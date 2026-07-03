@@ -8,3 +8,4 @@
 # Baked assets and oracle fixtures — derived from game data, regenerated locally
 /baked
 /fixtures
+/tools/mc2-genlevel/mc2-genlevel

@@ -9,7 +9,8 @@ use crate::level_mc1::{Mc1Level, ThingKind as Mc1Kind};
 use crate::level_mc2::{MC2_LEVEL_SIZE, MapType as Mc2MapType, Mc2Level};
 use mgc_formats::{
     FORMAT_VERSION, Game, GenParams, Importer, LevelHeader, LevelPackage, MapType, Meta, Source,
-    StageCheckpoint, StageVar, Stages, Thing, ThingKind, Things, WizardConfig, Wizards, mgcl,
+    StageCheckpoint, StageVar, Stages, TERRAIN_GRID_BYTES, Terrain, Thing, ThingKind, Things,
+    WizardConfig, Wizards, mgcl,
 };
 
 #[derive(Debug)]
@@ -84,6 +85,7 @@ pub fn package_mc1_level(
         header: None,
         wizards: None,
         stages: None,
+        terrain: None,
         gen_params: Some(GenParams {
             pre_header: Some(g.pre_header),
             seed: g.seed,
@@ -111,6 +113,7 @@ pub fn bake_mc1_archive(
     dat_path: &Path,
     tab_path: &Path,
     out_dir: &Path,
+    genlevel: Option<&Path>,
 ) -> Result<Vec<(String, String)>, BakeError> {
     let read = |p: &Path| std::fs::read(p).map_err(|e| BakeError::Io(p.to_path_buf(), e));
     let archive = Archive::open(&read(dat_path)?, &read(tab_path)?)
@@ -136,7 +139,7 @@ pub fn bake_mc1_archive(
             BakeError::Level(dat_path.to_path_buf(), entry.index as u32, e.to_string())
         })?;
 
-        let package = package_mc1_level(
+        let mut package = package_mc1_level(
             game,
             entry.index as u32,
             &level,
@@ -146,6 +149,14 @@ pub fn bake_mc1_archive(
                 entry_sha256,
             },
         );
+        if let Some(tool) = genlevel {
+            package.terrain = Some(generate_terrain(
+                tool,
+                &mc1_oracle_payload(&level.gen_map),
+                &game_dir,
+                entry.index as u32,
+            )?);
+        }
 
         let name = format!("level-{:03}.mgcl", entry.index);
         let path = game_dir.join(&name);
@@ -157,6 +168,149 @@ pub fn bake_mc1_archive(
         outputs.push((format!("{tag}/{name}"), hex(&Sha256::digest(&baked))));
     }
     Ok(outputs)
+}
+
+/// Locate the terrain-generation oracle (`mc2-genlevel`, the original
+/// algorithm carved out of remc2 — see tools/mc2-genlevel/): the
+/// `MGC_GENLEVEL` environment variable, or the default in-repo build
+/// location relative to the working directory.
+pub fn find_genlevel() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("MGC_GENLEVEL") {
+        let p = PathBuf::from(p);
+        return p.exists().then_some(p);
+    }
+    let default = Path::new("tools/mc2-genlevel/mc2-genlevel");
+    default.exists().then(|| default.to_path_buf())
+}
+
+/// Bake MC1's environment palettes (`DATA/PAL0-0.DAT` day, `PAL1-0.DAT`
+/// night; RNC-compressed 768-byte VGA palettes) into
+/// `out_dir/mc1/assets/palette-{day,night}.bin` as 8-bit RGB. VGA DACs
+/// are 6-bit; expansion replicates the top bits (`v<<2 | v>>4`) so full
+/// white maps to 255 — the standard lossless-round-trip expansion.
+pub fn bake_mc1_palettes(
+    data_dir: &Path,
+    out_dir: &Path,
+) -> Result<Vec<(String, String)>, BakeError> {
+    let assets_dir = out_dir.join("mc1/assets");
+    std::fs::create_dir_all(&assets_dir).map_err(|e| BakeError::Io(assets_dir.clone(), e))?;
+
+    let mut outputs = Vec::new();
+    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
+        let out_name = format!("{name}.bin");
+        let path = assets_dir.join(&out_name);
+        std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path.clone(), e))?;
+        outputs.push((format!("mc1/assets/{out_name}"), hex(&Sha256::digest(bytes))));
+        Ok(())
+    };
+    let unpack = |file: &str| -> Result<Vec<u8>, BakeError> {
+        let src = data_dir.join(file);
+        let raw = std::fs::read(&src).map_err(|e| BakeError::Io(src.clone(), e))?;
+        crate::rnc::decompress(&raw).map_err(|e| BakeError::Level(src.clone(), 0, e.to_string()))
+    };
+
+    for (file, name) in [("PAL0-0.DAT", "palette-day"), ("PAL1-0.DAT", "palette-night")] {
+        let vga = unpack(file)?;
+        if vga.len() != 768 {
+            return Err(BakeError::Level(
+                data_dir.join(file),
+                0,
+                format!("palette is {} bytes, expected 768", vga.len()),
+            ));
+        }
+        let rgb: Vec<u8> = vga.iter().map(|&v| (v << 2) | (v >> 4)).collect();
+        emit(name, &rgb)?;
+    }
+
+    // Tile-type -> palette-index map for the overhead/terrain color pass:
+    // 256 bytes at +0x14000 of the decompressed TABLES.DAT, exactly as the
+    // engine's map view resolves colors (remc2 GameUI.cpp,
+    // `tablesx[0x14000 + terrainType]`; MC2 splits the same layout into
+    // per-environment TABLESD/N/C.DAT).
+    let tables = unpack("TABLES.DAT")?;
+    const TILE_COLORS_OFFSET: usize = 0x14000;
+    if tables.len() < TILE_COLORS_OFFSET + 256 {
+        return Err(BakeError::Level(
+            data_dir.join("TABLES.DAT"),
+            0,
+            format!("tables blob is {} bytes, expected >= 0x14100", tables.len()),
+        ));
+    }
+    emit(
+        "tile-colors",
+        &tables[TILE_COLORS_OFFSET..TILE_COLORS_OFFSET + 256],
+    )?;
+    Ok(outputs)
+}
+
+/// Synthesize a minimal MC2 level buffer carrying MC1 GEN_MAP params at
+/// the offsets the oracle reads, so MC1 terrain can be generated by the
+/// same tool. Validated by entity-placement coherence across MC1 levels
+/// (see docs/ROADMAP.md "MC1 terrain oracle"): heights and water are
+/// faithful; the tile-type snow/rock layers are not (MC1's snlin scale
+/// exceeds MC2's) and need MC1-specific semantics later. MC1 has no
+/// `lriver`; 0 keeps the generator's extra river pass inert.
+fn mc1_oracle_payload(g: &crate::level_mc1::GenMap) -> Vec<u8> {
+    let mut buf = vec![0u8; MC2_LEVEL_SIZE];
+    let put16 = |buf: &mut [u8], o: usize, v: u16| buf[o..o + 2].copy_from_slice(&v.to_le_bytes());
+    put16(&mut buf, 0x00, 2); // version the oracle accepts
+    buf[0x06] = 0; // map type: day
+    put16(&mut buf, 0x17, g.seed as u16);
+    put16(&mut buf, 0x1B, g.off as u16);
+    // Negative raise survives truncation: the generator reads __int16.
+    put16(&mut buf, 0x1F, g.raise as u16);
+    put16(&mut buf, 0x23, g.gnarl as u16);
+    buf[0x27..0x2B].copy_from_slice(&g.river.to_le_bytes());
+    put16(&mut buf, 0x2B, 0); // lriver: MC1 has none
+    put16(&mut buf, 0x2F, g.sourc as u16);
+    put16(&mut buf, 0x33, g.snlin as u16);
+    put16(&mut buf, 0x37, g.snflt as u16);
+    put16(&mut buf, 0x3B, g.bhlin as u16);
+    put16(&mut buf, 0x3F, g.bhflt as u16);
+    put16(&mut buf, 0x43, g.rkste as u16);
+    buf
+}
+
+/// Run the oracle over one decompressed MC2 level, returning the
+/// pristine generated terrain. The tool emits the engine's 0x70000
+/// terrain block; we keep tile type (+0x00000) and heightmap (+0x10000).
+fn generate_terrain(
+    tool: &Path,
+    payload: &[u8],
+    scratch_dir: &Path,
+    index: u32,
+) -> Result<Terrain, BakeError> {
+    let io_err = |e: std::io::Error| BakeError::Io(tool.to_path_buf(), e);
+    let level_path = scratch_dir.join(format!("genlevel-in-{index}.bin"));
+    let out_path = scratch_dir.join(format!("genlevel-out-{index}.bin"));
+    std::fs::write(&level_path, payload).map_err(io_err)?;
+
+    let status = std::process::Command::new(tool)
+        .arg(&level_path)
+        .arg(&out_path)
+        .status()
+        .map_err(io_err)?;
+    if !status.success() {
+        return Err(BakeError::Level(
+            tool.to_path_buf(),
+            index,
+            format!("mc2-genlevel exited with {status}"),
+        ));
+    }
+    let block = std::fs::read(&out_path).map_err(io_err)?;
+    std::fs::remove_file(&level_path).ok();
+    std::fs::remove_file(&out_path).ok();
+    if block.len() != 0x70000 {
+        return Err(BakeError::Level(
+            tool.to_path_buf(),
+            index,
+            format!("oracle output {} bytes, expected 0x70000", block.len()),
+        ));
+    }
+    Ok(Terrain {
+        tile_type: block[..TERRAIN_GRID_BYTES].to_vec(),
+        height: block[TERRAIN_GRID_BYTES..2 * TERRAIN_GRID_BYTES].to_vec(),
+    })
 }
 
 /// Convert one parsed MC2 level into a package.
@@ -224,6 +378,7 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
                 })
                 .collect(),
         }),
+        terrain: None,
         stages: Some(Stages {
             checkpoints: level
                 .checkpoints
@@ -276,6 +431,7 @@ pub fn bake_mc2_archive(
     dat_path: &Path,
     tab_path: &Path,
     out_dir: &Path,
+    genlevel: Option<&Path>,
 ) -> Result<(Vec<(String, String)>, Vec<u32>), BakeError> {
     let read = |p: &Path| std::fs::read(p).map_err(|e| BakeError::Io(p.to_path_buf(), e));
     let archive = Archive::open(&read(dat_path)?, &read(tab_path)?)
@@ -313,7 +469,7 @@ pub fn bake_mc2_archive(
             ));
         }
 
-        let package = package_mc2_level(
+        let mut package = package_mc2_level(
             entry.index as u32,
             &level,
             Source {
@@ -322,6 +478,14 @@ pub fn bake_mc2_archive(
                 entry_sha256,
             },
         );
+        if let Some(tool) = genlevel {
+            package.terrain = Some(generate_terrain(
+                tool,
+                &payload,
+                &game_dir,
+                entry.index as u32,
+            )?);
+        }
 
         let name = format!("level-{:03}.mgcl", entry.index);
         let path = game_dir.join(&name);

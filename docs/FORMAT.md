@@ -42,11 +42,12 @@ A `.mgcl` file is a **ZIP archive with all members stored uncompressed**
 | `level.json` | no | JSON | MC2 level header: environment, player slots (absent on MC1) |
 | `wizards.json` | no | JSON | MC2 per-wizard configuration: AI stats, spell loadouts |
 | `stages.json` | no | JSON | MC2 mission script: stage checkpoints and variables |
-| `terrain/height.bin` | reserved | binary | Expanded heightmap (see below) |
-| `terrain/type.bin` | reserved | binary | Expanded terrain-type map |
+| `terrain/height.bin` | no | binary | Expanded heightmap (see below) |
+| `terrain/type.bin` | no | binary | Expanded terrain-type map |
 
-"Reserved" members are named and shaped here but not yet emitted by the
-importer; readers must tolerate their absence.
+The terrain pair is present when the importer had a terrain oracle
+available (currently MC2 only); readers must tolerate its absence, and
+the two members always appear together.
 
 ### `meta.json`
 
@@ -199,18 +200,21 @@ confirmation; the data is the raw source of truth. Objective
 display text lives in the game's `ETEXT.DAT` and is not part of the
 package.
 
-### `terrain/height.bin` (reserved)
+### `terrain/height.bin` and `terrain/type.bin`
 
-65,536 bytes: one unsigned byte per tile, row-major, index `y * 256 + x`,
-matching the original engine's in-memory heightmap layout. Byte-for-byte
-comparable against reference-engine memory dumps. Exact semantics
-(vertical scale, water level) will be documented when terrain baking
-lands.
+65,536 bytes each: one byte per tile on the 256x256 grid, row-major,
+index `y * 256 + x`, matching the original engine's in-memory layout
+(height in `height.bin`, per-tile terrain/texture type in `type.bin`).
 
-### `terrain/type.bin` (reserved)
-
-Same dimensions and ordering; per-tile terrain/texture type. Documented
-when terrain baking lands.
+The content is the **pristine output of the original generation
+algorithm** — produced by running the algorithm itself (carved verbatim
+out of remc2 into `tools/mc2-genlevel`) over the level's seed
+parameters, and validated byte-for-byte against remc2's DOSBox-derived
+regression fixtures. Entity-driven terrain modification (walls, canyons,
+building flattening) is deliberately NOT baked in: engines apply those
+at load time from `things.json`, exactly as the original engine does
+after generation. Vertical-scale and water-level semantics will be
+documented as the renderer work firms them up.
 
 ## Versioning and evolution
 

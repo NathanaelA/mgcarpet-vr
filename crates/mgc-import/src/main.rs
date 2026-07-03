@@ -237,6 +237,14 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
         ),
     ];
 
+    let genlevel = bake::find_genlevel();
+    match &genlevel {
+        Some(tool) => println!("terrain oracle: {}", tool.display()),
+        None => println!(
+            "terrain oracle not found (build tools/mc2-genlevel or set MGC_GENLEVEL) — baking without terrain"
+        ),
+    }
+
     let mut manifest = Vec::new();
     for (game, tag, base) in archives {
         let dat = base.with_extension("DAT");
@@ -245,7 +253,7 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
             eprintln!("note: {} not found — skipping {tag}", dat.display());
             continue;
         }
-        match bake::bake_mc1_archive(game, tag, &dat, &tab, out_dir) {
+        match bake::bake_mc1_archive(game, tag, &dat, &tab, out_dir, genlevel.as_deref()) {
             Ok(outputs) => {
                 println!("{tag}: baked {} levels", outputs.len());
                 manifest.extend(outputs);
@@ -256,10 +264,26 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
             }
         }
     }
+    let mc1_data = gamedata.join("mc1/DATA");
+    if mc1_data.join("PAL0-0.DAT").exists() {
+        match bake::bake_mc1_palettes(&mc1_data, out_dir) {
+            Ok(outputs) => {
+                println!("mc1: baked {} assets", outputs.len());
+                manifest.extend(outputs);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping palettes");
+    }
+
     let mc2_dat = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.DAT");
     let mc2_tab = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.TAB");
     if mc2_dat.exists() {
-        match bake::bake_mc2_archive(&mc2_dat, &mc2_tab, out_dir) {
+        match bake::bake_mc2_archive(&mc2_dat, &mc2_tab, out_dir, genlevel.as_deref()) {
             Ok((outputs, skipped)) => {
                 println!("mc2: baked {} levels", outputs.len());
                 if !skipped.is_empty() {

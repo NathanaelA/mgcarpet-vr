@@ -192,6 +192,29 @@ pub struct StageVar {
     pub data: u32,
 }
 
+/// Expanded terrain (`terrain/*.bin` members): the pristine output of
+/// the original generation algorithm, before any entity-driven terrain
+/// modification (walls, canyons, building flattening — those are applied
+/// by the engine at load time from `things.json`).
+///
+/// Both grids are 256x256, one byte per tile, row-major, index
+/// `y * 256 + x`, matching the original engine's in-memory layout.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Terrain {
+    /// `terrain/height.bin`.
+    pub height: Vec<u8>,
+    /// `terrain/type.bin` (per-tile terrain/texture type).
+    pub tile_type: Vec<u8>,
+}
+
+impl std::fmt::Debug for Terrain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Terrain {{ 256x256 }}")
+    }
+}
+
+pub const TERRAIN_GRID_BYTES: usize = 256 * 256;
+
 /// A fully-loaded level package (the members the current format version
 /// defines; unknown members are preserved at the container level, see
 /// [`mgcl`]).
@@ -203,4 +226,5 @@ pub struct LevelPackage {
     pub header: Option<LevelHeader>,
     pub wizards: Option<Wizards>,
     pub stages: Option<Stages>,
+    pub terrain: Option<Terrain>,
 }

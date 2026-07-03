@@ -8,7 +8,10 @@ use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use crate::{FORMAT_VERSION, GenParams, LevelHeader, LevelPackage, Meta, Stages, Things, Wizards};
+use crate::{
+    FORMAT_VERSION, GenParams, LevelHeader, LevelPackage, Meta, Stages, TERRAIN_GRID_BYTES,
+    Terrain, Things, Wizards,
+};
 
 #[derive(Debug)]
 pub enum MgclError {
@@ -114,6 +117,12 @@ pub fn write<W: Write + Seek>(sink: W, package: &LevelPackage) -> Result<(), Mgc
             serde_json::to_string_pretty(stages)?,
         )?;
     }
+    if let Some(terrain) = &package.terrain {
+        zip.start_file("terrain/height.bin", opts)?;
+        zip.write_all(&terrain.height)?;
+        zip.start_file("terrain/type.bin", opts)?;
+        zip.write_all(&terrain.tile_type)?;
+    }
 
     zip.finish()?;
     Ok(())
@@ -163,6 +172,22 @@ pub fn read<R: Read + Seek>(source: R) -> Result<LevelPackage, MgclError> {
         .map(|b| serde_json::from_slice(&b))
         .transpose()?;
 
+    let height = member_bytes(&mut zip, "terrain/height.bin")?;
+    let tile_type = member_bytes(&mut zip, "terrain/type.bin")?;
+    let terrain = match (height, tile_type) {
+        (Some(height), Some(tile_type))
+            if height.len() == TERRAIN_GRID_BYTES && tile_type.len() == TERRAIN_GRID_BYTES =>
+        {
+            Some(Terrain { height, tile_type })
+        }
+        (None, None) => None,
+        _ => {
+            return Err(MgclError::MissingMember(
+                "terrain/*.bin (pair, 65536 B each)",
+            ));
+        }
+    };
+
     Ok(LevelPackage {
         meta,
         things,
@@ -170,6 +195,7 @@ pub fn read<R: Read + Seek>(source: R) -> Result<LevelPackage, MgclError> {
         header,
         wizards,
         stages,
+        terrain,
     })
 }
 
@@ -214,6 +240,7 @@ mod tests {
             header: None,
             wizards: None,
             stages: None,
+            terrain: None,
             gen_params: Some(GenParams {
                 pre_header: Some(135538),
                 seed: 1921,
@@ -265,6 +292,19 @@ mod tests {
                 file.name()
             );
         }
+    }
+
+    #[test]
+    fn terrain_round_trips() {
+        use crate::{TERRAIN_GRID_BYTES, Terrain};
+        let mut package = sample();
+        package.terrain = Some(Terrain {
+            height: (0..TERRAIN_GRID_BYTES).map(|i| (i % 251) as u8).collect(),
+            tile_type: vec![7; TERRAIN_GRID_BYTES],
+        });
+        let bytes = write_to_vec(&package);
+        let loaded = read(Cursor::new(&bytes)).unwrap();
+        assert_eq!(loaded, package);
     }
 
     #[test]
