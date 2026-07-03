@@ -9,5 +9,8 @@
 //! Moburma's tools and michaelhoward's MagicCarpetFileFormat spec for MC1
 //! formats.
 
+pub mod bake;
 pub mod dattab;
+pub mod level_mc1;
+pub mod level_mc2;
 pub mod rnc;

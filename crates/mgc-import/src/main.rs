@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use mgc_import::{dattab, rnc};
+use mgc_import::{bake, dattab, level_mc1, rnc};
 
 /// Print one line to stdout; false when the reader went away (e.g.
 /// piped into `head`), so bulk listings can stop instead of panicking
@@ -38,6 +38,10 @@ fn main() -> ExitCode {
             &args[3],
             Path::new(&args[4]),
         ),
+        Some("level") if args.len() == 4 => {
+            level(Path::new(&args[1]), Path::new(&args[2]), &args[3])
+        }
+        Some("bake") if args.len() == 3 => bake_cmd(Path::new(&args[1]), Path::new(&args[2])),
         _ => {
             eprintln!("mgc-import — Magic Carpet data importer/baker\n");
             eprintln!("Usage:");
@@ -49,6 +53,8 @@ fn main() -> ExitCode {
             );
             eprintln!("  mgc-import archive <DAT> <TAB>    list a DAT/TAB archive's entries");
             eprintln!("  mgc-import extract <DAT> <TAB> <index> <out>  extract one archive entry");
+            eprintln!("  mgc-import level <DAT> <TAB> <index>  inspect an MC1 level");
+            eprintln!("  mgc-import bake <gamedata> <out>  bake all levels into .mgcl packages");
             ExitCode::from(2)
         }
     }
@@ -152,6 +158,154 @@ fn extract(dat_path: &Path, tab_path: &Path, index: &str, out_path: &Path) -> Ex
             ExitCode::FAILURE
         }
     }
+}
+
+fn level(dat_path: &Path, tab_path: &Path, index: &str) -> ExitCode {
+    let archive = match open_archive(dat_path, tab_path) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+    let Ok(index) = index.parse::<usize>() else {
+        eprintln!("error: bad index {index}");
+        return ExitCode::FAILURE;
+    };
+    let Some(entry) = archive.entries().get(index).copied() else {
+        eprintln!("error: index {index} out of range");
+        return ExitCode::FAILURE;
+    };
+    let payload = match archive.extract(entry) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: entry {index}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let level = match level_mc1::Mc1Level::parse(&payload) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("error: entry {index}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let g = &level.gen_map;
+    println!(
+        "GEN_MAP  seed={} off={} raise={} gnarl={}",
+        g.seed, g.off, g.raise, g.gnarl
+    );
+    println!(
+        "         river={} sourc={} snlin={} snflt={}",
+        g.river, g.sourc, g.snlin, g.snflt
+    );
+    println!(
+        "         bhlin={} bhflt={} rkste={} (pre-header {})",
+        g.bhlin, g.bhflt, g.rkste, g.pre_header
+    );
+    println!("footer   {:?}", level.footer);
+    if level.reserved_nonzero {
+        println!("note: reserved block is NOT all zeros");
+    }
+
+    let mut census = std::collections::BTreeMap::<(u16, u16), u32>::new();
+    for (_, thing) in level.active_things() {
+        *census.entry((thing.class, thing.model)).or_default() += 1;
+    }
+    println!(
+        "\nentities ({} active, {} markers, {} junk slots):",
+        level.active_things().count(),
+        level.markers().count(),
+        level.junk().count()
+    );
+    for ((class, model), count) in &census {
+        outln!("  {:>4}  {}", count, level_mc1::thing_name(*class, *model));
+    }
+    ExitCode::SUCCESS
+}
+
+fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
+    use mgc_formats::Game;
+    let archives = [
+        (
+            Game::MagicCarpet1,
+            "mc1",
+            gamedata.join("mc1/LEVELS/LEVELS"),
+        ),
+        (
+            Game::HiddenWorlds,
+            "mc1hw",
+            gamedata.join("mc1/LEVELS/DDLEVELS"),
+        ),
+    ];
+
+    let mut manifest = Vec::new();
+    for (game, tag, base) in archives {
+        let dat = base.with_extension("DAT");
+        let tab = base.with_extension("TAB");
+        if !dat.exists() {
+            eprintln!("note: {} not found — skipping {tag}", dat.display());
+            continue;
+        }
+        match bake::bake_mc1_archive(game, tag, &dat, &tab, out_dir) {
+            Ok(outputs) => {
+                println!("{tag}: baked {} levels", outputs.len());
+                manifest.extend(outputs);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let mc2_dat = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.DAT");
+    let mc2_tab = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.TAB");
+    if mc2_dat.exists() {
+        match bake::bake_mc2_archive(&mc2_dat, &mc2_tab, out_dir) {
+            Ok((outputs, skipped)) => {
+                println!("mc2: baked {} levels", outputs.len());
+                if !skipped.is_empty() {
+                    println!(
+                        "mc2: skipped {} extended-format dev leftovers (indices {:?})",
+                        skipped.len(),
+                        skipped
+                    );
+                }
+                manifest.extend(outputs);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        eprintln!("note: {} not found — skipping mc2", mc2_dat.display());
+    }
+
+    // Any subset of the three games is valid, including none at all
+    // (each archive above is skipped with a note when absent).
+    if manifest.is_empty() {
+        println!(
+            "0 packages baked — no game data found under {}",
+            gamedata.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    manifest.sort();
+    let manifest_path = out_dir.join("manifest.sha256");
+    let body: String = manifest
+        .iter()
+        .map(|(name, hash)| format!("{hash}  {name}\n"))
+        .collect();
+    if let Err(e) = std::fs::write(&manifest_path, body) {
+        eprintln!("error: cannot write {}: {e}", manifest_path.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "{} packages, manifest: {}",
+        manifest.len(),
+        manifest_path.display()
+    );
+    ExitCode::SUCCESS
 }
 
 fn scan(root: &Path) -> ExitCode {

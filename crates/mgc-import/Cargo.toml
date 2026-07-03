@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 mgc-formats = { path = "../mgc-formats" }
+sha2 = "0.10"
 
 [[bin]]
 name = "mgc-import"

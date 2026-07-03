@@ -59,20 +59,49 @@ cargo run -p mgc-import -- scan gamedata
 
 which finds and integrity-checks every RNC-compressed file in the data.
 
+## The level package format
+
+Levels bake to `.mgcl` files — stored (uncompressed) ZIP containers with
+JSON for structured data and raw binary for bulk grids, one schema
+covering both games. The format is explicitly documented in
+**[docs/FORMAT.md](docs/FORMAT.md)**; that document is normative and
+evolves in lockstep with the code. Community-authored levels in this
+format are original works and freely shareable (unlike packages baked
+from the copyrighted game data, which stay on your machine).
+
 ## Status
 
-Bootstrap. RNC decompression works; DAT/TAB parsing, level import, and the
-first rendering milestone (the "carpet flyer") are next.
+Bootstrap. Working: RNC decompression, DAT/TAB archives, MC1/Hidden
+Worlds level parsing (all 143 retail levels verified), level baking.
+Next: terrain expansion via original-engine oracles, MC2 level parsing,
+and the first rendering milestone (the "carpet flyer").
 
-## Related projects
+## Credits and prior art
 
-- [remc2 / Magic Carpet 2 HD](https://github.com/thobbsinteractive/magic-carpet-2-hd) —
-  the reverse-engineered MC2 port this project uses as its behavioral
-  reference. If you want to *play* MC2 today, go there.
-- [Moburma's Magic Carpet tools](https://github.com/Moburma) — level
-  extractors and format research.
-- [MagicCarpetFileFormat](https://github.com/michaelhoward/MagicCarpetFileFormat) —
-  MC1 level format specification.
+This project stands on years of community reverse engineering. It would
+not exist without:
+
+- **Tomáš Veselý (turican0)** — the original
+  [remc2](https://github.com/turican0/remc2), the assembly→C++
+  reconstruction of Magic Carpet 2 that made the engine family
+  understandable at all.
+- **Tim Hobbs (thobbsinteractive) and contributors** —
+  [Magic Carpet 2 HD](https://github.com/thobbsinteractive/magic-carpet-2-hd),
+  the actively maintained continuation (play MC2 today: go there), whose
+  codebase serves as this project's behavioral reference, and whose
+  `DataFileRNC` implementation our RNC decoder is ported from.
+- **Michael Howard** —
+  [MagicCarpetFileFormat](https://github.com/michaelhoward/MagicCarpetFileFormat),
+  the MC1 level format specification our parser is built against.
+- **Moburma** — [Magic Carpet tooling](https://github.com/Moburma)
+  (MCDatExtractor, MCLevelReader, MCLevelEdit, BullfrogSoundExtractor)
+  and the extensive unused-content documentation on
+  [The Cutting Room Floor](https://tcrf.net/Magic_Carpet_(DOS)).
+- **lab313ru** —
+  [rnc_propack_source](https://github.com/lab313ru/rnc_propack_source),
+  the decompiled original RNC ProPack.
+- **Bullfrog Productions** — for the 1994 original that was so far ahead
+  of its time we're still catching up to it.
 
 ## License
 

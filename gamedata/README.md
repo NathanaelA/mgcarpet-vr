@@ -18,6 +18,12 @@ then copy the resulting game directories here. The importer only reads
 these files — it never modifies them — and bakes engine packages from
 them into `baked/` (also git-ignored).
 
+**Any subset is fine.** Each game (MC1, Hidden Worlds, MC2) is detected
+independently: `bake` processes whatever is present and skips the rest
+with a note, and the test suite likewise self-skips per missing archive.
+Hidden Worlds data ships inside the Magic Carpet Plus install, so it
+normally arrives together with MC1.
+
 Quick check that the data is readable:
 
 ```sh
