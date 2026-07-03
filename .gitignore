@@ -1,0 +1,10 @@
+# Build output
+/target
+
+# Original game data (bring your own GOG copy) — never committed
+/gamedata/*
+!/gamedata/README.md
+
+# Baked assets and oracle fixtures — derived from game data, regenerated locally
+/baked
+/fixtures

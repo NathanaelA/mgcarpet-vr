@@ -1,0 +1,17 @@
+[package]
+name = "mgc-app"
+description = "Game shell: window, input, game loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mgc-formats = { path = "../mgc-formats" }
+mgc-sim = { path = "../mgc-sim" }
+mgc-render = { path = "../mgc-render" }
+winit = "0.30"
+
+[[bin]]
+name = "mgcarpet"
+path = "src/main.rs"

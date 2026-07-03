@@ -1,0 +1,14 @@
+[package]
+name = "mgc-import"
+description = "Importer/baker: expands original GOG game data into engine packages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mgc-formats = { path = "../mgc-formats" }
+
+[[bin]]
+name = "mgc-import"
+path = "src/main.rs"
