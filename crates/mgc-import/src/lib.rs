@@ -9,4 +9,5 @@
 //! Moburma's tools and michaelhoward's MagicCarpetFileFormat spec for MC1
 //! formats.
 
+pub mod dattab;
 pub mod rnc;
