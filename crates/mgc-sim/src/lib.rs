@@ -7,6 +7,11 @@
 //! - Given the same level package and the same input sequence, the
 //!   resulting state is bit-identical on every platform. This is what
 //!   makes replay, testing, and (eventually) multiplayer possible.
+//!
+//! World units follow the original engine: 1.0 = one terrain tile
+//! (256 fixed-point units in the original), the map is 256x256 tiles
+//! and wraps around in both axes, and altitude is `height_byte / 8`
+//! (the engine computes `32 * height_byte` in its own units).
 
 /// Fixed simulation tick rate.
 ///
@@ -16,11 +21,77 @@
 /// gameplay logic lands here.
 pub const TICK_RATE_HZ: u32 = 30;
 
+/// Seconds per tick (render-side interpolation uses the same constant,
+/// so keep a single definition).
+pub const TICK_DT: f32 = 1.0 / TICK_RATE_HZ as f32;
+
+/// Map side length in tiles; coordinates wrap modulo this.
+pub const MAP_TILES: usize = 256;
+
+/// Altitude of one height-byte step in tile units (engine: 32/256).
+pub const HEIGHT_SCALE: f32 = 1.0 / 8.0;
+
+/// Player intent for one tick, already normalized to [-1, 1] axes.
+/// Angles are radians accumulated since the previous tick.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FlightInput {
+    /// Forward (+) / backward (-) along the view direction.
+    pub thrust: f32,
+    /// Right (+) / left (-) perpendicular to the view, horizontal.
+    pub strafe: f32,
+    /// Up (+) / down (-) in world space.
+    pub lift: f32,
+    pub yaw_delta: f32,
+    pub pitch_delta: f32,
+}
+
+/// The carpet: position in tile units, velocity in tiles/second.
+#[derive(Debug, Clone, Copy)]
+pub struct Flyer {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub vx: f32,
+    pub vy: f32,
+    pub vz: f32,
+    /// Radians; 0 looks toward -Z, increasing turns right (clockwise
+    /// viewed from above).
+    pub yaw: f32,
+    /// Radians; positive looks up. Clamped to just short of vertical.
+    pub pitch: f32,
+}
+
+impl Default for Flyer {
+    fn default() -> Self {
+        Self {
+            x: 128.0,
+            y: 20.0,
+            z: 160.0,
+            vx: 0.0,
+            vy: 0.0,
+            vz: 0.0,
+            yaw: 0.0,
+            pitch: -0.2,
+        }
+    }
+}
+
+/// Flight tuning. Placeholder feel, to be eyeballed against remc2
+/// side-by-side before habits form (see docs/ROADMAP.md).
+const ACCEL: f32 = 40.0; // tiles/s^2 at full thrust
+const DRAG_PER_TICK: f32 = 0.90; // velocity retained per tick
+const MAX_PITCH: f32 = 1.45; // radians
+const MIN_CLEARANCE: f32 = 0.75; // tiles above ground
+const CEILING: f32 = 40.0; // tiles
+
 /// The whole game state and its single mutation entry point.
 #[derive(Debug, Default)]
 pub struct Simulation {
     /// Monotonic tick counter since level start.
     pub tick: u64,
+    pub flyer: Flyer,
+    /// 256x256 height bytes, row-major `y * 256 + x`; empty means flat.
+    terrain_height: Vec<u8>,
 }
 
 impl Simulation {
@@ -28,9 +99,68 @@ impl Simulation {
         Self::default()
     }
 
+    pub fn with_terrain(terrain_height: Vec<u8>) -> Self {
+        debug_assert!(terrain_height.is_empty() || terrain_height.len() == MAP_TILES * MAP_TILES);
+        Self {
+            terrain_height,
+            ..Self::default()
+        }
+    }
+
+    /// Ground altitude in tile units at a world position (nearest tile;
+    /// the engine interpolates across the tile's two triangles, which
+    /// can wait until collision matters beyond a hover clamp).
+    pub fn ground_height(&self, x: f32, z: f32) -> f32 {
+        if self.terrain_height.is_empty() {
+            return 0.0;
+        }
+        let tx = (x.floor() as i64).rem_euclid(MAP_TILES as i64) as usize;
+        let tz = (z.floor() as i64).rem_euclid(MAP_TILES as i64) as usize;
+        self.terrain_height[tz * MAP_TILES + tx] as f32 * HEIGHT_SCALE
+    }
+
     /// Advance exactly one fixed tick.
-    pub fn step(&mut self) {
+    pub fn step(&mut self, input: &FlightInput) {
         self.tick += 1;
+        let f = &mut self.flyer;
+
+        f.yaw += input.yaw_delta;
+        f.pitch = (f.pitch + input.pitch_delta).clamp(-MAX_PITCH, MAX_PITCH);
+
+        // View basis: yaw 0 faces -Z; right-handed Y-up.
+        let (sy, cy) = f.yaw.sin_cos();
+        let (sp, cp) = f.pitch.sin_cos();
+        let fwd = [sy * cp, sp, -cy * cp];
+        let right = [cy, 0.0, sy];
+
+        let ax = fwd[0] * input.thrust + right[0] * input.strafe;
+        let ay = fwd[1] * input.thrust + input.lift;
+        let az = fwd[2] * input.thrust + right[2] * input.strafe;
+        f.vx += ax * ACCEL * TICK_DT;
+        f.vy += ay * ACCEL * TICK_DT;
+        f.vz += az * ACCEL * TICK_DT;
+        f.vx *= DRAG_PER_TICK;
+        f.vy *= DRAG_PER_TICK;
+        f.vz *= DRAG_PER_TICK;
+
+        f.x += f.vx * TICK_DT;
+        f.y += f.vy * TICK_DT;
+        f.z += f.vz * TICK_DT;
+
+        // Wrap into [0, 256) like the original's 16-bit axes.
+        f.x = f.x.rem_euclid(MAP_TILES as f32);
+        f.z = f.z.rem_euclid(MAP_TILES as f32);
+
+        let floor = self.ground_height(self.flyer.x, self.flyer.z) + MIN_CLEARANCE;
+        let f = &mut self.flyer;
+        if f.y < floor {
+            f.y = floor;
+            f.vy = f.vy.max(0.0);
+        }
+        if f.y > CEILING {
+            f.y = CEILING;
+            f.vy = f.vy.min(0.0);
+        }
     }
 }
 
@@ -42,8 +172,55 @@ mod tests {
     fn steps_are_counted() {
         let mut sim = Simulation::new();
         for _ in 0..10 {
-            sim.step();
+            sim.step(&FlightInput::default());
         }
         assert_eq!(sim.tick, 10);
+    }
+
+    #[test]
+    fn thrust_moves_and_drag_stops() {
+        let mut sim = Simulation::new();
+        let forward = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..30 {
+            sim.step(&forward);
+        }
+        assert!(
+            sim.flyer.z < 160.0,
+            "forward thrust moves toward -Z, z = {}",
+            sim.flyer.z
+        );
+        let coast = FlightInput::default();
+        for _ in 0..300 {
+            sim.step(&coast);
+        }
+        let speed = (sim.flyer.vx.powi(2) + sim.flyer.vy.powi(2) + sim.flyer.vz.powi(2)).sqrt();
+        assert!(speed < 1e-3, "velocity decays to ~zero, got {speed}");
+    }
+
+    #[test]
+    fn terrain_clamps_altitude() {
+        let mut sim = Simulation::with_terrain(vec![80u8; MAP_TILES * MAP_TILES]);
+        let dive = FlightInput {
+            thrust: 1.0,
+            pitch_delta: -1.0,
+            ..Default::default()
+        };
+        for _ in 0..120 {
+            sim.step(&dive);
+        }
+        // Ground is 80/8 = 10 tiles everywhere.
+        assert!(sim.flyer.y >= 10.0 + MIN_CLEARANCE - 1e-4);
+    }
+
+    #[test]
+    fn world_wraps() {
+        let mut sim = Simulation::new();
+        sim.flyer.x = 255.9;
+        sim.flyer.vx = 12.0;
+        sim.step(&FlightInput::default());
+        assert!(sim.flyer.x < 256.0);
     }
 }

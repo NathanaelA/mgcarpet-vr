@@ -44,6 +44,7 @@ A `.mgcl` file is a **ZIP archive with all members stored uncompressed**
 | `stages.json` | no | JSON | MC2 mission script: stage checkpoints and variables |
 | `terrain/height.bin` | no | binary | Expanded heightmap (see below) |
 | `terrain/type.bin` | no | binary | Expanded terrain-type map |
+| `terrain/shading.bin` | no | binary | Per-tile light level (see below) |
 
 The terrain pair is present when the importer had a terrain oracle
 available (currently MC2 only); readers must tolerate its absence, and
@@ -200,11 +201,16 @@ confirmation; the data is the raw source of truth. Objective
 display text lives in the game's `ETEXT.DAT` and is not part of the
 package.
 
-### `terrain/height.bin` and `terrain/type.bin`
+### `terrain/height.bin`, `terrain/type.bin`, `terrain/shading.bin`
 
 65,536 bytes each: one byte per tile on the 256x256 grid, row-major,
 index `y * 256 + x`, matching the original engine's in-memory layout
-(height in `height.bin`, per-tile terrain/texture type in `type.bin`).
+(height in `height.bin`, per-tile terrain/texture type in `type.bin`,
+light level in `shading.bin`). `shading.bin` is optional (additive
+member): it indexes the shade dimension of the game's color-remap
+tables — the engine resolves a tile's displayed color as
+`palette[tables[shading * 256 + tables[0x14000 + type]]]` (both table
+slices are baked as assets: `shade-lut.bin`, `tile-colors.bin`).
 
 The content is the **pristine output of the original generation
 algorithm** — produced by running the algorithm itself (carved verbatim

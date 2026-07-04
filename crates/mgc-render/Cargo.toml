@@ -8,4 +8,8 @@ authors.workspace = true
 
 [dependencies]
 mgc-formats = { path = "../mgc-formats" }
+mgc-sim = { path = "../mgc-sim" }
 wgpu = "24"
+winit = "0.30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"

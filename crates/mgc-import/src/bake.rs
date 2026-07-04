@@ -200,7 +200,10 @@ pub fn bake_mc1_palettes(
         let out_name = format!("{name}.bin");
         let path = assets_dir.join(&out_name);
         std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path.clone(), e))?;
-        outputs.push((format!("mc1/assets/{out_name}"), hex(&Sha256::digest(bytes))));
+        outputs.push((
+            format!("mc1/assets/{out_name}"),
+            hex(&Sha256::digest(bytes)),
+        ));
         Ok(())
     };
     let unpack = |file: &str| -> Result<Vec<u8>, BakeError> {
@@ -209,7 +212,10 @@ pub fn bake_mc1_palettes(
         crate::rnc::decompress(&raw).map_err(|e| BakeError::Level(src.clone(), 0, e.to_string()))
     };
 
-    for (file, name) in [("PAL0-0.DAT", "palette-day"), ("PAL1-0.DAT", "palette-night")] {
+    for (file, name) in [
+        ("PAL0-0.DAT", "palette-day"),
+        ("PAL1-0.DAT", "palette-night"),
+    ] {
         let vga = unpack(file)?;
         if vga.len() != 768 {
             return Err(BakeError::Level(
@@ -222,12 +228,14 @@ pub fn bake_mc1_palettes(
         emit(name, &rgb)?;
     }
 
-    // Tile-type -> palette-index map for the overhead/terrain color pass:
-    // 256 bytes at +0x14000 of the decompressed TABLES.DAT, exactly as the
-    // engine's map view resolves colors (remc2 GameUI.cpp,
-    // `tablesx[0x14000 + terrainType]`; MC2 splits the same layout into
-    // per-environment TABLESD/N/C.DAT).
+    // Color-remap tables from the decompressed TABLES.DAT, exactly as
+    // the engine's map view resolves tile colors (remc2 GameUI.cpp; MC2
+    // splits the same layout into per-environment TABLESD/N/C.DAT):
+    //   base  = tables[0x14000 + terrainType]      (tile-colors.bin)
+    //   final = tables[shading * 256 + base]       (shade-lut.bin)
+    //   rgb   = palette[final]
     let tables = unpack("TABLES.DAT")?;
+    const SHADE_LUT_LEN: usize = 0x4000; // 64 shade levels x 256 colors
     const TILE_COLORS_OFFSET: usize = 0x14000;
     if tables.len() < TILE_COLORS_OFFSET + 256 {
         return Err(BakeError::Level(
@@ -240,6 +248,7 @@ pub fn bake_mc1_palettes(
         "tile-colors",
         &tables[TILE_COLORS_OFFSET..TILE_COLORS_OFFSET + 256],
     )?;
+    emit("shade-lut", &tables[..SHADE_LUT_LEN])?;
     Ok(outputs)
 }
 
@@ -310,6 +319,7 @@ fn generate_terrain(
     Ok(Terrain {
         tile_type: block[..TERRAIN_GRID_BYTES].to_vec(),
         height: block[TERRAIN_GRID_BYTES..2 * TERRAIN_GRID_BYTES].to_vec(),
+        shading: Some(block[2 * TERRAIN_GRID_BYTES..3 * TERRAIN_GRID_BYTES].to_vec()),
     })
 }
 

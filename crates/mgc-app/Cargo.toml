@@ -11,6 +11,8 @@ mgc-formats = { path = "../mgc-formats" }
 mgc-sim = { path = "../mgc-sim" }
 mgc-render = { path = "../mgc-render" }
 winit = "0.30"
+wgpu = "24"
+png = "0.17"
 
 [[bin]]
 name = "mgcarpet"

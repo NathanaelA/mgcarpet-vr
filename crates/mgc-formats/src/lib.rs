@@ -205,6 +205,10 @@ pub struct Terrain {
     pub height: Vec<u8>,
     /// `terrain/type.bin` (per-tile terrain/texture type).
     pub tile_type: Vec<u8>,
+    /// `terrain/shading.bin` (per-tile light level; indexes the shade
+    /// dimension of the game's color-remap tables). Optional: packages
+    /// baked before this member existed omit it.
+    pub shading: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Terrain {
