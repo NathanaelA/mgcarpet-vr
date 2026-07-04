@@ -28,11 +28,11 @@ fn baked_packages_round_trip_real_levels() {
     }
 
     let out = std::env::temp_dir().join(format!("mgc-bake-test-{}", std::process::id()));
-    let outputs = bake_mc1_archive(Game::MagicCarpet1, "mc1", &dat, &tab, &out, None).unwrap();
+    let outputs = bake_mc1_archive(Game::MagicCarpet1, "mc1", &dat, &tab, &out).unwrap();
     assert_eq!(outputs.len(), 70);
 
     // Determinism: baking again yields identical hashes.
-    let again = bake_mc1_archive(Game::MagicCarpet1, "mc1", &dat, &tab, &out, None).unwrap();
+    let again = bake_mc1_archive(Game::MagicCarpet1, "mc1", &dat, &tab, &out).unwrap();
     assert_eq!(outputs, again);
 
     // Faithfulness: reload each package and compare against a fresh parse.
@@ -98,14 +98,13 @@ fn baked_packages_round_trip_real_levels() {
     std::fs::remove_dir_all(&out).ok();
 }
 
-/// MC1-through-the-MC2-oracle coherence canary (docs/ROADMAP.md "MC1
-/// terrain oracle"): level 001 generates ~82% water, yet placed
-/// trees/stones (class 2) land on dry tiles — 158/159 at the validated
-/// mapping (one dolmen sits on a flooded shoreline tile; near-shore
-/// divergence or authentic shoal, undecidable without ground truth).
+/// Entity-placement coherence canary (docs/ROADMAP.md "MC1 terrain
+/// oracle"): level 001 generates ~82% water, yet placed trees/stones
+/// (class 2) land on dry tiles — 158/159 with the MC2 oracle, and the
+/// native MC1 generator must hold the same line (its shoreline detail
+/// differs slightly: extra smoothing and shore-flattening passes).
 /// Random placement would hit water ~4 times in 5, so a tolerance of 2
-/// still fails loudly if the param mapping or the generator drifts.
-/// Skips without game data or the oracle.
+/// still fails loudly if the generator drifts. Skips without game data.
 #[test]
 fn mc1_terrain_generation_is_coherent() {
     let base = gamedata_dir().join("mc1/LEVELS");
@@ -114,16 +113,9 @@ fn mc1_terrain_generation_is_coherent() {
         eprintln!("note: MC1 level data not present — skipping");
         return;
     }
-    let Some(tool) = find_genlevel().or_else(|| {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/mc2-genlevel/mc2-genlevel");
-        p.exists().then_some(p)
-    }) else {
-        eprintln!("note: mc2-genlevel not built — skipping");
-        return;
-    };
 
     let out = std::env::temp_dir().join(format!("mgc-mc1-terrain-test-{}", std::process::id()));
-    bake_mc1_archive(Game::MagicCarpet1, "mc1", &dat, &tab, &out, Some(&tool)).unwrap();
+    bake_mc1_archive(Game::MagicCarpet1, "mc1", &dat, &tab, &out).unwrap();
 
     let package = mgcl::read(std::fs::File::open(out.join("mc1/level-001.mgcl")).unwrap()).unwrap();
     let terrain = package.terrain.expect("terrain baked");

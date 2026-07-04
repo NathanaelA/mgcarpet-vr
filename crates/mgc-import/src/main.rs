@@ -237,11 +237,13 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
         ),
     ];
 
+    // MC1 terrain is generated natively (mc1_terrain); only MC2 needs
+    // the remc2-carved oracle tool.
     let genlevel = bake::find_genlevel();
     match &genlevel {
-        Some(tool) => println!("terrain oracle: {}", tool.display()),
+        Some(tool) => println!("mc2 terrain oracle: {}", tool.display()),
         None => println!(
-            "terrain oracle not found (build tools/mc2-genlevel or set MGC_GENLEVEL) — baking without terrain"
+            "mc2 terrain oracle not found (build tools/mc2-genlevel or set MGC_GENLEVEL) — baking mc2 without terrain"
         ),
     }
 
@@ -253,7 +255,7 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
             eprintln!("note: {} not found — skipping {tag}", dat.display());
             continue;
         }
-        match bake::bake_mc1_archive(game, tag, &dat, &tab, out_dir, genlevel.as_deref()) {
+        match bake::bake_mc1_archive(game, tag, &dat, &tab, out_dir) {
             Ok(outputs) => {
                 println!("{tag}: baked {} levels", outputs.len());
                 manifest.extend(outputs);
@@ -266,7 +268,7 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
     }
     let mc1_data = gamedata.join("mc1/DATA");
     if mc1_data.join("PAL0-0.DAT").exists() {
-        match bake::bake_mc1_palettes(&mc1_data, out_dir) {
+        match bake::bake_mc1_assets(&mc1_data, out_dir) {
             Ok(outputs) => {
                 println!("mc1: baked {} assets", outputs.len());
                 manifest.extend(outputs);

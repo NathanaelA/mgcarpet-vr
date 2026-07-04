@@ -45,10 +45,12 @@ A `.mgcl` file is a **ZIP archive with all members stored uncompressed**
 | `terrain/height.bin` | no | binary | Expanded heightmap (see below) |
 | `terrain/type.bin` | no | binary | Expanded terrain-type map |
 | `terrain/shading.bin` | no | binary | Per-tile light level (see below) |
+| `terrain/angle.bin` | no | binary | Per-tile texture orientation/flags (see below) |
 
-The terrain pair is present when the importer had a terrain oracle
-available (currently MC2 only); readers must tolerate its absence, and
-the two members always appear together.
+MC1/Hidden Worlds terrain is always present (the importer generates it
+natively); MC2 terrain is present when the importer had the MC2 oracle
+tool available. Readers must tolerate absence, and the terrain members
+always appear together.
 
 ### `meta.json`
 
@@ -201,26 +203,42 @@ confirmation; the data is the raw source of truth. Objective
 display text lives in the game's `ETEXT.DAT` and is not part of the
 package.
 
-### `terrain/height.bin`, `terrain/type.bin`, `terrain/shading.bin`
+### `terrain/height.bin`, `terrain/type.bin`, `terrain/shading.bin`, `terrain/angle.bin`
 
 65,536 bytes each: one byte per tile on the 256x256 grid, row-major,
 index `y * 256 + x`, matching the original engine's in-memory layout
 (height in `height.bin`, per-tile terrain/texture type in `type.bin`,
-light level in `shading.bin`). `shading.bin` is optional (additive
-member): it indexes the shade dimension of the game's color-remap
+light level in `shading.bin`, texture orientation in `angle.bin`).
+`shading.bin` and `angle.bin` are optional (additive members).
+
+`shading.bin` indexes the shade dimension of the game's color-remap
 tables — the engine resolves a tile's displayed color as
 `palette[tables[shading * 256 + tables[0x14000 + type]]]` (both table
-slices are baked as assets: `shade-lut.bin`, `tile-colors.bin`).
+slices are baked as assets: `shade-lut-N.bin`, `tile-colors-N.bin`).
+
+`angle.bin` is the generator's per-tile angle/flags byte. Bits 4-6
+select one of 8 UV orientations for the tile's terrain texture
+(dihedral: bit 4 = flip x, bit 5 = flip y, bit 6 = swap axes —
+decoded from the engine's `UVTable_D4350`, world-space/base-0 rows;
+critical for one-directional transition tiles like shorelines). The
+other bits carry generator flags (terrain class in bits 0-2, deep
+water — MC1 — or cave ceiling — MC2 — in bit 3, visibility in bit 7)
+and are preserved verbatim.
 
 The content is the **pristine output of the original generation
-algorithm** — produced by running the algorithm itself (carved verbatim
-out of remc2 into `tools/mc2-genlevel`) over the level's seed
-parameters, and validated byte-for-byte against remc2's DOSBox-derived
-regression fixtures. Entity-driven terrain modification (walls, canyons,
-building flattening) is deliberately NOT baked in: engines apply those
-at load time from `things.json`, exactly as the original engine does
-after generation. Vertical-scale and water-level semantics will be
-documented as the renderer work firms them up.
+algorithm**. MC2: the algorithm carved verbatim out of remc2 into
+`tools/mc2-genlevel`, run over the level's seed parameters and
+validated byte-for-byte against remc2's DOSBox-derived regression
+fixtures. MC1/Hidden Worlds: the importer's native Rust port of MC1's
+own generator (`mc1_terrain.rs`, from the remc1 decompilation —
+docs/ROADMAP.md "MC1 reference generator found"), whose heightmap
+reproduces the previously-validated oracle output near-byte-exactly
+and whose type layer is MC1's real classifier. Entity-driven terrain
+modification (walls, canyons, building flattening) is deliberately NOT
+baked in: engines apply those at load time from `things.json`, exactly
+as the original engine does after generation. Vertical-scale and
+water-level semantics will be documented as the renderer work firms
+them up.
 
 ## Versioning and evolution
 

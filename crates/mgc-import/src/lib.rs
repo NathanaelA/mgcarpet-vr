@@ -6,11 +6,13 @@
 //! anything about RNC, DAT/TAB, seeds, or XMI.
 //!
 //! Reference implementations: remc2 (`~/projects/remc2`) for MC2 behavior,
-//! Moburma's tools and michaelhoward's MagicCarpetFileFormat spec for MC1
-//! formats.
+//! remc1 (`~/projects/remc1`) for MC1 behavior, Moburma's tools and
+//! michaelhoward's MagicCarpetFileFormat spec for MC1 formats.
 
 pub mod bake;
 pub mod dattab;
 pub mod level_mc1;
 pub mod level_mc2;
+pub mod mc1_terrain;
 pub mod rnc;
+pub mod tmaps;

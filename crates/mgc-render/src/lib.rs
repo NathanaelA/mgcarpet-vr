@@ -10,9 +10,11 @@
 //!   enhanced rendering is a toggle, not a rewrite.
 //!
 //! Current scope: the terrain pass — a 256x256 tile mesh (one vertex
-//! per grid point, engine-authentic alternating diagonals), tile colors
-//! resolved in the fragment shader from the terrain-type byte through
-//! the baked color LUT, per-vertex hillshade, distance fog.
+//! per grid point, engine-authentic alternating diagonals), tiles
+//! textured in the fragment shader from the baked terrain atlas (the
+//! terrain-type byte is the atlas cell index), texels resolved through
+//! the engine's shade LUT and palette; flat map colors as the fallback
+//! when no atlas is baked. Per-vertex hillshade, distance fog.
 
 use std::sync::Arc;
 
@@ -24,10 +26,17 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Number of light levels in the engine's shade-remap table.
 pub const SHADE_LEVELS: usize = 64;
 
+/// Width in pixels of a baked terrain-texture atlas (`terrain-atlas-N.bin`).
+pub const ATLAS_WIDTH: usize = 256;
+/// Edge length of one atlas cell (one terrain texture).
+pub const ATLAS_CELL: usize = 32;
+
 /// Everything the renderer needs from a loaded level: terrain arrays
-/// from the package, color tables from the baked assets. Tile colors
-/// resolve exactly like the original map view:
-/// `palette[shade_lut[shade][tile_colors[type]]]`.
+/// from the package, color tables from the baked assets. Pixels resolve
+/// exactly like the original engine: a base palette index — an atlas
+/// texel where a terrain atlas is available, else the tile's flat map
+/// color `tile_colors[type]` — through the shade remap and palette:
+/// `palette[shade_lut[shade][index]]`.
 pub struct LevelView {
     /// 256x256 terrain-type bytes, row-major `y * 256 + x`.
     pub tile_type: Vec<u8>,
@@ -38,11 +47,42 @@ pub struct LevelView {
     pub shading: Option<Vec<u8>>,
     /// 256 RGB triplets (sRGB bytes, as baked).
     pub palette: [[u8; 3]; 256],
-    /// Terrain type -> base palette index (`tile-colors.bin`).
+    /// Terrain type -> base palette index (`tile-colors-N.bin`).
     pub tile_colors: [u8; 256],
     /// Shade level x base index -> final palette index
-    /// (`shade-lut.bin`, [`SHADE_LEVELS`] rows of 256).
+    /// (`shade-lut-N.bin`, [`SHADE_LEVELS`] rows of 256).
     pub shade_lut: Vec<u8>,
+    /// Terrain-texture atlas (`terrain-atlas-N.bin`): 8-bit palette
+    /// indices, [`ATLAS_WIDTH`] wide, [`ATLAS_CELL`]-square cells, the
+    /// terrain-type byte indexing cells row-major. None renders every
+    /// tile with its flat map color.
+    pub atlas: Option<Vec<u8>>,
+    /// 256x256 angle/flags bytes (`terrain/angle.bin`): bits 4-6 pick
+    /// the tile's texture UV orientation. None renders orientation 0
+    /// everywhere (transition tiles like shorelines will misalign).
+    pub angle: Option<Vec<u8>>,
+}
+
+/// Flat-color overhead map: one RGBA pixel per tile (256x256, row-major
+/// like the terrain grids), each resolved through the engine's map-view
+/// color path `palette[shade_lut[shade][tile_colors[type]]]` — the
+/// exact lookup the original's fullscreen map uses (remc2 GameUI).
+pub fn map_pixels(level: &LevelView) -> Vec<u8> {
+    let n = MAP_TILES;
+    let mut out = vec![0u8; n * n * 4];
+    for i in 0..n * n {
+        let ty = level.tile_type[i] as usize;
+        let shade = level
+            .shading
+            .as_ref()
+            .map(|s| (s[i] as usize).min(SHADE_LEVELS - 1))
+            .unwrap_or(32);
+        let base = level.tile_colors[ty] as usize;
+        let idx = level.shade_lut[shade * 256 + base] as usize;
+        out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[idx]);
+        out[i * 4 + 3] = 255;
+    }
+    out
 }
 
 /// Camera state for one rendered frame (already interpolated).
@@ -70,6 +110,8 @@ struct Globals {
     view_proj: [[f32; 4]; 4],
     camera: [f32; 4],
     fog_color: [f32; 4],
+    /// x = atlas cell count (0 = untextured), y/z/w reserved.
+    atlas: [u32; 4],
 }
 
 /// Sky/fog color, the classic hazy horizon. sRGB values converted to
@@ -117,6 +159,19 @@ pub struct Renderer {
     vertex_buf: Option<wgpu::Buffer>,
     index_buf: Option<wgpu::Buffer>,
     index_count: u32,
+    /// Cell count of the loaded terrain atlas (0 = render flat colors).
+    atlas_cells: u32,
+    /// Interpolate per-tile shade across tile centers (enhancement,
+    /// off = the original's per-tile shade snap).
+    smooth_shading: bool,
+    /// The book screen (the original's Enter view): overhead map on the
+    /// right half, left half reserved for the spell list.
+    map_view: bool,
+    map_pipeline: wgpu::RenderPipeline,
+    map_globals_buf: wgpu::Buffer,
+    map_bind_group_layout: wgpu::BindGroupLayout,
+    map_bind_group: Option<wgpu::BindGroup>,
+    fill_pipeline: wgpu::RenderPipeline,
 }
 
 #[derive(Debug)]
@@ -258,6 +313,36 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -314,6 +399,131 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // The map (book screen) pass: fullscreen-quad pipeline over the
+        // CPU-composed map texture.
+        let map_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("map"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("map.wgsl").into()),
+        });
+        let map_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("map"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let map_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("map"),
+            bind_group_layouts: &[&map_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let map_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("map"),
+            layout: Some(&map_layout),
+            vertex: wgpu::VertexState {
+                module: &map_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &map_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let map_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("map globals"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Solid sky fill behind the book screen's world viewport.
+        let fill_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fill"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("fill.wgsl").into()),
+        });
+        let fill_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fill"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fill"),
+            layout: Some(&fill_layout),
+            vertex: wgpu::VertexState {
+                module: &fill_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fill_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let depth = create_depth(&device, width, height);
 
         Self {
@@ -328,7 +538,34 @@ impl Renderer {
             vertex_buf: None,
             index_buf: None,
             index_count: 0,
+            atlas_cells: 0,
+            smooth_shading: false,
+            map_view: false,
+            map_pipeline,
+            map_globals_buf,
+            map_bind_group_layout,
+            map_bind_group: None,
+            fill_pipeline,
         }
+    }
+
+    /// Toggle the book screen (overhead map + reserved spell half).
+    pub fn set_map_view(&mut self, on: bool) {
+        self.map_view = on;
+    }
+
+    pub fn map_view(&self) -> bool {
+        self.map_view
+    }
+
+    /// Toggle smooth (tile-interpolated) shading; off is the original's
+    /// per-tile shade snap. Takes effect on the next frame.
+    pub fn set_smooth_shading(&mut self, on: bool) {
+        self.smooth_shading = on;
+    }
+
+    pub fn smooth_shading(&self) -> bool {
+        self.smooth_shading
     }
 
     /// Upload a level: build the terrain mesh and the color/type LUTs.
@@ -456,17 +693,54 @@ impl Renderer {
         };
         let shade_tex = byte_tex("tile shading", shading, n as u32, n as u32);
 
-        // Colormap (x = type, y = shade): the engine's two index hops
-        // composed on the CPU, resolved through the palette. sRGB format
-        // so sampling yields linear color.
+        // Type -> flat base palette index, for tiles rendered without a
+        // texture (no atlas, or type beyond the atlas).
+        let tile_colors_tex = byte_tex("tile colors", &level.tile_colors, 256, 1);
+
+        // Terrain-texture atlas (a 1x1 dummy keeps the bind group layout
+        // uniform when the level has none; the shader gates on the cell
+        // count in Globals).
+        let (atlas_data, atlas_w, atlas_h): (&[u8], u32, u32) = match &level.atlas {
+            Some(a) => {
+                assert_eq!(a.len() % (ATLAS_WIDTH * ATLAS_CELL), 0, "ragged atlas");
+                (a, ATLAS_WIDTH as u32, (a.len() / ATLAS_WIDTH) as u32)
+            }
+            None => (&[0], 1, 1),
+        };
+        self.atlas_cells = level
+            .atlas
+            .as_ref()
+            .map(|a| (a.len() / (ATLAS_WIDTH * ATLAS_CELL)) * (ATLAS_WIDTH / ATLAS_CELL))
+            .unwrap_or(0) as u32;
+        let atlas_tex = byte_tex("terrain atlas", atlas_data, atlas_w, atlas_h);
+
+        // Per-tile texture orientation (angle bits 4-6); orientation 0
+        // for packages baked before the angle member existed.
+        let flat_angle;
+        let angle: &[u8] = match &level.angle {
+            Some(a) => {
+                assert_eq!(a.len(), n * n);
+                a
+            }
+            None => {
+                flat_angle = vec![0u8; n * n];
+                &flat_angle
+            }
+        };
+        let angle_tex = byte_tex("tile angles", angle, n as u32, n as u32);
+
+        // Colormap (x = palette index, y = shade): the engine's shade
+        // remap composed with the palette on the CPU. sRGB format so
+        // sampling yields linear color. Texture texels and flat tile
+        // colors both resolve through this one table, exactly like the
+        // original's textured inner loop `shade_lut[shade*256 + texel]`.
         assert_eq!(level.shade_lut.len(), SHADE_LEVELS * 256);
         let mut colormap = vec![0u8; SHADE_LEVELS * 256 * 4];
         for shade in 0..SHADE_LEVELS {
-            for ty in 0..256 {
-                let base = level.tile_colors[ty] as usize;
-                let final_idx = level.shade_lut[shade * 256 + base] as usize;
+            for index in 0..256 {
+                let final_idx = level.shade_lut[shade * 256 + index] as usize;
                 let rgb = level.palette[final_idx];
-                let o = (shade * 256 + ty) * 4;
+                let o = (shade * 256 + index) * 4;
                 colormap[o..o + 3].copy_from_slice(&rgb);
                 colormap[o + 3] = 255;
             }
@@ -523,6 +797,69 @@ impl Renderer {
                         &colormap_tex.create_view(&Default::default()),
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(
+                        &tile_colors_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(
+                        &atlas_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(
+                        &angle_tex.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        }));
+
+        // Overhead map for the book screen, composed on the CPU through
+        // the engine's map color path.
+        let map_rgba = map_pixels(level);
+        let map_extent = wgpu::Extent3d {
+            width: n as u32,
+            height: n as u32,
+            depth_or_array_layers: 1,
+        };
+        let map_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overhead map"),
+            size: map_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            map_tex.as_image_copy(),
+            &map_rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n as u32 * 4),
+                rows_per_image: None,
+            },
+            map_extent,
+        );
+        self.map_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("map"),
+            layout: &self.map_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.map_globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &map_tex.create_view(&Default::default()),
+                    ),
+                },
             ],
         }));
     }
@@ -547,13 +884,30 @@ impl Renderer {
     /// Render one frame.
     pub fn render(&mut self, cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
         let (w, hpx) = self.size();
-        let aspect = w as f32 / hpx as f32;
+
+        // Book-screen layout fractions (the original's Enter view): map
+        // pane left, world viewport top-right, spell list bottom-right.
+        let map_pane_frac = 0.6f32;
+        let viewport_h_frac = 0.42f32;
+        let view_rect = (
+            (w as f32 * map_pane_frac) as u32,
+            0u32,
+            w - (w as f32 * map_pane_frac) as u32,
+            (hpx as f32 * viewport_h_frac) as u32,
+        );
+
+        let aspect = if self.map_view {
+            view_rect.2 as f32 / view_rect.3.max(1) as f32
+        } else {
+            w as f32 / hpx as f32
+        };
         let view_proj = camera_matrix(cam, aspect);
         let sky = sky_color_linear();
         let globals = Globals {
             view_proj,
             camera: [cam.x, cam.y, cam.z, FOG_DENSITY],
             fog_color: [sky[0] as f32, sky[1] as f32, sky[2] as f32, 1.0],
+            atlas: [self.atlas_cells, self.smooth_shading as u32, 0, 0],
         };
         self.queue
             .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
@@ -568,20 +922,54 @@ impl Renderer {
             _ => unreachable!(),
         };
 
+        if self.map_view {
+            // Square map letterboxed into the left pane.
+            let pane_w = w as f32 * map_pane_frac;
+            let side = pane_w.min(hpx as f32) * 0.98;
+            let center_x = map_pane_frac - 1.0; // middle of the left pane in NDC
+            let map_globals: [f32; 8] = [
+                center_x,
+                0.0,
+                side / w as f32,
+                side / hpx as f32,
+                cam.x,
+                cam.z,
+                0.0,
+                0.0,
+            ];
+            self.queue.write_buffer(
+                &self.map_globals_buf,
+                0,
+                bytemuck::cast_slice(&map_globals),
+            );
+        }
+
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
+            // The book screen replaces the world view entirely (as in
+            // the original); a dark backdrop fills the spell half.
+            let clear = if self.map_view {
+                wgpu::Color {
+                    r: 0.02,
+                    g: 0.015,
+                    b: 0.01,
+                    a: 1.0,
+                }
+            } else {
+                wgpu::Color {
+                    r: sky[0],
+                    g: sky[1],
+                    b: sky[2],
+                    a: 1.0,
+                }
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("terrain"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &color_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: sky[0],
-                            g: sky[1],
-                            b: sky[2],
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -595,15 +983,40 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
-            if let (Some(bg), Some(vb), Some(ib)) =
-                (&self.bind_group, &self.vertex_buf, &self.index_buf)
-            {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, bg, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                // 3x3 wrap copies; the vertex shader offsets by instance.
-                pass.draw_indexed(0..self.index_count, 0, 0..9);
+            let draw_world = |pass: &mut wgpu::RenderPass<'_>| {
+                if let (Some(bg), Some(vb), Some(ib)) =
+                    (&self.bind_group, &self.vertex_buf, &self.index_buf)
+                {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, bg, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    // 3x3 wrap copies; the vertex shader offsets by instance.
+                    pass.draw_indexed(0..self.index_count, 0, 0..9);
+                }
+            };
+            if self.map_view {
+                // World viewport in the top-right corner: sky fill, then
+                // the terrain, clipped to the rect.
+                let (vx, vy, vw, vh) = view_rect;
+                if vw > 0 && vh > 0 {
+                    pass.set_viewport(vx as f32, vy as f32, vw as f32, vh as f32, 0.0, 1.0);
+                    pass.set_scissor_rect(vx, vy, vw, vh);
+                    pass.set_pipeline(&self.fill_pipeline);
+                    pass.draw(0..3, 0..1);
+                    draw_world(&mut pass);
+                    pass.set_viewport(0.0, 0.0, w as f32, hpx as f32, 0.0, 1.0);
+                    pass.set_scissor_rect(0, 0, w, hpx);
+                }
+                // The map pane; the rest of the dark clear is the book
+                // backdrop (spell list placeholder).
+                if let Some(bg) = &self.map_bind_group {
+                    pass.set_pipeline(&self.map_pipeline);
+                    pass.set_bind_group(0, bg, &[]);
+                    pass.draw(0..6, 0..1);
+                }
+            } else {
+                draw_world(&mut pass);
             }
         }
         self.queue.submit([encoder.finish()]);

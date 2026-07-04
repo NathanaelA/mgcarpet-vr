@@ -898,6 +898,8 @@ dependencies = [
  "mgc-render",
  "mgc-sim",
  "png",
+ "serde",
+ "serde_json",
  "wgpu",
  "winit",
 ]

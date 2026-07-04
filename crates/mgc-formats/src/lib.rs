@@ -209,6 +209,11 @@ pub struct Terrain {
     /// dimension of the game's color-remap tables). Optional: packages
     /// baked before this member existed omit it.
     pub shading: Option<Vec<u8>>,
+    /// `terrain/angle.bin` (per-tile texture-orientation/flags byte;
+    /// bits 4-6 select one of 8 UV orientations for the tile's terrain
+    /// texture). Optional: packages baked before this member existed
+    /// omit it.
+    pub angle: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Terrain {

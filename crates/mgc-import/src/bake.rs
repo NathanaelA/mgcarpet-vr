@@ -107,13 +107,15 @@ pub fn package_mc1_level(
 
 /// Bake every level of one MC1-format archive into `out_dir/<tag>/`.
 /// Returns `(package file name, sha256)` pairs.
+///
+/// Terrain comes from the native MC1 generator port (`mc1_terrain`) —
+/// unlike MC2, no external oracle tool is involved.
 pub fn bake_mc1_archive(
     game: Game,
     tag: &str,
     dat_path: &Path,
     tab_path: &Path,
     out_dir: &Path,
-    genlevel: Option<&Path>,
 ) -> Result<Vec<(String, String)>, BakeError> {
     let read = |p: &Path| std::fs::read(p).map_err(|e| BakeError::Io(p.to_path_buf(), e));
     let archive = Archive::open(&read(dat_path)?, &read(tab_path)?)
@@ -149,14 +151,13 @@ pub fn bake_mc1_archive(
                 entry_sha256,
             },
         );
-        if let Some(tool) = genlevel {
-            package.terrain = Some(generate_terrain(
-                tool,
-                &mc1_oracle_payload(&level.gen_map),
-                &game_dir,
-                entry.index as u32,
-            )?);
-        }
+        let generated = crate::mc1_terrain::generate(&level.gen_map);
+        package.terrain = Some(Terrain {
+            tile_type: generated.tile_type,
+            height: generated.height,
+            shading: Some(generated.shading),
+            angle: Some(generated.angle),
+        });
 
         let name = format!("level-{:03}.mgcl", entry.index);
         let path = game_dir.join(&name);
@@ -183,106 +184,112 @@ pub fn find_genlevel() -> Option<PathBuf> {
     default.exists().then(|| default.to_path_buf())
 }
 
-/// Bake MC1's environment palettes (`DATA/PAL0-0.DAT` day, `PAL1-0.DAT`
-/// night; RNC-compressed 768-byte VGA palettes) into
-/// `out_dir/mc1/assets/palette-{day,night}.bin` as 8-bit RGB. VGA DACs
-/// are 6-bit; expansion replicates the top bits (`v<<2 | v>>4`) so full
-/// white maps to 255 — the standard lossless-round-trip expansion.
-pub fn bake_mc1_palettes(
+/// Bake MC1's per-tileset assets into `out_dir/mc1/assets/`. MC1 ships
+/// two complete world tilesets — 0 = temperate, 1 = arctic (snow) — each
+/// with its own palette, color tables, and terrain-texture atlas; a
+/// level uses exactly one set. (These are NOT day/night variants: the
+/// set-1 atlas is snowdrifts, pines, and stone-brick buildings.)
+///
+/// Per set `N`, from the original data:
+/// - `PALN-0.DAT` (RNC, 768-byte 6-bit VGA palette) →
+///   `palette-N.bin`, 256 RGB triplets. VGA DAC expansion replicates the
+///   top bits (`v<<2 | v>>4`) so full white maps to 255 — the standard
+///   lossless-round-trip expansion.
+/// - `TABLES.DAT` (set 0, RNC) / `DTABLES.DAT` (set 1, stored raw) —
+///   the engine's 83456-byte color-table blob (remc2 GameUI.cpp; MC2
+///   splits the same layout into per-environment TABLESD/N/C.DAT):
+///     base  = tables[0x14000 + terrainType]      (tile-colors-N.bin)
+///     final = tables[shading * 256 + base]       (shade-lut-N.bin)
+///     rgb   = palette[final]
+///   Textured rendering skips the tile-colors hop and feeds texture
+///   pixels straight through the same shade LUT:
+///     rgb = palette[shade_lut[shading][texel]]
+/// - `BLKN-1.DAT` (RNC) → `terrain-atlas-N.bin`: the high-detail
+///   terrain-texture atlas, 8-bit palette indices, 256 px wide, 32x32
+///   cells (8 per row, 19 rows = 152 textures; `BLKN-0.DAT` is the same
+///   set at 16x16, not baked). The terrain-type byte IS the cell index —
+///   verified by matching per-cell average colors against the map-view
+///   tile-colors table (near-exact on all common types).
+pub fn bake_mc1_assets(
     data_dir: &Path,
     out_dir: &Path,
 ) -> Result<Vec<(String, String)>, BakeError> {
     let assets_dir = out_dir.join("mc1/assets");
     std::fs::create_dir_all(&assets_dir).map_err(|e| BakeError::Io(assets_dir.clone(), e))?;
 
+    // Earlier bakes named the set-0/set-1 assets "day"/"night" before the
+    // sets were understood as world tilesets; drop the stale files.
+    for old in [
+        "palette-day.bin",
+        "palette-night.bin",
+        "tile-colors.bin",
+        "shade-lut.bin",
+    ] {
+        std::fs::remove_file(assets_dir.join(old)).ok();
+    }
+
     let mut outputs = Vec::new();
-    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
-        let out_name = format!("{name}.bin");
-        let path = assets_dir.join(&out_name);
+    let mut emit = |name: String, bytes: &[u8]| -> Result<(), BakeError> {
+        let path = assets_dir.join(&name);
         std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path.clone(), e))?;
-        outputs.push((
-            format!("mc1/assets/{out_name}"),
-            hex(&Sha256::digest(bytes)),
-        ));
+        outputs.push((format!("mc1/assets/{name}"), hex(&Sha256::digest(bytes))));
         Ok(())
     };
+    // DTABLES.DAT ships uncompressed; everything else is whole-file RNC.
     let unpack = |file: &str| -> Result<Vec<u8>, BakeError> {
         let src = data_dir.join(file);
         let raw = std::fs::read(&src).map_err(|e| BakeError::Io(src.clone(), e))?;
-        crate::rnc::decompress(&raw).map_err(|e| BakeError::Level(src.clone(), 0, e.to_string()))
+        if crate::rnc::is_rnc(&raw) {
+            crate::rnc::decompress(&raw)
+                .map_err(|e| BakeError::Level(src.clone(), 0, e.to_string()))
+        } else {
+            Ok(raw)
+        }
     };
-
-    for (file, name) in [
-        ("PAL0-0.DAT", "palette-day"),
-        ("PAL1-0.DAT", "palette-night"),
-    ] {
-        let vga = unpack(file)?;
-        if vga.len() != 768 {
+    let expect_len = |file: &str, data: &[u8], len: usize| -> Result<(), BakeError> {
+        if data.len() != len {
             return Err(BakeError::Level(
                 data_dir.join(file),
                 0,
-                format!("palette is {} bytes, expected 768", vga.len()),
+                format!("{} bytes, expected {len}", data.len()),
             ));
         }
-        let rgb: Vec<u8> = vga.iter().map(|&v| (v << 2) | (v >> 4)).collect();
-        emit(name, &rgb)?;
-    }
+        Ok(())
+    };
 
-    // Color-remap tables from the decompressed TABLES.DAT, exactly as
-    // the engine's map view resolves tile colors (remc2 GameUI.cpp; MC2
-    // splits the same layout into per-environment TABLESD/N/C.DAT):
-    //   base  = tables[0x14000 + terrainType]      (tile-colors.bin)
-    //   final = tables[shading * 256 + base]       (shade-lut.bin)
-    //   rgb   = palette[final]
-    let tables = unpack("TABLES.DAT")?;
     const SHADE_LUT_LEN: usize = 0x4000; // 64 shade levels x 256 colors
     const TILE_COLORS_OFFSET: usize = 0x14000;
-    if tables.len() < TILE_COLORS_OFFSET + 256 {
-        return Err(BakeError::Level(
-            data_dir.join("TABLES.DAT"),
-            0,
-            format!("tables blob is {} bytes, expected >= 0x14100", tables.len()),
-        ));
-    }
-    emit(
-        "tile-colors",
-        &tables[TILE_COLORS_OFFSET..TILE_COLORS_OFFSET + 256],
-    )?;
-    emit("shade-lut", &tables[..SHADE_LUT_LEN])?;
-    Ok(outputs)
-}
+    const TABLES_LEN: usize = 0x14600; // the engine's full blob
+    const ATLAS_LEN: usize = 256 * 608; // 152 cells of 32x32
 
-/// Synthesize a minimal MC2 level buffer carrying MC1 GEN_MAP params at
-/// the offsets the oracle reads, so MC1 terrain can be generated by the
-/// same tool. Validated by entity-placement coherence across MC1 levels
-/// (see docs/ROADMAP.md "MC1 terrain oracle"): heights and water are
-/// faithful; the tile-type snow/rock layers are not (MC1's snlin scale
-/// exceeds MC2's) and need MC1-specific semantics later. MC1 has no
-/// `lriver`; 0 keeps the generator's extra river pass inert.
-fn mc1_oracle_payload(g: &crate::level_mc1::GenMap) -> Vec<u8> {
-    let mut buf = vec![0u8; MC2_LEVEL_SIZE];
-    let put16 = |buf: &mut [u8], o: usize, v: u16| buf[o..o + 2].copy_from_slice(&v.to_le_bytes());
-    put16(&mut buf, 0x00, 2); // version the oracle accepts
-    buf[0x06] = 0; // map type: day
-    put16(&mut buf, 0x17, g.seed as u16);
-    put16(&mut buf, 0x1B, g.off as u16);
-    // Negative raise survives truncation: the generator reads __int16.
-    put16(&mut buf, 0x1F, g.raise as u16);
-    put16(&mut buf, 0x23, g.gnarl as u16);
-    buf[0x27..0x2B].copy_from_slice(&g.river.to_le_bytes());
-    put16(&mut buf, 0x2B, 0); // lriver: MC1 has none
-    put16(&mut buf, 0x2F, g.sourc as u16);
-    put16(&mut buf, 0x33, g.snlin as u16);
-    put16(&mut buf, 0x37, g.snflt as u16);
-    put16(&mut buf, 0x3B, g.bhlin as u16);
-    put16(&mut buf, 0x3F, g.bhflt as u16);
-    put16(&mut buf, 0x43, g.rkste as u16);
-    buf
+    for (set, tables_file) in [(0, "TABLES.DAT"), (1, "DTABLES.DAT")] {
+        let pal_file = format!("PAL{set}-0.DAT");
+        let vga = unpack(&pal_file)?;
+        expect_len(&pal_file, &vga, 768)?;
+        let rgb: Vec<u8> = vga.iter().map(|&v| (v << 2) | (v >> 4)).collect();
+        emit(format!("palette-{set}.bin"), &rgb)?;
+
+        let tables = unpack(tables_file)?;
+        expect_len(tables_file, &tables, TABLES_LEN)?;
+        emit(
+            format!("tile-colors-{set}.bin"),
+            &tables[TILE_COLORS_OFFSET..TILE_COLORS_OFFSET + 256],
+        )?;
+        emit(format!("shade-lut-{set}.bin"), &tables[..SHADE_LUT_LEN])?;
+
+        let blk_file = format!("BLK{set}-1.DAT");
+        let atlas = unpack(&blk_file)?;
+        expect_len(&blk_file, &atlas, ATLAS_LEN)?;
+        emit(format!("terrain-atlas-{set}.bin"), &atlas)?;
+    }
+    Ok(outputs)
 }
 
 /// Run the oracle over one decompressed MC2 level, returning the
 /// pristine generated terrain. The tool emits the engine's 0x70000
-/// terrain block; we keep tile type (+0x00000) and heightmap (+0x10000).
+/// terrain block; we keep tile type (+0x00000), heightmap (+0x10000),
+/// shading (+0x20000), and the angle/flags plane (+0x30000, texture UV
+/// orientation in bits 4-6).
 fn generate_terrain(
     tool: &Path,
     payload: &[u8],
@@ -320,6 +327,7 @@ fn generate_terrain(
         tile_type: block[..TERRAIN_GRID_BYTES].to_vec(),
         height: block[TERRAIN_GRID_BYTES..2 * TERRAIN_GRID_BYTES].to_vec(),
         shading: Some(block[2 * TERRAIN_GRID_BYTES..3 * TERRAIN_GRID_BYTES].to_vec()),
+        angle: Some(block[3 * TERRAIN_GRID_BYTES..4 * TERRAIN_GRID_BYTES].to_vec()),
     })
 }
 

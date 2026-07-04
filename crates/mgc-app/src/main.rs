@@ -9,6 +9,8 @@
 //! offscreen and exits, which is how terrain changes get verified
 //! without a display.
 
+mod config;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -31,8 +33,10 @@ struct LoadedLevel {
 }
 
 /// Resolve the package plus its per-game color assets into what the
-/// renderer and sim consume.
-fn load_level(level_path: &Path) -> Result<LoadedLevel, String> {
+/// renderer and sim consume. `tileset` picks MC1's world set: 0 =
+/// temperate, 1 = arctic (each MC1 level uses exactly one; which levels
+/// use set 1 is not yet baked into packages, so it is a CLI switch).
+fn load_level(level_path: &Path, tileset: u8) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
     let package: LevelPackage =
@@ -46,26 +50,34 @@ fn load_level(level_path: &Path) -> Result<LoadedLevel, String> {
 
     // Assets live in the baked tree next to the per-game level dirs:
     // <baked>/<game>/level-NNN.mgcl and <baked>/mc1/assets/*.bin. MC1
-    // and Hidden Worlds share MC1's palette; MC2's palettes are still
-    // missing from the game data (see ROADMAP), so MC2 levels borrow
-    // the MC1 day palette as a stand-in until the CD files land.
+    // and Hidden Worlds share MC1's assets; MC2's palettes/tables/atlas
+    // are still missing from the game data (see ROADMAP), so MC2 levels
+    // borrow MC1's as a stand-in until the CD files land.
     let baked_root = level_path
         .parent()
         .and_then(Path::parent)
         .unwrap_or(Path::new("."));
     let assets = baked_root.join("mc1/assets");
-    let asset = |name: &str| {
-        std::fs::read(assets.join(name))
-            .map_err(|e| format!("{}: {e}", assets.join(name).display()))
+    let asset = |name: String| {
+        std::fs::read(assets.join(&name)).map_err(|e| format!("{}: {e}", assets.join(&name).display()))
     };
-    let palette_bytes = asset("palette-day.bin")?;
-    let tile_colors_bytes = asset("tile-colors.bin")?;
-    let shade_lut = asset("shade-lut.bin")?;
+    let palette_bytes = asset(format!("palette-{tileset}.bin"))?;
+    let tile_colors_bytes = asset(format!("tile-colors-{tileset}.bin"))?;
+    let shade_lut = asset(format!("shade-lut-{tileset}.bin"))?;
+    let atlas = asset(format!("terrain-atlas-{tileset}.bin")).ok();
     if palette_bytes.len() != 768
         || tile_colors_bytes.len() != 256
         || shade_lut.len() != mgc_render::SHADE_LEVELS * 256
     {
         return Err("malformed palette assets (expected 768 + 256 + 16384 bytes)".into());
+    }
+    if let Some(a) = &atlas {
+        if a.len() % (mgc_render::ATLAS_WIDTH * mgc_render::ATLAS_CELL) != 0 {
+            return Err(format!(
+                "malformed terrain atlas ({} bytes is not whole 32px rows of 256px)",
+                a.len()
+            ));
+        }
     }
 
     let mut palette = [[0u8; 3]; 256];
@@ -81,7 +93,7 @@ fn load_level(level_path: &Path) -> Result<LoadedLevel, String> {
         Game::MagicCarpet2 => "mc2",
     };
     if package.meta.game == Game::MagicCarpet2 {
-        eprintln!("note: MC2 palettes not yet baked — using the MC1 day palette as a stand-in");
+        eprintln!("note: MC2 assets not yet baked — using MC1's as a stand-in");
     }
 
     Ok(LoadedLevel {
@@ -92,6 +104,8 @@ fn load_level(level_path: &Path) -> Result<LoadedLevel, String> {
             palette,
             tile_colors,
             shade_lut,
+            atlas,
+            angle: terrain.angle.clone(),
         },
         height: terrain.height.clone(),
         label: format!("{game} level {}", package.meta.level),
@@ -122,6 +136,7 @@ struct MouseAccum {
 
 struct App {
     level: LoadedLevel,
+    smooth_shading: bool,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Simulation,
@@ -134,11 +149,12 @@ struct App {
 }
 
 impl App {
-    fn new(level: LoadedLevel) -> Self {
+    fn new(level: LoadedLevel, smooth_shading: bool) -> Self {
         let sim = Simulation::with_terrain(level.height.clone());
         let prev_flyer = sim.flyer;
         Self {
             level,
+            smooth_shading,
             window: None,
             renderer: None,
             sim,
@@ -202,6 +218,7 @@ impl ApplicationHandler for App {
         match Renderer::for_window(window.clone()) {
             Ok(mut renderer) => {
                 renderer.load_level(&self.level.view);
+                renderer.set_smooth_shading(self.smooth_shading);
                 self.renderer = Some(renderer);
             }
             Err(e) => {
@@ -240,6 +257,28 @@ impl ApplicationHandler for App {
                     } else {
                         event_loop.exit();
                     }
+                    return;
+                }
+                if down && event.logical_key == Key::Named(NamedKey::Enter) {
+                    if let Some(r) = &mut self.renderer {
+                        let on = !r.map_view();
+                        r.set_map_view(on);
+                    }
+                    return;
+                }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyT) {
+                    self.smooth_shading = !self.smooth_shading;
+                    if let Some(r) = &mut self.renderer {
+                        r.set_smooth_shading(self.smooth_shading);
+                    }
+                    println!(
+                        "shading: {}",
+                        if self.smooth_shading {
+                            "smooth (enhanced)"
+                        } else {
+                            "per-tile (original)"
+                        }
+                    );
                     return;
                 }
                 let k = &mut self.keys;
@@ -324,17 +363,45 @@ struct Args {
     screenshot: Option<PathBuf>,
     /// Camera override for screenshots: x, y, z, yaw°, pitch°.
     camera: Option<[f32; 5]>,
+    /// MC1 world tileset: 0 = temperate, 1 = arctic.
+    tileset: u8,
+    /// Config file path; None = the default `mgcarpet.json` lookup.
+    config: Option<PathBuf>,
+    /// CLI override of `enhancements.smooth_shading`; None = use config.
+    smooth_shading: Option<bool>,
+    /// Write the overhead map as a PNG and exit (one pixel per tile,
+    /// scaled by `map_scale`).
+    map: Option<PathBuf>,
+    map_scale: u32,
+    /// Render `--screenshot` showing the book screen instead of the world.
+    map_view: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut level = PathBuf::from("baked/mc1/level-000.mgcl");
     let mut screenshot = None;
     let mut camera = None;
+    let mut tileset = 0u8;
+    let mut config = None;
+    let mut smooth_shading = None;
+    let mut map = None;
+    let mut map_scale = 4u32;
+    let mut map_view = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--level" => {
                 level = PathBuf::from(it.next().ok_or("--level needs a path")?);
+            }
+            "--tileset" => {
+                tileset = it
+                    .next()
+                    .ok_or("--tileset needs 0 or 1")?
+                    .parse()
+                    .map_err(|e| format!("--tileset: {e}"))?;
+                if tileset > 1 {
+                    return Err("--tileset must be 0 (temperate) or 1 (arctic)".into());
+                }
             }
             "--screenshot" => {
                 screenshot = Some(PathBuf::from(it.next().ok_or("--screenshot needs a path")?));
@@ -351,10 +418,35 @@ fn parse_args() -> Result<Args, String> {
                         .map_err(|_| "--camera needs exactly 5 values".to_string())?,
                 );
             }
+            "--config" => {
+                config = Some(PathBuf::from(it.next().ok_or("--config needs a path")?));
+            }
+            "--smooth-shading" => smooth_shading = Some(true),
+            "--no-smooth-shading" => smooth_shading = Some(false),
+            "--map" => {
+                map = Some(PathBuf::from(it.next().ok_or("--map needs a path")?));
+            }
+            "--map-scale" => {
+                map_scale = it
+                    .next()
+                    .ok_or("--map-scale needs a factor")?
+                    .parse()
+                    .map_err(|e| format!("--map-scale: {e}"))?;
+                if map_scale == 0 || map_scale > 16 {
+                    return Err("--map-scale must be 1..=16".into());
+                }
+            }
+            "--map-view" => map_view = true,
             "--help" | "-h" => {
-                return Err("usage: mgcarpet [--level <baked/.../level-NNN.mgcl>] \
-                     [--screenshot out.png [--camera x,y,z,yaw,pitch]]"
-                    .into());
+                return Err(format!(
+                    "usage: mgcarpet [--level <baked/.../level-NNN.mgcl>] \
+                     [--tileset 0|1] [--config <path>] \
+                     [--smooth-shading|--no-smooth-shading] \
+                     [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view]] \
+                     [--map out.png [--map-scale N]]\n\
+                     enhancements persist in {} (see crates/mgc-app/src/config.rs)",
+                    config::DEFAULT_PATH
+                ));
             }
             other => return Err(format!("unknown argument {other} (try --help)")),
         }
@@ -363,6 +455,12 @@ fn parse_args() -> Result<Args, String> {
         level,
         screenshot,
         camera,
+        tileset,
+        config,
+        smooth_shading,
+        map,
+        map_scale,
+        map_view,
     })
 }
 
@@ -376,9 +474,38 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), St
     Ok(())
 }
 
-fn run_screenshot(level: LoadedLevel, out: &Path, camera: Option<[f32; 5]>) -> Result<(), String> {
+/// Write the overhead map (one pixel per tile through the engine's
+/// map-color path), nearest-neighbor scaled — the axis-aligned,
+/// rotation-free comparison artifact for original map screenshots.
+fn run_map(level: &LoadedLevel, out: &Path, scale: u32) -> Result<(), String> {
+    let n = 256usize;
+    let src = mgc_render::map_pixels(&level.view);
+    let s = scale as usize;
+    let (w, h) = (n * s, n * s);
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let si = ((y / s) * n + x / s) * 4;
+            let di = (y * w + x) * 4;
+            rgba[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    write_png(out, w as u32, h as u32, &rgba)?;
+    println!("{} -> {} ({}x{})", level.label, out.display(), w, h);
+    Ok(())
+}
+
+fn run_screenshot(
+    level: LoadedLevel,
+    out: &Path,
+    camera: Option<[f32; 5]>,
+    smooth_shading: bool,
+    map_view: bool,
+) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
     renderer.load_level(&level.view);
+    renderer.set_smooth_shading(smooth_shading);
+    renderer.set_map_view(map_view);
     let flyer = Flyer::default();
     let [x, y, z, yaw_deg, pitch_deg] = camera.unwrap_or([flyer.x, flyer.y, flyer.z, 0.0, -11.5]);
     let cam = CameraView {
@@ -404,7 +531,27 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let level = match load_level(&args.level) {
+    let (config_path, explicit) = match &args.config {
+        Some(p) => (p.clone(), true),
+        None => (PathBuf::from(config::DEFAULT_PATH), false),
+    };
+    let cfg = match config::Config::load(&config_path, explicit) {
+        Ok(c) => {
+            if config_path.exists() {
+                println!("config: {}", config_path.display());
+            }
+            c
+        }
+        Err(e) => {
+            eprintln!("error: config: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let smooth_shading = args
+        .smooth_shading
+        .unwrap_or(cfg.enhancements.smooth_shading);
+
+    let level = match load_level(&args.level, args.tileset) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("error: {e}");
@@ -412,8 +559,18 @@ fn main() -> std::process::ExitCode {
         }
     };
 
+    if let Some(out) = &args.map {
+        return match run_map(&level, out, args.map_scale) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Some(out) = &args.screenshot {
-        return match run_screenshot(level, out, args.camera) {
+        return match run_screenshot(level, out, args.camera, smooth_shading, args.map_view) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -424,7 +581,8 @@ fn main() -> std::process::ExitCode {
 
     println!("mgcarpet {} — {}", env!("CARGO_PKG_VERSION"), level.label);
     println!("controls: WASD fly, mouse look (click to grab, Esc to release),");
-    println!("          Space/Shift up/down, arrows turn, Esc twice quits");
+    println!("          Space/Shift up/down, arrows turn, T toggles smooth shading,");
+    println!("          Enter opens the map (book screen), Esc twice quits");
 
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
@@ -433,7 +591,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level);
+    let mut app = App::new(level, smooth_shading);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;
