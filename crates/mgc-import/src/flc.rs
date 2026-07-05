@@ -15,10 +15,13 @@
 //!
 //! This is Autodesk Animator's FLC frame encoding verbatim (Bullfrog
 //! authored these animations in Animator); retail MC1 data uses exactly
-//! two sub-chunk types, verified over every entry of both tilesets:
-//! type 7 (`DELTA_FLC`, word-oriented delta) and type 16 (`FLI_COPY`,
-//! raw full-frame refresh). Each frame patches the previous one; the
-//! decoder returns the full frame sequence, base image first.
+//! two pixel sub-chunk types, verified over every entry of both
+//! tilesets: type 7 (`DELTA_FLC`, word-oriented delta) and type 16
+//! (`FLI_COPY`, raw full-frame refresh). A few MC2 streams additionally
+//! carry palette sub-chunks (4 `COLOR_256` / 11 `COLOR_64`), skipped —
+//! frames stay 8bpp indices against the environment's external palette.
+//! Each frame patches the previous one; the decoder returns the full
+//! frame sequence, base image first.
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FlcError {
@@ -26,7 +29,7 @@ pub enum FlcError {
     Truncated,
     /// A FRAME chunk without the 0xF1FA magic.
     BadMagic(u16),
-    /// A sub-chunk type outside the retail repertoire {7, 16}.
+    /// A sub-chunk type outside the retail repertoire {4, 7, 11, 16}.
     UnknownChunk(u16),
     /// Delta data walked outside the frame canvas.
     OutOfBounds,
@@ -97,6 +100,11 @@ pub fn decode_frames(
             }
             let data = &stream[coff + 6..cend];
             match ctype {
+                // COLOR_256 / COLOR_64: palette updates. Frames stay
+                // 8bpp indices and the palette is the environment's
+                // external PAL file, so these carry nothing for us
+                // (present in a few MC2 water streams).
+                4 | 11 => {}
                 7 => delta_flc(&mut canvas, w, h, data)?,
                 16 => {
                     // FLI_COPY: raw full-frame refresh.
@@ -268,11 +276,14 @@ mod tests {
     #[test]
     fn rejects_unknown_chunk_and_bad_magic() {
         let base = vec![0u8; 4];
-        let t = tail(&[frame_chunk(&sub_chunk(11, &[0, 0]))]);
+        let t = tail(&[frame_chunk(&sub_chunk(12, &[0, 0]))]);
         assert_eq!(
             decode_frames(2, 2, &base, &t),
-            Err(FlcError::UnknownChunk(11))
+            Err(FlcError::UnknownChunk(12))
         );
+        // Palette sub-chunks (4/11) are tolerated as no-ops.
+        let t = tail(&[frame_chunk(&sub_chunk(11, &[0, 0]))]);
+        assert_eq!(decode_frames(2, 2, &base, &t).unwrap().len(), 2);
         let mut bad = frame_chunk(&sub_chunk(16, &[0; 4]));
         bad[4] = 0;
         let t = tail(&[bad]);

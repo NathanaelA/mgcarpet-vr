@@ -10,25 +10,28 @@
 use std::path::{Path, PathBuf};
 
 use mgc_import::dattab::Archive;
+use mgc_import::gamedata::Gamedata;
 use mgc_import::level_mc2::{MC2_LEVEL_SIZE, MapType, Mc2Level};
 
-fn gamedata_dir() -> PathBuf {
-    match std::env::var_os("MGC_GAMEDATA") {
+fn gamedata() -> Gamedata {
+    let root = match std::env::var_os("MGC_GAMEDATA") {
         Some(p) => PathBuf::from(p),
         None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gamedata"),
-    }
+    };
+    Gamedata::locate(&root)
 }
 
 #[test]
 fn mc2_levels_parse_and_hold_invariants() {
-    let root = gamedata_dir().join("mc2/GAME/NETHERW/CLEVELS");
-    let (dat, tab) = (root.join("LEVELS.DAT"), root.join("LEVELS.TAB"));
-    if !dat.exists() {
+    let Some(src) = gamedata().mc2 else {
         eprintln!("note: MC2 level data not present — skipping");
         return;
-    }
-    let archive =
-        Archive::open(&std::fs::read(&dat).unwrap(), &std::fs::read(&tab).unwrap()).unwrap();
+    };
+    let archive = Archive::open(
+        &src.read("LEVELS/LEVELS.DAT").unwrap(),
+        &src.read("LEVELS/LEVELS.TAB").unwrap(),
+    )
+    .unwrap();
 
     let mut standard = 0u32;
     let mut extended = 0u32;

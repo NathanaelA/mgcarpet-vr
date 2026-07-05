@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::dattab::Archive;
+use crate::gamedata::GameSource;
 use crate::level_mc1::{Mc1Level, ThingKind as Mc1Kind};
 use crate::level_mc2::{MC2_LEVEL_SIZE, MapType as Mc2MapType, Mc2Level};
 use mgc_formats::{
@@ -106,20 +107,25 @@ pub fn package_mc1_level(
 }
 
 /// Bake every level of one MC1-format archive into `out_dir/<tag>/`.
-/// Returns `(package file name, sha256)` pairs.
+/// `base` is the archive's canonical path without extension, e.g.
+/// `LEVELS/DDLEVELS`. Returns `(package file name, sha256)` pairs.
 ///
 /// Terrain comes from the native MC1 generator port (`mc1_terrain`) —
 /// unlike MC2, no external oracle tool is involved.
 pub fn bake_mc1_archive(
     game: Game,
     tag: &str,
-    dat_path: &Path,
-    tab_path: &Path,
+    src: &GameSource,
+    base: &str,
     out_dir: &Path,
 ) -> Result<Vec<(String, String)>, BakeError> {
-    let read = |p: &Path| std::fs::read(p).map_err(|e| BakeError::Io(p.to_path_buf(), e));
-    let archive = Archive::open(&read(dat_path)?, &read(tab_path)?)
-        .map_err(|e| BakeError::Archive(dat_path.to_path_buf(), e))?;
+    let dat_path = PathBuf::from(format!("{base}.DAT"));
+    let read = |rel: String| {
+        src.read(&rel)
+            .map_err(|e| BakeError::Io(PathBuf::from(rel), e))
+    };
+    let archive = Archive::open(&read(format!("{base}.DAT"))?, &read(format!("{base}.TAB"))?)
+        .map_err(|e| BakeError::Archive(dat_path.clone(), e))?;
 
     let archive_name = dat_path
         .file_name()
@@ -348,14 +354,17 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
 /// skipped and their indices returned separately.
 #[allow(clippy::type_complexity)]
 pub fn bake_mc2_archive(
-    dat_path: &Path,
-    tab_path: &Path,
+    src: &GameSource,
     out_dir: &Path,
     genlevel: Option<&Path>,
 ) -> Result<(Vec<(String, String)>, Vec<u32>), BakeError> {
-    let read = |p: &Path| std::fs::read(p).map_err(|e| BakeError::Io(p.to_path_buf(), e));
-    let archive = Archive::open(&read(dat_path)?, &read(tab_path)?)
-        .map_err(|e| BakeError::Archive(dat_path.to_path_buf(), e))?;
+    let dat_path = PathBuf::from("LEVELS/LEVELS.DAT");
+    let read = |rel: &str| {
+        src.read(rel)
+            .map_err(|e| BakeError::Io(PathBuf::from(rel), e))
+    };
+    let archive = Archive::open(&read("LEVELS/LEVELS.DAT")?, &read("LEVELS/LEVELS.TAB")?)
+        .map_err(|e| BakeError::Archive(dat_path.clone(), e))?;
 
     let archive_name = dat_path
         .file_name()

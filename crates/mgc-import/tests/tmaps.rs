@@ -4,42 +4,47 @@
 
 use std::path::{Path, PathBuf};
 
+use mgc_import::gamedata::{GameSource, Gamedata};
 use mgc_import::tmaps::TmapsArchive;
 
-fn gamedata_dir() -> PathBuf {
-    match std::env::var_os("MGC_GAMEDATA") {
+fn gamedata() -> Gamedata {
+    let root = match std::env::var_os("MGC_GAMEDATA") {
         Some(p) => PathBuf::from(p),
         None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gamedata"),
-    }
+    };
+    Gamedata::locate(&root)
 }
 
 #[test]
 fn retail_tmaps_archives_fully_extract() {
-    let sets: [(&str, usize); 5] = [
-        // (path base relative to gamedata, expected entry count)
-        ("mc1/DATA/TMAPS0-0", 529),
-        ("mc1/DATA/TMAPS1-0", 529),
-        ("mc2/GAME/NETHERW/CDATA/TMAPS0-0", 504),
-        ("mc2/GAME/NETHERW/CDATA/TMAPS1-0", 504),
-        ("mc2/GAME/NETHERW/CDATA/TMAPS2-0", 504),
+    let found = gamedata();
+    let sets: [(&str, &Option<GameSource>, &str, usize); 5] = [
+        // (game, source, base path, expected entry count)
+        ("mc1", &found.mc1, "DATA/TMAPS0-0", 529),
+        ("mc1", &found.mc1, "DATA/TMAPS1-0", 529),
+        ("mc2", &found.mc2, "DATA/TMAPS0-0", 504),
+        ("mc2", &found.mc2, "DATA/TMAPS1-0", 504),
+        ("mc2", &found.mc2, "DATA/TMAPS2-0", 504),
     ];
 
     let mut seen_any = false;
-    for (base, expected_entries) in sets {
-        let dat_path = gamedata_dir().join(format!("{base}.DAT"));
-        let tab_path = gamedata_dir().join(format!("{base}.TAB"));
-        if !dat_path.exists() {
-            eprintln!("note: {base} not present — skipping");
+    for (game, src, base, expected_entries) in sets {
+        let label = format!("{game} {base}");
+        let Some(src) = src else {
+            eprintln!("note: {label} not present — skipping");
             continue;
-        }
+        };
+        let (Ok(dat), Ok(tab)) = (
+            src.read(&format!("{base}.DAT")),
+            src.read(&format!("{base}.TAB")),
+        ) else {
+            eprintln!("note: {label} not present — skipping");
+            continue;
+        };
         seen_any = true;
 
-        let archive = TmapsArchive::open(
-            &std::fs::read(&dat_path).unwrap(),
-            &std::fs::read(&tab_path).unwrap(),
-        )
-        .unwrap_or_else(|e| panic!("{base}: {e}"));
-        assert_eq!(archive.entries().len(), expected_entries, "{base}");
+        let archive = TmapsArchive::open(&dat, &tab).unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(archive.entries().len(), expected_entries, "{label}");
 
         let mut plain = 0usize;
         let mut animated = 0usize;
@@ -50,13 +55,13 @@ fn retail_tmaps_archives_fully_extract() {
             // declared size on every entry.
             let payload = archive
                 .extract(entry)
-                .unwrap_or_else(|e| panic!("{base} entry {}: {e}", entry.index));
+                .unwrap_or_else(|e| panic!("{label} entry {}: {e}", entry.index));
             match archive.texture(entry) {
                 Ok(tex) => {
                     plain += 1;
                     assert!(
                         tex.width > 0 && tex.height > 0,
-                        "{base} entry {}: degenerate {}x{}",
+                        "{label} entry {}: degenerate {}x{}",
                         entry.index,
                         tex.width,
                         tex.height
@@ -86,14 +91,14 @@ fn retail_tmaps_archives_fully_extract() {
         }
         assert!(
             irregular.len() <= 2,
-            "{base}: too many undecodable non-animated entries: {irregular:?}"
+            "{label}: too many undecodable non-animated entries: {irregular:?}"
         );
         eprintln!(
-            "{base}: {plain} plain, {animated} animated (extended layout), {empty} empty, irregular {irregular:?}"
+            "{label}: {plain} plain, {animated} animated (extended layout), {empty} empty, irregular {irregular:?}"
         );
     }
     assert!(
-        seen_any || !gamedata_dir().exists(),
+        seen_any || (found.mc1.is_none() && found.mc2.is_none()),
         "gamedata present but no TMAPS found"
     );
 }

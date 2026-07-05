@@ -5,25 +5,29 @@
 //! MC1 ships two complete world tilesets — 0 = temperate, 1 = arctic
 //! (snow; used by the Hidden Worlds bundle) — each with its own palette,
 //! color tables, terrain atlas, sprites, and building footprints. They
-//! bake as the `mc1-temperate` and `mc1-arctic` variants. MC2's
-//! day/night/cave variants use the same schema once its CD catalogs are
-//! available.
+//! bake as the `mc1-temperate` and `mc1-arctic` variants. MC2 ships
+//! four environment graphics sets from its CD catalogs — `mc2-day`,
+//! `mc2-night`, `mc2-night-fog` (night levels with gfx_type bit 1),
+//! `mc2-cave` — same schema, no build/search members yet (its
+//! terrain-feature pass is a separate port).
 
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use mgc_formats::bundle::{
-    BUNDLE_VERSION, BundleManifest, BundleSource, TerrainAtlasInfo,
-};
+use mgc_formats::bundle::{BUNDLE_VERSION, BundleManifest, BundleSource, TerrainAtlasInfo};
 use mgc_formats::{Game, Importer};
 
 use crate::bake::BakeError;
+use crate::gamedata::GameSource;
 use crate::sprites;
 use crate::tmaps::TmapsArchive;
 
 /// Width of the baked sprite atlas; retail sprites max out well below.
+/// Doubled as needed to keep the height under wgpu's baseline 2D
+/// texture limit (MC2's animated sets pack ~9.4k rows at 1024).
 const SPRITE_ATLAS_WIDTH: u32 = 1024;
+const MAX_TEXTURE_DIM: u32 = 8192;
 
 const SHADE_LUT_LEN: usize = 0x4000; // 64 shade levels x 256 colors
 const TILE_COLORS_OFFSET: usize = 0x14000;
@@ -36,39 +40,135 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Bake MC1's two world tilesets into `out_dir/assets/{mc1-temperate,
-/// mc1-arctic}`. Returns `(manifest path, sha256)` pairs for every
-/// written member.
-///
-/// Original catalogs consumed per set N (0 = temperate, 1 = arctic):
-/// - `PALN-0.DAT` (RNC, 6-bit VGA palette) → `palette.bin`, expanded to
-///   RGBA8 (`v<<2 | v>>4`); index 0 gets alpha 0 (the engine's sprite
-///   transparent index), everything else alpha 255.
-/// - `TABLES.DAT` / `DTABLES.DAT` (set 1, stored raw) → `shade-lut.bin`
-///   (first 0x4000 bytes) and `tile-colors.bin` (+0x14000), exactly the
-///   remc2-documented layout.
-/// - `BLKN-1.DAT` (RNC) → `terrain-atlas.bin` + `terrain-atlas.json`
-///   (32px cells, the terrain-type byte is the cell index).
-/// - `TMAPSN-0.DAT/.TAB` → `sprites.bin` + `sprites.json` (world
-///   billboards; FLC animations pre-decoded, see `crate::sprites`).
-/// - `BUILDN-0.TAB/.DAT` (RNC) → `build.tab.bin`/`build.dat.bin`, and
-///   `SEARCH.DAT` (RNC, tileset-independent) → `search.bin`: the
-///   terrain-feature pass data (`mgc_sim::features`).
-pub fn bake_mc1_bundles(
-    data_dir: &Path,
+/// One bundle variant: which original catalogs feed the uniform members.
+/// The differences between MC1's world tilesets and MC2's environments
+/// are entirely in file names and one TABLES layout shift, so a single
+/// spec-driven bake covers both games.
+struct VariantSpec {
+    variant: &'static str,
+    game: Game,
+    /// 768-byte 6-bit VGA palette (`DATA/…`).
+    palette: &'static str,
+    /// 0x14600-byte color-table blob (`DATA/…`).
+    tables: &'static str,
+    /// Offset of the 64x256 shade LUT inside the tables blob: MC1 keeps
+    /// it at +0x0000; MC2 keeps a pixel-remap table there and the shade
+    /// LUT at +0x4000 (remc2 Basic.cpp:123, GameRenderNG shading paths).
+    /// The tile-type→map-color table is at +0x14000 in both games.
+    shade_offset: usize,
+    /// Terrain atlas, 256px wide, 152 cells of 32x32; the terrain-type
+    /// byte is the cell index in both games (identity mapping, remc2
+    /// GameRenderHD.cpp:854).
+    atlas: &'static str,
+    /// TMAPS base name without extension (`DATA/…`): world billboards.
+    tmaps: &'static str,
+    /// MC1 only: BUILD base name; implies `SEARCH.DAT` too. MC2's
+    /// terrain-feature pass is a separate original implementation whose
+    /// data semantics are unverified — omitted until that port.
+    build: Option<&'static str>,
+}
+
+const MC1_VARIANTS: [VariantSpec; 2] = [
+    VariantSpec {
+        variant: "mc1-temperate",
+        game: Game::MagicCarpet1,
+        palette: "DATA/PAL0-0.DAT",
+        tables: "DATA/TABLES.DAT",
+        shade_offset: 0,
+        atlas: "DATA/BLK0-1.DAT",
+        tmaps: "DATA/TMAPS0-0",
+        build: Some("DATA/BUILD0-0"),
+    },
+    VariantSpec {
+        variant: "mc1-arctic",
+        game: Game::MagicCarpet1,
+        palette: "DATA/PAL1-0.DAT",
+        tables: "DATA/DTABLES.DAT",
+        shade_offset: 0,
+        atlas: "DATA/BLK1-1.DAT",
+        tmaps: "DATA/TMAPS1-0",
+        build: Some("DATA/BUILD1-0"),
+    },
+];
+
+/// MC2's per-environment catalogs (remc2 ReadAndDecompress.cpp:21-170,
+/// Level.cpp:878-906): day uses the un-suffixed BLOCK32 atlas, night
+/// splits into plain and "fog" graphics on the level header's gfx_type
+/// bit 1 (fog swaps atlas + palette; tables and TMAPS stay night), and
+/// TMAPS digits are the MapType ordinals (0 day / 1 night / 2 cave).
+const MC2_VARIANTS: [VariantSpec; 4] = [
+    VariantSpec {
+        variant: "mc2-day",
+        game: Game::MagicCarpet2,
+        palette: "DATA/PALD-0.DAT",
+        tables: "DATA/TABLESD.DAT",
+        shade_offset: MC2_SHADE_OFFSET,
+        atlas: "DATA/BLOCK32.DAT",
+        tmaps: "DATA/TMAPS0-0",
+        build: None,
+    },
+    VariantSpec {
+        variant: "mc2-night",
+        game: Game::MagicCarpet2,
+        palette: "DATA/PALN-0.DAT",
+        tables: "DATA/TABLESN.DAT",
+        shade_offset: MC2_SHADE_OFFSET,
+        atlas: "DATA/BL32N0-0.DAT",
+        tmaps: "DATA/TMAPS1-0",
+        build: None,
+    },
+    VariantSpec {
+        variant: "mc2-night-fog",
+        game: Game::MagicCarpet2,
+        palette: "DATA/PALF-0.DAT",
+        tables: "DATA/TABLESN.DAT",
+        shade_offset: MC2_SHADE_OFFSET,
+        atlas: "DATA/BL32F0-0.DAT",
+        tmaps: "DATA/TMAPS1-0",
+        build: None,
+    },
+    VariantSpec {
+        variant: "mc2-cave",
+        game: Game::MagicCarpet2,
+        palette: "DATA/PALC-0.DAT",
+        tables: "DATA/TABLESC.DAT",
+        shade_offset: MC2_SHADE_OFFSET,
+        atlas: "DATA/BL32C0-0.DAT",
+        tmaps: "DATA/TMAPS2-0",
+        build: None,
+    },
+];
+
+const MC2_SHADE_OFFSET: usize = 0x4000;
+
+fn bake_bundle_set(
+    src: &GameSource,
     out_dir: &Path,
+    specs: &[VariantSpec],
 ) -> Result<Vec<(String, String)>, BakeError> {
     let mut outputs = Vec::new();
-    for (set, variant) in [(0u8, "mc1-temperate"), (1u8, "mc1-arctic")] {
-        let dir = out_dir.join("assets").join(variant);
+    for spec in specs {
+        let dir = out_dir.join("assets").join(spec.variant);
         std::fs::create_dir_all(&dir).map_err(|e| BakeError::Io(dir.clone(), e))?;
-        let baked = bake_variant(data_dir, &dir, set, variant)?;
+        let baked = bake_variant(src, &dir, spec)?;
         outputs.extend(
             baked
                 .into_iter()
-                .map(|(name, sha)| (format!("assets/{variant}/{name}"), sha)),
+                .map(|(name, sha)| (format!("assets/{}/{name}", spec.variant), sha)),
         );
     }
+    Ok(outputs)
+}
+
+/// Bake MC1's two world tilesets into `out_dir/assets/{mc1-temperate,
+/// mc1-arctic}`. Returns `(manifest path, sha256)` pairs for every
+/// written member. Member semantics are in docs/FORMAT.md "Asset
+/// bundles"; per-variant source catalogs in [`MC1_VARIANTS`].
+pub fn bake_mc1_bundles(
+    src: &GameSource,
+    out_dir: &Path,
+) -> Result<Vec<(String, String)>, BakeError> {
+    let outputs = bake_bundle_set(src, out_dir, &MC1_VARIANTS)?;
     // The pre-bundle asset layout; remove so stale files cannot shadow
     // the bundles.
     let legacy = out_dir.join("mc1/assets");
@@ -78,11 +178,20 @@ pub fn bake_mc1_bundles(
     Ok(outputs)
 }
 
+/// Bake MC2's four environment bundles (`mc2-day`, `mc2-night`,
+/// `mc2-night-fog`, `mc2-cave`) from the CD catalogs. No search/build
+/// members yet — MC2's terrain-feature pass is a separate port.
+pub fn bake_mc2_bundles(
+    src: &GameSource,
+    out_dir: &Path,
+) -> Result<Vec<(String, String)>, BakeError> {
+    bake_bundle_set(src, out_dir, &MC2_VARIANTS)
+}
+
 fn bake_variant(
-    data_dir: &Path,
+    src: &GameSource,
     dir: &Path,
-    set: u8,
-    variant: &str,
+    spec: &VariantSpec,
 ) -> Result<Vec<(String, String)>, BakeError> {
     let mut outputs = Vec::new();
     let mut sources = Vec::new();
@@ -94,24 +203,26 @@ fn bake_variant(
         Ok(())
     };
     // Read + record provenance; decompress whole-file RNC when present
-    // (DTABLES.DAT and the TMAPS TABs ship raw).
-    let source = |file: &str, sources: &mut Vec<BundleSource>| -> Result<Vec<u8>, BakeError> {
-        let path = data_dir.join(file);
-        let raw = std::fs::read(&path).map_err(|e| BakeError::Io(path.clone(), e))?;
+    // (several catalogs and the TMAPS TABs ship raw).
+    let source = |rel: &str, sources: &mut Vec<BundleSource>| -> Result<Vec<u8>, BakeError> {
+        let raw = src
+            .read(rel)
+            .map_err(|e| BakeError::Io(Path::new(rel).to_path_buf(), e))?;
         sources.push(BundleSource {
-            file: file.to_string(),
+            file: rel.rsplit('/').next().unwrap_or(rel).to_string(),
             sha256: hex(&Sha256::digest(&raw)),
         });
         if crate::rnc::is_rnc(&raw) {
-            crate::rnc::decompress(&raw).map_err(|e| BakeError::Level(path, 0, e.to_string()))
+            crate::rnc::decompress(&raw)
+                .map_err(|e| BakeError::Level(Path::new(rel).to_path_buf(), 0, e.to_string()))
         } else {
             Ok(raw)
         }
     };
-    let expect = |file: &str, data: &[u8], len: usize| -> Result<(), BakeError> {
+    let expect = |rel: &str, data: &[u8], len: usize| -> Result<(), BakeError> {
         if data.len() != len {
             return Err(BakeError::Level(
-                data_dir.join(file),
+                Path::new(rel).to_path_buf(),
                 0,
                 format!("{} bytes, expected {len}", data.len()),
             ));
@@ -120,9 +231,8 @@ fn bake_variant(
     };
 
     // Palette: 6-bit VGA -> RGBA8, index 0 transparent.
-    let pal_file = format!("PAL{set}-0.DAT");
-    let vga = source(&pal_file, &mut sources)?;
-    expect(&pal_file, &vga, 768)?;
+    let vga = source(spec.palette, &mut sources)?;
+    expect(spec.palette, &vga, 768)?;
     let mut rgba = Vec::with_capacity(1024);
     for (i, c) in vga.chunks_exact(3).enumerate() {
         for &v in c {
@@ -132,21 +242,24 @@ fn bake_variant(
     }
     emit("palette.bin", &rgba)?;
 
-    // Color tables.
-    let tables_file = if set == 0 { "TABLES.DAT" } else { "DTABLES.DAT" };
-    let tables = source(tables_file, &mut sources)?;
-    expect(tables_file, &tables, TABLES_LEN)?;
-    emit("shade-lut.bin", &tables[..SHADE_LUT_LEN])?;
+    // Color tables: shade LUT at the game's offset (see
+    // VariantSpec::shade_offset), tile-type→map-color at +0x14000 in
+    // both games.
+    let tables = source(spec.tables, &mut sources)?;
+    expect(spec.tables, &tables, TABLES_LEN)?;
+    emit(
+        "shade-lut.bin",
+        &tables[spec.shade_offset..spec.shade_offset + SHADE_LUT_LEN],
+    )?;
     emit(
         "tile-colors.bin",
         &tables[TILE_COLORS_OFFSET..TILE_COLORS_OFFSET + 256],
     )?;
 
     // Terrain atlas.
-    let blk_file = format!("BLK{set}-1.DAT");
-    let atlas = source(&blk_file, &mut sources)?;
+    let atlas = source(spec.atlas, &mut sources)?;
     expect(
-        &blk_file,
+        spec.atlas,
         &atlas,
         (ATLAS_WIDTH * ATLAS_CELL * ATLAS_CELLS.div_ceil(ATLAS_WIDTH / ATLAS_CELL)) as usize,
     )?;
@@ -162,46 +275,53 @@ fn bake_variant(
     )?;
 
     // World sprites.
-    let tmaps_dat_file = format!("TMAPS{set}-0.DAT");
-    let tmaps_tab_file = format!("TMAPS{set}-0.TAB");
+    let tmaps_dat_file = format!("{}.DAT", spec.tmaps);
     let tmaps_dat = source(&tmaps_dat_file, &mut sources)?;
-    let tmaps_tab = source(&tmaps_tab_file, &mut sources)?;
-    let archive = TmapsArchive::open(&tmaps_dat, &tmaps_tab)
-        .map_err(|e| BakeError::Level(data_dir.join(&tmaps_dat_file), 0, e.to_string()))?;
-    let (decoded, warnings) = sprites::decode_tmaps(&archive)
-        .map_err(|e| BakeError::Level(data_dir.join(&tmaps_dat_file), 0, e.to_string()))?;
+    let tmaps_tab = source(&format!("{}.TAB", spec.tmaps), &mut sources)?;
+    let archive = TmapsArchive::open(&tmaps_dat, &tmaps_tab).map_err(|e| {
+        BakeError::Level(Path::new(&tmaps_dat_file).to_path_buf(), 0, e.to_string())
+    })?;
+    let (decoded, warnings) = sprites::decode_tmaps(&archive).map_err(|e| {
+        BakeError::Level(Path::new(&tmaps_dat_file).to_path_buf(), 0, e.to_string())
+    })?;
     for w in warnings {
-        eprintln!("note: {variant}: {w}");
+        eprintln!("note: {}: {w}", spec.variant);
     }
-    let packed = sprites::pack(&decoded, SPRITE_ATLAS_WIDTH);
+    let mut atlas_width = SPRITE_ATLAS_WIDTH;
+    let mut packed = sprites::pack(&decoded, atlas_width);
+    while packed.index.atlas_height > MAX_TEXTURE_DIM && atlas_width < MAX_TEXTURE_DIM {
+        atlas_width *= 2;
+        packed = sprites::pack(&decoded, atlas_width);
+    }
     emit("sprites.bin", &packed.atlas)?;
     emit(
         "sprites.json",
         &serde_json::to_vec_pretty(&packed.index).expect("sprite index serializes"),
     )?;
 
-    // Terrain-feature data.
-    let tab_file = format!("BUILD{set}-0.TAB");
-    let tab = source(&tab_file, &mut sources)?;
-    if tab.len() % 6 != 0 {
-        return Err(BakeError::Level(
-            data_dir.join(&tab_file),
-            0,
-            format!("{} bytes is not 6-byte entries", tab.len()),
-        ));
+    // Terrain-feature data (MC1 only for now, see VariantSpec::build).
+    if let Some(build) = spec.build {
+        let tab_file = format!("{build}.TAB");
+        let tab = source(&tab_file, &mut sources)?;
+        if tab.len() % 6 != 0 {
+            return Err(BakeError::Level(
+                Path::new(&tab_file).to_path_buf(),
+                0,
+                format!("{} bytes is not 6-byte entries", tab.len()),
+            ));
+        }
+        emit("build.tab.bin", &tab)?;
+        let build_dat = source(&format!("{build}.DAT"), &mut sources)?;
+        emit("build.dat.bin", &build_dat)?;
+        let search = source("DATA/SEARCH.DAT", &mut sources)?;
+        expect("DATA/SEARCH.DAT", &search, 1024)?;
+        emit("search.bin", &search)?;
     }
-    emit("build.tab.bin", &tab)?;
-    let dat_file = format!("BUILD{set}-0.DAT");
-    let build_dat = source(&dat_file, &mut sources)?;
-    emit("build.dat.bin", &build_dat)?;
-    let search = source("SEARCH.DAT", &mut sources)?;
-    expect("SEARCH.DAT", &search, 1024)?;
-    emit("search.bin", &search)?;
 
     let manifest = BundleManifest {
         format_version: BUNDLE_VERSION,
-        variant: variant.to_string(),
-        game: Game::MagicCarpet1,
+        variant: spec.variant.to_string(),
+        game: spec.game,
         importer: Importer {
             name: "mgc-import".into(),
             version: env!("CARGO_PKG_VERSION").into(),

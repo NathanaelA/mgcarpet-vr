@@ -706,7 +706,6 @@ impl Gen {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

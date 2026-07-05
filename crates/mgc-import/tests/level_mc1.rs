@@ -5,18 +5,20 @@
 use std::path::{Path, PathBuf};
 
 use mgc_import::dattab::Archive;
+use mgc_import::gamedata::{GameSource, Gamedata};
 use mgc_import::level_mc1::Mc1Level;
 
-fn gamedata_dir() -> PathBuf {
-    match std::env::var_os("MGC_GAMEDATA") {
+fn gamedata() -> Gamedata {
+    let root = match std::env::var_os("MGC_GAMEDATA") {
         Some(p) => PathBuf::from(p),
         None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gamedata"),
-    }
+    };
+    Gamedata::locate(&root)
 }
 
-fn open(dat: &Path, tab: &Path) -> Option<Archive> {
-    let dat = std::fs::read(dat).ok()?;
-    let tab = std::fs::read(tab).ok()?;
+fn open(src: &GameSource, base: &str) -> Option<Archive> {
+    let dat = src.read(&format!("{base}.DAT")).ok()?;
+    let tab = src.read(&format!("{base}.TAB")).ok()?;
     Some(Archive::open(&dat, &tab).expect("archive should parse"))
 }
 
@@ -74,8 +76,7 @@ fn check_all(archive: &Archive, label: &str) -> Vec<Mc1Level> {
 
 #[test]
 fn mc1_levels_parse_and_hold_invariants() {
-    let root = gamedata_dir().join("mc1/LEVELS");
-    let Some(archive) = open(&root.join("LEVELS.DAT"), &root.join("LEVELS.TAB")) else {
+    let Some(archive) = gamedata().mc1.and_then(|s| open(&s, "LEVELS/LEVELS")) else {
         eprintln!("note: MC1 level data not present — skipping");
         return;
     };
@@ -100,8 +101,7 @@ fn mc1_levels_parse_and_hold_invariants() {
 
 #[test]
 fn hidden_worlds_levels_parse_and_hold_invariants() {
-    let root = gamedata_dir().join("mc1/LEVELS");
-    let Some(archive) = open(&root.join("DDLEVELS.DAT"), &root.join("DDLEVELS.TAB")) else {
+    let Some(archive) = gamedata().mc1.and_then(|s| open(&s, "LEVELS/DDLEVELS")) else {
         eprintln!("note: Hidden Worlds level data not present — skipping");
         return;
     };

@@ -27,6 +27,13 @@ whose fixtures contain no post-generation entity edits; the test
 `baked_terrain_matches_remc2_fixture` re-checks this when a remc2
 checkout is present, override its location with `MGC_REMC2`).
 
+## rip-mc2-cdaudio.py
+
+Pulls the 27 redbook soundtrack tracks out of the GOG MC2 install's
+`game.gog` CD image into FLAC files (needs ffmpeg), for the engine's
+future music support. Game *data* files are never extracted this way —
+the importer reads them straight from the image (`mgc_import::iso`).
+
 ## MC1 oracle (planned)
 
 Reference dumps for MC1 terrain generation, via instrumented DOSBox

@@ -5,61 +5,51 @@
 //! asset-less checkouts stay green. Point `MGC_GAMEDATA` elsewhere to
 //! override the location.
 //!
-//! Every RNC container found must decompress with both CRCs verifying —
-//! the container carries its own ground truth, so this is a real
-//! correctness check of the decompressor against Bullfrog's packer.
+//! Every RNC container reachable through the game sources — including
+//! files living inside the GOG CD images — must decompress with both
+//! CRCs verifying. The container carries its own ground truth, so this
+//! is a real correctness check of the decompressor against Bullfrog's
+//! packer (and of the ISO reader's byte fidelity along the way).
 
 use std::path::{Path, PathBuf};
 
+use mgc_import::gamedata::Gamedata;
 use mgc_import::rnc;
 
-fn gamedata_dir() -> PathBuf {
-    match std::env::var_os("MGC_GAMEDATA") {
+fn gamedata() -> Gamedata {
+    let root = match std::env::var_os("MGC_GAMEDATA") {
         Some(p) => PathBuf::from(p),
         None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../gamedata"),
-    }
-}
-
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, out);
-        } else {
-            out.push(path);
-        }
-    }
+    Gamedata::locate(&root)
 }
 
 #[test]
 fn all_gamedata_rnc_files_decompress() {
-    let root = gamedata_dir();
-    let mut files = Vec::new();
-    collect_files(&root, &mut files);
+    let found = gamedata();
 
     let mut checked = 0u32;
     let mut failures = Vec::new();
-    for path in files {
-        let Ok(data) = std::fs::read(&path) else {
+    for (tag, src) in [("mc1", &found.mc1), ("mc2", &found.mc2)] {
+        let Some(src) = src else {
             continue;
         };
-        if !rnc::is_rnc(&data) {
-            continue;
-        }
-        checked += 1;
-        if let Err(e) = rnc::decompress(&data) {
-            failures.push(format!("{}: {e}", path.display()));
+        for rel in src.list() {
+            let data = src
+                .read(&rel)
+                .unwrap_or_else(|e| panic!("{tag} {rel}: listed but unreadable: {e}"));
+            if !rnc::is_rnc(&data) {
+                continue;
+            }
+            checked += 1;
+            if let Err(e) = rnc::decompress(&data) {
+                failures.push(format!("{tag} {rel}: {e}"));
+            }
         }
     }
 
     if checked == 0 {
-        eprintln!(
-            "note: no RNC files under {} — install game data to enable this test",
-            root.display()
-        );
+        eprintln!("note: no RNC files found — install game data to enable this test");
         return;
     }
     eprintln!("verified {checked} RNC containers");

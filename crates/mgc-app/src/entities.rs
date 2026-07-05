@@ -206,7 +206,11 @@ pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::M
 
 /// Expand a 6-bit VGA triple the way the bundle palette was baked.
 fn vga(r: u8, g: u8, b: u8) -> [u8; 3] {
-    [(r << 2) | (r >> 4), (g << 2) | (g >> 4), (b << 2) | (b >> 4)]
+    [
+        (r << 2) | (r >> 4),
+        (g << 2) | (g >> 4),
+        (b << 2) | (b >> 4),
+    ]
 }
 
 /// Nearest palette entry by squared RGB distance (the engine's

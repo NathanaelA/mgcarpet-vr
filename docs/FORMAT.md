@@ -263,11 +263,13 @@ data; sounds, music, and text will join additively.
 One schema, many *variants*: game and environment differences are
 expressed as bundle instances, never as layout differences. Current
 variants: `mc1-temperate`, `mc1-arctic` (MC1's two complete world
-tilesets; Hidden Worlds levels use the arctic one). Pending original
-data from the MC2 CD image: `mc2-day`, `mc2-night`, `mc2-cave`. The
-engine resolves a variant id (`baked/assets/<variant>/`); Bullfrog
-catalog names, RNC, sprite RLE, and FLC animation encodings all die in
-the importer.
+tilesets; Hidden Worlds levels use the arctic one) and MC2's four
+environment graphics sets `mc2-day`, `mc2-night`, `mc2-night-fog`,
+`mc2-cave` (per-level selector: the header's `map_type`, with night
+levels whose `gfx_type` has bit 1 set using the fog set — remc2
+Level.cpp:890). The engine resolves a variant id
+(`baked/assets/<variant>/`); Bullfrog catalog names, RNC, sprite RLE,
+and FLC animation encodings all die in the importer.
 
 All integers little-endian; all pixel data 8-bit palette indices
 (palette-as-LUT is the engine's authenticity baseline — RGBA is a
@@ -277,10 +279,10 @@ render-time resolve, and index 0 is the sprite-transparent index).
 |---|---|
 | `bundle.json` | manifest: `format_version`, `variant`, `game`, importer, source catalog files + raw-file sha256 |
 | `palette.bin` | 256 x RGBA8, VGA 6-bit expanded (`v<<2\|v>>4`); index 0 has alpha 0 |
-| `shade-lut.bin` | 64 rows x 256: `shade level x palette index -> final palette index` (the light/fog remap; `TABLES.DAT` first 0x4000 bytes) |
-| `tile-colors.bin` | 256: terrain type -> flat map color index (`TABLES.DAT` +0x14000) |
+| `shade-lut.bin` | 64 rows x 256: `shade level x palette index -> final palette index` (the light/fog remap; the TABLES blob at +0x0000 in MC1, +0x4000 in MC2 — MC2 keeps a pixel-remap table at +0x0000) |
+| `tile-colors.bin` | 256: terrain type -> flat map color index (TABLES blob +0x14000, both games) |
 | `terrain-atlas.bin` + `.json` | terrain texture atlas, square cells; the json gives `{cell, width, cells}`; the terrain-type byte indexes cells row-major |
-| `sprites.bin` + `sprites.json` | one 8bpp atlas of all world-sprite frames + its index (below) |
+| `sprites.bin` + `sprites.json` | one 8bpp atlas of all world-sprite frames + its index (below); atlas width doubles from 1024 as needed to stay under the 8192 texture-dimension baseline |
 | `search.bin` | 32x32 ring-order grid (terrain-feature digs) |
 | `build.tab.bin`, `build.dat.bin` | building footprint RLE maps (terrain-feature building pass) |
 
@@ -299,5 +301,10 @@ animated entries.
 Provenance per source (MC1): `PAL{N}-0.DAT`, `TABLES.DAT` /
 `DTABLES.DAT`, `BLK{N}-1.DAT`, `TMAPS{N}-0.DAT/.TAB`,
 `BUILD{N}-0.TAB/.DAT`, `SEARCH.DAT` for N = 0 (temperate) / 1
-(arctic). The versioning/evolution rules above apply unchanged
-(`bundle.json` `format_version`).
+(arctic). MC2 (all from the CD image): `PAL{D,N,F,C}-0.DAT`,
+`TABLES{D,N,C}.DAT`, `BLOCK32.DAT` (day) / `BL32{N,F,C}0-0.DAT`,
+`TMAPS{0,1,2}-0.DAT/.TAB` (digit = map_type ordinal; fog shares
+night's tables and TMAPS). MC2 bundles carry no `search.bin` /
+`build.*.bin` yet — its terrain-feature pass is a separate original
+implementation, pending its own port. The versioning/evolution rules
+above apply unchanged (`bundle.json` `format_version`).

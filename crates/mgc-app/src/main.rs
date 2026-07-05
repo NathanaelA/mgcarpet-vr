@@ -71,9 +71,9 @@ fn load_level(
     })?;
 
     // Bundles live in the baked tree next to the per-game level dirs:
-    // <baked>/<game>/level-NNN.mgcl, <baked>/assets/<variant>/. MC2's
-    // own bundles are still blocked on its CD catalogs (see ROADMAP),
-    // so MC2 levels borrow mc1-temperate as a stand-in.
+    // <baked>/<game>/level-NNN.mgcl, <baked>/assets/<variant>/. MC1's
+    // selector is the Hidden Worlds mode flag (temperate/arctic); MC2's
+    // is the level's environment (day/night/cave from level.json).
     let baked_root = level_path
         .parent()
         .and_then(Path::parent)
@@ -82,9 +82,23 @@ fn load_level(
         Game::HiddenWorlds => 1,
         _ => 0,
     });
-    let variant = if set == 1 { "mc1-arctic" } else { "mc1-temperate" };
-    if package.meta.game == Game::MagicCarpet2 {
-        eprintln!("note: MC2 bundles not yet baked — using {variant} as a stand-in");
+    let mut variant = if package.meta.game == Game::MagicCarpet2 {
+        // Night splits on the header's gfx_type bit 1 into plain and
+        // "fog" graphics (remc2 Level.cpp:890: PALF/BL32F variants).
+        match package.header.as_ref().map(|h| (h.map_type, h.gfx_type)) {
+            Some((mgc_formats::MapType::Night, g)) if g & 2 != 0 => "mc2-night-fog",
+            Some((mgc_formats::MapType::Night, _)) => "mc2-night",
+            Some((mgc_formats::MapType::Cave, _)) => "mc2-cave",
+            _ => "mc2-day",
+        }
+    } else if set == 1 {
+        "mc1-arctic"
+    } else {
+        "mc1-temperate"
+    };
+    if !baked_root.join("assets").join(variant).is_dir() && variant.starts_with("mc2") {
+        eprintln!("note: {variant} bundle not baked — using mc1-temperate as a stand-in (rebake)");
+        variant = "mc1-temperate";
     }
     let bundle = Bundle::load(&baked_root.join("assets").join(variant))
         .map_err(|e| format!("bundle {variant}: {e}"))?;
@@ -109,10 +123,15 @@ fn load_level(
     // separate remc2 port, pending). Needs the shading + angle planes
     // and the bundle's search/build data.
     if terrain_features && package.meta.game != Game::MagicCarpet2 {
-        match (&mut shading, &mut angle, &bundle.search, &bundle.build_tab, &bundle.build_dat) {
+        match (
+            &mut shading,
+            &mut angle,
+            &bundle.search,
+            &bundle.build_tab,
+            &bundle.build_dat,
+        ) {
             (Some(shading), Some(angle), Some(search), Some(build_tab), Some(build_dat)) => {
-                let assets =
-                    mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
+                let assets = mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
                 mgc_sim::features::generate_features_mc1(
                     mgc_sim::features::TerrainPlanes {

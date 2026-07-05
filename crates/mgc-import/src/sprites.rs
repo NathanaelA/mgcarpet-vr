@@ -32,11 +32,28 @@ pub struct DecodedSprite {
 /// Decode every entry of a TMAPS archive. Undecodable entries (retail
 /// corruption) become frame-less placeholders; a warning line per
 /// occurrence is returned alongside.
-pub fn decode_tmaps(archive: &TmapsArchive) -> Result<(Vec<DecodedSprite>, Vec<String>), TmapsError> {
+pub fn decode_tmaps(
+    archive: &TmapsArchive,
+) -> Result<(Vec<DecodedSprite>, Vec<String>), TmapsError> {
     let mut sprites = Vec::with_capacity(archive.entries().len());
     let mut warnings = Vec::new();
     for entry in archive.entries() {
         let payload = archive.extract(*entry)?;
+        // One-byte payloads are intentional placeholder slots for
+        // sprites absent from an environment's set (MC2's night TMAPS
+        // has runs of them) — ids must stay dense, so keep a frame-less
+        // 0x0 entry without a warning.
+        if payload.len() <= 1 {
+            sprites.push(DecodedSprite {
+                index: entry.index,
+                group: entry.group,
+                flags: 0,
+                width: 0,
+                height: 0,
+                frames: Vec::new(),
+            });
+            continue;
+        }
         if payload.len() < 6 {
             return Err(TmapsError::BadTexture(entry.index));
         }
@@ -195,10 +212,10 @@ mod tests {
         let packed = pack(&sprites, 8);
         let idx = &packed.index;
         // Sprite 0's two frames fill the first shelf.
-        assert_eq!(idx.sprites[0].frames, vec![
-            FramePos { x: 0, y: 0 },
-            FramePos { x: 4, y: 0 }
-        ]);
+        assert_eq!(
+            idx.sprites[0].frames,
+            vec![FramePos { x: 0, y: 0 }, FramePos { x: 4, y: 0 }]
+        );
         // Sprite 1 fits on the same shelf? No: shelf 0 is full (x=8).
         // It opens shelf 1 (height 2).
         assert_eq!(idx.sprites[1].frames, vec![FramePos { x: 0, y: 4 }]);

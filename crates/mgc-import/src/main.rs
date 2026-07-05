@@ -224,18 +224,15 @@ fn level(dat_path: &Path, tab_path: &Path, index: &str) -> ExitCode {
 
 fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
     use mgc_formats::Game;
-    let archives = [
-        (
-            Game::MagicCarpet1,
-            "mc1",
-            gamedata.join("mc1/LEVELS/LEVELS"),
-        ),
-        (
-            Game::HiddenWorlds,
-            "mc1hw",
-            gamedata.join("mc1/LEVELS/DDLEVELS"),
-        ),
-    ];
+    let found = mgc_import::gamedata::Gamedata::locate(gamedata);
+    match &found.mc1 {
+        Some(src) => println!("mc1 source: {}", src.origin),
+        None => eprintln!("note: no MC1 data under {} — skipping", gamedata.display()),
+    }
+    match &found.mc2 {
+        Some(src) => println!("mc2 source: {}", src.origin),
+        None => eprintln!("note: no MC2 data under {} — skipping", gamedata.display()),
+    }
 
     // MC1 terrain is generated natively (mc1_terrain); only MC2 needs
     // the remc2-carved oracle tool.
@@ -248,47 +245,48 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
     }
 
     let mut manifest = Vec::new();
-    for (game, tag, base) in archives {
-        let dat = base.with_extension("DAT");
-        let tab = base.with_extension("TAB");
-        if !dat.exists() {
-            eprintln!("note: {} not found — skipping {tag}", dat.display());
-            continue;
-        }
-        match bake::bake_mc1_archive(game, tag, &dat, &tab, out_dir) {
-            Ok(outputs) => {
-                println!("{tag}: baked {} levels", outputs.len());
-                manifest.extend(outputs);
+    if let Some(src) = &found.mc1 {
+        let archives = [
+            (Game::MagicCarpet1, "mc1", "LEVELS/LEVELS"),
+            (Game::HiddenWorlds, "mc1hw", "LEVELS/DDLEVELS"),
+        ];
+        for (game, tag, base) in archives {
+            if !src.exists(&format!("{base}.DAT")) {
+                eprintln!("note: {base}.DAT not found — skipping {tag}");
+                continue;
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    let mc1_data = gamedata.join("mc1/DATA");
-    if mc1_data.join("PAL0-0.DAT").exists() {
-        match mgc_import::bundle::bake_mc1_bundles(&mc1_data, out_dir) {
-            Ok(outputs) => {
-                println!(
-                    "mc1: baked asset bundles mc1-temperate + mc1-arctic ({} members)",
-                    outputs.len()
-                );
-                manifest.extend(outputs);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
+            match bake::bake_mc1_archive(game, tag, src, base, out_dir) {
+                Ok(outputs) => {
+                    println!("{tag}: baked {} levels", outputs.len());
+                    manifest.extend(outputs);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
             }
         }
-    } else {
-        eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
+        if src.exists("DATA/PAL0-0.DAT") {
+            match mgc_import::bundle::bake_mc1_bundles(src, out_dir) {
+                Ok(outputs) => {
+                    println!(
+                        "mc1: baked asset bundles mc1-temperate + mc1-arctic ({} members)",
+                        outputs.len()
+                    );
+                    manifest.extend(outputs);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
+        }
     }
 
-    let mc2_dat = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.DAT");
-    let mc2_tab = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.TAB");
-    if mc2_dat.exists() {
-        match bake::bake_mc2_archive(&mc2_dat, &mc2_tab, out_dir, genlevel.as_deref()) {
+    if let Some(src) = &found.mc2 {
+        match bake::bake_mc2_archive(src, out_dir, genlevel.as_deref()) {
             Ok((outputs, skipped)) => {
                 println!("mc2: baked {} levels", outputs.len());
                 if !skipped.is_empty() {
@@ -305,8 +303,27 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
-    } else {
-        eprintln!("note: {} not found — skipping mc2", mc2_dat.display());
+        // Environment bundles need the CD catalogs (absent from
+        // hard-disk-only legacy copies).
+        if src.exists("DATA/PALD-0.DAT") {
+            match mgc_import::bundle::bake_mc2_bundles(src, out_dir) {
+                Ok(outputs) => {
+                    println!(
+                        "mc2: baked asset bundles mc2-day/night/night-fog/cave ({} members)",
+                        outputs.len()
+                    );
+                    manifest.extend(outputs);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            eprintln!(
+                "note: mc2 DATA/PALD-0.DAT not found (CD catalogs missing) — skipping mc2 bundles"
+            );
+        }
     }
 
     // Any subset of the three games is valid, including none at all
@@ -337,6 +354,15 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn out_scan_line(label: &str, data: &[u8], decompressed: &[u8]) -> bool {
+    out(format_args!(
+        "  OK     {label}  {} -> {} bytes (method {})",
+        data.len(),
+        decompressed.len(),
+        rnc::parse_header(data).map(|h| h.method).unwrap_or(0),
+    ))
+}
+
 fn scan(root: &Path) -> ExitCode {
     let mut files = Vec::new();
     if let Err(e) = collect_files(root, &mut files) {
@@ -346,29 +372,42 @@ fn scan(root: &Path) -> ExitCode {
     files.sort();
 
     let (mut rnc_ok, mut rnc_bad, mut other) = (0u32, 0u32, 0u32);
+    let mut check = |label: &str, data: &[u8]| -> bool {
+        if !rnc::is_rnc(data) {
+            other += 1;
+            return true;
+        }
+        match rnc::decompress(data) {
+            Ok(out) => {
+                rnc_ok += 1;
+                out_scan_line(label, data, &out)
+            }
+            Err(e) => {
+                rnc_bad += 1;
+                out(format_args!("  FAIL   {label}  {e}"))
+            }
+        }
+    };
     for path in &files {
         let Ok(data) = std::fs::read(path) else {
             eprintln!("  ERROR  {} (unreadable)", path.display());
             continue;
         };
-        if !rnc::is_rnc(&data) {
-            other += 1;
-            continue;
+        if !check(&path.display().to_string(), &data) {
+            return ExitCode::SUCCESS;
         }
-        match rnc::decompress(&data) {
-            Ok(out) => {
-                rnc_ok += 1;
-                outln!(
-                    "  OK     {}  {} -> {} bytes (method {})",
-                    path.display(),
-                    data.len(),
-                    out.len(),
-                    rnc::parse_header(&data).map(|h| h.method).unwrap_or(0),
-                );
-            }
-            Err(e) => {
-                rnc_bad += 1;
-                outln!("  FAIL   {}  {e}", path.display());
+        // CD images (the GOG installs' game.gog) are scanned inside-out
+        // too — most game data lives there, not on the filesystem.
+        if let Ok(image) = mgc_import::iso::IsoImage::open(path) {
+            let inner: Vec<String> = image.paths().map(String::from).collect();
+            for rel in inner {
+                let Ok(data) = image.read(&rel) else {
+                    eprintln!("  ERROR  {}!{rel} (unreadable)", path.display());
+                    continue;
+                };
+                if !check(&format!("{}!{rel}", path.display()), &data) {
+                    return ExitCode::SUCCESS;
+                }
             }
         }
     }

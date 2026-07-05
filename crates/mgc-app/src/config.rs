@@ -44,12 +44,8 @@ impl Config {
     /// silently authentic.
     pub fn load(path: &Path, explicit: bool) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
-            Ok(text) => {
-                serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => {
-                Ok(Self::default())
-            }
+            Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(Self::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }
     }
