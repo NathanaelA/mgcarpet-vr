@@ -14,12 +14,13 @@ struct Globals {
     view_proj: mat4x4<f32>,
     // xyz = camera position (tile units), w = fog density
     camera: vec4<f32>,
-    // rgb = fog/sky color (linear), a unused
+    // rgb = fog/sky color (linear), a = water animation turn (the
+    // game's per-tick counter, fractional for render interpolation)
     fog_color: vec4<f32>,
     // x = atlas cell count (0 = untextured),
     // y = smooth shading (1 = interpolate the per-tile shade level
     //     across tile centers instead of the original's per-tile snap),
-    // z/w reserved
+    // z = water wave rule (0 = off, 1 = MC1, 2 = MC2), w reserved
     atlas: vec4<u32>,
 };
 
@@ -51,7 +52,12 @@ struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world: vec3<f32>,
     @location(1) light: f32,
+    // Water-shimmer shade offset in LUT rows, interpolated across the
+    // triangle exactly like the original's per-corner pnt5_32.
+    @location(2) shade_wave: f32,
 };
+
+const TAU: f32 = 6.283185307179586;
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
@@ -64,7 +70,49 @@ fn vs_main(in: VsIn) -> VsOut {
         (f32(in.instance / 3u) - 1.0) * 256.0,
     );
     var out: VsOut;
-    let pos = in.pos + wrap;
+    var pos = in.pos + wrap;
+    out.shade_wave = 0.0;
+
+    // Water surface animation: the original's per-grid-corner sine
+    // product (remc1 sub_main.cpp:33955, remc2 GameRenderOriginal:1054):
+    //   sinprod = (sin[(y<<7 + turn<<S) & 0x7FF] >> 8)
+    //           * (sin[(x<<7 + turn<<S) & 0x7FF] >> 8)
+    // on the 2048-entry 16.16 sine table — i.e. amplitude 65536,
+    // wavelength 16 tiles, phase advancing turn<<S of 2048 per tick
+    // (S = 6 for MC1, 5 for MC2). Gating is per VERTEX cell, so shared
+    // corners displace consistently across tiles. The wave repeats
+    // every 256 tiles, so the 3x3 torus copies stay seamless.
+    if globals.atlas.z != 0u {
+        let g = vec2<i32>(
+            (i32(in.pos.x) % 256 + 256) % 256,
+            (i32(in.pos.z) % 256 + 256) % 256,
+        );
+        let periods_per_turn = select(1.0 / 64.0, 1.0 / 32.0, globals.atlas.z == 1u);
+        let phase = globals.fog_color.a * periods_per_turn;
+        let sinprod = sin(TAU * (f32(g.x) / 16.0 + phase))
+            * sin(TAU * (f32(g.y) / 16.0 + phase));
+        if globals.atlas.z == 1u {
+            // MC1: deep-water corners only (angle bit 3, the
+            // generator's open-sea flag): +-1/4 tile swell, +-8 shade
+            // rows of shimmer (alt -= sinprod >> 10 in 1/256-tile alt
+            // units; pnt5 += 8 * sinprod in 8.16 shade).
+            if (textureLoad(t_angle, g, 0).r & 8u) != 0u {
+                pos.y -= sinprod * 0.25;
+                out.shade_wave = sinprod * 8.0;
+            }
+        } else {
+            // MC2: every water corner (terrain type 0) gets a gentle
+            // +-1/32 tile ripple (alt -= sinprod >> 13); the shimmer is
+            // skipped where the corner's shade level is 56 or darker.
+            if textureLoad(t_type, g, 0).r == 0u {
+                pos.y -= sinprod * (1.0 / 32.0);
+                if textureLoad(t_shade, g, 0).r < 56u {
+                    out.shade_wave = sinprod * 8.0;
+                }
+            }
+        }
+    }
+
     out.clip = globals.view_proj * vec4<f32>(pos, 1.0);
     out.world = pos;
     out.light = in.light;
@@ -124,10 +172,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let p = in.world.xz - vec2<f32>(0.5, 0.5);
         let t0 = vec2<i32>(i32(floor(p.x)), i32(floor(p.y)));
         let f = fract(p);
-        let s = mix(
-            mix(shade_at(t0), shade_at(t0 + vec2<i32>(1, 0)), f.x),
-            mix(shade_at(t0 + vec2<i32>(0, 1)), shade_at(t0 + vec2<i32>(1, 1)), f.x),
-            f.y,
+        let s = clamp(
+            mix(
+                mix(shade_at(t0), shade_at(t0 + vec2<i32>(1, 0)), f.x),
+                mix(shade_at(t0 + vec2<i32>(0, 1)), shade_at(t0 + vec2<i32>(1, 1)), f.x),
+                f.y,
+            ) + in.shade_wave,
+            0.0,
+            63.0,
         );
         let s0 = i32(floor(s));
         let s1 = min(s0 + 1, 63);
@@ -137,8 +189,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             fract(s),
         );
     } else {
-        // Original look: one shade level per tile.
-        let shade = i32(shade_at(tile));
+        // Original look: one shade level per tile, plus the water
+        // shimmer. The original rounds: pnt5 carries (shade<<8 + 128)
+        // <<8 + 8*sinprod and the rasterizer truncates the top byte.
+        let shade = clamp(i32(round(shade_at(tile) + in.shade_wave)), 0, 63);
         base = textureLoad(t_colormap, vec2<i32>(index, shade), 0).rgb;
     }
 

@@ -192,6 +192,10 @@ fn load_level(
             shade_lut: bundle.shade_lut,
             atlas: bundle.terrain_atlas.map(|(_, data)| data),
             angle,
+            wave: match package.meta.game {
+                Game::MagicCarpet2 => mgc_render::WaveMode::Mc2,
+                _ => mgc_render::WaveMode::Mc1,
+            },
         },
         height,
         label: format!("{game} level {}", package.meta.level),
@@ -431,6 +435,9 @@ impl ApplicationHandler for App {
                     fov_y: FOV_Y,
                 };
                 if let Some(r) = &mut self.renderer {
+                    // Animation clock: sim ticks are the original's game
+                    // turns; wrapped so f32 stays exact (see set_anim_turn).
+                    r.set_anim_turn((self.sim.tick % 4096) as f32 + alpha);
                     match r.render(&cam) {
                         Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
                         Err(e) => eprintln!("render: {e}"),
@@ -473,6 +480,9 @@ struct Args {
     map_scale: u32,
     /// Render `--screenshot` showing the book screen instead of the world.
     map_view: bool,
+    /// Animation clock for `--screenshot` (game turns; default 0).
+    /// Water-wave phase repeats every 32 (MC1) / 64 (MC2) turns.
+    anim_turn: f32,
     /// Apply the original's load-time terrain features (default true).
     terrain_features: bool,
 }
@@ -487,6 +497,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
+    let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -539,13 +550,21 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--map-view" => map_view = true,
+            "--anim-turn" => {
+                anim_turn = it
+                    .next()
+                    .ok_or("--anim-turn needs a turn count")?
+                    .parse()
+                    .map_err(|e| format!("--anim-turn: {e}"))?;
+            }
             "--no-terrain-features" => terrain_features = false,
             "--help" | "-h" => {
                 return Err(format!(
                     "usage: mgcarpet [--level <baked/.../level-NNN.mgcl>] \
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
-                     [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view]] \
+                     [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
+                     [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features]\n\
                      enhancements persist in {} (see crates/mgc-app/src/config.rs)",
                     config::DEFAULT_PATH
@@ -564,6 +583,7 @@ fn parse_args() -> Result<Args, String> {
         map,
         map_scale,
         map_view,
+        anim_turn,
         terrain_features,
     })
 }
@@ -605,6 +625,7 @@ fn run_screenshot(
     camera: Option<[f32; 5]>,
     smooth_shading: bool,
     map_view: bool,
+    anim_turn: f32,
 ) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
     renderer.load_level(&level.view, &level.map_dots);
@@ -614,6 +635,7 @@ fn run_screenshot(
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
     renderer.set_map_view(map_view);
+    renderer.set_anim_turn(anim_turn);
     let flyer = level.start.unwrap_or_default();
     let [x, y, z, yaw_deg, pitch_deg] = camera.unwrap_or([
         flyer.x,
@@ -684,7 +706,14 @@ fn main() -> std::process::ExitCode {
     }
 
     if let Some(out) = &args.screenshot {
-        return match run_screenshot(level, out, args.camera, smooth_shading, args.map_view) {
+        return match run_screenshot(
+            level,
+            out,
+            args.camera,
+            smooth_shading,
+            args.map_view,
+            args.anim_turn,
+        ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

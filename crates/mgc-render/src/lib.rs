@@ -31,6 +31,23 @@ pub const ATLAS_WIDTH: usize = 256;
 /// Edge length of one atlas cell (one terrain texture).
 pub const ATLAS_CELL: usize = 32;
 
+/// Which game's water-surface animation rule the terrain pass applies
+/// (the per-corner sine wave in the original tile projectors; ROADMAP
+/// "Terrain water animation").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaveMode {
+    /// No animation (static comparison renders).
+    #[default]
+    Off,
+    /// MC1 (remc1 sub_main.cpp:33955): deep-water corners (angle bit 3)
+    /// swell by ±¼ tile and shimmer by ±8 shade rows.
+    Mc1,
+    /// MC2 (remc2 GameRenderOriginal.cpp:1054): every water corner
+    /// (type 0) ripples by ±1/32 tile, shimmer gated on shade < 56;
+    /// phase advances at half MC1's rate.
+    Mc2,
+}
+
 /// Everything the renderer needs from a loaded level: terrain arrays
 /// from the package, color tables from the baked assets. Pixels resolve
 /// exactly like the original engine: a base palette index — an atlas
@@ -61,6 +78,8 @@ pub struct LevelView {
     /// the tile's texture UV orientation. None renders orientation 0
     /// everywhere (transition tiles like shorelines will misalign).
     pub angle: Option<Vec<u8>>,
+    /// The game's water-surface animation rule.
+    pub wave: WaveMode,
 }
 
 /// One entity dot on the overhead map: tile-unit position and the
@@ -221,6 +240,11 @@ pub struct Renderer {
     index_count: u32,
     /// Cell count of the loaded terrain atlas (0 = render flat colors).
     atlas_cells: u32,
+    /// The level's water-wave rule, as a shader selector (0/1/2).
+    wave_mode: u32,
+    /// Animation clock in original game turns (fractional between
+    /// ticks); drives the water wave and sprite frame cycling.
+    anim_turn: f32,
     /// Interpolate per-tile shade across tile centers (enhancement,
     /// off = the original's per-tile shade snap).
     smooth_shading: bool,
@@ -354,9 +378,11 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // Tile types and shading feed the vertex stage too (the
+                // per-corner water-wave gates), like the angle plane.
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -366,7 +392,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -406,7 +432,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -700,6 +726,8 @@ impl Renderer {
             index_buf: None,
             index_count: 0,
             atlas_cells: 0,
+            wave_mode: 0,
+            anim_turn: 0.0,
             smooth_shading: false,
             map_view: false,
             map_pipeline,
@@ -738,12 +766,26 @@ impl Renderer {
         self.smooth_shading
     }
 
+    /// Advance the animation clock, in original game turns (one sim
+    /// tick = one turn; pass a fractional part for render
+    /// interpolation). Drives the water wave and the sprite frame
+    /// cycling; both repeat within 4096 turns, so callers should wrap
+    /// (`tick % 4096`) to keep f32 precision over long sessions.
+    pub fn set_anim_turn(&mut self, turn: f32) {
+        self.anim_turn = turn;
+    }
+
     /// Upload a level: build the terrain mesh, the color/type LUTs, and
     /// the overhead map (terrain + entity dots).
     pub fn load_level(&mut self, level: &LevelView, map_dots: &[MapDot]) {
         let n = MAP_TILES;
         assert_eq!(level.height.len(), n * n);
         assert_eq!(level.tile_type.len(), n * n);
+        self.wave_mode = match level.wave {
+            WaveMode::Off => 0,
+            WaveMode::Mc1 => 1,
+            WaveMode::Mc2 => 2,
+        };
 
         // Height at a wrapped grid point.
         let h = |x: usize, z: usize| -> f32 {
@@ -1143,9 +1185,18 @@ impl Renderer {
             let Some(entry) = index.sprites.get(id) else {
                 continue;
             };
-            let Some(frame) = entry.frames.first() else {
+            if entry.frames.is_empty() {
                 continue; // known-corrupt source entry
+            }
+            // Animated entries (flags bit 0, the TMAPS FLC streams) step
+            // one frame per turn in a forward loop, all in lockstep —
+            // the original's per-frame driver (remc1 sub_590D0_595E0).
+            let fi = if entry.flags & 1 != 0 {
+                self.anim_turn as usize % entry.frames.len()
+            } else {
+                0
             };
+            let frame = &entry.frames[fi];
             let (w, h) = (entry.width as f32, entry.height as f32);
             let world_w = b.world_h * w / h;
             // Nearest torus copy relative to the camera.
@@ -1224,8 +1275,14 @@ impl Renderer {
         let globals = Globals {
             view_proj,
             camera: [cam.x, cam.y, cam.z, FOG_DENSITY],
-            fog_color: [sky[0] as f32, sky[1] as f32, sky[2] as f32, 1.0],
-            atlas: [self.atlas_cells, self.smooth_shading as u32, 0, 0],
+            // The fog alpha slot carries the animation clock (turns).
+            fog_color: [sky[0] as f32, sky[1] as f32, sky[2] as f32, self.anim_turn],
+            atlas: [
+                self.atlas_cells,
+                self.smooth_shading as u32,
+                self.wave_mode,
+                0,
+            ],
             cam_right: [right[0], right[1], right[2], 0.0],
             cam_up: [up[0], up[1], up[2], 0.0],
         };
