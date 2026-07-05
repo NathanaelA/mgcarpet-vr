@@ -29,22 +29,28 @@
 //!   time is one pass per turn instead of a fixpoint sweep, and the
 //!   per-tick `f63` increment (:52406) that gates digger growth
 //!   (`% 3`) and the trigger probe throttle (`& 7`).
-//! - **Spawned drawables** (classes 2/3/5/12) become inert pool events
-//!   (no AI/movement yet — the mobs track) mirrored into a live-things
-//!   list the app resolves to billboards/map dots exactly like
-//!   load-time entities.
+//! - **Spawned drawables** run their real spawn handlers
+//!   ([`crate::mobs`]): class-2 scenery, class-3 balloons/castles and
+//!   class-5 creatures (with multipart body chains) carry authentic
+//!   life/speed/extents/sprite state, and class-5 creatures TICK — the
+//!   movement core, the six state primitives and the awake system are
+//!   ported; the app consumes continuous poses via [`World::live_poses`].
 //!
 //! Deliberate deviations, tracked in docs/ROADMAP.md: no AI wizard
-//! balloons (the probe list is the player alone); the player's AABB is
-//! a point (the original balloon carries a small extent); class-12
-//! pickup/mana transfer is NOT ported (jars/mana spawn and render;
-//! collection is the mana track — its machinery routes through owner
-//! blocks and class-9 carrier effects); damage broadcasts and sounds
-//! omitted as in the load-time pass.
+//! balloons (the probe/scan lists are the player alone); combat is
+//! unported (chase closes in but the attack call is a no-op; damage
+//! mailboxes unread); custom family behaviors beyond movement
+//! (disguises, mana hunts, house building, ranged/teleport casters)
+//! stand still pending the AI track; corpses despawn without dropping
+//! mana balls/bones (mana track); class-12 pickup/mana transfer NOT
+//! ported; damage broadcasts and sounds omitted as in the load-time
+//! pass.
 
 use crate::features::{
     self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
 };
+use crate::mc1_sprite_stats::SPRITE_STATS;
+use crate::mobs::MobCtx;
 use mgc_formats::{Thing, ThingKind};
 
 /// The player's pose in engine units for trigger/portal tests: x/y are
@@ -79,9 +85,6 @@ pub struct World {
     g: Gen,
     /// Live 1-based THING table; dispositions consume from it.
     table: Vec<Rec>,
-    /// Drawable spawned entities: (pool slot, THING snapshot for the
-    /// app's billboard/map-dot resolution).
-    live: Vec<(u16, Thing)>,
     /// Terrain planes changed since last cleared (renderer re-upload).
     pub terrain_dirty: bool,
     /// Live entity set changed since last cleared.
@@ -89,6 +92,46 @@ pub struct World {
     /// A portal fired this tick: destination in tile units, consumed
     /// by the sim (which moves the flyer).
     pending_teleport: Option<(f32, f32)>,
+}
+
+/// One live drawable entity, resolved for the app's billboard / map
+/// layer: continuous pose (position in tile units, real-valued yaw)
+/// plus the sprite-stats type index and animation frame the sim's
+/// spawn/tick handlers assigned. Presentation resolves late — the
+/// billboard backend snaps yaw to view sectors at draw time, a mesh
+/// backend would consume the same pose unquantized.
+#[derive(Debug, Clone, Copy)]
+pub struct LivePose {
+    pub class: u8,
+    pub model: u8,
+    /// Row into [`crate::mc1_sprite_stats::SPRITE_STATS`].
+    pub type_index: u16,
+    /// Animation frame (entity offset 88) for the 2..=16 draw types.
+    pub frame: u8,
+    /// Position, tile units (torus [0, 256)).
+    pub x: f32,
+    pub z: f32,
+    /// Altitude, tile units.
+    pub alt: f32,
+    /// Facing, radians (0 = north/-Z like the flyer's yaw).
+    pub yaw: f32,
+    /// Multipart body segment (state 120) — drawn but excluded from
+    /// entity counts/lists like the original's map/behavior scans.
+    pub segment: bool,
+}
+
+/// Minimal live-event view for [`World::debug_pool`].
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct DebugEvent {
+    pub slot: usize,
+    pub class: u8,
+    pub model: u8,
+    pub state: u8,
+    pub id24: u16,
+    pub tx: u8,
+    pub ty: u8,
+    pub life: i32,
 }
 
 /// A live gameplay volume for the map overlay (an opt-in enhancement
@@ -131,7 +174,6 @@ impl World {
         let mut w = World {
             g,
             table,
-            live: Vec::new(),
             terrain_dirty: false,
             entities_dirty: false,
             pending_teleport: None,
@@ -147,14 +189,63 @@ impl World {
         &self.g.t
     }
 
-    /// Snapshot of the live drawable entities (kind = Entity), for the
-    /// app's billboard/map-dot resolution.
+    /// Snapshot of the live drawable entities as THING-shaped records
+    /// (kind = Entity), one per creature/scenery/pickup — multipart
+    /// body segments excluded, like the original's entity lists.
     pub fn live_things(&self) -> Vec<Thing> {
-        self.live.iter().map(|(_, t)| *t).collect()
+        let mut out = Vec::new();
+        for (i, e) in self.g.ent.iter().enumerate().skip(1) {
+            if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
+                continue;
+            }
+            if e.class64 == 5 && e.tick70 == 120 {
+                continue;
+            }
+            out.push(Thing {
+                slot: (e.thing_slot as u32).saturating_sub(1),
+                kind: ThingKind::Entity,
+                class: e.class64 as u16,
+                model: e.model65 as u16,
+                x: e.x >> 8,
+                y: e.y >> 8,
+                dis_id: 0,
+                swi_sz: 0,
+                swi_id: if e.type86 == 280 { 3 } else { 0 },
+                parent: 0,
+                child: 0,
+                par3: None,
+            });
+            let _ = i;
+        }
+        out
+    }
+
+    /// The live drawable set with continuous pose + resolved sprite
+    /// type — what the app's billboard and map-dot layers consume.
+    pub fn live_poses(&self) -> Vec<LivePose> {
+        const TAU: f32 = std::f32::consts::TAU;
+        let mut out = Vec::new();
+        for e in self.g.ent.iter().skip(1) {
+            if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
+                continue;
+            }
+            out.push(LivePose {
+                class: e.class64,
+                model: e.model65,
+                type_index: e.type86,
+                frame: e.frame88,
+                x: e.x as f32 / 256.0,
+                z: e.y as f32 / 256.0,
+                alt: e.z as f32 / 256.0,
+                yaw: (e.f30 & 0x7FF) as f32 * (TAU / 2048.0),
+                segment: e.class64 == 5 && e.tick70 == 120,
+            });
+        }
+        out
     }
 
     /// One game turn (`sub_41780_41AC0`, :52197). `player` feeds the
-    /// trigger volume probes.
+    /// trigger volume probes, creature awake checks and aggro scans.
     pub fn tick(&mut self, player: PlayerPose) {
         // One global LCG draw per tick, before any handler (:52223).
         lcg32(&mut self.g.rand);
@@ -163,17 +254,28 @@ impl World {
         // events by model, excluding state 120 (multipart body
         // segments in the original; :52246 list building).
         let mut buckets = [0u32; 20];
+        let mut any_creature = false;
         for e in &self.g.ent {
             if e.class64 == 5 && e.act_life >= 0 && e.tick70 != 120 {
                 buckets[(e.model65 as usize).min(19)] += 1;
+                any_creature = true;
             }
         }
+
+        // The awake pre-pass (sub_54F00, :64266) runs before dispatch.
+        let ctx = MobCtx {
+            px: player.x,
+            py: player.y,
+            pz: player.z,
+        };
+        self.g.mob_awake_pass(&ctx);
 
         for i in 1..features::POOL {
             if self.g.ent[i].class64 == 0 {
                 continue;
             }
             match self.g.ent[i].class64 {
+                5 => self.g.creature_tick(i, &ctx),
                 10 if self.g.ent[i].tick70 == 36 => self.portal_tick(i, player),
                 10 => {
                     // The load-time handlers ARE the runtime handlers.
@@ -181,8 +283,8 @@ impl World {
                     self.terrain_dirty = true;
                 }
                 11 => self.trigger_tick(i, player, &buckets),
-                // Creatures / scenery / effects / pickups: inert until
-                // their tracks (AI, mana) land — they stand and render.
+                // Scenery / effects / pickups: inert until their
+                // tracks land — they stand and render.
                 _ => {}
             }
             // Per-tick phase counter, incremented after the state
@@ -191,6 +293,10 @@ impl World {
             if self.g.ent[i].flags & 0x400 != 0 {
                 self.free_slot(i);
             }
+        }
+        if any_creature {
+            // Creatures move (or may): the pose consumer refreshes.
+            self.entities_dirty = true;
         }
     }
 
@@ -223,9 +329,12 @@ impl World {
         let z = self.g.ground_z(x, y) as i16;
 
         let slot = match r.class {
+            2 => self.g.spawn_scenery(r.model, x, y, z),
+            3 => self.g.spawn_class3(r.model, x, y, z),
+            5 => self.g.spawn_creature(r.model, x, y, z),
             10 => self.g.spawn_creator(r.model, x, y, z),
             11 => self.spawn_trigger(r.model, x, y, z),
-            2 | 3 | 5 | 7 | 9 | 12 => self.spawn_inert(r.class, r.model, x, y, z),
+            7 | 9 | 12 => self.spawn_inert(r.class, r.model, x, y, z),
             _ => None,
         };
         let Some(s) = slot else { return };
@@ -235,21 +344,26 @@ impl World {
             self.entities_dirty = true;
         }
 
-        // Post-init (:44017-44050).
+        // Post-init (:44017-44050). NOTE the original's branch shape:
+        // classes BELOW 11 get nothing except the class-10 models 4
+        // (spawner volume), 34 (portal) and 45 (building); exactly
+        // class 11 gets id24/extents; class 12 the state bump.
         match (r.class, r.model) {
             (12, _) => {
                 // byte70 += swi_id; >= 3 = the village-owned jar
-                // variant (-3, sprite 280 — the app's Mana pick reads
-                // the THING's swi_id for that).
+                // variant (-3, sprite 280 written straight to +86).
                 let e = &mut self.g.ent[s];
                 e.tick70 = e.tick70.wrapping_add((r.swi_id & 0xFF) as u8);
                 if r.swi_id >= 3 {
                     e.tick70 = e.tick70.wrapping_sub(3);
+                    e.type86 = 280;
+                    e.flags |= 0x40000; // +18 |= 4
                 }
             }
             (10, 4) => {
                 self.g.ent[s].id24 = r.swi_id;
-                self.set_extents(s, r.swi_sz << 8, r.swi_sz << 8);
+                self.g.extents(s, r.swi_sz << 8, r.swi_sz << 8);
+                self.g.refill_life(s);
             }
             // Portal destination (:44024): +150/+152 from the THING's
             // data_16/data_14 (our child/parent), tile centers.
@@ -260,38 +374,17 @@ impl World {
             }
             (10, 45) => {
                 self.g.building_fixup(s, r.parent.wrapping_add(16));
-                self.g.ent[s].id24 = r.swi_id;
-                self.set_extents(s, r.swi_sz << 8, 4096);
-                self.refill_life(s);
-                self.g.ent[s].flags |= 1;
             }
-            (c, _) if c <= 11 => {
+            (11, _) => {
                 self.g.ent[s].id24 = r.swi_id;
-                self.set_extents(s, r.swi_sz << 8, 4096);
-                self.refill_life(s);
+                self.g.extents(s, r.swi_sz << 8, 4096);
+                self.g.refill_life(s);
                 self.g.ent[s].flags |= 1;
             }
             _ => {}
         }
 
         if drawable(r.class, r.model) {
-            self.live.push((
-                s as u16,
-                Thing {
-                    slot: (ti as u32).saturating_sub(1),
-                    kind: ThingKind::Entity,
-                    class: r.class,
-                    model: r.model,
-                    x: r.x,
-                    y: r.y,
-                    dis_id: r.dis_id,
-                    swi_sz: r.swi_sz,
-                    swi_id: r.swi_id,
-                    parent: r.parent,
-                    child: r.child,
-                    par3: None,
-                },
-            ));
             self.entities_dirty = true;
         }
     }
@@ -309,46 +402,36 @@ impl World {
         e.x = x;
         e.y = y;
         e.z = z;
-        self.refill_life(s);
+        self.g.refill_life(s);
         Some(s)
     }
 
-    /// A drawable/latent entity as an inert pool event (creatures get
-    /// their real spawn handlers with the AI track; for now they
-    /// occupy their pool slot, count in the kill buckets, and render).
+    /// A drawable/latent entity as an inert pool event — the classes
+    /// whose real spawn handlers belong to later tracks (7 = spawner
+    /// logic, 9 = spell effects, 12 = mana pickups).
     fn spawn_inert(&mut self, class: u16, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
         let s = self.g.new_event()?;
         self.g.ent[s].class64 = class as u8;
         self.g.ent[s].model65 = model as u8;
         self.g.ent[s].tick70 = 0;
         self.g.link(s, x, y, z);
-        self.refill_life(s);
+        self.g.refill_life(s);
         self.g.ent[s].flags |= 1;
+        if class == 12 {
+            // Interim type for the pose/billboard layer (the real
+            // class-12 spawner sub_3BF70 is the mana track's port).
+            self.g.set_sprite(s, 77);
+        }
         Some(s)
     }
 
-    /// sub_37130_374F0 (:43790): square horizontal extent + vertical.
-    fn set_extents(&mut self, s: usize, horiz: u16, vert: u16) {
-        let e = &mut self.g.ent[s];
-        e.f80 = horiz;
-        e.f82 = horiz;
-        e.f84 = vert;
-    }
-
-    /// RefillLife_36DE0_371A0 (:43701).
-    fn refill_life(&mut self, s: usize) {
-        self.g.ent[s].act_life = self.g.ent[s].max_life as i32;
-    }
-
     fn free_slot(&mut self, i: usize) {
-        if self.g.ent[i].class64 == 11 {
-            self.entities_dirty = true; // overlay: a trigger fired/expired
+        if drawable(self.g.ent[i].class64 as u16, self.g.ent[i].model65 as u16)
+            || self.g.ent[i].class64 == 11
+        {
+            self.entities_dirty = true; // a drawable/overlay entity left
         }
         self.g.free_entity(i);
-        if let Some(pos) = self.live.iter().position(|&(s, _)| s as usize == i) {
-            self.live.swap_remove(pos);
-            self.entities_dirty = true;
-        }
     }
 
     // ---- class-11 trigger ticking (str_256038, :4921) ---------------------
@@ -390,17 +473,22 @@ impl World {
         false
     }
 
-    /// sub_118C0 (:16963): |dx| < ex, |dy| < ey, |dz + zoff| < ez —
-    /// the player as a point (extent 0).
+    /// sub_118C0 (:16963): both entities' extents SUM per axis, and
+    /// each z is centered by its half-height (+78). The player carpet
+    /// carries sprite 44's stats halves (spawn sub_378A0), replacing
+    /// the earlier point-extent stub — the suspect in the portal-entry
+    /// feel note.
     fn overlap(&self, i: usize, p: PlayerPose) -> bool {
+        const PW: i32 = (SPRITE_STATS[44].width / 2) as i32;
+        const PH: i32 = (SPRITE_STATS[44].height / 2) as i32;
         let e = &self.g.ent[i];
         let wrap_d = |a: u16, b: u16| {
             let d = (a as i32 - b as i32) & 0xFFFF;
             (d as i16 as i32).abs()
         };
-        wrap_d(p.x, e.x) < e.f80 as i32
-            && wrap_d(p.y, e.y) < e.f82 as i32
-            && ((e.z as i32) - (p.z as i32)).abs() < e.f84 as i32
+        wrap_d(p.x, e.x) < e.f80 as i32 + PW
+            && wrap_d(p.y, e.y) < e.f82 as i32 + PW
+            && ((e.z as i32 + e.f78 as i32) - (p.z as i32 + PH)).abs() < e.f84 as i32 + PH
     }
 
     fn one_shot(&mut self, i: usize, player: PlayerPose, want: bool) {
@@ -453,8 +541,15 @@ impl World {
                     Some((dx as f32 / 256.0, dy as f32 / 256.0));
             }
         }
+        // Follow the ground; the pose consumer must see the drop from
+        // the +640 spawn altitude (and any later re-dig under the
+        // portal) even on levels with no creatures ticking.
         let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
-        self.g.ent[i].z = self.g.ground_z(x, y) as i16;
+        let ground = self.g.ground_z(x, y) as i16;
+        if self.g.ent[i].z != ground {
+            self.g.ent[i].z = ground;
+            self.entities_dirty = true;
+        }
     }
 
     /// Consume this tick's portal teleport, if one fired: destination
@@ -514,6 +609,31 @@ impl World {
         let xi = (x.rem_euclid(256.0) * 256.0) as u16;
         let zi = (z.rem_euclid(256.0) * 256.0) as u16;
         self.g.ground_z(xi, zi) as f32 / 256.0
+    }
+
+    /// Pool diagnostics (debug tooling; the level-032 chain-stall
+    /// investigation): free slot count + a minimal live-event view.
+    #[doc(hidden)]
+    pub fn debug_pool(&self) -> (usize, Vec<DebugEvent>) {
+        let free = self.g.free.len();
+        let ev = self
+            .g
+            .ent
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.class64 != 0)
+            .map(|(slot, e)| DebugEvent {
+                slot,
+                class: e.class64,
+                model: e.model65,
+                state: e.tick70,
+                id24: e.id24,
+                tx: (e.x >> 8) as u8,
+                ty: (e.y >> 8) as u8,
+                life: e.act_life,
+            })
+            .collect();
+        (free, ev)
     }
 
     /// Copy the live planes into a caller's `TerrainPlanes` view (the
@@ -645,6 +765,226 @@ mod tests {
     }
 
     #[test]
+    fn creatures_wander_when_awake() {
+        let mut w = flat_world();
+        // Fire the trigger so the (5,2) creature spawns; the player
+        // stays nearby, keeping it awake.
+        for _ in 0..16 {
+            w.tick(at_trigger());
+        }
+        let start = w
+            .live_poses()
+            .into_iter()
+            .find(|p| p.class == 5)
+            .expect("creature spawned");
+        for _ in 0..200 {
+            w.tick(at_trigger());
+        }
+        let now = w
+            .live_poses()
+            .into_iter()
+            .find(|p| p.class == 5)
+            .expect("creature alive");
+        assert!(
+            (now.x - start.x).abs() + (now.z - start.z).abs() > 0.05,
+            "an awake creature wanders: {:?} -> {:?}",
+            (start.x, start.z),
+            (now.x, now.z)
+        );
+    }
+
+    #[test]
+    fn water_contains_a_grounded_creature() {
+        // One land tile in an ocean: the movement core's terrain mask
+        // (row 10 forbids water) must keep a villager on its island —
+        // same-tile steps stay free, crossings are blocked.
+        let mut planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![0; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        planes.tile_type[tile(100, 100)] = 5;
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 5,
+            model: 12,
+            x: 100,
+            y: 100,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        // Player adjacent: awake, jitter-walking every tick.
+        let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0);
+        for t in 0..400 {
+            w.tick(p);
+            let pose = w
+                .live_poses()
+                .into_iter()
+                .find(|q| q.class == 5)
+                .expect("villager alive");
+            assert_eq!(
+                (pose.x.floor(), pose.z.floor()),
+                (100.0, 100.0),
+                "tick {t}: creature left its island: ({}, {})",
+                pose.x,
+                pose.z
+            );
+        }
+    }
+
+    #[test]
+    fn worm_segments_trail_the_head() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 5,
+            model: 0,
+            x: 100,
+            y: 100,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let heads: Vec<_> = w.live_poses().into_iter().filter(|p| !p.segment).collect();
+        let segs: Vec<_> = w.live_poses().into_iter().filter(|p| p.segment).collect();
+        assert_eq!(heads.len(), 1, "one worm head");
+        assert_eq!(segs.len(), 16, "sixteen body segments");
+        assert_eq!(w.live_things().len(), 1, "segments hidden from entity lists");
+
+        let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0);
+        for _ in 0..60 {
+            w.tick(p);
+        }
+        let head = w
+            .live_poses()
+            .into_iter()
+            .find(|p| !p.segment)
+            .expect("head alive");
+        let segs: Vec<_> = w.live_poses().into_iter().filter(|p| p.segment).collect();
+        // Awake movement strings the body out: the first segment sits
+        // its follow distance behind the head, not on it.
+        let d0 = (segs[0].x - head.x).abs() + (segs[0].z - head.z).abs();
+        assert!(
+            d0 > 0.05,
+            "segment 0 trails the head (offset {d0}, head at {:?})",
+            (head.x, head.z)
+        );
+        let distinct: std::collections::HashSet<_> = segs
+            .iter()
+            .map(|s| ((s.x * 256.0) as i32, (s.z * 256.0) as i32))
+            .collect();
+        assert!(
+            distinct.len() > 8,
+            "segments spread out ({} distinct positions)",
+            distinct.len()
+        );
+    }
+
+    #[test]
+    fn asleep_crowds_do_not_pack_and_accelerate() {
+        // Regression (player-reported runaway worms/bees): WANDER's
+        // scans are awake-gated in the original — a distant crowd
+        // must never form packs and ride the unbounded pack accel.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let bee = |slot, x, y| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class: 5,
+            model: 1,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things: Vec<Thing> =
+            (0..8).map(|k| bee(k, 100 + (k % 3) as u16, 100 + (k / 3) as u16)).collect();
+        let mut w = World::new(planes, &things, 1, assets());
+        // Player far away the whole time (> 24 tiles: asleep).
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0);
+        for _ in 0..3000 {
+            w.tick(far);
+        }
+        let before: Vec<_> = w.live_poses();
+        w.tick(far);
+        let after: Vec<_> = w.live_poses();
+        // Bee speed = 50 engine units/tick ≈ 0.195 tiles; pack
+        // catch-up adds a bounded +16 per chain level. The compounding
+        // mis-fix reached many tiles per tick and kept growing —
+        // anything near a tile/tick means it is back.
+        for (b, a) in before.iter().zip(&after) {
+            let d = (a.x - b.x).abs().min(256.0 - (a.x - b.x).abs())
+                + (a.z - b.z).abs().min(256.0 - (a.z - b.z).abs());
+            assert!(
+                d < 1.0,
+                "asleep bee moved {d} tiles in one tick (speed ran away)"
+            );
+        }
+    }
+
+    #[test]
+    fn burrower_materializes_then_hides() {
+        // m9's spawn sequence (sub_1CFF0): flame form 220 → transform
+        // animation 237 → the type-201 lurking mound at state 55.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 5,
+            model: 9,
+            x: 100,
+            y: 100,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let near = PlayerPose::from_tiles(102.5, 14.0, 102.5, 0.0);
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            w.tick(near);
+            let t = w.live_poses()[0].type_index;
+            if seen.last() != Some(&t) {
+                seen.push(t);
+            }
+        }
+        assert_eq!(seen, vec![220, 237, 201], "materialize sequence");
+    }
+
+    #[test]
     fn deterministic_across_runs() {
         let run = || {
             let mut w = flat_world();
@@ -657,3 +997,4 @@ mod tests {
         assert_eq!(run(), run());
     }
 }
+

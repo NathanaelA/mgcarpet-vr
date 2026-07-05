@@ -52,6 +52,27 @@ fn level_032_entry_portal_spawns_and_teleports() {
     assert_eq!(portals.len(), 1, "the entry portal spawns at init");
     assert_eq!((portals[0].x, portals[0].y), (11, 253));
 
+    // Player-reported regression: the portal spawns 640 units up and
+    // its first tick must both drop it to the ground AND flag the
+    // entity set dirty so the pose consumer redraws it there — even
+    // with zero creatures ticking (032's population is disposition-
+    // gated).
+    let far = PlayerPose::from_tiles(100.0, 20.0, 100.0, 0.0);
+    w.entities_dirty = false;
+    w.tick(far);
+    assert!(w.entities_dirty, "portal re-ground must flag the pose refresh");
+    let pose = w
+        .live_poses()
+        .into_iter()
+        .find(|p| p.class == 10 && p.model == 34)
+        .expect("portal pose");
+    let pground = w.ground_height_tiles(pose.x, pose.z);
+    assert!(
+        (pose.alt - pground).abs() < 0.05,
+        "portal sits on the ground: alt {} vs ground {pground}",
+        pose.alt
+    );
+
     // Hovering NEXT to the portal but facing away: no teleport.
     let ground = w.ground_height_tiles(11.5, 254.3);
     let facing_away = PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, std::f32::consts::PI);

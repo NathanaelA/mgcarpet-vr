@@ -1,24 +1,19 @@
-//! Level entities -> billboards: resolve each THING record through the
-//! original's (class, model) -> type-index mapping and sprite stats
-//! into what the renderer draws.
+//! Level entities -> billboards.
 //!
-//! Static placement only (the "inhabited world" slice): every drawable
-//! entity stands at its spawn position with its authentic sprite,
-//! rotation-view behavior and world size; no behavior, no animation
-//! ticking yet.
-//!
-//! Fidelity notes (deliberate approximations until entity spawning is
-//! ported 1:1, tracked in docs/ROADMAP.md):
-//! - The original draws its spawn LCG in strict slot order across the
-//!   whole load; we seed a fresh LCG per slot instead, so random picks
-//!   (tree variants) and jitter are stable but not byte-identical.
-//! - Entity facing: level records carry no yaw; the original assigns
-//!   it at spawn (mostly LCG). We use the per-slot LCG too.
+//! Two paths: with a live [`mgc_sim::world::World`] (MC1/HW),
+//! [`billboards_from_poses`] consumes the sim's pose snapshot — sprite
+//! types, spawn facing and jitter come from the ported spawn handlers'
+//! per-event LCG (byte-faithful), and positions move with the mob
+//! tick. The static [`billboards`] path resolves THING records through
+//! the (class, model) -> type-index mapping with a per-slot LCG
+//! approximation — kept for MC2 (its runtime is unported) and
+//! `--no-terrain-features` comparison renders.
 
 use mgc_formats::{Thing, ThingKind};
 use mgc_render::Billboard;
 use mgc_sim::mc1_entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
 use mgc_sim::mc1_sprite_stats::SPRITE_STATS;
+use mgc_sim::world::LivePose;
 use mgc_sim::{HEIGHT_SCALE, MAP_TILES};
 
 /// Engine fixed-point units per tile.
@@ -112,6 +107,80 @@ pub fn billboards(
     out
 }
 
+/// The live-world path: billboards straight from the sim's pose
+/// snapshot — position, altitude, yaw, sprite type and animation frame
+/// are all sim-owned (the spawn handlers ran the original's per-event
+/// LCG), so nothing is re-derived here. The static `billboards` path
+/// above remains for MC2 / `--no-terrain-features` comparison renders.
+pub fn billboards_from_poses(
+    poses: &[LivePose],
+    sprite_dims: impl Fn(u16) -> Option<(u16, u16)>,
+) -> Vec<Billboard> {
+    let mut out = Vec::new();
+    for p in poses {
+        let Some(stats) = SPRITE_STATS.get(p.type_index as usize) else {
+            continue;
+        };
+        let world_h = if stats.height != 0 {
+            stats.height as f32 / UNITS_PER_TILE
+        } else {
+            let Some((sw, sh)) = sprite_dims(stats.sprite_base) else {
+                continue;
+            };
+            if sw == 0 || stats.width == 0 {
+                continue;
+            }
+            stats.width as f32 * sh as f32 / sw as f32 / UNITS_PER_TILE
+        };
+        out.push(Billboard {
+            x: p.x,
+            y: p.alt,
+            z: p.z,
+            yaw: p.yaw,
+            sprite_base: stats.sprite_base,
+            draw_type: stats.draw_type,
+            frame: p.frame,
+            world_h,
+        });
+    }
+    out
+}
+
+/// Map dots from the live pose set — same color switch as [`map_dots`]
+/// (remc1 sub_48710_48A50); body segments are hidden from the map like
+/// the original's state-120 exclusion.
+pub fn map_dots_from_poses(
+    poses: &[LivePose],
+    palette: &[[u8; 4]; 256],
+) -> Vec<mgc_render::MapDot> {
+    let near_black = nearest_palette_index(palette, vga(3, 3, 7));
+    let dark_green = nearest_palette_index(palette, vga(3, 7, 3));
+    let red = nearest_palette_index(palette, vga(63, 3, 7));
+    const SCENERY: u8 = 28;
+    const PLAYER_TEAM_BLUE: u8 = 0x71;
+
+    let mut out = Vec::new();
+    for p in poses {
+        if p.segment {
+            continue;
+        }
+        let color = match (p.class, p.model) {
+            (2, _) => SCENERY,
+            (3, 2) => PLAYER_TEAM_BLUE,
+            (5, 12..=14) => dark_green,
+            (5, _) => near_black,
+            (12, _) => red,
+            _ => continue,
+        };
+        out.push(mgc_render::MapDot {
+            x: p.x,
+            z: p.z,
+            color,
+        });
+    }
+    out
+}
+
 /// Resolve one type index to a billboard at a world position; skips
 /// rows whose size cannot be resolved (missing sprite dims).
 fn push_billboard(
@@ -147,6 +216,7 @@ fn push_billboard(
         yaw,
         sprite_base: stats.sprite_base,
         draw_type: stats.draw_type,
+        frame: 0,
         world_h,
     });
 }

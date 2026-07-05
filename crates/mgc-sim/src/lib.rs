@@ -14,9 +14,11 @@
 //! (the engine computes `32 * height_byte` in its own units).
 
 pub mod features;
+pub mod mc1_behavior;
 pub mod mc1_entities;
 pub mod mc1_sprite_stats;
 pub mod mc1_tables;
+mod mobs;
 pub mod world;
 mod tables;
 

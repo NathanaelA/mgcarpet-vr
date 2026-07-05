@@ -208,6 +208,10 @@ pub struct Billboard {
     /// 17 = 8 views + mirrored back half, 18 = 16 views, 19/20 =
     /// 5-/3-view folds.
     pub draw_type: u8,
+    /// Per-entity animation byte (entity offset 88): for the 2..=16
+    /// animation draw types the original draws sprite `base + frame`.
+    /// 0 for static/rotation-view entities.
+    pub frame: u8,
     /// World height of the quad (engine `var_8 / 256`).
     pub world_h: f32,
 }
@@ -1297,8 +1301,10 @@ impl Renderer {
                 18 => (view, false),
                 19 => (VIEW_FOLD_5[view as usize] as u16, view >= 8),
                 20 => (VIEW_FOLD_3[view as usize] as u16, view >= 8),
-                // 0/1/21, the 2..=16 animation modes (frame 0 until
-                // entity ticking lands), and anything unknown: base.
+                // Animation modes: the entity's anim byte selects the
+                // family member (DrawSprite3D :37552).
+                2..=16 => (b.frame as u16, false),
+                // 0/1/21 single view, and anything unknown: base.
                 _ => (0, false),
             };
             let id = (b.sprite_base + offset) as usize;

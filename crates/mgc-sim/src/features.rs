@@ -233,13 +233,36 @@ pub(crate) struct Ent {
     pub(crate) f32: u16,
     /// Strength (offset 44).
     pub(crate) f44: u16,
+    /// Target yaw (offset 34, 11-bit engine angle; high byte = pitch
+    /// for fliers) and its offset-36 companion (zeroed at spawn).
+    pub(crate) f34: u16,
+    pub(crate) f36: u16,
+    /// Multipart chain links (offsets 52/54): +52 = toward the head
+    /// (the segment's leader), +54 = toward the tail. 0 = end.
+    pub(crate) f52: u16,
+    pub(crate) f54: u16,
+    /// Segment follow distance (offset 56, engine units).
+    pub(crate) f56: u16,
+    /// Awake countdown (offset 58): >0 = the creature acts (damage
+    /// intake, hostile scans, segment follow); decremented by the
+    /// pre-pass, re-armed to 16 (segments 18) while the player is
+    /// within 24 tiles. Spawn staggers the initial value by the spawn
+    /// ordinal. NewEvent default 0xFA.
+    pub(crate) f58: i16,
+    /// Awake re-probe delay (offset 59).
+    pub(crate) f59: u8,
     /// Slot index at alloc (offset 63); the RUNTIME loop increments it
     /// per tick (:52417) — gates digger radius growth (`% 3`) and the
     /// trigger probe throttle (`& 7`). The load-time fixpoint loop
-    /// never increments, so there it stays the alloc slot.
+    /// never increments, so there it stays the alloc slot. Creature
+    /// spawns overwrite it with the per-model spawn ordinal.
     pub(crate) f63: u8,
     pub(crate) class64: u8,
     pub(crate) model65: u8,
+    /// Team/owner (offset 66; creatures spawn as 3 = wild) and its
+    /// offset-67 companion. NewEvent defaults both to 0xFF.
+    pub(crate) f66: u8,
+    pub(crate) f67: u8,
     /// Tick-handler index (offset 70).
     pub(crate) tick70: u8,
     /// Building-table index (offset 71).
@@ -248,13 +271,34 @@ pub(crate) struct Ent {
     pub(crate) x: u16,
     pub(crate) y: u16,
     pub(crate) z: i16,
+    /// Sprite half-height (offset 78, set with the extents by
+    /// `sub_36FA0` from the stats row).
+    pub(crate) f78: u16,
     /// Extents (offsets 80/82/84); high byte of f80 = dig radius in tiles.
     pub(crate) f80: u16,
     pub(crate) f82: u16,
     pub(crate) f84: u16,
+    /// Sprite-stats type index (offset 86), animation frame (88) and
+    /// frame count (89) — what the billboard layer draws.
+    pub(crate) type86: u16,
+    pub(crate) frame88: u8,
+    pub(crate) frames89: u8,
     /// Advance per tick (offset 126); building area>>4 (offset 128).
+    /// For creatures +126 is the actual speed toward max speed +128
+    /// with acceleration +130 (engine units per tick, 8.8).
     pub(crate) f126: i16,
     pub(crate) f128: i16,
+    pub(crate) f130: i16,
+    /// Mana pool / per-tick mana (offsets 136/140; the mana track
+    /// consumes these — carried for faithful spawn state).
+    pub(crate) f136: i32,
+    pub(crate) f140: i32,
+    /// Chase target (offset 146): pool slot of the hunted entity;
+    /// [`crate::mobs::PLAYER_TARGET`] = the player's carpet.
+    pub(crate) f146: u16,
+    /// Behavior row index into [`crate::mc1_behavior::BEHAVIOR`]
+    /// (offset 156 holds `&unk_98F38[N]` in the original).
+    pub(crate) row156: u8,
     /// Source THING table index (1-based; ours, not original layout) —
     /// lets the app resolve spawned drawables through the per-slot
     /// spawn-RNG approximation. 0 = not from a THING.
@@ -285,6 +329,10 @@ pub(crate) struct Gen {
     pub(crate) rand: u32,
     /// Terrain-retile LCG (`pseudoRand`), u16 stream.
     pub(crate) pseudo: u16,
+    /// Per-model spawn ordinals (`str_AE400+12+model`, Type_AE400_20
+    /// str_12): creature spawns record the old value into +63 and
+    /// increment; model-7 sprite alternation keys off its parity.
+    pub(crate) spawn_count: [u8; 20],
 }
 
 /// Rebuild the original 1-based record table from level things.
@@ -324,6 +372,7 @@ impl Gen {
             free: (1..POOL as u16).rev().collect(),
             rand: seed,
             pseudo,
+            spawn_count: [0; 20],
         }
     }
 
@@ -370,7 +419,9 @@ impl Gen {
     // ---- pool primitives ------------------------------------------------
 
     /// NewEvent_372C0 (:43865). Seeds the per-entity LCG from the
-    /// global stream WITHOUT advancing it.
+    /// global stream WITHOUT advancing it. Defaults per the original:
+    /// life 300, flags 8, +126 = 16, +44 = 100, +24 = own slot,
+    /// +58 = 0xFA, +66 = +67 = 0xFF, +156 = row 0.
     pub(crate) fn new_event(&mut self) -> Option<usize> {
         let idx = self.free.pop()? as usize;
         let e = &mut self.ent[idx];
@@ -379,9 +430,19 @@ impl Gen {
         e.flags = 8;
         e.f126 = 16;
         e.f44 = 100;
+        e.id24 = idx as u16;
+        e.f58 = 0xFA;
+        e.f66 = 0xFF;
+        e.f67 = 0xFF;
         e.rand = (idx as u32).wrapping_add(self.rand);
         e.f63 = idx as u8;
         Some(idx)
+    }
+
+    /// One draw of this event's own LCG (`rand_29799_4`, the stream
+    /// every spawn/behavior handler rolls).
+    pub(crate) fn ent_rand(&mut self, i: usize) -> u32 {
+        lcg32(&mut self.ent[i].rand)
     }
 
     /// sub_41CF0 (:52468): link into the per-tile list and set position.
@@ -423,7 +484,7 @@ impl Gen {
     }
 
     /// sub_41C70 (:52442): move, relinking only across tiles.
-    fn move_relink(&mut self, i: usize, x: u16, y: u16, z: i16) {
+    pub(crate) fn move_relink(&mut self, i: usize, x: u16, y: u16, z: i16) {
         let e = &self.ent[i];
         if e.x >> 8 == x >> 8 && e.y >> 8 == y >> 8 {
             let e = &mut self.ent[i];
@@ -803,7 +864,7 @@ impl Gen {
     }
 
     /// Distance_410CE (:51874): Newton integer sqrt with seed table.
-    fn isqrt(square: u32) -> u32 {
+    pub(crate) fn isqrt(square: u32) -> u32 {
         if square == 0 {
             return 0;
         }
@@ -816,7 +877,7 @@ impl Gen {
     }
 
     /// sub_42150/sub_423D0 (:52638/:52739) on two 8.8 positions.
-    fn angle_between(ax: u16, ay: u16, bx: u16, by: u16) -> u16 {
+    pub(crate) fn angle_between(ax: u16, ay: u16, bx: u16, by: u16) -> u16 {
         Self::angle_of(
             (bx as i16).wrapping_sub(ax as i16),
             (by as i16).wrapping_sub(ay as i16),
@@ -1039,13 +1100,14 @@ impl Gen {
                 e.max_life = 0;
                 e.act_life = 0;
                 e.flags = 0;
-                e.f80 = 256;
-                e.f82 = 256;
-                e.f84 = 256;
                 e.dest_x = e.x;
                 e.dest_y = e.y;
                 lcg32(&mut e.rand);
                 let (x, y, z) = (e.x, e.y, e.z);
+                self.set_sprite(i, 223);
+                self.ent[i].f80 = 256;
+                self.ent[i].f82 = 256;
+                self.ent[i].f84 = 256;
                 self.link(i, x, y, z.wrapping_add(640));
             }
             // All remaining retail models (0, 1, 5, 6, 8, 13, 14, 15,

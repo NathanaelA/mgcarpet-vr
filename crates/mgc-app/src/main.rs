@@ -194,27 +194,30 @@ fn load_level(
     }
 
     // World entities as billboards + map dots. With a live world, the
-    // population is its disposition-spawned live set; without one
-    // (MC2, --no-terrain-features), every drawable record — the old
-    // static behavior, kept as the comparison mode.
+    // sim's pose snapshot is the source of truth (sprite types, spawn
+    // facing and jitter come from the ported spawn handlers); without
+    // one (MC2, --no-terrain-features), every drawable record resolves
+    // statically — the old behavior, kept as the comparison mode.
     let (billboards, map_dots) = if package.meta.game != Game::MagicCarpet2 {
         let index = bundle.sprites.as_ref().map(|(i, _)| i);
-        let live;
-        let things: &[mgc_formats::Thing] = match &world {
-            Some(w) => {
-                live = w.live_things();
-                &live
-            }
-            None => &package.things.things,
+        let dims = |id: u16| {
+            index
+                .and_then(|i| i.sprites.get(id as usize))
+                .map(|s| (s.width, s.height))
         };
-        (
-            entities::billboards(things, &height, |id| {
-                index
-                    .and_then(|i| i.sprites.get(id as usize))
-                    .map(|s| (s.width, s.height))
-            }),
-            entities::map_dots(things, &bundle.palette),
-        )
+        match &world {
+            Some(w) => {
+                let poses = w.live_poses();
+                (
+                    entities::billboards_from_poses(&poses, dims),
+                    entities::map_dots_from_poses(&poses, &bundle.palette),
+                )
+            }
+            None => (
+                entities::billboards(&package.things.things, &height, dims),
+                entities::map_dots(&package.things.things, &bundle.palette),
+            ),
+        }
     } else {
         (Vec::new(), Vec::new())
     };
@@ -337,42 +340,52 @@ impl App {
         input
     }
 
-    /// Push runtime world changes (dug terrain, spawned/removed
-    /// entities) to the renderer: refresh the level view's planes,
-    /// rebuild billboards + map dots, re-upload the plane textures.
+    /// Push runtime world changes (dug terrain, moving/spawned/removed
+    /// entities) to the renderer. Entities move every tick now, so the
+    /// billboard set refreshes per tick from the sim's pose snapshot;
+    /// the map texture recompose (dots baked into it) is throttled to
+    /// every 8th tick unless terrain actually changed.
     fn sync_world(&mut self) {
         let Some(w) = &mut self.sim.world else { return };
-        if !w.terrain_dirty && !w.entities_dirty {
+        let terrain = w.terrain_dirty;
+        let entities = w.entities_dirty;
+        if !terrain && !entities {
             return;
         }
-        let (Some(shading), Some(angle)) =
-            (self.level.view.shading.as_mut(), self.level.view.angle.as_mut())
-        else {
-            return;
-        };
-        w.copy_planes_into(mgc_sim::features::TerrainPlanes {
-            height: &mut self.level.view.height,
-            tile_type: &mut self.level.view.tile_type,
-            shading,
-            angle,
-        });
-        if w.entities_dirty {
-            let live = w.live_things();
+        if terrain {
+            let (Some(shading), Some(angle)) =
+                (self.level.view.shading.as_mut(), self.level.view.angle.as_mut())
+            else {
+                return;
+            };
+            w.copy_planes_into(mgc_sim::features::TerrainPlanes {
+                height: &mut self.level.view.height,
+                tile_type: &mut self.level.view.tile_type,
+                shading,
+                angle,
+            });
+        }
+        if entities {
+            let poses = w.live_poses();
             let index = self.level.sprites.as_ref().map(|(i, _)| i);
-            self.level.billboards = entities::billboards(&live, &self.level.view.height, |id| {
+            self.level.billboards = entities::billboards_from_poses(&poses, |id| {
                 index
                     .and_then(|i| i.sprites.get(id as usize))
                     .map(|s| (s.width, s.height))
             });
-            self.level.map_dots = entities::map_dots(&live, &self.level.palette_rgba);
+            self.level.map_dots = entities::map_dots_from_poses(&poses, &self.level.palette_rgba);
             self.level.map_areas = map_areas(w);
         }
         w.terrain_dirty = false;
         w.entities_dirty = false;
         if let Some(r) = &mut self.renderer {
-            r.set_billboards(self.level.billboards.clone());
+            if entities {
+                r.set_billboards(self.level.billboards.clone());
+            }
             let areas = if self.map_triggers { &self.level.map_areas[..] } else { &[] };
-            r.update_terrain(&self.level.view, &self.level.map_dots, areas);
+            if terrain || self.sim.tick % 8 == 0 {
+                r.update_terrain(&self.level.view, &self.level.map_dots, areas);
+            }
         }
     }
 

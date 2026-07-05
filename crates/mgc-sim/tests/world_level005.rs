@@ -87,31 +87,42 @@ fn level_005_trigger_cascade() {
     assert_eq!(w.live_things().len(), init);
     assert_eq!(region_height(&w, 90, 103, 101, 114), before);
 
-    // Fly into the trigger at (99,115) → disposition 1: the model-11
-    // crater near (95,108) spawns and digs from the next ticks on.
-    fly(&mut w, 99.5, 115.5, 16);
+    // Fly into the trigger at (99,115) (extent 4 tiles) → disposition
+    // 1: the model-11 crater near (95,108) spawns and digs from the
+    // next ticks on. The visit point sits inside trigger 1 but clear
+    // of the follow-up trigger's volume at (95,109) (extent 6 tiles +
+    // the player carpet's sprite-44 half-width — the AABB test sums
+    // both entities' extents, sub_118C0).
+    fly(&mut w, 101.5, 117.5, 16);
     fly(&mut w, 20.0, 20.0, 120);
     let after_crater = region_height(&w, 90, 103, 101, 114);
     assert!(
         after_crater < before,
         "crater must dig: region height {after_crater} vs {before}"
     );
-    assert!(w.terrain_dirty);
-    let live_after_crater = w.live_things().len();
+    let live_after_crater = creature_count(&w);
 
-    // The follow-up trigger at (95,109) → disposition 2: the ambush.
+    // The follow-up trigger at (95,109) → disposition 2: the ambush
+    // (8 class-5 model-2 creatures around the crater).
     fly(&mut w, 95.5, 109.5, 16);
-    let live_final = w.live_things().len();
+    let live_final = creature_count(&w);
     assert_eq!(
         live_final - live_after_crater,
         8,
         "disposition 2 spawns the 8-creature ambush"
     );
 
-    // Both triggers were one-shot: re-entering changes nothing.
-    fly(&mut w, 99.5, 115.5, 32);
+    // Both triggers were one-shot: no NEW spawns on re-entry (the
+    // ambush creatures now move and may die in the fresh crater, so
+    // the count can only shrink).
+    fly(&mut w, 101.5, 117.5, 32);
     fly(&mut w, 95.5, 109.5, 32);
-    assert_eq!(w.live_things().len(), live_final);
+    assert!(creature_count(&w) <= live_final);
+}
+
+/// Live class-5 creature count (heads only; movement can kill).
+fn creature_count(w: &World) -> usize {
+    w.live_things().iter().filter(|t| t.class == 5).count()
 }
 
 #[test]
@@ -122,13 +133,19 @@ fn level_005_deterministic() {
     };
     let run = || {
         let (mut w, _) = build_world(&root);
-        fly(&mut w, 99.5, 115.5, 16);
+        fly(&mut w, 101.5, 117.5, 16);
         fly(&mut w, 20.0, 20.0, 100);
         fly(&mut w, 95.5, 109.5, 16);
+        let poses: Vec<_> = w
+            .live_poses()
+            .iter()
+            .map(|p| (p.type_index, (p.x * 256.0) as i32, (p.z * 256.0) as i32))
+            .collect();
         (
             w.planes().height.clone(),
             w.planes().tile_type.clone(),
             w.live_things().len(),
+            poses,
         )
     };
     assert_eq!(run(), run());
