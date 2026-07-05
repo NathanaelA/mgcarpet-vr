@@ -36,7 +36,12 @@ struct LoadedLevel {
 /// renderer and sim consume. `tileset` picks MC1's world set: 0 =
 /// temperate, 1 = arctic (each MC1 level uses exactly one; which levels
 /// use set 1 is not yet baked into packages, so it is a CLI switch).
-fn load_level(level_path: &Path, tileset: u8) -> Result<LoadedLevel, String> {
+///
+/// `terrain_features` applies the original's load-time entity-driven
+/// terrain pass (craters, canyons, walls, building flattening/painting
+/// — mgc_sim::features) to the pristine baked terrain, as the engine
+/// does. Off = the raw generator output, for comparison renders.
+fn load_level(level_path: &Path, tileset: u8, terrain_features: bool) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
     let package: LevelPackage =
@@ -96,18 +101,53 @@ fn load_level(level_path: &Path, tileset: u8) -> Result<LoadedLevel, String> {
         eprintln!("note: MC2 assets not yet baked — using MC1's as a stand-in");
     }
 
+    let mut height = terrain.height.clone();
+    let mut tile_type = terrain.tile_type.clone();
+    let mut shading = terrain.shading.clone();
+    let mut angle = terrain.angle.clone();
+
+    // The original's load-time feature pass (MC1/HW; MC2's variant is a
+    // separate remc2 port, pending). Needs the shading + angle planes
+    // and the search/build assets.
+    if terrain_features && package.meta.game != Game::MagicCarpet2 {
+        match (&mut shading, &mut angle) {
+            (Some(shading), Some(angle)) => {
+                let assets = mgc_sim::features::FeatureAssets::parse(
+                    &asset("search.bin".into())?,
+                    &asset(format!("build-{tileset}.tab.bin"))?,
+                    &asset(format!("build-{tileset}.dat.bin"))?,
+                )?;
+                let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
+                mgc_sim::features::generate_features_mc1(
+                    mgc_sim::features::TerrainPlanes {
+                        height: &mut height,
+                        tile_type: &mut tile_type,
+                        shading,
+                        angle,
+                    },
+                    &package.things.things,
+                    seed,
+                    &assets,
+                );
+            }
+            _ => eprintln!(
+                "note: package lacks shading/angle planes — terrain features skipped (rebake)"
+            ),
+        }
+    }
+
     Ok(LoadedLevel {
         view: LevelView {
-            tile_type: terrain.tile_type.clone(),
-            height: terrain.height.clone(),
-            shading: terrain.shading.clone(),
+            tile_type,
+            height: height.clone(),
+            shading,
             palette,
             tile_colors,
             shade_lut,
             atlas,
-            angle: terrain.angle.clone(),
+            angle,
         },
-        height: terrain.height.clone(),
+        height,
         label: format!("{game} level {}", package.meta.level),
     })
 }
@@ -375,6 +415,8 @@ struct Args {
     map_scale: u32,
     /// Render `--screenshot` showing the book screen instead of the world.
     map_view: bool,
+    /// Apply the original's load-time terrain features (default true).
+    terrain_features: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -387,6 +429,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
+    let mut terrain_features = true;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -437,13 +480,14 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--map-view" => map_view = true,
+            "--no-terrain-features" => terrain_features = false,
             "--help" | "-h" => {
                 return Err(format!(
                     "usage: mgcarpet [--level <baked/.../level-NNN.mgcl>] \
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view]] \
-                     [--map out.png [--map-scale N]]\n\
+                     [--map out.png [--map-scale N]] [--no-terrain-features]\n\
                      enhancements persist in {} (see crates/mgc-app/src/config.rs)",
                     config::DEFAULT_PATH
                 ));
@@ -461,6 +505,7 @@ fn parse_args() -> Result<Args, String> {
         map,
         map_scale,
         map_view,
+        terrain_features,
     })
 }
 
@@ -551,7 +596,7 @@ fn main() -> std::process::ExitCode {
         .smooth_shading
         .unwrap_or(cfg.enhancements.smooth_shading);
 
-    let level = match load_level(&args.level, args.tileset) {
+    let level = match load_level(&args.level, args.tileset, args.terrain_features) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("error: {e}");

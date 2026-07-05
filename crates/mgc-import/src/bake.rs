@@ -281,7 +281,31 @@ pub fn bake_mc1_assets(
         let atlas = unpack(&blk_file)?;
         expect_len(&blk_file, &atlas, ATLAS_LEN)?;
         emit(format!("terrain-atlas-{set}.bin"), &atlas)?;
+
+        // BUILDN-0.{TAB,DAT} (both RNC): building footprint RLE maps
+        // for the load-time feature pass (walls/floors flattened and
+        // painted under villages/castles). TAB = 6-byte entries
+        // {u32 offset into DAT, u8 width, u8 height}. Baked raw; the
+        // engine parses them via mgc_sim::features::FeatureAssets.
+        let tab_file = format!("BUILD{set}-0.TAB");
+        let tab = unpack(&tab_file)?;
+        if tab.len() % 6 != 0 {
+            return Err(BakeError::Level(
+                data_dir.join(&tab_file),
+                0,
+                format!("{} bytes is not 6-byte entries", tab.len()),
+            ));
+        }
+        emit(format!("build-{set}.tab.bin"), &tab)?;
+        let dat_file = format!("BUILD{set}-0.DAT");
+        emit(format!("build-{set}.dat.bin"), &unpack(&dat_file)?)?;
     }
+
+    // SEARCH.DAT (RNC): the engine's 32x32 ring-order grid driving
+    // every crater/canyon dig (mgc_sim::features). Tileset-independent.
+    let search = unpack("SEARCH.DAT")?;
+    expect_len("SEARCH.DAT", &search, 1024)?;
+    emit("search.bin".into(), &search)?;
     Ok(outputs)
 }
 

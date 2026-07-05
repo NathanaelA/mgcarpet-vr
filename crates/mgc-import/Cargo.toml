@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 mgc-formats = { path = "../mgc-formats" }
+mgc-sim = { path = "../mgc-sim" }
 sha2 = "0.10"
 
 [[bin]]

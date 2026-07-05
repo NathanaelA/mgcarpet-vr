@@ -918,6 +918,7 @@ name = "mgc-import"
 version = "0.1.0"
 dependencies = [
  "mgc-formats",
+ "mgc-sim",
  "sha2",
 ]
 

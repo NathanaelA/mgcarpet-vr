@@ -236,9 +236,12 @@ reproduces the previously-validated oracle output near-byte-exactly
 and whose type layer is MC1's real classifier. Entity-driven terrain
 modification (walls, canyons, building flattening) is deliberately NOT
 baked in: engines apply those at load time from `things.json`, exactly
-as the original engine does after generation. Vertical-scale and
-water-level semantics will be documented as the renderer work firms
-them up.
+as the original engine does after generation (implemented for MC1/HW
+in `mgc_sim::features` — the GenerateFeatures port; it additionally
+consumes the baked `search.bin` ring table and `build-N.{tab,dat}.bin`
+building footprints from the shared assets directory). Vertical-scale
+and water-level semantics will be documented as the renderer work
+firms them up.
 
 ## Versioning and evolution
 

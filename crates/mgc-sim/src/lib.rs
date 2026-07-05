@@ -13,6 +13,10 @@
 //! and wraps around in both axes, and altitude is `height_byte / 8`
 //! (the engine computes `32 * height_byte` in its own units).
 
+pub mod features;
+pub mod mc1_tables;
+mod tables;
+
 /// Fixed simulation tick rate.
 ///
 /// Placeholder value. The original advanced one "game turn" per rendered
