@@ -54,10 +54,10 @@ use mgc_formats::Thing;
 const GRID: usize = 0x10000;
 
 /// Engine entity-table capacity; the feature scan visits 1..=1999.
-const TABLE_SLOTS: usize = 2096;
+pub(crate) const TABLE_SLOTS: usize = 2096;
 
 /// Runtime event pool size (slot 0 never allocated).
-const POOL: usize = 1000;
+pub(crate) const POOL: usize = 1000;
 
 /// The four terrain planes the feature pass mutates, engine layout
 /// (index = tile_y * 256 + tile_x).
@@ -66,6 +66,16 @@ pub struct TerrainPlanes<'a> {
     pub tile_type: &'a mut [u8],
     pub shading: &'a mut [u8],
     pub angle: &'a mut [u8],
+}
+
+/// Owned form of the four planes — what the runtime world keeps and
+/// mutates across ticks (`mgc_sim::world`).
+#[derive(Clone)]
+pub struct Planes {
+    pub height: Vec<u8>,
+    pub tile_type: Vec<u8>,
+    pub shading: Vec<u8>,
+    pub angle: Vec<u8>,
 }
 
 /// One building-footprint entry from `BUILD?-0.TAB` (6 bytes on disk:
@@ -79,6 +89,7 @@ pub struct BuildDef {
 
 /// Parsed game data the feature pass needs: the SEARCH.DAT ring table
 /// and the building footprint RLE maps.
+#[derive(Clone)]
 pub struct FeatureAssets {
     /// Per ring 0..31: (dx, dy) byte deltas from the dig center, in the
     /// original's row-major emission order (sub_11540, :16784).
@@ -137,14 +148,14 @@ impl FeatureAssets {
 
 /// The engine's LCG, 32-bit state (`rand_4` and per-entity streams).
 #[inline]
-fn lcg32(s: &mut u32) -> u32 {
+pub(crate) fn lcg32(s: &mut u32) -> u32 {
     *s = s.wrapping_mul(9377).wrapping_add(9439);
     *s
 }
 
 /// Tile index from u8 coordinates (low byte = x, high byte = y).
 #[inline]
-fn tile(x: u8, y: u8) -> usize {
+pub(crate) fn tile(x: u8, y: u8) -> usize {
     ((y as usize) << 8) | x as usize
 }
 
@@ -179,75 +190,149 @@ pub fn post_generation_pseudo_rand(height: &[u8]) -> u16 {
 }
 
 /// One record of the original 18-byte THING_INIT table (1-based copy).
+/// The runtime world keeps this table live: dispositions scan it and
+/// one-shot spawns zero the class (`sub_37440_37800`).
 #[derive(Clone, Copy, Default)]
-struct Rec {
-    class: u16,
-    model: u16,
-    x: u16,
-    y: u16,
-    dis_id: u16,
-    swi_id: u16,
-    parent: u16,
-    child: u16,
+pub(crate) struct Rec {
+    pub(crate) class: u16,
+    pub(crate) model: u16,
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) dis_id: u16,
+    /// Switch size (`data_10`): trigger volume radius in tiles.
+    pub(crate) swi_sz: u16,
+    pub(crate) swi_id: u16,
+    pub(crate) parent: u16,
+    pub(crate) child: u16,
 }
 
 /// Runtime event entity — the subset of remc1's 164-byte
 /// `Type_AE400_29795` the load-time feature path uses. Names keep the
 /// original byte offsets for traceability.
 #[derive(Clone, Copy, Default)]
-struct Ent {
+pub(crate) struct Ent {
     /// Per-entity LCG (offset 4), seeded `slot + global_rand` at alloc.
-    rand: u32,
-    max_life: u32,
-    act_life: i32,
-    /// Flags (offset 16). Bit 1 (0x2) = dug/second-phase, bit 2 (0x4) =
-    /// linked into the tile map, bit 10 (0x400) = marked dead.
-    flags: u32,
-    next20: u16,
-    prev22: u16,
-    /// Generic counter (offset 26): crater ring counter, wall run length.
-    f26: i16,
-    f28: u16,
+    pub(crate) rand: u32,
+    pub(crate) max_life: u32,
+    pub(crate) act_life: i32,
+    /// Flags (offset 16). Bit 0 (0x1) = active, bit 1 (0x2) =
+    /// dug/second-phase, bit 2 (0x4) = linked into the tile map,
+    /// bit 10 (0x400) = marked dead.
+    pub(crate) flags: u32,
+    pub(crate) next20: u16,
+    pub(crate) prev22: u16,
+    /// The disposition this event fires / entity link (offset 24, from
+    /// the THING's `swi_id`).
+    pub(crate) id24: u16,
+    /// Generic counter (offset 26): crater ring counter, wall run
+    /// length, trigger rearm/debounce countdown.
+    pub(crate) f26: i16,
+    pub(crate) f28: u16,
     /// Wall step dx/dy (offsets 30/32); canyon/ridge heading (30).
-    f30: u16,
-    f32: u16,
+    pub(crate) f30: u16,
+    pub(crate) f32: u16,
     /// Strength (offset 44).
-    f44: u16,
-    /// Slot index at alloc (offset 63) — gates digger radius growth.
-    f63: u8,
-    class64: u8,
-    model65: u8,
+    pub(crate) f44: u16,
+    /// Slot index at alloc (offset 63); the RUNTIME loop increments it
+    /// per tick (:52417) — gates digger radius growth (`% 3`) and the
+    /// trigger probe throttle (`& 7`). The load-time fixpoint loop
+    /// never increments, so there it stays the alloc slot.
+    pub(crate) f63: u8,
+    pub(crate) class64: u8,
+    pub(crate) model65: u8,
     /// Tick-handler index (offset 70).
-    tick70: u8,
+    pub(crate) tick70: u8,
     /// Building-table index (offset 71).
-    f71: u8,
+    pub(crate) f71: u8,
     /// Position, 8.8 fixed point (offsets 72/74/76).
-    x: u16,
-    y: u16,
-    z: i16,
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) z: i16,
     /// Extents (offsets 80/82/84); high byte of f80 = dig radius in tiles.
-    f80: u16,
-    f82: u16,
-    f84: u16,
+    pub(crate) f80: u16,
+    pub(crate) f82: u16,
+    pub(crate) f84: u16,
     /// Advance per tick (offset 126); building area>>4 (offset 128).
-    f126: i16,
-    f128: i16,
+    pub(crate) f126: i16,
+    pub(crate) f128: i16,
+    /// Source THING table index (1-based; ours, not original layout) —
+    /// lets the app resolve spawned drawables through the per-slot
+    /// spawn-RNG approximation. 0 = not from a THING.
+    pub(crate) thing_slot: u16,
 }
 
-struct Gen<'a> {
-    t: TerrainPlanes<'a>,
-    assets: &'a FeatureAssets,
+/// The event-pool engine: terrain planes + the original's 1000-slot
+/// event pool and PRNG streams. Serves both the load-time feature pass
+/// (fixpoint loop, this module) and the runtime world tick
+/// (`mgc_sim::world`, one pass per turn) — in the original these are
+/// the same pool and the same handlers.
+pub(crate) struct Gen {
+    pub(crate) t: Planes,
+    pub(crate) assets: FeatureAssets,
     /// `byte_B5D40`: 2401 x {texture, orientation bits} retile table.
-    retile: Vec<[u8; 2]>,
+    pub(crate) retile: Vec<[u8; 2]>,
     /// Per-tile head of the event intrusive list (`mapEntityIndex`).
-    map_entity: Vec<u16>,
-    ent: Vec<Ent>,
+    pub(crate) map_entity: Vec<u16>,
+    pub(crate) ent: Vec<Ent>,
     /// Free stack; built 999→1 so allocation pops 1, 2, 3, …
-    free: Vec<u16>,
+    pub(crate) free: Vec<u16>,
     /// Global LCG (`rand_4`), = the level seed at scan time.
-    rand: u32,
+    pub(crate) rand: u32,
     /// Terrain-retile LCG (`pseudoRand`), u16 stream.
-    pseudo: u16,
+    pub(crate) pseudo: u16,
+}
+
+/// Rebuild the original 1-based record table from level things.
+pub(crate) fn build_table(things: &[Thing]) -> Vec<Rec> {
+    let mut table = vec![Rec::default(); TABLE_SLOTS];
+    for th in things {
+        let i = th.slot as usize + 1;
+        if i < TABLE_SLOTS {
+            table[i] = Rec {
+                class: th.class,
+                model: th.model,
+                x: th.x,
+                y: th.y,
+                dis_id: th.dis_id,
+                swi_sz: th.swi_sz,
+                swi_id: th.swi_id,
+                parent: th.parent,
+                child: th.child,
+            };
+        }
+    }
+    table
+}
+
+impl Gen {
+    /// A fresh engine over owned planes. `seed` = the level's GEN_MAP
+    /// seed (`rand_4`); the retile `pseudoRand` stream is replayed from
+    /// the pristine height plane.
+    pub(crate) fn new(t: Planes, assets: FeatureAssets, seed: u32) -> Self {
+        let pseudo = post_generation_pseudo_rand(&t.height);
+        Gen {
+            t,
+            assets,
+            retile: mc1_tables::retile_table(),
+            map_entity: vec![0; GRID],
+            ent: vec![Ent::default(); POOL],
+            free: (1..POOL as u16).rev().collect(),
+            rand: seed,
+            pseudo,
+        }
+    }
+
+    /// GenerateFeatures_36430: consume the class-10 load-time features
+    /// (dis_id 0xFFFF) in slot order and run the fixpoint event loop.
+    pub(crate) fn load_time_pass(&mut self, table: &mut [Rec]) {
+        for i in 1..2000usize {
+            if table[i].dis_id == 0xFFFF && table[i].class == 10 {
+                self.dispatch(table, i);
+                table[i].class = 0;
+            }
+        }
+        self.event_loop();
+    }
 }
 
 /// Apply MC1's load-time terrain features.
@@ -261,52 +346,27 @@ pub fn generate_features_mc1(
     seed: u32,
     assets: &FeatureAssets,
 ) {
-    // Rebuild the original 1-based record table.
-    let mut table = vec![Rec::default(); TABLE_SLOTS];
-    for th in things {
-        let i = th.slot as usize + 1;
-        if i < TABLE_SLOTS {
-            table[i] = Rec {
-                class: th.class,
-                model: th.model,
-                x: th.x,
-                y: th.y,
-                dis_id: th.dis_id,
-                swi_id: th.swi_id,
-                parent: th.parent,
-                child: th.child,
-            };
-        }
-    }
-
-    let pseudo = post_generation_pseudo_rand(planes.height);
-    let mut g = Gen {
-        t: planes,
-        assets,
-        retile: mc1_tables::retile_table(),
-        map_entity: vec![0; GRID],
-        ent: vec![Ent::default(); POOL],
-        free: (1..POOL as u16).rev().collect(),
-        rand: seed,
-        pseudo,
+    let mut table = build_table(things);
+    let owned = Planes {
+        height: planes.height.to_vec(),
+        tile_type: planes.tile_type.to_vec(),
+        shading: planes.shading.to_vec(),
+        angle: planes.angle.to_vec(),
     };
-
-    // GenerateFeatures_36430: the spawn scan (slots 1..1999).
-    for i in 1..2000usize {
-        if table[i].dis_id == 0xFFFF && table[i].class == 10 {
-            g.dispatch(&mut table, i);
-            table[i].class = 0;
-        }
-    }
-    g.event_loop();
+    let mut g = Gen::new(owned, assets.clone(), seed);
+    g.load_time_pass(&mut table);
+    planes.height.copy_from_slice(&g.t.height);
+    planes.tile_type.copy_from_slice(&g.t.tile_type);
+    planes.shading.copy_from_slice(&g.t.shading);
+    planes.angle.copy_from_slice(&g.t.angle);
 }
 
-impl<'a> Gen<'a> {
+impl Gen {
     // ---- pool primitives ------------------------------------------------
 
     /// NewEvent_372C0 (:43865). Seeds the per-entity LCG from the
     /// global stream WITHOUT advancing it.
-    fn new_event(&mut self) -> Option<usize> {
+    pub(crate) fn new_event(&mut self) -> Option<usize> {
         let idx = self.free.pop()? as usize;
         let e = &mut self.ent[idx];
         *e = Ent::default();
@@ -320,7 +380,7 @@ impl<'a> Gen<'a> {
     }
 
     /// sub_41CF0 (:52468): link into the per-tile list and set position.
-    fn link(&mut self, i: usize, x: u16, y: u16, z: i16) {
+    pub(crate) fn link(&mut self, i: usize, x: u16, y: u16, z: i16) {
         if self.ent[i].flags & 4 != 0 {
             return;
         }
@@ -372,7 +432,7 @@ impl<'a> Gen<'a> {
     }
 
     /// sub_41E90 (:52514): unlink, clear, return the slot (LIFO).
-    fn free_entity(&mut self, i: usize) {
+    pub(crate) fn free_entity(&mut self, i: usize) {
         self.unlink(i);
         self.ent[i].class64 = 0;
         self.free.push(i as u16);
@@ -383,7 +443,7 @@ impl<'a> Gen<'a> {
     /// sub_724C0 (:81516): ground height at an 8.8 position,
     /// interpolated across the tile's two triangles, in engine units
     /// (one height byte = 32).
-    fn ground_z(&self, x: u16, y: u16) -> i32 {
+    pub(crate) fn ground_z(&self, x: u16, y: u16) -> i32 {
         let h = |dx: u8, dy: u8| self.t.height[tile(dx, dy)] as i32;
         let (cx, cy) = ((x >> 8) as u8, (y >> 8) as u8);
         let (fx, fy) = ((x & 0xFF) as i32, (y & 0xFF) as i32);
@@ -832,7 +892,7 @@ impl<'a> Gen<'a> {
     /// an event that the loop purges unticked — only its pool-slot
     /// churn is observable, so their creator bodies reduce to alloc +
     /// identity fields (positions kept for completeness).
-    fn spawn_creator(&mut self, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
+    pub(crate) fn spawn_creator(&mut self, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
         // Null/stub creator entries: model 24 (stub returning 0),
         // 37, 46..49 (null). Everything else allocates one event.
         if matches!(model, 24 | 37 | 46..=49) || model > 61 {
@@ -987,7 +1047,7 @@ impl<'a> Gen<'a> {
 
     /// sub_36DF0 (:43707): building placement fix-up. `bt` = the level
     /// entity's parent + 16, an index into the build table.
-    fn building_fixup(&mut self, i: usize, bt: u16) {
+    pub(crate) fn building_fixup(&mut self, i: usize, bt: u16) {
         let def = self.assets.build_tab[bt as usize % self.assets.build_tab.len()];
         let (bw, bh) = (def.w as u16, def.h as u16);
         self.ent[i].f26 = 2;
@@ -1239,7 +1299,7 @@ impl<'a> Gen<'a> {
     }
 
     /// str_255998 (:4856) dispatch by byte 70.
-    fn tick(&mut self, i: usize) {
+    pub(crate) fn tick(&mut self, i: usize) {
         match self.ent[i].tick70 {
             9 => self.tick_hill(i),
             10 => self.tick_dish(i),
@@ -1859,13 +1919,6 @@ mod tests {
         }
     }
 
-    struct Planes {
-        height: Vec<u8>,
-        tile_type: Vec<u8>,
-        shading: Vec<u8>,
-        angle: Vec<u8>,
-    }
-
     fn flat_land(h: u8) -> Planes {
         Planes {
             height: vec![h; GRID],
@@ -1892,23 +1945,17 @@ mod tests {
     #[test]
     fn ring_iterator_drops_last_cell_of_end_ring() {
         let assets = synthetic_assets();
-        let g = Gen {
-            t: TerrainPlanes {
-                height: &mut [],
-                tile_type: &mut [],
-                shading: &mut [],
-                angle: &mut [],
+        let (r0, r1) = (assets.rings[0].len(), assets.rings[1].len());
+        let g = Gen::new(
+            Planes {
+                height: vec![0; GRID],
+                tile_type: vec![0; GRID],
+                shading: vec![0; GRID],
+                angle: vec![0; GRID],
             },
-            assets: &assets,
-            retile: mc1_tables::retile_table(),
-            map_entity: vec![],
-            ent: vec![],
-            free: vec![],
-            rand: 0,
-            pseudo: 0,
-        };
-        let r0 = assets.rings[0].len();
-        let r1 = assets.rings[1].len();
+            assets,
+            0,
+        );
         assert_eq!(g.ring_cells(0, 0).len(), r0 - 1);
         assert_eq!(g.ring_cells(0, 1).len(), r0 + r1 - 1);
     }

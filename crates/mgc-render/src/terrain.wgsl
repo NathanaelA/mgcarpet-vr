@@ -41,6 +41,10 @@ const ATLAS_CELLS_PER_ROW: i32 = 8;
 @group(0) @binding(5) var t_atlas: texture_2d<u32>;
 // Per-tile angle/flags byte; bits 4-6 = texture UV orientation.
 @group(0) @binding(6) var t_angle: texture_2d<u32>;
+// Height bytes (1 = 1/8 tile), sampled per grid corner in the vertex
+// stage — heights live here (not in the vertex buffer) so runtime
+// terrain mutation (craters, quakes) is a texture update.
+@group(0) @binding(7) var t_height: texture_2d<u32>;
 
 struct VsIn {
     @builtin(instance_index) instance: u32,
@@ -71,6 +75,12 @@ fn vs_main(in: VsIn) -> VsOut {
     );
     var out: VsOut;
     var pos = in.pos + wrap;
+    // Altitude from the height plane (the buffer carries y = 0).
+    let hg = vec2<i32>(
+        (i32(in.pos.x) % 256 + 256) % 256,
+        (i32(in.pos.z) % 256 + 256) % 256,
+    );
+    pos.y = f32(textureLoad(t_height, hg, 0).r) * 0.125;
     out.shade_wave = 0.0;
 
     // Water surface animation: the original's per-grid-corner sine

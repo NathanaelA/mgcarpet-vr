@@ -1,0 +1,135 @@
+//! Runtime trigger/disposition integration over real baked data:
+//! level 005's authored cascade — a proximity trigger at (99,115)
+//! fires disposition 1 (the chain-terminating crater at (95,108) + a
+//! follow-up trigger), whose trigger fires disposition 2 (an 8-creature
+//! ambush around the crater).
+//!
+//! Self-skips when the baked tree is absent (game data is optional,
+//! per the project rule).
+
+use mgc_sim::features::{FeatureAssets, Planes};
+use mgc_sim::world::{PlayerPose, World};
+use std::path::PathBuf;
+
+fn baked_root() -> Option<PathBuf> {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
+    p.join("mc1/level-005.mgcl").exists().then_some(p)
+}
+
+fn build_world(root: &std::path::Path) -> (World, usize) {
+    let file = std::fs::File::open(root.join("mc1/level-005.mgcl")).unwrap();
+    let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(file).unwrap();
+    let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc1-temperate")).unwrap();
+    let terrain = pkg.terrain.as_ref().unwrap();
+    let planes = Planes {
+        height: terrain.height.clone(),
+        tile_type: terrain.tile_type.clone(),
+        shading: terrain.shading.clone().unwrap(),
+        angle: terrain.angle.clone().unwrap(),
+    };
+    let assets = FeatureAssets::parse(
+        bundle.search.as_ref().unwrap(),
+        bundle.build_tab.as_ref().unwrap(),
+        bundle.build_dat.as_ref().unwrap(),
+    )
+    .unwrap();
+    let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
+    let world = World::new(planes, &pkg.things.things, seed, assets);
+    let drawable = pkg
+        .things
+        .things
+        .iter()
+        .filter(|t| {
+            t.kind == mgc_formats::ThingKind::Entity && matches!(t.class, 2 | 3 | 5 | 12)
+        })
+        .count();
+    (world, drawable)
+}
+
+/// Hover the player near the ground at (x, z) for `ticks` turns.
+fn fly(w: &mut World, x: f32, z: f32, ticks: usize) {
+    for _ in 0..ticks {
+        let alt = w.ground_height_tiles(x, z) + 2.0;
+        w.tick(PlayerPose::from_tiles(x, alt, z));
+    }
+}
+
+/// Sum of heights over a tile rectangle.
+fn region_height(w: &World, x0: usize, y0: usize, x1: usize, y1: usize) -> u32 {
+    let mut sum = 0u32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            sum += w.planes().height[y * 256 + x] as u32;
+        }
+    }
+    sum
+}
+
+#[test]
+fn level_005_trigger_cascade() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipped: baked data not present");
+        return;
+    };
+    let (mut w, drawable_records) = build_world(&root);
+
+    // Disposition gating: only dis_id == 0 things exist at level init.
+    let init = w.live_things().len();
+    assert!(
+        init < drawable_records,
+        "expected latent things: {init} live of {drawable_records} drawable records"
+    );
+    assert!(w.live_things().iter().all(|t| t.dis_id == 0));
+
+    // Idle far away: nothing fires, terrain static.
+    let before = region_height(&w, 90, 103, 101, 114);
+    fly(&mut w, 20.0, 20.0, 32);
+    assert_eq!(w.live_things().len(), init);
+    assert_eq!(region_height(&w, 90, 103, 101, 114), before);
+
+    // Fly into the trigger at (99,115) → disposition 1: the model-11
+    // crater near (95,108) spawns and digs from the next ticks on.
+    fly(&mut w, 99.5, 115.5, 16);
+    fly(&mut w, 20.0, 20.0, 120);
+    let after_crater = region_height(&w, 90, 103, 101, 114);
+    assert!(
+        after_crater < before,
+        "crater must dig: region height {after_crater} vs {before}"
+    );
+    assert!(w.terrain_dirty);
+    let live_after_crater = w.live_things().len();
+
+    // The follow-up trigger at (95,109) → disposition 2: the ambush.
+    fly(&mut w, 95.5, 109.5, 16);
+    let live_final = w.live_things().len();
+    assert_eq!(
+        live_final - live_after_crater,
+        8,
+        "disposition 2 spawns the 8-creature ambush"
+    );
+
+    // Both triggers were one-shot: re-entering changes nothing.
+    fly(&mut w, 99.5, 115.5, 32);
+    fly(&mut w, 95.5, 109.5, 32);
+    assert_eq!(w.live_things().len(), live_final);
+}
+
+#[test]
+fn level_005_deterministic() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipped: baked data not present");
+        return;
+    };
+    let run = || {
+        let (mut w, _) = build_world(&root);
+        fly(&mut w, 99.5, 115.5, 16);
+        fly(&mut w, 20.0, 20.0, 100);
+        fly(&mut w, 95.5, 109.5, 16);
+        (
+            w.planes().height.clone(),
+            w.planes().tile_type.clone(),
+            w.live_things().len(),
+        )
+    };
+    assert_eq!(run(), run());
+}

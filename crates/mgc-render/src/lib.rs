@@ -267,6 +267,11 @@ pub struct Renderer {
     sprite_tex: Option<wgpu::Texture>,
     colormap_tex: Option<wgpu::Texture>,
     billboards: Vec<Billboard>,
+    /// Terrain plane textures [type, shade, angle, height] kept for
+    /// runtime updates (craters, quakes — `update_terrain`).
+    plane_texs: Option<[wgpu::Texture; 4]>,
+    /// Overhead map texture, rewritten when terrain/entities change.
+    map_tex: Option<wgpu::Texture>,
 }
 
 #[derive(Debug)]
@@ -432,6 +437,18 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Height plane (vertex-stage altitude; runtime terrain
+                // mutation rewrites it).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
@@ -728,6 +745,8 @@ impl Renderer {
             atlas_cells: 0,
             wave_mode: 0,
             anim_turn: 0.0,
+            plane_texs: None,
+            map_tex: None,
             smooth_shading: false,
             map_view: false,
             map_pipeline,
@@ -819,8 +838,12 @@ impl Renderer {
                 } else {
                     1.0
                 };
+                // y stays 0 in the buffer: the vertex shader reads the
+                // height plane texture so runtime terrain mutation is
+                // a texture write, not a mesh rebuild.
+                let _ = y;
                 vertices.push(Vertex {
-                    pos: [x as f32, y, z as f32],
+                    pos: [x as f32, 0.0, z as f32],
                     light,
                 });
             }
@@ -941,6 +964,7 @@ impl Renderer {
             }
         };
         let angle_tex = byte_tex("tile angles", angle, n as u32, n as u32);
+        let height_tex = byte_tex("tile heights", &level.height, n as u32, n as u32);
 
         // Colormap (x = palette index, y = shade): the engine's shade
         // remap composed with the palette on the CPU. sRGB format so
@@ -1031,8 +1055,15 @@ impl Renderer {
                         &angle_tex.create_view(&Default::default()),
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(
+                        &height_tex.create_view(&Default::default()),
+                    ),
+                },
             ],
         }));
+        self.plane_texs = Some([type_tex, shade_tex, angle_tex, height_tex]);
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
@@ -1078,6 +1109,59 @@ impl Renderer {
                 },
             ],
         }));
+        self.map_tex = Some(map_tex);
+    }
+
+    /// Re-upload the terrain planes + overhead map after runtime world
+    /// mutation (craters, quakes, spawned entities). The level view
+    /// must carry the LIVE planes; mesh and bind groups are reused —
+    /// this is four 64 KB texture writes plus the map compose.
+    pub fn update_terrain(&mut self, level: &LevelView, map_dots: &[MapDot]) {
+        let n = MAP_TILES as u32;
+        let Some([type_tex, shade_tex, angle_tex, height_tex]) = &self.plane_texs else {
+            return;
+        };
+        let write = |tex: &wgpu::Texture, bytes: &[u8]| {
+            self.queue.write_texture(
+                tex.as_image_copy(),
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(n),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: 1,
+                },
+            );
+        };
+        write(type_tex, &level.tile_type);
+        write(height_tex, &level.height);
+        if let Some(s) = &level.shading {
+            write(shade_tex, s);
+        }
+        if let Some(a) = &level.angle {
+            write(angle_tex, a);
+        }
+        if let Some(map_tex) = &self.map_tex {
+            let map_rgba = map_pixels(level, map_dots);
+            self.queue.write_texture(
+                map_tex.as_image_copy(),
+                &map_rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(n * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     /// Upload the bundle's sprite atlas + index for billboard drawing.

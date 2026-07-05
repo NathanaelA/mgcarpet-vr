@@ -34,7 +34,7 @@ struct LoadedLevel {
     label: String,
     /// Bundle sprite data for the renderer (index, atlas pixels).
     sprites: Option<(mgc_formats::bundle::SpriteIndex, Vec<u8>)>,
-    /// Static world entities resolved to billboards.
+    /// World entities resolved to billboards (initial population).
     billboards: Vec<Billboard>,
     /// Entity dots for the overhead map (the original's 1px markers).
     map_dots: Vec<mgc_render::MapDot>,
@@ -42,6 +42,12 @@ struct LoadedLevel {
     /// facing for the flyer; None on levels without one (MC2, dev
     /// leftovers) falls back to the flyer default.
     start: Option<Flyer>,
+    /// The living MC1/HW world (triggers, dispositions, runtime
+    /// terrain events); moved into the Simulation by App::new. None =
+    /// static terrain (MC2, or --no-terrain-features).
+    world: Option<mgc_sim::world::World>,
+    /// Bundle palette, kept for runtime map-dot rebuilds.
+    palette_rgba: [[u8; 4]; 256],
 }
 
 /// Resolve the package plus its asset bundle into what the renderer and
@@ -119,31 +125,40 @@ fn load_level(
     let mut shading = terrain.shading.clone();
     let mut angle = terrain.angle.clone();
 
-    // The original's load-time feature pass (MC1/HW; MC2's variant is a
-    // separate remc2 port, pending). Needs the shading + angle planes
-    // and the bundle's search/build data.
+    // The living world (MC1/HW; MC2's feature/entity semantics are a
+    // separate remc2 port, pending): the load-time feature pass, then
+    // disposition 0 spawns the initial population — things authored
+    // behind triggers (dis_id != 0) stay latent until fired. Needs the
+    // shading + angle planes and the bundle's search/build data.
+    let mut world = None;
     if terrain_features && package.meta.game != Game::MagicCarpet2 {
         match (
-            &mut shading,
-            &mut angle,
+            &shading,
+            &angle,
             &bundle.search,
             &bundle.build_tab,
             &bundle.build_dat,
         ) {
-            (Some(shading), Some(angle), Some(search), Some(build_tab), Some(build_dat)) => {
+            (Some(sh), Some(an), Some(search), Some(build_tab), Some(build_dat)) => {
                 let assets = mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
-                mgc_sim::features::generate_features_mc1(
-                    mgc_sim::features::TerrainPlanes {
-                        height: &mut height,
-                        tile_type: &mut tile_type,
-                        shading,
-                        angle,
+                let w = mgc_sim::world::World::new(
+                    mgc_sim::features::Planes {
+                        height: height.clone(),
+                        tile_type: tile_type.clone(),
+                        shading: sh.clone(),
+                        angle: an.clone(),
                     },
                     &package.things.things,
                     seed,
-                    &assets,
+                    assets,
                 );
+                // The view starts from the post-feature planes.
+                height.copy_from_slice(&w.planes().height);
+                tile_type.copy_from_slice(&w.planes().tile_type);
+                shading.as_mut().unwrap().copy_from_slice(&w.planes().shading);
+                angle.as_mut().unwrap().copy_from_slice(&w.planes().angle);
+                world = Some(w);
             }
             (None, ..) | (_, None, ..) => eprintln!(
                 "note: package lacks shading/angle planes — terrain features skipped (rebake)"
@@ -154,18 +169,27 @@ fn load_level(
         }
     }
 
-    // Static world entities as billboards + map dots (MC1/HW; MC2's
-    // entity semantics are a separate mapping, pending with its
-    // bundles).
+    // World entities as billboards + map dots. With a live world, the
+    // population is its disposition-spawned live set; without one
+    // (MC2, --no-terrain-features), every drawable record — the old
+    // static behavior, kept as the comparison mode.
     let (billboards, map_dots) = if package.meta.game != Game::MagicCarpet2 {
         let index = bundle.sprites.as_ref().map(|(i, _)| i);
+        let live;
+        let things: &[mgc_formats::Thing] = match &world {
+            Some(w) => {
+                live = w.live_things();
+                &live
+            }
+            None => &package.things.things,
+        };
         (
-            entities::billboards(&package.things.things, &height, |id| {
+            entities::billboards(things, &height, |id| {
                 index
                     .and_then(|i| i.sprites.get(id as usize))
                     .map(|s| (s.width, s.height))
             }),
-            entities::map_dots(&package.things.things, &bundle.palette),
+            entities::map_dots(things, &bundle.palette),
         )
     } else {
         (Vec::new(), Vec::new())
@@ -203,6 +227,8 @@ fn load_level(
         billboards,
         map_dots,
         start,
+        world,
+        palette_rgba: bundle.palette,
     })
 }
 
@@ -243,8 +269,11 @@ struct App {
 }
 
 impl App {
-    fn new(level: LoadedLevel, smooth_shading: bool) -> Self {
-        let mut sim = Simulation::with_terrain(level.height.clone());
+    fn new(mut level: LoadedLevel, smooth_shading: bool) -> Self {
+        let mut sim = match level.world.take() {
+            Some(w) => Simulation::with_world(w),
+            None => Simulation::with_terrain(level.height.clone()),
+        };
         if let Some(start) = level.start {
             sim.flyer = start;
         }
@@ -278,6 +307,43 @@ impl App {
         };
         self.mouse = MouseAccum::default();
         input
+    }
+
+    /// Push runtime world changes (dug terrain, spawned/removed
+    /// entities) to the renderer: refresh the level view's planes,
+    /// rebuild billboards + map dots, re-upload the plane textures.
+    fn sync_world(&mut self) {
+        let Some(w) = &mut self.sim.world else { return };
+        if !w.terrain_dirty && !w.entities_dirty {
+            return;
+        }
+        let (Some(shading), Some(angle)) =
+            (self.level.view.shading.as_mut(), self.level.view.angle.as_mut())
+        else {
+            return;
+        };
+        w.copy_planes_into(mgc_sim::features::TerrainPlanes {
+            height: &mut self.level.view.height,
+            tile_type: &mut self.level.view.tile_type,
+            shading,
+            angle,
+        });
+        if w.entities_dirty {
+            let live = w.live_things();
+            let index = self.level.sprites.as_ref().map(|(i, _)| i);
+            self.level.billboards = entities::billboards(&live, &self.level.view.height, |id| {
+                index
+                    .and_then(|i| i.sprites.get(id as usize))
+                    .map(|s| (s.width, s.height))
+            });
+            self.level.map_dots = entities::map_dots(&live, &self.level.palette_rgba);
+        }
+        w.terrain_dirty = false;
+        w.entities_dirty = false;
+        if let Some(r) = &mut self.renderer {
+            r.set_billboards(self.level.billboards.clone());
+            r.update_terrain(&self.level.view, &self.level.map_dots);
+        }
     }
 
     fn set_grab(&mut self, grab: bool) {
@@ -411,6 +477,7 @@ impl ApplicationHandler for App {
                     let input = self.tick_input();
                     self.sim.step(&input);
                 }
+                self.sync_world();
 
                 let alpha = self.accumulator / TICK_DT;
                 let (a, b) = (&self.prev_flyer, &self.sim.flyer);

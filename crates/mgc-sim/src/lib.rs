@@ -17,6 +17,7 @@ pub mod features;
 pub mod mc1_entities;
 pub mod mc1_sprite_stats;
 pub mod mc1_tables;
+pub mod world;
 mod tables;
 
 /// Fixed simulation tick rate.
@@ -91,13 +92,19 @@ const MIN_CLEARANCE: f32 = 0.75; // tiles above ground
 const CEILING: f32 = 40.0; // tiles
 
 /// The whole game state and its single mutation entry point.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Simulation {
-    /// Monotonic tick counter since level start.
+    /// Monotonic tick counter since level start. One tick = one of the
+    /// original's game turns (events, water phase, sprite frames).
     pub tick: u64,
     pub flyer: Flyer,
     /// 256x256 height bytes, row-major `y * 256 + x`; empty means flat.
+    /// The static fallback when no [`world::World`] is attached.
     terrain_height: Vec<u8>,
+    /// The living level (MC1/HW): triggers, dispositions, runtime
+    /// terrain events. None = static terrain (MC2 until its feature
+    /// pass is ported, or bare test sims).
+    pub world: Option<world::World>,
 }
 
 impl Simulation {
@@ -113,10 +120,22 @@ impl Simulation {
         }
     }
 
+    /// A sim over a living world; the flight clamp follows the world's
+    /// mutating height plane.
+    pub fn with_world(world: world::World) -> Self {
+        Self {
+            world: Some(world),
+            ..Self::default()
+        }
+    }
+
     /// Ground altitude in tile units at a world position (nearest tile;
     /// the engine interpolates across the tile's two triangles, which
     /// can wait until collision matters beyond a hover clamp).
     pub fn ground_height(&self, x: f32, z: f32) -> f32 {
+        if let Some(w) = &self.world {
+            return w.ground_height_tiles(x, z);
+        }
         if self.terrain_height.is_empty() {
             return 0.0;
         }
@@ -166,6 +185,12 @@ impl Simulation {
         if f.y > CEILING {
             f.y = CEILING;
             f.vy = f.vy.min(0.0);
+        }
+
+        // The world turn: triggers probe the flyer, events tick.
+        if let Some(w) = &mut self.world {
+            let f = self.flyer;
+            w.tick(world::PlayerPose::from_tiles(f.x, f.y, f.z));
         }
     }
 }
