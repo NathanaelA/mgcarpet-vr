@@ -5,8 +5,8 @@
 //! packages (`mgc-formats`) that the engine consumes without knowing
 //! anything about RNC, DAT/TAB, seeds, or XMI.
 //!
-//! Reference implementations: remc2 (`~/projects/remc2`) for MC2 behavior,
-//! remc1 (`~/projects/remc1`) for MC1 behavior, Moburma's tools and
+//! Reference implementations: remc2 (`reference/remc2`) for MC2 behavior,
+//! remc1 (`reference/remc1`) for MC1 behavior, Moburma's tools and
 //! michaelhoward's MagicCarpetFileFormat spec for MC1 formats.
 
 pub mod bake;

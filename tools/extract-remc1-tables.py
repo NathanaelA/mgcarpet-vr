@@ -14,7 +14,7 @@ These are verbatim engine data (rounding does not match a simple
 round(sin*65536) reconstruction), so they are extracted rather than
 recomputed. Rerun after remc1 updates:
 
-    python3 tools/extract-remc1-tables.py ~/projects/remc1/sub_main.cpp
+    python3 tools/extract-remc1-tables.py   # or pass an explicit sub_main.cpp path
 """
 
 import re
@@ -76,7 +76,7 @@ def fmt_pairs(vals, rows):
 
 def main():
     src = Path(sys.argv[1] if len(sys.argv) > 1 else
-               Path.home() / "projects/remc1/sub_main.cpp")
+               Path(__file__).resolve().parent.parent / "reference/remc1/sub_main.cpp")
     lines = src.read_text(errors="replace").splitlines()
 
     sin = extract(lines, "int32 sin_90B4C", 2048)

@@ -9,3 +9,6 @@
 /baked
 /fixtures
 /tools/mc2-genlevel/mc2-genlevel
+
+# Reference decompilation checkouts (remc1, remc2) — local clones, never committed
+/reference

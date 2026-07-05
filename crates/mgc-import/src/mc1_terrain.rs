@@ -1,6 +1,6 @@
 //! Native port of Magic Carpet 1's terrain generator.
 //!
-//! Reference: the remc1 decompilation (`~/projects/remc1/sub_main.cpp`,
+//! Reference: the remc1 decompilation (`reference/remc1/sub_main.cpp`,
 //! GPL3 assumed, same stance as remc2). Entry point in the original is
 //! `sub_31AA0_31AE0` (:39289), called at level load with the raw level
 //! buffer — GEN_MAP parameters are read by byte offset from its start.
