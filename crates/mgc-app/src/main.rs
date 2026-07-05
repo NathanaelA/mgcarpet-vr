@@ -10,12 +10,14 @@
 //! without a display.
 
 mod config;
+mod entities;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use mgc_formats::bundle::Bundle;
 use mgc_formats::{Game, LevelPackage, mgcl};
-use mgc_render::{CameraView, LevelView, Renderer};
+use mgc_render::{Billboard, CameraView, LevelView, Renderer};
 use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT};
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, WindowEvent};
@@ -30,18 +32,27 @@ struct LoadedLevel {
     view: LevelView,
     height: Vec<u8>,
     label: String,
+    /// Bundle sprite data for the renderer (index, atlas pixels).
+    sprites: Option<(mgc_formats::bundle::SpriteIndex, Vec<u8>)>,
+    /// Static world entities resolved to billboards.
+    billboards: Vec<Billboard>,
 }
 
-/// Resolve the package plus its per-game color assets into what the
-/// renderer and sim consume. `tileset` picks MC1's world set: 0 =
-/// temperate, 1 = arctic (each MC1 level uses exactly one; which levels
-/// use set 1 is not yet baked into packages, so it is a CLI switch).
+/// Resolve the package plus its asset bundle into what the renderer and
+/// sim consume. `tileset` overrides MC1's world-set choice: by default
+/// MC1 campaign levels use `mc1-temperate` and Hidden Worlds levels
+/// `mc1-arctic` (the original's only selector is the Hidden Worlds mode
+/// flag — see ROADMAP "Arctic tileset selection").
 ///
 /// `terrain_features` applies the original's load-time entity-driven
 /// terrain pass (craters, canyons, walls, building flattening/painting
 /// — mgc_sim::features) to the pristine baked terrain, as the engine
 /// does. Off = the raw generator output, for comparison renders.
-fn load_level(level_path: &Path, tileset: u8, terrain_features: bool) -> Result<LoadedLevel, String> {
+fn load_level(
+    level_path: &Path,
+    tileset: Option<u8>,
+    terrain_features: bool,
+) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
     let package: LevelPackage =
@@ -53,53 +64,35 @@ fn load_level(level_path: &Path, tileset: u8, terrain_features: bool) -> Result<
         )
     })?;
 
-    // Assets live in the baked tree next to the per-game level dirs:
-    // <baked>/<game>/level-NNN.mgcl and <baked>/mc1/assets/*.bin. MC1
-    // and Hidden Worlds share MC1's assets; MC2's palettes/tables/atlas
-    // are still missing from the game data (see ROADMAP), so MC2 levels
-    // borrow MC1's as a stand-in until the CD files land.
+    // Bundles live in the baked tree next to the per-game level dirs:
+    // <baked>/<game>/level-NNN.mgcl, <baked>/assets/<variant>/. MC2's
+    // own bundles are still blocked on its CD catalogs (see ROADMAP),
+    // so MC2 levels borrow mc1-temperate as a stand-in.
     let baked_root = level_path
         .parent()
         .and_then(Path::parent)
         .unwrap_or(Path::new("."));
-    let assets = baked_root.join("mc1/assets");
-    let asset = |name: String| {
-        std::fs::read(assets.join(&name)).map_err(|e| format!("{}: {e}", assets.join(&name).display()))
-    };
-    let palette_bytes = asset(format!("palette-{tileset}.bin"))?;
-    let tile_colors_bytes = asset(format!("tile-colors-{tileset}.bin"))?;
-    let shade_lut = asset(format!("shade-lut-{tileset}.bin"))?;
-    let atlas = asset(format!("terrain-atlas-{tileset}.bin")).ok();
-    if palette_bytes.len() != 768
-        || tile_colors_bytes.len() != 256
-        || shade_lut.len() != mgc_render::SHADE_LEVELS * 256
-    {
-        return Err("malformed palette assets (expected 768 + 256 + 16384 bytes)".into());
+    let set = tileset.unwrap_or(match package.meta.game {
+        Game::HiddenWorlds => 1,
+        _ => 0,
+    });
+    let variant = if set == 1 { "mc1-arctic" } else { "mc1-temperate" };
+    if package.meta.game == Game::MagicCarpet2 {
+        eprintln!("note: MC2 bundles not yet baked — using {variant} as a stand-in");
     }
-    if let Some(a) = &atlas {
-        if a.len() % (mgc_render::ATLAS_WIDTH * mgc_render::ATLAS_CELL) != 0 {
-            return Err(format!(
-                "malformed terrain atlas ({} bytes is not whole 32px rows of 256px)",
-                a.len()
-            ));
-        }
-    }
+    let bundle = Bundle::load(&baked_root.join("assets").join(variant))
+        .map_err(|e| format!("bundle {variant}: {e}"))?;
 
     let mut palette = [[0u8; 3]; 256];
     for (i, rgb) in palette.iter_mut().enumerate() {
-        rgb.copy_from_slice(&palette_bytes[i * 3..i * 3 + 3]);
+        rgb.copy_from_slice(&bundle.palette[i][..3]);
     }
-    let mut tile_colors = [0u8; 256];
-    tile_colors.copy_from_slice(&tile_colors_bytes);
 
     let game = match package.meta.game {
         Game::MagicCarpet1 => "mc1",
         Game::HiddenWorlds => "mc1hw",
         Game::MagicCarpet2 => "mc2",
     };
-    if package.meta.game == Game::MagicCarpet2 {
-        eprintln!("note: MC2 assets not yet baked — using MC1's as a stand-in");
-    }
 
     let mut height = terrain.height.clone();
     let mut tile_type = terrain.tile_type.clone();
@@ -108,15 +101,12 @@ fn load_level(level_path: &Path, tileset: u8, terrain_features: bool) -> Result<
 
     // The original's load-time feature pass (MC1/HW; MC2's variant is a
     // separate remc2 port, pending). Needs the shading + angle planes
-    // and the search/build assets.
+    // and the bundle's search/build data.
     if terrain_features && package.meta.game != Game::MagicCarpet2 {
-        match (&mut shading, &mut angle) {
-            (Some(shading), Some(angle)) => {
-                let assets = mgc_sim::features::FeatureAssets::parse(
-                    &asset("search.bin".into())?,
-                    &asset(format!("build-{tileset}.tab.bin"))?,
-                    &asset(format!("build-{tileset}.dat.bin"))?,
-                )?;
+        match (&mut shading, &mut angle, &bundle.search, &bundle.build_tab, &bundle.build_dat) {
+            (Some(shading), Some(angle), Some(search), Some(build_tab), Some(build_dat)) => {
+                let assets =
+                    mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
                 mgc_sim::features::generate_features_mc1(
                     mgc_sim::features::TerrainPlanes {
@@ -130,11 +120,25 @@ fn load_level(level_path: &Path, tileset: u8, terrain_features: bool) -> Result<
                     &assets,
                 );
             }
-            _ => eprintln!(
+            (None, ..) | (_, None, ..) => eprintln!(
                 "note: package lacks shading/angle planes — terrain features skipped (rebake)"
+            ),
+            _ => eprintln!(
+                "note: bundle lacks search/build data — terrain features skipped (rebake)"
             ),
         }
     }
+
+    // Static world entities as billboards (MC1/HW; MC2's entity
+    // semantics are a separate mapping, pending with its bundles).
+    let billboards = if package.meta.game != Game::MagicCarpet2 {
+        let index = bundle.sprites.as_ref().map(|(i, _)| i);
+        entities::billboards(&package.things.things, &height, |id| {
+            index.and_then(|i| i.sprites.get(id as usize)).map(|s| (s.width, s.height))
+        })
+    } else {
+        Vec::new()
+    };
 
     Ok(LoadedLevel {
         view: LevelView {
@@ -142,13 +146,15 @@ fn load_level(level_path: &Path, tileset: u8, terrain_features: bool) -> Result<
             height: height.clone(),
             shading,
             palette,
-            tile_colors,
-            shade_lut,
-            atlas,
+            tile_colors: bundle.tile_colors,
+            shade_lut: bundle.shade_lut,
+            atlas: bundle.terrain_atlas.map(|(_, data)| data),
             angle,
         },
         height,
         label: format!("{game} level {}", package.meta.level),
+        sprites: bundle.sprites,
+        billboards,
     })
 }
 
@@ -258,6 +264,10 @@ impl ApplicationHandler for App {
         match Renderer::for_window(window.clone()) {
             Ok(mut renderer) => {
                 renderer.load_level(&self.level.view);
+                if let Some((index, atlas)) = &self.level.sprites {
+                    renderer.load_sprites(index.clone(), atlas);
+                }
+                renderer.set_billboards(self.level.billboards.clone());
                 renderer.set_smooth_shading(self.smooth_shading);
                 self.renderer = Some(renderer);
             }
@@ -403,8 +413,9 @@ struct Args {
     screenshot: Option<PathBuf>,
     /// Camera override for screenshots: x, y, z, yaw°, pitch°.
     camera: Option<[f32; 5]>,
-    /// MC1 world tileset: 0 = temperate, 1 = arctic.
-    tileset: u8,
+    /// MC1 world tileset override: 0 = temperate, 1 = arctic.
+    /// None = by game (mc1 temperate, mc1hw arctic).
+    tileset: Option<u8>,
     /// Config file path; None = the default `mgcarpet.json` lookup.
     config: Option<PathBuf>,
     /// CLI override of `enhancements.smooth_shading`; None = use config.
@@ -423,7 +434,7 @@ fn parse_args() -> Result<Args, String> {
     let mut level = PathBuf::from("baked/mc1/level-000.mgcl");
     let mut screenshot = None;
     let mut camera = None;
-    let mut tileset = 0u8;
+    let mut tileset = None;
     let mut config = None;
     let mut smooth_shading = None;
     let mut map = None;
@@ -437,14 +448,15 @@ fn parse_args() -> Result<Args, String> {
                 level = PathBuf::from(it.next().ok_or("--level needs a path")?);
             }
             "--tileset" => {
-                tileset = it
+                let set: u8 = it
                     .next()
                     .ok_or("--tileset needs 0 or 1")?
                     .parse()
                     .map_err(|e| format!("--tileset: {e}"))?;
-                if tileset > 1 {
+                if set > 1 {
                     return Err("--tileset must be 0 (temperate) or 1 (arctic)".into());
                 }
+                tileset = Some(set);
             }
             "--screenshot" => {
                 screenshot = Some(PathBuf::from(it.next().ok_or("--screenshot needs a path")?));
@@ -549,6 +561,10 @@ fn run_screenshot(
 ) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
     renderer.load_level(&level.view);
+    if let Some((index, atlas)) = &level.sprites {
+        renderer.load_sprites(index.clone(), atlas);
+    }
+    renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
     renderer.set_map_view(map_view);
     let flyer = Flyer::default();

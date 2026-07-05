@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod bundle;
 pub mod mgcl;
 
 /// Current `.mgcl` format version (see docs/FORMAT.md "Versioning").

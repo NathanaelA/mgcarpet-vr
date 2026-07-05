@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 mgc-formats = { path = "../mgc-formats" }
 mgc-sim = { path = "../mgc-sim" }
+serde_json = "1"
 sha2 = "0.10"
 
 [[bin]]

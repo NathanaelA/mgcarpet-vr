@@ -268,9 +268,12 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
     }
     let mc1_data = gamedata.join("mc1/DATA");
     if mc1_data.join("PAL0-0.DAT").exists() {
-        match bake::bake_mc1_assets(&mc1_data, out_dir) {
+        match mgc_import::bundle::bake_mc1_bundles(&mc1_data, out_dir) {
             Ok(outputs) => {
-                println!("mc1: baked {} assets", outputs.len());
+                println!(
+                    "mc1: baked asset bundles mc1-temperate + mc1-arctic ({} members)",
+                    outputs.len()
+                );
                 manifest.extend(outputs);
             }
             Err(e) => {
@@ -279,7 +282,7 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
             }
         }
     } else {
-        eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping palettes");
+        eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
     }
 
     let mc2_dat = gamedata.join("mc2/GAME/NETHERW/CLEVELS/LEVELS.DAT");

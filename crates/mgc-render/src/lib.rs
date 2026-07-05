@@ -112,6 +112,48 @@ struct Globals {
     fog_color: [f32; 4],
     /// x = atlas cell count (0 = untextured), y/z/w reserved.
     atlas: [u32; 4],
+    /// Camera basis for billboard expansion (screen-aligned quads).
+    cam_right: [f32; 4],
+    cam_up: [f32; 4],
+}
+
+/// One world sprite to draw, resolved from a level entity. Static data;
+/// the view-dependent part (which rotation view, mirroring) is computed
+/// per frame from `yaw` and the camera.
+#[derive(Debug, Clone, Copy)]
+pub struct Billboard {
+    /// Feet-center position, world units (x/z tile coords, y altitude).
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// Facing, radians (same convention as [`CameraView::yaw`]).
+    pub yaw: f32,
+    /// First sprite id of the entity's view/animation family.
+    pub sprite_base: u16,
+    /// The original's view-selection mode (sprite flags high byte /
+    /// stats-table draw type): 0/1/21 single view, 2..=16 animation,
+    /// 17 = 8 views + mirrored back half, 18 = 16 views, 19/20 =
+    /// 5-/3-view folds.
+    pub draw_type: u8,
+    /// World height of the quad (engine `var_8 / 256`).
+    pub world_h: f32,
+}
+
+/// 16 view sectors folded to 5 sprites (draw type 19, `byte_906E8`).
+const VIEW_FOLD_5: [u8; 16] = [0, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 2, 2, 1, 1, 0];
+/// 16 view sectors folded to 3 sprites (draw type 20, `byte_906F8`).
+const VIEW_FOLD_3: [u8; 16] = [0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 0, 0];
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct BillboardInstance {
+    pos: [f32; 3],
+    size: [f32; 2],
+    uv_pos: [f32; 2],
+    uv_size: [f32; 2],
+    /// x = mirror, y = shade LUT row.
+    flags: [u32; 2],
+    _pad: [u32; 1],
 }
 
 /// Sky/fog color, the classic hazy horizon. sRGB values converted to
@@ -172,6 +214,17 @@ pub struct Renderer {
     map_bind_group_layout: wgpu::BindGroupLayout,
     map_bind_group: Option<wgpu::BindGroup>,
     fill_pipeline: wgpu::RenderPipeline,
+    // Billboard (world sprite) pass.
+    billboard_pipeline: wgpu::RenderPipeline,
+    billboard_bind_group_layout: wgpu::BindGroupLayout,
+    billboard_bind_group: Option<wgpu::BindGroup>,
+    billboard_buf: Option<wgpu::Buffer>,
+    billboard_capacity: usize,
+    /// CPU copy of the sprite index for per-frame view selection.
+    sprite_index: Option<mgc_formats::bundle::SpriteIndex>,
+    sprite_tex: Option<wgpu::Texture>,
+    colormap_tex: Option<wgpu::Texture>,
+    billboards: Vec<Billboard>,
 }
 
 #[derive(Debug)]
@@ -524,6 +577,96 @@ impl Renderer {
             cache: None,
         });
 
+        // Billboard pass: instanced screen-aligned quads over the
+        // sprite atlas, same colormap as terrain.
+        let billboard_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("billboard"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("billboard.wgsl").into()),
+        });
+        let billboard_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("billboard"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let billboard_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("billboard"),
+            bind_group_layouts: &[&billboard_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let billboard_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("billboard"),
+            layout: Some(&billboard_layout),
+            vertex: wgpu::VertexState {
+                module: &billboard_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<BillboardInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3, 1 => Float32x2, 2 => Float32x2,
+                        3 => Float32x2, 4 => Uint32x2,
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &billboard_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let depth = create_depth(&device, width, height);
 
         Self {
@@ -546,6 +689,15 @@ impl Renderer {
             map_bind_group_layout,
             map_bind_group: None,
             fill_pipeline,
+            billboard_pipeline,
+            billboard_bind_group_layout,
+            billboard_bind_group: None,
+            billboard_buf: None,
+            billboard_capacity: 0,
+            sprite_index: None,
+            sprite_tex: None,
+            colormap_tex: None,
+            billboards: Vec::new(),
         }
     }
 
@@ -771,6 +923,9 @@ impl Renderer {
             colormap_extent,
         );
 
+        self.colormap_tex = Some(colormap_tex.clone());
+        self.rebuild_billboard_bind_group();
+
         self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("terrain"),
             layout: &self.bind_group_layout,
@@ -864,6 +1019,139 @@ impl Renderer {
         }));
     }
 
+    /// Upload the bundle's sprite atlas + index for billboard drawing.
+    pub fn load_sprites(&mut self, index: mgc_formats::bundle::SpriteIndex, atlas: &[u8]) {
+        assert_eq!(
+            atlas.len(),
+            index.atlas_width as usize * index.atlas_height as usize
+        );
+        let extent = wgpu::Extent3d {
+            width: index.atlas_width,
+            height: index.atlas_height,
+            depth_or_array_layers: 1,
+        };
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sprite atlas"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            tex.as_image_copy(),
+            atlas,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(index.atlas_width),
+                rows_per_image: None,
+            },
+            extent,
+        );
+        self.sprite_tex = Some(tex);
+        self.sprite_index = Some(index);
+        self.rebuild_billboard_bind_group();
+    }
+
+    /// Replace the set of world sprites drawn each frame.
+    pub fn set_billboards(&mut self, billboards: Vec<Billboard>) {
+        self.billboards = billboards;
+    }
+
+    fn rebuild_billboard_bind_group(&mut self) {
+        let (Some(sprites), Some(colormap)) = (&self.sprite_tex, &self.colormap_tex) else {
+            return;
+        };
+        self.billboard_bind_group =
+            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("billboard"),
+                layout: &self.billboard_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.globals_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &sprites.create_view(&Default::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &colormap.create_view(&Default::default()),
+                        ),
+                    },
+                ],
+            }));
+    }
+
+    /// Resolve each billboard against the camera (rotation view,
+    /// mirroring, wrap-nearest position) into instance data — the
+    /// original's per-sprite draw dispatch (remc1 DrawSprite3D_2F170),
+    /// with the yaw quantization done in engine angle units.
+    fn billboard_instances(&self, cam: &CameraView) -> Vec<BillboardInstance> {
+        let Some(index) = &self.sprite_index else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(self.billboards.len());
+        let full = MAP_TILES as f32;
+        for b in &self.billboards {
+            // 16 view sectors from relative yaw, exactly the engine's
+            // `(((entityYaw - camYaw) >> 3) & 0xF0) >> 4` on 11-bit
+            // angles: floor(rel / 128) of 2048 steps.
+            let rel = (b.yaw - cam.yaw).rem_euclid(std::f32::consts::TAU);
+            let view = ((rel * (2048.0 / std::f32::consts::TAU)) as i32 >> 7).clamp(0, 15) as u16;
+            let (offset, mirror) = match b.draw_type {
+                17 => {
+                    if view < 8 {
+                        (view, false)
+                    } else {
+                        (15 - view, true)
+                    }
+                }
+                18 => (view, false),
+                19 => (VIEW_FOLD_5[view as usize] as u16, view >= 8),
+                20 => (VIEW_FOLD_3[view as usize] as u16, view >= 8),
+                // 0/1/21, the 2..=16 animation modes (frame 0 until
+                // entity ticking lands), and anything unknown: base.
+                _ => (0, false),
+            };
+            let id = (b.sprite_base + offset) as usize;
+            let Some(entry) = index.sprites.get(id) else {
+                continue;
+            };
+            let Some(frame) = entry.frames.first() else {
+                continue; // known-corrupt source entry
+            };
+            let (w, h) = (entry.width as f32, entry.height as f32);
+            let world_w = b.world_h * w / h;
+            // Nearest torus copy relative to the camera.
+            let wrap = |p: f32, c: f32| {
+                let mut d = p - c;
+                if d > full / 2.0 {
+                    d -= full;
+                }
+                if d < -full / 2.0 {
+                    d += full;
+                }
+                c + d
+            };
+            out.push(BillboardInstance {
+                pos: [wrap(b.x, cam.x), b.y, wrap(b.z, cam.z)],
+                size: [world_w, b.world_h],
+                uv_pos: [frame.x as f32, frame.y as f32],
+                uv_size: [w, h],
+                flags: [mirror as u32, 32],
+                _pad: [0],
+            });
+        }
+        out
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         let (width, height) = (width.max(1), height.max(1));
         if let Target::Window { surface, config } = &mut self.target {
@@ -903,14 +1191,47 @@ impl Renderer {
         };
         let view_proj = camera_matrix(cam, aspect);
         let sky = sky_color_linear();
+        // Camera right/up for billboard expansion (matches
+        // `camera_matrix`'s basis).
+        let (sy, cy) = cam.yaw.sin_cos();
+        let (sp, cp) = cam.pitch.sin_cos();
+        let fwd = [sy * cp, sp, -cy * cp];
+        let right = [cy, 0.0, sy];
+        let up = [
+            right[1] * fwd[2] - right[2] * fwd[1],
+            right[2] * fwd[0] - right[0] * fwd[2],
+            right[0] * fwd[1] - right[1] * fwd[0],
+        ];
         let globals = Globals {
             view_proj,
             camera: [cam.x, cam.y, cam.z, FOG_DENSITY],
             fog_color: [sky[0] as f32, sky[1] as f32, sky[2] as f32, 1.0],
             atlas: [self.atlas_cells, self.smooth_shading as u32, 0, 0],
+            cam_right: [right[0], right[1], right[2], 0.0],
+            cam_up: [up[0], up[1], up[2], 0.0],
         };
         self.queue
             .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
+
+        // Billboard instances for this camera (empty when no sprites
+        // are loaded).
+        let instances = self.billboard_instances(cam);
+        let instance_count = instances.len() as u32;
+        if !instances.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(&instances);
+            let need = bytes.len();
+            if self.billboard_buf.is_none() || self.billboard_capacity < need {
+                self.billboard_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("billboard instances"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.billboard_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.billboard_buf.as_ref().unwrap(), 0, bytes);
+        }
 
         let frame = match &self.target {
             Target::Window { surface, .. } => Some(surface.get_current_texture()?),
@@ -993,6 +1314,16 @@ impl Renderer {
                     pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                     // 3x3 wrap copies; the vertex shader offsets by instance.
                     pass.draw_indexed(0..self.index_count, 0, 0..9);
+                }
+                if let (1.., Some(bg), Some(buf)) = (
+                    instance_count,
+                    &self.billboard_bind_group,
+                    &self.billboard_buf,
+                ) {
+                    pass.set_pipeline(&self.billboard_pipeline);
+                    pass.set_bind_group(0, bg, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..instance_count);
                 }
             };
             if self.map_view {

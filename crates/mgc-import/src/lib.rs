@@ -10,9 +10,12 @@
 //! michaelhoward's MagicCarpetFileFormat spec for MC1 formats.
 
 pub mod bake;
+pub mod bundle;
 pub mod dattab;
+pub mod flc;
 pub mod level_mc1;
 pub mod level_mc2;
 pub mod mc1_terrain;
 pub mod rnc;
+pub mod sprites;
 pub mod tmaps;
