@@ -48,6 +48,30 @@ struct LoadedLevel {
     world: Option<mgc_sim::world::World>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
     palette_rgba: [[u8; 4]; 256],
+    /// Live trigger/portal volumes for the opt-in map overlay.
+    map_areas: Vec<mgc_render::MapArea>,
+}
+
+/// Resolve the world's live volumes into map overlay circles: amber =
+/// fly-into triggers, red = kill-watchers, cyan = collected-item
+/// triggers, violet = portals.
+fn map_areas(world: &mgc_sim::world::World) -> Vec<mgc_render::MapArea> {
+    use mgc_sim::world::VolumeKind;
+    world
+        .active_volumes()
+        .into_iter()
+        .map(|v| mgc_render::MapArea {
+            x: v.x,
+            z: v.z,
+            radius: v.radius,
+            color: match v.kind {
+                VolumeKind::Proximity => [255, 196, 32],
+                VolumeKind::KillWatch => [255, 64, 64],
+                VolumeKind::Inventory => [64, 208, 255],
+                VolumeKind::Portal => [208, 96, 255],
+            },
+        })
+        .collect()
 }
 
 /// Resolve the package plus its asset bundle into what the renderer and
@@ -227,6 +251,7 @@ fn load_level(
         billboards,
         map_dots,
         start,
+        map_areas: world.as_ref().map(map_areas).unwrap_or_default(),
         world,
         palette_rgba: bundle.palette,
     })
@@ -257,6 +282,8 @@ struct MouseAccum {
 struct App {
     level: LoadedLevel,
     smooth_shading: bool,
+    /// Map trigger-volume overlay (enhancement/debug; V toggles).
+    map_triggers: bool,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Simulation,
@@ -269,7 +296,7 @@ struct App {
 }
 
 impl App {
-    fn new(mut level: LoadedLevel, smooth_shading: bool) -> Self {
+    fn new(mut level: LoadedLevel, smooth_shading: bool, map_triggers: bool) -> Self {
         let mut sim = match level.world.take() {
             Some(w) => Simulation::with_world(w),
             None => Simulation::with_terrain(level.height.clone()),
@@ -281,6 +308,7 @@ impl App {
         Self {
             level,
             smooth_shading,
+            map_triggers,
             window: None,
             renderer: None,
             sim,
@@ -337,12 +365,14 @@ impl App {
                     .map(|s| (s.width, s.height))
             });
             self.level.map_dots = entities::map_dots(&live, &self.level.palette_rgba);
+            self.level.map_areas = map_areas(w);
         }
         w.terrain_dirty = false;
         w.entities_dirty = false;
         if let Some(r) = &mut self.renderer {
             r.set_billboards(self.level.billboards.clone());
-            r.update_terrain(&self.level.view, &self.level.map_dots);
+            let areas = if self.map_triggers { &self.level.map_areas[..] } else { &[] };
+            r.update_terrain(&self.level.view, &self.level.map_dots, areas);
         }
     }
 
@@ -380,7 +410,8 @@ impl ApplicationHandler for App {
         };
         match Renderer::for_window(window.clone()) {
             Ok(mut renderer) => {
-                renderer.load_level(&self.level.view, &self.level.map_dots);
+                let areas = if self.map_triggers { &self.level.map_areas[..] } else { &[] };
+                renderer.load_level(&self.level.view, &self.level.map_dots, areas);
                 if let Some((index, atlas)) = &self.level.sprites {
                     renderer.load_sprites(index.clone(), atlas);
                 }
@@ -444,6 +475,26 @@ impl ApplicationHandler for App {
                             "smooth (enhanced)"
                         } else {
                             "per-tile (original)"
+                        }
+                    );
+                    return;
+                }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyV) {
+                    self.map_triggers = !self.map_triggers;
+                    if let Some(r) = &mut self.renderer {
+                        let areas = if self.map_triggers {
+                            &self.level.map_areas[..]
+                        } else {
+                            &[]
+                        };
+                        r.update_terrain(&self.level.view, &self.level.map_dots, areas);
+                    }
+                    println!(
+                        "map trigger overlay: {}",
+                        if self.map_triggers {
+                            "on (enhanced)"
+                        } else {
+                            "off (original)"
                         }
                     );
                     return;
@@ -541,6 +592,8 @@ struct Args {
     config: Option<PathBuf>,
     /// CLI override of `enhancements.smooth_shading`; None = use config.
     smooth_shading: Option<bool>,
+    /// CLI override of `enhancements.map_trigger_areas`.
+    map_triggers: Option<bool>,
     /// Write the overhead map as a PNG and exit (one pixel per tile,
     /// scaled by `map_scale`).
     map: Option<PathBuf>,
@@ -561,6 +614,7 @@ fn parse_args() -> Result<Args, String> {
     let mut tileset = None;
     let mut config = None;
     let mut smooth_shading = None;
+    let mut map_triggers = None;
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
@@ -603,6 +657,8 @@ fn parse_args() -> Result<Args, String> {
             }
             "--smooth-shading" => smooth_shading = Some(true),
             "--no-smooth-shading" => smooth_shading = Some(false),
+            "--map-triggers" => map_triggers = Some(true),
+            "--no-map-triggers" => map_triggers = Some(false),
             "--map" => {
                 map = Some(PathBuf::from(it.next().ok_or("--map needs a path")?));
             }
@@ -630,6 +686,7 @@ fn parse_args() -> Result<Args, String> {
                     "usage: mgcarpet [--level <baked/.../level-NNN.mgcl>] \
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
+                     [--map-triggers|--no-map-triggers] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features]\n\
@@ -647,6 +704,7 @@ fn parse_args() -> Result<Args, String> {
         tileset,
         config,
         smooth_shading,
+        map_triggers,
         map,
         map_scale,
         map_view,
@@ -668,9 +726,10 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), St
 /// Write the overhead map (one pixel per tile through the engine's
 /// map-color path), nearest-neighbor scaled — the axis-aligned,
 /// rotation-free comparison artifact for original map screenshots.
-fn run_map(level: &LoadedLevel, out: &Path, scale: u32) -> Result<(), String> {
+fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> Result<(), String> {
     let n = 256usize;
-    let src = mgc_render::map_pixels(&level.view, &level.map_dots);
+    let areas = if map_triggers { &level.map_areas[..] } else { &[] };
+    let src = mgc_render::map_pixels(&level.view, &level.map_dots, areas);
     let s = scale as usize;
     let (w, h) = (n * s, n * s);
     let mut rgba = vec![0u8; w * h * 4];
@@ -693,9 +752,11 @@ fn run_screenshot(
     smooth_shading: bool,
     map_view: bool,
     anim_turn: f32,
+    map_triggers: bool,
 ) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
-    renderer.load_level(&level.view, &level.map_dots);
+    let areas = if map_triggers { &level.map_areas[..] } else { &[] };
+    renderer.load_level(&level.view, &level.map_dots, areas);
     if let Some((index, atlas)) = &level.sprites {
         renderer.load_sprites(index.clone(), atlas);
     }
@@ -753,6 +814,9 @@ fn main() -> std::process::ExitCode {
     let smooth_shading = args
         .smooth_shading
         .unwrap_or(cfg.enhancements.smooth_shading);
+    let map_triggers = args
+        .map_triggers
+        .unwrap_or(cfg.enhancements.map_trigger_areas);
 
     let level = match load_level(&args.level, args.tileset, args.terrain_features) {
         Ok(l) => l,
@@ -763,7 +827,7 @@ fn main() -> std::process::ExitCode {
     };
 
     if let Some(out) = &args.map {
-        return match run_map(&level, out, args.map_scale) {
+        return match run_map(&level, out, args.map_scale, map_triggers) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -780,6 +844,7 @@ fn main() -> std::process::ExitCode {
             smooth_shading,
             args.map_view,
             args.anim_turn,
+            map_triggers,
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
@@ -801,7 +866,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level, smooth_shading);
+    let mut app = App::new(level, smooth_shading, map_triggers);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

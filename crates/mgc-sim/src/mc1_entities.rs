@@ -50,6 +50,10 @@ pub fn mc1_entity_type(class: u16, model: u16) -> Option<Mc1TypePick> {
         (3, 0) | (3, 1) => Const(44), // the wizard on his carpet
         (3, 2) => Const(177),         // castle (shares class 10 m45's type)
         (3, 3) => Const(169),
+        // Class 10 -- terrain-feature/effect events; model 34 is the
+        // PORTAL vortex, the one class-10 model that stands drawable in
+        // the world (spawn sub_3B300 loads sprite row 223).
+        (10, 34) => Const(223),
         // Class 5 — creatures. Multi-part worms map to their heads.
         (5, 0) => Const(40), // worm head (+ segments 19..=34 at runtime)
         (5, 1) => Const(86),

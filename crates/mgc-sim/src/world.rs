@@ -47,24 +47,29 @@ use crate::features::{
 };
 use mgc_formats::{Thing, ThingKind};
 
-/// The player's pose in engine units for trigger tests: x/y are 8.8
-/// fixed-point tile coordinates, z is altitude in engine units
-/// (256 = one tile of height, i.e. 32 per height byte).
+/// The player's pose in engine units for trigger/portal tests: x/y are
+/// 8.8 fixed-point tile coordinates, z is altitude in engine units
+/// (256 = one tile of height, i.e. 32 per height byte), heading is the
+/// engine's 11-bit angle (0 = north/-Z, matching the flyer's yaw 0).
 #[derive(Debug, Clone, Copy)]
 pub struct PlayerPose {
     pub x: u16,
     pub y: u16,
     pub z: i16,
+    pub heading: u16,
 }
 
 impl PlayerPose {
-    /// From world-space tile floats (the flyer's coordinates).
-    pub fn from_tiles(x: f32, y_alt: f32, z: f32) -> Self {
+    /// From world-space tile floats + yaw radians (the flyer's state).
+    pub fn from_tiles(x: f32, y_alt: f32, z: f32, yaw: f32) -> Self {
         let wrap = |v: f32| (v.rem_euclid(256.0) * 256.0) as u16;
         PlayerPose {
             x: wrap(x),
             y: wrap(z),
             z: (y_alt * 256.0) as i16,
+            heading: (yaw.rem_euclid(std::f32::consts::TAU) * (2048.0 / std::f32::consts::TAU))
+                as u16
+                & 0x7FF,
         }
     }
 }
@@ -81,11 +86,37 @@ pub struct World {
     pub terrain_dirty: bool,
     /// Live entity set changed since last cleared.
     pub entities_dirty: bool,
+    /// A portal fired this tick: destination in tile units, consumed
+    /// by the sim (which moves the flyer).
+    pending_teleport: Option<(f32, f32)>,
 }
 
-/// Classes the app can draw (mc1_entities has a sprite mapping).
-fn drawable(class: u16) -> bool {
-    matches!(class, 2 | 3 | 5 | 12)
+/// A live gameplay volume for the map overlay (an opt-in enhancement
+/// / debugging instrument — the original never reveals trigger areas).
+#[derive(Debug, Clone, Copy)]
+pub struct ActiveVolume {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub kind: VolumeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeKind {
+    /// Fly-into proximity trigger (one-shot or repeating).
+    Proximity,
+    /// Fires when a watched creature kind is wiped out.
+    KillWatch,
+    /// Fires on a collected item (stub until inventory).
+    Inventory,
+    /// Teleporter vortex.
+    Portal,
+}
+
+/// Records the app can draw (mc1_entities has a sprite mapping).
+/// Class 10 is logic/terrain except the model-34 portal vortex.
+fn drawable(class: u16, model: u16) -> bool {
+    matches!(class, 2 | 3 | 5 | 12) || (class == 10 && model == 34)
 }
 
 impl World {
@@ -103,6 +134,7 @@ impl World {
             live: Vec::new(),
             terrain_dirty: false,
             entities_dirty: false,
+            pending_teleport: None,
         };
         w.fire_disposition(0, true);
         w
@@ -142,6 +174,7 @@ impl World {
                 continue;
             }
             match self.g.ent[i].class64 {
+                10 if self.g.ent[i].tick70 == 36 => self.portal_tick(i, player),
                 10 => {
                     // The load-time handlers ARE the runtime handlers.
                     self.g.tick(i);
@@ -197,6 +230,10 @@ impl World {
         };
         let Some(s) = slot else { return };
         self.g.ent[s].thing_slot = ti as u16;
+        if r.class == 11 {
+            // Trigger volumes feed the map overlay, not billboards.
+            self.entities_dirty = true;
+        }
 
         // Post-init (:44017-44050).
         match (r.class, r.model) {
@@ -214,6 +251,13 @@ impl World {
                 self.g.ent[s].id24 = r.swi_id;
                 self.set_extents(s, r.swi_sz << 8, r.swi_sz << 8);
             }
+            // Portal destination (:44024): +150/+152 from the THING's
+            // data_16/data_14 (our child/parent), tile centers.
+            (10, 34) => {
+                let e = &mut self.g.ent[s];
+                e.dest_x = (r.child << 8).wrapping_add(128);
+                e.dest_y = (r.parent << 8).wrapping_add(128);
+            }
             (10, 45) => {
                 self.g.building_fixup(s, r.parent.wrapping_add(16));
                 self.g.ent[s].id24 = r.swi_id;
@@ -230,7 +274,7 @@ impl World {
             _ => {}
         }
 
-        if drawable(r.class) {
+        if drawable(r.class, r.model) {
             self.live.push((
                 s as u16,
                 Thing {
@@ -297,6 +341,9 @@ impl World {
     }
 
     fn free_slot(&mut self, i: usize) {
+        if self.g.ent[i].class64 == 11 {
+            self.entities_dirty = true; // overlay: a trigger fired/expired
+        }
         self.g.free_entity(i);
         if let Some(pos) = self.live.iter().position(|&(s, _)| s as usize == i) {
             self.live.swap_remove(pos);
@@ -376,6 +423,66 @@ impl World {
             self.fire_disposition(dis, false);
             self.g.ent[i].f26 = 10;
         }
+    }
+
+    /// sub_26A60 (:29170), class-10 state 36: the portal vortex. A
+    /// timed portal counts down actLife (authored ones carry 0 = stays
+    /// forever); a player overlapping the 1-tile volume while FACING
+    /// it (heading within 170/2048 of the bearing to the portal, i.e.
+    /// you fly INTO the vortex) is moved to the destination point. The
+    /// portal's altitude follows the ground each tick.
+    fn portal_tick(&mut self, i: usize, player: PlayerPose) {
+        let life = self.g.ent[i].act_life;
+        if life > 0 {
+            self.g.ent[i].act_life = life - 1;
+            if life == 1 {
+                self.g.ent[i].flags |= 0x400;
+                return;
+            }
+        }
+        if self.overlap(i, player) {
+            let e = &self.g.ent[i];
+            let bearing = Gen::angle_of(
+                Gen::wrap_delta(e.x as i16, player.x as i16) as i16,
+                Gen::wrap_delta(e.y as i16, player.y as i16) as i16,
+            );
+            let d = player.heading.wrapping_sub(bearing) & 0x7FF;
+            if d.min(2048 - d) < 0xAA {
+                let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
+                self.pending_teleport =
+                    Some((dx as f32 / 256.0, dy as f32 / 256.0));
+            }
+        }
+        let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+        self.g.ent[i].z = self.g.ground_z(x, y) as i16;
+    }
+
+    /// Consume this tick's portal teleport, if one fired: destination
+    /// in world tile units (x, z).
+    pub fn take_teleport(&mut self) -> Option<(f32, f32)> {
+        self.pending_teleport.take()
+    }
+
+    /// Live gameplay volumes (trigger AABBs, portals) for the map
+    /// debug/enhancement overlay: position + radius in tile units.
+    pub fn active_volumes(&self) -> Vec<ActiveVolume> {
+        let mut out = Vec::new();
+        for e in &self.g.ent {
+            let kind = match (e.class64, e.tick70) {
+                (11, 0..=3 | 5..=12) => VolumeKind::Proximity,
+                (11, 4) => VolumeKind::Inventory,
+                (11, 13..=30) => VolumeKind::KillWatch,
+                (10, 36) => VolumeKind::Portal,
+                _ => continue,
+            };
+            out.push(ActiveVolume {
+                x: e.x as f32 / 256.0,
+                z: e.y as f32 / 256.0,
+                radius: (e.f80 as f32 / 256.0).max(0.5),
+                kind,
+            });
+        }
+        out
     }
 
     /// sub_59E40_5A350 (:67460): fire one-shot after the watched
@@ -488,11 +595,11 @@ mod tests {
     }
 
     fn away() -> PlayerPose {
-        PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0)
+        PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0)
     }
 
     fn at_trigger() -> PlayerPose {
-        PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5)
+        PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0)
     }
 
     #[test]

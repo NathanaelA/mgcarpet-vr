@@ -12,3 +12,7 @@
 
 # Reference decompilation checkouts (remc1, remc2) — local clones, never committed
 /reference
+
+# Per-user authenticity-matrix config: personal overrides + the
+# app-generated faithful baseline
+/mgcarpet.json

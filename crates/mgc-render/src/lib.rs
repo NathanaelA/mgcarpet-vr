@@ -91,13 +91,26 @@ pub struct MapDot {
     pub color: u8,
 }
 
+/// A tinted circle on the overhead map (the trigger-volume overlay —
+/// an opt-in enhancement/debugging aid, never drawn by the original).
+/// Tile-unit center and radius, direct RGB (deliberately outside the
+/// palette: this layer is explicitly non-faithful).
+#[derive(Debug, Clone, Copy)]
+pub struct MapArea {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub color: [u8; 3],
+}
+
 /// Flat-color overhead map: one RGBA pixel per tile (256x256, row-major
 /// like the terrain grids), each resolved through the engine's map-view
 /// color path `palette[shade_lut[shade][tile_colors[type]]]` — the
 /// exact lookup the original's fullscreen map uses (remc2 GameUI) —
-/// then entity dots plotted over it, one pixel per entity, exactly like
-/// the original (the enhanced marker mode is a planned opt-in).
-pub fn map_pixels(level: &LevelView, dots: &[MapDot]) -> Vec<u8> {
+/// then the (opt-in) area overlay, then entity dots plotted on top, one
+/// pixel per entity, exactly like the original (the enhanced marker
+/// mode is a planned opt-in).
+pub fn map_pixels(level: &LevelView, dots: &[MapDot], areas: &[MapArea]) -> Vec<u8> {
     let n = MAP_TILES;
     let mut out = vec![0u8; n * n * 4];
     for i in 0..n * n {
@@ -111,6 +124,29 @@ pub fn map_pixels(level: &LevelView, dots: &[MapDot]) -> Vec<u8> {
         let idx = level.shade_lut[shade * 256 + base] as usize;
         out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[idx]);
         out[i * 4 + 3] = 255;
+    }
+    // Area overlay: a light tint fill with a stronger rim, wrapping
+    // toroidally like everything else on the map.
+    for a in areas {
+        let r = a.radius.max(0.5);
+        let (cx, cz) = (a.x, a.z);
+        let span = r.ceil() as i32;
+        for dz in -span..=span {
+            for dx in -span..=span {
+                let d = ((dx * dx + dz * dz) as f32).sqrt();
+                if d > r + 0.5 {
+                    continue;
+                }
+                let blend = if d > r - 1.0 { 0.75 } else { 0.30 };
+                let x = (cx as i32 + dx).rem_euclid(n as i32) as usize;
+                let z = (cz as i32 + dz).rem_euclid(n as i32) as usize;
+                let i = (z * n + x) * 4;
+                for c in 0..3 {
+                    let base = out[i + c] as f32;
+                    out[i + c] = (base + (a.color[c] as f32 - base) * blend) as u8;
+                }
+            }
+        }
     }
     for dot in dots {
         let x = (dot.x as usize).min(n - 1);
@@ -796,7 +832,7 @@ impl Renderer {
 
     /// Upload a level: build the terrain mesh, the color/type LUTs, and
     /// the overhead map (terrain + entity dots).
-    pub fn load_level(&mut self, level: &LevelView, map_dots: &[MapDot]) {
+    pub fn load_level(&mut self, level: &LevelView, map_dots: &[MapDot], map_areas: &[MapArea]) {
         let n = MAP_TILES;
         assert_eq!(level.height.len(), n * n);
         assert_eq!(level.tile_type.len(), n * n);
@@ -1067,7 +1103,7 @@ impl Renderer {
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
-        let map_rgba = map_pixels(level, map_dots);
+        let map_rgba = map_pixels(level, map_dots, map_areas);
         let map_extent = wgpu::Extent3d {
             width: n as u32,
             height: n as u32,
@@ -1116,7 +1152,7 @@ impl Renderer {
     /// mutation (craters, quakes, spawned entities). The level view
     /// must carry the LIVE planes; mesh and bind groups are reused —
     /// this is four 64 KB texture writes plus the map compose.
-    pub fn update_terrain(&mut self, level: &LevelView, map_dots: &[MapDot]) {
+    pub fn update_terrain(&mut self, level: &LevelView, map_dots: &[MapDot], map_areas: &[MapArea]) {
         let n = MAP_TILES as u32;
         let Some([type_tex, shade_tex, angle_tex, height_tex]) = &self.plane_texs else {
             return;
@@ -1146,7 +1182,7 @@ impl Renderer {
             write(angle_tex, a);
         }
         if let Some(map_tex) = &self.map_tex {
-            let map_rgba = map_pixels(level, map_dots);
+            let map_rgba = map_pixels(level, map_dots, map_areas);
             self.queue.write_texture(
                 map_tex.as_image_copy(),
                 &map_rgba,

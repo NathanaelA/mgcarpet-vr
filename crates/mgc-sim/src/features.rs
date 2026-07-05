@@ -259,6 +259,11 @@ pub(crate) struct Ent {
     /// lets the app resolve spawned drawables through the per-slot
     /// spawn-RNG approximation. 0 = not from a THING.
     pub(crate) thing_slot: u16,
+    /// Teleport destination (offsets 150/152, 8.8 fixed) — the portal's
+    /// target; defaults to its own position, overwritten by the THING
+    /// post-init (child/parent fields).
+    pub(crate) dest_x: u16,
+    pub(crate) dest_y: u16,
 }
 
 /// The event-pool engine: terrain planes + the original's 1000-slot
@@ -754,7 +759,7 @@ impl Gen {
     // ---- math helpers ---------------------------------------------------
 
     /// sub_358D0 (:42470): shortest wrapped tile delta in -128..=128.
-    fn wrap_delta(a: i16, b: i16) -> i32 {
+    pub(crate) fn wrap_delta(a: i16, b: i16) -> i32 {
         let d = b.wrapping_sub(a);
         if d > 128 {
             (d as i32) - 256
@@ -766,7 +771,7 @@ impl Gen {
     }
 
     /// sub_40F87 (:51818): angle from delta in 1/2048 turns (0 = -y).
-    fn angle_of(dx: i16, dy: i16) -> u16 {
+    pub(crate) fn angle_of(dx: i16, dy: i16) -> u16 {
         let lut = |n: i32, d: i32| ATAN[((n << 8) / d) as usize] as i32;
         let (a1, a2) = (dx as i32, dy as i32);
         let r = if a1 == 0 && a2 == 0 {
@@ -1022,17 +1027,26 @@ impl Gen {
                 e.act_life = 10000;
                 e.f44 = 200;
             }
-            // sub_3B300 (model 34): draws once from its own LCG for a
-            // target heading — kept for per-entity stream fidelity even
-            // though the event is purged unticked.
+            // sub_3B300 (model 34): the PORTAL vortex — sprite row 223,
+            // 1-tile extents, spawned 640 alt units above ground (its
+            // tick re-grounds it from the second turn), destination
+            // defaulting to its own position (a THING post-init
+            // overwrites it with the authored target). The LCG draw is
+            // the original's random scatter of that default. Purged
+            // unticked at LOAD time; persistent + drawable at runtime.
             34 => {
                 e.tick70 = 36;
                 e.max_life = 0;
                 e.act_life = 0;
                 e.flags = 0;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+                e.dest_x = e.x;
+                e.dest_y = e.y;
                 lcg32(&mut e.rand);
                 let (x, y, z) = (e.x, e.y, e.z);
-                self.link(i, x, y, z);
+                self.link(i, x, y, z.wrapping_add(640));
             }
             // All remaining retail models (0, 1, 5, 6, 8, 13, 14, 15,
             // 17, 23, 25, 33, 38, 39, 44, 52, …): purged unticked, no

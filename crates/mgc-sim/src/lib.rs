@@ -187,10 +187,20 @@ impl Simulation {
             f.vy = f.vy.min(0.0);
         }
 
-        // The world turn: triggers probe the flyer, events tick.
+        // The world turn: triggers/portals probe the flyer, events tick.
         if let Some(w) = &mut self.world {
             let f = self.flyer;
-            w.tick(world::PlayerPose::from_tiles(f.x, f.y, f.z));
+            w.tick(world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw));
+            if let Some((x, z)) = w.take_teleport() {
+                // Portal arrival: the original moves the entity to the
+                // destination point; altitude snaps above the ground
+                // there (velocity carries over).
+                let ground = w.ground_height_tiles(x, z);
+                let f = &mut self.flyer;
+                f.x = x;
+                f.z = z;
+                f.y = f.y.max(ground + MIN_CLEARANCE);
+            }
         }
     }
 }
