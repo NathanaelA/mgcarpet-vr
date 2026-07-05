@@ -91,6 +91,24 @@ pub fn mc1_entity_type(class: u16, model: u16) -> Option<Mc1TypePick> {
     })
 }
 
+/// Trailing body parts of the multi-part creatures (type indices into
+/// [`crate::mc1_sprite_stats::SPRITE_STATS`], spawn order preserved).
+/// The original spawns them stacked on the head (state 120,
+/// parent/child-linked; sub_38030 :44570) and its movement code
+/// strings them out behind it from the first tick on.
+pub fn mc1_entity_parts(class: u16, model: u16) -> &'static [u16] {
+    match (class, model) {
+        (5, 0) => &[
+            19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+        ],
+        (5, 3) => &[
+            89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
+        ],
+        (5, 6) => &[50, 193],
+        _ => &[],
+    }
+}
+
 /// The spawn LCG (the engine's global `9377 * x + 9439` stream). At
 /// load the original draws it in strict slot order across all spawn
 /// functions; until entity spawning is ported 1:1, callers seed

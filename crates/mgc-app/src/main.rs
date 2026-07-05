@@ -36,6 +36,12 @@ struct LoadedLevel {
     sprites: Option<(mgc_formats::bundle::SpriteIndex, Vec<u8>)>,
     /// Static world entities resolved to billboards.
     billboards: Vec<Billboard>,
+    /// Entity dots for the overhead map (the original's 1px markers).
+    map_dots: Vec<mgc_render::MapDot>,
+    /// The level's player start (class-3 m4 marker): position and
+    /// facing for the flyer; None on levels without one (MC2, dev
+    /// leftovers) falls back to the flyer default.
+    start: Option<Flyer>,
 }
 
 /// Resolve the package plus its asset bundle into what the renderer and
@@ -129,16 +135,33 @@ fn load_level(
         }
     }
 
-    // Static world entities as billboards (MC1/HW; MC2's entity
-    // semantics are a separate mapping, pending with its bundles).
-    let billboards = if package.meta.game != Game::MagicCarpet2 {
+    // Static world entities as billboards + map dots (MC1/HW; MC2's
+    // entity semantics are a separate mapping, pending with its
+    // bundles).
+    let (billboards, map_dots) = if package.meta.game != Game::MagicCarpet2 {
         let index = bundle.sprites.as_ref().map(|(i, _)| i);
-        entities::billboards(&package.things.things, &height, |id| {
-            index.and_then(|i| i.sprites.get(id as usize)).map(|s| (s.width, s.height))
-        })
+        (
+            entities::billboards(&package.things.things, &height, |id| {
+                index
+                    .and_then(|i| i.sprites.get(id as usize))
+                    .map(|s| (s.width, s.height))
+            }),
+            entities::map_dots(&package.things.things, &bundle.palette),
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
+
+    // The original's spawn: the class-3 m4 start marker's position,
+    // hovering over the (post-feature) terrain, facing north.
+    let start = entities::player_start(&package.things.things).map(|(x, z)| Flyer {
+        x,
+        y: entities::ground_at(&height, x, z) + entities::START_HOVER,
+        z,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Flyer::default()
+    });
 
     Ok(LoadedLevel {
         view: LevelView {
@@ -155,6 +178,8 @@ fn load_level(
         label: format!("{game} level {}", package.meta.level),
         sprites: bundle.sprites,
         billboards,
+        map_dots,
+        start,
     })
 }
 
@@ -196,7 +221,10 @@ struct App {
 
 impl App {
     fn new(level: LoadedLevel, smooth_shading: bool) -> Self {
-        let sim = Simulation::with_terrain(level.height.clone());
+        let mut sim = Simulation::with_terrain(level.height.clone());
+        if let Some(start) = level.start {
+            sim.flyer = start;
+        }
         let prev_flyer = sim.flyer;
         Self {
             level,
@@ -263,7 +291,7 @@ impl ApplicationHandler for App {
         };
         match Renderer::for_window(window.clone()) {
             Ok(mut renderer) => {
-                renderer.load_level(&self.level.view);
+                renderer.load_level(&self.level.view, &self.level.map_dots);
                 if let Some((index, atlas)) = &self.level.sprites {
                     renderer.load_sprites(index.clone(), atlas);
                 }
@@ -536,7 +564,7 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), St
 /// rotation-free comparison artifact for original map screenshots.
 fn run_map(level: &LoadedLevel, out: &Path, scale: u32) -> Result<(), String> {
     let n = 256usize;
-    let src = mgc_render::map_pixels(&level.view);
+    let src = mgc_render::map_pixels(&level.view, &level.map_dots);
     let s = scale as usize;
     let (w, h) = (n * s, n * s);
     let mut rgba = vec![0u8; w * h * 4];
@@ -560,15 +588,21 @@ fn run_screenshot(
     map_view: bool,
 ) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
-    renderer.load_level(&level.view);
+    renderer.load_level(&level.view, &level.map_dots);
     if let Some((index, atlas)) = &level.sprites {
         renderer.load_sprites(index.clone(), atlas);
     }
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
     renderer.set_map_view(map_view);
-    let flyer = Flyer::default();
-    let [x, y, z, yaw_deg, pitch_deg] = camera.unwrap_or([flyer.x, flyer.y, flyer.z, 0.0, -11.5]);
+    let flyer = level.start.unwrap_or_default();
+    let [x, y, z, yaw_deg, pitch_deg] = camera.unwrap_or([
+        flyer.x,
+        flyer.y,
+        flyer.z,
+        flyer.yaw.to_degrees(),
+        flyer.pitch.to_degrees(),
+    ]);
     let cam = CameraView {
         x,
         y,

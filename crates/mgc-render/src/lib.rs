@@ -63,11 +63,22 @@ pub struct LevelView {
     pub angle: Option<Vec<u8>>,
 }
 
+/// One entity dot on the overhead map: tile-unit position and the
+/// palette index the original plots for its category.
+#[derive(Debug, Clone, Copy)]
+pub struct MapDot {
+    pub x: f32,
+    pub z: f32,
+    pub color: u8,
+}
+
 /// Flat-color overhead map: one RGBA pixel per tile (256x256, row-major
 /// like the terrain grids), each resolved through the engine's map-view
 /// color path `palette[shade_lut[shade][tile_colors[type]]]` — the
-/// exact lookup the original's fullscreen map uses (remc2 GameUI).
-pub fn map_pixels(level: &LevelView) -> Vec<u8> {
+/// exact lookup the original's fullscreen map uses (remc2 GameUI) —
+/// then entity dots plotted over it, one pixel per entity, exactly like
+/// the original (the enhanced marker mode is a planned opt-in).
+pub fn map_pixels(level: &LevelView, dots: &[MapDot]) -> Vec<u8> {
     let n = MAP_TILES;
     let mut out = vec![0u8; n * n * 4];
     for i in 0..n * n {
@@ -80,6 +91,13 @@ pub fn map_pixels(level: &LevelView) -> Vec<u8> {
         let base = level.tile_colors[ty] as usize;
         let idx = level.shade_lut[shade * 256 + base] as usize;
         out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[idx]);
+        out[i * 4 + 3] = 255;
+    }
+    for dot in dots {
+        let x = (dot.x as usize).min(n - 1);
+        let z = (dot.z as usize).min(n - 1);
+        let i = z * n + x;
+        out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[dot.color as usize]);
         out[i * 4 + 3] = 255;
     }
     out
@@ -720,8 +738,9 @@ impl Renderer {
         self.smooth_shading
     }
 
-    /// Upload a level: build the terrain mesh and the color/type LUTs.
-    pub fn load_level(&mut self, level: &LevelView) {
+    /// Upload a level: build the terrain mesh, the color/type LUTs, and
+    /// the overhead map (terrain + entity dots).
+    pub fn load_level(&mut self, level: &LevelView, map_dots: &[MapDot]) {
         let n = MAP_TILES;
         assert_eq!(level.height.len(), n * n);
         assert_eq!(level.tile_type.len(), n * n);
@@ -975,7 +994,7 @@ impl Renderer {
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
-        let map_rgba = map_pixels(level);
+        let map_rgba = map_pixels(level, map_dots);
         let map_extent = wgpu::Extent3d {
             width: n as u32,
             height: n as u32,
