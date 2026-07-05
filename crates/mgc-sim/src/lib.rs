@@ -13,6 +13,7 @@
 //! and wraps around in both axes, and altitude is `height_byte / 8`
 //! (the engine computes `32 * height_byte` in its own units).
 
+mod combat;
 pub mod features;
 pub mod mc1_behavior;
 pub mod mc1_entities;
@@ -52,6 +53,8 @@ pub struct FlightInput {
     pub lift: f32,
     pub yaw_delta: f32,
     pub pitch_delta: f32,
+    /// Fire the dev repeat-fireball (hold-to-autofire).
+    pub fire: bool,
 }
 
 /// The carpet: position in tile units, velocity in tiles/second.
@@ -192,7 +195,13 @@ impl Simulation {
         // The world turn: triggers/portals probe the flyer, events tick.
         if let Some(w) = &mut self.world {
             let f = self.flyer;
-            w.tick(world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw));
+            // Horizontal speed in tiles/tick — the cast inherits it
+            // onto the projectile's base speed like the carpet's +126.
+            let speed = (f.vx * f.vx + f.vy * f.vy + f.vz * f.vz).sqrt() * TICK_DT;
+            w.tick(
+                world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, speed),
+                world::PlayerCommand { fire: input.fire },
+            );
             if let Some((x, z)) = w.take_teleport() {
                 // Portal arrival: the original moves the entity to the
                 // destination point; altitude snaps above the ground

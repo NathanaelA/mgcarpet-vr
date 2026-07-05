@@ -36,21 +36,26 @@
 //!   movement core, the six state primitives and the awake system are
 //!   ported; the app consumes continuous poses via [`World::live_poses`].
 //!
+//! COMBAT (the combat slice, see [`crate::combat`]): class-5 attack
+//! thunks fire class-9 projectiles / melee mailbox writes; class-10
+//! combat effects deliver the damage; creatures read their inbox,
+//! aggro on wizard-family attackers, die into DEATH/CORPSE and drop
+//! mana balls. The player casts the dev repeat-fireball through the
+//! tick input (`PlayerCommand`) and is invincible via a permanent
+//! spawn grace — mob damage lands in a discarded-but-totaled inbox.
+//!
 //! Deliberate deviations, tracked in docs/ROADMAP.md: no AI wizard
-//! balloons (the probe/scan lists are the player alone); combat is
-//! unported (chase closes in but the attack call is a no-op; damage
-//! mailboxes unread); custom family behaviors beyond movement
-//! (disguises, mana hunts, house building, ranged/teleport casters)
-//! stand still pending the AI track; corpses despawn without dropping
-//! mana balls/bones (mana track); class-12 pickup/mana transfer NOT
-//! ported; damage broadcasts and sounds omitted as in the load-time
-//! pass.
+//! balloons (the probe/scan lists are the player alone); custom
+//! family behaviors beyond movement/combat (disguises, mana hunts,
+//! house building, teleports) stand still pending the AI track;
+//! class-12 pickup/mana transfer NOT ported (mana balls drop, merge
+//! and take claims but nothing collects them yet); sounds omitted.
 
 use crate::features::{
     self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
 };
 use crate::mc1_sprite_stats::SPRITE_STATS;
-use crate::mobs::MobCtx;
+use crate::mobs::{MobCtx, PLAYER_TARGET};
 use mgc_formats::{Thing, ThingKind};
 
 /// The player's pose in engine units for trigger/portal tests: x/y are
@@ -63,21 +68,44 @@ pub struct PlayerPose {
     pub y: u16,
     pub z: i16,
     pub heading: u16,
+    /// Engine pitch (11-bit; POSITIVE pitches the polar step DOWN,
+    /// matching the original's angle convention). 0 = level.
+    pub pitch: u16,
+    /// Forward speed in engine units per tick (the carpet's +126 —
+    /// fired projectiles inherit it, :65060).
+    pub speed: i16,
 }
 
 impl PlayerPose {
-    /// From world-space tile floats + yaw radians (the flyer's state).
-    pub fn from_tiles(x: f32, y_alt: f32, z: f32, yaw: f32) -> Self {
+    /// From world-space tile floats + yaw/pitch radians (the flyer's
+    /// state; flyer pitch is positive-up, engine pitch positive-down)
+    /// and speed in tiles per tick.
+    pub fn from_tiles(x: f32, y_alt: f32, z: f32, yaw: f32, pitch: f32, speed_tiles: f32) -> Self {
+        const TAU: f32 = std::f32::consts::TAU;
         let wrap = |v: f32| (v.rem_euclid(256.0) * 256.0) as u16;
         PlayerPose {
             x: wrap(x),
             y: wrap(z),
             z: (y_alt * 256.0) as i16,
-            heading: (yaw.rem_euclid(std::f32::consts::TAU) * (2048.0 / std::f32::consts::TAU))
-                as u16
-                & 0x7FF,
+            heading: (yaw.rem_euclid(TAU) * (2048.0 / TAU)) as u16 & 0x7FF,
+            pitch: ((-pitch).rem_euclid(TAU) * (2048.0 / TAU)) as u16 & 0x7FF,
+            speed: (speed_tiles * 256.0) as i16,
         }
     }
+
+    /// A level pose with no pitch/speed (tests, trigger probes).
+    pub fn level(x: u16, y: u16, z: i16, heading: u16) -> Self {
+        PlayerPose { x, y, z, heading, pitch: 0, speed: 0 }
+    }
+}
+
+/// Player intent the sim consumes besides the pose. Part of the tick
+/// input stream (replay-recorded once replays exist).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerCommand {
+    /// Fire the dev repeat-fireball (hold-to-autofire; spell 23's
+    /// input gate with the mana cost bypassed).
+    pub fire: bool,
 }
 
 /// The runtime world of one loaded MC1/HW level.
@@ -92,6 +120,10 @@ pub struct World {
     /// A portal fired this tick: destination in tile units, consumed
     /// by the sim (which moves the flyer).
     pending_teleport: Option<(f32, f32)>,
+    /// The dev fireball's refire window (+48 of the spell event,
+    /// sub_58240 :66295): held fire re-arms it every tick — one
+    /// projectile per game tick, the repeat-fireball firehose.
+    spell48: i16,
 }
 
 /// One live drawable entity, resolved for the app's billboard / map
@@ -118,6 +150,10 @@ pub struct LivePose {
     /// Multipart body segment (state 120) — drawn but excluded from
     /// entity counts/lists like the original's map/behavior scans.
     pub segment: bool,
+    /// Remaining life fraction (0..=1) for monsters (class-5 chain
+    /// heads) — feeds the unfaithful debug health-bar overlay. None
+    /// for everything the overlay shouldn't tag.
+    pub life_frac: Option<f32>,
 }
 
 /// Minimal live-event view for [`World::debug_pool`].
@@ -157,9 +193,12 @@ pub enum VolumeKind {
 }
 
 /// Records the app can draw (mc1_entities has a sprite mapping).
-/// Class 10 is logic/terrain except the model-34 portal vortex.
+/// Class 9 = projectiles; class 10 is logic/terrain except the portal
+/// vortex and the combat effects (fire, flame, splash, flashes, mana
+/// ball — the model-17 blast driver is invisible by design).
 fn drawable(class: u16, model: u16) -> bool {
-    matches!(class, 2 | 3 | 5 | 12) || (class == 10 && model == 34)
+    matches!(class, 2 | 3 | 5 | 9 | 12)
+        || (class == 10 && matches!(model, 34 | 0 | 1 | 5 | 23 | 25 | 39))
 }
 
 impl World {
@@ -177,6 +216,7 @@ impl World {
             terrain_dirty: false,
             entities_dirty: false,
             pending_teleport: None,
+            spell48: 0,
         };
         w.fire_disposition(0, true);
         w
@@ -229,6 +269,7 @@ impl World {
             if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
                 continue;
             }
+            let segment = e.class64 == 5 && e.tick70 == 120;
             out.push(LivePose {
                 class: e.class64,
                 model: e.model65,
@@ -238,15 +279,19 @@ impl World {
                 z: e.y as f32 / 256.0,
                 alt: e.z as f32 / 256.0,
                 yaw: (e.f30 & 0x7FF) as f32 * (TAU / 2048.0),
-                segment: e.class64 == 5 && e.tick70 == 120,
+                segment,
+                life_frac: (e.class64 == 5 && !segment && e.max_life > 0).then(|| {
+                    (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
+                }),
             });
         }
         out
     }
 
     /// One game turn (`sub_41780_41AC0`, :52197). `player` feeds the
-    /// trigger volume probes, creature awake checks and aggro scans.
-    pub fn tick(&mut self, player: PlayerPose) {
+    /// trigger volume probes, creature awake checks and aggro scans;
+    /// `cmd` is the rest of the player's tick input (fire).
+    pub fn tick(&mut self, player: PlayerPose, cmd: PlayerCommand) {
         // One global LCG draw per tick, before any handler (:52223).
         lcg32(&mut self.g.rand);
 
@@ -255,11 +300,31 @@ impl World {
         // segments in the original; :52246 list building).
         let mut buckets = [0u32; 20];
         let mut any_creature = false;
+        let mut any_transient = false;
         for e in &self.g.ent {
             if e.class64 == 5 && e.act_life >= 0 && e.tick70 != 120 {
                 buckets[(e.model65 as usize).min(19)] += 1;
                 any_creature = true;
             }
+            if e.class64 == 9
+                || (e.class64 == 10 && matches!(e.tick70, 0 | 1 | 5 | 17 | 23 | 25 | 41))
+            {
+                any_transient = true;
+            }
+        }
+
+        // The dev repeat-fireball (spell 23, sub_58240 :66295): a held
+        // button re-arms +48 every tick (:20627-30) so the spawn gate
+        // `+48 == window` passes every tick; mana gates/deduction are
+        // the bypassed cheat. The window tail still decrements.
+        if cmd.fire {
+            self.spell48 = 3;
+        }
+        if self.spell48 == 3 {
+            self.cast_fireball(player);
+        }
+        if self.spell48 > 0 {
+            self.spell48 -= 1;
         }
 
         // The awake pre-pass (sub_54F00, :64266) runs before dispatch.
@@ -276,15 +341,27 @@ impl World {
             }
             match self.g.ent[i].class64 {
                 5 => self.g.creature_tick(i, &ctx),
+                9 => {
+                    if self.g.proj_tick(i, &ctx) {
+                        self.terrain_dirty = true;
+                    }
+                }
                 10 if self.g.ent[i].tick70 == 36 => self.portal_tick(i, player),
+                // Combat effects (fire, spreader, splash, blast ring,
+                // hit-flash, steal-flash, mana ball).
+                10 if matches!(self.g.ent[i].tick70, 0 | 1 | 5 | 17 | 23 | 25 | 41) => {
+                    if self.g.effect_tick(i, &ctx) {
+                        self.terrain_dirty = true;
+                    }
+                }
                 10 => {
                     // The load-time handlers ARE the runtime handlers.
                     self.g.tick(i);
                     self.terrain_dirty = true;
                 }
                 11 => self.trigger_tick(i, player, &buckets),
-                // Scenery / effects / pickups: inert until their
-                // tracks land — they stand and render.
+                // Scenery / pickups: inert until their tracks land —
+                // they stand and render.
                 _ => {}
             }
             // Per-tick phase counter, incremented after the state
@@ -294,10 +371,59 @@ impl World {
                 self.free_slot(i);
             }
         }
-        if any_creature {
-            // Creatures move (or may): the pose consumer refreshes.
+        if any_creature || any_transient {
+            // Creatures/projectiles/effects move: poses refresh.
             self.entities_dirty = true;
         }
+
+        // The invincible player: a spawn grace that never decrements
+        // (:55367-71 — all six channels discarded each tick). The ch0
+        // total is kept for display/tests.
+        if self.g.player_mail[0].1 != 0 {
+            self.g.player_damage += self.g.player_mail[0].0 as u64;
+        }
+        self.g.player_mail = [(0, 0); 6];
+    }
+
+    /// The fireball cast (sub_58240/sub_56090 :65056-83, gates and
+    /// mana deduction bypassed): muzzle offset 256 units to the left
+    /// hand, launch height = the carpet's half-height, heading/pitch
+    /// from the pose, carpet speed inherited.
+    fn cast_fireball(&mut self, p: PlayerPose) {
+        use crate::combat::PLAYER_HH;
+        let myaw = p.heading.wrapping_sub(512) & 0x7FF;
+        let mut muzzle = (p.x, p.y, p.z);
+        Gen::polar_step(&mut muzzle, myaw, 0, 256);
+        if self.g.ground_z(muzzle.0, muzzle.1) as i16 > p.z {
+            muzzle = (p.x, p.y, p.z); // muzzle inside terrain: revert
+        }
+        let z = p.z.wrapping_add(PLAYER_HH as i16);
+        let Some(pr) = self.g.spawn_fireball(muzzle.0, muzzle.1, z) else {
+            return;
+        };
+        let e = &mut self.g.ent[pr];
+        e.f126 += p.speed; // inherits carpet speed (:65060)
+        e.f128 = e.f126;
+        e.id24 = PLAYER_TARGET;
+        e.f30 = p.heading;
+        e.f34 = p.heading;
+        e.f32 = p.pitch;
+        e.f36 = p.pitch;
+        e.f44 = 50; // spell-row +44 (vestigial; the fire's 400 is real)
+        e.f140 = 200; // deflection economics (repeat-fireball row)
+        self.entities_dirty = true;
+    }
+
+    /// Total ch0 damage the invincible player has absorbed (what the
+    /// original would have subtracted from your life).
+    pub fn player_damage_taken(&self) -> u64 {
+        self.g.player_damage
+    }
+
+    /// Combat stat counters: (kills, shots resolved, aimed hits) —
+    /// the original's Type_160 +359/+343/+347.
+    pub fn combat_stats(&self) -> (u32, u32, u32) {
+        (self.g.kills, self.g.shots, self.g.hits)
     }
 
     // ---- dispositions ----------------------------------------------------
@@ -408,12 +534,14 @@ impl World {
 
     /// A drawable/latent entity as an inert pool event — the classes
     /// whose real spawn handlers belong to later tracks (7 = spawner
-    /// logic, 9 = spell effects, 12 = mana pickups).
+    /// logic, 9 = spell effects, 12 = mana pickups). Authored class-9
+    /// things park OUT of the flight-state range so they never tick
+    /// as live projectiles.
     fn spawn_inert(&mut self, class: u16, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
         let s = self.g.new_event()?;
         self.g.ent[s].class64 = class as u8;
         self.g.ent[s].model65 = model as u8;
-        self.g.ent[s].tick70 = 0;
+        self.g.ent[s].tick70 = if class == 9 { 0xFE } else { 0 };
         self.g.link(s, x, y, z);
         self.g.refill_life(s);
         self.g.ent[s].flags |= 1;
@@ -715,11 +843,11 @@ mod tests {
     }
 
     fn away() -> PlayerPose {
-        PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0)
+        PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
     }
 
     fn at_trigger() -> PlayerPose {
-        PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0)
+        PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0)
     }
 
     #[test]
@@ -727,7 +855,7 @@ mod tests {
         let mut w = flat_world();
         assert_eq!(w.live_things().len(), 0, "dis_id!=0 things must not spawn at init");
         for _ in 0..64 {
-            w.tick(away());
+            w.tick(away(), PlayerCommand::default());
         }
         assert_eq!(w.live_things().len(), 0);
         let center = tile(110, 110);
@@ -740,14 +868,14 @@ mod tests {
         // Fly into the volume; the probe is throttled to every 8th
         // tick, so give it a few.
         for _ in 0..16 {
-            w.tick(at_trigger());
+            w.tick(at_trigger(), PlayerCommand::default());
         }
         let live = w.live_things();
         assert_eq!(live.len(), 1, "the creature spawns via the disposition");
         assert_eq!((live[0].class, live[0].model), (5, 2));
         // The expanding crater digs -3 per covered ring per tick.
         for _ in 0..40 {
-            w.tick(away());
+            w.tick(away(), PlayerCommand::default());
         }
         let center = tile(110, 110);
         assert!(
@@ -759,7 +887,7 @@ mod tests {
         // One-shot: the records are consumed, the trigger is gone.
         let n = w.live_things().len();
         for _ in 0..32 {
-            w.tick(at_trigger());
+            w.tick(at_trigger(), PlayerCommand::default());
         }
         assert_eq!(w.live_things().len(), n, "one-shot trigger must not refire");
     }
@@ -770,7 +898,7 @@ mod tests {
         // Fire the trigger so the (5,2) creature spawns; the player
         // stays nearby, keeping it awake.
         for _ in 0..16 {
-            w.tick(at_trigger());
+            w.tick(at_trigger(), PlayerCommand::default());
         }
         let start = w
             .live_poses()
@@ -778,7 +906,7 @@ mod tests {
             .find(|p| p.class == 5)
             .expect("creature spawned");
         for _ in 0..200 {
-            w.tick(at_trigger());
+            w.tick(at_trigger(), PlayerCommand::default());
         }
         let now = w
             .live_poses()
@@ -821,9 +949,9 @@ mod tests {
         }];
         let mut w = World::new(planes, &things, 1, assets());
         // Player adjacent: awake, jitter-walking every tick.
-        let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0);
+        let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0, 0.0, 0.0);
         for t in 0..400 {
-            w.tick(p);
+            w.tick(p, PlayerCommand::default());
             let pose = w
                 .live_poses()
                 .into_iter()
@@ -868,9 +996,9 @@ mod tests {
         assert_eq!(segs.len(), 16, "sixteen body segments");
         assert_eq!(w.live_things().len(), 1, "segments hidden from entity lists");
 
-        let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0);
+        let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0, 0.0, 0.0);
         for _ in 0..60 {
-            w.tick(p);
+            w.tick(p, PlayerCommand::default());
         }
         let head = w
             .live_poses()
@@ -926,12 +1054,12 @@ mod tests {
             (0..8).map(|k| bee(k, 100 + (k % 3) as u16, 100 + (k / 3) as u16)).collect();
         let mut w = World::new(planes, &things, 1, assets());
         // Player far away the whole time (> 24 tiles: asleep).
-        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0);
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
         for _ in 0..3000 {
-            w.tick(far);
+            w.tick(far, PlayerCommand::default());
         }
         let before: Vec<_> = w.live_poses();
-        w.tick(far);
+        w.tick(far, PlayerCommand::default());
         let after: Vec<_> = w.live_poses();
         // Bee speed = 50 engine units/tick ≈ 0.195 tiles; pack
         // catch-up adds a bounded +16 per chain level. The compounding
@@ -972,10 +1100,10 @@ mod tests {
             par3: None,
         }];
         let mut w = World::new(planes, &things, 1, assets());
-        let near = PlayerPose::from_tiles(102.5, 14.0, 102.5, 0.0);
+        let near = PlayerPose::from_tiles(102.5, 14.0, 102.5, 0.0, 0.0, 0.0);
         let mut seen = Vec::new();
         for _ in 0..80 {
-            w.tick(near);
+            w.tick(near, PlayerCommand::default());
             let t = w.live_poses()[0].type_index;
             if seen.last() != Some(&t) {
                 seen.push(t);
@@ -990,9 +1118,216 @@ mod tests {
             let mut w = flat_world();
             for t in 0..200 {
                 let p = if (40..80).contains(&t) { at_trigger() } else { away() };
-                w.tick(p);
+                w.tick(p, PlayerCommand::default());
             }
             (w.planes().height.clone(), w.live_things().len())
+        };
+        assert_eq!(run(), run());
+    }
+
+    // ---- combat ------------------------------------------------------------
+
+    /// Directly south of the combat worlds' creature (112,110),
+    /// facing north (engine yaw 0 = -y): the fireball's line of fire.
+    fn firing_line() -> PlayerPose {
+        PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3360, 0)
+    }
+
+    fn count(w: &World, class: u8, model: u8) -> usize {
+        w.debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == class && e.model == model)
+            .count()
+    }
+
+    /// A flat world holding one load-time creature and nothing else —
+    /// no crater rims for a chaser to wall-death on.
+    fn bare_creature_world(model: u16) -> World {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 5,
+            model,
+            x: 112,
+            y: 110,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        World::new(planes, &things, 7, assets())
+    }
+
+    #[test]
+    fn fireball_kills_and_the_corpse_drops_a_mana_ball() {
+        let mut w = bare_creature_world(2);
+        assert_eq!(count(&w, 5, 2), 1, "the creature spawned");
+        // Hold fire from the firing line: the aim assist locks on,
+        // the fire's 400-damage broadcast whittles the 3000 life.
+        let fire = PlayerCommand { fire: true };
+        let mut died_at = None;
+        for t in 0..600 {
+            w.tick(firing_line(), fire);
+            if count(&w, 5, 2) == 0 {
+                died_at = Some(t);
+                break;
+            }
+        }
+        assert!(died_at.is_some(), "the creature dies under fire");
+        // The corpse dropped its mana ball (life/2 = 1500 mana).
+        for _ in 0..16 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert!(count(&w, 10, 39) >= 1, "a mana ball dropped");
+        // Ball size class by mana (sub_274D0): the lunger's 1500
+        // (life/2) lands in class 3 → sprite type 55.
+        let ball = w
+            .live_poses()
+            .into_iter()
+            .find(|p| p.class == 10 && p.model == 39)
+            .expect("ball pose");
+        assert_eq!(ball.type_index, 55, "1500 mana = size class 3");
+        let (kills, shots, _hits) = w.combat_stats();
+        assert_eq!(kills, 1, "the kill credits the player");
+        assert!(shots > 0, "shots were resolved");
+    }
+
+    #[test]
+    fn hit_creatures_aggro_and_maul_the_invincible_player() {
+        let mut w = bare_creature_world(2);
+        // A three-tick burst wounds the lunger without killing it
+        // (≤ 1200 of 3000 life)...
+        for _ in 0..3 {
+            w.tick(firing_line(), PlayerCommand { fire: true });
+        }
+        // ...then it chases the wizard-family attacker and melees.
+        // The invincible player discards the damage but the total
+        // records what would have killed you.
+        for _ in 0..1500 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 5, 2), 1, "the wounded lunger survives");
+        assert!(
+            w.player_damage_taken() > 0,
+            "the chaser's melee lands in the discarded inbox"
+        );
+    }
+
+    #[test]
+    fn worm_chain_dies_from_the_head_and_every_corpse_drops() {
+        let mut w = bare_creature_world(0);
+        assert_eq!(count(&w, 5, 0), 17, "head + 16 segments");
+        let fire = PlayerCommand { fire: true };
+        let mut cleared = false;
+        for _ in 0..3000 {
+            w.tick(firing_line(), fire);
+            if count(&w, 5, 0) == 0 {
+                cleared = true;
+                break;
+            }
+        }
+        assert!(cleared, "the whole chain dies (segments corpse with the head)");
+        for _ in 0..16 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert!(
+            count(&w, 10, 39) >= 1,
+            "segment corpses dropped mana balls (merged or not)"
+        );
+        let (kills, _, _) = w.combat_stats();
+        assert_eq!(kills, 1, "one worm, one kill");
+    }
+
+    #[test]
+    fn crab_eats_the_mana_grid_and_grows() {
+        // A crab (m5) amid a grid of authored loose mana balls: it
+        // must hunt them down, absorb their mana and grow through the
+        // 185+N sprite sizes (sub_1C170 + sub_38820).
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let th = |slot, class, model, x, y| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let mut things = vec![th(0, 5, 5, 112, 110)];
+        for (k, (dx, dy)) in [(2, 0), (0, 2), (-2, 0), (0, -2), (2, 2), (-2, -2)]
+            .iter()
+            .enumerate()
+        {
+            things.push(th(
+                k as u32 + 1,
+                10,
+                39,
+                (112 + dx) as u16,
+                (110 + dy) as u16,
+            ));
+        }
+        let mut w = World::new(planes, &things, 7, assets());
+        assert_eq!(count(&w, 10, 39), 6, "the mana grid spawned");
+        let far = PlayerPose::level(10 << 8, 10 << 8, 3360, 0);
+        for _ in 0..6000 {
+            w.tick(far, PlayerCommand::default());
+            if count(&w, 10, 39) == 0 {
+                break;
+            }
+        }
+        assert_eq!(count(&w, 10, 39), 0, "the crab ate every ball");
+        let crab = w
+            .live_poses()
+            .into_iter()
+            .find(|p| p.class == 5 && p.model == 5)
+            .expect("crab alive");
+        assert!(
+            crab.type_index > 185,
+            "the crab grew (sprite {}, expected > 185)",
+            crab.type_index
+        );
+    }
+
+    #[test]
+    fn deterministic_with_scripted_fire() {
+        let run = || {
+            let mut w = flat_world();
+            for t in 0..400 {
+                let p = if t < 16 { at_trigger() } else { firing_line() };
+                let cmd = PlayerCommand { fire: (60..90).contains(&t) };
+                w.tick(p, cmd);
+            }
+            let (free, pool) = w.debug_pool();
+            let snapshot: Vec<_> = pool
+                .iter()
+                .map(|e| (e.slot, e.class, e.model, e.state, e.tx, e.ty, e.life))
+                .collect();
+            (
+                free,
+                snapshot,
+                w.planes().height.clone(),
+                w.player_damage_taken(),
+                w.combat_stats(),
+            )
         };
         assert_eq!(run(), run());
     }

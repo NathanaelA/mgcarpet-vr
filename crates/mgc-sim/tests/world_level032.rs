@@ -6,7 +6,7 @@
 //! Self-skips when the baked tree is absent.
 
 use mgc_sim::features::{FeatureAssets, Planes};
-use mgc_sim::world::{PlayerPose, World};
+use mgc_sim::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
 fn baked_root() -> Option<PathBuf> {
@@ -57,9 +57,9 @@ fn level_032_entry_portal_spawns_and_teleports() {
     // entity set dirty so the pose consumer redraws it there — even
     // with zero creatures ticking (032's population is disposition-
     // gated).
-    let far = PlayerPose::from_tiles(100.0, 20.0, 100.0, 0.0);
+    let far = PlayerPose::from_tiles(100.0, 20.0, 100.0, 0.0, 0.0, 0.0);
     w.entities_dirty = false;
-    w.tick(far);
+    w.tick(far, PlayerCommand::default());
     assert!(w.entities_dirty, "portal re-ground must flag the pose refresh");
     let pose = w
         .live_poses()
@@ -75,18 +75,18 @@ fn level_032_entry_portal_spawns_and_teleports() {
 
     // Hovering NEXT to the portal but facing away: no teleport.
     let ground = w.ground_height_tiles(11.5, 254.3);
-    let facing_away = PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, std::f32::consts::PI);
+    let facing_away = PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, std::f32::consts::PI, 0.0, 0.0);
     for _ in 0..8 {
-        w.tick(facing_away);
+        w.tick(facing_away, PlayerCommand::default());
         assert!(w.take_teleport().is_none(), "facing away must not teleport");
     }
 
     // Flying INTO the vortex (facing north, toward it): teleported to
     // the authored destination (child=5, parent=230 → (5.5, 230.5)).
-    let facing_portal = PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, 0.0);
+    let facing_portal = PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, 0.0, 0.0, 0.0);
     let mut dest = None;
     for _ in 0..8 {
-        w.tick(facing_portal);
+        w.tick(facing_portal, PlayerCommand::default());
         if let Some(d) = w.take_teleport() {
             dest = Some(d);
             break;
@@ -98,7 +98,7 @@ fn level_032_entry_portal_spawns_and_teleports() {
     // The portal is persistent (maxLife 0): it keeps working.
     let mut again = None;
     for _ in 0..8 {
-        w.tick(facing_portal);
+        w.tick(facing_portal, PlayerCommand::default());
         if let Some(d) = w.take_teleport() {
             again = Some(d);
             break;

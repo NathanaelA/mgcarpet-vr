@@ -19,6 +19,7 @@
 //!   (:45086-:45087); `link` guards on the placed flag in both the
 //!   original and this port, so the second call is a no-op.
 
+use crate::combat::{Inbox, MailTarget};
 use crate::features::Gen;
 use crate::mc1_behavior::{BEHAVIOR, BehaviorRow};
 use crate::mc1_sprite_stats::SPRITE_STATS;
@@ -442,7 +443,7 @@ impl Gen {
     /// sub_41EC0_42200 (:52523): polar step — dist along (yaw, pitch)
     /// on the 16.16 sine tables; yaw 0 = -y (north), positive pitch
     /// steps downward (z -= dist·sin).
-    fn polar_step(pos: &mut (u16, u16, i16), yaw: u16, pitch: u16, dist: i16) {
+    pub(crate) fn polar_step(pos: &mut (u16, u16, i16), yaw: u16, pitch: u16, dist: i16) {
         if dist == 0 {
             return;
         }
@@ -462,14 +463,14 @@ impl Gen {
     }
 
     /// sub_42210 (:52652): angular distance on 11-bit angles.
-    fn angdist(a: u16, b: u16) -> u16 {
+    pub(crate) fn angdist(a: u16, b: u16) -> u16 {
         let d = a.wrapping_sub(b) & 0x7FF;
         if d > 1024 { 2048 - d } else { d }
     }
 
     /// sub_422A0_425E0 (:52689): rate-limited turn from `cur` toward
     /// `tgt`, capped at the row's v_2 (v_4 is passed but dead).
-    fn turn_step(cur: u16, tgt: u16, cap: i16) -> i16 {
+    pub(crate) fn turn_step(cur: u16, tgt: u16, cap: i16) -> i16 {
         if cur == tgt {
             return 0;
         }
@@ -538,7 +539,7 @@ impl Gen {
     // ---- the six state primitives (:21311-:21871) --------------------------
 
     /// Squared 2D distance in engine units (16-bit wrapping deltas).
-    fn dist2_sq(ax: u16, ay: u16, bx: u16, by: u16) -> i32 {
+    pub(crate) fn dist2_sq(ax: u16, ay: u16, bx: u16, by: u16) -> i32 {
         let dx = bx.wrapping_sub(ax) as i16 as i32;
         let dy = by.wrapping_sub(ay) as i16 as i32;
         dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
@@ -594,13 +595,9 @@ impl Gen {
     }
 
     /// IDLE sub_19B10 (:21311): stationary; every v_26 ticks a pack
-    /// scan. (The damage prologue reduces to the death check until
-    /// combat lands.)
+    /// scan. (The damage inbox runs in `creature_tick` before
+    /// dispatch, as the original's per-handler prologue.)
     fn mob_idle(&mut self, i: usize, base: u8) {
-        if self.ent[i].act_life < 0 {
-            self.ent[i].tick70 = base + 4;
-            return;
-        }
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
         if (self.ent[i].f63 as i16) % v26 == 0 {
             self.pack_scan(i, base);
@@ -616,10 +613,6 @@ impl Gen {
     /// crowds pack up and ride the unbounded pack accel — the
     /// player-reported runaway worms/bees).
     fn mob_wander(&mut self, i: usize, base: u8, ctx: &MobCtx, scan: bool, aggro: bool) {
-        if self.ent[i].act_life < 0 {
-            self.ent[i].tick70 = base + 4;
-            return;
-        }
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return; // walled in — dies via the prologue next tick
@@ -643,13 +636,16 @@ impl Gen {
     }
 
     /// CHASE sub_1A120 (:21580): move; bearing to the target every 4th
-    /// tick; every v_26 ticks drop back to WANDER when the 3D distance
-    /// reaches v_28 (un-squared — asymmetric with the scan's entry
-    /// test, verbatim). The attack call is the combat track — a no-op
-    /// here, so chasers close in and shadow their target.
+    /// tick; every v_26 ticks either drop back to WANDER when the 3D
+    /// distance reaches v_28 (un-squared — asymmetric with the scan's
+    /// entry test, verbatim) or fire the per-model attack thunk
+    /// (:21665-72). m6/m16 arm burst counters instead; the burst
+    /// spawns run every tick while armed.
     fn mob_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
-        if self.ent[i].act_life < 0 {
-            self.ent[i].tick70 = base + 4;
+        let model = self.ent[i].model65;
+        // m11 breaks off below half life (:24634-49).
+        if model == 11 && self.ent[i].act_life < (self.ent[i].max_life / 2) as i32 {
+            self.ent[i].tick70 = base + 1;
             return;
         }
         self.creature_move(i);
@@ -657,8 +653,8 @@ impl Gen {
             return;
         }
         let tgt = self.ent[i].f146;
-        let (tx, ty, tz) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz)
+        let (tx, ty, tz, tclass, tmodel) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, 3u8, 0u8)
         } else {
             let t = tgt as usize;
             if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0
@@ -667,11 +663,42 @@ impl Gen {
                 self.ent[i].tick70 = base + 1; // target lost (:21658)
                 return;
             }
-            (self.ent[t].x, self.ent[t].y, self.ent[t].z)
+            let c = &self.ent[t];
+            (c.x, c.y, c.z, c.class64, c.model65)
         };
         let e = &self.ent[i];
         if e.f63 & 3 == 0 {
             self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+        }
+        // m16's flame burst (:26154-77): while +26 > 0, one strongly
+        // homing 3000-damage fireball per tick from 4x launch height.
+        if model == 16 && self.ent[i].f26 > 0 {
+            self.ent[i].f26 -= 1;
+            let (x, y, z, owner, f84) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, e.id24, e.f84)
+            };
+            if let Some(p) = self.spawn_fireball(x, y, z.wrapping_add(4 * f84 as i16)) {
+                self.ent[p].row156 = 2; // unk_98F38[2], turn 0x71
+                self.ent[p].f140 = 60000;
+                self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 0);
+            }
+        }
+        // m6's spit burst (:23243-66): while +71 > 0, one zigzag bolt
+        // per tick, filter narrowed to the target's class/model.
+        if model == 6 && self.ent[i].f71 > 0 {
+            self.ent[i].f71 -= 1;
+            let (x, y, z, owner, f84) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, e.id24, e.f84)
+            };
+            if let Some(p) = self.spawn_zigzag(x, y, z.wrapping_add(f84 as i16)) {
+                self.arm_projectile(p, owner, tclass, tmodel, tgt, tx, ty, tz, 800, 23);
+            }
+        }
+        // m2's post-hit recoil cooldown (:22356-62 arms it).
+        if model == 2 && self.ent[i].f26 > 0 {
+            self.ent[i].f26 -= 1;
         }
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -680,8 +707,341 @@ impl Gen {
             let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
             if Self::isqrt(sq as u32) >= row.v_28 as u32 {
                 self.ent[i].tick70 = base + 1;
+            } else {
+                match model {
+                    // Dragon: burst arms only inside the 0xE3 facing
+                    // cone (:26179-91).
+                    16 => {
+                        let bearing = Self::angle_between(
+                            self.ent[i].x,
+                            self.ent[i].y,
+                            tx,
+                            ty,
+                        );
+                        if Self::angdist(self.ent[i].f30, bearing) < 0xE3 {
+                            self.ent[i].f26 = 15;
+                        }
+                    }
+                    // Kraken: arm the 5-bolt spit (:23235-42).
+                    6 => self.ent[i].f71 = 5,
+                    _ => self.attack_thunk(i, model, tgt, tx, ty, tz, tclass, tmodel),
+                }
             }
-            // attackFn: combat track.
+        }
+    }
+
+    /// m5's regen tail (sub_1BF60/sub_1C110 :22959-65, :22976-82):
+    /// life += maxlife>>7 per tick while below max.
+    fn m5_regen(&mut self, i: usize) {
+        let e = &mut self.ent[i];
+        if e.act_life < e.max_life as i32 {
+            e.act_life += (e.max_life >> 7) as i32;
+        }
+    }
+
+    /// sub_38820_38BA0 (:44943): the crab GROWS — size = clamp(mana /
+    /// (maxmana/8), 0, 7) picks sprite 185+size (extents follow the
+    /// new sprite's stats); a size-up adds 5000 max life (unrefilled).
+    fn m5_grow(&mut self, i: usize) {
+        let e = &self.ent[i];
+        let step = (e.f136 >> 3).max(1);
+        let size = (e.f140 / step).clamp(0, 7) as i16;
+        if size > e.type86 as i16 - 185 {
+            self.ent[i].max_life += 5000;
+        }
+        self.set_sprite(i, (185 + size) as u16);
+    }
+
+    /// m5 WANDER sub_1BF60 (:22775): move (NO yaw-jitter draws — the
+    /// crab's wander is a custom handler); every v_26: wizard scan →
+    /// CHASE, else steer toward / close on the targeted mana ball
+    /// (within maxSpeed<<7 → EAT state, +26 = 15), else acquire the
+    /// nearest ball and lay an egg when 500 over max mana.
+    fn m5_wander(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.creature_move(i);
+        if self.ent[i].act_life >= 0 {
+            let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
+            if (self.ent[i].f63 as i16) % v26 == 0 {
+                if self.player_in_aggro_range(i, ctx) {
+                    self.ent[i].f146 = PLAYER_TARGET;
+                    self.ent[i].tick70 = base + 2;
+                } else if self.ent[i].f146 != 0 {
+                    let t = self.ent[i].f146 as usize;
+                    let is_ball = t < self.ent.len()
+                        && self.ent[t].class64 == 10
+                        && self.ent[t].model65 == 39
+                        && self.ent[t].flags & 0x400 == 0;
+                    if is_ball {
+                        let e = &self.ent[i];
+                        let (bx, by) = (self.ent[t].x, self.ent[t].y);
+                        let d = Self::isqrt(Self::dist2_sq(e.x, e.y, bx, by) as u32);
+                        if d > (e.f128 as u32) << 7 {
+                            self.ent[i].f34 = Self::angle_between(e.x, e.y, bx, by);
+                        } else {
+                            self.ent[i].f26 = 15;
+                            self.ent[i].tick70 = base + 3; // EAT (state 0x21)
+                        }
+                    } else {
+                        self.ent[i].f146 = 0;
+                    }
+                } else {
+                    // Nearest loose ball, any range (:22928-45).
+                    let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                    let mut best: Option<(usize, i32)> = None;
+                    for j in 1..self.ent.len() {
+                        let c = &self.ent[j];
+                        if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
+                            continue;
+                        }
+                        let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                        if best.is_none_or(|(_, bd)| d2 < bd) {
+                            best = Some((j, d2));
+                        }
+                    }
+                    if let Some((j, _)) = best {
+                        self.ent[i].f146 = j as u16;
+                    }
+
+                    // Egg-laying (:22945-55): 500 over max mana buys a
+                    // class-10 m52 egg (1 own-LCG draw). DEVIATION:
+                    // the egg's hatch handler is unported — it stands
+                    // one tick and despawns (flagged in ROADMAP).
+                    if self.ent[i].f136 + 500 < self.ent[i].f140 {
+                        let (x, y, z) = {
+                            let e = &self.ent[i];
+                            (e.x, e.y, e.z)
+                        };
+                        if let Some(egg) = self.spawn_creator(52, x, y, z) {
+                            let d = self.ent_rand(i);
+                            self.ent[egg].f26 = (10 * (d % 10) + 100) as i16;
+                            self.ent[i].f140 -= 500;
+                        }
+                    }
+                }
+            }
+        }
+        self.m5_regen(i);
+    }
+
+    /// m5 EAT sub_1C170 (:22986): close on the ball at the +26 think
+    /// period (15, dropping to 3 inside 20·maxSpeed); within
+    /// 5·maxSpeed: absorb its mana, destroy it, GROW, back to wander.
+    fn m5_eat(&mut self, i: usize, base: u8) {
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
+        let period = self.ent[i].f26.max(1);
+        if (self.ent[i].f63 as i16) % period != 0 {
+            return;
+        }
+        let t = self.ent[i].f146 as usize;
+        let is_ball = t != 0
+            && t < self.ent.len()
+            && self.ent[t].class64 == 10
+            && self.ent[t].model65 == 39
+            && self.ent[t].flags & 0x400 == 0;
+        if !is_ball {
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = base + 1;
+            return;
+        }
+        let e = &self.ent[i];
+        let (bx, by, bz) = (self.ent[t].x, self.ent[t].y, self.ent[t].z);
+        let dz = bz.wrapping_sub(e.z) as i32;
+        let d2 = Self::dist2_sq(e.x, e.y, bx, by).wrapping_add(dz.wrapping_mul(dz));
+        let dist = Self::isqrt(d2 as u32);
+        let max = self.ent[i].f128 as u32;
+        if dist > 5 * max {
+            if dist <= 20 * max {
+                self.ent[i].f26 = 3;
+            }
+            let e = &self.ent[i];
+            self.ent[i].f34 = Self::angle_between(e.x, e.y, bx, by);
+        } else {
+            self.ent[i].f146 = 0;
+            self.ent[i].f140 += self.ent[t].f140;
+            self.ent[t].f144 = 0;
+            self.ent[t].flags |= 0x400;
+            self.ent[i].tick70 = base + 1;
+            self.m5_grow(i);
+        }
+    }
+
+    /// m4's stationary chase: face the target and fire the dart thunk
+    /// every v_26 while in range; drop back to (stationary) wander
+    /// when the target leaves or dies. Interim stub for the mimic's
+    /// custom family handlers.
+    fn mimic_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        let tgt = self.ent[i].f146;
+        let (tx, ty, tz) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz)
+        } else {
+            let t = tgt as usize;
+            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0
+                || self.ent[t].act_life < 0
+            {
+                self.ent[i].tick70 = base + 1;
+                return;
+            }
+            (self.ent[t].x, self.ent[t].y, self.ent[t].z)
+        };
+        let e = &self.ent[i];
+        if e.f63 & 3 == 0 {
+            let yaw = Self::angle_between(e.x, e.y, tx, ty);
+            self.ent[i].f34 = yaw;
+            self.ent[i].f30 = yaw;
+        }
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        if (e.f63 as i16) % row.v_26 == 0 {
+            let dz = tz.wrapping_sub(e.z) as i32;
+            let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
+            if Self::isqrt(sq as u32) >= row.v_28 as u32 {
+                self.ent[i].tick70 = base + 1;
+            } else {
+                self.attack_thunk(i, 4, tgt, tx, ty, tz, 0, 0);
+            }
+        }
+    }
+
+    /// The per-model attack thunks CHASE fires in range. Constants per
+    /// the banked combat trace (docs/ROADMAP.md); projectile damage
+    /// rides +44, explosions on +68/+69, owner immunity on +24.
+    #[allow(clippy::too_many_arguments)]
+    fn attack_thunk(
+        &mut self,
+        i: usize,
+        model: u8,
+        tgt: u16,
+        tx: u16,
+        ty: u16,
+        tz: i16,
+        tclass: u8,
+        tmodel: u8,
+    ) {
+        let (x, y, z, owner, f44, f84) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f44, e.f84)
+        };
+        let launch_z = z.wrapping_add(f84 as i16);
+        match model {
+            // sub_1A8E0 (:21874): the 500-damage straight fireball.
+            0 | 3 => {
+                if let Some(p) = self.spawn_fireball(x, y, launch_z) {
+                    self.ent[p].row156 = 6; // turn 0: no homing
+                    self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 500, 0);
+                }
+            }
+            // sub_1AB10 (:21962): melee within 1024 units, m2 recoils.
+            1 | 2 => {
+                if model == 2 && self.ent[i].f26 > 0 {
+                    return; // recoil cooldown
+                }
+                let d2 = Self::dist2_sq(x, y, tx, ty);
+                let dz = tz.wrapping_sub(z) as i32;
+                if Self::isqrt(d2.wrapping_add(dz.wrapping_mul(dz)) as u32) < 1024 {
+                    let t = if tgt == PLAYER_TARGET {
+                        MailTarget::Player
+                    } else {
+                        MailTarget::Pool(tgt as usize)
+                    };
+                    self.mail_write(t, 0, f44 as u32, owner);
+                    if model == 2 {
+                        // Recoil + cooldown (:22356-62).
+                        self.ent[i].f126 = -self.ent[i].f130;
+                        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
+                        self.ent[i].f26 = 3 * v26;
+                    }
+                }
+            }
+            // sub_1A990 (:21907): the 250-damage straight bolt.
+            4 | 10 => {
+                if let Some(p) = self.spawn_bolt(x, y, launch_z) {
+                    self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 250, 0);
+                }
+            }
+            // sub_1AB70 (:21976): m5's mana-scaled multishot.
+            5 => {
+                let mana = self.ent[i].f140;
+                let maxmana = self.ent[i].f136.max(1);
+                let v2 = (7 * mana / maxmana).max(0) as u32;
+                let v4 = if v2 != 0 {
+                    (self.ent_rand(i) % (100 * v2)) / 100
+                } else {
+                    0
+                };
+                let n = (v2 as i32).clamp(1, 5);
+                match v4 {
+                    0 => {
+                        for k in 0..n {
+                            if let Some(p) = self.spawn_fireball(x, y, launch_z) {
+                                self.ent[p].row156 = (6 - k).max(0) as u8;
+                                self.arm_projectile(
+                                    p, owner, 3, 0xFF, tgt, tx, ty, tz, 400, 0,
+                                );
+                            }
+                        }
+                    }
+                    1 | 2 => {
+                        for _ in 0..(n - 1).max(0) {
+                            if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
+                                self.arm_projectile(
+                                    p, owner, 3, 0xFF, tgt, tx, ty, tz, 800, 23,
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(p) = self.spawn_trail_bolt(x, y, launch_z) {
+                            self.ent[p].row156 = 3;
+                            self.arm_projectile(
+                                p, owner, 3, 0xFF, tgt, tx, ty, tz, 8000, 17,
+                            );
+                        }
+                    }
+                }
+            }
+            // sub_1AE30 (:22101): m7's 780-damage slow bolt (class-9
+            // m14; interim straight-bolt flight — table truncation).
+            7 => {
+                if let Some(p) = self.spawn_slow_bolt(x, y, launch_z) {
+                    self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 780, 0);
+                }
+            }
+            // sub_1AEE0 (:22134): m8's 4000-damage zigzag, filter
+            // narrowed to the target.
+            8 => {
+                if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
+                    self.arm_projectile(p, owner, tclass, tmodel, tgt, tx, ty, tz, 4000, 23);
+                }
+            }
+            // sub_1AA40 (:21935): m9's bolt — 600 with segments, else
+            // 400. (Aimed at the TARGET; the transcription's
+            // self-aim at :21947-48 is a decompile casualty.)
+            9 => {
+                let dmg = if self.ent[i].f144 != 0 { 600 } else { 400 };
+                if let Some(p) = self.spawn_bolt(x, y, launch_z) {
+                    self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, dmg, 0);
+                }
+            }
+            // sub_1E380 (:24554): m11's 3000-payload wizard-seeker
+            // (explodes into the ch3 mana-steal flash, wizards only).
+            11 => {
+                if let Some(p) = self.spawn_seeker(x, y, launch_z) {
+                    self.ent[p].f26 = 20;
+                    self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 25);
+                }
+            }
+            // m15 (:25846-59): a bare bolt — no +44 override, so the
+            // NewEvent default 100 rides.
+            15 => {
+                if let Some(p) = self.spawn_bolt(x, y, launch_z) {
+                    let dflt = self.ent[p].f44;
+                    self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, dflt, 0);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -692,15 +1052,6 @@ impl Gen {
         let l = self.ent[i].f52 as usize;
         if l == 0 {
             self.ent[i].tick70 = base + 1;
-            return;
-        }
-        if self.ent[i].act_life < 0 {
-            // Member death (:21746): the leader retargets the killer
-            // (slot 0 without combat → back to wander next tick).
-            self.ent[l].f146 = 0;
-            self.ent[l].f52 = 0;
-            self.ent[l].tick70 = base + 2;
-            self.ent[i].tick70 = base + 4;
             return;
         }
         self.creature_move(i);
@@ -774,30 +1125,48 @@ impl Gen {
         self.ent[i].f126 = self.ent[l].f126.wrapping_add(self.ent[l].f130);
     }
 
-    /// DEATH sub_1A6C0 (:21820): body segments become corpses, then
-    /// self. (Kill credit is the combat track.)
+    /// DEATH sub_1A6C0 (:21820): one tick — body segments become
+    /// corpses (any segment's killer propagates to the head), kill
+    /// credit, then self to CORPSE. m13/m14 absorbed by a castle
+    /// (+26 != 0) despawn silently instead (:25451-62, :25625-28).
     fn mob_death(&mut self, i: usize, base: u8) {
+        if matches!(self.ent[i].model65, 13 | 14) && self.ent[i].f26 != 0 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
         let mut s = self.ent[i].f54 as usize;
         while s != 0 {
             self.ent[s].tick70 = base + 5;
+            if self.ent[s].f38 != 0 {
+                self.ent[i].f38 = self.ent[s].f38;
+            }
             s = self.ent[s].f54 as usize;
+        }
+        // Kill credit (:21840-50): the human player, chain heads only,
+        // spell-track models excluded. The reward itself is the ball.
+        if self.ent[i].f38 == PLAYER_TARGET
+            && self.ent[i].id24 == i as u16
+            && !matches!(self.ent[i].model65, 9 | 12 | 13 | 14 | 15)
+        {
+            self.kills += 1;
         }
         self.ent[i].tick70 = base + 5;
     }
 
-    /// CORPSE sub_1A800 (:21855), on every 8th phase tick: despawn.
-    /// DEVIATION (mana track): the original first drops a class-10
-    /// m39 mana ball (1 draw on our stream + 2 on the ball's) and a
-    /// class-10 m1 bones pickup; both unported until mana mechanics.
+    /// CORPSE sub_1A800 (:21855), on every 8th phase tick: drop the
+    /// mana ball (sub_27690) and the death-flame puff, then despawn.
+    /// Every worm segment corpses independently — each drops its own.
     fn mob_corpse(&mut self, i: usize) {
         if self.ent[i].f63 & 7 == 0 {
+            self.corpse_drop(i);
+            self.corpse_puff(i);
             self.ent[i].flags |= 0x400;
         }
     }
 
     /// sub_42510_42850 (:52763): one animation-frame step; true =
     /// already finished (does not wrap).
-    fn anim_advance(&mut self, i: usize) -> bool {
+    pub(crate) fn anim_advance(&mut self, i: usize) -> bool {
         if self.ent[i].frame88 >= self.ent[i].frames89 {
             true
         } else {
@@ -868,10 +1237,6 @@ impl Gen {
         if self.ent[i].f58 != 0 {
             self.ent[i].f26 = 400; // player near: stay surfaced
         }
-        if self.ent[i].act_life < 0 {
-            self.ent[i].tick70 = base + 4;
-            return;
-        }
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return;
@@ -932,6 +1297,15 @@ impl Gen {
     /// the exact bearing (position derived from the leader every
     /// tick); asleep ones collapse onto it every 4th tick.
     fn segment_follow(&mut self, i: usize) {
+        // The segment's own damage intake (:21127-37): apply pending
+        // ch0, latch the attacker — the head's inbox walk inherits it.
+        if self.ent[i].f58 != 0 && self.ent[i].mail[0].1 != 0 {
+            let (amt, src) = self.ent[i].mail[0];
+            self.ent[i].act_life -= amt as i32;
+            self.ent[i].mail[0].1 = 0;
+            self.ent[i].f40 = src;
+            self.ent[i].f38 = src;
+        }
         let l = self.ent[i].f52 as usize;
         if l == 0 || self.ent[l].class64 != 5 {
             self.ent[i].flags |= 0x400; // orphaned (sub_41E80)
@@ -1088,11 +1462,71 @@ impl Gen {
             5 => return self.mob_corpse(i),
             _ => {}
         }
+        // The damage inbox block opening every live state handler
+        // (:21330-81): apply pending damage, dispatch death/aggro.
+        // Families 8/12/13/14 mark the attacker instead of chasing
+        // (:25057-63 — the "under attack" memory, wizard-AI track).
+        match self.inbox(i) {
+            Inbox::Dead => {
+                if role == 3 {
+                    // Pack-member death (:21746): the leader retargets
+                    // the killer and rejoins the hunt.
+                    let l = self.ent[i].f52 as usize;
+                    if l != 0 && self.ent[l].class64 == 5 {
+                        self.ent[l].f146 = self.ent[i].f38;
+                        self.ent[l].f52 = 0;
+                        self.ent[l].tick70 = base + 2;
+                    }
+                }
+                self.ent[i].tick70 = base + 4;
+                return;
+            }
+            Inbox::Hit(src) => {
+                if self.attacker_is_wizard(src) && !matches!(model, 8 | 12 | 13 | 14) {
+                    match role {
+                        0 | 1 => {
+                            self.ent[i].f146 = src;
+                            self.ent[i].tick70 = base + 2;
+                            return;
+                        }
+                        2 => {
+                            // CHASE just retargets and returns (:21636).
+                            self.ent[i].f146 = src;
+                            return;
+                        }
+                        3 => {
+                            // PACK: leader and member both retarget
+                            // (:21742-65).
+                            let l = self.ent[i].f52 as usize;
+                            if l != 0 && self.ent[l].class64 == 5 {
+                                self.ent[l].f146 = src;
+                                self.ent[l].tick70 = base + 2;
+                            }
+                            self.ent[i].f146 = src;
+                            self.ent[i].f52 = 0;
+                            self.ent[i].tick70 = base + 2;
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Inbox::Quiet => {}
+        }
         // Model 6 forces its speed every movement tick (:23116).
         if model == 6 && role >= 1 {
             self.ent[i].f126 = 30;
         }
         match (model, role) {
+            // -- m4, the mimic: a disguise AMBUSHER (custom family,
+            // speed 0 in the original's handlers). Stationary stub in
+            // every state — the generic primitives had them roaming
+            // off canyon rims and hanging in the sky on row 0's
+            // feather-fall (the level-032 "flying archers"). CHASE
+            // stands its ground and shoots (sub_1A990 darts).
+            (4, 0) | (4, 1) | (4, 3) => {}
+            (4, 2) => self.mimic_chase(i, base, ctx),
+
             // -- idles --
             // m5's spawn state falls straight through to wander
             // (:22775); m9 = the materialize sequence; m11-15 idles
@@ -1107,16 +1541,24 @@ impl Gen {
                 self.mob_wander(i, base, ctx, true, true);
                 self.flyer_bob(i);
             }
+            // m5, the crab: mana-hunting wander + EAT in the family's
+            // pack slot (state 0x21) + regen — growth feeds straight
+            // into the mana-scaled multishot.
+            (5, 1) => self.m5_wander(i, base, ctx),
+            (5, 3) => self.m5_eat(i, base),
+            (5, 2) => {
+                self.mob_chase(i, base, ctx);
+                self.m5_regen(i);
+            }
             (9, 1) => self.m9_hidden(i, base),
             (11, 1) => {} // caster-phase: stationary until AI lands
             (15, 1) => self.grid_walk(i, base),
-            // Aggro through the standard wizard scan; m4/m8 scan but
-            // their wizard branch is possession-gated (mana track),
-            // and m5/m12/13/14/16's wanders replace the whole scan
-            // block with custom hunts — jitter-walk only until those
-            // land.
+            // Aggro through the standard wizard scan; m8 scans but
+            // its wizard branch is possession-gated (mana track), and
+            // m12/13/14/16's wanders replace the whole scan block
+            // with custom hunts — jitter-walk only until those land.
             (m, 1) => {
-                let scan = !matches!(m, 5 | 12 | 13 | 14 | 16);
+                let scan = !matches!(m, 12 | 13 | 14 | 16);
                 let aggro = matches!(m, 1 | 2 | 3 | 6 | 7 | 10);
                 self.mob_wander(i, base, ctx, scan, aggro);
             }
@@ -1134,7 +1576,9 @@ impl Gen {
                 }
                 self.mob_chase(i, base, ctx);
             }
-            (11, 2) | (12, 2) => {} // ranged caster / house approach: AI track
+            // m11 fights (break-off + wizard-seeker bolts live in
+            // mob_chase); m12's house approach stays the AI track.
+            (12, 2) => {}
             (_, 2) => self.mob_chase(i, base, ctx),
 
             // -- packs --

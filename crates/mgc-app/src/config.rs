@@ -46,6 +46,10 @@ pub struct Enhancements {
     /// reveals trigger areas — this is a sanctioned deviation, and the
     /// event-system debugging instrument.
     pub map_trigger_areas: bool,
+    /// Red-on-black health bars floating above monsters (toggle at
+    /// runtime with H). The original never shows creature life — the
+    /// combat-system debugging instrument.
+    pub health_bars: bool,
 }
 
 impl Config {

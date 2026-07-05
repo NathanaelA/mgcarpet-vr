@@ -10,7 +10,7 @@
 //! `--no-terrain-features` comparison renders.
 
 use mgc_formats::{Thing, ThingKind};
-use mgc_render::Billboard;
+use mgc_render::{Billboard, HealthBar};
 use mgc_sim::mc1_entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
 use mgc_sim::mc1_sprite_stats::SPRITE_STATS;
 use mgc_sim::world::LivePose;
@@ -141,6 +141,44 @@ pub fn billboards_from_poses(
             draw_type: stats.draw_type,
             frame: p.frame,
             world_h,
+        });
+    }
+    out
+}
+
+/// Monster health bars from the live pose set (unfaithful debug
+/// overlay, `enhancements.health_bars` / H): one classic red-on-black
+/// bar hovering above each class-5 chain head, width tied to the
+/// sprite's world width, life fraction sim-owned.
+pub fn health_bars_from_poses(
+    poses: &[LivePose],
+    sprite_dims: impl Fn(u16) -> Option<(u16, u16)>,
+) -> Vec<HealthBar> {
+    let mut out = Vec::new();
+    for p in poses {
+        let Some(frac) = p.life_frac else {
+            continue;
+        };
+        let Some(stats) = SPRITE_STATS.get(p.type_index as usize) else {
+            continue;
+        };
+        let world_h = if stats.height != 0 {
+            stats.height as f32 / UNITS_PER_TILE
+        } else {
+            let Some((sw, sh)) = sprite_dims(stats.sprite_base) else {
+                continue;
+            };
+            if sw == 0 || stats.width == 0 {
+                continue;
+            }
+            stats.width as f32 * sh as f32 / sw as f32 / UNITS_PER_TILE
+        };
+        out.push(HealthBar {
+            x: p.x,
+            y: p.alt + world_h + 0.15,
+            z: p.z,
+            w: (stats.width as f32 / UNITS_PER_TILE).clamp(0.6, 2.0),
+            frac,
         });
     }
     out

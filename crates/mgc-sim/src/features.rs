@@ -222,8 +222,32 @@ pub(crate) struct Ent {
     pub(crate) next20: u16,
     pub(crate) prev22: u16,
     /// The disposition this event fires / entity link (offset 24, from
-    /// the THING's `swi_id`).
+    /// the THING's `swi_id`). NewEvent defaults it to the OWN slot —
+    /// for projectiles/effects the cast/thunk overwrites it with the
+    /// caster's id, and +24 equality is the engine's only friendly-
+    /// fire rule (owner immunity).
     pub(crate) id24: u16,
+    /// Killer id latch (offset 38) and attacker latch (offset 40) —
+    /// written by the damage inbox block, read by DEATH's kill credit
+    /// and the aggro retarget.
+    pub(crate) f38: u16,
+    pub(crate) f40: u16,
+    /// Vertical velocity (offset 46): mana-ball gravity, fire flicker.
+    pub(crate) f46: i16,
+    /// Explosion class/model a projectile detonates into (offsets
+    /// 68/69). NewEvent defaults +68 = 10 (:43879), +69 = 0 (fire).
+    pub(crate) f68: u8,
+    pub(crate) f69: u8,
+    /// Damage mailboxes (offsets 90..124): six {u32 amount, u16
+    /// source-id} channels. ch0 = physical damage, ch1 = mana-ball
+    /// claim, ch3 = mana steal, ch4 = grip/attract, ch5 = balloon
+    /// recall. Writers accumulate while a source is pending and
+    /// overwrite stale amounts (readers clear the source but NOT the
+    /// amount — :17301-05).
+    pub(crate) mail: [(u32, u16); 6],
+    /// Mana-ball owner (offset 144): the wizard whose collection claim
+    /// (ch1) tagged the ball; corpses pass theirs to the dropped ball.
+    pub(crate) f144: u16,
     /// Generic counter (offset 26): crater ring counter, wall run
     /// length, trigger rearm/debounce countdown.
     pub(crate) f26: i16,
@@ -333,6 +357,18 @@ pub(crate) struct Gen {
     /// str_12): creature spawns record the old value into +63 and
     /// increment; model-7 sprite alternation keys off its parity.
     pub(crate) spawn_count: [u8; 20],
+    /// The human player's damage inbox — the player lives outside the
+    /// pool ([`crate::mobs::PLAYER_TARGET`]), so writers land here.
+    /// The invincible-player dev mode discards it every tick like the
+    /// original's spawn grace (:55367-71), accumulating the totals.
+    pub(crate) player_mail: [(u32, u16); 6],
+    /// Total ch0 damage the (invincible) player has absorbed.
+    pub(crate) player_damage: u64,
+    /// Player stat counters: creatures killed (`Type_160+359`), shots
+    /// resolved (+343), shots that struck the aimed target (+347).
+    pub(crate) kills: u32,
+    pub(crate) shots: u32,
+    pub(crate) hits: u32,
 }
 
 /// Rebuild the original 1-based record table from level things.
@@ -373,6 +409,11 @@ impl Gen {
             rand: seed,
             pseudo,
             spawn_count: [0; 20],
+            player_mail: [(0, 0); 6],
+            player_damage: 0,
+            kills: 0,
+            shots: 0,
+            hits: 0,
         }
     }
 
@@ -421,7 +462,7 @@ impl Gen {
     /// NewEvent_372C0 (:43865). Seeds the per-entity LCG from the
     /// global stream WITHOUT advancing it. Defaults per the original:
     /// life 300, flags 8, +126 = 16, +44 = 100, +24 = own slot,
-    /// +58 = 0xFA, +66 = +67 = 0xFF, +156 = row 0.
+    /// +58 = 0xFA, +66 = +67 = 0xFF, +68 = 10 (:43879), +156 = row 0.
     pub(crate) fn new_event(&mut self) -> Option<usize> {
         let idx = self.free.pop()? as usize;
         let e = &mut self.ent[idx];
@@ -430,6 +471,7 @@ impl Gen {
         e.flags = 8;
         e.f126 = 16;
         e.f44 = 100;
+        e.f68 = 10;
         e.id24 = idx as u16;
         e.f58 = 0xFA;
         e.f66 = 0xFF;
@@ -752,6 +794,12 @@ impl Gen {
     /// every (dx, dy) of rings `lo..=hi` EXCEPT the last entry of ring
     /// `hi`, which the original fetches together with the stop code and
     /// drops — a faithful off-by-one.
+    /// Combat-effect access to the single-cell dig (the fire's scorch,
+    /// sub_40D30(expl, 0, 0, -depth, 1)).
+    pub(crate) fn dig_cell_pub(&mut self, ax: i16, ay: i16, delta: i16, protect: bool) -> bool {
+        self.dig_cell(ax, ay, delta, protect)
+    }
+
     fn ring_cells(&self, lo: i32, hi: i32) -> Vec<(u8, u8)> {
         let mut out = Vec::new();
         if lo < 0 || lo > 31 {
@@ -963,6 +1011,17 @@ impl Gen {
         // 37, 46..49 (null). Everything else allocates one event.
         if matches!(model, 24 | 37 | 46..=49) || model > 61 {
             return None;
+        }
+        // Combat-effect models get their real inits (crate::combat) —
+        // in the original one init table serves load AND runtime; at
+        // load time the fixpoint loop purges them unticked either way.
+        // Model 17 matters in the wild: level 032 authors c10m17
+        // fire-trap records behind dispositions (they erupt as the
+        // 10-tick blast ring when fired).
+        match model {
+            0 | 1 | 5 | 17 | 23 | 25 => return self.spawn_effect(model as u8, x, y, z),
+            39 => return self.spawn_mana_ball(x, y, z),
+            _ => {}
         }
         let i = self.new_event()?;
         let e = &mut self.ent[i];

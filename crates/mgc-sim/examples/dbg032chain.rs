@@ -4,7 +4,7 @@
 //! (pool exhaustion vs kill-triggers misfiring on movement deaths).
 
 use mgc_sim::features::{FeatureAssets, Planes};
-use mgc_sim::world::{PlayerPose, World};
+use mgc_sim::world::{PlayerCommand, PlayerPose, World};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -74,7 +74,7 @@ fn main() {
         let before = stat(&w);
         for _ in 0..24 {
             let alt = w.ground_height_tiles(x, z) + 0.5;
-            w.tick(PlayerPose::from_tiles(x, alt, z, 0.0));
+            w.tick(PlayerPose::from_tiles(x, alt, z, 0.0, 0.0, 0.0), PlayerCommand::default());
             w.take_teleport();
         }
         let after = stat(&w);

@@ -20,7 +20,7 @@ use mgc_formats::{Game, LevelPackage, mgcl};
 use mgc_render::{Billboard, CameraView, LevelView, Renderer};
 use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT};
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
@@ -287,19 +287,28 @@ struct App {
     smooth_shading: bool,
     /// Map trigger-volume overlay (enhancement/debug; V toggles).
     map_triggers: bool,
+    /// Monster health bars (enhancement/debug; H toggles).
+    health_bars: bool,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Simulation,
     prev_flyer: Flyer,
     keys: HeldKeys,
     mouse: MouseAccum,
+    /// Left button held while grabbed: the dev repeat-fireball.
+    fire_held: bool,
     grabbed: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
 }
 
 impl App {
-    fn new(mut level: LoadedLevel, smooth_shading: bool, map_triggers: bool) -> Self {
+    fn new(
+        mut level: LoadedLevel,
+        smooth_shading: bool,
+        map_triggers: bool,
+        health_bars: bool,
+    ) -> Self {
         let mut sim = match level.world.take() {
             Some(w) => Simulation::with_world(w),
             None => Simulation::with_terrain(level.height.clone()),
@@ -312,12 +321,14 @@ impl App {
             level,
             smooth_shading,
             map_triggers,
+            health_bars,
             window: None,
             renderer: None,
             sim,
             prev_flyer,
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
+            fire_held: false,
             grabbed: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
@@ -335,6 +346,7 @@ impl App {
             lift: axis(k.down, k.up),
             yaw_delta: axis(k.turn_left, k.turn_right) * key_turn + self.mouse.yaw,
             pitch_delta: axis(k.pitch_down, k.pitch_up) * key_turn + self.mouse.pitch,
+            fire: self.fire_held && self.grabbed,
         };
         self.mouse = MouseAccum::default();
         input
@@ -365,14 +377,19 @@ impl App {
                 angle,
             });
         }
+        let mut bars = Vec::new();
         if entities {
             let poses = w.live_poses();
             let index = self.level.sprites.as_ref().map(|(i, _)| i);
-            self.level.billboards = entities::billboards_from_poses(&poses, |id| {
+            let dims = |id: u16| {
                 index
                     .and_then(|i| i.sprites.get(id as usize))
                     .map(|s| (s.width, s.height))
-            });
+            };
+            self.level.billboards = entities::billboards_from_poses(&poses, dims);
+            if self.health_bars {
+                bars = entities::health_bars_from_poses(&poses, dims);
+            }
             self.level.map_dots = entities::map_dots_from_poses(&poses, &self.level.palette_rgba);
             self.level.map_areas = map_areas(w);
         }
@@ -381,6 +398,7 @@ impl App {
         if let Some(r) = &mut self.renderer {
             if entities {
                 r.set_billboards(self.level.billboards.clone());
+                r.set_health_bars(bars);
             }
             let areas = if self.map_triggers { &self.level.map_areas[..] } else { &[] };
             if terrain || self.sim.tick % 8 == 0 {
@@ -451,15 +469,20 @@ impl ApplicationHandler for App {
                     r.resize(size.width, size.height);
                 }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                ..
-            } => {
-                if !self.grabbed {
+            WindowEvent::MouseInput { state, button, .. } => {
+                let down = state == ElementState::Pressed;
+                if down && !self.grabbed {
                     self.set_grab(true);
+                    return; // the grab click doesn't fire
+                }
+                if button == MouseButton::Left {
+                    self.fire_held = down;
                 }
             }
-            WindowEvent::Focused(false) => self.set_grab(false),
+            WindowEvent::Focused(false) => {
+                self.set_grab(false);
+                self.fire_held = false;
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 if down && event.logical_key == Key::Named(NamedKey::Escape) {
@@ -506,6 +529,25 @@ impl ApplicationHandler for App {
                         "map trigger overlay: {}",
                         if self.map_triggers {
                             "on (enhanced)"
+                        } else {
+                            "off (original)"
+                        }
+                    );
+                    return;
+                }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyH) {
+                    self.health_bars = !self.health_bars;
+                    if !self.health_bars {
+                        if let Some(r) = &mut self.renderer {
+                            r.set_health_bars(Vec::new());
+                        }
+                    }
+                    // On: bars appear with the next entity sync (every
+                    // tick while creatures move).
+                    println!(
+                        "monster health bars: {}",
+                        if self.health_bars {
+                            "on (debug enhancement)"
                         } else {
                             "off (original)"
                         }
@@ -607,6 +649,8 @@ struct Args {
     smooth_shading: Option<bool>,
     /// CLI override of `enhancements.map_trigger_areas`.
     map_triggers: Option<bool>,
+    /// CLI override of `enhancements.health_bars`.
+    health_bars: Option<bool>,
     /// Write the overhead map as a PNG and exit (one pixel per tile,
     /// scaled by `map_scale`).
     map: Option<PathBuf>,
@@ -628,6 +672,7 @@ fn parse_args() -> Result<Args, String> {
     let mut config = None;
     let mut smooth_shading = None;
     let mut map_triggers = None;
+    let mut health_bars = None;
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
@@ -672,6 +717,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-smooth-shading" => smooth_shading = Some(false),
             "--map-triggers" => map_triggers = Some(true),
             "--no-map-triggers" => map_triggers = Some(false),
+            "--health-bars" => health_bars = Some(true),
+            "--no-health-bars" => health_bars = Some(false),
             "--map" => {
                 map = Some(PathBuf::from(it.next().ok_or("--map needs a path")?));
             }
@@ -718,6 +765,7 @@ fn parse_args() -> Result<Args, String> {
         config,
         smooth_shading,
         map_triggers,
+        health_bars,
         map,
         map_scale,
         map_view,
@@ -830,6 +878,7 @@ fn main() -> std::process::ExitCode {
     let map_triggers = args
         .map_triggers
         .unwrap_or(cfg.enhancements.map_trigger_areas);
+    let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
 
     let level = match load_level(&args.level, args.tileset, args.terrain_features) {
         Ok(l) => l,
@@ -869,7 +918,9 @@ fn main() -> std::process::ExitCode {
 
     println!("mgcarpet {} — {}", env!("CARGO_PKG_VERSION"), level.label);
     println!("controls: WASD fly, mouse look (click to grab, Esc to release),");
+    println!("          hold left button: fireball (dev: infinite, you are invincible),");
     println!("          Space/Shift up/down, arrows turn, T toggles smooth shading,");
+    println!("          H toggles monster health bars (debug),");
     println!("          Enter opens the map (book screen), Esc twice quits");
 
     let event_loop = match EventLoop::new() {
@@ -879,7 +930,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level, smooth_shading, map_triggers);
+    let mut app = App::new(level, smooth_shading, map_triggers, health_bars);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

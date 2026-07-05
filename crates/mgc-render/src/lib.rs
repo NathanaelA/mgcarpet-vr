@@ -221,6 +221,28 @@ const VIEW_FOLD_5: [u8; 16] = [0, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 2, 2, 1, 1, 0];
 /// 16 view sectors folded to 3 sprites (draw type 20, `byte_906F8`).
 const VIEW_FOLD_3: [u8; 16] = [0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 0, 0];
 
+/// One monster health bar (unfaithful debug overlay): the classic
+/// red-on-black rectangle floating above the sprite.
+#[derive(Debug, Clone, Copy)]
+pub struct HealthBar {
+    /// Bar bottom-center, world units (x/z tile coords, y altitude).
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// Bar width in world units.
+    pub w: f32,
+    /// Remaining life fraction 0..=1.
+    pub frac: f32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct BarInstance {
+    pos: [f32; 3],
+    size: [f32; 2],
+    frac: f32,
+}
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct BillboardInstance {
@@ -307,6 +329,12 @@ pub struct Renderer {
     sprite_tex: Option<wgpu::Texture>,
     colormap_tex: Option<wgpu::Texture>,
     billboards: Vec<Billboard>,
+    // Health-bar overlay pass (unfaithful debug enhancement).
+    bar_pipeline: wgpu::RenderPipeline,
+    bar_bind_group: wgpu::BindGroup,
+    bar_buf: Option<wgpu::Buffer>,
+    bar_capacity: usize,
+    health_bars: Vec<HealthBar>,
     /// Terrain plane textures [type, shade, angle, height] kept for
     /// runtime updates (craters, quakes — `update_terrain`).
     plane_texs: Option<[wgpu::Texture; 4]>,
@@ -768,6 +796,82 @@ impl Renderer {
             cache: None,
         });
 
+        // Health-bar overlay: solid-color instanced quads on the same
+        // camera basis; own single-binding layout so bars draw even
+        // before any sprite atlas is loaded.
+        let bar_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bar"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("bar.wgsl").into()),
+        });
+        let bar_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("bar"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let bar_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bar"),
+            layout: &bar_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buf.as_entire_binding(),
+            }],
+        });
+        let bar_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("bar"),
+            bind_group_layouts: &[&bar_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let bar_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bar"),
+            layout: Some(&bar_layout),
+            vertex: wgpu::VertexState {
+                module: &bar_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<BarInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3, 1 => Float32x2, 2 => Float32,
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &bar_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let depth = create_depth(&device, width, height);
 
         Self {
@@ -803,6 +907,11 @@ impl Renderer {
             sprite_tex: None,
             colormap_tex: None,
             billboards: Vec::new(),
+            bar_pipeline,
+            bar_bind_group,
+            bar_buf: None,
+            bar_capacity: 0,
+            health_bars: Vec::new(),
         }
     }
 
@@ -1245,6 +1354,11 @@ impl Renderer {
         self.billboards = billboards;
     }
 
+    /// Replace the monster health-bar overlay set (empty = off).
+    pub fn set_health_bars(&mut self, bars: Vec<HealthBar>) {
+        self.health_bars = bars;
+    }
+
     fn rebuild_billboard_bind_group(&mut self) {
         let (Some(sprites), Some(colormap)) = (&self.sprite_tex, &self.colormap_tex) else {
             return;
@@ -1435,6 +1549,44 @@ impl Renderer {
                 .write_buffer(self.billboard_buf.as_ref().unwrap(), 0, bytes);
         }
 
+        // Health-bar instances (wrap-nearest like billboards).
+        let full = MAP_TILES as f32;
+        let wrapn = |p: f32, c: f32| {
+            let mut d = p - c;
+            if d > full / 2.0 {
+                d -= full;
+            }
+            if d < -full / 2.0 {
+                d += full;
+            }
+            c + d
+        };
+        let bar_instances: Vec<BarInstance> = self
+            .health_bars
+            .iter()
+            .map(|b| BarInstance {
+                pos: [wrapn(b.x, cam.x), b.y, wrapn(b.z, cam.z)],
+                size: [b.w, 0.09],
+                frac: b.frac.clamp(0.0, 1.0),
+            })
+            .collect();
+        let bar_count = bar_instances.len() as u32;
+        if !bar_instances.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(&bar_instances);
+            let need = bytes.len();
+            if self.bar_buf.is_none() || self.bar_capacity < need {
+                self.bar_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bar instances"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.bar_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.bar_buf.as_ref().unwrap(), 0, bytes);
+        }
+
         let frame = match &self.target {
             Target::Window { surface, .. } => Some(surface.get_current_texture()?),
             Target::Offscreen { .. } => None,
@@ -1526,6 +1678,12 @@ impl Renderer {
                     pass.set_bind_group(0, bg, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..instance_count);
+                }
+                if let (1.., Some(buf)) = (bar_count, &self.bar_buf) {
+                    pass.set_pipeline(&self.bar_pipeline);
+                    pass.set_bind_group(0, &self.bar_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..bar_count);
                 }
             };
             if self.map_view {

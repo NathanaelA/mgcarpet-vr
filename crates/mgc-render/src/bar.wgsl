@@ -1,0 +1,58 @@
+// Health-bar overlay (unfaithful debug enhancement): screen-aligned
+// solid-color quads above monsters — the classic red-fill-on-black
+// rectangle showing remaining life. No texture, no fog: a debug
+// instrument should stay readable at any distance.
+
+struct Globals {
+    view_proj: mat4x4<f32>,
+    camera: vec4<f32>,
+    fog_color: vec4<f32>,
+    atlas: vec4<u32>,
+    cam_right: vec4<f32>,
+    cam_up: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> globals: Globals;
+
+struct Instance {
+    // Bar bottom-center world position (wrap-adjusted near the camera).
+    @location(0) pos: vec3<f32>,
+    // World-space bar size (width, height).
+    @location(1) size: vec2<f32>,
+    // Remaining life fraction 0..=1.
+    @location(2) frac: f32,
+};
+
+struct VsOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) fx: vec2<f32>,
+    @location(1) @interpolate(flat) frac: f32,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-0.5, 0.0), vec2<f32>(0.5, 0.0), vec2<f32>(0.5, 1.0),
+        vec2<f32>(-0.5, 0.0), vec2<f32>(0.5, 1.0), vec2<f32>(-0.5, 1.0),
+    );
+    let c = corners[vid];
+    let world = inst.pos
+        + globals.cam_right.xyz * (c.x * inst.size.x)
+        + globals.cam_up.xyz * (c.y * inst.size.y);
+    var out: VsOut;
+    out.clip = globals.view_proj * vec4<f32>(world, 1.0);
+    out.fx = vec2<f32>(c.x + 0.5, c.y);
+    out.frac = inst.frac;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    // A thin black border all around; red fill from the left up to
+    // the life fraction, black beyond it.
+    let border = in.fx.x < 0.03 || in.fx.x > 0.97 || in.fx.y < 0.12 || in.fx.y > 0.88;
+    if !border && in.fx.x < in.frac {
+        return vec4<f32>(0.75, 0.05, 0.05, 1.0);
+    }
+    return vec4<f32>(0.02, 0.02, 0.02, 1.0);
+}

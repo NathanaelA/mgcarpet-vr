@@ -1,0 +1,1218 @@
+//! MC1 combat: damage mailboxes, class-9 projectiles, class-10
+//! combat effects (fire/explosion, fire-spreader, splash, blast ring,
+//! hit-flash, mana-steal flash, mana ball) and the corpse pipeline —
+//! direct ports of remc1. All citations sub_main.cpp; the full banked
+//! specs live in docs/ROADMAP.md ("Combat, damage, death & corpses"
+//! and "Fireball / repeat fireball").
+//!
+//! Fidelity notes (deliberate deviations, all flagged in ROADMAP):
+//! - `sub_12B50`'s inverted accumulate/overwrite is NOT ported — the
+//!   direct write uses the area writers' protocol (:17301-05), the
+//!   transcription swap being a maintainer-suspect like :21814.
+//! - The m9 ranged thunk aims at the TARGET; the transcription's
+//!   atan2(0,0) self-aim (:21947-48) is a decompile casualty.
+//! - Aim assist scores candidates by angular miss (Δyaw² + Δpitch²)
+//!   with a distance tiebreak; the original's `sub_54A90` squared-
+//!   miss-distance metric awaits an exact port.
+//! - The m9 zigzag bolt flies straight and drops ONE visual segment
+//!   per tick (2 jitter draws); the original walks a multi-segment
+//!   random path per tick (sub_535E0 :63272).
+//! - Class-9 model 14 (m7's bolt) has NO handler in remc1's truncated
+//!   state table — interim: m13-style straight bolt at its slow
+//!   init speed until the retail table is extracted.
+//! - Mana-shield reflection (+17 bit 7) is ported but nothing sets
+//!   the flag yet (wizard shields are the spell track).
+
+use crate::features::{Gen, POOL, lcg32, tile};
+use crate::mc1_behavior::BEHAVIOR;
+use crate::mc1_sprite_stats::SPRITE_STATS;
+use crate::mobs::{MobCtx, PLAYER_TARGET};
+
+/// The player carpet's half-extents (sprite 44 stats halves — the
+/// same constants the trigger/portal overlap uses).
+pub(crate) const PLAYER_HW: i32 = (SPRITE_STATS[44].width / 2) as i32;
+pub(crate) const PLAYER_HH: i32 = (SPRITE_STATS[44].height / 2) as i32;
+
+/// A mailbox recipient: a pool event or the out-of-pool player.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MailTarget {
+    Pool(usize),
+    Player,
+}
+
+/// The inbox verdict a state handler dispatches on (hitflag 0/1/2).
+pub(crate) enum Inbox {
+    Quiet,
+    Hit(u16),
+    Dead,
+}
+
+impl Gen {
+    // ---- mailbox writes ---------------------------------------------------
+
+    /// The shared write protocol (:17301-05): accumulate while a
+    /// source is pending, overwrite a stale amount (readers clear the
+    /// source but never the amount).
+    pub(crate) fn mail_write(&mut self, tgt: MailTarget, ch: usize, amt: u32, src: u16) {
+        let m = match tgt {
+            MailTarget::Pool(i) => &mut self.ent[i].mail[ch],
+            MailTarget::Player => &mut self.player_mail[ch],
+        };
+        if m.1 != 0 {
+            m.0 = m.0.wrapping_add(amt);
+        } else {
+            m.0 = amt;
+        }
+        m.1 = src;
+    }
+
+    /// sub_118C0 (:16963) between two pool events: extents SUM per
+    /// axis, z centered by each half-height (+78).
+    fn ent_overlap(&self, a: usize, b: usize) -> bool {
+        let (ea, eb) = (&self.ent[a], &self.ent[b]);
+        let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+        wd(ea.x, eb.x) < ea.f80 as i32 + eb.f80 as i32
+            && wd(ea.y, eb.y) < ea.f82 as i32 + eb.f82 as i32
+            && ((ea.z as i32 + ea.f78 as i32) - (eb.z as i32 + eb.f78 as i32)).abs()
+                < ea.f84 as i32 + eb.f84 as i32
+    }
+
+    /// sub_118C0 against the player carpet.
+    pub(crate) fn player_overlap(&self, i: usize, ctx: &MobCtx) -> bool {
+        let e = &self.ent[i];
+        let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+        wd(e.x, ctx.px) < e.f80 as i32 + PLAYER_HW
+            && wd(e.y, ctx.py) < e.f82 as i32 + PLAYER_HW
+            && ((e.z as i32 + e.f78 as i32) - (ctx.pz as i32 + PLAYER_HH)).abs()
+                < e.f84 as i32 + PLAYER_HH
+    }
+
+    /// The writer's +66/+67 target filter (-1/-1 = wildcard).
+    fn filter_admits(f66: u8, f67: u8, class: u8, model: u8) -> bool {
+        (f66 == 0xFF || f66 == class) && (f67 == 0xFF || f67 == model)
+    }
+
+    /// sub_120B0 (:17235) / sub_124F0 (:17399): the channel-N area
+    /// write around event `i`. Gates per candidate: owner immunity
+    /// (+24 equality — the engine's only friendly-fire rule), the
+    /// damageable flag (+16&8), the vulnerability mask (+28 bit ch),
+    /// the writer's +66/+67 filter, AABB overlap; ch0 skips class-3
+    /// model 2 (:17372). `building_tenth` = the 124F0 variant where
+    /// class-2 model-0 buildings take amt/10 (:17465).
+    pub(crate) fn area_write(
+        &mut self,
+        i: usize,
+        ch: usize,
+        amt: u32,
+        ctx: &MobCtx,
+        building_tenth: bool,
+    ) {
+        let (wx, wy, id, f66, f67) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24, e.f66, e.f67)
+        };
+        let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
+        let mut victims: Vec<(usize, u32)> = Vec::new();
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let tx = ((wx >> 8) as i32 + dx) as u8;
+                let ty = ((wy >> 8) as i32 + dy) as u8;
+                let mut j = self.map_entity[tile(tx, ty)] as usize;
+                while j != 0 {
+                    let c = &self.ent[j];
+                    let next = c.next20 as usize;
+                    if c.id24 != id
+                        && c.flags & 8 != 0
+                        && c.f28 & (1 << ch) != 0
+                        && Self::filter_admits(f66, f67, c.class64, c.model65)
+                        && !(ch == 0 && c.class64 == 3 && c.model65 == 2)
+                        && self.ent_overlap(i, j)
+                    {
+                        let a = if building_tenth && c.class64 == 2 && c.model65 == 0 {
+                            amt / 10
+                        } else {
+                            amt
+                        };
+                        victims.push((j, a));
+                    }
+                    j = next;
+                }
+            }
+        }
+        for (j, a) in victims {
+            self.mail_write(MailTarget::Pool(j), ch, a, id);
+        }
+        // The player probe (the human wizard is outside the pool; the
+        // original reaches it through the same grid).
+        if id != PLAYER_TARGET
+            && Self::filter_admits(f66, f67, 3, 0)
+            && self.player_overlap(i, ctx)
+        {
+            self.mail_write(MailTarget::Player, ch, amt, id);
+        }
+    }
+
+    // ---- the creature inbox (the block opening every state handler) -------
+
+    /// :21330-67: apply pending ch0 damage (awake only), inherit the
+    /// weakest body segment's life, latch attacker (+40) and killer
+    /// (+38), and report the hitflag.
+    pub(crate) fn inbox(&mut self, i: usize) -> Inbox {
+        let mut hit = 0u8;
+        if self.ent[i].f58 != 0 {
+            if self.ent[i].mail[0].1 != 0 {
+                let (amt, src) = self.ent[i].mail[0];
+                self.ent[i].act_life -= amt as i32;
+                self.ent[i].mail[0].1 = 0; // amount stays stale (:21337)
+                self.ent[i].f40 = src;
+                hit = 1;
+            } else {
+                self.ent[i].f40 = 0;
+            }
+            let mut s = self.ent[i].f54 as usize;
+            while s != 0 {
+                if self.ent[s].act_life < self.ent[i].act_life {
+                    self.ent[i].act_life = self.ent[s].act_life;
+                    self.ent[i].f40 = self.ent[s].f40;
+                    hit = 1;
+                    break;
+                }
+                s = self.ent[s].f54 as usize;
+            }
+        }
+        if self.ent[i].act_life < 0 {
+            hit = 2;
+        }
+        self.ent[i].f38 = self.ent[i].f40;
+        match hit {
+            1 => Inbox::Hit(self.ent[i].f40),
+            2 => Inbox::Dead,
+            _ => Inbox::Quiet,
+        }
+    }
+
+    /// Aggro test on a mailbox source: only class-3 (wizard-family)
+    /// attackers provoke a chase (:21370-76).
+    pub(crate) fn attacker_is_wizard(&self, src: u16) -> bool {
+        if src == PLAYER_TARGET {
+            return true;
+        }
+        let s = src as usize;
+        s != 0 && s < POOL && self.ent[s].class64 == 3
+    }
+
+    // ---- class-9 projectiles ----------------------------------------------
+
+    /// The shared class-9 init shape (str_255870 :4463): 8.8 position,
+    /// not hittable (+16 &= ~8), refilled life, sprite-derived extents.
+    /// `speed`/`life`/`row`/`sprite` per the model column; state = the
+    /// model's flight state.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_projectile(
+        &mut self,
+        model: u8,
+        state: u8,
+        x: u16,
+        y: u16,
+        z: i16,
+        speed: i16,
+        life: u32,
+        row: u8,
+        sprite: u16,
+    ) -> Option<usize> {
+        let p = self.new_event()?;
+        {
+            let e = &mut self.ent[p];
+            e.class64 = 9;
+            e.model65 = model;
+            e.tick70 = state;
+            e.f126 = speed;
+            e.f128 = speed;
+            e.max_life = life;
+            e.f140 = 50;
+            e.row156 = row;
+            e.flags &= !8;
+        }
+        self.link(p, x, y, z);
+        self.refill_life(p);
+        self.set_sprite(p, sprite);
+        Some(p)
+    }
+
+    /// sub_39A10 (:45861): the fireball. Base speed 384, life 21
+    /// ticks, homing row [5] (thunks override), sprite 42.
+    pub(crate) fn spawn_fireball(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(0, 0, x, y, z, 384, 21, 5, 42)
+    }
+
+    /// sub_39BC0 (:45954): the m3 trail bolt (meteor). Row [1].
+    pub(crate) fn spawn_trail_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(3, 3, x, y, z, 384, 21, 1, 76)
+    }
+
+    /// sub_39E40 (:46104): the m8 wizard-seeker. Row [4] (yaw 0x100).
+    pub(crate) fn spawn_seeker(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(8, 8, x, y, z, 384, 21, 4, 214)
+    }
+
+    /// sub_39EC0 (:46135): the m9 zigzag lightning. Life 9.
+    pub(crate) fn spawn_zigzag(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(9, 9, x, y, z, 384, 9, 4, 216)
+    }
+
+    /// sub_3A0C0 (:46256): the m13 straight bolt. Life 13, default
+    /// row/damage (NewEvent's +44 = 100 unless the thunk overrides).
+    pub(crate) fn spawn_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(13, 13, x, y, z, 384, 13, 0, 195)
+    }
+
+    /// sub_3A1A0 (:46281): m7's slow bolt — state 15 is PAST remc1's
+    /// transcribed table; interim straight-bolt flight (see header).
+    pub(crate) fn spawn_slow_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(14, 15, x, y, z, 128, 32, 0, 196)
+    }
+
+    /// Vertical bearing (sub_42180 :52644): the pitch whose polar step
+    /// descends from `fz` toward `tz` over horizontal distance `dh`.
+    pub(crate) fn pitch_toward(fz: i16, tz: i16, dh: i32) -> u16 {
+        Self::angle_of(
+            fz.wrapping_sub(tz),
+            (-(dh.clamp(0, 0x7FFF))) as i16,
+        )
+    }
+
+    /// Aim a fresh projectile from an attacker at a target point
+    /// (sub_42150/42180 pair) and stamp the combat fields the thunks
+    /// share: owner, filter, homing target, damage, explosion.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn arm_projectile(
+        &mut self,
+        p: usize,
+        owner: u16,
+        f66: u8,
+        f67: u8,
+        target: u16,
+        tx: u16,
+        ty: u16,
+        tz: i16,
+        f44: u16,
+        expl_model: u8,
+    ) {
+        let (px, py, pz) = (self.ent[p].x, self.ent[p].y, self.ent[p].z);
+        let yaw = Self::angle_between(px, py, tx, ty);
+        let dh = Self::isqrt(Self::dist2_sq(px, py, tx, ty) as u32) as i32;
+        let pitch = Self::pitch_toward(pz, tz, dh);
+        let e = &mut self.ent[p];
+        e.id24 = owner;
+        e.f66 = f66;
+        e.f67 = f67;
+        e.f146 = target;
+        e.f30 = yaw;
+        e.f34 = yaw;
+        e.f32 = pitch;
+        e.f36 = pitch;
+        e.f44 = f44;
+        e.f68 = 10;
+        e.f69 = expl_model;
+    }
+
+    /// One-time target acquisition sub_54520 (:63943): nearest awake
+    /// creature (any range) or wizard within the caster row's v_28,
+    /// inside a ±0x71 yaw AND pitch cone, 3D distance ≤ 5120.
+    fn aim_assist(&mut self, i: usize, ctx: &MobCtx) {
+        let (px, py, pz, yaw, pitch, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f30, e.f32, e.id24)
+        };
+        let mut best: Option<(u16, u32, u16, u16)> = None; // (slot, score, yaw, pitch)
+        let consider = |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
+            let d2 = Self::dist2_sq(px, py, tx, ty);
+            let dz = tz.wrapping_sub(pz) as i32;
+            let d3 = d2.wrapping_add(dz.wrapping_mul(dz));
+            if d3 > 5120 * 5120 {
+                return;
+            }
+            let ty_yaw = Self::angle_between(px, py, tx, ty);
+            let dh = Self::isqrt(d2 as u32) as i32;
+            let ty_pitch = Self::pitch_toward(pz, tz, dh);
+            let dy = Self::angdist(yaw, ty_yaw) as u32;
+            let dp = Self::angdist(pitch, ty_pitch) as u32;
+            if dy > 0x71 || dp > 0x71 {
+                return;
+            }
+            let score = dy * dy + dp * dp;
+            if best.is_none()
+                || best.is_some_and(|(_, bs, _, _)| score < bs || (score == bs && false))
+            {
+                *best = Some((slot, score, ty_yaw, ty_pitch));
+            }
+        };
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 5 || c.tick70 == 120 || c.act_life < 0 || c.f58 == 0 {
+                continue;
+            }
+            if c.id24 == own {
+                continue;
+            }
+            let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+            consider(tx, ty, tz, j as u16, &mut best);
+        }
+        if own != PLAYER_TARGET {
+            consider(
+                ctx.px,
+                ctx.py,
+                ctx.pz.wrapping_add(PLAYER_HH as i16),
+                PLAYER_TARGET,
+                &mut best,
+            );
+        }
+        if let Some((slot, _, ty_yaw, ty_pitch)) = best {
+            self.ent[i].f146 = slot;
+            self.ent[i].f34 = ty_yaw;
+            self.ent[i].f36 = ty_pitch;
+        }
+    }
+
+    /// sub_52550 (:62534): per-tick homing — recompute bearing to the
+    /// target (z-centered) and turn yaw/pitch capped at the row's
+    /// v_2/v_6.
+    fn home(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let tgt = self.ent[i].f146;
+        let (tx, ty, tz) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz.wrapping_add(PLAYER_HH as i16))
+        } else {
+            let t = tgt as usize;
+            if t == 0 || t >= POOL || self.ent[t].class64 == 0 || self.ent[t].act_life < 0 {
+                self.ent[i].f146 = 0;
+                return false;
+            }
+            let c = &self.ent[t];
+            (c.x, c.y, c.z.wrapping_add(c.f78 as i16))
+        };
+        let e = &self.ent[i];
+        let yaw = Self::angle_between(e.x, e.y, tx, ty);
+        let dh = Self::isqrt(Self::dist2_sq(e.x, e.y, tx, ty) as u32) as i32;
+        let pitch = Self::pitch_toward(e.z, tz, dh);
+        let row = &BEHAVIOR[e.row156 as usize];
+        let (v2, v6) = (row.v_2, row.v_6);
+        self.ent[i].f34 = yaw;
+        self.ent[i].f36 = pitch;
+        let ty_ = Self::turn_step(self.ent[i].f30, yaw, v2);
+        self.ent[i].f30 = (self.ent[i].f30 as i32 + ty_ as i32) as u16 & 0x7FF;
+        let tp = Self::turn_step(self.ent[i].f32, pitch, v6);
+        self.ent[i].f32 = (self.ent[i].f32 as i32 + tp as i32) as u16 & 0x7FF;
+        true
+    }
+
+    /// sub_11980 (:16988) from a projectile: first overlapped victim
+    /// in the surrounding cells passing the filter/owner/damageable
+    /// gates. Also probes the out-of-pool player.
+    fn victim_scan(&self, i: usize, ctx: &MobCtx) -> Option<MailTarget> {
+        let (wx, wy, id, f66, f67) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24, e.f66, e.f67)
+        };
+        let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let tx = ((wx >> 8) as i32 + dx) as u8;
+                let ty = ((wy >> 8) as i32 + dy) as u8;
+                let mut j = self.map_entity[tile(tx, ty)] as usize;
+                while j != 0 {
+                    let c = &self.ent[j];
+                    if c.id24 != id
+                        && c.flags & 8 != 0
+                        && Self::filter_admits(f66, f67, c.class64, c.model65)
+                        && self.ent_overlap(i, j)
+                    {
+                        return Some(MailTarget::Pool(j));
+                    }
+                    j = c.next20 as usize;
+                }
+            }
+        }
+        if id != PLAYER_TARGET
+            && Self::filter_admits(f66, f67, 3, 0)
+            && self.player_overlap(i, ctx)
+        {
+            return Some(MailTarget::Player);
+        }
+        None
+    }
+
+    /// The explode tail shared by the flight handlers: accuracy stats
+    /// (sub_526C0 :62585), spawn the +68/+69 effect, despawn. The
+    /// generic sub_52770 path (:62759-72) also copies +44 and the
+    /// victim; sub_52B30 (fireball) does NOT (:62928-30) — the fire's
+    /// own 400 is the fireball's real damage.
+    fn proj_explode(&mut self, i: usize, ctx: &MobCtx, struck: Option<MailTarget>, copy_f44: bool) {
+        let (x, y, z, owner, yaw, pitch, f44, f69) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f30, e.f32, e.f44, e.f69)
+        };
+        if owner == PLAYER_TARGET {
+            self.shots += 1;
+            let aimed = self.ent[i].f146;
+            if struck.is_some_and(|s| match s {
+                MailTarget::Pool(j) => aimed == self.ent[j].id24 || aimed == j as u16,
+                MailTarget::Player => false,
+            }) {
+                self.hits += 1;
+            }
+        }
+        if let Some(fx) = self.spawn_effect(f69, x, y, z) {
+            let e = &mut self.ent[fx];
+            e.id24 = owner;
+            e.f30 = yaw;
+            e.f32 = pitch;
+            if copy_f44 {
+                e.f44 = f44;
+            }
+        }
+        let _ = ctx;
+        self.ent[i].flags |= 0x400;
+    }
+
+    /// Class-9 flight dispatch by state (str_25573C :4838).
+    pub(crate) fn proj_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        match self.ent[i].tick70 {
+            0 => self.proj_m0_tick(i, ctx),
+            3 => self.proj_generic_tick(i, ctx, true),
+            8 => self.proj_m8_tick(i, ctx),
+            9 => self.proj_m9_tick(i, ctx),
+            13 | 15 => self.proj_bolt_tick(i, ctx),
+            // Zigzag visual segment (state 14): brief sprite, no logic.
+            14 => {
+                self.ent[i].act_life -= 1;
+                if self.ent[i].act_life < 0 {
+                    self.ent[i].flags |= 0x400;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// sub_52B30 (:62779): the fireball. Returns terrain_dirty.
+    fn proj_m0_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        // Steering: one-time aim assist while untargeted (+16 bit 1),
+        // then a ≤34/tick yaw ease; homing once a target exists.
+        if self.ent[i].f146 == 0 {
+            if self.ent[i].flags & 2 == 0 {
+                self.ent[i].flags |= 2;
+                self.aim_assist(i, ctx);
+            }
+            if self.ent[i].f146 == 0 {
+                self.ent[i].f34 = self.ent[i].f30;
+                self.ent[i].f36 = self.ent[i].f32;
+            }
+            let t = Self::turn_step(self.ent[i].f30, self.ent[i].f34, 34);
+            self.ent[i].f30 = (self.ent[i].f30 as i32 + t as i32) as u16 & 0x7FF;
+            self.ent[i].f32 = self.ent[i].f36;
+        } else {
+            self.home(i, ctx);
+        }
+        self.proj_move_and_hit(i, ctx, false)
+    }
+
+    /// sub_52770 (:62618): the generic flight (m3 trail bolt) — speed
+    /// eases ±2 toward +128, homing, explode copies +44 + victim.
+    /// `fire_trail`: m3 drops a damage-suppressed fire-seeder per tick
+    /// (:63027-38).
+    fn proj_generic_tick(&mut self, i: usize, ctx: &MobCtx, fire_trail: bool) -> bool {
+        let e = &mut self.ent[i];
+        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        if self.ent[i].f146 != 0 {
+            self.home(i, ctx);
+        }
+        if fire_trail {
+            let (x, y, z, owner) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, e.id24)
+            };
+            if let Some(s) = self.spawn_effect(1, x, y, z) {
+                // +16|=0x80, +18|=1: the seeder's fires inherit the
+                // no-damage bit — a decorative trail (:63033-38).
+                self.ent[s].flags |= 0x80 | 0x10000;
+                self.ent[s].id24 = owner;
+            }
+        }
+        self.proj_move_and_hit(i, ctx, true)
+    }
+
+    /// sub_530C0 (:63048): m11's bolt — explodes ONLY on wizard-family
+    /// victims (class 3 model ≤ 1 / the player); every other end is a
+    /// silent despawn (:63188-210).
+    fn proj_m8_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let e = &mut self.ent[i];
+        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        if self.ent[i].f146 != 0 {
+            self.home(i, ctx);
+        }
+        // Move.
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        if let Some(v) = self.victim_scan_at(i, tmp, ctx) {
+            let wizard = match v {
+                MailTarget::Player => true,
+                MailTarget::Pool(j) => self.ent[j].class64 == 3 && self.ent[j].model65 <= 1,
+            };
+            self.move_relink(i, tmp.0, tmp.1, tmp.2);
+            if wizard {
+                self.proj_explode(i, ctx, Some(v), true);
+            } else {
+                self.ent[i].flags |= 0x400;
+            }
+            return false;
+        }
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        if ground <= tmp.2 {
+            self.move_relink(i, tmp.0, tmp.1, tmp.2);
+            self.ent[i].act_life -= 1;
+            if self.ent[i].act_life < 0 {
+                self.ent[i].flags |= 0x400; // silent timeout
+            }
+        } else if self.on_water_pub(tmp.0, tmp.1) {
+            self.splash_and_die(i);
+        } else {
+            self.ent[i].flags |= 0x400; // silent ground end
+        }
+        false
+    }
+
+    /// sub_535E0 (:63272), simplified: straight zigzag bolt — speed
+    /// pinned to +128, one visual segment (2 jitter draws) per tick,
+    /// explosion always spawned with +44 copied.
+    fn proj_m9_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].f126 = self.ent[i].f128;
+        // One visual zigzag segment along the path (deviation: the
+        // original walks 8-unit sub-steps and spawns a chain).
+        let d1 = self.ent_rand(i);
+        let d2 = self.ent_rand(i);
+        let (x, y, z) = {
+            let e = &self.ent[i];
+            (
+                e.x.wrapping_add(((d1 % 0x41) as i32 - 32) as u16),
+                e.y.wrapping_add(((d2 % 0x41) as i32 - 32) as u16),
+                e.z,
+            )
+        };
+        if let Some(s) = self.spawn_projectile(9, 14, x, y, z, 0, 1, 0, 216) {
+            self.ent[s].id24 = self.ent[i].id24;
+        }
+        self.proj_move_and_hit(i, ctx, true)
+    }
+
+    /// sub_54180 (:63789): the straight bolt (m13, and interim m14) —
+    /// first-tick LCG sound roll, direct ch0 area write on any end.
+    fn proj_bolt_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            let _ = self.ent_rand(i); // sound 33 + (rand & 3) (:63795)
+        }
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        let hit = self.victim_scan_at(i, tmp, ctx).is_some();
+        let grounded = ground > tmp.2;
+        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        self.ent[i].act_life -= 1;
+        if hit || grounded || self.ent[i].act_life < 0 {
+            let amt = self.ent[i].f44 as u32;
+            self.area_write(i, 0, amt, ctx, false);
+            self.ent[i].flags |= 0x400;
+        }
+        false
+    }
+
+    /// Move + hit scan + terrain shared by m0/m3/m9 (:62842-932).
+    /// Returns terrain_dirty (always false here — craters come from
+    /// the explosion).
+    fn proj_move_and_hit(&mut self, i: usize, ctx: &MobCtx, copy_f44: bool) -> bool {
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        if let Some(v) = self.victim_scan_at(i, tmp, ctx) {
+            // Rebound (+17 bit 7): mana-shield deflection (:62858-90).
+            let rebound = match v {
+                MailTarget::Pool(j) => self.ent[j].flags & 0x8000 != 0,
+                MailTarget::Player => false, // shields are the spell track
+            };
+            if rebound {
+                if let MailTarget::Pool(j) = v {
+                    let quarter = (self.ent[i].f140 / 4).max(0);
+                    if quarter <= self.ent[j].f140 {
+                        self.ent[j].f140 -= quarter;
+                        let deflector_id = self.ent[j].id24;
+                        let shooter = self.ent[i].id24;
+                        let d = self.ent_rand(i);
+                        let e = &mut self.ent[i];
+                        e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
+                        e.f30 = (e.f34 as i32 + (d % 0x5B) as i32 - 45) as u16 & 0x7FF;
+                        e.f32 = e.f32.wrapping_neg() & 0x7FF;
+                        e.f146 = if shooter == PLAYER_TARGET { PLAYER_TARGET } else { shooter };
+                        e.id24 = deflector_id;
+                        e.act_life = e.max_life as i32;
+                        let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+                        self.move_relink(i, jx, jy, jz);
+                        return false;
+                    }
+                }
+            }
+            // Teleport onto the victim, explode there (:62852-55).
+            match v {
+                MailTarget::Pool(j) => {
+                    let (jx, jy, jz) = (
+                        self.ent[j].x,
+                        self.ent[j].y,
+                        self.ent[j].z.wrapping_add(self.ent[j].f78 as i16),
+                    );
+                    self.move_relink(i, jx, jy, jz);
+                }
+                MailTarget::Player => {
+                    self.move_relink(i, ctx.px, ctx.py, ctx.pz);
+                }
+            }
+            self.proj_explode(i, ctx, Some(v), copy_f44);
+            return false;
+        }
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        if ground <= tmp.2 {
+            self.move_relink(i, tmp.0, tmp.1, tmp.2);
+            self.ent[i].act_life -= 1;
+            if self.ent[i].act_life < 0 {
+                self.proj_explode(i, ctx, None, copy_f44); // midair expiry
+            }
+        } else if self.on_water_pub(tmp.0, tmp.1) {
+            self.splash_and_die(i); // :62916-21, no explosion/crater
+        } else {
+            self.proj_explode(i, ctx, None, copy_f44); // terrain hit (pre-move pos)
+        }
+        false
+    }
+
+    /// The victim scan evaluated at a prospective position (the
+    /// original moves first and scans at the new position).
+    fn victim_scan_at(&mut self, i: usize, tmp: (u16, u16, i16), ctx: &MobCtx) -> Option<MailTarget> {
+        let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        self.ent[i].x = tmp.0;
+        self.ent[i].y = tmp.1;
+        self.ent[i].z = tmp.2;
+        let v = self.victim_scan(i, ctx);
+        self.ent[i].x = old.0;
+        self.ent[i].y = old.1;
+        self.ent[i].z = old.2;
+        v
+    }
+
+    fn splash_and_die(&mut self, i: usize) {
+        let (x, y, z, owner) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        if let Some(s) = self.spawn_effect(5, x, y, z) {
+            self.ent[s].id24 = owner;
+        }
+        self.ent[i].flags |= 0x400;
+    }
+
+    pub(crate) fn on_water_pub(&self, x: u16, y: u16) -> bool {
+        self.t.tile_type[(((y >> 8) as usize) << 8) | (x >> 8) as usize] == 0
+    }
+
+    // ---- class-10 combat effects -------------------------------------------
+
+    /// The class-10 effect inits (states = the original's +70 writes).
+    pub(crate) fn spawn_effect(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
+        let s = self.new_event()?;
+        self.ent[s].class64 = 10;
+        self.ent[s].model65 = model;
+        match model {
+            // sub_3A490 (:46454): the fire/explosion. Damage 400.
+            0 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 0;
+                e.max_life = 8;
+                e.f44 = 400;
+                e.f28 = 0;
+                e.flags = (e.flags & !(8 | 0x20000)) | 0x20000;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 7);
+                self.extents(s, 128, 128);
+            }
+            // sub_3A510 (:46482): the fire-spreader / corpse flame.
+            1 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 1;
+                e.max_life = 1;
+                e.f44 = 400;
+                e.flags &= !8;
+                e.flags |= 0x20000;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 41);
+            }
+            // sub_3A6B0 (:46560 region): the water splash. Grounded.
+            5 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 5;
+                e.max_life = 8;
+                e.f44 = 0;
+                e.flags &= !8;
+                e.flags |= 0x20000;
+                self.link(s, x, y, z);
+                let (px, py) = (self.ent[s].x, self.ent[s].y);
+                self.ent[s].z = self.ground_z(px, py) as i16;
+                self.refill_life(s);
+                self.set_sprite(s, 244);
+            }
+            // sub_3AC70 (:46935): the invisible fire-ring blast driver.
+            17 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 17;
+                e.max_life = 10;
+                e.f44 = 3000;
+                e.flags &= !8;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+            }
+            // sub_3AE80 (:47062): the bolt hit-flash (one-shot ch0).
+            23 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 23;
+                e.max_life = 8;
+                e.f44 = 25;
+                e.flags |= 0x20000 | 1;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 7);
+                self.extents(s, 200, 200);
+            }
+            // sub_3AF00 (:47090): m11's mana-steal flash (ch3).
+            25 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 25;
+                e.max_life = 8;
+                e.f44 = 2000;
+                e.flags &= !8;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 283);
+                self.extents(s, 512, 512);
+            }
+            _ => {
+                self.free_entity(s);
+                return None;
+            }
+        }
+        Some(s)
+    }
+
+    /// sub_3B5A0 (:47443): the mana ball (state 41). Callers override
+    /// +140/+144; the tick re-derives the size sprite every turn.
+    pub(crate) fn spawn_mana_ball(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let b = self.new_event()?;
+        {
+            let e = &mut self.ent[b];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.tick70 = 41;
+            e.f140 = 512;
+            e.f46 = 128;
+            e.f28 = 3;
+            e.f58 = 0x80;
+        }
+        self.link(b, x, y, z);
+        self.refill_life(b);
+        self.ball_resize(b);
+        Some(b)
+    }
+
+    /// dword_900A4 (:2215): the ball size-class thresholds.
+    const BALL_SIZES: [i32; 7] = [256, 512, 1024, 2048, 4096, 9192, 18384];
+
+    /// sub_274D0 (:29574): ball sprite = family base + size class by
+    /// carried mana (8 classes; > 36768 = the dragon-drop boulder);
+    /// nonzero sizes halve the extents (sub_370E0 :43781). Family 52
+    /// = unowned; the owner palette families (105 + 8·player-slot)
+    /// are the mana-collection track (our claims use the
+    /// PLAYER_TARGET sentinel, not a pool wizard).
+    fn ball_resize(&mut self, i: usize) {
+        let mana = self.ent[i].f140;
+        let mut size = 7usize;
+        for (k, t) in Self::BALL_SIZES.iter().enumerate() {
+            if mana <= *t {
+                size = k;
+                break;
+            }
+        }
+        let ty = (52 + size) as u16;
+        if self.ent[i].type86 != ty {
+            self.set_sprite(i, ty);
+            if size != 0 {
+                let e = &mut self.ent[i];
+                e.f80 /= 2;
+                e.f82 /= 2;
+                e.f84 /= 2;
+            }
+        }
+    }
+
+    /// Class-10 combat-effect dispatch. Returns terrain_dirty.
+    pub(crate) fn effect_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        match self.ent[i].tick70 {
+            0 => self.fire_tick(i, ctx),
+            1 => self.spreader_tick(i),
+            5 => {
+                self.ent[i].act_life -= 1;
+                if self.ent[i].act_life < 0 {
+                    self.ent[i].flags |= 0x400;
+                }
+                self.anim_advance(i);
+                false
+            }
+            17 => self.blast_ring_tick(i, ctx),
+            23 => self.hit_flash_tick(i, ctx),
+            25 => self.steal_flash_tick(i, ctx),
+            41 => self.ball_tick(i),
+            _ => false,
+        }
+    }
+
+    /// sub_24F60 (:28047): the fire. One ch0 broadcast + terrain
+    /// reaction on the first active tick, then flicker/anim out.
+    fn fire_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        if self.ent[i].f26 & 3 != 0 {
+            self.ent[i].f26 -= 1;
+            return false;
+        }
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        let mut dirty = false;
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            if self.ent[i].flags & 0x10000 == 0 {
+                let amt = self.ent[i].f44 as u32;
+                self.area_write(i, 0, amt, ctx, false);
+            }
+            // Terrain reaction (:28083-104): burn conversions, else a
+            // small scorch crater on flat, low, dry ground.
+            let (x, y, z) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            };
+            let t = tile((x >> 8) as u8, (y >> 8) as u8);
+            let ty = self.t.tile_type[t];
+            let conv = match ty {
+                26 => Some(0x14),
+                10 => Some(0x15),
+                11 => Some(0x16),
+                _ => None,
+            };
+            if let Some(c) = conv {
+                self.convert_tile(t, c);
+                dirty = true;
+            } else if !(6..=0x22).contains(&ty)
+                && self.t.angle[t] & 7 != 1
+                && (z as i32 - self.ground_z(x, y)) <= 128
+                && !self.on_water_pub(x, y)
+            {
+                let d = self.ent_rand(i);
+                self.dig_scorch(i, -((d % 7) as i16));
+                dirty = true;
+            }
+            let d2 = self.ent_rand(i);
+            self.ent[i].f46 = ((d2 % 0x41) as i32 - 32) as i16;
+            // Sound 3 — audio track.
+        }
+        // z follows the (possibly dug) ground with the flicker offset.
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let g = self.ground_z(x, y) as i16;
+        self.ent[i].z = g.wrapping_add(self.ent[i].f46.max(0));
+        self.anim_advance(i);
+        dirty
+    }
+
+    /// sub_25130 (:28127): the fire-spreader — one ring of fires at
+    /// radius +26 (0 = the single corpse flame), then gone.
+    fn spreader_tick(&mut self, i: usize) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].flags & 2 != 0 {
+            return false;
+        }
+        self.ent[i].flags |= 2;
+        let (x, y, z, owner, radius, inherit) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f26.max(0) as i32, e.flags & 0x10000)
+        };
+        let cells = self.ring_cells_pub(radius, radius);
+        for (dx, dy) in cells {
+            let skip = self.ent_rand(i) & 1 != 0; // 50% skip draw
+            let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            if skip {
+                continue;
+            }
+            let fx = x.wrapping_add((192 * dx as i32 + j1) as u16);
+            let fy = y.wrapping_add((192 * dy as i32 + j2) as u16);
+            if let Some(f) = self.spawn_effect(0, fx, fy, z) {
+                self.ent[f].id24 = owner;
+                self.ent[f].flags |= 0x80 | inherit;
+            }
+        }
+        false
+    }
+
+    /// sub_25CE0 (:28671): the growing fire-ring blast — per-tick ch0
+    /// at +44/maxLife, a ring of fires per tick, radius (+2) % 11.
+    fn blast_ring_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2 | 0x10000;
+            // Sound 30 — audio track.
+        }
+        let radius = self.ent[i].f26.max(0) as i32;
+        {
+            let e = &mut self.ent[i];
+            e.f80 = ((768 * radius / 4) as u16).max(128);
+            e.f82 = e.f80;
+            e.f84 = 512;
+        }
+        let per_tick = (self.ent[i].f44 as u32) / self.ent[i].max_life.max(1);
+        self.area_write(i, 0, per_tick, ctx, false);
+        let (x, y, z, owner) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        let _ = self.ent_rand(i); // pre-loop draw (:28699)
+        let cells = self.ring_cells_pub(radius, radius);
+        for (dx, dy) in cells {
+            let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            let fx = x.wrapping_add((160 * dx as i32 + j1) as u16);
+            let fy = y.wrapping_add((160 * dy as i32 + j2) as u16);
+            if let Some(f) = self.spawn_effect(0, fx, fy, z) {
+                self.ent[f].id24 = owner;
+                self.ent[f].flags |= 0x80 | 0x10000;
+                self.extents(f, 512, 512);
+                self.ent[f].f26 = 0;
+            }
+        }
+        self.ent[i].f26 = ((radius + 2) % 11) as i16;
+        false
+    }
+
+    /// sub_262D0 (:28898): the bolt hit-flash — one ch0 write, brief.
+    fn hit_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            let amt = self.ent[i].f44 as u32;
+            self.area_write(i, 0, amt, ctx, false);
+            self.ent[i].act_life = 1;
+        }
+        self.anim_advance(i);
+        false
+    }
+
+    /// sub_26360 (:28924): m11's mana-steal flash — one ch3 write.
+    fn steal_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            let amt = self.ent[i].f44 as u32;
+            self.area_write(i, 3, amt, ctx, false);
+        }
+        self.anim_advance(i);
+        false
+    }
+
+    /// sub_27030 (:29416): the mana ball — claim intake, launch-arc
+    /// physics (gravity 16, quarter-bounce, 250/256 friction, ±64
+    /// clamp), merge on overlap (sub_277D0 :29700).
+    fn ball_tick(&mut self, i: usize) -> bool {
+        // ch1 collection claim: the ball takes the claimant as owner.
+        if self.ent[i].mail[1].1 != 0 {
+            self.ent[i].f144 = self.ent[i].mail[1].1;
+            self.ent[i].mail[1] = (0, 0);
+            // Sound 4 — audio track.
+        }
+        // ch4 attract (collection pull) — mana track; acknowledge.
+        if self.ent[i].mail[4].1 != 0 {
+            self.ent[i].mail[4] = (0, 0);
+        }
+        let mut vx = self.ent[i].dest_x as i16;
+        let mut vy = self.ent[i].dest_y as i16;
+        vx = vx.clamp(-64, 64);
+        vy = vy.clamp(-64, 64);
+        let (x0, y0, z0) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let x = x0.wrapping_add(vx as u16);
+        let y = y0.wrapping_add(vy as u16);
+        let ground = self.ground_z(x, y) as i16;
+        // Vertical: gravity only while airborne or launched — a ball
+        // at rest stays at rest (the perpetual-jiggle fix: applying
+        // gravity at rest made settled balls oscillate 16 units).
+        let mut z = z0;
+        if z > ground || self.ent[i].f46 > 0 {
+            z = z.wrapping_add(self.ent[i].f46);
+            self.ent[i].f46 = (self.ent[i].f46 - 16).max(-128);
+        }
+        if z <= ground {
+            z = ground;
+            let v = self.ent[i].f46;
+            self.ent[i].f46 = if v < -32 { -v / 4 } else { 0 };
+        }
+        vx = (vx as i32 * 250 / 256) as i16;
+        vy = (vy as i32 * 250 / 256) as i16;
+        self.ent[i].dest_x = vx as u16;
+        self.ent[i].dest_y = vy as u16;
+        if (x, y, z) != (x0, y0, z0) {
+            self.move_relink(i, x, y, z);
+        }
+        // Merge with an overlapping ball: absorb, despawn the other.
+        for j in 1..self.ent.len() {
+            if j == i
+                || self.ent[j].class64 != 10
+                || self.ent[j].model65 != 39
+                || self.ent[j].flags & 0x400 != 0
+            {
+                continue;
+            }
+            if self.ent_overlap(i, j) {
+                let m = self.ent[j].f140;
+                self.ent[i].f140 += m;
+                self.ent[j].flags |= 0x400;
+                break;
+            }
+        }
+        // Size re-derivation every tick (:29569) — merged/claimed
+        // balls visibly grow/recolor in the original.
+        self.ball_resize(i);
+        false
+    }
+
+    // ---- corpse pipeline ----------------------------------------------------
+
+    /// sub_27690 (:29663): the corpse's mana-ball drop — one unused
+    /// draw on the CORPSE's seed (kept for stream parity), then the
+    /// ball with two launch draws on its OWN seed.
+    pub(crate) fn corpse_drop(&mut self, i: usize) {
+        if self.ent[i].f140 <= 0 {
+            return;
+        }
+        let _ = self.ent_rand(i); // :29674 — result unused, draw kept
+        let (x, y, z, heading, mana, owner) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f30, e.f140, e.f144)
+        };
+        if let Some(b) = self.spawn_mana_ball(x, y, z) {
+            self.ent[b].f140 = mana;
+            self.ent[b].f144 = owner;
+            let d1 = self.ent_rand(b);
+            let yaw = ((d1 % 0x71) as i32 - 56 + heading as i32) as u16 & 0x7FF;
+            let d2 = self.ent_rand(b);
+            let speed = (d2 % 0x30 + 16) as i16;
+            self.ent[b].f30 = yaw;
+            self.ent[b].f34 = yaw;
+            let vx = ((speed as i32 * crate::tables::SIN[yaw as usize]) >> 16) as i16;
+            let vy = (-((speed as i32 * crate::tables::COS[yaw as usize]) >> 16)) as i16;
+            self.ent[b].dest_x = vx as u16;
+            self.ent[b].dest_y = vy as u16;
+            let ground = self.ground_z(x, y) as i16;
+            self.ent[b].f46 = (1024 - (z.wrapping_sub(ground)) as i32).max(0) as i16 >> 3;
+        }
+        self.ent[i].f144 = 0;
+    }
+
+    /// The corpse's death-flame puff: class-10 m1 at radius 0 with
+    /// +24 = the corpse (:21866).
+    pub(crate) fn corpse_puff(&mut self, i: usize) {
+        let (x, y, z, id) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        if let Some(p) = self.spawn_effect(1, x, y, z) {
+            self.ent[p].id24 = id;
+            self.ent[p].f26 = 0;
+        }
+    }
+
+    // ---- helpers over private feature internals ------------------------------
+
+    /// Ring cell offsets for radius lo..=hi (the precomputed
+    /// `dword_AD008` rings; exact cell ordering pending extraction —
+    /// flagged for LCG parity in the banked trace).
+    fn ring_cells_pub(&self, lo: i32, hi: i32) -> Vec<(i8, i8)> {
+        if lo == 0 && hi == 0 {
+            return vec![(0, 0)];
+        }
+        let mut out = Vec::new();
+        for r in lo..=hi {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()) == r {
+                        out.push((dx as i8, dy as i8));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Single-tile burn conversion (sub_33800 :28088-97): type write +
+    /// local retile.
+    fn convert_tile(&mut self, t: usize, new_type: u8) {
+        self.t.tile_type[t] = new_type;
+    }
+
+    /// The fire's scorch dig (sub_40D30(expl, 0, 0, -depth, 1)):
+    /// a single-cell protected dig at the fire's position.
+    fn dig_scorch(&mut self, i: usize, delta: i16) {
+        if delta == 0 {
+            return;
+        }
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let _ = self.dig_cell_pub((x >> 8) as i16, (y >> 8) as i16, delta, true);
+    }
+}
+
+// Global-stream helper kept close to the module using it.
+#[allow(dead_code)]
+pub(crate) fn global_draw(rand: &mut u32) -> u32 {
+    lcg32(rand)
+}
