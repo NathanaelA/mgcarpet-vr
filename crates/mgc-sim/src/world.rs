@@ -347,9 +347,15 @@ impl World {
                     }
                 }
                 10 if self.g.ent[i].tick70 == 36 => self.portal_tick(i, player),
+                // Live village buildings and their collapse.
+                10 if self.g.ent[i].tick70 == 52 => self.g.tick_building_live(i),
+                10 if self.g.ent[i].tick70 == 53 => {
+                    self.g.tick_building_collapse(i);
+                    self.terrain_dirty = true;
+                }
                 // Combat effects (fire, spreader, splash, blast ring,
                 // hit-flash, steal-flash, mana ball).
-                10 if matches!(self.g.ent[i].tick70, 0 | 1 | 5 | 17 | 23 | 25 | 41) => {
+                10 if matches!(self.g.ent[i].tick70, 0 | 1 | 5 | 6 | 17 | 23 | 25 | 41) => {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
                     }
@@ -360,6 +366,8 @@ impl World {
                     self.terrain_dirty = true;
                 }
                 11 => self.trigger_tick(i, player, &buckets),
+                // Trees burn (states 0/1/2 + the standing fire).
+                2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
                 // Scenery / pickups: inert until their tracks land —
                 // they stand and render.
                 _ => {}
@@ -383,6 +391,11 @@ impl World {
             self.g.player_damage += self.g.player_mail[0].0 as u64;
         }
         self.g.player_mail = [(0, 0); 6];
+        // The village-aggro timer runs down once per wizard tick
+        // (:55405-06) — ~200 ticks of militia hostility per offense.
+        if self.g.player_aggro > 0 {
+            self.g.player_aggro -= 1;
+        }
     }
 
     /// The fireball cast (sub_58240/sub_56090 :65056-83, gates and
@@ -424,6 +437,12 @@ impl World {
     /// the original's Type_160 +359/+343/+347.
     pub fn combat_stats(&self) -> (u32, u32, u32) {
         (self.g.kills, self.g.shots, self.g.hits)
+    }
+
+    /// The village-aggro ("wanted") timer — remaining ticks of
+    /// militia hostility toward the player (+528 semantics).
+    pub fn player_aggro(&self) -> i16 {
+        self.g.player_aggro
     }
 
     // ---- dispositions ----------------------------------------------------
@@ -731,6 +750,67 @@ impl World {
         }
     }
 
+    /// The flyer-side wall gate (sub_45410 :55065) in tile units:
+    /// `from`/`to` = (x, z_map, altitude). Returns the position the
+    /// move actually reaches — `to` unchanged when no wall is hit, a
+    /// cardinal wall-slide otherwise — or None when both slides are
+    /// blocked and the whole move is discarded. Type-8 walls block the
+    /// player at ANY altitude.
+    pub fn player_wall_gate(
+        &self,
+        from: (f32, f32, f32),
+        to: (f32, f32, f32),
+    ) -> Option<(f32, f32, f32)> {
+        let fixed = |x: f32, z: f32, alt: f32| {
+            (
+                (x.rem_euclid(256.0) * 256.0) as u16,
+                (z.rem_euclid(256.0) * 256.0) as u16,
+                (alt * 256.0) as i16,
+            )
+        };
+        let cur = fixed(from.0, from.1, from.2);
+        let prop = fixed(to.0, to.1, to.2);
+        let out = self.g.player_wall_gate(cur, prop)?;
+        if out == prop {
+            // Untouched move: hand back the caller's floats verbatim
+            // (no 8.8 quantization outside collisions).
+            return Some(to);
+        }
+        Some((
+            out.0 as f32 / 256.0,
+            out.1 as f32 / 256.0,
+            out.2 as f32 / 256.0,
+        ))
+    }
+
+    /// This tick's forced knock displacement on the player (the
+    /// kraken buffet; later, hit knockback): Type_160 v_22/v_24
+    /// consumed like the human move does (:55204-218) — magnitude
+    /// clamped to 128, applied, then decayed 4/tick and snapped to 0
+    /// below |4|. Returns (11-bit direction, engine units) or None at
+    /// rest. The kraken re-arms 80 every ON tick of its 41/91 duty
+    /// cycle, so the pull only bleeds off in the OFF phase.
+    pub fn take_knock_step(&mut self) -> Option<(u16, i16)> {
+        let (dir, mag) = self.g.player_knock;
+        if mag == 0 {
+            return None;
+        }
+        let mag = mag.clamp(-128, 128);
+        let mut next = mag - mag.signum() * 4;
+        if next.abs() < 4 {
+            next = 0;
+        }
+        self.g.player_knock = (dir, next);
+        Some((dir, mag))
+    }
+
+    /// The live knock magnitude (for the app's camera pitch kick:
+    /// the original view drops by ~v_22/8 engine-angle units,
+    /// :52433-37).
+    pub fn knock_magnitude(&self) -> i16 {
+        self.g.player_knock.1
+    }
+
     /// Ground height in tile units at world-space tile coordinates
     /// (for the flyer's terrain clamp against the LIVE planes).
     pub fn ground_height_tiles(&self, x: f32, z: f32) -> f32 {
@@ -848,6 +928,91 @@ mod tests {
 
     fn at_trigger() -> PlayerPose {
         PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0)
+    }
+
+    #[test]
+    fn walls_gate_the_player_slide_block_and_corner() {
+        // A north-south type-8 wall line at tile x=120, plus an east-
+        // west line at tile y=101 forming a corner.
+        let mut planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        for y in 0..=255 {
+            planes.tile_type[tile(120, y)] = 8;
+        }
+        for x in 0..=255 {
+            planes.tile_type[tile(x, 101)] = 8;
+        }
+        let w = World::new(planes, &[], 1, assets());
+
+        // Oblique approach hugging the wall: the eastward cardinal
+        // slide still lands on the wall tile, the southward one
+        // succeeds — the player skims along the wall without crossing.
+        let slid = w
+            .player_wall_gate((119.95, 99.5, 12.5), (120.85, 99.9, 12.5))
+            .expect("oblique move slides");
+        assert!(slid.0 < 120.0, "never crosses the wall line, x={}", slid.0);
+        assert!(slid.1 > 99.5, "slides south along the wall, z={}", slid.1);
+
+        // Farther out, the blocked-cardinal retry shortens the move
+        // toward the wall instead (authentic: the scaled slide along
+        // the move's own cardinal lands short of the wall tile).
+        let short = w
+            .player_wall_gate((119.2, 99.5, 12.5), (120.1, 99.9, 12.5))
+            .expect("shortened approach");
+        assert!(short.0 < 120.0 && short.0 > 119.2, "shortened, x={}", short.0);
+
+        // Head-on at high altitude (way above the wall's +48 crest):
+        // the aligned cardinal contributes a zero-length slide — the
+        // move is voided in place. Walls block at ANY altitude.
+        let stuck = w
+            .player_wall_gate((119.5, 99.5, 30.0), (120.5, 99.5, 30.0))
+            .expect("head-on voids in place");
+        assert!(stuck.0 < 120.0, "altitude does not bypass, x={}", stuck.0);
+
+        // Diagonal into the inside corner: both cardinal slides land
+        // on wall tiles — the whole move is discarded.
+        assert!(
+            w.player_wall_gate((119.8, 100.8, 12.5), (120.2, 101.2, 12.5))
+                .is_none(),
+            "corner discards the whole move"
+        );
+
+        // No wall involved: the move passes through bit-identical.
+        let free = w
+            .player_wall_gate((110.0, 99.0, 12.5), (110.3, 99.2, 12.5))
+            .expect("free move");
+        assert_eq!(free, (110.3, 99.2, 12.5));
+    }
+
+    #[test]
+    fn the_flyer_never_crosses_a_wall() {
+        let mut planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        for y in 0..=255 {
+            planes.tile_type[tile(120, y)] = 8;
+            planes.height[tile(120, y)] = 148; // the wall's +48 crest
+        }
+        let w = World::new(planes, &[], 1, assets());
+        let mut sim = crate::Simulation::with_world(w);
+        sim.flyer.x = 117.0;
+        sim.flyer.z = 99.5;
+        sim.flyer.y = 30.0; // far above the crest
+        sim.flyer.yaw = std::f32::consts::FRAC_PI_2; // facing +x (east)
+        sim.flyer.pitch = 0.0;
+        let thrust = crate::FlightInput { thrust: 1.0, ..Default::default() };
+        for _ in 0..600 {
+            sim.step(&thrust);
+            assert!(sim.flyer.x < 120.0, "wall crossed at x={}", sim.flyer.x);
+        }
+        assert!(sim.flyer.x > 119.0, "the flyer did reach the wall, x={}", sim.flyer.x);
     }
 
     #[test]
@@ -1245,6 +1410,213 @@ mod tests {
         );
         let (kills, _, _) = w.combat_stats();
         assert_eq!(kills, 1, "one worm, one kill");
+    }
+
+    /// A slot of the given class/model from the live pool.
+    fn find_slot(w: &World, class: u8, model: u8) -> usize {
+        w.debug_pool()
+            .1
+            .iter()
+            .find(|e| e.class == class && e.model == model)
+            .map(|e| e.slot)
+            .expect("entity present")
+    }
+
+    #[test]
+    fn village_building_survives_pops_militia_and_collapses() {
+        use crate::combat::MailTarget;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 10,
+            model: 45,
+            x: 110,
+            y: 110,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 3, assets());
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        // The house persists past construction at runtime (regression:
+        // state 52 used to fall into the load loop's self-kill arm).
+        assert_eq!(count(&w, 10, 45), 1, "the house persists");
+        let b = find_slot(&w, 10, 45);
+        // Give it extra occupants so non-lethal hits pop militia out
+        // (fresh houses hold the floor of 2 — nobody spare).
+        w.g.ent[b].f26 = 4;
+        // Five 400-damage hits: 2000 life reaches exactly 0 — standing.
+        for _ in 0..5 {
+            w.g.mail_write(MailTarget::Pool(b), 0, 400, PLAYER_TARGET);
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 10, 45), 1, "still standing at 0 life");
+        // Spare occupants pop out as militia on non-lethal hits (they
+        // may mill back in — the walk-in door is live too, so counts
+        // fluctuate; at least one is outside right after the barrage).
+        assert!(count(&w, 5, 4) >= 1, "militia popped out under fire");
+        assert!(w.player_aggro() > 0, "hitting the village flags the wizard");
+        // The killing blow → collapse: everyone left evacuates, the
+        // LAST one out is a settler, rubble is stamped.
+        w.g.mail_write(MailTarget::Pool(b), 0, 400, PLAYER_TARGET);
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 10, 45), 0, "collapsed");
+        assert!(count(&w, 5, 12) >= 1, "the last occupant out is a settler");
+        let rubble = (108u8..=113)
+            .any(|x| (108u8..=113).any(|y| w.planes().angle[tile(x, y)] & 7 == 1));
+        assert!(rubble, "collapse stamps the rubble angle nibble");
+    }
+
+    #[test]
+    fn trees_burn_to_char_and_spark_a_standing_fire() {
+        use crate::combat::MailTarget;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 2,
+            model: 0,
+            x: 112,
+            y: 110,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 3, assets());
+        w.tick(away(), PlayerCommand::default());
+        let t = find_slot(&w, 2, 0);
+        // A fireball's fire (400) fells the 300-life tree.
+        w.g.mail_write(MailTarget::Pool(t), 0, 400, PLAYER_TARGET);
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(count(&w, 10, 6), 1, "the standing fire ignites");
+        for _ in 0..260 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 2, 0), 1, "the charred husk remains");
+        let husk = w
+            .debug_pool()
+            .1
+            .into_iter()
+            .find(|e| e.class == 2)
+            .unwrap();
+        assert_eq!(husk.state, 2, "burned down to the char state");
+        assert_eq!(count(&w, 10, 6), 0, "the fire burned out");
+    }
+
+    #[test]
+    fn a_settler_builds_a_second_house_and_settles_as_a_villager() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let th = |slot, class, model, x, y| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = vec![th(0, 10, 45, 110, 110), th(1, 5, 12, 113, 110)];
+        let mut w = World::new(planes, &things, 3, assets());
+        let mut second_house_at = None;
+        for t in 0..1200 {
+            w.tick(away(), PlayerCommand::default());
+            if count(&w, 10, 45) >= 2 {
+                second_house_at = Some(t);
+                break;
+            }
+        }
+        assert!(
+            second_house_at.is_some(),
+            "the settler seeks the house and builds a second one"
+        );
+        // Construction completes and the settler has retired into the
+        // villager-feeder state (model stays 12; dispatch is by state).
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 10, 45), 2, "the new house stands");
+        let settler = w
+            .debug_pool()
+            .1
+            .into_iter()
+            .find(|e| e.class == 5 && e.model == 12);
+        assert!(
+            settler.is_none_or(|s| s.state >= 79),
+            "the builder settled into the villager chain (or moved in)"
+        );
+    }
+
+    #[test]
+    fn kraken_beam_lays_segments_and_the_buffet_arms_the_knock() {
+        let mut w = bare_creature_world(6);
+        assert_eq!(count(&w, 5, 6), 3, "kraken head + 2 segments");
+        // Aggro the kraken with a short burst; it closes in, arms its
+        // 5-beam bursts and the 41-tick buffet phases.
+        for _ in 0..3 {
+            w.tick(firing_line(), PlayerCommand { fire: true });
+        }
+        let (mut saw_segments, mut knocked) = (false, false);
+        for _ in 0..2000 {
+            w.tick(firing_line(), PlayerCommand::default());
+            // State-14 chain segments are class-9 m9 entities besides
+            // the (already dead) one-tick beam.
+            saw_segments |= count(&w, 9, 9) > 1;
+            knocked |= w.knock_magnitude() > 0;
+            if saw_segments && knocked && w.player_damage_taken() > 0 {
+                break;
+            }
+        }
+        assert!(saw_segments, "beams lay state-14 segment chains");
+        assert!(knocked, "the buffet arms the player knock fields");
+        assert!(
+            w.player_damage_taken() > 0,
+            "beam endpoint detonations land ch0 damage on the player"
+        );
+    }
+
+    #[test]
+    fn knock_step_clamps_decays_and_snaps() {
+        let mut w = flat_world();
+        w.g.player_knock = (512, 200);
+        // Over-strength knocks clamp to 128 before applying
+        // (:55207-08), then decay 4/tick from the clamped value.
+        assert_eq!(w.take_knock_step(), Some((512, 128)));
+        assert_eq!(w.take_knock_step(), Some((512, 124)));
+        // Below |4| the remainder snaps to zero (:55217-18).
+        w.g.player_knock = (512, 7);
+        assert_eq!(w.take_knock_step(), Some((512, 7)));
+        assert_eq!(w.take_knock_step(), None);
     }
 
     #[test]

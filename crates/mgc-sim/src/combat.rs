@@ -14,9 +14,11 @@
 //! - Aim assist scores candidates by angular miss (Δyaw² + Δpitch²)
 //!   with a distance tiebreak; the original's `sub_54A90` squared-
 //!   miss-distance metric awaits an exact port.
-//! - The m9 zigzag bolt flies straight and drops ONE visual segment
-//!   per tick (2 jitter draws); the original walks a multi-segment
-//!   random path per tick (sub_535E0 :63272).
+//! - The m9 lightning BEAM (sub_535E0 :63272) is a full port: one-
+//!   tick hitscan walk + the state-14 segment chain (the two-random-
+//!   walk structure with the draw-only phantom walk confirmed against
+//!   remc2's sub_66750). Remaining deviation: the explosion's +146
+//!   stamps hit-or-0 where the original writes garbage on a miss.
 //! - Class-9 model 14 (m7's bolt) has NO handler in remc1's truncated
 //!   state table — interim: m13-style straight bolt at its slow
 //!   init speed until the retail table is extracted.
@@ -98,7 +100,9 @@ impl Gen {
     /// damageable flag (+16&8), the vulnerability mask (+28 bit ch),
     /// the writer's +66/+67 filter, AABB overlap; ch0 skips class-3
     /// model 2 (:17372). `building_tenth` = the 124F0 variant where
-    /// class-2 model-0 buildings take amt/10 (:17465).
+    /// class-2 model-0 TREES take amt/10 (:17465 — the discount that
+    /// keeps area spells from vaporizing forests; village buildings
+    /// are class-10 m45 and take full amounts).
     pub(crate) fn area_write(
         &mut self,
         i: usize,
@@ -482,11 +486,16 @@ impl Gen {
             8 => self.proj_m8_tick(i, ctx),
             9 => self.proj_m9_tick(i, ctx),
             13 | 15 => self.proj_bolt_tick(i, ctx),
-            // Zigzag visual segment (state 14): brief sprite, no logic.
+            // Beam segment (state 14; remc1's table is truncated here
+            // — lifecycle reconstructed from the slot-order life trick
+            // :63349-53): kill on the PRE-decrement value so every
+            // segment renders exactly one frame regardless of whether
+            // its slot ticks before or after the beam's.
             14 => {
-                self.ent[i].act_life -= 1;
                 if self.ent[i].act_life < 0 {
                     self.ent[i].flags |= 0x400;
+                } else {
+                    self.ent[i].act_life -= 1;
                 }
                 false
             }
@@ -585,27 +594,176 @@ impl Gen {
         false
     }
 
-    /// sub_535E0 (:63272), simplified: straight zigzag bolt — speed
-    /// pinned to +128, one visual segment (2 jitter draws) per tick,
-    /// explosion always spawned with +44 copied.
+    /// sub_535E0 (:63272): the lightning BEAM — resolves in ONE tick.
+    /// The flight walks to termination inside the handler in 384-unit
+    /// steps (life counts STEPS, not ticks; victim snap / terrain
+    /// stop / expiry; NO water splash, NO deflection), then the beam
+    /// redraws itself as a chain of short-lived state-14 segment
+    /// entities along a ±1 random walk (8 sub-steps per flight step)
+    /// and explodes at the segment-walk endpoint. The kraken fires
+    /// one beam per burst tick — a beam re-laid every tick, not a
+    /// traveling ball.
     fn proj_m9_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         self.ent[i].f126 = self.ent[i].f128;
-        // One visual zigzag segment along the path (deviation: the
-        // original walks 8-unit sub-steps and spawns a chain).
-        let d1 = self.ent_rand(i);
-        let d2 = self.ent_rand(i);
-        let (x, y, z) = {
-            let e = &self.ent[i];
-            (
-                e.x.wrapping_add(((d1 % 0x41) as i32 - 32) as u16),
-                e.y.wrapping_add(((d2 % 0x41) as i32 - 32) as u16),
-                e.z,
-            )
-        };
-        if let Some(s) = self.spawn_projectile(9, 14, x, y, z, 0, 1, 0, 216) {
-            self.ent[s].id24 = self.ent[i].id24;
+        let spawn = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        // Yaw/pitch are saved across the walk and restored for the
+        // segment chain (:63313-14, :63327-28).
+        let (yaw0, pitch0) = (self.ent[i].f30, self.ent[i].f32);
+        let mut steps: i32 = 0;
+        let mut hit: Option<MailTarget> = None;
+        loop {
+            steps += 1;
+            // sub_534C0 (:63216): one-time aim assist only while
+            // untargeted (+146 == 0 — the kraken target-locks at
+            // spawn, so this arm is for unowned beams); snap to the
+            // acquired angles, no per-tick easing, no homing ever.
+            if self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
+                self.ent[i].flags |= 2;
+                self.aim_assist(i, ctx);
+                if self.ent[i].f146 != 0 {
+                    self.ent[i].f30 = self.ent[i].f34;
+                    self.ent[i].f32 = self.ent[i].f36;
+                }
+            }
+            let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            let (yaw, pitch, speed) = {
+                let e = &self.ent[i];
+                (e.f30, e.f32, e.f126)
+            };
+            Self::polar_step(&mut tmp, yaw, pitch, speed);
+            if let Some(v) = self.victim_scan_at(i, tmp, ctx) {
+                // Snap to the victim's exact position — no +78
+                // half-height, unlike the fireball (:63252-56).
+                match v {
+                    MailTarget::Pool(j) => {
+                        let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+                        self.move_relink(i, jx, jy, jz);
+                    }
+                    MailTarget::Player => self.move_relink(i, ctx.px, ctx.py, ctx.pz),
+                }
+                hit = Some(v);
+                break;
+            }
+            self.move_relink(i, tmp.0, tmp.1, tmp.2);
+            if self.ground_z(tmp.0, tmp.1) as i16 > tmp.2 {
+                break; // terrain stop — sub_534C0 has no water case
+            }
+            self.ent[i].act_life -= 1;
+            if self.ent[i].act_life < 0 {
+                break; // expired midair (≤ 10 steps for life 9)
+            }
         }
-        self.proj_move_and_hit(i, ctx, true)
+        self.ent[i].f30 = yaw0;
+        self.ent[i].f32 = pitch0;
+        // ---- the segment chain (:63329-63420): 8·steps+1 segments
+        // along the straight spawn-heading path, sub-step = speed/8.
+        let beam_slot = i;
+        let owner = self.ent[i].id24;
+        let substep = self.ent[i].f126 / 8; // v33 = 48
+        let scale = (substep / 4) as i32; // offset unit = 12
+        let mut delta = (0u16, 0u16, 0i16);
+        Self::polar_step(&mut delta, yaw0, pitch0, substep);
+        let mut base = spawn;
+        let mut disp = spawn;
+        let (mut v32, mut v31): (i32, i32) = (0, 0);
+        let mut v30 = steps * 8;
+        loop {
+            if let Some(s) = self.new_event() {
+                // NewEvent defaults kept (hittable bit SET, speed 16,
+                // +44 100, filter -1). Slot-order life: a slot that
+                // ticks later this frame gets 0, an already-ticked
+                // one -1 — one rendered frame each under the
+                // state-14 pre-decrement test (:63345-56).
+                {
+                    let e = &mut self.ent[s];
+                    e.class64 = 9;
+                    e.model65 = 9;
+                    e.tick70 = 14;
+                    e.id24 = owner;
+                }
+                self.link(s, disp.0, disp.1, disp.2);
+                self.set_sprite(s, 216);
+                self.ent[s].act_life = if s >= beam_slot { 0 } else { -1 };
+            }
+            // Amplitude pinches toward the endpoint (:63358-62).
+            let amp = (v30 / 2).clamp(0, 8);
+            // Offset walk v32 (applied) then phantom walk v31 (its
+            // draws only advance the RNG — confirmed in BOTH
+            // decompiles, remc2 sub_66750): ±1 steps with p(+1) =
+            // 78/157; draws CONDITIONAL on being inside ±amp, out-of-
+            // band offsets pull back deterministically (:63363-92).
+            for w in [&mut v32, &mut v31] {
+                if *w <= amp {
+                    if *w >= -amp {
+                        let d = self.ent_rand(i);
+                        *w += 2 * ((d % 0x9D) / 79) as i32 - 1;
+                    } else {
+                        *w += 1;
+                    }
+                } else {
+                    *w -= 1;
+                }
+            }
+            // Advance; the display point offsets by v32·12 in BOTH z
+            // and the yaw+0x200 horizontal perpendicular — a diagonal
+            // zigzag plane, max ±96 units (:63394-412).
+            base.0 = base.0.wrapping_add(delta.0);
+            base.1 = base.1.wrapping_add(delta.1);
+            base.2 = base.2.wrapping_add(delta.2);
+            let off = (v32 * scale) as i16;
+            disp = (base.0, base.1, base.2.wrapping_add(off));
+            let mut p = (disp.0, disp.1, 0i16);
+            Self::polar_step(&mut p, yaw0.wrapping_add(0x200) & 0x7FF, 0, off);
+            disp.0 = p.0;
+            disp.1 = p.1;
+            v30 -= 1;
+            if v30 < 0 {
+                break;
+            }
+        }
+        // ---- endpoint (:63421-49) ----
+        let (f69, f44, f140, f146) = {
+            let e = &self.ent[i];
+            (e.f69, e.f44, e.f140, e.f146)
+        };
+        // Accuracy stats sub_526C0 (:62585): human-owned shots only.
+        if owner == PLAYER_TARGET {
+            self.shots += 1;
+            if hit.is_some_and(|s| match s {
+                MailTarget::Pool(j) => f146 == self.ent[j].id24 || f146 == j as u16,
+                MailTarget::Player => false,
+            }) {
+                self.hits += 1;
+            }
+        }
+        // The explosion lands at the SEGMENT-WALK endpoint, not the
+        // beam's snapped position. Shielded (+17 bit7) class-3
+        // victims with mana ≥ +140/4 quarter the payload — no drain,
+        // no deflection (:63435-47). +146: the original stamps
+        // garbage when nothing was hit (remc2 guards this) — we
+        // stamp hit-or-0, flagged deviation.
+        if let Some(fx) = self.spawn_effect(f69, disp.0, disp.1, disp.2) {
+            let quartered = match hit {
+                Some(MailTarget::Pool(j)) => {
+                    self.ent[j].flags & 0x8000 != 0
+                        && self.ent[j].class64 == 3
+                        && f140 / 4 <= self.ent[j].f140
+                }
+                _ => false, // player shields = the spell track
+            };
+            let e = &mut self.ent[fx];
+            e.id24 = owner;
+            e.f30 = yaw0;
+            e.f32 = pitch0;
+            e.f146 = match hit {
+                Some(MailTarget::Pool(j)) => j as u16,
+                Some(MailTarget::Player) => PLAYER_TARGET,
+                None => 0,
+            };
+            e.f44 = if quartered { f44 >> 2 } else { f44 };
+        }
+        self.ent[i].flags |= 0x400;
+        false
     }
 
     /// sub_54180 (:63789): the straight bolt (m13, and interim m14) —
@@ -765,6 +923,21 @@ impl Gen {
                 self.refill_life(s);
                 self.set_sprite(s, 41);
             }
+            // The standing fire / ground wave (state 6, sub_252D0):
+            // life 240, 50 ch0 per tick via the /10 writer, sprite
+            // 228 (the flame-size family +86 walks ±1). Tree deaths
+            // override life and set the f46 trunk offset.
+            6 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 6;
+                e.max_life = 240;
+                e.f44 = 50;
+                e.flags &= !8;
+                e.flags |= 0x20000;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 228);
+            }
             // sub_3A6B0 (:46560 region): the water splash. Grounded.
             5 => {
                 let e = &mut self.ent[s];
@@ -876,6 +1049,7 @@ impl Gen {
         match self.ent[i].tick70 {
             0 => self.fire_tick(i, ctx),
             1 => self.spreader_tick(i),
+            6 => self.standing_fire_tick(i, ctx),
             5 => {
                 self.ent[i].act_life -= 1;
                 if self.ent[i].act_life < 0 {
@@ -889,6 +1063,129 @@ impl Gen {
             25 => self.steal_flash_tick(i, ctx),
             41 => self.ball_tick(i),
             _ => false,
+        }
+    }
+
+    /// sub_252D0 (:28199), class-10 state 6: the STANDING fire (tree
+    /// burn / ground wave). The flame sprite family walks +86 up 7
+    /// steps then back down over the last 12 ticks; the fire rides
+    /// ground + f46 (3/4 up a burning tree's trunk), dies on water,
+    /// and — while +18 bit0 (0x10000) is clear — broadcasts +44 ch0
+    /// through the /10 tree-discount writer EVERY tick, so burning
+    /// trees torch their neighbors (~5/tick) and forests chain-burn.
+    /// Deviation: the original also spits a (10,13) smoke puff on
+    /// 1/7 of shrink ticks — the LCG draw is kept for stream parity,
+    /// the puff itself is skipped (decorative).
+    fn standing_fire_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let pre = self.ent[i].act_life;
+        self.ent[i].act_life = pre - 1;
+        let mut done = pre < 0;
+        if !done {
+            // sub_44C10 player-distance bookkeeping omitted (HUD/AI).
+            if self.ent[i].act_life < 12 {
+                if self.ent[i].f26 > 0 {
+                    self.ent[i].f26 -= 1;
+                    self.ent[i].type86 -= 1;
+                    if self.ent[i].flags & 0x80 == 0 {
+                        let d = self.ent_rand(i);
+                        if d % 7 == 0 {
+                            // (10,13) smoke puff — skipped.
+                        }
+                    }
+                }
+            } else if self.ent[i].f26 <= 6 {
+                self.ent[i].f26 += 1;
+                self.ent[i].type86 += 1;
+            }
+            let (x, y, f46) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.f46)
+            };
+            self.ent[i].z = (self.ground_z(x, y) as i16).wrapping_add(f46);
+            if self.on_water_pub(x, y) {
+                done = true;
+            }
+        }
+        if done {
+            self.ent[i].flags |= 0x400;
+        }
+        // The damage write runs even on the death tick (:28255-56
+        // falls through LABEL_11).
+        if self.ent[i].flags & 0x10000 == 0 {
+            let amt = self.ent[i].f44 as u32;
+            self.area_write(i, 0, amt, ctx, true);
+        }
+        false
+    }
+
+    /// sub_49890/499C0/49A50 (:57662-57790), class-2 model 0 — the
+    /// TREE. State 0: ch0 intake; death sparks a (10,6) standing fire
+    /// owned by the attacker, riding 3/4 up the trunk, with ONE
+    /// tree-LCG draw setting rand%60+130 as BOTH the fire's life and
+    /// the tree's burn timer; the tree goes un-hittable, state 1.
+    /// State 1: burn down; below 60 → state 2 + the charred sprite
+    /// (83→226, 84→227). All states follow the ground and splash-die
+    /// on water. (Pool-full fire spawn skips the draw and retries
+    /// next tick, as the original.)
+    pub(crate) fn tree_tick(&mut self, i: usize) {
+        match self.ent[i].tick70 {
+            0 => {
+                self.ent[i].flags |= 0x20000; // +18 |= 2 (:57674)
+                if self.ent[i].mail[0].1 != 0 {
+                    let (amt, src) = self.ent[i].mail[0];
+                    self.ent[i].mail[0].1 = 0;
+                    self.ent[i].act_life -= amt as i32;
+                    if self.ent[i].act_life < 0 {
+                        let (x, y, z, f84) = {
+                            let e = &self.ent[i];
+                            (e.x, e.y, e.z, e.f84)
+                        };
+                        if let Some(f) = self.spawn_effect(6, x, y, z) {
+                            // The mailbox source is already the
+                            // broadcaster's +24 owner; the original's
+                            // second +24 hop is the identity for it.
+                            self.ent[f].id24 = src;
+                            self.ent[f].f46 = (3 * f84 as i32 / 4) as i16;
+                            let d = self.ent_rand(i);
+                            let burn = (d % 60 + 130) as i32;
+                            self.ent[f].act_life = burn;
+                            self.ent[i].act_life = burn;
+                            self.ent[i].flags &= !8; // no longer hittable
+                            self.ent[i].tick70 = 1;
+                        }
+                    }
+                }
+                self.tree_ground_water(i);
+            }
+            1 => {
+                self.ent[i].act_life -= 1;
+                if self.ent[i].act_life < 60 {
+                    self.ent[i].tick70 = 2;
+                    match self.ent[i].type86 {
+                        83 => self.set_sprite(i, 226),
+                        84 => self.set_sprite(i, 227),
+                        _ => {}
+                    }
+                }
+                self.tree_ground_water(i);
+            }
+            _ => self.tree_ground_water(i),
+        }
+    }
+
+    /// The tree handlers' shared tail (:57703-11): z follows the live
+    /// ground; water under the trunk → splash (owner passed on) and
+    /// despawn.
+    fn tree_ground_water(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
+        if self.on_water_pub(x, y) {
+            let owner = self.ent[i].id24;
+            let z = self.ent[i].z;
+            if let Some(s) = self.spawn_effect(5, x, y, z) {
+                self.ent[s].id24 = owner;
+            }
+            self.ent[i].flags |= 0x400;
         }
     }
 

@@ -173,13 +173,46 @@ impl Simulation {
         f.vy *= DRAG_PER_TICK;
         f.vz *= DRAG_PER_TICK;
 
+        let from = (f.x, f.z, f.y);
         f.x += f.vx * TICK_DT;
         f.y += f.vy * TICK_DT;
         f.z += f.vz * TICK_DT;
 
+        // Forced knock displacement (the kraken buffet, Type_160
+        // v_22/v_24 — :55204-218): part of the move, BEFORE the wall
+        // gate, so the drag cannot pull the carpet through a wall.
+        if let Some(w) = &mut self.world {
+            if let Some((dir, mag)) = w.take_knock_step() {
+                let a = dir as f32 * std::f32::consts::TAU / 2048.0;
+                let d = mag as f32 / 256.0; // engine units → tiles
+                f.x += d * a.sin();
+                f.z -= d * a.cos();
+            }
+        }
+
         // Wrap into [0, 256) like the original's 16-bit axes.
         f.x = f.x.rem_euclid(MAP_TILES as f32);
         f.z = f.z.rem_euclid(MAP_TILES as f32);
+
+        // The human commit gate (sub_45410): type-8 walls are
+        // horizontally impassable at any altitude — slide along the
+        // nearer cardinal or discard the whole move. Blocking is the
+        // explicit gate, not the height clamp; the burn-to-breach
+        // castle exploit lives on the terrain side and is unaffected.
+        if let Some(w) = &self.world {
+            match w.player_wall_gate(from, (f.x, f.z, f.y)) {
+                Some((x, z, alt)) => {
+                    f.x = x;
+                    f.z = z;
+                    f.y = alt;
+                }
+                None => {
+                    f.x = from.0;
+                    f.z = from.1;
+                    f.y = from.2;
+                }
+            }
+        }
 
         let floor = self.ground_height(self.flyer.x, self.flyer.z) + MIN_CLEARANCE;
         let f = &mut self.flyer;

@@ -599,12 +599,21 @@ impl ApplicationHandler for App {
                     }
                     (p + d * alpha).rem_euclid(256.0)
                 };
+                // The knock camera kick (remc1 :52433-37): the view
+                // pitches down ~v_22/8 engine-angle units while a
+                // buffet/knock is live (the kraken drag feedback).
+                let kick = self
+                    .sim
+                    .world
+                    .as_ref()
+                    .map(|w| w.knock_magnitude() as f32 / 8.0 * (std::f32::consts::TAU / 2048.0))
+                    .unwrap_or(0.0);
                 let cam = CameraView {
                     x: lerp_wrap(a.x, b.x),
                     y: a.y + (b.y - a.y) * alpha,
                     z: lerp_wrap(a.z, b.z),
                     yaw: a.yaw + (b.yaw - a.yaw) * alpha,
-                    pitch: a.pitch + (b.pitch - a.pitch) * alpha,
+                    pitch: a.pitch + (b.pitch - a.pitch) * alpha - kick,
                     fov_y: FOV_Y,
                 };
                 if let Some(r) = &mut self.renderer {

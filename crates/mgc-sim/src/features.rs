@@ -364,6 +364,18 @@ pub(crate) struct Gen {
     pub(crate) player_mail: [(u32, u16); 6],
     /// Total ch0 damage the (invincible) player has absorbed.
     pub(crate) player_damage: u64,
+    /// The player's knock/buffet fields (Type_160 v_24 direction /
+    /// v_22 magnitude, :23225-28 kraken writer, :55204-218 consumer):
+    /// per-tick horizontal displacement forced onto the carpet.
+    /// DIRECT struct writes in the original — spawn grace does NOT
+    /// wipe them, so even the invincible dev player gets dragged.
+    pub(crate) player_knock: (u16, i16),
+    /// The human player's village-aggro timer (the wizard struct's
+    /// +528): set to 200 by offenses against village property or
+    /// population (building hits, villager-family hits and kills),
+    /// decremented once per world tick (:55405-06). m4 militia only
+    /// hunt a wizard whose timer is live — the hostility gate.
+    pub(crate) player_aggro: i16,
     /// Player stat counters: creatures killed (`Type_160+359`), shots
     /// resolved (+343), shots that struck the aimed target (+347).
     pub(crate) kills: u32,
@@ -411,6 +423,8 @@ impl Gen {
             spawn_count: [0; 20],
             player_mail: [(0, 0); 6],
             player_damage: 0,
+            player_knock: (0, 0),
+            player_aggro: 0,
             kills: 0,
             shots: 0,
             hits: 0,
@@ -1788,6 +1802,171 @@ impl Gen {
             self.smooth_perimeter(cx, cy, half_h as u16, half_w as u16, 2);
             self.smooth_perimeter(cx, cy, half_h as u16, half_w as u16, 5);
         }
+    }
+
+    /// sub_28DC0 (:30767), byte70 52: the LIVE village building.
+    /// Damage intake sub_29640 (ch0; the decompile's u16 amount read
+    /// is union slicing — writers store u32): non-lethal hits pop one
+    /// militiaman (m4) out at (x+f80, y) while occupants +26 > 2, and
+    /// put a wizard attacker on the village's wanted list (+528 =
+    /// 200); death latches the killer and moves to state 53. Every 40
+    /// ticks the mana pool +140 tracks occupants<<8, and a FULL house
+    /// with capacity > 5 has a ~1/16 chance to emit a villager.
+    /// Deviation: the ch1 possession re-owner (:30800-12) is the
+    /// spell track and is skipped.
+    pub(crate) fn tick_building_live(&mut self, i: usize) {
+        if self.ent[i].act_life < 0 {
+            // Killed directly (castle crush life = -1, :17638).
+            self.ent[i].tick70 = 53;
+            return;
+        }
+        if self.ent[i].mail[0].1 != 0 {
+            let (amt, src) = self.ent[i].mail[0];
+            self.ent[i].mail[0].1 = 0;
+            self.ent[i].act_life -= amt as i32;
+            if self.ent[i].act_life < 0 {
+                self.ent[i].f38 = src;
+                self.ent[i].tick70 = 53;
+                return;
+            }
+            self.ent[i].f40 = src;
+            if self.ent[i].f26 > 2 {
+                self.ent[i].f26 -= 1;
+                let (x, y, f80) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.f80)
+                };
+                let sx = x.wrapping_add(f80);
+                let z = self.ground_z(sx, y) as i16;
+                self.spawn_creature(4, sx, y, z);
+            }
+            if src == crate::mobs::PLAYER_TARGET {
+                self.player_aggro = 200;
+            }
+        }
+        if self.ent[i].f63 % 40 == 0 {
+            self.ent[i].f140 = (self.ent[i].f26 as i32) << 8;
+            let cap = self.ent[i].f128;
+            if cap > 5 && self.ent[i].f26 >= cap {
+                let d = self.ent_rand(i) % cap as u32;
+                if d > (cap - cap / 16 - 2) as u32 {
+                    self.building_emit(i);
+                }
+            }
+        }
+    }
+
+    /// sub_28D10 (:30715): one villager emitted at (x+f80, y) —
+    /// LCG%12: 0-1 militia m4, 2-3 migrant m14, 4-8 villager m13,
+    /// 9-11 settler m12 (their natural spawn states 25/85/79/73).
+    fn building_emit(&mut self, i: usize) {
+        let d = self.ent_rand(i) % 12;
+        let model = match d {
+            0 | 1 => 4,
+            2 | 3 => 14,
+            4..=8 => 13,
+            _ => 12,
+        };
+        let (x, y) = {
+            let e = &self.ent[i];
+            (e.x.wrapping_add(e.f80), e.y)
+        };
+        let z = self.ground_z(x, y) as i16;
+        self.spawn_creature(model, x, y, z);
+    }
+
+    /// sub_28FE0 (:30835), byte70 53: the one-shot collapse. Walks
+    /// the BUILD footprint once: per occupied cell an occupant
+    /// evacuates (the LAST one is a settler m12, ≥4 remaining draw
+    /// from the emit mix, otherwise a militiaman m4 — village defense
+    /// IS the evacuation); rubble = protection cleared, angle nibble
+    /// 1, raised cells knocked down (codes hi==3: -12/-16 towers;
+    /// others LCG%50 ≤ 20 → the full 4·(lo-1), else minus LCG%20 of
+    /// it); then one region retexture and despawn. No mana spill.
+    /// Deviation: evacuee z alternates 32·base / 32·(base-10) every
+    /// 8th cell in the original — approximated with the cell counter.
+    pub(crate) fn tick_building_collapse(&mut self, i: usize) {
+        let e = self.ent[i];
+        let cx = ((e.x as u32 + 128) >> 8) as u8;
+        let cy = ((e.y as u32 + 128) >> 8) as u8;
+        let base_h = (e.z >> 5) as i32;
+        let def = self.assets.build_tab[e.f71 as usize % self.assets.build_tab.len()];
+        let (w, h) = (def.w as u16, def.h as u16);
+        let (half_w, half_h) = ((w >> 1) as u8, (h >> 1) as u8);
+        let x0 = cx.wrapping_sub(half_w);
+        let y0 = cy.wrapping_sub(half_h);
+        let mut rows = h;
+        let (mut x, mut y) = (x0, y0);
+        let mut c = def.offset as usize;
+        let mut cell_n = 0u32;
+        while rows != 0 {
+            let ctl = self.assets.build_dat[c] as i8;
+            c += 1;
+            if ctl == 0 {
+                y = y.wrapping_add(1);
+                rows -= 1;
+                x = x0;
+                continue;
+            }
+            if ctl < 0 {
+                x = x.wrapping_add((-(ctl as i32)) as u8);
+                continue;
+            }
+            for _ in 0..ctl {
+                let b = self.assets.build_dat[c];
+                c += 1;
+                if b != 0 {
+                    let t = tile(x, y);
+                    cell_n += 1;
+                    // Evacuation (:30907-35).
+                    let occ = self.ent[i].f26;
+                    if occ > 0 {
+                        self.ent[i].f26 = occ - 1;
+                        let ez = if cell_n & 8 != 0 {
+                            (32 * (base_h - 10)) as i16
+                        } else {
+                            (32 * base_h) as i16
+                        };
+                        let wx = ((x as u16) << 8) + 128;
+                        let wy = ((y as u16) << 8) + 128;
+                        if occ == 1 {
+                            self.spawn_creature(12, wx, wy, ez);
+                        } else if occ - 1 >= 4 {
+                            self.building_emit(i);
+                        } else {
+                            self.spawn_creature(4, wx, wy, ez);
+                        }
+                    }
+                    // Rubble (:30940-93).
+                    self.t.angle[t] = (self.t.angle[t] & 0x70) | 1;
+                    let hi = b >> 4;
+                    let lo = b % 16;
+                    if hi == 3 {
+                        match lo % 3 {
+                            1 if self.t.height[t] > 12 => self.t.height[t] -= 12,
+                            2 if self.t.height[t] > 16 => self.t.height[t] -= 16,
+                            _ => {}
+                        }
+                    } else if hi >= 1 && lo != 0 {
+                        let full = 4 * (lo as i32 - 1);
+                        let d = lcg32(&mut self.ent[i].rand);
+                        let drop = if d % 50 <= 20 {
+                            full
+                        } else {
+                            full - (lcg32(&mut self.ent[i].rand) % 20) as i32
+                        };
+                        let hh = self.t.height[t] as i32;
+                        self.t.height[t] = (hh - drop).clamp(0, 255) as u8;
+                    }
+                }
+                x = x.wrapping_add(1);
+            }
+        }
+        let x1 = cx.wrapping_add(half_w);
+        let y1 = cy.wrapping_add(half_h);
+        self.retile_and_shade(x0, y0, x1, y1);
+        self.recompute_protected(x0, y0, x1, y1);
+        self.ent[i].flags |= 0x400;
     }
 
     /// sub_33800 (:40980): paint one building tile. `a4 < 8` writes a

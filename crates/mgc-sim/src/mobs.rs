@@ -536,6 +536,42 @@ impl Gen {
         self.ent[i].f30 = (self.ent[i].f30 as i32 + turn as i32) as u16 & 0x7FF;
     }
 
+    /// The human player's commit gate sub_45410_45750 (:55065):
+    /// type-8 wall tiles are horizontally impassable for the carpet at
+    /// ANY altitude (`sub_11810 == 0x100` — only the wall type maps to
+    /// exactly that mask; the human row 7 clears bit 0x100 while every
+    /// flying creature row allows it). A blocked move retries along
+    /// the two cardinals adjacent to the move bearing (floor, then
+    /// ceil multiple of 512), each stepped from the CURRENT position
+    /// scaled by angular proximity `dist·(512-Δ)>>9` — the original's
+    /// wall slide; both blocked → the whole move is discarded (None).
+    /// The routine's unconditional trailing z-floor (ground + row
+    /// v_12) stays with the flyer's own clamp for now (Phase 5).
+    pub(crate) fn player_wall_gate(
+        &self,
+        cur: (u16, u16, i16),
+        prop: (u16, u16, i16),
+    ) -> Option<(u16, u16, i16)> {
+        if self.cap_bit(prop.0, prop.1) != 0x100 {
+            return Some(prop);
+        }
+        let v1 = Self::angle_between(cur.0, cur.1, prop.0, prop.1);
+        // sub_42340 (3D distance) and sub_42180 (vertical bearing).
+        let dh2 = Self::dist2_sq(cur.0, cur.1, prop.0, prop.1);
+        let dz = prop.2.wrapping_sub(cur.2) as i32;
+        let v7 = Self::isqrt((dh2 as u32).wrapping_add((dz * dz) as u32)) as i32;
+        let v8 = Self::pitch_toward(cur.2, prop.2, Self::isqrt(dh2 as u32) as i32);
+        for cardinal in [(v1 >> 9) << 9, ((v1 >> 9).wrapping_add(1) << 9) & 0x7FF] {
+            let scaled = (v7 * (512 - Self::angdist(v1, cardinal) as i32)) >> 9;
+            let mut slid = cur;
+            Self::polar_step(&mut slid, cardinal, v8, scaled as i16);
+            if self.cap_bit(slid.0, slid.1) != 0x100 {
+                return Some(slid);
+            }
+        }
+        None
+    }
+
     // ---- the six state primitives (:21311-:21871) --------------------------
 
     /// Squared 2D distance in engine units (16-bit wrapping deltas).
@@ -653,8 +689,11 @@ impl Gen {
             return;
         }
         let tgt = self.ent[i].f146;
-        let (tx, ty, tz, tclass, tmodel) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz, 3u8, 0u8)
+        // tf66/tf67 = the target's OWN filter fields (the player
+        // entity keeps NewEvent's -1/-1): m6/m8 copy them onto their
+        // beams (:23261-64, :22156-60) — hit-anything vs the player.
+        let (tx, ty, tz, tf66, tf67) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, 0xFFu8, 0xFFu8)
         } else {
             let t = tgt as usize;
             if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0
@@ -664,7 +703,7 @@ impl Gen {
                 return;
             }
             let c = &self.ent[t];
-            (c.x, c.y, c.z, c.class64, c.model65)
+            (c.x, c.y, c.z, c.f66, c.f67)
         };
         let e = &self.ent[i];
         if e.f63 & 3 == 0 {
@@ -684,8 +723,30 @@ impl Gen {
                 self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 0);
             }
         }
-        // m6's spit burst (:23243-66): while +71 > 0, one zigzag bolt
-        // per tick, filter narrowed to the target's class/model.
+        // m6's buffet drag (:23215-31): the counter +26 cycles 1..41
+        // then -90 — 41 ON ticks per 132-tick cycle. Each ON tick
+        // re-arms the victim's knock fields (Type_160 v_24 dir /
+        // v_22 = 80): a per-tick pull TOWARD the kraken, applied by
+        // the human move. These are DIRECT struct writes, not a
+        // mailbox — spawn grace does not shield them (the "tractor
+        // beam"). v_26 = 256 is written but read by nothing. Sound
+        // 42 omitted (audio track).
+        if model == 6 {
+            self.ent[i].f26 += 1;
+            if self.ent[i].f26 > 40 {
+                self.ent[i].f26 = -90;
+            }
+            if self.ent[i].f26 > 0 && tgt == PLAYER_TARGET {
+                let (kx, ky) = (self.ent[i].x, self.ent[i].y);
+                let dir = Self::angle_between(kx, ky, ctx.px, ctx.py)
+                    .wrapping_add(0x400)
+                    & 0x7FF;
+                self.player_knock = (dir, 80);
+            }
+        }
+        // m6's spit burst (:23243-66): while +71 > 0, one lightning
+        // beam per tick, filter copied from the target's own fields,
+        // beam row [6] (:23259 — inert in flight, no homing).
         if model == 6 && self.ent[i].f71 > 0 {
             self.ent[i].f71 -= 1;
             let (x, y, z, owner, f84) = {
@@ -693,7 +754,8 @@ impl Gen {
                 (e.x, e.y, e.z, e.id24, e.f84)
             };
             if let Some(p) = self.spawn_zigzag(x, y, z.wrapping_add(f84 as i16)) {
-                self.arm_projectile(p, owner, tclass, tmodel, tgt, tx, ty, tz, 800, 23);
+                self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 800, 23);
+                self.ent[p].row156 = 6;
             }
         }
         // m2's post-hit recoil cooldown (:22356-62 arms it).
@@ -724,7 +786,7 @@ impl Gen {
                     }
                     // Kraken: arm the 5-bolt spit (:23235-42).
                     6 => self.ent[i].f71 = 5,
-                    _ => self.attack_thunk(i, model, tgt, tx, ty, tz, tclass, tmodel),
+                    _ => self.attack_thunk(i, model, tgt, tx, ty, tz, tf66, tf67),
                 }
             }
         }
@@ -872,20 +934,35 @@ impl Gen {
     /// every v_26 while in range; drop back to (stationary) wander
     /// when the target leaves or dies. Interim stub for the mimic's
     /// custom family handlers.
-    fn mimic_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+    /// m4 CHASE (sub_1BB20 :22690): the militiaman stands his ground
+    /// and shoots. Entering arms him (sub_1BC50 :22745 — ONE LCG:
+    /// sprite 206 on 11/20 else 1, speed 0, filter = target
+    /// class/model); every v_26 in range fires the sub_1A990 dart and
+    /// refreshes the wizard's wanted timer (:22714); break state is
+    /// base+0 (24, the disarm slot).
+    fn militia_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         let tgt = self.ent[i].f146;
-        let (tx, ty, tz) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz)
+        let (tx, ty, tz, tc, tm) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, 3u8, 0u8)
         } else {
             let t = tgt as usize;
             if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0
                 || self.ent[t].act_life < 0
             {
-                self.ent[i].tick70 = base + 1;
+                self.ent[i].tick70 = base;
                 return;
             }
-            (self.ent[t].x, self.ent[t].y, self.ent[t].z)
+            let c = &self.ent[t];
+            (c.x, c.y, c.z, c.class64, c.model65)
         };
+        if self.ent[i].type86 == 0 {
+            let d = self.ent_rand(i);
+            let armed = if d % 20 <= 10 { 206 } else { 1 };
+            self.set_sprite(i, armed);
+            self.ent[i].f126 = 0;
+            self.ent[i].f66 = tc;
+            self.ent[i].f67 = tm;
+        }
         let e = &self.ent[i];
         if e.f63 & 3 == 0 {
             let yaw = Self::angle_between(e.x, e.y, tx, ty);
@@ -898,10 +975,334 @@ impl Gen {
             let dz = tz.wrapping_sub(e.z) as i32;
             let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
             if Self::isqrt(sq as u32) >= row.v_28 as u32 {
-                self.ent[i].tick70 = base + 1;
+                self.ent[i].tick70 = base;
             } else {
                 self.attack_thunk(i, 4, tgt, tx, ty, tz, 0, 0);
+                if tgt == PLAYER_TARGET {
+                    self.player_aggro = 200;
+                }
             }
+        }
+    }
+
+    /// m4 IDLE, state 25 (sub_1B5D0 :22436): the unarmed-look /
+    /// filter restore, then every 4·v_26 the acquisition ladder —
+    /// (1) a wizard on the village wanted list (+528 ≠ 0, the
+    /// hostility gate) within aggro range, (2) the nearest burrower
+    /// (m9), NO gate — villagers fight burrowers on their own, (3) a
+    /// house within 0x1000 to move back into (the death slot with
+    /// +26 = 1 = the silent-absorb walk-in; house occupants++).
+    /// Deviation: the idle pair-up pack (:22650-84) stays stubbed.
+    fn militia_idle(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        if self.ent[i].type86 != 0 {
+            // Disarm (sub_1BCE0 :22765).
+            self.set_sprite(i, 0);
+            self.ent[i].f66 = 3;
+            self.ent[i].f67 = 0xFF;
+        }
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let (v26, r) = (row.v_26, row.v_28 as i32);
+        if (self.ent[i].f63 as i16) % (4 * v26) != 0 {
+            return;
+        }
+        if self.player_aggro != 0 && self.player_in_aggro_range(i, ctx) {
+            self.ent[i].f146 = PLAYER_TARGET;
+            self.ent[i].tick70 = base + 2;
+            return;
+        }
+        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+        let r2 = r * r;
+        let mut best: Option<(usize, i32)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 == 5 && c.model65 == 9 && c.tick70 != 120 && c.act_life >= 0 {
+                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                if d2 <= r2 && best.map_or(true, |(_, b)| d2 < b) {
+                    best = Some((j, d2));
+                }
+            }
+        }
+        if let Some((j, _)) = best {
+            self.ent[i].f146 = j as u16;
+            self.ent[i].tick70 = base + 2;
+            return;
+        }
+        if let Some(b) = self.nearest_building(ex, ey, Some(0x1000 * 0x1000)) {
+            self.ent[b].f26 += 1;
+            self.ent[i].f26 = 1;
+            self.ent[i].tick70 = base + 4;
+        }
+    }
+
+    /// Nearest live m45 house (the original's per-tick +36470 list;
+    /// pool order stands in for list order, same approximation as the
+    /// pack scans). `max_d2` = squared engine-unit window.
+    fn nearest_building(&self, x: u16, y: u16, max_d2: Option<i32>) -> Option<usize> {
+        let mut best: Option<(usize, i32)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 {
+                continue;
+            }
+            let d2 = Self::dist2_sq(x, y, c.x, c.y);
+            if max_d2.is_some_and(|m| d2 > m) {
+                continue;
+            }
+            if best.map_or(true, |(_, b)| d2 < b) {
+                best = Some((j, d2));
+            }
+        }
+        best.map(|(j, _)| j)
+    }
+
+    /// m12 settler WANDER, state 73 (sub_1EED0 :24994): jitter-walk;
+    /// +26 runs down one per think tick — at 0 → +26 = 1, SEEK (75).
+    fn m12_wander(&mut self, i: usize) {
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
+        if (self.ent[i].f63 as i16) % v26 == 0 {
+            let d1 = self.ent_rand(i);
+            let d2 = self.ent_rand(i);
+            let mag = ((d2 & 0xFF) + 85) as i32;
+            let sign = if d1 % 157 >= 79 { 1 } else { -1 };
+            self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
+            self.ent[i].f26 -= 1;
+            if self.ent[i].f26 <= 0 {
+                self.ent[i].f26 = 1;
+                self.ent[i].tick70 = 75;
+            }
+        }
+    }
+
+    /// m12 SEEK, state 75 (sub_1F390 :25198): the nearest house on
+    /// the m45 list (state-51 sites included — settlers cluster
+    /// around construction) → APPROACH; none on the map → wander
+    /// forever (villages only grow around existing buildings).
+    fn m12_seek(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        if let Some(b) = self.nearest_building(x, y, None) {
+            self.ent[i].f146 = b as u16;
+            self.ent[i].f26 = 10;
+            self.ent[i].tick70 = 74;
+        } else {
+            self.ent[i].f26 = 5;
+            self.ent[i].tick70 = 73;
+        }
+    }
+
+    /// m12 APPROACH, state 74 (sub_1F120 :25101): steer to the anchor
+    /// house; +26 runs down every v_26/2 ticks (target gone or
+    /// patience out → wander); inside 0xA00 → BUILD with +26 = 0.
+    fn m12_approach(&mut self, i: usize) {
+        let t = self.ent[i].f146 as usize;
+        let valid = t != 0
+            && t < self.ent.len()
+            && self.ent[t].class64 == 10
+            && self.ent[t].model65 == 45;
+        if !valid {
+            self.ent[i].f26 = 5;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = 73;
+            return;
+        }
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
+        if (self.ent[i].f63 as i16) % (v26 / 2).max(1) == 0 {
+            self.ent[i].f26 -= 1;
+            if self.ent[i].f26 <= 0 {
+                self.ent[i].f26 = 5;
+                self.ent[i].f146 = 0;
+                self.ent[i].tick70 = 73;
+                return;
+            }
+        }
+        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+        let (bx, by) = (self.ent[t].x, self.ent[t].y);
+        self.ent[i].f34 = Self::angle_between(ex, ey, bx, by);
+        self.creature_move(i);
+        if Self::dist2_sq(ex, ey, bx, by) < 0xA00 * 0xA00 {
+            self.ent[i].f26 = 0;
+            self.ent[i].tick70 = 72;
+        }
+    }
+
+    /// m12 BUILD, state 72 (sub_1EA40 :24835): one site attempt per
+    /// tick against the anchor house +146 — attempt # = the side
+    /// (E/W/S/N), three settler-LCG draws each (type (rand&7)+25 =
+    /// tent..house range, gap roll, perpendicular jitter). Water
+    /// aborts to wander (+26 = 2); a rough or overlapping site just
+    /// burns the attempt; the fifth entry resets (+26 = 1) to
+    /// wander. Success spawns the (10,45) site in state 51 — the
+    /// SAME 30-tick construction the features pass runs — and the
+    /// settler retires into villager-feeder state 79: model stays
+    /// 12, dispatch is state-based, exactly the original's trick.
+    fn m12_build(&mut self, i: usize) {
+        let a = self.ent[i].f146 as usize;
+        let anchor_ok = a != 0
+            && a < self.ent.len()
+            && self.ent[a].class64 == 10
+            && self.ent[a].model65 == 45;
+        if !anchor_ok {
+            self.ent[i].f26 = 5;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = 73;
+            return;
+        }
+        let pre = self.ent[i].f26;
+        self.ent[i].f26 = pre + 1;
+        if pre >= 4 {
+            self.ent[i].f26 = 1;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = 73;
+            return;
+        }
+        let d = self.ent_rand(i);
+        let btype = ((d & 7) + 25) as u16;
+        let def = self.assets.build_tab[btype as usize % self.assets.build_tab.len()];
+        // sub_1E9B0 (:24815): inflated footprint halves — the house
+        // spacing margin.
+        let half_x = ((def.w as i32) << 8) / 2 + 768;
+        let half_y = ((def.h as i32) << 8) / 2 + 768;
+        let (ax, ay, az, af80, af82) = {
+            let e = &self.ent[a];
+            (e.x, e.y, e.z, e.f80 as i32, e.f82 as i32)
+        };
+        let d1 = (self.ent_rand(i) % 3) as i32;
+        let d2 = (self.ent_rand(i) % 3) as i32;
+        let (mut px, mut py) = (ax as i32, ay as i32);
+        match self.ent[i].f26 {
+            1 => {
+                px += af80 + half_x + (d1 << 8) + 256;
+                py += (d2 << 8) - 1280;
+            }
+            2 => {
+                px -= af80 + half_x + (d1 << 8) + 256;
+                py += (d2 << 8) - 1280;
+            }
+            3 => {
+                px += (d1 << 8) - 1280;
+                py += af82 + half_y + (d2 << 8) + 256;
+            }
+            _ => {
+                px += (d1 << 8) - 1280;
+                py -= af82 + half_y + (d2 << 8) + 256;
+            }
+        }
+        let (px, py) = (px as u16, py as u16);
+        if self.on_water_pub(px, py) {
+            self.ent[i].f26 = 2;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = 73;
+            return;
+        }
+        // Flatness (sub_1E920/sub_35EA0): 4-corner max−min under the
+        // 15/16 threshold.
+        let thr = if (half_y >> 7) + (half_x >> 7) > 4 { 16 } else { 15 };
+        if self.site_roughness(px, py, (half_x >> 8) as u8, (half_y >> 8) as u8) >= thr {
+            return;
+        }
+        // Overlap vs every house, then every castle (:24940-75).
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            let house = c.class64 == 10 && c.model65 == 45;
+            let castle = c.class64 == 3 && c.model65 == 2;
+            if !(house || castle) || c.flags & 0x400 != 0 {
+                continue;
+            }
+            let dx = (c.x.wrapping_sub(px) as i16 as i32).abs();
+            let dy = (c.y.wrapping_sub(py) as i16 as i32).abs();
+            if dx <= c.f80 as i32 + half_x && dy <= c.f82 as i32 + half_y {
+                return;
+            }
+        }
+        // Site accepted: the house goes up, the settler settles.
+        if let Some(b) = self.spawn_creator(45, px, py, az) {
+            self.building_fixup(b, btype);
+            self.ent[b].tick70 = 51;
+        }
+        self.ent[i].f146 = 0;
+        self.ent[i].tick70 = 79;
+    }
+
+    /// sub_1E920/sub_35EA0 (:24802/:36260): 4-corner max−min height
+    /// of the prospective footprint (spans in tiles), with the parity
+    /// nudge on the start corner.
+    fn site_roughness(&self, x: u16, y: u16, w_tiles: u8, h_tiles: u8) -> i32 {
+        let mut v4 = ((x >> 8) as u8).wrapping_sub(w_tiles >> 1);
+        let v5 = ((y >> 8) as u8).wrapping_sub(h_tiles >> 1);
+        if (v4 as u16 + v5 as u16) % 2 == 1 {
+            v4 = v4.wrapping_add(1);
+        }
+        let h = |cx: u8, cy: u8| self.t.height[crate::features::tile(cx, cy)] as i32;
+        let c = [
+            h(v4, v5),
+            h(v4.wrapping_add(w_tiles), v5),
+            h(v4.wrapping_add(w_tiles), v5.wrapping_add(h_tiles)),
+            h(v4, v5.wrapping_add(h_tiles)),
+        ];
+        *c.iter().max().unwrap() - *c.iter().min().unwrap()
+    }
+
+    /// m13/m14 feeder wander (sub_1F640 :25296 / sub_1FAC0 :25472):
+    /// with a house target — steer in from beyond 0x800, drop it if
+    /// the house fills (+128 ≤ +26), walk in the door inside 0x800
+    /// (death slot with +26 = 1 = silent absorb, house occupants++);
+    /// without one — jitter-walk and acquire the nearest house every
+    /// v_26 (`distant`: m14 only migrates to a village farther than
+    /// 0xE100000 dist² — wrapping 32-bit math, verbatim).
+    fn feeder_wander(&mut self, i: usize, base: u8, distant: bool) {
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
+        let think = (self.ent[i].f63 as i16) % v26 == 0;
+        let t = self.ent[i].f146 as usize;
+        let valid = t != 0
+            && t < self.ent.len()
+            && self.ent[t].class64 == 10
+            && self.ent[t].model65 == 45;
+        if valid {
+            if !think {
+                return;
+            }
+            if self.ent[t].f128 <= self.ent[t].f26 {
+                self.ent[i].f146 = 0; // the house is full (:25397-404)
+                return;
+            }
+            let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+            let (bx, by) = (self.ent[t].x, self.ent[t].y);
+            if Self::dist2_sq(ex, ey, bx, by) > 0x800 * 0x800 {
+                self.ent[i].f34 = Self::angle_between(ex, ey, bx, by);
+            } else {
+                self.ent[t].f26 += 1;
+                self.ent[i].f26 = 1;
+                self.ent[i].tick70 = base + 4; // walks in the door
+            }
+            return;
+        }
+        if t != 0 {
+            self.ent[i].f146 = 0;
+        }
+        if !think {
+            return;
+        }
+        let d1 = self.ent_rand(i);
+        let d2 = self.ent_rand(i);
+        let mag = ((d2 & 0xFF) + 85) as i32;
+        let sign = if d1 % 157 >= 79 { 1 } else { -1 };
+        self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
+        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+        if let Some(b) = self.nearest_building(ex, ey, None) {
+            if distant {
+                let d2 = Self::dist2_sq(ex, ey, self.ent[b].x, self.ent[b].y);
+                if d2 <= 0xE100000u32 as i32 {
+                    return;
+                }
+            }
+            self.ent[i].f146 = b as u16;
         }
     }
 
@@ -917,8 +1318,8 @@ impl Gen {
         tx: u16,
         ty: u16,
         tz: i16,
-        tclass: u8,
-        tmodel: u8,
+        tf66: u8,
+        tf67: u8,
     ) {
         let (x, y, z, owner, f44, f84) = {
             let e = &self.ent[i];
@@ -1009,11 +1410,12 @@ impl Gen {
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 780, 0);
                 }
             }
-            // sub_1AEE0 (:22134): m8's 4000-damage zigzag, filter
-            // narrowed to the target.
+            // sub_1AEE0 (:22134): m8's 4000-damage beam, filter
+            // copied from the target's own fields, row [6] (:22155).
             8 => {
                 if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
-                    self.arm_projectile(p, owner, tclass, tmodel, tgt, tx, ty, tz, 4000, 23);
+                    self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 4000, 23);
+                    self.ent[p].row156 = 6;
                 }
             }
             // sub_1AA40 (:21935): m9's bolt — 600 with segments, else
@@ -1478,10 +1880,24 @@ impl Gen {
                         self.ent[l].tick70 = base + 2;
                     }
                 }
+                // Killing village folk puts the wizard on the wanted
+                // list (m12 :25291, m13 :25459, m14 :25638, m4's
+                // corpse analog).
+                if matches!(model, 4 | 12 | 13 | 14)
+                    && self.ent[i].f38 == PLAYER_TARGET
+                {
+                    self.player_aggro = 200;
+                }
                 self.ent[i].tick70 = base + 4;
                 return;
             }
             Inbox::Hit(src) => {
+                // The "under attack" mark the m8/12/13/14 families
+                // write instead of chasing (:25057-63) — for the
+                // village families it feeds the wanted timer.
+                if matches!(model, 8 | 12 | 13 | 14) && src == PLAYER_TARGET {
+                    self.player_aggro = 200;
+                }
                 if self.attacker_is_wizard(src) && !matches!(model, 8 | 12 | 13 | 14) {
                     match role {
                         0 | 1 => {
@@ -1518,22 +1934,32 @@ impl Gen {
             self.ent[i].f126 = 30;
         }
         match (model, role) {
-            // -- m4, the mimic: a disguise AMBUSHER (custom family,
-            // speed 0 in the original's handlers). Stationary stub in
-            // every state — the generic primitives had them roaming
-            // off canyon rims and hanging in the sky on row 0's
-            // feather-fall (the level-032 "flying archers"). CHASE
-            // stands its ground and shoots (sub_1A990 darts).
-            (4, 0) | (4, 1) | (4, 3) => {}
-            (4, 2) => self.mimic_chase(i, base, ctx),
+            // -- m4, the VILLAGE MILITIA (the "mimic" reading was
+            // half the story): stand-and-shoot with the +528 wanted-
+            // timer hostility gate, armed/unarmed sprite swaps and
+            // the walk-back-into-a-house exit. State 24 = the disarm
+            // slot the chase breaks to. Pack pair-up (27) stubbed.
+            (4, 0) => {
+                if self.ent[i].type86 != 0 {
+                    self.set_sprite(i, 0);
+                    self.ent[i].f66 = 3;
+                    self.ent[i].f67 = 0xFF;
+                }
+                self.ent[i].tick70 = base + 1;
+            }
+            (4, 1) => self.militia_idle(i, base, ctx),
+            (4, 2) => self.militia_chase(i, base, ctx),
+            (4, 3) => {}
 
             // -- idles --
             // m5's spawn state falls straight through to wander
-            // (:22775); m9 = the materialize sequence; m11-15 idles
-            // are custom/parked (m13/14/15 literal nops).
+            // (:22775); m9 = the materialize sequence; m12's idle
+            // slot 72 = the BUILD state; m11/13/14/15 idles are
+            // custom/parked nops.
             (5, 0) => self.ent[i].tick70 = base + 1,
             (9, 0) => self.m9_emerge(i),
-            (11..=15, 0) => {}
+            (12, 0) => self.m12_build(i),
+            (11 | 13 | 14 | 15, 0) => {}
             (_, 0) => self.mob_idle(i, base),
 
             // -- wanders --
@@ -1553,12 +1979,16 @@ impl Gen {
             (9, 1) => self.m9_hidden(i, base),
             (11, 1) => {} // caster-phase: stationary until AI lands
             (15, 1) => self.grid_walk(i, base),
+            // The villager families' custom hunts.
+            (12, 1) => self.m12_wander(i),
+            (13, 1) => self.feeder_wander(i, base, false),
+            (14, 1) => self.feeder_wander(i, base, true),
             // Aggro through the standard wizard scan; m8 scans but
             // its wizard branch is possession-gated (mana track), and
-            // m12/13/14/16's wanders replace the whole scan block
-            // with custom hunts — jitter-walk only until those land.
+            // m16's wander replaces the scan block with a custom hunt
+            // — jitter-walk only until that lands.
             (m, 1) => {
-                let scan = !matches!(m, 12 | 13 | 14 | 16);
+                let scan = m != 16;
                 let aggro = matches!(m, 1 | 2 | 3 | 6 | 7 | 10);
                 self.mob_wander(i, base, ctx, scan, aggro);
             }
@@ -1577,8 +2007,8 @@ impl Gen {
                 self.mob_chase(i, base, ctx);
             }
             // m11 fights (break-off + wizard-seeker bolts live in
-            // mob_chase); m12's house approach stays the AI track.
-            (12, 2) => {}
+            // mob_chase); m12's chase slot 74 = the house APPROACH.
+            (12, 2) => self.m12_approach(i),
             (_, 2) => self.mob_chase(i, base, ctx),
 
             // -- packs --
@@ -1586,7 +2016,10 @@ impl Gen {
                 self.mob_pack(i, base);
                 self.flyer_bob(i);
             }
-            (12, 3) | (13, 3) | (14, 3) => {} // villager house states
+            // m12's pack slot 75 = the house SEEK; m13/m14's pack
+            // slots stay parked (unreferenced in the trace).
+            (12, 3) => self.m12_seek(i),
+            (13, 3) | (14, 3) => {}
             (_, 3) => self.mob_pack(i, base),
 
             _ => unreachable!(),
