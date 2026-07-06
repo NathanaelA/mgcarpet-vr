@@ -68,6 +68,12 @@ impl IsoImage {
     }
 
     /// Uppercase paths of every file in the image, sorted.
+    /// Path of the image file on disk (for consumers that need raw
+    /// sector access outside the ISO filesystem — the redbook rip).
+    pub fn image_path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         self.files.keys().map(String::as_str)
     }

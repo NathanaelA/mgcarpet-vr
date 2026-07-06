@@ -30,6 +30,7 @@ mgc-formats ── the baked package format: the sole data contract
     ▼
 mgc-sim     ── pure, headless, deterministic simulation core
 mgc-render  ── wgpu renderer (reads sim state, interpolates between ticks)
+mgc-audio   ── cpal output + the ported original mixer + FLAC music
 mgc-app     ── winit shell: window, input, fixed-timestep game loop
 ```
 

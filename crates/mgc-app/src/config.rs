@@ -31,6 +31,34 @@ pub const DEFAULT_PATH: &str = "mgcarpet.json";
 #[serde(default)]
 pub struct Config {
     pub enhancements: Enhancements,
+    pub audio: AudioConfig,
+}
+
+/// Audio preferences. Volumes are plain preference, not authenticity
+/// flips; the MIXER selection (faithful tile-rule vs enhanced
+/// distance-weighted emitters) will join `enhancements` when the
+/// enhanced mixer exists — only the faithful port is implemented.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    /// Sample playback (F1 toggles at runtime, the original's key).
+    pub sound: bool,
+    /// Music playback (F2 toggles at runtime, the original's key).
+    pub music: bool,
+    /// Master gains, 0..=1 linear.
+    pub sfx_volume: f32,
+    pub music_volume: f32,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        AudioConfig {
+            sound: true,
+            music: true,
+            sfx_volume: 1.0,
+            music_volume: 1.0,
+        }
+    }
 }
 
 /// Modern-convenience switches, all defaulting to off (= authentic).

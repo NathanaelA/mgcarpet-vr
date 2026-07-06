@@ -387,6 +387,30 @@ pub(crate) struct Gen {
     pub(crate) kills: u32,
     pub(crate) shots: u32,
     pub(crate) hits: u32,
+    /// The wizard's danger-music countdown (Type_160 v_46): armed to
+    /// 100 by processed hits (sub_46540's blocks call sub_46520) and
+    /// by a projectile acquiring the player as target (:64013); the
+    /// player tick decrements it and switches the music mode on
+    /// v_46 > 0 (:55282-92 → sub_20D00).
+    pub(crate) player_danger: i16,
+    /// Sound requests emitted this tick at the original's
+    /// sub_55370_558A0 call sites; drained by the app into the audio
+    /// mixer (which reimplements that routine's attenuation/slot
+    /// policy). Position/tag mirror the entity the original passed.
+    pub(crate) sounds: Vec<SoundEvent>,
+}
+
+/// One sound request: engine sound id (the SNDS bank-0 index), the
+/// emitter's position on the u16 torus, and its slot as the instance
+/// tag (the original's entity+24). `player` marks requests the
+/// original issued against the player's own entity (full volume,
+/// center pan, and the gate for the player-only ids 4/14/17/29).
+#[derive(Debug, Clone, Copy)]
+pub struct SoundEvent {
+    pub id: u8,
+    pub pos: (u16, u16, i16),
+    pub tag: u16,
+    pub player: bool,
 }
 
 /// Rebuild the original 1-based record table from level things.
@@ -436,7 +460,32 @@ impl Gen {
             kills: 0,
             shots: 0,
             hits: 0,
+            player_danger: 0,
+            sounds: Vec::new(),
         }
+    }
+
+    /// Emit a sound request from entity `i` (its position and slot
+    /// become the request's position and instance tag).
+    pub(crate) fn snd(&mut self, id: u8, i: usize) {
+        let e = &self.ent[i];
+        self.sounds.push(SoundEvent {
+            id,
+            pos: (e.x, e.y, e.z),
+            tag: i as u16,
+            player: false,
+        });
+    }
+
+    /// Emit a player-entity sound request (the original's calls
+    /// against the wizard's own entity — full volume, center pan).
+    pub(crate) fn snd_player(&mut self, id: u8) {
+        self.sounds.push(SoundEvent {
+            id,
+            pos: (0, 0, 0),
+            tag: crate::mobs::PLAYER_TARGET,
+            player: true,
+        });
     }
 
     /// GenerateFeatures_36430: consume the class-10 load-time features

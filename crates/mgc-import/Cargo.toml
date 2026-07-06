@@ -7,8 +7,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+flacenc = "0.5.1"
 mgc-formats = { path = "../mgc-formats" }
 mgc-sim = { path = "../mgc-sim" }
+nuked-opl3 = "0.1.0"
 serde_json = "1"
 sha2 = "0.10"
 

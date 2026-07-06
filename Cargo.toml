@@ -5,6 +5,7 @@ members = [
     "crates/mgc-import",
     "crates/mgc-sim",
     "crates/mgc-render",
+    "crates/mgc-audio",
     "crates/mgc-app",
 ]
 

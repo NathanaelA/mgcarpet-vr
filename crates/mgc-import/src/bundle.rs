@@ -15,7 +15,9 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use mgc_formats::bundle::{BUNDLE_VERSION, BundleManifest, BundleSource, TerrainAtlasInfo};
+use mgc_formats::bundle::{
+    BUNDLE_VERSION, BundleManifest, BundleSource, MusicIndex, MusicTrack, TerrainAtlasInfo,
+};
 use mgc_formats::{Game, Importer};
 
 use crate::bake::BakeError;
@@ -200,6 +202,294 @@ pub fn bake_mc2_bundles(
     out_dir: &Path,
 ) -> Result<Vec<(String, String)>, BakeError> {
     bake_bundle_set(src, out_dir, &MC2_VARIANTS)
+}
+
+/// Highest of MC1's free-RAM sample-quality tiers (`SNDS<bank>-1`),
+/// 22050 Hz; `-0` is the same audio at half rate, `-3` lower still
+/// (see `crate::sound`).
+const MC1_SOUND_QUALITY: u32 = 1;
+const MC1_SOUND_RATE: u32 = 22050;
+/// OPL render / redbook output rate.
+const MUSIC_RATE: u32 = 44100;
+/// MC1 ships sample banks 0..=13 (bank = per-level/screen sound set).
+const MC1_SOUND_BANKS: std::ops::RangeInclusive<u32> = 0..=13;
+
+/// Bake MC1's audio bundle (`baked/assets/mc1-audio/`): every SNDS
+/// sample bank at the highest quality tier, deduplicated into one PCM
+/// blob. Sounds and music are tileset-independent (the bank digit is a
+/// level selector, not a world-set pair), so audio is one per-game
+/// bundle rather than a member of the graphics variants.
+pub fn bake_mc1_audio(
+    src: &GameSource,
+    out_dir: &Path,
+) -> Result<Vec<(String, String)>, BakeError> {
+    let dir = out_dir.join("assets").join("mc1-audio");
+    std::fs::create_dir_all(&dir).map_err(|e| BakeError::Io(dir.clone(), e))?;
+
+    let mut outputs = Vec::new();
+    let mut sources = Vec::new();
+
+    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path, e))?;
+        outputs.push((name.to_string(), hex(&Sha256::digest(bytes))));
+        Ok(())
+    };
+    let source = |rel: &str, sources: &mut Vec<BundleSource>| -> Result<Vec<u8>, BakeError> {
+        let raw = src
+            .read(rel)
+            .map_err(|e| BakeError::Io(Path::new(rel).to_path_buf(), e))?;
+        sources.push(BundleSource {
+            file: rel.rsplit('/').next().unwrap_or(rel).to_string(),
+            sha256: hex(&Sha256::digest(&raw)),
+        });
+        if crate::rnc::is_rnc(&raw) {
+            crate::rnc::decompress(&raw)
+                .map_err(|e| BakeError::Level(Path::new(rel).to_path_buf(), 0, e.to_string()))
+        } else {
+            Ok(raw)
+        }
+    };
+
+    // Sample banks. Decompressed DAT/TAB pairs are borrowed by the
+    // parsed banks, so decompress all of them first.
+    let mut raw_pairs = Vec::new();
+    for bank in MC1_SOUND_BANKS {
+        let dat_rel = format!("DATA/SNDS{bank}-{MC1_SOUND_QUALITY}.DAT");
+        let tab_rel = format!("DATA/SNDS{bank}-{MC1_SOUND_QUALITY}.TAB");
+        if !src.exists(&dat_rel) {
+            continue;
+        }
+        let dat = source(&dat_rel, &mut sources)?;
+        let tab = source(&tab_rel, &mut sources)?;
+        raw_pairs.push((bank, dat_rel, tab, dat));
+    }
+    let mut banks = Vec::new();
+    for (bank, dat_rel, tab, dat) in &raw_pairs {
+        banks.push(
+            crate::sound::parse_bank(*bank, tab, dat, true).map_err(|e| {
+                BakeError::Level(Path::new(dat_rel).to_path_buf(), 0, e)
+            })?,
+        );
+    }
+    let (index, blob) = crate::sound::bake_blob(&banks, MC1_SOUND_RATE);
+    emit("sounds.bin", &blob)?;
+    emit(
+        "sounds.json",
+        &serde_json::to_vec_pretty(&index).expect("sound index serializes"),
+    )?;
+
+    // Music: the AdLib arrangement (`MUSIC<bank>-0`, the `-0` driver
+    // digit is AdLib per remc1 :54030 — 0xA002 loads inst/drum.bnk)
+    // rendered through OPL3 with the game's own banks, FLAC per song.
+    let music_dir = dir.join("music");
+    std::fs::create_dir_all(&music_dir).map_err(|e| BakeError::Io(music_dir.clone(), e))?;
+    let inst = crate::adlib::parse_bnk(&source("DATA/INST.BNK", &mut sources)?)
+        .map_err(|e| BakeError::Level(Path::new("DATA/INST.BNK").to_path_buf(), 0, e))?;
+    let drum = crate::adlib::parse_bnk(&source("DATA/DRUM.BNK", &mut sources)?)
+        .map_err(|e| BakeError::Level(Path::new("DATA/DRUM.BNK").to_path_buf(), 0, e))?;
+    let mut music = MusicIndex { tracks: Vec::new() };
+    for bank in 0..=1u32 {
+        let dat_rel = format!("DATA/MUSIC{bank}-0.DAT");
+        let tab_rel = format!("DATA/MUSIC{bank}-0.TAB");
+        if !src.exists(&dat_rel) {
+            continue;
+        }
+        let dat = source(&dat_rel, &mut sources)?;
+        let tab = source(&tab_rel, &mut sources)?;
+        let parsed = crate::sound::parse_bank(bank, &tab, &dat, false)
+            .map_err(|e| BakeError::Level(Path::new(&dat_rel).to_path_buf(), 0, e))?;
+        for (_, name, hmp_bytes) in &parsed.entries {
+            let err = |e: String| {
+                BakeError::Level(Path::new(&dat_rel).to_path_buf(), 0, format!("{name}: {e}"))
+            };
+            let song = crate::hmp::parse(hmp_bytes).map_err(err)?;
+            // In-game songs keep their danger layers (MIDI channels
+            // 3/4/5, CC7-0-muted, runtime-faded by the original) as a
+            // separate sample-aligned stem; the base file is the
+            // ambient mix.
+            let layered = crate::adlib::has_danger_layer(&song);
+            let mix = if layered {
+                crate::adlib::MixSpec::ambient()
+            } else {
+                crate::adlib::MixSpec::full()
+            };
+            let pcm = crate::adlib::render(&song, &inst, &drum, MUSIC_RATE, &mix)
+                .map_err(err)?;
+            let flac = crate::flac::encode(&pcm, 1, MUSIC_RATE).map_err(err)?;
+            let name = name.strip_suffix(".hmp").unwrap_or(name);
+            let member = format!("music/{bank}-{name}.flac");
+            emit(&member, &flac)?;
+            let danger_file = if layered {
+                let stem = crate::adlib::render(
+                    &song,
+                    &inst,
+                    &drum,
+                    MUSIC_RATE,
+                    &crate::adlib::MixSpec::danger_stem(),
+                )
+                .map_err(err)?;
+                debug_assert_eq!(stem.len(), pcm.len(), "stems must stay sample-aligned");
+                let flac = crate::flac::encode(&stem, 1, MUSIC_RATE).map_err(err)?;
+                let member = format!("music/{bank}-{name}-danger.flac");
+                emit(&member, &flac)?;
+                Some(member)
+            } else {
+                None
+            };
+            music.tracks.push(MusicTrack {
+                bank,
+                name: name.to_string(),
+                file: member,
+                danger_file,
+                source: format!("MUSIC{bank}-0 {}.HMP", name.to_ascii_uppercase()),
+            });
+        }
+    }
+    emit(
+        "music.json",
+        &serde_json::to_vec_pretty(&music).expect("music index serializes"),
+    )?;
+
+    let manifest = BundleManifest {
+        format_version: BUNDLE_VERSION,
+        variant: "mc1-audio".to_string(),
+        game: Game::MagicCarpet1,
+        importer: Importer {
+            name: "mgc-import".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        sources,
+    };
+    emit(
+        "bundle.json",
+        &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )?;
+    Ok(outputs
+        .into_iter()
+        .map(|(name, sha)| (format!("assets/mc1-audio/{name}"), sha))
+        .collect())
+}
+
+/// Bake MC2's audio bundle (`baked/assets/mc2-audio/`): the redbook
+/// soundtrack ripped from the CD image — MC2's primary music path in
+/// retail (the AIL XMI arrangement was the no-CD fallback; a future
+/// faithful-alternate). Samples (`SOUND/SOUND.DAT`) are a separate
+/// step on this track.
+pub fn bake_mc2_audio(
+    src: &GameSource,
+    out_dir: &Path,
+) -> Result<Vec<(String, String)>, BakeError> {
+    let Some(image) = src.cd_image() else {
+        return Ok(Vec::new());
+    };
+    let image = image.to_path_buf();
+    let cue_path = image.with_extension("ins");
+    let cue = match std::fs::read_to_string(&cue_path) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!(
+                "note: mc2: no cue sheet at {} — skipping redbook rip",
+                cue_path.display()
+            );
+            return Ok(Vec::new());
+        }
+    };
+
+    let dir = out_dir.join("assets").join("mc2-audio");
+    let music_dir = dir.join("music");
+    std::fs::create_dir_all(&music_dir).map_err(|e| BakeError::Io(music_dir.clone(), e))?;
+
+    let mut outputs = Vec::new();
+    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path, e))?;
+        outputs.push((name.to_string(), hex(&Sha256::digest(bytes))));
+        Ok(())
+    };
+
+    let mut sources = Vec::new();
+
+    // Samples: SOUND/SOUND.DAT, best shipped quality tier (8-bit
+    // 22050 across the retail GOG file — same PCM encoding as MC1).
+    let sound_dat_raw = src
+        .read("SOUND/SOUND.DAT")
+        .map_err(|e| BakeError::Io(Path::new("SOUND/SOUND.DAT").to_path_buf(), e))?;
+    sources.push(BundleSource {
+        file: "SOUND.DAT".into(),
+        sha256: hex(&Sha256::digest(&sound_dat_raw)),
+    });
+    let banks = crate::sound::parse_mc2_sound_dat(&sound_dat_raw)
+        .map_err(|e| BakeError::Level(Path::new("SOUND/SOUND.DAT").to_path_buf(), 0, e))?;
+    let (index, blob) = crate::sound::bake_blob(&banks, MC1_SOUND_RATE);
+    emit("sounds.bin", &blob)?;
+    emit(
+        "sounds.json",
+        &serde_json::to_vec_pretty(&index).expect("sound index serializes"),
+    )?;
+
+    let image_len = std::fs::metadata(&image)
+        .map_err(|e| BakeError::Io(image.clone(), e))?
+        .len();
+    let tracks = crate::redbook::parse_cue(&cue, image_len / crate::redbook::SECTOR)
+        .map_err(|e| BakeError::Level(cue_path.clone(), 0, e))?;
+
+    let mut music = MusicIndex { tracks: Vec::new() };
+    for track in tracks {
+        let pcm = crate::redbook::read_track(&image, track)
+            .map_err(|e| BakeError::Io(image.clone(), e))?;
+        let flac = crate::flac::encode(&pcm, 2, crate::redbook::RATE).map_err(|e| {
+            BakeError::Level(image.clone(), 0, format!("track {}: {e}", track.number))
+        })?;
+        let name = format!("track-{:02}", track.number);
+        let member = format!("music/{name}.flac");
+        emit(&member, &flac)?;
+        music.tracks.push(MusicTrack {
+            bank: 0,
+            name,
+            file: member,
+            danger_file: None,
+            source: format!("redbook track {}", track.number),
+        });
+    }
+    emit(
+        "music.json",
+        &serde_json::to_vec_pretty(&music).expect("music index serializes"),
+    )?;
+
+    let manifest = BundleManifest {
+        format_version: BUNDLE_VERSION,
+        variant: "mc2-audio".to_string(),
+        game: Game::MagicCarpet2,
+        importer: Importer {
+            name: "mgc-import".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        sources: {
+            sources.push(BundleSource {
+                file: format!(
+                    "{} (redbook tracks)",
+                    image
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ),
+                // Hashing the 400 MB image per bake is
+                // disproportionate; provenance is the cue sheet's
+                // digest instead.
+                sha256: hex(&Sha256::digest(cue.as_bytes())),
+            });
+            sources
+        },
+    };
+    emit(
+        "bundle.json",
+        &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )?;
+    Ok(outputs
+        .into_iter()
+        .map(|(name, sha)| (format!("assets/mc2-audio/{name}"), sha))
+        .collect())
 }
 
 fn bake_variant(

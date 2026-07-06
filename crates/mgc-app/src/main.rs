@@ -49,6 +49,13 @@ struct LoadedLevel {
     world: Option<mgc_sim::world::World>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
     palette_rgba: [[u8; 4]; 256],
+    /// The per-game audio bundle directory (`assets/mc1-audio` /
+    /// `mc2-audio`), when baked.
+    audio_dir: Option<PathBuf>,
+    /// INTERIM level-music pick (MC1 cgame1-3 by level index; MC2
+    /// redbook by index) until the original's per-level song command
+    /// (level struct +576 / the script cases 12/25) is decoded.
+    music_track: Option<String>,
     /// HSPR UI sprites composited to RGBA (spellbook/HUD); None when
     /// the bundle has no UI members (MC2 until its UI track).
     ui: Option<ui::UiAssets>,
@@ -244,6 +251,22 @@ fn load_level(
             ui::UiAssets::build(idx.clone(), px, &bundle.palette, bundle.blend_lut.as_deref())
         });
 
+    // Per-game audio bundle + the INTERIM music pick.
+    let audio_game = if package.meta.game == Game::MagicCarpet2 {
+        "mc2"
+    } else {
+        "mc1"
+    };
+    let audio_dir = {
+        let d = baked_root.join("assets").join(format!("{audio_game}-audio"));
+        d.is_dir().then_some(d)
+    };
+    let music_track = Some(if audio_game == "mc2" {
+        format!("track-{:02}", 2 + package.meta.level as usize % 27)
+    } else {
+        format!("cgame{}", 1 + package.meta.level as usize % 3)
+    });
+
     Ok(LoadedLevel {
         view: LevelView {
             tile_type,
@@ -269,6 +292,8 @@ fn load_level(
         world,
         palette_rgba: bundle.palette,
         ui: ui_assets,
+        audio_dir,
+        music_track,
     })
 }
 
@@ -327,6 +352,14 @@ struct App {
     shift_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
+    /// Audio runtime (None in headless paths / when opening failed).
+    audio: Option<mgc_audio::Audio>,
+    /// F1/F2 runtime toggles (the original's keys) over the config's
+    /// audio preferences.
+    sound_on: bool,
+    music_on: bool,
+    sfx_volume: f32,
+    music_volume: f32,
 }
 
 impl App {
@@ -336,7 +369,34 @@ impl App {
         map_triggers: bool,
         health_bars: bool,
         dev_spells: bool,
+        audio_cfg: &config::AudioConfig,
     ) -> Self {
+        // Audio: open the device, load the game's audio bundle, start
+        // the level music. Any failure degrades to silence, never to
+        // an unplayable game.
+        let mut audio = None;
+        if audio_cfg.sound || audio_cfg.music {
+            let mut a = mgc_audio::Audio::open();
+            if let Some(dir) = &level.audio_dir {
+                if let Err(e) = a.load_bundle(dir, 0) {
+                    eprintln!("note: audio bundle: {e}");
+                }
+            } else {
+                eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
+            }
+            a.set_volumes(
+                if audio_cfg.sound { audio_cfg.sfx_volume } else { 0.0 },
+                if audio_cfg.music { audio_cfg.music_volume } else { 0.0 },
+            );
+            if audio_cfg.music {
+                if let Some(track) = &level.music_track {
+                    if let Err(e) = a.play_music(track, true) {
+                        eprintln!("note: music: {e}");
+                    }
+                }
+            }
+            audio = Some(a);
+        }
         let mut sim = match level.world.take() {
             Some(w) => Simulation::with_world(w),
             None => Simulation::with_terrain(level.height.clone()),
@@ -372,7 +432,45 @@ impl App {
             shift_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
+            audio,
+            sound_on: audio_cfg.sound,
+            music_on: audio_cfg.music,
+            sfx_volume: audio_cfg.sfx_volume,
+            music_volume: audio_cfg.music_volume,
         }
+    }
+
+    /// Per-sim-tick audio: drain the world's sound requests into the
+    /// faithful mixer, feed the ambient rule, run the flush.
+    fn audio_tick(&mut self) {
+        let Some(audio) = &mut self.audio else { return };
+        let f = &self.sim.flyer;
+        let pose = mgc_sim::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        let listener = mgc_audio::Listener {
+            pos: (pose.x, pose.y, pose.z),
+            yaw: pose.heading,
+        };
+        if let Some(w) = &mut self.sim.world {
+            let frame = w.take_audio(pose);
+            if self.sound_on {
+                for e in frame.events {
+                    let source = if e.player {
+                        mgc_audio::Source::Player
+                    } else {
+                        mgc_audio::Source::World {
+                            pos: e.pos,
+                            tag: e.tag,
+                        }
+                    };
+                    audio.event(e.id, source, &listener);
+                }
+                audio
+                    .mixer
+                    .set_ambient(frame.over_water, frame.fire_near, frame.market_near);
+            }
+            audio.set_danger(frame.danger);
+        }
+        audio.tick();
     }
 
     fn book_open(&self) -> bool {
@@ -643,6 +741,37 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::F1) {
+                    // The original's sound toggle (remc1 :20086).
+                    self.sound_on = !self.sound_on;
+                    if let Some(a) = &mut self.audio {
+                        a.set_volumes(
+                            if self.sound_on { self.sfx_volume } else { 0.0 },
+                            if self.music_on { self.music_volume } else { 0.0 },
+                        );
+                    }
+                    println!("sound: {}", if self.sound_on { "on" } else { "off" });
+                    return;
+                }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::F2) {
+                    // The original's music toggle (remc1 :20100).
+                    self.music_on = !self.music_on;
+                    if let Some(a) = &mut self.audio {
+                        if self.music_on {
+                            if let Some(track) = &self.level.music_track {
+                                let _ = a.play_music(track, true);
+                            }
+                            a.set_volumes(
+                                if self.sound_on { self.sfx_volume } else { 0.0 },
+                                self.music_volume,
+                            );
+                        } else {
+                            a.stop_music();
+                        }
+                    }
+                    println!("music: {}", if self.music_on { "on" } else { "off" });
+                    return;
+                }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyT) {
                     self.smooth_shading = !self.smooth_shading;
                     if let Some(r) = &mut self.renderer {
@@ -743,6 +872,9 @@ impl ApplicationHandler for App {
                     self.prev_flyer = self.sim.flyer;
                     let input = self.tick_input();
                     self.sim.step(&input);
+                    // The mixer flush is per-tick like the original's
+                    // (fade ramps are tick-denominated).
+                    self.audio_tick();
                 }
                 self.sync_world();
 
@@ -1150,7 +1282,14 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level, smooth_shading, map_triggers, health_bars, dev_spells);
+    let mut app = App::new(
+        level,
+        smooth_shading,
+        map_triggers,
+        health_bars,
+        dev_spells,
+        &cfg.audio,
+    );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

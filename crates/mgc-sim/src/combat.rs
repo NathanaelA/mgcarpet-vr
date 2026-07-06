@@ -397,6 +397,11 @@ impl Gen {
             self.ent[i].f146 = slot;
             self.ent[i].f34 = ty_yaw;
             self.ent[i].f36 = ty_pitch;
+            // Being targeted arms the danger music (:64013/:64095 —
+            // acquire of a class-3 m0 human calls sub_46520).
+            if slot == PLAYER_TARGET {
+                self.player_danger = 100;
+            }
         }
     }
 
@@ -795,7 +800,8 @@ impl Gen {
     fn proj_bolt_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
-            let _ = self.ent_rand(i); // sound 33 + (rand & 3) (:63795)
+            let d = self.ent_rand(i); // :63795
+            self.snd(33 + (d & 3) as u8, i);
         }
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
@@ -1061,6 +1067,7 @@ impl Gen {
                 MailTarget::Player => self.player_rebound,
             };
             if rebound {
+                self.snd(28, i); // deflection twang (:62880)
                 match v {
                     MailTarget::Pool(j) => {
                         let quarter = (self.ent[i].f140 / 4).max(0);
@@ -1510,7 +1517,7 @@ impl Gen {
             }
             let d2 = self.ent_rand(i);
             self.ent[i].f46 = ((d2 % 0x41) as i32 - 32) as i16;
-            // Sound 3 — audio track.
+            self.snd(3, i); // :28118
         }
         // z follows the (possibly dug) ground with the flicker offset.
         let (x, y) = (self.ent[i].x, self.ent[i].y);
@@ -1564,7 +1571,7 @@ impl Gen {
         }
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2 | 0x10000;
-            // Sound 30 — audio track.
+            self.snd(30, i);
         }
         let radius = self.ent[i].f26.max(0) as i32;
         {
@@ -1638,7 +1645,9 @@ impl Gen {
         if self.ent[i].mail[1].1 != 0 {
             self.ent[i].f144 = self.ent[i].mail[1].1;
             self.ent[i].mail[1] = (0, 0);
-            // Sound 4 — audio track.
+            // Player-gated in sub_55370 (ids 4/14/29): heard only
+            // when the claimant is the human player.
+            self.snd(4, i);
         }
         // ch4 attract (collection pull) — mana track; acknowledge.
         if self.ent[i].mail[4].1 != 0 {

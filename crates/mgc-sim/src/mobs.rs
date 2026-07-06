@@ -727,6 +727,10 @@ impl Gen {
                 self.ent[p].f140 = 60000;
                 self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 0);
             }
+            // Roar throttle `+63 % (2*v_26) == 0` → sound 39 (:26186).
+            if self.ent[i].f63 as u16 % (2 * BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u16) == 0 {
+                self.snd(39, i);
+            }
         }
         // m6's buffet drag (:23215-31): the counter +26 cycles 1..41
         // then -90 — 41 ON ticks per 132-tick cycle. Each ON tick
@@ -734,8 +738,7 @@ impl Gen {
         // v_22 = 80): a per-tick pull TOWARD the kraken, applied by
         // the human move. These are DIRECT struct writes, not a
         // mailbox — spawn grace does not shield them (the "tractor
-        // beam"). v_26 = 256 is written but read by nothing. Sound
-        // 42 omitted (audio track).
+        // beam"). v_26 = 256 is written but read by nothing.
         if model == 6 {
             self.ent[i].f26 += 1;
             if self.ent[i].f26 > 40 {
@@ -747,6 +750,15 @@ impl Gen {
                     .wrapping_add(0x400)
                     & 0x7FF;
                 self.player_knock = (dir, 80);
+                // Victim buffet cue (:23223). Sound 42 falls into
+                // sub_55370's default case — the faithful mixer
+                // drops it, exactly like retail; emitted anyway so
+                // an enhanced mixer may honor it.
+                self.snd(42, i);
+            }
+            // Kraken growl every v_26 in range → sound 37 (:23240).
+            if self.ent[i].f63 as u16 % BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u16 == 0 {
+                self.snd(37, i);
             }
         }
         // m6's spit burst (:23243-66): while +71 > 0, one lightning
@@ -1224,6 +1236,7 @@ impl Gen {
         }
         // Site accepted: the house goes up, the settler settles.
         if let Some(b) = self.spawn_creator(45, px, py, az) {
+            self.snd(10, i); // construction gong (:24983)
             self.building_fixup(b, btype);
             self.ent[b].tick70 = 51;
         }
@@ -1337,6 +1350,7 @@ impl Gen {
                 if let Some(p) = self.spawn_fireball(x, y, launch_z) {
                     self.ent[p].row156 = 6; // turn 0: no homing
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 500, 0);
+                    self.snd(8, i); // :22182/:22406
                 }
             }
             // sub_1AB10 (:21962): melee within 1024 units, m2 recoils.
@@ -1353,6 +1367,7 @@ impl Gen {
                         MailTarget::Pool(tgt as usize)
                     };
                     self.mail_write(t, 0, f44 as u32, owner);
+                    self.snd(if model == 2 { 13 } else { 7 }, i); // :22294/:22358
                     if model == 2 {
                         // Recoil + cooldown (:22356-62).
                         self.ent[i].f126 = -self.ent[i].f130;
@@ -1367,8 +1382,10 @@ impl Gen {
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 250, 0);
                 }
             }
-            // sub_1AB70 (:21976): m5's mana-scaled multishot.
+            // sub_1AB70 (:21976): m5's mana-scaled multishot,
+            // sound 32 (:22975).
             5 => {
+                self.snd(32, i);
                 let mana = self.ent[i].f140;
                 let maxmana = self.ent[i].f136.max(1);
                 let v2 = (7 * mana / maxmana).max(0) as u32;
@@ -1421,6 +1438,7 @@ impl Gen {
                 if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
                     self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 4000, 23);
                     self.ent[p].row156 = 6;
+                    self.snd(38, i); // :23555
                 }
             }
             // sub_1AA40 (:21935): m9's bolt — 600 with segments, else
@@ -1438,6 +1456,7 @@ impl Gen {
                 if let Some(p) = self.spawn_seeker(x, y, launch_z) {
                     self.ent[p].f26 = 20;
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 25);
+                    self.snd(9, i); // :24700
                 }
             }
             // m15 (:25846-59): a bare bolt — no +44 override, so the

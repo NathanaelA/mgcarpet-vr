@@ -283,6 +283,20 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
         } else {
             eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
         }
+        if src.exists("DATA/SNDS0-1.DAT") {
+            match mgc_import::bundle::bake_mc1_audio(src, out_dir) {
+                Ok(outputs) => {
+                    println!("mc1: baked audio bundle mc1-audio ({} members)", outputs.len());
+                    manifest.extend(outputs);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            eprintln!("note: mc1 DATA/SNDS0-1.DAT not found — skipping audio bundle");
+        }
     }
 
     if let Some(src) = &found.mc2 {
@@ -323,6 +337,17 @@ fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
             eprintln!(
                 "note: mc2 DATA/PALD-0.DAT not found (CD catalogs missing) — skipping mc2 bundles"
             );
+        }
+        match mgc_import::bundle::bake_mc2_audio(src, out_dir) {
+            Ok(outputs) if outputs.is_empty() => {}
+            Ok(outputs) => {
+                println!("mc2: baked audio bundle mc2-audio ({} members)", outputs.len());
+                manifest.extend(outputs);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
         }
     }
 

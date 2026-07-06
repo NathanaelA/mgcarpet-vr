@@ -9,9 +9,12 @@
 //! remc1 (`reference/remc1`) for MC1 behavior, Moburma's tools and
 //! michaelhoward's MagicCarpetFileFormat spec for MC1 formats.
 
+pub mod adlib;
 pub mod bake;
 pub mod bundle;
+pub mod hmp;
 pub mod dattab;
+pub mod flac;
 pub mod flc;
 pub mod gamedata;
 pub mod hspr;
@@ -19,6 +22,8 @@ pub mod iso;
 pub mod level_mc1;
 pub mod level_mc2;
 pub mod mc1_terrain;
+pub mod redbook;
 pub mod rnc;
+pub mod sound;
 pub mod sprites;
 pub mod tmaps;

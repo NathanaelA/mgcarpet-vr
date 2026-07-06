@@ -258,7 +258,8 @@ The second engine-facing format (Rust types + loader:
 catalogs, as a directory of uniformly-named members. Where `.mgcl`
 carries what is *level*-scoped, a bundle carries what is *world*-scoped
 — palettes, color LUTs, terrain textures, sprites, terrain-feature
-data; sounds, music, and text will join additively.
+data; text will join additively. Sounds and music live in per-game
+audio bundles (see "Audio bundles" below).
 
 One schema, many *variants*: game and environment differences are
 expressed as bundle instances, never as layout differences. Current
@@ -311,3 +312,33 @@ night's tables and TMAPS). MC2 bundles carry no `search.bin` /
 `build.*.bin` yet — its terrain-feature pass is a separate original
 implementation, pending its own port. The versioning/evolution rules
 above apply unchanged (`bundle.json` `format_version`).
+
+## Audio bundles
+
+Audio is per-GAME, not per-graphics-variant (MC1's sample/music bank
+digits are level/screen selectors, not tileset pairs; duplicating the
+redbook rip into four MC2 environment bundles would be absurd), so it
+bakes as its own bundle instances: `mc1-audio`, `mc2-audio` — same
+manifest schema, audio members only. Loader: `mgc_formats::bundle::
+AudioBundle`.
+
+| member | contents |
+|---|---|
+| `bundle.json` | same manifest schema as graphics bundles |
+| `sounds.bin` | one deduplicated blob of raw PCM (unsigned 8-bit mono — the original sample data byte-for-byte) |
+| `sounds.json` | `SoundIndex`: `sample_rate` (22050 — the best tier shipped by both retail games), `encoding` (`"pcm8"`), `banks[]` of `{bank, entries[]}`; each entry `{id, name, offset, len}` — `id` is the ENGINE sound id (the original bank-table index; the mixer's 47 request slots index bank 0 directly) |
+| `music.json` | `MusicIndex`: `tracks[]` of `{bank, name, file, danger_file?, source}` |
+| `music/*.flac` | one FLAC stream per track; MC1 in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) — the original keeps its combat layers on MIDI channels 3/4/5 at CC7 0 and fades them in/out with runtime CC7 ramps (remc1 sub_20BD0/sub_20D00); the runtime overlays the stem with the same ramp. Songs without a muted danger layer (menu/intro) and redbook tracks have no stem |
+
+Sources: MC1 `DATA/SNDS<bank>-<q>.DAT/.TAB` (bank 0 = the 47-sound
+gameplay bank, 1..13 auxiliary sets; `q` = the original's free-RAM
+quality tier, always baked from `-1` = 22050 Hz) and
+`DATA/MUSIC{0,1}-0.DAT/.TAB` — HMP songs rendered through OPL3
+(nuked-opl3) with the game's own `INST.BNK`/`DRUM.BNK` AdLib patches
+at import, 44100 Hz mono FLAC (`0-cgame1` … `1-cintro6`). MC2
+`SOUND/SOUND.DAT` (10 banks, best shipped tier = 8-bit 22050; the
+per-sample WAV containers are stripped to keep `sounds.bin` raw PCM)
+and the 27 redbook audio tracks ripped losslessly from the CD image
+(`game.gog` + `game.ins` cue) as 44100 Hz stereo FLAC
+(`track-02` … `track-28`) — CD audio was retail MC2's primary music
+path; its AIL XMI arrangement is a future faithful-alternate.

@@ -91,6 +91,16 @@ impl GameSource {
         })
     }
 
+    /// Path of the source's CD image on disk, if it has one — raw
+    /// sector access for the redbook rip lives outside the ISO
+    /// filesystem view.
+    pub fn cd_image(&self) -> Option<&Path> {
+        self.layers.iter().find_map(|layer| match layer {
+            Layer::Iso { image, .. } => Some(image.image_path()),
+            Layer::Dir { .. } => None,
+        })
+    }
+
     /// Union of canonical paths across all layers, sorted, deduplicated.
     pub fn list(&self) -> Vec<String> {
         let mut out = BTreeSet::new();

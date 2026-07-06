@@ -270,6 +270,20 @@ pub struct DebugEvent {
     pub life: i32,
 }
 
+/// One tick's audio outputs: drained sound requests + the ambient
+/// rule inputs (see [`World::take_audio`]).
+#[derive(Debug, Clone)]
+pub struct AudioFrame {
+    pub events: Vec<crate::features::SoundEvent>,
+    /// The carpet is over a water tile (waves vs wind, :55254-65).
+    pub over_water: bool,
+    pub fire_near: bool,
+    pub market_near: bool,
+    /// Danger-music mode (the wizard's v_46 countdown is live —
+    /// recently hit or targeted; :55282-92).
+    pub danger: bool,
+}
+
 /// A live gameplay volume for the map overlay (an opt-in enhancement
 /// / debugging instrument — the original never reveals trigger areas).
 #[derive(Debug, Clone, Copy)]
@@ -542,7 +556,18 @@ impl World {
             let amt = self.g.player_mail[0].0 as u64;
             self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
         }
+        // Any processed hit arms the danger music for 100 ticks
+        // (sub_46540's damage/grip/steal blocks all call sub_46520 →
+        // v_46 = 100; the grace discards damage but the mail still
+        // arrived — under the invincible dev player we arm anyway so
+        // the mode is audible in playtests).
+        if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
+            self.g.player_danger = 100;
+        }
         self.g.player_mail = [(0, 0); 6];
+        if self.g.player_danger > 0 {
+            self.g.player_danger -= 1;
+        }
         // The village-aggro timer runs down once per wizard tick
         // (:55405-06) — ~200 ticks of militia hostility per offense.
         if self.g.player_aggro > 0 {
@@ -680,6 +705,7 @@ impl World {
         if id == 23 {
             if !self.dev_spells {
                 if self.player.mana < def.possess_mana {
+                    self.g.snd_player(29); // cast-blocked buzz
                     return;
                 }
                 self.player.mana -= per_shot;
@@ -702,6 +728,7 @@ impl World {
             }
             if !armed && !self.dev_spells {
                 if self.player.mana < def.possess_mana {
+                    self.g.snd_player(29); // cast-blocked buzz
                     return;
                 }
                 self.player.mana -= per_shot;
@@ -729,6 +756,7 @@ impl World {
         }
         if !self.dev_spells {
             if self.player.mana < def.possess_mana {
+                self.g.snd_player(29); // cast-blocked buzz
                 return;
             }
             // Global Death deducts its FULL possess cost (75000) on
@@ -756,6 +784,23 @@ impl World {
     /// The per-spell one-shot emissions (cite = the traced cast arm).
     fn emit_spell(&mut self, id: usize, m: usize, p: PlayerPose, right: bool, ctx: &MobCtx) {
         let _ = ctx;
+        // Launch sounds at the original cast sites (sub_55370 calls
+        // against the wizard's own entity — full volume): fireball
+        // family 9 (:65079), meteor/volcano 15, accelerate 19,
+        // teleport 22, lightning 23, heal 25, possess 40. Spells
+        // without a traced launch sound stay silent for now.
+        if let Some(snd) = match id {
+            0 | 23 => Some(9u8),
+            7 | 8 => Some(15),
+            2 | 21 => Some(19),
+            10 => Some(22),
+            15 => Some(23),
+            1 => Some(25),
+            3 => Some(40),
+            _ => None,
+        } {
+            self.g.snd_player(snd);
+        }
         match id {
             // 0 Fireball (:65029): edge-triggered single shot (the
             // hold-to-autofire lives on 23 alone).
@@ -1470,6 +1515,47 @@ impl World {
     /// in world tile units (x, z).
     pub fn take_teleport(&mut self) -> Option<(f32, f32)> {
         self.pending_teleport.take()
+    }
+
+    /// Drain this tick's sound requests plus the ambient-loop inputs
+    /// the original's player tick derives (:55254-82): waves XOR wind
+    /// from the terrain under the carpet, fire and market loops from
+    /// emitter proximity. The original refreshes per-player countdown
+    /// fields from the emitters' own handlers; the INTERIM probe here
+    /// is a direct radius scan (8 tiles) over live fires (class 10
+    /// m0/m6) and village houses (m45) — same audible result, exact
+    /// hysteresis owed with the emitter trace.
+    pub fn take_audio(&mut self, player: PlayerPose) -> AudioFrame {
+        let over_water = self.g.on_water_pub(player.x, player.y);
+        const AMBIENT_RANGE: i32 = 8 * 256;
+        let (mut fire_near, mut market_near) = (false, false);
+        for e in &self.g.ent {
+            if e.flags & 1 == 0 || e.flags & 0x400 != 0 || e.class64 != 10 {
+                continue;
+            }
+            let is_fire = matches!(e.model65, 0 | 6);
+            let is_house = e.model65 == 45 && e.act_life >= 0;
+            if !is_fire && !is_house {
+                continue;
+            }
+            let dx = i32::from(e.x.wrapping_sub(player.x) as i16).abs();
+            let dy = i32::from(e.y.wrapping_sub(player.y) as i16).abs();
+            if dx.max(dy) > AMBIENT_RANGE {
+                continue;
+            }
+            if is_fire {
+                fire_near = true;
+            } else {
+                market_near = true;
+            }
+        }
+        AudioFrame {
+            events: std::mem::take(&mut self.g.sounds),
+            over_water,
+            fire_near,
+            market_near,
+            danger: self.g.player_danger > 0,
+        }
     }
 
     /// Live gameplay volumes (trigger AABBs, portals) for the map

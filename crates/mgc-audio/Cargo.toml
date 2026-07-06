@@ -1,0 +1,12 @@
+[package]
+name = "mgc-audio"
+description = "Audio runtime: output device, faithful MC1 mixer port, music player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mgc-formats = { path = "../mgc-formats" }
+cpal = "0.18"
+claxon = "0.4"

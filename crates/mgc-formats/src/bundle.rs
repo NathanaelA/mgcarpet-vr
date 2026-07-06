@@ -104,6 +104,78 @@ pub struct FramePos {
     pub y: u32,
 }
 
+/// `sounds.json`: the index into the `sounds.bin` PCM blob of an audio
+/// bundle (`mc1-audio`, `mc2-audio`). Sample banks are the original
+/// engine's unit of loading: MC1's `SNDS<bank>-<q>.DAT` families (bank
+/// selected per level by the level command stream, `q` = the original's
+/// free-RAM quality tier — we always bake the highest, 22050 Hz) and
+/// MC2's `SOUND/SOUND.DAT`. Entry ids are the engine's sound ids: the
+/// per-tick mixer slots index straight into bank 0 (remc1 sub_55100,
+/// 47 slots).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoundIndex {
+    /// Sample rate of every entry, Hz.
+    pub sample_rate: u32,
+    /// PCM encoding of `sounds.bin`; always `"pcm8"` (unsigned 8-bit
+    /// mono, the original sample data byte-for-byte).
+    pub encoding: String,
+    pub banks: Vec<SoundBankIndex>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoundBankIndex {
+    /// Original bank number (MC1 `SNDS<bank>`; MC2 uses bank 0).
+    pub bank: u32,
+    pub entries: Vec<SoundEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoundEntry {
+    /// Engine sound id (the original bank-table index; id 0 is the
+    /// bank-header pseudo-entry and is never emitted).
+    pub id: u32,
+    /// Original sample name, lowercase, extension stripped
+    /// (`firebal1`, `waves2-`).
+    pub name: String,
+    /// Byte offset into `sounds.bin` (samples dedupe across banks).
+    pub offset: u32,
+    /// Length in bytes (= samples; 8-bit mono).
+    pub len: u32,
+}
+
+/// `music.json`: the music tracks of an audio bundle, one FLAC member
+/// each. MC1: HMP songs rendered through OPL3 with the game's own
+/// AdLib banks at import. MC2: redbook tracks ripped from the CD image
+/// (the original's primary music path).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MusicIndex {
+    pub tracks: Vec<MusicTrack>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MusicTrack {
+    /// Original music bank (MC1 `MUSIC<bank>`, level-selected like the
+    /// sound banks; MC2 redbook uses bank 0).
+    pub bank: u32,
+    /// Track name: MC1 the song name (`cgame1`, `csetup`); MC2 the
+    /// redbook track (`track-02`).
+    pub name: String,
+    /// Bundle member holding the FLAC stream (`music/<...>.flac`).
+    /// For MC1 in-game songs this is the AMBIENT mix: the danger
+    /// layers (MIDI channels 3/4/5, kept at CC7 0 by the original
+    /// and faded in during combat — remc1 sub_20BD0/sub_20D00)
+    /// silenced.
+    pub file: String,
+    /// The danger-layer stem (channels 3/4/5 solo), sample-aligned
+    /// with `file` — the runtime overlays it with a gain ramp on the
+    /// danger state. Absent on songs without a muted danger layer
+    /// (menu/intro music) and on redbook tracks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub danger_file: Option<String>,
+    /// Provenance: original source (`CGAME1.HMP`, `redbook track 2`).
+    pub source: String,
+}
+
 /// A fully-loaded bundle.
 #[derive(Debug, Clone)]
 pub struct Bundle {
@@ -270,6 +342,71 @@ impl Bundle {
             search: read_opt("search.bin"),
             build_tab: read_opt("build.tab.bin"),
             build_dat: read_opt("build.dat.bin"),
+        })
+    }
+}
+
+/// A fully-loaded audio bundle (`<game>-audio` variants). Sounds load
+/// eagerly (a few MB of 8-bit PCM); music stays on disk — tracks are
+/// FLAC files streamed by path at play time.
+#[derive(Debug, Clone)]
+pub struct AudioBundle {
+    pub manifest: BundleManifest,
+    pub sounds: Option<(SoundIndex, Vec<u8>)>,
+    pub music: Option<MusicIndex>,
+    /// Bundle directory, for resolving [`MusicTrack::file`].
+    pub dir: PathBuf,
+}
+
+impl AudioBundle {
+    /// Load an audio bundle directory. Both member families are
+    /// optional (a bundle may carry only music while the game's sample
+    /// track is unported); the manifest is required.
+    pub fn load(dir: &Path) -> Result<Self, BundleError> {
+        let manifest_path = dir.join("bundle.json");
+        let manifest_bytes =
+            std::fs::read(&manifest_path).map_err(|e| BundleError::Io(manifest_path.clone(), e))?;
+        let manifest: BundleManifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|e| BundleError::Json(manifest_path, e))?;
+
+        let sounds = match std::fs::read(dir.join("sounds.bin")) {
+            Ok(data) => {
+                let index_path = dir.join("sounds.json");
+                let index_bytes =
+                    std::fs::read(&index_path).map_err(|e| BundleError::Io(index_path.clone(), e))?;
+                let index: SoundIndex = serde_json::from_slice(&index_bytes)
+                    .map_err(|e| BundleError::Json(index_path.clone(), e))?;
+                for bank in &index.banks {
+                    for e in &bank.entries {
+                        if e.offset as usize + e.len as usize > data.len() {
+                            return Err(BundleError::Malformed(
+                                index_path,
+                                format!(
+                                    "bank {} id {} ({}) spans past sounds.bin",
+                                    bank.bank, e.id, e.name
+                                ),
+                            ));
+                        }
+                    }
+                }
+                Some((index, data))
+            }
+            Err(_) => None,
+        };
+
+        let music = match std::fs::read(dir.join("music.json")) {
+            Ok(bytes) => Some(
+                serde_json::from_slice(&bytes)
+                    .map_err(|e| BundleError::Json(dir.join("music.json"), e))?,
+            ),
+            Err(_) => None,
+        };
+
+        Ok(Self {
+            manifest,
+            sounds,
+            music,
+            dir: dir.to_path_buf(),
         })
     }
 }
