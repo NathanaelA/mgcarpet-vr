@@ -509,12 +509,16 @@ impl Gen {
     pub(crate) fn proj_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         match self.ent[i].tick70 {
             0 => self.proj_m0_tick(i, ctx),
+            1 => self.proj_m1_tick(i, ctx),
             3 => self.proj_generic_tick(i, ctx, true),
             8 => self.proj_m8_tick(i, ctx),
             9 => self.proj_m9_tick(i, ctx),
+            10 => self.proj_castle_ball_tick(i, ctx),
+            12 => self.proj_m12_tick(i, ctx),
             13 | 15 => self.proj_bolt_tick(i, ctx),
+            17 => self.proj_firewall_tick(i, ctx),
             // Player-spell payload projectiles (spell track).
-            1 | 2 | 4 | 5 | 6 | 7 | 11 => self.proj_payload_tick(i, ctx),
+            2 | 4 | 5 | 6 | 7 | 11 => self.proj_payload_tick(i, ctx),
             // Beam segment (state 14; remc1's table is truncated here
             // — lifecycle reconstructed from the slot-order life trick
             // :63349-53): kill on the PRE-decrement value so every
@@ -552,6 +556,357 @@ impl Gen {
             self.home(i, ctx);
         }
         self.proj_move_and_hit(i, ctx, false)
+    }
+
+    /// sub_52ED0 (:62937): the POSSESS lob (c9 m1). Its flight z is
+    /// clamped UP to the terrain each tick (:62975-77 — the lob skims
+    /// rising ground), its one-time acquisition scans ONLY mana balls
+    /// and houses (sub_54520 case 1, :64040-77 — never creatures or
+    /// wizards), and its victim scan is the dedicated sub_11AC0
+    /// (:17033): class-10 models 39/40/45 only, skipping entities the
+    /// shooter already owns or claimed. Any end detonates into the
+    /// (10,12) ch1-claim flash.
+    fn proj_m1_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let _ = ctx;
+        if self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            self.aim_assist_possess(i);
+        }
+        if self.ent[i].f146 != 0 {
+            self.home_possess(i);
+        }
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        let g = self.ground_z(tmp.0, tmp.1) as i16;
+        if tmp.2 < g {
+            tmp.2 = g; // ground clamp (:62975-77)
+        }
+        let hit = self.possess_victim_at(i, tmp);
+        self.move_relink(i, tmp.0, tmp.1, tmp.2);
+        self.ent[i].act_life -= 1;
+        if let Some(j) = hit {
+            let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+            self.move_relink(i, jx, jy, jz);
+            self.proj_explode(i, ctx, Some(MailTarget::Pool(j)), false);
+        } else if self.ent[i].act_life < 0 {
+            self.proj_explode(i, ctx, None, false);
+        }
+        false
+    }
+
+    /// sub_54520 case 1 (:64040-77): possess acquisition — nearest
+    /// awake mana ball (m39/40) not already owned/claimed by the
+    /// shooter, or any house (m45), inside the ±0x71 yaw+pitch cone
+    /// within 5120. Snaps the heading on success.
+    fn aim_assist_possess(&mut self, i: usize) {
+        let (px, py, pz, yaw, pitch, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f30, e.f32, e.id24)
+        };
+        let mut best: Option<(u16, u32, u16, u16)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.flags & 0x400 != 0 {
+                continue;
+            }
+            let candidate = match c.model65 {
+                39 | 40 => c.f58 != 0 && c.f144 != own && c.id24 != own,
+                45 => c.f144 != own && c.id24 != own,
+                _ => false,
+            };
+            if !candidate {
+                continue;
+            }
+            let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+            let d2 = Self::dist2_sq(px, py, tx, ty);
+            let dz = tz.wrapping_sub(pz) as i32;
+            if d2.wrapping_add(dz.wrapping_mul(dz)) > 5120 * 5120 {
+                continue;
+            }
+            let ty_yaw = Self::angle_between(px, py, tx, ty);
+            let dh = Self::isqrt(d2 as u32) as i32;
+            let ty_pitch = Self::pitch_toward(pz, tz, dh);
+            let dy = Self::angdist(yaw, ty_yaw) as u32;
+            let dp = Self::angdist(pitch, ty_pitch) as u32;
+            if dy > 0x71 || dp > 0x71 {
+                continue;
+            }
+            let score = dy * dy + dp * dp;
+            if best.is_none() || best.is_some_and(|(_, bs, _, _)| score < bs) {
+                best = Some((j as u16, score, ty_yaw, ty_pitch));
+            }
+        }
+        if let Some((slot, _, ty_yaw, ty_pitch)) = best {
+            let e = &mut self.ent[i];
+            e.f146 = slot;
+            e.f30 = ty_yaw;
+            e.f32 = ty_pitch;
+            e.f34 = ty_yaw;
+            e.f36 = ty_pitch;
+        }
+    }
+
+    /// Pool-target homing for the possess lob (the sub_52550 steer
+    /// against a class-10 target — the generic home() only handles
+    /// creatures/the player).
+    fn home_possess(&mut self, i: usize) {
+        let t = self.ent[i].f146 as usize;
+        if t == 0 || t >= POOL || self.ent[t].class64 != 10 || self.ent[t].flags & 0x400 != 0 {
+            self.ent[i].f146 = 0;
+            return;
+        }
+        let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (tx, ty, tz) = (
+            self.ent[t].x,
+            self.ent[t].y,
+            self.ent[t].z.wrapping_add(self.ent[t].f78 as i16),
+        );
+        let yaw = Self::angle_between(px, py, tx, ty);
+        let dh = Self::isqrt(Self::dist2_sq(px, py, tx, ty) as u32) as i32;
+        let pitch = Self::pitch_toward(pz, tz, dh);
+        let e = &mut self.ent[i];
+        let ty_ = Self::turn_step(e.f30, yaw, 34);
+        e.f30 = (e.f30 as i32 + ty_ as i32) as u16 & 0x7FF;
+        e.f32 = pitch;
+    }
+
+    /// sub_11AC0 (:17033): the possess victim scan — class-10 models
+    /// 39/40/45 only, not the shooter's own or already-claimed, AABB.
+    fn possess_victim_at(&mut self, i: usize, tmp: (u16, u16, i16)) -> Option<usize> {
+        let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        self.ent[i].x = tmp.0;
+        self.ent[i].y = tmp.1;
+        self.ent[i].z = tmp.2;
+        let own = self.ent[i].id24;
+        let mut found = None;
+        let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
+        'scan: for dy in -r..=r {
+            for dx in -r..=r {
+                let tx = ((tmp.0 >> 8) as i32 + dx) as u8;
+                let ty = ((tmp.1 >> 8) as i32 + dy) as u8;
+                let mut j = self.map_entity[tile(tx, ty)] as usize;
+                while j != 0 {
+                    let c = &self.ent[j];
+                    if c.flags & 8 != 0
+                        && c.class64 == 10
+                        && matches!(c.model65, 39 | 40 | 45)
+                        && c.id24 != own
+                        && c.f144 != own
+                        && self.ent_overlap(i, j)
+                    {
+                        found = Some(j);
+                        break 'scan;
+                    }
+                    j = c.next20 as usize;
+                }
+            }
+        }
+        self.ent[i].x = old.0;
+        self.ent[i].y = old.1;
+        self.ent[i].z = old.2;
+        found
+    }
+
+    /// sub_53DC0 (:63628): the storm-carrier flight (c9 m12) — the
+    /// Lightning Storm's projectile. Speed eases ±2, homes on an
+    /// acquired class-3 target (none exist for us yet → straight
+    /// flight); on ANY end but water it becomes the (10,38) storm
+    /// cloud, passing owner/heading/victim/damage and the (9,9)
+    /// bolt spec down (:63767-83).
+    fn proj_m12_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let e = &mut self.ent[i];
+        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        if self.ent[i].f146 != 0 {
+            self.home(i, ctx);
+        }
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        let hit = self.victim_scan_at(i, tmp, ctx);
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        let grounded = ground > tmp.2;
+        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        self.ent[i].act_life -= 1;
+        if hit.is_none() && !grounded && self.ent[i].act_life >= 0 {
+            return false;
+        }
+        if grounded && self.on_water_pub(tmp.0, tmp.1) {
+            self.splash_and_die(i); // stormless water end (:63704)
+            return false;
+        }
+        let (x, y, z, own, f44, f30, f32) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f44, e.f30, e.f32)
+        };
+        if let Some(s) = self.spawn_effect(38, x, y, z) {
+            let e = &mut self.ent[s];
+            e.id24 = own;
+            e.f30 = f30;
+            e.f32 = f32;
+            e.f44 = f44;
+            e.f68 = 9;
+            e.f69 = 9;
+            e.f146 = match hit {
+                Some(MailTarget::Pool(j)) => j as u16,
+                Some(MailTarget::Player) => PLAYER_TARGET,
+                None => 0,
+            };
+        }
+        self.ent[i].flags |= 0x400;
+        false
+    }
+
+    /// sub_39F40 (:46166): the castle ball (c9 m10) — sprite 18,
+    /// speed 384, life 0x2000/384 = 21.
+    pub(crate) fn spawn_castle_ball(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(10, 10, x, y, z, 384, 21, 0, 18)
+    }
+
+    /// sub_3A040 (:46226): the storm carrier (c9 m12) — sprite 216,
+    /// speed 384, life 2048/384 = 5.
+    pub(crate) fn spawn_storm_carrier(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(12, 12, x, y, z, 384, 5, 0, 216)
+    }
+
+    /// sub_3A270 (:46330): the Wall of Fire bolt (c9 m16, state 17)
+    /// — fireball sprite 42, speed 384, life 21. remc1's state table
+    /// is truncated before 17; the flight is the sub_53B50 shape =
+    /// straight at the aim (the +150 target sits ON the aim line),
+    /// exploding into +68/+69 WITHOUT the +44 copy.
+    pub(crate) fn spawn_firewall_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(16, 17, x, y, z, 384, 21, 0, 42)
+    }
+
+    /// The m16 firewall flight (state 17): generic ease + move, no
+    /// fire trail, NO +44 copy into the explosion (the napalm keeps
+    /// its own 100).
+    fn proj_firewall_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let e = &mut self.ent[i];
+        e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        if self.ent[i].f146 != 0 {
+            self.home(i, ctx);
+        }
+        self.proj_move_and_hit(i, ctx, false)
+    }
+
+    /// sub_53980/sub_53B50 (:63453/:63525): the castle ball's flight
+    /// — steered at the +150 ground target (dest_x/dest_y). The
+    /// LAUNCH tick re-runs the placement scan at the cast spot; a
+    /// failure is a silent despawn (:63617-21). On landing the scan
+    /// runs again: a failure flips the heading 180° and steps back
+    /// once, then the class-3 m2 castle is created anyway
+    /// (:63590-606). APPROX: snap-steer in place of the original's
+    /// eased turn.
+    fn proj_castle_ball_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let _ = ctx;
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            let (x, y) = (self.ent[i].x, self.ent[i].y);
+            if !self.castle_site_ok(i, x, y) {
+                self.ent[i].flags |= 0x400;
+                return false;
+            }
+        }
+        let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (dx, dy) = (self.ent[i].dest_x, self.ent[i].dest_y);
+        let tz = self.ground_z(dx, dy) as i16;
+        let yaw = Self::angle_between(px, py, dx, dy);
+        let dh = Self::isqrt(Self::dist2_sq(px, py, dx, dy) as u32) as i32;
+        let pitch = Self::pitch_toward(pz, tz, dh);
+        {
+            let e = &mut self.ent[i];
+            e.f30 = yaw;
+            e.f32 = pitch;
+        }
+        let mut tmp = (px, py, pz);
+        let speed = self.ent[i].f126;
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        let grounded = ground > tmp.2;
+        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        self.ent[i].act_life -= 1;
+        if grounded || self.ent[i].act_life < 0 {
+            let (mut bx, mut by) = (tmp.0, tmp.1);
+            if !self.castle_site_ok(i, bx, by) {
+                let back = yaw.wrapping_add(0x400) & 0x7FF;
+                let mut t = (bx, by, 0i16);
+                Self::polar_step(&mut t, back, 0, speed);
+                bx = t.0;
+                by = t.1;
+            }
+            let own = self.ent[i].id24;
+            if let Some(c) = self.spawn_castle(bx, by) {
+                self.ent[c].id24 = own;
+            }
+            self.ent[i].flags |= 0x400;
+        }
+        false
+    }
+
+    /// sub_12F70 (:17786): the castle placement scan — fails when
+    /// another castle (c3 m2) is within extents+2048 on both axes,
+    /// or any tile of the 8x8 block at (tx-8..tx-1, ty-8..ty-1) —
+    /// the original's asymmetric window, ported verbatim — carries
+    /// the protection bit.
+    pub(crate) fn castle_site_ok(&self, i: usize, x: u16, y: u16) -> bool {
+        let (f80, f82) = (self.ent[i].f80 as i32, self.ent[i].f82 as i32);
+        let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+        for j in 1..POOL {
+            let c = &self.ent[j];
+            if c.class64 == 3
+                && c.model65 == 2
+                && c.flags & 0x400 == 0
+                && wd(c.x, x) < c.f80 as i32 + f80 + 2048
+                && wd(c.y, y) < c.f82 as i32 + f82 + 2048
+            {
+                return false;
+            }
+        }
+        let (tx, ty) = ((x >> 8) as i32, (y >> 8) as i32);
+        for dy in -8..0i32 {
+            for dx in -8..0i32 {
+                if self.t.angle[tile((tx + dx) as u8, (ty + dy) as u8)] & 0x80 != 0 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// sub_37920 (:44229): the class-3 model-2 CASTLE entity —
+    /// grid-snapped with (tx+ty) even parity, state 5 machine
+    /// (sub-state f59 = 0 → the level-up arm builds level 1),
+    /// sprite 177, life 40000. The visible castle is painted
+    /// terrain; this entity is the anchor/state machine.
+    pub(crate) fn spawn_castle(&mut self, x: u16, y: u16) -> Option<usize> {
+        let mut cx = ((x as u32 + 128) >> 8) as u8;
+        let cy = ((y as u32 + 128) >> 8) as u8;
+        if (cx as u16 + cy as u16) % 2 == 1 {
+            cx = cx.wrapping_add(1); // parity snap (:44246-52)
+        }
+        let (px, py) = ((cx as u16) << 8, (cy as u16) << 8);
+        let z = self.ground_z(px, py) as i16;
+        let s = self.new_event()?;
+        {
+            let e = &mut self.ent[s];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.tick70 = 5;
+            e.f59 = 0;
+            e.f26 = 0;
+            e.max_life = 40000;
+        }
+        self.link(s, px, py, z);
+        self.refill_life(s);
+        self.set_sprite(s, 177);
+        Some(s)
     }
 
     /// sub_52770 (:62618): the generic flight (m3 trail bolt) — speed
@@ -860,64 +1215,32 @@ impl Gen {
             (e.x, e.y, e.z, e.model65)
         };
         let gz = self.ground_z(x, y) as i16;
+        let own = self.ent[i].id24;
         match model {
-            // Possess (:65203): the nearest mana ball (c10 m39)
-            // within 2 tiles becomes claimed-by-player (+144; the
-            // map-blink presentation comes later). APPROX: no claim
-            // flash ported.
-            1 => {
-                let mut best: Option<(usize, i32)> = None;
-                for j in 1..POOL {
-                    let c = &self.ent[j];
-                    if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
-                        continue;
-                    }
-                    let d2 = Self::dist2_sq(x, y, c.x, c.y);
-                    if d2 <= 512 * 512 && best.is_none_or(|(_, bd)| d2 < bd) {
-                        best = Some((j, d2));
-                    }
-                }
-                if let Some((j, _)) = best {
-                    self.ent[j].f144 = PLAYER_TARGET;
-                }
-            }
-            // Earthquake (:65314): an ONGOING crater that TRAVELS
-            // forward from the impact (player-validated shape).
-            // APPROX(original: effect c10 m15 crevice walker — not
-            // ported): the ported canyon-head walker (state 34,
-            // segment_canyon's init shape) at the cast heading —
-            // 1 tile/tick, laying 2-tick diggers as it goes, ~24
-            // tiles or until water.
+            // Earthquake (:65314): the authentic (10,15) crevice
+            // walker — random start heading off its own LCG, ±45
+            // wander, a 10-tick m11 digger per step (the rumble is
+            // the diggers' loop-10).
             2 => {
-                let yaw = self.ent[i].f30;
-                if let Some(h) = self.new_event() {
-                    let e = &mut self.ent[h];
-                    e.class64 = 10;
-                    e.model65 = 32;
-                    e.tick70 = 34;
-                    e.max_life = 0;
-                    e.f126 = 256;
-                    e.flags = 0;
-                    e.x = x;
-                    e.y = y;
-                    e.z = gz;
-                    e.f30 = yaw;
-                    e.act_life = 24; // APPROX run pending the m15 trace
+                if let Some(w) = self.spawn_creator(15, x, y, gz) {
+                    self.ent[w].id24 = own;
                 }
             }
             // Volcano (:65432): the growing hill + pit IS the
             // authentic model (trace :65466, effect c10 m9); the
-            // finished cone spawns the model-18 marker, which at
-            // runtime is the eruption driver ([`Gen::eruption_tick`]
-            // — manual: "periodic eruptions which inflict further
-            // damage").
+            // finished cone spawns the model-18 eruption driver
+            // ([`Gen::eruption_tick`]).
             4 => {
-                self.spawn_creator(9, x, y, gz);
+                if let Some(h) = self.spawn_creator(9, x, y, gz) {
+                    self.ent[h].id24 = own;
+                }
             }
             // Crater (:65491): the expanding bowl (authentic:
             // effect c10 m11).
             5 => {
-                self.spawn_creator(11, x, y, gz);
+                if let Some(c) = self.spawn_creator(11, x, y, gz) {
+                    self.ent[c].id24 = own;
+                }
             }
             // Mana Magnet (:66049): a 30-tick puller event at the
             // impact — balls within 8 tiles stream toward it (merge
@@ -941,21 +1264,40 @@ impl Gen {
                     self.ent[f].id24 = PLAYER_TARGET;
                 }
             }
-            // Undead Army (:65927): 3 skeletons (c5 m7 — 032's
-            // wraith/skeleton family) scattered at the impact,
-            // claimed by the player (+144) so they read player-owned
-            // on the map; their normal AI applies.
-            // APPROX(original: effect c10 m36 spawner, army size
-            // scales with target-terrain mana :65961-71).
+            // Undead Army (:65927 → the (10,36) spawner sub_26E90
+            // :29353): up to 8 class-5 model-9 SKELETONS on a
+            // 512-unit ring (angles k·2048/N, facing radial+180°),
+            // zero mana (no corpse balls, :29672 gate), capped at 64
+            // live skeletons per owner (:29375-81). Owner goes on
+            // BOTH +24 and +144 — remc1 writes only +144 (:29399),
+            // which would turn gen-1 skeletons on their caster;
+            // transcription-slip suspicion beside the :29366
+            // hardcode (converted skeletons DO get +24, :23913).
+            // Deferred: the human→skeleton conversion AI arm.
             11 => {
-                for _ in 0..3 {
-                    let d1 = self.ent_rand(i);
-                    let d2 = self.ent_rand(i);
-                    let sx = x.wrapping_add(((d1 & 0xFF) as i32 - 128) as u16);
-                    let sy = y.wrapping_add(((d2 & 0xFF) as i32 - 128) as u16);
-                    let sz = self.ground_z(sx, sy) as i16;
-                    if let Some(s) = self.spawn_creature(7, sx, sy, sz) {
-                        self.ent[s].f144 = PLAYER_TARGET;
+                let live = (1..POOL)
+                    .filter(|&j| {
+                        let c = &self.ent[j];
+                        c.class64 == 5
+                            && c.model65 == 9
+                            && c.flags & 0x400 == 0
+                            && c.f144 == own
+                    })
+                    .count() as i32;
+                let n = 8i32.min(64 - live).max(0);
+                for k in 0..n {
+                    let ang = ((k * (2048 / n)) as u16) & 0x7FF;
+                    let mut pos = (x, y, 0i16);
+                    Self::polar_step(&mut pos, ang, 0, 512);
+                    let sz = self.ground_z(pos.0, pos.1) as i16;
+                    if let Some(s) = self.spawn_creature(9, pos.0, pos.1, sz) {
+                        let facing = ang.wrapping_add(0x400) & 0x7FF;
+                        let e = &mut self.ent[s];
+                        e.id24 = own;
+                        e.f144 = own;
+                        e.f140 = 0;
+                        e.f30 = facing;
+                        e.f34 = facing;
                     }
                 }
             }
@@ -993,58 +1335,313 @@ impl Gen {
         false
     }
 
-    /// The volcano's eruption driver — the model-18 marker the
-    /// finished cone spawns (tick_hill, sub_25470's finish arm),
-    /// alive 10000 ticks with f44 = 200 from its creator row.
-    /// APPROX(spell 8 Volcano, manual "periodic eruptions which
-    /// inflict further damage"; the original's state-18 handler is
-    /// untraced): every 60 ticks, 3-5 lava bombs (fireball-family
-    /// class-9, fire effect on landing) arc outward from the cone
-    /// apex on the marker's own LCG, plus a 200 ch0 pulse in a
-    /// 3-tile ring around the cone.
+    /// sub_25EC0 (:28731): the volcano eruption driver (m18, state
+    /// 18). Direct import replacing the old every-60-ticks
+    /// approximation. Counter +26 runs the machine; maxLife (10000)
+    /// never counts down:
+    /// - counter 0: eruption start — always activates, registers as
+    ///   THE erupting volcano (kicking any previous one to counter
+    ///   250), swaps the global (10,19) plume, and fires the
+    ///   once-per-eruption blast fireball ((10,17) payload, pitch
+    ///   -386, life 1) at the rotating heading (:28778-823).
+    /// - counters 1..126: activate at p=1/5, except every 16th tick
+    ///   (counter&0xF == 0) which never does (:28768-71). Every
+    ///   activation lobs ONE ballistic (10,16) lava bomb and turns
+    ///   the heading by 0x500 (:28795-804).
+    /// - an activation at 127 is the CLEAN death: clears the global
+    ///   register (:28825-29). Missing that 1/5 roll leaves the
+    ///   register pointing at a dead-idle volcano — the authentic
+    ///   no-more-eruptions-anywhere quirk.
+    /// - counter > 2500: dormant; p=1/100 per tick to re-arm to 0,
+    ///   only while NO volcano is registered (:28750-66).
+    /// - every activation (and every re-arm) dies instead if the
+    ///   ground height under the driver changed (:28773-77).
+    /// No driver-level sound: eruption audio = the bombs' seeded
+    /// fires (crackle 3) + the blast ring (30).
     fn eruption_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let _ = ctx;
+        let c = self.ent[i].f26;
+        let (x, y, z, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        if c > 2500 {
+            let d = self.ent_rand(i);
+            if d % 100 == 0 && self.erupting == 0 {
+                if self.ground_z(x, y) as i16 != z {
+                    self.ent[i].flags |= 0x400;
+                    return false;
+                }
+                self.ent[i].f26 = 0;
+            } else if self.ent[i].f26 < i16::MAX - 1 {
+                self.ent[i].f26 = c + 1;
+            }
+            return false;
+        }
+        let fire = if c != 0 && c < 128 && c & 0xF != 0 {
+            self.ent_rand(i) % 5 == 0
+        } else {
+            c == 0
+        };
+        if fire {
+            if self.ground_z(x, y) as i16 != z {
+                self.ent[i].flags |= 0x400; // deformed under: dead
+                return false;
+            }
+            if c == 0 {
+                // Register self; kick the previous eruption (:28778-92).
+                let prev = self.erupting as usize;
+                if prev != 0 && self.ent[prev].class64 == 10 && self.ent[prev].model65 == 18 {
+                    self.ent[prev].f26 = 250;
+                }
+                self.erupting = i as u16;
+                let pl = self.plume as usize;
+                if pl != 0 && self.ent[pl].class64 == 10 && self.ent[pl].model65 == 19 {
+                    self.ent[pl].flags |= 0x400;
+                }
+                let g = self.ground_z(x, y) as i16;
+                self.plume = match self.spawn_effect(19, x, y, g) {
+                    Some(p) => {
+                        self.ent[p].id24 = own;
+                        p as u16
+                    }
+                    None => 0,
+                };
+            }
+            // One ballistic lava bomb per activation (:28795-801):
+            // owner AND the driver's LCG seed pass on.
+            let seed = self.ent[i].rand;
+            if let Some(b) = self.spawn_lava_bomb(x, y) {
+                self.ent[b].id24 = own;
+                self.ent[b].rand = seed;
+            }
+            // Heading advances 0x500 per activation (:28804).
+            self.ent[i].f30 = self.ent[i].f30.wrapping_add(0x500);
+            if c == 0 {
+                // The eruption-start blast fireball (:28805-23):
+                // pitch -386, life 1, detonates into the (10,17)
+                // fire-field. APPROX: the +150 position-target
+                // steering is skipped (aim assist suppressed) — it
+                // flies the armed heading.
+                let yaw = self.ent[i].f30 & 0x7FF;
+                if let Some(p) = self.spawn_fireball(x, y, z) {
+                    let e = &mut self.ent[p];
+                    e.id24 = own;
+                    e.f30 = yaw;
+                    e.f34 = yaw;
+                    e.f32 = (-386i16 as u16) & 0x7FF;
+                    e.f36 = e.f32;
+                    e.f68 = 10;
+                    e.f69 = 17;
+                    e.act_life = 1;
+                    e.flags |= 2;
+                }
+            }
+            if c >= 127 {
+                self.erupting = 0; // the clean death (:28825-29)
+                self.ent[i].flags |= 0x400;
+                return false;
+            }
+        }
+        self.ent[i].f26 = c + 1;
+        false
+    }
+
+    /// sub_3ACC0 (:46958): the (10,16) lava bomb — draws IN ORDER
+    /// off its own LCG: life = %100+100, speed = %50 (held), vz =
+    /// 256 up, yaw = rand & 0x7FF; speed applies as +52; spawned
+    /// map-linked at ground+64 with the horizontal velocity vector
+    /// pre-advanced into +150/+152 (our dest_x/dest_y), sprite 210.
+    fn spawn_lava_bomb(&mut self, x: u16, y: u16) -> Option<usize> {
+        let b = self.new_event()?;
+        {
+            let e = &mut self.ent[b];
+            e.class64 = 10;
+            e.model65 = 16;
+            e.tick70 = 16;
+            e.f44 = 200;
+            e.flags = (e.flags & !(8 | 0x20000)) | 0x20000;
+            let d1 = lcg32(&mut e.rand);
+            e.max_life = d1 % 0x64 + 100;
+            let d2 = lcg32(&mut e.rand);
+            e.f46 = 256;
+            let d3 = lcg32(&mut e.rand);
+            e.f30 = (d3 & 0x7FF) as u16;
+            e.f126 = (d2 % 0x32) as i16 + 52;
+        }
+        let gz = (self.ground_z(x, y) + 64) as i16;
+        self.link(b, x, y, gz);
+        {
+            let (yaw, speed) = (self.ent[b].f30, self.ent[b].f126);
+            let mut v = (0u16, 0u16, 0i16);
+            Self::polar_step(&mut v, yaw, 0, speed);
+            let e = &mut self.ent[b];
+            e.dest_x = v.0;
+            e.dest_y = v.1;
+        }
+        self.refill_life(b);
+        self.set_sprite(b, 210);
+        Some(b)
+    }
+
+    /// sub_25A60 (:28573): the lava bomb's ballistic flight —
+    /// per-axis velocity clamp ±80, gravity -28/tick (vz clamped
+    /// [-384, 256]), ground bounce vz = -vz/4, water splash, and at
+    /// rest a 30-tick standing fire at 3x damage (if none already
+    /// burns on the cell), then downhill roll under 250/256
+    /// friction. Slope roll APPROX: central-difference gradient in
+    /// place of sub_41F50's table.
+    fn lava_bomb_tick(&mut self, i: usize) -> bool {
         self.ent[i].act_life -= 1;
         if self.ent[i].act_life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
-        if self.ent[i].f63 % 60 != 0 {
+        let mut vx = (self.ent[i].dest_x as i16).clamp(-80, 80);
+        let mut vy = (self.ent[i].dest_y as i16).clamp(-80, 80);
+        let mut vz = (self.ent[i].f46 - 28).clamp(-384, 256);
+        let (x0, y0, z0) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let x = x0.wrapping_add(vx as u16);
+        let y = y0.wrapping_add(vy as u16);
+        let mut z = z0.wrapping_add(vz);
+        let g = self.ground_z(x, y) as i16;
+        let mut grounded = false;
+        if z <= g {
+            z = g;
+            grounded = true;
+            if self.on_water_pub(x, y) {
+                self.move_relink(i, x, y, z);
+                self.splash_and_die(i);
+                return false;
+            }
+            vz = -vz / 4; // bounce (:28625)
+            if vz.abs() <= 28 {
+                vz = 0;
+                // Seed a standing fire at rest if the cell has none
+                // (:28637-47): life 30, 3x the bomb's 200.
+                let mut burning = false;
+                let mut j = self.map_entity[tile((x >> 8) as u8, (y >> 8) as u8)] as usize;
+                while j != 0 {
+                    if self.ent[j].class64 == 10
+                        && self.ent[j].model65 == 6
+                        && self.ent[j].flags & 0x400 == 0
+                    {
+                        burning = true;
+                        break;
+                    }
+                    j = self.ent[j].next20 as usize;
+                }
+                if !burning {
+                    let own = self.ent[i].id24;
+                    let amt = 3 * self.ent[i].f44;
+                    if let Some(f) = self.spawn_effect(6, x, y, z) {
+                        self.ent[f].id24 = own;
+                        self.ent[f].act_life = 30;
+                        self.ent[f].f44 = amt;
+                    }
+                }
+            }
+        }
+        if grounded {
+            // Downhill roll + friction (:28655-67).
+            let gxm = self.ground_z(x.wrapping_sub(256), y) as i16;
+            let gxp = self.ground_z(x.wrapping_add(256), y) as i16;
+            let gym = self.ground_z(x, y.wrapping_sub(256)) as i16;
+            let gyp = self.ground_z(x, y.wrapping_add(256)) as i16;
+            vx = (vx + (gxm - gxp) / 8).clamp(-80, 80);
+            vy = (vy + (gym - gyp) / 8).clamp(-80, 80);
+            vx = (250 * vx as i32 >> 8) as i16;
+            vy = (250 * vy as i32 >> 8) as i16;
+        }
+        let e = &mut self.ent[i];
+        e.dest_x = vx as u16;
+        e.dest_y = vy as u16;
+        e.f46 = vz;
+        self.move_relink(i, x, y, z);
+        false
+    }
+
+    /// The (10,19) eruption plume: a 240-tick flame-family visual
+    /// riding the crater. APPROX(state-19 handler untraced): life
+    /// countdown + animation only.
+    fn plume_tick(&mut self, i: usize) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            if self.plume == i as u16 {
+                self.plume = 0;
+            }
             return false;
         }
-        let (x, y, id) = {
+        self.anim_advance(i);
+        false
+    }
+
+    /// sub_26D20 (:29279), state 40: the lightning STORM cloud.
+    /// Rises 64/tick until 1024 above the terrain (doing nothing
+    /// else while climbing), then holds that altitude and fires TWO
+    /// (9,9) bolts per tick in opposite random directions (pitch 56
+    /// down, yaw flipped 0x400 between them), each with a third of
+    /// the bolt life, the storm's 2000 damage, and the (10,23)
+    /// endpoint flash; thunder 23 per firing tick. Life 32 ticks of
+    /// fire (~66 bolts).
+    fn storm_cloud_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let _ = ctx;
+        let (x, y, z) = {
             let e = &self.ent[i];
-            (e.x, e.y, e.id24)
+            (e.x, e.y, e.z)
         };
-        // Launch from the (grown) cone apex.
-        let apex = (self.ground_z(x, y) + 256) as i16;
-        let n = 3 + self.ent_rand(i) % 3; // 3-5 bombs
-        for _ in 0..n {
-            let d1 = self.ent_rand(i);
-            let d2 = self.ent_rand(i);
-            let yaw = (d1 & 0x7FF) as u16;
-            let pitch = (d2 % 0x80) as u16; // shallow downward arc
-            let Some(p) = self.spawn_fireball(x, y, apex) else {
-                continue;
-            };
-            let e = &mut self.ent[p];
-            e.id24 = id;
-            e.f30 = yaw;
-            e.f34 = yaw;
-            e.f32 = pitch;
-            e.f36 = pitch;
-            e.f126 = (200 + d2 % 150) as i16;
-            e.f128 = e.f126;
-            e.flags |= 2; // aim assist spent: lava does not home
+        let g = self.ground_z(x, y) as i16;
+        if z < g.wrapping_add(1024) {
+            let nz = z.wrapping_add(64);
+            self.move_relink(i, x, y, nz);
+            return false;
         }
-        // The near-cone damage pulse.
-        {
-            let e = &mut self.ent[i];
-            e.f80 = 768;
-            e.f82 = 768;
-            e.f84 = 0x2000;
+        self.move_relink(i, x, y, g.wrapping_add(1024));
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        let d = self.ent_rand(i);
+        self.ent[i].f32 = 56;
+        self.ent[i].f30 = (d & 0x7FF) as u16;
+        for _ in 0..2 {
+            // Yaw flips 180° BEFORE each launch (:29321-23).
+            self.ent[i].f30 = self.ent[i].f30.wrapping_add(0x400) & 0x7FF;
+            let (yaw, pitch, f44, own, hh) = {
+                let e = &self.ent[i];
+                (e.f30, e.f32, e.f44, e.id24, e.f78 as i16)
+            };
+            let (bx, by, bz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z.wrapping_add(hh));
+            if let Some(b) = self.spawn_zigzag(bx, by, bz) {
+                let e = &mut self.ent[b];
+                e.id24 = own;
+                e.act_life /= 3; // shorter beams (:29334)
+                e.f30 = yaw;
+                e.f34 = yaw;
+                e.f32 = pitch;
+                e.f36 = pitch;
+                e.f68 = 10;
+                e.f69 = 23;
+                e.f44 = f44;
+            }
+        }
+        self.snd(23, i); // :29343
+        false
+    }
+
+    /// sub_25760 (:28426), state 12: the possess detonation — a ch1
+    /// claim broadcast every tick of its 8-tick life over the 512
+    /// extents; balls and built houses consume the SENDER field.
+    fn possess_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
         }
         let amt = self.ent[i].f44 as u32;
-        self.area_write(i, 0, amt, ctx, false);
+        self.area_write(i, 1, amt, ctx, false);
         false
     }
 
@@ -1241,6 +1838,68 @@ impl Gen {
                 self.link(s, x, y, z);
                 self.refill_life(s);
             }
+            // sub_3AA10 (:46790): the POSSESS detonation flash —
+            // an 8-tick ch1 claim broadcast over 512-unit extents.
+            // The original's +44 = -1536 is a mana-drain amount the
+            // claim readers never consume (they act on the SENDER
+            // field alone); our u16 +44 carries 0 — the drain joins
+            // the mana-economy track.
+            12 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 12;
+                e.max_life = 8;
+                e.f44 = 0;
+                e.flags &= !8;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.extents(s, 512, 512);
+            }
+            // sub_3AE00 (:47034): the volcano's (10,19) smoke/fire
+            // plume — a 240-tick visual at the crater (sprite 228,
+            // the flame family), no damage (+18 bit1 set).
+            19 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 19;
+                e.max_life = 240;
+                e.f44 = 200;
+                e.flags = (e.flags & !8) | 0x20000 | 1;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 228);
+                self.extents(s, 512, 512);
+            }
+            // sub_3B8E0 (:47639): the Wall of Fire NAPALM cloud
+            // (state 58 — NOT 53; class-10 state 53 is the building
+            // collapse walker), life 128, f44 100, random yaw,
+            // extents 1024/0x4000.
+            53 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 58;
+                e.max_life = 128;
+                e.f44 = 100;
+                e.f26 = 0;
+                let d = lcg32(&mut e.rand);
+                e.f30 = (d & 0x7FF) as u16;
+                e.flags &= !8;
+                e.f80 = 1024;
+                e.f82 = 1024;
+                e.f84 = 0x4000;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+            }
+            // sub_3B460 (:47396): the lightning STORM cloud — note
+            // state 40 (not 38), life 32, sprite 272. The caller
+            // copies heading/target/damage/bolt-spec from the (9,12)
+            // storm projectile (:63775-81).
+            38 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 40;
+                e.max_life = 32;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 272);
+                self.extents(s, 512, 512);
+            }
             // sub_3AE80 (:47062): the bolt hit-flash (one-shot ch0).
             23 => {
                 let e = &mut self.ent[s];
@@ -1337,14 +1996,65 @@ impl Gen {
                 self.anim_advance(i);
                 false
             }
+            12 => self.possess_flash_tick(i, ctx),
+            16 => self.lava_bomb_tick(i),
             17 => self.blast_ring_tick(i, ctx),
             18 => self.eruption_tick(i, ctx),
+            19 => self.plume_tick(i),
             21 => self.magnet_tick(i),
             23 => self.hit_flash_tick(i, ctx),
             25 => self.steal_flash_tick(i, ctx),
+            40 => self.storm_cloud_tick(i, ctx),
             41 => self.ball_tick(i),
+            58 => self.napalm_tick(i, ctx),
             _ => false,
         }
+    }
+
+    /// sub_29780 (:31140), class-10 state 58 (the m53 Wall of Fire
+    /// cloud): 15 waves of standing flames over the impact ring
+    /// (112-unit pitch over SEARCH rings 0..1, ±64 jitter, the -96
+    /// 2x2-center recenter): wave 0 = a persistent 14-tick ground
+    /// fire patch, waves 1..14 = 1-tick flame sheets climbing 128
+    /// units per wave — the rising fire curtain. The cloud's own
+    /// ch0 write is +44/maxLife = 100/128 = 0 (kept verbatim); the
+    /// flames' inherited 100/tick is the damage. Silent in single
+    /// player (:31200 plays 30 only on the multiplayer branch).
+    fn napalm_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        {
+            let e = &mut self.ent[i];
+            e.f80 = 512;
+            e.f82 = 512;
+            e.f84 = 2048;
+        }
+        let amt = self.ent[i].f44 as u32 / self.ent[i].max_life.max(1);
+        self.area_write(i, 0, amt, ctx, false);
+        let wave = self.ent[i].f26;
+        let (x, y, z, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        let cells = self.ring_cells_pub(0, 1);
+        for (dx, dy) in cells {
+            let d1 = self.ent_rand(i);
+            let d2 = self.ent_rand(i);
+            let fx = x.wrapping_add((112 * dx as i32 + (d1 % 0x81) as i32 - 64 - 96) as u16);
+            let fy = y.wrapping_add((112 * dy as i32 + (d2 % 0x81) as i32 - 64 - 96) as u16);
+            if let Some(f) = self.spawn_effect(6, fx, fy, z) {
+                let e = &mut self.ent[f];
+                e.id24 = own;
+                e.f44 = 100;
+                e.act_life = if wave == 0 { 14 } else { 1 };
+                e.type86 += 7;
+                e.f26 += 7;
+                e.f46 = wave * 128;
+            }
+        }
+        self.ent[i].f26 = wave + 1;
+        if wave >= 14 {
+            self.ent[i].flags |= 0x400;
+        }
+        false
     }
 
     /// sub_252D0 (:28199), class-10 state 6: the STANDING fire (tree
@@ -1519,10 +2229,20 @@ impl Gen {
             self.ent[i].f46 = ((d2 % 0x41) as i32 - 32) as i16;
             self.snd(3, i); // :28118
         }
-        // z follows the (possibly dug) ground with the flicker offset.
+        // z rule sub_42000_42340 (:52576-601, called :28116 with
+        // (ground, 0, 0, flicker)): ABOVE ground the fire drifts by
+        // the fixed flicker delta each tick; below ground it clamps
+        // UP to ground; at ground it stays. The original never pulls
+        // a fire down to terrain — a midair explosion (max-range
+        // fireball expiry, the meteor's trail) stays at altitude.
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let g = self.ground_z(x, y) as i16;
-        self.ent[i].z = g.wrapping_add(self.ent[i].f46.max(0));
+        if self.ent[i].z > g {
+            self.ent[i].z = self.ent[i].z.wrapping_add(self.ent[i].f46);
+        }
+        if self.ent[i].z < g {
+            self.ent[i].z = g;
+        }
         self.anim_advance(i);
         dirty
     }
@@ -1551,8 +2271,9 @@ impl Gen {
             if skip {
                 continue;
             }
-            let fx = x.wrapping_add((192 * dx as i32 + j1) as u16);
-            let fy = y.wrapping_add((192 * dy as i32 + j2) as u16);
+            // x - 96 + 192·dx + jitter (:28167-70), 2x2-center recenter.
+            let fx = x.wrapping_add((192 * dx as i32 + j1 - 96) as u16);
+            let fy = y.wrapping_add((192 * dy as i32 + j2 - 96) as u16);
             if let Some(f) = self.spawn_effect(0, fx, fy, z) {
                 self.ent[f].id24 = owner;
                 self.ent[f].flags |= 0x80 | inherit;
@@ -1575,8 +2296,11 @@ impl Gen {
         }
         let radius = self.ent[i].f26.max(0) as i32;
         {
+            // Half-extents 192·ring, z 512 (:28696-97) — no floor; the
+            // AABB damage test sums both parties' extents, so ring 0
+            // still hits a victim on the impact point.
             let e = &mut self.ent[i];
-            e.f80 = ((768 * radius / 4) as u16).max(128);
+            e.f80 = (768 * radius / 4) as u16;
             e.f82 = e.f80;
             e.f84 = 512;
         }
@@ -1589,10 +2313,12 @@ impl Gen {
         let _ = self.ent_rand(i); // pre-loop draw (:28699)
         let cells = self.ring_cells_pub(radius, radius);
         for (dx, dy) in cells {
+            // x - 96 + 160·dx + rand%0x81 - 64 (:28707-09): the -96
+            // recenters the ring table's 2x2 zero block.
             let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
             let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
-            let fx = x.wrapping_add((160 * dx as i32 + j1) as u16);
-            let fy = y.wrapping_add((160 * dy as i32 + j2) as u16);
+            let fx = x.wrapping_add((160 * dx as i32 + j1 - 96) as u16);
+            let fy = y.wrapping_add((160 * dy as i32 + j2 - 96) as u16);
             if let Some(f) = self.spawn_effect(0, fx, fy, z) {
                 self.ent[f].id24 = owner;
                 self.ent[f].flags |= 0x80 | 0x10000;
@@ -1604,7 +2330,8 @@ impl Gen {
         false
     }
 
-    /// sub_262D0 (:28898): the bolt hit-flash — one ch0 write, brief.
+    /// sub_262D0 (:28898): the bolt hit-flash — one ch0 write and the
+    /// thunder-crack 24 (:28911), brief.
     fn hit_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         self.ent[i].act_life -= 1;
         if self.ent[i].act_life < 0 {
@@ -1615,6 +2342,7 @@ impl Gen {
             self.ent[i].flags |= 2;
             let amt = self.ent[i].f44 as u32;
             self.area_write(i, 0, amt, ctx, false);
+            self.snd(24, i);
             self.ent[i].act_life = 1;
         }
         self.anim_advance(i);
@@ -1641,13 +2369,20 @@ impl Gen {
     /// physics (gravity 16, quarter-bounce, 250/256 friction, ±64
     /// clamp), merge on overlap (sub_277D0 :29700).
     fn ball_tick(&mut self, i: usize) -> bool {
-        // ch1 collection claim: the ball takes the claimant as owner.
+        // ch1 collection claim (:29439-45): the ball takes the
+        // claimant as owner — only on an owner CHANGE (the possess
+        // flash re-broadcasts for 8 ticks; the guard keeps the claim
+        // chime single).
         if self.ent[i].mail[1].1 != 0 {
-            self.ent[i].f144 = self.ent[i].mail[1].1;
+            let src = self.ent[i].mail[1].1;
             self.ent[i].mail[1] = (0, 0);
-            // Player-gated in sub_55370 (ids 4/14/29): heard only
-            // when the claimant is the human player.
-            self.snd(4, i);
+            if src != self.ent[i].f144 {
+                self.ent[i].f144 = src;
+                self.ent[i].flags &= !0x40;
+                // Player-gated in sub_55370 (ids 4/14/29): heard only
+                // when the claimant is the human player.
+                self.snd(4, i);
+            }
         }
         // ch4 attract (collection pull) — mana track; acknowledge.
         if self.ent[i].mail[4].1 != 0 {
@@ -1754,24 +2489,18 @@ impl Gen {
 
     // ---- helpers over private feature internals ------------------------------
 
-    /// Ring cell offsets for radius lo..=hi (the precomputed
-    /// `dword_AD008` rings; exact cell ordering pending extraction —
-    /// flagged for LCG parity in the banked trace).
+    /// Ring cell offsets for radius lo..=hi — the real SEARCH.DAT
+    /// ring table (the original's precomputed rings, row-major
+    /// emission order + the dropped-last-cell quirk, features.rs
+    /// `ring_cells`), sign-extended for unit-space scaling. The
+    /// earlier Chebyshev box placeholder here was the square meteor
+    /// blast of playtest 3 (the retail rings are round); tile-space
+    /// callers (dig_disc) keep the raw u8 deltas and wrap mod 256.
     fn ring_cells_pub(&self, lo: i32, hi: i32) -> Vec<(i8, i8)> {
-        if lo == 0 && hi == 0 {
-            return vec![(0, 0)];
-        }
-        let mut out = Vec::new();
-        for r in lo..=hi {
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    if dx.abs().max(dy.abs()) == r {
-                        out.push((dx as i8, dy as i8));
-                    }
-                }
-            }
-        }
-        out
+        self.ring_cells(lo, hi)
+            .into_iter()
+            .map(|(dx, dy)| (dx as i8, dy as i8))
+            .collect()
     }
 
     /// Single-tile burn conversion (sub_33800 :28088-97): type write +

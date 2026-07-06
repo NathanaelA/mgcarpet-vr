@@ -508,12 +508,13 @@ impl World {
                     self.g.tick_building_collapse(i);
                     self.terrain_dirty = true;
                 }
-                // Combat effects (fire, spreader, splash, blast ring,
-                // eruption driver, magnet, hit-flash, steal-flash,
-                // mana ball).
+                // Combat effects (fire, spreader, splash, possess
+                // flash, lava bomb, blast ring, eruption driver,
+                // plume, magnet, hit-flash, steal-flash, storm
+                // cloud, mana ball).
                 10 if matches!(
                     self.g.ent[i].tick70,
-                    0 | 1 | 5 | 6 | 17 | 18 | 21 | 23 | 25 | 41
+                    0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 40 | 41 | 58
                 ) => {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
@@ -521,10 +522,13 @@ impl World {
                 }
                 10 => {
                     // The load-time handlers ARE the runtime handlers.
-                    self.g.tick(i);
+                    self.g.tick(i, Some(&ctx));
                     self.terrain_dirty = true;
                 }
                 11 => self.trigger_tick(i, player, &buckets),
+                // The player-built castle's state machine (class-3
+                // m2; balloons/wizard castles = later tracks).
+                3 if self.g.ent[i].model65 == 2 => self.g.castle_tick(i),
                 // Trees burn (states 0/1/2 + the standing fire).
                 2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
                 // Spell jars (pickup) and owned-spell manifestations
@@ -712,6 +716,10 @@ impl World {
             }
             self.g.ent[m].f26 = def.count as i16;
             self.break_cloak(id);
+            // Per-shot discharge (:66296 family 9): every fireball of
+            // the firehose thunks — the machine-gun sound is the
+            // spell's identity (player-reported gap, playtest 3).
+            self.g.snd_player(9);
             self.cast_fireball(p, right, id);
             return;
         }
@@ -785,18 +793,24 @@ impl World {
     fn emit_spell(&mut self, id: usize, m: usize, p: PlayerPose, right: bool, ctx: &MobCtx) {
         let _ = ctx;
         // Launch sounds at the original cast sites (sub_55370 calls
-        // against the wizard's own entity — full volume): fireball
-        // family 9 (:65079), meteor/volcano 15, accelerate 19,
-        // teleport 22, lightning 23, heal 25, possess 40. Spells
-        // without a traced launch sound stay silent for now.
+        // against the wizard's own entity — full volume), all ids
+        // trace-confirmed 2026-07-06: the 9-family covers fireball/
+        // rapid (:65079/:66296), earthquake (:65365), duel (:65665),
+        // steal mana (:65764 — the player's possess-soft memory
+        // loses to the trace here), undead (:65980), storm (:66039),
+        // wall of fire (:66158); meteor/volcano/crater/castle 15
+        // (:65422/:65481/:65544/:65914); accelerate 19; teleport 22;
+        // lightning 23 (:65852); heal 25; possess 40 (:65252); mana
+        // magnet 40 (:66097). Beyond Sight is authentically silent
+        // (sub_56730 :65292 — mana gate only).
         if let Some(snd) = match id {
-            0 | 23 => Some(9u8),
-            7 | 8 => Some(15),
+            0 | 23 | 6 | 11 | 13 | 17 | 18 | 20 => Some(9u8),
+            7 | 8 | 9 | 16 => Some(15),
             2 | 21 => Some(19),
             10 => Some(22),
             15 => Some(23),
             1 => Some(25),
-            3 => Some(40),
+            3 | 19 => Some(40),
             _ => None,
         } {
             self.g.snd_player(snd);
@@ -837,7 +851,7 @@ impl World {
             // 18 Lightning Storm (:65988).
             18 => self.cast_storm(p),
             // 20 Wall of Fire (:66110).
-            20 => self.cast_firewall(p),
+            20 => self.cast_firewall(p, right),
             // 22 Global Death (:66235): PRIMES only — no visible
             // in-game effect; the pulse fires around the carpet at
             // expiry (player-validated). APPROX ~55 ticks (~2s).
@@ -944,11 +958,23 @@ impl World {
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = def.possess_mana as i32;
         match id {
+            // Possess (:65236-52): detonation = the (10,12) ch1
+            // claim flash; target-class filter 10 (the dedicated
+            // ball/house victim scan), charge 200, doubled extents
+            // (sub_39A90 :45917).
+            3 => {
+                e.f68 = 10;
+                e.f69 = 12;
+                e.f66 = 10;
+                e.f26 = 200;
+                e.f80 *= 2;
+                e.f82 *= 2;
+                e.f84 *= 2;
+            }
             // Meteor detonates into the growing fire-ring blast (c10
-            // m17): rings of fires that scorch + its 10000 broadcast
-            // over the ring's 10-tick growth. APPROX(radius/shape of
-            // the original's impact pending a trace) — the massive-
-            // explosion machinery already ported.
+            // m17): rings of fires along the round SEARCH annuli +
+            // its 10000 broadcast over the ring's 10-tick growth
+            // (trace-confirmed, sub_25CE0).
             7 => e.f69 = 17,
             // Steal Mana's damage is forced 2000 (:65754), exploding
             // into the m11 steal flash (ch3).
@@ -964,103 +990,129 @@ impl World {
         self.entities_dirty = true;
     }
 
-    /// 10 Teleport (:65554). INTERIM: no castle exists in our sim
-    /// yet — the first cast stores the cast site and hops the carpet
-    /// 64 tiles (0x4000 units, :65579-81) along a manifestation-LCG
-    /// yaw; the recast returns to the stored site. Castle-anchored
-    /// teleport is the housekeeping pass.
+    /// 10 Teleport (:65554): to the player's castle when one stands
+    /// (the authentic anchor); the recast returns to the cast site.
+    /// INTERIM (no castle built): the 64-tile LCG hop (0x4000 units,
+    /// :65579-81) along a manifestation-LCG yaw.
     fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
         if let Some((rx, ry)) = self.player.teleport_return.take() {
             self.pending_teleport = Some((rx as f32 / 256.0, ry as f32 / 256.0));
         } else {
             self.player.teleport_return = Some((p.x, p.y));
-            let yaw = (self.g.ent_rand(m) & 0x7FF) as u16;
-            let mut dest = (p.x, p.y, 0i16);
-            Gen::polar_step(&mut dest, yaw, 0, 0x4000);
-            self.pending_teleport =
-                Some((dest.0 as f32 / 256.0, dest.1 as f32 / 256.0));
+            let dest = if let Some(c) = self.player_castle() {
+                (self.g.ent[c].x, self.g.ent[c].y)
+            } else {
+                let yaw = (self.g.ent_rand(m) & 0x7FF) as u16;
+                let mut d = (p.x, p.y, 0i16);
+                Gen::polar_step(&mut d, yaw, 0, 0x4000);
+                (d.0, d.1)
+            };
+            self.pending_teleport = Some((dest.0 as f32 / 256.0, dest.1 as f32 / 256.0));
         }
     }
 
-    /// A player-built castle build event lives (the (10,45) building
-    /// with our player-built marker) — the single-active lockout.
+    /// The player's live castle entity (class-3 m2 owned by the
+    /// player), or a castle ball still in flight — the single-active
+    /// lockout (recast-as-upgrade is the housekeeping pass).
     fn castle_build_lives(&self) -> bool {
         self.g.ent.iter().any(|e| {
-            e.class64 == 10
-                && e.model65 == 45
-                && e.thing_slot == u16::MAX
-                && e.flags & 0x400 == 0
+            e.flags & 0x400 == 0
+                && e.id24 == PLAYER_TARGET
+                && ((e.class64 == 3 && e.model65 == 2)
+                    || (e.class64 == 9 && e.model65 == 10))
         })
     }
 
-    /// 16 Create Castle (:65862): target 4 tiles ahead on the ground;
-    /// the 8x8 protection-bit placement scan (:17825 — angle-plane
-    /// bit 7, the building-protection stamp) must be clear; then the
-    /// model-45 building event builds the castle. INTERIM: footprint
-    /// = the parent-0 build-table row like authored buildings (the
-    /// authored-castle footprint id is unconfirmed); no balloon, no
-    /// castle levels, no respawn semantics (housekeeping pass).
-    fn cast_castle(&mut self, p: PlayerPose) {
-        let mut c = (p.x, p.y, 0i16);
-        Gen::polar_step(&mut c, p.heading, 0, 4 * 256);
-        let (tx, ty) = ((c.0 >> 8) as i32, (c.1 >> 8) as i32);
-        for dy in -4..4i32 {
-            for dx in -4..4i32 {
-                let t = features::tile((tx + dx) as u8, (ty + dy) as u8);
-                if self.g.t.angle[t] & 0x80 != 0 {
-                    return; // protected ground: message-free skip
-                }
-            }
-        }
-        let gz = self.g.ground_z(c.0, c.1) as i16;
-        if let Some(s) = self.g.spawn_creator(45, c.0, c.1, gz) {
-            self.g.building_fixup(s, 16);
-            self.g.ent[s].thing_slot = u16::MAX; // player-built marker
-            self.entities_dirty = true;
-        }
+    /// The player's established castle slot (teleport anchor).
+    fn player_castle(&self) -> Option<usize> {
+        (1..features::POOL).find(|&j| {
+            let e = &self.g.ent[j];
+            e.class64 == 3 && e.model65 == 2 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
+        })
     }
 
-    /// 18 Lightning Storm (:65988): 8 bolts fanned every 256
-    /// angle-units around the player. APPROX of the chained
-    /// c9 m12 → m9 storm driver.
+    /// 16 Create Castle (sub_57610 :65862): the class-9 m10 castle
+    /// ball from the caster, target 16 tiles (4096 units) ahead at
+    /// ground level (:65894-902); the flight runs the sub_12F70
+    /// placement scans (launch = silent abort, landing = flip 180 +
+    /// step back, then build). The upgrade token (m43) for an
+    /// existing castle is the housekeeping pass (the lockout above
+    /// covers it).
+    fn cast_castle(&mut self, p: PlayerPose) {
+        use crate::combat::PLAYER_HH;
+        let z = p.z.wrapping_add(PLAYER_HH as i16);
+        let Some(pr) = self.g.spawn_castle_ball(p.x, p.y, z) else {
+            return;
+        };
+        let mut tgt = (p.x, p.y, 0i16);
+        Gen::polar_step(&mut tgt, p.heading, 0, 4096);
+        let def = &SPELLS[16];
+        let e = &mut self.g.ent[pr];
+        e.f126 += p.speed;
+        e.f128 = e.f126;
+        e.id24 = PLAYER_TARGET;
+        e.f30 = p.heading;
+        e.f34 = p.heading;
+        e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        e.f140 = def.possess_mana as i32;
+        e.dest_x = tgt.0;
+        e.dest_y = tgt.1;
+        e.f68 = 3;
+        e.f69 = 2;
+        self.entities_dirty = true;
+    }
+
+    /// 18 Lightning Storm (sub_579D0 :65988): ONE class-9 m12
+    /// carrier launched at the aim (target point 0x4000 ahead;
+    /// wizard-homing when rivals exist), becoming the (10,38) storm
+    /// cloud on any non-water end — the cloud climbs to ground+1024
+    /// and rains 2 bolts/tick for 33 ticks at the spell's 2000.
     fn cast_storm(&mut self, p: PlayerPose) {
         use crate::combat::PLAYER_HH;
         let def = &SPELLS[18];
         let z = p.z.wrapping_add(PLAYER_HH as i16);
-        for k in 0..8u16 {
-            let yaw = (k * 256) & 0x7FF;
-            let Some(pr) = self.g.spawn_zigzag(p.x, p.y, z) else {
-                continue;
-            };
-            let e = &mut self.g.ent[pr];
-            e.id24 = PLAYER_TARGET;
-            e.f30 = yaw;
-            e.f34 = yaw;
-            e.f32 = 0;
-            e.f36 = 0;
-            e.f44 = def.damage.min(u16::MAX as u32) as u16;
-            e.f69 = 23;
-        }
+        let Some(pr) = self.g.spawn_storm_carrier(p.x, p.y, z) else {
+            return;
+        };
+        let e = &mut self.g.ent[pr];
+        e.f126 += p.speed;
+        e.f128 = e.f126;
+        e.id24 = PLAYER_TARGET;
+        e.f30 = p.heading;
+        e.f34 = p.heading;
+        e.f32 = p.pitch;
+        e.f36 = p.pitch;
+        e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        e.f140 = def.possess_mana as i32;
+        e.f68 = 9;
+        e.f69 = 9;
         self.entities_dirty = true;
     }
 
-    /// 20 Wall of Fire (:66110): a line of standing fires — 5 ground
-    /// points spanning perpendicular to aim, 2 tiles apart, 6 tiles
-    /// ahead. APPROX of the c9 m16 → c10 m53 salvo (the row's
-    /// anomalous 24464 damage stays untouched — the standing fire's
-    /// own 50/tick broadcast is the payload).
-    fn cast_firewall(&mut self, p: PlayerPose) {
-        let mut ahead = (p.x, p.y, 0i16);
-        Gen::polar_step(&mut ahead, p.heading, 0, 6 * 256);
-        let perp = p.heading.wrapping_add(0x200) & 0x7FF;
-        for k in -2i16..=2 {
-            let mut q = (ahead.0, ahead.1, 0i16);
-            Gen::polar_step(&mut q, perp, 0, k * 512);
-            let gz = self.g.ground_z(q.0, q.1) as i16;
-            if let Some(f) = self.g.spawn_effect(6, q.0, q.1, gz) {
-                self.g.ent[f].id24 = PLAYER_TARGET;
-            }
-        }
+    /// 20 Wall of Fire (sub_57D40 :66110): the class-9 m16 bolt
+    /// (fireball sprite, straight at the aim), detonating into the
+    /// (10,53) NAPALM cloud — 15 waves of standing flames climbing
+    /// 128 units/wave over the impact (the rising fire curtain).
+    /// The row's 24464 stays dead weight (sub_53B50 does not copy
+    /// +44; the flames' inherited 100/tick is the payload).
+    fn cast_firewall(&mut self, p: PlayerPose, right: bool) {
+        let (mx, my, mz) = self.muzzle(p, right);
+        let Some(pr) = self.g.spawn_firewall_bolt(mx, my, mz) else {
+            return;
+        };
+        let def = &SPELLS[20];
+        let e = &mut self.g.ent[pr];
+        e.f126 += p.speed;
+        e.f128 = e.f126;
+        e.id24 = PLAYER_TARGET;
+        e.f30 = p.heading;
+        e.f34 = p.heading;
+        e.f32 = p.pitch;
+        e.f36 = p.pitch;
+        e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        e.f140 = def.possess_mana as i32;
+        e.f68 = 10;
+        e.f69 = 53;
         self.entities_dirty = true;
     }
 
@@ -1069,8 +1121,11 @@ impl World {
     /// (~1.25 tiles — the spell's balance: "you have to be straight
     /// below a dragon to affect it") centered on the CARPET, no
     /// visual, no terrain scorch. A transient unlinked writer event
-    /// carries the area-write protocol; sound is the audio track.
+    /// carries the area-write protocol. The expiry plays the real
+    /// explosion (30) at the carpet — the spell's only feedback
+    /// (player ground truth: prime silent, blast audible).
     fn bomb_pulse(&mut self, ctx: &MobCtx) {
+        self.g.snd_player(30);
         let Some(s) = self.g.new_event() else { return };
         {
             let e = &mut self.g.ent[s];
@@ -1498,6 +1553,9 @@ impl World {
                 let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
                 self.pending_teleport =
                     Some((dx as f32 / 256.0, dy as f32 / 256.0));
+                // PORTUSE — the same 22 as the teleport spell
+                // (player-confirmed gap, playtest 3).
+                self.g.snd_player(22);
             }
         }
         // Follow the ground; the pose consumer must see the drop from
@@ -2781,20 +2839,103 @@ mod tests {
         w.player.left = Some(SpellId(8));
         let p = firing_line();
         w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
-        let (mut saw_driver, mut saw_lava) = (false, false);
+        let (mut saw_driver, mut saw_lava, mut saw_plume) = (false, false, false);
         for _ in 0..400 {
             w.tick(p, PlayerCommand::default());
             saw_driver |= count(&w, 10, 18) > 0;
-            // Lava bombs are fireball-family class-9 m0 NOT owned by
-            // the player (the marker owns them).
-            saw_lava |= w
-                .debug_pool()
-                .1
-                .iter()
-                .any(|e| e.class == 9 && e.model == 0 && e.id24 != PLAYER_TARGET);
+            // The traced chain: ballistic (10,16) lava bombs + the
+            // (10,19) plume during the ~127-tick eruption window.
+            saw_lava |= count(&w, 10, 16) > 0;
+            saw_plume |= count(&w, 10, 19) > 0;
         }
         assert!(saw_driver, "the cone finish spawned the eruption driver");
-        assert!(saw_lava, "periodic eruptions launch lava bombs");
+        assert!(saw_lava, "the eruption window launches ballistic lava bombs");
+        assert!(saw_plume, "the eruption start raises the (10,19) plume");
+        // FINITE: the window is over — no live bombs remain hundreds
+        // of ticks past it (bomb life caps at 199).
+        assert_eq!(count(&w, 10, 16), 0, "eruption activity ended");
+    }
+
+    #[test]
+    fn possess_homes_on_and_claims_a_mana_ball() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(3));
+        let p = firing_line();
+        // A loose ball ~6 tiles dead ahead (heading 0 = -y) on the
+        // aim line, at ground level.
+        let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched");
+        let mut claimed = false;
+        for _ in 0..120 {
+            w.tick(p, PlayerCommand::default());
+            claimed |= w.g.ent[b].f144 == PLAYER_TARGET;
+        }
+        assert!(claimed, "the m1 lob acquires + the (10,12) flash claims the ball");
+    }
+
+    #[test]
+    fn lightning_storm_cloud_rains_bolts() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(18));
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 12), 1, "the storm carrier launched");
+        let (mut saw_cloud, mut bolts) = (false, 0usize);
+        for _ in 0..80 {
+            w.tick(p, PlayerCommand::default());
+            saw_cloud |= count(&w, 10, 38) > 0;
+            bolts += count(&w, 9, 9);
+        }
+        assert!(saw_cloud, "the carrier became the (10,38) storm cloud");
+        // 2 bolts/tick over 33 firing ticks once on station — the
+        // per-tick census over-counts long-lived segments, so just
+        // demand a real rain, not a fan.
+        assert!(bolts > 20, "the cloud rained bolts over time (saw {bolts})");
+    }
+
+    #[test]
+    fn wall_of_fire_erupts_the_napalm_curtain() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(20));
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 16), 1, "the firewall bolt launched");
+        let (mut saw_cloud, mut saw_flames) = (false, false);
+        for _ in 0..80 {
+            w.tick(p, PlayerCommand::default());
+            saw_cloud |= count(&w, 10, 53) > 0;
+            saw_flames |= count(&w, 10, 6) > 2;
+        }
+        assert!(saw_cloud, "impact spawned the (10,53) napalm cloud");
+        assert!(saw_flames, "the cloud waves standing flames over the ring");
+    }
+
+    #[test]
+    fn undead_army_raises_owned_skeletons() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(17));
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        let mut skeletons = 0usize;
+        for _ in 0..80 {
+            w.tick(p, PlayerCommand::default());
+            skeletons = skeletons.max(count(&w, 5, 9));
+        }
+        assert_eq!(skeletons, 8, "8 skeletons on the ring");
+        for e in w.debug_pool().1.iter().filter(|e| e.class == 5 && e.model == 9) {
+            assert_eq!(e.id24, PLAYER_TARGET, "owner-tagged: never attacks the caster");
+        }
     }
 
     #[test]

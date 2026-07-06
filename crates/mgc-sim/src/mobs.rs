@@ -627,6 +627,12 @@ impl Gen {
         if self.player_invisible {
             return false;
         }
+        // The +24 owner gate (sub_1DCD0 :24242 + the scan-side +24
+        // exclusions): a creature the player OWNS (undead army
+        // skeletons) never targets its owner.
+        if self.ent[i].id24 == PLAYER_TARGET {
+            return false;
+        }
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         let r2 = (row.v_28 as i32) * (row.v_28 as i32);

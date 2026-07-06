@@ -364,6 +364,13 @@ pub(crate) struct Gen {
     pub(crate) player_mail: [(u32, u16); 6],
     /// Total ch0 damage the (invincible) player has absorbed.
     pub(crate) player_damage: u64,
+    /// `gamedata+36` / `gamedata+38` (sub_25EC0): the currently
+    /// erupting volcano's pool slot and its (10,19) plume's slot —
+    /// 0 = none. One volcano erupts at a time; a driver that dies
+    /// unclean leaves the register pointing at itself (authentic
+    /// quirk: no volcano can re-arm until a clean death clears it).
+    pub(crate) erupting: u16,
+    pub(crate) plume: u16,
     /// The player's knock/buffet fields (Type_160 v_24 direction /
     /// v_22 magnitude, :23225-28 kraken writer, :55204-218 consumer):
     /// per-tick horizontal displacement forced onto the carpet.
@@ -453,6 +460,8 @@ impl Gen {
             spawn_count: [0; 20],
             player_mail: [(0, 0); 6],
             player_damage: 0,
+            erupting: 0,
+            plume: 0,
             player_knock: (0, 0),
             player_aggro: 0,
             player_invisible: false,
@@ -871,7 +880,7 @@ impl Gen {
         self.dig_cell(ax, ay, delta, protect)
     }
 
-    fn ring_cells(&self, lo: i32, hi: i32) -> Vec<(u8, u8)> {
+    pub(crate) fn ring_cells(&self, lo: i32, hi: i32) -> Vec<(u8, u8)> {
         let mut out = Vec::new();
         if lo < 0 || lo > 31 {
             return out;
@@ -1211,12 +1220,52 @@ impl Gen {
                 let (x, y, z) = (e.x, e.y, e.z);
                 self.link(i, x, y, z);
             }
-            // sub_3ADB0: transient marker the volcano finish spawns.
+            // sub_3ABE0 (:46946): the earthquake crevice walker —
+            // life 128, step 256, RANDOM initial heading off its own
+            // LCG, extents 1024/1024/0x4000, NOT map-linked (its
+            // craters are the visible/audible part).
+            15 => {
+                e.tick70 = 15;
+                e.max_life = 128;
+                e.act_life = 128;
+                e.f126 = 256;
+                e.flags &= !8;
+                e.f44 = 100;
+                e.f26 = 0;
+                let d = lcg32(&mut e.rand);
+                e.f30 = (d & 0x7FF) as u16;
+                e.f80 = 1024;
+                e.f82 = 1024;
+                e.f84 = 0x4000;
+            }
+            // sub_3ADB0 (:47008): the volcano eruption driver the
+            // finished cone spawns. maxLife 10000 is NEVER counted
+            // down — lifetime is the driver's own state machine
+            // (sub_25EC0; see combat::eruption_tick).
             18 => {
                 e.tick70 = 18;
                 e.max_life = 10000;
                 e.act_life = 10000;
                 e.f44 = 200;
+                e.f26 = 0;
+                e.flags &= !8;
+            }
+            // sub_3B760 (:47545): the castle ground-leveling pass
+            // (state 43); counter armed by its first tick.
+            41 => {
+                e.tick70 = 43;
+                e.max_life = 10;
+                e.act_life = 10;
+                e.flags &= !8;
+            }
+            // sub_3B7B0 (:47567): the CASTLE painter (state 44,
+            // sub_285C0) — the caller stamps level (+71) and the
+            // castle link.
+            42 => {
+                e.tick70 = 44;
+                e.max_life = 30;
+                e.act_life = 30;
+                e.flags &= !8;
             }
             // sub_3B300 (model 34): the PORTAL vortex — sprite row 223,
             // 1-tile extents, spawned 640 alt units above ground (its
@@ -1489,7 +1538,7 @@ impl Gen {
                     };
                     if eligible {
                         run_again = true;
-                        self.tick(i);
+                        self.tick(i, None);
                     } else if model != 0x2D {
                         self.ent[i].flags |= 0x400;
                     }
@@ -1504,27 +1553,40 @@ impl Gen {
         }
     }
 
-    /// str_255998 (:4856) dispatch by byte 70.
-    pub(crate) fn tick(&mut self, i: usize) {
+    /// str_255998 (:4856) dispatch by byte 70. `ctx` = the player
+    /// context at RUNTIME (None during the load fixpoint): the
+    /// terrain deformers broadcast ch0 damage + the loop-10 rumble,
+    /// which only matter — and only have a listener — once the world
+    /// runs (deviation: the original's load pass broadcasts into the
+    /// half-built pool too; nothing observable survives it).
+    pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
         match self.ent[i].tick70 {
-            9 => self.tick_hill(i),
+            9 => self.tick_hill(i, ctx),
             10 => self.tick_dish(i),
-            11 => self.tick_digger(i),
+            11 => self.tick_digger(i, ctx),
+            15 => self.tick_quake_walker(i),
             27 => self.tick_wall_neg_y(i),
             28 => self.tick_wall_pos_y(i),
             29 => self.tick_wall_pos_x(i),
             32 => self.tick_track(i),
             34 => self.tick_canyon_head(i),
+            43 => self.tick_castle_leveler(i),
+            44 => self.tick_castle_painter(i),
             51 => self.tick_building(i),
-            55 => self.tick_ridge_head(i),
+            55 => self.tick_ridge_head(i, ctx),
             // sub_253E0 rows (30, 31, 33, 54, …): pure self-kill.
             _ => self.ent[i].flags |= 0x400,
         }
     }
 
     /// sub_25470 (:28302), byte70 9: growing hill; finish punches a
-    /// -40 pit at the center and spawns a transient model-18 marker.
-    fn tick_hill(&mut self, i: usize) {
+    /// -40 pit at the center and spawns a transient model-18 marker
+    /// (owner passed on — the eruption driver inherits immunity).
+    /// Every growth tick is a KILL ZONE: full +44 (2000) on ch0 over
+    /// the live extents (:28327, via the sub_127E0 writer — its
+    /// wizard +50=30 ground-ride stamp is the mortality track) plus
+    /// the loop-10 rumble (:28328).
+    fn tick_hill(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
         let life = self.ent[i].act_life;
         self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
         self.ent[i].act_life = life - 1;
@@ -1537,12 +1599,17 @@ impl Gen {
         };
         if finish {
             self.dig_disc(i, 0, 0, -40, false);
-            let (x, y) = (self.ent[i].x, self.ent[i].y);
+            let (x, y, own) = (self.ent[i].x, self.ent[i].y, self.ent[i].id24);
             let z = self.ground_z(x, y) as i16;
-            self.spawn_creator(18, x, y, z);
+            if let Some(m) = self.spawn_creator(18, x, y, z) {
+                self.ent[m].id24 = own; // :28322
+            }
             self.ent[i].flags |= 0x400;
+        } else if let Some(ctx) = ctx {
+            let amt = self.ent[i].f44 as u32;
+            self.area_write(i, 0, amt, ctx, false);
+            self.snd(10, i);
         }
-        // else: damage broadcast + sound (terrain-neutral, omitted).
     }
 
     /// sub_25570 (:28333), byte70 10: one-shot shallow dish, honoring
@@ -1558,8 +1625,11 @@ impl Gen {
     }
 
     /// sub_25670 (:28379), byte70 11: expanding -3 crater; radius grows
-    /// only when the event's pool slot is divisible by 3.
-    fn tick_digger(&mut self, i: usize) {
+    /// only when the event's pool slot is divisible by 3. Every
+    /// surviving tick: ch0 damage — full +44 before the phase-2 flag
+    /// sets, +44/25 after (:28396-400) — and the loop-10 rumble
+    /// (:28421).
+    fn tick_digger(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
         if self.ent[i].f63 % 3 == 0 {
             self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
         }
@@ -1570,8 +1640,14 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return;
         }
-        // Damage broadcast (full first tick, /25 after): terrain-neutral,
-        // omitted.
+        if let Some(ctx) = ctx {
+            let amt = if self.ent[i].flags & 2 != 0 {
+                self.ent[i].f44 as u32 / 25
+            } else {
+                self.ent[i].f44 as u32
+            };
+            self.area_write(i, 0, amt, ctx, false);
+        }
         let radius = (e.f80 >> 8) as i16;
         let mut upto = e.f26;
         if upto > radius - 1 {
@@ -1582,6 +1658,9 @@ impl Gen {
         }
         self.ent[i].flags |= 2;
         self.dig_disc_minus3(i, 0, upto as i32);
+        if ctx.is_some() {
+            self.snd(10, i); // :28421
+        }
     }
 
     /// sub_26670 (:29030), byte70 27: wall strip toward -Y.
@@ -1699,6 +1778,44 @@ impl Gen {
         self.ent[i].flags |= 0x400;
     }
 
+    /// sub_25990 (:28534), byte70 15: the EARTHQUAKE crevice walker
+    /// (spell 6's authentic payload — direct import). Water under it
+    /// counts a ledger up (dry ticks count it back down); dies when
+    /// the ledger passes 8 or life runs out. Each tick: wander the
+    /// heading ±45, step 256 units, and drop a 10-tick m11 digger at
+    /// the new spot with the walker's extents + owner. The rumble is
+    /// the diggers' own loop-10.
+    fn tick_quake_walker(&mut self, i: usize) {
+        let (x0, y0) = (self.ent[i].x, self.ent[i].y);
+        if self.on_water(x0, y0) {
+            self.ent[i].f26 += 1;
+        } else if self.ent[i].f26 > 0 {
+            self.ent[i].f26 -= 1;
+        }
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 || self.ent[i].f26 > 8 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let d = lcg32(&mut self.ent[i].rand);
+        self.ent[i].f30 =
+            ((d % 0x5B) as u16).wrapping_add(self.ent[i].f30).wrapping_sub(45) & 0x7FF;
+        let (mut x, mut y) = (self.ent[i].x, self.ent[i].y);
+        Self::advance(&mut x, &mut y, self.ent[i].f30, 256);
+        self.ent[i].x = x;
+        self.ent[i].y = y;
+        let e = self.ent[i];
+        if let Some(dg) = self.spawn_creator(11, x, y, e.z) {
+            let g = &mut self.ent[dg];
+            g.f80 = e.f80; // dword copy +80 covers both axes (:28564)
+            g.f82 = e.f82;
+            g.f84 = e.f84;
+            g.act_life = 10;
+            g.id24 = e.id24;
+        }
+    }
+
     /// sub_26920 (:29122), byte70 34: canyon head — spawn a 3-tick
     /// digger at the current position, advance one tile along the
     /// heading; stop on distance or water.
@@ -1713,6 +1830,7 @@ impl Gen {
         if let Some(d) = self.spawn_creator(11, e.x, e.y, e.z) {
             self.ent[d].act_life = 2;
             self.ent[d].f84 = e.f84;
+            self.ent[d].id24 = e.id24; // :29141 — owner immunity chains
         }
         let (mut x, mut y) = (self.ent[i].x, self.ent[i].y);
         Self::advance(&mut x, &mut y, self.ent[i].f30, self.ent[i].f126);
@@ -1721,8 +1839,9 @@ impl Gen {
     }
 
     /// sub_269A0 (:29147), byte70 55: ridge head — raise a radius-3
-    /// disc by rand%15+10, advance 4 tiles.
-    fn tick_ridge_head(&mut self, i: usize) {
+    /// disc by rand%15+10, advance 4 tiles. Each successful raise:
+    /// full +44 on ch0 + the loop-10 rumble (:29163-64).
+    fn tick_ridge_head(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
         let e = self.ent[i];
@@ -1732,7 +1851,11 @@ impl Gen {
         }
         let r = lcg32(&mut self.ent[i].rand);
         self.dig_disc(i, 0, 1024, (r % 0xF + 10) as i16, false);
-        // Damage broadcast + sound: terrain-neutral, omitted.
+        if let Some(ctx) = ctx {
+            let amt = self.ent[i].f44 as u32;
+            self.area_write(i, 0, amt, ctx, false);
+            self.snd(10, i);
+        }
         let (mut x, mut y) = (self.ent[i].x, self.ent[i].y);
         Self::advance(&mut x, &mut y, self.ent[i].f30, self.ent[i].f126);
         self.ent[i].x = x;
@@ -1756,95 +1879,9 @@ impl Gen {
         let x0 = cx.wrapping_sub(half_w);
         let y0 = cy.wrapping_sub(half_h);
         if life != 0 {
-            // Flatten pass.
-            let mut rows = h;
-            let (mut x, mut y) = (x0, y0);
-            let mut c = def.offset as usize;
-            while rows != 0 {
-                let ctl = self.assets.build_dat[c] as i8;
-                c += 1;
-                if ctl == 0 {
-                    y = y.wrapping_add(1);
-                    rows -= 1;
-                    x = x0;
-                    continue;
-                }
-                if ctl < 0 {
-                    x = x.wrapping_add((-(ctl as i32)) as u8);
-                    continue;
-                }
-                for _ in 0..ctl {
-                    let b = self.assets.build_dat[c];
-                    c += 1;
-                    let t = tile(x, y);
-                    let goal = if b < 0xF {
-                        if b > 6 { Some(target) } else { None }
-                    } else if b >> 4 == 3 {
-                        match (b % 16) % 3 {
-                            1 => Some(target + 12),
-                            2 => Some(target + 16),
-                            _ => None,
-                        }
-                    } else {
-                        let lo = b % 16;
-                        if lo != 0 {
-                            Some(4 * (lo as i32 - 1) + target)
-                        } else {
-                            None
-                        }
-                    };
-                    if let Some(goal) = goal {
-                        let angle_before = self.t.angle[t];
-                        let hh = self.t.height[t] as i32;
-                        self.t.height[t] =
-                            self.t.height[t].wrapping_add(((goal - hh) / life) as u8);
-                        if angle_before & 7 == 0 {
-                            self.t.angle[t] = (angle_before & 0xF0) | 1;
-                            self.recompute_protected(x, y, x, y);
-                        }
-                    }
-                    x = x.wrapping_add(1);
-                }
-            }
-            // Paint pass.
+            self.flatten_build_row(e.f71 as usize, cx, cy, target, life);
             if life % 5 == 0 || life == 1 {
-                let mut rows = h;
-                let (mut x, mut y) = (x0, y0);
-                let mut c = def.offset as usize;
-                while rows != 0 {
-                    let ctl = self.assets.build_dat[c] as i8;
-                    c += 1;
-                    if ctl == 0 {
-                        y = y.wrapping_add(1);
-                        rows -= 1;
-                        x = x0;
-                        continue;
-                    }
-                    if ctl < 0 {
-                        x = x.wrapping_add((-(ctl as i32)) as u8);
-                        continue;
-                    }
-                    for _ in 0..ctl {
-                        let b = self.assets.build_dat[c];
-                        c += 1;
-                        let t = tile(x, y);
-                        match b >> 4 {
-                            0 => {
-                                let k = b % 7;
-                                if k != 0 {
-                                    self.paint(k as i8, 7, t, k - 1);
-                                }
-                            }
-                            hi @ 1..=2 => self.paint(0, b as i8, t, hi + 7),
-                            3 => {
-                                let lo = b % 16;
-                                self.paint((lo % 3) as i8, (lo / 3 + 10) as i8, t, lo / 3 + 10)
-                            }
-                            hi => self.paint(0, b as i8, t, hi + 11),
-                        }
-                        x = x.wrapping_add(1);
-                    }
-                }
+                self.paint_build_row(e.f71 as usize, cx, cy);
             }
         } else {
             // Final tick: retile the whole rect, become a castle.
@@ -1861,6 +1898,278 @@ impl Gen {
         }
     }
 
+    /// One flatten pass over build-table row `bt` centered on tile
+    /// (cx, cy): the shared cell-code goal decode of sub_27D30
+    /// (:30040-70) / sub_285C0 (:30541-94), stepping each tile's
+    /// height toward its goal by /divisor.
+    fn flatten_build_row(&mut self, bt: usize, cx: u8, cy: u8, target: i32, divisor: i32) {
+        let def = self.assets.build_tab[bt % self.assets.build_tab.len()];
+        let (w, h) = (def.w as u16, def.h as u16);
+        let x0 = cx.wrapping_sub((w >> 1) as u8);
+        let y0 = cy.wrapping_sub((h >> 1) as u8);
+        let mut rows = h;
+        let (mut x, mut y) = (x0, y0);
+        let mut c = def.offset as usize;
+        while rows != 0 {
+            let ctl = self.assets.build_dat[c] as i8;
+            c += 1;
+            if ctl == 0 {
+                y = y.wrapping_add(1);
+                rows -= 1;
+                x = x0;
+                continue;
+            }
+            if ctl < 0 {
+                x = x.wrapping_add((-(ctl as i32)) as u8);
+                continue;
+            }
+            for _ in 0..ctl {
+                let b = self.assets.build_dat[c];
+                c += 1;
+                let t = tile(x, y);
+                let goal = if b < 0xF {
+                    if b > 6 { Some(target) } else { None }
+                } else if b >> 4 == 3 {
+                    match (b % 16) % 3 {
+                        1 => Some(target + 12),
+                        2 => Some(target + 16),
+                        _ => None,
+                    }
+                } else {
+                    let lo = b % 16;
+                    if lo != 0 {
+                        Some(4 * (lo as i32 - 1) + target)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(goal) = goal {
+                    let angle_before = self.t.angle[t];
+                    let hh = self.t.height[t] as i32;
+                    self.t.height[t] =
+                        self.t.height[t].wrapping_add(((goal - hh) / divisor) as u8);
+                    if angle_before & 7 == 0 {
+                        self.t.angle[t] = (angle_before & 0xF0) | 1;
+                        self.recompute_protected(x, y, x, y);
+                    }
+                }
+                x = x.wrapping_add(1);
+            }
+        }
+    }
+
+    /// One paint pass over build-table row `bt` (the shared tile-type
+    /// decode of sub_27D30/sub_285C0 via sub_33800).
+    fn paint_build_row(&mut self, bt: usize, cx: u8, cy: u8) {
+        let def = self.assets.build_tab[bt % self.assets.build_tab.len()];
+        let (w, h) = (def.w as u16, def.h as u16);
+        let x0 = cx.wrapping_sub((w >> 1) as u8);
+        let y0 = cy.wrapping_sub((h >> 1) as u8);
+        let mut rows = h;
+        let (mut x, mut y) = (x0, y0);
+        let mut c = def.offset as usize;
+        while rows != 0 {
+            let ctl = self.assets.build_dat[c] as i8;
+            c += 1;
+            if ctl == 0 {
+                y = y.wrapping_add(1);
+                rows -= 1;
+                x = x0;
+                continue;
+            }
+            if ctl < 0 {
+                x = x.wrapping_add((-(ctl as i32)) as u8);
+                continue;
+            }
+            for _ in 0..ctl {
+                let b = self.assets.build_dat[c];
+                c += 1;
+                let t = tile(x, y);
+                match b >> 4 {
+                    0 => {
+                        let k = b % 7;
+                        if k != 0 {
+                            self.paint(k as i8, 7, t, k - 1);
+                        }
+                    }
+                    hi @ 1..=2 => self.paint(0, b as i8, t, hi + 7),
+                    3 => {
+                        let lo = b % 16;
+                        self.paint((lo % 3) as i8, (lo / 3 + 10) as i8, t, lo / 3 + 10)
+                    }
+                    hi => self.paint(0, b as i8, t, hi + 11),
+                }
+                x = x.wrapping_add(1);
+            }
+        }
+    }
+
+    /// sub_285C0 (:30445), byte70 44: the CASTLE painter — the m42
+    /// event a castle level-up spawns. 20 ticks (counter +26 armed
+    /// to 19 on the first tick); each tick flattens the CUMULATIVE
+    /// footprints of build rows 1..=level toward the event z, paints
+    /// on every 7th counter value and the last, and the finish
+    /// stamps the protection bit over the level footprint and hands
+    /// the castle (f146) to sub-state 5 (:30703-08).
+    fn tick_castle_painter(&mut self, i: usize) {
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            self.ent[i].f26 = 19;
+        }
+        let e = self.ent[i];
+        let cx = ((e.x as u32 + 128) >> 8) as u8;
+        let cy = ((e.y as u32 + 128) >> 8) as u8;
+        let target = (e.z >> 5) as i32;
+        let level = e.f71.clamp(1, 8) as usize;
+        let divisor = (e.f26 as i32 + 1).max(1);
+        for r in 1..=level {
+            self.flatten_build_row(r, cx, cy, target, divisor);
+        }
+        if e.f26 % 7 == 0 || e.f26 == 0 {
+            for r in 1..=level {
+                self.paint_build_row(r, cx, cy);
+            }
+        }
+        self.ent[i].f26 -= 1;
+        if self.ent[i].f26 < 0 {
+            let def = self.assets.build_tab[level % self.assets.build_tab.len()];
+            let x0 = cx.wrapping_sub((def.w >> 1) as u8);
+            let y0 = cy.wrapping_sub((def.h >> 1) as u8);
+            for dy in 0..def.h {
+                for dx in 0..def.w {
+                    let t = tile(x0.wrapping_add(dx), y0.wrapping_add(dy));
+                    self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
+                }
+            }
+            let c = self.ent[i].f146 as usize;
+            if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
+                self.ent[c].f59 = 5;
+            }
+            self.ent[i].flags |= 0x400;
+        }
+    }
+
+    /// sub_28200 (:30284), byte70 43: the castle ground-leveling
+    /// pass — 10 ticks stepping the footprint toward the clamped
+    /// (≤220) average of the surrounding perimeter ring, then the
+    /// protection stamp and the castle to sub-state 2 (:30375,
+    /// :30422-23). APPROX: plain rect + arithmetic-mean perimeter
+    /// in place of sub_361C0's exact walk.
+    fn tick_castle_leveler(&mut self, i: usize) {
+        let e = self.ent[i];
+        let cx = ((e.x as u32 + 128) >> 8) as u8;
+        let cy = ((e.y as u32 + 128) >> 8) as u8;
+        let level = e.f71.clamp(1, 8) as usize;
+        let def = self.assets.build_tab[level % self.assets.build_tab.len()];
+        let x0 = cx.wrapping_sub((def.w >> 1) as u8);
+        let y0 = cy.wrapping_sub((def.h >> 1) as u8);
+        self.ent[i].act_life -= 1;
+        let life = self.ent[i].act_life;
+        if life >= 0 {
+            let (mut sum, mut n) = (0i32, 0i32);
+            for gx in -1..=(def.w as i32) {
+                for gy in [-1i32, def.h as i32] {
+                    sum += self.t.height[tile((x0 as i32 + gx) as u8, (y0 as i32 + gy) as u8)]
+                        as i32;
+                    n += 1;
+                }
+            }
+            for gy in 0..(def.h as i32) {
+                for gx in [-1i32, def.w as i32] {
+                    sum += self.t.height[tile((x0 as i32 + gx) as u8, (y0 as i32 + gy) as u8)]
+                        as i32;
+                    n += 1;
+                }
+            }
+            let avg = (sum / n.max(1)).min(220);
+            let divisor = life + 1;
+            for gy in 0..def.h {
+                for gx in 0..def.w {
+                    let t = tile(x0.wrapping_add(gx), y0.wrapping_add(gy));
+                    let hh = self.t.height[t] as i32;
+                    self.t.height[t] = (hh + (avg - hh) / divisor).clamp(0, 255) as u8;
+                }
+            }
+        } else {
+            for gy in 0..def.h {
+                for gx in 0..def.w {
+                    let t = tile(x0.wrapping_add(gx), y0.wrapping_add(gy));
+                    self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
+                }
+            }
+            let c = self.ent[i].f146 as usize;
+            if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
+                self.ent[c].f59 = 2;
+            }
+            self.ent[i].flags |= 0x400;
+        }
+    }
+
+    /// sub_46F10 (:56043): the class-3 m2 CASTLE state machine
+    /// (sub-state f59 = the original's +48). INTERIM scope: the
+    /// build path only — mana capacity per level, balloons, the m43
+    /// upgrade token and respawn semantics are the housekeeping/
+    /// mana cluster.
+    pub(crate) fn castle_tick(&mut self, i: usize) {
+        match self.ent[i].f59 {
+            // Level-up (sub_47960 :56461): extents from build row =
+            // level (sub_37150 :43798; its +78=0xE000 marker skipped
+            // — it would z-orphan our AABB overlaps), the loop-10
+            // build gong, and the m42 painter.
+            0 => {
+                let lvl = (self.ent[i].f26 + 1).clamp(1, 8);
+                self.ent[i].f26 = lvl;
+                let def =
+                    self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
+                {
+                    let e = &mut self.ent[i];
+                    e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
+                    e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
+                    e.f84 = 0x4000;
+                }
+                self.snd(10, i);
+                let (x, y, own) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.id24)
+                };
+                let cx = ((x as u32 + 128) >> 8) as u8;
+                let cy = ((y as u32 + 128) >> 8) as u8;
+                let z = 32
+                    * self.avg4(
+                        cx.wrapping_sub(def.w >> 1),
+                        cy.wrapping_sub(def.h >> 1),
+                        def.h,
+                        def.w,
+                    ) as i32;
+                if let Some(p) = self.spawn_creator(42, x, y, z as i16) {
+                    let e = &mut self.ent[p];
+                    e.f146 = i as u16;
+                    e.f71 = lvl as u8;
+                    e.id24 = own;
+                    e.flags |= 0x10000; // +18 |= 1 (:56492)
+                }
+                self.ent[i].f59 = 4;
+            }
+            // Painter done → the m41 ground leveler (:56086-90).
+            5 => {
+                let (x, y, z, own, lvl) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z, e.id24, e.f26)
+                };
+                if let Some(l) = self.spawn_creator(41, x, y, z) {
+                    let e = &mut self.ent[l];
+                    e.f146 = i as u16;
+                    e.f71 = lvl as u8;
+                    e.id24 = own;
+                }
+                self.ent[i].f59 = 6; // wait for the leveler
+            }
+            // Leveler done → established (case 2 → sub_46DB0).
+            2 => self.ent[i].f59 = 4,
+            _ => {} // 4 established / 6 waiting
+        }
+    }
+
     /// sub_28DC0 (:30767), byte70 52: the LIVE village building.
     /// Damage intake sub_29640 (ch0; the decompile's u16 amount read
     /// is union slicing — writers store u32): non-lethal hits pop one
@@ -1869,13 +2178,25 @@ impl Gen {
     /// 200); death latches the killer and moves to state 53. Every 40
     /// ticks the mana pool +140 tracks occupants<<8, and a FULL house
     /// with capacity > 5 has a ~1/16 chance to emit a villager.
-    /// Deviation: the ch1 possession re-owner (:30800-12) is the
-    /// spell track and is skipped.
+    /// The ch1 possession re-owner (:30801-14): claim the sender,
+    /// chime 4, clear the active bit, swap to the claimed sprite
+    /// (177). Deviation: the immediate mana credit off the claimer's
+    /// +48 is the mana-economy track.
     pub(crate) fn tick_building_live(&mut self, i: usize) {
         if self.ent[i].act_life < 0 {
             // Killed directly (castle crush life = -1, :17638).
             self.ent[i].tick70 = 53;
             return;
+        }
+        if self.ent[i].mail[1].1 != 0 {
+            let src = self.ent[i].mail[1].1;
+            self.ent[i].mail[1] = (0, 0);
+            if src != self.ent[i].f144 {
+                self.ent[i].f144 = src;
+                self.ent[i].flags &= !1;
+                self.snd(4, i);
+                self.set_sprite(i, 177);
+            }
         }
         if self.ent[i].mail[0].1 != 0 {
             let (amt, src) = self.ent[i].mail[0];
