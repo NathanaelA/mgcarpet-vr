@@ -11,6 +11,7 @@
 
 mod config;
 mod entities;
+mod ui;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,6 +49,9 @@ struct LoadedLevel {
     world: Option<mgc_sim::world::World>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
     palette_rgba: [[u8; 4]; 256],
+    /// HSPR UI sprites composited to RGBA (spellbook/HUD); None when
+    /// the bundle has no UI members (MC2 until its UI track).
+    ui: Option<ui::UiAssets>,
     /// Live trigger/portal volumes for the opt-in map overlay.
     map_areas: Vec<mgc_render::MapArea>,
 }
@@ -233,6 +237,13 @@ fn load_level(
         ..Flyer::default()
     });
 
+    let ui_assets = bundle
+        .ui_sprites
+        .as_ref()
+        .map(|(idx, px)| {
+            ui::UiAssets::build(idx.clone(), px, &bundle.palette, bundle.blend_lut.as_deref())
+        });
+
     Ok(LoadedLevel {
         view: LevelView {
             tile_type,
@@ -257,6 +268,7 @@ fn load_level(
         map_areas: world.as_ref().map(map_areas).unwrap_or_default(),
         world,
         palette_rgba: bundle.palette,
+        ui: ui_assets,
     })
 }
 
@@ -289,15 +301,30 @@ struct App {
     map_triggers: bool,
     /// Monster health bars (enhancement/debug; H toggles).
     health_bars: bool,
+    /// All spells + infinite mana (playtest instrument; G toggles).
+    dev_spells: bool,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Simulation,
     prev_flyer: Flyer,
     keys: HeldKeys,
     mouse: MouseAccum,
-    /// Left button held while grabbed: the dev repeat-fireball.
+    /// Left/right button held while grabbed: the two casting hands.
     fire_held: bool,
+    fire_right_held: bool,
     grabbed: bool,
+    /// Cursor position in window pixels (book-screen interactions).
+    cursor: (f32, f32),
+    /// Spell under the cursor on the book screen (display hit test,
+    /// refreshed each frame the book is open).
+    hovered: Option<mgc_sim::spells::SpellId>,
+    /// Quick-key bindings 1..9,0 → spell id (session-local; set in the
+    /// book by hovering + pressing a digit). Our enhancement — the
+    /// original only has the obscure Ctrl+]+digit chord.
+    quick_binds: [Option<u8>; 10],
+    /// Equip requests to feed the next sim tick (LMB hand, RMB hand).
+    pending_equip: (Option<u8>, Option<u8>),
+    shift_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
 }
@@ -308,6 +335,7 @@ impl App {
         smooth_shading: bool,
         map_triggers: bool,
         health_bars: bool,
+        dev_spells: bool,
     ) -> Self {
         let mut sim = match level.world.take() {
             Some(w) => Simulation::with_world(w),
@@ -316,12 +344,18 @@ impl App {
         if let Some(start) = level.start {
             sim.flyer = start;
         }
+        if dev_spells {
+            if let Some(w) = &mut sim.world {
+                w.set_dev_spells(true);
+            }
+        }
         let prev_flyer = sim.flyer;
         Self {
             level,
             smooth_shading,
             map_triggers,
             health_bars,
+            dev_spells,
             window: None,
             renderer: None,
             sim,
@@ -329,10 +363,20 @@ impl App {
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
             fire_held: false,
+            fire_right_held: false,
             grabbed: false,
+            cursor: (0.0, 0.0),
+            hovered: None,
+            quick_binds: [None; 10],
+            pending_equip: (None, None),
+            shift_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
         }
+    }
+
+    fn book_open(&self) -> bool {
+        self.renderer.as_ref().is_some_and(|r| r.map_view())
     }
 
     fn tick_input(&mut self) -> FlightInput {
@@ -340,13 +384,19 @@ impl App {
         let k = &self.keys;
         // Keyboard turn rate: radians per tick.
         let key_turn = 2.2 * TICK_DT;
+        let book = self.book_open();
         let input = FlightInput {
             thrust: axis(k.back, k.forward),
             strafe: axis(k.left, k.right),
             lift: axis(k.down, k.up),
             yaw_delta: axis(k.turn_left, k.turn_right) * key_turn + self.mouse.yaw,
             pitch_delta: axis(k.pitch_down, k.pitch_up) * key_turn + self.mouse.pitch,
-            fire: self.fire_held && self.grabbed,
+            // The book screen swallows the fire buttons (they bind
+            // spells there, as in the original's map-screen input).
+            fire_left: self.fire_held && self.grabbed && !book,
+            fire_right: self.fire_right_held && self.grabbed && !book,
+            equip_left: self.pending_equip.0.take().map(mgc_sim::spells::SpellId),
+            equip_right: self.pending_equip.1.take().map(mgc_sim::spells::SpellId),
         };
         self.mouse = MouseAccum::default();
         input
@@ -446,6 +496,9 @@ impl ApplicationHandler for App {
                 if let Some((index, atlas)) = &self.level.sprites {
                     renderer.load_sprites(index.clone(), atlas);
                 }
+                if let Some(assets) = &self.level.ui {
+                    renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
+                }
                 renderer.set_billboards(self.level.billboards.clone());
                 renderer.set_smooth_shading(self.smooth_shading);
                 self.renderer = Some(renderer);
@@ -471,17 +524,58 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = state == ElementState::Pressed;
+                if self.book_open() {
+                    // Book screen: clicking an owned spell binds it to
+                    // that hand (the original's commands 0x15/0x16)
+                    // AND closes the book back into flight (player-
+                    // confirmed original UX). Clicks on unowned slots
+                    // or empty page do nothing.
+                    if down {
+                        let owned = self
+                            .sim
+                            .world
+                            .as_ref()
+                            .map(|w| w.loadout().owned)
+                            .unwrap_or([false; 24]);
+                        if let Some(spell) = self.hovered {
+                            if owned[spell.0 as usize] {
+                                match button {
+                                    MouseButton::Left => {
+                                        self.pending_equip.0 = Some(spell.0)
+                                    }
+                                    MouseButton::Right => {
+                                        self.pending_equip.1 = Some(spell.0)
+                                    }
+                                    _ => return,
+                                }
+                                if let Some(r) = &mut self.renderer {
+                                    r.set_map_view(false);
+                                }
+                                self.set_grab(true);
+                            }
+                        }
+                    }
+                    self.fire_held = false;
+                    self.fire_right_held = false;
+                    return;
+                }
                 if down && !self.grabbed {
                     self.set_grab(true);
                     return; // the grab click doesn't fire
                 }
-                if button == MouseButton::Left {
-                    self.fire_held = down;
+                match button {
+                    MouseButton::Left => self.fire_held = down,
+                    MouseButton::Right => self.fire_right_held = down,
+                    _ => {}
                 }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x as f32, position.y as f32);
             }
             WindowEvent::Focused(false) => {
                 self.set_grab(false);
                 self.fire_held = false;
+                self.fire_right_held = false;
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
@@ -497,8 +591,57 @@ impl ApplicationHandler for App {
                     if let Some(r) = &mut self.renderer {
                         let on = !r.map_view();
                         r.set_map_view(on);
+                        // The book frees the cursor for spell binding;
+                        // closing it returns to mouse-look.
+                        if on {
+                            self.set_grab(false);
+                            self.fire_held = false;
+                            self.fire_right_held = false;
+                        } else {
+                            self.set_grab(true);
+                        }
                     }
                     return;
+                }
+                // Quick keys 1..9,0 (enhancement; the original's only
+                // digit path is the Ctrl+]+digit chord, :20340-56):
+                // in the book, bind the hovered spell to the digit;
+                // in flight, equip the bound spell (Shift = right hand).
+                if down {
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        let digit = match code {
+                            KeyCode::Digit1 => Some(0),
+                            KeyCode::Digit2 => Some(1),
+                            KeyCode::Digit3 => Some(2),
+                            KeyCode::Digit4 => Some(3),
+                            KeyCode::Digit5 => Some(4),
+                            KeyCode::Digit6 => Some(5),
+                            KeyCode::Digit7 => Some(6),
+                            KeyCode::Digit8 => Some(7),
+                            KeyCode::Digit9 => Some(8),
+                            KeyCode::Digit0 => Some(9),
+                            _ => None,
+                        };
+                        if let Some(d) = digit {
+                            if self.book_open() {
+                                if let Some(spell) = self.hovered {
+                                    self.quick_binds[d] = Some(spell.0);
+                                    println!(
+                                        "quick key {}: {}",
+                                        (d + 1) % 10,
+                                        spell.name()
+                                    );
+                                }
+                            } else if let Some(spell) = self.quick_binds[d] {
+                                if self.shift_held {
+                                    self.pending_equip.1 = Some(spell);
+                                } else {
+                                    self.pending_equip.0 = Some(spell);
+                                }
+                            }
+                            return;
+                        }
+                    }
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyT) {
                     self.smooth_shading = !self.smooth_shading;
@@ -535,6 +678,21 @@ impl ApplicationHandler for App {
                     );
                     return;
                 }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyG) {
+                    self.dev_spells = !self.dev_spells;
+                    if let Some(w) = &mut self.sim.world {
+                        w.set_dev_spells(self.dev_spells);
+                    }
+                    println!(
+                        "dev spells: {}",
+                        if self.dev_spells {
+                            "on — all spells, infinite mana (playtest instrument)"
+                        } else {
+                            "off (authentic acquisition/mana)"
+                        }
+                    );
+                    return;
+                }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyH) {
                     self.health_bars = !self.health_bars;
                     if !self.health_bars {
@@ -561,7 +719,10 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::KeyA) => k.left = down,
                     PhysicalKey::Code(KeyCode::KeyD) => k.right = down,
                     PhysicalKey::Code(KeyCode::Space) => k.up = down,
-                    PhysicalKey::Code(KeyCode::ShiftLeft) => k.down = down,
+                    PhysicalKey::Code(KeyCode::ShiftLeft) => {
+                        k.down = down;
+                        self.shift_held = down;
+                    }
                     PhysicalKey::Code(KeyCode::ArrowLeft) => k.turn_left = down,
                     PhysicalKey::Code(KeyCode::ArrowRight) => k.turn_right = down,
                     PhysicalKey::Code(KeyCode::ArrowUp) => k.pitch_up = down,
@@ -616,6 +777,25 @@ impl ApplicationHandler for App {
                     pitch: a.pitch + (b.pitch - a.pitch) * alpha - kick,
                     fov_y: FOV_Y,
                 };
+                // Spell UI quads (book grid or in-flight HUD).
+                if let (Some(assets), Some(w)) = (&self.level.ui, &self.sim.world) {
+                    let size = self
+                        .window
+                        .as_ref()
+                        .map(|win| win.inner_size())
+                        .map(|s| (s.width as f32, s.height as f32))
+                        .unwrap_or((1280.0, 720.0));
+                    let loadout = w.loadout();
+                    let (quads, hovered) = if self.book_open() {
+                        ui::book_quads(assets, &loadout, size.0, size.1, self.cursor)
+                    } else {
+                        (ui::hud_quads(assets, &loadout, size.0, size.1), None)
+                    };
+                    self.hovered = hovered;
+                    if let Some(r) = &mut self.renderer {
+                        r.set_ui_quads(quads);
+                    }
+                }
                 if let Some(r) = &mut self.renderer {
                     // Animation clock: sim ticks are the original's game
                     // turns; wrapped so f32 stays exact (see set_anim_turn).
@@ -660,6 +840,8 @@ struct Args {
     map_triggers: Option<bool>,
     /// CLI override of `enhancements.health_bars`.
     health_bars: Option<bool>,
+    /// CLI override of `enhancements.dev_spells`.
+    dev_spells: Option<bool>,
     /// Write the overhead map as a PNG and exit (one pixel per tile,
     /// scaled by `map_scale`).
     map: Option<PathBuf>,
@@ -682,6 +864,7 @@ fn parse_args() -> Result<Args, String> {
     let mut smooth_shading = None;
     let mut map_triggers = None;
     let mut health_bars = None;
+    let mut dev_spells = None;
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
@@ -728,6 +911,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-map-triggers" => map_triggers = Some(false),
             "--health-bars" => health_bars = Some(true),
             "--no-health-bars" => health_bars = Some(false),
+            "--dev-spells" => dev_spells = Some(true),
+            "--no-dev-spells" => dev_spells = Some(false),
             "--map" => {
                 map = Some(PathBuf::from(it.next().ok_or("--map needs a path")?));
             }
@@ -756,6 +941,7 @@ fn parse_args() -> Result<Args, String> {
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
+                     [--dev-spells|--no-dev-spells] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features]\n\
@@ -775,6 +961,7 @@ fn parse_args() -> Result<Args, String> {
         smooth_shading,
         map_triggers,
         health_bars,
+        dev_spells,
         map,
         map_scale,
         map_view,
@@ -816,13 +1003,14 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
 }
 
 fn run_screenshot(
-    level: LoadedLevel,
+    mut level: LoadedLevel,
     out: &Path,
     camera: Option<[f32; 5]>,
     smooth_shading: bool,
     map_view: bool,
     anim_turn: f32,
     map_triggers: bool,
+    dev_spells: bool,
 ) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
     let areas = if map_triggers { &level.map_areas[..] } else { &[] };
@@ -830,10 +1018,29 @@ fn run_screenshot(
     if let Some((index, atlas)) = &level.sprites {
         renderer.load_sprites(index.clone(), atlas);
     }
+    if let Some(assets) = &level.ui {
+        renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
+        if let Ok(p) = std::env::var("MGC_DUMP_UI_ATLAS") {
+            write_png(Path::new(&p), assets.atlas_w, assets.atlas_h, &assets.atlas_rgba)?;
+        }
+    }
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
     renderer.set_map_view(map_view);
     renderer.set_anim_turn(anim_turn);
+    // Spell UI (book grid or HUD), from the level-start loadout.
+    if let (Some(assets), Some(w)) = (&level.ui, &mut level.world) {
+        if dev_spells {
+            w.set_dev_spells(true);
+        }
+        let loadout = w.loadout();
+        let quads = if map_view {
+            ui::book_quads(assets, &loadout, 1280.0, 720.0, (-1.0, -1.0)).0
+        } else {
+            ui::hud_quads(assets, &loadout, 1280.0, 720.0)
+        };
+        renderer.set_ui_quads(quads);
+    }
     let flyer = level.start.unwrap_or_default();
     let [x, y, z, yaw_deg, pitch_deg] = camera.unwrap_or([
         flyer.x,
@@ -888,6 +1095,7 @@ fn main() -> std::process::ExitCode {
         .map_triggers
         .unwrap_or(cfg.enhancements.map_trigger_areas);
     let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
+    let dev_spells = args.dev_spells.unwrap_or(cfg.enhancements.dev_spells);
 
     let level = match load_level(&args.level, args.tileset, args.terrain_features) {
         Ok(l) => l,
@@ -916,6 +1124,7 @@ fn main() -> std::process::ExitCode {
             args.map_view,
             args.anim_turn,
             map_triggers,
+            dev_spells,
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
@@ -927,10 +1136,12 @@ fn main() -> std::process::ExitCode {
 
     println!("mgcarpet {} — {}", env!("CARGO_PKG_VERSION"), level.label);
     println!("controls: WASD fly, mouse look (click to grab, Esc to release),");
-    println!("          hold left button: fireball (dev: infinite, you are invincible),");
-    println!("          Space/Shift up/down, arrows turn, T toggles smooth shading,");
-    println!("          H toggles monster health bars (debug),");
-    println!("          Enter opens the map (book screen), Esc twice quits");
+    println!("          LMB/RMB cast the equipped hand's spell (hold = channel),");
+    println!("          Enter opens the book: click a spell with LMB/RMB to equip,");
+    println!("          hover + 1-9,0 binds a quick key (in flight: equip, Shift = right hand),");
+    println!("          Space/Shift up/down, arrows turn, T smooth shading,");
+    println!("          H monster health bars (debug), G all spells + infinite mana (dev),");
+    println!("          V map trigger overlay, Esc twice quits");
 
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
@@ -939,7 +1150,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level, smooth_shading, map_triggers, health_bars);
+    let mut app = App::new(level, smooth_shading, map_triggers, health_bars, dev_spells);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

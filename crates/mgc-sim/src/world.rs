@@ -56,7 +56,91 @@ use crate::features::{
 };
 use crate::mc1_sprite_stats::SPRITE_STATS;
 use crate::mobs::{MobCtx, PLAYER_TARGET};
+use crate::spells::{SPELL_COUNT, SPELLS, SpellId};
 use mgc_formats::{Thing, ThingKind};
+
+/// The player's life ceiling (the original wizard's +332 max; used by
+/// Heal's 5%-per-tick rate — no ported player max exists yet).
+pub const PLAYER_LIFE_MAX: u64 = 4000;
+
+/// The class-12 state marker separating OWNED spell manifestations
+/// (tick70 = 200 + spell id, ours) from pre-placed JARS (tick70 0..=2
+/// from the THING post-init) — the jar keeps its spawn state, the
+/// manifestation keeps the jar's pool slot (slot economy is
+/// load-bearing: level 032 depends on it).
+const MANIFEST_BASE: u8 = 200;
+
+/// The human player's carpet-side spell state — the original Type_160
+/// slice: the +308 free mana pool, the var_940/944 hand equips, the
+/// var_676 owned-spell table, and the +16/+17 effect flag bits.
+pub struct Player {
+    /// Carpet free mana pool (+308). INTERIM: fixed 100_000 pool with
+    /// the idle recharge rule `mana_max/2000` per tick (:55409-20);
+    /// the original recomputes the pool from world state (mana track).
+    pub mana: u32,
+    pub mana_max: u32,
+    /// Hand equips (var_940/944).
+    pub left: Option<SpellId>,
+    pub right: Option<SpellId>,
+    /// Pool slot of each owned spell's class-12 manifestation entity,
+    /// 0 = not owned (var_676).
+    owned: [u16; SPELL_COUNT],
+    /// Active toggle effects (carpet flag bits: shield +17 0x40,
+    /// invisible +16 0x20, rebound +17 0x80). Derived each tick from
+    /// the manifestations' burst counters.
+    pub shield: bool,
+    pub invisible: bool,
+    pub rebound: bool,
+    pub beyond_sight: bool,
+    pub heal_active: bool,
+    /// 0 none, +1 forward, -1 backward (types 2/21).
+    pub accel: i8,
+    /// The accelerate channel's cast button was held this tick — the
+    /// held factor is 3.0 ("hold down the mouse button to achieve
+    /// maximum speed"), 2.0 after release (:65169/:65175).
+    accel_held: bool,
+    /// Cached signed thrust-override factor (0.0 = inactive) —
+    /// [`World::accel_override`].
+    speed_boost: f32,
+    /// Teleport return slot (:65554): recast returns here.
+    teleport_return: Option<(u16, u16)>,
+    /// Global Death's primed charge (:66235): ticks until the pulse
+    /// fires around the carpet. APPROX ~2s pending a trace.
+    bomb_timer: Option<i16>,
+}
+
+impl Default for Player {
+    fn default() -> Self {
+        Player {
+            mana: 100_000,
+            mana_max: 100_000,
+            left: None,
+            right: None,
+            owned: [0; SPELL_COUNT],
+            shield: false,
+            invisible: false,
+            rebound: false,
+            beyond_sight: false,
+            heal_active: false,
+            accel: 0,
+            accel_held: false,
+            speed_boost: 0.0,
+            teleport_return: None,
+            bomb_timer: None,
+        }
+    }
+}
+
+/// Spellbook/HUD snapshot for the app layer.
+pub struct LoadoutView {
+    pub owned: [bool; 24],
+    pub left: Option<u8>,
+    pub right: Option<u8>,
+    /// 0.0 = ready, 1.0 = just fired (burst counter / count).
+    pub cooldown: [f32; 24],
+    pub mana: u32,
+    pub mana_max: u32,
+}
 
 /// The player's pose in engine units for trigger/portal tests: x/y are
 /// 8.8 fixed-point tile coordinates, z is altitude in engine units
@@ -103,9 +187,16 @@ impl PlayerPose {
 /// input stream (replay-recorded once replays exist).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlayerCommand {
-    /// Fire the dev repeat-fireball (hold-to-autofire; spell 23's
-    /// input gate with the mana cost bypassed).
-    pub fire: bool,
+    /// Left-hand cast held (the original's dw_0 fire bit 0x10; the
+    /// carpet fire tick tests it per equipped hand,
+    /// sub_46840_46B80 :55825-55834).
+    pub fire_left: bool,
+    /// Right-hand cast held (dw_0 bit 0x20).
+    pub fire_right: bool,
+    /// Equip a spell to a hand (the original's commands 0x15/0x16,
+    /// :48717-48731) — from the book screen or a quick key.
+    pub equip_left: Option<crate::spells::SpellId>,
+    pub equip_right: Option<crate::spells::SpellId>,
 }
 
 /// The runtime world of one loaded MC1/HW level.
@@ -120,10 +211,19 @@ pub struct World {
     /// A portal fired this tick: destination in tile units, consumed
     /// by the sim (which moves the flyer).
     pending_teleport: Option<(f32, f32)>,
-    /// The dev fireball's refire window (+48 of the spell event,
-    /// sub_58240 :66295): held fire re-arms it every tick — one
-    /// projectile per game tick, the repeat-fireball firehose.
-    spell48: i16,
+    /// The human player's spell/mana state (spells cast through the
+    /// per-hand dispatcher, sub_46B00_46E40 :55851).
+    player: Player,
+    /// Dev/playtest "all spells + infinite mana" switch (G-class).
+    dev_spells: bool,
+    /// Last tick's fire-button states — casts are EDGE-triggered (one
+    /// cast per press) except the traced hold spells; the edges are
+    /// derived sim-side from the held booleans.
+    prev_fire: (bool, bool),
+    /// The Accelerate brake veto for this tick, fed by
+    /// [`World::thrust_cancel`]: .0 blocks type 2 (backward thrust
+    /// held), .1 blocks type 21 (forward thrust held).
+    accel_veto: (bool, bool),
 }
 
 /// One live drawable entity, resolved for the app's billboard / map
@@ -216,9 +316,15 @@ impl World {
             terrain_dirty: false,
             entities_dirty: false,
             pending_teleport: None,
-            spell48: 0,
+            player: Player::default(),
+            dev_spells: false,
+            prev_fire: (false, false),
+            accel_veto: (false, false),
         };
         w.fire_disposition(0, true);
+        // Starting spells AFTER the level population so the initial
+        // spawns keep their original pool slots (per-slot LCG seeds).
+        w.grant_starting_spells();
         w
     }
 
@@ -239,6 +345,11 @@ impl World {
                 continue;
             }
             if e.class64 == 5 && e.tick70 == 120 {
+                continue;
+            }
+            // Owned-spell manifestations occupy their (former jar)
+            // slot but are not world drawables.
+            if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
                 continue;
             }
             out.push(Thing {
@@ -268,6 +379,9 @@ impl World {
         for e in self.g.ent.iter().skip(1) {
             if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
                 continue;
+            }
+            if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
+                continue; // owned manifestation, not a drawable
             }
             let segment = e.class64 == 5 && e.tick70 == 120;
             out.push(LivePose {
@@ -307,32 +421,59 @@ impl World {
                 any_creature = true;
             }
             if e.class64 == 9
-                || (e.class64 == 10 && matches!(e.tick70, 0 | 1 | 5 | 17 | 23 | 25 | 41))
+                || (e.class64 == 10
+                    && matches!(e.tick70, 0 | 1 | 5 | 17 | 18 | 21 | 23 | 25 | 41))
             {
                 any_transient = true;
             }
         }
 
-        // The dev repeat-fireball (spell 23, sub_58240 :66295): a held
-        // button re-arms +48 every tick (:20627-30) so the spawn gate
-        // `+48 == window` passes every tick; mana gates/deduction are
-        // the bypassed cheat. The window tail still decrements.
-        if cmd.fire {
-            self.spell48 = 3;
-        }
-        if self.spell48 == 3 {
-            self.cast_fireball(player);
-        }
-        if self.spell48 > 0 {
-            self.spell48 -= 1;
-        }
-
-        // The awake pre-pass (sub_54F00, :64266) runs before dispatch.
         let ctx = MobCtx {
             px: player.x,
             py: player.y,
             pz: player.z,
         };
+
+        // Mirror the cloak/deflection flags into the pool engine for
+        // the mob-side gates (invisible :65689-90 = +16 0x20, rebound
+        // :65774 = the ported deflection bit +17 0x80). One-tick-old
+        // view: the flags refresh in the manifestation ticks below.
+        self.g.player_invisible = self.player.invisible;
+        self.g.player_rebound = self.player.rebound;
+
+        // Hand equips (the original's commands 0x15/0x16, :48717-31):
+        // only owned spells take.
+        if let Some(s) = cmd.equip_left
+            && (s.0 as usize) < SPELL_COUNT
+            && self.player.owned[s.0 as usize] != 0
+        {
+            self.player.left = Some(s);
+        }
+        if let Some(s) = cmd.equip_right
+            && (s.0 as usize) < SPELL_COUNT
+            && self.player.owned[s.0 as usize] != 0
+        {
+            self.player.right = Some(s);
+        }
+
+        // Per-hand cast triggers (the carpet fire tick,
+        // sub_46840_46B80 :55825-34, dw_0 bits 0x10/0x20). Casting is
+        // EDGE-triggered — one cast per press, re-arm on release —
+        // except the traced hold spells (23 firehose, 15 stream, the
+        // channels); the edges derive from last tick's held state.
+        let edge = (
+            cmd.fire_left && !self.prev_fire.0,
+            cmd.fire_right && !self.prev_fire.1,
+        );
+        self.prev_fire = (cmd.fire_left, cmd.fire_right);
+        if cmd.fire_left && let Some(s) = self.player.left {
+            self.cast_spell(s, false, edge.0, player, &ctx);
+        }
+        if cmd.fire_right && let Some(s) = self.player.right {
+            self.cast_spell(s, true, edge.1, player, &ctx);
+        }
+
+        // The awake pre-pass (sub_54F00, :64266) runs before dispatch.
         self.g.mob_awake_pass(&ctx);
 
         for i in 1..features::POOL {
@@ -354,8 +495,12 @@ impl World {
                     self.terrain_dirty = true;
                 }
                 // Combat effects (fire, spreader, splash, blast ring,
-                // hit-flash, steal-flash, mana ball).
-                10 if matches!(self.g.ent[i].tick70, 0 | 1 | 5 | 6 | 17 | 23 | 25 | 41) => {
+                // eruption driver, magnet, hit-flash, steal-flash,
+                // mana ball).
+                10 if matches!(
+                    self.g.ent[i].tick70,
+                    0 | 1 | 5 | 6 | 17 | 18 | 21 | 23 | 25 | 41
+                ) => {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
                     }
@@ -368,8 +513,11 @@ impl World {
                 11 => self.trigger_tick(i, player, &buckets),
                 // Trees burn (states 0/1/2 + the standing fire).
                 2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
-                // Scenery / pickups: inert until their tracks land —
-                // they stand and render.
+                // Spell jars (pickup) and owned-spell manifestations
+                // (burst countdown + continuous effects).
+                12 => self.class12_tick(i, &ctx),
+                // Scenery: inert until its tracks land — stands and
+                // renders.
                 _ => {}
             }
             // Per-tick phase counter, incremented after the state
@@ -386,9 +534,13 @@ impl World {
 
         // The invincible player: a spawn grace that never decrements
         // (:55367-71 — all six channels discarded each tick). The ch0
-        // total is kept for display/tests.
+        // total is kept for display/tests. Shield (:65266): ch0 totals
+        // at 1/4 while up — the manual's "absorbs three-quarters"
+        // (scales the accumulated display total only; the grace still
+        // discards the damage itself).
         if self.g.player_mail[0].1 != 0 {
-            self.g.player_damage += self.g.player_mail[0].0 as u64;
+            let amt = self.g.player_mail[0].0 as u64;
+            self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
         }
         self.g.player_mail = [(0, 0); 6];
         // The village-aggro timer runs down once per wizard tick
@@ -396,24 +548,285 @@ impl World {
         if self.g.player_aggro > 0 {
             self.g.player_aggro -= 1;
         }
+
+        // Global Death's primed charge (:66235): no visible effect —
+        // it counts down after the cast, then a single small pulse
+        // around the CARPET at expiry ("you have to be straight below
+        // a dragon to affect it"). APPROX ~55 ticks pending a trace.
+        if let Some(t) = self.player.bomb_timer {
+            if t <= 1 {
+                self.player.bomb_timer = None;
+                self.bomb_pulse(&ctx);
+            } else {
+                self.player.bomb_timer = Some(t - 1);
+            }
+        }
+
+        // The carpet idle mana recharge, mana_max/2000 per tick
+        // (:55409-20); INTERIM fixed pool until the mana track lands.
+        self.player.mana =
+            (self.player.mana + self.player.mana_max / 2000).min(self.player.mana_max);
+
+        // Types 2/21 thrust-override factor for the flyer (3.0 while
+        // the cast button is held — "hold down the mouse button to
+        // achieve maximum speed" — 2.0 after release, negative for
+        // backward; :65169/:65175). Computed after the manifestation
+        // ticks so an expired burst drops the override the same turn.
+        self.player.speed_boost = match self.player.accel {
+            0 => 0.0,
+            a => (if self.player.accel_held { 3.0 } else { 2.0 }) * a.signum() as f32,
+        };
+        self.player.accel_held = false;
+        self.accel_veto = (false, false);
     }
 
-    /// The fireball cast (sub_58240/sub_56090 :65056-83, gates and
-    /// mana deduction bypassed): muzzle offset 256 units to the left
-    /// hand, launch height = the carpet's half-height, heading/pitch
-    /// from the pose, carpet speed inherited.
-    fn cast_fireball(&mut self, p: PlayerPose) {
-        use crate::combat::PLAYER_HH;
-        let myaw = p.heading.wrapping_sub(512) & 0x7FF;
-        let mut muzzle = (p.x, p.y, p.z);
-        Gen::polar_step(&mut muzzle, myaw, 0, 256);
-        if self.g.ground_z(muzzle.0, muzzle.1) as i16 > p.z {
-            muzzle = (p.x, p.y, p.z); // muzzle inside terrain: revert
+    // ---- player spells (sub_46B00_46E40 :55851 + the 24 cast arms) --------
+
+    /// INTERIM until the level-data spell block is decoded: every new
+    /// World grants Fireball (0) + Possess (3), auto-equipped L/R in
+    /// the original's auto-fill order (:49246-54).
+    fn grant_starting_spells(&mut self) {
+        self.grant_spell(SpellId(0));
+        self.grant_spell(SpellId(3));
+    }
+
+    /// Materialize an owned spell: a class-12 manifestation ENTITY in
+    /// the pool (the original's sub_3BF70 slot economy — spell
+    /// manifestations compete with monsters for slots). tick70 =
+    /// [`MANIFEST_BASE`] + spell id; +48 burst counter → our f26,
+    /// +44 damage → f44 (count/possess read from the static table).
+    /// Auto-fills an empty hand, LEFT first (:49246-54).
+    fn grant_spell(&mut self, spell: SpellId) -> Option<usize> {
+        let id = spell.0 as usize;
+        if id >= SPELL_COUNT {
+            return None;
         }
-        let z = p.z.wrapping_add(PLAYER_HH as i16);
-        let Some(pr) = self.g.spawn_fireball(muzzle.0, muzzle.1, z) else {
+        if self.player.owned[id] != 0 {
+            return Some(self.player.owned[id] as usize);
+        }
+        let m = self.g.new_event()?;
+        {
+            let e = &mut self.g.ent[m];
+            e.class64 = 12;
+            e.model65 = spell.0;
+            e.tick70 = MANIFEST_BASE + spell.0;
+            e.flags &= !8; // never a damage victim
+            e.f26 = 0;
+            e.f44 = SPELLS[id].damage.min(u16::MAX as u32) as u16;
+        }
+        self.player.owned[id] = m as u16;
+        if self.player.left.is_none() {
+            self.player.left = Some(spell);
+        } else if self.player.right.is_none() {
+            self.player.right = Some(spell);
+        }
+        Some(m)
+    }
+
+    /// Dev/playtest toggle (G-class enhancement; the original ships
+    /// equivalent debug commands — the :48836 cheat menu's "access
+    /// all spells" / "more mana"): grants every spell (spawning the
+    /// missing class-12 manifestations, auto-equipping L/R if empty)
+    /// and pins the mana pool full (no gate, no deduction, and
+    /// [`LoadoutView::mana`] reads as full while on). Turning it OFF
+    /// keeps the granted manifestations and any spells acquired
+    /// meanwhile (no un-granting — the slot economy stays honest; if
+    /// the pool cannot fit all 24, what fits is granted).
+    pub fn set_dev_spells(&mut self, on: bool) {
+        self.dev_spells = on;
+        if on {
+            for s in 0..SPELL_COUNT as u8 {
+                self.grant_spell(SpellId(s));
+            }
+        }
+    }
+
+    pub fn dev_spells(&self) -> bool {
+        self.dev_spells
+    }
+
+    /// One hand's cast trigger — the port of sub_46B00_46E40 :55851 +
+    /// LABEL_32 :55892, simplified per the agreed interim semantics.
+    /// Gate: owned && mana covers the possess cost && the
+    /// manifestation's burst counter (+48 → f26) is 0. On trigger:
+    /// burst = count, emit ONCE, deduct possess/count — the authored
+    /// per-shot deduction remc1 ships commented out by its maintainer
+    /// (:64946-50, a known mis-fix pattern); we implement it.
+    ///
+    /// Trigger classes (player-validated 2026-07-06):
+    /// - 23 Rapid Fireball: the ONLY hold-to-autofire — held fire
+    ///   re-arms the window every tick (:20627-30), one emission per
+    ///   game tick (the firehose).
+    /// - 15 Lightning Bolt: hold = continuous stream that keeps
+    ///   emitting at its burst pacing (manual: "hold down the mouse
+    ///   for a continuous stream").
+    /// - 1/2/4/5/12/14/21: hold-to-channel toggles.
+    /// - Everything else (incl. 0 Fireball): EDGE-triggered — one
+    ///   cast per press, release + re-press to fire again, still
+    ///   paced by the burst counter.
+    fn cast_spell(&mut self, spell: SpellId, right: bool, edge: bool, p: PlayerPose, ctx: &MobCtx) {
+        let id = spell.0 as usize;
+        if id >= SPELL_COUNT {
+            return;
+        }
+        let m = self.player.owned[id] as usize;
+        if m == 0 {
+            return;
+        }
+        let def = &SPELLS[id];
+        let per_shot = def.possess_mana / def.count as u32;
+
+        // 23: the firehose.
+        if id == 23 {
+            if !self.dev_spells {
+                if self.player.mana < def.possess_mana {
+                    return;
+                }
+                self.player.mana -= per_shot;
+            }
+            self.g.ent[m].f26 = def.count as i16;
+            self.break_cloak(id);
+            self.cast_fireball(p, right, id);
+            return;
+        }
+
+        let armed = self.g.ent[m].f26 > 0;
+
+        // The hold-to-channel toggles re-arm while held (:55871..).
+        if matches!(id, 1 | 2 | 4 | 5 | 12 | 14 | 21) {
+            // The Accelerate brake veto (manual: "press the down
+            // cursor to cancel"): a resisting thrust input this tick
+            // keeps the channel down ([`World::thrust_cancel`]).
+            if (id == 2 && self.accel_veto.0) || (id == 21 && self.accel_veto.1) {
+                return;
+            }
+            if !armed && !self.dev_spells {
+                if self.player.mana < def.possess_mana {
+                    return;
+                }
+                self.player.mana -= per_shot;
+            }
+            self.g.ent[m].f26 = def.count as i16;
+            if matches!(id, 2 | 21) {
+                self.player.accel_held = true; // held = the 3.0 factor
+            }
+            if !armed {
+                self.break_cloak(id);
+                self.emit_spell(id, m, p, right, ctx);
+            }
+            return;
+        }
+
+        // Edge-triggered casts (15 streams while held), paced by the
+        // burst spacing (fireball 5, meteor 11, castle 101 ticks).
+        if (!edge && id != 15) || armed {
+            return;
+        }
+        // Create Castle: single-active lockout — a message-free skip
+        // while a build event lives (:65862).
+        if id == 16 && self.castle_build_lives() {
+            return;
+        }
+        if !self.dev_spells {
+            if self.player.mana < def.possess_mana {
+                return;
+            }
+            // Global Death deducts its FULL possess cost (75000) on
+            // cast — INTERIM simplification of its weird +132 (:66235).
+            let cost = if id == 22 { def.possess_mana } else { per_shot };
+            self.player.mana -= cost;
+        }
+        self.g.ent[m].f26 = def.count as i16;
+        self.break_cloak(id);
+        self.emit_spell(id, m, p, right, ctx);
+    }
+
+    /// Casting any other spell breaks the cloak (manual-confirmed;
+    /// the +16 0x20 bit clears with the manifestation's burst).
+    fn break_cloak(&mut self, casting: usize) {
+        if casting != 12 && self.player.invisible {
+            self.player.invisible = false;
+            let m12 = self.player.owned[12];
+            if m12 != 0 {
+                self.g.ent[m12 as usize].f26 = 0;
+            }
+        }
+    }
+
+    /// The per-spell one-shot emissions (cite = the traced cast arm).
+    fn emit_spell(&mut self, id: usize, m: usize, p: PlayerPose, right: bool, ctx: &MobCtx) {
+        let _ = ctx;
+        match id {
+            // 0 Fireball (:65029): edge-triggered single shot (the
+            // hold-to-autofire lives on 23 alone).
+            0 => self.cast_fireball(p, right, 0),
+            // 1 Heal (:65091): continuous — runs in the manifestation
+            // tick while the burst is live.
+            1 => {}
+            // 2/21 Accelerate fwd/back (:65131/:66172): mutually
+            // exclusive — activating one force-clears the other's
+            // charge (:55871/:55914). While active the spell REPLACES
+            // the thrust model ([`World::accel_override`]); the
+            // resisting thrust input cancels it
+            // ([`World::thrust_cancel`]).
+            2 | 21 => {
+                let (dir, other) = if id == 2 { (1i8, 21usize) } else { (-1, 2) };
+                let om = self.player.owned[other];
+                if om != 0 {
+                    self.g.ent[om as usize].f26 = 0;
+                }
+                self.player.accel = dir;
+            }
+            // Toggles (4 Shield :65266, 5 Beyond Sight :65292,
+            // 12 Invisible :65675, 14 Rebound :65774): the flags
+            // derive from the live burst in the manifestation tick.
+            // 5 TODO: map reveal gating is a map-authenticity item
+            // (our map is currently all-seeing).
+            4 | 5 | 12 | 14 => {}
+            // Projectile spells.
+            3 | 6 | 7 | 8 | 9 | 11 | 13 | 15 | 17 | 19 => self.cast_projectile(id, p, right),
+            // 10 Teleport (:65554).
+            10 => self.cast_teleport(m, p),
+            // 16 Create Castle (:65862).
+            16 => self.cast_castle(p),
+            // 18 Lightning Storm (:65988).
+            18 => self.cast_storm(p),
+            // 20 Wall of Fire (:66110).
+            20 => self.cast_firewall(p),
+            // 22 Global Death (:66235): PRIMES only — no visible
+            // in-game effect; the pulse fires around the carpet at
+            // expiry (player-validated). APPROX ~55 ticks (~2s).
+            22 => self.player.bomb_timer = Some(55),
+            _ => {}
+        }
+    }
+
+    /// Muzzle placement shared by the hand casts (sub_56090 :65056-)
+    /// — 256 units to the casting hand's side, launch height = the
+    /// carpet's half-height, reverted when inside terrain.
+    fn muzzle(&self, p: PlayerPose, right: bool) -> (u16, u16, i16) {
+        use crate::combat::PLAYER_HH;
+        let myaw = if right {
+            p.heading.wrapping_add(512)
+        } else {
+            p.heading.wrapping_sub(512)
+        } & 0x7FF;
+        let mut mz = (p.x, p.y, p.z);
+        Gen::polar_step(&mut mz, myaw, 0, 256);
+        if self.g.ground_z(mz.0, mz.1) as i16 > p.z {
+            mz = (p.x, p.y, p.z); // muzzle inside terrain: revert
+        }
+        (mz.0, mz.1, p.z.wrapping_add(PLAYER_HH as i16))
+    }
+
+    /// The fireball cast (spells 0/23, sub_58240/sub_56090 :65029/
+    /// :66296): heading/pitch from the pose, carpet speed inherited.
+    fn cast_fireball(&mut self, p: PlayerPose, right: bool, id: usize) {
+        let (mx, my, mz) = self.muzzle(p, right);
+        let Some(pr) = self.g.spawn_fireball(mx, my, mz) else {
             return;
         };
+        let def = &SPELLS[id];
         let e = &mut self.g.ent[pr];
         e.f126 += p.speed; // inherits carpet speed (:65060)
         e.f128 = e.f126;
@@ -422,9 +835,363 @@ impl World {
         e.f34 = p.heading;
         e.f32 = p.pitch;
         e.f36 = p.pitch;
-        e.f44 = 50; // spell-row +44 (vestigial; the fire's 400 is real)
-        e.f140 = 200; // deflection economics (repeat-fireball row)
+        // Spell-row +44 (125/50 — vestigial on detonation: the fire
+        // effect's own 400 is the fireball's real damage, sub_52B30
+        // does not copy +44, :62928-30) and the possess pool onto
+        // +140 (deflection economics).
+        e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        e.f140 = def.possess_mana as i32;
         self.entities_dirty = true;
+    }
+
+    /// The single-projectile spells: spawn the traced class-9 model
+    /// from the hand muzzle, owner = the player, carpet speed
+    /// inherited (like the fireball), damage = the spell row's.
+    fn cast_projectile(&mut self, id: usize, p: PlayerPose, right: bool) {
+        let (mx, my, mz) = self.muzzle(p, right);
+        let pr = match id {
+            // 3 Possess (:65203): c9 m1 lob; detonation claims the
+            // nearest mana ball (payload in crate::combat).
+            3 => self.g.spawn_spell_lob(1, mx, my, mz),
+            // 6 Earthquake (:65314): c9 m2 lob.
+            6 => self.g.spawn_spell_lob(2, mx, my, mz),
+            // 7 Meteor (:65374): the m3 trail bolt — generic flight
+            // with the decorative fire trail; impact = the growing
+            // blast ring (f69 below) carrying the row's 10000 (+44 IS
+            // copied on the generic path, :62759-72).
+            7 => self.g.spawn_trail_bolt(mx, my, mz),
+            // 8 Volcano (:65432): c9 m4 down-arc.
+            8 => self.g.spawn_spell_lob(4, mx, my, mz),
+            // 9 Crater (:65491): c9 m5 down-arc.
+            9 => self.g.spawn_spell_lob(5, mx, my, mz),
+            // 11 Duel to the Death (:65620): c9 m7 with a tether
+            // effect on wizards — INTERIM: no rival wizards exist;
+            // the projectile flies and latches nothing.
+            11 => self.g.spawn_spell_lob(7, mx, my, mz),
+            // 13 Steal Mana (:65711): c9 m8 — the mob steal ball's
+            // ported tick (explodes only on wizard-family victims).
+            13 => self.g.spawn_seeker(mx, my, mz),
+            // 15 Lightning Bolt (:65806): c9 m9, the one-tick beam.
+            15 => self.g.spawn_zigzag(mx, my, mz),
+            // 17 Undead Army (:65927): c9 m11; skeletons at impact.
+            17 => self.g.spawn_spell_lob(11, mx, my, mz),
+            // 19 Mana Magnet (:66049): c9 m6; magnet event at impact.
+            19 => self.g.spawn_spell_lob(6, mx, my, mz),
+            _ => None,
+        };
+        let Some(pr) = pr else { return };
+        let def = &SPELLS[id];
+        // APPROX(original per-spell launch pitches, :65579-style):
+        // the down-arc terrain spells get a fixed downward bias on
+        // the pose pitch (engine pitch positive = down).
+        let pitch = match id {
+            6 | 8 | 9 => p.pitch.wrapping_add(0x60) & 0x7FF,
+            _ => p.pitch,
+        };
+        let e = &mut self.g.ent[pr];
+        e.f126 += p.speed; // carpet speed inherited (:65060)
+        e.f128 = e.f126;
+        e.id24 = PLAYER_TARGET;
+        e.f30 = p.heading;
+        e.f34 = p.heading;
+        e.f32 = pitch;
+        e.f36 = pitch;
+        e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        e.f140 = def.possess_mana as i32;
+        match id {
+            // Meteor detonates into the growing fire-ring blast (c10
+            // m17): rings of fires that scorch + its 10000 broadcast
+            // over the ring's 10-tick growth. APPROX(radius/shape of
+            // the original's impact pending a trace) — the massive-
+            // explosion machinery already ported.
+            7 => e.f69 = 17,
+            // Steal Mana's damage is forced 2000 (:65754), exploding
+            // into the m11 steal flash (ch3).
+            13 => {
+                e.f44 = 2000;
+                e.f69 = 25;
+            }
+            // Player bolts detonate as the hit flash, like the mob
+            // zigzags (:63421- endpoint effect 23).
+            15 => e.f69 = 23,
+            _ => {}
+        }
+        self.entities_dirty = true;
+    }
+
+    /// 10 Teleport (:65554). INTERIM: no castle exists in our sim
+    /// yet — the first cast stores the cast site and hops the carpet
+    /// 64 tiles (0x4000 units, :65579-81) along a manifestation-LCG
+    /// yaw; the recast returns to the stored site. Castle-anchored
+    /// teleport is the housekeeping pass.
+    fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
+        if let Some((rx, ry)) = self.player.teleport_return.take() {
+            self.pending_teleport = Some((rx as f32 / 256.0, ry as f32 / 256.0));
+        } else {
+            self.player.teleport_return = Some((p.x, p.y));
+            let yaw = (self.g.ent_rand(m) & 0x7FF) as u16;
+            let mut dest = (p.x, p.y, 0i16);
+            Gen::polar_step(&mut dest, yaw, 0, 0x4000);
+            self.pending_teleport =
+                Some((dest.0 as f32 / 256.0, dest.1 as f32 / 256.0));
+        }
+    }
+
+    /// A player-built castle build event lives (the (10,45) building
+    /// with our player-built marker) — the single-active lockout.
+    fn castle_build_lives(&self) -> bool {
+        self.g.ent.iter().any(|e| {
+            e.class64 == 10
+                && e.model65 == 45
+                && e.thing_slot == u16::MAX
+                && e.flags & 0x400 == 0
+        })
+    }
+
+    /// 16 Create Castle (:65862): target 4 tiles ahead on the ground;
+    /// the 8x8 protection-bit placement scan (:17825 — angle-plane
+    /// bit 7, the building-protection stamp) must be clear; then the
+    /// model-45 building event builds the castle. INTERIM: footprint
+    /// = the parent-0 build-table row like authored buildings (the
+    /// authored-castle footprint id is unconfirmed); no balloon, no
+    /// castle levels, no respawn semantics (housekeeping pass).
+    fn cast_castle(&mut self, p: PlayerPose) {
+        let mut c = (p.x, p.y, 0i16);
+        Gen::polar_step(&mut c, p.heading, 0, 4 * 256);
+        let (tx, ty) = ((c.0 >> 8) as i32, (c.1 >> 8) as i32);
+        for dy in -4..4i32 {
+            for dx in -4..4i32 {
+                let t = features::tile((tx + dx) as u8, (ty + dy) as u8);
+                if self.g.t.angle[t] & 0x80 != 0 {
+                    return; // protected ground: message-free skip
+                }
+            }
+        }
+        let gz = self.g.ground_z(c.0, c.1) as i16;
+        if let Some(s) = self.g.spawn_creator(45, c.0, c.1, gz) {
+            self.g.building_fixup(s, 16);
+            self.g.ent[s].thing_slot = u16::MAX; // player-built marker
+            self.entities_dirty = true;
+        }
+    }
+
+    /// 18 Lightning Storm (:65988): 8 bolts fanned every 256
+    /// angle-units around the player. APPROX of the chained
+    /// c9 m12 → m9 storm driver.
+    fn cast_storm(&mut self, p: PlayerPose) {
+        use crate::combat::PLAYER_HH;
+        let def = &SPELLS[18];
+        let z = p.z.wrapping_add(PLAYER_HH as i16);
+        for k in 0..8u16 {
+            let yaw = (k * 256) & 0x7FF;
+            let Some(pr) = self.g.spawn_zigzag(p.x, p.y, z) else {
+                continue;
+            };
+            let e = &mut self.g.ent[pr];
+            e.id24 = PLAYER_TARGET;
+            e.f30 = yaw;
+            e.f34 = yaw;
+            e.f32 = 0;
+            e.f36 = 0;
+            e.f44 = def.damage.min(u16::MAX as u32) as u16;
+            e.f69 = 23;
+        }
+        self.entities_dirty = true;
+    }
+
+    /// 20 Wall of Fire (:66110): a line of standing fires — 5 ground
+    /// points spanning perpendicular to aim, 2 tiles apart, 6 tiles
+    /// ahead. APPROX of the c9 m16 → c10 m53 salvo (the row's
+    /// anomalous 24464 damage stays untouched — the standing fire's
+    /// own 50/tick broadcast is the payload).
+    fn cast_firewall(&mut self, p: PlayerPose) {
+        let mut ahead = (p.x, p.y, 0i16);
+        Gen::polar_step(&mut ahead, p.heading, 0, 6 * 256);
+        let perp = p.heading.wrapping_add(0x200) & 0x7FF;
+        for k in -2i16..=2 {
+            let mut q = (ahead.0, ahead.1, 0i16);
+            Gen::polar_step(&mut q, perp, 0, k * 512);
+            let gz = self.g.ground_z(q.0, q.1) as i16;
+            if let Some(f) = self.g.spawn_effect(6, q.0, q.1, gz) {
+                self.g.ent[f].id24 = PLAYER_TARGET;
+            }
+        }
+        self.entities_dirty = true;
+    }
+
+    /// 22 Global Death's expiry pulse (:66235; player-validated
+    /// semantics): a single 7000 ch0 write in a VERY SMALL radius
+    /// (~1.25 tiles — the spell's balance: "you have to be straight
+    /// below a dragon to affect it") centered on the CARPET, no
+    /// visual, no terrain scorch. A transient unlinked writer event
+    /// carries the area-write protocol; sound is the audio track.
+    fn bomb_pulse(&mut self, ctx: &MobCtx) {
+        let Some(s) = self.g.new_event() else { return };
+        {
+            let e = &mut self.g.ent[s];
+            e.class64 = 10;
+            e.model65 = 41; // transient, never ticked or drawn
+            e.flags &= !8;
+            e.id24 = PLAYER_TARGET;
+            e.x = ctx.px;
+            e.y = ctx.py;
+            e.z = ctx.pz;
+            e.f80 = 320; // APPROX radius pending a trace
+            e.f82 = 320;
+            e.f84 = 320;
+        }
+        self.g.area_write(s, 0, SPELLS[22].damage, ctx, false);
+        self.g.free_entity(s);
+    }
+
+    /// Class-12 dispatch: pre-placed JARS wait for pickup; owned
+    /// manifestations run their burst countdown + continuous effects.
+    fn class12_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let t = self.g.ent[i].tick70;
+        if t >= MANIFEST_BASE {
+            self.manifestation_tick(i, (t - MANIFEST_BASE) as usize);
+        } else if self.g.player_overlap(i, ctx) {
+            self.try_pickup(i);
+        }
+    }
+
+    /// Jar pickup (:64843-58): flying through an unowned spell's jar
+    /// grants it — the SAME entity converts into the manifestation
+    /// (class stays 12, the pool slot stays occupied: slot economy),
+    /// auto-equipped LEFT (:64855). Owned already: the jar stays —
+    /// no duplicate upgrade (:64843).
+    /// TODO(jar spell id): model65 carries the spell id per the
+    /// off_987DE thunk dispatch; unverified against retail jar data.
+    fn try_pickup(&mut self, i: usize) {
+        let spell = self.g.ent[i].model65 as usize;
+        if spell >= SPELL_COUNT || self.player.owned[spell] != 0 {
+            return;
+        }
+        {
+            let e = &mut self.g.ent[i];
+            e.tick70 = MANIFEST_BASE + spell as u8;
+            e.flags &= !8;
+            e.f26 = 0;
+            e.f44 = SPELLS[spell].damage.min(u16::MAX as u32) as u16;
+        }
+        self.player.owned[spell] = i as u16;
+        self.player.left = Some(SpellId(spell as u8)); // auto-equip LEFT
+        self.entities_dirty = true; // the jar sprite leaves the world
+    }
+
+    /// The owned-spell manifestation tick (the class-12 runtime arm):
+    /// the burst counter (+48 → f26) decrements once per tick — it is
+    /// the refire spacing — and the continuous/toggle effects derive
+    /// from it.
+    fn manifestation_tick(&mut self, i: usize, spell: usize) {
+        if self.g.ent[i].f26 > 0 {
+            self.g.ent[i].f26 -= 1;
+        }
+        let active = self.g.ent[i].f26 > 0;
+        match spell {
+            // 1 Heal (:65091): while active and the pool covers the
+            // possess gate, heal 5% of the life ceiling per tick and
+            // pay possess/count per tick of healing.
+            1 => {
+                self.player.heal_active = active;
+                let def = &SPELLS[1];
+                if active && (self.dev_spells || self.player.mana >= def.possess_mana) {
+                    self.g.player_damage =
+                        self.g.player_damage.saturating_sub(PLAYER_LIFE_MAX / 20);
+                    if !self.dev_spells {
+                        self.player.mana -= def.possess_mana / def.count as u32;
+                    }
+                }
+            }
+            2 => {
+                if !active && self.player.accel == 1 {
+                    self.player.accel = 0;
+                }
+            }
+            21 => {
+                if !active && self.player.accel == -1 {
+                    self.player.accel = 0;
+                }
+            }
+            4 => self.player.shield = active,
+            5 => self.player.beyond_sight = active,
+            12 => self.player.invisible = active,
+            14 => self.player.rebound = active,
+            _ => {}
+        }
+    }
+
+    /// Spellbook/HUD snapshot.
+    pub fn loadout(&self) -> LoadoutView {
+        let mut owned = [false; SPELL_COUNT];
+        let mut cooldown = [0f32; SPELL_COUNT];
+        for s in 0..SPELL_COUNT {
+            let m = self.player.owned[s] as usize;
+            if m != 0 {
+                owned[s] = true;
+                cooldown[s] =
+                    self.g.ent[m].f26.max(0) as f32 / SPELLS[s].count as f32;
+            }
+        }
+        LoadoutView {
+            owned,
+            left: self.player.left.map(|s| s.0),
+            right: self.player.right.map(|s| s.0),
+            cooldown,
+            mana: if self.dev_spells { self.player.mana_max } else { self.player.mana },
+            mana_max: self.player.mana_max,
+        }
+    }
+
+    /// The raw types-2/21 factor: 0.0 inactive, ±3.0 while the cast
+    /// button is held, ±2.0 channeling after release (:65169/:65175).
+    pub fn player_speed_boost(&self) -> f32 {
+        self.player.speed_boost
+    }
+
+    /// The Accelerate thrust-model OVERRIDE (types 2/21): while
+    /// channeling, the spell REPLACES the thrust model — the carpet
+    /// is propelled along its facing at factor × normal-full-thrust
+    /// speed regardless of thrust input (the original writes the
+    /// carpet speed directly; player ground truth: "it propels you
+    /// forward at maximum speed and you can't really stop it —
+    /// merely trying to slow down cancels the spell"). Some(signed
+    /// factor): +3.0/-3.0 with the button held ("hold down the mouse
+    /// button to achieve maximum speed"), +2.0/-2.0 after release
+    /// until the burst (count 251) drains. None = normal thrust.
+    pub fn accel_override(&self) -> Option<f32> {
+        (self.player.speed_boost != 0.0).then_some(self.player.speed_boost)
+    }
+
+    /// The Accelerate brake-cancel, fed by the sim from the tick's
+    /// raw thrust input BEFORE the world turn (manual: "press the
+    /// down cursor to cancel"; symmetric for Accelerate Backwards —
+    /// the resisting input is the ONE control that works): negative
+    /// thrust cancels/vetoes type 2, positive thrust type 21. The
+    /// veto also blocks re-triggering for the rest of the tick.
+    pub fn thrust_cancel(&mut self, thrust: f32) {
+        if thrust < 0.0 {
+            self.accel_veto.0 = true;
+            if self.player.accel == 1 {
+                self.stop_accel(2);
+            }
+        }
+        if thrust > 0.0 {
+            self.accel_veto.1 = true;
+            if self.player.accel == -1 {
+                self.stop_accel(21);
+            }
+        }
+    }
+
+    /// Kill an accelerate channel outright (brake cancel).
+    fn stop_accel(&mut self, id: usize) {
+        self.player.accel = 0;
+        self.player.speed_boost = 0.0;
+        let m = self.player.owned[id];
+        if m != 0 {
+            self.g.ent[m as usize].f26 = 0;
+        }
     }
 
     /// Total ch0 damage the invincible player has absorbed (what the
@@ -1306,6 +2073,15 @@ mod tests {
             .count()
     }
 
+    /// Combat-test loadout: the Rapid Fireball firehose (23) on the
+    /// left hand with the dev mana pin — the only hold-to-autofire
+    /// spell, giving the 1-projectile-per-held-tick cadence the
+    /// combat tests were written against.
+    fn rapid_fire(w: &mut World) {
+        w.set_dev_spells(true);
+        w.player.left = Some(crate::spells::SpellId(23));
+    }
+
     /// A flat world holding one load-time creature and nothing else —
     /// no crater rims for a chaser to wall-death on.
     fn bare_creature_world(model: u16) -> World {
@@ -1335,10 +2111,11 @@ mod tests {
     #[test]
     fn fireball_kills_and_the_corpse_drops_a_mana_ball() {
         let mut w = bare_creature_world(2);
+        rapid_fire(&mut w);
         assert_eq!(count(&w, 5, 2), 1, "the creature spawned");
         // Hold fire from the firing line: the aim assist locks on,
         // the fire's 400-damage broadcast whittles the 3000 life.
-        let fire = PlayerCommand { fire: true };
+        let fire = PlayerCommand { fire_left: true, ..Default::default() };
         let mut died_at = None;
         for t in 0..600 {
             w.tick(firing_line(), fire);
@@ -1369,10 +2146,11 @@ mod tests {
     #[test]
     fn hit_creatures_aggro_and_maul_the_invincible_player() {
         let mut w = bare_creature_world(2);
+        rapid_fire(&mut w);
         // A three-tick burst wounds the lunger without killing it
         // (≤ 1200 of 3000 life)...
         for _ in 0..3 {
-            w.tick(firing_line(), PlayerCommand { fire: true });
+            w.tick(firing_line(), PlayerCommand { fire_left: true, ..Default::default() });
         }
         // ...then it chases the wizard-family attacker and melees.
         // The invincible player discards the damage but the total
@@ -1390,8 +2168,9 @@ mod tests {
     #[test]
     fn worm_chain_dies_from_the_head_and_every_corpse_drops() {
         let mut w = bare_creature_world(0);
+        rapid_fire(&mut w);
         assert_eq!(count(&w, 5, 0), 17, "head + 16 segments");
-        let fire = PlayerCommand { fire: true };
+        let fire = PlayerCommand { fire_left: true, ..Default::default() };
         let mut cleared = false;
         for _ in 0..3000 {
             w.tick(firing_line(), fire);
@@ -1580,11 +2359,12 @@ mod tests {
     #[test]
     fn kraken_beam_lays_segments_and_the_buffet_arms_the_knock() {
         let mut w = bare_creature_world(6);
+        rapid_fire(&mut w);
         assert_eq!(count(&w, 5, 6), 3, "kraken head + 2 segments");
         // Aggro the kraken with a short burst; it closes in, arms its
         // 5-beam bursts and the 41-tick buffet phases.
         for _ in 0..3 {
-            w.tick(firing_line(), PlayerCommand { fire: true });
+            w.tick(firing_line(), PlayerCommand { fire_left: true, ..Default::default() });
         }
         let (mut saw_segments, mut knocked) = (false, false);
         for _ in 0..2000 {
@@ -1679,13 +2459,286 @@ mod tests {
         );
     }
 
+    // ---- player spells ------------------------------------------------------
+
+    #[test]
+    fn casting_fireball_spawns_a_projectile_and_deducts_mana() {
+        let mut w = flat_world();
+        let lv = w.loadout();
+        assert!(lv.owned[0] && lv.owned[3], "starting spells granted");
+        assert_eq!((lv.left, lv.right), (Some(0), Some(3)), "auto-fill L/R (:49246-54)");
+        // Drain below the regen pin so the per-shot deduction shows.
+        w.player.mana = 10_000;
+        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        w.tick(firing_line(), fire);
+        assert_eq!(count(&w, 9, 0), 1, "the press edge casts one fireball");
+        // possess/count = 200/5 = 40 out (:64946-50), regen 50 in.
+        assert_eq!(w.loadout().mana, 10_000 - 40 + 50);
+        assert!(w.loadout().cooldown[0] > 0.0, "burst window armed");
+        // Fireball is EDGE-triggered (autofire is spell 23's alone):
+        // holding adds nothing; a fresh press past the burst does.
+        for _ in 0..8 {
+            w.tick(firing_line(), fire);
+        }
+        assert_eq!(
+            count(&w, 9, 0) + w.combat_stats().1 as usize,
+            1,
+            "held fire never re-casts"
+        );
+        w.tick(firing_line(), PlayerCommand::default()); // release
+        w.tick(firing_line(), fire); // re-press
+        let total = count(&w, 9, 0) + w.combat_stats().1 as usize;
+        assert_eq!(total, 2, "release + re-press casts again");
+        // Below the possess gate nothing fires.
+        let mut w2 = flat_world();
+        w2.player.mana = 100;
+        w2.tick(firing_line(), fire);
+        assert_eq!(count(&w2, 9, 0), 0, "mana-gated cast");
+    }
+
+    #[test]
+    fn jar_pickup_grants_auto_equips_and_keeps_the_slot() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        // A class-12 jar carrying spell 7 (Meteor) via its model.
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 112,
+            y: 116,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        assert!(!w.loadout().owned[7]);
+        assert_eq!(w.live_poses().iter().filter(|p| p.class == 12).count(), 1);
+        let (free0, _) = w.debug_pool();
+        // Fly onto the jar (ground 100*32 = 3200 engine units).
+        let on_jar = PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3260, 0);
+        for _ in 0..4 {
+            w.tick(on_jar, PlayerCommand::default());
+        }
+        let lv = w.loadout();
+        assert!(lv.owned[7], "the jar granted its spell");
+        assert_eq!(lv.left, Some(7), "auto-equipped LEFT (:64855)");
+        let (free1, _) = w.debug_pool();
+        assert_eq!(free0, free1, "the manifestation keeps the jar's pool slot");
+        assert!(
+            w.live_poses().iter().all(|p| p.class != 12),
+            "the picked-up jar no longer renders"
+        );
+        // Re-overlap: no duplicate, the manifestation stays (:64843).
+        for _ in 0..4 {
+            w.tick(on_jar, PlayerCommand::default());
+        }
+        assert_eq!(w.debug_pool().0, free1);
+    }
+
+    #[test]
+    fn accelerate_directions_are_mutually_exclusive() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.grant_spell(SpellId(2));
+        w.grant_spell(SpellId(21));
+        let equip = PlayerCommand {
+            equip_left: Some(SpellId(2)),
+            equip_right: Some(SpellId(21)),
+            ..Default::default()
+        };
+        w.tick(away(), equip);
+        assert_eq!(w.accel_override(), None, "no override at rest");
+        // Forward: ±3.0 while the button is held ("hold down the
+        // mouse button to achieve maximum speed").
+        let fwd = PlayerCommand { fire_left: true, ..Default::default() };
+        w.tick(away(), fwd);
+        assert_eq!(w.accel_override(), Some(3.0), "held = 3.0 (:65169)");
+        w.tick(away(), fwd);
+        assert_eq!(w.accel_override(), Some(3.0), "still held = still 3.0");
+        // Released: the channel keeps propelling at 2.0.
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.accel_override(), Some(2.0), "released = 2.0 channel");
+        // Opposite activation force-clears forward (:55871/:55914).
+        let back = PlayerCommand { fire_right: true, ..Default::default() };
+        w.tick(away(), back);
+        assert_eq!(w.player.accel, -1, "backward took over");
+        assert_eq!(w.accel_override(), Some(-3.0), "negative held backward");
+        let m2 = w.player.owned[2] as usize;
+        assert_eq!(w.g.ent[m2].f26, 0, "forward's charge force-cleared");
+        // The resisting thrust input cancels instantly (manual: the
+        // down cursor; forward thrust for the backward spell).
+        w.thrust_cancel(1.0);
+        assert_eq!(w.accel_override(), None, "brake input kills the channel");
+        // The veto also blocks re-triggering within the same tick.
+        w.tick(away(), back);
+        assert_eq!(w.accel_override(), None, "vetoed re-trigger");
+        // Next tick (no veto) it channels again, then drains after
+        // release (count 251) back to no override.
+        w.tick(away(), back);
+        assert_eq!(w.accel_override(), Some(-3.0));
+        for _ in 0..252 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.accel_override(), None, "expired burst drops the override");
+        assert_eq!(w.player_speed_boost(), 0.0);
+    }
+
+    #[test]
+    fn lightning_bolt_streams_while_held() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(15));
+        // Hold = continuous stream (manual), paced by count 2: the
+        // one-tick beams resolve immediately into player shots.
+        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        for _ in 0..10 {
+            w.tick(firing_line(), fire);
+        }
+        let (_, shots, _) = w.combat_stats();
+        assert!(shots >= 4, "held bolt streams (got {shots})");
+    }
+
+    #[test]
+    fn global_death_primes_then_pulses_point_blank() {
+        use crate::spells::SpellId;
+        let mut w = bare_creature_world(2); // wandering lunger, 3000 life
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(22));
+        // Hover right on top of the creature WHEREVER it wanders: the
+        // pulse's tiny radius ("straight below a dragon") demands it.
+        let over = |w: &World| {
+            let c = w
+                .debug_pool()
+                .1
+                .into_iter()
+                .find(|e| e.class == 5 && e.model == 2)
+                .expect("creature alive");
+            PlayerPose::level(
+                ((c.tx as u16) << 8) + 128,
+                ((c.ty as u16) << 8) + 128,
+                3300,
+                0,
+            )
+        };
+        let p = over(&w);
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        // Primed: NO visible effect, no damage for ~2 seconds.
+        for _ in 0..50 {
+            let p = over(&w);
+            w.tick(p, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 5, 2), 1, "nothing happens while primed");
+        // The pulse lands a few ticks later; the death/corpse
+        // pipeline takes a few dozen more.
+        for _ in 0..60 {
+            if count(&w, 5, 2) == 0 {
+                break;
+            }
+            let p = over(&w);
+            w.tick(p, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 5, 2), 0, "the expiry pulse one-shots point-blank");
+    }
+
+    #[test]
+    fn earthquake_trench_travels_forward() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(6));
+        // Fire north from the firing line: the lob impacts a few
+        // tiles ahead, then the walker digs onward tile by tile.
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        for _ in 0..120 {
+            w.tick(p, PlayerCommand::default());
+        }
+        let dug: usize = (80..=113u8)
+            .filter(|&y| w.planes().height[tile(112, y)] < 100)
+            .count();
+        assert!(dug >= 5, "the quake trench travels north ({dug} dug rows)");
+    }
+
+    #[test]
+    fn meteor_detonates_into_the_blast_ring() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(7));
+        // Aim steeply down so the bolt grounds fast.
+        let mut p = firing_line();
+        p.pitch = 0x100;
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        let mut saw_ring = false;
+        for _ in 0..40 {
+            w.tick(p, PlayerCommand::default());
+            saw_ring |= count(&w, 10, 17) > 0;
+        }
+        assert!(saw_ring, "meteor impact = the growing fire-ring blast");
+    }
+
+    #[test]
+    fn volcano_erupts_periodically_after_the_cone() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(8));
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        let (mut saw_driver, mut saw_lava) = (false, false);
+        for _ in 0..400 {
+            w.tick(p, PlayerCommand::default());
+            saw_driver |= count(&w, 10, 18) > 0;
+            // Lava bombs are fireball-family class-9 m0 NOT owned by
+            // the player (the marker owns them).
+            saw_lava |= w
+                .debug_pool()
+                .1
+                .iter()
+                .any(|e| e.class == 9 && e.model == 0 && e.id24 != PLAYER_TARGET);
+        }
+        assert!(saw_driver, "the cone finish spawned the eruption driver");
+        assert!(saw_lava, "periodic eruptions launch lava bombs");
+    }
+
+    #[test]
+    fn dev_spells_grants_everything_and_pins_mana() {
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        assert!(w.dev_spells());
+        let lv = w.loadout();
+        assert!(lv.owned.iter().all(|&o| o), "all 24 owned");
+        assert_eq!(lv.mana, lv.mana_max, "pool reads full");
+        // Casts neither gate nor deduct while on.
+        w.player.mana = 0;
+        w.tick(firing_line(), PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 0), 1, "no mana gate under dev spells");
+        assert_eq!(w.loadout().mana, w.loadout().mana_max);
+        // Off keeps the granted spells (no un-granting).
+        w.set_dev_spells(false);
+        assert!(w.loadout().owned.iter().all(|&o| o));
+    }
+
     #[test]
     fn deterministic_with_scripted_fire() {
         let run = || {
             let mut w = flat_world();
             for t in 0..400 {
                 let p = if t < 16 { at_trigger() } else { firing_line() };
-                let cmd = PlayerCommand { fire: (60..90).contains(&t) };
+                let cmd = PlayerCommand {
+                    fire_left: (60..90).contains(&t),
+                    ..Default::default()
+                };
                 w.tick(p, cmd);
             }
             let (free, pool) = w.debug_pool();

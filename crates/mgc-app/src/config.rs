@@ -50,6 +50,12 @@ pub struct Enhancements {
     /// runtime with H). The original never shows creature life — the
     /// combat-system debugging instrument.
     pub health_bars: bool,
+    /// All 24 spells granted + infinite mana (toggle at runtime with
+    /// G). The spell-track playtest instrument; gameplay-affecting
+    /// (G-class) — a replay taped with it on is not a faithful
+    /// fixture. The original ships the equivalent debug commands
+    /// ("access all spells" / "more mana", remc1's :48836 cheat menu).
+    pub dev_spells: bool,
 }
 
 impl Config {

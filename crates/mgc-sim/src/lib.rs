@@ -20,6 +20,7 @@ pub mod mc1_entities;
 pub mod mc1_sprite_stats;
 pub mod mc1_tables;
 mod mobs;
+pub mod spells;
 pub mod world;
 mod tables;
 
@@ -53,8 +54,14 @@ pub struct FlightInput {
     pub lift: f32,
     pub yaw_delta: f32,
     pub pitch_delta: f32,
-    /// Fire the dev repeat-fireball (hold-to-autofire).
-    pub fire: bool,
+    /// Left-hand cast held (the original's dw_0 bit 0x10; LMB).
+    pub fire_left: bool,
+    /// Right-hand cast held (dw_0 bit 0x20; RMB).
+    pub fire_right: bool,
+    /// Equip a spell to the left/right hand this tick (from the book
+    /// screen or a quick key) — the original's commands 0x15/0x16.
+    pub equip_left: Option<spells::SpellId>,
+    pub equip_right: Option<spells::SpellId>,
 }
 
 /// The carpet: position in tile units, velocity in tiles/second.
@@ -152,6 +159,15 @@ impl Simulation {
     /// Advance exactly one fixed tick.
     pub fn step(&mut self, input: &FlightInput) {
         self.tick += 1;
+
+        // The Accelerate brake-cancel reads the tick's raw thrust
+        // input BEFORE anything moves (manual: "press the down cursor
+        // to cancel"; symmetric for backward — the resisting input is
+        // the one control that works against the spell).
+        if let Some(w) = &mut self.world {
+            w.thrust_cancel(input.thrust);
+        }
+
         let f = &mut self.flyer;
 
         f.yaw += input.yaw_delta;
@@ -163,15 +179,35 @@ impl Simulation {
         let fwd = [sy * cp, sp, -cy * cp];
         let right = [cy, 0.0, sy];
 
-        let ax = fwd[0] * input.thrust + right[0] * input.strafe;
-        let ay = fwd[1] * input.thrust + input.lift;
-        let az = fwd[2] * input.thrust + right[2] * input.strafe;
+        // The Accelerate override (types 2/21): while channeling, the
+        // spell REPLACES the thrust model — normal thrust input is
+        // IGNORED (strafe/lift/turn stay live) and velocity is driven
+        // toward facing × factor × the normal full-thrust terminal
+        // speed. Deliberately tier-independent: this must behave the
+        // same under the future faithful MC1 thrust model (Phase 5),
+        // because the original also bypasses its own control scheme
+        // here — it writes the carpet speed directly.
+        let over = self.world.as_ref().and_then(|w| w.accel_override());
+        let thrust = if over.is_some() { 0.0 } else { input.thrust };
+        let ax = fwd[0] * thrust + right[0] * input.strafe;
+        let ay = fwd[1] * thrust + input.lift;
+        let az = fwd[2] * thrust + right[2] * input.strafe;
         f.vx += ax * ACCEL * TICK_DT;
         f.vy += ay * ACCEL * TICK_DT;
         f.vz += az * ACCEL * TICK_DT;
         f.vx *= DRAG_PER_TICK;
         f.vy *= DRAG_PER_TICK;
         f.vz *= DRAG_PER_TICK;
+        if let Some(k) = over {
+            // The placeholder model's full-thrust terminal speed:
+            // v = a·dt·d/(1-d) (12 tiles/s at current tuning).
+            let vmax = ACCEL * TICK_DT * DRAG_PER_TICK / (1.0 - DRAG_PER_TICK);
+            let tv = [fwd[0] * k * vmax, fwd[1] * k * vmax, fwd[2] * k * vmax];
+            // Snappy approach: "propelled", not "accelerating".
+            f.vx += (tv[0] - f.vx) * 0.5;
+            f.vy += (tv[1] - f.vy) * 0.5;
+            f.vz += (tv[2] - f.vz) * 0.5;
+        }
 
         let from = (f.x, f.z, f.y);
         f.x += f.vx * TICK_DT;
@@ -233,7 +269,12 @@ impl Simulation {
             let speed = (f.vx * f.vx + f.vy * f.vy + f.vz * f.vz).sqrt() * TICK_DT;
             w.tick(
                 world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, speed),
-                world::PlayerCommand { fire: input.fire },
+                world::PlayerCommand {
+                    fire_left: input.fire_left,
+                    fire_right: input.fire_right,
+                    equip_left: input.equip_left,
+                    equip_right: input.equip_right,
+                },
             );
             if let Some((x, z)) = w.take_teleport() {
                 // Portal arrival: the original moves the entity to the

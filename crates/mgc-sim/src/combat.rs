@@ -276,6 +276,26 @@ impl Gen {
         self.spawn_projectile(14, 15, x, y, z, 128, 32, 0, 196)
     }
 
+    /// The player-spell payload projectiles (c9 m1 possess / m2
+    /// earthquake / m4 volcano / m5 crater / m6 magnet / m7 duel /
+    /// m11 undead): fireball-shaped init, state = model, dispatched
+    /// to [`Gen::proj_payload_tick`]. Sprites per the class-9 rows in
+    /// `mc1_entities`. APPROX(original: each model's own flight state
+    /// past remc1's transcribed table).
+    pub(crate) fn spawn_spell_lob(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
+        let sprite = match model {
+            1 => 209,
+            2 => 211,
+            4 => 210,
+            5 => 211,
+            6 => 212,
+            7 => 213,
+            11 => 281,
+            _ => return None,
+        };
+        self.spawn_projectile(model, model, x, y, z, 384, 21, 0, sprite)
+    }
+
     /// Vertical bearing (sub_42180 :52644): the pitch whose polar step
     /// descends from `fz` toward `tz` over horizontal distance `dh`.
     pub(crate) fn pitch_toward(fz: i16, tz: i16, dh: i32) -> u16 {
@@ -362,7 +382,9 @@ impl Gen {
             let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
             consider(tx, ty, tz, j as u16, &mut best);
         }
-        if own != PLAYER_TARGET {
+        // Invisible (spell 12, :65689-90 — the +16 0x20 bit): the
+        // cloaked player is skipped by mob-side target acquisition.
+        if own != PLAYER_TARGET && !self.player_invisible {
             consider(
                 ctx.px,
                 ctx.py,
@@ -486,6 +508,8 @@ impl Gen {
             8 => self.proj_m8_tick(i, ctx),
             9 => self.proj_m9_tick(i, ctx),
             13 | 15 => self.proj_bolt_tick(i, ctx),
+            // Player-spell payload projectiles (spell track).
+            1 | 2 | 4 | 5 | 6 | 7 | 11 => self.proj_payload_tick(i, ctx),
             // Beam segment (state 14; remc1's table is truncated here
             // — lifecycle reconstructed from the slot-order life trick
             // :63349-53): kill on the PRE-decrement value so every
@@ -792,6 +816,232 @@ impl Gen {
         false
     }
 
+    /// The player-spell payload flight. APPROX(original: c9 m1/m2/m4/
+    /// m5/m6/m7/m11 have their own states past remc1's transcribed
+    /// table): m13-bolt-shaped straight flight at the cast pitch (the
+    /// down-arc arrives via the cast's pitch bias); on any end
+    /// (victim / ground / expiry) the struck victim takes the row
+    /// damage on ch0 and the per-model payload fires.
+    fn proj_payload_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        let hit = self.victim_scan_at(i, tmp, ctx);
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        let grounded = ground > tmp.2;
+        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        self.ent[i].act_life -= 1;
+        if hit.is_some() || grounded || self.ent[i].act_life < 0 {
+            if let Some(MailTarget::Pool(j)) = hit {
+                let amt = self.ent[i].f44 as u32;
+                let src = self.ent[i].id24;
+                self.mail_write(MailTarget::Pool(j), 0, amt, src);
+            }
+            self.spell_payload(i);
+            self.ent[i].flags |= 0x400;
+        }
+        false
+    }
+
+    /// The per-model detonation payloads of the player-spell
+    /// projectiles (each cite = the traced cast arm's effect).
+    fn spell_payload(&mut self, i: usize) {
+        let (x, y, z, model) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.model65)
+        };
+        let gz = self.ground_z(x, y) as i16;
+        match model {
+            // Possess (:65203): the nearest mana ball (c10 m39)
+            // within 2 tiles becomes claimed-by-player (+144; the
+            // map-blink presentation comes later). APPROX: no claim
+            // flash ported.
+            1 => {
+                let mut best: Option<(usize, i32)> = None;
+                for j in 1..POOL {
+                    let c = &self.ent[j];
+                    if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
+                        continue;
+                    }
+                    let d2 = Self::dist2_sq(x, y, c.x, c.y);
+                    if d2 <= 512 * 512 && best.is_none_or(|(_, bd)| d2 < bd) {
+                        best = Some((j, d2));
+                    }
+                }
+                if let Some((j, _)) = best {
+                    self.ent[j].f144 = PLAYER_TARGET;
+                }
+            }
+            // Earthquake (:65314): an ONGOING crater that TRAVELS
+            // forward from the impact (player-validated shape).
+            // APPROX(original: effect c10 m15 crevice walker — not
+            // ported): the ported canyon-head walker (state 34,
+            // segment_canyon's init shape) at the cast heading —
+            // 1 tile/tick, laying 2-tick diggers as it goes, ~24
+            // tiles or until water.
+            2 => {
+                let yaw = self.ent[i].f30;
+                if let Some(h) = self.new_event() {
+                    let e = &mut self.ent[h];
+                    e.class64 = 10;
+                    e.model65 = 32;
+                    e.tick70 = 34;
+                    e.max_life = 0;
+                    e.f126 = 256;
+                    e.flags = 0;
+                    e.x = x;
+                    e.y = y;
+                    e.z = gz;
+                    e.f30 = yaw;
+                    e.act_life = 24; // APPROX run pending the m15 trace
+                }
+            }
+            // Volcano (:65432): the growing hill + pit IS the
+            // authentic model (trace :65466, effect c10 m9); the
+            // finished cone spawns the model-18 marker, which at
+            // runtime is the eruption driver ([`Gen::eruption_tick`]
+            // — manual: "periodic eruptions which inflict further
+            // damage").
+            4 => {
+                self.spawn_creator(9, x, y, gz);
+            }
+            // Crater (:65491): the expanding bowl (authentic:
+            // effect c10 m11).
+            5 => {
+                self.spawn_creator(11, x, y, gz);
+            }
+            // Mana Magnet (:66049): a 30-tick puller event at the
+            // impact — balls within 8 tiles stream toward it (merge
+            // handled by ball_tick's contact machinery). APPROX.
+            6 => {
+                if let Some(s) = self.new_event() {
+                    let e = &mut self.ent[s];
+                    e.class64 = 10;
+                    e.model65 = 40; // no retail c10 m40 runtime spawn
+                    e.tick70 = 21;
+                    e.max_life = 30;
+                    e.flags &= !8;
+                    self.link(s, x, y, gz);
+                    self.refill_life(s);
+                }
+            }
+            // Duel to the Death (:65620): INTERIM — no rival wizards
+            // exist to tether; the bolt ends in a hit flash.
+            7 => {
+                if let Some(f) = self.spawn_effect(23, x, y, z) {
+                    self.ent[f].id24 = PLAYER_TARGET;
+                }
+            }
+            // Undead Army (:65927): 3 skeletons (c5 m7 — 032's
+            // wraith/skeleton family) scattered at the impact,
+            // claimed by the player (+144) so they read player-owned
+            // on the map; their normal AI applies.
+            // APPROX(original: effect c10 m36 spawner, army size
+            // scales with target-terrain mana :65961-71).
+            11 => {
+                for _ in 0..3 {
+                    let d1 = self.ent_rand(i);
+                    let d2 = self.ent_rand(i);
+                    let sx = x.wrapping_add(((d1 & 0xFF) as i32 - 128) as u16);
+                    let sy = y.wrapping_add(((d2 & 0xFF) as i32 - 128) as u16);
+                    let sz = self.ground_z(sx, sy) as i16;
+                    if let Some(s) = self.spawn_creature(7, sx, sy, sz) {
+                        self.ent[s].f144 = PLAYER_TARGET;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The Mana Magnet puller (our class-10 state 21; APPROX of the
+    /// original's gather effect): every tick, every loose ball within
+    /// 8 tiles gets its launch velocity pointed at the magnet (the
+    /// ball tick's ±64 clamp and 250/256 friction shape the stream);
+    /// contact merging happens in ball_tick.
+    fn magnet_tick(&mut self, i: usize) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        let (mx, my) = (self.ent[i].x, self.ent[i].y);
+        for j in 1..POOL {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
+                continue;
+            }
+            let d2 = Self::dist2_sq(mx, my, c.x, c.y);
+            if d2 > 2048 * 2048 || d2 <= 64 * 64 {
+                continue;
+            }
+            let dir = Self::angle_between(c.x, c.y, mx, my);
+            let vx = ((64 * crate::tables::SIN[dir as usize]) >> 16) as i16;
+            let vy = (-((64 * crate::tables::COS[dir as usize]) >> 16)) as i16;
+            self.ent[j].dest_x = vx as u16;
+            self.ent[j].dest_y = vy as u16;
+        }
+        false
+    }
+
+    /// The volcano's eruption driver — the model-18 marker the
+    /// finished cone spawns (tick_hill, sub_25470's finish arm),
+    /// alive 10000 ticks with f44 = 200 from its creator row.
+    /// APPROX(spell 8 Volcano, manual "periodic eruptions which
+    /// inflict further damage"; the original's state-18 handler is
+    /// untraced): every 60 ticks, 3-5 lava bombs (fireball-family
+    /// class-9, fire effect on landing) arc outward from the cone
+    /// apex on the marker's own LCG, plus a 200 ch0 pulse in a
+    /// 3-tile ring around the cone.
+    fn eruption_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].f63 % 60 != 0 {
+            return false;
+        }
+        let (x, y, id) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24)
+        };
+        // Launch from the (grown) cone apex.
+        let apex = (self.ground_z(x, y) + 256) as i16;
+        let n = 3 + self.ent_rand(i) % 3; // 3-5 bombs
+        for _ in 0..n {
+            let d1 = self.ent_rand(i);
+            let d2 = self.ent_rand(i);
+            let yaw = (d1 & 0x7FF) as u16;
+            let pitch = (d2 % 0x80) as u16; // shallow downward arc
+            let Some(p) = self.spawn_fireball(x, y, apex) else {
+                continue;
+            };
+            let e = &mut self.ent[p];
+            e.id24 = id;
+            e.f30 = yaw;
+            e.f34 = yaw;
+            e.f32 = pitch;
+            e.f36 = pitch;
+            e.f126 = (200 + d2 % 150) as i16;
+            e.f128 = e.f126;
+            e.flags |= 2; // aim assist spent: lava does not home
+        }
+        // The near-cone damage pulse.
+        {
+            let e = &mut self.ent[i];
+            e.f80 = 768;
+            e.f82 = 768;
+            e.f84 = 0x2000;
+        }
+        let amt = self.ent[i].f44 as u32;
+        self.area_write(i, 0, amt, ctx, false);
+        false
+    }
+
     /// Move + hit scan + terrain shared by m0/m3/m9 (:62842-932).
     /// Returns terrain_dirty (always false here — craters come from
     /// the explosion).
@@ -804,27 +1054,49 @@ impl Gen {
         Self::polar_step(&mut tmp, yaw, pitch, speed);
         if let Some(v) = self.victim_scan_at(i, tmp, ctx) {
             // Rebound (+17 bit 7): mana-shield deflection (:62858-90).
+            // The human carpet's bit is the Rebound spell (14, :65774
+            // — the ported deflection-bit semantics).
             let rebound = match v {
                 MailTarget::Pool(j) => self.ent[j].flags & 0x8000 != 0,
-                MailTarget::Player => false, // shields are the spell track
+                MailTarget::Player => self.player_rebound,
             };
             if rebound {
-                if let MailTarget::Pool(j) = v {
-                    let quarter = (self.ent[i].f140 / 4).max(0);
-                    if quarter <= self.ent[j].f140 {
-                        self.ent[j].f140 -= quarter;
-                        let deflector_id = self.ent[j].id24;
+                match v {
+                    MailTarget::Pool(j) => {
+                        let quarter = (self.ent[i].f140 / 4).max(0);
+                        if quarter <= self.ent[j].f140 {
+                            self.ent[j].f140 -= quarter;
+                            let deflector_id = self.ent[j].id24;
+                            let shooter = self.ent[i].id24;
+                            let d = self.ent_rand(i);
+                            let e = &mut self.ent[i];
+                            e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
+                            e.f30 = (e.f34 as i32 + (d % 0x5B) as i32 - 45) as u16 & 0x7FF;
+                            e.f32 = e.f32.wrapping_neg() & 0x7FF;
+                            e.f146 = if shooter == PLAYER_TARGET { PLAYER_TARGET } else { shooter };
+                            e.id24 = deflector_id;
+                            e.act_life = e.max_life as i32;
+                            let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+                            self.move_relink(i, jx, jy, jz);
+                            return false;
+                        }
+                    }
+                    MailTarget::Player => {
+                        // The projectile reverses heading and swaps
+                        // owner to the player, re-homing on its
+                        // shooter. INTERIM: no mana-economy debit on
+                        // the player pool (the original quarters the
+                        // projectile's +140 against the shield pool).
                         let shooter = self.ent[i].id24;
                         let d = self.ent_rand(i);
                         let e = &mut self.ent[i];
                         e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
                         e.f30 = (e.f34 as i32 + (d % 0x5B) as i32 - 45) as u16 & 0x7FF;
                         e.f32 = e.f32.wrapping_neg() & 0x7FF;
-                        e.f146 = if shooter == PLAYER_TARGET { PLAYER_TARGET } else { shooter };
-                        e.id24 = deflector_id;
+                        e.f146 = shooter;
+                        e.id24 = PLAYER_TARGET;
                         e.act_life = e.max_life as i32;
-                        let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
-                        self.move_relink(i, jx, jy, jz);
+                        self.move_relink(i, ctx.px, ctx.py, ctx.pz);
                         return false;
                     }
                 }
@@ -1059,6 +1331,8 @@ impl Gen {
                 false
             }
             17 => self.blast_ring_tick(i, ctx),
+            18 => self.eruption_tick(i, ctx),
+            21 => self.magnet_tick(i),
             23 => self.hit_flash_tick(i, ctx),
             25 => self.steal_flash_tick(i, ctx),
             41 => self.ball_tick(i),

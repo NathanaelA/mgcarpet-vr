@@ -285,6 +285,9 @@ render-time resolve, and index 0 is the sprite-transparent index).
 | `sprites.bin` + `sprites.json` | one 8bpp atlas of all world-sprite frames + its index (below); atlas width doubles from 1024 as needed to stay under the 8192 texture-dimension baseline |
 | `search.bin` | 32x32 ring-order grid (terrain-feature digs) |
 | `build.tab.bin`, `build.dat.bin` | building footprint RLE maps (terrain-feature building pass) |
+| `ui-sprites.bin` + `.json` | 2D UI sprite library (HSPR: spell icons, HUD panel, mana-bar frames, level pips, map markers), same atlas + `SpriteIndex` schema as `sprites` with one frame per entry and `group == id`; entries 6..=29 are the 24 spell icons keyed by internal spell type, 83/84 the advertised-trigger map X-markers (MC1 only until MC2's UI track) |
+| `book-palette.bin` | 256 x RGBA8 like `palette.bin`: the book/spellbook screen's own palette (MC1 `DATA/BOOK.PAL`) |
+| `blend-lut.bin` | 64KB UI blend table (MC1 TABLES +0x4000..+0x14000, the slice between the shade LUT and map colors): 2D blits resolve `blend[src \| dest<<8]` — UI sprites (spell icons) only show their true colors composited through it (remc1 `strPal.byte_BB934_BB924`, sub_main.cpp:27444) |
 
 `sprites.json` (`mgc_formats::bundle::SpriteIndex`): `atlas_width`,
 `atlas_height`, and one entry per original sprite id (dense — ids are

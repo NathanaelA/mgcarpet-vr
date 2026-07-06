@@ -135,8 +135,29 @@ fn shade_at(t: vec2<i32>) -> f32 {
     return f32(min(textureLoad(t_shade, wrapped, 0).r, 63u));
 }
 
+// Painter-order depth (the original's compositing model): the depth
+// channel carries HORIZONTAL camera distance, not ray depth. The
+// original renderer draws tiles back-to-front and blits each tile's
+// queued sprite right after the tile's own triangles (sub_main.cpp
+// :33673) — occlusion is painter order at tile granularity. On a
+// heightfield (no overhangs) plan distance orders identically to ray
+// depth along every view ray, so terrain-vs-terrain occlusion is
+// unchanged — but sprites keyed by their anchor TILE's plan distance
+// composite exactly like the original: never clipped by the wall
+// they stand against, always hidden by tiles in front.
+const DEPTH_RANGE: f32 = 768.0;
+
+fn plan_depth(world_xz: vec2<f32>) -> f32 {
+    return clamp(length(world_xz - globals.camera.xz) / DEPTH_RANGE, 0.0, 0.999999);
+}
+
+struct FsOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut) -> FsOut {
     // Tile index from world position, wrapped to the 256x256 torus.
     let tile = vec2<i32>(
         (i32(floor(in.world.x)) % 256 + 256) % 256,
@@ -213,5 +234,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let dist = distance(in.world, globals.camera.xyz);
     let fog = 1.0 - exp(-dist * globals.camera.w);
     let rgb = mix(lit, globals.fog_color.rgb, fog);
-    return vec4<f32>(rgb, 1.0);
+    var out: FsOut;
+    out.color = vec4<f32>(rgb, 1.0);
+    out.depth = plan_depth(in.world.xz);
+    return out;
 }

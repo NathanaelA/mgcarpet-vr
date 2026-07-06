@@ -622,6 +622,11 @@ impl Gen {
     /// the original — AI wizards are a later track): v_28² range +
     /// v_30 cone.
     fn player_in_aggro_range(&self, i: usize, ctx: &MobCtx) -> bool {
+        // Invisible (spell 12, :65689-90 — the +16 0x20 bit): the
+        // wizard scan skips the cloaked player entirely.
+        if self.player_invisible {
+            return false;
+        }
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         let r2 = (row.v_28 as i32) * (row.v_28 as i32);

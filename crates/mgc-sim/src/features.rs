@@ -376,6 +376,12 @@ pub(crate) struct Gen {
     /// decremented once per world tick (:55405-06). m4 militia only
     /// hunt a wizard whose timer is live — the hostility gate.
     pub(crate) player_aggro: i16,
+    /// The player's Invisible cloak (spell 12; the wizard's +16 0x20
+    /// bit, :65689-90) mirrored in for the mob-side target gates.
+    pub(crate) player_invisible: bool,
+    /// The player's Rebound deflection bit (spell 14; +17 0x80,
+    /// :65774) — incoming class-9 projectiles bounce back.
+    pub(crate) player_rebound: bool,
     /// Player stat counters: creatures killed (`Type_160+359`), shots
     /// resolved (+343), shots that struck the aimed target (+347).
     pub(crate) kills: u32,
@@ -425,6 +431,8 @@ impl Gen {
             player_damage: 0,
             player_knock: (0, 0),
             player_aggro: 0,
+            player_invisible: false,
+            player_rebound: false,
             kills: 0,
             shots: 0,
             hits: 0,

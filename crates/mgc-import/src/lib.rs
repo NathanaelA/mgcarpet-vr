@@ -14,6 +14,7 @@ pub mod bundle;
 pub mod dattab;
 pub mod flc;
 pub mod gamedata;
+pub mod hspr;
 pub mod iso;
 pub mod level_mc1;
 pub mod level_mc2;

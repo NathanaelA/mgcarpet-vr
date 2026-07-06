@@ -243,6 +243,18 @@ struct BarInstance {
     frac: f32,
 }
 
+/// One screen-space UI quad (spellbook icon, HUD slot, bar fill).
+/// Pixel coordinates, origin top-left. `uv` addresses the RGBA UI
+/// atlas in texels; a zero-width uv marks a solid quad drawn from
+/// `tint` alone. Tint multiplies sampled color (dim = grey tint).
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+pub struct UiQuad {
+    pub rect: [f32; 4],
+    pub uv: [f32; 4],
+    pub tint: [f32; 4],
+}
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct BillboardInstance {
@@ -335,6 +347,14 @@ pub struct Renderer {
     bar_buf: Option<wgpu::Buffer>,
     bar_capacity: usize,
     health_bars: Vec<HealthBar>,
+    // Screen-space UI pass (spellbook / HUD).
+    ui_pipeline: wgpu::RenderPipeline,
+    ui_bind_group_layout: wgpu::BindGroupLayout,
+    ui_globals_buf: wgpu::Buffer,
+    ui_bind_group: Option<wgpu::BindGroup>,
+    ui_buf: Option<wgpu::Buffer>,
+    ui_capacity: usize,
+    ui_quads: Vec<UiQuad>,
     /// Terrain plane textures [type, shade, angle, height] kept for
     /// runtime updates (craters, quakes — `update_terrain`).
     plane_texs: Option<[wgpu::Texture; 4]>,
@@ -872,6 +892,98 @@ impl Renderer {
             cache: None,
         });
 
+        // Screen-space UI pass (spellbook / HUD): pixel-space textured
+        // quads over an RGBA atlas the app pre-composites through the
+        // engine's blend LUT. Alpha-blended, no depth.
+        let ui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ui"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("ui.wgsl").into()),
+        });
+        let ui_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("ui"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
+        let ui_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ui globals"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ui_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ui"),
+            bind_group_layouts: &[&ui_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ui"),
+            layout: Some(&ui_layout),
+            vertex: wgpu::VertexState {
+                module: &ui_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<UiQuad>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x4, 1 => Float32x4, 2 => Float32x4,
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ui_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let depth = create_depth(&device, width, height);
 
         Self {
@@ -912,6 +1024,13 @@ impl Renderer {
             bar_buf: None,
             bar_capacity: 0,
             health_bars: Vec::new(),
+            ui_pipeline,
+            ui_bind_group_layout,
+            ui_globals_buf,
+            ui_bind_group: None,
+            ui_buf: None,
+            ui_capacity: 0,
+            ui_quads: Vec::new(),
         }
     }
 
@@ -1350,6 +1469,77 @@ impl Renderer {
     }
 
     /// Replace the set of world sprites drawn each frame.
+    /// Upload the RGBA UI atlas (app-side composited: HSPR indices
+    /// resolved through the blend LUT + palette; index-0 texels carry
+    /// alpha 0).
+    pub fn load_ui_atlas(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ui atlas"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("ui"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        self.ui_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ui"),
+            layout: &self.ui_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.ui_globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        }));
+    }
+
+    /// Replace this frame's UI quads (drawn last, in list order).
+    pub fn set_ui_quads(&mut self, quads: Vec<UiQuad>) {
+        self.ui_quads = quads;
+    }
+
     pub fn set_billboards(&mut self, billboards: Vec<Billboard>) {
         self.billboards = billboards;
     }
@@ -1587,6 +1777,29 @@ impl Renderer {
                 .write_buffer(self.bar_buf.as_ref().unwrap(), 0, bytes);
         }
 
+        // UI quads (screen-space overlay, both views).
+        let ui_count = self.ui_quads.len() as u32;
+        if !self.ui_quads.is_empty() {
+            self.queue.write_buffer(
+                &self.ui_globals_buf,
+                0,
+                bytemuck::cast_slice(&[w as f32, hpx as f32, 0.0, 0.0]),
+            );
+            let bytes: &[u8] = bytemuck::cast_slice(&self.ui_quads);
+            let need = bytes.len();
+            if self.ui_buf.is_none() || self.ui_capacity < need {
+                self.ui_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("ui quads"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.ui_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.ui_buf.as_ref().unwrap(), 0, bytes);
+        }
+
         let frame = match &self.target {
             Target::Window { surface, .. } => Some(surface.get_current_texture()?),
             Target::Offscreen { .. } => None,
@@ -1708,6 +1921,13 @@ impl Renderer {
                 }
             } else {
                 draw_world(&mut pass);
+            }
+            // Screen-space UI on top of either view.
+            if let (1.., Some(bg), Some(buf)) = (ui_count, &self.ui_bind_group, &self.ui_buf) {
+                pass.set_pipeline(&self.ui_pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..ui_count);
             }
         }
         self.queue.submit([encoder.finish()]);

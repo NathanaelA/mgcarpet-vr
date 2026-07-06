@@ -115,6 +115,15 @@ pub struct Bundle {
     pub tile_colors: [u8; 256],
     pub terrain_atlas: Option<(TerrainAtlasInfo, Vec<u8>)>,
     pub sprites: Option<(SpriteIndex, Vec<u8>)>,
+    /// UI sprite library (HSPR: spell icons, HUD, map markers) — same
+    /// index schema as `sprites`, single frame per entry.
+    pub ui_sprites: Option<(SpriteIndex, Vec<u8>)>,
+    /// 256 RGBA entries: the book screen's own palette (DATA/BOOK.PAL).
+    pub book_palette: Option<[[u8; 4]; 256]>,
+    /// 64KB UI blend LUT (TABLES +0x4000): 2D blits resolve
+    /// `blend[src | dest<<8]` — UI sprites get their true colors only
+    /// through this table against their background.
+    pub blend_lut: Option<Vec<u8>>,
     pub search: Option<Vec<u8>>,
     pub build_tab: Option<Vec<u8>>,
     pub build_dat: Option<Vec<u8>>,
@@ -213,6 +222,41 @@ impl Bundle {
             None => None,
         };
 
+        let ui_sprites = match read_opt("ui-sprites.bin") {
+            Some(data) => {
+                let index_path = dir.join("ui-sprites.json");
+                let index: SpriteIndex = serde_json::from_slice(&read("ui-sprites.json")?)
+                    .map_err(|e| BundleError::Json(index_path, e))?;
+                expect(
+                    "ui-sprites.bin",
+                    &data,
+                    index.atlas_width as usize * index.atlas_height as usize,
+                )?;
+                Some((index, data))
+            }
+            None => None,
+        };
+
+        let book_palette = match read_opt("book-palette.bin") {
+            Some(data) => {
+                expect("book-palette.bin", &data, 256 * 4)?;
+                let mut pal = [[0u8; 4]; 256];
+                for (i, rgba) in pal.iter_mut().enumerate() {
+                    rgba.copy_from_slice(&data[i * 4..i * 4 + 4]);
+                }
+                Some(pal)
+            }
+            None => None,
+        };
+
+        let blend_lut = match read_opt("blend-lut.bin") {
+            Some(data) => {
+                expect("blend-lut.bin", &data, 0x10000)?;
+                Some(data)
+            }
+            None => None,
+        };
+
         Ok(Self {
             manifest,
             palette,
@@ -220,6 +264,9 @@ impl Bundle {
             tile_colors,
             terrain_atlas,
             sprites,
+            ui_sprites,
+            book_palette,
+            blend_lut,
             search: read_opt("search.bin"),
             build_tab: read_opt("build.tab.bin"),
             build_dat: read_opt("build.dat.bin"),

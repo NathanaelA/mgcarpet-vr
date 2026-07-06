@@ -43,7 +43,18 @@ struct VsOut {
     @location(2) @interpolate(flat) uv_pos: vec2<f32>,
     @location(3) @interpolate(flat) uv_size: vec2<f32>,
     @location(4) @interpolate(flat) flags: vec2<u32>,
+    // The sprite's painter-order depth, written for every fragment.
+    // The depth channel carries HORIZONTAL camera distance (see
+    // terrain.wgsl): the sprite is keyed to its anchor TILE's plan
+    // distance minus half a tile — the original's "blit the sprite
+    // right after its own tile's triangles" (sub_main.cpp :33673).
+    // Walls the sprite stands against are farther tiles → never clip
+    // it; tiles in front always hide it; ridge silhouettes still
+    // occlude partially because the terrain side varies per pixel.
+    @location(5) @interpolate(flat) anchor_depth: f32,
 };
+
+const DEPTH_RANGE: f32 = 768.0;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
@@ -63,11 +74,22 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     out.uv_pos = inst.uv_pos;
     out.uv_size = inst.uv_size;
     out.flags = inst.flags;
+    let tile_center = floor(inst.pos.xz) + vec2<f32>(0.5, 0.5);
+    out.anchor_depth = clamp(
+        (length(tile_center - globals.camera.xz) - 0.5) / DEPTH_RANGE,
+        0.0,
+        0.999999,
+    );
     return out;
 }
 
+struct FsOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut) -> FsOut {
     var fx = in.frac.x;
     if in.flags.x != 0u {
         fx = 1.0 - fx;
@@ -87,5 +109,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let dist = distance(in.world, globals.camera.xyz);
     let fog = 1.0 - exp(-dist * globals.camera.w);
     let rgb = mix(base, globals.fog_color.rgb, fog);
-    return vec4<f32>(rgb, 1.0);
+    var out: FsOut;
+    out.color = vec4<f32>(rgb, 1.0);
+    out.depth = in.anchor_depth;
+    return out;
 }

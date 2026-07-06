@@ -28,6 +28,9 @@ use crate::tmaps::TmapsArchive;
 /// texture limit (MC2's animated sets pack ~9.4k rows at 1024).
 const SPRITE_ATLAS_WIDTH: u32 = 1024;
 const MAX_TEXTURE_DIM: u32 = 8192;
+/// UI sprite atlas width: 87 small sprites (~122k pixels) pack well
+/// under 256 rows at this width.
+const UI_ATLAS_WIDTH: u32 = 512;
 
 const SHADE_LUT_LEN: usize = 0x4000; // 64 shade levels x 256 colors
 const TILE_COLORS_OFFSET: usize = 0x14000;
@@ -66,6 +69,11 @@ struct VariantSpec {
     /// terrain-feature pass is a separate original implementation whose
     /// data semantics are unverified — omitted until that port.
     build: Option<&'static str>,
+    /// UI sprite library base name (HSPR = the 640x480 set; see
+    /// `crate::hspr`). Implies `DATA/BOOK.PAL` (the book screen's own
+    /// palette) for MC1. MC2's per-environment HSPR{D,N,C} wait for
+    /// its UI track.
+    ui: Option<&'static str>,
 }
 
 const MC1_VARIANTS: [VariantSpec; 2] = [
@@ -78,6 +86,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         atlas: "DATA/BLK0-1.DAT",
         tmaps: "DATA/TMAPS0-0",
         build: Some("DATA/BUILD0-0"),
+        ui: Some("DATA/HSPR0-0"),
     },
     VariantSpec {
         variant: "mc1-arctic",
@@ -88,6 +97,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         atlas: "DATA/BLK1-1.DAT",
         tmaps: "DATA/TMAPS1-0",
         build: Some("DATA/BUILD1-0"),
+        ui: Some("DATA/HSPR1-0"),
     },
 ];
 
@@ -106,6 +116,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         atlas: "DATA/BLOCK32.DAT",
         tmaps: "DATA/TMAPS0-0",
         build: None,
+        ui: None,
     },
     VariantSpec {
         variant: "mc2-night",
@@ -116,6 +127,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         atlas: "DATA/BL32N0-0.DAT",
         tmaps: "DATA/TMAPS1-0",
         build: None,
+        ui: None,
     },
     VariantSpec {
         variant: "mc2-night-fog",
@@ -126,6 +138,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         atlas: "DATA/BL32F0-0.DAT",
         tmaps: "DATA/TMAPS1-0",
         build: None,
+        ui: None,
     },
     VariantSpec {
         variant: "mc2-cave",
@@ -136,6 +149,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         atlas: "DATA/BL32C0-0.DAT",
         tmaps: "DATA/TMAPS2-0",
         build: None,
+        ui: None,
     },
 ];
 
@@ -316,6 +330,42 @@ fn bake_variant(
         let search = source("DATA/SEARCH.DAT", &mut sources)?;
         expect("DATA/SEARCH.DAT", &search, 1024)?;
         emit("search.bin", &search)?;
+    }
+
+    // UI sprites (HSPR) + the book screen palette (MC1 only for now).
+    if let Some(ui) = spec.ui {
+        let dat_file = format!("{ui}.DAT");
+        let dat = source(&dat_file, &mut sources)?;
+        let tab = source(&format!("{ui}.TAB"), &mut sources)?;
+        let decoded = crate::hspr::decode(&dat, &tab)
+            .map_err(|e| BakeError::Level(Path::new(&dat_file).to_path_buf(), 0, e.to_string()))?;
+        let packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
+        emit("ui-sprites.bin", &packed.atlas)?;
+        emit(
+            "ui-sprites.json",
+            &serde_json::to_vec_pretty(&packed.index).expect("ui sprite index serializes"),
+        )?;
+
+        // The UI blend LUT: TABLES.DAT's middle 64KB (+0x4000..+0x14000),
+        // the slice between the shade LUT and the map colors. The
+        // original's 2D blits resolve every pixel as
+        // `blend[src | dest<<8]` (remc1 strPal.byte_BB934_BB924,
+        // sub_main.cpp:27444/27564) — spell icons composite through it
+        // against the book page, which is where their true colors
+        // (e.g. the red heal heart) come from; raw icon indices are a
+        // ramp that reads garish under any palette directly.
+        emit("blend-lut.bin", &tables[SHADE_LUT_LEN..TILE_COLORS_OFFSET])?;
+
+        let book = source("DATA/BOOK.PAL", &mut sources)?;
+        expect("DATA/BOOK.PAL", &book, 768)?;
+        let mut rgba = Vec::with_capacity(1024);
+        for (i, c) in book.chunks_exact(3).enumerate() {
+            for &v in c {
+                rgba.push((v << 2) | (v >> 4));
+            }
+            rgba.push(if i == 0 { 0 } else { 255 });
+        }
+        emit("book-palette.bin", &rgba)?;
     }
 
     let manifest = BundleManifest {

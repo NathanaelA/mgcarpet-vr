@@ -27,7 +27,12 @@ struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) fx: vec2<f32>,
     @location(1) @interpolate(flat) frac: f32,
+    // Painter-order depth, like the billboard pass (see
+    // terrain.wgsl): the bar rides its creature's tile key.
+    @location(2) @interpolate(flat) anchor_depth: f32,
 };
+
+const DEPTH_RANGE: f32 = 768.0;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
@@ -43,16 +48,31 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
     out.fx = vec2<f32>(c.x + 0.5, c.y);
     out.frac = inst.frac;
+    let tile_center = floor(inst.pos.xz) + vec2<f32>(0.5, 0.5);
+    out.anchor_depth = clamp(
+        (length(tile_center - globals.camera.xz) - 0.5) / DEPTH_RANGE,
+        0.0,
+        0.999999,
+    );
     return out;
 }
 
+struct FsOut {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut) -> FsOut {
     // A thin black border all around; red fill from the left up to
     // the life fraction, black beyond it.
+    var out: FsOut;
+    out.depth = in.anchor_depth;
     let border = in.fx.x < 0.03 || in.fx.x > 0.97 || in.fx.y < 0.12 || in.fx.y > 0.88;
     if !border && in.fx.x < in.frac {
-        return vec4<f32>(0.75, 0.05, 0.05, 1.0);
+        out.color = vec4<f32>(0.75, 0.05, 0.05, 1.0);
+        return out;
     }
-    return vec4<f32>(0.02, 0.02, 0.02, 1.0);
+    out.color = vec4<f32>(0.02, 0.02, 0.02, 1.0);
+    return out;
 }
