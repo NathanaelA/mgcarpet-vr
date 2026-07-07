@@ -9,6 +9,7 @@
   "enhancements": {
     "dev_spells": false,
     "health_bars": false,
+    "invincible": false,
     "map_owned_buildings": false,
     "map_trigger_areas": false,
     "smooth_shading": false

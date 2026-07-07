@@ -220,7 +220,13 @@ pub fn map_dots_from_poses(
     // are purple" report resolves as these HOUSE dots (2026-07-07,
     // player screenshot).
     let near_black = nearest_palette_index(palette, vga(7, 3, 3));
-    let dark_green = nearest_palette_index(palette, vga(3, 7, 3));
+    // Villager green: retail's LUT[16] decodes to (r0, g1, b0) — a
+    // green so dark the nearest-palette match lands on black (the
+    // playtest-6 "humans show black" report). The player's ground
+    // truth is VISIBLY green dots and the map is gameplay-critical,
+    // so aim at a legible mid-green instead of the literal cube
+    // color (map-marker legibility ruling, 2026-07-05).
+    let dark_green = nearest_palette_index(palette, vga(8, 32, 8));
     let wild_blue = nearest_palette_index(palette, vga(3, 7, 63));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
     const SCENERY: u8 = 28;

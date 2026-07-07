@@ -100,6 +100,11 @@ pub struct FlightInput {
     /// screen or a quick key) — the original's commands 0x15/0x16.
     pub equip_left: Option<spells::SpellId>,
     pub equip_right: Option<spells::SpellId>,
+    /// The respawn key (Space; the original's command 15) — consumed
+    /// only while dead.
+    pub respawn: bool,
+    /// The demolish key (Shift+L; the unique control word 48).
+    pub demolish: bool,
 }
 
 /// The carpet: position in tile units, velocity in tiles/second.
@@ -222,6 +227,24 @@ impl Simulation {
     pub fn step(&mut self, input: &FlightInput) {
         self.tick += 1;
 
+        // The death fall / dead wait override the controls: the
+        // original's dead wizard never reaches the command handler
+        // (sub_46840 is skipped from state 2 on) — the stick filters
+        // decay, the speed targets freeze, casts stop. Only the
+        // respawn key passes through.
+        let (falling, dead) = match &self.world {
+            Some(w) => (w.player_falling(), w.player_dead()),
+            None => (false, false),
+        };
+        let mut input = *input;
+        if falling || dead {
+            input = FlightInput {
+                respawn: input.respawn,
+                ..FlightInput::default()
+            };
+        }
+        let input = &input;
+
         // The Accelerate cancel reads the tick's raw thrust input
         // BEFORE anything moves. Faithful MC1: ANY Up/Down press
         // cancels (the handler ends on the v_14 speed-touched flag,
@@ -245,6 +268,44 @@ impl Simulation {
             ThrustModel::Enhanced => self.move_enhanced(input),
         }
 
+        // The death fall (sub_45FC0 :55466-77): gravity −2/tick²
+        // (clamped −256) on top of the still-drifting move, riding
+        // down to the ground+128 floor — touchdown is detected by
+        // the world tick below at that exact altitude.
+        if falling && let Some(w) = &mut self.world {
+            let dz = w.death_fall_step() as i32;
+            let g = w.ground_z_engine(self.carpet.x, self.carpet.y) as i32;
+            let z = (self.carpet.z as i32 + dz).max(g + 128);
+            self.carpet.z = z.min(i16::MAX as i32) as i16;
+            self.flyer.y = self.carpet.z as f32 / 256.0;
+            self.flyer.vy = 0.0;
+        }
+        // Dead (sub_463B0 :55575-91): speeds zeroed, the camera
+        // turns toward the killer while the grey screen waits for
+        // Space.
+        if dead {
+            self.carpet.tgt_speed = 0;
+            self.carpet.act_speed = 0;
+            self.carpet.strafe = 0;
+            if let Some(w) = &self.world
+                && let Some((kx, kz)) = w.killer_pos()
+            {
+                const RAD: f32 = std::f32::consts::TAU / 2048.0;
+                let px = (self.flyer.x.rem_euclid(256.0) * 256.0) as u16;
+                let py = (self.flyer.z.rem_euclid(256.0) * 256.0) as u16;
+                let tx = (kx.rem_euclid(256.0) * 256.0) as u16;
+                let ty = (kz.rem_euclid(256.0) * 256.0) as u16;
+                let target = features::Gen::angle_between(px, py, tx, ty);
+                let mut d = (target as i32 - self.carpet.yaw as i32) & 0x7FF;
+                if d > 1024 {
+                    d -= 2048;
+                }
+                let step = d.clamp(-16, 16);
+                self.carpet.yaw = ((self.carpet.yaw as i32 + step) & 0x7FF) as u16;
+                self.flyer.yaw += step as f32 * RAD;
+            }
+        }
+
         // The world turn: triggers/portals probe the flyer, events tick.
         if let Some(w) = &mut self.world {
             let f = self.flyer;
@@ -265,8 +326,25 @@ impl Simulation {
                     fire_right: input.fire_right,
                     equip_left: input.equip_left,
                     equip_right: input.equip_right,
+                    respawn: input.respawn,
+                    demolish: input.demolish,
                 },
             );
+            // Respawn (sub_44D30): reposition at the castle, one
+            // tile up (:54845-63 z = ground+256), flight state
+            // zeroed (thrust target, strafe, knock — :54878-83),
+            // heading preserved.
+            if let Some((x, z)) = w.take_respawn() {
+                let ground = w.ground_height_tiles(x, z);
+                let f = &mut self.flyer;
+                f.x = x;
+                f.z = z;
+                f.y = ground + 1.0;
+                f.vx = 0.0;
+                f.vy = 0.0;
+                f.vz = 0.0;
+                self.carpet = flight::Mc1State::from_tiles(f.x, f.z, f.y, f.yaw);
+            }
             if let Some((x, z)) = w.take_teleport() {
                 // Portal arrival: the original moves the entity to the
                 // destination point; altitude snaps above the ground
@@ -339,25 +417,35 @@ impl Simulation {
         // ported routine — vertical only (it cannot cross a wall), the
         // z-floor stays, and float-up caps at the level's highest
         // terrain + the soft-ceiling band (never a god's-eye view).
-        if self.altitude_model == AltitudeModel::ExtendedLift && input.lift != 0.0 {
+        if self.altitude_model == AltitudeModel::ExtendedLift {
             let g = match &self.world {
                 Some(w) => w.ground_z_engine(self.carpet.x, self.carpet.y),
                 None => (self
                     .ground_height(self.carpet.x as f32 / 256.0, self.carpet.y as f32 / 256.0)
                     * 256.0) as i16,
             };
-            let ceil = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
-            let dz = (input.lift * LIFT_STEP) as i16;
             let floor = g.saturating_add(128);
-            let new_z = self.carpet.z.saturating_add(dz);
-            // Rising: capped at the ceiling, but never yanked DOWN
-            // from altitude already held above it (wall-climb gains
-            // are legitimate). Descending: the z-floor holds.
-            self.carpet.z = if dz > 0 {
-                new_z.min(ceil.max(self.carpet.z))
-            } else {
-                new_z.max(floor)
-            };
+            if input.lift != 0.0 {
+                let ceil = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
+                let dz = (input.lift * LIFT_STEP) as i16;
+                let new_z = self.carpet.z.saturating_add(dz);
+                // Rising: capped at the ceiling, but never yanked DOWN
+                // from altitude already held above it (wall-climb gains
+                // are legitimate). Descending: the z-floor holds.
+                self.carpet.z = if dz > 0 {
+                    new_z.min(ceil.max(self.carpet.z))
+                } else {
+                    new_z.max(floor)
+                };
+            } else if self.carpet.z > floor {
+                // Hover keys idle: the carpet settles gently toward
+                // the terrain-follow floor (player directive,
+                // playtest-6 — gameplay assumes ground-contact
+                // pickups like spell jars; holding altitude forever
+                // made you overfly them). Rate = the faithful 8/tick
+                // passive sink.
+                self.carpet.z = (self.carpet.z - 8).max(floor);
+            }
         }
 
         // Derive the float flyer for the renderer: yaw stays
@@ -501,6 +589,15 @@ impl Simulation {
         let speed = (f.vx * f.vx + f.vz * f.vz).sqrt();
         if speed < 0.05 && input.lift == 0.0 && f.y > ground + 4.0 {
             f.y -= 8.0 / 256.0;
+        }
+        // Extended lift with the hover keys idle: settle toward the
+        // floor at any speed (player directive, playtest-6 — ground-
+        // contact pickups assume the carpet comes down by itself).
+        if self.altitude_model == AltitudeModel::ExtendedLift
+            && input.lift == 0.0
+            && f.y > floor
+        {
+            f.y = (f.y - 8.0 / 256.0).max(floor);
         }
     }
 

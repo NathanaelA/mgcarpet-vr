@@ -169,6 +169,12 @@ pub struct Enhancements {
     /// opt-in (P-class; MC1 never marks houses). Player proposal
     /// 2026-07-07: "helps visibility".
     pub map_owned_buildings: bool,
+    /// Player invincibility — the pre-mortality dev behavior (damage
+    /// totaled for display, never applied; no death). G-class
+    /// playtest/accessibility instrument; the authentic default is
+    /// MORTAL (grace window, castle respawn, castle-less death =
+    /// level restart).
+    pub invincible: bool,
 }
 
 impl Config {

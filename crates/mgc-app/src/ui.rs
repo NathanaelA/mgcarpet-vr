@@ -17,7 +17,7 @@
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
 use mgc_sim::spells::{SpellId, DISPLAY_ORDER, SPELL_COUNT};
-use mgc_sim::world::LoadoutView;
+use mgc_sim::world::{LifeState, LoadoutView, PlayerVitals};
 
 /// UI sprite ids (remc1 begSprTab layout; ROADMAP "Spell repertoire").
 const SPR_HILITE_LEFT: u32 = 1;
@@ -377,6 +377,22 @@ pub fn hud_quads(assets: &UiAssets, loadout: &LoadoutView, w: f32, h: f32) -> Ve
         ],
         MANA_BLUE,
     ));
+    // Castle HP strip (functional-first): a thin green/red meter
+    // above the castle panel — the downgrade damage is invisible
+    // otherwise (playtest-6: "castle health is difficult to verify").
+    if let Some((hp, max)) = loadout.castle_hp {
+        let frac = (hp as f32 / max as f32).clamp(0.0, 1.0);
+        let pw = w * 0.18;
+        let px = w - pw - 12.0 * scale;
+        let py = h - 72.0 * scale;
+        quads.push(solid([px, py, pw, 4.0 * scale], BAR_BG));
+        let color = if frac > 0.5 {
+            [0.25, 0.8, 0.3, 1.0]
+        } else {
+            [0.9, 0.25, 0.15, 1.0]
+        };
+        quads.push(solid([px, py, pw * frac, 4.0 * scale], color));
+    }
     // The castle panel's WORLD-RELATIVE pair (sub_22E50 :27172-290):
     // the original never shows absolute mana — everything scales
     // against the level's total. Row 1 = castle capacity / world
@@ -413,6 +429,75 @@ pub fn hud_quads(assets: &UiAssets, loadout: &LoadoutView, w: f32, h: f32) -> Ve
             }
             py += 8.0 * scale;
         }
+    }
+    quads
+}
+
+/// Mortality overlays + the life bar (functional-first placement;
+/// the faithful HUD layout is the banked UI/UX track). `blink`
+/// drives the dead-screen respawn prompt.
+pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad> {
+    let mut quads = Vec::new();
+    let scale = (w / 640.0).max(1.0);
+    // Life bar just above the center mana bar, traffic-light tinted.
+    let frac = (v.life as f32 / v.life_max.max(1) as f32).clamp(0.0, 1.0);
+    let bw = w * 0.25;
+    let y = h - 26.0 * scale;
+    quads.push(solid([(w - bw) / 2.0, y, bw, 7.0 * scale], BAR_BG));
+    let color = if frac > 0.5 {
+        [0.25, 0.8, 0.3, 1.0]
+    } else if frac > 0.25 {
+        [0.9, 0.75, 0.2, 1.0]
+    } else {
+        [0.9, 0.2, 0.15, 1.0]
+    };
+    quads.push(solid(
+        [(w - bw) / 2.0 + 1.0, y + 1.0, (bw - 2.0) * frac, 7.0 * scale - 2.0],
+        color,
+    ));
+    // Spawn-grace shimmer: a thin white strip draining over the bar.
+    if v.grace > 0 && v.state == LifeState::Alive {
+        quads.push(solid(
+            [
+                (w - bw) / 2.0,
+                y - 3.0 * scale,
+                bw * (v.grace as f32 / 100.0).min(1.0),
+                2.0 * scale,
+            ],
+            [1.0, 1.0, 1.0, 0.8],
+        ));
+    }
+    // Castle under attack (the original flashes the castle panel,
+    // Type_160+391): an amber strip over the castle-panel bars.
+    if v.castle_alert {
+        quads.push(solid(
+            [w - w * 0.18 - 12.0 * scale, h - 66.0 * scale, w * 0.18, 3.0 * scale],
+            [1.0, 0.4, 0.1, 0.9],
+        ));
+    }
+    // The red hit flash (sub_44BE0(2) — palette row 2 in retail).
+    if v.hit_flash > 0 && v.state == LifeState::Alive {
+        let a = 0.08 * v.hit_flash as f32;
+        quads.push(solid([0.0, 0.0, w, h], [0.8, 0.05, 0.05, a]));
+    }
+    match v.state {
+        // The death fall: a deepening red-out.
+        LifeState::Falling => {
+            quads.push(solid([0.0, 0.0, w, h], [0.45, 0.03, 0.03, 0.35]));
+        }
+        // Dead: the grey screen (palette row 7) + a blinking center
+        // strip as the Space prompt (no text renderer yet).
+        LifeState::Dead => {
+            quads.push(solid([0.0, 0.0, w, h], [0.22, 0.22, 0.25, 0.55]));
+            if blink {
+                let pw = w * 0.30;
+                quads.push(solid(
+                    [(w - pw) / 2.0, h * 0.62, pw, 4.0 * scale],
+                    [0.95, 0.95, 0.95, 0.9],
+                ));
+            }
+        }
+        LifeState::Alive => {}
     }
     quads
 }

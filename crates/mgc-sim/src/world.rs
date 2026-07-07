@@ -40,9 +40,12 @@
 //! thunks fire class-9 projectiles / melee mailbox writes; class-10
 //! combat effects deliver the damage; creatures read their inbox,
 //! aggro on wizard-family attackers, die into DEATH/CORPSE and drop
-//! mana balls. The player casts the dev repeat-fireball through the
-//! tick input (`PlayerCommand`) and is invincible via a permanent
-//! spawn grace — mob damage lands in a discarded-but-totaled inbox.
+//! mana balls. The player is MORTAL (2026-07-07): the six-channel
+//! inbox applies for real — grace window, at-castle redirect, shield
+//! quartering, hit knockback, the death fall with the jar scatter and
+//! the m40 grave, and the Space respawn at the castle (castle-less =
+//! the level restarts). The old invincibility survives as the
+//! `invincible` dev/config toggle.
 //!
 //! Deliberate deviations, tracked in docs/ROADMAP.md: no AI wizard
 //! balloons (the probe/scan lists are the player alone); custom
@@ -55,13 +58,35 @@ use crate::features::{
     self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
 };
 use crate::mc1_sprite_stats::SPRITE_STATS;
+use crate::combat::MailTarget;
 use crate::mobs::{MobCtx, PLAYER_TARGET};
 use crate::spells::{SPELL_COUNT, SPELLS, SpellId};
 use mgc_formats::{Thing, ThingKind};
 
-/// The player's life ceiling (the original wizard's +332 max; used by
-/// Heal's 5%-per-tick rate — no ported player max exists yet).
-pub const PLAYER_LIFE_MAX: u64 = 4000;
+/// The player's life ceiling: the human wizard ctor's maxLife 10000
+/// (:44185; skill does NOT scale it — sub_44D30 :55026 resets to max
+/// on every spawn). Heal's 5%-per-tick rate divides it.
+pub const PLAYER_LIFE_MAX: i32 = 10000;
+
+/// The class-12 state marking a death-scattered spell jar: it decays
+/// (200-289 ticks, :55545-47) where the THING-placed jar states
+/// (0..=2) sit forever. Pickup works from any sub-MANIFEST state.
+const DROPPED_JAR: u8 = 3;
+
+/// The player wizard's life state — the original class-3 states 0
+/// (alive) / 2 (death fall) / 3 (dead, awaiting the respawn key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LifeState {
+    #[default]
+    Alive,
+    /// The death fall (sub_45FC0 :55434): flight drifts on with no
+    /// input, gravity −2/tick², a (10,1) fire trail, until the
+    /// carpet lands at ground+128.
+    Falling,
+    /// Landed (sub_46480 :55594): grey screen, death camera toward
+    /// the killer, waiting for Space.
+    Dead,
+}
 
 /// The class-12 state marker separating OWNED spell manifestations
 /// (tick70 = 200 + spell id, ours) from pre-placed JARS (tick70 0..=2
@@ -120,6 +145,33 @@ pub struct Player {
     /// Global Death's primed charge (:66235): ticks until the pulse
     /// fires around the carpet. APPROX ~2s pending a trace.
     bomb_timer: Option<i16>,
+    /// Current life (actLife +12; signed — dying drives it below 0).
+    pub life: i32,
+    /// The spawn grace (Type_160 u16_331): while > 0 the whole
+    /// mailbox is wiped each tick — total immunity (:55367-71).
+    /// Respawn arms 100 (:54866); the at-castle redirect re-arms 2.
+    grace: u16,
+    /// Regen stall (u32_383): every processed hit sets 16 — no
+    /// health regen for 16 ticks (:55387-90).
+    regen_delay: u16,
+    /// Life state (class-3 states 0/2/3).
+    pub state: LifeState,
+    /// Death-fall vertical speed (var_u16_29841_46), engine units.
+    fall_speed: i16,
+    /// The killer latch (+38): the death camera target and (were
+    /// there rival wizards) the kill credit.
+    killer: u16,
+    /// Spell models owned at death — the original keeps them as
+    /// MODEL NUMBERS in the 24 Type_160+532 slots and re-instantiates
+    /// on respawn (:54884-923); the manifestation entities scatter
+    /// as decaying jars meanwhile.
+    death_owned: [bool; SPELL_COUNT],
+    /// Red hit-flash ticks for the app overlay (sub_44BE0(2)).
+    pub hit_flash: u8,
+    /// Died castle-less in single player: the original sets the
+    /// lost + level-over flags (+13325 |= 0xC, :48620-33) — the
+    /// level restarts.
+    pub lost: bool,
 }
 
 impl Default for Player {
@@ -143,8 +195,34 @@ impl Default for Player {
             speed_boost: 0.0,
             teleport_return: None,
             bomb_timer: None,
+            life: PLAYER_LIFE_MAX,
+            grace: 100,
+            regen_delay: 0,
+            state: LifeState::Alive,
+            fall_speed: 0,
+            killer: 0,
+            death_owned: [false; SPELL_COUNT],
+            hit_flash: 0,
+            lost: false,
         }
     }
+}
+
+/// The player's mortality snapshot for the app layer.
+#[derive(Debug, Clone, Copy)]
+pub struct PlayerVitals {
+    pub life: i32,
+    pub life_max: i32,
+    pub state: LifeState,
+    /// Remaining spawn-grace ticks (invulnerability window).
+    pub grace: u16,
+    /// Red hit-flash ticks remaining (sub_44BE0(2)).
+    pub hit_flash: u8,
+    /// Died castle-less — the level is lost (restarting).
+    pub lost: bool,
+    /// The own castle took a processed hit recently (+391 flash).
+    pub castle_alert: bool,
+    pub has_castle: bool,
 }
 
 /// Spellbook/HUD snapshot for the app layer.
@@ -163,6 +241,10 @@ pub struct LoadoutView {
     pub world_mana: u32,
     /// Own castle (stored, capacity, level) when one stands.
     pub castle: Option<(u32, u32, u8)>,
+    /// Own castle health (current, max) — the downgrade meter
+    /// (functional-first; retail shows no castle HP number, but the
+    /// player needs SOME way to see the vulture-bomb chip damage).
+    pub castle_hp: Option<(i32, u32)>,
     /// The level goal: required banked % of the world total (the
     /// HUD goal tick, :27268). 0 = none wired.
     pub win_pct: u16,
@@ -225,6 +307,13 @@ pub struct PlayerCommand {
     /// :48717-48731) — from the book screen or a quick key.
     pub equip_left: Option<crate::spells::SpellId>,
     pub equip_right: Option<crate::spells::SpellId>,
+    /// The respawn key (Space, command 15 :20081/:48620) — only
+    /// consumed while dead.
+    pub respawn: bool,
+    /// The demolish key (Shift+L → the unique control word 48,
+    /// :20496-501): sets the OWN castle's life to −1 (:55846-50) —
+    /// one downgrade level per press.
+    pub demolish: bool,
 }
 
 /// The runtime world of one loaded MC1/HW level.
@@ -263,6 +352,16 @@ pub struct World {
     /// [`World::thrust_cancel`]: .0 blocks type 2 (backward thrust
     /// held), .1 blocks type 21 (forward thrust held).
     accel_veto: (bool, bool),
+    /// A respawn fired this tick: the sim moves the carpet there
+    /// (tile units) and resets the flight state.
+    pending_respawn: Option<(f32, f32)>,
+    /// Castle-less death confirmed: the level restarts (the
+    /// original's lost + level-over flags, :48620-33).
+    pending_restart: bool,
+    /// Dev/accessibility invincibility (config `invincible`, G-class
+    /// dev family): the pre-mortality behavior — damage totaled for
+    /// display, never applied.
+    invincible: bool,
 }
 
 /// One live drawable entity, resolved for the app's billboard / map
@@ -392,6 +491,9 @@ impl World {
             dev_spells: false,
             prev_fire: (false, false),
             accel_veto: (false, false),
+            pending_respawn: None,
+            pending_restart: false,
+            invincible: false,
         };
         w.fire_disposition(0, true);
         // Starting spells AFTER the level population so the initial
@@ -592,11 +694,22 @@ impl World {
             cmd.fire_right && !self.prev_fire.1,
         );
         self.prev_fire = (cmd.fire_left, cmd.fire_right);
-        if cmd.fire_left && let Some(s) = self.player.left {
+        let alive = self.player.state == LifeState::Alive;
+        if alive && cmd.fire_left && let Some(s) = self.player.left {
             self.cast_spell(s, false, edge.0, player, &ctx);
         }
-        if cmd.fire_right && let Some(s) = self.player.right {
+        if alive && cmd.fire_right && let Some(s) = self.player.right {
             self.cast_spell(s, true, edge.1, player, &ctx);
+        }
+
+        // The demolish key (:55846-50): the OWN castle's life goes
+        // to −1 — the castle tick's damage path does the rest (one
+        // downgrade level per press; the last one costs the respawn
+        // point).
+        if alive && cmd.demolish {
+            if let Some(c) = self.player_castle() {
+                self.g.ent[c].act_life = -1;
+            }
         }
 
         // The awake pre-pass (sub_54F00, :64266) runs before dispatch.
@@ -623,10 +736,10 @@ impl World {
                 // Combat effects (fire, spreader, splash, possess
                 // flash, lava bomb, blast ring, eruption driver,
                 // plume, magnet, hit-flash, steal-flash, storm
-                // cloud, mana ball).
+                // cloud, mana ball, grave, collapse magnet).
                 10 if matches!(
                     self.g.ent[i].tick70,
-                    0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 40 | 41 | 58
+                    0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 40 | 41 | 42 | 58 | 59
                 ) => {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
@@ -664,27 +777,97 @@ impl World {
             self.entities_dirty = true;
         }
 
-        // The invincible player: a spawn grace that never decrements
-        // (:55367-71 — all six channels discarded each tick). The ch0
-        // total is kept for display/tests. Shield (:65266): ch0 totals
-        // at 1/4 while up — the manual's "absorbs three-quarters"
-        // (scales the accumulated display total only; the grace still
-        // discards the damage itself).
-        if self.g.player_mail[0].1 != 0 {
-            let amt = self.g.player_mail[0].0 as u64;
-            self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
+        // ---- player damage intake (the wizard tick's mailbox block,
+        // sub_45C90 :55344-74 + sub_46540 :55641-737) ----
+        if self.player.state == LifeState::Alive {
+            // The at-castle redirect (:55353-62): with the own castle
+            // underfoot, pending ch0 damage FORWARDS into the
+            // castle's mailbox — the castle tanks for you — and the
+            // grace re-arms to 2 (:55363, an unconditional write:
+            // sitting home under fire deliberately shortens a fresh
+            // 100-tick spawn grace).
+            if at_castle && self.g.player_mail[0].1 != 0 {
+                if let Some(c) = self.player_castle() {
+                    let (amt, src) = self.g.player_mail[0];
+                    self.g.mail_write(MailTarget::Pool(c), 0, amt, src);
+                    self.g.player_mail[0] = (0, 0);
+                    self.player.grace = 2;
+                }
+            }
+            if self.invincible || self.player.grace > 0 {
+                // The grace memset (:55367-71): every channel wiped,
+                // total immunity — steal and grip included, and the
+                // danger music stays calm (sub_46540 never runs).
+                // Under the dev invincibility we keep the old
+                // playtest behaviors: the ch0 total accumulates for
+                // display and any mail arms the danger music.
+                if self.invincible {
+                    if self.g.player_mail[0].1 != 0 {
+                        let amt = self.g.player_mail[0].0 as u64;
+                        self.g.player_damage +=
+                            if self.player.shield { amt / 4 } else { amt };
+                    }
+                    if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
+                        self.g.player_danger = 100;
+                    }
+                } else {
+                    self.player.grace -= 1;
+                }
+                self.g.player_mail = [(0, 0); 6];
+            } else {
+                self.apply_player_damage(player);
+            }
+            // Health regen (:55381-421): stalled 16 ticks by every
+            // processed hit, then maxLife/250 per tick at the own
+            // castle vs maxLife/2000 afield.
+            if self.player.regen_delay > 0 {
+                self.player.regen_delay -= 1;
+            } else if self.player.life < PLAYER_LIFE_MAX {
+                let rate = if at_castle {
+                    PLAYER_LIFE_MAX / 250
+                } else {
+                    PLAYER_LIFE_MAX / 2000
+                };
+                self.player.life = (self.player.life + rate).min(PLAYER_LIFE_MAX);
+            }
+        } else {
+            // Falling/dead: the landing wipe already cleared the
+            // mailbox; discard anything new (the original's dead
+            // wizard never reads it).
+            self.g.player_mail = [(0, 0); 6];
         }
-        // Any processed hit arms the danger music for 100 ticks
-        // (sub_46540's damage/grip/steal blocks all call sub_46520 →
-        // v_46 = 100; the grace discards damage but the mail still
-        // arrived — under the invincible dev player we arm anyway so
-        // the mode is audible in playtests).
-        if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
-            self.g.player_danger = 100;
-        }
-        self.g.player_mail = [(0, 0); 6];
         if self.g.player_danger > 0 {
             self.g.player_danger -= 1;
+        }
+        if self.player.hit_flash > 0 {
+            self.player.hit_flash -= 1;
+        }
+        if self.g.castle_alert > 0 {
+            self.g.castle_alert -= 1;
+        }
+
+        // ---- the death fall and the wait for Space ----
+        match self.player.state {
+            LifeState::Falling => {
+                // The fire trail (:55478-83): one damage-suppressed
+                // (10,1) spreader per tick at the carpet.
+                if let Some(s) = self.g.spawn_effect(1, player.x, player.y, player.z) {
+                    self.g.ent[s].flags |= 0x80 | 0x10000;
+                    self.g.ent[s].id24 = PLAYER_TARGET;
+                }
+                // Landing (:55485): the sim's fall integration rides
+                // the z-floor down; ground+128 is touchdown.
+                let ground = self.g.ground_z(player.x, player.y) as i16;
+                if player.z <= ground.saturating_add(128) {
+                    self.player_land(player);
+                }
+            }
+            LifeState::Dead => {
+                if cmd.respawn {
+                    self.player_respawn();
+                }
+            }
+            LifeState::Alive => {}
         }
         // The village-aggro timer runs down once per wizard tick
         // (:55405-06) — ~200 ticks of militia hostility per offense.
@@ -716,6 +899,165 @@ impl World {
         };
         self.player.accel_held = false;
         self.accel_veto = (false, false);
+    }
+
+    // ---- player mortality (sub_46540 / sub_45FC0 / sub_44D30) -------------
+
+    /// sub_46540 (:55641): apply the pending mailbox channels to the
+    /// mortal player.
+    fn apply_player_damage(&mut self, player: PlayerPose) {
+        // ch4 grip (:55663-81): the wizard duel tether — no rival
+        // wizards cast it yet; the intake side effects land (regen
+        // stall + danger music), the tether itself is the duel track.
+        if self.g.player_mail[4].1 != 0 {
+            self.g.player_mail[4] = (0, 0);
+            self.player.regen_delay = 16;
+            self.g.player_danger = 100;
+        }
+        // ch3 mana steal (:55683-97): the pool drains; a class-3
+        // thief would bank it (mob feeders aren't wizards).
+        if self.g.player_mail[3].1 != 0 {
+            let amt = self.g.player_mail[3].0;
+            self.g.player_mail[3] = (0, 0);
+            self.player.mana = self.player.mana.saturating_sub(amt);
+            self.player.regen_delay = 16;
+            self.g.player_danger = 100;
+        }
+        // ch0 physical (:55698-735).
+        if self.g.player_mail[0].1 != 0 {
+            let (mut amt, src) = self.g.player_mail[0];
+            self.g.player_mail[0] = (0, 0);
+            // Shield (:55700-07): quarter the damage, and the
+            // quarter is ALSO paid from mana. (The original clears
+            // the +17 0x40 flag per absorb; the manifestation
+            // re-arms it every tick, so the quartering is
+            // continuous while the spell runs.)
+            if self.player.shield {
+                amt /= 4;
+                self.player.mana = self.player.mana.saturating_sub(amt);
+            }
+            self.g.player_damage += amt as u64;
+            self.player.life -= amt as i32;
+            // Knockback (:55711-21): v_24 = the source→victim
+            // bearing, v_22 = amount/10 clamped [0, 80] — an
+            // overwrite of whatever knock was pending.
+            let s = src as usize;
+            if src != 0
+                && src != PLAYER_TARGET
+                && s < features::POOL
+                && self.g.ent[s].class64 != 0
+            {
+                let dir =
+                    Gen::angle_between(self.g.ent[s].x, self.g.ent[s].y, player.x, player.y)
+                        & 0x7FF;
+                self.g.player_knock = (dir, ((amt / 10) as i16).clamp(0, 80));
+            }
+            // Red flash (sub_44BE0(2)), regen stall, hit sound 17
+            // (:55722-26) — all fire even on a fatal hit.
+            self.player.hit_flash = 5;
+            self.player.regen_delay = 16;
+            self.g.snd_player(17);
+            if self.player.life < 0 {
+                // Fatal (:55729): latch the killer; the state flip
+                // + death sound are the wizard tick's death check
+                // (:55424-29), same turn.
+                self.player.killer = src;
+                self.player.state = LifeState::Falling;
+                self.player.fall_speed = 0;
+                self.g.snd_player(16);
+                return;
+            }
+            self.g.player_danger = 100;
+        }
+        // ch1/ch2/ch5 have no player consumers (mask 29 filters most
+        // writers already); drop anything stale.
+        self.g.player_mail = [(0, 0); 6];
+    }
+
+    /// The death landing (:55485-569): wipe the mailbox, scatter the
+    /// spell inventory as decaying jars, raise the (10,40) grave and
+    /// hand it the player's loose mana balls (possess the grave to
+    /// reclaim them), then wait for Space.
+    fn player_land(&mut self, player: PlayerPose) {
+        self.g.player_mail = [(0, 0); 6];
+        // Jar scatter (:55519-47): the 24 slots remember the MODELS
+        // (re-instantiated on respawn); the manifestation entities
+        // become world jars again, thrown into a ±1-tile box with
+        // 200-289 ticks to live. Three LCG draws per jar; the
+        // original rolls the dying wizard's private stream — ours
+        // uses the world stream (APPROX: same constants; the wizard
+        // stream isn't modeled outside flight).
+        for s in 0..SPELL_COUNT {
+            let m = self.player.owned[s] as usize;
+            if m == 0 {
+                continue;
+            }
+            self.player.death_owned[s] = true;
+            self.player.owned[s] = 0;
+            let d1 = features::lcg32(&mut self.g.rand);
+            let d2 = features::lcg32(&mut self.g.rand);
+            let d3 = features::lcg32(&mut self.g.rand);
+            let x = player.x.wrapping_add(((d1 & 0x1FF) as i32 - 256) as u16);
+            let y = player.y.wrapping_add(((d2 & 0x1FF) as i32 - 256) as u16);
+            let z = self.g.ground_z(x, y) as i16;
+            {
+                let e = &mut self.g.ent[m];
+                e.tick70 = DROPPED_JAR;
+                e.f26 = (d3 % 90 + 200) as i16;
+            }
+            self.g.move_relink(m, x, y, z);
+        }
+        // The grave (:55550-65). On a full pool the original retries
+        // the whole landing next tick; ours proceeds graveless (the
+        // balls simply stay player-owned) — a benign deviation.
+        let gz = self.g.ground_z(player.x, player.y) as i16;
+        if let Some(gv) = self.g.spawn_grave(player.x, player.y, gz) {
+            for j in 1..features::POOL {
+                if self.g.ent[j].class64 == 10
+                    && self.g.ent[j].model65 == 39
+                    && self.g.ent[j].flags & 0x400 == 0
+                    && self.g.ent[j].f144 == PLAYER_TARGET
+                {
+                    self.g.ent[j].f144 = gv as u16;
+                }
+            }
+        }
+        self.player.state = LifeState::Dead;
+        self.entities_dirty = true;
+    }
+
+    /// sub_44D30 (:54802) via the Space command (case 0xF :48620-33):
+    /// respawn at the castle; castle-less in single player = the
+    /// lost + level-over flags — the level restarts.
+    fn player_respawn(&mut self) {
+        let Some(c) = self.player_castle() else {
+            self.player.lost = true;
+            self.pending_restart = true;
+            return;
+        };
+        let e = &self.g.ent[c];
+        self.pending_respawn = Some((e.x as f32 / 256.0, e.y as f32 / 256.0));
+        // Type_160 re-arm (:54866-83) + HP/mana reset (:55019-32).
+        self.player.state = LifeState::Alive;
+        self.player.life = PLAYER_LIFE_MAX;
+        self.player.grace = 100;
+        self.player.regen_delay = 0;
+        self.player.killer = 0;
+        self.player.hit_flash = 0;
+        self.g.player_knock = (0, 0);
+        self.g.player_danger = 0;
+        self.player.mana = self.player.mana_max;
+        // Jar re-instantiation (:54884-923): every remembered model
+        // returns as an owned manifestation; the scattered decaying
+        // jars stay out in the world until they expire. Hand equips
+        // survive death untouched (the original never clears
+        // var_940/944 on respawn).
+        for s in 0..SPELL_COUNT {
+            if self.player.death_owned[s] {
+                self.player.death_owned[s] = false;
+                self.grant_spell(SpellId(s as u8));
+            }
+        }
     }
 
     // ---- player spells (sub_46B00_46E40 :55851 + the 24 cast arms) --------
@@ -1214,6 +1556,9 @@ impl World {
         self.player.mana_max = max;
         self.player.banked = houses.saturating_add(castle_stored);
         self.player.world_mana = world;
+        // The castle overflow ejector reads the house tally
+        // (sub_47130 :56185-89 — wizext u32_308).
+        self.g.banked_houses = houses.min(i32::MAX as u32) as i32;
     }
 
     /// sub_55DD0 (:64909): the cast gate — the castle ladder first
@@ -1278,7 +1623,12 @@ impl World {
         e.f126 += p.speed;
         e.f128 = e.f126;
         e.id24 = PLAYER_TARGET;
+        // The launch inherits the wizard's AIM — yaw and pitch both
+        // (:65913-14 copies +30/+32) — and the flight EASES from it
+        // toward the ground target (the playtest-6 "castle ignores
+        // up/down aim" fix).
         e.f30 = p.heading;
+        e.f32 = p.pitch;
         e.f34 = p.heading;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = def.possess_mana as i32;
@@ -1373,7 +1723,7 @@ impl World {
             e.f82 = 320;
             e.f84 = 320;
         }
-        self.g.area_write(s, 0, SPELLS[22].damage, ctx, false);
+        self.g.area_write(s, 0, SPELLS[22].damage, ctx, false, false);
         self.g.free_entity(s);
     }
 
@@ -1383,7 +1733,22 @@ impl World {
         let t = self.g.ent[i].tick70;
         if t >= MANIFEST_BASE {
             self.manifestation_tick(i, (t - MANIFEST_BASE) as usize);
-        } else if self.g.player_overlap(i, ctx) {
+            return;
+        }
+        // Death-scattered jars decay (life 200-289, :55545-47); the
+        // THING-placed states 0..=2 sit forever.
+        if t == DROPPED_JAR {
+            self.g.ent[i].f26 -= 1;
+            if self.g.ent[i].f26 <= 0 {
+                self.g.ent[i].flags |= 0x400;
+                self.entities_dirty = true;
+                return;
+            }
+        }
+        // Pickup needs a live carpet — the original's dead wizard is
+        // out of play (flag 0x20), so the fresh scatter can't be
+        // re-vacuumed while lying on it.
+        if self.player.state == LifeState::Alive && self.g.player_overlap(i, ctx) {
             self.try_pickup(i);
         }
     }
@@ -1429,8 +1794,8 @@ impl World {
                 self.player.heal_active = active;
                 let def = &SPELLS[1];
                 if active && (self.dev_spells || self.player.mana >= def.possess_mana) {
-                    self.g.player_damage =
-                        self.g.player_damage.saturating_sub(PLAYER_LIFE_MAX / 20);
+                    self.player.life =
+                        (self.player.life + PLAYER_LIFE_MAX / 20).min(PLAYER_LIFE_MAX);
                     if !self.dev_spells {
                         self.player.mana -= def.possess_mana / def.count as u32;
                     }
@@ -1482,6 +1847,10 @@ impl World {
                     e.f136.max(0) as u32,
                     e.f26.clamp(0, 255) as u8,
                 )
+            }),
+            castle_hp: self.player_castle().map(|c| {
+                let e = &self.g.ent[c];
+                (e.act_life.max(0), e.max_life.max(1))
             }),
             win_pct: self.win_pct,
             completed: self.completed,
@@ -1539,10 +1908,74 @@ impl World {
         }
     }
 
-    /// Total ch0 damage the invincible player has absorbed (what the
-    /// original would have subtracted from your life).
+    /// Total ch0 damage the player has taken (a running stat; under
+    /// the dev invincibility it is the only ledger).
     pub fn player_damage_taken(&self) -> u64 {
         self.g.player_damage
+    }
+
+    /// The mortality snapshot for the app: HUD bar, hit/death
+    /// overlays, respawn prompt, castle-under-attack flash.
+    pub fn vitals(&self) -> PlayerVitals {
+        PlayerVitals {
+            life: self.player.life.clamp(0, PLAYER_LIFE_MAX),
+            life_max: PLAYER_LIFE_MAX,
+            state: self.player.state,
+            grace: self.player.grace,
+            hit_flash: self.player.hit_flash,
+            lost: self.player.lost,
+            castle_alert: self.g.castle_alert > 0,
+            has_castle: self.player_castle().is_some(),
+        }
+    }
+
+    /// The death fall is running (class-3 state 2): the sim's mover
+    /// suppresses input and integrates [`Self::death_fall_step`].
+    pub fn player_falling(&self) -> bool {
+        self.player.state == LifeState::Falling
+    }
+
+    /// Landed and waiting for Space (class-3 state 3).
+    pub fn player_dead(&self) -> bool {
+        self.player.state == LifeState::Dead
+    }
+
+    /// One tick of death-fall gravity (:55466-72): returns this
+    /// tick's vertical delta (engine units, ≤ 0), then accelerates
+    /// −2/tick² clamped to −256.
+    pub fn death_fall_step(&mut self) -> i16 {
+        let v = self.player.fall_speed;
+        self.player.fall_speed = (v - 2).clamp(-256, 0);
+        v
+    }
+
+    /// The killer's position in tile units (the death camera turns
+    /// toward it, sub_463B0 :55575-91).
+    pub fn killer_pos(&self) -> Option<(f32, f32)> {
+        let k = self.player.killer as usize;
+        if k != 0 && k < features::POOL && self.g.ent[k].class64 != 0 {
+            let e = &self.g.ent[k];
+            Some((e.x as f32 / 256.0, e.y as f32 / 256.0))
+        } else {
+            None
+        }
+    }
+
+    /// A respawn fired this tick: destination in tile units. The sim
+    /// moves the carpet there and resets the flight state.
+    pub fn take_respawn(&mut self) -> Option<(f32, f32)> {
+        self.pending_respawn.take()
+    }
+
+    /// Castle-less death confirmed: the app restarts the level (the
+    /// original's lost + level-over flow).
+    pub fn take_restart(&mut self) -> bool {
+        std::mem::take(&mut self.pending_restart)
+    }
+
+    /// Dev/accessibility invincibility (the pre-mortality behavior).
+    pub fn set_invincible(&mut self, on: bool) {
+        self.invincible = on;
     }
 
     /// Combat stat counters: (kills, shots resolved, aimed hits) —
@@ -2503,9 +2936,12 @@ mod tests {
     /// Combat-test loadout: the Rapid Fireball firehose (23) on the
     /// left hand with the dev mana pin — the only hold-to-autofire
     /// spell, giving the 1-projectile-per-held-tick cadence the
-    /// combat tests were written against.
+    /// combat tests were written against. Invincibility pins the OLD
+    /// dev-player semantics these tests assume (damage totaled from
+    /// tick 0, no death mid-fight); mortality has its own tests.
     fn rapid_fire(w: &mut World) {
         w.set_dev_spells(true);
+        w.set_invincible(true);
         w.player.left = Some(crate::spells::SpellId(23));
     }
 
@@ -2533,6 +2969,232 @@ mod tests {
             par3: None,
         }];
         World::new(planes, &things, 7, assets())
+    }
+
+    // ---- mortality (the 2026-07-07 track) -------------------------------
+
+    /// A landed pose: ground 100*32 = 3200, the touchdown floor is
+    /// ground+128 = 3328 (firing_line's 3360 stays airborne).
+    fn grounded_line() -> PlayerPose {
+        PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3328, 0)
+    }
+
+    fn hit_player(w: &mut World, amt: u32, src: u16) {
+        w.g.mail_write(crate::combat::MailTarget::Player, 0, amt, src);
+    }
+
+    #[test]
+    fn spawn_grace_absorbs_then_real_damage_knocks_and_kills() {
+        let mut w = bare_creature_world(2);
+        w.set_dev_spells(true); // all spells owned → a real jar scatter
+        // Park the creature far away; it stays alive as the damage
+        // SOURCE entity (the knockback bearing needs its position).
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+
+        // 1) The grace window: hits are wiped, not totaled (:55367-71).
+        for _ in 0..50 {
+            hit_player(&mut w, 500, 1);
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert_eq!(w.vitals().life, PLAYER_LIFE_MAX, "grace = total immunity");
+        assert_eq!(w.player_damage_taken(), 0, "grace does not total");
+        for _ in 0..50 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert_eq!(w.vitals().grace, 0, "the 100-tick grace expired");
+
+        // 2) A real hit: life drops, knockback arms (amt/10 clamp 80),
+        // the red flash and the regen stall run.
+        hit_player(&mut w, 500, 1);
+        w.tick(firing_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().life, PLAYER_LIFE_MAX - 500);
+        assert_eq!(w.knock_magnitude(), 50, "v_22 = amount/10");
+        assert!(w.vitals().hit_flash > 0, "the red flash armed");
+
+        // 3) Regen: /2000 afield = 5/tick once the 16-tick stall ends.
+        for _ in 0..20 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        let healed = w.vitals().life;
+        assert!(healed > PLAYER_LIFE_MAX - 500, "afield regen ticked");
+        assert!(healed < PLAYER_LIFE_MAX, "but nowhere near full yet");
+
+        // 4) A lethal hit: the death fall begins.
+        hit_player(&mut w, 30000, 1);
+        w.tick(firing_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Falling);
+        assert!(w.player_falling());
+
+        // 5) Touchdown at ground+128: jars scatter, the grave rises,
+        // the player-owned loose ball passes to the grave.
+        let b = w.g.spawn_mana_ball((112 << 8) + 128, (114 << 8) + 128, 3200).unwrap();
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.tick(grounded_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead);
+        assert_eq!(count(&w, 10, 40), 1, "the grave stands");
+        let grave = w
+            .debug_pool()
+            .1
+            .into_iter()
+            .find(|e| e.class == 10 && e.model == 40)
+            .unwrap()
+            .slot as u16;
+        assert_eq!(w.g.ent[b as usize].f144, grave, "the grave inherits the ball");
+        let jars = w
+            .debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == 12 && e.state == 3)
+            .count();
+        assert!(jars > 0, "the spell inventory scattered as decaying jars");
+
+        // 6) Castle-less respawn = the level is lost and restarts.
+        w.tick(grounded_line(), PlayerCommand { respawn: true, ..Default::default() });
+        assert!(w.take_restart(), "castle-less death restarts the level");
+        assert!(w.vitals().lost);
+    }
+
+    #[test]
+    fn death_with_a_castle_respawns_there_with_fresh_grace() {
+        let mut w = bare_creature_world(2);
+        w.set_dev_spells(true);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let c = w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..60 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert!(w.loadout().castle.is_some(), "castle established");
+
+        w.player.grace = 0;
+        hit_player(&mut w, 30000, 1);
+        w.tick(firing_line(), PlayerCommand::default());
+        w.tick(grounded_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead);
+        let owned_before = w.loadout().owned.iter().filter(|&&o| o).count();
+        assert_eq!(owned_before, 0, "ownership rides the death slots while dead");
+
+        w.tick(grounded_line(), PlayerCommand { respawn: true, ..Default::default() });
+        let (rx, rz) = w.take_respawn().expect("respawn fired");
+        // The castle grid-snaps to even tile parity; just confirm the
+        // destination is the castle's tile neighborhood.
+        assert!((rx - 140.0).abs() < 2.0 && (rz - 140.0).abs() < 2.0);
+        assert_eq!(w.vitals().state, LifeState::Alive);
+        assert_eq!(w.vitals().life, PLAYER_LIFE_MAX);
+        assert_eq!(w.vitals().grace, 100, "fresh spawn grace");
+        assert!(!w.take_restart(), "no restart with a castle standing");
+        let owned_after = w.loadout().owned.iter().filter(|&&o| o).count();
+        assert!(owned_after >= 24, "the spell inventory re-instantiated");
+    }
+
+    #[test]
+    fn castle_transformation_kills_the_footprint_but_spares_the_exempt() {
+        let mut w = bare_creature_world(2); // wild lunger at ~(113,110)
+        // An owned creature and a boss-exempt m16 on the footprint.
+        let owned = w.g.spawn_creature(2, (112 << 8), (110 << 8), 3200).unwrap();
+        w.g.ent[owned].id24 = PLAYER_TARGET;
+        let boss = w.g.spawn_creature(16, (111 << 8), (110 << 8), 3200).unwrap();
+        let wild_life = w.g.ent[1].act_life;
+        assert!(wild_life > 0);
+
+        // The castle rises straight under them (the level-0 build
+        // skips the space gate — the initial cast is single-step).
+        let c = w.g.spawn_castle((112 << 8), (110 << 8)).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..40 {
+            w.tick(PlayerPose::level((90 << 8), (90 << 8), 3400, 0), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 5, 2) , 1, "exactly one m2 survives...");
+        assert_eq!(w.g.ent[owned].id24, PLAYER_TARGET);
+        assert!(w.g.ent[owned].act_life > 0, "...the OWNED one (owner immunity)");
+        assert!(w.g.ent[boss].act_life > 0, "m16 is exempt from the execution");
+        let (kills, _, _) = w.combat_stats();
+        assert_eq!(kills, 1, "the execution credits the castle owner");
+    }
+
+    #[test]
+    fn castle_downgrade_ejects_mana_and_demolish_razes() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level((90 << 8), (90 << 8), 3400, 0);
+        let c = w.g.spawn_castle((140 << 8), (140 << 8)).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        // Promote to level 2 through the authentic ch5 upgrade mail.
+        w.g.ent[c].mail[5] = (10, PLAYER_TARGET);
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let (_, cap, lvl) = w.loadout().castle.expect("castle stands");
+        assert_eq!((lvl, cap), (2, 20_000));
+
+        // Bank mana, then overkill it: one level down, the overkill
+        // carries (capped at half), the spill flies out as balls.
+        w.g.ent[c].f140 = 30_000;
+        w.g.mail_write(crate::combat::MailTarget::Pool(c), 0, 45_000, 1);
+        w.tick(pose, PlayerCommand::default());
+        let (_, cap, lvl) = w.loadout().castle.expect("downgraded, not dead");
+        assert_eq!((lvl, cap), (1, 10_000), "one level per lethal event");
+        assert_eq!(
+            w.g.ent[c].act_life, 15_000,
+            "20000 max minus the 5000 overkill carry"
+        );
+        assert!(count(&w, 10, 39) >= 2, "the spill scattered as mana balls");
+        assert_eq!(count(&w, 10, 54), 4, "the four collapse magnets");
+
+        // Let the repaint cycle finish, then demolish: level 1 → 0
+        // = total destruction, castle-less.
+        for _ in 0..80 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        w.tick(pose, PlayerCommand { demolish: true, ..Default::default() });
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(w.loadout().castle.is_none(), "the demolish razed it");
+        assert_eq!(count(&w, 3, 2), 0, "the entity is gone");
+    }
+
+    /// Playtest-6 orphaned-tower regression: a lethal (here the
+    /// demolish key) landing MID-TRANSFORMATION must defer until the
+    /// castle is established — the original's standing tick is the
+    /// only damage processor. Processing it under a live painter
+    /// collapsed the footprint while the painter kept painting,
+    /// leaving castle terrain with no castle.
+    #[test]
+    fn demolish_during_the_build_defers_until_established() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level((90 << 8), (90 << 8), 3400, 0);
+        let c = w.g.spawn_castle((140 << 8), (140 << 8)).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        // Two ticks in: the painter is mid-flight, the castle waits.
+        w.tick(pose, PlayerCommand::default());
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(w.g.ent[c].f59, 1, "mid-transformation wait state");
+        w.tick(pose, PlayerCommand { demolish: true, ..Default::default() });
+        assert!(w.g.ent[c].act_life < 0, "the lethal is pending");
+        // The transformation runs to completion untouched...
+        for _ in 0..10 {
+            w.tick(pose, PlayerCommand::default());
+            if w.g.ent[c].flags & 0x400 != 0 || w.g.ent[c].class64 != 3 {
+                panic!("the castle died mid-transformation");
+            }
+        }
+        // ...and the deferred lethal razes it once established
+        // (level 1 → destruction).
+        for _ in 0..80 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 3, 2), 0, "processed at establishment");
+        // No orphaned painters/levelers keep running afterwards.
+        assert_eq!(count(&w, 10, 42) + count(&w, 10, 41), 0);
     }
 
     #[test]
@@ -3393,4 +4055,3 @@ mod tests {
         assert_eq!(run(), run());
     }
 }
-

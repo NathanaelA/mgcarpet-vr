@@ -34,6 +34,33 @@ const MOUSE_SENSITIVITY: f32 = 0.0022;
 /// half that suits modern DPI while sensitivity 1.0 keeps the range.
 const STICK_PER_PIXEL: f32 = 0.4;
 
+/// Pristine inputs to rebuild the [`mgc_sim::world::World`] for a
+/// LEVEL RESTART — the original's castle-less-death "lost + level
+/// over" flow ends in exactly this (respawn at the start of a fresh
+/// level).
+struct WorldInit {
+    planes: mgc_sim::features::Planes,
+    things: Vec<mgc_formats::Thing>,
+    seed: u32,
+    assets: mgc_sim::features::FeatureAssets,
+    win_pct: u16,
+}
+
+impl WorldInit {
+    fn build(&self) -> mgc_sim::world::World {
+        let mut w = mgc_sim::world::World::new(
+            self.planes.clone(),
+            &self.things,
+            self.seed,
+            self.assets.clone(),
+        );
+        if self.win_pct > 0 {
+            w.set_win_pct(self.win_pct);
+        }
+        w
+    }
+}
+
 struct LoadedLevel {
     view: LevelView,
     height: Vec<u8>,
@@ -52,6 +79,8 @@ struct LoadedLevel {
     /// terrain events); moved into the Simulation by App::new. None =
     /// static terrain (MC2, or --no-terrain-features).
     world: Option<mgc_sim::world::World>,
+    /// Rebuild inputs for the castle-less-death level restart.
+    world_init: Option<WorldInit>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
     palette_rgba: [[u8; 4]; 256],
     /// The per-game audio bundle directory (`assets/mc1-audio` /
@@ -175,6 +204,7 @@ fn load_level(
     // behind triggers (dis_id != 0) stay latent until fired. Needs the
     // shading + angle planes and the bundle's search/build data.
     let mut world = None;
+    let mut world_init = None;
     if terrain_features && package.meta.game != Game::MagicCarpet2 {
         match (
             &shading,
@@ -186,29 +216,34 @@ fn load_level(
             (Some(sh), Some(an), Some(search), Some(build_tab), Some(build_dat)) => {
                 let assets = mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
-                let mut w = mgc_sim::world::World::new(
-                    mgc_sim::features::Planes {
+                // The level goal: footer[0] = the required banked
+                // percentage of world mana (level offset 38800 —
+                // the win check's threshold and the HUD goal tick).
+                let win_pct = package
+                    .gen_params
+                    .as_ref()
+                    .and_then(|g| g.footer)
+                    .map_or(0, |f| f[0]);
+                let init = WorldInit {
+                    planes: mgc_sim::features::Planes {
                         height: height.clone(),
                         tile_type: tile_type.clone(),
                         shading: sh.clone(),
                         angle: an.clone(),
                     },
-                    &package.things.things,
+                    things: package.things.things.clone(),
                     seed,
                     assets,
-                );
-                // The level goal: footer[0] = the required banked
-                // percentage of world mana (level offset 38800 —
-                // the win check's threshold and the HUD goal tick).
-                if let Some(f) = package.gen_params.as_ref().and_then(|g| g.footer) {
-                    w.set_win_pct(f[0]);
-                }
+                    win_pct,
+                };
+                let w = init.build();
                 // The view starts from the post-feature planes.
                 height.copy_from_slice(&w.planes().height);
                 tile_type.copy_from_slice(&w.planes().tile_type);
                 shading.as_mut().unwrap().copy_from_slice(&w.planes().shading);
                 angle.as_mut().unwrap().copy_from_slice(&w.planes().angle);
                 world = Some(w);
+                world_init = Some(init);
             }
             (None, ..) | (_, None, ..) => eprintln!(
                 "note: package lacks shading/angle planes — terrain features skipped (rebake)"
@@ -308,6 +343,7 @@ fn load_level(
         start,
         map_areas: world.as_ref().map(map_areas).unwrap_or_default(),
         world,
+        world_init,
         palette_rgba: bundle.palette,
         map_icons: entities::MapIcons {
             // Castle = UI sprite 58+team, balloon = 66+team (team 0);
@@ -364,6 +400,12 @@ struct App {
     health_bars: bool,
     /// All spells + infinite mana (playtest instrument; G toggles).
     dev_spells: bool,
+    /// The pre-mortality invincible player (config `invincible`).
+    invincible: bool,
+    /// Space pressed since the last sim tick (respawn confirm).
+    pending_respawn: bool,
+    /// Shift+L pressed since the last sim tick (castle demolish).
+    pending_demolish: bool,
     /// Claimed dwellings highlighted on the map (MC2-style opt-in).
     map_owned_buildings: bool,
     /// Own castle position in tile units (the guide-path target),
@@ -414,6 +456,7 @@ impl App {
         map_triggers: bool,
         health_bars: bool,
         dev_spells: bool,
+        invincible: bool,
         map_owned_buildings: bool,
         audio_cfg: &config::AudioConfig,
         flight: config::FlightConfig,
@@ -465,6 +508,11 @@ impl App {
                 w.set_dev_spells(true);
             }
         }
+        if invincible {
+            if let Some(w) = &mut sim.world {
+                w.set_invincible(true);
+            }
+        }
         let prev_flyer = sim.flyer;
         Self {
             level,
@@ -472,6 +520,9 @@ impl App {
             map_triggers,
             health_bars,
             dev_spells,
+            invincible,
+            pending_respawn: false,
+            pending_demolish: false,
             map_owned_buildings,
             castle_pos: None,
             window: None,
@@ -533,6 +584,35 @@ impl App {
         audio.tick();
     }
 
+    /// Castle-less death: rebuild the pristine world (the original
+    /// restarts the level) and reset the flyer to the level start.
+    fn restart_level(&mut self) {
+        let Some(init) = &self.level.world_init else {
+            return;
+        };
+        let mut w = init.build();
+        if self.dev_spells {
+            w.set_dev_spells(true);
+        }
+        if self.invincible {
+            w.set_invincible(true);
+        }
+        w.terrain_dirty = true;
+        w.entities_dirty = true;
+        let (thrust, altitude) = (self.sim.thrust_model, self.sim.altitude_model);
+        self.sim = Simulation::with_world(w);
+        self.sim.thrust_model = thrust;
+        self.sim.altitude_model = altitude;
+        if let Some(start) = self.level.start {
+            self.sim.flyer = start;
+            self.sim.sync_carpet_from_flyer();
+        }
+        self.prev_flyer = self.sim.flyer;
+        self.castle_pos = None;
+        self.sync_world();
+        println!("level restarted (died without a castle)");
+    }
+
     fn book_open(&self) -> bool {
         self.renderer.as_ref().is_some_and(|r| r.map_view())
     }
@@ -559,6 +639,8 @@ impl App {
             fire_right: self.fire_right_held && self.grabbed && !book,
             equip_left: self.pending_equip.0.take().map(mgc_sim::spells::SpellId),
             equip_right: self.pending_equip.1.take().map(mgc_sim::spells::SpellId),
+            respawn: std::mem::take(&mut self.pending_respawn),
+            demolish: std::mem::take(&mut self.pending_demolish),
             ..Default::default()
         };
         if mc1 {
@@ -937,6 +1019,17 @@ impl ApplicationHandler for App {
                     );
                     return;
                 }
+                // The demolish key (MC1 Shift+L, scancode 0x26 under
+                // the shift branch :20496-501): razes the OWN castle
+                // one level per press — the castle-as-attack-spell
+                // enabler, at the price of the respawn point.
+                if down
+                    && self.shift_held
+                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyL)
+                {
+                    self.pending_demolish = true;
+                    return;
+                }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyG) {
                     self.dev_spells = !self.dev_spells;
                     if let Some(w) = &mut self.sim.world {
@@ -991,9 +1084,18 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::ArrowRight) => k.turn_right = down,
                     PhysicalKey::Code(KeyCode::ArrowUp) => k.pitch_up = down,
                     PhysicalKey::Code(KeyCode::ArrowDown) => k.pitch_down = down,
-                    PhysicalKey::Code(KeyCode::Space) => k.up = down,
+                    // Extended-lift float moved to E/Q (2026-07-07,
+                    // player directive): Space is the original's
+                    // respawn/continue key and Shift now composes
+                    // freely (Shift+L demolish, Shift+digit equips).
+                    PhysicalKey::Code(KeyCode::KeyE) => k.up = down,
+                    PhysicalKey::Code(KeyCode::KeyQ) => k.down = down,
+                    PhysicalKey::Code(KeyCode::Space) => {
+                        if down {
+                            self.pending_respawn = true;
+                        }
+                    }
                     PhysicalKey::Code(KeyCode::ShiftLeft) => {
-                        k.down = down;
                         self.shift_held = down;
                     }
                     _ => {}
@@ -1017,6 +1119,11 @@ impl ApplicationHandler for App {
                     self.audio_tick();
                 }
                 self.sync_world();
+                // Castle-less death confirmed → the level restarts
+                // (the original's lost + level-over flow).
+                if self.sim.world.as_mut().is_some_and(|w| w.take_restart()) {
+                    self.restart_level();
+                }
 
                 let alpha = self.accumulator / TICK_DT;
                 let (a, b) = (&self.prev_flyer, &self.sim.flyer);
@@ -1066,11 +1173,19 @@ impl ApplicationHandler for App {
                         .map(|s| (s.width as f32, s.height as f32))
                         .unwrap_or((1280.0, 720.0));
                     let loadout = w.loadout();
-                    let (quads, hovered) = if self.book_open() {
+                    let (mut quads, hovered) = if self.book_open() {
                         ui::book_quads(assets, &loadout, size.0, size.1, self.cursor)
                     } else {
                         (ui::hud_quads(assets, &loadout, size.0, size.1), None)
                     };
+                    if !self.book_open() {
+                        quads.extend(ui::vitals_quads(
+                            &w.vitals(),
+                            size.0,
+                            size.1,
+                            (self.sim.tick / 8) % 2 == 0,
+                        ));
+                    }
                     self.hovered = hovered;
                     if let Some(r) = &mut self.renderer {
                         r.set_ui_quads(quads);
@@ -1135,6 +1250,8 @@ struct Args {
     health_bars: Option<bool>,
     /// CLI override of `enhancements.dev_spells`.
     dev_spells: Option<bool>,
+    /// CLI override of `enhancements.invincible`.
+    invincible: Option<bool>,
     /// CLI overrides of the `flight` tier enums; None = use config.
     thrust: Option<config::ThrustModel>,
     altitude: Option<config::AltitudeModel>,
@@ -1162,6 +1279,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map_triggers = None;
     let mut health_bars = None;
     let mut dev_spells = None;
+    let mut invincible = None;
     let mut thrust = None;
     let mut altitude = None;
     let mut bindings = None;
@@ -1213,6 +1331,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-health-bars" => health_bars = Some(false),
             "--dev-spells" => dev_spells = Some(true),
             "--no-dev-spells" => dev_spells = Some(false),
+            "--invincible" => invincible = Some(true),
+            "--no-invincible" => invincible = Some(false),
             "--thrust" => {
                 thrust = Some(match it.next().as_deref() {
                     Some("mc1") => config::ThrustModel::Mc1,
@@ -1263,6 +1383,7 @@ fn parse_args() -> Result<Args, String> {
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
                      [--dev-spells|--no-dev-spells] \
+                     [--invincible|--no-invincible] \
                      [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
                      [--bindings classic|wasd] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
@@ -1285,6 +1406,7 @@ fn parse_args() -> Result<Args, String> {
         map_triggers,
         health_bars,
         dev_spells,
+        invincible,
         thrust,
         altitude,
         bindings,
@@ -1432,6 +1554,7 @@ fn main() -> std::process::ExitCode {
         .unwrap_or(cfg.enhancements.map_trigger_areas);
     let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
     let dev_spells = args.dev_spells.unwrap_or(cfg.enhancements.dev_spells);
+    let invincible = args.invincible.unwrap_or(cfg.enhancements.invincible);
     let flight = config::FlightConfig {
         thrust: args.thrust.unwrap_or(cfg.flight.thrust),
         altitude: args.altitude.unwrap_or(cfg.flight.altitude),
@@ -1492,8 +1615,10 @@ fn main() -> std::process::ExitCode {
         ),
     }
     if flight.altitude == config::AltitudeModel::ExtendedLift {
-        println!("          Space/Shift float up/down (extended lift, capped at the highest terrain),");
+        println!("          E/Q float up/down (extended lift, capped at the highest terrain),");
     }
+    println!("          Space respawns after death (at your castle; no castle = level restart),");
+    println!("          Shift+L demolishes your own castle one level per press,");
     println!("          LMB/RMB cast the equipped hand's spell (hold = channel),");
     println!("          Enter opens the book: click a spell with LMB/RMB to equip,");
     println!("          hover + 1-9,0 binds a quick key (in flight: equip, Shift = right hand),");
@@ -1513,6 +1638,7 @@ fn main() -> std::process::ExitCode {
         map_triggers,
         health_bars,
         dev_spells,
+        invincible,
         cfg.enhancements.map_owned_buildings,
         &cfg.audio,
         flight,

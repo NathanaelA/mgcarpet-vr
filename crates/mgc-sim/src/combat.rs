@@ -94,15 +94,21 @@ impl Gen {
         (f66 == 0xFF || f66 == class) && (f67 == 0xFF || f67 == model)
     }
 
-    /// sub_120B0 (:17235) / sub_124F0 (:17399): the channel-N area
-    /// write around event `i`. Gates per candidate: owner immunity
-    /// (+24 equality — the engine's only friendly-fire rule), the
-    /// damageable flag (+16&8), the vulnerability mask (+28 bit ch),
-    /// the writer's +66/+67 filter, AABB overlap; ch0 skips class-3
-    /// model 2 (:17372). `building_tenth` = the 124F0 variant where
-    /// class-2 model-0 TREES take amt/10 (:17465 — the discount that
-    /// keeps area spells from vaporizing forests; village buildings
-    /// are class-10 m45 and take full amounts).
+    /// sub_120B0 (:17235) / sub_124F0 (:17399) / sub_127E0 (:17502):
+    /// the channel-N area write around event `i`. Gates per
+    /// candidate: owner immunity (+24 equality — the engine's only
+    /// friendly-fire rule), the damageable flag (+16&8), the
+    /// vulnerability mask (+28 bit ch), the writer's +66/+67 filter,
+    /// AABB overlap; the tile scan skips class-3 model 2 (:17372) —
+    /// castles get their own ch0 pre-pass instead (:17325-34): every
+    /// overlapping castle on ANOTHER team takes the mail (this is
+    /// how mob-death fire cells fell castles), and under the 127E0
+    /// variant (`shake`) EVERY castle in range — own included — arms
+    /// its 30-tick blast-shake repaint (:17522). `building_tenth` =
+    /// the 124F0 variant where class-2 model-0 TREES take amt/10
+    /// (:17465 — the discount that keeps area spells from vaporizing
+    /// forests; village buildings are class-10 m45 and take full
+    /// amounts).
     pub(crate) fn area_write(
         &mut self,
         i: usize,
@@ -110,11 +116,35 @@ impl Gen {
         amt: u32,
         ctx: &MobCtx,
         building_tenth: bool,
+        shake: bool,
     ) {
         let (wx, wy, id, f66, f67) = {
             let e = &self.ent[i];
             (e.x, e.y, e.id24, e.f66, e.f67)
         };
+        // The castle pre-pass (ch0 only).
+        if ch == 0 {
+            let mut hits: Vec<usize> = Vec::new();
+            for j in 1..POOL {
+                let c = &self.ent[j];
+                if c.class64 == 3
+                    && c.model65 == 2
+                    && c.flags & 0x400 == 0
+                    && j != i
+                    && self.ent_overlap(i, j)
+                {
+                    hits.push(j);
+                }
+            }
+            for j in hits {
+                if shake {
+                    self.ent[j].f50 = 30;
+                }
+                if self.ent[j].id24 != id {
+                    self.mail_write(MailTarget::Pool(j), 0, amt, id);
+                }
+            }
+        }
         let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
         let mut victims: Vec<(usize, u32)> = Vec::new();
         for dy in -r..=r {
@@ -821,20 +851,48 @@ impl Gen {
         let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (dx, dy) = (self.ent[i].dest_x, self.ent[i].dest_y);
         let tz = self.ground_z(dx, dy) as i16;
-        let yaw = Self::angle_between(px, py, dx, dy);
+        // EASED steering (sub_53B50 :63548-65 via sub_422A0 with the
+        // behavior-row caps): the ball leaves along the wizard's aim
+        // and turns toward the ground target at row-0 rates — the
+        // aim pitch shapes the early arc (snap-steer was the
+        // playtest-6 "aim ignored" report).
+        let tgt_yaw = Self::angle_between(px, py, dx, dy);
         let dh = Self::isqrt(Self::dist2_sq(px, py, dx, dy) as u32) as i32;
-        let pitch = Self::pitch_toward(pz, tz, dh);
+        let tgt_pitch = Self::pitch_toward(pz, tz, dh);
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let (v2, v6) = (row.v_2, row.v_6);
         {
             let e = &mut self.ent[i];
-            e.f30 = yaw;
-            e.f32 = pitch;
+            e.f34 = tgt_yaw;
+            e.f36 = tgt_pitch;
+            let ty = Self::turn_step(e.f30, tgt_yaw, v2);
+            e.f30 = (e.f30 as i32 + ty as i32) as u16 & 0x7FF;
+            let tp = Self::turn_step(e.f32, tgt_pitch, v6);
+            e.f32 = (e.f32 as i32 + tp as i32) as u16 & 0x7FF;
         }
+        let (yaw, pitch) = (self.ent[i].f30, self.ent[i].f32);
         let mut tmp = (px, py, pz);
         let speed = self.ent[i].f126;
         Self::polar_step(&mut tmp, yaw, pitch, speed);
         let ground = self.ground_z(tmp.0, tmp.1) as i16;
-        let grounded = ground > tmp.2;
+        let mut grounded = ground > tmp.2;
         self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        // The with-castle flight lands on OVERLAP with the linked
+        // castle — the ball snaps onto it and morphs (:63484-88);
+        // the castle's 0x4000 z-extent makes any overflight count.
+        if upgrade {
+            let c = self.ent[i].f146 as usize;
+            if c != 0
+                && self.ent[c].class64 == 3
+                && self.ent[c].flags & 0x400 == 0
+                && self.ent_overlap(i, c)
+            {
+                let (cx, cy, cz) = (self.ent[c].x, self.ent[c].y, self.ent[c].z);
+                self.move_relink(i, cx, cy, cz);
+                tmp = (cx, cy, cz);
+                grounded = true;
+            }
+        }
         self.ent[i].act_life -= 1;
         if grounded || self.ent[i].act_life < 0 {
             let own = self.ent[i].id24;
@@ -1195,7 +1253,7 @@ impl Gen {
         self.ent[i].act_life -= 1;
         if hit || grounded || self.ent[i].act_life < 0 {
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, false);
+            self.area_write(i, 0, amt, ctx, false, false);
             self.ent[i].flags |= 0x400;
         }
         false
@@ -1665,7 +1723,7 @@ impl Gen {
             return false;
         }
         let amt = self.ent[i].f44 as u32;
-        self.area_write(i, 1, amt, ctx, false);
+        self.area_write(i, 1, amt, ctx, false, false);
         false
     }
 
@@ -2042,7 +2100,15 @@ impl Gen {
             25 => self.steal_flash_tick(i, ctx),
             40 => self.storm_cloud_tick(i, ctx),
             41 => self.ball_tick(i),
+            42 => {
+                self.grave_tick(i);
+                false
+            }
             58 => self.napalm_tick(i, ctx),
+            59 => {
+                self.mana_magnet_tick(i);
+                false
+            }
             _ => false,
         }
     }
@@ -2064,7 +2130,7 @@ impl Gen {
             e.f84 = 2048;
         }
         let amt = self.ent[i].f44 as u32 / self.ent[i].max_life.max(1);
-        self.area_write(i, 0, amt, ctx, false);
+        self.area_write(i, 0, amt, ctx, false, false);
         let wave = self.ent[i].f26;
         let (x, y, z, own) = {
             let e = &self.ent[i];
@@ -2140,7 +2206,7 @@ impl Gen {
         // falls through LABEL_11).
         if self.ent[i].flags & 0x10000 == 0 {
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, true);
+            self.area_write(i, 0, amt, ctx, true, false);
         }
         false
     }
@@ -2233,7 +2299,7 @@ impl Gen {
             self.ent[i].flags |= 2;
             if self.ent[i].flags & 0x10000 == 0 {
                 let amt = self.ent[i].f44 as u32;
-                self.area_write(i, 0, amt, ctx, false);
+                self.area_write(i, 0, amt, ctx, false, false);
             }
             // Terrain reaction (:28083-104): burn conversions, else a
             // small scorch crater on flat, low, dry ground.
@@ -2346,7 +2412,7 @@ impl Gen {
             e.f84 = 512;
         }
         let per_tick = (self.ent[i].f44 as u32) / self.ent[i].max_life.max(1);
-        self.area_write(i, 0, per_tick, ctx, false);
+        self.area_write(i, 0, per_tick, ctx, false, false);
         let (x, y, z, owner) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24)
@@ -2382,7 +2448,7 @@ impl Gen {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, false);
+            self.area_write(i, 0, amt, ctx, false, false);
             self.snd(24, i);
             self.ent[i].act_life = 1;
         }
@@ -2400,7 +2466,7 @@ impl Gen {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 3, amt, ctx, false);
+            self.area_write(i, 3, amt, ctx, false, false);
         }
         self.anim_advance(i);
         false

@@ -234,6 +234,10 @@ pub(crate) struct Ent {
     pub(crate) f40: u16,
     /// Vertical velocity (offset 46): mana-ball gravity, fire flicker.
     pub(crate) f46: i16,
+    /// Damage-response countdown (offset 50): a blast near a castle
+    /// arms 30 ticks (sub_127E0 :17522); expiry sends the castle to
+    /// the repaint sub-state (:55987-93). The downgrade arms 5.
+    pub(crate) f50: i16,
     /// Explosion class/model a projectile detonates into (offsets
     /// 68/69). NewEvent defaults +68 = 10 (:43879), +69 = 0 (fire).
     pub(crate) f68: u8,
@@ -404,6 +408,13 @@ pub(crate) struct Gen {
     /// player tick decrements it and switches the music mode on
     /// v_46 > 0 (:55282-92 → sub_20D00).
     pub(crate) player_danger: i16,
+    /// The claimed-house mana tally (wizext u32_308), stashed by the
+    /// per-tick census — the castle overflow ejector's trigger reads
+    /// houses + stored vs capacity (sub_47130 :56185-89).
+    pub(crate) banked_houses: i32,
+    /// "Castle under attack" HUD flash (Type_160+391 = 4, :56698) —
+    /// armed by every processed castle hit, decremented per tick.
+    pub(crate) castle_alert: u8,
     /// Sound requests emitted this tick at the original's
     /// sub_55370_558A0 call sites; drained by the app into the audio
     /// mixer (which reimplements that routine's attenuation/slot
@@ -474,6 +485,8 @@ impl Gen {
             shots: 0,
             hits: 0,
             player_danger: 0,
+            banked_houses: 0,
+            castle_alert: 0,
             sounds: Vec::new(),
         }
     }
@@ -1626,7 +1639,7 @@ impl Gen {
             self.ent[i].flags |= 0x400;
         } else if let Some(ctx) = ctx {
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, false);
+            self.area_write(i, 0, amt, ctx, false, true);
             self.snd(10, i);
         }
     }
@@ -1665,7 +1678,7 @@ impl Gen {
             } else {
                 self.ent[i].f44 as u32
             };
-            self.area_write(i, 0, amt, ctx, false);
+            self.area_write(i, 0, amt, ctx, false, true);
         }
         let radius = (e.f80 >> 8) as i16;
         let mut upto = e.f26;
@@ -1872,7 +1885,7 @@ impl Gen {
         self.dig_disc(i, 0, 1024, (r % 0xF + 10) as i16, false);
         if let Some(ctx) = ctx {
             let amt = self.ent[i].f44 as u32;
-            self.area_write(i, 0, amt, ctx, false);
+            self.area_write(i, 0, amt, ctx, false, false);
             self.snd(10, i);
         }
         let (mut x, mut y) = (self.ent[i].x, self.ent[i].y);
@@ -1977,6 +1990,63 @@ impl Gen {
         }
     }
 
+    /// sub_40E20 (:51729): the castle-transformation kill, one pass
+    /// over the NEW level's RLE footprint. Per occupied cell, walking
+    /// the tile's entity chain: anything owned by the castle owner is
+    /// SPARED (:51744 — broader than the caster: your skeletons
+    /// survive your own castle); class-2 scenery is deleted outright
+    /// (:51749); class-5 creatures die instantly at any HP (life =
+    /// −1, killer = the owner → kill credit + normal corpse drops)
+    /// EXCEPT models 6/8/16 (:51753 — boss-tier exemptions). Every
+    /// other class (wizards, balloons, castles, projectiles,
+    /// effects) is structurally immune (:51760 default: break).
+    fn build_footprint_kill(&mut self, bt: usize, cx: u8, cy: u8, owner: u16) {
+        let def = self.assets.build_tab[bt % self.assets.build_tab.len()];
+        let (w, h) = (def.w as u16, def.h as u16);
+        let x0 = cx.wrapping_sub((w >> 1) as u8);
+        let y0 = cy.wrapping_sub((h >> 1) as u8);
+        let mut rows = h;
+        let (mut x, mut y) = (x0, y0);
+        let mut c = def.offset as usize;
+        while rows != 0 {
+            let ctl = self.assets.build_dat[c] as i8;
+            c += 1;
+            if ctl == 0 {
+                y = y.wrapping_add(1);
+                rows -= 1;
+                x = x0;
+                continue;
+            }
+            if ctl < 0 {
+                x = x.wrapping_add((-(ctl as i32)) as u8);
+                continue;
+            }
+            for _ in 0..ctl {
+                let b = self.assets.build_dat[c];
+                c += 1;
+                if b != 0 {
+                    let mut j = self.map_entity[tile(x, y)] as usize;
+                    while j != 0 {
+                        let next = self.ent[j].next20 as usize;
+                        if self.ent[j].id24 != owner && self.ent[j].flags & 0x400 == 0 {
+                            match self.ent[j].class64 {
+                                2 => self.free_entity(j),
+                                5 if !matches!(self.ent[j].model65, 6 | 8 | 16) => {
+                                    self.ent[j].act_life = -1;
+                                    self.ent[j].f38 = owner;
+                                    self.ent[j].f40 = owner;
+                                }
+                                _ => {}
+                            }
+                        }
+                        j = next;
+                    }
+                }
+                x = x.wrapping_add(1);
+            }
+        }
+    }
+
     /// One paint pass over build-table row `bt` (the shared tile-type
     /// decode of sub_27D30/sub_285C0 via sub_33800).
     fn paint_build_row(&mut self, bt: usize, cx: u8, cy: u8) {
@@ -2043,6 +2113,14 @@ impl Gen {
         let divisor = (e.f26 as i32 + 1).max(1);
         for r in 1..=level {
             self.flatten_build_row(r, cx, cy, target, divisor);
+        }
+        // THE CASTLE WEAPON (sub_40E20 :51729, called per footprint
+        // tile per paint tick :30631-34): the rising transformation
+        // EXECUTES what stands on it — but only under the upgrade-
+        // commit painter (the +18&1 kill bit, :56492); the damage
+        // repaint kills nothing.
+        if e.flags & 0x10000 != 0 {
+            self.build_footprint_kill(level, cx, cy, e.id24);
         }
         if e.f26 % 7 == 0 || e.f26 == 0 {
             for r in 1..=level {
@@ -2497,12 +2575,15 @@ impl Gen {
         self.move_relink(i, pos.0, pos.1, z);
     }
 
-    /// sub_47C60 (:56572): castle max health by level (level 0 = 0
-    /// = keep; levels 6/7 are decompile-garbage consts — 60000
-    /// carried). The damage carry-over rule (old deficit, capped at
-    /// half the new max) is the castle-HP track.
+    /// sub_47C60 (:56572): castle max health by level (level 0 = 0 =
+    /// keep the ctor's 40000). Levels 6/7 use the decompiler-mangled
+    /// const `loc_13880` = 0x13880 = 80000 (decoded 2026-07-07 —
+    /// corrects the earlier 60000 carry). The carry-over rule on any
+    /// level change (sub_47BD0 :56552-60): a NEGATIVE old life
+    /// (overkill) is re-deducted from the new max, capped at half of
+    /// it; positive life just resets to full.
     const CASTLE_HP: [u32; 8] =
-        [40000, 20000, 40000, 40000, 60000, 60000, 60000, 60000];
+        [40000, 20000, 40000, 40000, 60000, 60000, 80000, 80000];
 
     /// sub_46F10 (:56043): the class-3 m2 CASTLE state machine
     /// (sub-state f59 = the original's +48). Remaining housekeeping:
@@ -2558,7 +2639,17 @@ impl Gen {
                     e.id24 = own;
                     e.flags |= 0x10000; // +18 |= 1 (:56492)
                 }
-                self.ent[i].f59 = 4;
+                // WAIT in sub-state 1 (the original's pure-wait
+                // :56073) — NOT established. Damage/demolish/upgrade
+                // mail accrue untouched until the leveler hands back
+                // state 4: the original's standing tick is the ONLY
+                // damage processor (sub_47EC0 runs from +70=4 alone).
+                // Processing lethals mid-transformation was the
+                // playtest-6 orphaned-tower bug (a downgrade collapse
+                // under a still-running painter), and it erased the
+                // authentic between-transformations upgrade window
+                // (the dragon-squat survival trick).
+                self.ent[i].f59 = 1;
             }
             // Painter done → the m41 ground leveler (case 5,
             // sub_47080 :56119-35), then wait in sub-state 6 — the
@@ -2579,12 +2670,63 @@ impl Gen {
             }
             // Leveler done → established (case 2 → sub_46DB0).
             2 => self.ent[i].f59 = 4,
-            // Established: the ch5 upgrade intake (sub_47EC0
-            // :56690-95 — sender must be the owner, max level 7),
-            // direct ball absorption, and the balloon/guard
-            // dispatcher every other tick (:56016-20). The overflow
-            // ejector is still pending.
+            // Blast-shake expiry → the damage REPAINT (sub_47020
+            // :56100-15): a painter at the CURRENT level with the
+            // kill bit CLEAR — it re-stamps the tower and kills
+            // nothing (:56492 sets the bit only on the upgrade
+            // commit).
+            3 => {
+                let (x, y, own, site_z, lvl) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.id24, e.site_z, e.f26)
+                };
+                if let Some(p) = self.spawn_creator(42, x, y, site_z) {
+                    let e = &mut self.ent[p];
+                    e.f146 = i as u16;
+                    e.f71 = lvl.clamp(1, 8) as u8;
+                    e.id24 = own;
+                }
+                self.ent[i].f59 = 1; // wait for the repaint painter
+            }
+            // Established (sub_46DB0 :55978): the blast-shake
+            // countdown FREEZES everything else while it runs
+            // (:55981-93 — the mailbox accrues, processing waits),
+            // then the ch0 damage intake (sub_47EC0 :56678), the ch5
+            // upgrade intake (:56690-95 — sender must be the owner,
+            // max level 7), and the every-other-tick block
+            // (:56016-37): overflow ejector, balloons, absorption.
             4 => {
+                if self.ent[i].f50 > 0 {
+                    self.ent[i].f50 -= 1;
+                    if self.ent[i].f50 == 1 {
+                        self.ent[i].f50 = 0;
+                        self.ent[i].f59 = 3;
+                    }
+                    return;
+                }
+                // sub_47EC0's first line (:56683): already below
+                // zero → straight to the downgrade. This is also
+                // the demolish path — Shift+L writes life = −1 with
+                // no mail at all (:55846-50).
+                if self.ent[i].act_life < 0 {
+                    self.castle_downgrade(i);
+                    return;
+                }
+                // sub_47EC0: HP -= pending ch0; lethal → the
+                // one-level downgrade (state 6 → sub_47A70).
+                if self.ent[i].mail[0].1 != 0 {
+                    let amt = self.ent[i].mail[0].0;
+                    self.ent[i].mail[0] = (0, 0);
+                    self.ent[i].act_life -= amt as i32;
+                    if self.ent[i].act_life < 0 {
+                        self.castle_downgrade(i);
+                        return;
+                    }
+                    // "Castle under attack" flash (Type_160+391=4).
+                    if self.ent[i].id24 == crate::mobs::PLAYER_TARGET {
+                        self.castle_alert = 4;
+                    }
+                }
                 if self.ent[i].mail[5].1 != 0 {
                     let sender = self.ent[i].mail[5].1;
                     self.ent[i].mail[5] = (0, 0);
@@ -2593,13 +2735,262 @@ impl Gen {
                     }
                 }
                 if self.ent[i].f63 & 1 == 0 {
+                    // The overflow ejector (sub_47130, called :56016):
+                    // banked houses + stored over capacity spill out
+                    // as owner-tagged wild-flying balls.
+                    self.castle_eject(i);
                     self.castle_balloons(i);
                     // Absorption sits inside the every-other-tick
                     // block in the original too (:57023-32).
                     self.castle_absorb(i);
                 }
             }
-            _ => {} // 6 waiting for the leveler
+            // 1 = waiting for a painter, 6 = waiting for the
+            // leveler (the original's pure waits, :56073-78): the
+            // mailbox and any pending lethal accrue untouched.
+            _ => {}
+        }
+    }
+
+    /// sub_47A70 (:56498) + the state-6 wrapper (sub_470E0 :56138):
+    /// lethal damage knocks the castle DOWN one level — collapse
+    /// rumble (sound 30), ~10% of capacity ejected as mana balls,
+    /// the footprint un-stamped to rough ground (the collapse
+    /// walker's zeroed fake event, :56515-24), then the ladder reset
+    /// with the overkill carry and a 5-tick timer into the repaint.
+    /// At level 1 the whole castle dies instead (:56531-37): the
+    /// balloon is released, the ENTIRE bank scatters, the entity is
+    /// freed — the player is castle-less (die now = restart).
+    fn castle_downgrade(&mut self, i: usize) {
+        self.snd(30, i);
+        let lvl = self.ent[i].f26;
+        // 10% capacity haircut before the ejector (:56507-09) — the
+        // ejector spills everything above the reduced ceiling.
+        let cut = 10 * self.ent[i].f136 / 100;
+        self.ent[i].f136 -= cut;
+        self.castle_eject(i);
+        // The footprint un-stamp: a zeroed fake collapse event over
+        // the CURRENT level's build row, run synchronously
+        // (sub_28FE0 direct call, :56524).
+        let (x, y, site_z, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.site_z, e.id24)
+        };
+        if let Some(f) = self.new_event() {
+            {
+                let e = &mut self.ent[f];
+                e.class64 = 10;
+                e.model65 = 0; // zeroed model → z>>5 datum fallback
+                e.f71 = lvl.clamp(1, 8) as u8;
+                e.f26 = 0; // no evacuees on a castle (:56521)
+                e.x = x;
+                e.y = y;
+                e.z = site_z;
+            }
+            self.tick_building_collapse(f);
+            self.free_entity(f);
+        }
+        let lvl = lvl - 1;
+        self.ent[i].f26 = lvl;
+        if lvl <= 0 {
+            // Total destruction (:56531-37): release the balloons,
+            // scatter the whole remaining bank (the level-0 ejector
+            // rule spills ALL stored, :56172), free the castle.
+            self.ent[i].f136 = 0;
+            self.castle_eject(i);
+            for j in 1..POOL {
+                if self.ent[j].class64 == 3
+                    && self.ent[j].model65 == 3
+                    && self.ent[j].id24 == own
+                    && self.ent[j].flags & 0x400 == 0
+                {
+                    self.ent[j].flags |= 0x400; // release ≈ despawn
+                }
+            }
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        // Ladder reset at the new level (sub_47C60 → sub_47BD0): the
+        // overkill deficit carries, capped at half the new max.
+        let new_max = Self::CASTLE_HP[(lvl as usize).min(7)];
+        let deficit = (-self.ent[i].act_life).clamp(0, new_max as i32 / 2);
+        self.ent[i].max_life = new_max;
+        self.ent[i].act_life = new_max as i32 - deficit;
+        self.ent[i].f136 = Self::CASTLE_CAP[(lvl as usize).min(7)];
+        let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
+        {
+            let e = &mut self.ent[i];
+            e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
+            e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
+        }
+        // 5 ticks, then the repaint re-stamps the smaller castle
+        // (:56158 +48=0/+50=5 → the state-4 countdown → sub-state 3).
+        self.ent[i].f50 = 5;
+        self.ent[i].f59 = 4;
+    }
+
+    /// sub_47130 (:56162): the castle mana EJECTOR. Spill = stored −
+    /// capacity when houses + stored exceed capacity (ALL stored for
+    /// a level-0/dying castle), thrown as 1..=32 owner-tagged balls
+    /// of spill/count each, teleported 15-35 tiles out at random
+    /// yaws with an upward pop, plus 4 (10,54) mana magnets at 25
+    /// tiles (their ball-pull is the banked magnet chain; the ch4
+    /// writes land but the pull is inert until it's ported).
+    fn castle_eject(&mut self, i: usize) {
+        let stored = self.ent[i].f140;
+        let cap = self.ent[i].f136;
+        let mut spill = if self.banked_houses.saturating_add(stored) > cap {
+            stored - cap
+        } else {
+            0
+        };
+        if self.ent[i].f26 == 0 {
+            spill = stored;
+        }
+        if spill <= 0 {
+            return;
+        }
+        let count = (spill / 1000).clamp(1, 32);
+        let mut share = spill / count;
+        let (cx, cy, cz, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        let ground = self.ground_z(cx, cy) as i16;
+        for _ in 0..count {
+            let Some(b) = self.spawn_mana_ball(cx, cy, cz) else {
+                break;
+            };
+            self.ent[b].f140 = share;
+            self.ent[b].f144 = own;
+            // Ball-seed draw → +126 (vestigial speed, kept for
+            // stream parity); +150/152 velocity zeroed (:56221-23).
+            let d = self.ent_rand(b);
+            self.ent[b].f126 = (d % 0x30 + 16) as i16;
+            self.ent[b].dest_x = 0;
+            self.ent[b].dest_y = 0;
+            // Upward pop scaled by how low the flag sits (:56227).
+            self.ent[b].f46 = ((1024 - (cz.wrapping_sub(ground)) as i32) / 8) as i16;
+            // Castle-seed draws: distance then yaw (:56231-37).
+            let dist = (lcg32(&mut self.ent[i].rand) % 0x1400 + 3840) as i16;
+            let yaw = (lcg32(&mut self.ent[i].rand) & 0x7FF) as u16;
+            let mut pos = (cx, cy, cz);
+            Self::polar_step(&mut pos, yaw, 0, dist);
+            self.move_relink(b, pos.0, pos.1, pos.2);
+            let taken = self.ent[b].f140;
+            spill -= taken;
+            self.ent[i].f140 -= taken;
+            if spill < share {
+                share = spill;
+            }
+            if spill <= 0 {
+                break;
+            }
+        }
+        for _ in 0..4 {
+            let dist = 6400i16;
+            let yaw = (lcg32(&mut self.ent[i].rand) & 0x7FF) as u16;
+            let mut pos = (cx, cy, cz);
+            Self::polar_step(&mut pos, yaw, 0, dist);
+            self.spawn_castle_magnet(pos.0, pos.1, pos.2, own);
+        }
+    }
+
+    /// sub_3B970 (:47672): the (10,54) mana MAGNET — invisible,
+    /// 128 ticks, not damageable. Its tick (sub_29920 :31234) stamps
+    /// ch4 attract mail on every mana ball within ~14 tiles.
+    fn spawn_castle_magnet(&mut self, x: u16, y: u16, z: i16, own: u16) -> Option<usize> {
+        let s = self.new_event()?;
+        {
+            let e = &mut self.ent[s];
+            e.class64 = 10;
+            e.model65 = 54;
+            e.tick70 = 59;
+            e.max_life = 128;
+            e.f126 = 256;
+            e.f44 = 100;
+            e.f26 = 0;
+            e.flags &= !8;
+            e.id24 = own;
+            let d = lcg32(&mut e.rand);
+            e.f30 = (d & 0x7FF) as u16;
+        }
+        self.link(s, x, y, z);
+        self.refill_life(s);
+        {
+            let e = &mut self.ent[s];
+            e.f80 = 1024;
+            e.f82 = 1024;
+            e.f84 = 0x4000;
+        }
+        Some(s)
+    }
+
+    /// sub_29920 (:31234), byte70 59: the (10,54) magnet tick — life
+    /// runs down, and every m39 ball within dist² < 12845056 (~14
+    /// tiles) gets ch4 mail {100, self} (a direct overwrite,
+    /// :31255-57). The ball-side ch4 consumer is the banked magnet
+    /// chain — the writes land but the pull is inert today (the
+    /// spell-side state-21 APPROX puller is separate; unify when the
+    /// (9,17)→(10,54) chain is traced).
+    pub(crate) fn mana_magnet_tick(&mut self, i: usize) {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i64).abs();
+        for j in 1..POOL {
+            if self.ent[j].class64 == 10
+                && self.ent[j].model65 == 39
+                && self.ent[j].flags & 0x400 == 0
+            {
+                let (dx, dy) = (wd(self.ent[j].x, x), wd(self.ent[j].y, y));
+                if dx * dx + dy * dy < 12_845_056 {
+                    self.ent[j].mail[4] = (100, i as u16);
+                }
+            }
+        }
+    }
+
+    /// sub_3B620 (:47477): the (10,40) GRAVE a dying wizard leaves —
+    /// sprite 65, ch1 (possession) mask only, f26 = slot % 11.
+    pub(crate) fn spawn_grave(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let s = self.new_event()?;
+        {
+            let e = &mut self.ent[s];
+            e.class64 = 10;
+            e.model65 = 40;
+            e.tick70 = 42;
+            e.f26 = (s % 11) as i16;
+            e.f28 = 2;
+        }
+        self.link(s, x, y, z);
+        self.refill_life(s);
+        self.set_sprite(s, 65);
+        Some(s)
+    }
+
+    /// sub_275C0 (:29636), byte70 42: the grave tick — ground-snap,
+    /// and a wizard-family possession claim (ch1) inherits EVERYTHING
+    /// the grave owns (+144 == grave slot → claimant), then the grave
+    /// vanishes. Reclaiming your own scattered bank after a death is
+    /// exactly this possess.
+    pub(crate) fn grave_tick(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
+        if self.ent[i].mail[1].1 != 0 {
+            let claimant = self.ent[i].mail[1].1;
+            self.ent[i].mail[1] = (0, 0);
+            if self.attacker_is_wizard(claimant) && self.ent[i].f144 == 0 {
+                for j in 1..POOL {
+                    if self.ent[j].f144 == i as u16 && self.ent[j].class64 != 0 {
+                        self.ent[j].f144 = claimant;
+                    }
+                }
+            }
+            self.free_entity(i);
         }
     }
 
