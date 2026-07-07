@@ -25,7 +25,14 @@ struct Instance {
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) solid: u32,
+    // 0 = textured, 1 = solid tint quad, 2 = MASK-DARKEN (the sprite is a
+    // coverage MASK; inside it the destination — the stone slab already
+    // drawn beneath — is DARKENED, so the icon's outer shape reads as a
+    // dark relief cut into the slab texture. The original's sub_23AE0
+    // writes blend[0xA6 | dest]; we approximate with a dark translucent
+    // fill over the slab so the tile texture shows through, darkened.
+    // Used for unowned spellbook icons).
+    @location(1) @interpolate(flat) mode: u32,
     @location(2) @interpolate(flat) tint: vec4<f32>,
 };
 
@@ -45,22 +52,39 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         0.0,
         1.0,
     );
+    // uv.z (width) encodes the draw mode: 0 = solid tint; < 0 = silhouette
+    // (|w| is the real width); > 0 = normal textured.
+    let uvw = abs(inst.uv.z);
     let tex_size = vec2<f32>(textureDimensions(atlas_tex));
-    out.uv = (inst.uv.xy + c * inst.uv.zw) / tex_size;
-    out.solid = u32(inst.uv.z == 0.0);
+    out.uv = (inst.uv.xy + c * vec2<f32>(uvw, inst.uv.w)) / tex_size;
+    if inst.uv.z == 0.0 {
+        out.mode = 1u;
+    } else if inst.uv.z < 0.0 {
+        out.mode = 2u;
+    } else {
+        out.mode = 0u;
+    }
     out.tint = inst.tint;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    if in.solid == 1u {
+    if in.mode == 1u {
         return in.tint;
     }
     // Nearest-texel chunky sampling, like every sprite path here.
     let c = textureSample(atlas_tex, atlas_samp, in.uv);
     if c.a < 0.5 {
         discard;
+    }
+    if in.mode == 2u {
+        // Mask-darken: the icon is a coverage mask. Output a dark fill
+        // with the tint's alpha, which ALPHA-BLENDS over the slab already
+        // drawn beneath — so the stone texture shows through, darkened,
+        // inside the icon's outer shape (the original's blend[0xA6|dest]).
+        // tint.rgb = the dark ink, tint.a = how strongly it darkens.
+        return vec4<f32>(in.tint.rgb, in.tint.a);
     }
     return c * in.tint;
 }

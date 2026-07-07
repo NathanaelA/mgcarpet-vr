@@ -1202,7 +1202,7 @@ impl ApplicationHandler for App {
                         .unwrap_or((1280.0, 720.0));
                     let loadout = w.loadout();
                     let (mut quads, hovered) = if self.book_open() {
-                        ui::book_quads(assets, &loadout, size.0, size.1, self.cursor)
+                        ui::book_quads(assets, &loadout, &self.quick_binds, size.0, size.1, self.cursor)
                     } else {
                         (
                             ui::hud_quads(
@@ -1539,7 +1539,7 @@ fn run_screenshot(
         let loadout = w.loadout();
         let vitals = w.vitals();
         let quads = if map_view {
-            ui::book_quads(assets, &loadout, 1280.0, 720.0, (-1.0, -1.0)).0
+            ui::book_quads(assets, &loadout, &[None; 10], 1280.0, 720.0, (-1.0, -1.0)).0
         } else {
             ui::hud_quads(assets, &loadout, &vitals, hud_transparent, 1280.0, 720.0)
         };

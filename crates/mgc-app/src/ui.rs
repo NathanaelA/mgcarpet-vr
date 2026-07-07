@@ -221,7 +221,12 @@ impl UiAssets {
     }
 
     /// The pre-composited icon-on-slab tile for a spell; `variant`
-    /// 0 = plain, 1 = left-equipped, 2 = right-equipped highlight.
+    /// 0 = plain, 1 = left-equipped, 2 = right-equipped highlight. Kept
+    /// for the composited luminous-ramp look (the icon blended over the
+    /// slab); the book now draws slab + native-uniform icon separately to
+    /// avoid the non-4:3 stretch, and the equipped-hand variants are the
+    /// parked unfaithful binding indicator.
+    #[allow(dead_code)]
     fn slot_quad(&self, spell: SpellId, variant: usize, rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
         UiQuad {
             rect,
@@ -258,6 +263,46 @@ impl UiAssets {
             tint,
         })
     }
+
+    /// Blit `begSprTab[id]` into an explicit destination rect (for the
+    /// spellbook: the slab stretches to the cell, the icon draws at a
+    /// uniform-scaled centered rect so it never distorts).
+    fn sprite_quad_rect_tint(&self, id: usize, rect: [f32; 4], tint: [f32; 4]) -> Option<UiQuad> {
+        let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some(UiQuad {
+            rect,
+            uv: [sx as f32, sy as f32, w as f32, h as f32],
+            tint,
+        })
+    }
+
+    /// Like [`Self::sprite_quad_rect_tint`] but MASK-DARKEN: the sprite is
+    /// a coverage mask, and the shader fills it with the (translucent)
+    /// tint so the destination beneath (the slab) shows through DARKENED —
+    /// the dark-relief look of UNOWNED spellbook icons cut into the stone
+    /// texture (the original's sub_23AE0 blend[0xA6 | dest]). A NEGATIVE
+    /// uv width is the mode flag. player 2026-07-07.
+    fn sprite_quad_rect_mask(&self, id: usize, rect: [f32; 4], tint: [f32; 4]) -> Option<UiQuad> {
+        let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some(UiQuad {
+            rect,
+            uv: [sx as f32, sy as f32, -(w as f32), h as f32],
+            tint,
+        })
+    }
+}
+
+/// Push an optional quad (from the sprite-blit helpers) if present.
+fn push_opt(quads: &mut Vec<UiQuad>, q: Option<UiQuad>) {
+    if let Some(u) = q {
+        quads.push(u);
+    }
 }
 
 fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
@@ -271,92 +316,160 @@ fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 /// Unowned spells: icon ghosted way down (the original greys via the
 /// blend table's dim row; a tint is our stand-in).
-const GHOST: [f32; 4] = [0.28, 0.28, 0.28, 1.0];
-const MANA_BLUE: [f32; 4] = [0.15, 0.35, 0.9, 1.0];
+/// Unowned spell icons: the icon's outer SHAPE used as a mask, filled
+/// with a dark TRANSLUCENT ink so the stone-slab texture shows through,
+/// DARKENED — a dark relief cut into the tile (player 2026-07-07: "a
+/// silhouette … it follows the outer shape of the sprite, but the
+/// texture of the tile exactly"). The original's sub_23AE0 writes
+/// blend[0xA6 | dest]; rgb = the dark ink, a = darkening strength.
+const UNOWNED_MASK: [f32; 4] = [0.05, 0.04, 0.03, 0.74];
+/// The book slab tint. Our raw [3] sprite is a cool blue-grey
+/// (~158,165,198); retail's slab reads a WARM DARK BROWN (the original
+/// blends [3] through the LUT over the book background, warming +
+/// darkening it). A neutral darkening kept it blue-grey, so this tint
+/// warms toward brown (boosts red-relative, cuts blue) AND darkens.
+/// player 2026-07-07 side-by-side.
+const SLAB_DIM: [f32; 4] = [0.58, 0.46, 0.32, 1.0];
+/// Quick-select digit ink: the original blends the glyph toward
+/// `byte_AD167_AD157[1]` (black); a black multiplicative tint blackens
+/// the sprite's yellow ink while keeping its coverage/alpha.
+const DIGIT_INK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const COOLDOWN_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const BAR_BG: [f32; 4] = [0.05, 0.05, 0.05, 0.9];
 
-/// The book screen's spell-grid rect (must match the renderer's book
-/// layout fractions: map pane 0.6 left, viewport 0.42 top-right).
-fn book_rect(w: f32, h: f32) -> (f32, f32, f32, f32) {
-    let x = w * 0.6;
-    let y = h * 0.42;
-    (x, y, w - x, h - y)
-}
+// The spellbook grid (remc1 :26915-70), native 640×480 scaled by w/640,
+// h/480. 24 spells iterate in DISPLAY_ORDER packed with NO gaps: cell =
+// the slot-slab sprite [3] = 64×37, 4 cols × 6 rows from (384,194). The
+// origin was measured from the player's hi-res retail screenshot
+// (2026-07-07) — the world viewport ends and the spellbook begins at
+// y=194 (must agree with the renderer's BOOK_SPELL_Y); the grid bottom
+// (194 + 6·37 = 416) is the map-pane base and the black-bar top.
+const BOOK_GRID_X: f32 = 384.0;
+const BOOK_GRID_Y: f32 = 194.0;
+const BOOK_CELL_W: f32 = 64.0;
+const BOOK_CELL_H: f32 = 37.0;
+const BOOK_GRID_COLS: usize = 4;
+/// Quick-select digit glyphs: `[30 + slot]` (slot 0 = "1" … slot 9 =
+/// "0"), 10×14 badges — the number retail stamps in a hotkeyed spell's
+/// book cell (sub_24230 :27857).
+const SPR_QUICK_DIGIT: usize = 30;
 
-/// One grid cell: outer rect of display slot `k` (4 cols x 6 rows).
+/// One grid cell's slab rect in screen pixels (the icon is pre-composited
+/// onto the 64×37 slot slab). `k` = display index 0..24.
 fn book_cell(w: f32, h: f32, k: usize) -> [f32; 4] {
-    let (bx, by, bw, bh) = book_rect(w, h);
-    let (cols, rows) = (4.0, 6.0);
-    let (cw, ch) = (bw / cols, bh / rows);
-    let (col, row) = ((k % 4) as f32, (k / 4) as f32);
-    // Icon area keeps the 62x34 aspect inside the cell with padding.
-    let pad = 0.08;
-    let (iw, ih) = fit(ICON_W, ICON_H, cw * (1.0 - 2.0 * pad), ch * (1.0 - 2.0 * pad) - 6.0);
+    let sx = w / 640.0;
+    let sy = h / 480.0;
+    let col = (k % BOOK_GRID_COLS) as f32;
+    let row = (k / BOOK_GRID_COLS) as f32;
     [
-        bx + col * cw + (cw - iw) / 2.0,
-        by + row * ch + (ch - 6.0 - ih) / 2.0,
-        iw,
-        ih,
+        (BOOK_GRID_X + col * BOOK_CELL_W) * sx,
+        (BOOK_GRID_Y + row * BOOK_CELL_H) * sy,
+        BOOK_CELL_W * sx,
+        BOOK_CELL_H * sy,
     ]
-}
-
-fn fit(sw: f32, sh: f32, mw: f32, mh: f32) -> (f32, f32) {
-    let s = (mw / sw).min(mh / sh);
-    (sw * s, sh * s)
 }
 
 /// Book screen quads + the display slot under the cursor (if any).
 pub fn book_quads(
     assets: &UiAssets,
     loadout: &LoadoutView,
+    quick_binds: &[Option<u8>; 10],
     w: f32,
     h: f32,
     cursor: (f32, f32),
 ) -> (Vec<UiQuad>, Option<SpellId>) {
-    let mut quads = Vec::with_capacity(SPELL_COUNT * 4 + 4);
+    let mut quads = Vec::with_capacity(SPELL_COUNT * 3 + 2);
     let mut hovered = None;
     for (k, &spell) in DISPLAY_ORDER.iter().enumerate() {
         let spell_id = SpellId(spell);
         let cell = book_cell(w, h, k);
+        // Two spellbook states, per the actual draw split (remc1
+        // :26932/:26972):
+        //   OWNED   → sub_24230: slab + the icon drawn in FULL color
+        //             (DrawBitmap, raw). Affordability is shown by the
+        //             separate diagonal-line marks (sub_247C0), NOT by
+        //             dimming the icon.
+        //   NOT owned → sub_23CF0: slab + the icon as a coverage mask
+        //             DIM-TINTED toward color 0xA6 (sub_23AE0) — the full
+        //             icon SHAPE stays visible, just darkened (player
+        //             2026-07-07: "unowned drawn in full, not silhouettes").
+        // The slab itself is drawn via sub_23940 = a BLEND over the book's
+        // black background, so it reads DARKER than the raw sprite (player:
+        // "background should be the darker sprite"). We approximate the
+        // blend-over-black with a darkening tint.
         let owned = loadout.owned[spell as usize];
+        let cost = SPELLS[spell as usize].possess_mana;
+        let castable = owned && cost <= loadout.mana;
         let over = cursor.0 >= cell[0]
             && cursor.0 < cell[0] + cell[2]
             && cursor.1 >= cell[1]
-            && cursor.1 < cell[1] + cell[3] + 6.0;
-        if over {
+            && cursor.1 < cell[1] + cell[3];
+        // Only owned+affordable spells are hoverable/bindable (the click
+        // gate checks the mana cost at :26926).
+        if over && castable {
             hovered = Some(spell_id);
         }
 
-        // Icon pre-composited on its slot slab (one quad); the tile
-        // variant carries the equipped-hand highlight.
-        let bg_rect = [cell[0] - 3.0, cell[1] - 3.0, cell[2] + 6.0, cell[3] + 6.0];
-        let variant = if loadout.left == Some(spell) {
-            1
-        } else if loadout.right == Some(spell) {
-            2
-        } else {
-            0
-        };
-        quads.push(assets.slot_quad(
-            spell_id,
-            variant,
-            bg_rect,
-            if owned { WHITE } else { GHOST },
-        ));
+        // The stone slab [3] fills the cell, drawn DARKER (the original's
+        // sub_23940 blends it over the black book background). Stretching
+        // the slab texture to the cell is invisible.
+        push_opt(&mut quads, assets.sprite_quad_rect_tint(SPR_SLOT_BG as usize, cell, SLAB_DIM));
+        // The ICON at its NATIVE 62×34, UNIFORM-scaled + centered (NOT
+        // baked into the stretched slab — that distorted at non-4:3).
+        // OWNED = full colour (raw). NOT owned = the icon's SHAPE cut into
+        // the slab as a dark relief: a translucent dark fill over the
+        // stone so the tile texture shows through, darkened (player
+        // 2026-07-07: "a silhouette … outer shape of the sprite, but the
+        // texture of the tile exactly" — the original's blend[0xA6|dest]).
+        let icon_id = SPR_SPELL_ICON + spell as usize;
+        if let Some((iw, ih)) = assets.sprite_dims(icon_id) {
+            let s = (cell[2] / iw).min(cell[3] / ih);
+            let (dw, dh) = (iw * s, ih * s);
+            let ix = cell[0] + (cell[2] - dw) / 2.0;
+            let iy = cell[1] + (cell[3] - dh) / 2.0;
+            let irect = [ix, iy, dw, dh];
+            push_opt(
+                &mut quads,
+                if owned {
+                    assets.sprite_quad_rect_tint(icon_id, irect, WHITE)
+                } else {
+                    assets.sprite_quad_rect_mask(icon_id, irect, UNOWNED_MASK)
+                },
+            );
+        }
         if owned {
             // Cooldown veil sweeps down as the burst counter runs.
             let cd = loadout.cooldown[spell as usize];
             if cd > 0.0 {
-                quads.push(solid(
-                    [cell[0], cell[1], cell[2], cell[3] * cd],
-                    COOLDOWN_SHADE,
-                ));
+                quads.push(solid([cell[0], cell[1], cell[2], cell[3] * cd], COOLDOWN_SHADE));
+            }
+            // Quick-select number badge (sub_24230 :27857): a spell
+            // bound to a number key shows its digit glyph [30+slot] in
+            // the cell corner (slot 0 = key "1" = glyph [30], … slot 9 =
+            // key "0" = [39]). The original blends the glyph toward color
+            // `byte_AD167_AD157[1]` (sub_23AE0 = a coverage-mask blend,
+            // NOT a raw copy) — which renders BLACK, not the sprite's own
+            // yellow (shared with the castle-level digits). We reproduce
+            // that with a black multiplicative tint over the glyph, so
+            // the digit shape stays but the ink is black (player
+            // 2026-07-07: retail digits are black).
+            if let Some(slot) = quick_binds.iter().position(|&b| b == Some(spell)) {
+                let s = (w / 640.0).min(h / 480.0);
+                push_opt(
+                    &mut quads,
+                    assets.sprite_quad_tint(
+                        SPR_QUICK_DIGIT + slot,
+                        cell[0] + 2.0,
+                        cell[1] + 2.0,
+                        s,
+                        DIGIT_INK,
+                    ),
+                );
             }
         }
-        if over && owned {
-            // Hover ring: thin bright frame.
-            let f = [cell[0] - 4.0, cell[1] - 4.0, cell[2] + 8.0, cell[3] + 8.0];
+        if over && castable {
+            // Hover highlight (sub_24DA0): a bright frame on the cell.
+            let f = cell;
             let t = [0.9, 0.85, 0.5, 0.9];
             quads.push(solid([f[0], f[1], f[2], 2.0], t));
             quads.push(solid([f[0], f[1] + f[3] - 2.0, f[2], 2.0], t));
@@ -364,14 +477,11 @@ pub fn book_quads(
             quads.push(solid([f[0] + f[2] - 2.0, f[1], 2.0, f[3]], t));
         }
     }
-    // Player mana bar along the very bottom of the spell pane.
-    let (bx, _, bw, _) = book_rect(w, h);
-    let frac = loadout.mana as f32 / loadout.mana_max.max(1) as f32;
-    quads.push(solid([bx + 8.0, h - 14.0, bw - 16.0, 8.0], BAR_BG));
-    quads.push(solid(
-        [bx + 9.0, h - 13.0, (bw - 18.0) * frac.clamp(0.0, 1.0), 6.0],
-        MANA_BLUE,
-    ));
+    // The whole screen bottom (below the map + spellbook) is simply
+    // BLACK and empty in retail — the multiplayer message log draws
+    // there (via the DrawText path, not built yet), but with no panel
+    // fill or tint. The renderer's black clear shows through; nothing to
+    // draw here.
     (quads, hovered)
 }
 
@@ -695,4 +805,40 @@ pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad
         LifeState::Alive => {}
     }
     quads
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spellbook_grid_is_tightly_packed_at_native_coords() {
+        // At native 640×480 the 24 cells sit at (384,194)+(col·64,row·37),
+        // 4 cols × 6 rows, with NO gaps — the faithful spellbook packing
+        // (measured from the player's hi-res retail shot). Anchors + step.
+        let (w, h) = (640.0, 480.0);
+        // First cell at the grid origin.
+        assert_eq!(book_cell(w, h, 0), [384.0, 194.0, 64.0, 37.0]);
+        // End of row 0 (col 3): x = 384 + 3·64 = 576, right edge = 640.
+        let c3 = book_cell(w, h, 3);
+        assert_eq!(c3, [576.0, 194.0, 64.0, 37.0]);
+        assert_eq!(c3[0] + c3[2], 640.0, "row fills to the screen edge");
+        // Wraps to the next row at col 0 (k=4): x back to 384, y += 37.
+        assert_eq!(book_cell(w, h, 4), [384.0, 231.0, 64.0, 37.0]);
+        // Last cell (k=23 = col 3, row 5): bottom edge = 194 + 6·37 = 416.
+        let last = book_cell(w, h, 23);
+        assert_eq!(last, [576.0, 379.0, 64.0, 37.0]);
+        assert_eq!(last[1] + last[3], 416.0, "grid bottom = spellbook base");
+        // Tightly packed: adjacent cells share an edge (no gap).
+        let a = book_cell(w, h, 0);
+        let b = book_cell(w, h, 1);
+        assert_eq!(a[0] + a[2], b[0], "columns are gapless");
+    }
+
+    #[test]
+    fn spellbook_grid_scales_with_resolution() {
+        // Cells scale by w/640, h/480 so the layout is resolution-parametric.
+        let cell = book_cell(1280.0, 960.0, 0);
+        assert_eq!(cell, [768.0, 388.0, 128.0, 74.0], "2× native");
+    }
 }

@@ -368,6 +368,38 @@ const FOG_DENSITY: f32 = 0.006;
 /// makes it appear infinite (the original's rounding-error void-mobs
 /// live at that wrap; we don't reproduce those).
 const BOOK_MAP_ZOOM: f32 = 256.0;
+// The book/map screen topology (sub_20E60 case 4 + the spellbook grid
+// at :26915), in the original's hi-res 640×480 native coordinates,
+// scaled to the live resolution by w/640, hpx/480. The live world fills
+// the background; the map pane and spellbook overlay it, leaving the
+// world visible in the top-right L-remainder and the bottom log strip.
+/// The book map pane: `DrawMinimap(0,0, 382,378, ...)` at the top-left
+/// corner (native px).
+const BOOK_MAP_X: f32 = 0.0;
+const BOOK_MAP_Y: f32 = 0.0;
+// Book/map screen native geometry, MEASURED from the player's hi-res
+// retail screenshot (2026-07-07), which is senior over the decompile's
+// raw DrawMinimap args (382×378 was the sample size, not the on-screen
+// pane). Layout: map pane top-left, world viewport top-right, spellbook
+// bottom-right, ~64px black bar along the bottom. There is a 2px BLACK
+// GAP forming a "T" between the three panes — taken out of the MAP and
+// the LIVE VIEW, NOT the spellbook (which is 1:1 to retail). player
+// 2026-07-07.
+//   spellbook:  x 384..640, y 194..416 (4 cols × 6 rows of 64×37) — FIXED
+//   map:        (0,0) (384−GAP) × 416   [right edge recedes for the gap]
+//   viewport:   x 384..640, y 0..(194−GAP)   [bottom recedes for the gap]
+//   bottom bar: y 416..480 (black)
+/// The 2px black demarcation between the book panes (native px).
+const BOOK_GAP: f32 = 2.0;
+const BOOK_MAP_W: f32 = 384.0 - BOOK_GAP;
+const BOOK_MAP_H: f32 = 416.0;
+/// The spellbook grid origin (native px): 24 spells in 4 cols × 6 rows
+/// of the slot-slab [3] = 64×37, tightly packed from (384,194). FIXED —
+/// the gap is taken from the map/viewport, not here. The grid is drawn
+/// app-side (`ui::book_quads`); the renderer needs its LEFT
+/// (`BOOK_SPELL_X`) + TOP (`BOOK_SPELL_Y`) to place the world viewport.
+const BOOK_SPELL_X: f32 = 384.0;
+const BOOK_SPELL_Y: f32 = 194.0;
 // The HUD top strip is six tiles packed left-to-right from x=2 with 0px
 // gaps (player pixel-measurements 2026-07-07, matched to native sprite
 // widths at scale 1.668): [40] radar frame (124) | three [41] sub-panels
@@ -1775,6 +1807,7 @@ impl Renderer {
     /// transform in map.wgsl (inverted): a stamp at world `(sx, sz)` is
     /// placed at the screen offset `R(-yaw)·(world - player)` scaled so
     /// `half_tiles` fills `half` pixels.
+    #[allow(clippy::too_many_arguments)]
     fn map_stamp_quads(
         &self,
         cx: f32,
@@ -1786,6 +1819,7 @@ impl Renderer {
         yaw: f32,
         zoom: f32,
         round: bool,
+        aspect: f32,
     ) -> Vec<UiQuad> {
         let half_tiles = zoom * 0.5;
         // Match the shader: screen-up (-y) maps to "ahead"; the sample
@@ -1813,8 +1847,16 @@ impl Renderer {
             // (y-UP: +1 = top), but UiQuad screen space is y-DOWN
             // (pixels from top-left), so the vertical axis flips —
             // without this the stamps counter-rotate against the map.
-            let nx = ox / half_tiles;
-            let ny = -oy / half_tiles;
+            // The shader stretches the world span on the longer pane
+            // axis (mode.y = w/h aspect): aspect≥1 widens x's span, so a
+            // world offset covers a smaller x-fraction — mirror that here.
+            let mut nx = ox / half_tiles;
+            let mut ny = -oy / half_tiles;
+            if aspect >= 1.0 {
+                nx /= aspect;
+            } else {
+                ny *= aspect;
+            }
             if round && (nx * nx + ny * ny) > 1.0 {
                 continue;
             }
@@ -1971,15 +2013,26 @@ impl Renderer {
     pub fn render(&mut self, cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
         let (w, hpx) = self.size();
 
-        // Book-screen layout fractions (the original's Enter view): map
-        // pane left, world viewport top-right, spell list bottom-right.
-        let map_pane_frac = 0.6f32;
-        let viewport_h_frac = 0.42f32;
+        // Book-screen layout (sub_20E60 case 4), native 640×480 scaled to
+        // the live resolution. The live world fills the background; the
+        // 382×378 map pane pastes top-left and the spellbook grid fills
+        // bottom-right, leaving the world visible in the top-right corner
+        // (right of the map, above the spellbook) and the bottom strip.
+        // Native→screen scale for the book layout (kept distinct from the
+        // camera basis's `sx/sy` sin/cos below — the collision zeroed the
+        // map pane's height when yaw=0).
+        let res_x = w as f32 / 640.0;
+        let res_y = hpx as f32 / 480.0;
+        // The world viewport = the top-right rectangle. Its LEFT edge is
+        // the SPELLBOOK's left (384); its BOTTOM recedes by BOOK_GAP above
+        // the spellbook top (194−2) so a 2px black gap separates them —
+        // the horizontal bar of the "T" demarcation (player 2026-07-07;
+        // the gap comes out of the live view, not the spellbook).
         let view_rect = (
-            (w as f32 * map_pane_frac) as u32,
+            (BOOK_SPELL_X * res_x) as u32,
             0u32,
-            w - (w as f32 * map_pane_frac) as u32,
-            (hpx as f32 * viewport_h_frac) as u32,
+            w.saturating_sub((BOOK_SPELL_X * res_x) as u32),
+            ((BOOK_SPELL_Y - BOOK_GAP) * res_y) as u32,
         );
 
         let aspect = if self.map_view {
@@ -2082,12 +2135,13 @@ impl Renderer {
         let mut stamp_quads: Vec<UiQuad> = Vec::new();
         if !self.map_stamps.is_empty() {
             if self.map_view {
-                let pane_w = w as f32 * map_pane_frac;
-                let side = pane_w.min(hpx as f32) * 0.98;
-                let cx = (map_pane_frac * 0.5) * w as f32; // center of left pane, px
-                let cy = hpx as f32 * 0.5;
+                // Same 382×378 pane rect as the map-globals block, in px.
+                let (pw, ph) = (BOOK_MAP_W * res_x, BOOK_MAP_H * res_y);
+                let cx = (BOOK_MAP_X * res_x) + pw * 0.5;
+                let cy = (BOOK_MAP_Y * res_y) + ph * 0.5;
                 stamp_quads = self.map_stamp_quads(
-                    cx, cy, side * 0.5, side * 0.5, cam.x, cam.z, cam.yaw, BOOK_MAP_ZOOM, false,
+                    cx, cy, pw * 0.5, ph * 0.5, cam.x, cam.z, cam.yaw, BOOK_MAP_ZOOM, false,
+                    pw / ph,
                 );
             } else if self.minimap_on {
                 // Same (diam, center) as the shader uniform — shared via
@@ -2095,6 +2149,7 @@ impl Renderer {
                 let (disc, cx, cy) = self.minimap_rect(w, hpx);
                 stamp_quads = self.map_stamp_quads(
                     cx, cy, disc * 0.5, disc * 0.5, cam.x, cam.z, cam.yaw, self.minimap_zoom, true,
+                    1.0,
                 );
             }
         }
@@ -2136,24 +2191,25 @@ impl Renderer {
         };
 
         if self.map_view {
-            // Square map letterboxed into the left pane, player-centered
-            // and yaw-rotated (round mask off — the book map is
-            // rectangular/square).
-            let pane_w = w as f32 * map_pane_frac;
-            let side = pane_w.min(hpx as f32) * 0.98;
-            let center_x = map_pane_frac - 1.0; // middle of the left pane in NDC
+            // The book map pane at native (0,0) 382×378, player-centered
+            // and yaw-rotated, rectangular (round mask off). Placed by
+            // pixel rect → NDC so it matches the stamp projection.
+            let (px0, py0) = (BOOK_MAP_X * res_x, BOOK_MAP_Y * res_y);
+            let (pw, ph) = (BOOK_MAP_W * res_x, BOOK_MAP_H * res_y);
+            let cx_px = px0 + pw * 0.5;
+            let cy_px = py0 + ph * 0.5;
             let map_globals: [f32; 12] = [
-                center_x,
-                0.0,
-                side / w as f32,
-                side / hpx as f32,
+                cx_px / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
+                1.0 - cy_px / hpx as f32 * 2.0, // pixel center → NDC y (flip)
+                pw / w as f32,                  // NDC half-width
+                ph / hpx as f32,                // NDC half-height
                 cam.x,
                 cam.z,
                 cam.yaw,
                 BOOK_MAP_ZOOM,
-                0.0, // rectangular
-                1.0, // square quad → aspect 1
-                1.0, // opaque (book map is a fullscreen view)
+                0.0,          // rectangular (no round mask)
+                pw / ph,      // sampler aspect = pane w/h (382/378)
+                1.0,          // opaque (the map pane sits over the world)
                 0.0,
             ];
             self.queue.write_buffer(
@@ -2190,13 +2246,15 @@ impl Renderer {
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
-            // The book screen replaces the world view entirely (as in
-            // the original); a dark backdrop fills the spell half.
+            // The book screen: the world viewport fills the top-right,
+            // the map pane the top-left, the spellbook the bottom-right;
+            // everything below (the message-log zone) is pure BLACK in
+            // retail — the clear shows through with no panel fill.
             let clear = if self.map_view {
                 wgpu::Color {
-                    r: 0.02,
-                    g: 0.015,
-                    b: 0.01,
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
                     a: 1.0,
                 }
             } else {
