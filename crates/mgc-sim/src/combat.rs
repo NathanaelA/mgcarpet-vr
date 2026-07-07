@@ -70,7 +70,7 @@ impl Gen {
 
     /// sub_118C0 (:16963) between two pool events: extents SUM per
     /// axis, z centered by each half-height (+78).
-    fn ent_overlap(&self, a: usize, b: usize) -> bool {
+    pub(crate) fn ent_overlap(&self, a: usize, b: usize) -> bool {
         let (ea, eb) = (&self.ent[a], &self.ent[b]);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
         wd(ea.x, eb.x) < ea.f80 as i32 + eb.f80 as i32
@@ -806,10 +806,14 @@ impl Gen {
     /// eased turn.
     fn proj_castle_ball_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let _ = ctx;
+        // The UPGRADE variant (+69 = 43, :65904-08) skips the
+        // placement scans — it flies at the OWN castle and morphs
+        // into the (10,43) token there.
+        let upgrade = self.ent[i].f69 == 43;
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
             let (x, y) = (self.ent[i].x, self.ent[i].y);
-            if !self.castle_site_ok(i, x, y) {
+            if !upgrade && !self.castle_site_ok(i, x, y) {
                 self.ent[i].flags |= 0x400;
                 return false;
             }
@@ -833,6 +837,18 @@ impl Gen {
         self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
         self.ent[i].act_life -= 1;
         if grounded || self.ent[i].act_life < 0 {
+            let own = self.ent[i].id24;
+            if upgrade {
+                // Morph into the (10,43) upgrade token at the castle
+                // (the token mails the castle's ch5 on touch).
+                let (z, link) = (self.ent[i].z, self.ent[i].f146);
+                if let Some(t) = self.spawn_creator(43, tmp.0, tmp.1, z) {
+                    self.ent[t].id24 = own;
+                    self.ent[t].f146 = link;
+                }
+                self.ent[i].flags |= 0x400;
+                return false;
+            }
             let (mut bx, mut by) = (tmp.0, tmp.1);
             if !self.castle_site_ok(i, bx, by) {
                 let back = yaw.wrapping_add(0x400) & 0x7FF;
@@ -841,9 +857,11 @@ impl Gen {
                 bx = t.0;
                 by = t.1;
             }
-            let own = self.ent[i].id24;
             if let Some(c) = self.spawn_castle(bx, by) {
                 self.ent[c].id24 = own;
+                // Claim owner (+144) — the mana census counts the
+                // castle's stored mana into the owner's ceiling.
+                self.ent[c].f144 = own;
             }
             self.ent[i].flags |= 0x400;
         }
@@ -902,6 +920,12 @@ impl Gen {
             e.f59 = 0;
             e.f26 = 0;
             e.max_life = 40000;
+            // Build-site z (+154): the painter/leveler datum. The
+            // entity z (+76) is refreshed to live ground per tick —
+            // the flag rides the painted tower.
+            e.site_z = z;
+            // Channel mask (+28 = 33, ch0+ch5 — sub_37920 :44247).
+            e.f28 = 33;
         }
         self.link(s, px, py, z);
         self.refill_life(s);
@@ -1852,6 +1876,9 @@ impl Gen {
                 e.flags &= !8;
                 self.link(s, x, y, z);
                 self.refill_life(s);
+                // The ctor's sub_36FA0(41) — the visible claim
+                // sparkle (extents then overridden to 512).
+                self.set_sprite(s, 41);
                 self.extents(s, 512, 512);
             }
             // sub_3AE00 (:47034): the volcano's (10,19) smoke/fire
@@ -1970,7 +1997,16 @@ impl Gen {
                 break;
             }
         }
-        let ty = (52 + size) as u16;
+        // Owner recolor (:29627-32): claimed balls swap to the owner
+        // wizard's color row (base 105 + 8*color, wizext var_48);
+        // unowned/wild stay on the neutral 52 row. Our sole wizard is
+        // the human player = color 0.
+        let base = if self.ent[i].f144 == crate::mobs::PLAYER_TARGET {
+            105
+        } else {
+            52
+        };
+        let ty = (base + size) as u16;
         if self.ent[i].type86 != ty {
             self.set_sprite(i, ty);
             if size != 0 {
@@ -2214,7 +2250,12 @@ impl Gen {
                 _ => None,
             };
             if let Some(c) = conv {
-                self.convert_tile(t, c);
+                // The real sub_33800 paint call (:28086-92) — the
+                // damage-stage TYPES come from PAINT_BC (10/11/12);
+                // writing the paint CODE as the type was the
+                // wrong-texture bug. a1/a2 are leftover registers in
+                // the original; they only seed corner_orient ties.
+                self.paint(0, 0, t, c);
                 dirty = true;
             } else if !(6..=0x22).contains(&ty)
                 && self.t.angle[t] & 7 != 1
@@ -2379,14 +2420,44 @@ impl Gen {
             if src != self.ent[i].f144 {
                 self.ent[i].f144 = src;
                 self.ent[i].flags &= !0x40;
-                // Player-gated in sub_55370 (ids 4/14/29): heard only
-                // when the claimant is the human player.
-                self.snd(4, i);
+                // The chime anchors at the CLAIMANT, not the ball
+                // (:29444 sub_55370(claimant, -1, 4)) — the player-
+                // gated id 4 is heard exactly when YOU claim.
+                if src == crate::mobs::PLAYER_TARGET {
+                    self.snd_player(4);
+                }
             }
         }
         // ch4 attract (collection pull) — mana track; acknowledge.
         if self.ent[i].mail[4].1 != 0 {
             self.ent[i].mail[4] = (0, 0);
+        }
+        // Balloon tether (flag 0x40): the tethered ball rises at its
+        // +46=128 lift toward the balloon (+146) instead of ground
+        // physics; the balloon clears the bit when the ball strays
+        // past 1024 (:56746). APPROX: vertical-only homing — the
+        // balloon snaps horizontally over the ball, so the original's
+        // hover-band fine detail is not observable-critical.
+        if self.ent[i].flags & 0x40 != 0 {
+            let b = self.ent[i].f146 as usize;
+            if b != 0
+                && self.ent[b].class64 == 3
+                && self.ent[b].model65 == 3
+                && self.ent[b].flags & 0x400 == 0
+            {
+                let bz = self.ent[b].z;
+                let (x, y, z0) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z)
+                };
+                if z0 < bz {
+                    let z = z0.saturating_add(128).min(bz);
+                    self.move_relink(i, x, y, z);
+                }
+                self.ball_resize(i);
+                return false;
+            }
+            self.ent[i].flags &= !0x40; // dangling tether
         }
         let mut vx = self.ent[i].dest_x as i16;
         let mut vy = self.ent[i].dest_y as i16;
@@ -2501,12 +2572,6 @@ impl Gen {
             .into_iter()
             .map(|(dx, dy)| (dx as i8, dy as i8))
             .collect()
-    }
-
-    /// Single-tile burn conversion (sub_33800 :28088-97): type write +
-    /// local retile.
-    fn convert_tile(&mut self, t: usize, new_type: u8) {
-        self.t.tile_type[t] = new_type;
     }
 
     /// The fire's scorch dig (sub_40D30(expl, 0, 0, -depth, 1)):

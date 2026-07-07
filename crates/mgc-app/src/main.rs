@@ -177,7 +177,7 @@ fn load_level(
             (Some(sh), Some(an), Some(search), Some(build_tab), Some(build_dat)) => {
                 let assets = mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
-                let w = mgc_sim::world::World::new(
+                let mut w = mgc_sim::world::World::new(
                     mgc_sim::features::Planes {
                         height: height.clone(),
                         tile_type: tile_type.clone(),
@@ -188,6 +188,12 @@ fn load_level(
                     seed,
                     assets,
                 );
+                // The level goal: footer[0] = the required banked
+                // percentage of world mana (level offset 38800 —
+                // the win check's threshold and the HUD goal tick).
+                if let Some(f) = package.gen_params.as_ref().and_then(|g| g.footer) {
+                    w.set_win_pct(f[0]);
+                }
                 // The view starts from the post-feature planes.
                 height.copy_from_slice(&w.planes().height);
                 tile_type.copy_from_slice(&w.planes().tile_type);

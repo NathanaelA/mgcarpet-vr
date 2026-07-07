@@ -429,7 +429,7 @@ impl Gen {
     /// sub_42000_42340 (:52576): altitude clamp toward the behavior
     /// band [ground+v_12, ground+v_10] with step v_14 (quarter step
     /// inside the band, hard floor below).
-    fn alt_clamp(z: &mut i16, ground: i16, row: &BehaviorRow) {
+    pub(crate) fn alt_clamp(z: &mut i16, ground: i16, row: &BehaviorRow) {
         if *z > ground.wrapping_add(row.v_10) {
             *z = z.wrapping_add(row.v_14);
         } else if *z > ground.wrapping_add(row.v_12) {

@@ -70,8 +70,10 @@ const NAMES: [&str; SPELL_COUNT] = [
 /// derived rather than stored).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpellDef {
-    /// a4 → `+136` and `+140`: manifestation max mana = spawn mana =
-    /// the mana this spell locks up ("possess cost").
+    /// a4 → `+136` and `+140`: the spell's TOTAL MANA COST — gated
+    /// against the wizard's current pool at full charge and debited
+    /// through the regen delta (sub_55DD0 :64909 / sub_55E80 :64936;
+    /// remc1 ships the debit commented out — a maintainer mis-fix).
     pub possess_mana: u32,
     /// a5 → `+50`: burst count — `+48` is set to this when the player
     /// fires, and the manifestation's tick consumes it. 251/101 =
@@ -82,10 +84,12 @@ pub struct SpellDef {
     pub fire_flag: bool,
     /// a7 → `+62`: continuous/charging spell flag.
     pub charge_flag: bool,
-    /// a8 → `+132`: mana recharge added to `+140` every tick (clamped
-    /// to `+136`; sub_main.cpp:55385-55395). Non-projectile spells
-    /// overload this slot with an effect constant — see rows.
-    pub recharge: u32,
+    /// a8 → `+132`: required CASTLE STORED MANA — the spell-unlock
+    /// ladder (sub_55DD0 :64917-19: nonzero → the caster must own a
+    /// castle holding at least this much). 0 = castle-free spell.
+    /// Magic Bomb's 199488 is the frozen `&loc_30D40` decompile
+    /// artifact (retail value needs the binary) — kept verbatim.
+    pub castle_req: u32,
     /// a9 → `+44`: damage/potency. Utility rows carry a vestigial 100
     /// here (shared-constructor filler; the player: "not sure what
     /// damage means there").
@@ -155,7 +159,7 @@ const fn def(
     count: u16,
     fire_flag: bool,
     charge_flag: bool,
-    recharge: u32,
+    castle_req: u32,
     damage: u32,
 ) -> SpellDef {
     SpellDef {
@@ -163,7 +167,7 @@ const fn def(
         count,
         fire_flag,
         charge_flag,
-        recharge,
+        castle_req,
         damage,
     }
 }

@@ -126,10 +126,44 @@ fn create_castle_builds_on_clear_ground() {
     });
     assert!(changed, "the m42 painter flattened/painted the target region");
 
-    // Single-active lockout: a second press while the player castle
-    // lives is a message-free skip (:65862 surface behavior) — no
-    // new ball appears on the cast tick.
+    // The leveler is a uniform TRANSLATION of the footprint
+    // (sub_28200 adds the same per-tick step to every tile) — the
+    // painted tower must survive it (playtest-4 flatten regression:
+    // the old flatten-to-perimeter-mean APPROX erased the castle).
+    let castle = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 2)
+        .expect("castle entity lives");
+    let (tx, ty) = (castle.tx as i32, castle.ty as i32);
+    let (mut hmin, mut hmax) = (255u8, 0u8);
+    for dy in -4i32..=4 {
+        for dx in -4i32..=4 {
+            let t = ((ty + dy) as usize % 256) * 256 + ((tx + dx) as usize % 256);
+            let h = w.planes().height[t];
+            hmin = hmin.min(h);
+            hmax = hmax.max(h);
+        }
+    }
+    assert!(
+        hmax - hmin >= 12,
+        "the tower relief survives the leveler (min {hmin}, max {hmax})"
+    );
+
+    let (_, cap1, lvl1) = w.loadout().castle.expect("castle panel data");
+    assert_eq!((lvl1, cap1), (1, 10_000), "level 1, capacity ladder rung 1");
+
+    // The RECAST on a standing castle is the UPGRADE (:65904-08):
+    // a new ball launches carrying the (10,43) token morph, the
+    // token mails the castle's ch5 (:31033-34), the castle re-runs
+    // the level-up arm — level 2, capacity 20000 (sub_47DD0).
     w.tick(pose, PlayerCommand::default()); // release the button
     w.tick(pose, PlayerCommand { fire_left: true, ..Default::default() });
-    assert_eq!(count(&w, 9, 10), 0, "lockout: one player castle at a time");
+    assert_eq!(count(&w, 9, 10), 1, "the recast launches the upgrade ball");
+    for _ in 0..200 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let (_, cap2, lvl2) = w.loadout().castle.expect("castle survives the upgrade");
+    assert_eq!((lvl2, cap2), (2, 20_000), "the token upgrade raised level 2");
 }

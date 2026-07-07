@@ -322,7 +322,7 @@ pub fn hud_quads(assets: &UiAssets, loadout: &LoadoutView, w: f32, h: f32) -> Ve
             [0.85, 0.7, 0.2, 1.0],
         ));
     }
-    // Center mana bar.
+    // Center mana bar (the castable pool vs the claimed ceiling).
     let frac = loadout.mana as f32 / loadout.mana_max.max(1) as f32;
     let bw = w * 0.25;
     quads.push(solid([(w - bw) / 2.0, h - 16.0 * scale, bw, 7.0 * scale], BAR_BG));
@@ -335,5 +335,42 @@ pub fn hud_quads(assets: &UiAssets, loadout: &LoadoutView, w: f32, h: f32) -> Ve
         ],
         MANA_BLUE,
     ));
+    // The castle panel's WORLD-RELATIVE pair (sub_22E50 :27172-290):
+    // the original never shows absolute mana — everything scales
+    // against the level's total. Row 1 = castle capacity / world
+    // (amber), row 2 = banked / world (blue), and the level-goal
+    // tick at win_pct% on both rows (`(value<<6)/world` fills +
+    // `(pct<<6)/100` tick on a shared ruler). The tick turns green
+    // once the win latches (16 sustained ticks over the goal).
+    if loadout.world_mana > 0 {
+        let world = loadout.world_mana as f32;
+        let pw = w * 0.18;
+        let px = w - pw - 12.0 * scale;
+        let mut py = h - 60.0 * scale;
+        let rows: [(f32, [f32; 4]); 2] = [
+            (
+                loadout.castle.map_or(0.0, |(_, cap, _)| cap as f32) / world,
+                [0.85, 0.7, 0.2, 1.0],
+            ),
+            (loadout.banked as f32 / world, MANA_BLUE),
+        ];
+        for (row_frac, color) in rows {
+            quads.push(solid([px, py, pw, 5.0 * scale], BAR_BG));
+            quads.push(solid(
+                [px + 1.0, py + 1.0, (pw - 2.0) * row_frac.clamp(0.0, 1.0), 5.0 * scale - 2.0],
+                color,
+            ));
+            if loadout.win_pct > 0 {
+                let tick = px + pw * (loadout.win_pct as f32 / 100.0).clamp(0.0, 1.0);
+                let tick_color = if loadout.completed {
+                    [0.3, 0.95, 0.3, 1.0]
+                } else {
+                    [0.95, 0.95, 0.95, 1.0]
+                };
+                quads.push(solid([tick - 1.0, py - 1.0, 2.0, 7.0 * scale], tick_color));
+            }
+            py += 8.0 * scale;
+        }
+    }
     quads
 }

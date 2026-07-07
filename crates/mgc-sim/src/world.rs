@@ -74,11 +74,24 @@ const MANIFEST_BASE: u8 = 200;
 /// slice: the +308 free mana pool, the var_940/944 hand equips, the
 /// var_676 owned-spell table, and the +16/+17 effect flag bits.
 pub struct Player {
-    /// Carpet free mana pool (+308). INTERIM: fixed 100_000 pool with
-    /// the idle recharge rule `mana_max/2000` per tick (:55409-20);
-    /// the original recomputes the pool from world state (mana track).
+    /// Wizard current mana (+140): stepped by [`Self::mana_delta`]
+    /// each tick, clamped to [0, mana_max] (:55385-95).
     pub mana: u32,
+    /// Wizard mana ceiling (+136): recomputed EVERY tick by
+    /// sub_48230 (:56839, called :52327) = intrinsic base 1000
+    /// (u32_322, :55031-33) + Σ +140 of everything claimed (+144):
+    /// creatures, castle, balloons, mana balls, houses.
     pub mana_max: u32,
+    /// Regen/debit delta (+132): +136/200 (min 1000) touching the
+    /// own castle, else +136/2000 (min 100) (:55397-421); a cast
+    /// debit OVERWRITES it negative for one tick (sub_55E80 :64936 —
+    /// authored behavior; remc1 ships it commented out).
+    mana_delta: i32,
+    /// Banked mana: claimed-house tally (wizext u32_308) + own
+    /// castle stored (+140) — the HUD % and win-check numerator.
+    pub banked: u32,
+    /// World total mana (str_184.u32_188), the HUD % denominator.
+    pub world_mana: u32,
     /// Hand equips (var_940/944).
     pub left: Option<SpellId>,
     pub right: Option<SpellId>,
@@ -112,8 +125,11 @@ pub struct Player {
 impl Default for Player {
     fn default() -> Self {
         Player {
-            mana: 100_000,
-            mana_max: 100_000,
+            mana: 1000,
+            mana_max: 1000,
+            mana_delta: 0,
+            banked: 0,
+            world_mana: 0,
             left: None,
             right: None,
             owned: [0; SPELL_COUNT],
@@ -140,6 +156,18 @@ pub struct LoadoutView {
     pub cooldown: [f32; 24],
     pub mana: u32,
     pub mana_max: u32,
+    /// Banked mana (claimed houses + castle stored) and the world
+    /// total — the original castle-panel % (:54721) and the win
+    /// check's numerator/denominator.
+    pub banked: u32,
+    pub world_mana: u32,
+    /// Own castle (stored, capacity, level) when one stands.
+    pub castle: Option<(u32, u32, u8)>,
+    /// The level goal: required banked % of the world total (the
+    /// HUD goal tick, :27268). 0 = none wired.
+    pub win_pct: u16,
+    /// The latched completion flag.
+    pub completed: bool,
 }
 
 /// The player's pose in engine units for trigger/portal tests: x/y are
@@ -214,6 +242,17 @@ pub struct World {
     /// The human player's spell/mana state (spells cast through the
     /// per-hand dispatcher, sub_46B00_46E40 :55851).
     player: Player,
+    /// Level completion threshold: the required banked percentage of
+    /// the world total (the u16 at level-file offset 38800 — the
+    /// first footer field; gamedata+232595, read by the win check
+    /// :52128 and the HUD goal tick :27268). 0 = no goal wired.
+    win_pct: u16,
+    /// Consecutive ticks the banked share has exceeded the goal
+    /// (sub_415C0 :52130-38; 16 latches the win).
+    win_streak: u16,
+    /// The latched completion flag (the original's per-player
+    /// +13325 bit 2).
+    completed: bool,
     /// Dev/playtest "all spells + infinite mana" switch (G-class).
     dev_spells: bool,
     /// Last tick's fire-button states — casts are EDGE-triggered (one
@@ -311,8 +350,11 @@ pub enum VolumeKind {
 /// vortex and the combat effects (fire, flame, splash, flashes, mana
 /// ball — the model-17 blast driver is invisible by design).
 fn drawable(class: u16, model: u16) -> bool {
+    // The (10,12) possess flash carries the ctor's sprite row 41 but
+    // draws NOTHING in retail (player-confirmed) — its draw gate is
+    // whatever +16 bit the ctor clears; excluded here.
     matches!(class, 2 | 3 | 5 | 9 | 12)
-        || (class == 10 && matches!(model, 34 | 0 | 1 | 5 | 23 | 25 | 39))
+        || (class == 10 && matches!(model, 34 | 0 | 1 | 5 | 23 | 25 | 39 | 40 | 45))
 }
 
 impl World {
@@ -331,6 +373,9 @@ impl World {
             entities_dirty: false,
             pending_teleport: None,
             player: Player::default(),
+            win_pct: 0,
+            win_streak: 0,
+            completed: false,
             dev_spells: false,
             prev_fire: (false, false),
             accel_veto: (false, false),
@@ -397,6 +442,15 @@ impl World {
             if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
                 continue; // owned manifestation, not a drawable
             }
+            // Houses (m45): the visible building is painted terrain;
+            // the entity billboard is the OWNER FLAG (sprite 177 +
+            // color row) — drawn only once CLAIMED. APPROX: the
+            // original's exact draw gate for the neutral state is
+            // untraced (the claim clears +16 bit 0); claimed-only
+            // matches the known "captured buildings fly your flag".
+            if e.class64 == 10 && e.model65 == 45 && e.f144 == 0 {
+                continue;
+            }
             let segment = e.class64 == 5 && e.tick70 == 120;
             out.push(LivePose {
                 class: e.class64,
@@ -446,6 +500,49 @@ impl World {
             px: player.x,
             py: player.y,
             pz: player.z,
+        };
+
+        // The per-tick mana census (sub_48230 :56839, called :52327
+        // BEFORE all entity ticks).
+        self.recompute_mana();
+
+        // The completion check (sub_415C0 :52100-40): a wizard WITH
+        // a castle whose banked share of the world total exceeds the
+        // level goal (strictly — `<=` resets, :52128) for 16
+        // consecutive ticks wins. Ours: the human player only.
+        if self.win_pct > 0 && !self.completed {
+            let over = self.player.world_mana != 0
+                && self.player_castle().is_some()
+                && 100u64 * self.player.banked as u64 / self.player.world_mana as u64
+                    > self.win_pct as u64;
+            if over {
+                self.win_streak += 1;
+                if self.win_streak >= 16 {
+                    self.completed = true;
+                }
+            } else {
+                self.win_streak = 0;
+            }
+        }
+
+        // The wizard mana tick (:55385-421) — BEFORE cast handling,
+        // like the original wizard tick (regen first, casts later in
+        // the same function): step the pool by the delta (a cast
+        // debit overwrote it negative last turn — it lands here),
+        // clamp to [0, max], then recompute the delta: fast regen
+        // touching the own castle (max/200, floor 1000), slow afield
+        // (max/2000, floor 100).
+        let stepped = self.player.mana as i64 + self.player.mana_delta as i64;
+        self.player.mana = stepped.clamp(0, self.player.mana_max as i64) as u32;
+        let at_castle = self.player_castle().is_some_and(|c| {
+            let e = &self.g.ent[c];
+            ((player.x.wrapping_sub(e.x) as i16).unsigned_abs() as u16) <= e.f80
+                && ((player.y.wrapping_sub(e.y) as i16).unsigned_abs() as u16) <= e.f82
+        });
+        self.player.mana_delta = if at_castle {
+            ((self.player.mana_max / 200) as i32).max(1000)
+        } else {
+            ((self.player.mana_max / 2000) as i32).max(100)
         };
 
         // Mirror the cloak/deflection flags into the pool engine for
@@ -527,8 +624,10 @@ impl World {
                 }
                 11 => self.trigger_tick(i, player, &buckets),
                 // The player-built castle's state machine (class-3
-                // m2; balloons/wizard castles = later tracks).
+                // m2) and its mana balloons (m3; wizard castles =
+                // a later track).
                 3 if self.g.ent[i].model65 == 2 => self.g.castle_tick(i),
+                3 if self.g.ent[i].model65 == 3 => self.g.balloon_tick(i),
                 // Trees burn (states 0/1/2 + the standing fire).
                 2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
                 // Spell jars (pickup) and owned-spell manifestations
@@ -590,11 +689,6 @@ impl World {
                 self.player.bomb_timer = Some(t - 1);
             }
         }
-
-        // The carpet idle mana recharge, mana_max/2000 per tick
-        // (:55409-20); INTERIM fixed pool until the mana track lands.
-        self.player.mana =
-            (self.player.mana + self.player.mana_max / 2000).min(self.player.mana_max);
 
         // Types 2/21 thrust-override factor for the flyer (3.0 while
         // the cast button is held — "hold down the mouse button to
@@ -674,6 +768,19 @@ impl World {
         self.dev_spells
     }
 
+    /// Wire the level's completion goal: the required banked share
+    /// (percent of world mana) — the level footer's first u16
+    /// (offset 38800; the original's gamedata+232595).
+    pub fn set_win_pct(&mut self, pct: u16) {
+        self.win_pct = pct;
+    }
+
+    /// The latched level-completion flag (sub_415C0: banked share
+    /// above the goal for 16 consecutive ticks).
+    pub fn completed(&self) -> bool {
+        self.completed
+    }
+
     /// One hand's cast trigger — the port of sub_46B00_46E40 :55851 +
     /// LABEL_32 :55892, simplified per the agreed interim semantics.
     /// Gate: owned && mana covers the possess cost && the
@@ -703,17 +810,18 @@ impl World {
             return;
         }
         let def = &SPELLS[id];
-        let per_shot = def.possess_mana / def.count as u32;
 
         // 23: the firehose.
         if id == 23 {
-            if !self.dev_spells {
-                if self.player.mana < def.possess_mana {
-                    self.g.snd_player(29); // cast-blocked buzz
-                    return;
-                }
-                self.player.mana -= per_shot;
+            if !self.spell_gate(def) {
+                self.g.snd_player(29); // cast-blocked buzz (:64930)
+                return;
             }
+            // Per-shot debit at cost/count: the original charges the
+            // full +136 per 3-tick refire window at 1 shot/tick —
+            // the same drain rate, and the negative delta correctly
+            // starves regen while the stream is held.
+            self.mana_debit(def.possess_mana / def.count as u32);
             self.g.ent[m].f26 = def.count as i16;
             self.break_cloak(id);
             // Per-shot discharge (:66296 family 9): every fireball of
@@ -734,12 +842,12 @@ impl World {
             if (id == 2 && self.accel_veto.0) || (id == 21 && self.accel_veto.1) {
                 return;
             }
-            if !armed && !self.dev_spells {
-                if self.player.mana < def.possess_mana {
+            if !armed {
+                if !self.spell_gate(def) {
                     self.g.snd_player(29); // cast-blocked buzz
                     return;
                 }
-                self.player.mana -= per_shot;
+                self.mana_debit(def.possess_mana);
             }
             self.g.ent[m].f26 = def.count as i16;
             if matches!(id, 2 | 21) {
@@ -757,21 +865,41 @@ impl World {
         if (!edge && id != 15) || armed {
             return;
         }
-        // Create Castle: single-active lockout — a message-free skip
-        // while a build event lives (:65862).
-        if id == 16 && self.castle_build_lives() {
-            return;
-        }
-        if !self.dev_spells {
-            if self.player.mana < def.possess_mana {
-                self.g.snd_player(29); // cast-blocked buzz
+        // Create Castle (the model-16 trigger arm, :55901-11): a
+        // recast while the build chain lives FIZZLES (the original
+        // pins the manifestation's charge through the build — +48
+        // nonzero → buzz 29); the mana check is SILENT; and the
+        // cast COST is dynamic — sub_47C60/sub_47DD0 rewrite the
+        // manifestation's +136 to the capacity ladder at the
+        // castle's CURRENT level on every init/level-up (the
+        // player-remembered doubling threshold: upgrading costs the
+        // FULL next-stage amount; the fresh castle keeps the ctor
+        // 1000).
+        if id == 16 {
+            if self.castle_build_lives() {
+                self.g.snd_player(29); // the pinned-charge fizzle
                 return;
             }
-            // Global Death deducts its FULL possess cost (75000) on
-            // cast — INTERIM simplification of its weird +132 (:66235).
-            let cost = if id == 22 { def.possess_mana } else { per_shot };
-            self.player.mana -= cost;
+            let cost = self
+                .player_castle()
+                .map(|c| {
+                    Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32
+                })
+                .unwrap_or(def.possess_mana);
+            if !self.dev_spells && self.player.mana < cost {
+                return; // silent (:55908-10)
+            }
+            self.mana_debit(cost);
+            self.g.ent[m].f26 = def.count as i16;
+            self.break_cloak(id);
+            self.emit_spell(id, m, p, right, ctx);
+            return;
         }
+        if !self.spell_gate(def) {
+            self.g.snd_player(29); // cast-blocked buzz
+            return;
+        }
+        self.mana_debit(def.possess_mana);
         self.g.ent[m].f26 = def.count as i16;
         self.break_cloak(id);
         self.emit_spell(id, m, p, right, ctx);
@@ -1011,15 +1139,16 @@ impl World {
         }
     }
 
-    /// The player's live castle entity (class-3 m2 owned by the
-    /// player), or a castle ball still in flight — the single-active
-    /// lockout (recast-as-upgrade is the housekeeping pass).
+    /// The cast lockout: a castle ball (9,10) or upgrade token
+    /// (10,43) still in flight. A STANDING castle no longer locks —
+    /// the recast on it is the UPGRADE (:65904-08 morphs the ball
+    /// into the token instead of a new castle).
     fn castle_build_lives(&self) -> bool {
         self.g.ent.iter().any(|e| {
             e.flags & 0x400 == 0
                 && e.id24 == PLAYER_TARGET
-                && ((e.class64 == 3 && e.model65 == 2)
-                    || (e.class64 == 9 && e.model65 == 10))
+                && ((e.class64 == 9 && e.model65 == 10)
+                    || (e.class64 == 10 && e.model65 == 43))
         })
     }
 
@@ -1031,21 +1160,104 @@ impl World {
         })
     }
 
+    /// sub_48230 (:56839): the per-tick mana census. The wizard
+    /// ceiling (+136) resets to the intrinsic base 1000 (u32_322,
+    /// :55031-33) and accumulates the +140 of every CLAIMED (+144)
+    /// creature, castle, balloon, mana ball and house (:56860-907);
+    /// claimed houses also feed the banked tally (u32_308, :56895);
+    /// every counted entity feeds the world total regardless of
+    /// owner. Model-40 claim totems are excluded (:56880). Banked =
+    /// house tally + own castle stored (the HUD % numerator, :54721).
+    fn recompute_mana(&mut self) {
+        let mut max = 1000u32;
+        let mut houses = 0u32;
+        let mut world = 0u32;
+        let mut castle_stored = 0u32;
+        for j in 1..features::POOL {
+            let e = &self.g.ent[j];
+            if e.flags & 0x400 != 0 {
+                continue;
+            }
+            if !matches!(
+                (e.class64, e.model65),
+                (5, _) | (3, 2) | (3, 3) | (10, 39) | (10, 45)
+            ) {
+                continue;
+            }
+            let m = e.f140.max(0) as u32;
+            world = world.saturating_add(m);
+            if e.f144 == PLAYER_TARGET {
+                max = max.saturating_add(m);
+                if e.class64 == 10 && e.model65 == 45 {
+                    houses = houses.saturating_add(m);
+                }
+                if e.class64 == 3 && e.model65 == 2 {
+                    castle_stored = castle_stored.saturating_add(m);
+                }
+            }
+        }
+        self.player.mana_max = max;
+        self.player.banked = houses.saturating_add(castle_stored);
+        self.player.world_mana = world;
+    }
+
+    /// sub_55DD0 (:64909): the cast gate — the castle ladder first
+    /// (a nonzero `castle_req` needs an owned castle STORING at
+    /// least that much), then the wizard pool covers the full cost.
+    /// The fizzle 29 on failure is the caller's job.
+    fn spell_gate(&self, def: &crate::spells::SpellDef) -> bool {
+        if self.dev_spells {
+            return true;
+        }
+        if def.castle_req > 0
+            && !self
+                .player_castle()
+                .is_some_and(|c| self.g.ent[c].f140.max(0) as u32 >= def.castle_req)
+        {
+            return false;
+        }
+        self.player.mana >= def.possess_mana
+    }
+
+    /// sub_55E80 (:64936): the cast debit rides the regen delta —
+    /// overwrite it negative, or deepen an already-negative one. The
+    /// wizard mana tick applies it next turn and clamps at 0.
+    /// (Authored behavior: remc1's maintainer ships this commented
+    /// out — a known mis-fix.)
+    fn mana_debit(&mut self, cost: u32) {
+        if self.dev_spells {
+            return;
+        }
+        let c = cost.min(i32::MAX as u32) as i32;
+        if self.player.mana_delta >= 0 {
+            self.player.mana_delta = -c;
+        } else {
+            self.player.mana_delta -= c;
+        }
+    }
+
     /// 16 Create Castle (sub_57610 :65862): the class-9 m10 castle
-    /// ball from the caster, target 16 tiles (4096 units) ahead at
-    /// ground level (:65894-902); the flight runs the sub_12F70
-    /// placement scans (launch = silent abort, landing = flip 180 +
-    /// step back, then build). The upgrade token (m43) for an
-    /// existing castle is the housekeeping pass (the lockout above
-    /// covers it).
+    /// ball from the caster. NO castle standing: target 16 tiles
+    /// (4096 units) ahead at ground level (:65894-902), morph =
+    /// the (3,2) castle; the flight runs the sub_12F70 placement
+    /// scans (launch = silent abort, landing = flip 180 + step back,
+    /// then build). Castle standing: the RECAST is the UPGRADE —
+    /// the ball flies AT the castle and morphs into the (10,43)
+    /// upgrade token instead (+68/69, +146 = castle idx, :65904-08).
     fn cast_castle(&mut self, p: PlayerPose) {
         use crate::combat::PLAYER_HH;
         let z = p.z.wrapping_add(PLAYER_HH as i16);
+        let castle = self.player_castle();
         let Some(pr) = self.g.spawn_castle_ball(p.x, p.y, z) else {
             return;
         };
-        let mut tgt = (p.x, p.y, 0i16);
-        Gen::polar_step(&mut tgt, p.heading, 0, 4096);
+        let tgt = if let Some(c) = castle {
+            (self.g.ent[c].x, self.g.ent[c].y, 0i16)
+        } else {
+            let mut t = (p.x, p.y, 0i16);
+            Gen::polar_step(&mut t, p.heading, 0, 4096);
+            t
+        };
         let def = &SPELLS[16];
         let e = &mut self.g.ent[pr];
         e.f126 += p.speed;
@@ -1057,8 +1269,14 @@ impl World {
         e.f140 = def.possess_mana as i32;
         e.dest_x = tgt.0;
         e.dest_y = tgt.1;
-        e.f68 = 3;
-        e.f69 = 2;
+        if let Some(c) = castle {
+            e.f68 = 10;
+            e.f69 = 43;
+            e.f146 = c as u16;
+        } else {
+            e.f68 = 3;
+            e.f69 = 2;
+        }
         self.entities_dirty = true;
     }
 
@@ -1240,6 +1458,18 @@ impl World {
             cooldown,
             mana: if self.dev_spells { self.player.mana_max } else { self.player.mana },
             mana_max: self.player.mana_max,
+            banked: self.player.banked,
+            world_mana: self.player.world_mana,
+            castle: self.player_castle().map(|c| {
+                let e = &self.g.ent[c];
+                (
+                    e.f140.max(0) as u32,
+                    e.f136.max(0) as u32,
+                    e.f26.clamp(0, 255) as u8,
+                )
+            }),
+            win_pct: self.win_pct,
+            completed: self.completed,
         }
     }
 
@@ -1814,10 +2044,16 @@ mod tests {
                 e
             })
             .collect();
+        // Plain floor (7) with a wall ring (0x10) like real rows —
+        // the collapse rubble stamp only marks WALL cells (:30944).
         let mut dat = Vec::new();
-        for _ in 0..4 {
+        for row in 0..4 {
             dat.push(4u8);
-            dat.extend_from_slice(&[7, 7, 7, 7]);
+            if row == 1 || row == 2 {
+                dat.extend_from_slice(&[0x10, 7, 7, 0x10]);
+            } else {
+                dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            }
             dat.push(0);
         }
         FeatureAssets::parse(&grid, &tab, &dat).unwrap()
@@ -2404,6 +2640,73 @@ mod tests {
     }
 
     #[test]
+    fn balloon_collects_claimed_mana_to_the_castle() {
+        let mut w = flat_world();
+        // A player castle; let the build chain (level-up → painter →
+        // leveler) run to established.
+        let c = w.g.spawn_castle(110 << 8, 110 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        let (_, cap, lvl) = w.loadout().castle.expect("castle stands");
+        assert_eq!((lvl, cap), (1, 10_000), "level 1 on the capacity ladder");
+        // A claimed ball 4 tiles out: the dispatcher's balloon must
+        // fetch it and empty the cargo into the castle store.
+        let b = w.g.spawn_mana_ball(114 << 8, 110 << 8, 100 * 32).unwrap();
+        w.g.ent[b].f140 = 512;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        let mut stored = 0;
+        for _ in 0..600 {
+            w.tick(away(), PlayerCommand::default());
+            stored = w.loadout().castle.map_or(0, |(s, _, _)| s);
+            if stored >= 512 {
+                break;
+            }
+        }
+        assert!(stored >= 512, "balloon delivered the cargo (stored {stored})");
+        // One more tick: the census (tick-start) sees the delivery.
+        w.tick(away(), PlayerCommand::default());
+        // Castle-stored mana raises the wizard ceiling and counts as
+        // banked (sub_48230).
+        assert!(w.loadout().mana_max >= 1000 + 512, "ceiling includes the store");
+        assert!(w.loadout().banked >= 512, "banked = castle stored");
+    }
+
+    #[test]
+    fn castle_upgrade_costs_the_full_ladder_amount() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.grant_spell(SpellId(16));
+        w.player.left = Some(SpellId(16));
+        // A standing level-1 castle (build chain runs to established).
+        let c = w.g.spawn_castle(110 << 8, 110 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.loadout().castle.map(|(_, _, l)| l), Some(1));
+        // Recast with the bare 1000 pool: SILENT no-cast — the
+        // upgrade costs the full ladder amount at the current level
+        // (10000 at level 1; sub_47C60/sub_47DD0 rewrite the
+        // manifestation's +136, gate :55908-10).
+        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        w.tick(away(), fire);
+        assert_eq!(count(&w, 9, 10), 0, "pool 1000 cannot fund the 10000 upgrade");
+        // Own enough mana (a claimed ball raises the ceiling) and
+        // the same recast launches the upgrade ball.
+        let b = w.g.spawn_mana_ball(50 << 8, 50 << 8, 100 * 32).unwrap();
+        w.g.ent[b].f140 = 20_000;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.tick(away(), PlayerCommand::default()); // census + release
+        w.player.mana = w.player.mana_max;
+        w.tick(away(), fire);
+        assert_eq!(count(&w, 9, 10), 1, "funded upgrade launches the ball");
+    }
+
+    #[test]
     fn trees_burn_to_char_and_spark_a_standing_fire() {
         use crate::combat::MailTarget;
         let planes = Planes {
@@ -2611,14 +2914,16 @@ mod tests {
         let lv = w.loadout();
         assert!(lv.owned[0] && lv.owned[3], "starting spells granted");
         assert_eq!((lv.left, lv.right), (Some(0), Some(3)), "auto-fill L/R (:49246-54)");
-        // Drain below the regen pin so the per-shot deduction shows.
-        w.player.mana = 10_000;
         let fire = PlayerCommand { fire_left: true, ..Default::default() };
         w.tick(firing_line(), fire);
         assert_eq!(count(&w, 9, 0), 1, "the press edge casts one fireball");
-        // possess/count = 200/5 = 40 out (:64946-50), regen 50 in.
-        assert_eq!(w.loadout().mana, 10_000 - 40 + 50);
+        // Ceiling = the intrinsic 1000 with nothing claimed
+        // (sub_48230); the FULL 200 debit rides the regen delta and
+        // lands NEXT tick (sub_55E80 — the debit remc1 comments out).
+        assert_eq!(w.loadout().mana, 1000, "debit is delta-deferred");
         assert!(w.loadout().cooldown[0] > 0.0, "burst window armed");
+        w.tick(firing_line(), fire); // held: no re-cast
+        assert_eq!(w.loadout().mana, 800, "the full 200 debit landed");
         // Fireball is EDGE-triggered (autofire is spell 23's alone):
         // holding adds nothing; a fresh press past the burst does.
         for _ in 0..8 {
@@ -2692,8 +2997,9 @@ mod tests {
     fn accelerate_directions_are_mutually_exclusive() {
         use crate::spells::SpellId;
         let mut w = flat_world();
-        w.grant_spell(SpellId(2));
-        w.grant_spell(SpellId(21));
+        // Toggle semantics under test, not the economy — the real
+        // pool (base 1000) can't fund back-to-back 1000-cost arms.
+        w.set_dev_spells(true);
         let equip = PlayerCommand {
             equip_left: Some(SpellId(2)),
             equip_right: Some(SpellId(21)),
@@ -2876,6 +3182,47 @@ mod tests {
             claimed |= w.g.ent[b].f144 == PLAYER_TARGET;
         }
         assert!(claimed, "the m1 lob acquires + the (10,12) flash claims the ball");
+    }
+
+    #[test]
+    fn possess_claims_a_neutral_house() {
+        use crate::spells::SpellId;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 10,
+            model: 45,
+            x: 112,
+            y: 110,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 3, assets());
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(3));
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        let b = find_slot(&w, 10, 45);
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched");
+        let mut claimed = false;
+        for _ in 0..120 {
+            w.tick(p, PlayerCommand::default());
+            claimed |= w.g.ent[b].f144 == PLAYER_TARGET;
+        }
+        assert!(claimed, "the lob claims the neutral house (:30800-14)");
     }
 
     #[test]

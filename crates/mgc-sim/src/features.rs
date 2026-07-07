@@ -332,6 +332,10 @@ pub(crate) struct Ent {
     /// post-init (child/parent fields).
     pub(crate) dest_x: u16,
     pub(crate) dest_y: u16,
+    /// Build-site z (offset 154): the castle's painter/leveler datum
+    /// — distinct from the live entity z (+76), which tracks the
+    /// ground under the flag every tick.
+    pub(crate) site_z: i16,
 }
 
 /// The event-pool engine: terrain planes + the original's 1000-slot
@@ -1267,6 +1271,20 @@ impl Gen {
                 e.act_life = 30;
                 e.flags &= !8;
             }
+            // sub_3B6F0 (:47526): the castle UPGRADE token — state
+            // 45, life 8, +44 = -1536 (inert dead weight, same
+            // family as the possess flash), sprite row 41, 512
+            // extents. The caller stamps owner + castle link.
+            43 => {
+                e.tick70 = 45;
+                e.max_life = 8;
+                e.act_life = 8;
+                e.f44 = (-1536i16) as u16;
+                e.flags &= !8;
+                self.set_sprite(i, 41);
+                self.ent[i].f80 = 512;
+                self.ent[i].f82 = 512;
+            }
             // sub_3B300 (model 34): the PORTAL vortex — sprite row 223,
             // 1-tile extents, spawned 640 alt units above ground (its
             // tick re-grounds it from the second turn), destination
@@ -1572,6 +1590,7 @@ impl Gen {
             34 => self.tick_canyon_head(i),
             43 => self.tick_castle_leveler(i),
             44 => self.tick_castle_painter(i),
+            45 => self.tick_upgrade_token(i),
             51 => self.tick_building(i),
             55 => self.tick_ridge_head(i, ctx),
             // sub_253E0 rows (30, 31, 33, 54, …): pure self-kill.
@@ -2032,13 +2051,18 @@ impl Gen {
         }
         self.ent[i].f26 -= 1;
         if self.ent[i].f26 < 0 {
+            // Finish (:30697-707): PROMOTE pending protection — only
+            // tiles carrying bit 0x08 flip to 0x80; unpainted cells of
+            // the RLE footprint stay unprotected.
             let def = self.assets.build_tab[level % self.assets.build_tab.len()];
             let x0 = cx.wrapping_sub((def.w >> 1) as u8);
             let y0 = cy.wrapping_sub((def.h >> 1) as u8);
             for dy in 0..def.h {
                 for dx in 0..def.w {
                     let t = tile(x0.wrapping_add(dx), y0.wrapping_add(dy));
-                    self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
+                    if self.t.angle[t] & 8 != 0 {
+                        self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
+                    }
                 }
             }
             let c = self.ent[i].f146 as usize;
@@ -2049,76 +2073,468 @@ impl Gen {
         }
     }
 
-    /// sub_28200 (:30284), byte70 43: the castle ground-leveling
-    /// pass — 10 ticks stepping the footprint toward the clamped
-    /// (≤220) average of the surrounding perimeter ring, then the
-    /// protection stamp and the castle to sub-state 2 (:30375,
-    /// :30422-23). APPROX: plain rect + arithmetic-mean perimeter
-    /// in place of sub_361C0's exact walk.
+    /// sub_28200 (:30284), byte70 43: the castle ground LEVELER — a
+    /// uniform vertical TRANSLATION of the whole sculpted footprint,
+    /// never a flatten: each tick every w*h tile gets the SAME signed
+    /// step, so the painted tower rides along with the base. Init
+    /// (:30429-41): counter (+26) = 10, current (+48, ours f28) =
+    /// event z>>5, target (+44) = the OUTSIDE 4-corner average
+    /// sub_361C0(x0-1, y0-1, h+2, w+2) clamped 220; already equal →
+    /// straight to finish. Stepping (:30333-36): step = (target -
+    /// current) / counter (signed truncating div), current += step;
+    /// counter 10..2 add step to all tiles (:30386-416); counter 1
+    /// adds + downgrades protection 0x80→0x08 (:30337-62) then
+    /// counter = -10; -10..-2 idle; -1 restores 0x08→0x80
+    /// (:30363-85). Finish (counter 0, :30419-27): castle sub-state
+    /// 2, castle site z = 32*current, perimeter smooth depth 3,
+    /// despawn. (The original also aborts to finish when castle +50
+    /// [rebuild-pending] goes nonzero — field unported, always 0.)
     fn tick_castle_leveler(&mut self, i: usize) {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
-        let level = e.f71.clamp(1, 8) as usize;
-        let def = self.assets.build_tab[level % self.assets.build_tab.len()];
+        let def = self.assets.build_tab[e.f71 as usize % self.assets.build_tab.len()];
         let x0 = cx.wrapping_sub((def.w >> 1) as u8);
         let y0 = cy.wrapping_sub((def.h >> 1) as u8);
-        self.ent[i].act_life -= 1;
-        let life = self.ent[i].act_life;
-        if life >= 0 {
-            let (mut sum, mut n) = (0i32, 0i32);
-            for gx in -1..=(def.w as i32) {
-                for gy in [-1i32, def.h as i32] {
-                    sum += self.t.height[tile((x0 as i32 + gx) as u8, (y0 as i32 + gy) as u8)]
-                        as i32;
-                    n += 1;
-                }
+        if e.flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            self.ent[i].f26 = 10;
+            let cur = e.z >> 5;
+            self.ent[i].f28 = cur as u16;
+            let mut tgt = self.avg4(
+                x0.wrapping_sub(1),
+                y0.wrapping_sub(1),
+                def.h.wrapping_add(2),
+                def.w.wrapping_add(2),
+            );
+            if tgt > 220 {
+                tgt = 220;
             }
-            for gy in 0..(def.h as i32) {
-                for gx in [-1i32, def.w as i32] {
-                    sum += self.t.height[tile((x0 as i32 + gx) as u8, (y0 as i32 + gy) as u8)]
-                        as i32;
-                    n += 1;
-                }
+            self.ent[i].f44 = tgt;
+            if cur == tgt as i16 {
+                self.ent[i].f26 = 0;
             }
-            let avg = (sum / n.max(1)).min(220);
-            let divisor = life + 1;
-            for gy in 0..def.h {
-                for gx in 0..def.w {
-                    let t = tile(x0.wrapping_add(gx), y0.wrapping_add(gy));
-                    let hh = self.t.height[t] as i32;
-                    self.t.height[t] = (hh + (avg - hh) / divisor).clamp(0, 255) as u8;
+            return;
+        }
+        let counter = self.ent[i].f26;
+        if counter != 0 {
+            let step = (self.ent[i].f44 as i32 - self.ent[i].f28 as i16 as i32)
+                / counter as i32;
+            self.ent[i].f28 = (self.ent[i].f28 as i16 as i32 + step) as i16 as u16;
+            let add = |g: &mut Self, unstamp: bool| {
+                for gy in 0..def.h {
+                    for gx in 0..def.w {
+                        let t = tile(x0.wrapping_add(gx), y0.wrapping_add(gy));
+                        if unstamp && g.t.angle[t] & 0x80 != 0 {
+                            g.t.angle[t] = (g.t.angle[t] & 0x77) | 8;
+                        }
+                        g.t.height[t] = (g.t.height[t] as i32 + step) as u8;
+                    }
                 }
+            };
+            if counter == 1 {
+                add(self, true);
+                self.ent[i].f26 = -10;
+            } else if counter == -1 {
+                for gy in 0..def.h {
+                    for gx in 0..def.w {
+                        let t = tile(x0.wrapping_add(gx), y0.wrapping_add(gy));
+                        if self.t.angle[t] & 8 != 0 {
+                            self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
+                        }
+                    }
+                }
+                self.ent[i].f26 += 1;
+            } else if counter < 0 {
+                self.ent[i].f26 += 1;
+            } else {
+                add(self, false);
+                self.ent[i].f26 -= 1;
             }
         } else {
-            for gy in 0..def.h {
-                for gx in 0..def.w {
-                    let t = tile(x0.wrapping_add(gx), y0.wrapping_add(gy));
-                    self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
-                }
-            }
             let c = self.ent[i].f146 as usize;
             if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
                 self.ent[c].f59 = 2;
+                // Castle SITE z (+154) = 32 * final — the next
+                // build's datum (:30424); the entity z refreshes
+                // from live ground on its own tick.
+                self.ent[c].site_z = 32 * self.ent[i].f28 as i16;
             }
+            self.smooth_perimeter(cx, cy, (def.h >> 1) as u16, (def.w >> 1) as u16, 3);
             self.ent[i].flags |= 0x400;
         }
     }
 
+    /// sub_293D0 (:31009), byte70 45: the castle UPGRADE token — the
+    /// delivery receipt the upgrade ball morphs into at the castle.
+    /// One armed tick: touching the linked castle (the original
+    /// resolves it through wizext +50 — same castle) → ch5 mail
+    /// {10, owner} (:31033-34) and despawn; the fall-through deletes
+    /// it on the next tick regardless (the ball already carried it
+    /// to the castle — the token is not a traveler).
+    fn tick_upgrade_token(&mut self, i: usize) {
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            let c = self.ent[i].f146 as usize;
+            if c != 0
+                && self.ent[c].class64 == 3
+                && self.ent[c].model65 == 2
+                && self.ent[c].flags & 0x400 == 0
+                && self.ent_overlap(i, c)
+            {
+                self.ent[c].mail[5] = (10, self.ent[i].id24);
+                self.ent[i].flags |= 0x400;
+            }
+            return;
+        }
+        self.ent[i].flags |= 0x400;
+    }
+
+    /// sub_47DD0 (:56617): castle mana capacity by level (level 0 =
+    /// the pre-tower shell; player castles occupy 1..=7).
+    pub(crate) const CASTLE_CAP: [i32; 8] =
+        [5000, 10000, 20000, 40000, 80000, 160000, 320000, 30_000_000];
+
+    /// sub_12C50 (:17616): the upgrade pre-clear — every house whose
+    /// AABB overlaps the NEXT level's footprint grown by 256 is
+    /// killed outright (life = -1 → the collapse walker evacuates).
+    fn castle_upgrade_preclear(&mut self, i: usize) {
+        let next = (self.ent[i].f26 + 1).clamp(1, 8) as usize;
+        let def = self.assets.build_tab[next % self.assets.build_tab.len()];
+        let half_w = ((((def.w as u16) << 8).wrapping_add(1280)) >> 1) as i32 + 256;
+        let half_h = ((((def.h as u16) << 8).wrapping_add(1280)) >> 1) as i32 + 256;
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+        for j in 1..POOL {
+            let e = &self.ent[j];
+            if e.class64 == 10
+                && e.model65 == 45
+                && e.flags & 0x400 == 0
+                && wd(e.x, x) < e.f80 as i32 + half_w
+                && wd(e.y, y) < e.f82 as i32 + half_h
+            {
+                self.ent[j].act_life = -1;
+            }
+        }
+    }
+
+    /// sub_12D10 (:17643): the upgrade space gate — FAIL when
+    /// another castle overlaps the next level's extents, or any
+    /// tile on the four edges of the new footprint carries the
+    /// protection bit (blocked/steep ground).
+    fn castle_upgrade_space_ok(&self, i: usize) -> bool {
+        let next = (self.ent[i].f26 + 1).clamp(1, 8) as usize;
+        let def = self.assets.build_tab[next % self.assets.build_tab.len()];
+        let half_w = ((((def.w as u16) << 8).wrapping_add(1280)) >> 1) as i32;
+        let half_h = ((((def.h as u16) << 8).wrapping_add(1280)) >> 1) as i32;
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+        for j in 1..POOL {
+            let e = &self.ent[j];
+            if j != i
+                && e.class64 == 3
+                && e.model65 == 2
+                && e.flags & 0x400 == 0
+                && wd(e.x, x) < e.f80 as i32 + half_w
+                && wd(e.y, y) < e.f82 as i32 + half_h
+            {
+                return false;
+            }
+        }
+        let cx = ((x as u32 + 128) >> 8) as u8;
+        let cy = ((y as u32 + 128) >> 8) as u8;
+        let (htx, hty) = ((half_w >> 8) as i32, (half_h >> 8) as i32);
+        let blocked = |gx: i32, gy: i32| {
+            self.t.angle[tile(
+                (cx as i32 + gx) as u8,
+                (cy as i32 + gy) as u8,
+            )] & 0x80
+                != 0
+        };
+        for gx in -htx..=htx {
+            if blocked(gx, -hty) || blocked(gx, hty) {
+                return false;
+            }
+        }
+        for gy in -hty..=hty {
+            if blocked(-htx, gy) || blocked(htx, gy) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// sub_46DB0 (:57023-32): direct ball absorption — an OWNED m39
+    /// ball touching the castle empties into the store while the
+    /// store sits below capacity (the whole ball lands; overflow is
+    /// the ejector's business).
+    fn castle_absorb(&mut self, i: usize) {
+        if self.ent[i].f140 >= self.ent[i].f136 {
+            return;
+        }
+        let own = self.ent[i].id24;
+        for j in 1..POOL {
+            if self.ent[j].class64 == 10
+                && self.ent[j].model65 == 39
+                && self.ent[j].flags & 0x400 == 0
+                && self.ent[j].f144 == own
+                && self.ent_overlap(i, j)
+            {
+                self.ent[i].f140 += self.ent[j].f140;
+                self.ent[j].flags |= 0x400;
+            }
+        }
+    }
+
+    /// sub_37A00 (:44266): the mana BALLOON entity (class 3 m3) —
+    /// life 10000, speed 48, cargo capacity 10000, behavior row 9,
+    /// sprite 169. The castle dispatcher overwrites the ctor's
+    /// state 7 with the working state 9 (:56355).
+    fn spawn_balloon(&mut self, x: u16, y: u16, z: i16, own: u16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.tick70 = 9;
+            e.max_life = 10000;
+            e.act_life = 10000;
+            e.f126 = 48;
+            e.f136 = 10000;
+            e.f140 = 0;
+            e.row156 = 9;
+            e.id24 = own;
+            e.f144 = own;
+            e.x = x;
+            e.y = y;
+            e.z = z;
+        }
+        self.set_sprite(i, 169);
+        Some(i)
+    }
+
+    /// sub_47400 (:56264): the balloon/guard dispatcher, run from
+    /// the established castle every other tick (:56016-20). Fleet
+    /// quota by level: (balloons, guards) = L1(1,0) L2(1,0) L3(1,4)
+    /// L4(2,6) L5(2,14) L6(3,18) L7(3,34); shortfalls respawn at the
+    /// castle (guards = class-5 m15, HP 512). Targeting (:56358-95):
+    /// castle full (house tally + stored >= cap) or balloon full →
+    /// home the castle; else the nearest own claimed ball not
+    /// already targeted by a sibling; none → idle (target 0).
+    fn castle_balloons(&mut self, i: usize) {
+        const FLEET: [(usize, usize); 8] =
+            [(0, 0), (1, 0), (1, 0), (1, 4), (2, 6), (2, 14), (3, 18), (3, 34)];
+        let own = self.ent[i].id24;
+        let (bq, gq) = FLEET[self.ent[i].f26.clamp(0, 7) as usize];
+        let mut balloons: Vec<usize> = Vec::new();
+        let mut guards = 0usize;
+        let mut house_tally = 0i64;
+        for j in 1..POOL {
+            let e = &self.ent[j];
+            if e.flags & 0x400 != 0 {
+                continue;
+            }
+            match (e.class64, e.model65) {
+                (3, 3) if e.id24 == own => balloons.push(j),
+                (5, 15) if e.id24 == own => guards += 1,
+                (10, 45) if e.f144 == own => house_tally += e.f140.max(0) as i64,
+                _ => {}
+            }
+        }
+        let (cx, cy, cz) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        while balloons.len() < bq {
+            let Some(b) = self.spawn_balloon(cx, cy, cz, own) else {
+                break;
+            };
+            balloons.push(b);
+        }
+        // Guard respawn (:56412-47): throttled by the castle's +46
+        // cooldown (ours f46) — at most ONE guard per dispatch pass,
+        // 16 passes between spawns — placed at (x+128, y+640) on the
+        // GROUND (the courtyard, off the tower slopes), facing 512.
+        if self.ent[i].f46 > 0 {
+            self.ent[i].f46 -= 1;
+        }
+        if guards < gq && self.ent[i].f46 == 0 {
+            let gx = cx.wrapping_add(128);
+            let gy = cy.wrapping_add(640);
+            let gz = self.ground_z(gx, gy) as i16;
+            if let Some(g) = self.spawn_creature(15, gx, gy, gz) {
+                self.ent[g].id24 = own;
+                self.ent[g].f144 = own;
+                self.ent[g].f30 = 512;
+                self.ent[g].f34 = 512;
+                self.ent[i].f46 = 16;
+            }
+        }
+        let full =
+            house_tally + self.ent[i].f140.max(0) as i64 >= self.ent[i].f136.max(0) as i64;
+        for k in 0..balloons.len() {
+            let b = balloons[k];
+            if full || self.ent[b].f140 >= self.ent[b].f136 {
+                self.ent[b].f146 = i as u16;
+                continue;
+            }
+            // Nearest own claimed ball a sibling isn't already on
+            // (sub_46CA0 :55922).
+            let (bx, by) = (self.ent[b].x, self.ent[b].y);
+            let mut best = 0usize;
+            let mut best_d = i32::MAX;
+            for j in 1..POOL {
+                let e = &self.ent[j];
+                if e.class64 != 10
+                    || e.model65 != 39
+                    || e.flags & 0x400 != 0
+                    || e.f144 != own
+                {
+                    continue;
+                }
+                if balloons
+                    .iter()
+                    .any(|&s| s != b && self.ent[s].f146 as usize == j)
+                {
+                    continue;
+                }
+                let d = Self::dist2_sq(bx, by, e.x, e.y);
+                if d < best_d {
+                    best_d = d;
+                    best = j;
+                }
+            }
+            self.ent[b].f146 = best as u16;
+        }
+    }
+
+    /// sub_47F90 (:56716): the BALLOON tick (class-3 m3 state 9).
+    /// Ball target: >1024 away clears the ball's tether bit, near
+    /// sets it (+ ball homes the balloon); touching absorbs the
+    /// cargo and refreshes life; within one speed-step the balloon
+    /// snaps over the ball. Castle target: within level·speed and
+    /// low enough, the cargo empties into the castle store. All
+    /// paths finish through the row-9 altitude servo (sub_42000
+    /// params from the behavior row). Death drops the cargo as a
+    /// claimed ball (the dispatcher's slot cleanup, :56368-72).
+    pub(crate) fn balloon_tick(&mut self, i: usize) {
+        use crate::mc1_behavior::BEHAVIOR;
+        // ch0 damage inbox (sub_481D0 :56813).
+        if self.ent[i].mail[0].1 != 0 {
+            let amt = self.ent[i].mail[0].0;
+            self.ent[i].mail[0].1 = 0;
+            self.ent[i].act_life -= amt as i32;
+        }
+        if self.ent[i].act_life < 0 {
+            self.corpse_drop(i);
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let t = self.ent[i].f146 as usize;
+        if t == 0 || self.ent[t].flags & 0x400 != 0 {
+            return; // idle: inbox only (:56814)
+        }
+        let mut pos = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let (tx, ty) = (self.ent[t].x, self.ent[t].y);
+        let yaw = Self::angle_between(pos.0, pos.1, tx, ty);
+        self.ent[i].f30 = yaw;
+        let speed = self.ent[i].f126;
+        let own = self.ent[i].id24;
+        let mut step = true;
+        if self.ent[t].class64 == 10 {
+            if self.ent[t].f144 != own {
+                step = false; // stale claim: hover (:56744)
+            } else {
+                let d = Self::isqrt(Self::dist2_sq(pos.0, pos.1, tx, ty) as u32) as i32;
+                if d > 1024 {
+                    self.ent[t].flags &= !0x40;
+                } else {
+                    self.ent[t].flags |= 0x40;
+                    self.ent[t].f146 = i as u16;
+                    if self.ent_overlap(i, t) {
+                        let cargo = self.ent[t].f140;
+                        let ball_owner = self.ent[t].f144;
+                        self.ent[i].f140 += cargo;
+                        self.ent[i].f144 = ball_owner;
+                        self.ent[i].f146 = 0;
+                        self.ent[i].act_life = self.ent[i].max_life as i32;
+                        self.ent[t].flags |= 0x400;
+                    }
+                }
+                if d <= speed as i32 {
+                    pos.0 = tx;
+                    pos.1 = ty;
+                    step = false;
+                }
+            }
+        } else {
+            // Castle target: delivery ring = level * speed.
+            let d = Self::isqrt(Self::dist2_sq(pos.0, pos.1, tx, ty) as u32) as i32;
+            if d <= self.ent[t].f26 as i32 * speed as i32 {
+                let ground = self.ground_z(pos.0, pos.1) as i16;
+                if pos.2 <= ground.wrapping_add(BEHAVIOR[9].v_12) && self.ent[t].f26 > 0 {
+                    pos.0 = tx;
+                    pos.1 = ty;
+                    let cargo = self.ent[i].f140;
+                    self.ent[t].f140 += cargo;
+                    self.ent[i].f140 = 0;
+                    self.ent[i].f144 = own;
+                    self.ent[i].act_life = self.ent[i].max_life as i32;
+                }
+                step = false;
+            }
+        }
+        if step {
+            Self::polar_step(&mut pos, yaw, self.ent[i].f32, speed);
+        }
+        // The row-9 altitude servo + writeback (LABEL_17).
+        let ground = self.ground_z(pos.0, pos.1) as i16;
+        let mut z = pos.2;
+        Self::alt_clamp(&mut z, ground, &BEHAVIOR[9]);
+        self.move_relink(i, pos.0, pos.1, z);
+    }
+
+    /// sub_47C60 (:56572): castle max health by level (level 0 = 0
+    /// = keep; levels 6/7 are decompile-garbage consts — 60000
+    /// carried). The damage carry-over rule (old deficit, capped at
+    /// half the new max) is the castle-HP track.
+    const CASTLE_HP: [u32; 8] =
+        [40000, 20000, 40000, 40000, 60000, 60000, 60000, 60000];
+
     /// sub_46F10 (:56043): the class-3 m2 CASTLE state machine
-    /// (sub-state f59 = the original's +48). INTERIM scope: the
-    /// build path only — mana capacity per level, balloons, the m43
-    /// upgrade token and respawn semantics are the housekeeping/
-    /// mana cluster.
+    /// (sub-state f59 = the original's +48). Remaining housekeeping:
+    /// the overflow ejector, downgrade/respawn. The entity z (+76)
+    /// refreshes to live ground every tick (idle :56014 + wait
+    /// cases 1/4/6 :56073-78) — the flag rides the painted tower;
+    /// the build-site datum lives in f28 (+154).
     pub(crate) fn castle_tick(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
         match self.ent[i].f59 {
-            // Level-up (sub_47960 :56461): extents from build row =
-            // level (sub_37150 :43798; its +78=0xE000 marker skipped
-            // — it would z-orphan our AABB overlaps), the loop-10
-            // build gong, and the m42 painter.
+            // Level-up (sub_47960 :56461, case 0 :56053-72): the
+            // house pre-clear + (for standing castles) the space
+            // gate — a reject bounces back to established with no
+            // sound (the cast-time fizzle was the only failure
+            // audio). Extents from build row = level (sub_37150
+            // :43798; its +78=0xE000 marker skipped — it would
+            // z-orphan our AABB overlaps), the loop-10 build gong,
+            // the m42 painter, and the capacity ladder (sub_47C60 →
+            // sub_47DD0 :56617).
             0 => {
+                self.castle_upgrade_preclear(i);
+                if self.ent[i].f26 > 0 && !self.castle_upgrade_space_ok(i) {
+                    self.ent[i].f59 = 2;
+                    return;
+                }
                 let lvl = (self.ent[i].f26 + 1).clamp(1, 8);
                 self.ent[i].f26 = lvl;
+                self.ent[i].f136 = Self::CASTLE_CAP[(lvl as usize).min(7)];
+                let hp = Self::CASTLE_HP[(lvl as usize).min(7)];
+                self.ent[i].max_life = hp;
+                self.ent[i].act_life = hp as i32;
                 let def =
                     self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
                 {
@@ -2128,20 +2544,14 @@ impl Gen {
                     e.f84 = 0x4000;
                 }
                 self.snd(10, i);
-                let (x, y, own) = {
+                let (x, y, own, site_z) = {
                     let e = &self.ent[i];
-                    (e.x, e.y, e.id24)
+                    (e.x, e.y, e.id24, e.site_z)
                 };
-                let cx = ((x as u32 + 128) >> 8) as u8;
-                let cy = ((y as u32 + 128) >> 8) as u8;
-                let z = 32
-                    * self.avg4(
-                        cx.wrapping_sub(def.w >> 1),
-                        cy.wrapping_sub(def.h >> 1),
-                        def.h,
-                        def.w,
-                    ) as i32;
-                if let Some(p) = self.spawn_creator(42, x, y, z as i16) {
+                // The painter targets the build-site datum (+154),
+                // not the live tower-top ground (sub_47020 spawns at
+                // the site triple).
+                if let Some(p) = self.spawn_creator(42, x, y, site_z) {
                     let e = &mut self.ent[p];
                     e.f146 = i as u16;
                     e.f71 = lvl as u8;
@@ -2150,11 +2560,14 @@ impl Gen {
                 }
                 self.ent[i].f59 = 4;
             }
-            // Painter done → the m41 ground leveler (:56086-90).
+            // Painter done → the m41 ground leveler (case 5,
+            // sub_47080 :56119-35), then wait in sub-state 6 — the
+            // original's real flow (:56132; cases 1/4/6 are pure
+            // waits, :56073-78).
             5 => {
                 let (x, y, z, own, lvl) = {
                     let e = &self.ent[i];
-                    (e.x, e.y, e.z, e.id24, e.f26)
+                    (e.x, e.y, e.site_z, e.id24, e.f26)
                 };
                 if let Some(l) = self.spawn_creator(41, x, y, z) {
                     let e = &mut self.ent[l];
@@ -2162,11 +2575,31 @@ impl Gen {
                     e.f71 = lvl as u8;
                     e.id24 = own;
                 }
-                self.ent[i].f59 = 6; // wait for the leveler
+                self.ent[i].f59 = 6; // authentic wait state (:56132)
             }
             // Leveler done → established (case 2 → sub_46DB0).
             2 => self.ent[i].f59 = 4,
-            _ => {} // 4 established / 6 waiting
+            // Established: the ch5 upgrade intake (sub_47EC0
+            // :56690-95 — sender must be the owner, max level 7),
+            // direct ball absorption, and the balloon/guard
+            // dispatcher every other tick (:56016-20). The overflow
+            // ejector is still pending.
+            4 => {
+                if self.ent[i].mail[5].1 != 0 {
+                    let sender = self.ent[i].mail[5].1;
+                    self.ent[i].mail[5] = (0, 0);
+                    if sender == self.ent[i].id24 && self.ent[i].f26 < 7 {
+                        self.ent[i].f59 = 0;
+                    }
+                }
+                if self.ent[i].f63 & 1 == 0 {
+                    self.castle_balloons(i);
+                    // Absorption sits inside the every-other-tick
+                    // block in the original too (:57023-32).
+                    self.castle_absorb(i);
+                }
+            }
+            _ => {} // 6 waiting for the leveler
         }
     }
 
@@ -2194,13 +2627,24 @@ impl Gen {
             if src != self.ent[i].f144 {
                 self.ent[i].f144 = src;
                 self.ent[i].flags &= !1;
-                self.snd(4, i);
+                // Anchored at the CLAIMANT (:30806) — the player-
+                // gated id 4 sounds exactly when YOU capture.
+                if src == crate::mobs::PLAYER_TARGET {
+                    self.snd_player(4);
+                }
                 self.set_sprite(i, 177);
             }
         }
         if self.ent[i].mail[0].1 != 0 {
             let (amt, src) = self.ent[i].mail[0];
             self.ent[i].mail[0].1 = 0;
+            // Captured buildings are immune to their OWNER's damage
+            // ("as if they were your castle" — PLAYER GROUND TRUTH;
+            // no substrate found in the decompile's ch0 writer or
+            // intake, sub_120B0/:31070 — DOSBox verification owed).
+            if src != 0 && src == self.ent[i].f144 {
+                return;
+            }
             self.ent[i].act_life -= amt as i32;
             if self.ent[i].act_life < 0 {
                 self.ent[i].f38 = src;
@@ -2257,29 +2701,42 @@ impl Gen {
     /// the BUILD footprint once: per occupied cell an occupant
     /// evacuates (the LAST one is a settler m12, ≥4 remaining draw
     /// from the emit mix, otherwise a militiaman m4 — village defense
-    /// IS the evacuation); rubble = protection cleared, angle nibble
-    /// 1, raised cells knocked down (codes hi==3: -12/-16 towers;
-    /// others LCG%50 ≤ 20 → the full 4·(lo-1), else minus LCG%20 of
-    /// it); then one region retexture and despawn. No mana spill.
-    /// Deviation: evacuee z alternates 32·base / 32·(base-10) every
-    /// 8th cell in the original — approximated with the cell counter.
+    /// IS the evacuation; spawn z drops 10 tiles every 8th STREAM
+    /// byte, :30913-17). Per cell code hi nibble (:30940-93):
+    /// 0 = unprotect only; 3 = unprotect + tower knock-down (-12
+    /// AND -16 for sub-code 1, -16 for 2) + single-tile retexture;
+    /// walls (1/2/4..7) = corner code forced to 1, single-tile
+    /// retexture BEFORE the height drop (LCG%50 ≤ 20 → the full
+    /// 4·(lo-1), else minus LCG%20 of it; at or below the wall
+    /// height → 0). Finish = the full-rect 3x3 height smoother
+    /// sub_36080 (:31004) and despawn. No mana spill. Base z =
+    /// avg4 of the footprint corners when the event carries a model
+    /// (:30879-81); the castle demolish path's zeroed fake event
+    /// falls back to z>>5.
     pub(crate) fn tick_building_collapse(&mut self, i: usize) {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
-        let base_h = (e.z >> 5) as i32;
         let def = self.assets.build_tab[e.f71 as usize % self.assets.build_tab.len()];
         let (w, h) = (def.w as u16, def.h as u16);
         let (half_w, half_h) = ((w >> 1) as u8, (h >> 1) as u8);
         let x0 = cx.wrapping_sub(half_w);
         let y0 = cy.wrapping_sub(half_h);
+        let base_h = if e.model65 != 0 {
+            self.avg4(x0, y0, h as u8, w as u8) as i32
+        } else {
+            (e.z >> 5) as i32
+        };
+        let (z_hi, z_lo) = ((32 * base_h) as i16, (32 * (base_h - 10)) as i16);
         let mut rows = h;
         let (mut x, mut y) = (x0, y0);
         let mut c = def.offset as usize;
-        let mut cell_n = 0u32;
+        // Stream position (the original's v2) — control bytes count.
+        let mut pos = 0u32;
         while rows != 0 {
             let ctl = self.assets.build_dat[c] as i8;
             c += 1;
+            pos += 1;
             if ctl == 0 {
                 y = y.wrapping_add(1);
                 rows -= 1;
@@ -2293,20 +2750,17 @@ impl Gen {
             for _ in 0..ctl {
                 let b = self.assets.build_dat[c];
                 c += 1;
+                pos += 1;
                 if b != 0 {
                     let t = tile(x, y);
-                    cell_n += 1;
-                    // Evacuation (:30907-35).
+                    // Evacuation (:30907-35): tile-corner position,
+                    // low z every 8th stream byte.
                     let occ = self.ent[i].f26;
                     if occ > 0 {
                         self.ent[i].f26 = occ - 1;
-                        let ez = if cell_n & 8 != 0 {
-                            (32 * (base_h - 10)) as i16
-                        } else {
-                            (32 * base_h) as i16
-                        };
-                        let wx = ((x as u16) << 8) + 128;
-                        let wy = ((y as u16) << 8) + 128;
+                        let ez = if pos & 7 == 0 { z_lo } else { z_hi };
+                        let wx = (x as u16) << 8;
+                        let wy = (y as u16) << 8;
                         if occ == 1 {
                             self.spawn_creature(12, wx, wy, ez);
                         } else if occ - 1 >= 4 {
@@ -2316,42 +2770,67 @@ impl Gen {
                         }
                     }
                     // Rubble (:30940-93).
-                    self.t.angle[t] = (self.t.angle[t] & 0x70) | 1;
                     let hi = b >> 4;
                     let lo = b % 16;
-                    if hi == 3 {
-                        match lo % 3 {
-                            1 if self.t.height[t] > 12 => self.t.height[t] -= 12,
-                            2 if self.t.height[t] > 16 => self.t.height[t] -= 16,
-                            _ => {}
+                    if hi == 0 {
+                        // Floors: unprotect, texture kept (:30994-95).
+                        self.t.angle[t] &= !0x80;
+                    } else if hi == 3 {
+                        // Towers (:30974-93): unprotect, knock down,
+                        // re-infer the tile. Sub-code 1 drops BOTH
+                        // steps (decompile fall-through, verbatim).
+                        self.t.angle[t] &= !0x80;
+                        let sub = (lo % 16) % 3;
+                        if sub == 1 && self.t.height[t] > 12 {
+                            self.t.height[t] -= 12;
                         }
-                    } else if hi >= 1 && lo != 0 {
-                        let full = 4 * (lo as i32 - 1);
-                        let d = lcg32(&mut self.ent[i].rand);
-                        let drop = if d % 50 <= 20 {
-                            full
-                        } else {
-                            full - (lcg32(&mut self.ent[i].rand) % 20) as i32
-                        };
-                        let hh = self.t.height[t] as i32;
-                        self.t.height[t] = (hh - drop).clamp(0, 255) as u8;
+                        if (sub == 1 || sub == 2) && self.t.height[t] > 16 {
+                            self.t.height[t] -= 16;
+                        }
+                        self.recompute_unprotected(x, y, x, y);
+                    } else {
+                        // Walls (:30944-71): corner code 1, retile
+                        // BEFORE the height drop.
+                        self.t.angle[t] = (self.t.angle[t] & 0x70) | 1;
+                        self.recompute_unprotected(x, y, x, y);
+                        if lo != 0 {
+                            let full = 4 * (lo as i32 - 1);
+                            if (self.t.height[t] as i32) <= full {
+                                self.t.height[t] = 0;
+                            } else {
+                                let d = lcg32(&mut self.ent[i].rand);
+                                let drop = if (d % 50) as i32 <= 20 {
+                                    full
+                                } else {
+                                    full - (lcg32(&mut self.ent[i].rand) % 20) as i32
+                                };
+                                let hh = self.t.height[t] as i32;
+                                self.t.height[t] = (hh - drop) as u8;
+                            }
+                        }
                     }
                 }
                 x = x.wrapping_add(1);
             }
         }
-        let x1 = cx.wrapping_add(half_w);
-        let y1 = cy.wrapping_add(half_h);
-        self.retile_and_shade(x0, y0, x1, y1);
-        self.recompute_protected(x0, y0, x1, y1);
+        // Finish (:31004): the full-rect vertex smoother over the
+        // footprint (rows/cols exactly w x h, per-vertex sub_360C0 —
+        // building-typed quads are self-excluding).
+        for gy in 0..h {
+            for gx in 0..w {
+                self.smooth_cell(tile(x0.wrapping_add(gx as u8), y0.wrapping_add(gy as u8)));
+            }
+        }
         self.ent[i].flags |= 0x400;
     }
 
     /// sub_33800 (:40980): paint one building tile. `a4 < 8` writes a
     /// terrain class + retexture; higher codes select {type,
     /// orientation} pairs from the paint tables and set the protection
-    /// bit (plus clear bit 3 on the E/SE/S neighbors).
-    fn paint(&mut self, a1: i8, a2: i8, t: usize, a4: u8) {
+    /// bit (plus clear bit 3 on the E/SE/S neighbors). Codes
+    /// 0x14/0x15/0x16 are the white-wall DAMAGE stages (types
+    /// 10/11/12 via PAINT_BC) — the fire cell's burn ladder.
+    pub(crate) fn paint(&mut self, a1: i8, a2: i8, t: usize, a4: u8) {
         if a4 < 8 {
             self.t.angle[t] = a4 | (self.t.angle[t] & 0xF0);
             self.recompute_protected(tx(t), ty(t), tx(t), ty(t));
