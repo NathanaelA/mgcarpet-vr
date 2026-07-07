@@ -9,6 +9,7 @@
 //! offscreen and exits, which is how terrain changes get verified
 //! without a display.
 
+mod campaign;
 mod config;
 mod entities;
 mod ui;
@@ -99,6 +100,10 @@ struct LoadedLevel {
     map_icons: entities::MapIcons,
     /// Live icon stamps (own castle/balloons), refreshed per tick.
     map_stamps: Vec<mgc_render::MapStamp>,
+    /// The plausible-spellbook grant set (spell ids), computed from the
+    /// campaign jars before this level when the instrument is on; empty
+    /// otherwise. Granted into the world after init.
+    plausible_spells: Vec<u8>,
 }
 
 /// Resolve the world's live volumes into map overlay circles: amber =
@@ -137,6 +142,7 @@ fn load_level(
     level_path: &Path,
     tileset: Option<u8>,
     terrain_features: bool,
+    plausible_spellbook: bool,
 ) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
@@ -320,6 +326,35 @@ fn load_level(
         format!("cgame{}", 1 + package.meta.level as usize % 3)
     });
 
+    // Plausible spellbook (playtest instrument): the union of spell
+    // jars in the campaign levels before this one. Only scanned when
+    // the toggle is on — it reads the sibling `level-NNN.mgcl` files.
+    let plausible_spells = if plausible_spellbook {
+        let dir = level_path.parent().unwrap_or(Path::new("."));
+        let p = campaign::plausible_spellbook(dir, &package);
+        let names: Vec<&str> = p
+            .spells
+            .iter()
+            .map(|&s| mgc_sim::spells::SpellId(s).name())
+            .collect();
+        println!(
+            "plausible-spellbook: {} spell(s) from {} campaign level(s) before level {} \
+             [{}]{}",
+            p.spells.len(),
+            p.scanned_levels.len(),
+            package.meta.level,
+            names.join(", "),
+            if p.skipped_levels.is_empty() {
+                String::new()
+            } else {
+                format!(" (skipped unreadable levels: {:?})", p.skipped_levels)
+            },
+        );
+        p.spells
+    } else {
+        Vec::new()
+    };
+
     Ok(LoadedLevel {
         view: LevelView {
             tile_type,
@@ -355,6 +390,7 @@ fn load_level(
         ui: ui_assets,
         audio_dir,
         music_track,
+        plausible_spells,
     })
 }
 
@@ -511,6 +547,11 @@ impl App {
                 w.set_dev_spells(true);
             }
         }
+        if !level.plausible_spells.is_empty() {
+            if let Some(w) = &mut sim.world {
+                w.grant_spells(&level.plausible_spells);
+            }
+        }
         if invincible {
             if let Some(w) = &mut sim.world {
                 w.set_invincible(true);
@@ -597,6 +638,9 @@ impl App {
         let mut w = init.build();
         if self.dev_spells {
             w.set_dev_spells(true);
+        }
+        if !self.level.plausible_spells.is_empty() {
+            w.grant_spells(&self.level.plausible_spells);
         }
         if self.invincible {
             w.set_invincible(true);
@@ -1288,6 +1332,8 @@ struct Args {
     health_bars: Option<bool>,
     /// CLI override of `enhancements.dev_spells`.
     dev_spells: Option<bool>,
+    /// CLI override of `enhancements.plausible_spellbook`.
+    plausible_spellbook: Option<bool>,
     /// CLI override of `enhancements.invincible`.
     invincible: Option<bool>,
     /// CLI overrides of the `flight` tier enums; None = use config.
@@ -1317,6 +1363,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map_triggers = None;
     let mut health_bars = None;
     let mut dev_spells = None;
+    let mut plausible_spellbook = None;
     let mut invincible = None;
     let mut thrust = None;
     let mut altitude = None;
@@ -1369,6 +1416,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-health-bars" => health_bars = Some(false),
             "--dev-spells" => dev_spells = Some(true),
             "--no-dev-spells" => dev_spells = Some(false),
+            "--plausible-spellbook" => plausible_spellbook = Some(true),
+            "--no-plausible-spellbook" => plausible_spellbook = Some(false),
             "--invincible" => invincible = Some(true),
             "--no-invincible" => invincible = Some(false),
             "--thrust" => {
@@ -1421,6 +1470,7 @@ fn parse_args() -> Result<Args, String> {
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
                      [--dev-spells|--no-dev-spells] \
+                     [--plausible-spellbook|--no-plausible-spellbook] \
                      [--invincible|--no-invincible] \
                      [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
                      [--bindings classic|wasd] \
@@ -1444,6 +1494,7 @@ fn parse_args() -> Result<Args, String> {
         map_triggers,
         health_bars,
         dev_spells,
+        plausible_spellbook,
         invincible,
         thrust,
         altitude,
@@ -1536,6 +1587,9 @@ fn run_screenshot(
         if dev_spells {
             w.set_dev_spells(true);
         }
+        if !level.plausible_spells.is_empty() {
+            w.grant_spells(&level.plausible_spells);
+        }
         let loadout = w.loadout();
         let vitals = w.vitals();
         let quads = if map_view {
@@ -1600,6 +1654,9 @@ fn main() -> std::process::ExitCode {
         .unwrap_or(cfg.enhancements.map_trigger_areas);
     let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
     let dev_spells = args.dev_spells.unwrap_or(cfg.enhancements.dev_spells);
+    let plausible_spellbook = args
+        .plausible_spellbook
+        .unwrap_or(cfg.enhancements.plausible_spellbook);
     let invincible = args.invincible.unwrap_or(cfg.enhancements.invincible);
     let flight = config::FlightConfig {
         thrust: args.thrust.unwrap_or(cfg.flight.thrust),
@@ -1609,7 +1666,12 @@ fn main() -> std::process::ExitCode {
         invert_y: cfg.flight.invert_y,
     };
 
-    let level = match load_level(&args.level, args.tileset, args.terrain_features) {
+    let level = match load_level(
+        &args.level,
+        args.tileset,
+        args.terrain_features,
+        plausible_spellbook,
+    ) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("error: {e}");

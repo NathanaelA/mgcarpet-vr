@@ -1786,11 +1786,11 @@ impl Renderer {
     }
 
     /// The in-flight radar disc: (diameter, center_x, center_y) in
-    /// pixels. The disc is CENTERED inside section 1 (the first 20% of
-    /// width) so its margins are equal on both sides — scaled by the HUD
-    /// factor (w/640) to track the sprite panels. Single source of truth
-    /// for both the shader uniform and the stamp projection; they MUST
-    /// agree or terrain and stamps diverge.
+    /// pixels. The disc is anchored at the screen CORNER (0,0) so its
+    /// center sits at its radius (retail DrawMinimap(0,0)) — scaled by
+    /// the HUD factor (w/640) to track the sprite panels. Single source
+    /// of truth for both the shader uniform and the stamp projection;
+    /// they MUST agree or terrain and stamps diverge.
     fn minimap_rect(&self, w: u32, hpx: u32) -> (f32, f32, f32) {
         let hud = w as f32 / 640.0;
         let diam = (MINIMAP_DIAM * hud).min(w.min(hpx) as f32);
@@ -2218,8 +2218,8 @@ impl Renderer {
                 bytemuck::cast_slice(&map_globals),
             );
         } else if self.minimap_on {
-            // In-flight round minimap, centered in section 1 (first 20%
-            // of width). Disc + position scale with the HUD (w/640).
+            // In-flight round minimap, corner-anchored at (0,0). Disc +
+            // position scale with the HUD (w/640).
             let (disc, cx, cy) = self.minimap_rect(w, hpx);
             let hw = disc / w as f32; // NDC half-width
             let hh = disc / hpx as f32; // NDC half-height

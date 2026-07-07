@@ -1132,6 +1132,21 @@ impl World {
         self.dev_spells
     }
 
+    /// Grant a specific set of spells at level start — the app's
+    /// `plausible_spellbook` playtest instrument (the campaign-inferred
+    /// "could legitimately have" set; see mgc-app `campaign`). Reuses
+    /// the normal grant path: each spawns a class-12 manifestation and
+    /// auto-equips L/R if empty, honestly competing for pool slots.
+    /// Unknown/duplicate ids are no-ops. Grants ON TOP of whatever the
+    /// world already gave (starting spells etc.).
+    pub fn grant_spells(&mut self, spells: &[u8]) {
+        for &s in spells {
+            if (s as usize) < SPELL_COUNT {
+                self.grant_spell(SpellId(s));
+            }
+        }
+    }
+
     /// Wire the level's completion goal: the required banked share
     /// (percent of world mana) — the level footer's first u16
     /// (offset 38800; the original's gamedata+232595).

@@ -164,6 +164,17 @@ pub struct Enhancements {
     /// fixture. The original ships the equivalent debug commands
     /// ("access all spells" / "more mana", remc1's :48836 cheat menu).
     pub dev_spells: bool,
+    /// Seed the spellbook at level start with the spells a diligent
+    /// player COULD legitimately hold entering this level — the union
+    /// of every spell jar in the campaign levels before this one
+    /// (MC1 only; see `campaign::plausible_spellbook`). Unlike
+    /// `dev_spells` this respects the campaign's spell economy (it
+    /// never grants a spell the campaign couldn't have delivered yet),
+    /// so bugs found while playtesting an individual level are real.
+    /// G-class playtest instrument — NOT campaign state; a level so
+    /// launched is not a faithful fixture. Grants on top of whatever
+    /// the world already gave (starting spells etc.).
+    pub plausible_spellbook: bool,
     /// Highlight claimed/possessed dwellings on the overhead map in
     /// the owner's color — MC2's map behavior brought to MC1 as an
     /// opt-in (P-class; MC1 never marks houses). Player proposal

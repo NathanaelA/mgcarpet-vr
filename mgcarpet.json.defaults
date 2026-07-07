@@ -13,6 +13,7 @@
     "invincible": false,
     "map_owned_buildings": false,
     "map_trigger_areas": false,
+    "plausible_spellbook": false,
     "smooth_shading": false
   },
   "flight": {
