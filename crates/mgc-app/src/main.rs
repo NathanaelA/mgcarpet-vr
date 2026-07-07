@@ -408,6 +408,8 @@ struct App {
     pending_demolish: bool,
     /// Claimed dwellings highlighted on the map (MC2-style opt-in).
     map_owned_buildings: bool,
+    /// HUD blends over the sky (faithful MC1) vs opaque (MC2 toggle).
+    hud_transparent: bool,
     /// Own castle position in tile units (the guide-path target),
     /// refreshed from the pose set.
     castle_pos: Option<(f32, f32)>,
@@ -458,6 +460,7 @@ impl App {
         dev_spells: bool,
         invincible: bool,
         map_owned_buildings: bool,
+        hud_transparent: bool,
         audio_cfg: &config::AudioConfig,
         flight: config::FlightConfig,
     ) -> Self {
@@ -524,6 +527,7 @@ impl App {
             pending_respawn: false,
             pending_demolish: false,
             map_owned_buildings,
+            hud_transparent,
             castle_pos: None,
             window: None,
             renderer: None,
@@ -809,6 +813,7 @@ impl ApplicationHandler for App {
                 }
                 renderer.set_billboards(self.level.billboards.clone());
                 renderer.set_smooth_shading(self.smooth_shading);
+                renderer.set_hud_transparent(self.hud_transparent);
                 self.renderer = Some(renderer);
             }
             Err(e) => {
@@ -1199,7 +1204,17 @@ impl ApplicationHandler for App {
                     let (mut quads, hovered) = if self.book_open() {
                         ui::book_quads(assets, &loadout, size.0, size.1, self.cursor)
                     } else {
-                        (ui::hud_quads(assets, &loadout, size.0, size.1), None)
+                        (
+                            ui::hud_quads(
+                                assets,
+                                &loadout,
+                                &w.vitals(),
+                                self.hud_transparent,
+                                size.0,
+                                size.1,
+                            ),
+                            None,
+                        )
                     };
                     if !self.book_open() {
                         quads.extend(ui::vitals_quads(
@@ -1510,6 +1525,10 @@ fn run_screenshot(
     }
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
+    // Headless HUD-transparency override for testing (live play reads
+    // the config): MGC_HUD_OPAQUE=1 renders the opaque HUD.
+    let hud_transparent = std::env::var("MGC_HUD_OPAQUE").is_err();
+    renderer.set_hud_transparent(hud_transparent);
     renderer.set_map_view(map_view);
     renderer.set_anim_turn(anim_turn);
     // Spell UI (book grid or HUD), from the level-start loadout.
@@ -1518,10 +1537,11 @@ fn run_screenshot(
             w.set_dev_spells(true);
         }
         let loadout = w.loadout();
+        let vitals = w.vitals();
         let quads = if map_view {
             ui::book_quads(assets, &loadout, 1280.0, 720.0, (-1.0, -1.0)).0
         } else {
-            ui::hud_quads(assets, &loadout, 1280.0, 720.0)
+            ui::hud_quads(assets, &loadout, &vitals, hud_transparent, 1280.0, 720.0)
         };
         renderer.set_ui_quads(quads);
     }
@@ -1666,6 +1686,7 @@ fn main() -> std::process::ExitCode {
         dev_spells,
         invincible,
         cfg.enhancements.map_owned_buildings,
+        matches!(cfg.enhancements.hud_transparency, config::HudTransparency::Mc1),
         &cfg.audio,
         flight,
     );

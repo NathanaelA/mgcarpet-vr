@@ -241,6 +241,13 @@ pub struct LoadoutView {
     pub world_mana: u32,
     /// Own castle (stored, capacity, level) when one stands.
     pub castle: Option<(u32, u32, u8)>,
+    /// The player's mana balloons for the HUD's balloon sub-panel
+    /// (sub_22E50 slot B, `var_52[]`): one (hp_frac, cargo_frac) entry
+    /// per owned class-3/model-3 balloon, capped at the castle-level
+    /// roster size (1 at castle level 1-3, 2 at 4-5, 3 at 6-7 —
+    /// sub_22E50 :27296-314). Empty with no castle. hp_frac =
+    /// actLife/maxLife, cargo_frac = stored/capacity (+140/+136).
+    pub balloons: Vec<(f32, f32)>,
     /// Own castle health (current, max) — the downgrade meter
     /// (functional-first; retail shows no castle HP number, but the
     /// player needs SOME way to see the vulture-bomb chip damage).
@@ -1517,6 +1524,39 @@ impl World {
         })
     }
 
+    /// The player's owned mana balloons (class-3/model-3) for the HUD
+    /// balloon panel, in pool order. The original keeps them in the
+    /// wizard's `var_52[]` roster shown 1/2/3 wide by castle level
+    /// (sub_22E50 :27296-314); we derive the roster size the same way
+    /// and read the matching count of player-owned balloon entities.
+    /// Each entry = (hp_frac = actLife/maxLife, cargo_frac =
+    /// stored/capacity), both clamped to [0,1]. No castle → no roster.
+    fn player_balloons(&self) -> Vec<(f32, f32)> {
+        let level = match self.player_castle() {
+            Some(c) => self.g.ent[c].f26.clamp(0, 255),
+            None => return Vec::new(),
+        };
+        let roster = match level {
+            1..=3 => 1,
+            4..=5 => 2,
+            6.. => 3,
+            _ => return Vec::new(),
+        };
+        (1..features::POOL)
+            .filter(|&j| {
+                let e = &self.g.ent[j];
+                e.class64 == 3 && e.model65 == 3 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
+            })
+            .take(roster)
+            .map(|j| {
+                let e = &self.g.ent[j];
+                let hp = e.act_life.max(0) as f32 / (e.max_life.max(1) as f32);
+                let cargo = e.f140.max(0) as f32 / (e.f136.max(1) as f32);
+                (hp.clamp(0.0, 1.0), cargo.clamp(0.0, 1.0))
+            })
+            .collect()
+    }
+
     /// sub_48230 (:56839): the per-tick mana census. The wizard
     /// ceiling (+136) resets to the intrinsic base 1000 (u32_322,
     /// :55031-33) and accumulates the +140 of every CLAIMED (+144)
@@ -1848,6 +1888,7 @@ impl World {
                     e.f26.clamp(0, 255) as u8,
                 )
             }),
+            balloons: self.player_balloons(),
             castle_hp: self.player_castle().map(|c| {
                 let e = &self.g.ent[c];
                 (e.act_life.max(0), e.max_life.max(1))
@@ -4061,5 +4102,48 @@ mod tests {
             )
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn loadout_surfaces_the_balloon_roster_by_castle_level() {
+        // The HUD balloon panel (sub_22E50 slot B): the roster size is
+        // 1/2/3 by castle level (1-3 / 4-5 / 6-7), each entry a
+        // (hp_frac, cargo_frac) of a player-owned class-3/model-3
+        // balloon. No castle → no roster.
+        let mut w = flat_world();
+
+        // No castle yet: empty roster.
+        assert!(w.loadout().balloons.is_empty(), "no castle → no balloons");
+
+        // Plant a player-owned castle at level 4 (roster = 2) and three
+        // player-owned balloons with distinct HP/cargo.
+        let castle = 1;
+        w.g.ent[castle].class64 = 3;
+        w.g.ent[castle].model65 = 2;
+        w.g.ent[castle].id24 = PLAYER_TARGET;
+        w.g.ent[castle].flags = 0;
+        w.g.ent[castle].f26 = 4; // level 4 → roster 2
+
+        for (k, slot) in [2usize, 3, 4].into_iter().enumerate() {
+            w.g.ent[slot].class64 = 3;
+            w.g.ent[slot].model65 = 3;
+            w.g.ent[slot].id24 = PLAYER_TARGET;
+            w.g.ent[slot].flags = 0;
+            w.g.ent[slot].max_life = 100;
+            w.g.ent[slot].act_life = 100 - (k as i32) * 25; // 100, 75, 50
+            w.g.ent[slot].f136 = 200; // cargo capacity
+            w.g.ent[slot].f140 = (k as i32 + 1) * 50; // 50, 100, 150
+        }
+
+        let balloons = w.loadout().balloons;
+        assert_eq!(balloons.len(), 2, "level-4 castle → 2-balloon roster");
+        assert!((balloons[0].0 - 1.0).abs() < 1e-3, "first balloon full HP");
+        assert!((balloons[0].1 - 0.25).abs() < 1e-3, "first balloon 50/200 cargo");
+        assert!((balloons[1].0 - 0.75).abs() < 1e-3, "second balloon 75/100 HP");
+        assert!((balloons[1].1 - 0.5).abs() < 1e-3, "second balloon 100/200 cargo");
+
+        // A collapsed castle (flag 0x400) removes the roster.
+        w.g.ent[castle].flags |= 0x400;
+        assert!(w.loadout().balloons.is_empty(), "collapsed castle → no roster");
     }
 }

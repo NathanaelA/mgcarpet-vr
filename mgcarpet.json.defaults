@@ -9,6 +9,7 @@
   "enhancements": {
     "dev_spells": false,
     "health_bars": false,
+    "hud_transparency": "mc1",
     "invincible": false,
     "map_owned_buildings": false,
     "map_trigger_areas": false,

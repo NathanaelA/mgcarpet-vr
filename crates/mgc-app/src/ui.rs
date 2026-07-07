@@ -16,7 +16,7 @@
 
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
-use mgc_sim::spells::{SpellId, DISPLAY_ORDER, SPELL_COUNT};
+use mgc_sim::spells::{SpellId, DISPLAY_ORDER, SPELLS, SPELL_COUNT};
 use mgc_sim::world::{LifeState, LoadoutView, PlayerVitals};
 
 /// UI sprite ids (remc1 begSprTab layout; ROADMAP "Spell repertoire").
@@ -99,11 +99,20 @@ impl UiAssets {
         let total_h = base_h + tile_rows * tile_h;
         let mut rgba = vec![0u8; base_w * total_h * 4];
 
+        // Base atlas = RAW palette colors, no blend. The original draws
+        // the panel BACKGROUNDS (sub_23940) blended over the live
+        // framebuffer (the bright sky) — NOT over black — and the icons/
+        // glyphs (DrawBitmap_60CE0) raw with no blend at all. Compositing
+        // the base atlas through `blend[src|0]` (over black) was
+        // darkening every panel sprite (~30%: [41] (109,109,117) →
+        // (81,73,69)); raw palette restores their true brightness. The
+        // luminous spell-icon ramps that genuinely need the blend read
+        // over the stone slab in the slot tiles below, not here.
         for (i, &src) in pixels.iter().enumerate() {
             if src == 0 {
                 continue; // transparent
             }
-            let c = palette[resolve(src, 0) as usize];
+            let c = palette[src as usize];
             rgba[i * 4..i * 4 + 3].copy_from_slice(&c[..3]);
             rgba[i * 4 + 3] = 255;
         }
@@ -221,6 +230,34 @@ impl UiAssets {
         }
     }
 
+    /// Pixel dimensions of one `begSprTab[id]` UI sprite, or None if the
+    /// sprite is empty/absent.
+    pub fn sprite_dims(&self, id: usize) -> Option<(f32, f32)> {
+        let (_, _, w, h) = self.sprite_rects.get(id).copied().flatten()?;
+        (w != 0 && h != 0).then_some((w as f32, h as f32))
+    }
+
+    /// Blit `begSprTab[id]` at screen pixel (x, y), opaque. For the
+    /// icons/glyphs the original draws raw (DrawBitmap, no blend).
+    fn sprite_quad(&self, id: usize, x: f32, y: f32, scale: f32) -> Option<UiQuad> {
+        self.sprite_quad_tint(id, x, y, scale, WHITE)
+    }
+
+    /// Blit `begSprTab[id]` with an explicit tint (for the translucent
+    /// panel BACKGROUNDS — the original's sub_23940 blends them over the
+    /// live framebuffer, so HUD transparency is always on; we approximate
+    /// with an alpha over the sky, which the UI pass already blends).
+    fn sprite_quad_tint(&self, id: usize, x: f32, y: f32, scale: f32, tint: [f32; 4]) -> Option<UiQuad> {
+        let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some(UiQuad {
+            rect: [x, y, w as f32 * scale, h as f32 * scale],
+            uv: [sx as f32, sy as f32, w as f32, h as f32],
+            tint,
+        })
+    }
 }
 
 fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
@@ -338,99 +375,254 @@ pub fn book_quads(
     (quads, hovered)
 }
 
-/// In-game HUD: the two equipped slots + the mana bar.
-pub fn hud_quads(assets: &UiAssets, loadout: &LoadoutView, w: f32, h: f32) -> Vec<UiQuad> {
+// Panel sprite ids (remc1 begSprTab; ROADMAP "HUD parity"). The panel
+// strip is laid out at the original's 640-wide coordinates, scaled to
+// the live resolution.
+const SPR_SLOT_IDLE: usize = 1; // equipped-spell frame, idle
+const SPR_SLOT_HELD: usize = 2; // equipped-spell frame, active/held
+const SPR_PANEL_BG: usize = 40; // wizard-strip left cap
+const SPR_WIZ_BG: usize = 41; // a wizard sub-panel background
+const SPR_DIVIDER: usize = 42; // between the level digit and the bars
+const SPR_CASTLE_LVL: usize = 43; // +level 0..7 = the castle-level glyph
+const SPR_BALLOON_GLYPH: usize = 50; // +count 1..3 = the balloon-roster glyph
+const SPR_WIZ_EMPTY: usize = 54; // no-wizard slot
+const SPR_WIZ_ALERT: usize = 55; // castle-under-attack flash
+const SPR_SPELL_ICON: usize = 6; // spell icon base: [spell + 6]
+/// HUD panel background translucency — the original's panels blend over
+/// the framebuffer (transparency is ALWAYS on, not a toggle; player
+/// 2026-07-07). We approximate with an alpha over the sky; the icons/
+/// glyphs/bars stay opaque (drawn raw in retail).
+const PANEL_TINT: [f32; 4] = [1.0, 1.0, 1.0, mgc_render::HUD_PANEL_ALPHA];
+/// Life-bar color (remc1 uses palette index 0x7B, a team red).
+const LIFE_RED: [f32; 4] = [0.85, 0.15, 0.12, 1.0];
+const CAP_AMBER: [f32; 4] = [0.85, 0.7, 0.2, 1.0];
+/// Collected/banked mana bar (sub_22E50 :27377, color v29 =
+/// byte_99B58[2*owner]) — WHITE, not blue (player 2026-07-07). The
+/// castle-capacity bar under it (v27) stays the amber team tint.
+const MANA_WHITE: [f32; 4] = [0.95, 0.95, 0.95, 1.0];
+/// Spell availability progress bar (sub_23D40 :27705, color v26 =
+/// byte_99B58[1+2*owner]) — GREY, not blue (player 2026-07-07); the
+/// partial mana toward the next cast, under the equipped-spell icon.
+const METER_GREY: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+/// Bar geometry (sub_22810 draws a 64-wide fill; sub_22E50 offsets).
+const BAR_W: f32 = 64.0;
+const BAR_X: f32 = 58.0; // bars start +58 from the sub-panel origin
+/// One HUD section = 640/5 = 128 native px (the 5×20% top strip).
+const HUD_SECTION: f32 = 128.0;
+
+/// A solid bar fill at panel-space (x,y) scaled to screen — the
+/// original's `sub_22810(x,y,64,h,(val<<6)/max,color)`: `fill` is the
+/// value/max fraction of the 64-px ruler. `bg` draws the dark track.
+fn bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, h: f32, frac: f32, color: [f32; 4]) {
+    quads.push(solid([x * s, y * s, BAR_W * s, h * s], BAR_BG));
+    let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
+    if fill >= 2.0 {
+        quads.push(solid([x * s, y * s, fill * s, h * s], color));
+    }
+}
+
+/// A thin (2-px) balloon bar with no dark track — the original stacks
+/// these per balloon (sub_22E50 :27338-39, `sub_22810(x, y, 64, 2,
+/// frac, color)`). Just the colored fill; the panel marble shows
+/// between them.
+fn thin_bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, frac: f32, color: [f32; 4]) {
+    let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
+    if fill >= 1.0 {
+        quads.push(solid([x * s, y * s, fill * s, 2.0 * s], color));
+    }
+}
+
+/// In-game HUD — the faithful top strip (remc1 sub_22E50 wizard panel +
+/// sub_23D40 equipped-spell panels), laid out at the original's 640-wide
+/// coordinates scaled by `w/640`. The rotating round minimap is drawn by
+/// the renderer; here we place the wizard stat panel (left) and the two
+/// equipped-spell panels (right, x=510/574).
+pub fn hud_quads(
+    assets: &UiAssets,
+    loadout: &LoadoutView,
+    vitals: &PlayerVitals,
+    transparent: bool,
+    w: f32,
+    _h: f32,
+) -> Vec<UiQuad> {
     let mut quads = Vec::new();
-    let scale = (w / 640.0).max(1.0);
-    let (iw, ih) = (ICON_W * scale, ICON_H * scale);
-    let margin = 12.0 * scale;
-    let slots = [
-        (loadout.left, margin, 1usize),
-        (loadout.right, w - margin - iw, 2usize),
-    ];
-    for (spell, x, variant) in slots {
-        let rect = [x, h - ih - margin - 10.0 * scale, iw, ih];
-        let Some(spell) = spell else {
-            quads.push(solid(rect, BAR_BG));
-            continue;
-        };
-        quads.push(assets.slot_quad(SpellId(spell), variant, rect, WHITE));
-        let cd = loadout.cooldown[spell as usize];
-        if cd > 0.0 {
-            quads.push(solid([rect[0], rect[1], rect[2], rect[3] * cd], COOLDOWN_SHADE));
+    let s = w / 640.0;
+    // Panel-background tint: translucent (faithful MC1, always-on
+    // transparency) or opaque (the MC2 readability toggle).
+    let panel_tint = if transparent { PANEL_TINT } else { WHITE };
+    let push = |q: &mut Vec<UiQuad>, o: Option<UiQuad>| {
+        if let Some(u) = o {
+            q.push(u);
         }
-        // Per-slot readiness strip under the icon.
-        let bar = [rect[0], rect[1] + rect[3] + 2.0, rect[2], 5.0 * scale];
-        quads.push(solid(bar, BAR_BG));
-        quads.push(solid(
-            [bar[0], bar[1], bar[2] * (1.0 - cd), bar[3]],
-            [0.85, 0.7, 0.2, 1.0],
-        ));
+    };
+
+    // --- Wizard stat strip (sub_22E50): three 128-wide sub-panels. ---
+    // Tiles pack from x=2: [40] radar frame (124w), then sub-panels at
+    // v22 = 2 + [40].w, then +128 each. The three panels are, in order
+    // (player retail ground truth + the trace :27214/:27334/:27374):
+    //   A (v22, `var_50`)  = the player's LINKED CASTLE — castle HP +
+    //                        castle mana capacity/banked, level glyph.
+    //   B (v23, `var_52[]`)= the player's MANA BALLOONS — 1..3 by castle
+    //                        level, each a thin stacked HP + cargo bar.
+    //   C (v24, `a1x`)     = the player's OWN wizard — self life + mana
+    //                        capacity/banked, drawn UNCONDITIONALLY.
+    let cap_w = assets.sprite_dims(SPR_PANEL_BG).map_or(124.0, |(w, _)| w);
+    push(&mut quads, assets.sprite_quad_tint(SPR_PANEL_BG, 2.0 * s, 2.0 * s, s, panel_tint));
+    let v22 = 2.0 + cap_w; // slot A = castle panel
+    let v23 = v22 + HUD_SECTION; // slot B = balloons
+    let v24 = v22 + 2.0 * HUD_SECTION; // slot C = self
+
+    let world = loadout.world_mana.max(1) as f32;
+    // The level-goal tick on a mana ruler at panel-origin `ox` (the
+    // win_pct mark; green once completed) — sub_22E50 :27268.
+    let win_tick = |quads: &mut Vec<UiQuad>, ox: f32| {
+        if loadout.win_pct > 0 {
+            let tx = (ox + BAR_X) * s + BAR_W * s * (loadout.win_pct as f32 / 100.0).min(1.0);
+            let tc = if loadout.completed {
+                [0.3, 0.95, 0.3, 1.0]
+            } else {
+                [0.95, 0.95, 0.95, 1.0]
+            };
+            quads.push(solid([tx - 1.0, 26.0 * s, 2.0, 12.0 * s], tc));
+        }
+    };
+
+    // === Slot A: the linked castle (:27215). Gated on the castle
+    // existing AND level > 0 (else the bare marble [54]). player. ===
+    let castle = loadout.castle.filter(|(_, _, lvl)| *lvl > 0);
+    let slot_a_bg = if castle.is_none() {
+        SPR_WIZ_EMPTY
+    } else if vitals.castle_alert {
+        SPR_WIZ_ALERT
+    } else {
+        SPR_WIZ_BG
+    };
+    push(&mut quads, assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint));
+    if let Some((stored, capacity, level)) = castle {
+        let ox = v22;
+        // Castle-level glyph [43+level] (emblem/heart/orb/digit baked
+        // in) then the divider [42].
+        push(
+            &mut quads,
+            assets.sprite_quad(SPR_CASTLE_LVL + level as usize, (ox + 2.0) * s, 2.0 * s, s),
+        );
+        push(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        // Life bar (+58, y=10) = the CASTLE's HP (v4x->actLife/maxLife,
+        // palette 0x7B) — NOT the player's life (:27237). castle_hp is
+        // the downgrade meter.
+        let hp = loadout
+            .castle_hp
+            .map_or(1.0, |(cur, max)| cur.max(0) as f32 / max.max(1) as f32);
+        bar(&mut quads, s, ox + BAR_X, 10.0, 10.0, hp, LIFE_RED);
+        // Mana capacity + banked, world-relative (y=28), overlaid.
+        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, capacity as f32 / world, CAP_AMBER);
+        bar(
+            &mut quads,
+            s,
+            ox + BAR_X,
+            28.0,
+            10.0,
+            (stored + loadout.banked) as f32 / world,
+            MANA_WHITE,
+        );
+        win_tick(&mut quads, ox);
     }
-    // Center mana bar (the castable pool vs the claimed ceiling).
-    let frac = loadout.mana as f32 / loadout.mana_max.max(1) as f32;
-    let bw = w * 0.25;
-    quads.push(solid([(w - bw) / 2.0, h - 16.0 * scale, bw, 7.0 * scale], BAR_BG));
-    quads.push(solid(
-        [
-            (w - bw) / 2.0 + 1.0,
-            h - 16.0 * scale + 1.0,
-            (bw - 2.0) * frac.clamp(0.0, 1.0),
-            7.0 * scale - 2.0,
-        ],
-        MANA_BLUE,
-    ));
-    // Castle HP strip (functional-first): a thin green/red meter
-    // above the castle panel — the downgrade damage is invisible
-    // otherwise (playtest-6: "castle health is difficult to verify").
-    if let Some((hp, max)) = loadout.castle_hp {
-        let frac = (hp as f32 / max as f32).clamp(0.0, 1.0);
-        let pw = w * 0.18;
-        let px = w - pw - 12.0 * scale;
-        let py = h - 72.0 * scale;
-        quads.push(solid([px, py, pw, 4.0 * scale], BAR_BG));
-        let color = if frac > 0.5 {
-            [0.25, 0.8, 0.3, 1.0]
-        } else {
-            [0.9, 0.25, 0.15, 1.0]
-        };
-        quads.push(solid([px, py, pw * frac, 4.0 * scale], color));
+
+    // === Slot B: the mana balloons (:27278-344). Empty [54] with no
+    // roster; otherwise the balloon glyph [50+count] + divider, then a
+    // thin HP + cargo bar per balloon, stacked 2px apart. ===
+    let balloons = &loadout.balloons;
+    let slot_b_bg = if balloons.is_empty() { SPR_WIZ_EMPTY } else { SPR_WIZ_BG };
+    push(&mut quads, assets.sprite_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint));
+    if !balloons.is_empty() {
+        let ox = v23;
+        let count = balloons.len().min(3);
+        push(
+            &mut quads,
+            assets.sprite_quad(SPR_BALLOON_GLYPH + count, (ox + 2.0) * s, 2.0 * s, s),
+        );
+        push(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        // Per balloon: HP bar at y=12+2i (red), cargo bar at y=30+2i
+        // (banked-mana white) — the thin stacked lines (:27338-39).
+        for (i, &(hp, cargo)) in balloons.iter().enumerate().take(3) {
+            let y = 2.0 * i as f32;
+            thin_bar(&mut quads, s, ox + BAR_X, 12.0 + y, hp, LIFE_RED);
+            thin_bar(&mut quads, s, ox + BAR_X, 30.0 + y, cargo, MANA_WHITE);
+        }
     }
-    // The castle panel's WORLD-RELATIVE pair (sub_22E50 :27172-290):
-    // the original never shows absolute mana — everything scales
-    // against the level's total. Row 1 = castle capacity / world
-    // (amber), row 2 = banked / world (blue), and the level-goal
-    // tick at win_pct% on both rows (`(value<<6)/world` fills +
-    // `(pct<<6)/100` tick on a shared ruler). The tick turns green
-    // once the win latches (16 sustained ticks over the goal).
-    if loadout.world_mana > 0 {
-        let world = loadout.world_mana as f32;
-        let pw = w * 0.18;
-        let px = w - pw - 12.0 * scale;
-        let mut py = h - 60.0 * scale;
-        let rows: [(f32, [f32; 4]); 2] = [
-            (
-                loadout.castle.map_or(0.0, |(_, cap, _)| cap as f32) / world,
-                [0.85, 0.7, 0.2, 1.0],
-            ),
-            (loadout.banked as f32 / world, MANA_BLUE),
-        ];
-        for (row_frac, color) in rows {
-            quads.push(solid([px, py, pw, 5.0 * scale], BAR_BG));
-            quads.push(solid(
-                [px + 1.0, py + 1.0, (pw - 2.0) * row_frac.clamp(0.0, 1.0), 5.0 * scale - 2.0],
-                color,
-            ));
-            if loadout.win_pct > 0 {
-                let tick = px + pw * (loadout.win_pct as f32 / 100.0).clamp(0.0, 1.0);
-                let tick_color = if loadout.completed {
-                    [0.3, 0.95, 0.3, 1.0]
-                } else {
-                    [0.95, 0.95, 0.95, 1.0]
-                };
-                quads.push(solid([tick - 1.0, py - 1.0, 2.0, 7.0 * scale], tick_color));
+
+    // === Slot C: the player's OWN wizard (:27346-388). Always drawn
+    // (no gate) — the wizard is always present. ===
+    let slot_c_bg = if vitals.castle_alert { SPR_WIZ_ALERT } else { SPR_WIZ_BG };
+    push(&mut quads, assets.sprite_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint));
+    {
+        let ox = v24;
+        // Base wizard glyph [43] + divider [42] (:27358-72; the alert
+        // /grace variant swaps a blended copy — we keep the plain draw).
+        push(&mut quads, assets.sprite_quad(SPR_CASTLE_LVL, (ox + 2.0) * s, 2.0 * s, s));
+        push(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        // Self life bar (+58, y=10) = the PLAYER's health (a1x->actLife,
+        // 0x7B red) — this is where player life belongs (:27375).
+        bar(
+            &mut quads,
+            s,
+            ox + BAR_X,
+            10.0,
+            10.0,
+            vitals.life as f32 / vitals.life_max.max(1) as f32,
+            LIFE_RED,
+        );
+        // Self mana: capacity (var_136 = mana_max, amber) + current
+        // (var_140 = mana, white) over the world total (:27376-77).
+        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana_max as f32 / world, CAP_AMBER);
+        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana as f32 / world, MANA_WHITE);
+        win_tick(&mut quads, ox);
+    }
+    // --- Equipped-spell panels (sub_23D40) at x=510 and x=574. ---
+    // Frame [1]/[2] (64x44), then the icon [spell+6] at its NATIVE 62x34
+    // (top-aligned, NOT stretched to the frame), then the availability
+    // meter at y=+36: a progress bar (partial mana toward the next cast)
+    // plus a row of dots (whole casts currently affordable) — sub_23D40
+    // :27700-34.
+    for (spell, px) in [(loadout.left, 510.0), (loadout.right, 574.0)] {
+        // Frame [2] = the CAST-IN-PROGRESS highlight (sub_23D40 :27675:
+        // `a3x->var_48` = the burst counter, nonzero only while firing/
+        // channeling), else the idle frame [1]. Equipped ≠ casting — the
+        // highlight flashes on projectile casts and stays lit for
+        // duration effects (speed etc.), driven by the burst counter.
+        let active = spell.is_some_and(|sp| loadout.cooldown[sp as usize] > 0.0);
+        let frame = if active { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
+        push(&mut quads, assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint));
+        if let Some(sp) = spell {
+            // Icon at native size, drawn raw on top of the frame (the
+            // original's DrawBitmap, no stretch) — a couple px in.
+            push(
+                &mut quads,
+                assets.sprite_quad(SPR_SPELL_ICON + sp as usize, (px + 1.0) * s, 3.0 * s, s),
+            );
+            // Availability meter at (frame+4, frame+36) — sub_23D40
+            // :27703-34. A progress bar (partial mana toward the next
+            // cast) with a row-pair of SINGLE-PIXEL dots over it, one dot
+            // per whole cast currently affordable (sub_61594 writes one
+            // pixel each; 2 rows, columns step by 2, up to 27 wide).
+            let cost = SPELLS[sp as usize].possess_mana.max(1);
+            let mana = loadout.mana;
+            let mx = px + 4.0; // sub_23D40 a1+4
+            let my = 2.0 + 36.0; // a2+36
+            // Progress bar: (56 * (mana % cost)) / cost px wide, 4 tall.
+            let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
+            quads.push(solid([mx * s, my * s, partial * s, 4.0 * s], METER_GREY));
+            // Dots: one single pixel per whole cast, filled column-major
+            // (2 rows), columns +2 apart — up to 27 columns (54 casts).
+            let casts = (mana / cost).min(54) as usize;
+            for d in 0..casts {
+                let col = (d / 2) as f32;
+                let row = (d % 2) as f32;
+                quads.push(solid(
+                    [(mx + col * 2.0) * s, (my + row * 2.0) * s, s.max(1.0), s.max(1.0)],
+                    WHITE,
+                ));
             }
-            py += 8.0 * scale;
         }
     }
     quads

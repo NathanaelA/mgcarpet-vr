@@ -17,7 +17,7 @@ struct MapGlobals {
     player: vec4<f32>,
     // x = round mask (1 = circular disc for the HUD minimap, 0 = the
     // rectangular book map), y = aspect (quad width / height in pixels),
-    // zw unused
+    // z = output alpha (HUD transparency; 1 = opaque), w unused
     mode: vec4<f32>,
 };
 
@@ -88,5 +88,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         rgb = vec3<f32>(1.0, 1.0, 1.0);
     }
 
-    return vec4<f32>(rgb, 1.0);
+    // Output alpha carries the HUD transparency (radar follows the same
+    // toggle as the panels); the book map passes 1.
+    return vec4<f32>(rgb, mg.mode.z);
 }

@@ -368,14 +368,23 @@ const FOG_DENSITY: f32 = 0.006;
 /// makes it appear infinite (the original's rounding-error void-mobs
 /// live at that wrap; we don't reproduce those).
 const BOOK_MAP_ZOOM: f32 = 256.0;
-/// In-flight radar: disc diameter in pixels + corner margin. The zoom
-/// is kept FAITHFUL — the original's 128/128/a8=256 spans exactly 128
-/// tiles across the disc (surroundings shown small in a 128px disc, not
-/// a tight vicinity crop). `+`/`-` adjust it at runtime (MC2, likely
-/// MC1); [`MINIMAP_ZOOM`] is the default.
-const MINIMAP_PX: f32 = 200.0;
-const MINIMAP_MARGIN: f32 = 6.0;
+// The HUD top strip is six tiles packed left-to-right from x=2 with 0px
+// gaps (player pixel-measurements 2026-07-07, matched to native sprite
+// widths at scale 1.668): [40] radar frame (124) | three [41] sub-panels
+// (128 each) | two spell frames [1]/[2] (64 each). Native tile origins:
+// 2, 126, 254, 382, 510, 574.
+/// In-flight radar: the disc is anchored at the screen CORNER (0,0) and
+/// spans the full 128 native px — it touches both edges with NO margin
+/// (retail: DrawMinimap(0,0,128,128,...); the [40] frame sprite is what
+/// leaves the visible margin, drawn on top). So the disc is slightly
+/// bigger than its frame tile, and radar objects read slightly larger.
+/// Native px, scaled by w/640 to track the panels. Zoom stays FAITHFUL
+/// at 128 tiles across; `+`/`-` adjust it at runtime.
+const MINIMAP_DIAM: f32 = 128.0;
 const MINIMAP_ZOOM: f32 = 128.0;
+/// HUD transparency alpha (radar + panels; kept in sync with ui.rs's
+/// PANEL_TINT). The whole HUD blends over the sky in faithful MC1.
+pub const HUD_PANEL_ALPHA: f32 = 0.62;
 /// Runtime radar-zoom bounds (`+`/`-`): from a tight 32-tile crop out
 /// to a near-whole-world 224 tiles.
 const MINIMAP_ZOOM_MIN: f32 = 32.0;
@@ -447,6 +456,9 @@ pub struct Renderer {
     minimap_on: bool,
     /// Runtime radar zoom (tiles across the disc); `+`/`-` adjust it.
     minimap_zoom: f32,
+    /// Radar output alpha — HUD transparency (1 = opaque; the MC1
+    /// default matches the translucent panels, MC2/opaque = 1).
+    minimap_alpha: f32,
     fill_pipeline: wgpu::RenderPipeline,
     // Billboard (world sprite) pass.
     billboard_pipeline: wgpu::RenderPipeline,
@@ -778,7 +790,10 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: None,
+                    // Alpha blend so the in-flight radar can be
+                    // translucent (HUD transparency); the book map and
+                    // opaque-HUD radar pass alpha = 1 (a no-op blend).
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -1142,6 +1157,7 @@ impl Renderer {
             minimap_bind_group: None,
             minimap_on: true,
             minimap_zoom: MINIMAP_ZOOM,
+            minimap_alpha: 1.0,
             map_bind_group_layout,
             map_bind_group: None,
             fill_pipeline,
@@ -1202,6 +1218,13 @@ impl Renderer {
     /// Show/hide the in-flight radar minimap.
     pub fn set_minimap_on(&mut self, on: bool) {
         self.minimap_on = on;
+    }
+
+    /// Set the radar's HUD transparency: `true` = translucent (faithful
+    /// MC1, matches the panels), `false` = opaque (MC2 readability
+    /// toggle). Alpha kept in sync with the panel alpha in ui.rs.
+    pub fn set_hud_transparent(&mut self, transparent: bool) {
+        self.minimap_alpha = if transparent { HUD_PANEL_ALPHA } else { 1.0 };
     }
 
     pub fn minimap_on(&self) -> bool {
@@ -1730,6 +1753,21 @@ impl Renderer {
         self.map_stamps = stamps;
     }
 
+    /// The in-flight radar disc: (diameter, center_x, center_y) in
+    /// pixels. The disc is CENTERED inside section 1 (the first 20% of
+    /// width) so its margins are equal on both sides — scaled by the HUD
+    /// factor (w/640) to track the sprite panels. Single source of truth
+    /// for both the shader uniform and the stamp projection; they MUST
+    /// agree or terrain and stamps diverge.
+    fn minimap_rect(&self, w: u32, hpx: u32) -> (f32, f32, f32) {
+        let hud = w as f32 / 640.0;
+        let diam = (MINIMAP_DIAM * hud).min(w.min(hpx) as f32);
+        // Anchored at the corner (0,0), touching both screen edges — the
+        // disc center is exactly at its radius (retail DrawMinimap(0,0)).
+        let c = diam * 0.5;
+        (diam, c, c)
+    }
+
     /// Project the map stamps onto one map surface as upright UI quads.
     /// `center`/`half` are the surface's screen rect (pixels): center
     /// point and half-extents. `zoom` = tiles across the shorter axis,
@@ -2052,15 +2090,9 @@ impl Renderer {
                     cx, cy, side * 0.5, side * 0.5, cam.x, cam.z, cam.yaw, BOOK_MAP_ZOOM, false,
                 );
             } else if self.minimap_on {
-                let disc = MINIMAP_PX.min(w.min(hpx) as f32);
-                // Center must match the shader's on-screen disc EXACTLY,
-                // or terrain and stamps diverge. The uniform places the
-                // disc at NDC center `-1 + hw + margin/w` (hw = disc/w),
-                // which is `(disc + margin)/2` pixels from the top-left —
-                // NOT `margin + disc/2` (the margin is halved by the NDC
-                // round-trip). This mismatch was the radar stamp shift.
-                let cx = (disc + MINIMAP_MARGIN) * 0.5;
-                let cy = (disc + MINIMAP_MARGIN) * 0.5;
+                // Same (diam, center) as the shader uniform — shared via
+                // minimap_rect so terrain and stamps can't diverge.
+                let (disc, cx, cy) = self.minimap_rect(w, hpx);
                 stamp_quads = self.map_stamp_quads(
                     cx, cy, disc * 0.5, disc * 0.5, cam.x, cam.z, cam.yaw, self.minimap_zoom, true,
                 );
@@ -2121,7 +2153,7 @@ impl Renderer {
                 BOOK_MAP_ZOOM,
                 0.0, // rectangular
                 1.0, // square quad → aspect 1
-                0.0,
+                1.0, // opaque (book map is a fullscreen view)
                 0.0,
             ];
             self.queue.write_buffer(
@@ -2130,15 +2162,14 @@ impl Renderer {
                 bytemuck::cast_slice(&map_globals),
             );
         } else if self.minimap_on {
-            // In-flight round minimap in the top-left corner (the
-            // original's DrawMinimap at (0,0)). A fixed-size disc,
-            // player-centered + yaw-rotated, round mask on.
-            let disc = MINIMAP_PX.min(w.min(hpx) as f32);
+            // In-flight round minimap, centered in section 1 (first 20%
+            // of width). Disc + position scale with the HUD (w/640).
+            let (disc, cx, cy) = self.minimap_rect(w, hpx);
             let hw = disc / w as f32; // NDC half-width
             let hh = disc / hpx as f32; // NDC half-height
             let minimap_globals: [f32; 12] = [
-                -1.0 + hw + MINIMAP_MARGIN / w as f32, // top-left, margin in
-                1.0 - hh - MINIMAP_MARGIN / hpx as f32,
+                cx / w as f32 * 2.0 - 1.0, // pixel center → NDC x
+                1.0 - cy / hpx as f32 * 2.0, // pixel center → NDC y (flip)
                 hw,
                 hh,
                 cam.x,
@@ -2147,7 +2178,7 @@ impl Renderer {
                 self.minimap_zoom,
                 1.0, // round mask
                 1.0, // square disc → aspect 1
-                0.0,
+                self.minimap_alpha, // HUD transparency
                 0.0,
             ];
             self.queue.write_buffer(

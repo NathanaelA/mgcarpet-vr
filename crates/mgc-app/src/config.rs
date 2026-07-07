@@ -175,6 +175,26 @@ pub struct Enhancements {
     /// MORTAL (grace window, castle respawn, castle-less death =
     /// level restart).
     pub invincible: bool,
+    /// HUD transparency (the top-strip panels + radar blend over the
+    /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle to
+    /// make it opaque for readability (the radar especially). Multi-
+    /// column matrix option: `Mc1` faithful transparent (default) |
+    /// `Opaque` the MC2-style solid HUD. Player 2026-07-07: transparency
+    /// "makes the radar map less useful" — opaque is the readable
+    /// alternate.
+    pub hud_transparency: HudTransparency,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HudTransparency {
+    /// Faithful MC1: the whole HUD blends over the sky (sub_23940's
+    /// blend path — transparency is always on in MC1).
+    #[default]
+    Mc1,
+    /// Opaque HUD (MC2 offers this toggle): solid panels + radar, best
+    /// readability. P-class, presentation-only.
+    Opaque,
 }
 
 impl Config {
