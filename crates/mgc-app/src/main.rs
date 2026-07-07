@@ -28,6 +28,11 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 const FOV_Y: f32 = 60.0_f32.to_radians();
 const MOUSE_SENSITIVITY: f32 = 0.0022;
+/// MC1 virtual-stick gain: stick units (±127 full deflection) per
+/// pixel of mouse motion. The original's DOS cursor reached full
+/// deflection ~160 px from the center of a 320-wide screen (~0.8/px);
+/// half that suits modern DPI while sensitivity 1.0 keeps the range.
+const STICK_PER_PIXEL: f32 = 0.4;
 
 struct LoadedLevel {
     view: LevelView,
@@ -325,6 +330,17 @@ struct MouseAccum {
     pitch: f32,
 }
 
+/// The MC1 model's virtual stick: mouse motion integrates into a
+/// POSITION offset from center (the original reads the DOS cursor's
+/// screen offset, ±127 per axis — an airplane-stick input: deflection
+/// = turn rate, re-center to fly straight). Kept in floats app-side;
+/// sampled to the sim's i16 pair each tick.
+#[derive(Default)]
+struct VirtualStick {
+    x: f32,
+    y: f32,
+}
+
 struct App {
     level: LoadedLevel,
     smooth_shading: bool,
@@ -340,6 +356,10 @@ struct App {
     prev_flyer: Flyer,
     keys: HeldKeys,
     mouse: MouseAccum,
+    /// Flight-control tiers (thrust/altitude models mirror into the
+    /// sim; bindings + sensitivity are app-side input mapping).
+    flight: config::FlightConfig,
+    stick: VirtualStick,
     /// Left/right button held while grabbed: the two casting hands.
     fire_held: bool,
     fire_right_held: bool,
@@ -376,6 +396,7 @@ impl App {
         health_bars: bool,
         dev_spells: bool,
         audio_cfg: &config::AudioConfig,
+        flight: config::FlightConfig,
     ) -> Self {
         // Audio: open the device, load the game's audio bundle, start
         // the level music. Any failure degrades to silence, never to
@@ -407,8 +428,17 @@ impl App {
             Some(w) => Simulation::with_world(w),
             None => Simulation::with_terrain(level.height.clone()),
         };
+        sim.thrust_model = match flight.thrust {
+            config::ThrustModel::Mc1 => mgc_sim::ThrustModel::Mc1,
+            config::ThrustModel::Enhanced => mgc_sim::ThrustModel::Enhanced,
+        };
+        sim.altitude_model = match flight.altitude {
+            config::AltitudeModel::Faithful => mgc_sim::AltitudeModel::Faithful,
+            config::AltitudeModel::ExtendedLift => mgc_sim::AltitudeModel::ExtendedLift,
+        };
         if let Some(start) = level.start {
             sim.flyer = start;
+            sim.sync_carpet_from_flyer();
         }
         if dev_spells {
             if let Some(w) = &mut sim.world {
@@ -428,6 +458,8 @@ impl App {
             prev_flyer,
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
+            flight,
+            stick: VirtualStick::default(),
             fire_held: false,
             fire_right_held: false,
             grabbed: false,
@@ -486,13 +518,17 @@ impl App {
     fn tick_input(&mut self) -> FlightInput {
         let axis = |neg: bool, pos: bool| (pos as i32 - neg as i32) as f32;
         let k = &self.keys;
-        // Keyboard turn rate: radians per tick.
+        // Keyboard turn rate: radians per tick (enhanced model only).
         let key_turn = 2.2 * TICK_DT;
         let book = self.book_open();
-        let input = FlightInput {
+        let mc1 = self.flight.thrust == config::ThrustModel::Mc1;
+        // Explicit float up/down is the extended-lift enhancement; the
+        // faithful altitude model has no vertical control at all.
+        let lift_keys = self.flight.altitude == config::AltitudeModel::ExtendedLift;
+        let mut input = FlightInput {
             thrust: axis(k.back, k.forward),
             strafe: axis(k.left, k.right),
-            lift: axis(k.down, k.up),
+            lift: if lift_keys { axis(k.down, k.up) } else { 0.0 },
             yaw_delta: axis(k.turn_left, k.turn_right) * key_turn + self.mouse.yaw,
             pitch_delta: axis(k.pitch_down, k.pitch_up) * key_turn + self.mouse.pitch,
             // The book screen swallows the fire buttons (they bind
@@ -501,7 +537,31 @@ impl App {
             fire_right: self.fire_right_held && self.grabbed && !book,
             equip_left: self.pending_equip.0.take().map(mgc_sim::spells::SpellId),
             equip_right: self.pending_equip.1.take().map(mgc_sim::spells::SpellId),
+            ..Default::default()
         };
+        if mc1 {
+            // The MC1 model steers from the virtual stick; the delta
+            // accumulators stay zero (the sim ignores them, but keep
+            // the recorded input honest for future replays).
+            input.stick_x = self.stick.x.round() as i16;
+            input.stick_y = self.stick.y.round() as i16;
+            input.yaw_delta = 0.0;
+            input.pitch_delta = 0.0;
+        }
+        if book {
+            // The original's map/book modes write NO movement input
+            // (:20635-:20744 never reach the mouse read or command 6)
+            // — the steering filters decay to center while the speed
+            // target persists (the "map fixes your orientation, not
+            // your velocity" behavior).
+            input.thrust = 0.0;
+            input.strafe = 0.0;
+            input.lift = 0.0;
+            input.stick_x = 0;
+            input.stick_y = 0;
+            input.yaw_delta = 0.0;
+            input.pitch_delta = 0.0;
+        }
         self.mouse = MouseAccum::default();
         input
     }
@@ -704,6 +764,17 @@ impl ApplicationHandler for App {
                         } else {
                             self.set_grab(true);
                         }
+                        // Entering/leaving the fullscreen map fixes
+                        // your ORIENTATION but not your velocity in
+                        // the original (player ground truth; traced
+                        // as EMERGENT — map modes write no input, so
+                        // the steering filters decay ~×0.75/tick to
+                        // center while the target speed persists,
+                        // :49017-20/:49044). We recenter the virtual
+                        // stick; the sim's filters decay on their own
+                        // because tick_input sends zero stick while
+                        // the book is open.
+                        self.stick = VirtualStick::default();
                     }
                     return;
                 }
@@ -847,21 +918,31 @@ impl ApplicationHandler for App {
                     );
                     return;
                 }
+                let wasd = self.flight.bindings == config::Bindings::Wasd;
                 let k = &mut self.keys;
                 match event.physical_key {
-                    PhysicalKey::Code(KeyCode::KeyW) => k.forward = down,
-                    PhysicalKey::Code(KeyCode::KeyS) => k.back = down,
-                    PhysicalKey::Code(KeyCode::KeyA) => k.left = down,
-                    PhysicalKey::Code(KeyCode::KeyD) => k.right = down,
+                    // Thrust/strafe keys by binding profile. Classic =
+                    // the original scheme (mouse aims, Up/Down arrows
+                    // accelerate/decelerate, Left/Right strafe); the
+                    // WASD profile keeps the arrows as enhanced-model
+                    // turn/pitch keys.
+                    PhysicalKey::Code(KeyCode::KeyW) if wasd => k.forward = down,
+                    PhysicalKey::Code(KeyCode::KeyS) if wasd => k.back = down,
+                    PhysicalKey::Code(KeyCode::KeyA) if wasd => k.left = down,
+                    PhysicalKey::Code(KeyCode::KeyD) if wasd => k.right = down,
+                    PhysicalKey::Code(KeyCode::ArrowUp) if !wasd => k.forward = down,
+                    PhysicalKey::Code(KeyCode::ArrowDown) if !wasd => k.back = down,
+                    PhysicalKey::Code(KeyCode::ArrowLeft) if !wasd => k.left = down,
+                    PhysicalKey::Code(KeyCode::ArrowRight) if !wasd => k.right = down,
+                    PhysicalKey::Code(KeyCode::ArrowLeft) => k.turn_left = down,
+                    PhysicalKey::Code(KeyCode::ArrowRight) => k.turn_right = down,
+                    PhysicalKey::Code(KeyCode::ArrowUp) => k.pitch_up = down,
+                    PhysicalKey::Code(KeyCode::ArrowDown) => k.pitch_down = down,
                     PhysicalKey::Code(KeyCode::Space) => k.up = down,
                     PhysicalKey::Code(KeyCode::ShiftLeft) => {
                         k.down = down;
                         self.shift_held = down;
                     }
-                    PhysicalKey::Code(KeyCode::ArrowLeft) => k.turn_left = down,
-                    PhysicalKey::Code(KeyCode::ArrowRight) => k.turn_right = down,
-                    PhysicalKey::Code(KeyCode::ArrowUp) => k.pitch_up = down,
-                    PhysicalKey::Code(KeyCode::ArrowDown) => k.pitch_down = down,
                     _ => {}
                 }
             }
@@ -907,12 +988,20 @@ impl ApplicationHandler for App {
                     .as_ref()
                     .map(|w| w.knock_magnitude() as f32 / 8.0 * (std::f32::consts::TAU / 2048.0))
                     .unwrap_or(0.0);
+                // The faithful camera renders at HALF the aim pitch
+                // (remc1 :52434: pitch_8 = u16_329/2) — casts still
+                // aim along the full published pitch.
+                let aim = a.pitch + (b.pitch - a.pitch) * alpha;
+                let view_pitch = match self.flight.thrust {
+                    config::ThrustModel::Mc1 => aim * 0.5,
+                    config::ThrustModel::Enhanced => aim,
+                };
                 let cam = CameraView {
                     x: lerp_wrap(a.x, b.x),
                     y: a.y + (b.y - a.y) * alpha,
                     z: lerp_wrap(a.z, b.z),
                     yaw: a.yaw + (b.yaw - a.yaw) * alpha,
-                    pitch: a.pitch + (b.pitch - a.pitch) * alpha - kick,
+                    pitch: view_pitch - kick,
                     fov_y: FOV_Y,
                 };
                 // Spell UI quads (book grid or in-flight HUD).
@@ -956,8 +1045,20 @@ impl ApplicationHandler for App {
             return;
         }
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-            self.mouse.yaw += dx as f32 * MOUSE_SENSITIVITY;
-            self.mouse.pitch -= dy as f32 * MOUSE_SENSITIVITY;
+            if self.flight.thrust == config::ThrustModel::Mc1 {
+                // Relative motion integrates into the virtual stick
+                // POSITION (the original reads the DOS cursor offset
+                // from screen center, clamped ±127 — on a 320-wide
+                // screen that's ~0.8 stick units per pixel; modern
+                // default trades a little of that for precision).
+                let s = STICK_PER_PIXEL * self.flight.mouse_sensitivity;
+                self.stick.x = (self.stick.x + dx as f32 * s).clamp(-127.0, 127.0);
+                self.stick.y = (self.stick.y - dy as f32 * s).clamp(-127.0, 127.0);
+            } else {
+                let s = MOUSE_SENSITIVITY * self.flight.mouse_sensitivity;
+                self.mouse.yaw += dx as f32 * s;
+                self.mouse.pitch -= dy as f32 * s;
+            }
         }
     }
 }
@@ -980,6 +1081,10 @@ struct Args {
     health_bars: Option<bool>,
     /// CLI override of `enhancements.dev_spells`.
     dev_spells: Option<bool>,
+    /// CLI overrides of the `flight` tier enums; None = use config.
+    thrust: Option<config::ThrustModel>,
+    altitude: Option<config::AltitudeModel>,
+    bindings: Option<config::Bindings>,
     /// Write the overhead map as a PNG and exit (one pixel per tile,
     /// scaled by `map_scale`).
     map: Option<PathBuf>,
@@ -1003,6 +1108,9 @@ fn parse_args() -> Result<Args, String> {
     let mut map_triggers = None;
     let mut health_bars = None;
     let mut dev_spells = None;
+    let mut thrust = None;
+    let mut altitude = None;
+    let mut bindings = None;
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
@@ -1051,6 +1159,27 @@ fn parse_args() -> Result<Args, String> {
             "--no-health-bars" => health_bars = Some(false),
             "--dev-spells" => dev_spells = Some(true),
             "--no-dev-spells" => dev_spells = Some(false),
+            "--thrust" => {
+                thrust = Some(match it.next().as_deref() {
+                    Some("mc1") => config::ThrustModel::Mc1,
+                    Some("enhanced") => config::ThrustModel::Enhanced,
+                    _ => return Err("--thrust needs mc1|enhanced".into()),
+                });
+            }
+            "--altitude" => {
+                altitude = Some(match it.next().as_deref() {
+                    Some("faithful") => config::AltitudeModel::Faithful,
+                    Some("extended-lift") => config::AltitudeModel::ExtendedLift,
+                    _ => return Err("--altitude needs faithful|extended-lift".into()),
+                });
+            }
+            "--bindings" => {
+                bindings = Some(match it.next().as_deref() {
+                    Some("classic") => config::Bindings::Classic,
+                    Some("wasd") => config::Bindings::Wasd,
+                    _ => return Err("--bindings needs classic|wasd".into()),
+                });
+            }
             "--map" => {
                 map = Some(PathBuf::from(it.next().ok_or("--map needs a path")?));
             }
@@ -1080,6 +1209,8 @@ fn parse_args() -> Result<Args, String> {
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
                      [--dev-spells|--no-dev-spells] \
+                     [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
+                     [--bindings classic|wasd] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features]\n\
@@ -1100,6 +1231,9 @@ fn parse_args() -> Result<Args, String> {
         map_triggers,
         health_bars,
         dev_spells,
+        thrust,
+        altitude,
+        bindings,
         map,
         map_scale,
         map_view,
@@ -1234,6 +1368,12 @@ fn main() -> std::process::ExitCode {
         .unwrap_or(cfg.enhancements.map_trigger_areas);
     let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
     let dev_spells = args.dev_spells.unwrap_or(cfg.enhancements.dev_spells);
+    let flight = config::FlightConfig {
+        thrust: args.thrust.unwrap_or(cfg.flight.thrust),
+        altitude: args.altitude.unwrap_or(cfg.flight.altitude),
+        bindings: args.bindings.unwrap_or(cfg.flight.bindings),
+        mouse_sensitivity: cfg.flight.mouse_sensitivity,
+    };
 
     let level = match load_level(&args.level, args.tileset, args.terrain_features) {
         Ok(l) => l,
@@ -1273,13 +1413,27 @@ fn main() -> std::process::ExitCode {
     }
 
     println!("mgcarpet {} — {}", env!("CARGO_PKG_VERSION"), level.label);
-    println!("controls: WASD fly, mouse look (click to grab, Esc to release),");
+    let move_keys = match flight.bindings {
+        config::Bindings::Classic => "Up/Down arrows accel/decel, Left/Right strafe",
+        config::Bindings::Wasd => "W/S accel/decel, A/D strafe",
+    };
+    match flight.thrust {
+        config::ThrustModel::Mc1 => println!(
+            "controls: faithful MC1 — mouse = stick (offset steers, recenter to fly straight),\n\
+             \x20         {move_keys} (impulses: speed persists until countered),"
+        ),
+        config::ThrustModel::Enhanced => println!(
+            "controls: enhanced — mouse look, {move_keys} (hold-to-fly),"
+        ),
+    }
+    if flight.altitude == config::AltitudeModel::ExtendedLift {
+        println!("          Space/Shift float up/down (extended lift, capped at the highest terrain),");
+    }
     println!("          LMB/RMB cast the equipped hand's spell (hold = channel),");
     println!("          Enter opens the book: click a spell with LMB/RMB to equip,");
     println!("          hover + 1-9,0 binds a quick key (in flight: equip, Shift = right hand),");
-    println!("          Space/Shift up/down, arrows turn, T smooth shading,");
-    println!("          H monster health bars (debug), G all spells + infinite mana (dev),");
-    println!("          V map trigger overlay, Esc twice quits");
+    println!("          T smooth shading, H monster health bars (debug),");
+    println!("          G all spells + infinite mana (dev), V map trigger overlay, Esc twice quits");
 
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
@@ -1295,6 +1449,7 @@ fn main() -> std::process::ExitCode {
         health_bars,
         dev_spells,
         &cfg.audio,
+        flight,
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");

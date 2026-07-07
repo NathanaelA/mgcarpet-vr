@@ -1952,6 +1952,37 @@ impl World {
         self.g.player_knock.1
     }
 
+    /// Ground height in ENGINE units at an 8.8 position (the faithful
+    /// mover's terrain probe — sub_11F50's triangle interpolation).
+    pub fn ground_z_engine(&self, x: u16, y: u16) -> i16 {
+        self.g.ground_z(x, y) as i16
+    }
+
+    /// The sub_45410 wall gate in engine units (the faithful mover
+    /// applies the routine's trailing z-floor itself).
+    pub fn player_wall_gate_fixed(
+        &self,
+        cur: (u16, u16, i16),
+        prop: (u16, u16, i16),
+    ) -> Option<(u16, u16, i16)> {
+        self.g.player_wall_gate(cur, prop)
+    }
+
+    /// Emit a player-anchored sound from the sim boundary (the move's
+    /// wind-gust flutter, remc1 :55294-99).
+    pub fn push_player_sound(&mut self, id: u8) {
+        self.g.snd_player(id);
+    }
+
+    /// The level's highest terrain tile in tile units, from the LIVE
+    /// height plane (terrain is runtime-mutable). The extended-lift
+    /// float-up cap anchors here so explicit lift can never reach a
+    /// god's-eye view (player directive, 2026-07-07).
+    pub fn max_ground_tiles(&self) -> f32 {
+        let max = self.g.t.height.iter().copied().max().unwrap_or(0);
+        max as f32 * crate::HEIGHT_SCALE
+    }
+
     /// Ground height in tile units at world-space tile coordinates
     /// (for the flyer's terrain clamp against the LIVE planes).
     pub fn ground_height_tiles(&self, x: f32, z: f32) -> f32 {
@@ -2154,6 +2185,7 @@ mod tests {
         sim.flyer.y = 30.0; // far above the crest
         sim.flyer.yaw = std::f32::consts::FRAC_PI_2; // facing +x (east)
         sim.flyer.pitch = 0.0;
+        sim.sync_carpet_from_flyer(); // flyer set directly → re-seed
         let thrust = crate::FlightInput { thrust: 1.0, ..Default::default() };
         for _ in 0..600 {
             sim.step(&thrust);

@@ -32,6 +32,80 @@ pub const DEFAULT_PATH: &str = "mgcarpet.json";
 pub struct Config {
     pub enhancements: Enhancements,
     pub audio: AudioConfig,
+    pub flight: FlightConfig,
+}
+
+/// The flight-control tiers (ROADMAP "Flight-control tiers"): three
+/// ORTHOGONAL enums, freely combinable, authentic values as defaults.
+/// Enums rather than booleans by design (authenticity-matrix rule 3 —
+/// room for named alternates like `mc2` or `torso-aim` later).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FlightConfig {
+    /// Thrust + steering model. G-CLASS (physics — a replay taped
+    /// under `enhanced` is not a faithful fixture).
+    pub thrust: ThrustModel,
+    /// Altitude model. G-CLASS. Extended lift adds explicit float
+    /// up/down keys (no original equivalent); it never bypasses wall
+    /// blocking and float-up is capped at the level's highest terrain.
+    pub altitude: AltitudeModel,
+    /// Key-binding profile. P-class, input mapping ahead of the
+    /// `FlightInput` seam.
+    pub bindings: Bindings,
+    /// Mouse-to-stick / mouse-look sensitivity multiplier (P-class
+    /// preference, 1.0 = default).
+    pub mouse_sensitivity: f32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThrustModel {
+    /// The faithful MC1 model (remc1 sub_455D0): rate-based mouse
+    /// steering (offset = turn RATE, like an airplane stick),
+    /// accelerate/decelerate impulses with no stop key, thrust always
+    /// in the level ground plane regardless of aim pitch.
+    #[default]
+    Mc1,
+    /// Hold-to-fly with automatic deceleration on release (the MVP
+    /// model, retuned; keeps the authentic level-plane thrust rule).
+    Enhanced,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AltitudeModel {
+    /// Terrain-follow only: the carpet floats up along rising ground
+    /// (hard floor ground+128) and settles by itself; no fly-up
+    /// control exists (remc1 sub_455D0 vertical rules).
+    #[default]
+    Faithful,
+    /// Faithful behavior PLUS explicit float up/down keys, with
+    /// float-up capped at the level's highest terrain tile (never a
+    /// god's-eye view) and wall blocking fully intact.
+    ExtendedLift,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Bindings {
+    /// The original scheme: mouse aims, Up/Down arrows accelerate/
+    /// decelerate, Left/Right arrows strafe.
+    #[default]
+    Classic,
+    /// W/S thrust, A/D strafe, mouse aims (arrows keep turn/pitch in
+    /// the enhanced thrust model).
+    Wasd,
+}
+
+impl Default for FlightConfig {
+    fn default() -> Self {
+        FlightConfig {
+            thrust: ThrustModel::default(),
+            altitude: AltitudeModel::default(),
+            bindings: Bindings::default(),
+            mouse_sensitivity: 1.0,
+        }
+    }
 }
 
 /// Audio preferences. Volumes are plain preference, not authenticity
