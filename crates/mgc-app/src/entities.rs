@@ -190,9 +190,14 @@ pub fn health_bars_from_poses(
 pub fn map_dots_from_poses(
     poses: &[LivePose],
     palette: &[[u8; 4]; 256],
+    owned_buildings: bool,
 ) -> Vec<mgc_render::MapDot> {
     let near_black = nearest_palette_index(palette, vga(3, 3, 7));
-    let dark_green = nearest_palette_index(palette, vga(3, 7, 3));
+    // Villagers read PURPLE in retail play (player ground truth,
+    // 2026-07-07 — senior over the decompile's LUT[16] transcription,
+    // which decodes dark green; LUT index 0x101 — one digit away — is
+    // exactly this dark purple, the plausible original entry).
+    let purple = nearest_palette_index(palette, vga(7, 3, 7));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
     const SCENERY: u8 = 28;
     const PLAYER_TEAM_BLUE: u8 = 0x71;
@@ -205,8 +210,13 @@ pub fn map_dots_from_poses(
         let color = match (p.class, p.model) {
             (2, _) => SCENERY,
             (3, 2) => PLAYER_TEAM_BLUE,
-            (5, 12..=14) => dark_green,
+            (5, 12..=14) => purple,
             (5, _) => near_black,
+            // Claimed dwellings highlighted in the owner's color —
+            // the MC2 map behavior as an opt-in enhancement (MC1
+            // never marks houses; player proposal 2026-07-07). Only
+            // claimed houses reach the pose set at all.
+            (10, 45) if owned_buildings => PLAYER_TEAM_BLUE,
             (12, _) => red,
             _ => continue,
         };
@@ -282,7 +292,8 @@ fn push_billboard(
 ///   name labels (runtime state, not placement).
 pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::MapDot> {
     let near_black = nearest_palette_index(palette, vga(3, 3, 7));
-    let dark_green = nearest_palette_index(palette, vga(3, 7, 3));
+    // Purple per retail play (see map_dots_from_poses).
+    let purple = nearest_palette_index(palette, vga(7, 3, 7));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
     const SCENERY: u8 = 28;
     const PLAYER_TEAM_BLUE: u8 = 0x71; // byte_99B58[1 + 2*0]
@@ -298,7 +309,7 @@ pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::M
             // from model 2 up; models 0/1 are the player balloon —
             // the map's center cross — and 3 needs rivals revealed).
             (3, 2) => PLAYER_TEAM_BLUE,
-            (5, 12..=14) => dark_green,
+            (5, 12..=14) => purple,
             (5, _) => near_black,
             (12, _) => red,
             _ => continue,

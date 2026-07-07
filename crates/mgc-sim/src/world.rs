@@ -352,9 +352,17 @@ pub enum VolumeKind {
 fn drawable(class: u16, model: u16) -> bool {
     // The (10,12) possess flash carries the ctor's sprite row 41 but
     // draws NOTHING in retail (player-confirmed) — its draw gate is
-    // whatever +16 bit the ctor clears; excluded here.
+    // whatever +16 bit the ctor clears; excluded here. Also excluded:
+    // the genuinely invisible drivers (15 quake walker, 17 blast
+    // ring, 18 eruption counter, 41/42 leveler/painter, 53 napalm
+    // cloud — its visible part is the (10,6) sheets it spawns).
+    // 6 standing fire / 16 lava bomb / 19 plume / 38 storm cloud /
+    // 43 upgrade token ARE sprite-carrying visibles — their absence
+    // here was the burning-tree-without-flame report (2026-07-07)
+    // and playtest-3's "wall of fire didn't even show".
     matches!(class, 2 | 3 | 5 | 9 | 12)
-        || (class == 10 && matches!(model, 34 | 0 | 1 | 5 | 23 | 25 | 39 | 40 | 45))
+        || (class == 10
+            && matches!(model, 34 | 0 | 1 | 5 | 6 | 16 | 19 | 23 | 25 | 38 | 39 | 40 | 43 | 45))
 }
 
 impl World {
@@ -2768,6 +2776,21 @@ mod tests {
         w.g.mail_write(MailTarget::Pool(t), 0, 400, PLAYER_TARGET);
         w.tick(away(), PlayerCommand::default());
         assert_eq!(count(&w, 10, 6), 1, "the standing fire ignites");
+        // The flame must also DRAW — riding 3/4 up the trunk, above
+        // the ground plane (the 2026-07-07 burning-tree report: the
+        // fire existed but (10,6) was missing from the drawables).
+        let flame = w
+            .live_poses()
+            .into_iter()
+            .find(|p| p.class == 10 && p.model == 6)
+            .expect("the standing fire is a drawable");
+        let ground = w.ground_height_tiles(flame.x, flame.z);
+        assert!(
+            flame.alt > ground + 0.1,
+            "the flame rides the trunk: alt {} ground {}",
+            flame.alt,
+            ground
+        );
         for _ in 0..260 {
             w.tick(away(), PlayerCommand::default());
         }

@@ -232,7 +232,9 @@ fn load_level(
                 let poses = w.live_poses();
                 (
                     entities::billboards_from_poses(&poses, dims),
-                    entities::map_dots_from_poses(&poses, &bundle.palette),
+                    // No dwelling is claimed at load time, so the
+                    // owned-buildings highlight is vacuously off here.
+                    entities::map_dots_from_poses(&poses, &bundle.palette, false),
                 )
             }
             None => (
@@ -350,6 +352,8 @@ struct App {
     health_bars: bool,
     /// All spells + infinite mana (playtest instrument; G toggles).
     dev_spells: bool,
+    /// Claimed dwellings highlighted on the map (MC2-style opt-in).
+    map_owned_buildings: bool,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Simulation,
@@ -395,6 +399,7 @@ impl App {
         map_triggers: bool,
         health_bars: bool,
         dev_spells: bool,
+        map_owned_buildings: bool,
         audio_cfg: &config::AudioConfig,
         flight: config::FlightConfig,
     ) -> Self {
@@ -452,6 +457,7 @@ impl App {
             map_triggers,
             health_bars,
             dev_spells,
+            map_owned_buildings,
             window: None,
             renderer: None,
             sim,
@@ -604,7 +610,11 @@ impl App {
             if self.health_bars {
                 bars = entities::health_bars_from_poses(&poses, dims);
             }
-            self.level.map_dots = entities::map_dots_from_poses(&poses, &self.level.palette_rgba);
+            self.level.map_dots = entities::map_dots_from_poses(
+                &poses,
+                &self.level.palette_rgba,
+                self.map_owned_buildings,
+            );
             self.level.map_areas = map_areas(w);
         }
         w.terrain_dirty = false;
@@ -1045,6 +1055,7 @@ impl ApplicationHandler for App {
             return;
         }
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            let dy = if self.flight.invert_y { -dy } else { dy };
             if self.flight.thrust == config::ThrustModel::Mc1 {
                 // Relative motion integrates into the virtual stick
                 // POSITION (the original reads the DOS cursor offset
@@ -1373,6 +1384,7 @@ fn main() -> std::process::ExitCode {
         altitude: args.altitude.unwrap_or(cfg.flight.altitude),
         bindings: args.bindings.unwrap_or(cfg.flight.bindings),
         mouse_sensitivity: cfg.flight.mouse_sensitivity,
+        invert_y: cfg.flight.invert_y,
     };
 
     let level = match load_level(&args.level, args.tileset, args.terrain_features) {
@@ -1448,6 +1460,7 @@ fn main() -> std::process::ExitCode {
         map_triggers,
         health_bars,
         dev_spells,
+        cfg.enhancements.map_owned_buildings,
         &cfg.audio,
         flight,
     );

@@ -9,7 +9,15 @@
   "enhancements": {
     "dev_spells": false,
     "health_bars": false,
+    "map_owned_buildings": false,
     "map_trigger_areas": false,
     "smooth_shading": false
+  },
+  "flight": {
+    "altitude": "faithful",
+    "bindings": "classic",
+    "invert_y": false,
+    "mouse_sensitivity": 1.0,
+    "thrust": "mc1"
   }
 }

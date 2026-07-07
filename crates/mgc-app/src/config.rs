@@ -55,6 +55,11 @@ pub struct FlightConfig {
     /// Mouse-to-stick / mouse-look sensitivity multiplier (P-class
     /// preference, 1.0 = default).
     pub mouse_sensitivity: f32,
+    /// Invert the mouse Y axis (P-class binding — pure preference,
+    /// changes nothing about gameplay; the originals shipped the same
+    /// option). false = the authentic polarity: mouse-forward = dive,
+    /// like a flight stick.
+    pub invert_y: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +109,7 @@ impl Default for FlightConfig {
             altitude: AltitudeModel::default(),
             bindings: Bindings::default(),
             mouse_sensitivity: 1.0,
+            invert_y: false,
         }
     }
 }
@@ -158,6 +164,11 @@ pub struct Enhancements {
     /// fixture. The original ships the equivalent debug commands
     /// ("access all spells" / "more mana", remc1's :48836 cheat menu).
     pub dev_spells: bool,
+    /// Highlight claimed/possessed dwellings on the overhead map in
+    /// the owner's color — MC2's map behavior brought to MC1 as an
+    /// opt-in (P-class; MC1 never marks houses). Player proposal
+    /// 2026-07-07: "helps visibility".
+    pub map_owned_buildings: bool,
 }
 
 impl Config {
