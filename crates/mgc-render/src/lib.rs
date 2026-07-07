@@ -107,15 +107,26 @@ pub struct MapArea {
 }
 
 /// An icon stamped onto the overhead map (the original's castle /
-/// balloon UI-sprite markers, remc1 sub_48710 :57224-37): RGBA patch
-/// (alpha 0 = transparent) blitted centered on a tile position.
-#[derive(Debug, Clone)]
+/// balloon UI-sprite markers, remc1 sub_48710 :57224-37). Because both
+/// maps are yaw-rotated, stamps must stay SCREEN-UPRIGHT — a flag/
+/// balloon always points up regardless of heading — so they are NOT
+/// baked into the (rotated) map texture; the renderer projects each
+/// one's world position through the map's rotation to a screen rect and
+/// blits the upright sprite from the UI atlas. `uv` is the atlas texel
+/// rect (x, y, w, h); `w`/`h` double as the on-screen pixel size.
+#[derive(Debug, Clone, Copy)]
 pub struct MapStamp {
     pub x: f32,
     pub z: f32,
     pub w: u32,
     pub h: u32,
-    pub rgba: std::sync::Arc<Vec<u8>>,
+    pub uv: [f32; 4],
+    /// Fractional anchor: the point on the sprite (0..1 of its w/h, from
+    /// the top-left) that pins to the world position. Per remc1
+    /// sub_48710's per-range anchors: castle (58-65) = bottom-LEFT
+    /// `(0, 1)` — the flagpole foot; balloon (66-73) = bottom-CENTER
+    /// `(0.5, 1)` — the balloon base.
+    pub anchor: [f32; 2],
 }
 
 /// The marching-ants guide line (remc1 :57150-82: a pixel every 4
@@ -224,25 +235,10 @@ pub fn map_pixels(level: &LevelView, overlay: &MapOverlay) -> Vec<u8> {
             }
         }
     }
-    // Icon stamps last (castle/balloon markers ride over everything).
-    for s in &overlay.stamps {
-        let (w, h) = (s.w as usize, s.h as usize);
-        let x0 = s.x as i32 - (w / 2) as i32;
-        let z0 = s.z as i32 - (h / 2) as i32;
-        for sy in 0..h {
-            for sx in 0..w {
-                let px = &s.rgba[(sy * w + sx) * 4..(sy * w + sx) * 4 + 4];
-                if px[3] == 0 {
-                    continue;
-                }
-                let x = (x0 + sx as i32).rem_euclid(n as i32) as usize;
-                let z = (z0 + sy as i32).rem_euclid(n as i32) as usize;
-                let i = (z * n + x) * 4;
-                out[i..i + 3].copy_from_slice(&px[..3]);
-                out[i + 3] = 255;
-            }
-        }
-    }
+    // NOTE: icon stamps (castle/balloon) are NOT baked here — they must
+    // stay screen-upright under map rotation, so the renderer projects
+    // and blits them as upright screen-space quads after the rotated
+    // map draw (see `Renderer::map_stamp_quads`).
     out
 }
 
@@ -360,6 +356,31 @@ struct BillboardInstance {
 const SKY_SRGB: [f32; 3] = [0.42, 0.55, 0.75];
 const FOG_DENSITY: f32 = 0.006;
 
+// Both maps are player-centered, yaw-rotated and toroidally wrapping
+// (player directive 2026-07-07). World spans derive from the original's
+// DrawMinimap_49300 params: span_tiles = a6 * a8 / a5 / 256 (BYTE1 tile
+// step; hi-res halves a5/a6 and doubles a8, cancelling).
+//
+/// Book-screen (Enter) map zoom. The original passes 382/378/a8=170 →
+/// ~251 tiles, JUST short of the 256-tile world, which is why its edges
+/// clip ("questionable things at the edges"). Our deliberate
+/// improvement: span the FULL world so nothing is cut. Toroidal wrap
+/// makes it appear infinite (the original's rounding-error void-mobs
+/// live at that wrap; we don't reproduce those).
+const BOOK_MAP_ZOOM: f32 = 256.0;
+/// In-flight radar: disc diameter in pixels + corner margin. The zoom
+/// is kept FAITHFUL — the original's 128/128/a8=256 spans exactly 128
+/// tiles across the disc (surroundings shown small in a 128px disc, not
+/// a tight vicinity crop). `+`/`-` adjust it at runtime (MC2, likely
+/// MC1); [`MINIMAP_ZOOM`] is the default.
+const MINIMAP_PX: f32 = 200.0;
+const MINIMAP_MARGIN: f32 = 6.0;
+const MINIMAP_ZOOM: f32 = 128.0;
+/// Runtime radar-zoom bounds (`+`/`-`): from a tight 32-tile crop out
+/// to a near-whole-world 224 tiles.
+const MINIMAP_ZOOM_MIN: f32 = 32.0;
+const MINIMAP_ZOOM_MAX: f32 = 224.0;
+
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
@@ -417,6 +438,15 @@ pub struct Renderer {
     map_globals_buf: wgpu::Buffer,
     map_bind_group_layout: wgpu::BindGroupLayout,
     map_bind_group: Option<wgpu::BindGroup>,
+    /// The in-flight round minimap (top-left corner): its own uniform +
+    /// bind group over the SAME world map texture, drawn during normal
+    /// flight (the book screen uses `map_bind_group`). None until a
+    /// level is loaded; `minimap_on` gates the draw.
+    minimap_globals_buf: wgpu::Buffer,
+    minimap_bind_group: Option<wgpu::BindGroup>,
+    minimap_on: bool,
+    /// Runtime radar zoom (tiles across the disc); `+`/`-` adjust it.
+    minimap_zoom: f32,
     fill_pipeline: wgpu::RenderPipeline,
     // Billboard (world sprite) pass.
     billboard_pipeline: wgpu::RenderPipeline,
@@ -443,6 +473,13 @@ pub struct Renderer {
     ui_buf: Option<wgpu::Buffer>,
     ui_capacity: usize,
     ui_quads: Vec<UiQuad>,
+    /// Upright screen-space map icons (castle/balloon), projected onto
+    /// whichever map surface is active each frame. World-positioned but
+    /// drawn unrotated so they always point up.
+    map_stamps: Vec<MapStamp>,
+    /// UI atlas dimensions, needed to convert stamp texel UVs. Set by
+    /// `load_ui_atlas`.
+    ui_atlas_size: (u32, u32),
     /// Terrain plane textures [type, shade, angle, height] kept for
     /// runtime updates (craters, quakes — `update_terrain`).
     plane_texs: Option<[wgpu::Texture; 4]>,
@@ -763,7 +800,13 @@ impl Renderer {
         });
         let map_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("map globals"),
-            size: 32,
+            size: 48, // 3 vec4: rect, player(x,z,yaw,zoom), mode(round,aspect,_,_)
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let minimap_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("minimap globals"),
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1095,6 +1138,10 @@ impl Renderer {
             map_view: false,
             map_pipeline,
             map_globals_buf,
+            minimap_globals_buf,
+            minimap_bind_group: None,
+            minimap_on: true,
+            minimap_zoom: MINIMAP_ZOOM,
             map_bind_group_layout,
             map_bind_group: None,
             fill_pipeline,
@@ -1119,6 +1166,8 @@ impl Renderer {
             ui_buf: None,
             ui_capacity: 0,
             ui_quads: Vec::new(),
+            map_stamps: Vec::new(),
+            ui_atlas_size: (1, 1),
         }
     }
 
@@ -1148,6 +1197,26 @@ impl Renderer {
     /// (`tick % 4096`) to keep f32 precision over long sessions.
     pub fn set_anim_turn(&mut self, turn: f32) {
         self.anim_turn = turn;
+    }
+
+    /// Show/hide the in-flight radar minimap.
+    pub fn set_minimap_on(&mut self, on: bool) {
+        self.minimap_on = on;
+    }
+
+    pub fn minimap_on(&self) -> bool {
+        self.minimap_on
+    }
+
+    /// Multiply the radar zoom (tiles across the disc), clamped to a
+    /// sane range. `factor` < 1 zooms in (fewer tiles), > 1 zooms out.
+    /// Bound to `+`/`-` in the app (MC2/MC1 runtime radar zoom).
+    pub fn zoom_minimap(&mut self, factor: f32) {
+        self.minimap_zoom = (self.minimap_zoom * factor).clamp(MINIMAP_ZOOM_MIN, MINIMAP_ZOOM_MAX);
+    }
+
+    pub fn minimap_zoom(&self) -> f32 {
+        self.minimap_zoom
     }
 
     /// Upload a level: build the terrain mesh, the color/type LUTs, and
@@ -1449,6 +1518,7 @@ impl Renderer {
             },
             map_extent,
         );
+        let map_view = map_tex.create_view(&Default::default());
         self.map_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("map"),
             layout: &self.map_bind_group_layout,
@@ -1459,12 +1529,27 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &map_tex.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&map_view),
                 },
             ],
         }));
+        // The in-flight minimap shares the world map texture but has its
+        // own globals (corner rect, tighter zoom, round mask).
+        self.minimap_bind_group =
+            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("minimap"),
+                layout: &self.map_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.minimap_globals_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&map_view),
+                    },
+                ],
+            }));
         self.map_tex = Some(map_tex);
     }
 
@@ -1571,6 +1656,7 @@ impl Renderer {
     /// alpha 0).
     pub fn load_ui_atlas(&mut self, width: u32, height: u32, rgba: &[u8]) {
         debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
+        self.ui_atlas_size = (width.max(1), height.max(1));
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ui atlas"),
             size: wgpu::Extent3d {
@@ -1635,6 +1721,83 @@ impl Renderer {
     /// Replace this frame's UI quads (drawn last, in list order).
     pub fn set_ui_quads(&mut self, quads: Vec<UiQuad>) {
         self.ui_quads = quads;
+    }
+
+    /// Set the upright map icons (own castle/balloons). They are drawn
+    /// screen-space over the active map surface — never baked into the
+    /// rotated map texture — so they stay upright under rotation.
+    pub fn set_map_stamps(&mut self, stamps: Vec<MapStamp>) {
+        self.map_stamps = stamps;
+    }
+
+    /// Project the map stamps onto one map surface as upright UI quads.
+    /// `center`/`half` are the surface's screen rect (pixels): center
+    /// point and half-extents. `zoom` = tiles across the shorter axis,
+    /// `round` clips to the inscribed disc. Mirrors the sampling
+    /// transform in map.wgsl (inverted): a stamp at world `(sx, sz)` is
+    /// placed at the screen offset `R(-yaw)·(world - player)` scaled so
+    /// `half_tiles` fills `half` pixels.
+    fn map_stamp_quads(
+        &self,
+        cx: f32,
+        cy: f32,
+        half_x: f32,
+        half_y: f32,
+        px: f32,
+        pz: f32,
+        yaw: f32,
+        zoom: f32,
+        round: bool,
+    ) -> Vec<UiQuad> {
+        let half_tiles = zoom * 0.5;
+        // Match the shader: screen-up (-y) maps to "ahead"; the sample
+        // is world = player + (off.x·cos + off.y·sin, off.x·sin −
+        // off.y·cos). Inverting that rotation for screen placement.
+        let (s, c) = yaw.sin_cos();
+        let mut quads = Vec::new();
+        for st in &self.map_stamps {
+            // Shortest toroidal delta from the player, in tiles.
+            let wrap = |d: f32| {
+                let mut d = (d + 128.0).rem_euclid(256.0) - 128.0;
+                if d == -128.0 {
+                    d = 128.0;
+                }
+                d
+            };
+            let dx = wrap(st.x - px);
+            let dz = wrap(st.z - pz);
+            // Invert the shader's rotation (its forward map is
+            // [c s; s -c], an involution, so the same matrix maps world
+            // delta → the shader's centered coords `p`).
+            let ox = dx * c + dz * s;
+            let oy = dx * s - dz * c;
+            // Tiles → normalized [-1,1]. The shader's `p.y` is NDC
+            // (y-UP: +1 = top), but UiQuad screen space is y-DOWN
+            // (pixels from top-left), so the vertical axis flips —
+            // without this the stamps counter-rotate against the map.
+            let nx = ox / half_tiles;
+            let ny = -oy / half_tiles;
+            if round && (nx * nx + ny * ny) > 1.0 {
+                continue;
+            }
+            if nx.abs() > 1.0 || ny.abs() > 1.0 {
+                continue;
+            }
+            let scx = cx + nx * half_x;
+            let scy = cy + ny * half_y;
+            let (w, h) = (st.w as f32, st.h as f32);
+            quads.push(UiQuad {
+                // Per-stamp anchor (remc1 sub_48710 :57344-64): the
+                // world point pins to `anchor`·(w,h) from the top-left —
+                // castle (58-65) bottom-LEFT `DrawBitmap(v41, v42−h)`,
+                // balloon (66-73) bottom-CENTER `(v41−w/2, v42−h)`. uv is
+                // already atlas texels (ui.wgsl divides).
+                rect: [scx - st.anchor[0] * w, scy - st.anchor[1] * h, w, h],
+                uv: st.uv,
+                tint: [1.0, 1.0, 1.0, 1.0],
+            });
+        }
+        quads
     }
 
     pub fn set_billboards(&mut self, billboards: Vec<Billboard>) {
@@ -1874,15 +2037,48 @@ impl Renderer {
                 .write_buffer(self.bar_buf.as_ref().unwrap(), 0, bytes);
         }
 
-        // UI quads (screen-space overlay, both views).
-        let ui_count = self.ui_quads.len() as u32;
-        if !self.ui_quads.is_empty() {
+        // Upright map icons (castle/balloon): projected onto whichever
+        // map surface is active, appended to the UI quad stream so they
+        // draw screen-space (unrotated) over the rotated map. Rect math
+        // mirrors the map-globals block below, in pixels.
+        let mut stamp_quads: Vec<UiQuad> = Vec::new();
+        if !self.map_stamps.is_empty() {
+            if self.map_view {
+                let pane_w = w as f32 * map_pane_frac;
+                let side = pane_w.min(hpx as f32) * 0.98;
+                let cx = (map_pane_frac * 0.5) * w as f32; // center of left pane, px
+                let cy = hpx as f32 * 0.5;
+                stamp_quads = self.map_stamp_quads(
+                    cx, cy, side * 0.5, side * 0.5, cam.x, cam.z, cam.yaw, BOOK_MAP_ZOOM, false,
+                );
+            } else if self.minimap_on {
+                let disc = MINIMAP_PX.min(w.min(hpx) as f32);
+                // Center must match the shader's on-screen disc EXACTLY,
+                // or terrain and stamps diverge. The uniform places the
+                // disc at NDC center `-1 + hw + margin/w` (hw = disc/w),
+                // which is `(disc + margin)/2` pixels from the top-left —
+                // NOT `margin + disc/2` (the margin is halved by the NDC
+                // round-trip). This mismatch was the radar stamp shift.
+                let cx = (disc + MINIMAP_MARGIN) * 0.5;
+                let cy = (disc + MINIMAP_MARGIN) * 0.5;
+                stamp_quads = self.map_stamp_quads(
+                    cx, cy, disc * 0.5, disc * 0.5, cam.x, cam.z, cam.yaw, self.minimap_zoom, true,
+                );
+            }
+        }
+
+        // UI quads (screen-space overlay, both views) + the projected
+        // map stamps on top.
+        let ui_count = (self.ui_quads.len() + stamp_quads.len()) as u32;
+        if ui_count > 0 {
+            let mut all = self.ui_quads.clone();
+            all.extend_from_slice(&stamp_quads);
             self.queue.write_buffer(
                 &self.ui_globals_buf,
                 0,
                 bytemuck::cast_slice(&[w as f32, hpx as f32, 0.0, 0.0]),
             );
-            let bytes: &[u8] = bytemuck::cast_slice(&self.ui_quads);
+            let bytes: &[u8] = bytemuck::cast_slice(&all);
             let need = bytes.len();
             if self.ui_buf.is_none() || self.ui_capacity < need {
                 self.ui_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1908,17 +2104,23 @@ impl Renderer {
         };
 
         if self.map_view {
-            // Square map letterboxed into the left pane.
+            // Square map letterboxed into the left pane, player-centered
+            // and yaw-rotated (round mask off — the book map is
+            // rectangular/square).
             let pane_w = w as f32 * map_pane_frac;
             let side = pane_w.min(hpx as f32) * 0.98;
             let center_x = map_pane_frac - 1.0; // middle of the left pane in NDC
-            let map_globals: [f32; 8] = [
+            let map_globals: [f32; 12] = [
                 center_x,
                 0.0,
                 side / w as f32,
                 side / hpx as f32,
                 cam.x,
                 cam.z,
+                cam.yaw,
+                BOOK_MAP_ZOOM,
+                0.0, // rectangular
+                1.0, // square quad → aspect 1
                 0.0,
                 0.0,
             ];
@@ -1926,6 +2128,32 @@ impl Renderer {
                 &self.map_globals_buf,
                 0,
                 bytemuck::cast_slice(&map_globals),
+            );
+        } else if self.minimap_on {
+            // In-flight round minimap in the top-left corner (the
+            // original's DrawMinimap at (0,0)). A fixed-size disc,
+            // player-centered + yaw-rotated, round mask on.
+            let disc = MINIMAP_PX.min(w.min(hpx) as f32);
+            let hw = disc / w as f32; // NDC half-width
+            let hh = disc / hpx as f32; // NDC half-height
+            let minimap_globals: [f32; 12] = [
+                -1.0 + hw + MINIMAP_MARGIN / w as f32, // top-left, margin in
+                1.0 - hh - MINIMAP_MARGIN / hpx as f32,
+                hw,
+                hh,
+                cam.x,
+                cam.z,
+                cam.yaw,
+                self.minimap_zoom,
+                1.0, // round mask
+                1.0, // square disc → aspect 1
+                0.0,
+                0.0,
+            ];
+            self.queue.write_buffer(
+                &self.minimap_globals_buf,
+                0,
+                bytemuck::cast_slice(&minimap_globals),
             );
         }
 
@@ -2018,6 +2246,15 @@ impl Renderer {
                 }
             } else {
                 draw_world(&mut pass);
+                // In-flight round minimap in the corner (round mask
+                // discards outside the disc).
+                if self.minimap_on {
+                    if let Some(bg) = &self.minimap_bind_group {
+                        pass.set_pipeline(&self.map_pipeline);
+                        pass.set_bind_group(0, bg, &[]);
+                        pass.draw(0..6, 0..1);
+                    }
+                }
             }
             // Screen-space UI on top of either view.
             if let (1.., Some(bg), Some(buf)) = (ui_count, &self.ui_bind_group, &self.ui_buf) {

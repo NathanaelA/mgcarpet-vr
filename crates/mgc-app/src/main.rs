@@ -728,6 +728,9 @@ impl App {
                 r.set_billboards(self.level.billboards.clone());
                 r.set_health_bars(bars);
             }
+            // Upright map icons are drawn screen-space by the renderer
+            // (never baked into the rotated map texture).
+            r.set_map_stamps(self.level.map_stamps.clone());
             if terrain {
                 r.update_terrain(&self.level.view, &overlay);
             } else {
@@ -751,7 +754,9 @@ impl App {
             } else {
                 Vec::new()
             },
-            stamps: self.level.map_stamps.clone(),
+            // Stamps are set separately via `set_map_stamps` (they draw
+            // upright screen-space, not baked into the rotated map).
+            stamps: Vec::new(),
             path: self.castle_pos.map(|(cx, cz)| mgc_render::MapPath {
                 from: (self.sim.flyer.x, self.sim.flyer.z),
                 to: (cx, cz),
@@ -1018,6 +1023,24 @@ impl ApplicationHandler for App {
                         }
                     );
                     return;
+                }
+                // Radar zoom (`+`/`-`, main row or numpad): tighten or
+                // widen the in-flight minimap's world span. Faithful to
+                // MC2's runtime radar zoom (likely MC1 too). The book
+                // map always shows the whole world and is unaffected.
+                if down {
+                    let zoom = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Equal | KeyCode::NumpadAdd) => Some(0.8),
+                        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Some(1.25),
+                        _ => None,
+                    };
+                    if let Some(factor) = zoom {
+                        if let Some(r) = &mut self.renderer {
+                            r.zoom_minimap(factor);
+                            println!("radar zoom: {:.0} tiles", r.minimap_zoom());
+                        }
+                        return;
+                    }
                 }
                 // The demolish key (MC1 Shift+L, scancode 0x26 under
                 // the shift branch :20496-501): razes the OWN castle
@@ -1436,7 +1459,9 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
     let overlay = mgc_render::MapOverlay {
         dots: level.map_dots.clone(),
         areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
-        stamps: level.map_stamps.clone(),
+        // Stamps are screen-space projected at render time; this raw CPU
+        // dump (the diagnostic artifact) shows dots only.
+        stamps: Vec::new(),
         path: None,
     };
     let src = mgc_render::map_pixels(&level.view, &overlay);
@@ -1469,10 +1494,11 @@ fn run_screenshot(
     let overlay = mgc_render::MapOverlay {
         dots: level.map_dots.clone(),
         areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
-        stamps: level.map_stamps.clone(),
+        stamps: Vec::new(),
         path: None,
     };
     renderer.load_level(&level.view, &overlay);
+    renderer.set_map_stamps(level.map_stamps.clone());
     if let Some((index, atlas)) = &level.sprites {
         renderer.load_sprites(index.clone(), atlas);
     }

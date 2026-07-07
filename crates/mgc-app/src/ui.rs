@@ -182,29 +182,32 @@ impl UiAssets {
         }
     }
 
-    /// Crop one HSPR sprite from the composited base atlas as an RGBA
-    /// patch for map stamping (castle 58+team, balloon 66+team —
-    /// remc1 sub_48710 :57230/:57234). Position is filled by the
+    /// The UI-atlas UV rect (texels) for one HSPR sprite, for map
+    /// stamping (castle 58+team, balloon 66+team — remc1 sub_48710
+    /// :57230/:57234). The renderer projects the world position and
+    /// blits it upright over the rotated map; position is filled by the
     /// caller per entity.
     pub fn map_stamp(&self, id: usize) -> Option<mgc_render::MapStamp> {
         let (x, y, w, h) = self.sprite_rects.get(id).copied().flatten()?;
         if w == 0 || h == 0 {
             return None;
         }
-        let aw = self.atlas_w as usize;
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for row in 0..h as usize {
-            let src = ((y as usize + row) * aw + x as usize) * 4;
-            let dst = row * w as usize * 4;
-            rgba[dst..dst + w as usize * 4]
-                .copy_from_slice(&self.atlas_rgba[src..src + w as usize * 4]);
-        }
+        // Per-range anchor (remc1 sub_48710 :57344-64): castle sprites
+        // 58-65 pin at bottom-LEFT (the flagpole foot in the lower-left
+        // of the rectangular flag icon); balloon sprites 66-73 pin at
+        // bottom-CENTER (the balloon base). Others default center-bottom.
+        let anchor = match id {
+            58..=65 => [0.0, 1.0], // castle: bottom-left
+            66..=73 => [0.5, 1.0], // balloon: bottom-center
+            _ => [0.5, 1.0],
+        };
         Some(mgc_render::MapStamp {
             x: 0.0,
             z: 0.0,
             w,
             h,
-            rgba: std::sync::Arc::new(rgba),
+            uv: [x as f32, y as f32, w as f32, h as f32],
+            anchor,
         })
     }
 
