@@ -271,14 +271,19 @@ impl Simulation {
         // The death fall (sub_45FC0 :55466-77): gravity −2/tick²
         // (clamped −256) on top of the still-drifting move, riding
         // down to the ground+128 floor — touchdown is detected by
-        // the world tick below at that exact altitude.
+        // the world tick below at that exact altitude. Integrated in
+        // FLYER space at the FLYER's position: the integer carpet's
+        // x/y are stale under the enhanced mover (never synced after
+        // spawn), and clamping against ground THERE suspended the
+        // corpse mid-air wherever the local ground sat lower — the
+        // playtest-7 never-landing deadlock.
         if falling && let Some(w) = &mut self.world {
-            let dz = w.death_fall_step() as i32;
-            let g = w.ground_z_engine(self.carpet.x, self.carpet.y) as i32;
-            let z = (self.carpet.z as i32 + dz).max(g + 128);
-            self.carpet.z = z.min(i16::MAX as i32) as i16;
-            self.flyer.y = self.carpet.z as f32 / 256.0;
+            let dz = w.death_fall_step() as f32 / 256.0;
+            let g = w.ground_height_tiles(self.flyer.x, self.flyer.z);
+            let y = (self.flyer.y + dz).max(g + 0.5);
+            self.flyer.y = y;
             self.flyer.vy = 0.0;
+            self.carpet.z = ((y * 256.0) as i32).min(i16::MAX as i32) as i16;
         }
         // Dead (sub_463B0 :55575-91): speeds zeroed, the camera
         // turns toward the killer while the grey screen waits for
@@ -567,7 +572,11 @@ impl Simulation {
         }
 
         let ground = self.ground_height(self.flyer.x, self.flyer.z);
-        let floor = ground + MIN_CLEARANCE;
+        // The death fall must reach the ground+128 touchdown — the
+        // living hover clearance sits ABOVE it and would hold the
+        // corpse off the ground forever.
+        let dead_fall = self.world.as_ref().is_some_and(|w| w.player_falling());
+        let floor = ground + if dead_fall { 0.5 } else { MIN_CLEARANCE };
         let ceiling = self.lift_ceiling();
         let f = &mut self.flyer;
         if f.y < floor {
@@ -624,6 +633,96 @@ impl Simulation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal living world over flat height-100 terrain (the
+    /// mortality boundary tests need World state, not just planes).
+    fn flat_world(height: Vec<u8>) -> world::World {
+        use crate::features::{FeatureAssets, Planes};
+        let planes = Planes {
+            height,
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        world::World::new(planes, &[], 7, assets)
+    }
+
+    /// The death fall lands and the landing chain runs — faithful
+    /// (integer) model.
+    #[test]
+    fn death_fall_lands_under_mc1() {
+        let mut sim = Simulation::with_world(flat_world(vec![100; 0x10000]));
+        sim.flyer.x = 112.5;
+        sim.flyer.z = 116.5;
+        sim.flyer.y = 100.0 / 8.0 + 3.0;
+        sim.sync_carpet_from_flyer();
+        sim.world.as_mut().unwrap().debug_kill_player();
+        for _ in 0..200 {
+            sim.step(&FlightInput::default());
+            if sim.world.as_ref().unwrap().player_dead() {
+                return;
+            }
+        }
+        panic!("the corpse never landed (mc1)");
+    }
+
+    /// Playtest-7 deadlock regression: under the ENHANCED mover the
+    /// integer carpet's x/y are stale (spawn position) — the fall
+    /// must integrate at the FLYER's position or the corpse suspends
+    /// mid-air wherever the local ground is lower than the spawn's.
+    #[test]
+    fn death_fall_lands_under_enhanced_far_from_spawn() {
+        // Spawn plateau high (200), death site low (40).
+        let mut height = vec![40u8; MAP_TILES * MAP_TILES];
+        for y in 0..MAP_TILES {
+            for x in 120..140 {
+                height[y * MAP_TILES + x] = 200;
+            }
+        }
+        let mut sim = Simulation::with_world(flat_world(height));
+        sim.thrust_model = ThrustModel::Enhanced;
+        sim.altitude_model = AltitudeModel::ExtendedLift;
+        // Carpet synced ON the plateau (level start)...
+        sim.flyer.x = 128.0;
+        sim.flyer.z = 128.0;
+        sim.flyer.y = 200.0 / 8.0 + 2.0;
+        sim.sync_carpet_from_flyer();
+        // ...then the player flew to the lowland (enhanced never
+        // re-syncs the integer carpet).
+        sim.flyer.x = 60.0;
+        sim.flyer.z = 60.0;
+        sim.flyer.y = 40.0 / 8.0 + 3.0;
+        sim.world.as_mut().unwrap().debug_kill_player();
+        for _ in 0..300 {
+            sim.step(&FlightInput::default());
+            if sim.world.as_ref().unwrap().player_dead() {
+                return;
+            }
+        }
+        panic!("the corpse never landed (enhanced, far from spawn)");
+    }
 
     #[test]
     fn steps_are_counted() {

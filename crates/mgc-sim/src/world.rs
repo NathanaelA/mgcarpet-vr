@@ -1973,6 +1973,14 @@ impl World {
         std::mem::take(&mut self.pending_restart)
     }
 
+    /// Test hook: zero the grace and hand the player a lethal hit
+    /// from nothing (killer 0 — no death-camera target).
+    #[doc(hidden)]
+    pub fn debug_kill_player(&mut self) {
+        self.player.grace = 0;
+        self.g.player_mail[0] = (u32::MAX / 4, 1);
+    }
+
     /// Dev/accessibility invincibility (the pre-mortality behavior).
     pub fn set_invincible(&mut self, on: bool) {
         self.invincible = on;
