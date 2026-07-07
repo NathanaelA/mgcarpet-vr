@@ -293,6 +293,11 @@ pub struct LivePose {
     /// heads) — feeds the unfaithful debug health-bar overlay. None
     /// for everything the overlay shouldn't tag.
     pub life_frac: Option<f32>,
+    /// The entity belongs to the player: owner (+24) for projectiles/
+    /// effects, claim owner (+144) for balls/houses, castle/balloon
+    /// ownership for class 3. Drives the map's team-color rule
+    /// (sub_48710: owner class-3 → byte_99B58 team pair).
+    pub player_owned: bool,
 }
 
 /// Minimal live-event view for [`World::debug_pool`].
@@ -473,6 +478,8 @@ impl World {
                 life_frac: (e.class64 == 5 && !segment && e.max_life > 0).then(|| {
                     (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
                 }),
+                player_owned: e.id24 == PLAYER_TARGET
+                    || (e.class64 == 10 && e.f144 == PLAYER_TARGET),
             });
         }
         out

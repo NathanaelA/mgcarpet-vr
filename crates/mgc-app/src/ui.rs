@@ -36,6 +36,9 @@ pub struct UiAssets {
     /// blend-composited over the icon like everything else, so they
     /// bake as whole-tile variants rather than overlay quads.
     slot_uv: [[[f32; 4]; 3]; SPELL_COUNT],
+    /// Base-atlas frame rects (x, y, w, h) per HSPR sprite id — the
+    /// map's icon-marker crops.
+    sprite_rects: Vec<Option<(u32, u32, u32, u32)>>,
 }
 
 impl UiAssets {
@@ -158,12 +161,51 @@ impl UiAssets {
             }
         }
 
+        // Frame rects per sprite id in the base atlas region (the
+        // map's icon markers crop from here).
+        let sprite_rects = index
+            .sprites
+            .iter()
+            .map(|e| {
+                e.frames
+                    .first()
+                    .map(|f| (f.x as u32, f.y as u32, e.width as u32, e.height as u32))
+            })
+            .collect();
+
         Self {
             atlas_w: index.atlas_width,
             atlas_h: total_h as u32,
             atlas_rgba: rgba,
             slot_uv,
+            sprite_rects,
         }
+    }
+
+    /// Crop one HSPR sprite from the composited base atlas as an RGBA
+    /// patch for map stamping (castle 58+team, balloon 66+team —
+    /// remc1 sub_48710 :57230/:57234). Position is filled by the
+    /// caller per entity.
+    pub fn map_stamp(&self, id: usize) -> Option<mgc_render::MapStamp> {
+        let (x, y, w, h) = self.sprite_rects.get(id).copied().flatten()?;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let aw = self.atlas_w as usize;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for row in 0..h as usize {
+            let src = ((y as usize + row) * aw + x as usize) * 4;
+            let dst = row * w as usize * 4;
+            rgba[dst..dst + w as usize * 4]
+                .copy_from_slice(&self.atlas_rgba[src..src + w as usize * 4]);
+        }
+        Some(mgc_render::MapStamp {
+            x: 0.0,
+            z: 0.0,
+            w,
+            h,
+            rgba: std::sync::Arc::new(rgba),
+        })
     }
 
     /// The pre-composited icon-on-slab tile for a spell; `variant`

@@ -89,6 +89,9 @@ pub struct MapDot {
     pub x: f32,
     pub z: f32,
     pub color: u8,
+    /// Pixel side length: 1 for the standard dot, 2 for the
+    /// original's grown portal dot (sub_48710 v60).
+    pub size: u8,
 }
 
 /// A tinted circle on the overhead map (the trigger-volume overlay —
@@ -103,6 +106,39 @@ pub struct MapArea {
     pub color: [u8; 3],
 }
 
+/// An icon stamped onto the overhead map (the original's castle /
+/// balloon UI-sprite markers, remc1 sub_48710 :57224-37): RGBA patch
+/// (alpha 0 = transparent) blitted centered on a tile position.
+#[derive(Debug, Clone)]
+pub struct MapStamp {
+    pub x: f32,
+    pub z: f32,
+    pub w: u32,
+    pub h: u32,
+    pub rgba: std::sync::Arc<Vec<u8>>,
+}
+
+/// The marching-ants guide line (remc1 :57150-82: a pixel every 4
+/// units from a start offset cycling 0..3 per frame, plotted through
+/// the BRIGHTEN blend — the "moving" dotted path to the castle).
+/// Endpoints in tile units; `phase` = the 0..3 cycle.
+#[derive(Debug, Clone, Copy)]
+pub struct MapPath {
+    pub from: (f32, f32),
+    pub to: (f32, f32),
+    pub phase: u8,
+}
+
+/// Everything drawn over the map terrain, in draw order: areas
+/// (enhancement), path, dots, stamps.
+#[derive(Debug, Clone, Default)]
+pub struct MapOverlay {
+    pub dots: Vec<MapDot>,
+    pub areas: Vec<MapArea>,
+    pub stamps: Vec<MapStamp>,
+    pub path: Option<MapPath>,
+}
+
 /// Flat-color overhead map: one RGBA pixel per tile (256x256, row-major
 /// like the terrain grids), each resolved through the engine's map-view
 /// color path `palette[shade_lut[shade][tile_colors[type]]]` — the
@@ -110,7 +146,7 @@ pub struct MapArea {
 /// then the (opt-in) area overlay, then entity dots plotted on top, one
 /// pixel per entity, exactly like the original (the enhanced marker
 /// mode is a planned opt-in).
-pub fn map_pixels(level: &LevelView, dots: &[MapDot], areas: &[MapArea]) -> Vec<u8> {
+pub fn map_pixels(level: &LevelView, overlay: &MapOverlay) -> Vec<u8> {
     let n = MAP_TILES;
     let mut out = vec![0u8; n * n * 4];
     for i in 0..n * n {
@@ -127,7 +163,7 @@ pub fn map_pixels(level: &LevelView, dots: &[MapDot], areas: &[MapArea]) -> Vec<
     }
     // Area overlay: a light tint fill with a stronger rim, wrapping
     // toroidally like everything else on the map.
-    for a in areas {
+    for a in &overlay.areas {
         let r = a.radius.max(0.5);
         let (cx, cz) = (a.x, a.z);
         let span = r.ceil() as i32;
@@ -148,12 +184,64 @@ pub fn map_pixels(level: &LevelView, dots: &[MapDot], areas: &[MapArea]) -> Vec<
             }
         }
     }
-    for dot in dots {
+    // The marching-ants guide (:57161-82): a mark every 4 units along
+    // the torus-shortest line, starting at `phase & 3 + 4`, each pixel
+    // BRIGHTENED over the terrain (the original goes through the
+    // blend LUT; a linear lift reads the same).
+    if let Some(p) = &overlay.path {
+        let wrapd = |a: f32, b: f32| {
+            let mut d = b - a;
+            if d > 128.0 {
+                d -= 256.0;
+            }
+            if d < -128.0 {
+                d += 256.0;
+            }
+            d
+        };
+        let (dx, dz) = (wrapd(p.from.0, p.to.0), wrapd(p.from.1, p.to.1));
+        let len = (dx * dx + dz * dz).sqrt();
+        let mut t = (p.phase & 3) as f32 + 4.0;
+        while t < len {
+            let x = (p.from.0 + dx * t / len).rem_euclid(n as f32) as usize % n;
+            let z = (p.from.1 + dz * t / len).rem_euclid(n as f32) as usize % n;
+            let i = (z * n + x) * 4;
+            for c in 0..3 {
+                out[i + c] = (out[i + c] as u16 + 160).min(255) as u8;
+            }
+            t += 4.0;
+        }
+    }
+    for dot in &overlay.dots {
         let x = (dot.x as usize).min(n - 1);
         let z = (dot.z as usize).min(n - 1);
-        let i = z * n + x;
-        out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[dot.color as usize]);
-        out[i * 4 + 3] = 255;
+        // `size` covers the original's 2x2 grown dot (portals).
+        for dz in 0..dot.size as usize {
+            for dx in 0..dot.size as usize {
+                let i = ((z + dz) % n) * n + (x + dx) % n;
+                out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[dot.color as usize]);
+                out[i * 4 + 3] = 255;
+            }
+        }
+    }
+    // Icon stamps last (castle/balloon markers ride over everything).
+    for s in &overlay.stamps {
+        let (w, h) = (s.w as usize, s.h as usize);
+        let x0 = s.x as i32 - (w / 2) as i32;
+        let z0 = s.z as i32 - (h / 2) as i32;
+        for sy in 0..h {
+            for sx in 0..w {
+                let px = &s.rgba[(sy * w + sx) * 4..(sy * w + sx) * 4 + 4];
+                if px[3] == 0 {
+                    continue;
+                }
+                let x = (x0 + sx as i32).rem_euclid(n as i32) as usize;
+                let z = (z0 + sy as i32).rem_euclid(n as i32) as usize;
+                let i = (z * n + x) * 4;
+                out[i..i + 3].copy_from_slice(&px[..3]);
+                out[i + 3] = 255;
+            }
+        }
     }
     out
 }
@@ -1064,7 +1152,7 @@ impl Renderer {
 
     /// Upload a level: build the terrain mesh, the color/type LUTs, and
     /// the overhead map (terrain + entity dots).
-    pub fn load_level(&mut self, level: &LevelView, map_dots: &[MapDot], map_areas: &[MapArea]) {
+    pub fn load_level(&mut self, level: &LevelView, overlay: &MapOverlay) {
         let n = MAP_TILES;
         assert_eq!(level.height.len(), n * n);
         assert_eq!(level.tile_type.len(), n * n);
@@ -1335,7 +1423,7 @@ impl Renderer {
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
-        let map_rgba = map_pixels(level, map_dots, map_areas);
+        let map_rgba = map_pixels(level, overlay);
         let map_extent = wgpu::Extent3d {
             width: n as u32,
             height: n as u32,
@@ -1384,7 +1472,7 @@ impl Renderer {
     /// mutation (craters, quakes, spawned entities). The level view
     /// must carry the LIVE planes; mesh and bind groups are reused —
     /// this is four 64 KB texture writes plus the map compose.
-    pub fn update_terrain(&mut self, level: &LevelView, map_dots: &[MapDot], map_areas: &[MapArea]) {
+    pub fn update_terrain(&mut self, level: &LevelView, overlay: &MapOverlay) {
         let n = MAP_TILES as u32;
         let Some([type_tex, shade_tex, angle_tex, height_tex]) = &self.plane_texs else {
             return;
@@ -1413,8 +1501,17 @@ impl Renderer {
         if let Some(a) = &level.angle {
             write(angle_tex, a);
         }
+        self.update_map(level, overlay);
+    }
+
+    /// Recompose + re-upload ONLY the overhead map texture (dots,
+    /// icon stamps, the guide path, blink phases). Cheap enough to
+    /// run every sim tick — the original redraws its map every frame,
+    /// and the blink/marching-ants patterns need it.
+    pub fn update_map(&mut self, level: &LevelView, overlay: &MapOverlay) {
+        let n = MAP_TILES as u32;
         if let Some(map_tex) = &self.map_tex {
-            let map_rgba = map_pixels(level, map_dots, map_areas);
+            let map_rgba = map_pixels(level, overlay);
             self.queue.write_texture(
                 map_tex.as_image_copy(),
                 &map_rgba,

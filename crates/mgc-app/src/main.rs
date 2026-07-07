@@ -66,6 +66,10 @@ struct LoadedLevel {
     ui: Option<ui::UiAssets>,
     /// Live trigger/portal volumes for the opt-in map overlay.
     map_areas: Vec<mgc_render::MapArea>,
+    /// Castle/balloon icon patches for the map marker pass.
+    map_icons: entities::MapIcons,
+    /// Live icon stamps (own castle/balloons), refreshed per tick.
+    map_stamps: Vec<mgc_render::MapStamp>,
 }
 
 /// Resolve the world's live volumes into map overlay circles: amber =
@@ -233,8 +237,9 @@ fn load_level(
                 (
                     entities::billboards_from_poses(&poses, dims),
                     // No dwelling is claimed at load time, so the
-                    // owned-buildings highlight is vacuously off here.
-                    entities::map_dots_from_poses(&poses, &bundle.palette, false),
+                    // owned-buildings highlight is vacuously off here
+                    // (and the blink phase starts low).
+                    entities::map_dots_from_poses(&poses, &bundle.palette, false, false),
                 )
             }
             None => (
@@ -304,6 +309,13 @@ fn load_level(
         map_areas: world.as_ref().map(map_areas).unwrap_or_default(),
         world,
         palette_rgba: bundle.palette,
+        map_icons: entities::MapIcons {
+            // Castle = UI sprite 58+team, balloon = 66+team (team 0);
+            // remc1 sub_48710 :57230/:57234.
+            castle: ui_assets.as_ref().and_then(|u| u.map_stamp(58)),
+            balloon: ui_assets.as_ref().and_then(|u| u.map_stamp(66)),
+        },
+        map_stamps: Vec::new(),
         ui: ui_assets,
         audio_dir,
         music_track,
@@ -354,6 +366,9 @@ struct App {
     dev_spells: bool,
     /// Claimed dwellings highlighted on the map (MC2-style opt-in).
     map_owned_buildings: bool,
+    /// Own castle position in tile units (the guide-path target),
+    /// refreshed from the pose set.
+    castle_pos: Option<(f32, f32)>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     sim: Simulation,
@@ -458,6 +473,7 @@ impl App {
             health_bars,
             dev_spells,
             map_owned_buildings,
+            castle_pos: None,
             window: None,
             renderer: None,
             sim,
@@ -581,9 +597,6 @@ impl App {
         let Some(w) = &mut self.sim.world else { return };
         let terrain = w.terrain_dirty;
         let entities = w.entities_dirty;
-        if !terrain && !entities {
-            return;
-        }
         if terrain {
             let (Some(shading), Some(angle)) =
                 (self.level.view.shading.as_mut(), self.level.view.angle.as_mut())
@@ -614,20 +627,54 @@ impl App {
                 &poses,
                 &self.level.palette_rgba,
                 self.map_owned_buildings,
+                // The claimed-ball blink phase (the original's global
+                // toggle byte; ~4 Hz at 30 ticks/s reads right).
+                self.sim.tick >> 3 & 1 == 0,
             );
+            self.level.map_stamps = entities::map_stamps_from_poses(&poses, &self.level.map_icons);
+            self.castle_pos = poses
+                .iter()
+                .find(|p| p.class == 3 && p.model == 2 && p.player_owned)
+                .map(|p| (p.x, p.z));
             self.level.map_areas = map_areas(w);
         }
         w.terrain_dirty = false;
         w.entities_dirty = false;
+        let overlay = self.map_overlay();
         if let Some(r) = &mut self.renderer {
             if entities {
                 r.set_billboards(self.level.billboards.clone());
                 r.set_health_bars(bars);
             }
-            let areas = if self.map_triggers { &self.level.map_areas[..] } else { &[] };
-            if terrain || self.sim.tick % 8 == 0 {
-                r.update_terrain(&self.level.view, &self.level.map_dots, areas);
+            if terrain {
+                r.update_terrain(&self.level.view, &overlay);
+            } else {
+                // The map recomposes EVERY frame — the original
+                // redraws it per frame, and the blink + marching-ants
+                // phases live in the pixels (the old every-8th-tick
+                // throttle was the player-reported low refresh rate).
+                r.update_map(&self.level.view, &overlay);
             }
+        }
+    }
+
+    /// Assemble the current map overlay: dots + own-castle/balloon
+    /// icon stamps + the guide path (player → own castle, marching
+    /// ants on the tick phase) + the opt-in trigger circles.
+    fn map_overlay(&self) -> mgc_render::MapOverlay {
+        mgc_render::MapOverlay {
+            dots: self.level.map_dots.clone(),
+            areas: if self.map_triggers {
+                self.level.map_areas.clone()
+            } else {
+                Vec::new()
+            },
+            stamps: self.level.map_stamps.clone(),
+            path: self.castle_pos.map(|(cx, cz)| mgc_render::MapPath {
+                from: (self.sim.flyer.x, self.sim.flyer.z),
+                to: (cx, cz),
+                phase: (self.sim.tick & 3) as u8,
+            }),
         }
     }
 
@@ -665,8 +712,8 @@ impl ApplicationHandler for App {
         };
         match Renderer::for_window(window.clone()) {
             Ok(mut renderer) => {
-                let areas = if self.map_triggers { &self.level.map_areas[..] } else { &[] };
-                renderer.load_level(&self.level.view, &self.level.map_dots, areas);
+                let overlay = self.map_overlay();
+                renderer.load_level(&self.level.view, &overlay);
                 if let Some((index, atlas)) = &self.level.sprites {
                     renderer.load_sprites(index.clone(), atlas);
                 }
@@ -876,13 +923,9 @@ impl ApplicationHandler for App {
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyV) {
                     self.map_triggers = !self.map_triggers;
+                    let overlay = self.map_overlay();
                     if let Some(r) = &mut self.renderer {
-                        let areas = if self.map_triggers {
-                            &self.level.map_areas[..]
-                        } else {
-                            &[]
-                        };
-                        r.update_terrain(&self.level.view, &self.level.map_dots, areas);
+                        r.update_map(&self.level.view, &overlay);
                     }
                     println!(
                         "map trigger overlay: {}",
@@ -1268,8 +1311,13 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), St
 /// rotation-free comparison artifact for original map screenshots.
 fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> Result<(), String> {
     let n = 256usize;
-    let areas = if map_triggers { &level.map_areas[..] } else { &[] };
-    let src = mgc_render::map_pixels(&level.view, &level.map_dots, areas);
+    let overlay = mgc_render::MapOverlay {
+        dots: level.map_dots.clone(),
+        areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
+        stamps: level.map_stamps.clone(),
+        path: None,
+    };
+    let src = mgc_render::map_pixels(&level.view, &overlay);
     let s = scale as usize;
     let (w, h) = (n * s, n * s);
     let mut rgba = vec![0u8; w * h * 4];
@@ -1296,8 +1344,13 @@ fn run_screenshot(
     dev_spells: bool,
 ) -> Result<(), String> {
     let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
-    let areas = if map_triggers { &level.map_areas[..] } else { &[] };
-    renderer.load_level(&level.view, &level.map_dots, areas);
+    let overlay = mgc_render::MapOverlay {
+        dots: level.map_dots.clone(),
+        areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
+        stamps: level.map_stamps.clone(),
+        path: None,
+    };
+    renderer.load_level(&level.view, &overlay);
     if let Some((index, atlas)) = &level.sprites {
         renderer.load_sprites(index.clone(), atlas);
     }

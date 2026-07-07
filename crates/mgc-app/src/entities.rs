@@ -184,39 +184,95 @@ pub fn health_bars_from_poses(
     out
 }
 
-/// Map dots from the live pose set — same color switch as [`map_dots`]
-/// (remc1 sub_48710_48A50); body segments are hidden from the map like
-/// the original's state-120 exclusion.
+/// The team-0 color pair from `byte_99B58` (remc1 :5740): even entry
+/// = the violet projectile/blink-A color, odd = the blue creature/
+/// blink-B color. Raw palette indices, exactly as plotted.
+const TEAM0_VIOLET: u8 = 0xB7;
+const TEAM0_BLUE: u8 = 0x71;
+
+/// Icon patches for the map's UI-sprite markers (cropped from the
+/// composited HSPR atlas): castle = sprite 58+team, balloon = 66+team
+/// (remc1 sub_48710 :57230/:57234); the advertised-trigger X markers
+/// 83/84 join when trigger markers land.
+#[derive(Default)]
+pub struct MapIcons {
+    pub castle: Option<mgc_render::MapStamp>,
+    pub balloon: Option<mgc_render::MapStamp>,
+}
+
+/// Map dots from the live pose set — the verbatim color switch of
+/// remc1 sub_48710_48A50 (:57184-:57292); body segments hidden like
+/// the original's state-120 exclusion. `blink` = the global blink
+/// phase (claimed mana balls alternate the team pair with it).
+/// `owned_buildings` = our MC2-style enhancement: owned dwellings get
+/// a 2x2 grown dot instead of the original's barely-distinct 1px.
 pub fn map_dots_from_poses(
     poses: &[LivePose],
     palette: &[[u8; 4]; 256],
     owned_buildings: bool,
+    blink: bool,
 ) -> Vec<mgc_render::MapDot> {
-    let near_black = nearest_palette_index(palette, vga(3, 3, 7));
-    // Villagers read PURPLE in retail play (player ground truth,
-    // 2026-07-07 — senior over the decompile's LUT[16] transcription,
-    // which decodes dark green; LUT index 0x101 — one digit away — is
-    // exactly this dark purple, the plausible original entry).
-    let purple = nearest_palette_index(palette, vga(7, 3, 7));
+    // The engine's computed colors go through its 16x16x16 RGB LUT
+    // (byte_AD167_AD157, BLUE-major per the retail map's blue-violet
+    // village dots): [1] = near-black (wild creatures), [16] = dark
+    // green (villagers), [3856] = the vivid blue-violet (wild
+    // class-9/10 things — houses, projectiles). The earlier "settlers
+    // are purple" report resolves as these HOUSE dots (2026-07-07,
+    // player screenshot).
+    let near_black = nearest_palette_index(palette, vga(7, 3, 3));
+    let dark_green = nearest_palette_index(palette, vga(3, 7, 3));
+    let wild_blue = nearest_palette_index(palette, vga(3, 7, 63));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
     const SCENERY: u8 = 28;
-    const PLAYER_TEAM_BLUE: u8 = 0x71;
+    const WILD_BALL: u8 = 232; // v74 = -24 (:57291)
 
     let mut out = Vec::new();
     for p in poses {
         if p.segment {
             continue;
         }
+        // LABEL_32 (:57272-76): owner class-3 → the team color;
+        // wild → the LUT[3856] blue-violet.
+        let owner_color = if p.player_owned { TEAM0_VIOLET } else { wild_blue };
+        let mut size = 1u8;
         let color = match (p.class, p.model) {
+            // Charred trees leave the map (v29 stays 0, :57219).
+            (2, 0) if matches!(p.type_index, 226 | 227) => continue,
+            // Models 1/3 = the settings-gated near-black family
+            // (:57195-57210); the rest plain scenery 28.
+            (2, 1 | 3) => near_black,
             (2, _) => SCENERY,
-            (3, 2) => PLAYER_TEAM_BLUE,
-            (5, 12..=14) => purple,
+            // Castle/balloon draw as icon STAMPS, not dots.
+            (3, _) => continue,
+            (5, 12..=14) if !p.player_owned => dark_green,
+            (5, _) if p.player_owned => TEAM0_BLUE, // :57252 (odd entry)
             (5, _) => near_black,
-            // Claimed dwellings highlighted in the owner's color —
-            // the MC2 map behavior as an opt-in enhancement (MC1
-            // never marks houses; player proposal 2026-07-07). Only
-            // claimed houses reach the pose set at all.
-            (10, 45) if owned_buildings => PLAYER_TEAM_BLUE,
+            (9, _) => owner_color,
+            // Portal vortex: the 2x2 grown dot (v60 = 2, :57270).
+            (10, 34) => {
+                size = 2;
+                owner_color
+            }
+            // Mana balls: wild = 232; claimed BLINK the team pair
+            // on the global phase (:57282-91).
+            (10, 39 | 40) => {
+                if p.player_owned {
+                    if blink { TEAM0_VIOLET } else { TEAM0_BLUE }
+                } else {
+                    WILD_BALL
+                }
+            }
+            // Houses and every other class-10 effect: the owner rule
+            // (yes, the original dots houses — the blue-violet
+            // village speckles on the retail map). The enhancement
+            // grows OWNED dwellings to 2x2 for legibility.
+            (10, 45) => {
+                if owned_buildings && p.player_owned {
+                    size = 2;
+                }
+                owner_color
+            }
+            (10, _) => owner_color,
             (12, _) => red,
             _ => continue,
         };
@@ -224,7 +280,33 @@ pub fn map_dots_from_poses(
             x: p.x,
             z: p.z,
             color,
+            size,
         });
+    }
+    out
+}
+
+/// Icon stamps from the live pose set: the own castle (sprite
+/// 58+team) and own balloons (66+team) — remc1 :57224-37 draws these
+/// as UI sprites instead of dots (rival markers need the reveal
+/// flag; single-wizard worlds have none to hide).
+pub fn map_stamps_from_poses(
+    poses: &[LivePose],
+    icons: &MapIcons,
+) -> Vec<mgc_render::MapStamp> {
+    let mut out = Vec::new();
+    for p in poses {
+        let icon = match (p.class, p.model) {
+            (3, 2) if p.player_owned => icons.castle.as_ref(),
+            (3, 3) if p.player_owned => icons.balloon.as_ref(),
+            _ => None,
+        };
+        if let Some(i) = icon {
+            let mut s = i.clone();
+            s.x = p.x;
+            s.z = p.z;
+            out.push(s);
+        }
     }
     out
 }
@@ -291,9 +373,8 @@ fn push_billboard(
 /// - Dot blinking, the 2x2 grown dot of one creature sub-case, rival
 ///   name labels (runtime state, not placement).
 pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::MapDot> {
-    let near_black = nearest_palette_index(palette, vga(3, 3, 7));
-    // Purple per retail play (see map_dots_from_poses).
-    let purple = nearest_palette_index(palette, vga(7, 3, 7));
+    let near_black = nearest_palette_index(palette, vga(7, 3, 3));
+    let dark_green = nearest_palette_index(palette, vga(3, 7, 3));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
     const SCENERY: u8 = 28;
     const PLAYER_TEAM_BLUE: u8 = 0x71; // byte_99B58[1 + 2*0]
@@ -309,7 +390,7 @@ pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::M
             // from model 2 up; models 0/1 are the player balloon —
             // the map's center cross — and 3 needs rivals revealed).
             (3, 2) => PLAYER_TEAM_BLUE,
-            (5, 12..=14) => purple,
+            (5, 12..=14) => dark_green,
             (5, _) => near_black,
             (12, _) => red,
             _ => continue,
@@ -318,6 +399,7 @@ pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::M
             x: t.x as f32 + 0.5,
             z: t.y as f32 + 0.5,
             color,
+            size: 1,
         });
     }
     out
@@ -389,4 +471,47 @@ fn ground_height(height: &[u8], x: f32, z: f32) -> f32 {
     let top = h(x0, z0) * (1.0 - tx) + h(x1, z0) * tx;
     let bot = h(x0, z1) * (1.0 - tx) + h(x1, z1) * tx;
     top * (1.0 - tz) + bot * tz
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pose(class: u8, model: u8, owned: bool, type_index: u16) -> LivePose {
+        LivePose {
+            class,
+            model,
+            type_index,
+            frame: 0,
+            x: 10.0,
+            z: 10.0,
+            alt: 1.0,
+            yaw: 0.0,
+            segment: false,
+            life_frac: None,
+            player_owned: owned,
+        }
+    }
+
+    /// The verbatim sub_48710 color switch (:57184-:57292).
+    #[test]
+    fn map_dot_color_switch() {
+        let pal = [[0u8; 4]; 256];
+        let dots = |p: LivePose, blink: bool| map_dots_from_poses(&[p], &pal, false, blink);
+
+        // Player projectiles = the team-0 violet; wild = LUT blue.
+        assert_eq!(dots(pose(9, 0, true, 42), false)[0].color, TEAM0_VIOLET);
+        // Claimed mana balls blink the team pair on the phase.
+        assert_eq!(dots(pose(10, 39, true, 105), true)[0].color, TEAM0_VIOLET);
+        assert_eq!(dots(pose(10, 39, true, 105), false)[0].color, TEAM0_BLUE);
+        // Wild balls = the raw 232 (:57291).
+        assert_eq!(dots(pose(10, 39, false, 52), false)[0].color, 232);
+        // Portals draw the 2x2 grown dot (:57270).
+        assert_eq!(dots(pose(10, 34, false, 223), false)[0].size, 2);
+        // Charred trees leave the map (:57219).
+        assert!(dots(pose(2, 0, false, 226), false).is_empty());
+        assert_eq!(dots(pose(2, 0, false, 83), false).len(), 1);
+        // Castles/balloons are icon stamps, never dots.
+        assert!(dots(pose(3, 2, true, 0), false).is_empty());
+    }
 }
