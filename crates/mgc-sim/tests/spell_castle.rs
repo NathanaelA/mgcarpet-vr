@@ -167,3 +167,86 @@ fn create_castle_builds_on_clear_ground() {
     let (_, cap2, lvl2) = w.loadout().castle.expect("castle survives the upgrade");
     assert_eq!((lvl2, cap2), (2, 20_000), "the token upgrade raised level 2");
 }
+
+/// Playtest-8: the FINAL destruction (level 1 → 0) must leave a
+/// barren square — the un-stamp collapse reverses the painted tower
+/// and walls; no stump may survive (and the renderer is told via
+/// terrain_dirty, asserted in the unit suite).
+#[test]
+fn final_destruction_flattens_the_tower_to_a_barren_square() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let mut w = build_world(&root);
+    w.set_dev_spells(true);
+
+    let (cx, cy) = clear_spot(&w);
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+
+    let count = |w: &World, class: u8, model: u8| {
+        w.debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == class && e.model == model)
+            .count()
+    };
+
+    w.tick(pose, PlayerCommand {
+        equip_left: Some(SpellId(16)),
+        ..Default::default()
+    });
+    w.tick(pose, PlayerCommand { fire_left: true, ..Default::default() });
+    for _ in 0..110 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let castle = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 2)
+        .expect("the castle stands");
+    let (tx, ty) = (castle.tx as i32, castle.ty as i32);
+    let relief = |w: &World| {
+        let (mut hmin, mut hmax) = (255u8, 0u8);
+        for dy in -4i32..=4 {
+            for dx in -4i32..=4 {
+                let t = ((ty + dy) as usize % 256) * 256 + ((tx + dx) as usize % 256);
+                let h = w.planes().height[t];
+                hmin = hmin.min(h);
+                hmax = hmax.max(h);
+            }
+        }
+        (hmin, hmax)
+    };
+    let (_, towered) = relief(&w);
+    let (base_min, _) = relief(&w);
+    assert!(towered - base_min >= 12, "the tower relief stands before demolish");
+
+    // One demolish at level 1 = total destruction.
+    w.tick(pose, PlayerCommand { demolish: true, ..Default::default() });
+    for _ in 0..40 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    assert_eq!(count(&w, 3, 2), 0, "the castle entity is gone");
+    let (fmin, fmax) = relief(&w);
+    assert!(
+        fmax - fmin < 12,
+        "barren square: no tower stump survives (min {fmin}, max {fmax})"
+    );
+    // No protection bits linger on the footprint (the square is
+    // ordinary ground again).
+    for dy in -4i32..=4 {
+        for dx in -4i32..=4 {
+            let t = ((ty + dy) as usize % 256) * 256 + ((tx + dx) as usize % 256);
+            assert_eq!(
+                w.planes().angle[t] & 0x80,
+                0,
+                "unprotected at ({dx},{dy})"
+            );
+        }
+    }
+}

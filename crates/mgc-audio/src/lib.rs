@@ -58,6 +58,16 @@ impl Audio {
         self.danger = danger;
     }
 
+    /// Game pause: freeze the whole output (channels + music hold
+    /// their positions, the device streams silence). Retail suspends
+    /// ALL sound while paused; mixer requests made meanwhile (the
+    /// map-toggle ding) sit queued and flush on the first unpaused
+    /// tick — the original's deferred-ding quirk (our per-id request
+    /// slot plays it once even if the map toggled twice).
+    pub fn set_paused(&mut self, on: bool) {
+        let _ = self.out.tx.send(output::Cmd::Suspend { on });
+    }
+
     /// Load an audio bundle directory (`baked/assets/<game>-audio`)
     /// and select a sample bank (0 = the gameplay bank).
     pub fn load_bundle(&mut self, dir: &Path, bank: u32) -> Result<(), String> {

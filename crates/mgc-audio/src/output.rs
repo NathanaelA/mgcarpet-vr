@@ -58,6 +58,12 @@ pub enum Cmd {
         sfx: f32,
         music: f32,
     },
+    /// Freeze the whole output (game pause: retail suspends ALL
+    /// sound). Channels and music hold their positions and the
+    /// device streams silence until resumed.
+    Suspend {
+        on: bool,
+    },
 }
 
 struct Channel {
@@ -87,6 +93,8 @@ pub struct Renderer {
     sfx_gain: f32,
     music_gain: f32,
     out_rate: f64,
+    /// Game pause: stream silence, hold every play position.
+    suspended: bool,
 }
 
 impl Renderer {
@@ -115,6 +123,7 @@ impl Renderer {
             sfx_gain: 1.0,
             music_gain: 1.0,
             out_rate: f64::from(out_rate),
+            suspended: false,
         }
     }
 
@@ -178,12 +187,19 @@ impl Renderer {
                 self.sfx_gain = sfx;
                 self.music_gain = music;
             }
+            Cmd::Suspend { on } => self.suspended = on,
         }
     }
 
     /// Fill an interleaved stereo f32 buffer.
     pub fn render(&mut self, out: &mut [f32]) {
         self.drain_cmds();
+        if self.suspended {
+            // Game pause: silence, positions held (retail suspends
+            // ALL sound and resumes where it left off).
+            out.fill(0.0);
+            return;
+        }
         for frame in out.chunks_exact_mut(2) {
             let (mut l, mut r) = (0.0f32, 0.0f32);
             for ch in &mut self.channels {

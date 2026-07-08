@@ -142,9 +142,6 @@ pub struct Player {
     speed_boost: f32,
     /// Teleport return slot (:65554): recast returns here.
     teleport_return: Option<(u16, u16)>,
-    /// Global Death's primed charge (:66235): ticks until the pulse
-    /// fires around the carpet. APPROX ~2s pending a trace.
-    bomb_timer: Option<i16>,
     /// Current life (actLife +12; signed — dying drives it below 0).
     pub life: i32,
     /// The spawn grace (Type_160 u16_331): while > 0 the whole
@@ -194,7 +191,6 @@ impl Default for Player {
             accel_held: false,
             speed_boost: 0.0,
             teleport_return: None,
-            bomb_timer: None,
             life: PLAYER_LIFE_MAX,
             grace: 100,
             regen_delay: 0,
@@ -489,7 +485,12 @@ fn drawable(class: u16, model: u16) -> bool {
     // 43 upgrade token ARE sprite-carrying visibles — their absence
     // here was the burning-tree-without-flame report (2026-07-07)
     // and playtest-3's "wall of fire didn't even show".
-    matches!(class, 2 | 3 | 5 | 9 | 12)
+    // The (9,18) Global Death fuse carries ctor sprite 42 (fireball
+    // boilerplate) but retail shows NO prime visual (player,
+    // playtest-8 — drawing it read as rapid-fireball explosions
+    // riding the carpet); its draw gate is in the missing state-19
+    // handler, so the player observation rules: invisible.
+    (matches!(class, 2 | 3 | 5 | 12) || (class == 9 && model != 18))
         || (class == 10
             && matches!(model, 34 | 0 | 1 | 5 | 6 | 16 | 19 | 23 | 25 | 38 | 39 | 40 | 43 | 45))
 }
@@ -524,6 +525,10 @@ impl World {
         // Starting spells AFTER the level population so the initial
         // spawns keep their original pool slots (per-slot LCG seeds).
         w.grant_starting_spells();
+        // The level-start screen-mode chime (sub_3DC90 :49072 plays
+        // sound 14 on every mode set, the init included) — drained
+        // by the app's first audio tick.
+        w.g.snd_player(14);
         w
     }
 
@@ -749,10 +754,12 @@ impl World {
                 // Combat effects (fire, spreader, splash, possess
                 // flash, lava bomb, blast ring, eruption driver,
                 // plume, magnet, hit-flash, steal-flash, storm
-                // cloud, mana ball, grave, collapse magnet).
+                // cloud, mana ball, grave, napalm, collapse magnet,
+                // death field).
                 10 if matches!(
                     self.g.ent[i].tick70,
                     0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 40 | 41 | 42 | 58 | 59
+                        | 60
                 ) => {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
@@ -788,6 +795,12 @@ impl World {
         if any_creature || any_transient {
             // Creatures/projectiles/effects move: poses refresh.
             self.entities_dirty = true;
+        }
+        // Gen-internal terrain writes with no dirty-returning arm
+        // (the castle downgrade's synchronous un-stamp).
+        if self.g.terrain_dirty {
+            self.g.terrain_dirty = false;
+            self.terrain_dirty = true;
         }
 
         // ---- player damage intake (the wizard tick's mailbox block,
@@ -892,19 +905,6 @@ impl World {
         // (:55405-06) — ~200 ticks of militia hostility per offense.
         if self.g.player_aggro > 0 {
             self.g.player_aggro -= 1;
-        }
-
-        // Global Death's primed charge (:66235): no visible effect —
-        // it counts down after the cast, then a single small pulse
-        // around the CARPET at expiry ("you have to be straight below
-        // a dragon to affect it"). APPROX ~55 ticks pending a trace.
-        if let Some(t) = self.player.bomb_timer {
-            if t <= 1 {
-                self.player.bomb_timer = None;
-                self.bomb_pulse(&ctx);
-            } else {
-                self.player.bomb_timer = Some(t - 1);
-            }
         }
 
         // Types 2/21 thrust-override factor for the flyer (3.0 while
@@ -1063,6 +1063,9 @@ impl World {
         let e = &self.g.ent[c];
         self.pending_respawn = Some((e.x as f32 / 256.0, e.y as f32 / 256.0));
         // Type_160 re-arm (:54866-83) + HP/mana reset (:55019-32).
+        // The respawn screen-mode chime (case 0xF runs sub_3DC90(0)
+        // :48640 → sound 14).
+        self.g.snd_player(14);
         self.player.state = LifeState::Alive;
         self.player.life = PLAYER_LIFE_MAX;
         self.player.grace = 100;
@@ -1119,6 +1122,16 @@ impl World {
             e.f26 = 0;
             e.f44 = SPELLS[id].damage.min(u16::MAX as u32) as u16;
         }
+        // The class-12 ctor sub_3BF70 (:47979-) gives EVERY jar sprite
+        // type 77 + a 4x extent override; without it a death-scattered
+        // manifestation drew as sprite 0 (the "archers on death"
+        // playtest report, 2026-07-08).
+        self.g.set_sprite(m, 77);
+        let (h4, v4) = {
+            let e = &self.g.ent[m];
+            (e.f80 * 4, e.f84 * 4)
+        };
+        self.g.extents(m, h4, v4);
         self.player.owned[id] = m as u16;
         if self.player.left.is_none() {
             self.player.left = Some(spell);
@@ -1259,7 +1272,13 @@ impl World {
 
         // Edge-triggered casts (15 streams while held), paced by the
         // burst spacing (fireball 5, meteor 11, castle 101 ticks).
-        if (!edge && id != 15) || armed {
+        // 22 Global Death STACKS: retail lets you prime multiple
+        // charges, each detonating on its own delay (player-retail-
+        // confirmed, playtest-8 round 3: "launch multiple and make a
+        // flyby") — the recast resets the burst instead of gating on
+        // it. Whether other spells share this is the banked
+        // cast-cadence item.
+        if (!edge && id != 15) || (armed && id != 22) {
             return;
         }
         // Create Castle (the model-16 trigger arm, :55901-11): a
@@ -1377,10 +1396,10 @@ impl World {
             18 => self.cast_storm(p),
             // 20 Wall of Fire (:66110).
             20 => self.cast_firewall(p, right),
-            // 22 Global Death (:66235): PRIMES only — no visible
-            // in-game effect; the pulse fires around the carpet at
-            // expiry (player-validated). APPROX ~55 ticks (~2s).
-            22 => self.player.bomb_timer = Some(55),
+            // 22 Global Death (sub_580A0 :66235): launches the (9,18)
+            // bolt immediately — the "silent prime" the player sees
+            // is the invisible-feeling flight + the field's life.
+            22 => self.cast_bomb(p, right),
             _ => {}
         }
     }
@@ -1777,32 +1796,40 @@ impl World {
         self.entities_dirty = true;
     }
 
-    /// 22 Global Death's expiry pulse (:66235; player-validated
-    /// semantics): a single 7000 ch0 write in a VERY SMALL radius
-    /// (~1.25 tiles — the spell's balance: "you have to be straight
-    /// below a dragon to affect it") centered on the CARPET, no
-    /// visual, no terrain scorch. A transient unlinked writer event
-    /// carries the area-write protocol. The expiry plays the real
-    /// explosion (30) at the carpet — the spell's only feedback
-    /// (player ground truth: prime silent, blast audible).
-    fn bomb_pulse(&mut self, ctx: &MobCtx) {
-        self.g.snd_player(30);
-        let Some(s) = self.g.new_event() else { return };
-        {
-            let e = &mut self.g.ent[s];
-            e.class64 = 10;
-            e.model65 = 41; // transient, never ticked or drawn
-            e.flags &= !8;
-            e.id24 = PLAYER_TARGET;
-            e.x = ctx.px;
-            e.y = ctx.py;
-            e.z = ctx.pz;
-            e.f80 = 320; // APPROX radius pending a trace
-            e.f82 = 320;
-            e.f84 = 320;
-        }
-        self.g.area_write(s, 0, SPELLS[22].damage, ctx, false, false);
-        self.g.free_entity(s);
+    /// 22 Global Death (sub_580A0 :66235, the state-0x42 manifestation
+    /// arm): arm the (9,18) FUSE at the wizard — 21 ticks riding the
+    /// caster (player-validated: fire once, wait, the blast lands
+    /// AROUND THE CASTER) — then the (10,55) DEATH FIELD in place:
+    /// 32 more ticks of the sound-43 priming tick-tock, then ONE
+    /// instant-kill sweep over the 10-tile 2D radius (the infinite
+    /// vertical kill cylinder — sub_299D0, see combat.rs). Total
+    /// delay ~53 ticks ≈ 2s — matching the playtest-3 observation.
+    /// +44 = the row's 7000 (castles in range take it as ch0 mail).
+    /// Unmodeled from the arm: the +26 charge byte (326, role
+    /// unknown), the +150 target point projected 0x4000 ahead (dead
+    /// weight in the caster-anchored reading), the 101-tick/742 mana
+    /// drain (our economy debits at cast), and the sub_44BE0 screen
+    /// flash — banked in ROADMAP; retail checks owed: blast tracks
+    /// vs parks, overlapping charges (cast-cadence item).
+    fn cast_bomb(&mut self, p: PlayerPose, right: bool) {
+        let (mx, my, mz) = self.muzzle(p, right);
+        let Some(pr) = self.g.spawn_bomb_fuse(mx, my, mz) else {
+            return;
+        };
+        let def = &SPELLS[22];
+        let e = &mut self.g.ent[pr];
+        e.f126 += p.speed;
+        e.f128 = e.f126;
+        e.id24 = PLAYER_TARGET;
+        e.f30 = p.heading;
+        e.f34 = p.heading;
+        e.f32 = p.pitch;
+        e.f36 = p.pitch;
+        e.f44 = def.damage.min(u16::MAX as u32) as u16;
+        e.f140 = def.possess_mana as i32;
+        e.f68 = 10;
+        e.f69 = 55;
+        self.entities_dirty = true;
     }
 
     /// Class-12 dispatch: pre-placed JARS wait for pickup; owned
@@ -1852,6 +1879,8 @@ impl World {
         }
         self.player.owned[spell] = i as u16;
         self.player.left = Some(SpellId(spell as u8)); // auto-equip LEFT
+        // The pickup chime (:64848 — sound 18 at the wizard).
+        self.g.snd_player(18);
         self.entities_dirty = true; // the jar sprite leaves the world
     }
 
@@ -1903,17 +1932,25 @@ impl World {
     /// paused — binding is UI state, not simulation, and the frozen
     /// HUD must still reflect it (player 2026-07-08).
     pub fn equip_hands(&mut self, left: Option<SpellId>, right: Option<SpellId>) {
+        let mut took = false;
         if let Some(s) = left
             && (s.0 as usize) < SPELL_COUNT
             && self.player.owned[s.0 as usize] != 0
         {
             self.player.left = Some(s);
+            took = true;
         }
         if let Some(s) = right
             && (s.0 as usize) < SPELL_COUNT
             && self.player.owned[s.0 as usize] != 0
         {
             self.player.right = Some(s);
+            took = true;
+        }
+        // The equip chime (:48721/:48729 — sound 14 per accepted
+        // equip command).
+        if took {
+            self.g.snd_player(14);
         }
     }
 
@@ -2232,9 +2269,14 @@ impl World {
         self.g.refill_life(s);
         self.g.ent[s].flags |= 1;
         if class == 12 {
-            // Interim type for the pose/billboard layer (the real
-            // class-12 spawner sub_3BF70 is the mana track's port).
+            // sub_3BF70 (:47979-): sprite 77 for every jar model +
+            // the 4x extent override (the generous pickup vacuum).
             self.g.set_sprite(s, 77);
+            let (h4, v4) = {
+                let e = &self.g.ent[s];
+                (e.f80 * 4, e.f84 * 4)
+            };
+            self.g.extents(s, h4, v4);
         }
         Some(s)
     }
@@ -3320,6 +3362,34 @@ mod tests {
     }
 
     #[test]
+    fn final_destruction_marks_the_terrain_dirty() {
+        // The un-stamp runs inside castle_tick — with no follow-up
+        // painter at the final destruction, the renderer only learns
+        // of the flattened tower through the Gen terrain_dirty merge
+        // (playtest-8: the tower stayed ON SCREEN after the last
+        // level fell). Height assertions live in the real-BUILD.DAT
+        // integration test (tests/spell_castle.rs).
+        let mut w = flat_world();
+        let c = w.g.spawn_castle(110 << 8, 110 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.loadout().castle.map(|(_, _, l)| l), Some(1));
+        w.terrain_dirty = false;
+        w.tick(away(), PlayerCommand { demolish: true, ..Default::default() });
+        assert!(
+            w.terrain_dirty,
+            "the destruction tick re-uploads the flattened footprint"
+        );
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 3, 2), 0, "the castle is gone");
+    }
+
+    #[test]
     fn fireball_kills_and_the_corpse_drops_a_mana_ball() {
         let mut w = bare_creature_world(2);
         rapid_fire(&mut w);
@@ -3503,6 +3573,26 @@ mod tests {
         // banked (sub_48230).
         assert!(w.loadout().mana_max >= 1000 + 512, "ceiling includes the store");
         assert!(w.loadout().banked >= 512, "banked = castle stored");
+        // With no pickups left, the dispatcher's default target is
+        // the CASTLE (:56376): the balloon comes home and hovers
+        // there instead of parking at the last pickup (playtest-8).
+        for _ in 0..600 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        let bal = (1..features::POOL)
+            .find(|&j| {
+                w.g.ent[j].class64 == 3
+                    && w.g.ent[j].model65 == 3
+                    && w.g.ent[j].flags & 0x400 == 0
+            })
+            .expect("the fleet balloon lives");
+        assert_eq!(w.g.ent[bal].f146, c as u16, "homes the castle when idle");
+        let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
+        let d = crate::features::Gen::dist2_sq(w.g.ent[bal].x, w.g.ent[bal].y, cx, cy);
+        assert!(
+            crate::features::Gen::isqrt(d as u32) < 4 * 256,
+            "hovers the castle neighborhood, not the pickup spot"
+        );
     }
 
     #[test]
@@ -3905,48 +3995,6 @@ mod tests {
     }
 
     #[test]
-    fn global_death_primes_then_pulses_point_blank() {
-        use crate::spells::SpellId;
-        let mut w = bare_creature_world(2); // wandering lunger, 3000 life
-        w.set_dev_spells(true);
-        w.player.left = Some(SpellId(22));
-        // Hover right on top of the creature WHEREVER it wanders: the
-        // pulse's tiny radius ("straight below a dragon") demands it.
-        let over = |w: &World| {
-            let c = w
-                .debug_pool()
-                .1
-                .into_iter()
-                .find(|e| e.class == 5 && e.model == 2)
-                .expect("creature alive");
-            PlayerPose::level(
-                ((c.tx as u16) << 8) + 128,
-                ((c.ty as u16) << 8) + 128,
-                3300,
-                0,
-            )
-        };
-        let p = over(&w);
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
-        // Primed: NO visible effect, no damage for ~2 seconds.
-        for _ in 0..50 {
-            let p = over(&w);
-            w.tick(p, PlayerCommand::default());
-        }
-        assert_eq!(count(&w, 5, 2), 1, "nothing happens while primed");
-        // The pulse lands a few ticks later; the death/corpse
-        // pipeline takes a few dozen more.
-        for _ in 0..60 {
-            if count(&w, 5, 2) == 0 {
-                break;
-            }
-            let p = over(&w);
-            w.tick(p, PlayerCommand::default());
-        }
-        assert_eq!(count(&w, 5, 2), 0, "the expiry pulse one-shots point-blank");
-    }
-
-    #[test]
     fn earthquake_trench_travels_forward() {
         use crate::spells::SpellId;
         let mut w = flat_world();
@@ -4110,6 +4158,84 @@ mod tests {
         }
         assert!(saw_cloud, "impact spawned the (10,53) napalm cloud");
         assert!(saw_flames, "the cloud waves standing flames over the ring");
+    }
+
+    #[test]
+    fn global_death_fuses_at_the_caster_into_the_flat_plane_field() {
+        use crate::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(22));
+        let p = firing_line();
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 18), 1, "the (9,18) death fuse armed");
+        // Charges STACK (player-retail-confirmed): a release +
+        // re-press primes a second independent fuse.
+        w.tick(p, PlayerCommand::default());
+        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        assert_eq!(count(&w, 9, 18), 2, "overlapping charges both live");
+
+        // The fuse rides the caster ~21 ticks, then the (10,55)
+        // field detonates AT the caster (player-validated — never a
+        // downrange bolt).
+        let mut field = None;
+        for _ in 0..40 {
+            w.tick(p, PlayerCommand::default());
+            if field.is_none() {
+                field = (1..features::POOL).find(|&j| {
+                    w.g.ent[j].class64 == 10
+                        && w.g.ent[j].model65 == 55
+                        && w.g.ent[j].flags & 0x400 == 0
+                });
+                if field.is_some() {
+                    break;
+                }
+            }
+        }
+        let f = field.expect("the fuse raised the (10,55) death field");
+        let d = crate::features::Gen::isqrt(crate::features::Gen::dist2_sq(
+            w.g.ent[f].x,
+            w.g.ent[f].y,
+            p.x,
+            p.y,
+        ) as u32);
+        assert!(
+            (d as i32) < 3 * 256,
+            "the field detonated around the caster, not downrange (d {d})"
+        );
+        assert_eq!(w.g.ent[f].f44, 7000, "the detonation copied the spell's damage");
+
+        // The kill cylinder is 2D (sub_423D0 is x/y only): a creature
+        // FAR ABOVE inside the 10-tile radius dies; one 15 tiles to
+        // the side survives. No terrain is touched (the "volcano"
+        // regression was state 55's handler, not this one).
+        let (fx, fy, fz) = (w.g.ent[f].x, w.g.ent[f].y, w.g.ent[f].z);
+        let above = w.g.spawn_creature(2, fx, fy, fz + 12000).unwrap();
+        let aside = w
+            .g
+            .spawn_creature(2, fx.wrapping_add(15 << 8), fy, fz + 200)
+            .unwrap();
+        let ground_before = {
+            let g = &w.g;
+            g.ground_z(fx, fy)
+        };
+        // Ride out the 32-tick priming tick-tock + the sweep.
+        for _ in 0..40 {
+            w.tick(p, PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[above].class64 != 5 || w.g.ent[above].act_life < 0,
+            "the vertical kill cylinder reached the creature far above"
+        );
+        assert!(
+            w.g.ent[aside].class64 == 5 && w.g.ent[aside].act_life > 0,
+            "15 tiles out of the cylinder survives"
+        );
+        assert_eq!(
+            w.g.ground_z(fx, fy),
+            ground_before,
+            "Global Death never modifies terrain"
+        );
     }
 
     #[test]

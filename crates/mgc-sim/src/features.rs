@@ -428,6 +428,12 @@ pub(crate) struct Gen {
     /// mixer (which reimplements that routine's attenuation/slot
     /// policy). Position/tag mirror the entity the original passed.
     pub(crate) sounds: Vec<SoundEvent>,
+    /// Terrain changed inside a Gen-internal path with no dirty-
+    /// returning dispatch arm (the castle downgrade's synchronous
+    /// un-stamp collapse); World::tick merges + clears per turn.
+    /// Playtest-8: the final destruction left the tower ON SCREEN —
+    /// the sim flattened it but nothing re-uploaded the terrain.
+    pub(crate) terrain_dirty: bool,
 }
 
 /// One sound request: engine sound id (the SNDS bank-0 index), the
@@ -498,6 +504,7 @@ impl Gen {
             player_alert: 0,
             balloon_alert: 0,
             sounds: Vec::new(),
+            terrain_dirty: false,
         }
     }
 
@@ -2406,9 +2413,16 @@ impl Gen {
     /// quota by level: (balloons, guards) = L1(1,0) L2(1,0) L3(1,4)
     /// L4(2,6) L5(2,14) L6(3,18) L7(3,34); shortfalls respawn at the
     /// castle (guards = class-5 m15, HP 512). Targeting (:56358-95):
-    /// castle full (house tally + stored >= cap) or balloon full →
-    /// home the castle; else the nearest own claimed ball not
-    /// already targeted by a sibling; none → idle (target 0).
+    /// the state-9 balloon's target DEFAULTS to the castle every
+    /// pass (:56376 — the return/offload/hover-home behavior), then
+    /// is overridden to the nearest own claimed ball no sibling is
+    /// on, ONLY when the balloon still has cargo room and the castle
+    /// census (house tally + stored) is below capacity. No free ball
+    /// → the castle stays the target: balloons come home and wait
+    /// there (playtest-8 fix — the old none→idle parked them at the
+    /// last pickup). Untraced nicety: retail staggers retargeting by
+    /// castle+63 % fleet, keeping a stale ball target between slots'
+    /// turns; we re-pick every pass.
     fn castle_balloons(&mut self, i: usize) {
         const FLEET: [(usize, usize); 8] =
             [(0, 0), (1, 0), (1, 0), (1, 4), (2, 6), (2, 14), (3, 18), (3, 34)];
@@ -2492,7 +2506,8 @@ impl Gen {
                     best = j;
                 }
             }
-            self.ent[b].f146 = best as u16;
+            // No free ball → the castle default stands (:56376).
+            self.ent[b].f146 = if best != 0 { best as u16 } else { i as u16 };
         }
     }
 
@@ -2776,6 +2791,7 @@ impl Gen {
     /// balloon is released, the ENTIRE bank scatters, the entity is
     /// freed — the player is castle-less (die now = restart).
     fn castle_downgrade(&mut self, i: usize) {
+        self.terrain_dirty = true; // the synchronous un-stamp below
         self.snd(30, i);
         let lvl = self.ent[i].f26;
         // 10% capacity haircut before the ejector (:56507-09) — the

@@ -300,6 +300,41 @@ impl Gen {
         self.spawn_projectile(13, 13, x, y, z, 384, 13, 0, 195)
     }
 
+    /// sub_3A390 (:46392): the m18 GLOBAL DEATH fuse. The ctor is
+    /// fireball-shaped boilerplate (speed 384, life 0x2000/384 = 21,
+    /// row [5], sprite 42) but state 19 sits past remc1's transcribed
+    /// class-9 table, and the PLAYER GROUND TRUTH (playtest-3 AND the
+    /// playtest-8 follow-up) is that it NEVER acts like a bolt: fire
+    /// once, wait, the blast lands AROUND THE CASTER. Reconstructed
+    /// as a caster-anchored fuse: 21 ticks tracking the caster, then
+    /// the GENERIC +44-copying detonation into the (10,55) field at
+    /// the caster's position. The ctor's speed/aim/+150 target point
+    /// are carried but unused (dead weight until a retail trace says
+    /// otherwise); the +26 charge byte stays unmodeled (the spawner
+    /// does move the wizard's accumulated charge into it — role
+    /// unknown; the player recalls NO hold-to-charge in play).
+    /// RETAIL CHECK OWED: the player recalls MULTIPLE overlapping
+    /// charges, each detonating on its own delay — our cast gate
+    /// (the row's 101-tick burst counter, decompile-consistent)
+    /// currently blocks a recast for ~4s.
+    pub(crate) fn spawn_bomb_fuse(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        self.spawn_projectile(18, 19, x, y, z, 384, 21, 5, 42)
+    }
+
+    /// State 19: the Global Death fuse tick — ride the caster, burn
+    /// the 21-tick life, detonate in place (player-validated shape;
+    /// see spawn_bomb_fuse).
+    fn bomb_fuse_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        if self.ent[i].id24 == crate::mobs::PLAYER_TARGET {
+            self.move_relink(i, ctx.px, ctx.py, ctx.pz);
+        }
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.proj_explode(i, ctx, None, true);
+        }
+        false
+    }
+
     /// sub_3A1A0 (:46281): m7's slow bolt — state 15 is PAST remc1's
     /// transcribed table; interim straight-bolt flight (see header).
     pub(crate) fn spawn_slow_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
@@ -540,6 +575,10 @@ impl Gen {
         match self.ent[i].tick70 {
             0 => self.proj_m0_tick(i, ctx),
             1 => self.proj_m1_tick(i, ctx),
+            // Global Death's m18 fuse (state 19, player-validated
+            // reconstruction — see spawn_bomb_fuse): rides the
+            // caster, detonates the (10,55) field in place.
+            19 => self.bomb_fuse_tick(i, ctx),
             3 => self.proj_generic_tick(i, ctx, true),
             8 => self.proj_m8_tick(i, ctx),
             9 => self.proj_m9_tick(i, ctx),
@@ -1972,6 +2011,30 @@ impl Gen {
                 self.link(s, x, y, z);
                 self.refill_life(s);
             }
+            // sub_3BA00 (:47705): the GLOBAL DEATH field (state 60).
+            // +26 = 32 = the priming tick-tock; +44 = 100 (the
+            // detonation copy overrides with the spell's 7000). The
+            // ctor's life 19 / speed 256 / random heading / extents
+            // (1024, 0x4000) are DEAD WEIGHT for the state-60
+            // handler (verbatim anyway); the flat plane lives in
+            // the sweep's 2D distance. No sprite — the spell is
+            // authentically invisible.
+            55 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 60;
+                e.max_life = 19;
+                e.f44 = 100;
+                e.f26 = 32;
+                e.f126 = 256;
+                let d = lcg32(&mut e.rand);
+                e.f30 = (d & 0x7FF) as u16;
+                e.flags &= !8;
+                e.f80 = 1024;
+                e.f82 = 1024;
+                e.f84 = 0x4000;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+            }
             // sub_3B460 (:47396): the lightning STORM cloud — note
             // state 40 (not 38), life 32, sprite 272. The caller
             // copies heading/target/damage/bolt-spec from the (9,12)
@@ -2109,8 +2172,71 @@ impl Gen {
                 self.mana_magnet_tick(i);
                 false
             }
+            60 => self.death_field_tick(i, ctx),
             _ => false,
         }
+    }
+
+    /// sub_299D0 (:31263), class-10 STATE 60 — the real GLOBAL DEATH
+    /// field (the first port keyed the class-10 table by MODEL and
+    /// landed on state 55's terrain-raising volcano riser — the
+    /// playtest-8 "it does a volcano" report; the table is by STATE,
+    /// cross-checked against the napalm cloud's state 58 →
+    /// sub_29780). Verbatim: while +26 (32 from the ctor) runs, tick
+    /// it down with sound 43 (the audible priming tick-tock); then
+    /// ONE full-pool sweep — every enemy entity within 0xA00 (10
+    /// tiles) by PURE 2D DISTANCE (sub_423D0 is x/y only: the
+    /// infinite vertical kill cylinder, the player's "shoots very
+    /// well up and down"): class 2/5 die instantly (life = -1, no
+    /// kill credit, no explosion effect — "the monsters simply
+    /// explode"), class 3 take the +44 (7000) on ch0, own-team
+    /// skipped, and an in-range class-9/10 re-arms the field's OWN
+    /// life to 0 (verbatim quirk, inconsequential — it frees this
+    /// tick regardless). Finish: sound 44 at the field AND at the
+    /// owner, the sub_44BE0(owner, 3) SCREEN FLASH (the general
+    /// flash mechanism is unported — banked; player: "flashes on
+    /// many occasions, yet to look into"), free. NO terrain change,
+    /// NO drift, NO visual — the ctor's speed/heading/extents are
+    /// dead weight.
+    fn death_field_tick(&mut self, i: usize, _ctx: &MobCtx) -> bool {
+        if self.ent[i].f26 > 0 {
+            self.ent[i].f26 -= 1;
+            self.snd(43, i);
+            return false;
+        }
+        let pre = self.ent[i].act_life;
+        self.ent[i].act_life = pre - 1;
+        if pre >= 0 {
+            let (fx, fy, own, amt) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.id24, e.f44 as u32)
+            };
+            for j in 1..POOL {
+                if j == i {
+                    continue;
+                }
+                let (class, team) = (self.ent[j].class64, self.ent[j].id24);
+                if class == 0 || team == own {
+                    continue;
+                }
+                let d2 = Self::dist2_sq(fx, fy, self.ent[j].x, self.ent[j].y);
+                if Self::isqrt(d2 as u32) >= 0xA00 {
+                    continue;
+                }
+                match class {
+                    2 | 5 => self.ent[j].act_life = -1,
+                    3 => self.mail_write(MailTarget::Pool(j), 0, amt, own),
+                    9 | 10 => self.ent[i].act_life = 0,
+                    _ => {}
+                }
+            }
+            self.snd(44, i);
+            if own == crate::mobs::PLAYER_TARGET {
+                self.snd_player(44);
+            }
+        }
+        self.ent[i].flags |= 0x400;
+        false
     }
 
     /// sub_29780 (:31140), class-10 state 58 (the m53 Wall of Fire

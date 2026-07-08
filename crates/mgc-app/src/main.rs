@@ -624,6 +624,24 @@ impl App {
         audio.tick();
     }
 
+    /// The screen-mode chime (sub_3DC90 :49072, sound 14 at the
+    /// local wizard): level start, map/book enter + exit, respawn.
+    /// The sim-side switches emit it through the event stream; this
+    /// is the app-side path for view toggles the sim never sees.
+    fn ui_ding(&mut self) {
+        let Some(audio) = &mut self.audio else { return };
+        if !self.sound_on {
+            return;
+        }
+        let f = &self.sim.flyer;
+        let pose = mgc_sim::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        let listener = mgc_audio::Listener {
+            pos: (pose.x, pose.y, pose.z),
+            yaw: pose.heading,
+        };
+        audio.event(14, mgc_audio::Source::Player, &listener);
+    }
+
     /// Castle-less death: rebuild the pristine world (the original
     /// restarts the level) and reset the flyer to the level start.
     fn restart_level(&mut self) {
@@ -964,6 +982,12 @@ impl ApplicationHandler for App {
                     if let Some(r) = &mut self.renderer {
                         let on = !r.map_view();
                         r.set_map_view(on);
+                        // The screen-mode ding (sub_3DC90 :49072 —
+                        // sound 14 on EVERY mode switch, enter and
+                        // exit alike). While paused the request sits
+                        // in the mixer and flushes on unpause — the
+                        // retail deferred-ding quirk.
+                        self.ui_ding();
                         // The book frees the cursor for spell binding;
                         // closing it returns to mouse-look.
                         if on {
@@ -1075,6 +1099,11 @@ impl ApplicationHandler for App {
                 // room for inspecting the HUD/book without mobs.
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyP) {
                     self.paused = !self.paused;
+                    // Retail pause suspends ALL sound (playtest-8);
+                    // resumed sounds pick up where they froze.
+                    if let Some(a) = &mut self.audio {
+                        a.set_paused(self.paused);
+                    }
                     println!("{}", if self.paused { "paused" } else { "unpaused" });
                     return;
                 }
