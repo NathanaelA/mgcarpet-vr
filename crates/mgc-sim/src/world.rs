@@ -647,6 +647,8 @@ impl World {
             px: player.x,
             py: player.y,
             pz: player.z,
+            pyaw: player.heading,
+            pmana: self.player.mana,
         };
 
         // The per-tick mana census (sub_48230 :56839, called :52327
@@ -3444,6 +3446,187 @@ mod tests {
             w.player_damage_taken() > 0,
             "the chaser's melee lands in the discarded inbox"
         );
+    }
+
+    #[test]
+    fn fireball_snaps_to_offaxis_targets() {
+        // sub_52B30's per-tick re-acquire (:62815 → sub_54520): a
+        // bolt launched ~4° wide of an awake creature snaps to it
+        // mid-flight (the player-remembered spell autoaim). Target =
+        // the stationary militia; the fireball row's authentic caps
+        // (v_2 = 5/tick yaw) can't run a pursuit curve onto a fast
+        // lateral mover — which is the retail "crows are
+        // near-impossible to hit".
+        let mut w = bare_creature_world(4);
+        rapid_fire(&mut w);
+        let b = find_slot(&w, 5, 4);
+        let start = w.g.ent[b].act_life;
+        let off = PlayerPose::level((112 << 8) + 128, (128 << 8) + 128, 3360, 0x18);
+        for _ in 0..6 {
+            w.tick(off, PlayerCommand { fire_left: true, ..Default::default() });
+        }
+        for _ in 0..200 {
+            w.tick(off, PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[b].act_life < start || w.g.ent[b].class64 != 5,
+            "an off-axis fireball snaps onto the bee"
+        );
+    }
+
+    #[test]
+    fn wyvern_aggros_the_player_on_sight() {
+        // PLAYTEST-8 Cluster A: m16 inherits the shared awake-gated
+        // wizard scan (sub_20710 calls sub_19D70 first) — no
+        // provocation needed. The player just hovers in range.
+        let mut w = bare_creature_world(16);
+        w.set_invincible(true);
+        // 14 tiles out — inside the 18-tile scan and 24-tile awake
+        // radii but far enough for a stable approach bearing (the
+        // 0xE3 burst cone can't align during a close orbit).
+        let pose = PlayerPose::level((112 << 8) + 128, (124 << 8) + 128, 3360, 0);
+        let mut hostile = false;
+        for _ in 0..2000 {
+            w.tick(pose, PlayerCommand::default());
+            if w.player_damage_taken() > 0 {
+                hostile = true;
+                break;
+            }
+        }
+        assert!(hostile, "an unprovoked wyvern opens fire on sight");
+    }
+
+    #[test]
+    fn wyvern_hunts_and_burns_houses() {
+        // sub_20710's custom layer (:26033-58): nearest house in
+        // v_28², no cone, no awake gate — wyverns wreck dwellings
+        // with nobody around.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let t = |slot, class, model, x, y| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = vec![t(0, 5, 16, 112, 110), t(1, 10, 45, 115, 110)];
+        let mut w = World::new(planes, &things, 3, assets());
+        let house = find_slot(&w, 10, 45);
+        let start = w.g.ent[house].act_life;
+        let wyv = find_slot(&w, 5, 16);
+        let mut chased = false;
+        let mut wounded = false;
+        for _ in 0..3000 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[wyv].tick70 == 98 && w.g.ent[wyv].f146 == house as u16 {
+                chased = true;
+            }
+            if w.g.ent[house].class64 != 10 || w.g.ent[house].act_life < start {
+                wounded = true;
+                break;
+            }
+        }
+        assert!(chased, "the wyvern targets the house and enters its chase");
+        assert!(wounded, "wyvern flame reaches the dwelling");
+    }
+
+    #[test]
+    fn griffon_peaceful_until_hit_then_rebounds_and_retaliates() {
+        use crate::combat::MailTarget;
+        use crate::mobs::PLAYER_TARGET;
+        let mut w = bare_creature_world(8);
+        w.set_invincible(true);
+        let g = find_slot(&w, 5, 8);
+        // Short peaceful window: a longer one lets the griffon wander
+        // past the 24-tile awake radius, where the (verbatim) awake-
+        // gated damage intake would just bank the provoking hit.
+        for _ in 0..200 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        assert_eq!(w.player_damage_taken(), 0, "unprovoked griffon holds fire");
+        assert_eq!(
+            w.g.ent[g].flags & 0x8000,
+            0,
+            "no deflection while peaceful — the first hit must land"
+        );
+        // One wizard-source hit provokes it (sub_1CA50 :23455-58)...
+        w.g.mail_write(MailTarget::Pool(g), 0, 500, PLAYER_TARGET);
+        let mut deflecting = false;
+        let mut mauled = false;
+        for _ in 0..1500 {
+            w.tick(firing_line(), PlayerCommand::default());
+            deflecting |= w.g.ent[g].flags & 0x8000 != 0;
+            mauled |= w.player_damage_taken() > 0;
+        }
+        // ...and the attack state raises the permanent deflection bit
+        // (sub_1CE30 :23552) while the beam thunk answers.
+        assert!(deflecting, "attacking griffon raises the rebound bit");
+        assert!(mauled, "provoked griffon fights back");
+    }
+
+    #[test]
+    fn bee_lunges_at_triple_speed_after_the_sting() {
+        // sub_1B3C0 (:22346-47): the sting recoils and arms +26; the
+        // tick the cooldown expires the bee bursts to 3x max speed.
+        let mut w = bare_creature_world(2);
+        w.set_invincible(true);
+        let b = find_slot(&w, 5, 2);
+        let max = w.g.ent[b].f128;
+        let mut lunged = false;
+        for _ in 0..3000 {
+            w.tick(grounded_line(), PlayerCommand::default());
+            if w.g.ent[b].f126 == 3 * max {
+                lunged = true;
+                break;
+            }
+        }
+        assert!(lunged, "the post-sting lunge reaches 3x max speed");
+    }
+
+    #[test]
+    fn genie_blinks_ambushes_and_steals_mana() {
+        // sub_1DFE0's mana hunt (:24523-46, no range gate) → the
+        // sub_1E770 ambush blink → the blink cycle → chase seekers →
+        // the (10,25) steal flash on the player.
+        let mut w = bare_creature_world(11);
+        w.set_invincible(true);
+        let g = find_slot(&w, 5, 11);
+        let (x0, y0) = (w.g.ent[g].x, w.g.ent[g].y);
+        let mana0 = w.player.mana;
+        assert!(mana0 > 0, "the hunt needs a mana-holding wizard");
+        let mut blinked = false;
+        let mut flashed = false;
+        for _ in 0..2000 {
+            let (px, py) = (w.g.ent[g].x, w.g.ent[g].y);
+            w.tick(firing_line(), PlayerCommand::default());
+            let e = &w.g.ent[g];
+            if e.class64 == 5 {
+                let jump = crate::features::Gen::dist2_sq(px, py, e.x, e.y);
+                // One-tick displacement far beyond move speed = a blink.
+                if jump > 1024 * 1024 {
+                    blinked = true;
+                }
+            }
+            flashed |= count(&w, 10, 25) > 0;
+            if blinked && flashed {
+                break;
+            }
+        }
+        let _ = (x0, y0);
+        assert!(blinked, "the genie teleports (ambush/blink cycle)");
+        assert!(flashed, "the steal seeker lands the (10,25) mana-drain flash");
     }
 
     #[test]

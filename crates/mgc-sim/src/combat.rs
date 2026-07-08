@@ -607,13 +607,13 @@ impl Gen {
 
     /// sub_52B30 (:62779): the fireball. Returns terrain_dirty.
     fn proj_m0_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        // Steering: one-time aim assist while untargeted (+16 bit 1),
-        // then a ≤34/tick yaw ease; homing once a target exists.
+        // Steering: while untargeted the acquire scan re-runs EVERY
+        // tick (:62815 — +146 invalid → sub_54520; model 0 is an
+        // acquire case), so a bolt launched wide SNAPS mid-flight
+        // the moment a victim enters the ±0x71 cone. Then a ≤34/tick
+        // yaw ease; homing once a target exists.
         if self.ent[i].f146 == 0 {
-            if self.ent[i].flags & 2 == 0 {
-                self.ent[i].flags |= 2;
-                self.aim_assist(i, ctx);
-            }
+            self.aim_assist(i, ctx);
             if self.ent[i].f146 == 0 {
                 self.ent[i].f34 = self.ent[i].f30;
                 self.ent[i].f36 = self.ent[i].f32;
@@ -629,16 +629,17 @@ impl Gen {
 
     /// sub_52ED0 (:62937): the POSSESS lob (c9 m1). Its flight z is
     /// clamped UP to the terrain each tick (:62975-77 — the lob skims
-    /// rising ground), its one-time acquisition scans ONLY mana balls
-    /// and houses (sub_54520 case 1, :64040-77 — never creatures or
+    /// rising ground), its acquisition scans ONLY mana balls and
+    /// houses (sub_54520 case 1, :64040-77 — never creatures or
     /// wizards), and its victim scan is the dedicated sub_11AC0
     /// (:17033): class-10 models 39/40/45 only, skipping entities the
     /// shooter already owns or claimed. Any end detonates into the
     /// (10,12) ch1-claim flash.
     fn proj_m1_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let _ = ctx;
-        if self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
-            self.ent[i].flags |= 2;
+        // Re-acquire per tick while untargeted, like the engine's
+        // state-1 handler (:62961).
+        if self.ent[i].f146 == 0 {
             self.aim_assist_possess(i);
         }
         if self.ent[i].f146 != 0 {
@@ -1037,6 +1038,13 @@ impl Gen {
     fn proj_generic_tick(&mut self, i: usize, ctx: &MobCtx, fire_trail: bool) -> bool {
         let e = &mut self.ent[i];
         e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        // The generic flight re-acquires while untargeted (:62652 →
+        // sub_54520); the meteor's m3 is an acquire case (block
+        // 0/3/4) — the retail meteor SNAPS to a bee in the cone and
+        // the blast ring does the cluster.
+        if self.ent[i].f146 == 0 {
+            self.aim_assist(i, ctx);
+        }
         if self.ent[i].f146 != 0 {
             self.home(i, ctx);
         }
@@ -1305,6 +1313,18 @@ impl Gen {
     /// (victim / ground / expiry) the struck victim takes the row
     /// damage on ch0 and the per-model payload fires.
     fn proj_payload_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        // These states run the engine's generic homing flight
+        // (sub_52770): re-acquire while untargeted per the sub_54520
+        // subtype switch — m4 (volcano) sits in the 0/3/4 creature
+        // block; m7/m11 acquire only wizards (block 7/8/B/C — a no-op
+        // until AI wizards land); m2/m5/m6 are default: no acquire.
+        // All of them home once +146 holds a target.
+        if self.ent[i].model65 == 4 && self.ent[i].f146 == 0 {
+            self.aim_assist(i, ctx);
+        }
+        if self.ent[i].f146 != 0 {
+            self.home(i, ctx);
+        }
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
             let e = &self.ent[i];

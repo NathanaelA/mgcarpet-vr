@@ -37,6 +37,13 @@ pub(crate) struct MobCtx {
     pub(crate) px: u16,
     pub(crate) py: u16,
     pub(crate) pz: i16,
+    /// The player's heading (the wizard entity's +30) — the genie's
+    /// ambush blink (sub_1E770 :24733) lands ahead of the TARGET
+    /// along the target's own yaw.
+    pub(crate) pyaw: u16,
+    /// The player's castable pool (+140) — the genie's mana hunt
+    /// (:24523-46) takes the first wizard holding ANY mana.
+    pub(crate) pmana: u32,
 }
 
 /// Animation frame counts by sprite draw type (`byte_90AD8`, :2716):
@@ -654,12 +661,15 @@ impl Gen {
     /// WANDER sub_19D70 (:21421): move every tick; every v_26 ticks
     /// the two-draw yaw jitter (:21506 — d1 picks the sign via % 157,
     /// d2's low byte + 85 the magnitude), then — ONLY WHEN AWAKE
-    /// (:21514, `if (+58)`) — the wizard scan, falling back to the
-    /// pack scan when no wizard is in range/cone. Asleep creatures
-    /// never scan (getting this backwards is what let whole distant
-    /// crowds pack up and ride the unbounded pack accel — the
-    /// player-reported runaway worms/bees).
-    fn mob_wander(&mut self, i: usize, base: u8, ctx: &MobCtx, scan: bool, aggro: bool) {
+    /// (:21514, `if (+58)`) — the wizard scan (Scan A, the class-3
+    /// hunt list :21519-42), falling back to the same-owner pack scan
+    /// (Scan B :21546-73) when no wizard is in range/cone. EVERY
+    /// awake creature runs both scans — the engine has no per-model
+    /// aggro list; `aggro` exists only for m8's wanted-timer CHASE
+    /// gate (sub_1CA50 :23500). Asleep creatures never scan (getting
+    /// this backwards is what let whole distant crowds pack up and
+    /// ride the unbounded pack accel — the playtest-1 runaway).
+    fn mob_wander(&mut self, i: usize, base: u8, ctx: &MobCtx, aggro: bool) {
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return; // walled in — dies via the prologue next tick
@@ -671,7 +681,7 @@ impl Gen {
             let mag = ((d2 & 0xFF) + 85) as i32;
             let sign = if d1 % 157 >= 79 { 1 } else { -1 };
             self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
-            if scan && self.ent[i].f58 != 0 {
+            if self.ent[i].f58 != 0 {
                 if aggro && self.player_in_aggro_range(i, ctx) {
                     self.ent[i].f146 = PLAYER_TARGET;
                     self.ent[i].tick70 = base + 2;
@@ -686,15 +696,11 @@ impl Gen {
     /// tick; every v_26 ticks either drop back to WANDER when the 3D
     /// distance reaches v_28 (un-squared — asymmetric with the scan's
     /// entry test, verbatim) or fire the per-model attack thunk
-    /// (:21665-72). m6/m16 arm burst counters instead; the burst
-    /// spawns run every tick while armed.
+    /// (:21665-72). m6 arms a burst counter instead; the burst spawns
+    /// run every tick while armed. (m2/m8/m11/m16 chase through their
+    /// own wrappers/handlers above.)
     fn mob_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         let model = self.ent[i].model65;
-        // m11 breaks off below half life (:24634-49).
-        if model == 11 && self.ent[i].act_life < (self.ent[i].max_life / 2) as i32 {
-            self.ent[i].tick70 = base + 1;
-            return;
-        }
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return;
@@ -719,24 +725,6 @@ impl Gen {
         let e = &self.ent[i];
         if e.f63 & 3 == 0 {
             self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
-        }
-        // m16's flame burst (:26154-77): while +26 > 0, one strongly
-        // homing 3000-damage fireball per tick from 4x launch height.
-        if model == 16 && self.ent[i].f26 > 0 {
-            self.ent[i].f26 -= 1;
-            let (x, y, z, owner, f84) = {
-                let e = &self.ent[i];
-                (e.x, e.y, e.z, e.id24, e.f84)
-            };
-            if let Some(p) = self.spawn_fireball(x, y, z.wrapping_add(4 * f84 as i16)) {
-                self.ent[p].row156 = 2; // unk_98F38[2], turn 0x71
-                self.ent[p].f140 = 60000;
-                self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 0);
-            }
-            // Roar throttle `+63 % (2*v_26) == 0` → sound 39 (:26186).
-            if self.ent[i].f63 as u16 % (2 * BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u16) == 0 {
-                self.snd(39, i);
-            }
         }
         // m6's buffet drag (:23215-31): the counter +26 cycles 1..41
         // then -90 — 41 ON ticks per 132-tick cycle. Each ON tick
@@ -781,10 +769,6 @@ impl Gen {
                 self.ent[p].row156 = 6;
             }
         }
-        // m2's post-hit recoil cooldown (:22356-62 arms it).
-        if model == 2 && self.ent[i].f26 > 0 {
-            self.ent[i].f26 -= 1;
-        }
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         if (e.f63 as i16) % row.v_26 == 0 {
@@ -792,26 +776,395 @@ impl Gen {
             let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
             if Self::isqrt(sq as u32) >= row.v_28 as u32 {
                 self.ent[i].tick70 = base + 1;
+            } else if model == 6 {
+                // Kraken: arm the 5-bolt spit (:23235-42).
+                self.ent[i].f71 = 5;
             } else {
-                match model {
-                    // Dragon: burst arms only inside the 0xE3 facing
-                    // cone (:26179-91).
-                    16 => {
-                        let bearing = Self::angle_between(
-                            self.ent[i].x,
-                            self.ent[i].y,
-                            tx,
-                            ty,
-                        );
-                        if Self::angdist(self.ent[i].f30, bearing) < 0xE3 {
-                            self.ent[i].f26 = 15;
-                        }
-                    }
-                    // Kraken: arm the 5-bolt spit (:23235-42).
-                    6 => self.ent[i].f71 = 5,
-                    _ => self.attack_thunk(i, model, tgt, tx, ty, tz, tf66, tf67),
+                self.attack_thunk(i, model, tgt, tx, ty, tz, tf66, tf67);
+            }
+        }
+    }
+
+    /// m2's CHASE wrapper sub_1B3C0 (:22335): the sting cooldown +26
+    /// counts down BEFORE the shared chase; the tick it expires the
+    /// bee LUNGES at 3x max speed (:22346-47) — the retail
+    /// "no-escape" burst. The sting itself (in the melee thunk)
+    /// recoils and re-arms the cooldown; leaving the chase state
+    /// resets speed to base (:22363-66).
+    fn bee_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        let v1 = self.ent[i].f26;
+        if v1 != 0 {
+            self.ent[i].f26 = v1 - 1;
+            if v1 == 1 {
+                self.ent[i].f126 = 3 * self.ent[i].f128;
+            }
+        }
+        self.mob_chase(i, base, ctx);
+        if self.ent[i].tick70 != base + 2 {
+            self.ent[i].f126 = self.ent[i].f128;
+        }
+    }
+
+    /// m8's CHASE sub_1CE30 (:23546): restore full speed while the
+    /// cooldown runs, re-set the DEFLECTION bit EVERY tick (:23552 —
+    /// the only creature that raises it, and nothing ever clears it:
+    /// fireballs/meteors bounce off an attacking griffon for good;
+    /// beams — lightning — never full-deflect, which is why lightning
+    /// stays the counter), then the shared chase with the 4000-damage
+    /// beam thunk, plus the screech throttle (sound 38) every v_26
+    /// (:23563-65). The provoking hit lands BEFORE the first chase
+    /// tick sets the bit — the player-remembered "first meteor
+    /// connects".
+    fn griffon_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        if self.ent[i].f26 != 0 {
+            self.ent[i].f126 = self.ent[i].f128;
+        }
+        self.ent[i].flags |= 0x8000;
+        self.mob_chase(i, base, ctx);
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+        if (self.ent[i].f63 as i16) % v26 == 0 {
+            self.snd(38, i);
+        }
+    }
+
+    /// m16's CHASE sub_207E0 (:26062) — the wyvern's own handler, NOT
+    /// the shared sub_1A120. Bearing every 8th tick, and only when
+    /// the target is a wizard or beyond 0x200 3D (:26146-49 — over a
+    /// house it stops re-aiming instead of orbiting); target
+    /// dead/expired → back to the hunt (:26152); while the burst
+    /// counter +26 runs, one strongly homing 3000-damage fireball PER
+    /// TICK from 4x launch height with the wyvern's own +66/+67
+    /// filter (:26154-77); every v_26 a SQUARED 2D range drop-out
+    /// (unlike the shared chase's un-squared 3D test), the roar at
+    /// 2*v_26 (sound 39) and the 0xE3-cone burst re-arm to 15
+    /// (:26178-90).
+    fn wyvern_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
+        let tgt = self.ent[i].f146;
+        let (tx, ty, tz, tclass, tdead) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, 3u8, false)
+        } else {
+            let t = tgt as usize;
+            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 {
+                self.ent[i].tick70 = base + 1;
+                return;
+            }
+            let c = &self.ent[t];
+            (c.x, c.y, c.z, c.class64, c.act_life < 0 || c.flags & 0x400 != 0)
+        };
+        if self.ent[i].f63 & 7 == 0 {
+            let e = &self.ent[i];
+            let dz = tz.wrapping_sub(e.z) as i32;
+            let d = Self::isqrt(
+                Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz)) as u32,
+            );
+            if tclass == 3 || d >= 0x200 {
+                let e = &self.ent[i];
+                self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+            }
+        }
+        if tdead {
+            self.ent[i].tick70 = base + 1;
+            return;
+        }
+        if self.ent[i].f26 > 0 {
+            self.ent[i].f26 -= 1;
+            let (x, y, z, owner, f84, f66, f67) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, e.id24, e.f84, e.f66, e.f67)
+            };
+            if let Some(p) = self.spawn_fireball(x, y, z.wrapping_add(4 * f84 as i16)) {
+                self.ent[p].row156 = 2; // unk_98F38[2], turn 0x71
+                self.ent[p].f140 = 60000;
+                self.arm_projectile(p, owner, f66, f67, tgt, tx, ty, tz, 3000, 0);
+            }
+        }
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let (v26, v28) = (row.v_26.max(1), row.v_28 as i32);
+        if (self.ent[i].f63 as i16) % v26 == 0 {
+            let e = &self.ent[i];
+            if Self::dist2_sq(e.x, e.y, tx, ty) >= v28 * v28 {
+                self.ent[i].tick70 = base + 1;
+                return;
+            }
+            if (self.ent[i].f63 as i16) % (2 * v26) == 0 {
+                self.snd(39, i);
+            }
+            let e = &self.ent[i];
+            let bearing = Self::angle_between(e.x, e.y, tx, ty);
+            if Self::angdist(e.f30, bearing) < 0xE3 {
+                self.ent[i].f26 = 15;
+            }
+        }
+    }
+
+    /// sub_20710's custom layer over the shared wander (:26033-58):
+    /// every v_26+1 ticks (offset from the scan cadence) the nearest
+    /// HOUSE (class-10 m45) within v_28² becomes the chase target —
+    /// pure 2D nearest-in-radius, NO facing cone, NO invisibility
+    /// gate. Wyverns wreck dwellings on sight.
+    fn wyvern_house_hunt(&mut self, i: usize, base: u8) {
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let period = row.v_26 + 1;
+        if (self.ent[i].f63 as i16) % period != 0 {
+            return;
+        }
+        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+        let mut best: Option<(usize, i32)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 || c.act_life < 0 {
+                continue;
+            }
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((j, d2));
+            }
+        }
+        if let Some((j, _)) = best {
+            self.ent[i].f146 = j as u16;
+            self.ent[i].tick70 = base + 2;
+        }
+    }
+
+    // ---- model 11, the genie (states 66-71, :24317-24770) ------------------
+
+    /// m11 IDLE sub_1DE40 (:24317) — the blink cycle. While +26 runs
+    /// it counts down; on expiry (sound 21) the phase bit (+16
+    /// byte[0] bit 0; ours flags 0x2000) picks the exit: SET → drop
+    /// the target and TELEPORT by a per-axis LCG offset
+    /// ((rand % 0x3C) << 8) + 12800 (toroidal map) into WANDER;
+    /// CLEAR → straight into CHASE with the target intact. At +26 ==
+    /// 0 it lays the 12-puff (10,1) sparkle ring on a 3x4 grid of
+    /// 40-unit cells, re-arms +26 = 1 and toggles the phase — ring,
+    /// then blink, alternating.
+    fn genie_idle(&mut self, i: usize, base: u8) {
+        let v1 = self.ent[i].f26;
+        if v1 != 0 {
+            self.ent[i].f26 = v1 - 1;
+            if v1 == 1 {
+                self.snd(21, i);
+                if self.ent[i].flags & 0x2000 != 0 {
+                    self.ent[i].f146 = 0;
+                    let d1 = self.ent_rand(i);
+                    let d2 = self.ent_rand(i);
+                    let (x, y, z) = {
+                        let e = &self.ent[i];
+                        (e.x, e.y, e.z)
+                    };
+                    let nx = x.wrapping_add((((d1 % 0x3C) << 8) + 12800) as u16);
+                    let ny = y.wrapping_add((((d2 % 0x3C) << 8) + 12800) as u16);
+                    self.move_relink(i, nx, ny, z);
+                    self.ent[i].tick70 = base + 1;
+                } else {
+                    self.ent[i].tick70 = base + 2;
                 }
             }
+        } else {
+            // The sparkle ring (:24361-84); each puff carries the
+            // genie as owner (+24) and the original's +18 bit 0.
+            let (x, y, z, id) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, e.id24)
+            };
+            for k in (0..12u16).rev() {
+                let px = x.wrapping_add(40 * (k % 3));
+                let py = y.wrapping_add(40 * (k / 3));
+                if let Some(p) = self.spawn_effect(1, px, py, z) {
+                    self.ent[p].id24 = id;
+                }
+            }
+            self.ent[i].f26 = 1;
+            self.ent[i].flags ^= 0x2000;
+        }
+    }
+
+    /// sub_1E770 (:24733): the AMBUSH BLINK — with a target held,
+    /// zero the blink timer, drop to IDLE (whose ring/blink cycle
+    /// alternates back into chase) and TELEPORT to the point one
+    /// actSpeed<<6 step (60<<6 = 15 tiles) AHEAD of the target along
+    /// the TARGET's own heading, at the target's altitude.
+    fn genie_ambush(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        let tgt = self.ent[i].f146;
+        if tgt == 0 {
+            return;
+        }
+        let (tx, ty, tz, tyaw) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, ctx.pyaw)
+        } else {
+            let t = tgt as usize;
+            if t >= self.ent.len() {
+                return;
+            }
+            let c = &self.ent[t];
+            (c.x, c.y, c.z, c.f30)
+        };
+        self.ent[i].f26 = 0;
+        self.ent[i].tick70 = base;
+        let mut pos = (tx, ty, tz);
+        let step = ((self.ent[i].f126 as i32) << 6).clamp(i16::MIN as i32, i16::MAX as i32);
+        Self::polar_step(&mut pos, tyaw, 0, step as i16);
+        self.move_relink(i, pos.0, pos.1, pos.2);
+    }
+
+    /// sub_1E720 (:24724): blink home — clear the target and timer,
+    /// back to IDLE, sound 11.
+    fn genie_home(&mut self, i: usize, base: u8) {
+        self.ent[i].f146 = 0;
+        self.ent[i].f26 = 0;
+        self.ent[i].tick70 = base;
+        self.snd(11, i);
+    }
+
+    /// sub_1E810 (:24751): eat a loose mana ball — while below max
+    /// mana, the nearest class-10 m39 ball within v_28² is absorbed
+    /// (+140 += ball's, ball unclaimed + destroyed) with a (10,0)
+    /// explosion puff at the spot and sound 11. The other half of
+    /// "genies steal mana": they drain the map economy too.
+    fn genie_eat_ball(&mut self, i: usize) {
+        if self.ent[i].f140 >= self.ent[i].f136 {
+            return;
+        }
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+        let mut best: Option<(usize, i32)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
+                continue;
+            }
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((j, d2));
+            }
+        }
+        if let Some((t, _)) = best {
+            self.ent[i].f140 += self.ent[t].f140;
+            self.ent[t].f144 = 0;
+            self.ent[t].flags |= 0x400;
+            let (bx, by, bz) = (self.ent[t].x, self.ent[t].y, self.ent[t].z);
+            let id = self.ent[i].id24;
+            if let Some(p) = self.spawn_effect(0, bx, by, bz) {
+                self.ent[p].id24 = id;
+            }
+            self.snd(11, i);
+        }
+    }
+
+    /// m11 WANDER sub_1DFE0 (:24388) — a full active handler, not a
+    /// caster-phase nop: move, then every v_26 the SELF-HEAL
+    /// (+maxLife>>6, clamped), the awake- and quarter-life-gated
+    /// wizard scan (range v_28 + cone v_30 + invisibility, owner ≤ 1)
+    /// → AMBUSH BLINK, else eat a mana ball; the standard two-draw
+    /// yaw jitter; and above 3/4 life the MANA HUNT (:24523-46) — the
+    /// first wizard holding ANY mana, no range or cone gate, →
+    /// ambush. (The hit-retaliation lives in the central inbox.)
+    fn genie_wander(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+        if (self.ent[i].f63 as i16) % v26 != 0 {
+            return;
+        }
+        {
+            let e = &mut self.ent[i];
+            e.act_life += (e.max_life >> 6) as i32;
+            if e.act_life < -1 {
+                e.act_life = -1;
+            }
+            if e.act_life > e.max_life as i32 {
+                e.act_life = e.max_life as i32;
+            }
+        }
+        if self.ent[i].f58 != 0
+            && self.ent[i].act_life > (self.ent[i].max_life >> 2) as i32
+        {
+            if self.player_in_aggro_range(i, ctx) {
+                self.ent[i].f146 = PLAYER_TARGET;
+                self.genie_ambush(i, base, ctx);
+            } else {
+                self.genie_eat_ball(i);
+            }
+        }
+        let d1 = self.ent_rand(i);
+        let d2 = self.ent_rand(i);
+        let mag = ((d2 & 0xFF) + 85) as i32;
+        let sign = if d1 % 157 >= 79 { 1 } else { -1 };
+        self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
+        let e = &self.ent[i];
+        if e.act_life > (e.max_life - (e.max_life >> 2)) as i32
+            && ctx.pmana != 0
+            && !self.player_invisible
+            && self.ent[i].id24 != PLAYER_TARGET
+        {
+            self.ent[i].f146 = PLAYER_TARGET;
+            self.genie_ambush(i, base, ctx);
+        }
+    }
+
+    /// m11 CHASE sub_1E380 (:24554): move; at or above half life the
+    /// bearing update every 8th tick (target dead/expired → eat a
+    /// ball + blink home); below half life the BREAK-OFF blink home.
+    /// Every v_26: 3D range ≥ v_28 → blink home; the chatter (sound
+    /// 11) every 8*v_26; else the 3000-payload steal seeker (the
+    /// attack thunk; the +26 counter the original bumps per window is
+    /// vestigial — both decompiled branches spawn identically).
+    /// Deviation noted: the original falls through to the attack
+    /// block even after blinking home, firing one stray seeker with
+    /// the CLEARED target slot (a null-target quirk); we return.
+    fn genie_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
+        let tgt = self.ent[i].f146;
+        let (tx, ty, tz, tdead) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, false)
+        } else {
+            let t = tgt as usize;
+            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 {
+                self.genie_home(i, base);
+                return;
+            }
+            let c = &self.ent[t];
+            (c.x, c.y, c.z, c.act_life < 0 || c.flags & 0x400 != 0)
+        };
+        if self.ent[i].act_life >= (self.ent[i].max_life >> 1) as i32 {
+            if !tdead {
+                if self.ent[i].f63 & 7 == 0 {
+                    let e = &self.ent[i];
+                    self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                }
+            } else {
+                self.genie_eat_ball(i);
+                self.genie_home(i, base);
+                return;
+            }
+        } else {
+            self.genie_home(i, base);
+            return;
+        }
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+        if (self.ent[i].f63 as i16) % v26 == 0 {
+            let e = &self.ent[i];
+            let dz = tz.wrapping_sub(e.z) as i32;
+            let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
+            if Self::isqrt(sq as u32) >= BEHAVIOR[self.ent[i].row156 as usize].v_28 as u32 {
+                self.genie_home(i, base);
+                return;
+            }
+            if (self.ent[i].f63 as i16) % (8 * v26) == 0 {
+                self.snd(11, i);
+            }
+            self.ent[i].f26 += 1;
+            self.attack_thunk(i, 11, tgt, tx, ty, tz, 0, 0);
         }
     }
 
@@ -1360,10 +1713,10 @@ impl Gen {
                 }
             }
             // sub_1AB10 (:21962): melee within 1024 units, m2 recoils.
+            // (No cooldown gate — the thunk fires whenever the shared
+            // chase cadence lands it in range; the bee's +26 only
+            // drives the recoil/lunge cycle in bee_chase.)
             1 | 2 => {
-                if model == 2 && self.ent[i].f26 > 0 {
-                    return; // recoil cooldown
-                }
                 let d2 = Self::dist2_sq(x, y, tx, ty);
                 let dz = tz.wrapping_sub(z) as i32;
                 if Self::isqrt(d2.wrapping_add(dz.wrapping_mul(dz)) as u32) < 1024 {
@@ -1440,11 +1793,16 @@ impl Gen {
             }
             // sub_1AEE0 (:22134): m8's 4000-damage beam, filter
             // copied from the target's own fields, row [6] (:22155).
+            // A landed attack refreshes the victim's wanted timer
+            // (+528 = 200, sub_1CE30 :23557-60).
             8 => {
                 if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
                     self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 4000, 23);
                     self.ent[p].row156 = 6;
                     self.snd(38, i); // :23555
+                    if tgt == PLAYER_TARGET {
+                        self.player_aggro = 200;
+                    }
                 }
             }
             // sub_1AA40 (:21935): m9's bolt — 600 with segments, else
@@ -1547,13 +1905,18 @@ impl Gen {
             }
         }
         // Catch-up (:21814): member speed = LEADER's speed + accel —
-        // a bounded "fly slightly faster than the leader". NOTE the
-        // remc1 source line reads `a1x->+126 += v3x->+130`, but the
-        // decompiler's raw output preserved above it
-        // (`v10 = v3x->+130 + v3x->+126`) shows the original computes
-        // the sum of the LEADER's fields — the += is a maintainer
-        // mis-fix, and porting it verbatim is exactly the
-        // player-reported runaway worm/bee acceleration.
+        // a bounded "fly slightly faster than the leader". The remc1
+        // source line reads `a1x->+126 += v3x->+130`, but the dead
+        // decompiler temp preserved above it reads BOTH operands from
+        // the LEADER (`v10 = v3x->+130 + v3x->+126`) — a dead temp of
+        // the += form would read the member's +126. The original
+        // computed the leader sum; the += is a maintainer mis-fix
+        // whose unbounded accumulation is exactly the runaway (IDLE's
+        // pack scan is NOT awake-gated, so distant idle crowds pack
+        // up and would ratchet forever — re-verified 2026-07-08 when
+        // a trace re-read flipped this line and the asleep-crowd
+        // regression test caught the runaway again). The bee's retail
+        // "no escape" is the 3x lunge in bee_chase, not this line.
         self.ent[i].f126 = self.ent[l].f126.wrapping_add(self.ent[l].f130);
     }
 
@@ -1837,7 +2200,8 @@ impl Gen {
     /// The awake pre-pass sub_54F80 (:64300), run before dispatch:
     /// awake creatures count down (+58, mirrored into their body
     /// segments); asleep ones re-arm to 16 (segments 18) when the
-    /// player is within 24 tiles (2D dist² < 0x2400000).
+    /// player is within 24 tiles (3D dist² < 0x2400000 — sub_42410
+    /// at :64353 is the 3D form).
     pub(crate) fn mob_awake_pass(&mut self, ctx: &MobCtx) {
         for i in 1..self.ent.len() {
             let e = &self.ent[i];
@@ -1859,7 +2223,11 @@ impl Gen {
                 }
             } else if e.f59 > 0 {
                 self.ent[i].f59 -= 1;
-            } else if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000 {
+            } else if {
+                let dz = ctx.pz.wrapping_sub(e.z) as i32;
+                Self::dist2_sq(e.x, e.y, ctx.px, ctx.py).wrapping_add(dz.wrapping_mul(dz))
+                    < 0x240_0000
+            } {
                 self.ent[i].f58 = 16;
                 self.ent[i].f59 = 0;
                 let mut s = self.ent[i].f54 as usize;
@@ -1912,8 +2280,9 @@ impl Gen {
                 }
                 // Killing village folk puts the wizard on the wanted
                 // list (m12 :25291, m13 :25459, m14 :25638, m4's
-                // corpse analog).
-                if matches!(model, 4 | 12 | 13 | 14)
+                // corpse analog) — and so does killing a griffon
+                // (sub_1CF60 :23578-80): the flock avenges it.
+                if matches!(model, 4 | 8 | 12 | 13 | 14)
                     && self.ent[i].f38 == PLAYER_TARGET
                 {
                     self.player_aggro = 200;
@@ -1928,11 +2297,22 @@ impl Gen {
                 if matches!(model, 8 | 12 | 13 | 14) && src == PLAYER_TARGET {
                     self.player_aggro = 200;
                 }
-                if self.attacker_is_wizard(src) && !matches!(model, 8 | 12 | 13 | 14) {
+                // m8 DOES retaliate — its IDLE promotes a hit-by-
+                // wizard griffon straight into attack (sub_1CA50
+                // :23455-58); only the villager families merely mark
+                // the attacker (:25057-63) without chasing.
+                if self.attacker_is_wizard(src) && !matches!(model, 12 | 13 | 14) {
                     match role {
                         0 | 1 => {
                             self.ent[i].f146 = src;
-                            self.ent[i].tick70 = base + 2;
+                            if model == 11 {
+                                // The genie's retaliation blinks
+                                // ahead of the attacker (sub_1DFE0
+                                // :24459-62 → sub_1E770).
+                                self.genie_ambush(i, base, ctx);
+                            } else {
+                                self.ent[i].tick70 = base + 2;
+                            }
                             return;
                         }
                         2 => {
@@ -1984,17 +2364,18 @@ impl Gen {
             // -- idles --
             // m5's spawn state falls straight through to wander
             // (:22775); m9 = the materialize sequence; m12's idle
-            // slot 72 = the BUILD state; m11/13/14/15 idles are
-            // custom/parked nops.
+            // slot 72 = the BUILD state; m11 = the blink cycle;
+            // m13/14/15 idles are custom/parked nops.
             (5, 0) => self.ent[i].tick70 = base + 1,
             (9, 0) => self.m9_emerge(i),
+            (11, 0) => self.genie_idle(i, base),
             (12, 0) => self.m12_build(i),
-            (11 | 13 | 14 | 15, 0) => {}
+            (13 | 14 | 15, 0) => {}
             (_, 0) => self.mob_idle(i, base),
 
             // -- wanders --
             (0, 1) => {
-                self.mob_wander(i, base, ctx, true, true);
+                self.mob_wander(i, base, ctx, true);
                 self.flyer_bob(i);
             }
             // m5, the crab: mana-hunting wander + EAT in the family's
@@ -2007,20 +2388,25 @@ impl Gen {
                 self.m5_regen(i);
             }
             (9, 1) => self.m9_hidden(i, base),
-            (11, 1) => {} // caster-phase: stationary until AI lands
+            (11, 1) => self.genie_wander(i, base, ctx),
             (15, 1) => self.grid_walk(i, base),
             // The villager families' custom hunts.
             (12, 1) => self.m12_wander(i),
             (13, 1) => self.feeder_wander(i, base, false),
             (14, 1) => self.feeder_wander(i, base, true),
-            // Aggro through the standard wizard scan; m8 scans but
-            // its wizard branch is possession-gated (mana track), and
-            // m16's wander replaces the scan block with a custom hunt
-            // — jitter-walk only until that lands.
+            // Every remaining model runs the shared awake-gated
+            // two-scan — the engine has no per-model aggro list. m8's
+            // CHASE promotion alone is gated on the wanted timer
+            // (sub_1CA50 :23500 — the griffon stays peaceful until
+            // the wizard is marked); m16 layers the house hunt on top
+            // of the shared scans (sub_20710 :26033) when it is still
+            // wandering afterwards.
             (m, 1) => {
-                let scan = m != 16;
-                let aggro = matches!(m, 1 | 2 | 3 | 6 | 7 | 10);
-                self.mob_wander(i, base, ctx, scan, aggro);
+                let aggro = m != 8 || self.player_aggro != 0;
+                self.mob_wander(i, base, ctx, aggro);
+                if m == 16 && self.ent[i].tick70 == base + 1 {
+                    self.wyvern_house_hunt(i, base);
+                }
             }
 
             // -- chases --
@@ -2028,6 +2414,8 @@ impl Gen {
                 self.mob_chase(i, base, ctx);
                 self.flyer_bob(i);
             }
+            (2, 2) => self.bee_chase(i, base, ctx),
+            (8, 2) => self.griffon_chase(i, base, ctx),
             (9, 2) => {
                 // sub_1DA60's per-tick disguise (sub_1DCD0): the mound
                 // pops up as the warrior form while it chases.
@@ -2036,9 +2424,10 @@ impl Gen {
                 }
                 self.mob_chase(i, base, ctx);
             }
-            // m11 fights (break-off + wizard-seeker bolts live in
-            // mob_chase); m12's chase slot 74 = the house APPROACH.
+            (11, 2) => self.genie_chase(i, base, ctx),
+            // m12's chase slot 74 = the house APPROACH.
             (12, 2) => self.m12_approach(i),
+            (16, 2) => self.wyvern_chase(i, base, ctx),
             (_, 2) => self.mob_chase(i, base, ctx),
 
             // -- packs --
