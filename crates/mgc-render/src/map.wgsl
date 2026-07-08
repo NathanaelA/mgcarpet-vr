@@ -5,8 +5,10 @@
 // world scrolls + spins under it (not a static axis-aligned grid). The
 // world map texture is composed on the CPU through the engine's color
 // path (see map_pixels); here we sample it under the rotated,
-// player-centered affine so entity dots / stamps / the guide path — all
-// baked into the world texture — rotate together with the terrain.
+// player-centered affine so the baked entity dots rotate together with
+// the terrain. (Icon stamps and the guide path draw screen-space over
+// this pass — upright and evenly spaced — see project_map_stamps /
+// project_guide_path in lib.rs.)
 
 struct MapGlobals {
     // xy = quad center in NDC, zw = quad half-extents in NDC
@@ -17,7 +19,8 @@ struct MapGlobals {
     player: vec4<f32>,
     // x = round mask (1 = circular disc for the HUD minimap, 0 = the
     // rectangular book map), y = aspect (quad width / height in pixels),
-    // z = output alpha (HUD transparency; 1 = opaque), w unused
+    // z = output alpha (HUD transparency; 1 = opaque), w = world period
+    // in tiles (MAP_TILES; the toroidal wrap + texture size)
     mode: vec4<f32>,
 };
 
@@ -48,6 +51,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Centered coordinates; correct the shorter axis so the round mask
     // is a true circle and the zoom is isotropic. mg.mode.y = w/h aspect.
     let aspect = mg.mode.y;
+    // Derivative taken up front: fwidth needs uniform control flow, so
+    // it must precede the round-mask discard.
+    let pxw = fwidth(in.uv);
     var p = in.uv;
     if aspect >= 1.0 {
         p.x = p.x * aspect;    // wider than tall: stretch x span
@@ -74,18 +80,37 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         mg.player.y + off.x * s - off.y * cth,
     );
 
-    // Toroidal wrap into the 256-tile world, nearest-texel fetch.
+    // Toroidal wrap into the world period (mode.w = MAP_TILES),
+    // nearest-texel fetch. The % guards the fract·tiles == tiles
+    // rounding edge (the old & 255 mask, period-agnostic).
+    let tiles = mg.mode.w;
     let tile = vec2<i32>(
-        i32(fract(world.x / 256.0 + 1.0) * 256.0) & 255,
-        i32(fract(world.y / 256.0 + 1.0) * 256.0) & 255,
+        i32(fract(world.x / tiles) * tiles) % i32(tiles),
+        i32(fract(world.y / tiles) * tiles) % i32(tiles),
     );
     var rgb = textureLoad(t_map, tile, 0).rgb;
 
-    // Player marker: a small white square dead center (the original's
-    // fixed centered marker).
-    let center = abs(in.uv);
-    if center.x < 0.015 && center.y < 0.015 {
-        rgb = vec3<f32>(1.0, 1.0, 1.0);
+    // Player marker (sub_48710 epilogue :57449-69): a four-arm CROSS
+    // at the pane center, arm length = pane_width/12 (= 1/6 of the
+    // centered half-width; the vertical arms match in PIXELS, hence
+    // aspect/6 in uv.y), one surface pixel thick (retail keeps 1px at
+    // both its 320 and 640 surfaces — the rule is one pixel of the
+    // output surface). Retail fades each step through the fog ramp
+    // 0x2C00→0x2400; a linear WHITE-mix approximates that until the
+    // LUT bake. POLARITY CHECK OWED: the locked-spell wash proved fog
+    // row 0x30 DARKENS (player 2026-07-08), so rows 0x24-0x2C may
+    // darken too — if retail's cross reads dark on the map, flip the
+    // mix target to black.
+    let cuv = abs(in.uv);
+    let arm_x = 1.0 / 6.0;      // pane_w/12 px over a pane_w/2 half-span
+    let arm_y = aspect / 6.0;   // the same PIXEL length in uv.y units
+    let on_h = cuv.y < pxw.y && cuv.x < arm_x;
+    let on_v = cuv.x < pxw.x && cuv.y < arm_y;
+    if on_h || on_v {
+        // Distance along the arm: 0 at center = full bright, 1 at the
+        // tip = no lift.
+        let d = select(cuv.y / arm_y, cuv.x / arm_x, on_h);
+        rgb = mix(rgb, vec3<f32>(1.0), (1.0 - d) * 0.85);
     }
 
     // Output alpha carries the HUD transparency (radar follows the same

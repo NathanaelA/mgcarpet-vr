@@ -220,8 +220,15 @@ pub struct PlayerVitals {
     pub hit_flash: u8,
     /// Died castle-less — the level is lost (restarting).
     pub lost: bool,
-    /// The own castle took a processed hit recently (+391 flash).
+    /// The own castle took a processed hit recently (+391 flash —
+    /// the HUD castle sub-panel swaps to the alert marble [55]).
     pub castle_alert: bool,
+    /// The player took a processed hit / steal / grip recently
+    /// (+392 flash — the SELF sub-panel's alert marble, :55679-723).
+    pub player_alert: bool,
+    /// An own balloon took a processed hit recently (+393 flash —
+    /// the balloon sub-panel's alert marble, :56826).
+    pub balloon_alert: bool,
     pub has_castle: bool,
 }
 
@@ -241,13 +248,17 @@ pub struct LoadoutView {
     pub world_mana: u32,
     /// Own castle (stored, capacity, level) when one stands.
     pub castle: Option<(u32, u32, u8)>,
-    /// The player's mana balloons for the HUD's balloon sub-panel
-    /// (sub_22E50 slot B, `var_52[]`): one (hp_frac, cargo_frac) entry
-    /// per owned class-3/model-3 balloon, capped at the castle-level
-    /// roster size (1 at castle level 1-3, 2 at 4-5, 3 at 6-7 —
-    /// sub_22E50 :27296-314). Empty with no castle. hp_frac =
+    /// The player's mana-balloon ROSTER for the HUD's balloon
+    /// sub-panel (sub_22E50 slot B, `var_52[]`). The length IS the
+    /// roster size granted by castle level (1 at level 1-3, 2 at 4-5,
+    /// 3 at 6-7 — the :27296-314 switch; the glyph is [50+len]);
+    /// empty only with no castle (:27281 shows the marble [54] only
+    /// when the castle pointer is invalid). Each slot = Some((hp_frac,
+    /// cargo_frac)) for a live owned class-3/model-3 balloon, None for
+    /// a dead/not-yet-spawned slot — retail keeps the roster width and
+    /// just draws no bars for invalid entries (:27335-40). hp_frac =
     /// actLife/maxLife, cargo_frac = stored/capacity (+140/+136).
-    pub balloons: Vec<(f32, f32)>,
+    pub balloons: Vec<Option<(f32, f32)>>,
     /// Own castle health (current, max) — the downgrade meter
     /// (functional-first; retail shows no castle HP number, but the
     /// player needs SOME way to see the vulture-bomb chip damage).
@@ -257,6 +268,13 @@ pub struct LoadoutView {
     pub win_pct: u16,
     /// The latched completion flag.
     pub completed: bool,
+    /// Per-spell BOOK BIND gate (the :26926 check): a spell can be
+    /// hovered/bound iff its `castle_req` (+132, the castle-stored
+    /// unlock ladder — ctor a8) is 0, or the linked castle STORES at
+    /// least that much (+140). NOT a player-mana affordability test —
+    /// retail never blocks binding on the castable pool; per-cast
+    /// mana gates apply at cast time. All-true under dev_spells.
+    pub bindable: [bool; 24],
 }
 
 /// The player's pose in engine units for trigger/portal tests: x/y are
@@ -676,20 +694,8 @@ impl World {
         self.g.player_invisible = self.player.invisible;
         self.g.player_rebound = self.player.rebound;
 
-        // Hand equips (the original's commands 0x15/0x16, :48717-31):
-        // only owned spells take.
-        if let Some(s) = cmd.equip_left
-            && (s.0 as usize) < SPELL_COUNT
-            && self.player.owned[s.0 as usize] != 0
-        {
-            self.player.left = Some(s);
-        }
-        if let Some(s) = cmd.equip_right
-            && (s.0 as usize) < SPELL_COUNT
-            && self.player.owned[s.0 as usize] != 0
-        {
-            self.player.right = Some(s);
-        }
+        // Hand equips (the original's commands 0x15/0x16, :48717-31).
+        self.equip_hands(cmd.equip_left, cmd.equip_right);
 
         // Per-hand cast triggers (the carpet fire tick,
         // sub_46840_46B80 :55825-34, dw_0 bits 0x10/0x20). Casting is
@@ -852,6 +858,12 @@ impl World {
         if self.g.castle_alert > 0 {
             self.g.castle_alert -= 1;
         }
+        if self.g.player_alert > 0 {
+            self.g.player_alert -= 1;
+        }
+        if self.g.balloon_alert > 0 {
+            self.g.balloon_alert -= 1;
+        }
 
         // ---- the death fall and the wait for Space ----
         match self.player.state {
@@ -920,6 +932,9 @@ impl World {
             self.g.player_mail[4] = (0, 0);
             self.player.regen_delay = 16;
             self.g.player_danger = 100;
+            // "You are being attacked" flash (+392=4, :55679) — the
+            // HUD's SELF sub-panel, not the castle's.
+            self.g.player_alert = 4;
         }
         // ch3 mana steal (:55683-97): the pool drains; a class-3
         // thief would bank it (mob feeders aren't wizards).
@@ -929,6 +944,7 @@ impl World {
             self.player.mana = self.player.mana.saturating_sub(amt);
             self.player.regen_delay = 16;
             self.g.player_danger = 100;
+            self.g.player_alert = 4; // +392=4 (:55692)
         }
         // ch0 physical (:55698-735).
         if self.g.player_mail[0].1 != 0 {
@@ -959,9 +975,11 @@ impl World {
                         & 0x7FF;
                 self.g.player_knock = (dir, ((amt / 10) as i16).clamp(0, 80));
             }
-            // Red flash (sub_44BE0(2)), regen stall, hit sound 17
-            // (:55722-26) — all fire even on a fatal hit.
+            // Red flash (sub_44BE0(2)), self-panel flash (+392=4,
+            // :55723), regen stall, hit sound 17 (:55722-26) — all
+            // fire even on a fatal hit.
             self.player.hit_flash = 5;
+            self.g.player_alert = 4;
             self.player.regen_delay = 16;
             self.g.snd_player(17);
             if self.player.life < 0 {
@@ -1539,15 +1557,17 @@ impl World {
         })
     }
 
-    /// The player's owned mana balloons (class-3/model-3) for the HUD
-    /// balloon panel, in pool order. The original keeps them in the
-    /// wizard's `var_52[]` roster shown 1/2/3 wide by castle level
-    /// (sub_22E50 :27296-314); we derive the roster size the same way
-    /// and read the matching count of player-owned balloon entities.
-    /// Each entry = (hp_frac = actLife/maxLife, cargo_frac =
-    /// stored/capacity), both clamped to [0,1]. No castle → no roster.
-    fn player_balloons(&self) -> Vec<(f32, f32)> {
-        let level = match self.player_castle() {
+    /// The player's balloon ROSTER (class-3/model-3) for the HUD
+    /// balloon panel. The roster WIDTH comes from castle level alone
+    /// (`var_52[]` shown 1/2/3 wide — the :27296-314 switch) and is
+    /// kept even when balloons are dead: retail draws the [50+width]
+    /// glyph regardless and simply skips the bars of invalid entries
+    /// (:27335-40). Live owned balloons fill slots in pool order with
+    /// (hp_frac = actLife/maxLife, cargo_frac = stored/capacity), both
+    /// clamped to [0,1]. No castle → no roster (the marble [54] case,
+    /// :27281).
+    fn player_balloons(&self, castle: Option<usize>) -> Vec<Option<(f32, f32)>> {
+        let level = match castle {
             Some(c) => self.g.ent[c].f26.clamp(0, 255),
             None => return Vec::new(),
         };
@@ -1557,19 +1577,22 @@ impl World {
             6.. => 3,
             _ => return Vec::new(),
         };
-        (1..features::POOL)
-            .filter(|&j| {
-                let e = &self.g.ent[j];
-                e.class64 == 3 && e.model65 == 3 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
-            })
-            .take(roster)
-            .map(|j| {
-                let e = &self.g.ent[j];
+        let mut out = vec![None; roster];
+        let mut k = 0;
+        for j in 1..features::POOL {
+            if k >= roster {
+                break;
+            }
+            let e = &self.g.ent[j];
+            if e.class64 == 3 && e.model65 == 3 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
+            {
                 let hp = e.act_life.max(0) as f32 / (e.max_life.max(1) as f32);
                 let cargo = e.f140.max(0) as f32 / (e.f136.max(1) as f32);
-                (hp.clamp(0.0, 1.0), cargo.clamp(0.0, 1.0))
-            })
-            .collect()
+                out[k] = Some((hp.clamp(0.0, 1.0), cargo.clamp(0.0, 1.0)));
+                k += 1;
+            }
+        }
+        out
     }
 
     /// sub_48230 (:56839): the per-tick mana census. The wizard
@@ -1874,6 +1897,26 @@ impl World {
         }
     }
 
+    /// Hand equips (the original's book/quickselect commands
+    /// 0x15/0x16, :48717-31): only owned spells take. Public so the
+    /// app can apply a book binding IMMEDIATELY while the sim clock is
+    /// paused — binding is UI state, not simulation, and the frozen
+    /// HUD must still reflect it (player 2026-07-08).
+    pub fn equip_hands(&mut self, left: Option<SpellId>, right: Option<SpellId>) {
+        if let Some(s) = left
+            && (s.0 as usize) < SPELL_COUNT
+            && self.player.owned[s.0 as usize] != 0
+        {
+            self.player.left = Some(s);
+        }
+        if let Some(s) = right
+            && (s.0 as usize) < SPELL_COUNT
+            && self.player.owned[s.0 as usize] != 0
+        {
+            self.player.right = Some(s);
+        }
+    }
+
     /// Spellbook/HUD snapshot.
     pub fn loadout(&self) -> LoadoutView {
         let mut owned = [false; SPELL_COUNT];
@@ -1886,6 +1929,18 @@ impl World {
                     self.g.ent[m].f26.max(0) as f32 / SPELLS[s].count as f32;
             }
         }
+        // One castle scan feeds castle/castle_hp/balloons/bindable.
+        let castle_slot = self.player_castle();
+        // The :26926 bind gate: castle_req (+132) vs the castle's
+        // STORED mana (+140). `req == 0` spells are always bindable.
+        let castle_stored = castle_slot.map(|c| self.g.ent[c].f140.max(0) as u32);
+        let mut bindable = [false; SPELL_COUNT];
+        for (s, b) in bindable.iter_mut().enumerate() {
+            let req = SPELLS[s].castle_req;
+            *b = self.dev_spells
+                || req == 0
+                || castle_stored.is_some_and(|stored| stored >= req);
+        }
         LoadoutView {
             owned,
             left: self.player.left.map(|s| s.0),
@@ -1895,7 +1950,7 @@ impl World {
             mana_max: self.player.mana_max,
             banked: self.player.banked,
             world_mana: self.player.world_mana,
-            castle: self.player_castle().map(|c| {
+            castle: castle_slot.map(|c| {
                 let e = &self.g.ent[c];
                 (
                     e.f140.max(0) as u32,
@@ -1903,13 +1958,14 @@ impl World {
                     e.f26.clamp(0, 255) as u8,
                 )
             }),
-            balloons: self.player_balloons(),
-            castle_hp: self.player_castle().map(|c| {
+            balloons: self.player_balloons(castle_slot),
+            castle_hp: castle_slot.map(|c| {
                 let e = &self.g.ent[c];
                 (e.act_life.max(0), e.max_life.max(1))
             }),
             win_pct: self.win_pct,
             completed: self.completed,
+            bindable,
         }
     }
 
@@ -1981,6 +2037,8 @@ impl World {
             hit_flash: self.player.hit_flash,
             lost: self.player.lost,
             castle_alert: self.g.castle_alert > 0,
+            player_alert: self.g.player_alert > 0,
+            balloon_alert: self.g.balloon_alert > 0,
             has_castle: self.player_castle().is_some(),
         }
     }
@@ -4152,13 +4210,63 @@ mod tests {
 
         let balloons = w.loadout().balloons;
         assert_eq!(balloons.len(), 2, "level-4 castle → 2-balloon roster");
-        assert!((balloons[0].0 - 1.0).abs() < 1e-3, "first balloon full HP");
-        assert!((balloons[0].1 - 0.25).abs() < 1e-3, "first balloon 50/200 cargo");
-        assert!((balloons[1].0 - 0.75).abs() < 1e-3, "second balloon 75/100 HP");
-        assert!((balloons[1].1 - 0.5).abs() < 1e-3, "second balloon 100/200 cargo");
+        let first = balloons[0].expect("first roster slot live");
+        let second = balloons[1].expect("second roster slot live");
+        assert!((first.0 - 1.0).abs() < 1e-3, "first balloon full HP");
+        assert!((first.1 - 0.25).abs() < 1e-3, "first balloon 50/200 cargo");
+        assert!((second.0 - 0.75).abs() < 1e-3, "second balloon 75/100 HP");
+        assert!((second.1 - 0.5).abs() < 1e-3, "second balloon 100/200 cargo");
+
+        // Dead balloons do NOT shrink the roster (retail keeps the
+        // [50+width] glyph and just draws no bars, :27335-40): kill
+        // two of three → the roster is still 2 wide, one slot live
+        // (the third balloon backfills), one empty... kill all three
+        // → 2 wide, all empty.
+        w.g.ent[2].flags |= 0x400;
+        w.g.ent[3].flags |= 0x400;
+        let balloons = w.loadout().balloons;
+        assert_eq!(balloons.len(), 2, "roster width survives balloon deaths");
+        assert!(balloons[0].is_some(), "the surviving balloon fills slot 0");
+        assert!(balloons[1].is_none(), "the lost slot draws no bars");
+        w.g.ent[4].flags |= 0x400;
+        let balloons = w.loadout().balloons;
+        assert_eq!(balloons.len(), 2, "all balloons dead → roster still 2 wide");
+        assert!(balloons.iter().all(Option::is_none));
 
         // A collapsed castle (flag 0x400) removes the roster.
         w.g.ent[castle].flags |= 0x400;
         assert!(w.loadout().balloons.is_empty(), "collapsed castle → no roster");
+    }
+
+    #[test]
+    fn book_bind_gate_is_the_castle_stored_unlock_ladder() {
+        // The :26926 gate: bindable iff castle_req == 0 OR the linked
+        // castle STORES >= castle_req — never a player-mana test.
+        let mut w = flat_world();
+        let free = SPELLS.iter().position(|s| s.castle_req == 0).expect("a free spell");
+        let (locked, req) = SPELLS
+            .iter()
+            .enumerate()
+            .find_map(|(i, s)| (s.castle_req > 0).then_some((i, s.castle_req)))
+            .expect("a ladder spell");
+
+        // No castle: free spells bindable, ladder spells locked —
+        // regardless of player mana.
+        w.player.mana = 0;
+        let l = w.loadout();
+        assert!(l.bindable[free], "castle_req 0 binds even at 0 mana");
+        assert!(!l.bindable[locked], "ladder spell locked with no castle");
+
+        // A castle storing just under / at the requirement.
+        let castle = 1;
+        w.g.ent[castle].class64 = 3;
+        w.g.ent[castle].model65 = 2;
+        w.g.ent[castle].id24 = PLAYER_TARGET;
+        w.g.ent[castle].flags = 0;
+        w.g.ent[castle].f26 = 1;
+        w.g.ent[castle].f140 = req as i32 - 1;
+        assert!(!w.loadout().bindable[locked], "stored < req stays locked");
+        w.g.ent[castle].f140 = req as i32;
+        assert!(w.loadout().bindable[locked], "stored >= req unlocks");
     }
 }

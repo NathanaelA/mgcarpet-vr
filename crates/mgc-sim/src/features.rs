@@ -415,6 +415,14 @@ pub(crate) struct Gen {
     /// "Castle under attack" HUD flash (Type_160+391 = 4, :56698) —
     /// armed by every processed castle hit, decremented per tick.
     pub(crate) castle_alert: u8,
+    /// "You are being attacked" HUD flash (Type_160+392 = 4,
+    /// :55679/:55692/:55723) — armed by every processed player hit /
+    /// steal / grip, decremented per tick. The SELF sub-panel's alert.
+    pub(crate) player_alert: u8,
+    /// Balloon-under-attack HUD flash (Type_160+393 = 4, :56826) —
+    /// armed by a processed hit on an own balloon, decremented per
+    /// tick. The balloon sub-panel's alert.
+    pub(crate) balloon_alert: u8,
     /// Sound requests emitted this tick at the original's
     /// sub_55370_558A0 call sites; drained by the app into the audio
     /// mixer (which reimplements that routine's attenuation/slot
@@ -487,6 +495,8 @@ impl Gen {
             player_danger: 0,
             banked_houses: 0,
             castle_alert: 0,
+            player_alert: 0,
+            balloon_alert: 0,
             sounds: Vec::new(),
         }
     }
@@ -2502,6 +2512,10 @@ impl Gen {
             let amt = self.ent[i].mail[0].0;
             self.ent[i].mail[0].1 = 0;
             self.ent[i].act_life -= amt as i32;
+            // Balloon-under-attack flash (Type_160+393 = 4, :56826).
+            if self.ent[i].id24 == crate::mobs::PLAYER_TARGET {
+                self.balloon_alert = 4;
+            }
         }
         if self.ent[i].act_life < 0 {
             self.corpse_drop(i);

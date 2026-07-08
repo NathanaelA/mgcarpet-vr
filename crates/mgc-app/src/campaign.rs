@@ -25,6 +25,7 @@
 use std::path::Path;
 
 use mgc_formats::{Game, LevelPackage, ThingKind, Things, mgcl};
+use mgc_sim::spells::SPELL_COUNT;
 
 /// The MC1 campaign is the reachable levels (indices from 0 up), MINUS a
 /// handful that the shipped game never routes to: five indices blacklisted
@@ -60,10 +61,13 @@ fn is_campaign_level(level: u32) -> bool {
 /// The spell ids of every jar placed in one level's records. Counts jars
 /// behind trigger dispositions too — a triggered jar is still collectable
 /// in a completed playthrough, so it belongs in the "could have" set.
-pub fn jar_spells_in(things: &Things) -> Vec<u8> {
+fn jar_spells_in(things: &Things) -> Vec<u8> {
     let mut out = Vec::new();
     for t in &things.things {
-        if t.kind == ThingKind::Entity && t.class == JAR_CLASS && t.model < 24 {
+        if t.kind == ThingKind::Entity
+            && t.class == JAR_CLASS
+            && (t.model as usize) < SPELL_COUNT
+        {
             let s = t.model as u8;
             if !out.contains(&s) {
                 out.push(s);

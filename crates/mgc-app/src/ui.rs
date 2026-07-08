@@ -258,7 +258,7 @@ impl UiAssets {
             return None;
         }
         Some(UiQuad {
-            rect: [x, y, w as f32 * scale, h as f32 * scale],
+            rect: snap([x, y, w as f32 * scale, h as f32 * scale]),
             uv: [sx as f32, sy as f32, w as f32, h as f32],
             tint,
         })
@@ -273,7 +273,7 @@ impl UiAssets {
             return None;
         }
         Some(UiQuad {
-            rect,
+            rect: snap(rect),
             uv: [sx as f32, sy as f32, w as f32, h as f32],
             tint,
         })
@@ -291,7 +291,7 @@ impl UiAssets {
             return None;
         }
         Some(UiQuad {
-            rect,
+            rect: snap(rect),
             uv: [sx as f32, sy as f32, -(w as f32), h as f32],
             tint,
         })
@@ -305,9 +305,26 @@ fn push_opt(quads: &mut Vec<UiQuad>, q: Option<UiQuad>) {
     }
 }
 
+/// Snap a rect to the integer pixel grid, EDGE-consistently: left/top
+/// and right/bottom round independently, so adjacent cells that share
+/// an edge in native coordinates still share it after snapping (no
+/// gaps, no overlaps). Without this, fractional scale factors (e.g.
+/// 1.5 at 720p) rasterize identical native sources into visibly
+/// different rows/columns — the jagged icons and the meter-dot rows
+/// that didn't match (player 2026-07-08). The structural fix for the
+/// remaining in-sprite aliasing at fractional scales is a native
+/// 640×480 UI layer upscaled once with a real filter — banked.
+fn snap(rect: [f32; 4]) -> [f32; 4] {
+    let x0 = rect[0].round();
+    let y0 = rect[1].round();
+    let x1 = (rect[0] + rect[2]).round();
+    let y1 = (rect[1] + rect[3]).round();
+    [x0, y0, x1 - x0, y1 - y0]
+}
+
 fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
     UiQuad {
-        rect,
+        rect: snap(rect),
         uv: [0.0; 4],
         tint,
     }
@@ -334,18 +351,17 @@ const SLAB_DIM: [f32; 4] = [0.58, 0.46, 0.32, 1.0];
 /// `byte_AD167_AD157[1]` (black); a black multiplicative tint blackens
 /// the sprite's yellow ink while keeping its coverage/alpha.
 const DIGIT_INK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-const COOLDOWN_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
-const BAR_BG: [f32; 4] = [0.05, 0.05, 0.05, 0.9];
 
 // The spellbook grid (remc1 :26915-70), native 640×480 scaled by w/640,
 // h/480. 24 spells iterate in DISPLAY_ORDER packed with NO gaps: cell =
 // the slot-slab sprite [3] = 64×37, 4 cols × 6 rows from (384,194). The
 // origin was measured from the player's hi-res retail screenshot
-// (2026-07-07) — the world viewport ends and the spellbook begins at
-// y=194 (must agree with the renderer's BOOK_SPELL_Y); the grid bottom
-// (194 + 6·37 = 416) is the map-pane base and the black-bar top.
-const BOOK_GRID_X: f32 = 384.0;
-const BOOK_GRID_Y: f32 = 194.0;
+// (2026-07-07) and lives in mgc-render (which places the world
+// viewport against the same edges) — consumed here so the two crates
+// cannot drift; the grid bottom (194 + 6·37 = 416) is the map-pane
+// base and the black-bar top.
+const BOOK_GRID_X: f32 = mgc_render::BOOK_SPELL_X;
+const BOOK_GRID_Y: f32 = mgc_render::BOOK_SPELL_Y;
 const BOOK_CELL_W: f32 = 64.0;
 const BOOK_CELL_H: f32 = 37.0;
 const BOOK_GRID_COLS: usize = 4;
@@ -353,6 +369,9 @@ const BOOK_GRID_COLS: usize = 4;
 /// "0"), 10×14 badges — the number retail stamps in a hotkeyed spell's
 /// book cell (sub_24230 :27857).
 const SPR_QUICK_DIGIT: usize = 30;
+/// The slot slab's ACTIVE variant — retail swaps [3]→[4] while the
+/// spell's burst counter runs (sub_24230 :27810).
+const SPR_SLOT_BG_ACTIVE: usize = 4;
 
 /// One grid cell's slab rect in screen pixels (the icon is pre-composited
 /// onto the 64×37 slot slab). `k` = display index 0..24.
@@ -398,36 +417,51 @@ pub fn book_quads(
         // "background should be the darker sprite"). We approximate the
         // blend-over-black with a darkening tint.
         let owned = loadout.owned[spell as usize];
-        let cost = SPELLS[spell as usize].possess_mana;
-        let castable = owned && cost <= loadout.mana;
+        // The :26926 BIND gate: the spell's castle_req (+132, the
+        // castle-stored unlock ladder) vs the castle's stored mana —
+        // NOT a player-mana affordability test. Computed sim-side.
+        let bindable = owned && loadout.bindable[spell as usize];
         let over = cursor.0 >= cell[0]
             && cursor.0 < cell[0] + cell[2]
             && cursor.1 >= cell[1]
             && cursor.1 < cell[1] + cell[3];
-        // Only owned+affordable spells are hoverable/bindable (the click
-        // gate checks the mana cost at :26926).
-        if over && castable {
+        // Only gate-passing owned spells become the bind target
+        // (var_u8_22); every hovered cell still gets feedback below.
+        if over && bindable {
             hovered = Some(spell_id);
         }
 
-        // The stone slab [3] fills the cell, drawn DARKER (the original's
-        // sub_23940 blends it over the black book background). Stretching
-        // the slab texture to the cell is invisible.
-        push_opt(&mut quads, assets.sprite_quad_rect_tint(SPR_SLOT_BG as usize, cell, SLAB_DIM));
-        // The ICON at its NATIVE 62×34, UNIFORM-scaled + centered (NOT
-        // baked into the stretched slab — that distorted at non-4:3).
-        // OWNED = full colour (raw). NOT owned = the icon's SHAPE cut into
-        // the slab as a dark relief: a translucent dark fill over the
-        // stone so the tile texture shows through, darkened (player
-        // 2026-07-07: "a silhouette … outer shape of the sprite, but the
-        // texture of the tile exactly" — the original's blend[0xA6|dest]).
+        // The stone slab fills the cell, drawn DARKER (the original's
+        // sub_23940 blends it over the black book background) —
+        // stretching the slab texture is invisible. While the spell's
+        // burst counter runs, retail swaps the slab to the ACTIVE
+        // variant [4] (sub_24230 :27810; no cooldown veil exists —
+        // ours was an invention).
+        let slab = if owned && loadout.cooldown[spell as usize] > 0.0 {
+            SPR_SLOT_BG_ACTIVE
+        } else {
+            SPR_SLOT_BG as usize
+        };
+        push_opt(
+            &mut quads,
+            assets
+                .sprite_quad_rect_tint(slab, cell, SLAB_DIM)
+                .or_else(|| assets.sprite_quad_rect_tint(SPR_SLOT_BG as usize, cell, SLAB_DIM)),
+        );
+        // The ICON at native 62×34 × the UNIFORM art scale, anchored at
+        // the CELL ORIGIN — retail's sub_24230 draws it with
+        // `DrawBitmap(a1, a2, icon)`: top-left at the cell corner, so
+        // the 62×34 art leaves 2px right + 3px bottom slack (player
+        // 2026-07-08: centering + fit-to-cell sat it too low and made
+        // e.g. the castle icon touch the cell bottom). Uniform scale =
+        // min(w/640, h/480) so the art never stretches at non-4:3.
+        // OWNED = full colour (raw). NOT owned = the icon's SHAPE cut
+        // into the slab as a dark relief (the original's
+        // blend[0xA6|dest], sub_23AE0).
+        let su = (w / 640.0).min(h / 480.0);
         let icon_id = SPR_SPELL_ICON + spell as usize;
         if let Some((iw, ih)) = assets.sprite_dims(icon_id) {
-            let s = (cell[2] / iw).min(cell[3] / ih);
-            let (dw, dh) = (iw * s, ih * s);
-            let ix = cell[0] + (cell[2] - dw) / 2.0;
-            let iy = cell[1] + (cell[3] - dh) / 2.0;
-            let irect = [ix, iy, dw, dh];
+            let irect = [cell[0], cell[1], iw * su, ih * su];
             push_opt(
                 &mut quads,
                 if owned {
@@ -438,43 +472,106 @@ pub fn book_quads(
             );
         }
         if owned {
-            // Cooldown veil sweeps down as the burst counter runs.
-            let cd = loadout.cooldown[spell as usize];
-            if cd > 0.0 {
-                quads.push(solid([cell[0], cell[1], cell[2], cell[3] * cd], COOLDOWN_SHADE));
-            }
             // Quick-select number badge (sub_24230 :27857): a spell
-            // bound to a number key shows its digit glyph [30+slot] in
-            // the cell corner (slot 0 = key "1" = glyph [30], … slot 9 =
-            // key "0" = [39]). The original blends the glyph toward color
-            // `byte_AD167_AD157[1]` (sub_23AE0 = a coverage-mask blend,
-            // NOT a raw copy) — which renders BLACK, not the sprite's own
-            // yellow (shared with the castle-level digits). We reproduce
-            // that with a black multiplicative tint over the glyph, so
-            // the digit shape stays but the ink is black (player
-            // 2026-07-07: retail digits are black).
+            // bound to a number key shows its digit glyph [30+slot]
+            // at the CELL ORIGIN (retail `sub_23AE0(a1, a2, ...)` —
+            // the glyph's own margins do the placement), blended
+            // toward `byte_AD167[1]` = BLACK ink (a coverage-mask
+            // blend). Retail actually gates this on a per-spell
+            // countdown (+844, decremented per draw — the badge
+            // FLASHES after assignment) or a book-wide flag (+14421);
+            // we keep it always-on in the book as the readable
+            // interpretation.
             if let Some(slot) = quick_binds.iter().position(|&b| b == Some(spell)) {
-                let s = (w / 640.0).min(h / 480.0);
                 push_opt(
                     &mut quads,
                     assets.sprite_quad_tint(
                         SPR_QUICK_DIGIT + slot,
-                        cell[0] + 2.0,
-                        cell[1] + 2.0,
-                        s,
+                        cell[0],
+                        cell[1],
+                        su,
                         DIGIT_INK,
                     ),
                 );
             }
+            // LOCKED overlay (sub_24230 :27860): when castle_req
+            // exceeds the castle's stored mana (or no castle stands),
+            // retail remaps the WHOLE cell through fog row 0x30
+            // (sub_247C0) — a uniform wash over slab + icon + badge.
+            // This is the visual for the unlock ladder ("owned but
+            // can't select" is faithful; the wash tells you why).
+            if !bindable {
+                quads.push(solid(cell, LOCKED_WASH));
+            }
         }
-        if over && castable {
-            // Hover highlight (sub_24DA0): a bright frame on the cell.
+        if over && !bindable {
+            // Hover ring (sub_24DA0/sub_24D20, ink byte_AE167): retail
+            // rings EVERY hovered cell — locked and unowned included —
+            // only the bind-candidate recording is gated. The hovered
+            // BINDABLE cell gets the panel redraw below instead of a
+            // ring. (Ring colour = a text-table ink; hand-tuned until
+            // the LUT bake.)
             let f = cell;
             let t = [0.9, 0.85, 0.5, 0.9];
             quads.push(solid([f[0], f[1], f[2], 2.0], t));
             quads.push(solid([f[0], f[1] + f[3] - 2.0, f[2], 2.0], t));
             quads.push(solid([f[0], f[1], 2.0, f[3]], t));
             quads.push(solid([f[0] + f[2] - 2.0, f[1], 2.0, f[3]], t));
+        }
+    }
+    // The hovered BINDABLE cell is redrawn as a full equipped-spell
+    // panel at the cell origin — retail calls `sub_23D40(x, y, spell,
+    // 1)` AFTER the grid loop (a4=1 = raw opaque DrawBitmap frame, not
+    // the translucent sub_23940 blend), overdrawing its neighbours
+    // with the 64×44 frame. Frame [1]/[2] by the burst counter, icon
+    // raw, availability meter at (+4,+36).
+    if let Some(spell_id) = hovered {
+        let sp = spell_id.0;
+        let k = DISPLAY_ORDER.iter().position(|&d| d == sp).unwrap_or(0);
+        let cell = book_cell(w, h, k);
+        let (sx, sy) = (w / 640.0, h / 480.0);
+        let frame = if loadout.cooldown[sp as usize] > 0.0 { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
+        if let Some((fw, fh)) = assets.sprite_dims(frame) {
+            push_opt(
+                &mut quads,
+                assets.sprite_quad_rect_tint(
+                    frame,
+                    [cell[0], cell[1], fw * sx, fh * sy],
+                    WHITE,
+                ),
+            );
+        }
+        let su = sx.min(sy);
+        let icon_id = SPR_SPELL_ICON + sp as usize;
+        if let Some((iw, ih)) = assets.sprite_dims(icon_id) {
+            // Retail draws the icon at the frame origin (DrawBitmap
+            // (a1, a2)), uniform art scale.
+            push_opt(
+                &mut quads,
+                assets.sprite_quad_rect_tint(
+                    icon_id,
+                    [cell[0], cell[1], iw * su, ih * su],
+                    WHITE,
+                ),
+            );
+        }
+        // Availability meter (sub_23D40 :27703-34): partial-cast
+        // progress bar + one shaded dot per whole affordable cast.
+        let cost = SPELLS[sp as usize].possess_mana.max(1);
+        let mana = loadout.mana;
+        let (mx, my) = (cell[0] + 4.0 * sx, cell[1] + 36.0 * sy);
+        let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
+        quads.push(solid([mx, my, partial * sx, 4.0 * sy], METER_GREY));
+        meter_dots(&mut quads, mx, my, sx, sy, (mana / cost).min(54) as usize);
+        // Retail's sub_23D40 re-stamps the quickselect digit inside
+        // the redraw (:27749-67) — without it the badge vanishes
+        // exactly while hovering the cell you're assigning (player
+        // 2026-07-08).
+        if let Some(slot) = quick_binds.iter().position(|&b| b == Some(sp)) {
+            push_opt(
+                &mut quads,
+                assets.sprite_quad_tint(SPR_QUICK_DIGIT + slot, cell[0], cell[1], su, DIGIT_INK),
+            );
         }
     }
     // The whole screen bottom (below the map + spellbook) is simply
@@ -514,6 +611,15 @@ const MANA_WHITE: [f32; 4] = [0.95, 0.95, 0.95, 1.0];
 /// byte_99B58[1+2*owner]) — GREY, not blue (player 2026-07-07); the
 /// partial mana toward the next cast, under the equipped-spell icon.
 const METER_GREY: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+/// Locked-spell overlay (sub_24230 :27860 + sub_23D40 :27767): when a
+/// spell's castle_req (+132) exceeds the linked castle's STORED mana
+/// (+140) — or no castle stands — retail remaps the whole cell/panel
+/// rect through fog row 0x30 (sub_247C0), a uniform wash over
+/// everything beneath. DARKENS, per the player's retail book
+/// screenshot (2026-07-08) — which also means the fog rows run
+/// dark-high (flagging the map marker cross's white fade for a
+/// polarity re-check); exact shade lands with the LUT bake.
+const LOCKED_WASH: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 /// Bar geometry (sub_22810 draws a 64-wide fill; sub_22E50 offsets).
 const BAR_W: f32 = 64.0;
 const BAR_X: f32 = 58.0; // bars start +58 from the sub-panel origin
@@ -522,9 +628,12 @@ const HUD_SECTION: f32 = 128.0;
 
 /// A solid bar fill at panel-space (x,y) scaled to screen — the
 /// original's `sub_22810(x,y,64,h,(val<<6)/max,color)`: `fill` is the
-/// value/max fraction of the 64-px ruler. `bg` draws the dark track.
+/// value/max fraction of the 64-px ruler. Faithful sub_22810 (:26991)
+/// draws ONLY the clamped colored fill, straight on the panel marble —
+/// no background track — and skips fills under 2px. (The track we used
+/// to draw also covered the amber capacity fill wherever a white
+/// stored-mana bar overlaid it.)
 fn bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, h: f32, frac: f32, color: [f32; 4]) {
-    quads.push(solid([x * s, y * s, BAR_W * s, h * s], BAR_BG));
     let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
     if fill >= 2.0 {
         quads.push(solid([x * s, y * s, fill * s, h * s], color));
@@ -542,6 +651,23 @@ fn thin_bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, frac: f32, color: [
     }
 }
 
+/// The availability dots (sub_23D40 :27713-33): one dot per whole
+/// affordable cast, filled column-major (2 rows at +0/+2, 27 columns
+/// at +4,+6,…). Each dot is EXACTLY ONE native pixel — both screen
+/// writers (sub_615D4 hi-res 640w, sub_61594 lo-res 320w) plot a
+/// single byte; the "shaded 2×2" look in DOSBox captures is its
+/// upscaler smearing that pixel across the 2-px spacing grid
+/// (decompile-verified vs player screenshot, 2026-07-08). `mx/my` in
+/// screen px; `sx/sy` = native→screen scale (snap() keeps every dot
+/// rasterizing alike).
+fn meter_dots(quads: &mut Vec<UiQuad>, mx: f32, my: f32, sx: f32, sy: f32, casts: usize) {
+    for d in 0..casts {
+        let (col, row) = ((d / 2) as f32, (d % 2) as f32);
+        let (x, y) = (mx + col * 2.0 * sx, my + row * 2.0 * sy);
+        quads.push(solid([x, y, sx.max(1.0), sy.max(1.0)], MANA_WHITE));
+    }
+}
+
 /// In-game HUD — the faithful top strip (remc1 sub_22E50 wizard panel +
 /// sub_23D40 equipped-spell panels), laid out at the original's 640-wide
 /// coordinates scaled by `w/640`. The rotating round minimap is drawn by
@@ -552,6 +678,7 @@ pub fn hud_quads(
     loadout: &LoadoutView,
     vitals: &PlayerVitals,
     transparent: bool,
+    alert_blink: bool,
     w: f32,
     _h: f32,
 ) -> Vec<UiQuad> {
@@ -560,11 +687,6 @@ pub fn hud_quads(
     // Panel-background tint: translucent (faithful MC1, always-on
     // transparency) or opaque (the MC2 readability toggle).
     let panel_tint = if transparent { PANEL_TINT } else { WHITE };
-    let push = |q: &mut Vec<UiQuad>, o: Option<UiQuad>| {
-        if let Some(u) = o {
-            q.push(u);
-        }
-    };
 
     // --- Wizard stat strip (sub_22E50): three 128-wide sub-panels. ---
     // Tiles pack from x=2: [40] radar frame (124w), then sub-panels at
@@ -577,46 +699,59 @@ pub fn hud_quads(
     //   C (v24, `a1x`)     = the player's OWN wizard — self life + mana
     //                        capacity/banked, drawn UNCONDITIONALLY.
     let cap_w = assets.sprite_dims(SPR_PANEL_BG).map_or(124.0, |(w, _)| w);
-    push(&mut quads, assets.sprite_quad_tint(SPR_PANEL_BG, 2.0 * s, 2.0 * s, s, panel_tint));
+    push_opt(&mut quads, assets.sprite_quad_tint(SPR_PANEL_BG, 2.0 * s, 2.0 * s, s, panel_tint));
     let v22 = 2.0 + cap_w; // slot A = castle panel
     let v23 = v22 + HUD_SECTION; // slot B = balloons
     let v24 = v22 + 2.0 * HUD_SECTION; // slot C = self
 
     let world = loadout.world_mana.max(1) as f32;
-    // The level-goal tick on a mana ruler at panel-origin `ox` (the
-    // win_pct mark; green once completed) — sub_22E50 :27268.
+    // The level-goal marks (:27267-74 slot A / :27380-87 slot C): TWO
+    // 2×2 ticks at y=26 and y=38 bracketing the mana ruler at win_pct%
+    // of its 64px width (`v20 + (pct<<6)/100`), colour alternating
+    // between the two team-ramp entries per blink frame (v28 =
+    // byte_99B58[2·owner + phase]; white/grey stand-ins until the LUT
+    // bake). The green completed state is our labeled helper — retail
+    // has no completion recolour here.
     let win_tick = |quads: &mut Vec<UiQuad>, ox: f32| {
         if loadout.win_pct > 0 {
             let tx = (ox + BAR_X) * s + BAR_W * s * (loadout.win_pct as f32 / 100.0).min(1.0);
             let tc = if loadout.completed {
                 [0.3, 0.95, 0.3, 1.0]
+            } else if alert_blink {
+                MANA_WHITE
             } else {
-                [0.95, 0.95, 0.95, 1.0]
+                METER_GREY
             };
-            quads.push(solid([tx - 1.0, 26.0 * s, 2.0, 12.0 * s], tc));
+            for y in [26.0, 38.0] {
+                quads.push(solid([tx, y * s, 2.0 * s, 2.0 * s], tc));
+            }
         }
     };
 
     // === Slot A: the linked castle (:27215). Gated on the castle
     // existing AND level > 0 (else the bare marble [54]). player. ===
+    // Alert marbles: retail flickers [55] on alternate blink frames
+    // while the per-source hit counter runs (u8_391 castle / u8_393
+    // balloons / u8_392 self, each decremented per flash) — the
+    // `alert_blink` gate approximates that frame flicker.
     let castle = loadout.castle.filter(|(_, _, lvl)| *lvl > 0);
     let slot_a_bg = if castle.is_none() {
         SPR_WIZ_EMPTY
-    } else if vitals.castle_alert {
+    } else if vitals.castle_alert && alert_blink {
         SPR_WIZ_ALERT
     } else {
         SPR_WIZ_BG
     };
-    push(&mut quads, assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint));
+    push_opt(&mut quads, assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint));
     if let Some((stored, capacity, level)) = castle {
         let ox = v22;
         // Castle-level glyph [43+level] (emblem/heart/orb/digit baked
         // in) then the divider [42].
-        push(
+        push_opt(
             &mut quads,
             assets.sprite_quad(SPR_CASTLE_LVL + level as usize, (ox + 2.0) * s, 2.0 * s, s),
         );
-        push(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        push_opt(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
         // Life bar (+58, y=10) = the CASTLE's HP (v4x->actLife/maxLife,
         // palette 0x7B) — NOT the player's life (:27237). castle_hp is
         // the downgrade meter.
@@ -638,23 +773,33 @@ pub fn hud_quads(
         win_tick(&mut quads, ox);
     }
 
-    // === Slot B: the mana balloons (:27278-344). Empty [54] with no
-    // roster; otherwise the balloon glyph [50+count] + divider, then a
-    // thin HP + cargo bar per balloon, stacked 2px apart. ===
+    // === Slot B: the mana balloons (:27278-344). The marble [54]
+    // ONLY when no castle stands (:27281); otherwise the glyph is
+    // [50+roster] where the roster WIDTH comes from castle level —
+    // it does NOT shrink when balloons die (dead slots simply draw no
+    // bars, :27335-40). Thin HP + cargo bars per live balloon. ===
     let balloons = &loadout.balloons;
-    let slot_b_bg = if balloons.is_empty() { SPR_WIZ_EMPTY } else { SPR_WIZ_BG };
-    push(&mut quads, assets.sprite_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint));
+    let slot_b_bg = if balloons.is_empty() {
+        SPR_WIZ_EMPTY
+    } else if vitals.balloon_alert && alert_blink {
+        SPR_WIZ_ALERT
+    } else {
+        SPR_WIZ_BG
+    };
+    push_opt(&mut quads, assets.sprite_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint));
     if !balloons.is_empty() {
         let ox = v23;
-        let count = balloons.len().min(3);
-        push(
+        let roster = balloons.len().min(3);
+        push_opt(
             &mut quads,
-            assets.sprite_quad(SPR_BALLOON_GLYPH + count, (ox + 2.0) * s, 2.0 * s, s),
+            assets.sprite_quad(SPR_BALLOON_GLYPH + roster, (ox + 2.0) * s, 2.0 * s, s),
         );
-        push(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
-        // Per balloon: HP bar at y=12+2i (red), cargo bar at y=30+2i
-        // (banked-mana white) — the thin stacked lines (:27338-39).
-        for (i, &(hp, cargo)) in balloons.iter().enumerate().take(3) {
+        push_opt(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        // Per LIVE balloon: HP bar at y=12+2i (red), cargo bar at
+        // y=30+2i (banked-mana white) — the thin stacked lines
+        // (:27338-39); dead/unspawned roster slots stay bar-less.
+        for (i, slot) in balloons.iter().enumerate().take(3) {
+            let Some((hp, cargo)) = *slot else { continue };
             let y = 2.0 * i as f32;
             thin_bar(&mut quads, s, ox + BAR_X, 12.0 + y, hp, LIFE_RED);
             thin_bar(&mut quads, s, ox + BAR_X, 30.0 + y, cargo, MANA_WHITE);
@@ -662,15 +807,17 @@ pub fn hud_quads(
     }
 
     // === Slot C: the player's OWN wizard (:27346-388). Always drawn
-    // (no gate) — the wizard is always present. ===
-    let slot_c_bg = if vitals.castle_alert { SPR_WIZ_ALERT } else { SPR_WIZ_BG };
-    push(&mut quads, assets.sprite_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint));
+    // (no gate) — the wizard is always present. The alert marble here
+    // is the PLAYER-hit flash (u8_392, :27347), independent of the
+    // castle's u8_391. ===
+    let slot_c_bg = if vitals.player_alert && alert_blink { SPR_WIZ_ALERT } else { SPR_WIZ_BG };
+    push_opt(&mut quads, assets.sprite_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint));
     {
         let ox = v24;
         // Base wizard glyph [43] + divider [42] (:27358-72; the alert
         // /grace variant swaps a blended copy — we keep the plain draw).
-        push(&mut quads, assets.sprite_quad(SPR_CASTLE_LVL, (ox + 2.0) * s, 2.0 * s, s));
-        push(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        push_opt(&mut quads, assets.sprite_quad(SPR_CASTLE_LVL, (ox + 2.0) * s, 2.0 * s, s));
+        push_opt(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
         // Self life bar (+58, y=10) = the PLAYER's health (a1x->actLife,
         // 0x7B red) — this is where player life belongs (:27375).
         bar(
@@ -702,40 +849,50 @@ pub fn hud_quads(
         // duration effects (speed etc.), driven by the burst counter.
         let active = spell.is_some_and(|sp| loadout.cooldown[sp as usize] > 0.0);
         let frame = if active { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
-        push(&mut quads, assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint));
+        push_opt(&mut quads, assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint));
         if let Some(sp) = spell {
-            // Icon at native size, drawn raw on top of the frame (the
-            // original's DrawBitmap, no stretch) — a couple px in.
-            push(
+            // Icon drawn raw at the FRAME ORIGIN (sub_23D40's
+            // `DrawBitmap(a1, a2, icon)` — the art's own margins do
+            // the placement), native size × the HUD scale.
+            push_opt(
                 &mut quads,
-                assets.sprite_quad(SPR_SPELL_ICON + sp as usize, (px + 1.0) * s, 3.0 * s, s),
+                assets.sprite_quad(SPR_SPELL_ICON + sp as usize, px * s, 2.0 * s, s),
             );
             // Availability meter at (frame+4, frame+36) — sub_23D40
-            // :27703-34. A progress bar (partial mana toward the next
-            // cast) with a row-pair of SINGLE-PIXEL dots over it, one dot
-            // per whole cast currently affordable (sub_61594 writes one
-            // pixel each; 2 rows, columns step by 2, up to 27 wide).
+            // :27703-34: the grey partial-cast progress bar, then one
+            // 2×2 SHADED dot per whole affordable cast over it.
             let cost = SPELLS[sp as usize].possess_mana.max(1);
             let mana = loadout.mana;
-            let mx = px + 4.0; // sub_23D40 a1+4
-            let my = 2.0 + 36.0; // a2+36
-            // Progress bar: (56 * (mana % cost)) / cost px wide, 4 tall.
+            let mx = (px + 4.0) * s; // sub_23D40 a1+4
+            let my = (2.0 + 36.0) * s; // a2+36
             let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
-            quads.push(solid([mx * s, my * s, partial * s, 4.0 * s], METER_GREY));
-            // Dots: one single pixel per whole cast, filled column-major
-            // (2 rows), columns +2 apart — up to 27 columns (54 casts).
-            let casts = (mana / cost).min(54) as usize;
-            for d in 0..casts {
-                let col = (d / 2) as f32;
-                let row = (d % 2) as f32;
-                quads.push(solid(
-                    [(mx + col * 2.0) * s, (my + row * 2.0) * s, s.max(1.0), s.max(1.0)],
-                    WHITE,
-                ));
+            quads.push(solid([mx, my, partial * s, 4.0 * s], METER_GREY));
+            meter_dots(&mut quads, mx, my, s, s, (mana / cost).min(54) as usize);
+            // Locked equipped spell (sub_23D40 :27767): the same fog
+            // wash as the book cell covers the whole panel while the
+            // castle_req isn't met — the equipped hand tells you it
+            // can't fire.
+            if !loadout.bindable[sp as usize] {
+                let (fw, fh) = assets.sprite_dims(frame).unwrap_or((64.0, 44.0));
+                quads.push(solid([px * s, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
             }
         }
     }
     quads
+}
+
+/// Pause indicator. Retail draws the text "PAUSED" at native (132,50)
+/// (banked with the DrawText path — ROADMAP Tier 3); until the font
+/// lands, a ‖ pause glyph at the same spot marks the frozen sim so a
+/// still screen doesn't read as a hang.
+pub fn pause_quads(w: f32, _h: f32) -> Vec<UiQuad> {
+    let s = (w / 640.0).max(1.0);
+    let (x, y) = (132.0 * s, 50.0 * s);
+    let ink = [0.95, 0.95, 0.95, 0.95];
+    vec![
+        solid([x, y, 4.0 * s, 14.0 * s], ink),
+        solid([x + 8.0 * s, y, 4.0 * s, 14.0 * s], ink),
+    ]
 }
 
 /// Mortality overlays + the life bar (functional-first placement;
@@ -744,23 +901,14 @@ pub fn hud_quads(
 pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad> {
     let mut quads = Vec::new();
     let scale = (w / 640.0).max(1.0);
-    // Life bar just above the center mana bar, traffic-light tinted.
-    let frac = (v.life as f32 / v.life_max.max(1) as f32).clamp(0.0, 1.0);
+    // (The old bottom-center life bar is GONE — player health lives in
+    // the wizard strip's slot C now, where retail draws it; the bar
+    // was redundant, player 2026-07-08.)
     let bw = w * 0.25;
     let y = h - 26.0 * scale;
-    quads.push(solid([(w - bw) / 2.0, y, bw, 7.0 * scale], BAR_BG));
-    let color = if frac > 0.5 {
-        [0.25, 0.8, 0.3, 1.0]
-    } else if frac > 0.25 {
-        [0.9, 0.75, 0.2, 1.0]
-    } else {
-        [0.9, 0.2, 0.15, 1.0]
-    };
-    quads.push(solid(
-        [(w - bw) / 2.0 + 1.0, y + 1.0, (bw - 2.0) * frac, 7.0 * scale - 2.0],
-        color,
-    ));
-    // Spawn-grace shimmer: a thin white strip draining over the bar.
+    // Spawn-grace shimmer: a thin white strip draining bottom-center
+    // (no faithful equivalent — retail shows nothing for grace; kept
+    // as the readable invulnerability cue).
     if v.grace > 0 && v.state == LifeState::Alive {
         quads.push(solid(
             [
@@ -772,14 +920,10 @@ pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad
             [1.0, 1.0, 1.0, 0.8],
         ));
     }
-    // Castle under attack (the original flashes the castle panel,
-    // Type_160+391): an amber strip over the castle-panel bars.
-    if v.castle_alert {
-        quads.push(solid(
-            [w - w * 0.18 - 12.0 * scale, h - 66.0 * scale, w * 0.18, 3.0 * scale],
-            [1.0, 0.4, 0.1, 0.9],
-        ));
-    }
+    // Castle under attack: the faithful cue is the wizard strip's
+    // alert marble [55] (hud_quads slot A) — the amber strip that used
+    // to flash here anchored to the old bottom-right castle panel,
+    // which moved to the top strip.
     // The red hit flash (sub_44BE0(2) — palette row 2 in retail).
     if v.hit_flash > 0 && v.state == LifeState::Alive {
         let a = 0.08 * v.hit_flash as f32;

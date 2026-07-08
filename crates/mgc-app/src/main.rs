@@ -446,6 +446,11 @@ struct App {
     map_owned_buildings: bool,
     /// HUD blends over the sky (faithful MC1) vs opaque (MC2 toggle).
     hud_transparent: bool,
+    /// Sim tick of the last map-texture recompose (dots/blink are
+    /// tick-derived, so update_map runs per tick, not per frame).
+    last_map_tick: Option<u64>,
+    /// P-key pause: the sim clock freezes, rendering and UI stay live.
+    paused: bool,
     /// Own castle position in tile units (the guide-path target),
     /// refreshed from the pose set.
     castle_pos: Option<(f32, f32)>,
@@ -542,20 +547,8 @@ impl App {
             sim.flyer = start;
             sim.sync_carpet_from_flyer();
         }
-        if dev_spells {
-            if let Some(w) = &mut sim.world {
-                w.set_dev_spells(true);
-            }
-        }
-        if !level.plausible_spells.is_empty() {
-            if let Some(w) = &mut sim.world {
-                w.grant_spells(&level.plausible_spells);
-            }
-        }
-        if invincible {
-            if let Some(w) = &mut sim.world {
-                w.set_invincible(true);
-            }
+        if let Some(w) = &mut sim.world {
+            apply_instruments(w, dev_spells, &level.plausible_spells, invincible);
         }
         let prev_flyer = sim.flyer;
         Self {
@@ -569,6 +562,8 @@ impl App {
             pending_demolish: false,
             map_owned_buildings,
             hud_transparent,
+            last_map_tick: None,
+            paused: false,
             castle_pos: None,
             window: None,
             renderer: None,
@@ -636,15 +631,7 @@ impl App {
             return;
         };
         let mut w = init.build();
-        if self.dev_spells {
-            w.set_dev_spells(true);
-        }
-        if !self.level.plausible_spells.is_empty() {
-            w.grant_spells(&self.level.plausible_spells);
-        }
-        if self.invincible {
-            w.set_invincible(true);
-        }
+        apply_instruments(&mut w, self.dev_spells, &self.level.plausible_spells, self.invincible);
         w.terrain_dirty = true;
         w.entities_dirty = true;
         let (thrust, altitude) = (self.sim.thrust_model, self.sim.altitude_model);
@@ -776,24 +763,37 @@ impl App {
                 r.set_billboards(self.level.billboards.clone());
                 r.set_health_bars(bars);
             }
-            // Upright map icons are drawn screen-space by the renderer
-            // (never baked into the rotated map texture).
+            // Upright map icons + the guide path are drawn screen-space
+            // by the renderer (never baked into the rotated map
+            // texture: icons stay upright, ant spacing stays 4 surface
+            // px under rotation/zoom).
             r.set_map_stamps(self.level.map_stamps.clone());
+            r.set_map_path(self.castle_pos.map(|(cx, cz)| mgc_render::MapPath {
+                from: (self.sim.flyer.x, self.sim.flyer.z),
+                to: (cx, cz),
+                phase: (self.sim.tick & 3) as u8,
+            }));
             if terrain {
                 r.update_terrain(&self.level.view, &overlay);
-            } else {
-                // The map recomposes EVERY frame — the original
-                // redraws it per frame, and the blink + marching-ants
-                // phases live in the pixels (the old every-8th-tick
-                // throttle was the player-reported low refresh rate).
+                self.last_map_tick = Some(self.sim.tick);
+            } else if self.last_map_tick != Some(self.sim.tick) {
+                // The map recomposes once per SIM TICK — everything
+                // baked in it (dots, blink phase tick>>3) changes at
+                // tick rate, so per-frame recompose (a 256×256 LUT
+                // walk + full texture upload) bought nothing. (The
+                // marching ants march per frame regardless — they're
+                // screen-space now. The old every-8th-tick throttle
+                // was the player-reported low refresh; per-tick is
+                // the content rate.)
                 r.update_map(&self.level.view, &overlay);
+                self.last_map_tick = Some(self.sim.tick);
             }
         }
     }
 
-    /// Assemble the current map overlay: dots + own-castle/balloon
-    /// icon stamps + the guide path (player → own castle, marching
-    /// ants on the tick phase) + the opt-in trigger circles.
+    /// Assemble the current baked map overlay: dots + the opt-in
+    /// trigger circles. (Icon stamps and the guide path draw
+    /// screen-space via `set_map_stamps`/`set_map_path`.)
     fn map_overlay(&self) -> mgc_render::MapOverlay {
         mgc_render::MapOverlay {
             dots: self.level.map_dots.clone(),
@@ -802,14 +802,21 @@ impl App {
             } else {
                 Vec::new()
             },
-            // Stamps are set separately via `set_map_stamps` (they draw
-            // upright screen-space, not baked into the rotated map).
-            stamps: Vec::new(),
-            path: self.castle_pos.map(|(cx, cz)| mgc_render::MapPath {
-                from: (self.sim.flyer.x, self.sim.flyer.z),
-                to: (cx, cz),
-                phase: (self.sim.tick & 3) as u8,
-            }),
+        }
+    }
+
+    /// While PAUSED the sim never consumes `pending_equip` (no ticks
+    /// run), so the HUD hand icons wouldn't redraw until unpause —
+    /// apply book bindings to the world immediately instead (binding
+    /// is UI state, not simulation).
+    fn flush_equip_if_paused(&mut self) {
+        if !self.paused {
+            return;
+        }
+        if let Some(w) = &mut self.sim.world {
+            let l = self.pending_equip.0.take().map(mgc_sim::spells::SpellId);
+            let r = self.pending_equip.1.take().map(mgc_sim::spells::SpellId);
+            w.equip_hands(l, r);
         }
     }
 
@@ -835,8 +842,16 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        let attrs =
-            Window::default_attributes().with_title(format!("Magic Carpet — {}", self.level.label));
+        // Default viewport = 1280×960 PHYSICAL px: exactly 2× the
+        // native 640×480, so every UI/HUD element lands on an integer
+        // pixel grid (no fractional-scale aliasing) and the aspect is
+        // retail 4:3. Physical (not logical) so fractional DPI scales
+        // (125% etc.) can't reintroduce a fractional multiple. The
+        // window stays resizable; fullscreen/non-4:3 presentation is
+        // the banked ui-native-layer work.
+        let attrs = Window::default_attributes()
+            .with_title(format!("Magic Carpet — {}", self.level.label))
+            .with_inner_size(winit::dpi::PhysicalSize::new(1280u32, 960u32));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -909,6 +924,7 @@ impl ApplicationHandler for App {
                                     r.set_map_view(false);
                                 }
                                 self.set_grab(true);
+                                self.flush_equip_if_paused();
                             }
                         }
                     }
@@ -993,6 +1009,17 @@ impl ApplicationHandler for App {
                         if let Some(d) = digit {
                             if self.book_open() {
                                 if let Some(spell) = self.hovered {
+                                    // One spell ↔ one digit (retail:
+                                    // assigning a quick key unassigns
+                                    // the spell's previous one) — two
+                                    // slots holding the same spell
+                                    // would fight over the book's
+                                    // digit badge.
+                                    for b in self.quick_binds.iter_mut() {
+                                        if *b == Some(spell.0) {
+                                            *b = None;
+                                        }
+                                    }
                                     self.quick_binds[d] = Some(spell.0);
                                     println!(
                                         "quick key {}: {}",
@@ -1006,6 +1033,7 @@ impl ApplicationHandler for App {
                                 } else {
                                     self.pending_equip.0 = Some(spell);
                                 }
+                                self.flush_equip_if_paused();
                             }
                             return;
                         }
@@ -1040,6 +1068,14 @@ impl ApplicationHandler for App {
                         }
                     }
                     println!("music: {}", if self.music_on { "on" } else { "off" });
+                    return;
+                }
+                // Pause (retail P, drawing PAUSED at 132,50): the sim
+                // clock freezes, the renderer/UI stay live — the quiet
+                // room for inspecting the HUD/book without mobs.
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyP) {
+                    self.paused = !self.paused;
+                    println!("{}", if self.paused { "paused" } else { "unpaused" });
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyT) {
@@ -1180,6 +1216,12 @@ impl ApplicationHandler for App {
                 let dt = (now - self.last_frame).as_secs_f32().min(0.25);
                 self.last_frame = now;
                 self.accumulator += dt;
+                if self.paused {
+                    // Frozen sim clock: drain the accumulator so
+                    // unpausing resumes cleanly instead of bursting
+                    // through the missed ticks.
+                    self.accumulator = 0.0;
+                }
 
                 while self.accumulator >= TICK_DT {
                     self.accumulator -= TICK_DT;
@@ -1243,8 +1285,12 @@ impl ApplicationHandler for App {
                         .as_ref()
                         .map(|win| win.inner_size())
                         .map(|s| (s.width as f32, s.height as f32))
-                        .unwrap_or((1280.0, 720.0));
+                        .unwrap_or((1280.0, 960.0));
                     let loadout = w.loadout();
+                    let vitals = w.vitals();
+                    // The alert-marble flicker approximates retail's
+                    // per-frame [55]/[41] alternation at tick parity.
+                    let alert_blink = self.sim.tick % 2 == 0;
                     let (mut quads, hovered) = if self.book_open() {
                         ui::book_quads(assets, &loadout, &self.quick_binds, size.0, size.1, self.cursor)
                     } else {
@@ -1252,8 +1298,9 @@ impl ApplicationHandler for App {
                             ui::hud_quads(
                                 assets,
                                 &loadout,
-                                &w.vitals(),
+                                &vitals,
                                 self.hud_transparent,
+                                alert_blink,
                                 size.0,
                                 size.1,
                             ),
@@ -1262,11 +1309,16 @@ impl ApplicationHandler for App {
                     };
                     if !self.book_open() {
                         quads.extend(ui::vitals_quads(
-                            &w.vitals(),
+                            &vitals,
                             size.0,
                             size.1,
                             (self.sim.tick / 8) % 2 == 0,
                         ));
+                    }
+                    if self.paused {
+                        // Both views: the book screen is exactly where
+                        // paused inspection happens.
+                        quads.extend(ui::pause_quads(size.0, size.1));
                     }
                     self.hovered = hovered;
                     if let Some(r) = &mut self.renderer {
@@ -1522,13 +1574,11 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), St
 /// rotation-free comparison artifact for original map screenshots.
 fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> Result<(), String> {
     let n = 256usize;
+    // Stamps/path are screen-space projected at render time; this raw
+    // CPU dump (the diagnostic artifact) shows dots only.
     let overlay = mgc_render::MapOverlay {
         dots: level.map_dots.clone(),
         areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
-        // Stamps are screen-space projected at render time; this raw CPU
-        // dump (the diagnostic artifact) shows dots only.
-        stamps: Vec::new(),
-        path: None,
     };
     let src = mgc_render::map_pixels(&level.view, &overlay);
     let s = scale as usize;
@@ -1546,6 +1596,28 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
     Ok(())
 }
 
+/// Apply the playtest instruments to a freshly built world — ONE place
+/// so a future instrument can't miss a call site (fresh start in
+/// `App::new`, `restart_level`, and the headless screenshot path all
+/// go through here).
+fn apply_instruments(
+    w: &mut mgc_sim::world::World,
+    dev_spells: bool,
+    plausible_spells: &[u8],
+    invincible: bool,
+) {
+    if dev_spells {
+        w.set_dev_spells(true);
+    }
+    if !plausible_spells.is_empty() {
+        w.grant_spells(plausible_spells);
+    }
+    if invincible {
+        w.set_invincible(true);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_screenshot(
     mut level: LoadedLevel,
     out: &Path,
@@ -1555,13 +1627,14 @@ fn run_screenshot(
     anim_turn: f32,
     map_triggers: bool,
     dev_spells: bool,
+    cfg_hud_transparent: bool,
 ) -> Result<(), String> {
-    let mut renderer = Renderer::offscreen(1280, 720).map_err(|e| e.to_string())?;
+    // Same 2×-native 4:3 size as the live default window: integer
+    // pixel grid (no fractional-scale aliasing), retail aspect.
+    let mut renderer = Renderer::offscreen(1280, 960).map_err(|e| e.to_string())?;
     let overlay = mgc_render::MapOverlay {
         dots: level.map_dots.clone(),
         areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
-        stamps: Vec::new(),
-        path: None,
     };
     renderer.load_level(&level.view, &overlay);
     renderer.set_map_stamps(level.map_stamps.clone());
@@ -1576,26 +1649,27 @@ fn run_screenshot(
     }
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
-    // Headless HUD-transparency override for testing (live play reads
-    // the config): MGC_HUD_OPAQUE=1 renders the opaque HUD.
-    let hud_transparent = std::env::var("MGC_HUD_OPAQUE").is_err();
+    // HUD transparency: the config decides (same path as live play);
+    // MGC_HUD_OPAQUE overrides for A/B captures — by VALUE, so
+    // MGC_HUD_OPAQUE=0 forces transparent and =1 forces opaque.
+    let hud_transparent = match std::env::var("MGC_HUD_OPAQUE") {
+        Ok(v) => v == "0" || v.is_empty(),
+        Err(_) => cfg_hud_transparent,
+    };
     renderer.set_hud_transparent(hud_transparent);
     renderer.set_map_view(map_view);
     renderer.set_anim_turn(anim_turn);
     // Spell UI (book grid or HUD), from the level-start loadout.
     if let (Some(assets), Some(w)) = (&level.ui, &mut level.world) {
-        if dev_spells {
-            w.set_dev_spells(true);
-        }
-        if !level.plausible_spells.is_empty() {
-            w.grant_spells(&level.plausible_spells);
-        }
+        // invincible=false: a single headless frame takes no damage.
+        apply_instruments(w, dev_spells, &level.plausible_spells, false);
         let loadout = w.loadout();
         let vitals = w.vitals();
         let quads = if map_view {
-            ui::book_quads(assets, &loadout, &[None; 10], 1280.0, 720.0, (-1.0, -1.0)).0
+            ui::book_quads(assets, &loadout, &[None; 10], 1280.0, 960.0, (-1.0, -1.0)).0
         } else {
-            ui::hud_quads(assets, &loadout, &vitals, hud_transparent, 1280.0, 720.0)
+            // alert_blink=true: a screenshot shows any armed alert.
+            ui::hud_quads(assets, &loadout, &vitals, hud_transparent, true, 1280.0, 960.0)
         };
         renderer.set_ui_quads(quads);
     }
@@ -1699,6 +1773,7 @@ fn main() -> std::process::ExitCode {
             args.anim_turn,
             map_triggers,
             dev_spells,
+            matches!(cfg.enhancements.hud_transparency, config::HudTransparency::Mc1),
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {

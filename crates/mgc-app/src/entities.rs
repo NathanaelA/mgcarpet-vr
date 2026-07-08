@@ -294,8 +294,13 @@ pub fn map_dots_from_poses(
 
 /// Icon stamps from the live pose set: the own castle (sprite
 /// 58+team) and own balloons (66+team) — remc1 :57224-37 draws these
-/// as UI sprites instead of dots (rival markers need the reveal
-/// flag; single-wizard worlds have none to hide).
+/// as UI sprites instead of dots. NOTE (fidelity): retail stamps
+/// EVERY castle unconditionally with its team's sprite [58+team] —
+/// only the balloon/wizard markers check the reveal flag (v59). Our
+/// `player_owned` gate exists ONLY because `MapIcons` bakes just the
+/// player-team sprites; when rival wizards land, bake all eight
+/// team icons and lift the castle gate (balloons keep the reveal
+/// check).
 pub fn map_stamps_from_poses(
     poses: &[LivePose],
     icons: &MapIcons,
