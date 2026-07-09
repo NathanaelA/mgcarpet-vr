@@ -17,3 +17,6 @@ sha2 = "0.10"
 [[bin]]
 name = "mgc-import"
 path = "src/main.rs"
+
+[lints]
+workspace = true

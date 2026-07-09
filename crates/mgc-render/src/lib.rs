@@ -241,7 +241,12 @@ fn clip_quad_to(rect: [f32; 4], uv: [f32; 4], bounds: [f32; 4]) -> Option<([f32;
     let fh = (y1 - y0) / rect[3];
     Some((
         [x0, y0, x1 - x0, y1 - y0],
-        [uv[0] + uv[2] * fx, uv[1] + uv[3] * fy, uv[2] * fw, uv[3] * fh],
+        [
+            uv[0] + uv[2] * fx,
+            uv[1] + uv[3] * fy,
+            uv[2] * fw,
+            uv[3] * fh,
+        ],
     ))
 }
 
@@ -329,7 +334,11 @@ fn project_map_stamps(
                 // v42−h)`. uv is atlas texels (ui.wgsl divides).
                 let rect = [scx - st.anchor[0] * w, scy - st.anchor[1] * h, w, h];
                 if let Some((rect, uv)) = clip_quad_to(rect, st.uv, bounds) {
-                    quads.push(UiQuad { rect, uv, tint: [1.0, 1.0, 1.0, 1.0] });
+                    quads.push(UiQuad {
+                        rect,
+                        uv,
+                        tint: [1.0, 1.0, 1.0, 1.0],
+                    });
                 }
             }
         }
@@ -1757,21 +1766,20 @@ impl Renderer {
         }));
         // The in-flight minimap shares the world map texture but has its
         // own globals (corner rect, tighter zoom, round mask).
-        self.minimap_bind_group =
-            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("minimap"),
-                layout: &self.map_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.minimap_globals_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&map_view),
-                    },
-                ],
-            }));
+        self.minimap_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("minimap"),
+            layout: &self.map_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.minimap_globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&map_view),
+                },
+            ],
+        }));
         self.map_tex = Some(map_tex);
     }
 
@@ -2277,7 +2285,16 @@ impl Renderer {
                 // Icons scale with the pane like every book element
                 // (retail only ever rendered ≤640 wide; native-size
                 // icons at HD read a third of their proportion).
-                Some((cx, cy, pw * 0.5, ph * 0.5, BOOK_MAP_ZOOM, false, pw / ph, res_x))
+                Some((
+                    cx,
+                    cy,
+                    pw * 0.5,
+                    ph * 0.5,
+                    BOOK_MAP_ZOOM,
+                    false,
+                    pw / ph,
+                    res_x,
+                ))
             } else {
                 // Same (diam, center) as the shader uniform — shared via
                 // minimap_rect so terrain and stamps can't diverge. The
@@ -2334,7 +2351,8 @@ impl Renderer {
                 self.queue.write_buffer(buf, 0, ui_bytes);
             }
             if !stamp_bytes.is_empty() {
-                self.queue.write_buffer(buf, ui_bytes.len() as u64, stamp_bytes);
+                self.queue
+                    .write_buffer(buf, ui_bytes.len() as u64, stamp_bytes);
             }
         }
 
@@ -2365,16 +2383,13 @@ impl Renderer {
                 cam.z,
                 cam.yaw,
                 BOOK_MAP_ZOOM,
-                0.0,               // rectangular (no round mask)
-                pw / ph,           // sampler aspect = pane w/h
-                1.0,               // opaque (the map pane sits over the world)
-                MAP_TILES as f32,  // world period for the toroidal wrap
+                0.0,              // rectangular (no round mask)
+                pw / ph,          // sampler aspect = pane w/h
+                1.0,              // opaque (the map pane sits over the world)
+                MAP_TILES as f32, // world period for the toroidal wrap
             ];
-            self.queue.write_buffer(
-                &self.map_globals_buf,
-                0,
-                bytemuck::cast_slice(&map_globals),
-            );
+            self.queue
+                .write_buffer(&self.map_globals_buf, 0, bytemuck::cast_slice(&map_globals));
         } else {
             // In-flight round minimap, corner-anchored at (0,0). Disc +
             // position scale with the HUD (w/640).
@@ -2382,7 +2397,7 @@ impl Renderer {
             let hw = disc / w as f32; // NDC half-width
             let hh = disc / hpx as f32; // NDC half-height
             let minimap_globals: [f32; 12] = [
-                cx / w as f32 * 2.0 - 1.0, // pixel center → NDC x
+                cx / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
                 1.0 - cy / hpx as f32 * 2.0, // pixel center → NDC y (flip)
                 hw,
                 hh,
@@ -2390,8 +2405,8 @@ impl Renderer {
                 cam.z,
                 cam.yaw,
                 self.minimap_zoom,
-                1.0, // round mask
-                1.0, // square disc → aspect 1
+                1.0,                // round mask
+                1.0,                // square disc → aspect 1
                 self.minimap_alpha, // HUD transparency
                 MAP_TILES as f32,   // world period for the toroidal wrap
             ];
@@ -2665,7 +2680,14 @@ mod tests {
     use super::*;
 
     fn stamp_at(x: f32, z: f32) -> MapStamp {
-        MapStamp { x, z, w: 16, h: 15, uv: [0.0, 0.0, 16.0, 15.0], anchor: [0.0, 1.0] }
+        MapStamp {
+            x,
+            z,
+            w: 16,
+            h: 15,
+            uv: [0.0, 0.0, 16.0, 15.0],
+            anchor: [0.0, 1.0],
+        }
     }
 
     #[test]
@@ -2756,7 +2778,10 @@ mod tests {
         let q2 = run(2.0);
         assert_eq!(q1.len(), 1);
         assert_eq!(q2.len(), 1);
-        assert!((q2[0].rect[2] - q1[0].rect[2] * 2.0).abs() < 1e-3, "rect scales");
+        assert!(
+            (q2[0].rect[2] - q1[0].rect[2] * 2.0).abs() < 1e-3,
+            "rect scales"
+        );
 
         // Anchor just inside the pane's left edge: bottom-left-anchored
         // sprite extends UP from the point; the top may clip at y=0
@@ -2779,7 +2804,10 @@ mod tests {
             1.0,
         );
         for quad in &q {
-            assert!(quad.rect[0] >= 0.0 && quad.rect[1] >= 0.0, "clipped to bounds");
+            assert!(
+                quad.rect[0] >= 0.0 && quad.rect[1] >= 0.0,
+                "clipped to bounds"
+            );
             assert!(quad.rect[0] + quad.rect[2] <= pw + 1e-3);
             assert!(quad.rect[1] + quad.rect[3] <= ph + 1e-3);
             assert!(quad.uv[2] > 0.0, "uv width stays positive (textured mode)");

@@ -9,6 +9,7 @@
 //! offscreen and exits, which is how terrain changes get verified
 //! without a display.
 
+mod bakecheck;
 mod campaign;
 mod config;
 mod entities;
@@ -289,7 +290,10 @@ fn load_level(
                 // The view starts from the post-feature planes.
                 height.copy_from_slice(&w.planes().height);
                 tile_type.copy_from_slice(&w.planes().tile_type);
-                shading.as_mut().unwrap().copy_from_slice(&w.planes().shading);
+                shading
+                    .as_mut()
+                    .unwrap()
+                    .copy_from_slice(&w.planes().shading);
                 angle.as_mut().unwrap().copy_from_slice(&w.planes().angle);
                 world = Some(w);
                 world_init = Some(init);
@@ -346,12 +350,14 @@ fn load_level(
         ..Flyer::default()
     });
 
-    let ui_assets = bundle
-        .ui_sprites
-        .as_ref()
-        .map(|(idx, px)| {
-            ui::UiAssets::build(idx.clone(), px, &bundle.palette, bundle.blend_lut.as_deref())
-        });
+    let ui_assets = bundle.ui_sprites.as_ref().map(|(idx, px)| {
+        ui::UiAssets::build(
+            idx.clone(),
+            px,
+            &bundle.palette,
+            bundle.blend_lut.as_deref(),
+        )
+    });
 
     // Per-game audio bundle + the INTERIM music pick.
     let audio_game = if package.meta.game == Game::MagicCarpet2 {
@@ -360,7 +366,9 @@ fn load_level(
         "mc1"
     };
     let audio_dir = {
-        let d = baked_root.join("assets").join(format!("{audio_game}-audio"));
+        let d = baked_root
+            .join("assets")
+            .join(format!("{audio_game}-audio"));
         d.is_dir().then_some(d)
     };
     let music_track = Some(if audio_game == "mc2" {
@@ -426,12 +434,8 @@ fn load_level(
         map_icons: entities::MapIcons {
             // Castle = UI sprite 58+team, balloon = 66+team, all
             // eight teams; remc1 sub_48710 :57230/:57234.
-            castle: std::array::from_fn(|t| {
-                ui_assets.as_ref().and_then(|u| u.map_stamp(58 + t))
-            }),
-            balloon: std::array::from_fn(|t| {
-                ui_assets.as_ref().and_then(|u| u.map_stamp(66 + t))
-            }),
+            castle: std::array::from_fn(|t| ui_assets.as_ref().and_then(|u| u.map_stamp(58 + t))),
+            balloon: std::array::from_fn(|t| ui_assets.as_ref().and_then(|u| u.map_stamp(66 + t))),
         },
         map_stamps: Vec::new(),
         ui: ui_assets,
@@ -566,8 +570,16 @@ impl App {
                 eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
             }
             a.set_volumes(
-                if audio_cfg.sound { audio_cfg.sfx_volume } else { 0.0 },
-                if audio_cfg.music { audio_cfg.music_volume } else { 0.0 },
+                if audio_cfg.sound {
+                    audio_cfg.sfx_volume
+                } else {
+                    0.0
+                },
+                if audio_cfg.music {
+                    audio_cfg.music_volume
+                } else {
+                    0.0
+                },
             );
             if audio_cfg.music {
                 if let Some(track) = &level.music_track {
@@ -696,7 +708,12 @@ impl App {
             return;
         };
         let mut w = init.build();
-        apply_instruments(&mut w, self.dev_spells, &self.level.plausible_spells, self.invincible);
+        apply_instruments(
+            &mut w,
+            self.dev_spells,
+            &self.level.plausible_spells,
+            self.invincible,
+        );
         w.terrain_dirty = true;
         w.entities_dirty = true;
         let (thrust, altitude) = (self.sim.thrust_model, self.sim.altitude_model);
@@ -789,9 +806,10 @@ impl App {
         let terrain = w.terrain_dirty;
         let entities = w.entities_dirty;
         if terrain {
-            let (Some(shading), Some(angle)) =
-                (self.level.view.shading.as_mut(), self.level.view.angle.as_mut())
-            else {
+            let (Some(shading), Some(angle)) = (
+                self.level.view.shading.as_mut(),
+                self.level.view.angle.as_mut(),
+            ) else {
                 return;
             };
             w.copy_planes_into(mgc_sim::features::TerrainPlanes {
@@ -822,11 +840,8 @@ impl App {
                 // toggle byte; ~4 Hz at 30 ticks/s reads right).
                 self.sim.tick >> 3 & 1 == 0,
             );
-            self.level.map_stamps = entities::map_stamps_from_poses(
-                &poses,
-                &self.level.map_icons,
-                w.beyond_sight(),
-            );
+            self.level.map_stamps =
+                entities::map_stamps_from_poses(&poses, &self.level.map_icons, w.beyond_sight());
             // Beyond-Sight rival position markers (interim for the
             // retail name labels — DrawText track).
             self.level
@@ -995,12 +1010,8 @@ impl ApplicationHandler for App {
                         if let Some(spell) = self.hovered {
                             if owned[spell.0 as usize] {
                                 match button {
-                                    MouseButton::Left => {
-                                        self.pending_equip.0 = Some(spell.0)
-                                    }
-                                    MouseButton::Right => {
-                                        self.pending_equip.1 = Some(spell.0)
-                                    }
+                                    MouseButton::Left => self.pending_equip.0 = Some(spell.0),
+                                    MouseButton::Right => self.pending_equip.1 = Some(spell.0),
                                     _ => return,
                                 }
                                 if let Some(r) = &mut self.renderer {
@@ -1110,11 +1121,7 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     self.quick_binds[d] = Some(spell.0);
-                                    println!(
-                                        "quick key {}: {}",
-                                        (d + 1) % 10,
-                                        spell.name()
-                                    );
+                                    println!("quick key {}: {}", (d + 1) % 10, spell.name());
                                 }
                             } else if let Some(spell) = self.quick_binds[d] {
                                 if self.shift_held {
@@ -1134,7 +1141,11 @@ impl ApplicationHandler for App {
                     if let Some(a) = &mut self.audio {
                         a.set_volumes(
                             if self.sound_on { self.sfx_volume } else { 0.0 },
-                            if self.music_on { self.music_volume } else { 0.0 },
+                            if self.music_on {
+                                self.music_volume
+                            } else {
+                                0.0
+                            },
                         );
                     }
                     println!("sound: {}", if self.sound_on { "on" } else { "off" });
@@ -1225,9 +1236,7 @@ impl ApplicationHandler for App {
                 // the shift branch :20496-501): razes the OWN castle
                 // one level per press — the castle-as-attack-spell
                 // enabler, at the price of the respawn point.
-                if down
-                    && self.shift_held
-                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyL)
+                if down && self.shift_held && event.physical_key == PhysicalKey::Code(KeyCode::KeyL)
                 {
                     self.pending_demolish = true;
                     return;
@@ -1386,7 +1395,14 @@ impl ApplicationHandler for App {
                     // per-frame [55]/[41] alternation at tick parity.
                     let alert_blink = self.sim.tick % 2 == 0;
                     let (mut quads, hovered) = if self.book_open() {
-                        ui::book_quads(assets, &loadout, &self.quick_binds, size.0, size.1, self.cursor)
+                        ui::book_quads(
+                            assets,
+                            &loadout,
+                            &self.quick_binds,
+                            size.0,
+                            size.1,
+                            self.cursor,
+                        )
                     } else {
                         (
                             ui::hud_quads(
@@ -1672,7 +1688,11 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
     // CPU dump (the diagnostic artifact) shows dots only.
     let overlay = mgc_render::MapOverlay {
         dots: level.map_dots.clone(),
-        areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
+        areas: if map_triggers {
+            level.map_areas.clone()
+        } else {
+            Vec::new()
+        },
     };
     let src = mgc_render::map_pixels(&level.view, &overlay);
     let s = scale as usize;
@@ -1728,7 +1748,11 @@ fn run_screenshot(
     let mut renderer = Renderer::offscreen(1280, 960).map_err(|e| e.to_string())?;
     let overlay = mgc_render::MapOverlay {
         dots: level.map_dots.clone(),
-        areas: if map_triggers { level.map_areas.clone() } else { Vec::new() },
+        areas: if map_triggers {
+            level.map_areas.clone()
+        } else {
+            Vec::new()
+        },
     };
     renderer.load_level(&level.view, &overlay);
     renderer.set_map_stamps(level.map_stamps.clone());
@@ -1738,7 +1762,12 @@ fn run_screenshot(
     if let Some(assets) = &level.ui {
         renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
         if let Ok(p) = std::env::var("MGC_DUMP_UI_ATLAS") {
-            write_png(Path::new(&p), assets.atlas_w, assets.atlas_h, &assets.atlas_rgba)?;
+            write_png(
+                Path::new(&p),
+                assets.atlas_w,
+                assets.atlas_h,
+                &assets.atlas_rgba,
+            )?;
         }
     }
     renderer.set_billboards(level.billboards.clone());
@@ -1763,7 +1792,15 @@ fn run_screenshot(
             ui::book_quads(assets, &loadout, &[None; 10], 1280.0, 960.0, (-1.0, -1.0)).0
         } else {
             // alert_blink=true: a screenshot shows any armed alert.
-            ui::hud_quads(assets, &loadout, &vitals, hud_transparent, true, 1280.0, 960.0)
+            ui::hud_quads(
+                assets,
+                &loadout,
+                &vitals,
+                hud_transparent,
+                true,
+                1280.0,
+                960.0,
+            )
         };
         renderer.set_ui_quads(quads);
     }
@@ -1834,6 +1871,13 @@ fn main() -> std::process::ExitCode {
         invert_y: cfg.flight.invert_y,
     };
 
+    // First-run / stale-epoch auto-bake: regenerate the baked tree
+    // from the original game data before touching it.
+    if let Err(e) = bakecheck::ensure_baked(&args.level, cfg.gamedata.as_deref()) {
+        eprintln!("error: {e}");
+        return std::process::ExitCode::FAILURE;
+    }
+
     let level = match load_level(
         &args.level,
         args.tileset,
@@ -1867,7 +1911,10 @@ fn main() -> std::process::ExitCode {
             args.anim_turn,
             map_triggers,
             dev_spells,
-            matches!(cfg.enhancements.hud_transparency, config::HudTransparency::Mc1),
+            matches!(
+                cfg.enhancements.hud_transparency,
+                config::HudTransparency::Mc1
+            ),
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
@@ -1887,9 +1934,9 @@ fn main() -> std::process::ExitCode {
             "controls: faithful MC1 — mouse = stick (offset steers, recenter to fly straight),\n\
              \x20         {move_keys} (impulses: speed persists until countered),"
         ),
-        config::ThrustModel::Enhanced => println!(
-            "controls: enhanced — mouse look, {move_keys} (hold-to-fly),"
-        ),
+        config::ThrustModel::Enhanced => {
+            println!("controls: enhanced — mouse look, {move_keys} (hold-to-fly),")
+        }
     }
     if flight.altitude == config::AltitudeModel::ExtendedLift {
         println!("          E/Q float up/down (extended lift, capped at the highest terrain),");
@@ -1900,7 +1947,9 @@ fn main() -> std::process::ExitCode {
     println!("          Enter opens the book: click a spell with LMB/RMB to equip,");
     println!("          hover + 1-9,0 binds a quick key (in flight: equip, Shift = right hand),");
     println!("          T smooth shading, H monster health bars (debug),");
-    println!("          G all spells + infinite mana (dev), V map trigger overlay, Esc twice quits");
+    println!(
+        "          G all spells + infinite mana (dev), V map trigger overlay, Esc twice quits"
+    );
 
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
@@ -1917,7 +1966,10 @@ fn main() -> std::process::ExitCode {
         dev_spells,
         invincible,
         cfg.enhancements.map_owned_buildings,
-        matches!(cfg.enhancements.hud_transparency, config::HudTransparency::Mc1),
+        matches!(
+            cfg.enhancements.hud_transparency,
+            config::HudTransparency::Mc1
+        ),
         &cfg.audio,
         flight,
     );

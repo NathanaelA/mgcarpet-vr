@@ -10,3 +10,6 @@ authors.workspace = true
 mgc-formats = { path = "../mgc-formats" }
 cpal = "0.18"
 claxon = "0.4"
+
+[lints]
+workspace = true

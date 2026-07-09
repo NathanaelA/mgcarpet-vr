@@ -19,6 +19,16 @@ pub mod mgcl;
 /// decoded level tail); MC2's wizard fields regrouped as optionals.
 pub const FORMAT_VERSION: u32 = 2;
 
+/// Current bake CONTENT epoch (see docs/FORMAT.md "Versioning").
+/// Orthogonal to the schema versions above: bump it whenever the
+/// importer's OUTPUT changes under an unchanged schema (a decode fix,
+/// a new baked member, corrected tables), so consumers know a baked
+/// tree is stale and must be regenerated from game data. Artifacts
+/// baked before the field existed deserialize as epoch 0 — always
+/// stale.
+/// 1: first stamped epoch (2026-07-09).
+pub const BAKE_EPOCH: u32 = 1;
+
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,6 +48,10 @@ pub enum Game {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meta {
     pub format_version: u32,
+    /// Bake content epoch (`BAKE_EPOCH` at bake time); pre-epoch
+    /// artifacts read as 0.
+    #[serde(default)]
+    pub bake_epoch: u32,
     pub game: Game,
     /// Index of the level in its source archive.
     pub level: u32,

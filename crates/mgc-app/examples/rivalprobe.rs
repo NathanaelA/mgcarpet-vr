@@ -12,7 +12,8 @@ fn main() {
         bundle.search.as_ref().unwrap(),
         bundle.build_tab.as_ref().unwrap(),
         bundle.build_dat.as_ref().unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
     let planes = mgc_sim::features::Planes {
         height: terrain.height.clone(),
         tile_type: terrain.tile_type.clone(),
@@ -26,7 +27,8 @@ fn main() {
     let count = wiz.player_count.unwrap();
     let mut cfgs: [Option<mgc_sim::rivals::RivalConfig>; 8] = Default::default();
     for (slot, c) in wiz.wizards.iter().enumerate().take(8).skip(1) {
-        let mut book = [false; 24]; let mut allowed = [false; 24];
+        let mut book = [false; 24];
+        let mut allowed = [false; 24];
         let am = c.allowed_spells.as_ref().unwrap();
         for s in 0..24 {
             allowed[s] = am[s] != 0;
@@ -37,28 +39,57 @@ fn main() {
             accuracy: c.accuracy.unwrap() as u8,
             tempo: c.tempo.unwrap() as u8,
             castle_level: c.castle_level.unwrap(),
-            book, allowed,
+            book,
+            allowed,
         });
     }
     w.set_wizards(&cfgs, count);
     println!("players={count} rivals={}", w.rival_views().len());
-    for r in w.rival_views() { println!("  {} slot {} at ({:.0},{:.0})", r.name, r.slot, r.x, r.z); }
+    for r in w.rival_views() {
+        println!("  {} slot {} at ({:.0},{:.0})", r.name, r.slot, r.x, r.z);
+    }
     // Park the player near the level start.
-    let start = package.things.things.iter().find(|t| t.class == 3 && t.model == 4).unwrap();
+    let start = package
+        .things
+        .things
+        .iter()
+        .find(|t| t.class == 3 && t.model == 4)
+        .unwrap();
     let pose = mgc_sim::world::PlayerPose::level(
-        ((start.x as u32) << 8) as u16 + 128, ((start.y as u32) << 8) as u16 + 128, 3000, 0);
+        ((start.x as u32) << 8) as u16 + 128,
+        ((start.y as u32) << 8) as u16 + 128,
+        3000,
+        0,
+    );
     for t in 0..6000u32 {
         w.tick(pose, mgc_sim::world::PlayerCommand::default());
-        for slot in w.take_rival_deaths() { println!("t{t}: rival slot {slot} died"); }
+        for slot in w.take_rival_deaths() {
+            println!("t{t}: rival slot {slot} died");
+        }
         if t % 1000 == 999 {
             for r in w.rival_views() {
                 let castle = if r.alive { "" } else { " (dead)" };
-                println!("t{}: {} at ({:.0},{:.0}) mana {}/{} life {:.2}{}",
-                    t+1, r.name, r.x, r.z, r.mana, r.mana_max, r.life_frac, castle);
+                println!(
+                    "t{}: {} at ({:.0},{:.0}) mana {}/{} life {:.2}{}",
+                    t + 1,
+                    r.name,
+                    r.x,
+                    r.z,
+                    r.mana,
+                    r.mana_max,
+                    r.life_frac,
+                    castle
+                );
             }
             let poses = w.live_poses();
-            let castles = poses.iter().filter(|p| p.class == 3 && p.model == 2).count();
-            let wiz = poses.iter().filter(|p| p.class == 3 && p.model <= 1).count();
+            let castles = poses
+                .iter()
+                .filter(|p| p.class == 3 && p.model == 2)
+                .count();
+            let wiz = poses
+                .iter()
+                .filter(|p| p.class == 3 && p.model <= 1)
+                .count();
             let projs = poses.iter().filter(|p| p.class == 9).count();
             println!("      castles={castles} wizard-billboards={wiz} projectiles={projs}");
         }

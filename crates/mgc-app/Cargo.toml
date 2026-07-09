@@ -8,6 +8,9 @@ authors.workspace = true
 
 [dependencies]
 mgc-formats = { path = "../mgc-formats" }
+# The embedded importer: the game bakes its own data on first run /
+# stale epoch (src/bakecheck.rs) instead of shipping a second binary.
+mgc-import = { path = "../mgc-import" }
 mgc-sim = { path = "../mgc-sim" }
 mgc-render = { path = "../mgc-render" }
 winit = "0.30"
@@ -20,3 +23,6 @@ mgc-audio = { version = "0.1.0", path = "../mgc-audio" }
 [[bin]]
 name = "mgcarpet"
 path = "src/main.rs"
+
+[lints]
+workspace = true

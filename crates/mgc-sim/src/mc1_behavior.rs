@@ -43,13 +43,38 @@ pub struct BehaviorRow {
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
 const fn B(
-    v_0: i16, v_2: i16, v_4: i16, v_6: i16, v_8: i16, v_10: i16, v_12: i16,
-    v_14: i16, v_16: i16, v_18: i16, v_20: u32, v_22: i16, v_26: i16,
-    v_28: i16, v_30: i16,
+    v_0: i16,
+    v_2: i16,
+    v_4: i16,
+    v_6: i16,
+    v_8: i16,
+    v_10: i16,
+    v_12: i16,
+    v_14: i16,
+    v_16: i16,
+    v_18: i16,
+    v_20: u32,
+    v_22: i16,
+    v_26: i16,
+    v_28: i16,
+    v_30: i16,
 ) -> BehaviorRow {
     BehaviorRow {
-        v_0, v_2, v_4, v_6, v_8, v_10, v_12, v_14, v_16, v_18, v_20, v_22,
-        v_26, v_28, v_30,
+        v_0,
+        v_2,
+        v_4,
+        v_6,
+        v_8,
+        v_10,
+        v_12,
+        v_14,
+        v_16,
+        v_18,
+        v_20,
+        v_22,
+        v_26,
+        v_28,
+        v_30,
     }
 }
 

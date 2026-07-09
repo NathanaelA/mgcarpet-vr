@@ -233,9 +233,7 @@ pub fn render(
     let total_ticks = u64::from(song.end_tick) + u64::from(song.tick_rate);
 
     for tick in 0..=total_ticks {
-        while next_event < song.events.len()
-            && u64::from(song.events[next_event].tick) <= tick
-        {
+        while next_event < song.events.len() && u64::from(song.events[next_event].tick) <= tick {
             let ev = song.events[next_event];
             next_event += 1;
             clock += 1;
@@ -249,8 +247,7 @@ pub fn render(
                         if let Some((vch, note)) = voice.key {
                             if vch == ch {
                                 let (_, _, cb) = chan_regs(v);
-                                let (fnum, block) =
-                                    fnum_block(pitch(note, value));
+                                let (fnum, block) = fnum_block(pitch(note, value));
                                 voice.b0 = 0x20 | (block << 2) | (fnum >> 8) as u8;
                                 chip.write_register(0xA0 + cb, (fnum & 0xFF) as u8);
                                 chip.write_register(0xB0 + cb, voice.b0);
@@ -316,8 +313,7 @@ pub fn render(
                     }
                     // Both stereo outputs on.
                     chip.write_register(0xC0 + cb, patch.c0 | 0x30);
-                    let (fnum, block) =
-                        fnum_block(pitch(note, chan_bend[ch as usize]));
+                    let (fnum, block) = fnum_block(pitch(note, chan_bend[ch as usize]));
                     let b0 = 0x20 | (block << 2) | (fnum >> 8) as u8;
                     chip.write_register(0xA0 + cb, (fnum & 0xFF) as u8);
                     chip.write_register(0xB0 + cb, b0);

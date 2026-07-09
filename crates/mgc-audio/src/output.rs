@@ -11,7 +11,7 @@
 //! simplicity at this scale).
 
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, Sender};
 
 /// Number of driver sample channels in the original (remc1's
 /// word_CBFF0 table).
@@ -135,11 +135,10 @@ impl Renderer {
     }
 
     fn drain_cmds(&mut self) {
-        loop {
-            match self.rx.try_recv() {
-                Ok(cmd) => self.apply(cmd),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-            }
+        // Stops on Empty or Disconnected alike; a torn-down game
+        // thread just leaves the mixer running out its tail.
+        while let Ok(cmd) = self.rx.try_recv() {
+            self.apply(cmd);
         }
     }
 
@@ -324,10 +323,7 @@ impl Output {
                     },
                     move |data: &mut [f32], _| {
                         renderer.render(data);
-                        live_w.store(
-                            renderer.live_mask(),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
+                        live_w.store(renderer.live_mask(), std::sync::atomic::Ordering::Relaxed);
                     },
                     |e| eprintln!("audio stream error: {e}"),
                     None,

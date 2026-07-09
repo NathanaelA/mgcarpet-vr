@@ -60,7 +60,10 @@ fn level_032_entry_portal_spawns_and_teleports() {
     let far = PlayerPose::from_tiles(100.0, 20.0, 100.0, 0.0, 0.0, 0.0);
     w.entities_dirty = false;
     w.tick(far, PlayerCommand::default());
-    assert!(w.entities_dirty, "portal re-ground must flag the pose refresh");
+    assert!(
+        w.entities_dirty,
+        "portal re-ground must flag the pose refresh"
+    );
     let pose = w
         .live_poses()
         .into_iter()
@@ -75,7 +78,8 @@ fn level_032_entry_portal_spawns_and_teleports() {
 
     // Hovering NEXT to the portal but facing away: no teleport.
     let ground = w.ground_height_tiles(11.5, 254.3);
-    let facing_away = PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, std::f32::consts::PI, 0.0, 0.0);
+    let facing_away =
+        PlayerPose::from_tiles(11.5, ground + 0.5, 254.3, std::f32::consts::PI, 0.0, 0.0);
     for _ in 0..8 {
         w.tick(facing_away, PlayerCommand::default());
         assert!(w.take_teleport().is_none(), "facing away must not teleport");
@@ -93,7 +97,10 @@ fn level_032_entry_portal_spawns_and_teleports() {
         }
     }
     let (dx, dz) = dest.expect("flying into the portal teleports");
-    assert!((dx - 5.5).abs() < 0.01 && (dz - 230.5).abs() < 0.01, "dest = ({dx}, {dz})");
+    assert!(
+        (dx - 5.5).abs() < 0.01 && (dz - 230.5).abs() < 0.01,
+        "dest = ({dx}, {dz})"
+    );
 
     // The portal is persistent (maxLife 0): it keeps working.
     let mut again = None;

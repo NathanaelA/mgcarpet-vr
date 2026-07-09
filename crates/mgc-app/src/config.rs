@@ -33,6 +33,11 @@ pub struct Config {
     pub enhancements: Enhancements,
     pub audio: AudioConfig,
     pub flight: FlightConfig,
+    /// Where the original game installs live, for the first-run /
+    /// stale-epoch auto-bake (src/bakecheck.rs). Unset = `MGC_GAMEDATA`
+    /// or `gamedata/` in the working directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gamedata: Option<PathBuf>,
 }
 
 /// The flight-control tiers (ROADMAP "Flight-control tiers"): three

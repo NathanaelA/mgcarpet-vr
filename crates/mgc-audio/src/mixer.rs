@@ -235,10 +235,8 @@ impl FaithfulMixer {
                     return;
                 }
                 let restart = matches!(p, Policy::Restart | Policy::RestartPlayerOnly);
-                if matches!(
-                    p,
-                    Policy::RestartPlayerOnly | Policy::KeepRunningPlayerOnly
-                ) && !player_sourced
+                if matches!(p, Policy::RestartPlayerOnly | Policy::KeepRunningPlayerOnly)
+                    && !player_sourced
                 {
                     return;
                 }
@@ -282,7 +280,11 @@ impl FaithfulMixer {
             match (want, running) {
                 (true, Some(i)) => {
                     let ch = &mut self.channels[i];
-                    if ch.fade != (Fade::In { target: i32::from(target) << 8 }) {
+                    if ch.fade
+                        != (Fade::In {
+                            target: i32::from(target) << 8,
+                        })
+                    {
                         ch.fade = Fade::In {
                             target: i32::from(target) << 8,
                         };
@@ -393,9 +395,7 @@ impl FaithfulMixer {
     }
 
     fn find_channel(&self, tag: u16, id: u8) -> Option<usize> {
-        self.channels
-            .iter()
-            .position(|c| c.key == Some((tag, id)))
+        self.channels.iter().position(|c| c.key == Some((tag, id)))
     }
 
     fn free_channel(&self, live_mask: u32) -> Option<usize> {
@@ -460,13 +460,34 @@ mod tests {
     fn loudest_request_wins_slot() {
         let mut m = FaithfulMixer::new();
         let l = listener();
-        m.request(9, Source::World { pos: (8000, 0, 0), tag: 1 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (8000, 0, 0),
+                tag: 1,
+            },
+            &l,
+        );
         let quiet = m.slots[9].vol;
-        m.request(9, Source::World { pos: (500, 0, 0), tag: 2 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (500, 0, 0),
+                tag: 2,
+            },
+            &l,
+        );
         assert!(m.slots[9].vol > quiet);
         assert_eq!(m.slots[9].tag, 2);
         // A far request must not displace the near one.
-        m.request(9, Source::World { pos: (9000, 0, 0), tag: 3 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (9000, 0, 0),
+                tag: 3,
+            },
+            &l,
+        );
         assert_eq!(m.slots[9].tag, 2);
     }
 
@@ -475,11 +496,25 @@ mod tests {
         let mut m = FaithfulMixer::new();
         let l = listener();
         // 90° to the side but within 320 units: center.
-        m.request(9, Source::World { pos: (300, 0, 0), tag: 1 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (300, 0, 0),
+                tag: 1,
+            },
+            &l,
+        );
         assert_eq!(m.slots[9].pan, 0x7FFF);
         m.slots[9] = Slot::default();
         // Far to the side: panned off center.
-        m.request(9, Source::World { pos: (5000, 0, 0), tag: 1 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (5000, 0, 0),
+                tag: 1,
+            },
+            &l,
+        );
         assert_ne!(m.slots[9].pan, 0x7FFF);
     }
 
@@ -490,13 +525,27 @@ mod tests {
         let mut m = FaithfulMixer::new();
         let l = listener();
         // id 37 (KRAKEN) = mode 3.
-        m.request(37, Source::World { pos: (100, 0, 0), tag: 5 }, &l);
+        m.request(
+            37,
+            Source::World {
+                pos: (100, 0, 0),
+                tag: 5,
+            },
+            &l,
+        );
         m.tick(&s, &tx, 0);
         let first: Vec<_> = rx.try_iter().collect();
         assert!(first.iter().any(|c| matches!(c, Cmd::Play { .. })));
         // Same (tag, id) again while "running" (mixer bookkeeping
         // says live because the mask still reports it).
-        m.request(37, Source::World { pos: (100, 0, 0), tag: 5 }, &l);
+        m.request(
+            37,
+            Source::World {
+                pos: (100, 0, 0),
+                tag: 5,
+            },
+            &l,
+        );
         m.tick(&s, &tx, 1); // pretend ch0 still live
         let second: Vec<_> = rx.try_iter().collect();
         assert!(
@@ -511,10 +560,24 @@ mod tests {
         let s = sounds();
         let mut m = FaithfulMixer::new();
         let l = listener();
-        m.request(9, Source::World { pos: (100, 0, 0), tag: 5 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (100, 0, 0),
+                tag: 5,
+            },
+            &l,
+        );
         m.tick(&s, &tx, 0);
         rx.try_iter().count();
-        m.request(9, Source::World { pos: (100, 0, 0), tag: 5 }, &l);
+        m.request(
+            9,
+            Source::World {
+                pos: (100, 0, 0),
+                tag: 5,
+            },
+            &l,
+        );
         m.tick(&s, &tx, 1);
         let cmds: Vec<_> = rx.try_iter().collect();
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Stop { .. })));
@@ -550,7 +613,10 @@ mod tests {
         for _ in 0..30 {
             m.tick(&s, &tx, m_live(&m));
         }
-        assert!(m.find_channel(0, SND_WAVES).is_none(), "waves not faded out");
+        assert!(
+            m.find_channel(0, SND_WAVES).is_none(),
+            "waves not faded out"
+        );
         assert!(m.find_channel(0, SND_WIND).is_some(), "wind not running");
     }
 

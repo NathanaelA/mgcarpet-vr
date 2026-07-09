@@ -39,30 +39,30 @@ impl SpellId {
 /// the manual name oversells the sub-tile blast radius, but the
 /// "shockwave fatal to anything within its influence" bit is real.
 const NAMES: [&str; SPELL_COUNT] = [
-    "Fireball",              // 0
-    "Heal",                  // 1
-    "Accelerate",            // 2  (forward; down-cursor cancels)
-    "Possess",               // 3  (claim buildings/mana)
-    "Shield",                // 4  (absorbs 3/4 of spell energy)
-    "Beyond Sight",          // 5
-    "Earthquake",            // 6
-    "Meteor",                // 7
-    "Volcano",               // 8  (periodic re-eruptions)
-    "Crater",                // 9
-    "Teleport",              // 10 (to castle / back to cast site)
-    "Duel to the Death",     // 11 (locks two players; Accelerate escapes)
-    "Invisible",             // 12 (casting breaks the cloak)
-    "Steal Mana",            // 13
-    "Rebound",               // 14 (deflects incoming fire spells)
-    "Lightning Bolt",        // 15 (hold: stream locks onto a target)
-    "Create Castle",         // 16 (launches a mana balloon per cast)
-    "Undead Army",           // 17 (red-cloaked skeletons)
-    "Lightning Storm",       // 18 (radiates in all directions)
-    "Mana Magnet",           // 19
-    "Wall of Fire",          // 20
-    "Accelerate Backwards",  // 21
-    "Global Death",          // 22 (point-blank one-shot shockwave)
-    "Rapid Fireball",        // 23
+    "Fireball",             // 0
+    "Heal",                 // 1
+    "Accelerate",           // 2  (forward; down-cursor cancels)
+    "Possess",              // 3  (claim buildings/mana)
+    "Shield",               // 4  (absorbs 3/4 of spell energy)
+    "Beyond Sight",         // 5
+    "Earthquake",           // 6
+    "Meteor",               // 7
+    "Volcano",              // 8  (periodic re-eruptions)
+    "Crater",               // 9
+    "Teleport",             // 10 (to castle / back to cast site)
+    "Duel to the Death",    // 11 (locks two players; Accelerate escapes)
+    "Invisible",            // 12 (casting breaks the cloak)
+    "Steal Mana",           // 13
+    "Rebound",              // 14 (deflects incoming fire spells)
+    "Lightning Bolt",       // 15 (hold: stream locks onto a target)
+    "Create Castle",        // 16 (launches a mana balloon per cast)
+    "Undead Army",          // 17 (red-cloaked skeletons)
+    "Lightning Storm",      // 18 (radiates in all directions)
+    "Mana Magnet",          // 19
+    "Wall of Fire",         // 20
+    "Accelerate Backwards", // 21
+    "Global Death",         // 22 (point-blank one-shot shockwave)
+    "Rapid Fireball",       // 23
 ];
 
 /// One spell's constructor arguments (sub_3BF70 a2..a9 in call order;

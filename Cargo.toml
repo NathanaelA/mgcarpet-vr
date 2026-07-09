@@ -15,6 +15,29 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["mgcarpet contributors"]
 
+# Lint policy: this is a porting project — sim, audio and importer
+# code is traced from the original engines (remc1/remc2 decompiles,
+# format specs), and KEEPING THE ORIGINAL'S SHAPE is a feature: it is
+# what makes a port auditable against its trace. The allows below are
+# exactly the "rewrite this into idiomatic Rust" style lints that
+# would erase that correspondence (original nesting, `x % n == 0`
+# arithmetic, decompile-typed casts, case-list OR patterns, indexed
+# loops, boolean shapes, trace-shaped signatures). Everything else —
+# correctness, suspicious constructs, docs — stays on and CI denies
+# warnings.
+[workspace.lints.clippy]
+collapsible_if = "allow"
+manual_is_multiple_of = "allow"
+unnecessary_cast = "allow"
+manual_range_patterns = "allow"
+manual_range_contains = "allow"
+nonminimal_bool = "allow"
+needless_range_loop = "allow"
+int_plus_one = "allow"
+type_complexity = "allow"
+blocks_in_conditions = "allow"
+too_many_arguments = "allow"
+
 [profile.dev]
 # Data decompression is unusably slow at opt-level 0; the importer chews
 # through megabytes of RNC even in dev builds.

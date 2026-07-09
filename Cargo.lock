@@ -1083,6 +1083,7 @@ version = "0.1.0"
 dependencies = [
  "mgc-audio",
  "mgc-formats",
+ "mgc-import",
  "mgc-render",
  "mgc-sim",
  "png",

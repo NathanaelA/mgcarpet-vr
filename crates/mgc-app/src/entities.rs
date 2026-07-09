@@ -331,7 +331,7 @@ pub fn map_stamps_from_poses(
             _ => None,
         };
         if let Some(i) = icon {
-            let mut s = i.clone();
+            let mut s = *i;
             s.x = p.x;
             s.z = p.z;
             out.push(s);

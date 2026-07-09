@@ -13,7 +13,11 @@ fn main() {
         let mut slots = 0usize;
         for t in things {
             *counts.entry((t.class, t.model)).or_default() += 1;
-            slots += if t.class == 5 && matches!(t.model, 0 | 3 | 6) { 17 } else { 1 };
+            slots += if t.class == 5 && matches!(t.model, 0 | 3 | 6) {
+                17
+            } else {
+                1
+            };
         }
         print!("dis {dis:2} ({slots:3} slots): ");
         for ((c, m), n) in &counts {
@@ -22,9 +26,18 @@ fn main() {
         println!();
         for t in things {
             match t.class {
-                11 => println!("    trigger model {} at ({},{}) sz {} fires dis {}", t.model, t.x, t.y, t.swi_sz, t.swi_id),
-                10 if t.model == 34 => println!("    PORTAL at ({},{}) -> ({}.5,{}.5)", t.x, t.y, t.child, t.parent),
-                12 => println!("    jar/mana m{} at ({},{}) swi_id {}", t.model, t.x, t.y, t.swi_id),
+                11 => println!(
+                    "    trigger model {} at ({},{}) sz {} fires dis {}",
+                    t.model, t.x, t.y, t.swi_sz, t.swi_id
+                ),
+                10 if t.model == 34 => println!(
+                    "    PORTAL at ({},{}) -> ({}.5,{}.5)",
+                    t.x, t.y, t.child, t.parent
+                ),
+                12 => println!(
+                    "    jar/mana m{} at ({},{}) swi_id {}",
+                    t.model, t.x, t.y, t.swi_id
+                ),
                 _ => {}
             }
         }

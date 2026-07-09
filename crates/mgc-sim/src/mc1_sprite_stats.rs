@@ -37,7 +37,13 @@ pub struct SpriteStats {
 
 #[allow(non_snake_case)]
 const fn S(sprite_base: u16, width: u16, height: u16, shade: i8, draw_type: u8) -> SpriteStats {
-    SpriteStats { sprite_base, width, height, shade, draw_type }
+    SpriteStats {
+        sprite_base,
+        width,
+        height,
+        shade,
+        draw_type,
+    }
 }
 
 /// 16 view sectors folded onto 5 sprites for draw type 19

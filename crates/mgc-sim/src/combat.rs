@@ -178,9 +178,7 @@ impl Gen {
         }
         // The player probe (the human wizard is outside the pool; the
         // original reaches it through the same grid).
-        if id != PLAYER_TARGET
-            && Self::filter_admits(f66, f67, 3, 0)
-            && self.player_overlap(i, ctx)
+        if id != PLAYER_TARGET && Self::filter_admits(f66, f67, 3, 0) && self.player_overlap(i, ctx)
         {
             self.mail_write(MailTarget::Player, ch, amt, id);
         }
@@ -364,10 +362,7 @@ impl Gen {
     /// Vertical bearing (sub_42180 :52644): the pitch whose polar step
     /// descends from `fz` toward `tz` over horizontal distance `dh`.
     pub(crate) fn pitch_toward(fz: i16, tz: i16, dh: i32) -> u16 {
-        Self::angle_of(
-            fz.wrapping_sub(tz),
-            (-(dh.clamp(0, 0x7FFF))) as i16,
-        )
+        Self::angle_of(fz.wrapping_sub(tz), (-(dh.clamp(0, 0x7FFF))) as i16)
     }
 
     /// Aim a fresh projectile from an attacker at a target point
@@ -414,28 +409,29 @@ impl Gen {
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
         };
         let mut best: Option<(u16, u32, u16, u16)> = None; // (slot, score, yaw, pitch)
-        let consider = |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
-            let d2 = Self::dist2_sq(px, py, tx, ty);
-            let dz = tz.wrapping_sub(pz) as i32;
-            let d3 = d2.wrapping_add(dz.wrapping_mul(dz));
-            if d3 > 5120 * 5120 {
-                return;
-            }
-            let ty_yaw = Self::angle_between(px, py, tx, ty);
-            let dh = Self::isqrt(d2 as u32) as i32;
-            let ty_pitch = Self::pitch_toward(pz, tz, dh);
-            let dy = Self::angdist(yaw, ty_yaw) as u32;
-            let dp = Self::angdist(pitch, ty_pitch) as u32;
-            if dy > 0x71 || dp > 0x71 {
-                return;
-            }
-            let score = dy * dy + dp * dp;
-            if best.is_none()
-                || best.is_some_and(|(_, bs, _, _)| score < bs || (score == bs && false))
-            {
-                *best = Some((slot, score, ty_yaw, ty_pitch));
-            }
-        };
+        let consider =
+            |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
+                let d2 = Self::dist2_sq(px, py, tx, ty);
+                let dz = tz.wrapping_sub(pz) as i32;
+                let d3 = d2.wrapping_add(dz.wrapping_mul(dz));
+                if d3 > 5120 * 5120 {
+                    return;
+                }
+                let ty_yaw = Self::angle_between(px, py, tx, ty);
+                let dh = Self::isqrt(d2 as u32) as i32;
+                let ty_pitch = Self::pitch_toward(pz, tz, dh);
+                let dy = Self::angdist(yaw, ty_yaw) as u32;
+                let dp = Self::angdist(pitch, ty_pitch) as u32;
+                if dy > 0x71 || dp > 0x71 {
+                    return;
+                }
+                let score = dy * dy + dp * dp;
+                // Strictly-less: on a score tie the earlier slot wins,
+                // matching the original's scan order.
+                if best.is_none() || best.is_some_and(|(_, bs, _, _)| score < bs) {
+                    *best = Some((slot, score, ty_yaw, ty_pitch));
+                }
+            };
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 != 5 || c.tick70 == 120 || c.act_life < 0 || c.f58 == 0 {
@@ -494,25 +490,26 @@ impl Gen {
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
         };
         let mut best: Option<(u16, u32, u16, u16)> = None;
-        let consider = |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
-            let d2 = Self::dist2_sq(px, py, tx, ty);
-            let dz = tz.wrapping_sub(pz) as i32;
-            if d2.wrapping_add(dz.wrapping_mul(dz)) > 5120 * 5120 {
-                return;
-            }
-            let ty_yaw = Self::angle_between(px, py, tx, ty);
-            let dh = Self::isqrt(d2 as u32) as i32;
-            let ty_pitch = Self::pitch_toward(pz, tz, dh);
-            let dy = Self::angdist(yaw, ty_yaw) as u32;
-            let dp = Self::angdist(pitch, ty_pitch) as u32;
-            if dy > 0x71 || dp > 0x71 {
-                return;
-            }
-            let score = dy * dy + dp * dp;
-            if best.is_none_or(|(_, bs, _, _)| score < bs) {
-                *best = Some((slot, score, ty_yaw, ty_pitch));
-            }
-        };
+        let consider =
+            |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
+                let d2 = Self::dist2_sq(px, py, tx, ty);
+                let dz = tz.wrapping_sub(pz) as i32;
+                if d2.wrapping_add(dz.wrapping_mul(dz)) > 5120 * 5120 {
+                    return;
+                }
+                let ty_yaw = Self::angle_between(px, py, tx, ty);
+                let dh = Self::isqrt(d2 as u32) as i32;
+                let ty_pitch = Self::pitch_toward(pz, tz, dh);
+                let dy = Self::angdist(yaw, ty_yaw) as u32;
+                let dp = Self::angdist(pitch, ty_pitch) as u32;
+                if dy > 0x71 || dp > 0x71 {
+                    return;
+                }
+                let score = dy * dy + dp * dp;
+                if best.is_none_or(|(_, bs, _, _)| score < bs) {
+                    *best = Some((slot, score, ty_yaw, ty_pitch));
+                }
+            };
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 != 3
@@ -523,7 +520,13 @@ impl Gen {
             {
                 continue;
             }
-            consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16, &mut best);
+            consider(
+                c.x,
+                c.y,
+                c.z.wrapping_add(c.f78 as i16),
+                j as u16,
+                &mut best,
+            );
         }
         if own != PLAYER_TARGET && !self.player_invisible {
             consider(
@@ -602,9 +605,7 @@ impl Gen {
                 }
             }
         }
-        if id != PLAYER_TARGET
-            && Self::filter_admits(f66, f67, 3, 0)
-            && self.player_overlap(i, ctx)
+        if id != PLAYER_TARGET && Self::filter_admits(f66, f67, 3, 0) && self.player_overlap(i, ctx)
         {
             return Some(MailTarget::Player);
         }
@@ -1509,10 +1510,7 @@ impl Gen {
                 let live = (1..POOL)
                     .filter(|&j| {
                         let c = &self.ent[j];
-                        c.class64 == 5
-                            && c.model65 == 9
-                            && c.flags & 0x400 == 0
-                            && c.f144 == own
+                        c.class64 == 5 && c.model65 == 9 && c.flags & 0x400 == 0 && c.f144 == own
                     })
                     .count() as i32;
                 let n = 8i32.min(64 - live).max(0);
@@ -1587,6 +1585,7 @@ impl Gen {
     ///   only while NO volcano is registered (:28750-66).
     /// - every activation (and every re-arm) dies instead if the
     ///   ground height under the driver changed (:28773-77).
+    ///
     /// No driver-level sound: eruption audio = the bombs' seeded
     /// fires (crackle 3) + the blast ring (30).
     fn eruption_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
@@ -1781,8 +1780,8 @@ impl Gen {
             let gyp = self.ground_z(x, y.wrapping_add(256)) as i16;
             vx = (vx + (gxm - gxp) / 8).clamp(-80, 80);
             vy = (vy + (gym - gyp) / 8).clamp(-80, 80);
-            vx = (250 * vx as i32 >> 8) as i16;
-            vy = (250 * vy as i32 >> 8) as i16;
+            vx = ((250 * vx as i32) >> 8) as i16;
+            vy = ((250 * vy as i32) >> 8) as i16;
         }
         let e = &mut self.ent[i];
         e.dest_x = vx as u16;
@@ -1908,7 +1907,11 @@ impl Gen {
                             e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
                             e.f30 = (e.f34 as i32 + (d % 0x5B) as i32 - 45) as u16 & 0x7FF;
                             e.f32 = e.f32.wrapping_neg() & 0x7FF;
-                            e.f146 = if shooter == PLAYER_TARGET { PLAYER_TARGET } else { shooter };
+                            e.f146 = if shooter == PLAYER_TARGET {
+                                PLAYER_TARGET
+                            } else {
+                                shooter
+                            };
                             e.id24 = deflector_id;
                             e.act_life = e.max_life as i32;
                             let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
@@ -1970,7 +1973,12 @@ impl Gen {
 
     /// The victim scan evaluated at a prospective position (the
     /// original moves first and scans at the new position).
-    fn victim_scan_at(&mut self, i: usize, tmp: (u16, u16, i16), ctx: &MobCtx) -> Option<MailTarget> {
+    fn victim_scan_at(
+        &mut self,
+        i: usize,
+        tmp: (u16, u16, i16),
+        ctx: &MobCtx,
+    ) -> Option<MailTarget> {
         let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         self.ent[i].x = tmp.0;
         self.ent[i].y = tmp.1;
@@ -2645,7 +2653,14 @@ impl Gen {
         self.ent[i].flags |= 2;
         let (x, y, z, owner, radius, inherit) = {
             let e = &self.ent[i];
-            (e.x, e.y, e.z, e.id24, e.f26.max(0) as i32, e.flags & 0x10000)
+            (
+                e.x,
+                e.y,
+                e.z,
+                e.id24,
+                e.f26.max(0) as i32,
+                e.flags & 0x10000,
+            )
         };
         let cells = self.ring_cells_pub(radius, radius);
         for (dx, dy) in cells {

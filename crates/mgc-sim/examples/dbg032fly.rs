@@ -37,7 +37,9 @@ fn main() {
             .filter(|e| e.class == 11 && e.state <= 12)
             .map(|e| (e.slot, e.tx, e.ty, e.id24))
             .find(|&(slot, tx, ty, dis)| !visited.contains(&(slot, dis, tx, ty)));
-        let Some((slot, tx, ty, dis)) = next else { break };
+        let Some((slot, tx, ty, dis)) = next else {
+            break;
+        };
         visited.insert((slot, dis, tx, ty));
         let (x, z) = (tx as f32 + 0.5, ty as f32 + 0.5);
         last_pos = (x, z);
@@ -77,10 +79,12 @@ fn main() {
     };
     for p in &poses {
         let ground = w.ground_height_tiles(p.x, p.z);
-        groups
-            .entry((p.class, p.model))
-            .or_default()
-            .push((p.alt - ground, p.x, p.z, p.type_index));
+        groups.entry((p.class, p.model)).or_default().push((
+            p.alt - ground,
+            p.x,
+            p.z,
+            p.type_index,
+        ));
     }
     for ((class, model), list) in &groups {
         let n = list.len();

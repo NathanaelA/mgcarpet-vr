@@ -49,8 +49,7 @@ pub fn corner_buckets() -> Vec<Bucket> {
             continue;
         }
         for (p, orient) in arrangements(*corners) {
-            let key =
-                343 * p[0] as usize + 49 * p[1] as usize + 7 * p[2] as usize + p[3] as usize;
+            let key = 343 * p[0] as usize + 49 * p[1] as usize + 7 * p[2] as usize + p[3] as usize;
             let bkt = &mut buckets[key];
             if (bkt.count as usize) < 12 {
                 bkt.tex[bkt.count as usize] = t as u8;

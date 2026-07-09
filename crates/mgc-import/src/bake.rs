@@ -9,9 +9,9 @@ use crate::gamedata::GameSource;
 use crate::level_mc1::{Mc1Level, ThingKind as Mc1Kind};
 use crate::level_mc2::{MC2_LEVEL_SIZE, MapType as Mc2MapType, Mc2Level};
 use mgc_formats::{
-    FORMAT_VERSION, Game, GenParams, Importer, LevelHeader, LevelPackage, MapType, Meta, Source,
-    StageCheckpoint, StageVar, Stages, TERRAIN_GRID_BYTES, Terrain, Thing, ThingKind, Things,
-    WizardConfig, Wizards, mgcl,
+    BAKE_EPOCH, FORMAT_VERSION, Game, GenParams, Importer, LevelHeader, LevelPackage, MapType,
+    Meta, Source, StageCheckpoint, StageVar, Stages, TERRAIN_GRID_BYTES, Terrain, Thing, ThingKind,
+    Things, WizardConfig, Wizards, mgcl,
 };
 
 #[derive(Debug)]
@@ -77,6 +77,7 @@ pub fn package_mc1_level(
     LevelPackage {
         meta: Meta {
             format_version: FORMAT_VERSION,
+            bake_epoch: BAKE_EPOCH,
             game,
             level: level_index,
             source: Some(source),
@@ -289,6 +290,7 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
     LevelPackage {
         meta: Meta {
             format_version: FORMAT_VERSION,
+            bake_epoch: BAKE_EPOCH,
             game: Game::MagicCarpet2,
             level: level_index,
             source: Some(source),
@@ -457,4 +459,135 @@ pub fn bake_mc2_archive(
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Outcome of [`bake_all`]: the `(member, sha256)` pairs written to
+/// `manifest.sha256`, sorted. Empty when no game data was found (a
+/// valid outcome for the CLI; the game shell treats it as fatal).
+pub struct BakeSummary {
+    pub manifest: Vec<(String, String)>,
+}
+
+/// Bake every game found under `gamedata` into `out_dir` — the full
+/// tree the engine consumes: level packages, environment bundles,
+/// audio/music bundles, plus `manifest.sha256`. Any subset of the
+/// three games is valid, including none at all (each absent source is
+/// skipped with a note). This is the one orchestration path, shared by
+/// the `mgc-import bake` CLI and the game shell's first-run/stale-epoch
+/// auto-bake; progress and skip notes print to stdout/stderr in both.
+pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> {
+    let found = crate::gamedata::Gamedata::locate(gamedata);
+    match &found.mc1 {
+        Some(src) => println!("mc1 source: {}", src.origin),
+        None => eprintln!("note: no MC1 data under {} — skipping", gamedata.display()),
+    }
+    match &found.mc2 {
+        Some(src) => println!("mc2 source: {}", src.origin),
+        None => eprintln!("note: no MC2 data under {} — skipping", gamedata.display()),
+    }
+
+    // MC1 terrain is generated natively (mc1_terrain); only MC2 needs
+    // the remc2-carved oracle tool.
+    let genlevel = find_genlevel();
+    match &genlevel {
+        Some(tool) => println!("mc2 terrain oracle: {}", tool.display()),
+        None => println!(
+            "mc2 terrain oracle not found (build tools/mc2-genlevel or set MGC_GENLEVEL) — baking mc2 without terrain"
+        ),
+    }
+
+    let mut manifest = Vec::new();
+    if let Some(src) = &found.mc1 {
+        let archives = [
+            (Game::MagicCarpet1, "mc1", "LEVELS/LEVELS"),
+            (Game::HiddenWorlds, "mc1hw", "LEVELS/DDLEVELS"),
+        ];
+        for (game, tag, base) in archives {
+            if !src.exists(&format!("{base}.DAT")) {
+                eprintln!("note: {base}.DAT not found — skipping {tag}");
+                continue;
+            }
+            let outputs =
+                bake_mc1_archive(game, tag, src, base, out_dir).map_err(|e| e.to_string())?;
+            println!("{tag}: baked {} levels", outputs.len());
+            manifest.extend(outputs);
+        }
+        if src.exists("DATA/PAL0-0.DAT") {
+            let outputs =
+                crate::bundle::bake_mc1_bundles(src, out_dir).map_err(|e| e.to_string())?;
+            println!(
+                "mc1: baked asset bundles mc1-temperate + mc1-arctic ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        } else {
+            eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
+        }
+        if src.exists("DATA/SNDS0-1.DAT") {
+            let outputs = crate::bundle::bake_mc1_audio(src, out_dir).map_err(|e| e.to_string())?;
+            println!(
+                "mc1: baked audio bundle mc1-audio ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        } else {
+            eprintln!("note: mc1 DATA/SNDS0-1.DAT not found — skipping audio bundle");
+        }
+    }
+
+    if let Some(src) = &found.mc2 {
+        let (outputs, skipped) =
+            bake_mc2_archive(src, out_dir, genlevel.as_deref()).map_err(|e| e.to_string())?;
+        println!("mc2: baked {} levels", outputs.len());
+        if !skipped.is_empty() {
+            println!(
+                "mc2: skipped {} extended-format dev leftovers (indices {:?})",
+                skipped.len(),
+                skipped
+            );
+        }
+        manifest.extend(outputs);
+        // Environment bundles need the CD catalogs (absent from
+        // hard-disk-only legacy copies).
+        if src.exists("DATA/PALD-0.DAT") {
+            let outputs =
+                crate::bundle::bake_mc2_bundles(src, out_dir).map_err(|e| e.to_string())?;
+            println!(
+                "mc2: baked asset bundles mc2-day/night/night-fog/cave ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        } else {
+            eprintln!(
+                "note: mc2 DATA/PALD-0.DAT not found (CD catalogs missing) — skipping mc2 bundles"
+            );
+        }
+        let outputs = crate::bundle::bake_mc2_audio(src, out_dir).map_err(|e| e.to_string())?;
+        if !outputs.is_empty() {
+            println!(
+                "mc2: baked audio bundle mc2-audio ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        }
+    }
+
+    if manifest.is_empty() {
+        return Ok(BakeSummary { manifest });
+    }
+
+    manifest.sort();
+    let manifest_path = out_dir.join("manifest.sha256");
+    let body: String = manifest
+        .iter()
+        .map(|(name, hash)| format!("{hash}  {name}\n"))
+        .collect();
+    std::fs::write(&manifest_path, body)
+        .map_err(|e| format!("cannot write {}: {e}", manifest_path.display()))?;
+    println!(
+        "{} packages, manifest: {}",
+        manifest.len(),
+        manifest_path.display()
+    );
+    Ok(BakeSummary { manifest })
 }

@@ -63,8 +63,7 @@ pub fn parse_bank<'a>(
         let name_end = name_raw.iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
         let name = std::str::from_utf8(&name_raw[..name_end])
             .map_err(|_| format!("bank {bank} record {i}: non-ASCII name"))?;
-        let offset =
-            u32::from_le_bytes(rec[OFFSET_AT..OFFSET_AT + 4].try_into().unwrap()) as usize;
+        let offset = u32::from_le_bytes(rec[OFFSET_AT..OFFSET_AT + 4].try_into().unwrap()) as usize;
         let len = u32::from_le_bytes(rec[LEN_AT..LEN_AT + 4].try_into().unwrap()) as usize;
         if i == 0 {
             // Header pseudo-entry: empty name; its size field is a
@@ -78,7 +77,11 @@ pub fn parse_bank<'a>(
                 dat.len()
             ));
         }
-        let len = if trim_tail { len.saturating_sub(16) } else { len };
+        let len = if trim_tail {
+            len.saturating_sub(16)
+        } else {
+            len
+        };
         let name = name
             .strip_suffix(".RAW")
             .unwrap_or(name)
@@ -188,7 +191,10 @@ pub fn parse_mc2_sound_dat(data: &[u8]) -> Result<Vec<ParsedBank<'_>>, String> {
             if i == 0 {
                 continue; // pseudo-header, as in the MC1 TAB
             }
-            let name_end = rec[..NAME_LEN].iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
+            let name_end = rec[..NAME_LEN]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(NAME_LEN);
             let name = std::str::from_utf8(&rec[..name_end])
                 .map_err(|_| format!("bank {bank} record {i}: non-ASCII name"))?;
             let offset =
@@ -197,8 +203,8 @@ pub fn parse_mc2_sound_dat(data: &[u8]) -> Result<Vec<ParsedBank<'_>>, String> {
             let wav = data
                 .get(data_off + offset..data_off + offset + len)
                 .ok_or_else(|| format!("bank {bank} record {i} ({name}): data out of range"))?;
-            let pcm = strip_wav(wav)
-                .map_err(|e| format!("bank {bank} record {i} ({name}): {e}"))?;
+            let pcm =
+                strip_wav(wav).map_err(|e| format!("bank {bank} record {i} ({name}): {e}"))?;
             let name = name
                 .strip_suffix(".WAV")
                 .unwrap_or(name)

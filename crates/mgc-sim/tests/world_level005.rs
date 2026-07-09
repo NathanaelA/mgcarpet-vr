@@ -39,9 +39,7 @@ fn build_world(root: &std::path::Path) -> (World, usize) {
         .things
         .things
         .iter()
-        .filter(|t| {
-            t.kind == mgc_formats::ThingKind::Entity && matches!(t.class, 2 | 3 | 5 | 12)
-        })
+        .filter(|t| t.kind == mgc_formats::ThingKind::Entity && matches!(t.class, 2 | 3 | 5 | 12))
         .count();
     (world, drawable)
 }
@@ -50,7 +48,10 @@ fn build_world(root: &std::path::Path) -> (World, usize) {
 fn fly(w: &mut World, x: f32, z: f32, ticks: usize) {
     for _ in 0..ticks {
         let alt = w.ground_height_tiles(x, z) + 2.0;
-        w.tick(PlayerPose::from_tiles(x, alt, z, 0.0, 0.0, 0.0), PlayerCommand::default());
+        w.tick(
+            PlayerPose::from_tiles(x, alt, z, 0.0, 0.0, 0.0),
+            PlayerCommand::default(),
+        );
     }
 }
 

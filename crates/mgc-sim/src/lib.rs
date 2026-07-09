@@ -23,8 +23,8 @@ pub mod mc1_tables;
 mod mobs;
 pub mod rivals;
 pub mod spells;
-pub mod world;
 mod tables;
+pub mod world;
 
 /// Fixed simulation tick rate.
 ///
@@ -321,9 +321,7 @@ impl Simulation {
             // velocity magnitude.
             let speed = match self.thrust_model {
                 ThrustModel::Mc1 => self.carpet.act_speed as f32 / 256.0,
-                ThrustModel::Enhanced => {
-                    (f.vx * f.vx + f.vy * f.vy + f.vz * f.vz).sqrt() * TICK_DT
-                }
+                ThrustModel::Enhanced => (f.vx * f.vx + f.vy * f.vy + f.vz * f.vz).sqrt() * TICK_DT,
             };
             w.tick(
                 world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, speed),
@@ -410,7 +408,9 @@ impl Simulation {
                     let (tx, ty) = ((x >> 8) as usize, (y >> 8) as usize);
                     th[ty * MAP_TILES + tx] as i16 * 32
                 };
-                flight::mc1_move(&mut self.carpet, &inp, over, knock, &ground, &|_, p| Some(p))
+                flight::mc1_move(&mut self.carpet, &inp, over, knock, &ground, &|_, p| {
+                    Some(p)
+                })
             }
         };
         if moved.flutter {
@@ -426,9 +426,10 @@ impl Simulation {
         if self.altitude_model == AltitudeModel::ExtendedLift {
             let g = match &self.world {
                 Some(w) => w.ground_z_engine(self.carpet.x, self.carpet.y),
-                None => (self
-                    .ground_height(self.carpet.x as f32 / 256.0, self.carpet.y as f32 / 256.0)
-                    * 256.0) as i16,
+                None => {
+                    (self.ground_height(self.carpet.x as f32 / 256.0, self.carpet.y as f32 / 256.0)
+                        * 256.0) as i16
+                }
             };
             let floor = g.saturating_add(128);
             if input.lift != 0.0 {
@@ -603,10 +604,7 @@ impl Simulation {
         // Extended lift with the hover keys idle: settle toward the
         // floor at any speed (player directive, playtest-6 — ground-
         // contact pickups assume the carpet comes down by itself).
-        if self.altitude_model == AltitudeModel::ExtendedLift
-            && input.lift == 0.0
-            && f.y > floor
-        {
+        if self.altitude_model == AltitudeModel::ExtendedLift && input.lift == 0.0 && f.y > floor {
             f.y = (f.y - 8.0 / 256.0).max(floor);
         }
     }
@@ -619,13 +617,7 @@ impl Simulation {
     fn lift_ceiling(&self) -> f32 {
         let max_ground = match &self.world {
             Some(w) => w.max_ground_tiles(),
-            None => self
-                .terrain_height
-                .iter()
-                .copied()
-                .max()
-                .unwrap_or(0) as f32
-                * HEIGHT_SCALE,
+            None => self.terrain_height.iter().copied().max().unwrap_or(0) as f32 * HEIGHT_SCALE,
         };
         max_ground + 4.0
     }
@@ -798,11 +790,18 @@ mod tests {
         sim.sync_carpet_from_flyer();
 
         // Phase 1 — ride the wall: hold accelerate into the cliff.
-        let fwd = FlightInput { thrust: 1.0, ..Default::default() };
+        let fwd = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
         for _ in 0..100 {
             sim.step(&fwd);
         }
-        assert!(sim.flyer.x > 131.0, "reached the plateau, x={}", sim.flyer.x);
+        assert!(
+            sim.flyer.x > 131.0,
+            "reached the plateau, x={}",
+            sim.flyer.x
+        );
         assert!(
             (sim.flyer.y - 25.5).abs() < 0.1,
             "the floor carried the carpet up the face, y={}",
@@ -811,11 +810,18 @@ mod tests {
 
         // Phase 2 — dash away level: decelerate through zero into
         // backward flight, off the cliff edge, pitch untouched.
-        let back = FlightInput { thrust: -1.0, ..Default::default() };
+        let back = FlightInput {
+            thrust: -1.0,
+            ..Default::default()
+        };
         for _ in 0..110 {
             sim.step(&back);
         }
-        assert!(sim.flyer.x < 129.0, "back over the lowland, x={}", sim.flyer.x);
+        assert!(
+            sim.flyer.x < 129.0,
+            "back over the lowland, x={}",
+            sim.flyer.x
+        );
         assert!(
             sim.flyer.y > 25.0,
             "level flight HOLDS the stolen altitude, y={}",
@@ -843,7 +849,10 @@ mod tests {
         th[0] = 80; // a lone 10-tile peak far away
         let mut sim = Simulation::with_terrain(th);
         sim.altitude_model = AltitudeModel::ExtendedLift;
-        let rise = FlightInput { lift: 1.0, ..Default::default() };
+        let rise = FlightInput {
+            lift: 1.0,
+            ..Default::default()
+        };
         for _ in 0..500 {
             sim.step(&rise);
         }
@@ -860,14 +869,28 @@ mod tests {
         let y0 = sim.flyer.y;
         // Aim hard down, then thrust: motion must stay horizontal
         // (aim pitch is for shooting; it never steals mobility).
-        let dive = FlightInput { pitch_delta: -1.4, ..Default::default() };
+        let dive = FlightInput {
+            pitch_delta: -1.4,
+            ..Default::default()
+        };
         sim.step(&dive);
-        let fwd = FlightInput { thrust: 1.0, ..Default::default() };
+        let fwd = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
         for _ in 0..60 {
             sim.step(&fwd);
         }
-        assert!((sim.flyer.y - y0).abs() < 1e-3, "no vertical bleed, y={}", sim.flyer.y);
-        assert!(sim.flyer.z < 160.0, "full horizontal speed, z={}", sim.flyer.z);
+        assert!(
+            (sim.flyer.y - y0).abs() < 1e-3,
+            "no vertical bleed, y={}",
+            sim.flyer.y
+        );
+        assert!(
+            sim.flyer.z < 160.0,
+            "full horizontal speed, z={}",
+            sim.flyer.z
+        );
     }
 
     #[test]

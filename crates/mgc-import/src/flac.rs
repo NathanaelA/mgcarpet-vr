@@ -10,12 +10,8 @@ pub fn encode(samples: &[i16], channels: usize, sample_rate: u32) -> Result<Vec<
     let config = flacenc::config::Encoder::default()
         .into_verified()
         .map_err(|(_, e)| format!("flac config: {e}"))?;
-    let source = flacenc::source::MemSource::from_samples(
-        &widened,
-        channels,
-        16,
-        sample_rate as usize,
-    );
+    let source =
+        flacenc::source::MemSource::from_samples(&widened, channels, 16, sample_rate as usize);
     let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
         .map_err(|e| format!("flac encode: {e}"))?;
     let mut sink = flacenc::bitsink::ByteSink::new();

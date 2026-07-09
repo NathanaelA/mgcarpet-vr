@@ -103,7 +103,10 @@ impl FeatureAssets {
     /// grid); `build_tab`/`build_dat` = decompressed BUILD?-0.TAB/DAT.
     pub fn parse(search: &[u8], build_tab: &[u8], build_dat: &[u8]) -> Result<Self, String> {
         if search.len() != 1024 {
-            return Err(format!("search grid: expected 1024 bytes, got {}", search.len()));
+            return Err(format!(
+                "search grid: expected 1024 bytes, got {}",
+                search.len()
+            ));
         }
         // Center = the first value-0 cell in row-major scan; ring j's
         // entries are all value-j cells in the same scan order.
@@ -123,7 +126,10 @@ impl FeatureAssets {
             }
         }
         if build_tab.len() % 6 != 0 {
-            return Err(format!("build tab: {} bytes is not 6-byte entries", build_tab.len()));
+            return Err(format!(
+                "build tab: {} bytes is not 6-byte entries",
+                build_tab.len()
+            ));
         }
         let tab: Vec<BuildDef> = build_tab
             .chunks_exact(6)
@@ -729,8 +735,7 @@ impl Gen {
                     let p2 = self.t.angle[tile(cx.wrapping_add(1), cy)] & 7;
                     let p3 = self.t.angle[tile(cx.wrapping_add(1), cy.wrapping_add(1))] & 7;
                     let p4 = self.t.angle[tile(cx, cy.wrapping_add(1))] & 7;
-                    let idx =
-                        p4 as usize + 7 * p3 as usize + 49 * p2 as usize + 343 * p1 as usize;
+                    let idx = p4 as usize + 7 * p3 as usize + 49 * p2 as usize + 343 * p1 as usize;
                     let [new_type, orient] = self.retile[idx];
                     self.t.tile_type[t] = new_type;
                     self.t.angle[t] = if new_type >= 8 {
@@ -982,7 +987,7 @@ impl Gen {
 
     /// sub_11760 (:16869): true when the tile under the position (plain
     /// >>8, no rounding) is water (angle nibble 0) — the walker/digger
-    /// stop probe.
+    /// > > stop probe.
     fn on_water(&self, x: u16, y: u16) -> bool {
         self.t.angle[tile((x >> 8) as u8, (y >> 8) as u8)] & 0xF == 0
     }
@@ -1364,14 +1369,22 @@ impl Gen {
         self.ent[i].f26 = 2;
         self.ent[i].f128 = ((bw * bh) >> 4) as i16;
         // Snap to the tile origin.
-        let (px, py, pz) = (self.ent[i].x & 0xFF00, self.ent[i].y & 0xFF00, self.ent[i].z);
+        let (px, py, pz) = (
+            self.ent[i].x & 0xFF00,
+            self.ent[i].y & 0xFF00,
+            self.ent[i].z,
+        );
         self.move_relink(i, px, py, pz);
         let e = &self.ent[i];
         let mut cx = ((e.x >> 8) as u8).wrapping_sub((bw >> 1) as u8);
         let cy = ((e.y >> 8) as u8).wrapping_sub((bh >> 1) as u8);
         if (cx as u16 + cy as u16) % 2 == 1 {
             // Odd corner parity: shift one tile east (relinks).
-            let (nx, ny, nz) = (self.ent[i].x.wrapping_add(0x100), self.ent[i].y, self.ent[i].z);
+            let (nx, ny, nz) = (
+                self.ent[i].x.wrapping_add(0x100),
+                self.ent[i].y,
+                self.ent[i].z,
+            );
             self.move_relink(i, nx, ny, nz);
             cx = cx.wrapping_add(1);
         }
@@ -1856,8 +1869,10 @@ impl Gen {
             return;
         }
         let d = lcg32(&mut self.ent[i].rand);
-        self.ent[i].f30 =
-            ((d % 0x5B) as u16).wrapping_add(self.ent[i].f30).wrapping_sub(45) & 0x7FF;
+        self.ent[i].f30 = ((d % 0x5B) as u16)
+            .wrapping_add(self.ent[i].f30)
+            .wrapping_sub(45)
+            & 0x7FF;
         let (mut x, mut y) = (self.ent[i].x, self.ent[i].y);
         Self::advance(&mut x, &mut y, self.ent[i].f30, 256);
         self.ent[i].x = x;
@@ -2003,8 +2018,7 @@ impl Gen {
                 if let Some(goal) = goal {
                     let angle_before = self.t.angle[t];
                     let hh = self.t.height[t] as i32;
-                    self.t.height[t] =
-                        self.t.height[t].wrapping_add(((goal - hh) / divisor) as u8);
+                    self.t.height[t] = self.t.height[t].wrapping_add(((goal - hh) / divisor) as u8);
                     if angle_before & 7 == 0 {
                         self.t.angle[t] = (angle_before & 0xF0) | 1;
                         self.recompute_protected(x, y, x, y);
@@ -2221,8 +2235,7 @@ impl Gen {
         }
         let counter = self.ent[i].f26;
         if counter != 0 {
-            let step = (self.ent[i].f44 as i32 - self.ent[i].f28 as i16 as i32)
-                / counter as i32;
+            let step = (self.ent[i].f44 as i32 - self.ent[i].f28 as i16 as i32) / counter as i32;
             self.ent[i].f28 = (self.ent[i].f28 as i16 as i32 + step) as i16 as u16;
             let add = |g: &mut Self, unstamp: bool| {
                 for gy in 0..def.h {
@@ -2388,11 +2401,7 @@ impl Gen {
         let cy = ((y as u32 + 128) >> 8) as u8;
         let (htx, hty) = ((half_w >> 8) as i32, (half_h >> 8) as i32);
         let blocked = |gx: i32, gy: i32| {
-            self.t.angle[tile(
-                (cx as i32 + gx) as u8,
-                (cy as i32 + gy) as u8,
-            )] & 0x80
-                != 0
+            self.t.angle[tile((cx as i32 + gx) as u8, (cy as i32 + gy) as u8)] & 0x80 != 0
         };
         for gx in -htx..=htx {
             if blocked(gx, -hty) || blocked(gx, hty) {
@@ -2494,8 +2503,16 @@ impl Gen {
     /// castle+63 % fleet, keeping a stale ball target between slots'
     /// turns; we re-pick every pass.
     fn castle_balloons(&mut self, i: usize) {
-        const FLEET: [(usize, usize); 8] =
-            [(0, 0), (1, 0), (1, 0), (1, 4), (2, 6), (2, 14), (3, 18), (3, 34)];
+        const FLEET: [(usize, usize); 8] = [
+            (0, 0),
+            (1, 0),
+            (1, 0),
+            (1, 4),
+            (2, 6),
+            (2, 14),
+            (3, 18),
+            (3, 34),
+        ];
         let own = self.ent[i].id24;
         let (bq, gq) = FLEET[self.ent[i].f26.clamp(0, 7) as usize];
         let mut balloons: Vec<usize> = Vec::new();
@@ -2542,8 +2559,7 @@ impl Gen {
                 self.ent[i].f46 = 16;
             }
         }
-        let full =
-            house_tally + self.ent[i].f140.max(0) as i64 >= self.ent[i].f136.max(0) as i64;
+        let full = house_tally + self.ent[i].f140.max(0) as i64 >= self.ent[i].f136.max(0) as i64;
         for k in 0..balloons.len() {
             let b = balloons[k];
             if full || self.ent[b].f140 >= self.ent[b].f136 {
@@ -2557,11 +2573,7 @@ impl Gen {
             let mut best_d = i32::MAX;
             for j in 1..POOL {
                 let e = &self.ent[j];
-                if e.class64 != 10
-                    || e.model65 != 39
-                    || e.flags & 0x400 != 0
-                    || e.f144 != own
-                {
+                if e.class64 != 10 || e.model65 != 39 || e.flags & 0x400 != 0 || e.f144 != own {
                     continue;
                 }
                 if balloons
@@ -2688,8 +2700,7 @@ impl Gen {
     /// level change (sub_47BD0 :56552-60): a NEGATIVE old life
     /// (overkill) is re-deducted from the new max, capped at half of
     /// it; positive life just resets to full.
-    const CASTLE_HP: [u32; 8] =
-        [40000, 20000, 40000, 40000, 60000, 60000, 80000, 80000];
+    const CASTLE_HP: [u32; 8] = [40000, 20000, 40000, 40000, 60000, 60000, 80000, 80000];
 
     /// sub_46F10 (:56043): the class-3 m2 CASTLE state machine
     /// (sub-state f59 = the original's +48). Remaining housekeeping:
@@ -2722,8 +2733,7 @@ impl Gen {
                 let hp = Self::CASTLE_HP[(lvl as usize).min(7)];
                 self.ent[i].max_life = hp;
                 self.ent[i].act_life = hp as i32;
-                let def =
-                    self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
+                let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
                 {
                     let e = &mut self.ent[i];
                     e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
@@ -3680,7 +3690,10 @@ mod tests {
             .flat_map(|y| (125..132).map(move |x| (x, y)))
             .filter(|&(x, y)| p.angle[y * 256 + x] & 0x80 != 0)
             .count();
-        assert!(protected >= 8, "building marks protected tiles, got {protected}");
+        assert!(
+            protected >= 8,
+            "building marks protected tiles, got {protected}"
+        );
     }
 
     #[test]

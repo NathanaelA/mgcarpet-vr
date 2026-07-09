@@ -52,7 +52,10 @@ fn main() {
     let (free, creatures, dead, triggers, portals) = stat(&w);
     println!("== init: free {free}, creatures {creatures} ({dead} dead), portals {portals:?}");
     for t in &triggers {
-        println!("   trigger slot {} state {} fires-dis {} at ({},{})", t.0, t.1, t.2, t.3, t.4);
+        println!(
+            "   trigger slot {} state {} fires-dis {} at ({},{})",
+            t.0, t.1, t.2, t.3, t.4
+        );
     }
 
     let mut visited: HashSet<(usize, u16, u8, u8)> = HashSet::new();
@@ -74,7 +77,10 @@ fn main() {
         let before = stat(&w);
         for _ in 0..24 {
             let alt = w.ground_height_tiles(x, z) + 0.5;
-            w.tick(PlayerPose::from_tiles(x, alt, z, 0.0, 0.0, 0.0), PlayerCommand::default());
+            w.tick(
+                PlayerPose::from_tiles(x, alt, z, 0.0, 0.0, 0.0),
+                PlayerCommand::default(),
+            );
             w.take_teleport();
         }
         let after = stat(&w);
@@ -84,18 +90,27 @@ fn main() {
         );
         for t in &after.3 {
             if !before.3.contains(t) {
-                println!("   NEW trigger slot {} state {} fires-dis {} at ({},{})", t.0, t.1, t.2, t.3, t.4);
+                println!(
+                    "   NEW trigger slot {} state {} fires-dis {} at ({},{})",
+                    t.0, t.1, t.2, t.3, t.4
+                );
             }
         }
         for t in &before.3 {
             if !after.3.contains(t) {
-                println!("   GONE trigger slot {} state {} fires-dis {} at ({},{})", t.0, t.1, t.2, t.3, t.4);
+                println!(
+                    "   GONE trigger slot {} state {} fires-dis {} at ({},{})",
+                    t.0, t.1, t.2, t.3, t.4
+                );
             }
         }
     }
     let (free, creatures, dead, triggers, portals) = stat(&w);
     println!("== final: free {free}, creatures {creatures} ({dead} dead), portals {portals:?}");
     for t in &triggers {
-        println!("   remaining trigger slot {} state {} fires-dis {} at ({},{})", t.0, t.1, t.2, t.3, t.4);
+        println!(
+            "   remaining trigger slot {} state {} fires-dis {} at ({},{})",
+            t.0, t.1, t.2, t.3, t.4
+        );
     }
 }

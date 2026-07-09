@@ -136,6 +136,23 @@ pub fn write<W: Write + Seek>(sink: W, package: &LevelPackage) -> Result<(), Mgc
     Ok(())
 }
 
+/// Read only `meta.json` from a package — the cheap staleness probe
+/// (version/epoch checks) that avoids parsing the whole package. Does
+/// NOT reject unsupported versions; the caller inspects the fields.
+pub fn read_meta<R: Read + Seek>(source: R) -> Result<Meta, MgclError> {
+    let mut zip = ZipArchive::new(source)?;
+    let mut file = match zip.by_name("meta.json") {
+        Ok(f) => f,
+        Err(zip::result::ZipError::FileNotFound) => {
+            return Err(MgclError::MissingMember("meta.json"));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut buf = Vec::with_capacity(file.size() as usize);
+    file.read_to_end(&mut buf)?;
+    Ok(serde_json::from_slice(&buf)?)
+}
+
 /// Read a package from any seekable source. Unknown members are ignored
 /// here; tools that rewrite packages must copy them through (docs/FORMAT.md).
 pub fn read<R: Read + Seek>(source: R) -> Result<LevelPackage, MgclError> {
@@ -226,6 +243,7 @@ mod tests {
         LevelPackage {
             meta: Meta {
                 format_version: FORMAT_VERSION,
+                bake_epoch: crate::BAKE_EPOCH,
                 game: Game::MagicCarpet1,
                 level: 0,
                 source: Some(Source {

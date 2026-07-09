@@ -62,10 +62,7 @@ impl Gen {
         let e = &mut self.ent[i];
         e.frame88 = 0;
         e.type86 = t;
-        e.frames89 = FRAME_COUNTS
-            .get(s.draw_type as usize)
-            .copied()
-            .unwrap_or(0);
+        e.frames89 = FRAME_COUNTS.get(s.draw_type as usize).copied().unwrap_or(0);
         e.f78 = s.height / 2;
         e.f80 = s.width / 2;
         e.f82 = s.width / 2;
@@ -121,12 +118,7 @@ impl Gen {
                 self.ent[i].act_life = life as i32; // clobbered by RefillLife below, as the original
                 let jx = ((self.ent_rand(i) & 0x3F) as i32 - 32) as i16;
                 let jy = ((self.ent_rand(i) & 0x3F) as i32 - 32) as i16;
-                self.link(
-                    i,
-                    x.wrapping_add(jx as u16),
-                    y.wrapping_add(jy as u16),
-                    z,
-                );
+                self.link(i, x.wrapping_add(jx as u16), y.wrapping_add(jy as u16), z);
                 self.refill_life(i);
                 let t = if self.ent_rand(i) & 1 != 0 { 84 } else { 83 };
                 self.set_sprite(i, t);
@@ -242,8 +234,8 @@ impl Gen {
     }
 
     /// The single-entity creature spawns (:44664-:45640), one table
-    /// row per model; the shared shape is NewEvent + state/speeds/life
-    /// + mana + facing draw + bookkeeping + place + RefillLife +
+    /// row per model; the shared shape is NewEvent + state/speeds/life +
+    /// mana + facing draw + bookkeeping + place + RefillLife +
     /// sprite/extents.
     fn spawn_simple_creature(&mut self, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
         // Per-model constants (sub_38270..sub_396E0):
@@ -260,22 +252,134 @@ impl Gen {
             f44: u16,
         }
         let c = match model {
-            1 => C { state: 7, life: 2000, act: 50, max: 100, accel: 16, row: 13, f44: 100 },
-            2 => C { state: 13, life: 3000, act: 35, max: 70, accel: 30, row: 14, f44: 350 },
-            4 => C { state: 25, life: 1000, act: 30, max: 30, accel: 0, row: 0, f44: 500 },
-            5 => C { state: 31, life: 5000, act: 30, max: 30, accel: 3, row: 17, f44: 500 },
-            7 => C { state: 43, life: 0, act: 20, max: 20, accel: 3, row: 19, f44: 500 },
-            8 => C { state: 49, life: 10000, act: 40, max: 40, accel: 20, row: 20, f44: 1000 },
+            1 => C {
+                state: 7,
+                life: 2000,
+                act: 50,
+                max: 100,
+                accel: 16,
+                row: 13,
+                f44: 100,
+            },
+            2 => C {
+                state: 13,
+                life: 3000,
+                act: 35,
+                max: 70,
+                accel: 30,
+                row: 14,
+                f44: 350,
+            },
+            4 => C {
+                state: 25,
+                life: 1000,
+                act: 30,
+                max: 30,
+                accel: 0,
+                row: 0,
+                f44: 500,
+            },
+            5 => C {
+                state: 31,
+                life: 5000,
+                act: 30,
+                max: 30,
+                accel: 3,
+                row: 17,
+                f44: 500,
+            },
+            7 => C {
+                state: 43,
+                life: 0,
+                act: 20,
+                max: 20,
+                accel: 3,
+                row: 19,
+                f44: 500,
+            },
+            8 => C {
+                state: 49,
+                life: 10000,
+                act: 40,
+                max: 40,
+                accel: 20,
+                row: 20,
+                f44: 1000,
+            },
             // State 54, NOT 55 — breaks the 6n+1 family pattern (:45258).
-            9 => C { state: 54, life: 1000, act: 20, max: 20, accel: 0, row: 21, f44: 500 },
-            10 => C { state: 61, life: 2000, act: 60, max: 60, accel: 20, row: 22, f44: 500 },
+            9 => C {
+                state: 54,
+                life: 1000,
+                act: 20,
+                max: 20,
+                accel: 0,
+                row: 21,
+                f44: 500,
+            },
+            10 => C {
+                state: 61,
+                life: 2000,
+                act: 60,
+                max: 60,
+                accel: 20,
+                row: 22,
+                f44: 500,
+            },
             // State 66, NOT 67 (:45364).
-            11 => C { state: 66, life: 20000, act: 60, max: 60, accel: 20, row: 23, f44: 500 },
-            12 => C { state: 73, life: 1000, act: 40, max: 40, accel: 20, row: 10, f44: 500 },
-            13 => C { state: 79, life: 1000, act: 40, max: 40, accel: 20, row: 10, f44: 500 },
-            14 => C { state: 85, life: 1000, act: 40, max: 40, accel: 20, row: 10, f44: 500 },
-            15 => C { state: 91, life: 1000, act: 30, max: 30, accel: 0, row: 24, f44: 500 },
-            16 => C { state: 97, life: 100000, act: 60, max: 60, accel: 20, row: 25, f44: 500 },
+            11 => C {
+                state: 66,
+                life: 20000,
+                act: 60,
+                max: 60,
+                accel: 20,
+                row: 23,
+                f44: 500,
+            },
+            12 => C {
+                state: 73,
+                life: 1000,
+                act: 40,
+                max: 40,
+                accel: 20,
+                row: 10,
+                f44: 500,
+            },
+            13 => C {
+                state: 79,
+                life: 1000,
+                act: 40,
+                max: 40,
+                accel: 20,
+                row: 10,
+                f44: 500,
+            },
+            14 => C {
+                state: 85,
+                life: 1000,
+                act: 40,
+                max: 40,
+                accel: 20,
+                row: 10,
+                f44: 500,
+            },
+            15 => C {
+                state: 91,
+                life: 1000,
+                act: 30,
+                max: 30,
+                accel: 0,
+                row: 24,
+                f44: 500,
+            },
+            16 => C {
+                state: 97,
+                life: 100000,
+                act: 60,
+                max: 60,
+                accel: 20,
+                row: 25,
+                f44: 500,
+            },
             _ => return None,
         };
         let i = self.new_event()?;
@@ -366,7 +470,11 @@ impl Gen {
             4 | 15 => 0,
             5 => 185,
             7 => {
-                if ordinal & 1 != 0 { 85 } else { 199 }
+                if ordinal & 1 != 0 {
+                    85
+                } else {
+                    199
+                }
             }
             8 => 47,
             9 => 220,
@@ -374,7 +482,11 @@ impl Gen {
             11 => 200,
             12 => 221,
             13 => {
-                if self.ent_rand(i) % 7 < 4 { 217 } else { 218 }
+                if self.ent_rand(i) % 7 < 4 {
+                    217
+                } else {
+                    218
+                }
             }
             14 => 219,
             16 => 207,
@@ -426,11 +538,13 @@ impl Gen {
     fn roughness(&self, x: u16, y: u16) -> i32 {
         let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
         let h = |dx: u8, dy: u8| {
-            self.t.height[(((ty.wrapping_add(dy)) as usize) << 8)
-                | tx.wrapping_add(dx) as usize] as i32
+            self.t.height[(((ty.wrapping_add(dy)) as usize) << 8) | tx.wrapping_add(dx) as usize]
+                as i32
         };
         let (h00, h10, h01, h11) = (h(0, 0), h(1, 0), h(0, 1), h(1, 1));
-        (h00 + h01 - h10 - h11).abs().max((h00 + h10 - h01 - h11).abs())
+        (h00 + h01 - h10 - h11)
+            .abs()
+            .max((h00 + h10 - h01 - h11).abs())
     }
 
     /// sub_42000_42340 (:52576): altitude clamp toward the behavior
@@ -482,7 +596,11 @@ impl Gen {
             return 0;
         }
         let d = Self::angdist(cur, tgt) as i16;
-        let s = if tgt.wrapping_sub(cur) & 0x7FF <= 1024 { 1 } else { -1 };
+        let s = if tgt.wrapping_sub(cur) & 0x7FF <= 1024 {
+            1
+        } else {
+            -1
+        };
         s * d.min(cap)
     }
 
@@ -658,8 +776,7 @@ impl Gen {
         let row = &BEHAVIOR[e.row156 as usize];
         let r2 = (row.v_28 as i32) * (row.v_28 as i32);
         Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) <= r2
-            && Self::angdist(e.f30, Self::angle_between(e.x, e.y, ctx.px, ctx.py))
-                < row.v_30 as u16
+            && Self::angdist(e.f30, Self::angle_between(e.x, e.y, ctx.px, ctx.py)) < row.v_30 as u16
     }
 
     /// IDLE sub_19B10 (:21311): stationary; every v_26 ticks a pack
@@ -727,8 +844,7 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz, 0xFFu8, 0xFFu8)
         } else {
             let t = tgt as usize;
-            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0
-                || self.ent[t].act_life < 0
+            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 || self.ent[t].act_life < 0
             {
                 self.ent[i].tick70 = base + 1; // target lost (:21658)
                 return;
@@ -754,9 +870,7 @@ impl Gen {
             }
             if self.ent[i].f26 > 0 && tgt == PLAYER_TARGET {
                 let (kx, ky) = (self.ent[i].x, self.ent[i].y);
-                let dir = Self::angle_between(kx, ky, ctx.px, ctx.py)
-                    .wrapping_add(0x400)
-                    & 0x7FF;
+                let dir = Self::angle_between(kx, ky, ctx.px, ctx.py).wrapping_add(0x400) & 0x7FF;
                 self.player_knock = (dir, 80);
                 // Victim buffet cue (:23223). Sound 42 falls into
                 // sub_55370's default case — the faithful mixer
@@ -765,7 +879,9 @@ impl Gen {
                 self.snd(42, i);
             }
             // Kraken growl every v_26 in range → sound 37 (:23240).
-            if self.ent[i].f63 as u16 % BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u16 == 0 {
+            if self.ent[i].f63 as u16 % BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u16
+                == 0
+            {
                 self.snd(37, i);
             }
         }
@@ -867,7 +983,13 @@ impl Gen {
                 return;
             }
             let c = &self.ent[t];
-            (c.x, c.y, c.z, c.class64, c.act_life < 0 || c.flags & 0x400 != 0)
+            (
+                c.x,
+                c.y,
+                c.z,
+                c.class64,
+                c.act_life < 0 || c.flags & 0x400 != 0,
+            )
         };
         if self.ent[i].f63 & 7 == 0 {
             let e = &self.ent[i];
@@ -1097,9 +1219,7 @@ impl Gen {
                 e.act_life = e.max_life as i32;
             }
         }
-        if self.ent[i].f58 != 0
-            && self.ent[i].act_life > (self.ent[i].max_life >> 2) as i32
-        {
+        if self.ent[i].f58 != 0 && self.ent[i].act_life > (self.ent[i].max_life >> 2) as i32 {
             if self.player_in_aggro_range(i, ctx) {
                 self.ent[i].f146 = PLAYER_TARGET;
                 self.genie_ambush(i, base, ctx);
@@ -1336,8 +1456,7 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz, 3u8, 0u8)
         } else {
             let t = tgt as usize;
-            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0
-                || self.ent[t].act_life < 0
+            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 || self.ent[t].act_life < 0
             {
                 self.ent[i].tick70 = base;
                 return;
@@ -1407,7 +1526,7 @@ impl Gen {
             let c = &self.ent[j];
             if c.class64 == 5 && c.model65 == 9 && c.tick70 != 120 && c.act_life >= 0 {
                 let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
-                if d2 <= r2 && best.map_or(true, |(_, b)| d2 < b) {
+                if d2 <= r2 && best.is_none_or(|(_, b)| d2 < b) {
                     best = Some((j, d2));
                 }
             }
@@ -1438,7 +1557,7 @@ impl Gen {
             if max_d2.is_some_and(|m| d2 > m) {
                 continue;
             }
-            if best.map_or(true, |(_, b)| d2 < b) {
+            if best.is_none_or(|(_, b)| d2 < b) {
                 best = Some((j, d2));
             }
         }
@@ -1488,10 +1607,8 @@ impl Gen {
     /// patience out → wander); inside 0xA00 → BUILD with +26 = 0.
     fn m12_approach(&mut self, i: usize) {
         let t = self.ent[i].f146 as usize;
-        let valid = t != 0
-            && t < self.ent.len()
-            && self.ent[t].class64 == 10
-            && self.ent[t].model65 == 45;
+        let valid =
+            t != 0 && t < self.ent.len() && self.ent[t].class64 == 10 && self.ent[t].model65 == 45;
         if !valid {
             self.ent[i].f26 = 5;
             self.ent[i].f146 = 0;
@@ -1530,10 +1647,8 @@ impl Gen {
     /// 12, dispatch is state-based, exactly the original's trick.
     fn m12_build(&mut self, i: usize) {
         let a = self.ent[i].f146 as usize;
-        let anchor_ok = a != 0
-            && a < self.ent.len()
-            && self.ent[a].class64 == 10
-            && self.ent[a].model65 == 45;
+        let anchor_ok =
+            a != 0 && a < self.ent.len() && self.ent[a].class64 == 10 && self.ent[a].model65 == 45;
         if !anchor_ok {
             self.ent[i].f26 = 5;
             self.ent[i].f146 = 0;
@@ -1589,7 +1704,11 @@ impl Gen {
         }
         // Flatness (sub_1E920/sub_35EA0): 4-corner max−min under the
         // 15/16 threshold.
-        let thr = if (half_y >> 7) + (half_x >> 7) > 4 { 16 } else { 15 };
+        let thr = if (half_y >> 7) + (half_x >> 7) > 4 {
+            16
+        } else {
+            15
+        };
         if self.site_roughness(px, py, (half_x >> 8) as u8, (half_y >> 8) as u8) >= thr {
             return;
         }
@@ -1651,10 +1770,8 @@ impl Gen {
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
         let think = (self.ent[i].f63 as i16) % v26 == 0;
         let t = self.ent[i].f146 as usize;
-        let valid = t != 0
-            && t < self.ent.len()
-            && self.ent[t].class64 == 10
-            && self.ent[t].model65 == 45;
+        let valid =
+            t != 0 && t < self.ent.len() && self.ent[t].class64 == 10 && self.ent[t].model65 == 45;
         if valid {
             if !think {
                 return;
@@ -1773,27 +1890,21 @@ impl Gen {
                         for k in 0..n {
                             if let Some(p) = self.spawn_fireball(x, y, launch_z) {
                                 self.ent[p].row156 = (6 - k).max(0) as u8;
-                                self.arm_projectile(
-                                    p, owner, 3, 0xFF, tgt, tx, ty, tz, 400, 0,
-                                );
+                                self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 400, 0);
                             }
                         }
                     }
                     1 | 2 => {
                         for _ in 0..(n - 1).max(0) {
                             if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
-                                self.arm_projectile(
-                                    p, owner, 3, 0xFF, tgt, tx, ty, tz, 800, 23,
-                                );
+                                self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 800, 23);
                             }
                         }
                     }
                     _ => {
                         if let Some(p) = self.spawn_trail_bolt(x, y, launch_z) {
                             self.ent[p].row156 = 3;
-                            self.arm_projectile(
-                                p, owner, 3, 0xFF, tgt, tx, ty, tz, 8000, 17,
-                            );
+                            self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 8000, 17);
                         }
                     }
                 }
@@ -2296,9 +2407,7 @@ impl Gen {
                 // list (m12 :25291, m13 :25459, m14 :25638, m4's
                 // corpse analog) — and so does killing a griffon
                 // (sub_1CF60 :23578-80): the flock avenges it.
-                if matches!(model, 4 | 8 | 12 | 13 | 14)
-                    && self.ent[i].f38 == PLAYER_TARGET
-                {
+                if matches!(model, 4 | 8 | 12 | 13 | 14) && self.ent[i].f38 == PLAYER_TARGET {
                     self.player_aggro = 200;
                 }
                 self.ent[i].tick70 = base + 4;
@@ -2500,7 +2609,11 @@ impl Gen {
             let e = &mut self.ent[head];
             e.f26 = (head % 100) as i16;
             e.f63 = ordinal;
-            e.f58 = if model == 6 { 64 } else { v26 - (ordinal as i16 % v26) + 4 };
+            e.f58 = if model == 6 {
+                64
+            } else {
+                v26 - (ordinal as i16 % v26) + 4
+            };
             if model != 6 {
                 e.f56 = 96;
             }
@@ -2532,7 +2645,11 @@ impl Gen {
                 0 => 19 + si as u16,
                 3 => 89 + si as u16,
                 _ => {
-                    if si == 0 { 50 } else { 193 }
+                    if si == 0 {
+                        50
+                    } else {
+                        193
+                    }
                 }
             };
             self.set_sprite(seg, seg_type);

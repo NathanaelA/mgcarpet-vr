@@ -64,10 +64,7 @@ fn is_campaign_level(level: u32) -> bool {
 fn jar_spells_in(things: &Things) -> Vec<u8> {
     let mut out = Vec::new();
     for t in &things.things {
-        if t.kind == ThingKind::Entity
-            && t.class == JAR_CLASS
-            && (t.model as usize) < SPELL_COUNT
-        {
+        if t.kind == ThingKind::Entity && t.class == JAR_CLASS && (t.model as usize) < SPELL_COUNT {
             let s = t.model as u8;
             if !out.contains(&s) {
                 out.push(s);

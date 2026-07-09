@@ -24,7 +24,13 @@ fn main() {
         }
         let txt: String = s
             .iter()
-            .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
+            .map(|&b| {
+                if b.is_ascii_graphic() || b == b' ' {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         println!("{i:4}: {txt}");
     }

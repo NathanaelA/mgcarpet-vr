@@ -267,9 +267,8 @@ pub fn bake_mc1_audio(
     let mut banks = Vec::new();
     for (bank, dat_rel, tab, dat) in &raw_pairs {
         banks.push(
-            crate::sound::parse_bank(*bank, tab, dat, true).map_err(|e| {
-                BakeError::Level(Path::new(dat_rel).to_path_buf(), 0, e)
-            })?,
+            crate::sound::parse_bank(*bank, tab, dat, true)
+                .map_err(|e| BakeError::Level(Path::new(dat_rel).to_path_buf(), 0, e))?,
         );
     }
     let (index, blob) = crate::sound::bake_blob(&banks, MC1_SOUND_RATE);
@@ -314,8 +313,7 @@ pub fn bake_mc1_audio(
             } else {
                 crate::adlib::MixSpec::full()
             };
-            let pcm = crate::adlib::render(&song, &inst, &drum, MUSIC_RATE, &mix)
-                .map_err(err)?;
+            let pcm = crate::adlib::render(&song, &inst, &drum, MUSIC_RATE, &mix).map_err(err)?;
             let flac = crate::flac::encode(&pcm, 1, MUSIC_RATE).map_err(err)?;
             let name = name.strip_suffix(".hmp").unwrap_or(name);
             let member = format!("music/{bank}-{name}.flac");
@@ -353,6 +351,7 @@ pub fn bake_mc1_audio(
 
     let manifest = BundleManifest {
         format_version: BUNDLE_VERSION,
+        bake_epoch: mgc_formats::BAKE_EPOCH,
         variant: "mc1-audio".to_string(),
         game: Game::MagicCarpet1,
         importer: Importer {
@@ -459,6 +458,7 @@ pub fn bake_mc2_audio(
 
     let manifest = BundleManifest {
         format_version: BUNDLE_VERSION,
+        bake_epoch: mgc_formats::BAKE_EPOCH,
         variant: "mc2-audio".to_string(),
         game: Game::MagicCarpet2,
         importer: Importer {
@@ -660,6 +660,7 @@ fn bake_variant(
 
     let manifest = BundleManifest {
         format_version: BUNDLE_VERSION,
+        bake_epoch: mgc_formats::BAKE_EPOCH,
         variant: spec.variant.to_string(),
         game: spec.game,
         importer: Importer {

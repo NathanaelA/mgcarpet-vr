@@ -19,8 +19,8 @@ pub mod output;
 
 use std::path::Path;
 
-pub use mixer::{FaithfulMixer, Listener, Sounds, Source};
 use mgc_formats::bundle::AudioBundle;
+pub use mixer::{FaithfulMixer, Listener, Sounds, Source};
 
 pub struct Audio {
     out: output::Output,

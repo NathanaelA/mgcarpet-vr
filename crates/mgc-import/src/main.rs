@@ -223,160 +223,22 @@ fn level(dat_path: &Path, tab_path: &Path, index: &str) -> ExitCode {
 }
 
 fn bake_cmd(gamedata: &Path, out_dir: &Path) -> ExitCode {
-    use mgc_formats::Game;
-    let found = mgc_import::gamedata::Gamedata::locate(gamedata);
-    match &found.mc1 {
-        Some(src) => println!("mc1 source: {}", src.origin),
-        None => eprintln!("note: no MC1 data under {} — skipping", gamedata.display()),
-    }
-    match &found.mc2 {
-        Some(src) => println!("mc2 source: {}", src.origin),
-        None => eprintln!("note: no MC2 data under {} — skipping", gamedata.display()),
-    }
-
-    // MC1 terrain is generated natively (mc1_terrain); only MC2 needs
-    // the remc2-carved oracle tool.
-    let genlevel = bake::find_genlevel();
-    match &genlevel {
-        Some(tool) => println!("mc2 terrain oracle: {}", tool.display()),
-        None => println!(
-            "mc2 terrain oracle not found (build tools/mc2-genlevel or set MGC_GENLEVEL) — baking mc2 without terrain"
-        ),
-    }
-
-    let mut manifest = Vec::new();
-    if let Some(src) = &found.mc1 {
-        let archives = [
-            (Game::MagicCarpet1, "mc1", "LEVELS/LEVELS"),
-            (Game::HiddenWorlds, "mc1hw", "LEVELS/DDLEVELS"),
-        ];
-        for (game, tag, base) in archives {
-            if !src.exists(&format!("{base}.DAT")) {
-                eprintln!("note: {base}.DAT not found — skipping {tag}");
-                continue;
-            }
-            match bake::bake_mc1_archive(game, tag, src, base, out_dir) {
-                Ok(outputs) => {
-                    println!("{tag}: baked {} levels", outputs.len());
-                    manifest.extend(outputs);
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        if src.exists("DATA/PAL0-0.DAT") {
-            match mgc_import::bundle::bake_mc1_bundles(src, out_dir) {
-                Ok(outputs) => {
-                    println!(
-                        "mc1: baked asset bundles mc1-temperate + mc1-arctic ({} members)",
-                        outputs.len()
-                    );
-                    manifest.extend(outputs);
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        } else {
-            eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
-        }
-        if src.exists("DATA/SNDS0-1.DAT") {
-            match mgc_import::bundle::bake_mc1_audio(src, out_dir) {
-                Ok(outputs) => {
-                    println!("mc1: baked audio bundle mc1-audio ({} members)", outputs.len());
-                    manifest.extend(outputs);
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        } else {
-            eprintln!("note: mc1 DATA/SNDS0-1.DAT not found — skipping audio bundle");
-        }
-    }
-
-    if let Some(src) = &found.mc2 {
-        match bake::bake_mc2_archive(src, out_dir, genlevel.as_deref()) {
-            Ok((outputs, skipped)) => {
-                println!("mc2: baked {} levels", outputs.len());
-                if !skipped.is_empty() {
-                    println!(
-                        "mc2: skipped {} extended-format dev leftovers (indices {:?})",
-                        skipped.len(),
-                        skipped
-                    );
-                }
-                manifest.extend(outputs);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-        // Environment bundles need the CD catalogs (absent from
-        // hard-disk-only legacy copies).
-        if src.exists("DATA/PALD-0.DAT") {
-            match mgc_import::bundle::bake_mc2_bundles(src, out_dir) {
-                Ok(outputs) => {
-                    println!(
-                        "mc2: baked asset bundles mc2-day/night/night-fog/cave ({} members)",
-                        outputs.len()
-                    );
-                    manifest.extend(outputs);
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        } else {
-            eprintln!(
-                "note: mc2 DATA/PALD-0.DAT not found (CD catalogs missing) — skipping mc2 bundles"
+    // The orchestration lives in the library (bake::bake_all) so the
+    // game shell's auto-bake shares this exact path.
+    match bake::bake_all(gamedata, out_dir) {
+        Ok(summary) if summary.manifest.is_empty() => {
+            println!(
+                "0 packages baked — no game data found under {}",
+                gamedata.display()
             );
+            ExitCode::SUCCESS
         }
-        match mgc_import::bundle::bake_mc2_audio(src, out_dir) {
-            Ok(outputs) if outputs.is_empty() => {}
-            Ok(outputs) => {
-                println!("mc2: baked audio bundle mc2-audio ({} members)", outputs.len());
-                manifest.extend(outputs);
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
         }
     }
-
-    // Any subset of the three games is valid, including none at all
-    // (each archive above is skipped with a note when absent).
-    if manifest.is_empty() {
-        println!(
-            "0 packages baked — no game data found under {}",
-            gamedata.display()
-        );
-        return ExitCode::SUCCESS;
-    }
-
-    manifest.sort();
-    let manifest_path = out_dir.join("manifest.sha256");
-    let body: String = manifest
-        .iter()
-        .map(|(name, hash)| format!("{hash}  {name}\n"))
-        .collect();
-    if let Err(e) = std::fs::write(&manifest_path, body) {
-        eprintln!("error: cannot write {}: {e}", manifest_path.display());
-        return ExitCode::FAILURE;
-    }
-    println!(
-        "{} packages, manifest: {}",
-        manifest.len(),
-        manifest_path.display()
-    );
-    ExitCode::SUCCESS
 }
 
 fn out_scan_line(label: &str, data: &[u8], decompressed: &[u8]) -> bool {

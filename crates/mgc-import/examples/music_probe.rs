@@ -35,9 +35,20 @@ fn main() {
         song.tick_rate
     );
     let rate = 44100u32;
-    let pcm = mgc_import::adlib::render(&song, &inst, &drum, rate, &mgc_import::adlib::MixSpec::full()).unwrap();
+    let pcm = mgc_import::adlib::render(
+        &song,
+        &inst,
+        &drum,
+        rate,
+        &mgc_import::adlib::MixSpec::full(),
+    )
+    .unwrap();
     let peak = pcm.iter().map(|s| s.unsigned_abs()).max().unwrap();
-    let rms = (pcm.iter().map(|&s| f64::from(s) * f64::from(s)).sum::<f64>() / pcm.len() as f64)
+    let rms = (pcm
+        .iter()
+        .map(|&s| f64::from(s) * f64::from(s))
+        .sum::<f64>()
+        / pcm.len() as f64)
         .sqrt();
     println!("{} samples, peak {peak}, rms {rms:.0}", pcm.len());
 

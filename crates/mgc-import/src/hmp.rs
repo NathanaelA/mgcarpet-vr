@@ -57,8 +57,7 @@ pub fn parse(data: &[u8]) -> Result<Song, String> {
     if data.len() < TRACKS_AT || &data[..8] != SIGNATURE {
         return Err("not an HMIMIDIP stream".into());
     }
-    let read_u32 =
-        |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    let read_u32 = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
     let track_count = read_u32(TRACK_COUNT_AT);
     let tick_rate = read_u32(BPM_AT);
     if tick_rate == 0 {
@@ -78,8 +77,8 @@ pub fn parse(data: &[u8]) -> Result<Song, String> {
             return Err(format!("track {t}: bad length {len}"));
         }
         let stream = &data[pos + TRACK_HEADER..pos + len];
-        let tick = parse_track(t, channel, stream, &mut events)
-            .map_err(|e| format!("track {t}: {e}"))?;
+        let tick =
+            parse_track(t, channel, stream, &mut events).map_err(|e| format!("track {t}: {e}"))?;
         end_tick = end_tick.max(tick);
         pos += len;
     }
@@ -176,8 +175,7 @@ mod tests {
     fn song(tracks: &[(u32, &[u8])]) -> Vec<u8> {
         let mut d = vec![0u8; TRACKS_AT];
         d[..8].copy_from_slice(SIGNATURE);
-        d[TRACK_COUNT_AT..TRACK_COUNT_AT + 4]
-            .copy_from_slice(&(tracks.len() as u32).to_le_bytes());
+        d[TRACK_COUNT_AT..TRACK_COUNT_AT + 4].copy_from_slice(&(tracks.len() as u32).to_le_bytes());
         d[BPM_AT..BPM_AT + 4].copy_from_slice(&120u32.to_le_bytes());
         for (i, (ch, stream)) in tracks.iter().enumerate() {
             d.extend_from_slice(&(i as u32).to_le_bytes());

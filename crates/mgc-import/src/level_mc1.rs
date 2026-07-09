@@ -420,10 +420,7 @@ mod tests {
         assert_eq!(level.player_count, 2);
         assert_eq!(level.castle_levels, [0, 3, 0, 0, 0, 0, 0, 0]);
         let w1 = &level.wizards[1];
-        assert_eq!(
-            (w1.aggression, w1.tempo, w1.accuracy),
-            (200, 128, 64)
-        );
+        assert_eq!((w1.aggression, w1.tempo, w1.accuracy), (200, 128, 64));
         assert_eq!(w1.pregrant[0], 1);
         assert_eq!(w1.allowed[0], 1);
         assert_eq!(level.wizards[0].pregrant, [0; 24]);

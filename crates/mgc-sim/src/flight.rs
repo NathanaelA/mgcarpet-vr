@@ -52,7 +52,7 @@
 use crate::features::Gen;
 
 /// Faithful carpet state (the human entity + Type_160 fields we use).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Mc1State {
     /// Position in engine units (8.8 tiles, wrapping like the
     /// original's 16-bit axes).
@@ -84,26 +84,6 @@ pub struct Mc1State {
     /// (rand_29799_4) — the every-64th-tick flutter roll.
     pub tick_ctr: u8,
     pub rand: u32,
-}
-
-impl Default for Mc1State {
-    fn default() -> Self {
-        Mc1State {
-            x: 0,
-            y: 0,
-            z: 0,
-            yaw: 0,
-            roll_f: 0,
-            pitch_f: 0,
-            aim_pitch: 0,
-            eff_pitch: 0,
-            act_speed: 0,
-            tgt_speed: 0,
-            strafe: 0,
-            tick_ctr: 0,
-            rand: 0,
-        }
-    }
 }
 
 impl Mc1State {
@@ -289,10 +269,7 @@ mod tests {
     fn flat_ground(_: u16, _: u16) -> i16 {
         0
     }
-    fn open_gate(
-        _: (u16, u16, i16),
-        p: (u16, u16, i16),
-    ) -> Option<(u16, u16, i16)> {
+    fn open_gate(_: (u16, u16, i16), p: (u16, u16, i16)) -> Option<(u16, u16, i16)> {
         Some(p)
     }
 
@@ -302,8 +279,14 @@ mod tests {
 
     #[test]
     fn speed_target_persists_after_release() {
-        let mut st = Mc1State { z: 128, ..Default::default() };
-        let up = Mc1Input { speed_up: true, ..Default::default() };
+        let mut st = Mc1State {
+            z: 128,
+            ..Default::default()
+        };
+        let up = Mc1Input {
+            speed_up: true,
+            ..Default::default()
+        };
         for _ in 0..3 {
             step(&mut st, &up);
         }
@@ -320,8 +303,14 @@ mod tests {
 
     #[test]
     fn stick_is_a_rate_not_a_position() {
-        let mut st = Mc1State { z: 128, ..Default::default() };
-        let left = Mc1Input { stick_x: -127, ..Default::default() };
+        let mut st = Mc1State {
+            z: 128,
+            ..Default::default()
+        };
+        let left = Mc1Input {
+            stick_x: -127,
+            ..Default::default()
+        };
         for _ in 0..20 {
             step(&mut st, &left);
         }
@@ -335,7 +324,11 @@ mod tests {
         }
         // The truncating decay authentically parks at |s| ≤ 3 — below
         // the yaw step's s/8 threshold, so turning still stops dead.
-        assert!(st.roll_f.abs() <= 3, "filter parks near center: {}", st.roll_f);
+        assert!(
+            st.roll_f.abs() <= 3,
+            "filter parks near center: {}",
+            st.roll_f
+        );
         let settled = st.yaw;
         for _ in 0..20 {
             step(&mut st, &centered);
@@ -345,8 +338,14 @@ mod tests {
 
     #[test]
     fn strafe_decays_on_release() {
-        let mut st = Mc1State { z: 128, ..Default::default() };
-        let right = Mc1Input { strafe_right: true, ..Default::default() };
+        let mut st = Mc1State {
+            z: 128,
+            ..Default::default()
+        };
+        let right = Mc1Input {
+            strafe_right: true,
+            ..Default::default()
+        };
         for _ in 0..10 {
             step(&mut st, &right);
         }
@@ -363,7 +362,10 @@ mod tests {
     #[test]
     fn hover_holds_below_ceiling_sinks_above() {
         // Below the soft ceiling (ground 0, z = 512): exact hover.
-        let mut st = Mc1State { z: 512, ..Default::default() };
+        let mut st = Mc1State {
+            z: 512,
+            ..Default::default()
+        };
         let idle = Mc1Input::default();
         for _ in 0..30 {
             step(&mut st, &idle);
@@ -378,8 +380,16 @@ mod tests {
     #[test]
     fn climb_authority_inverts_above_soft_ceiling() {
         // Full authority low: aiming up (negative pitch) climbs.
-        let mut st = Mc1State { z: 256, act_speed: 80, tgt_speed: 80, ..Default::default() };
-        let aim_up = Mc1Input { stick_y: -127, ..Default::default() };
+        let mut st = Mc1State {
+            z: 256,
+            act_speed: 80,
+            tgt_speed: 80,
+            ..Default::default()
+        };
+        let aim_up = Mc1Input {
+            stick_y: -127,
+            ..Default::default()
+        };
         for _ in 0..20 {
             step(&mut st, &aim_up);
         }
@@ -408,7 +418,12 @@ mod tests {
     fn level_flight_holds_any_altitude() {
         // Pitch exactly 0 while moving: no vertical term at all, even
         // far above the soft ceiling — the wall-climb dash-away.
-        let mut st = Mc1State { z: 4096, act_speed: 80, tgt_speed: 80, ..Default::default() };
+        let mut st = Mc1State {
+            z: 4096,
+            act_speed: 80,
+            tgt_speed: 80,
+            ..Default::default()
+        };
         let fwd = Mc1Input::default();
         for _ in 0..100 {
             step(&mut st, &fwd);
@@ -421,9 +436,22 @@ mod tests {
         // Ground staircase: the z-floor (ground+128) carries the
         // carpet up a wall face.
         let stair = |x: u16, _: u16| -> i16 { ((x >> 8) as i16) * 64 };
-        let mut st = Mc1State { z: 128, act_speed: 80, tgt_speed: 80, yaw: 512, ..Default::default() };
+        let mut st = Mc1State {
+            z: 128,
+            act_speed: 80,
+            tgt_speed: 80,
+            yaw: 512,
+            ..Default::default()
+        };
         for _ in 0..200 {
-            mc1_move(&mut st, &Mc1Input::default(), None, None, &stair, &open_gate);
+            mc1_move(
+                &mut st,
+                &Mc1Input::default(),
+                None,
+                None,
+                &stair,
+                &open_gate,
+            );
         }
         let g = stair(st.x, st.y);
         assert!(st.z >= g + 128, "rides the floor: z {} ground {}", st.z, g);
@@ -432,7 +460,10 @@ mod tests {
 
     #[test]
     fn accelerate_override_bypasses_chase() {
-        let mut st = Mc1State { z: 128, ..Default::default() };
+        let mut st = Mc1State {
+            z: 128,
+            ..Default::default()
+        };
         let idle = Mc1Input::default();
         mc1_move(&mut st, &idle, Some(3.0), None, &flat_ground, &open_gate);
         assert_eq!(st.act_speed, 240);
@@ -448,8 +479,16 @@ mod tests {
         // Full dive aim: horizontal speed shrinks by cos(±44.6°) ≈
         // 0.71, never worse (the player's "flat plane" holds within
         // 29% — load-bearing for combat dodging).
-        let mut st = Mc1State { z: 20000, act_speed: 80, tgt_speed: 80, ..Default::default() };
-        let dive = Mc1Input { stick_y: 127, ..Default::default() };
+        let mut st = Mc1State {
+            z: 20000,
+            act_speed: 80,
+            tgt_speed: 80,
+            ..Default::default()
+        };
+        let dive = Mc1Input {
+            stick_y: 127,
+            ..Default::default()
+        };
         // Let the filter converge (target 254).
         for _ in 0..40 {
             step(&mut st, &dive);

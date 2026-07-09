@@ -16,7 +16,7 @@
 
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
-use mgc_sim::spells::{SpellId, DISPLAY_ORDER, SPELLS, SPELL_COUNT};
+use mgc_sim::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellId};
 use mgc_sim::world::{LifeState, LoadoutView, PlayerVitals};
 
 /// UI sprite ids (remc1 begSprTab layout; ROADMAP "Spell repertoire").
@@ -126,8 +126,7 @@ impl UiAssets {
                     (tile % tiles_per_row) * tile_w,
                     base_h + (tile / tiles_per_row) * tile_h,
                 );
-                slot_uv[spell][variant] =
-                    [tx as f32, ty as f32, tile_w as f32, tile_h as f32];
+                slot_uv[spell][variant] = [tx as f32, ty as f32, tile_w as f32, tile_h as f32];
                 for y in 0..tile_h {
                     for x in 0..tile_w {
                         // Layered exactly like the original's blits:
@@ -252,7 +251,14 @@ impl UiAssets {
     /// panel BACKGROUNDS — the original's sub_23940 blends them over the
     /// live framebuffer, so HUD transparency is always on; we approximate
     /// with an alpha over the sky, which the UI pass already blends).
-    fn sprite_quad_tint(&self, id: usize, x: f32, y: f32, scale: f32, tint: [f32; 4]) -> Option<UiQuad> {
+    fn sprite_quad_tint(
+        &self,
+        id: usize,
+        x: f32,
+        y: f32,
+        scale: f32,
+        tint: [f32; 4],
+    ) -> Option<UiQuad> {
         let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
         if w == 0 || h == 0 {
             return None;
@@ -536,15 +542,15 @@ pub fn book_quads(
         let k = DISPLAY_ORDER.iter().position(|&d| d == sp).unwrap_or(0);
         let cell = book_cell(w, h, k);
         let (sx, sy) = (w / 640.0, h / 480.0);
-        let frame = if loadout.cooldown[sp as usize] > 0.0 { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
+        let frame = if loadout.cooldown[sp as usize] > 0.0 {
+            SPR_SLOT_HELD
+        } else {
+            SPR_SLOT_IDLE
+        };
         if let Some((fw, fh)) = assets.sprite_dims(frame) {
             push_opt(
                 &mut quads,
-                assets.sprite_quad_rect_tint(
-                    frame,
-                    [cell[0], cell[1], fw * sx, fh * sy],
-                    WHITE,
-                ),
+                assets.sprite_quad_rect_tint(frame, [cell[0], cell[1], fw * sx, fh * sy], WHITE),
             );
         }
         let su = sx.min(sy);
@@ -554,11 +560,7 @@ pub fn book_quads(
             // (a1, a2)), uniform art scale.
             push_opt(
                 &mut quads,
-                assets.sprite_quad_rect_tint(
-                    icon_id,
-                    [cell[0], cell[1], iw * su, ih * su],
-                    WHITE,
-                ),
+                assets.sprite_quad_rect_tint(icon_id, [cell[0], cell[1], iw * su, ih * su], WHITE),
             );
         }
         // Availability meter (sub_23D40 :27703-34): partial-cast
@@ -703,7 +705,10 @@ pub fn hud_quads(
     //   C (v24, `a1x`)     = the player's OWN wizard — self life + mana
     //                        capacity/banked, drawn UNCONDITIONALLY.
     let cap_w = assets.sprite_dims(SPR_PANEL_BG).map_or(124.0, |(w, _)| w);
-    push_opt(&mut quads, assets.sprite_quad_tint(SPR_PANEL_BG, 2.0 * s, 2.0 * s, s, panel_tint));
+    push_opt(
+        &mut quads,
+        assets.sprite_quad_tint(SPR_PANEL_BG, 2.0 * s, 2.0 * s, s, panel_tint),
+    );
     let v22 = 2.0 + cap_w; // slot A = castle panel
     let v23 = v22 + HUD_SECTION; // slot B = balloons
     let v24 = v22 + 2.0 * HUD_SECTION; // slot C = self
@@ -746,7 +751,10 @@ pub fn hud_quads(
     } else {
         SPR_WIZ_BG
     };
-    push_opt(&mut quads, assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint));
+    push_opt(
+        &mut quads,
+        assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint),
+    );
     if let Some((_stored, capacity, level)) = castle {
         let ox = v22;
         // Castle-level glyph [43+level] (emblem/heart/orb/digit baked
@@ -755,7 +763,10 @@ pub fn hud_quads(
             &mut quads,
             assets.sprite_quad(SPR_CASTLE_LVL + level as usize, (ox + 2.0) * s, 2.0 * s, s),
         );
-        push_opt(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        push_opt(
+            &mut quads,
+            assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s),
+        );
         // Life bar (+58, y=10) = the CASTLE's HP (v4x->actLife/maxLife,
         // palette 0x7B) — NOT the player's life (:27237). castle_hp is
         // the downgrade meter.
@@ -773,9 +784,25 @@ pub fn hud_quads(
         // blinks the single full bar between the pair (:27242-53).
         if loadout.banked >= capacity && capacity > 0 {
             let c = if alert_blink { METER_GREY } else { MANA_WHITE };
-            bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, capacity as f32 / world, c);
+            bar(
+                &mut quads,
+                s,
+                ox + BAR_X,
+                28.0,
+                10.0,
+                capacity as f32 / world,
+                c,
+            );
         } else {
-            bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, capacity as f32 / world, METER_GREY);
+            bar(
+                &mut quads,
+                s,
+                ox + BAR_X,
+                28.0,
+                10.0,
+                capacity as f32 / world,
+                METER_GREY,
+            );
             bar(
                 &mut quads,
                 s,
@@ -802,7 +829,10 @@ pub fn hud_quads(
     } else {
         SPR_WIZ_BG
     };
-    push_opt(&mut quads, assets.sprite_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint));
+    push_opt(
+        &mut quads,
+        assets.sprite_quad_tint(slot_b_bg, v23 * s, 2.0 * s, s, panel_tint),
+    );
     if !balloons.is_empty() {
         let ox = v23;
         let roster = balloons.len().min(3);
@@ -810,7 +840,10 @@ pub fn hud_quads(
             &mut quads,
             assets.sprite_quad(SPR_BALLOON_GLYPH + roster, (ox + 2.0) * s, 2.0 * s, s),
         );
-        push_opt(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        push_opt(
+            &mut quads,
+            assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s),
+        );
         // Per LIVE balloon: HP bar at y=12+2i (red), cargo bar at
         // y=30+2i (banked-mana white) — the thin stacked lines
         // (:27338-39); dead/unspawned roster slots stay bar-less.
@@ -826,14 +859,27 @@ pub fn hud_quads(
     // (no gate) — the wizard is always present. The alert marble here
     // is the PLAYER-hit flash (u8_392, :27347), independent of the
     // castle's u8_391. ===
-    let slot_c_bg = if vitals.player_alert && alert_blink { SPR_WIZ_ALERT } else { SPR_WIZ_BG };
-    push_opt(&mut quads, assets.sprite_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint));
+    let slot_c_bg = if vitals.player_alert && alert_blink {
+        SPR_WIZ_ALERT
+    } else {
+        SPR_WIZ_BG
+    };
+    push_opt(
+        &mut quads,
+        assets.sprite_quad_tint(slot_c_bg, v24 * s, 2.0 * s, s, panel_tint),
+    );
     {
         let ox = v24;
         // Base wizard glyph [43] + divider [42] (:27358-72; the alert
         // /grace variant swaps a blended copy — we keep the plain draw).
-        push_opt(&mut quads, assets.sprite_quad(SPR_CASTLE_LVL, (ox + 2.0) * s, 2.0 * s, s));
-        push_opt(&mut quads, assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s));
+        push_opt(
+            &mut quads,
+            assets.sprite_quad(SPR_CASTLE_LVL, (ox + 2.0) * s, 2.0 * s, s),
+        );
+        push_opt(
+            &mut quads,
+            assets.sprite_quad(SPR_DIVIDER, (ox + 38.0) * s, 2.0 * s, s),
+        );
         // Self life bar (+58, y=10) = the PLAYER's health (a1x->actLife,
         // 0x7B red) — this is where player life belongs (:27375).
         bar(
@@ -848,8 +894,24 @@ pub fn hud_quads(
         // Self mana: capacity (var_136 = mana_max, the v27 grey) +
         // current (var_140 = mana, white) over the world total
         // (:27376-77).
-        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana_max as f32 / world, METER_GREY);
-        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana as f32 / world, MANA_WHITE);
+        bar(
+            &mut quads,
+            s,
+            ox + BAR_X,
+            28.0,
+            10.0,
+            loadout.mana_max as f32 / world,
+            METER_GREY,
+        );
+        bar(
+            &mut quads,
+            s,
+            ox + BAR_X,
+            28.0,
+            10.0,
+            loadout.mana as f32 / world,
+            MANA_WHITE,
+        );
         win_tick(&mut quads, ox);
     }
     // --- Equipped-spell panels (sub_23D40) at x=510 and x=574. ---
@@ -866,7 +928,10 @@ pub fn hud_quads(
         // duration effects (speed etc.), driven by the burst counter.
         let active = spell.is_some_and(|sp| loadout.cooldown[sp as usize] > 0.0);
         let frame = if active { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
-        push_opt(&mut quads, assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint));
+        push_opt(
+            &mut quads,
+            assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint),
+        );
         if let Some(sp) = spell {
             // Icon drawn raw at the FRAME ORIGIN (sub_23D40's
             // `DrawBitmap(a1, a2, icon)` — the art's own margins do

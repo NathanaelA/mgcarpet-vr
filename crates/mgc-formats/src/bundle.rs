@@ -42,6 +42,10 @@ pub const BUNDLE_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleManifest {
     pub format_version: u32,
+    /// Bake content epoch (`crate::BAKE_EPOCH` at bake time);
+    /// pre-epoch bundles read as 0.
+    #[serde(default)]
+    pub bake_epoch: u32,
     /// Variant id; by convention also the bundle directory name
     /// (e.g. `mc1-temperate`, `mc1-arctic`, `mc2-day`).
     pub variant: String,
@@ -372,8 +376,8 @@ impl AudioBundle {
         let sounds = match std::fs::read(dir.join("sounds.bin")) {
             Ok(data) => {
                 let index_path = dir.join("sounds.json");
-                let index_bytes =
-                    std::fs::read(&index_path).map_err(|e| BundleError::Io(index_path.clone(), e))?;
+                let index_bytes = std::fs::read(&index_path)
+                    .map_err(|e| BundleError::Io(index_path.clone(), e))?;
                 let index: SoundIndex = serde_json::from_slice(&index_bytes)
                     .map_err(|e| BundleError::Json(index_path.clone(), e))?;
                 for bank in &index.banks {

@@ -57,6 +57,7 @@ always appear together.
 ```json
 {
   "format_version": 1,
+  "bake_epoch": 1,
   "game": "mc1",
   "level": 0,
   "source": {
@@ -71,6 +72,12 @@ always appear together.
 - `format_version` (integer): this document's version. Breaking changes
   bump it; additive changes (new members, new optional JSON fields) do
   not.
+- `bake_epoch` (integer, `mgc_formats::BAKE_EPOCH`): the bake CONTENT
+  epoch — bumped when the importer's output changes under an unchanged
+  schema (a decode fix, corrected tables, a new member), so consumers
+  can tell a baked tree is stale. Artifacts baked before the field
+  existed deserialize as 0 (always stale). The game shell checks it at
+  startup and rebakes automatically (see "Versioning and evolution").
 - `game`: `"mc1"`, `"mc1hw"` (Hidden Worlds), or `"mc2"`.
 - `level`: index of the level in its source archive (campaign order for
   retail levels).
@@ -286,7 +293,15 @@ firms them up.
    bump; old readers ignore them.
 2. Changing the meaning or layout of an existing member bumps
    `format_version`; readers reject versions they don't know.
-3. This file is updated in the same change as the code.
+3. Changing the CONTENT the importer emits — a decode fix, corrected
+   tables, a new baked member — without touching the schema bumps
+   `bake_epoch` (`mgc_formats::BAKE_EPOCH`, stamped into `meta.json`
+   and every `bundle.json`). Schema versions answer "can this reader
+   parse it"; the epoch answers "is this bake current". The game
+   shell compares stamps at startup and reruns the full bake
+   (`mgc_import::bake::bake_all` — the same path as `mgc-import
+   bake`) when anything is missing or stale.
+4. This file is updated in the same change as the code.
 
 # Asset bundles
 
@@ -315,7 +330,7 @@ render-time resolve, and index 0 is the sprite-transparent index).
 
 | member | contents |
 |---|---|
-| `bundle.json` | manifest: `format_version`, `variant`, `game`, importer, source catalog files + raw-file sha256 |
+| `bundle.json` | manifest: `format_version`, `bake_epoch` (same semantics as `meta.json`), `variant`, `game`, importer, source catalog files + raw-file sha256 |
 | `palette.bin` | 256 x RGBA8, VGA 6-bit expanded (`v<<2\|v>>4`); index 0 has alpha 0 |
 | `shade-lut.bin` | 64 rows x 256: `shade level x palette index -> final palette index` (the light/fog remap; the TABLES blob at +0x0000 in MC1, +0x4000 in MC2 — MC2 keeps a pixel-remap table at +0x0000) |
 | `tile-colors.bin` | 256: terrain type -> flat map color index (TABLES blob +0x14000, both games) |

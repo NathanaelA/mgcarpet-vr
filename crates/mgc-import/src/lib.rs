@@ -12,11 +12,11 @@
 pub mod adlib;
 pub mod bake;
 pub mod bundle;
-pub mod hmp;
 pub mod dattab;
 pub mod flac;
 pub mod flc;
 pub mod gamedata;
+pub mod hmp;
 pub mod hspr;
 pub mod iso;
 pub mod level_mc1;

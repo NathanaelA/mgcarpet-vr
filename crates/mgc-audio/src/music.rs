@@ -22,9 +22,8 @@ pub fn decode_flac(path: &Path) -> Result<DecodedTrack, String> {
             info.bits_per_sample
         ));
     }
-    let mut pcm: Vec<i16> = Vec::with_capacity(
-        info.samples.unwrap_or(0) as usize * info.channels as usize,
-    );
+    let mut pcm: Vec<i16> =
+        Vec::with_capacity(info.samples.unwrap_or(0) as usize * info.channels as usize);
     for s in reader.samples() {
         pcm.push(s.map_err(|e| format!("{}: {e}", path.display()))? as i16);
     }

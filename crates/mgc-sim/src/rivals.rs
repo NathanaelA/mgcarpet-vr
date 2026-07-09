@@ -366,10 +366,7 @@ impl World {
         if owner == PLAYER_TARGET {
             return Some(0);
         }
-        self.rivals
-            .iter()
-            .find(|r| r.ent == owner)
-            .map(|r| r.slot)
+        self.rivals.iter().find(|r| r.ent == owner).map(|r| r.slot)
     }
 
     // ---- the per-tick brain (sub_13170 :17842) ---------------------------
@@ -477,7 +474,10 @@ impl World {
             let row = &BEHAVIOR[self.g.ent[i].row156 as usize];
             let ground = self.g.ground_z(self.g.ent[i].x, self.g.ent[i].y) as i16;
             let z = &mut self.g.ent[i].z;
-            *z = (*z).clamp(ground.saturating_add(row.v_12), ground.saturating_add(row.v_10));
+            *z = (*z).clamp(
+                ground.saturating_add(row.v_12),
+                ground.saturating_add(row.v_10),
+            );
         }
 
         // State handler + the decision cascade (fresh runs the
@@ -529,12 +529,8 @@ impl World {
                 // u16_314/316/318 on the human: victim, counter,
                 // clamp(dist, 1024, 3072) (:55671-77).
                 let (vx, vy) = (self.g.ent[i].x, self.g.ent[i].y);
-                let dist = Gen::isqrt(Gen::dist2_sq(
-                    self.human_pose.0,
-                    self.human_pose.1,
-                    vx,
-                    vy,
-                ) as u32);
+                let dist =
+                    Gen::isqrt(Gen::dist2_sq(self.human_pose.0, self.human_pose.1, vx, vy) as u32);
                 let hold = dist.clamp(1024, 3072);
                 self.set_duel_latch(self.rivals[ri].ent, hold);
             }
@@ -755,8 +751,8 @@ impl World {
     }
 
     /// Incoming-projectile defense (sub_16800 :19769 + sub_16870/90):
-    /// the nearest class-9 homing on me within 5120 → lateral jink 80
-    /// + a reactive cast (models {0,3,16} → 14 Rebound, {4,9} → 4
+    /// the nearest class-9 homing on me within 5120 → lateral jink 80 +
+    /// a reactive cast (models {0,3,16} → 14 Rebound, {4,9} → 4
     /// Shield).
     fn rival_defense(&mut self, ri: usize, i: usize) {
         let me = self.rivals[ri].ent;
@@ -804,9 +800,7 @@ impl World {
             }
         }
         // 2. Flee home hurt (sub_14310 :18480).
-        if castle.is_some()
-            && self.g.ent[i].act_life < (self.g.ent[i].max_life / 2) as i32
-        {
+        if castle.is_some() && self.g.ent[i].act_life < (self.g.ent[i].max_life / 2) as i32 {
             self.set_rival_state(ri, AiState::Home, 0);
             return;
         }
@@ -865,9 +859,7 @@ impl World {
             return;
         }
         // 9. Idle (sub_14DC0 :18749).
-        if castle.is_some()
-            && self.g.ent[i].act_life < self.g.ent[i].max_life as i32
-        {
+        if castle.is_some() && self.g.ent[i].act_life < self.g.ent[i].max_life as i32 {
             self.set_rival_state(ri, AiState::Home, 0);
         } else {
             self.rivals[ri].state = AiState::Cruise;
@@ -918,13 +910,15 @@ impl World {
             let bx = ((sx >> 14).wrapping_add(cell & 3) & 3) << 14;
             let by = ((sy >> 14).wrapping_add(cell >> 2) & 3) << 14;
             for (ox, oy) in [(0u16, 0u16), (0x1F00, 0x1F00)] {
-                let (tx, ty) = (bx.wrapping_add(ox).wrapping_add(128), by.wrapping_add(oy).wrapping_add(128));
+                let (tx, ty) = (
+                    bx.wrapping_add(ox).wrapping_add(128),
+                    by.wrapping_add(oy).wrapping_add(128),
+                );
                 // Nearest foreign castle.
                 let mut near = i32::MAX;
                 for j in 1..features::POOL {
                     let e = &self.g.ent[j];
-                    if e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 != me
-                    {
+                    if e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 != me {
                         near = near.min(Gen::dist2_sq(tx, ty, e.x, e.y));
                     }
                 }
@@ -1011,25 +1005,31 @@ impl World {
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32 + 10;
         let my_mana = self.rivals[ri].mana;
         let mut best: Option<(u16, i32)> = None;
-        let consider =
-            |slot: u8, tgt: u16, x: u16, y: u16, invisible: bool, castle_less: bool,
-             wealth: u32, mana: u32, best: &mut Option<(u16, i32)>| {
-                if invisible {
-                    return; // spell-12 targets are skipped (:18558)
-                }
-                let war = self.rivals[ri].war[slot as usize];
-                let hated = self.hate_over(ri, slot, wealth);
-                // Bully the homeless rich (:18570-77).
-                let bully = castle_less
-                    && mana.saturating_add(32 * (255 - self.rivals[ri].agg as u32)) < my_mana;
-                if !war && !hated && !bully {
-                    return;
-                }
-                let d = Gen::dist2_sq(px, py, x, y);
-                if d <= range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
-                    *best = Some((tgt, d));
-                }
-            };
+        let consider = |slot: u8,
+                        tgt: u16,
+                        x: u16,
+                        y: u16,
+                        invisible: bool,
+                        castle_less: bool,
+                        wealth: u32,
+                        mana: u32,
+                        best: &mut Option<(u16, i32)>| {
+            if invisible {
+                return; // spell-12 targets are skipped (:18558)
+            }
+            let war = self.rivals[ri].war[slot as usize];
+            let hated = self.hate_over(ri, slot, wealth);
+            // Bully the homeless rich (:18570-77).
+            let bully = castle_less
+                && mana.saturating_add(32 * (255 - self.rivals[ri].agg as u32)) < my_mana;
+            if !war && !hated && !bully {
+                return;
+            }
+            let d = Gen::dist2_sq(px, py, x, y);
+            if d <= range.saturating_mul(range) && best.is_none_or(|(_, bd)| d < bd) {
+                *best = Some((tgt, d));
+            }
+        };
         // The human.
         if self.player.state == LifeState::Alive {
             let (hx, hy) = (self.human_pose.0, self.human_pose.1);
@@ -1098,9 +1098,9 @@ impl World {
                 continue;
             }
             // Not sitting at its own castle (:18628-33).
-            let home = self.rival_castle(e.id24).or_else(|| {
-                (owner == 0).then(|| self.player_castle()).flatten()
-            });
+            let home = self
+                .rival_castle(e.id24)
+                .or_else(|| (owner == 0).then(|| self.player_castle()).flatten());
             if home.is_some_and(|c| {
                 Gen::dist2_sq(e.x, e.y, self.g.ent[c].x, self.g.ent[c].y) < 2048 * 2048
             }) {
@@ -1197,8 +1197,7 @@ impl World {
     /// A wizard's live position by slot (0 = the human).
     fn wizard_pos(&self, slot: u8) -> Option<(u16, u16, i16)> {
         if slot == 0 {
-            return (self.player.state == LifeState::Alive)
-                .then_some(self.human_pose);
+            return (self.player.state == LifeState::Alive).then_some(self.human_pose);
         }
         let r = self.rivals.iter().find(|r| r.slot == slot)?;
         let e = &self.g.ent[r.ent as usize];
@@ -1228,9 +1227,7 @@ impl World {
                 | AiState::RaidBalloon
                 | AiState::HuntMana
         );
-        if needs_target
-            && !self.target_alive(self.rivals[ri].target, self.rivals[ri].target_sig)
-        {
+        if needs_target && !self.target_alive(self.rivals[ri].target, self.rivals[ri].target_sig) {
             self.rivals[ri].state = AiState::Fresh;
             self.rivals[ri].target = 0;
             return;
@@ -1311,9 +1308,7 @@ impl World {
                 self.rival_hover_toward(i, tz.saturating_add(512));
                 if self.rivals[ri].burst >= 0 {
                     if let Some(s) = self.rival_attack_pick(ri, true) {
-                        if self.rival_cast(ri, i, s)
-                            && self.rivals[ri].target == PLAYER_TARGET
-                        {
+                        if self.rival_cast(ri, i, s) && self.rivals[ri].target == PLAYER_TARGET {
                             // Landing a cast clears the war flag
                             // toward that wizard (:18338-39).
                             self.rivals[ri].war[0] = false;
@@ -1527,8 +1522,7 @@ impl World {
                 self.rivals[ri].burst += 1;
                 if self.rivals[ri].burst >= 8 {
                     // Negative lockout (:19129-36).
-                    self.rivals[ri].burst =
-                        ((self.rivals[ri].tempo as i32 - 255) / 8 - 1) as i16;
+                    self.rivals[ri].burst = ((self.rivals[ri].tempo as i32 - 255) / 8 - 1) as i16;
                 }
             }
             // Aimed group (:19158-77): the wider cone.
@@ -1586,7 +1580,11 @@ impl World {
             {
                 let r = &mut self.rivals[ri];
                 let ci = cost.min(i32::MAX as u32) as i32;
-                r.mana_delta = if r.mana_delta >= 0 { -ci } else { r.mana_delta - ci };
+                r.mana_delta = if r.mana_delta >= 0 {
+                    -ci
+                } else {
+                    r.mana_delta - ci
+                };
             }
             // The token delivery (sub_293D0 :31033-34): ch5 mail
             // {10, owner} — the castle tick's case-0 runs the whole
@@ -1797,11 +1795,7 @@ impl World {
             let me = self.rivals[ri].ent;
             for j in 1..features::POOL {
                 let e = &mut self.g.ent[j];
-                if e.class64 == 10
-                    && e.model65 == 39
-                    && e.flags & 0x400 == 0
-                    && e.f144 == me
-                {
+                if e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0 && e.f144 == me {
                     e.f144 = gv as u16;
                 }
             }

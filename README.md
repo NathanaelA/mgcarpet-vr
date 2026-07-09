@@ -40,6 +40,31 @@ dumps produced by the original code ([remc2] for MC2, instrumented DOSBox
 for MC1). Fixtures live outside git (derived from copyrighted data); their
 SHA-256 hashes are committed as pins.
 
+## Quickstart (playtesting)
+
+1. Get the `mgcarpet` binary: a
+   [release](../../releases) archive for Linux/Windows, or build it
+   yourself (below).
+2. Copy your installed GOG game directories into a `gamedata/` folder
+   next to the binary — see [gamedata/README.md](gamedata/README.md)
+   for the expected layout. Any subset works (MC1 only is fine).
+3. Run it:
+
+   ```sh
+   ./mgcarpet                                  # MC1 campaign level 1
+   ./mgcarpet --level baked/mc1/level-009.mgcl # a specific level
+   ```
+
+   On first run the game finds no baked data and **bakes it from your
+   GOG installs automatically** (once per machine; also after an
+   upgrade that changes the bake — the data carries an epoch stamp).
+   To point elsewhere than `gamedata/`, set `MGC_GAMEDATA` or
+   `"gamedata"` in `mgcarpet.json`.
+
+Options live in `mgcarpet.json` (sparse overrides) next to the
+generated `mgcarpet.json.defaults`, which documents every option with
+its faithful-authentic default. `--help` lists the CLI flags.
+
 ## Building
 
 ```sh
@@ -47,18 +72,21 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Rust 1.85+ (edition 2024). No system dependencies.
+Rust 1.85+ (edition 2024). Linux needs the ALSA headers for audio
+(`libasound2-dev` on Debian/Ubuntu, `alsa-lib` headers elsewhere);
+Windows and macOS need no system dependencies.
 
 ## Game data
 
-Copy your installed GOG game directories into `gamedata/` — see
-[gamedata/README.md](gamedata/README.md). Then:
+The engine consumes *baked* packages, generated from your GOG installs
+under `gamedata/` — the game shell does this by itself on first run
+(see Quickstart), and `mgc-import` exposes the same importer as a
+standalone tool:
 
 ```sh
-cargo run -p mgc-import -- scan gamedata
+cargo run -p mgc-import -- scan gamedata   # integrity-check the data
+cargo run -p mgc-import -- bake gamedata baked   # bake everything
 ```
-
-which finds and integrity-checks every RNC-compressed file in the data.
 
 ## The level package format
 
@@ -72,10 +100,15 @@ from the copyrighted game data, which stay on your machine).
 
 ## Status
 
-Bootstrap. Working: RNC decompression, DAT/TAB archives, MC1/Hidden
-Worlds level parsing (all 143 retail levels verified), level baking.
-Next: terrain expansion via original-engine oracles, MC2 level parsing,
-and the first rendering milestone (the "carpet flyer").
+MC1 is playable at near-parity and player-certified faithful across
+the core game: flight model, terrain and villages, monster AI, combat,
+the full 24-spell repertoire, mana economy, castles, player mortality,
+and rival (AI) wizards — with sound effects and the original music.
+The porting record — what each subsystem does, how it was verified,
+and where it deliberately deviates — is being assembled in
+docs/FIDELITY.md; docs/ROADMAP.md is the working log. MC2 levels parse
+and render (environment bundles, terrain via the remc2-carved oracle);
+its gameplay port comes after MC1.
 
 ## Credits and prior art
 

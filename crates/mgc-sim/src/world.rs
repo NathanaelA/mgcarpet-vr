@@ -54,11 +54,9 @@
 //! class-12 pickup/mana transfer NOT ported (mana balls drop, merge
 //! and take claims but nothing collects them yet); sounds omitted.
 
-use crate::features::{
-    self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
-};
-use crate::mc1_sprite_stats::SPRITE_STATS;
 use crate::combat::MailTarget;
+use crate::features::{self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32};
+use crate::mc1_sprite_stats::SPRITE_STATS;
 use crate::mobs::{MobCtx, PLAYER_TARGET};
 use crate::spells::{SPELL_COUNT, SPELLS, SpellId};
 use mgc_formats::{Thing, ThingKind};
@@ -310,7 +308,14 @@ impl PlayerPose {
 
     /// A level pose with no pitch/speed (tests, trigger probes).
     pub fn level(x: u16, y: u16, z: i16, heading: u16) -> Self {
-        PlayerPose { x, y, z, heading, pitch: 0, speed: 0 }
+        PlayerPose {
+            x,
+            y,
+            z,
+            heading,
+            pitch: 0,
+            speed: 0,
+        }
     }
 }
 
@@ -678,8 +683,7 @@ impl World {
                 // Class-5 heads + (playtest request 2026-07-09) the
                 // wizard-family: rival carpets, castles, balloons —
                 // all consumed by the opt-in debug bar overlay only.
-                life_frac: ((e.class64 == 5 && !segment)
-                    || (e.class64 == 3 && e.model65 <= 3))
+                life_frac: ((e.class64 == 5 && !segment) || (e.class64 == 3 && e.model65 <= 3))
                     .then(|| {
                         if e.max_life == 0 {
                             return 0.0;
@@ -721,8 +725,7 @@ impl World {
                 any_creature = true;
             }
             if e.class64 == 9
-                || (e.class64 == 10
-                    && matches!(e.tick70, 0 | 1 | 5 | 17 | 18 | 21 | 23 | 25 | 41))
+                || (e.class64 == 10 && matches!(e.tick70, 0 | 1 | 5 | 17 | 18 | 21 | 23 | 25 | 41))
             {
                 any_transient = true;
             }
@@ -752,8 +755,7 @@ impl World {
             } else {
                 let speed = (player.speed.max(16)) as i32;
                 let denom = (1024 / (3 * speed / 2)).max(1);
-                let pull = ((dist as i32 - hold as i32) / denom)
-                    .clamp(0, 3 * speed / 2);
+                let pull = ((dist as i32 - hold as i32) / denom).clamp(0, 3 * speed / 2);
                 let yaw = Gen::angle_between(player.x, player.y, vx, vy);
                 self.g.player_knock = (yaw, pull.clamp(0, 80) as i16);
                 self.duel = Some((victim, count + 1, hold));
@@ -824,10 +826,16 @@ impl World {
         );
         self.prev_fire = (cmd.fire_left, cmd.fire_right);
         let alive = self.player.state == LifeState::Alive;
-        if alive && cmd.fire_left && let Some(s) = self.player.left {
+        if alive
+            && cmd.fire_left
+            && let Some(s) = self.player.left
+        {
             self.cast_spell(s, false, edge.0, player, &ctx);
         }
-        if alive && cmd.fire_right && let Some(s) = self.player.right {
+        if alive
+            && cmd.fire_right
+            && let Some(s) = self.player.right
+        {
             self.cast_spell(s, true, edge.1, player, &ctx);
         }
 
@@ -869,9 +877,26 @@ impl World {
                 // death field).
                 10 if matches!(
                     self.g.ent[i].tick70,
-                    0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 26 | 40 | 41 | 42 | 58
-                        | 59 | 60
-                ) => {
+                    0 | 1
+                        | 5
+                        | 6
+                        | 12
+                        | 16
+                        | 17
+                        | 18
+                        | 19
+                        | 21
+                        | 23
+                        | 25
+                        | 26
+                        | 40
+                        | 41
+                        | 42
+                        | 58
+                        | 59
+                        | 60
+                ) =>
+                {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
                     }
@@ -942,8 +967,7 @@ impl World {
                 if self.invincible {
                     if self.g.player_mail[0].1 != 0 {
                         let amt = self.g.player_mail[0].0 as u64;
-                        self.g.player_damage +=
-                            if self.player.shield { amt / 4 } else { amt };
+                        self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
                     }
                     if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
                         self.g.player_danger = 100;
@@ -1077,14 +1101,10 @@ impl World {
             // bearing, v_22 = amount/10 clamped [0, 80] — an
             // overwrite of whatever knock was pending.
             let s = src as usize;
-            if src != 0
-                && src != PLAYER_TARGET
-                && s < features::POOL
-                && self.g.ent[s].class64 != 0
+            if src != 0 && src != PLAYER_TARGET && s < features::POOL && self.g.ent[s].class64 != 0
             {
-                let dir =
-                    Gen::angle_between(self.g.ent[s].x, self.g.ent[s].y, player.x, player.y)
-                        & 0x7FF;
+                let dir = Gen::angle_between(self.g.ent[s].x, self.g.ent[s].y, player.x, player.y)
+                    & 0x7FF;
                 self.g.player_knock = (dir, ((amt / 10) as i16).clamp(0, 80));
             }
             // Red flash (sub_44BE0(2)), self-panel flash (+392=4,
@@ -1410,9 +1430,7 @@ impl World {
             }
             let cost = self
                 .player_castle()
-                .map(|c| {
-                    Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32
-                })
+                .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
                 .unwrap_or(def.possess_mana);
             if !self.dev_spells && self.player.mana < cost {
                 return; // silent (:55908-10)
@@ -1682,8 +1700,7 @@ impl World {
         self.g.ent.iter().any(|e| {
             e.flags & 0x400 == 0
                 && e.id24 == PLAYER_TARGET
-                && ((e.class64 == 9 && e.model65 == 10)
-                    || (e.class64 == 10 && e.model65 == 43))
+                && ((e.class64 == 9 && e.model65 == 10) || (e.class64 == 10 && e.model65 == 43))
         })
     }
 
@@ -1722,8 +1739,7 @@ impl World {
                 break;
             }
             let e = &self.g.ent[j];
-            if e.class64 == 3 && e.model65 == 3 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
-            {
+            if e.class64 == 3 && e.model65 == 3 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0 {
                 let hp = e.act_life.max(0) as f32 / (e.max_life.max(1) as f32);
                 let cargo = e.f140.max(0) as f32 / (e.f136.max(1) as f32);
                 out[k] = Some((hp.clamp(0.0, 1.0), cargo.clamp(0.0, 1.0)));
@@ -2111,8 +2127,7 @@ impl World {
             let m = self.player.owned[s] as usize;
             if m != 0 {
                 owned[s] = true;
-                cooldown[s] =
-                    self.g.ent[m].f26.max(0) as f32 / SPELLS[s].count as f32;
+                cooldown[s] = self.g.ent[m].f26.max(0) as f32 / SPELLS[s].count as f32;
             }
         }
         // One castle scan feeds castle/castle_hp/balloons/bindable.
@@ -2123,16 +2138,18 @@ impl World {
         let mut bindable = [false; SPELL_COUNT];
         for (s, b) in bindable.iter_mut().enumerate() {
             let req = SPELLS[s].castle_req;
-            *b = self.dev_spells
-                || req == 0
-                || castle_stored.is_some_and(|stored| stored >= req);
+            *b = self.dev_spells || req == 0 || castle_stored.is_some_and(|stored| stored >= req);
         }
         LoadoutView {
             owned,
             left: self.player.left.map(|s| s.0),
             right: self.player.right.map(|s| s.0),
             cooldown,
-            mana: if self.dev_spells { self.player.mana_max } else { self.player.mana },
+            mana: if self.dev_spells {
+                self.player.mana_max
+            } else {
+                self.player.mana
+            },
             mana_max: self.player.mana_max,
             banked: self.player.banked,
             world_mana: self.player.world_mana,
@@ -2605,8 +2622,7 @@ impl World {
             let d = player.heading.wrapping_sub(bearing) & 0x7FF;
             if d.min(2048 - d) < 0xAA {
                 let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
-                self.pending_teleport =
-                    Some((dx as f32 / 256.0, dy as f32 / 256.0));
+                self.pending_teleport = Some((dx as f32 / 256.0, dy as f32 / 256.0));
                 // PORTUSE — the same 22 as the teleport spell
                 // (player-confirmed gap, playtest 3).
                 self.g.snd_player(22);
@@ -2965,7 +2981,11 @@ mod tests {
         let short = w
             .player_wall_gate((119.2, 99.5, 12.5), (120.1, 99.9, 12.5))
             .expect("shortened approach");
-        assert!(short.0 < 120.0 && short.0 > 119.2, "shortened, x={}", short.0);
+        assert!(
+            short.0 < 120.0 && short.0 > 119.2,
+            "shortened, x={}",
+            short.0
+        );
 
         // Head-on at high altitude (way above the wall's +48 crest):
         // the aligned cardinal contributes a zero-length slide — the
@@ -3010,24 +3030,39 @@ mod tests {
         sim.flyer.yaw = std::f32::consts::FRAC_PI_2; // facing +x (east)
         sim.flyer.pitch = 0.0;
         sim.sync_carpet_from_flyer(); // flyer set directly → re-seed
-        let thrust = crate::FlightInput { thrust: 1.0, ..Default::default() };
+        let thrust = crate::FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
         for _ in 0..600 {
             sim.step(&thrust);
             assert!(sim.flyer.x < 120.0, "wall crossed at x={}", sim.flyer.x);
         }
-        assert!(sim.flyer.x > 119.0, "the flyer did reach the wall, x={}", sim.flyer.x);
+        assert!(
+            sim.flyer.x > 119.0,
+            "the flyer did reach the wall, x={}",
+            sim.flyer.x
+        );
     }
 
     #[test]
     fn deferred_things_stay_latent_until_triggered() {
         let mut w = flat_world();
-        assert_eq!(w.live_things().len(), 0, "dis_id!=0 things must not spawn at init");
+        assert_eq!(
+            w.live_things().len(),
+            0,
+            "dis_id!=0 things must not spawn at init"
+        );
         for _ in 0..64 {
             w.tick(away(), PlayerCommand::default());
         }
         assert_eq!(w.live_things().len(), 0);
         let center = tile(110, 110);
-        assert_eq!(w.planes().height[center], 100, "crater must not dig while latent");
+        assert_eq!(
+            w.planes().height[center],
+            100,
+            "crater must not dig while latent"
+        );
     }
 
     #[test]
@@ -3162,7 +3197,11 @@ mod tests {
         let segs: Vec<_> = w.live_poses().into_iter().filter(|p| p.segment).collect();
         assert_eq!(heads.len(), 1, "one worm head");
         assert_eq!(segs.len(), 16, "sixteen body segments");
-        assert_eq!(w.live_things().len(), 1, "segments hidden from entity lists");
+        assert_eq!(
+            w.live_things().len(),
+            1,
+            "segments hidden from entity lists"
+        );
 
         let p = PlayerPose::from_tiles(101.5, 14.0, 101.5, 0.0, 0.0, 0.0);
         for _ in 0..60 {
@@ -3218,8 +3257,9 @@ mod tests {
             child: 0,
             par3: None,
         };
-        let things: Vec<Thing> =
-            (0..8).map(|k| bee(k, 100 + (k % 3) as u16, 100 + (k / 3) as u16)).collect();
+        let things: Vec<Thing> = (0..8)
+            .map(|k| bee(k, 100 + (k % 3) as u16, 100 + (k / 3) as u16))
+            .collect();
         let mut w = World::new(planes, &things, 1, assets());
         // Player far away the whole time (> 24 tiles: asleep).
         let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
@@ -3285,7 +3325,11 @@ mod tests {
         let run = || {
             let mut w = flat_world();
             for t in 0..200 {
-                let p = if (40..80).contains(&t) { at_trigger() } else { away() };
+                let p = if (40..80).contains(&t) {
+                    at_trigger()
+                } else {
+                    away()
+                };
                 w.tick(p, PlayerCommand::default());
             }
             (w.planes().height.clone(), w.live_things().len())
@@ -3406,7 +3450,9 @@ mod tests {
 
         // 5) Touchdown at ground+128: jars scatter, the grave rises,
         // the player-owned loose ball passes to the grave.
-        let b = w.g.spawn_mana_ball((112 << 8) + 128, (114 << 8) + 128, 3200).unwrap();
+        let b =
+            w.g.spawn_mana_ball((112 << 8) + 128, (114 << 8) + 128, 3200)
+                .unwrap();
         w.g.ent[b].f144 = PLAYER_TARGET;
         w.tick(grounded_line(), PlayerCommand::default());
         assert_eq!(w.vitals().state, LifeState::Dead);
@@ -3418,7 +3464,10 @@ mod tests {
             .find(|e| e.class == 10 && e.model == 40)
             .unwrap()
             .slot as u16;
-        assert_eq!(w.g.ent[b as usize].f144, grave, "the grave inherits the ball");
+        assert_eq!(
+            w.g.ent[b as usize].f144, grave,
+            "the grave inherits the ball"
+        );
         let jars = w
             .debug_pool()
             .1
@@ -3428,7 +3477,13 @@ mod tests {
         assert!(jars > 0, "the spell inventory scattered as decaying jars");
 
         // 6) Castle-less respawn = the level is lost and restarts.
-        w.tick(grounded_line(), PlayerCommand { respawn: true, ..Default::default() });
+        w.tick(
+            grounded_line(),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
         assert!(w.take_restart(), "castle-less death restarts the level");
         assert!(w.vitals().lost);
     }
@@ -3438,7 +3493,9 @@ mod tests {
         let mut w = bare_creature_world(2);
         w.set_dev_spells(true);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
-        let c = w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128).unwrap();
+        let c =
+            w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
+                .unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
         for _ in 0..60 {
@@ -3452,9 +3509,18 @@ mod tests {
         w.tick(grounded_line(), PlayerCommand::default());
         assert_eq!(w.vitals().state, LifeState::Dead);
         let owned_before = w.loadout().owned.iter().filter(|&&o| o).count();
-        assert_eq!(owned_before, 0, "ownership rides the death slots while dead");
+        assert_eq!(
+            owned_before, 0,
+            "ownership rides the death slots while dead"
+        );
 
-        w.tick(grounded_line(), PlayerCommand { respawn: true, ..Default::default() });
+        w.tick(
+            grounded_line(),
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
         let (rx, rz) = w.take_respawn().expect("respawn fired");
         // The castle grid-snaps to even tile parity; just confirm the
         // destination is the castle's tile neighborhood.
@@ -3471,24 +3537,33 @@ mod tests {
     fn castle_transformation_kills_the_footprint_but_spares_the_exempt() {
         let mut w = bare_creature_world(2); // wild lunger at ~(113,110)
         // An owned creature and a boss-exempt m16 on the footprint.
-        let owned = w.g.spawn_creature(2, (112 << 8), (110 << 8), 3200).unwrap();
+        let owned = w.g.spawn_creature(2, 112 << 8, 110 << 8, 3200).unwrap();
         w.g.ent[owned].id24 = PLAYER_TARGET;
-        let boss = w.g.spawn_creature(16, (111 << 8), (110 << 8), 3200).unwrap();
+        let boss = w.g.spawn_creature(16, 111 << 8, 110 << 8, 3200).unwrap();
         let wild_life = w.g.ent[1].act_life;
         assert!(wild_life > 0);
 
         // The castle rises straight under them (the level-0 build
         // skips the space gate — the initial cast is single-step).
-        let c = w.g.spawn_castle((112 << 8), (110 << 8)).unwrap();
+        let c = w.g.spawn_castle(112 << 8, 110 << 8).unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
         for _ in 0..40 {
-            w.tick(PlayerPose::level((90 << 8), (90 << 8), 3400, 0), PlayerCommand::default());
+            w.tick(
+                PlayerPose::level(90 << 8, 90 << 8, 3400, 0),
+                PlayerCommand::default(),
+            );
         }
-        assert_eq!(count(&w, 5, 2) , 1, "exactly one m2 survives...");
+        assert_eq!(count(&w, 5, 2), 1, "exactly one m2 survives...");
         assert_eq!(w.g.ent[owned].id24, PLAYER_TARGET);
-        assert!(w.g.ent[owned].act_life > 0, "...the OWNED one (owner immunity)");
-        assert!(w.g.ent[boss].act_life > 0, "m16 is exempt from the execution");
+        assert!(
+            w.g.ent[owned].act_life > 0,
+            "...the OWNED one (owner immunity)"
+        );
+        assert!(
+            w.g.ent[boss].act_life > 0,
+            "m16 is exempt from the execution"
+        );
         let (kills, _, _) = w.combat_stats();
         assert_eq!(kills, 1, "the execution credits the castle owner");
     }
@@ -3497,8 +3572,8 @@ mod tests {
     fn castle_downgrade_ejects_mana_and_demolish_razes() {
         let mut w = bare_creature_world(2);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
-        let pose = PlayerPose::level((90 << 8), (90 << 8), 3400, 0);
-        let c = w.g.spawn_castle((140 << 8), (140 << 8)).unwrap();
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
         for _ in 0..60 {
@@ -3531,7 +3606,13 @@ mod tests {
         for _ in 0..80 {
             w.tick(pose, PlayerCommand::default());
         }
-        w.tick(pose, PlayerCommand { demolish: true, ..Default::default() });
+        w.tick(
+            pose,
+            PlayerCommand {
+                demolish: true,
+                ..Default::default()
+            },
+        );
         for _ in 0..4 {
             w.tick(pose, PlayerCommand::default());
         }
@@ -3549,15 +3630,21 @@ mod tests {
     fn demolish_during_the_build_defers_until_established() {
         let mut w = bare_creature_world(2);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
-        let pose = PlayerPose::level((90 << 8), (90 << 8), 3400, 0);
-        let c = w.g.spawn_castle((140 << 8), (140 << 8)).unwrap();
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
         w.g.ent[c].id24 = PLAYER_TARGET;
         w.g.ent[c].f144 = PLAYER_TARGET;
         // Two ticks in: the painter is mid-flight, the castle waits.
         w.tick(pose, PlayerCommand::default());
         w.tick(pose, PlayerCommand::default());
         assert_eq!(w.g.ent[c].f59, 1, "mid-transformation wait state");
-        w.tick(pose, PlayerCommand { demolish: true, ..Default::default() });
+        w.tick(
+            pose,
+            PlayerCommand {
+                demolish: true,
+                ..Default::default()
+            },
+        );
         assert!(w.g.ent[c].act_life < 0, "the lethal is pending");
         // The transformation runs to completion untouched...
         for _ in 0..10 {
@@ -3593,7 +3680,13 @@ mod tests {
         }
         assert_eq!(w.loadout().castle.map(|(_, _, l)| l), Some(1));
         w.terrain_dirty = false;
-        w.tick(away(), PlayerCommand { demolish: true, ..Default::default() });
+        w.tick(
+            away(),
+            PlayerCommand {
+                demolish: true,
+                ..Default::default()
+            },
+        );
         assert!(
             w.terrain_dirty,
             "the destruction tick re-uploads the flattened footprint"
@@ -3611,7 +3704,10 @@ mod tests {
         assert_eq!(count(&w, 5, 2), 1, "the creature spawned");
         // Hold fire from the firing line: the aim assist locks on,
         // the fire's 400-damage broadcast whittles the 3000 life.
-        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
         let mut died_at = None;
         for t in 0..600 {
             w.tick(firing_line(), fire);
@@ -3646,7 +3742,13 @@ mod tests {
         // A three-tick burst wounds the lunger without killing it
         // (≤ 1200 of 3000 life)...
         for _ in 0..3 {
-            w.tick(firing_line(), PlayerCommand { fire_left: true, ..Default::default() });
+            w.tick(
+                firing_line(),
+                PlayerCommand {
+                    fire_left: true,
+                    ..Default::default()
+                },
+            );
         }
         // ...then it chases the wizard-family attacker and melees.
         // The invincible player discards the damage but the total
@@ -3676,7 +3778,13 @@ mod tests {
         let start = w.g.ent[b].act_life;
         let off = PlayerPose::level((112 << 8) + 128, (128 << 8) + 128, 3360, 0x18);
         for _ in 0..6 {
-            w.tick(off, PlayerCommand { fire_left: true, ..Default::default() });
+            w.tick(
+                off,
+                PlayerCommand {
+                    fire_left: true,
+                    ..Default::default()
+                },
+            );
         }
         for _ in 0..200 {
             w.tick(off, PlayerCommand::default());
@@ -3839,7 +3947,10 @@ mod tests {
         }
         let _ = (x0, y0);
         assert!(blinked, "the genie teleports (ambush/blink cycle)");
-        assert!(flashed, "the steal seeker lands the (10,25) mana-drain flash");
+        assert!(
+            flashed,
+            "the steal seeker lands the (10,25) mana-drain flash"
+        );
     }
 
     #[test]
@@ -3847,7 +3958,10 @@ mod tests {
         let mut w = bare_creature_world(0);
         rapid_fire(&mut w);
         assert_eq!(count(&w, 5, 0), 17, "head + 16 segments");
-        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
         let mut cleared = false;
         for _ in 0..3000 {
             w.tick(firing_line(), fire);
@@ -3856,7 +3970,10 @@ mod tests {
                 break;
             }
         }
-        assert!(cleared, "the whole chain dies (segments corpse with the head)");
+        assert!(
+            cleared,
+            "the whole chain dies (segments corpse with the head)"
+        );
         for _ in 0..16 {
             w.tick(firing_line(), PlayerCommand::default());
         }
@@ -3931,8 +4048,8 @@ mod tests {
         }
         assert_eq!(count(&w, 10, 45), 0, "collapsed");
         assert!(count(&w, 5, 12) >= 1, "the last occupant out is a settler");
-        let rubble = (108u8..=113)
-            .any(|x| (108u8..=113).any(|y| w.planes().angle[tile(x, y)] & 7 == 1));
+        let rubble =
+            (108u8..=113).any(|x| (108u8..=113).any(|y| w.planes().angle[tile(x, y)] & 7 == 1));
         assert!(rubble, "collapse stamps the rubble angle nibble");
     }
 
@@ -3962,12 +4079,18 @@ mod tests {
                 break;
             }
         }
-        assert!(stored >= 512, "balloon delivered the cargo (stored {stored})");
+        assert!(
+            stored >= 512,
+            "balloon delivered the cargo (stored {stored})"
+        );
         // One more tick: the census (tick-start) sees the delivery.
         w.tick(away(), PlayerCommand::default());
         // Castle-stored mana raises the wizard ceiling and counts as
         // banked (sub_48230).
-        assert!(w.loadout().mana_max >= 1000 + 512, "ceiling includes the store");
+        assert!(
+            w.loadout().mana_max >= 1000 + 512,
+            "ceiling includes the store"
+        );
         assert!(w.loadout().banked >= 512, "banked = castle stored");
         // With no pickups left, the dispatcher's default target is
         // the CASTLE (:56376): the balloon comes home and hovers
@@ -3977,9 +4100,7 @@ mod tests {
         }
         let bal = (1..features::POOL)
             .find(|&j| {
-                w.g.ent[j].class64 == 3
-                    && w.g.ent[j].model65 == 3
-                    && w.g.ent[j].flags & 0x400 == 0
+                w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 3 && w.g.ent[j].flags & 0x400 == 0
             })
             .expect("the fleet balloon lives");
         assert_eq!(w.g.ent[bal].f146, c as u16, "homes the castle when idle");
@@ -4009,9 +4130,16 @@ mod tests {
         // upgrade costs the full ladder amount at the current level
         // (10000 at level 1; sub_47C60/sub_47DD0 rewrite the
         // manifestation's +136, gate :55908-10).
-        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
         w.tick(away(), fire);
-        assert_eq!(count(&w, 9, 10), 0, "pool 1000 cannot fund the 10000 upgrade");
+        assert_eq!(
+            count(&w, 9, 10),
+            0,
+            "pool 1000 cannot fund the 10000 upgrade"
+        );
         // Own enough mana (a claimed ball raises the ceiling) and
         // the same recast launches the upgrade ball.
         let b = w.g.spawn_mana_ball(50 << 8, 50 << 8, 100 * 32).unwrap();
@@ -4072,12 +4200,7 @@ mod tests {
             w.tick(away(), PlayerCommand::default());
         }
         assert_eq!(count(&w, 2, 0), 1, "the charred husk remains");
-        let husk = w
-            .debug_pool()
-            .1
-            .into_iter()
-            .find(|e| e.class == 2)
-            .unwrap();
+        let husk = w.debug_pool().1.into_iter().find(|e| e.class == 2).unwrap();
         assert_eq!(husk.state, 2, "burned down to the char state");
         assert_eq!(count(&w, 10, 6), 0, "the fire burned out");
     }
@@ -4143,7 +4266,13 @@ mod tests {
         // Aggro the kraken with a short burst; it closes in, arms its
         // 5-beam bursts and the 41-tick buffet phases.
         for _ in 0..3 {
-            w.tick(firing_line(), PlayerCommand { fire_left: true, ..Default::default() });
+            w.tick(
+                firing_line(),
+                PlayerCommand {
+                    fire_left: true,
+                    ..Default::default()
+                },
+            );
         }
         let (mut saw_segments, mut knocked) = (false, false);
         for _ in 0..2000 {
@@ -4245,8 +4374,15 @@ mod tests {
         let mut w = flat_world();
         let lv = w.loadout();
         assert!(lv.owned[0] && lv.owned[3], "starting spells granted");
-        assert_eq!((lv.left, lv.right), (Some(0), Some(3)), "auto-fill L/R (:49246-54)");
-        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        assert_eq!(
+            (lv.left, lv.right),
+            (Some(0), Some(3)),
+            "auto-fill L/R (:49246-54)"
+        );
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
         w.tick(firing_line(), fire);
         assert_eq!(count(&w, 9, 0), 1, "the press edge casts one fireball");
         // Ceiling = the intrinsic 1000 with nothing claimed
@@ -4341,7 +4477,10 @@ mod tests {
         assert_eq!(w.accel_override(), None, "no override at rest");
         // Forward: ±3.0 while the button is held ("hold down the
         // mouse button to achieve maximum speed").
-        let fwd = PlayerCommand { fire_left: true, ..Default::default() };
+        let fwd = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
         w.tick(away(), fwd);
         assert_eq!(w.accel_override(), Some(3.0), "held = 3.0 (:65169)");
         w.tick(away(), fwd);
@@ -4350,7 +4489,10 @@ mod tests {
         w.tick(away(), PlayerCommand::default());
         assert_eq!(w.accel_override(), Some(2.0), "released = 2.0 channel");
         // Opposite activation force-clears forward (:55871/:55914).
-        let back = PlayerCommand { fire_right: true, ..Default::default() };
+        let back = PlayerCommand {
+            fire_right: true,
+            ..Default::default()
+        };
         w.tick(away(), back);
         assert_eq!(w.player.accel, -1, "backward took over");
         assert_eq!(w.accel_override(), Some(-3.0), "negative held backward");
@@ -4382,7 +4524,10 @@ mod tests {
         w.player.left = Some(SpellId(15));
         // Hold = continuous stream (manual), paced by count 2: the
         // one-tick beams resolve immediately into player shots.
-        let fire = PlayerCommand { fire_left: true, ..Default::default() };
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
         for _ in 0..10 {
             w.tick(firing_line(), fire);
         }
@@ -4399,7 +4544,13 @@ mod tests {
         // Fire north from the firing line: the lob impacts a few
         // tiles ahead, then the walker digs onward tile by tile.
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         for _ in 0..120 {
             w.tick(p, PlayerCommand::default());
         }
@@ -4418,7 +4569,13 @@ mod tests {
         // Aim steeply down so the bolt grounds fast.
         let mut p = firing_line();
         p.pitch = 0x100;
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         let mut saw_ring = false;
         for _ in 0..40 {
             w.tick(p, PlayerCommand::default());
@@ -4434,7 +4591,13 @@ mod tests {
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(8));
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         let (mut saw_driver, mut saw_lava, mut saw_plume) = (false, false, false);
         for _ in 0..400 {
             w.tick(p, PlayerCommand::default());
@@ -4445,7 +4608,10 @@ mod tests {
             saw_plume |= count(&w, 10, 19) > 0;
         }
         assert!(saw_driver, "the cone finish spawned the eruption driver");
-        assert!(saw_lava, "the eruption window launches ballistic lava bombs");
+        assert!(
+            saw_lava,
+            "the eruption window launches ballistic lava bombs"
+        );
         assert!(saw_plume, "the eruption start raises the (10,19) plume");
         // FINITE: the window is over — no live bombs remain hundreds
         // of ticks past it (bomb life caps at 199).
@@ -4464,14 +4630,23 @@ mod tests {
         let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
         let gz = w.g.ground_z(bx, by) as i16;
         let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 1), 1, "the possess lob launched");
         let mut claimed = false;
         for _ in 0..120 {
             w.tick(p, PlayerCommand::default());
             claimed |= w.g.ent[b].f144 == PLAYER_TARGET;
         }
-        assert!(claimed, "the m1 lob acquires + the (10,12) flash claims the ball");
+        assert!(
+            claimed,
+            "the m1 lob acquires + the (10,12) flash claims the ball"
+        );
     }
 
     #[test]
@@ -4505,7 +4680,13 @@ mod tests {
         }
         let b = find_slot(&w, 10, 45);
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 1), 1, "the possess lob launched");
         let mut claimed = false;
         for _ in 0..120 {
@@ -4522,7 +4703,13 @@ mod tests {
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(18));
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 12), 1, "the storm carrier launched");
         let (mut saw_cloud, mut bolts) = (false, 0usize);
         for _ in 0..80 {
@@ -4544,7 +4731,13 @@ mod tests {
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(20));
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 16), 1, "the firewall bolt launched");
         let (mut saw_cloud, mut saw_flames) = (false, false);
         for _ in 0..80 {
@@ -4563,12 +4756,24 @@ mod tests {
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(22));
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 18), 1, "the (9,18) death fuse armed");
         // Charges STACK (player-retail-confirmed): a release +
         // re-press primes a second independent fuse.
         w.tick(p, PlayerCommand::default());
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 18), 2, "overlapping charges both live");
 
         // The fuse rides the caster ~21 ticks, then the (10,55)
@@ -4599,7 +4804,10 @@ mod tests {
             (d as i32) < 3 * 256,
             "the field detonated around the caster, not downrange (d {d})"
         );
-        assert_eq!(w.g.ent[f].f44, 7000, "the detonation copied the spell's damage");
+        assert_eq!(
+            w.g.ent[f].f44, 7000,
+            "the detonation copied the spell's damage"
+        );
 
         // The kill cylinder is 2D (sub_423D0 is x/y only): a creature
         // FAR ABOVE inside the 10-tile radius dies; one 15 tiles to
@@ -4607,10 +4815,9 @@ mod tests {
         // regression was state 55's handler, not this one).
         let (fx, fy, fz) = (w.g.ent[f].x, w.g.ent[f].y, w.g.ent[f].z);
         let above = w.g.spawn_creature(2, fx, fy, fz + 12000).unwrap();
-        let aside = w
-            .g
-            .spawn_creature(2, fx.wrapping_add(15 << 8), fy, fz + 200)
-            .unwrap();
+        let aside =
+            w.g.spawn_creature(2, fx.wrapping_add(15 << 8), fy, fz + 200)
+                .unwrap();
         let ground_before = {
             let g = &w.g;
             g.ground_z(fx, fy)
@@ -4641,15 +4848,29 @@ mod tests {
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(17));
         let p = firing_line();
-        w.tick(p, PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         let mut skeletons = 0usize;
         for _ in 0..80 {
             w.tick(p, PlayerCommand::default());
             skeletons = skeletons.max(count(&w, 5, 9));
         }
         assert_eq!(skeletons, 8, "8 skeletons on the ring");
-        for e in w.debug_pool().1.iter().filter(|e| e.class == 5 && e.model == 9) {
-            assert_eq!(e.id24, PLAYER_TARGET, "owner-tagged: never attacks the caster");
+        for e in w
+            .debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == 5 && e.model == 9)
+        {
+            assert_eq!(
+                e.id24, PLAYER_TARGET,
+                "owner-tagged: never attacks the caster"
+            );
         }
     }
 
@@ -4663,7 +4884,13 @@ mod tests {
         assert_eq!(lv.mana, lv.mana_max, "pool reads full");
         // Casts neither gate nor deduct while on.
         w.player.mana = 0;
-        w.tick(firing_line(), PlayerCommand { fire_left: true, ..Default::default() });
+        w.tick(
+            firing_line(),
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(count(&w, 9, 0), 1, "no mana gate under dev spells");
         assert_eq!(w.loadout().mana, w.loadout().mana_max);
         // Off keeps the granted spells (no un-granting).
@@ -4737,7 +4964,10 @@ mod tests {
         assert!((first.0 - 1.0).abs() < 1e-3, "first balloon full HP");
         assert!((first.1 - 0.25).abs() < 1e-3, "first balloon 50/200 cargo");
         assert!((second.0 - 0.75).abs() < 1e-3, "second balloon 75/100 HP");
-        assert!((second.1 - 0.5).abs() < 1e-3, "second balloon 100/200 cargo");
+        assert!(
+            (second.1 - 0.5).abs() < 1e-3,
+            "second balloon 100/200 cargo"
+        );
 
         // Dead balloons do NOT shrink the roster (retail keeps the
         // [50+width] glyph and just draws no bars, :27335-40): kill
@@ -4757,7 +4987,10 @@ mod tests {
 
         // A collapsed castle (flag 0x400) removes the roster.
         w.g.ent[castle].flags |= 0x400;
-        assert!(w.loadout().balloons.is_empty(), "collapsed castle → no roster");
+        assert!(
+            w.loadout().balloons.is_empty(),
+            "collapsed castle → no roster"
+        );
     }
 
     #[test]
@@ -4765,7 +4998,10 @@ mod tests {
         // The :26926 gate: bindable iff castle_req == 0 OR the linked
         // castle STORES >= castle_req — never a player-mana test.
         let mut w = flat_world();
-        let free = SPELLS.iter().position(|s| s.castle_req == 0).expect("a free spell");
+        let free = SPELLS
+            .iter()
+            .position(|s| s.castle_req == 0)
+            .expect("a free spell");
         let (locked, req) = SPELLS
             .iter()
             .enumerate()
@@ -4874,9 +5110,11 @@ mod tests {
         for _ in 0..400 {
             w.tick(pose, PlayerCommand::default());
             let rid = w.rivals[0].ent;
-            if w.g.ent.iter().any(|e| {
-                e.class64 == 9 && e.flags & 0x400 == 0 && e.id24 == rid
-            }) {
+            if w.g
+                .ent
+                .iter()
+                .any(|e| e.class64 == 9 && e.flags & 0x400 == 0 && e.id24 == rid)
+            {
                 fired = true;
                 break;
             }
@@ -4902,12 +5140,11 @@ mod tests {
         // The kill credited to the human.
         assert_eq!(w.player_kill_row()[1], 1);
         // The known book scattered as decaying ground jars + a grave.
-        let jars = w
-            .g
-            .ent
-            .iter()
-            .filter(|e| e.class64 == 12 && e.tick70 == DROPPED_JAR && e.flags & 0x400 == 0)
-            .count();
+        let jars =
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 12 && e.tick70 == DROPPED_JAR && e.flags & 0x400 == 0)
+                .count();
         assert_eq!(jars, 1, "one owned spell scatters one jar");
         assert!(
             w.g.ent
@@ -4917,9 +5154,7 @@ mod tests {
         );
         // Hidden husk: not in the drawable set.
         assert!(
-            !w.live_poses()
-                .iter()
-                .any(|p| p.class == 3 && p.model == 1),
+            !w.live_poses().iter().any(|p| p.class == 3 && p.model == 1),
             "the dead wizard billboard must be hidden"
         );
         let death_slots = w.take_rival_deaths();
@@ -4976,7 +5211,9 @@ mod tests {
             angle: vec![5; 0x10000],
         };
         let mut w = World::new(planes, &[], 1, assets());
-        let k = w.g.spawn_creature(6, 120 << 8 | 128, 120 << 8 | 128, 3200).unwrap();
+        let k =
+            w.g.spawn_creature(6, 120 << 8 | 128, 120 << 8 | 128, 3200)
+                .unwrap();
         w.g.ent[k].f58 = 16; // awake
         let mut died = false;
         for _ in 0..200 {
@@ -4996,7 +5233,9 @@ mod tests {
             angle: vec![5; 0x10000],
         };
         let mut w = World::new(planes, &[], 1, assets());
-        let k = w.g.spawn_creature(6, 120 << 8 | 128, 120 << 8 | 128, 3200).unwrap();
+        let k =
+            w.g.spawn_creature(6, 120 << 8 | 128, 120 << 8 | 128, 3200)
+                .unwrap();
         w.g.ent[k].f58 = 16;
         for _ in 0..200 {
             w.tick(away(), PlayerCommand::default());
@@ -5060,11 +5299,7 @@ mod tests {
             w.tick(away(), PlayerCommand::default());
         }
         assert!(!w.completed, "the win trigger must consume the win bit");
-        let creatures = w
-            .live_things()
-            .iter()
-            .filter(|t| t.class == 5)
-            .count();
+        let creatures = w.live_things().iter().filter(|t| t.class == 5).count();
         assert_eq!(creatures, 1, "the disposition spawned its stage");
     }
 
