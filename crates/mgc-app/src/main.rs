@@ -1535,11 +1535,36 @@ fn parse_args() -> Result<Args, String> {
     let mut map_view = false;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
+
+    /// `--level` accepts a package path or the path-free shorthand
+    /// `<game>:<index>` (`mc1:32`, `mc1hw:7`, `mc2:100`) resolving to
+    /// `baked/<game>/level-NNN.mgcl` — typeable before the baked tree
+    /// exists, when there is no file to tab-complete (the launch
+    /// itself bakes it). Anything not starting with a known game tag
+    /// is a path (Windows drive prefixes like `C:` fall through).
+    fn resolve_level_arg(spec: &str) -> Result<PathBuf, String> {
+        match spec.split_once(':') {
+            Some((game @ ("mc1" | "mc1hw" | "mc2"), index)) => {
+                let index: u32 = index
+                    .parse()
+                    .map_err(|e| format!("--level {spec}: bad level index: {e}"))?;
+                Ok(PathBuf::from(format!("baked/{game}/level-{index:03}.mgcl")))
+            }
+            // A numeric index after an unknown tag is a typo'd
+            // shorthand, not a path — fail fast instead of hunting
+            // (and baking) for a file literally named `mc3:5`.
+            Some((game, index)) if index.parse::<u32>().is_ok() => Err(format!(
+                "--level {spec}: unknown game {game:?} (mc1, mc1hw or mc2)"
+            )),
+            _ => Ok(PathBuf::from(spec)),
+        }
+    }
+
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--level" => {
-                level = PathBuf::from(it.next().ok_or("--level needs a path")?);
+                level = resolve_level_arg(&it.next().ok_or("--level needs a path or game:index")?)?;
             }
             "--tileset" => {
                 let set: u8 = it
@@ -1627,7 +1652,7 @@ fn parse_args() -> Result<Args, String> {
             "--no-terrain-features" => terrain_features = false,
             "--help" | "-h" => {
                 return Err(format!(
-                    "usage: mgcarpet [--level <baked/.../level-NNN.mgcl>] \
+                    "usage: mgcarpet [--level <game:index> | <baked/.../level-NNN.mgcl>] \
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \

@@ -3,6 +3,8 @@
 A modern, cross-platform engine for Bullfrog's **Magic Carpet** (1994) and
 **Magic Carpet 2: The Netherworlds** (1995).
 
+Built with heavy use of Claude Fable 5 (primarily) / Claude Opus 4.8
+
 This is an engine-only reimplementation: it ships no game content and
 requires original game data from a legally owned copy (both games are sold
 on [GOG](https://www.gog.com/en/game/magic_carpet) —
@@ -51,8 +53,8 @@ SHA-256 hashes are committed as pins.
 3. Run it:
 
    ```sh
-   ./mgcarpet                                  # MC1 campaign level 1
-   ./mgcarpet --level baked/mc1/level-009.mgcl # a specific level
+   ./mgcarpet                 # MC1 campaign level 1
+   ./mgcarpet --level mc1:9   # a specific level (mc1 | mc1hw | mc2)
    ```
 
    On first run the game finds no baked data and **bakes it from your
@@ -63,7 +65,9 @@ SHA-256 hashes are committed as pins.
 
 Options live in `mgcarpet.json` (sparse overrides) next to the
 generated `mgcarpet.json.defaults`, which documents every option with
-its faithful-authentic default. `--help` lists the CLI flags.
+its faithful-authentic default. `--help` lists the CLI flags. To
+bootstrap `mgcarpet.json.defaults`, simply run the game once. Then copy
+the file to `mgcarpet.json` and make your desired tweaks.
 
 ## Building
 

@@ -96,10 +96,35 @@ fn locate_gamedata(config_override: Option<&Path>) -> Option<PathBuf> {
 /// bake it from game data when it isn't. `Ok(())` means the caller
 /// can load the level normally.
 pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result<(), String> {
-    // Same root rule as load_level: <baked>/<game>/level-NNN.mgcl.
+    // Same root rule as load_level: <baked>/<game>/level-NNN.mgcl —
+    // but only trust the inference when the path actually follows the
+    // convention (parent dir named after a game). Guessing a root for
+    // an arbitrary path once sprayed a full bake into the working
+    // directory (a bare `mc3:5` inferred root `.`).
+    let parent_is_game = level_path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|d| matches!(d.to_str(), Some("mc1" | "mc1hw" | "mc2")));
+    if !parent_is_game {
+        // A custom/one-off package outside the baked tree: load it as
+        // it stands (bundle resolution reports its own errors), but
+        // never auto-bake into an inferred root.
+        return if level_path.exists() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{}: not found, and the path does not follow \
+                 <root>/<game>/level-NNN.mgcl, so there is no baked tree to \
+                 (re)generate for it. Try `--level mc1:0` or a path under \
+                 baked/.",
+                level_path.display()
+            ))
+        };
+    }
     let baked_root = level_path
         .parent()
         .and_then(Path::parent)
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
 
     let reason = level_staleness(level_path).or_else(|| bundle_staleness(baked_root));
