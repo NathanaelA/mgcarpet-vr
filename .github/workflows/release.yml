@@ -52,6 +52,12 @@ jobs:
             cp "$bin/mgcarpet" "$bin/mgc-import" "dist/$name/"
           fi
           cp README.md LICENSE "dist/$name/"
+          # The ready-to-fill gamedata/ folder: its README describes
+          # the expected GOG-install layout (referenced by the main
+          # README's quickstart) — testers drop their retail packs in
+          # next to the binary and run.
+          mkdir -p "dist/$name/gamedata"
+          cp gamedata/README.md "dist/$name/gamedata/"
           cd dist
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             7z a "$name.zip" "$name"
