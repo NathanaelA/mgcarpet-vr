@@ -2633,6 +2633,44 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture
 
 /// Column-major view-projection matrix. Yaw 0 faces -Z, positive pitch
 /// looks up; right-handed, Y-up, depth 0..1.
+/// Project a world point (tile x/z + altitude — [`LivePose`] space)
+/// to surface pixels through the same wrap-to-camera rule and matrix
+/// as the world pass. `None` when the point is at/behind the near
+/// plane. For screen-space overlays anchored to world positions (the
+/// aim crosshair; future name labels).
+pub fn world_to_screen(
+    cam: &CameraView,
+    surface_w: f32,
+    surface_h: f32,
+    x: f32,
+    alt: f32,
+    z: f32,
+) -> Option<(f32, f32)> {
+    let full = MAP_TILES as f32;
+    let wrapn = |p: f32, c: f32| {
+        let mut d = p - c;
+        if d > full / 2.0 {
+            d -= full;
+        }
+        if d < -full / 2.0 {
+            d += full;
+        }
+        c + d
+    };
+    let m = camera_matrix(cam, surface_w / surface_h);
+    let v = [wrapn(x, cam.x), alt, wrapn(z, cam.z), 1.0];
+    // `m` is column-major (see camera_matrix): clip_r = Σc m[c][r]·v[c].
+    let clip = |r: usize| m[0][r] * v[0] + m[1][r] * v[1] + m[2][r] * v[2] + m[3][r];
+    let w = clip(3);
+    if w <= 0.05 {
+        return None;
+    }
+    Some((
+        (clip(0) / w * 0.5 + 0.5) * surface_w,
+        (0.5 - clip(1) / w * 0.5) * surface_h,
+    ))
+}
+
 fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
     let (sy, cy) = cam.yaw.sin_cos();
     let (sp, cp) = cam.pitch.sin_cos();
@@ -2678,6 +2716,33 @@ fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// world_to_screen: a point dead ahead lands at screen center; a
+    /// point behind the camera is rejected; the world wrap picks the
+    /// nearest image (a target across the seam still projects).
+    #[test]
+    fn world_to_screen_centers_rejects_and_wraps() {
+        let cam = CameraView {
+            x: 10.0,
+            y: 5.0,
+            z: 10.0,
+            yaw: 0.0, // fwd = [0, 0, -1]
+            pitch: 0.0,
+            fov_y: 1.0,
+        };
+        let (w, h) = (640.0, 480.0);
+        let (sx, sy) = world_to_screen(&cam, w, h, 10.0, 5.0, 0.0).unwrap();
+        assert!((sx - 320.0).abs() < 0.01 && (sy - 240.0).abs() < 0.01);
+        assert!(
+            world_to_screen(&cam, w, h, 10.0, 5.0, 20.0).is_none(),
+            "behind"
+        );
+        // Same point expressed across the 256-tile seam: z = -10 and
+        // z = 246 are the same world position 20 tiles ahead.
+        let a = world_to_screen(&cam, w, h, 12.0, 5.0, -10.0).unwrap();
+        let b = world_to_screen(&cam, w, h, 12.0, 5.0, 246.0).unwrap();
+        assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
+    }
 
     fn stamp_at(x: f32, z: f32) -> MapStamp {
         MapStamp {

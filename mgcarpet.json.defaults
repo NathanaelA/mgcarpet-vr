@@ -7,6 +7,7 @@
     "sound": true
   },
   "enhancements": {
+    "crosshair": false,
     "dev_spells": false,
     "health_bars": false,
     "hud_transparency": "mc1",

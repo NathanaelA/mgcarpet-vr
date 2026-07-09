@@ -199,6 +199,16 @@ pub struct Enhancements {
     /// "makes the radar map less useful" — opaque is the readable
     /// alternate.
     pub hud_transparency: HudTransparency,
+    /// The autoaim crosshair (toggle at runtime with C): a
+    /// white-edged black cross at the TRUE aim point (the faithful
+    /// camera pitches at half the aim pitch, so aim is never screen
+    /// center) plus per-hand lock markers — left `+`, right `×`,
+    /// blinking red — on the target each hand's equipped spell would
+    /// acquire this instant. P-class projectile-behavior
+    /// predictor/debug instrument (pure preview: no sim writes, no
+    /// RNG); the original shows no aim UI at all. Acquisition ≠ hit
+    /// (homing is capped 5/tick yaw).
+    pub crosshair: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

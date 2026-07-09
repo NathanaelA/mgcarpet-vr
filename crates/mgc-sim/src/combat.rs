@@ -35,6 +35,19 @@ use crate::mobs::{MobCtx, PLAYER_TARGET};
 pub(crate) const PLAYER_HW: i32 = (SPRITE_STATS[44].width / 2) as i32;
 pub(crate) const PLAYER_HH: i32 = (SPRITE_STATS[44].height / 2) as i32;
 
+/// Candidate set of the pure crosshair preview — the sub_54520
+/// subtype blocks the player's own spells can reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AimPreviewSet {
+    /// Blocks 0/3/4 + the beam's one-shot snap: awake creatures +
+    /// rival wizards (fireball, meteor, volcano, lightning).
+    Creatures,
+    /// Block 1: unowned mana balls + houses (possess).
+    Possess,
+    /// Blocks 7/8/B/C: rival wizards only (duel, steal, undead).
+    Wizards,
+}
+
 /// A mailbox recipient: a pool event or the out-of-pool player.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MailTarget {
@@ -479,6 +492,95 @@ impl Gen {
                 self.player_danger = 100;
             }
         }
+    }
+
+    /// Read-only twin of the acquire family below for the crosshair
+    /// instrument (P-class `crosshair` option): identical candidate
+    /// filters, cone (±0x71 yaw AND pitch), 3D range (≤ 5120) and
+    /// min-score pick as [`Self::aim_assist`] /
+    /// [`Self::aim_assist_wizards`] / [`Self::aim_assist_possess`] —
+    /// but NO entity writes, NO `player_danger` arming and NO LCG
+    /// draws, so it is safe to run every frame without touching
+    /// simulation state. The caster is the human player
+    /// (own = PLAYER_TARGET), so the mob scans' player-candidate arm
+    /// never applies. Returns the acquired slot.
+    pub(crate) fn aim_preview_scan(
+        &self,
+        px: u16,
+        py: u16,
+        pz: i16,
+        yaw: u16,
+        pitch: u16,
+        set: AimPreviewSet,
+    ) -> Option<u16> {
+        let own = PLAYER_TARGET;
+        let mut best: Option<(u16, u32)> = None;
+        let mut consider = |tx: u16, ty: u16, tz: i16, slot: u16| {
+            let d2 = Self::dist2_sq(px, py, tx, ty);
+            let dz = tz.wrapping_sub(pz) as i32;
+            if d2.wrapping_add(dz.wrapping_mul(dz)) > 5120 * 5120 {
+                return;
+            }
+            let ty_yaw = Self::angle_between(px, py, tx, ty);
+            let dh = Self::isqrt(d2 as u32) as i32;
+            let ty_pitch = Self::pitch_toward(pz, tz, dh);
+            let dy = Self::angdist(yaw, ty_yaw) as u32;
+            let dp = Self::angdist(pitch, ty_pitch) as u32;
+            if dy > 0x71 || dp > 0x71 {
+                return;
+            }
+            let score = dy * dy + dp * dp;
+            if best.is_none_or(|(_, bs)| score < bs) {
+                best = Some((slot, score));
+            }
+        };
+        if set == AimPreviewSet::Possess {
+            // Mirror of aim_assist_possess: unowned/unclaimed awake
+            // mana balls (m39/40) + anyone else's houses (m45).
+            for j in 1..self.ent.len() {
+                let c = &self.ent[j];
+                if c.class64 != 10 || c.flags & 0x400 != 0 {
+                    continue;
+                }
+                let candidate = match c.model65 {
+                    39 | 40 => c.f58 != 0 && c.f144 != own && c.id24 != own,
+                    45 => c.f144 != own && c.id24 != own,
+                    _ => false,
+                };
+                if candidate {
+                    consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+                }
+            }
+            return best.map(|(slot, _)| slot);
+        }
+        if set == AimPreviewSet::Creatures {
+            // Mirror of aim_assist's creature scan.
+            for j in 1..self.ent.len() {
+                let c = &self.ent[j];
+                if c.class64 != 5 || c.tick70 == 120 || c.act_life < 0 || c.f58 == 0 {
+                    continue;
+                }
+                if c.id24 == own {
+                    continue;
+                }
+                consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+            }
+        }
+        // Both remaining sets scan the rival-wizard list (live, not
+        // hidden or cloaked, not own).
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 3
+                || c.model65 > 1
+                || c.tick70 != 1
+                || c.flags & (0x400 | 0x20) != 0
+                || c.id24 == own
+            {
+                continue;
+            }
+            consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+        }
+        best.map(|(slot, _)| slot)
     }
 
     /// The wizard-only acquire (sub_54520 blocks 7/8/B/C — duel m7,

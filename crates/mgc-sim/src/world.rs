@@ -227,6 +227,16 @@ pub struct PlayerVitals {
 }
 
 /// Spellbook/HUD snapshot for the app layer.
+/// One hand's live crosshair lock (see [`World::aim_preview`]):
+/// the point the hand's shot would chase, in [`LivePose`] space
+/// (tile x/z + altitude).
+#[derive(Debug, Clone, Copy)]
+pub struct AimLock {
+    pub x: f32,
+    pub z: f32,
+    pub alt: f32,
+}
+
 pub struct LoadoutView {
     pub owned: [bool; 24],
     pub left: Option<u8>,
@@ -2117,6 +2127,54 @@ impl World {
         if took {
             self.g.snd_player(14);
         }
+    }
+
+    /// Per-hand crosshair preview (the P-class `crosshair`
+    /// instrument): the target each hand's EQUIPPED spell would
+    /// acquire if cast this instant, through the pure read-only twin
+    /// of the acquire scans ([`crate::features::Gen`]'s
+    /// `aim_preview_scan` — no writes, no RNG). Runs from the same
+    /// muzzle pose and pitch bias the real cast uses. `None` = the
+    /// hand holds no spell, the spell never acquires (quake, crater,
+    /// magnet, all non-projectile spells), or nothing is in the cone.
+    ///
+    /// Honest-instrument caveat: acquisition ≠ hit — homing is capped
+    /// at the authentic 5/tick yaw, so a locked fast crosser can
+    /// still evade. The marker shows what the shot will CHASE.
+    pub fn aim_preview(&self, p: PlayerPose) -> [Option<AimLock>; 2] {
+        let hand = |right: bool| -> Option<AimLock> {
+            let spell = if right {
+                self.player.right?.0
+            } else {
+                self.player.left?.0
+            } as usize;
+            use crate::combat::AimPreviewSet as Set;
+            let set = match spell {
+                // Fireball, meteor, volcano, lightning, rapid fireball.
+                0 | 7 | 8 | 15 | 23 => Set::Creatures,
+                3 => Set::Possess,
+                // Duel, steal, undead army.
+                11 | 13 | 17 => Set::Wizards,
+                _ => return None,
+            };
+            // The down-arc launch bias (cast_projectile): the
+            // volcano's acquire cone centers on the biased pitch.
+            let pitch = if spell == 8 {
+                p.pitch.wrapping_add(0x60) & 0x7FF
+            } else {
+                p.pitch
+            };
+            let (mx, my, mz) = self.muzzle(p, right);
+            let slot = self.g.aim_preview_scan(mx, my, mz, p.heading, pitch, set)?;
+            let e = &self.g.ent[slot as usize];
+            Some(AimLock {
+                x: e.x as f32 / 256.0,
+                z: e.y as f32 / 256.0,
+                // The acquire aims at the +78 half-height point.
+                alt: e.z.wrapping_add(e.f78 as i16) as f32 / 256.0,
+            })
+        };
+        [hand(false), hand(true)]
     }
 
     /// Spellbook/HUD snapshot.
@@ -5342,5 +5400,35 @@ mod tests {
             before,
             w.g.ent[b].act_life
         );
+    }
+
+    /// The crosshair preview (aim_preview) is hand-keyed by the
+    /// equipped spell's candidate set and mirrors the acquire cone:
+    /// the default grant is Fireball LEFT (creature set) + Possess
+    /// RIGHT (balls/houses only). Purity is compiler-guaranteed
+    /// (&self); this pins the keying + the ±0x71 cone.
+    #[test]
+    fn aim_preview_is_hand_keyed_and_cone_gated() {
+        let mut w = bare_creature_world(2); // wild lunger at ~(112,110)
+        let alt = w.g.ent[1].z;
+        let pose = move |heading: u16| PlayerPose::level(108 << 8, 110 << 8, alt, heading);
+        for _ in 0..5 {
+            w.tick(pose(0), PlayerCommand::default());
+        }
+        // Exactly one compass octant faces the lunger (cone ±0x71 <
+        // the 256 octant spacing).
+        let hits: Vec<u16> = (0..8u16)
+            .map(|k| k * 256)
+            .filter(|&h| w.aim_preview(pose(h))[0].is_some())
+            .collect();
+        assert_eq!(hits.len(), 1, "one heading locks the lunger: {hits:?}");
+        // The lock reports the creature's position.
+        let l = w.aim_preview(pose(hits[0]))[0].unwrap();
+        assert!((l.x - w.g.ent[1].x as f32 / 256.0).abs() < 0.51);
+        // The possess hand never locks a creature (its set is
+        // balls/houses, and this world has neither).
+        for k in 0..8u16 {
+            assert!(w.aim_preview(pose(k * 256))[1].is_none());
+        }
     }
 }

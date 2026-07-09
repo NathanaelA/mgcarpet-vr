@@ -1033,6 +1033,80 @@ pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad
     quads
 }
 
+/// The autoaim crosshair instrument (`enhancements.crosshair` / C —
+/// P-class, playtest predictor, not a combat aid): a black,
+/// white-edged cross at the TRUE aim point (the faithful camera
+/// pitches at HALF the aim pitch, so the aim is never screen
+/// center), plus per-hand lock markers on the target each hand's
+/// equipped spell would acquire this instant (`World::aim_preview`):
+/// left hand = an upright `+`, right hand = a diagonal `×`, cores
+/// blinking gently red while locked (both shapes compose when the
+/// hands lock the same target). Acquisition ≠ hit — homing yaw is
+/// authentically capped at 5/tick, so the marker shows what the shot
+/// will CHASE, not what it will catch.
+pub fn crosshair_quads(
+    quads: &mut Vec<UiQuad>,
+    w: f32,
+    neutral: Option<(f32, f32)>,
+    locks: [Option<(f32, f32)>; 2],
+    blink: f32,
+) {
+    let s = w / 640.0;
+    let red = [0.30 + 0.70 * blink.clamp(0.0, 1.0), 0.02, 0.02, 1.0];
+    if let Some((cx, cy)) = neutral {
+        plus_glyph(quads, cx, cy, s, [0.0, 0.0, 0.0, 1.0]);
+    }
+    if let Some((cx, cy)) = locks[0] {
+        plus_glyph(quads, cx, cy, s, red);
+    }
+    if let Some((cx, cy)) = locks[1] {
+        diag_glyph(quads, cx, cy, s, red);
+    }
+}
+
+/// White edge under a colored core, both crosshair glyph shapes.
+const GLYPH_EDGE: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
+
+/// Upright `+`: 16-native-px arms, white-edged.
+fn plus_glyph(quads: &mut Vec<UiQuad>, cx: f32, cy: f32, s: f32, core: [f32; 4]) {
+    quads.push(solid(
+        [cx - 8.0 * s, cy - 2.0 * s, 16.0 * s, 4.0 * s],
+        GLYPH_EDGE,
+    ));
+    quads.push(solid(
+        [cx - 2.0 * s, cy - 8.0 * s, 4.0 * s, 16.0 * s],
+        GLYPH_EDGE,
+    ));
+    quads.push(solid([cx - 7.0 * s, cy - 1.0 * s, 14.0 * s, 2.0 * s], core));
+    quads.push(solid([cx - 1.0 * s, cy - 7.0 * s, 2.0 * s, 14.0 * s], core));
+}
+
+/// Diagonal `×`: chunky pixel diagonals (axis-aligned quads only),
+/// white-edged; edges first so no core is covered by a neighbor.
+fn diag_glyph(quads: &mut Vec<UiQuad>, cx: f32, cy: f32, s: f32, core: [f32; 4]) {
+    const ARM: [f32; 7] = [-6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0];
+    for i in ARM {
+        quads.push(solid(
+            [cx + (i - 2.0) * s, cy + (i - 2.0) * s, 4.0 * s, 4.0 * s],
+            GLYPH_EDGE,
+        ));
+        quads.push(solid(
+            [cx + (i - 2.0) * s, cy - (i + 2.0) * s, 4.0 * s, 4.0 * s],
+            GLYPH_EDGE,
+        ));
+    }
+    for i in ARM {
+        quads.push(solid(
+            [cx + (i - 1.0) * s, cy + (i - 1.0) * s, 2.0 * s, 2.0 * s],
+            core,
+        ));
+        quads.push(solid(
+            [cx + (i - 1.0) * s, cy - (i + 1.0) * s, 2.0 * s, 2.0 * s],
+            core,
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

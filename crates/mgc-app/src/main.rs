@@ -485,6 +485,9 @@ struct App {
     map_triggers: bool,
     /// Monster health bars (enhancement/debug; H toggles).
     health_bars: bool,
+    /// The autoaim crosshair predictor (P-class instrument; C
+    /// toggles): true aim point + per-hand acquire lock markers.
+    crosshair: bool,
     /// All spells + infinite mana (playtest instrument; G toggles).
     dev_spells: bool,
     /// The pre-mortality invincible player (config `invincible`).
@@ -549,6 +552,7 @@ impl App {
         smooth_shading: bool,
         map_triggers: bool,
         health_bars: bool,
+        crosshair: bool,
         dev_spells: bool,
         invincible: bool,
         map_owned_buildings: bool,
@@ -615,6 +619,7 @@ impl App {
             smooth_shading,
             map_triggers,
             health_bars,
+            crosshair,
             dev_spells,
             invincible,
             pending_respawn: false,
@@ -1275,6 +1280,18 @@ impl ApplicationHandler for App {
                     );
                     return;
                 }
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyC) {
+                    self.crosshair = !self.crosshair;
+                    println!(
+                        "autoaim crosshair: {}",
+                        if self.crosshair {
+                            "on (predictor instrument)"
+                        } else {
+                            "off (original)"
+                        }
+                    );
+                    return;
+                }
                 let wasd = self.flight.bindings == config::Bindings::Wasd;
                 let k = &mut self.keys;
                 match event.physical_key {
@@ -1430,6 +1447,42 @@ impl ApplicationHandler for App {
                         // paused inspection happens.
                         quads.extend(ui::pause_quads(size.0, size.1));
                     }
+                    // The autoaim crosshair (P-class predictor;
+                    // `enhancements.crosshair`, C toggles): the
+                    // white-edged cross at the TRUE aim point (full
+                    // aim pitch — the faithful camera runs half), and
+                    // +/x lock markers on the target each hand's
+                    // equipped spell would acquire this instant
+                    // (World::aim_preview — the pure scan twin).
+                    if self.crosshair
+                        && !self.book_open()
+                        && vitals.state == mgc_sim::world::LifeState::Alive
+                    {
+                        let f = &self.sim.flyer;
+                        let (sy, cyaw) = cam.yaw.sin_cos();
+                        let (sp, cp) = aim.sin_cos();
+                        // The acquire range: 5120 units = 20 tiles.
+                        const AIM_D: f32 = 20.0;
+                        let neutral = mgc_render::world_to_screen(
+                            &cam,
+                            size.0,
+                            size.1,
+                            cam.x + sy * cp * AIM_D,
+                            cam.y + sp * AIM_D,
+                            cam.z - cyaw * cp * AIM_D,
+                        );
+                        let pose = mgc_sim::world::PlayerPose::from_tiles(
+                            f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
+                        );
+                        let locks = w.aim_preview(pose).map(|l| {
+                            l.and_then(|l| {
+                                mgc_render::world_to_screen(&cam, size.0, size.1, l.x, l.alt, l.z)
+                            })
+                        });
+                        let blink =
+                            0.5 + 0.5 * (((self.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
+                        ui::crosshair_quads(&mut quads, size.0, neutral, locks, blink);
+                    }
                     self.hovered = hovered;
                     if let Some(r) = &mut self.renderer {
                         r.set_ui_quads(quads);
@@ -1492,6 +1545,7 @@ struct Args {
     map_triggers: Option<bool>,
     /// CLI override of `enhancements.health_bars`.
     health_bars: Option<bool>,
+    crosshair: Option<bool>,
     /// CLI override of `enhancements.dev_spells`.
     dev_spells: Option<bool>,
     /// CLI override of `enhancements.plausible_spellbook`.
@@ -1524,6 +1578,7 @@ fn parse_args() -> Result<Args, String> {
     let mut smooth_shading = None;
     let mut map_triggers = None;
     let mut health_bars = None;
+    let mut crosshair = None;
     let mut dev_spells = None;
     let mut plausible_spellbook = None;
     let mut invincible = None;
@@ -1601,6 +1656,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-map-triggers" => map_triggers = Some(false),
             "--health-bars" => health_bars = Some(true),
             "--no-health-bars" => health_bars = Some(false),
+            "--crosshair" => crosshair = Some(true),
+            "--no-crosshair" => crosshair = Some(false),
             "--dev-spells" => dev_spells = Some(true),
             "--no-dev-spells" => dev_spells = Some(false),
             "--plausible-spellbook" => plausible_spellbook = Some(true),
@@ -1656,6 +1713,7 @@ fn parse_args() -> Result<Args, String> {
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
+                     [--crosshair|--no-crosshair] \
                      [--dev-spells|--no-dev-spells] \
                      [--plausible-spellbook|--no-plausible-spellbook] \
                      [--invincible|--no-invincible] \
@@ -1680,6 +1738,7 @@ fn parse_args() -> Result<Args, String> {
         smooth_shading,
         map_triggers,
         health_bars,
+        crosshair,
         dev_spells,
         plausible_spellbook,
         invincible,
@@ -1883,6 +1942,7 @@ fn main() -> std::process::ExitCode {
         .map_triggers
         .unwrap_or(cfg.enhancements.map_trigger_areas);
     let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
+    let crosshair = args.crosshair.unwrap_or(cfg.enhancements.crosshair);
     let dev_spells = args.dev_spells.unwrap_or(cfg.enhancements.dev_spells);
     let plausible_spellbook = args
         .plausible_spellbook
@@ -1988,6 +2048,7 @@ fn main() -> std::process::ExitCode {
         smooth_shading,
         map_triggers,
         health_bars,
+        crosshair,
         dev_spells,
         invincible,
         cfg.enhancements.map_owned_buildings,
