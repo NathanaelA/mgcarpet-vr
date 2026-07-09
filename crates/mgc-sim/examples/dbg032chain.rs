@@ -3,8 +3,8 @@
 //! and trigger firings — distinguishing the two chain-stall hypotheses
 //! (pool exhaustion vs kill-triggers misfiring on movement deaths).
 
-use mgc_sim::features::{FeatureAssets, Planes};
-use mgc_sim::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::mc1::features::{FeatureAssets, Planes};
+use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::collections::HashSet;
 use std::path::PathBuf;
 

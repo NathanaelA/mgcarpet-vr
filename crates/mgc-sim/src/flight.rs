@@ -49,7 +49,7 @@
 //! pitch never steals meaningful mobility (the faithful model's cos
 //! shrink maxes at ~29%, and thrust stays fully live while aiming).
 
-use crate::features::Gen;
+use crate::mc1::features::Gen;
 
 /// Faithful carpet state (the human entity + Type_160 fields we use).
 #[derive(Debug, Clone, Copy, Default)]

@@ -8,9 +8,9 @@
 //! Self-skips when the baked tree is absent (game data is optional,
 //! per the project rule).
 
-use mgc_sim::features::{FeatureAssets, Planes};
-use mgc_sim::spells::SpellId;
-use mgc_sim::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::mc1::features::{FeatureAssets, Planes};
+use mgc_sim::mc1::spells::SpellId;
+use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
 fn baked_root() -> Option<PathBuf> {

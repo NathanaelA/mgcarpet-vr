@@ -46,9 +46,11 @@
 //! offset 0x442 = our slot 0), and `parent`/`child` values are those
 //! 1-based indices. The pass rebuilds the 1-based table.
 
-use crate::mc1_tables;
-use crate::tables::{ATAN, BIT_SQRT, COS, PAINT_AC, PAINT_BC, PAINT_EC, PAINT_FC, SIN};
+use crate::mc1::corners;
+use crate::mc1::tables::{ATAN, BIT_SQRT, COS, PAINT_AC, PAINT_BC, PAINT_EC, PAINT_FC, SIN};
 use mgc_formats::Thing;
+
+use crate::chassis::{ChassisParams, RandWidth};
 
 /// Cells in the 256x256 terrain grid.
 const GRID: usize = 0x10000;
@@ -56,8 +58,8 @@ const GRID: usize = 0x10000;
 /// Engine entity-table capacity; the feature scan visits 1..=1999.
 pub(crate) const TABLE_SLOTS: usize = 2096;
 
-/// Runtime event pool size (slot 0 never allocated).
-pub(crate) const POOL: usize = 1000;
+// Runtime pool size lives in chassis::ChassisParams::pool_slots
+// (slot 0 never allocated); sizing/iteration read `ent.len()`.
 
 /// The four terrain planes the feature pass mutates, engine layout
 /// (index = tile_y * 256 + tile_x).
@@ -70,7 +72,7 @@ pub struct TerrainPlanes<'a> {
 
 /// Owned form of the four planes — what the runtime world keeps and
 /// mutates across ticks (`mgc_sim::world`).
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct Planes {
     pub height: Vec<u8>,
     pub tile_type: Vec<u8>,
@@ -80,7 +82,7 @@ pub struct Planes {
 
 /// One building-footprint entry from `BUILD?-0.TAB` (6 bytes on disk:
 /// u32 offset into the DAT blob, u8 width, u8 height in tiles).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Hash)]
 pub struct BuildDef {
     pub offset: u32,
     pub w: u8,
@@ -89,7 +91,7 @@ pub struct BuildDef {
 
 /// Parsed game data the feature pass needs: the SEARCH.DAT ring table
 /// and the building footprint RLE maps.
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct FeatureAssets {
     /// Per ring 0..31: (dx, dy) byte deltas from the dig center, in the
     /// original's row-major emission order (sub_11540, :16784).
@@ -198,7 +200,7 @@ pub fn post_generation_pseudo_rand(height: &[u8]) -> u16 {
 /// One record of the original 18-byte THING_INIT table (1-based copy).
 /// The runtime world keeps this table live: dispositions scan it and
 /// one-shot spawns zero the class (`sub_37440_37800`).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Hash)]
 pub(crate) struct Rec {
     pub(crate) class: u16,
     pub(crate) model: u16,
@@ -215,7 +217,7 @@ pub(crate) struct Rec {
 /// Runtime event entity — the subset of remc1's 164-byte
 /// `Type_AE400_29795` the load-time feature path uses. Names keep the
 /// original byte offsets for traceability.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Hash)]
 pub(crate) struct Ent {
     /// Per-entity LCG (offset 4), seeded `slot + global_rand` at alloc.
     pub(crate) rand: u32,
@@ -328,9 +330,9 @@ pub(crate) struct Ent {
     pub(crate) f136: i32,
     pub(crate) f140: i32,
     /// Chase target (offset 146): pool slot of the hunted entity;
-    /// [`crate::mobs::PLAYER_TARGET`] = the player's carpet.
+    /// [`crate::mc1::mobs::PLAYER_TARGET`] = the player's carpet.
     pub(crate) f146: u16,
-    /// Behavior row index into [`crate::mc1_behavior::BEHAVIOR`]
+    /// Behavior row index into [`crate::mc1::behavior::BEHAVIOR`]
     /// (offset 156 holds `&unk_98F38[N]` in the original).
     pub(crate) row156: u8,
     /// Source THING table index (1-based; ours, not original layout) —
@@ -353,6 +355,7 @@ pub(crate) struct Ent {
 /// (fixpoint loop, this module) and the runtime world tick
 /// (`mgc_sim::world`, one pass per turn) — in the original these are
 /// the same pool and the same handlers.
+#[derive(Hash)]
 pub(crate) struct Gen {
     pub(crate) t: Planes,
     pub(crate) assets: FeatureAssets,
@@ -372,7 +375,7 @@ pub(crate) struct Gen {
     /// increment; model-7 sprite alternation keys off its parity.
     pub(crate) spawn_count: [u8; 20],
     /// The human player's damage inbox — the player lives outside the
-    /// pool ([`crate::mobs::PLAYER_TARGET`]), so writers land here.
+    /// pool ([`crate::mc1::mobs::PLAYER_TARGET`]), so writers land here.
     /// The invincible-player dev mode discards it every tick like the
     /// original's spawn grace (:55367-71), accumulating the totals.
     pub(crate) player_mail: [(u32, u16); 6],
@@ -436,6 +439,13 @@ pub(crate) struct Gen {
     /// armed by a processed hit on an own balloon, decremented per
     /// tick. The balloon sub-panel's alert.
     pub(crate) balloon_alert: u8,
+    /// Allocations dropped on pool exhaustion (the limit-removing
+    /// register's telemetry; the app logs increases). The original
+    /// keeps no such count — it is observability, not behavior.
+    pub(crate) exhausted: u32,
+    /// The per-game chassis constant set ([`crate::chassis`]); fixed
+    /// at construction, never rebranched on.
+    pub(crate) chassis: ChassisParams,
     /// Sound requests emitted this tick at the original's
     /// sub_55370_558A0 call sites; drained by the app into the audio
     /// mixer (which reimplements that routine's attenuation/slot
@@ -454,7 +464,7 @@ pub(crate) struct Gen {
 /// tag (the original's entity+24). `player` marks requests the
 /// original issued against the player's own entity (full volume,
 /// center pan, and the gate for the player-only ids 4/14/17/29).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub struct SoundEvent {
     pub id: u8,
     pub pos: (u16, u16, i16),
@@ -463,11 +473,11 @@ pub struct SoundEvent {
 }
 
 /// Rebuild the original 1-based record table from level things.
-pub(crate) fn build_table(things: &[Thing]) -> Vec<Rec> {
-    let mut table = vec![Rec::default(); TABLE_SLOTS];
+pub(crate) fn build_table(things: &[Thing], slots: usize) -> Vec<Rec> {
+    let mut table = vec![Rec::default(); slots];
     for th in things {
         let i = th.slot as usize + 1;
-        if i < TABLE_SLOTS {
+        if i < table.len() {
             table[i] = Rec {
                 class: th.class,
                 model: th.model,
@@ -488,15 +498,15 @@ impl Gen {
     /// A fresh engine over owned planes. `seed` = the level's GEN_MAP
     /// seed (`rand_4`); the retile `pseudoRand` stream is replayed from
     /// the pristine height plane.
-    pub(crate) fn new(t: Planes, assets: FeatureAssets, seed: u32) -> Self {
+    pub(crate) fn new(t: Planes, assets: FeatureAssets, seed: u32, chassis: ChassisParams) -> Self {
         let pseudo = post_generation_pseudo_rand(&t.height);
         Gen {
             t,
             assets,
-            retile: mc1_tables::retile_table(),
+            retile: corners::retile_table(),
             map_entity: vec![0; GRID],
-            ent: vec![Ent::default(); POOL],
-            free: (1..POOL as u16).rev().collect(),
+            ent: vec![Ent::default(); chassis.pool_slots],
+            free: (1..chassis.pool_slots as u16).rev().collect(),
             rand: seed,
             pseudo,
             spawn_count: [0; 20],
@@ -517,8 +527,10 @@ impl Gen {
             castle_alert: 0,
             player_alert: 0,
             balloon_alert: 0,
+            exhausted: 0,
             sounds: Vec::new(),
             terrain_dirty: false,
+            chassis,
         }
     }
 
@@ -540,7 +552,7 @@ impl Gen {
         self.sounds.push(SoundEvent {
             id,
             pos: (0, 0, 0),
-            tag: crate::mobs::PLAYER_TARGET,
+            tag: crate::mc1::mobs::PLAYER_TARGET,
             player: true,
         });
     }
@@ -569,14 +581,14 @@ pub fn generate_features_mc1(
     seed: u32,
     assets: &FeatureAssets,
 ) {
-    let mut table = build_table(things);
+    let mut table = build_table(things, ChassisParams::MC1.level_table_slots);
     let owned = Planes {
         height: planes.height.to_vec(),
         tile_type: planes.tile_type.to_vec(),
         shading: planes.shading.to_vec(),
         angle: planes.angle.to_vec(),
     };
-    let mut g = Gen::new(owned, assets.clone(), seed);
+    let mut g = Gen::new(owned, assets.clone(), seed, ChassisParams::MC1);
     g.load_time_pass(&mut table);
     planes.height.copy_from_slice(&g.t.height);
     planes.tile_type.copy_from_slice(&g.t.tile_type);
@@ -592,7 +604,17 @@ impl Gen {
     /// life 300, flags 8, +126 = 16, +44 = 100, +24 = own slot,
     /// +58 = 0xFA, +66 = +67 = 0xFF, +68 = 10 (:43879), +156 = row 0.
     pub(crate) fn new_event(&mut self) -> Option<usize> {
-        let idx = self.free.pop()? as usize;
+        let Some(idx) = self.free.pop() else {
+            // Fail-open like the original (alloc returns null, the
+            // spawn silently vanishes — map 032's starved trigger),
+            // but COUNTED: the limit-removing register (ROADMAP
+            // "MULTI-GAME ARCHITECTURE") wants a playtest catalogue
+            // of the levels that hit the pool ceiling before any
+            // bumped-pool option exists.
+            self.exhausted += 1;
+            return None;
+        };
+        let idx = idx as usize;
         let e = &mut self.ent[idx];
         *e = Ent::default();
         e.max_life = 300;
@@ -604,7 +626,10 @@ impl Gen {
         e.f58 = 0xFA;
         e.f66 = 0xFF;
         e.f67 = 0xFF;
-        e.rand = (idx as u32).wrapping_add(self.rand);
+        e.rand = match self.chassis.ent_rand_width {
+            RandWidth::U32 => (idx as u32).wrapping_add(self.rand),
+            RandWidth::U16 => (idx as u32).wrapping_add(self.rand) & 0xFFFF,
+        };
         e.f63 = idx as u8;
         Some(idx)
     }
@@ -612,7 +637,14 @@ impl Gen {
     /// One draw of this event's own LCG (`rand_29799_4`, the stream
     /// every spawn/behavior handler rolls).
     pub(crate) fn ent_rand(&mut self, i: usize) -> u32 {
-        lcg32(&mut self.ent[i].rand)
+        match self.chassis.ent_rand_width {
+            RandWidth::U32 => lcg32(&mut self.ent[i].rand),
+            RandWidth::U16 => {
+                let r = self.ent[i].rand.wrapping_mul(9377).wrapping_add(9439) & 0xFFFF;
+                self.ent[i].rand = r;
+                r
+            }
+        }
     }
 
     /// sub_41CF0 (:52468): link into the per-tile list and set position.
@@ -1139,7 +1171,7 @@ impl Gen {
         if matches!(model, 24 | 37 | 46..=49) || model > 61 {
             return None;
         }
-        // Combat-effect models get their real inits (crate::combat) —
+        // Combat-effect models get their real inits (crate::mc1::combat) —
         // in the original one init table serves load AND runtime; at
         // load time the fixpoint loop purges them unticked either way.
         // Model 17 matters in the wild: level 032 authors c10m17
@@ -1588,7 +1620,7 @@ impl Gen {
         lcg32(&mut self.rand);
         loop {
             let mut run_again = false;
-            for i in 1..POOL {
+            for i in 1..self.ent.len() {
                 if self.ent[i].class64 == 0 {
                     continue;
                 }
@@ -1628,7 +1660,7 @@ impl Gen {
     /// which only matter — and only have a listener — once the world
     /// runs (deviation: the original's load pass broadcasts into the
     /// half-built pool too; nothing observable survives it).
-    pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
+    pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
         match self.ent[i].tick70 {
             9 => self.tick_hill(i, ctx),
             10 => self.tick_dish(i),
@@ -1656,7 +1688,7 @@ impl Gen {
     /// the live extents (:28327, via the sub_127E0 writer — its
     /// wizard +50=30 ground-ride stamp is the mortality track) plus
     /// the loop-10 rumble (:28328).
-    fn tick_hill(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
+    fn tick_hill(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
         let life = self.ent[i].act_life;
         self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
         self.ent[i].act_life = life - 1;
@@ -1699,7 +1731,7 @@ impl Gen {
     /// surviving tick: ch0 damage — full +44 before the phase-2 flag
     /// sets, +44/25 after (:28396-400) — and the loop-10 rumble
     /// (:28421).
-    fn tick_digger(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
+    fn tick_digger(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
         if self.ent[i].f63 % 3 == 0 {
             self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
         }
@@ -1913,7 +1945,7 @@ impl Gen {
     /// sub_269A0 (:29147), byte70 55: ridge head — raise a radius-3
     /// disc by rand%15+10, advance 4 tiles. Each successful raise:
     /// full +44 on ch0 + the loop-10 rumble (:29163-64).
-    fn tick_ridge_head(&mut self, i: usize, ctx: Option<&crate::mobs::MobCtx>) {
+    fn tick_ridge_head(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
         let e = self.ent[i];
@@ -2361,7 +2393,7 @@ impl Gen {
         let half_h = ((((def.h as u16) << 8).wrapping_add(1280)) >> 1) as i32 + 256;
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             let e = &self.ent[j];
             if e.class64 == 10
                 && e.model65 == 45
@@ -2385,7 +2417,7 @@ impl Gen {
         let half_h = ((((def.h as u16) << 8).wrapping_add(1280)) >> 1) as i32;
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             let e = &self.ent[j];
             if j != i
                 && e.class64 == 3
@@ -2425,7 +2457,7 @@ impl Gen {
             return;
         }
         let own = self.ent[i].id24;
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             if self.ent[j].class64 == 10
                 && self.ent[j].model65 == 39
                 && self.ent[j].flags & 0x400 == 0
@@ -2441,7 +2473,7 @@ impl Gen {
     /// A wizard owner tag's team slot: PLAYER_TARGET = 0, a rival's
     /// entity slot = its player slot (wizext var_48 in the original).
     pub(crate) fn owner_team(&self, owner: u16) -> Option<u8> {
-        if owner == crate::mobs::PLAYER_TARGET {
+        if owner == crate::mc1::mobs::PLAYER_TARGET {
             return Some(0);
         }
         (owner != 0)
@@ -2518,7 +2550,7 @@ impl Gen {
         let mut balloons: Vec<usize> = Vec::new();
         let mut guards = 0usize;
         let mut house_tally = 0i64;
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             let e = &self.ent[j];
             if e.flags & 0x400 != 0 {
                 continue;
@@ -2571,7 +2603,7 @@ impl Gen {
             let (bx, by) = (self.ent[b].x, self.ent[b].y);
             let mut best = 0usize;
             let mut best_d = i32::MAX;
-            for j in 1..POOL {
+            for j in 1..self.ent.len() {
                 let e = &self.ent[j];
                 if e.class64 != 10 || e.model65 != 39 || e.flags & 0x400 != 0 || e.f144 != own {
                     continue;
@@ -2614,7 +2646,7 @@ impl Gen {
             self.ent[i].mail[0].1 = 0;
             self.ent[i].act_life -= amt as i32;
             // Balloon-under-attack flash (Type_160+393 = 4, :56826).
-            if self.ent[i].id24 == crate::mobs::PLAYER_TARGET {
+            if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                 self.balloon_alert = 4;
             }
         }
@@ -2625,7 +2657,7 @@ impl Gen {
     }
 
     fn balloon_move(&mut self, i: usize) {
-        use crate::mc1_behavior::BEHAVIOR;
+        use crate::mc1::behavior::BEHAVIOR;
         let t = self.ent[i].f146 as usize;
         if t == 0 || self.ent[t].flags & 0x400 != 0 {
             return; // idle (:56814)
@@ -2839,7 +2871,7 @@ impl Gen {
                         return;
                     }
                     // "Castle under attack" flash (Type_160+391=4).
-                    if self.ent[i].id24 == crate::mobs::PLAYER_TARGET {
+                    if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                         self.castle_alert = 4;
                     }
                 }
@@ -2915,7 +2947,7 @@ impl Gen {
             // rule spills ALL stored, :56172), free the castle.
             self.ent[i].f136 = 0;
             self.castle_eject(i);
-            for j in 1..POOL {
+            for j in 1..self.ent.len() {
                 if self.ent[j].class64 == 3
                     && self.ent[j].model65 == 3
                     && self.ent[j].id24 == own
@@ -3058,7 +3090,7 @@ impl Gen {
         }
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i64).abs();
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             if self.ent[j].class64 == 10
                 && self.ent[j].model65 == 39
                 && self.ent[j].flags & 0x400 == 0
@@ -3101,7 +3133,7 @@ impl Gen {
             let claimant = self.ent[i].mail[1].1;
             self.ent[i].mail[1] = (0, 0);
             if self.attacker_is_wizard(claimant) && self.ent[i].f144 == 0 {
-                for j in 1..POOL {
+                for j in 1..self.ent.len() {
                     if self.ent[j].f144 == i as u16 && self.ent[j].class64 != 0 {
                         self.ent[j].f144 = claimant;
                     }
@@ -3137,7 +3169,7 @@ impl Gen {
                 self.ent[i].flags &= !1;
                 // Anchored at the CLAIMANT (:30806) — the player-
                 // gated id 4 sounds exactly when YOU capture.
-                if src == crate::mobs::PLAYER_TARGET {
+                if src == crate::mc1::mobs::PLAYER_TARGET {
                     self.snd_player(4);
                 }
                 self.set_sprite(i, 177);
@@ -3170,7 +3202,7 @@ impl Gen {
                 let z = self.ground_z(sx, y) as i16;
                 self.spawn_creature(4, sx, y, z);
             }
-            if src == crate::mobs::PLAYER_TARGET {
+            if src == crate::mc1::mobs::PLAYER_TARGET {
                 self.player_aggro = 200;
             }
         }
@@ -3634,6 +3666,7 @@ mod tests {
             },
             assets,
             0,
+            ChassisParams::MC1,
         );
         assert_eq!(g.ring_cells(0, 0).len(), r0 - 1);
         assert_eq!(g.ring_cells(0, 1).len(), r0 + r1 - 1);

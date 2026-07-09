@@ -13,18 +13,11 @@
 //! and wraps around in both axes, and altitude is `height_byte / 8`
 //! (the engine computes `32 * height_byte` in its own units).
 
-mod combat;
-pub mod features;
+pub mod chassis;
 pub mod flight;
-pub mod mc1_behavior;
-pub mod mc1_entities;
-pub mod mc1_sprite_stats;
-pub mod mc1_tables;
-mod mobs;
-pub mod rivals;
-pub mod spells;
-mod tables;
-pub mod world;
+pub mod mc1;
+
+use mc1::{features, spells, world};
 
 /// Fixed simulation tick rate.
 ///
@@ -630,7 +623,7 @@ mod tests {
     /// A minimal living world over flat height-100 terrain (the
     /// mortality boundary tests need World state, not just planes).
     fn flat_world(height: Vec<u8>) -> world::World {
-        use crate::features::{FeatureAssets, Planes};
+        use crate::mc1::features::{FeatureAssets, Planes};
         let planes = Planes {
             height,
             tile_type: vec![5; 0x10000],

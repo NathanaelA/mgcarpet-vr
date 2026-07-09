@@ -623,7 +623,7 @@ impl Gen {
     }
 
     /// Texture selection (`sub_32560`): every tile's texture is chosen
-    /// by matching its quad's corner classes (mgc_sim::mc1_tables)
+    /// by matching its quad's corner classes (mgc_sim::mc1::corners)
     /// in all 8 dihedral arrangements. Candidate buckets are keyed by
     /// base-7 corner code; the PRNG picks among up to 12 candidates
     /// (quirk: `rand % (n+1)` maps the overflow back to candidate 0,
@@ -633,9 +633,9 @@ impl Gen {
     /// (The engine also builds a flat 2401-entry first-candidate table
     /// here, `byte_B5D40`, used for in-game repaints after terrain
     /// deformation — no effect on generation; the feature pass gets it
-    /// from `mgc_sim::mc1_tables::retile_table`.)
+    /// from `mgc_sim::mc1::corners::retile_table`.)
     fn textures(&mut self) {
-        let buckets = mgc_sim::mc1_tables::corner_buckets();
+        let buckets = mgc_sim::mc1::corners::corner_buckets();
         for i in 0..=0xFFFFu16 {
             if self.types[i as usize] != 0 {
                 continue;
@@ -709,7 +709,7 @@ impl Gen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mgc_sim::mc1_tables::CORNER_CLASSES;
+    use mgc_sim::mc1::corners::CORNER_CLASSES;
 
     fn sample_params() -> GenMap {
         // Campaign level 001's real GEN_MAP: an 82%-water archipelago

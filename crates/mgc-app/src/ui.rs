@@ -16,8 +16,8 @@
 
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
-use mgc_sim::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellId};
-use mgc_sim::world::{LifeState, LoadoutView, PlayerVitals};
+use mgc_sim::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellId};
+use mgc_sim::mc1::world::{LifeState, LoadoutView, PlayerVitals};
 
 /// UI sprite ids (remc1 begSprTab layout; ROADMAP "Spell repertoire").
 const SPR_HILITE_LEFT: u32 = 1;

@@ -30,13 +30,13 @@
 //!   per-tick `f63` increment (:52406) that gates digger growth
 //!   (`% 3`) and the trigger probe throttle (`& 7`).
 //! - **Spawned drawables** run their real spawn handlers
-//!   ([`crate::mobs`]): class-2 scenery, class-3 balloons/castles and
+//!   ([`crate::mc1::mobs`]): class-2 scenery, class-3 balloons/castles and
 //!   class-5 creatures (with multipart body chains) carry authentic
 //!   life/speed/extents/sprite state, and class-5 creatures TICK — the
 //!   movement core, the six state primitives and the awake system are
 //!   ported; the app consumes continuous poses via [`World::live_poses`].
 //!
-//! COMBAT (the combat slice, see [`crate::combat`]): class-5 attack
+//! COMBAT (the combat slice, see [`crate::mc1::combat`]): class-5 attack
 //! thunks fire class-9 projectiles / melee mailbox writes; class-10
 //! combat effects deliver the damage; creatures read their inbox,
 //! aggro on wizard-family attackers, die into DEATH/CORPSE and drop
@@ -54,11 +54,14 @@
 //! class-12 pickup/mana transfer NOT ported (mana balls drop, merge
 //! and take claims but nothing collects them yet); sounds omitted.
 
-use crate::combat::MailTarget;
-use crate::features::{self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32};
-use crate::mc1_sprite_stats::SPRITE_STATS;
-use crate::mobs::{MobCtx, PLAYER_TARGET};
-use crate::spells::{SPELL_COUNT, SPELLS, SpellId};
+use crate::chassis::ChassisParams;
+use crate::mc1::combat::MailTarget;
+use crate::mc1::features::{
+    self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
+};
+use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
+use crate::mc1::spells::{SPELL_COUNT, SPELLS, SpellId};
+use crate::mc1::sprite_stats::SPRITE_STATS;
 use mgc_formats::{Thing, ThingKind};
 
 /// The player's life ceiling: the human wizard ctor's maxLife 10000
@@ -73,7 +76,7 @@ pub(crate) const DROPPED_JAR: u8 = 3;
 
 /// The player wizard's life state — the original class-3 states 0
 /// (alive) / 2 (death fall) / 3 (dead, awaiting the respawn key).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum LifeState {
     #[default]
     Alive,
@@ -198,6 +201,62 @@ impl Default for Player {
             death_owned: [false; SPELL_COUNT],
             hit_flash: 0,
             lost: false,
+        }
+    }
+}
+
+/// Manual because `speed_boost` is the one float in persistent sim
+/// state (hashed by bit pattern). The full destructure makes a new
+/// `Player` field a compile error here: extend the hash deliberately.
+impl std::hash::Hash for Player {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        let Player {
+            mana,
+            mana_max,
+            mana_delta,
+            banked,
+            world_mana,
+            left,
+            right,
+            owned,
+            shield,
+            invisible,
+            rebound,
+            beyond_sight,
+            heal_active,
+            accel,
+            accel_held,
+            speed_boost,
+            teleport_return,
+            life,
+            grace,
+            regen_delay,
+            state,
+            fall_speed,
+            killer,
+            death_owned,
+            hit_flash,
+            lost,
+        } = self;
+        (mana, mana_max, mana_delta, banked, world_mana, left, right).hash(h);
+        (owned, shield, invisible, rebound, beyond_sight, heal_active).hash(h);
+        (accel, accel_held, speed_boost.to_bits(), teleport_return).hash(h);
+        (life, grace, regen_delay, state, fall_speed, killer).hash(h);
+        (death_owned, hit_flash, lost).hash(h);
+    }
+}
+
+/// FNV-1a 64, spelled out so fixture hashes are stable across Rust
+/// releases and platforms (std's default hasher guarantees neither).
+struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x100_0000_01b3);
         }
     }
 }
@@ -341,8 +400,8 @@ pub struct PlayerCommand {
     pub fire_right: bool,
     /// Equip a spell to a hand (the original's commands 0x15/0x16,
     /// :48717-48731) — from the book screen or a quick key.
-    pub equip_left: Option<crate::spells::SpellId>,
-    pub equip_right: Option<crate::spells::SpellId>,
+    pub equip_left: Option<crate::mc1::spells::SpellId>,
+    pub equip_right: Option<crate::mc1::spells::SpellId>,
     /// The respawn key (Space, command 15 :20081/:48620) — only
     /// consumed while dead.
     pub respawn: bool,
@@ -367,8 +426,8 @@ pub struct World {
     /// The human player's spell/mana state (spells cast through the
     /// per-hand dispatcher, sub_46B00_46E40 :55851).
     pub(crate) player: Player,
-    /// Live AI wizards (player slots 1..=7) — see [`crate::rivals`].
-    pub(crate) rivals: Vec<crate::rivals::Rival>,
+    /// Live AI wizards (player slots 1..=7) — see [`crate::mc1::rivals`].
+    pub(crate) rivals: Vec<crate::mc1::rivals::Rival>,
     /// Kill tally [killer slot][victim slot] (the original keeps it
     /// on the killer's Type_160+30 — the book roster's numbers).
     pub(crate) kill_tally: [[u16; 8]; 8],
@@ -431,7 +490,7 @@ pub struct World {
 pub struct LivePose {
     pub class: u8,
     pub model: u8,
-    /// Row into [`crate::mc1_sprite_stats::SPRITE_STATS`].
+    /// Row into [`crate::mc1::sprite_stats::SPRITE_STATS`].
     pub type_index: u16,
     /// Animation frame (entity offset 88) for the 2..=16 draw types.
     pub frame: u8,
@@ -496,7 +555,7 @@ pub struct DebugEvent {
 /// rule inputs (see [`World::take_audio`]).
 #[derive(Debug, Clone)]
 pub struct AudioFrame {
-    pub events: Vec<crate::features::SoundEvent>,
+    pub events: Vec<crate::mc1::features::SoundEvent>,
     /// The carpet is over a water tile (waves vs wind, :55254-65).
     pub over_water: bool,
     pub fire_near: bool,
@@ -563,6 +622,19 @@ impl World {
     /// initial population spawns. `things` come from the package;
     /// `seed` is the GEN_MAP seed.
     pub fn new(planes: Planes, things: &[Thing], seed: u32, assets: FeatureAssets) -> Self {
+        Self::new_with_chassis(planes, things, seed, assets, ChassisParams::MC1)
+    }
+
+    /// [`World::new`] with an explicit chassis set — the per-game
+    /// pristine constants ([`crate::chassis`]), or a deliberately
+    /// deviating set (limit-removing tests; G-class).
+    pub fn new_with_chassis(
+        planes: Planes,
+        things: &[Thing],
+        seed: u32,
+        assets: FeatureAssets,
+        chassis: ChassisParams,
+    ) -> Self {
         let mut start_markers: [Option<(u16, u16)>; 8] = Default::default();
         for t in things {
             if t.class == 3 && (4..=11).contains(&t.model) {
@@ -572,8 +644,8 @@ impl World {
                 }
             }
         }
-        let mut table = build_table(things);
-        let mut g = Gen::new(planes, assets, seed);
+        let mut table = build_table(things, chassis.level_table_slots);
+        let mut g = Gen::new(planes, assets, seed, chassis);
         g.load_time_pass(&mut table);
         let mut w = World {
             g,
@@ -732,12 +804,14 @@ impl World {
         // Broad-phase bucket counts for the kill triggers: class-5
         // events by model, excluding state 120 (multipart body
         // segments in the original; :52246 list building).
-        let mut buckets = [0u32; 20];
+        let nb = self.g.chassis.bucket_models;
+        let excluded = self.g.chassis.bucket_excluded_states;
+        let mut buckets = vec![0u32; nb];
         let mut any_creature = false;
         let mut any_transient = false;
         for e in &self.g.ent {
-            if e.class64 == 5 && e.act_life >= 0 && e.tick70 != 120 {
-                buckets[(e.model65 as usize).min(19)] += 1;
+            if e.class64 == 5 && e.act_life >= 0 && !excluded.contains(&e.tick70) {
+                buckets[(e.model65 as usize).min(nb - 1)] += 1;
                 any_creature = true;
             }
             if e.class64 == 9
@@ -793,7 +867,7 @@ impl World {
                     > self.win_pct as u64;
             if over {
                 self.win_streak += 1;
-                if self.win_streak >= 16 {
+                if self.win_streak >= self.g.chassis.win_streak_ticks {
                     self.completed = true;
                 }
             } else {
@@ -868,7 +942,7 @@ impl World {
         // The awake pre-pass (sub_54F00, :64266) runs before dispatch.
         self.g.mob_awake_pass(&ctx);
 
-        for i in 1..features::POOL {
+        for i in 1..self.g.ent.len() {
             if self.g.ent[i].class64 == 0 {
                 continue;
             }
@@ -1117,7 +1191,10 @@ impl World {
             // bearing, v_22 = amount/10 clamped [0, 80] — an
             // overwrite of whatever knock was pending.
             let s = src as usize;
-            if src != 0 && src != PLAYER_TARGET && s < features::POOL && self.g.ent[s].class64 != 0
+            if src != 0
+                && src != PLAYER_TARGET
+                && s < self.g.ent.len()
+                && self.g.ent[s].class64 != 0
             {
                 let dir = Gen::angle_between(self.g.ent[s].x, self.g.ent[s].y, player.x, player.y)
                     & 0x7FF;
@@ -1185,7 +1262,7 @@ impl World {
         // balls simply stay player-owned) — a benign deviation.
         let gz = self.g.ground_z(player.x, player.y) as i16;
         if let Some(gv) = self.g.spawn_grave(player.x, player.y, gz) {
-            for j in 1..features::POOL {
+            for j in 1..self.g.ent.len() {
                 if self.g.ent[j].class64 == 10
                     && self.g.ent[j].model65 == 39
                     && self.g.ent[j].flags & 0x400 == 0
@@ -1301,6 +1378,63 @@ impl World {
 
     pub fn dev_spells(&self) -> bool {
         self.dev_spells
+    }
+
+    /// Allocations dropped on pool exhaustion since the last call —
+    /// the limit-removing register's telemetry (the app logs it; the
+    /// sim itself fails open exactly like the original).
+    pub fn take_pool_exhausted(&mut self) -> u32 {
+        std::mem::take(&mut self.g.exhausted)
+    }
+
+    /// Deterministic digest of the full persistent sim state — the
+    /// refactor guard (ROADMAP "MULTI-GAME ARCHITECTURE", Phase 1):
+    /// golden fixtures pin these hashes across the verb extraction.
+    /// Everything persistent hashes — pool internals, LCG states,
+    /// mailboxes — so divergence can't hide behind the observable
+    /// surface; the ignored fields are per-tick transients (dirty
+    /// flags, pending moves, drained queues). The full destructure
+    /// makes a new `World` field a compile error here: extend the
+    /// hash deliberately.
+    pub fn state_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let World {
+            g,
+            table,
+            terrain_dirty: _,
+            entities_dirty: _,
+            pending_teleport: _,
+            player,
+            rivals,
+            kill_tally,
+            human_pose,
+            rival_deaths: _,
+            duel,
+            start_markers,
+            win_pct,
+            win_streak,
+            completed,
+            dev_spells,
+            prev_fire,
+            accel_veto: _,
+            pending_respawn: _,
+            pending_restart: _,
+            invincible,
+        } = self;
+        let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+        g.hash(&mut h);
+        table.hash(&mut h);
+        player.hash(&mut h);
+        rivals.hash(&mut h);
+        kill_tally.hash(&mut h);
+        human_pose.hash(&mut h);
+        duel.hash(&mut h);
+        start_markers.hash(&mut h);
+        (
+            win_pct, win_streak, completed, dev_spells, prev_fire, invincible,
+        )
+            .hash(&mut h);
+        h.finish()
     }
 
     /// Grant a specific set of spells at level start — the app's
@@ -1546,7 +1680,7 @@ impl World {
     /// — 256 units to the casting hand's side, launch height = the
     /// carpet's half-height, reverted when inside terrain.
     fn muzzle(&self, p: PlayerPose, right: bool) -> (u16, u16, i16) {
-        use crate::combat::PLAYER_HH;
+        use crate::mc1::combat::PLAYER_HH;
         let myaw = if right {
             p.heading.wrapping_add(512)
         } else {
@@ -1592,7 +1726,7 @@ impl World {
         let (mx, my, mz) = self.muzzle(p, right);
         let pr = match id {
             // 3 Possess (:65203): c9 m1 lob; detonation claims the
-            // nearest mana ball (payload in crate::combat).
+            // nearest mana ball (payload in crate::mc1::combat).
             3 => self.g.spawn_spell_lob(1, mx, my, mz),
             // 6 Earthquake (:65314): c9 m2 lob.
             6 => self.g.spawn_spell_lob(2, mx, my, mz),
@@ -1714,7 +1848,7 @@ impl World {
 
     /// The player's established castle slot (teleport anchor).
     pub(crate) fn player_castle(&self) -> Option<usize> {
-        (1..features::POOL).find(|&j| {
+        (1..self.g.ent.len()).find(|&j| {
             let e = &self.g.ent[j];
             e.class64 == 3 && e.model65 == 2 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
         })
@@ -1742,7 +1876,7 @@ impl World {
         };
         let mut out = vec![None; roster];
         let mut k = 0;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             if k >= roster {
                 break;
             }
@@ -1787,7 +1921,7 @@ impl World {
         // (every HUD bar is world-relative).
         let mut world = 1000u32;
         let mut castle_stored = 0u32;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             let e = &self.g.ent[j];
             if e.flags & 0x400 != 0 {
                 continue;
@@ -1831,7 +1965,7 @@ impl World {
     /// (a nonzero `castle_req` needs an owned castle STORING at
     /// least that much), then the wizard pool covers the full cost.
     /// The fizzle 29 on failure is the caller's job.
-    fn spell_gate(&self, def: &crate::spells::SpellDef) -> bool {
+    fn spell_gate(&self, def: &crate::mc1::spells::SpellDef) -> bool {
         if self.dev_spells {
             return true;
         }
@@ -1871,7 +2005,7 @@ impl World {
     /// the ball flies AT the castle and morphs into the (10,43)
     /// upgrade token instead (+68/69, +146 = castle idx, :65904-08).
     fn cast_castle(&mut self, p: PlayerPose) {
-        use crate::combat::PLAYER_HH;
+        use crate::mc1::combat::PLAYER_HH;
         let z = p.z.wrapping_add(PLAYER_HH as i16);
         let castle = self.player_castle();
         let Some(pr) = self.g.spawn_castle_ball(p.x, p.y, z) else {
@@ -1917,7 +2051,7 @@ impl World {
     /// cloud on any non-water end — the cloud climbs to ground+1024
     /// and rains 2 bolts/tick for 33 ticks at the spell's 2000.
     fn cast_storm(&mut self, p: PlayerPose) {
-        use crate::combat::PLAYER_HH;
+        use crate::mc1::combat::PLAYER_HH;
         let def = &SPELLS[18];
         let z = p.z.wrapping_add(PLAYER_HH as i16);
         let Some(pr) = self.g.spawn_storm_carrier(p.x, p.y, z) else {
@@ -2130,7 +2264,7 @@ impl World {
     /// Per-hand crosshair preview (the P-class `crosshair`
     /// instrument): the target each hand's EQUIPPED spell would
     /// acquire if cast this instant, through the pure read-only twin
-    /// of the acquire scans ([`crate::features::Gen`]'s
+    /// of the acquire scans ([`crate::mc1::features::Gen`]'s
     /// `aim_preview_scan` — no writes, no RNG). Runs from the same
     /// muzzle pose and pitch bias the real cast uses. `None` = the
     /// hand holds no spell, the spell never acquires (quake, crater,
@@ -2146,7 +2280,7 @@ impl World {
             } else {
                 self.player.left?.0
             } as usize;
-            use crate::combat::AimPreviewSet as Set;
+            use crate::mc1::combat::AimPreviewSet as Set;
             let set = match spell {
                 // Fireball, meteor, volcano, lightning, rapid fireball.
                 0 | 7 | 8 | 15 | 23 => Set::Creatures,
@@ -2326,7 +2460,7 @@ impl World {
     /// toward it, sub_463B0 :55575-91).
     pub fn killer_pos(&self) -> Option<(f32, f32)> {
         let k = self.player.killer as usize;
-        if k != 0 && k < features::POOL && self.g.ent[k].class64 != 0 {
+        if k != 0 && k < self.g.ent.len() && self.g.ent[k].class64 != 0 {
             let e = &self.g.ent[k];
             Some((e.x as f32 / 256.0, e.y as f32 / 256.0))
         } else {
@@ -2369,7 +2503,7 @@ impl World {
                 let e = &self.g.ent[r.ent as usize];
                 RivalView {
                     slot: r.slot,
-                    name: crate::rivals::RIVAL_NAMES[r.slot as usize],
+                    name: crate::mc1::rivals::RIVAL_NAMES[r.slot as usize],
                     alive: e.tick70 == 1 && !r.eliminated,
                     eliminated: r.eliminated,
                     x: e.x as f32 / 256.0,
@@ -2561,7 +2695,7 @@ impl World {
 
     // ---- class-11 trigger ticking (str_256038, :4921) ---------------------
 
-    fn trigger_tick(&mut self, i: usize, player: PlayerPose, buckets: &[u32; 20]) {
+    fn trigger_tick(&mut self, i: usize, player: PlayerPose, buckets: &[u32]) {
         match self.g.ent[i].tick70 {
             // One-shot proximity: fire when a wizard balloon is inside
             // (polarity 1) / outside (polarity 0) the volume.
@@ -2767,7 +2901,7 @@ impl World {
     /// sub_59E40_5A350 (:67460): fire one-shot after the watched
     /// class-5 bucket(s) stay empty through a 16-tick countdown; a
     /// non-empty probe pauses (does not reset) the countdown.
-    fn kill_trigger(&mut self, i: usize, list: Option<usize>, buckets: &[u32; 20]) {
+    fn kill_trigger(&mut self, i: usize, list: Option<usize>, buckets: &[u32]) {
         let empty = match list {
             Some(k) => buckets.get(k).copied().unwrap_or(0) == 0,
             // The -1 variant: buckets 0..=11 and 16.
@@ -2925,7 +3059,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::tile;
+    use crate::mc1::features::tile;
 
     /// Level-005-shaped micro-world: a proximity trigger that fires a
     /// disposition spawning an expanding crater + a creature.
@@ -3418,7 +3552,7 @@ mod tests {
     fn rapid_fire(w: &mut World) {
         w.set_dev_spells(true);
         w.set_invincible(true);
-        w.player.left = Some(crate::spells::SpellId(23));
+        w.player.left = Some(crate::mc1::spells::SpellId(23));
     }
 
     /// A flat world holding one load-time creature and nothing else —
@@ -3459,7 +3593,7 @@ mod tests {
     }
 
     fn hit_player(w: &mut World, amt: u32, src: u16) {
-        w.g.mail_write(crate::combat::MailTarget::Player, 0, amt, src);
+        w.g.mail_write(crate::mc1::combat::MailTarget::Player, 0, amt, src);
     }
 
     #[test]
@@ -3646,7 +3780,7 @@ mod tests {
         // Bank mana, then overkill it: one level down, the overkill
         // carries (capped at half), the spill flies out as balls.
         w.g.ent[c].f140 = 30_000;
-        w.g.mail_write(crate::combat::MailTarget::Pool(c), 0, 45_000, 1);
+        w.g.mail_write(crate::mc1::combat::MailTarget::Pool(c), 0, 45_000, 1);
         w.tick(pose, PlayerCommand::default());
         let (_, cap, lvl) = w.loadout().castle.expect("downgraded, not dead");
         assert_eq!((lvl, cap), (1, 10_000), "one level per lethal event");
@@ -3921,8 +4055,8 @@ mod tests {
 
     #[test]
     fn griffon_peaceful_until_hit_then_rebounds_and_retaliates() {
-        use crate::combat::MailTarget;
-        use crate::mobs::PLAYER_TARGET;
+        use crate::mc1::combat::MailTarget;
+        use crate::mc1::mobs::PLAYER_TARGET;
         let mut w = bare_creature_world(8);
         w.set_invincible(true);
         let g = find_slot(&w, 5, 8);
@@ -3990,7 +4124,7 @@ mod tests {
             w.tick(firing_line(), PlayerCommand::default());
             let e = &w.g.ent[g];
             if e.class64 == 5 {
-                let jump = crate::features::Gen::dist2_sq(px, py, e.x, e.y);
+                let jump = crate::mc1::features::Gen::dist2_sq(px, py, e.x, e.y);
                 // One-tick displacement far beyond move speed = a blink.
                 if jump > 1024 * 1024 {
                     blinked = true;
@@ -4053,7 +4187,7 @@ mod tests {
 
     #[test]
     fn village_building_survives_pops_militia_and_collapses() {
-        use crate::combat::MailTarget;
+        use crate::mc1::combat::MailTarget;
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -4154,23 +4288,23 @@ mod tests {
         for _ in 0..600 {
             w.tick(away(), PlayerCommand::default());
         }
-        let bal = (1..features::POOL)
+        let bal = (1..w.g.ent.len())
             .find(|&j| {
                 w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 3 && w.g.ent[j].flags & 0x400 == 0
             })
             .expect("the fleet balloon lives");
         assert_eq!(w.g.ent[bal].f146, c as u16, "homes the castle when idle");
         let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
-        let d = crate::features::Gen::dist2_sq(w.g.ent[bal].x, w.g.ent[bal].y, cx, cy);
+        let d = crate::mc1::features::Gen::dist2_sq(w.g.ent[bal].x, w.g.ent[bal].y, cx, cy);
         assert!(
-            crate::features::Gen::isqrt(d as u32) < 4 * 256,
+            crate::mc1::features::Gen::isqrt(d as u32) < 4 * 256,
             "hovers the castle neighborhood, not the pickup spot"
         );
     }
 
     #[test]
     fn castle_upgrade_costs_the_full_ladder_amount() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.grant_spell(SpellId(16));
         w.player.left = Some(SpellId(16));
@@ -4209,7 +4343,7 @@ mod tests {
 
     #[test]
     fn trees_burn_to_char_and_spark_a_standing_fire() {
-        use crate::combat::MailTarget;
+        use crate::mc1::combat::MailTarget;
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -4526,7 +4660,7 @@ mod tests {
 
     #[test]
     fn accelerate_directions_are_mutually_exclusive() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         // Toggle semantics under test, not the economy — the real
         // pool (base 1000) can't fund back-to-back 1000-cost arms.
@@ -4581,7 +4715,7 @@ mod tests {
 
     #[test]
     fn lightning_bolt_streams_while_held() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(15));
@@ -4600,7 +4734,7 @@ mod tests {
 
     #[test]
     fn earthquake_trench_travels_forward() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(6));
@@ -4625,7 +4759,7 @@ mod tests {
 
     #[test]
     fn meteor_detonates_into_the_blast_ring() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(7));
@@ -4649,7 +4783,7 @@ mod tests {
 
     #[test]
     fn volcano_erupts_periodically_after_the_cone() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(8));
@@ -4683,7 +4817,7 @@ mod tests {
 
     #[test]
     fn possess_homes_on_and_claims_a_mana_ball() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(3));
@@ -4714,7 +4848,7 @@ mod tests {
 
     #[test]
     fn possess_claims_a_neutral_house() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -4761,7 +4895,7 @@ mod tests {
 
     #[test]
     fn lightning_storm_cloud_rains_bolts() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(18));
@@ -4789,7 +4923,7 @@ mod tests {
 
     #[test]
     fn wall_of_fire_erupts_the_napalm_curtain() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(20));
@@ -4814,7 +4948,7 @@ mod tests {
 
     #[test]
     fn global_death_fuses_at_the_caster_into_the_flat_plane_field() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(22));
@@ -4846,7 +4980,7 @@ mod tests {
         for _ in 0..40 {
             w.tick(p, PlayerCommand::default());
             if field.is_none() {
-                field = (1..features::POOL).find(|&j| {
+                field = (1..w.g.ent.len()).find(|&j| {
                     w.g.ent[j].class64 == 10
                         && w.g.ent[j].model65 == 55
                         && w.g.ent[j].flags & 0x400 == 0
@@ -4857,7 +4991,7 @@ mod tests {
             }
         }
         let f = field.expect("the fuse raised the (10,55) death field");
-        let d = crate::features::Gen::isqrt(crate::features::Gen::dist2_sq(
+        let d = crate::mc1::features::Gen::isqrt(crate::mc1::features::Gen::dist2_sq(
             w.g.ent[f].x,
             w.g.ent[f].y,
             p.x,
@@ -4906,7 +5040,7 @@ mod tests {
 
     #[test]
     fn undead_army_raises_owned_skeletons() {
-        use crate::spells::SpellId;
+        use crate::mc1::spells::SpellId;
         let mut w = flat_world();
         w.set_dev_spells(true);
         w.player.left = Some(SpellId(17));
@@ -5093,11 +5227,11 @@ mod tests {
 
     // ---- hostile wizards (rival AI) ----------------------------------
 
-    fn rival_cfg(book16: bool, castle_level: u8) -> crate::rivals::RivalConfig {
+    fn rival_cfg(book16: bool, castle_level: u8) -> crate::mc1::rivals::RivalConfig {
         let mut book = [false; SPELL_COUNT];
         book[0] = true; // fireball
         book[16] = book16;
-        crate::rivals::RivalConfig {
+        crate::mc1::rivals::RivalConfig {
             aggression: 200,
             accuracy: 255,
             tempo: 255,
@@ -5133,7 +5267,7 @@ mod tests {
             angle: vec![5; 0x10000],
         };
         let mut w = World::new(planes, &rival_marker_things(), 1, assets());
-        let mut cfgs: [Option<crate::rivals::RivalConfig>; 8] = Default::default();
+        let mut cfgs: [Option<crate::mc1::rivals::RivalConfig>; 8] = Default::default();
         cfgs[1] = Some(rival_cfg(book16, castle_level));
         w.set_wizards(&cfgs, 2);
         w
@@ -5183,7 +5317,7 @@ mod tests {
             }
         }
         assert!(fired, "the rival never fired on the player");
-        assert_eq!(w.rivals[0].state, crate::rivals::AiState::AttackWizard);
+        assert_eq!(w.rivals[0].state, crate::mc1::rivals::AiState::AttackWizard);
     }
 
     #[test]
@@ -5374,7 +5508,7 @@ mod tests {
         let mut balloon = None;
         for _ in 0..64 {
             w.tick(away(), PlayerCommand::default());
-            balloon = (1..features::POOL).find(|&j| {
+            balloon = (1..w.g.ent.len()).find(|&j| {
                 let e = &w.g.ent[j];
                 e.class64 == 3 && e.model65 == 3 && e.flags & 0x400 == 0
             });

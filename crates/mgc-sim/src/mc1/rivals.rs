@@ -31,11 +31,11 @@
 //! a follow-up); the duel pull on the CASTER is applied through the
 //! knock channel (magnitude from the traced formula).
 
-use crate::features::{self, Gen};
-use crate::mc1_behavior::BEHAVIOR;
-use crate::mobs::PLAYER_TARGET;
-use crate::spells::{SPELL_COUNT, SPELLS};
-use crate::world::{LifeState, World};
+use crate::mc1::behavior::BEHAVIOR;
+use crate::mc1::features::Gen;
+use crate::mc1::mobs::PLAYER_TARGET;
+use crate::mc1::spells::{SPELL_COUNT, SPELLS};
+use crate::mc1::world::{LifeState, World};
 
 /// Per-slot config from the level record (wizards.json), resolved by
 /// the app: personality params, starting castle, and the two spell
@@ -83,7 +83,7 @@ const AI_RECAST: [u16; SPELL_COUNT] = [
 
 /// The AI brain state (Type_160+415). States 2/4/5/10 exist in the
 /// original's table but no selector ever sets them (cut content).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum AiState {
     /// Fresh spawn: decide immediately (cascade runs twice, :17850).
     #[default]
@@ -112,6 +112,7 @@ pub(crate) enum AiState {
 /// wizard's position/yaw/life/speed live on its pool entity (class 3
 /// model 1); carried mana rides the entity's f140 mirror for the
 /// census.
+#[derive(Hash)]
 pub(crate) struct Rival {
     /// Player slot (1..=7); slot 0 = the human, never a Rival.
     pub slot: u8,
@@ -289,7 +290,7 @@ impl World {
             let e = &mut self.g.ent[m];
             e.class64 = 12;
             e.model65 = spell as u8;
-            e.tick70 = crate::world::MANIFEST_BASE + spell as u8;
+            e.tick70 = crate::mc1::world::MANIFEST_BASE + spell as u8;
             e.flags &= !8;
             e.f26 = 0;
             e.f44 = SPELLS[spell].damage.min(u16::MAX as u32) as u16;
@@ -353,7 +354,7 @@ impl World {
     /// original's Type_160.var_50, resolved by scan like
     /// [`World::player_castle`]).
     pub(crate) fn rival_castle(&self, ent: u16) -> Option<usize> {
-        (1..features::POOL).find(|&j| {
+        (1..self.g.ent.len()).find(|&j| {
             let e = &self.g.ent[j];
             e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 == ent
         })
@@ -681,11 +682,11 @@ impl World {
             }
             // Arm on a matching ground jar existing anywhere
             // (:64805-14; jars have tick70 < MANIFEST_BASE).
-            let exists = (1..features::POOL).any(|j| {
+            let exists = (1..self.g.ent.len()).any(|j| {
                 let e = &self.g.ent[j];
                 e.class64 == 12
                     && e.model65 as usize == s
-                    && e.tick70 < crate::world::MANIFEST_BASE
+                    && e.tick70 < crate::mc1::world::MANIFEST_BASE
                     && e.flags & 0x400 == 0
             });
             if exists {
@@ -761,7 +762,7 @@ impl World {
             (e.x, e.y, e.z)
         };
         let mut best: Option<(usize, i32)> = None;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             let e = &self.g.ent[j];
             if e.class64 != 9 || e.flags & 0x400 != 0 || e.f146 != me {
                 continue;
@@ -916,7 +917,7 @@ impl World {
                 );
                 // Nearest foreign castle.
                 let mut near = i32::MAX;
-                for j in 1..features::POOL {
+                for j in 1..self.g.ent.len() {
                     let e = &self.g.ent[j];
                     if e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 != me {
                         near = near.min(Gen::dist2_sq(tx, ty, e.x, e.y));
@@ -966,7 +967,7 @@ impl World {
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32;
         let mut best: Option<(u16, i32)> = None;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             let e = &self.g.ent[j];
             if e.class64 != 3 || e.model65 != 2 || e.flags & 0x400 != 0 || e.id24 == me {
                 continue;
@@ -1083,7 +1084,7 @@ impl World {
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32;
         let cargo_gate = 10 * (275 - self.rivals[ri].agg as u32);
         let mut best: Option<(u16, i32)> = None;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             let e = &self.g.ent[j];
             if e.class64 != 3 || e.model65 != 3 || e.flags & 0x400 != 0 || e.id24 == me {
                 continue;
@@ -1125,7 +1126,7 @@ impl World {
         let me = self.rivals[ri].ent;
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let mut best: Option<(u16, i32)> = None;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             let e = &self.g.ent[j];
             if e.class64 != 10 || e.model65 != 39 || e.flags & 0x400 != 0 {
                 continue;
@@ -1173,7 +1174,7 @@ impl World {
             .map(|c| (self.g.ent[c].x, self.g.ent[c].y))
             .unwrap_or((self.g.ent[i].x, self.g.ent[i].y));
         let mut best: Option<(u16, i32)> = None;
-        for j in 1..features::POOL {
+        for j in 1..self.g.ent.len() {
             let e = &self.g.ent[j];
             if e.class64 != 5 || e.flags & 0x400 != 0 || e.act_life < 0 || e.tick70 == 120 {
                 continue;
@@ -1783,7 +1784,7 @@ impl World {
             let life = (self.g.ent_rand(m) % 90 + 200) as i16;
             {
                 let e = &mut self.g.ent[m];
-                e.tick70 = crate::world::DROPPED_JAR; // pickup-able, decaying
+                e.tick70 = crate::mc1::world::DROPPED_JAR; // pickup-able, decaying
                 e.f144 = 0; // no owner — a free copy
                 e.f26 = life; // the decay countdown
             }
@@ -1793,7 +1794,7 @@ impl World {
         let gz = self.g.ground_z(cx, cy) as i16;
         if let Some(gv) = self.g.spawn_grave(cx, cy, gz) {
             let me = self.rivals[ri].ent;
-            for j in 1..features::POOL {
+            for j in 1..self.g.ent.len() {
                 let e = &mut self.g.ent[j];
                 if e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0 && e.f144 == me {
                     e.f144 = gv as u16;

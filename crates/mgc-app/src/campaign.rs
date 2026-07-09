@@ -25,7 +25,7 @@
 use std::path::Path;
 
 use mgc_formats::{Game, LevelPackage, ThingKind, Things, mgcl};
-use mgc_sim::spells::SPELL_COUNT;
+use mgc_sim::mc1::spells::SPELL_COUNT;
 
 /// The MC1 campaign is the reachable levels (indices from 0 up), MINUS a
 /// handful that the shipped game never routes to: five indices blacklisted

@@ -36,29 +36,35 @@ const MOUSE_SENSITIVITY: f32 = 0.0022;
 /// half that suits modern DPI while sensitivity 1.0 keeps the range.
 const STICK_PER_PIXEL: f32 = 0.4;
 
-/// Pristine inputs to rebuild the [`mgc_sim::world::World`] for a
+/// Pristine inputs to rebuild the [`mgc_sim::mc1::world::World`] for a
 /// LEVEL RESTART — the original's castle-less-death "lost + level
 /// over" flow ends in exactly this (respawn at the start of a fresh
 /// level).
 struct WorldInit {
-    planes: mgc_sim::features::Planes,
+    planes: mgc_sim::mc1::features::Planes,
     things: Vec<mgc_formats::Thing>,
     seed: u32,
-    assets: mgc_sim::features::FeatureAssets,
+    assets: mgc_sim::mc1::features::FeatureAssets,
     win_pct: u16,
     /// Rival wizard configs by player slot (wizards.json) + the
     /// level's active-slot count.
-    wizards: [Option<mgc_sim::rivals::RivalConfig>; 8],
+    wizards: [Option<mgc_sim::mc1::rivals::RivalConfig>; 8],
     player_count: u16,
+    /// The chassis constant set: pristine MC1, or a deliberately
+    /// deviating one (the limit-removing `--pool-slots` dev flag;
+    /// G-class — a run under a bumped pool is not a faithful
+    /// fixture).
+    chassis: mgc_sim::chassis::ChassisParams,
 }
 
 impl WorldInit {
-    fn build(&self) -> mgc_sim::world::World {
-        let mut w = mgc_sim::world::World::new(
+    fn build(&self) -> mgc_sim::mc1::world::World {
+        let mut w = mgc_sim::mc1::world::World::new_with_chassis(
             self.planes.clone(),
             &self.things,
             self.seed,
             self.assets.clone(),
+            self.chassis.clone(),
         );
         if self.win_pct > 0 {
             w.set_win_pct(self.win_pct);
@@ -74,8 +80,8 @@ impl WorldInit {
 /// allowed, remc1 :49222).
 fn rival_configs(
     wizards: Option<&mgc_formats::Wizards>,
-) -> ([Option<mgc_sim::rivals::RivalConfig>; 8], u16) {
-    let mut out: [Option<mgc_sim::rivals::RivalConfig>; 8] = Default::default();
+) -> ([Option<mgc_sim::mc1::rivals::RivalConfig>; 8], u16) {
+    let mut out: [Option<mgc_sim::mc1::rivals::RivalConfig>; 8] = Default::default();
     let Some(w) = wizards else { return (out, 1) };
     let count = w.player_count.unwrap_or(1).min(8);
     for (slot, cfg) in w.wizards.iter().enumerate().take(8).skip(1) {
@@ -91,7 +97,7 @@ fn rival_configs(
             allowed[s] = a;
             book[s] = a && cfg.starting_spells.get(s).copied().unwrap_or(0) != 0;
         }
-        out[slot] = Some(mgc_sim::rivals::RivalConfig {
+        out[slot] = Some(mgc_sim::mc1::rivals::RivalConfig {
             aggression: cfg.aggression.clamp(0, 255) as u8,
             accuracy: acc.clamp(0, 255) as u8,
             tempo: tempo.clamp(0, 255) as u8,
@@ -120,7 +126,7 @@ struct LoadedLevel {
     /// The living MC1/HW world (triggers, dispositions, runtime
     /// terrain events); moved into the Simulation by App::new. None =
     /// static terrain (MC2, or --no-terrain-features).
-    world: Option<mgc_sim::world::World>,
+    world: Option<mgc_sim::mc1::world::World>,
     /// Rebuild inputs for the castle-less-death level restart.
     world_init: Option<WorldInit>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
@@ -150,8 +156,8 @@ struct LoadedLevel {
 /// Resolve the world's live volumes into map overlay circles: amber =
 /// fly-into triggers, red = kill-watchers, cyan = collected-item
 /// triggers, violet = portals.
-fn map_areas(world: &mgc_sim::world::World) -> Vec<mgc_render::MapArea> {
-    use mgc_sim::world::VolumeKind;
+fn map_areas(world: &mgc_sim::mc1::world::World) -> Vec<mgc_render::MapArea> {
+    use mgc_sim::mc1::world::VolumeKind;
     world
         .active_volumes()
         .into_iter()
@@ -177,13 +183,14 @@ fn map_areas(world: &mgc_sim::world::World) -> Vec<mgc_render::MapArea> {
 ///
 /// `terrain_features` applies the original's load-time entity-driven
 /// terrain pass (craters, canyons, walls, building flattening/painting
-/// — mgc_sim::features) to the pristine baked terrain, as the engine
+/// — mgc_sim::mc1::features) to the pristine baked terrain, as the engine
 /// does. Off = the raw generator output, for comparison renders.
 fn load_level(
     level_path: &Path,
     tileset: Option<u8>,
     terrain_features: bool,
     plausible_spellbook: bool,
+    pool_slots: Option<usize>,
 ) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
@@ -261,7 +268,8 @@ fn load_level(
             &bundle.build_dat,
         ) {
             (Some(sh), Some(an), Some(search), Some(build_tab), Some(build_dat)) => {
-                let assets = mgc_sim::features::FeatureAssets::parse(search, build_tab, build_dat)?;
+                let assets =
+                    mgc_sim::mc1::features::FeatureAssets::parse(search, build_tab, build_dat)?;
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
                 // The level goal: footer[0] = the required banked
                 // percentage of world mana (level offset 38800 —
@@ -272,8 +280,16 @@ fn load_level(
                     .and_then(|g| g.footer)
                     .map_or(0, |f| f[0]);
                 let (wizards, player_count) = rival_configs(package.wizards.as_ref());
+                let mut chassis = mgc_sim::chassis::ChassisParams::MC1;
+                if let Some(n) = pool_slots {
+                    chassis.pool_slots = n;
+                    println!(
+                        "chassis: pool_slots {n} (limit-removing override; \
+                         G-class — not a faithful run)"
+                    );
+                }
                 let init = WorldInit {
-                    planes: mgc_sim::features::Planes {
+                    planes: mgc_sim::mc1::features::Planes {
                         height: height.clone(),
                         tile_type: tile_type.clone(),
                         shading: sh.clone(),
@@ -285,6 +301,7 @@ fn load_level(
                     win_pct,
                     wizards,
                     player_count,
+                    chassis,
                 };
                 let w = init.build();
                 // The view starts from the post-feature planes.
@@ -386,7 +403,7 @@ fn load_level(
         let names: Vec<&str> = p
             .spells
             .iter()
-            .map(|&s| mgc_sim::spells::SpellId(s).name())
+            .map(|&s| mgc_sim::mc1::spells::SpellId(s).name())
             .collect();
         println!(
             "plausible-spellbook: {} spell(s) from {} campaign level(s) before level {} \
@@ -409,7 +426,7 @@ fn load_level(
                     " (level mask strips: {})",
                     p.masked
                         .iter()
-                        .map(|&s| mgc_sim::spells::SpellId(s).name())
+                        .map(|&s| mgc_sim::mc1::spells::SpellId(s).name())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -540,7 +557,7 @@ struct App {
     cursor: (f32, f32),
     /// Spell under the cursor on the book screen (display hit test,
     /// refreshed each frame the book is open).
-    hovered: Option<mgc_sim::spells::SpellId>,
+    hovered: Option<mgc_sim::mc1::spells::SpellId>,
     /// Quick-key bindings 1..9,0 → spell id (session-local; set in the
     /// book by hovering + pressing a digit). Our enhancement — the
     /// original only has the obscure Ctrl+]+digit chord.
@@ -550,6 +567,9 @@ struct App {
     shift_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
+    /// Running pool-exhaustion drop count for this level (the
+    /// limit-removing telemetry's playthrough readout).
+    pool_dropped_total: u32,
     /// Audio runtime (None in headless paths / when opening failed).
     audio: Option<mgc_audio::Audio>,
     /// F1/F2 runtime toggles (the original's keys) over the config's
@@ -661,6 +681,7 @@ impl App {
             shift_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
+            pool_dropped_total: 0,
             audio,
             sound_on: audio_cfg.sound,
             music_on: audio_cfg.music,
@@ -674,7 +695,7 @@ impl App {
     fn audio_tick(&mut self) {
         let Some(audio) = &mut self.audio else { return };
         let f = &self.sim.flyer;
-        let pose = mgc_sim::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
         let listener = mgc_audio::Listener {
             pos: (pose.x, pose.y, pose.z),
             yaw: pose.heading,
@@ -712,7 +733,7 @@ impl App {
             return;
         }
         let f = &self.sim.flyer;
-        let pose = mgc_sim::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
         let listener = mgc_audio::Listener {
             pos: (pose.x, pose.y, pose.z),
             yaw: pose.heading,
@@ -727,6 +748,7 @@ impl App {
             return;
         };
         let mut w = init.build();
+        self.pool_dropped_total = 0;
         apply_instruments(
             &mut w,
             self.dev_spells,
@@ -773,8 +795,16 @@ impl App {
             // spells there, as in the original's map-screen input).
             fire_left: self.fire_held && self.grabbed && !book,
             fire_right: self.fire_right_held && self.grabbed && !book,
-            equip_left: self.pending_equip.0.take().map(mgc_sim::spells::SpellId),
-            equip_right: self.pending_equip.1.take().map(mgc_sim::spells::SpellId),
+            equip_left: self
+                .pending_equip
+                .0
+                .take()
+                .map(mgc_sim::mc1::spells::SpellId),
+            equip_right: self
+                .pending_equip
+                .1
+                .take()
+                .map(mgc_sim::mc1::spells::SpellId),
             respawn: std::mem::take(&mut self.pending_respawn),
             demolish: std::mem::take(&mut self.pending_demolish),
             ..Default::default()
@@ -816,7 +846,7 @@ impl App {
         for slot in w.take_rival_deaths() {
             // The retail death broadcast ("%name% <str 54>",
             // :55499-517) — console interim until DrawText lands.
-            let name = mgc_sim::rivals::RIVAL_NAMES
+            let name = mgc_sim::mc1::rivals::RIVAL_NAMES
                 .get(slot as usize)
                 .copied()
                 .unwrap_or("?");
@@ -831,7 +861,7 @@ impl App {
             ) else {
                 return;
             };
-            w.copy_planes_into(mgc_sim::features::TerrainPlanes {
+            w.copy_planes_into(mgc_sim::mc1::features::TerrainPlanes {
                 height: &mut self.level.view.height,
                 tile_type: &mut self.level.view.tile_type,
                 shading,
@@ -931,8 +961,16 @@ impl App {
             return;
         }
         if let Some(w) = &mut self.sim.world {
-            let l = self.pending_equip.0.take().map(mgc_sim::spells::SpellId);
-            let r = self.pending_equip.1.take().map(mgc_sim::spells::SpellId);
+            let l = self
+                .pending_equip
+                .0
+                .take()
+                .map(mgc_sim::mc1::spells::SpellId);
+            let r = self
+                .pending_equip
+                .1
+                .take()
+                .map(mgc_sim::mc1::spells::SpellId);
             w.equip_hands(l, r);
         }
     }
@@ -1366,6 +1404,22 @@ impl ApplicationHandler for App {
                     // (fade ramps are tick-denominated).
                     self.audio_tick();
                 }
+                // Limit-removing telemetry (ROADMAP "MULTI-GAME
+                // ARCHITECTURE"): the pool fails open like retail,
+                // but every dropped spawn is worth a report — this
+                // is how the catalogue of ceiling-hitting levels
+                // (032's starved trigger, 039's walls) gets built.
+                if let Some(w) = self.sim.world.as_mut() {
+                    let dropped = w.take_pool_exhausted();
+                    if dropped > 0 {
+                        self.pool_dropped_total += dropped;
+                        println!(
+                            "ERROR: entity pool exhausted — {dropped} allocation(s) \
+                             dropped this frame, {} this level (fail-open, as retail)",
+                            self.pool_dropped_total
+                        );
+                    }
+                }
                 self.sync_world();
                 // Castle-less death confirmed → the level restarts
                 // (the original's lost + level-over flow).
@@ -1470,7 +1524,7 @@ impl ApplicationHandler for App {
                     // (World::aim_preview — the pure scan twin).
                     if self.crosshair
                         && !self.book_open()
-                        && vitals.state == mgc_sim::world::LifeState::Alive
+                        && vitals.state == mgc_sim::mc1::world::LifeState::Alive
                     {
                         let f = &self.sim.flyer;
                         let (sy, cyaw) = cam.yaw.sin_cos();
@@ -1485,7 +1539,7 @@ impl ApplicationHandler for App {
                             cam.y + sp * AIM_D,
                             cam.z - cyaw * cp * AIM_D,
                         );
-                        let pose = mgc_sim::world::PlayerPose::from_tiles(
+                        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(
                             f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
                         );
                         let locks = w.aim_preview(pose).map(|l| {
@@ -1581,6 +1635,9 @@ struct Args {
     anim_turn: f32,
     /// Apply the original's load-time terrain features (default true).
     terrain_features: bool,
+    /// Entity-pool size override (limit-removing dev flag, G-class);
+    /// None = the game's pristine chassis value (1000).
+    pool_slots: Option<usize>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -1604,6 +1661,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map_view = false;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
+    let mut pool_slots = None;
 
     /// `--level` accepts a package path or the path-free shorthand
     /// `<game>:<index>` (`mc1:32`, `mc1hw:7`, `mc2:100`) resolving to
@@ -1721,6 +1779,17 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|e| format!("--anim-turn: {e}"))?;
             }
             "--no-terrain-features" => terrain_features = false,
+            "--pool-slots" => {
+                let n: usize = it
+                    .next()
+                    .ok_or("--pool-slots needs a count")?
+                    .parse()
+                    .map_err(|e| format!("--pool-slots: {e}"))?;
+                if !(2..=60000).contains(&n) {
+                    return Err("--pool-slots must be in 2..=60000 (slots are u16)".into());
+                }
+                pool_slots = Some(n);
+            }
             "--help" | "-h" => {
                 return Err(format!(
                     "usage: mgcarpet [--level <game:index> | <baked/.../level-NNN.mgcl>] \
@@ -1735,7 +1804,8 @@ fn parse_args() -> Result<Args, String> {
                      [--bindings classic|wasd] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
-                     [--map out.png [--map-scale N]] [--no-terrain-features]\n\
+                     [--map out.png [--map-scale N]] [--no-terrain-features] \
+                     [--pool-slots N]\n\
                      enhancements persist in {} (see crates/mgc-app/src/config.rs)",
                     config::DEFAULT_PATH
                 ));
@@ -1764,6 +1834,7 @@ fn parse_args() -> Result<Args, String> {
         map_view,
         anim_turn,
         terrain_features,
+        pool_slots,
     })
 }
 
@@ -1813,7 +1884,7 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
 /// `App::new`, `restart_level`, and the headless screenshot path all
 /// go through here).
 fn apply_instruments(
-    w: &mut mgc_sim::world::World,
+    w: &mut mgc_sim::mc1::world::World,
     dev_spells: bool,
     plausible_spells: &[u8],
     invincible: bool,
@@ -1982,6 +2053,7 @@ fn main() -> std::process::ExitCode {
         args.tileset,
         args.terrain_features,
         plausible_spellbook,
+        args.pool_slots,
     ) {
         Ok(l) => l,
         Err(e) => {

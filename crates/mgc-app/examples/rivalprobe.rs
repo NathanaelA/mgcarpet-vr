@@ -8,24 +8,24 @@ fn main() {
     let dir = Path::new("baked/assets/mc1-temperate");
     let bundle = mgc_formats::bundle::Bundle::load(dir).unwrap();
     let terrain = package.terrain.as_ref().unwrap();
-    let assets = mgc_sim::features::FeatureAssets::parse(
+    let assets = mgc_sim::mc1::features::FeatureAssets::parse(
         bundle.search.as_ref().unwrap(),
         bundle.build_tab.as_ref().unwrap(),
         bundle.build_dat.as_ref().unwrap(),
     )
     .unwrap();
-    let planes = mgc_sim::features::Planes {
+    let planes = mgc_sim::mc1::features::Planes {
         height: terrain.height.clone(),
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
     };
     let seed = package.gen_params.as_ref().unwrap().seed;
-    let mut w = mgc_sim::world::World::new(planes, &package.things.things, seed, assets);
+    let mut w = mgc_sim::mc1::world::World::new(planes, &package.things.things, seed, assets);
     // wizards.json -> configs
     let wiz = package.wizards.as_ref().unwrap();
     let count = wiz.player_count.unwrap();
-    let mut cfgs: [Option<mgc_sim::rivals::RivalConfig>; 8] = Default::default();
+    let mut cfgs: [Option<mgc_sim::mc1::rivals::RivalConfig>; 8] = Default::default();
     for (slot, c) in wiz.wizards.iter().enumerate().take(8).skip(1) {
         let mut book = [false; 24];
         let mut allowed = [false; 24];
@@ -34,7 +34,7 @@ fn main() {
             allowed[s] = am[s] != 0;
             book[s] = allowed[s] && c.starting_spells[s] != 0;
         }
-        cfgs[slot] = Some(mgc_sim::rivals::RivalConfig {
+        cfgs[slot] = Some(mgc_sim::mc1::rivals::RivalConfig {
             aggression: c.aggression as u8,
             accuracy: c.accuracy.unwrap() as u8,
             tempo: c.tempo.unwrap() as u8,
@@ -55,14 +55,14 @@ fn main() {
         .iter()
         .find(|t| t.class == 3 && t.model == 4)
         .unwrap();
-    let pose = mgc_sim::world::PlayerPose::level(
+    let pose = mgc_sim::mc1::world::PlayerPose::level(
         ((start.x as u32) << 8) as u16 + 128,
         ((start.y as u32) << 8) as u16 + 128,
         3000,
         0,
     );
     for t in 0..6000u32 {
-        w.tick(pose, mgc_sim::world::PlayerCommand::default());
+        w.tick(pose, mgc_sim::mc1::world::PlayerCommand::default());
         for slot in w.take_rival_deaths() {
             println!("t{t}: rival slot {slot} died");
         }

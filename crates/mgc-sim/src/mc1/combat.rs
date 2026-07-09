@@ -25,10 +25,10 @@
 //! - Mana-shield reflection (+17 bit 7) is ported but nothing sets
 //!   the flag yet (wizard shields are the spell track).
 
-use crate::features::{Gen, POOL, lcg32, tile};
-use crate::mc1_behavior::BEHAVIOR;
-use crate::mc1_sprite_stats::SPRITE_STATS;
-use crate::mobs::{MobCtx, PLAYER_TARGET};
+use crate::mc1::behavior::BEHAVIOR;
+use crate::mc1::features::{Gen, lcg32, tile};
+use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
+use crate::mc1::sprite_stats::SPRITE_STATS;
 
 /// The player carpet's half-extents (sprite 44 stats halves — the
 /// same constants the trigger/portal overlap uses).
@@ -138,7 +138,7 @@ impl Gen {
         // The castle pre-pass (ch0 only).
         if ch == 0 {
             let mut hits: Vec<usize> = Vec::new();
-            for j in 1..POOL {
+            for j in 1..self.ent.len() {
                 let c = &self.ent[j];
                 if c.class64 == 3
                     && c.model65 == 2
@@ -243,7 +243,7 @@ impl Gen {
             return true;
         }
         let s = src as usize;
-        s != 0 && s < POOL && self.ent[s].class64 == 3
+        s != 0 && s < self.ent.len() && self.ent[s].class64 == 3
     }
 
     // ---- class-9 projectiles ----------------------------------------------
@@ -336,7 +336,7 @@ impl Gen {
     /// the 21-tick life, detonate in place (player-validated shape;
     /// see spawn_bomb_fuse).
     fn bomb_fuse_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        if self.ent[i].id24 == crate::mobs::PLAYER_TARGET {
+        if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
             self.move_relink(i, ctx.px, ctx.py, ctx.pz);
         }
         self.ent[i].act_life -= 1;
@@ -658,7 +658,8 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz.wrapping_add(PLAYER_HH as i16))
         } else {
             let t = tgt as usize;
-            if t == 0 || t >= POOL || self.ent[t].class64 == 0 || self.ent[t].act_life < 0 {
+            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 || self.ent[t].act_life < 0
+            {
                 self.ent[i].f146 = 0;
                 return false;
             }
@@ -902,7 +903,11 @@ impl Gen {
     /// creatures/the player).
     fn home_possess(&mut self, i: usize) {
         let t = self.ent[i].f146 as usize;
-        if t == 0 || t >= POOL || self.ent[t].class64 != 10 || self.ent[t].flags & 0x400 != 0 {
+        if t == 0
+            || t >= self.ent.len()
+            || self.ent[t].class64 != 10
+            || self.ent[t].flags & 0x400 != 0
+        {
             self.ent[i].f146 = 0;
             return;
         }
@@ -1151,7 +1156,7 @@ impl Gen {
     pub(crate) fn castle_site_ok(&self, i: usize, x: u16, y: u16) -> bool {
         let (f80, f82) = (self.ent[i].f80 as i32, self.ent[i].f82 as i32);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 == 3
                 && c.model65 == 2
@@ -1584,7 +1589,7 @@ impl Gen {
             // the bolt ends in a hit flash.
             7 => {
                 let victim = self.ent[i].f146;
-                let is_wizard = victim == crate::mobs::PLAYER_TARGET
+                let is_wizard = victim == crate::mc1::mobs::PLAYER_TARGET
                     || (victim != 0
                         && self.ent[victim as usize].class64 == 3
                         && self.ent[victim as usize].model65 <= 1);
@@ -1609,7 +1614,7 @@ impl Gen {
             // hardcode (converted skeletons DO get +24, :23913).
             // Deferred: the human→skeleton conversion AI arm.
             11 => {
-                let live = (1..POOL)
+                let live = (1..self.ent.len())
                     .filter(|&j| {
                         let c = &self.ent[j];
                         c.class64 == 5 && c.model65 == 9 && c.flags & 0x400 == 0 && c.f144 == own
@@ -1648,7 +1653,7 @@ impl Gen {
             return false;
         }
         let (mx, my) = (self.ent[i].x, self.ent[i].y);
-        for j in 1..POOL {
+        for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
                 continue;
@@ -1658,8 +1663,8 @@ impl Gen {
                 continue;
             }
             let dir = Self::angle_between(c.x, c.y, mx, my);
-            let vx = ((64 * crate::tables::SIN[dir as usize]) >> 16) as i16;
-            let vy = (-((64 * crate::tables::COS[dir as usize]) >> 16)) as i16;
+            let vx = ((64 * crate::mc1::tables::SIN[dir as usize]) >> 16) as i16;
+            let vy = (-((64 * crate::mc1::tables::COS[dir as usize]) >> 16)) as i16;
             self.ent[j].dest_x = vx as u16;
             self.ent[j].dest_y = vy as u16;
         }
@@ -2420,7 +2425,7 @@ impl Gen {
         }
         let victim = self.ent[i].f146;
         let amt = self.ent[i].f44 as u32;
-        if victim == crate::mobs::PLAYER_TARGET {
+        if victim == crate::mc1::mobs::PLAYER_TARGET {
             // The human victim (AI-cast duel — unreachable today:
             // no AI selector emits spell 11).
             let (x, y, z) = (ctx.px, ctx.py, ctx.pz);
@@ -2472,7 +2477,7 @@ impl Gen {
                 let e = &self.ent[i];
                 (e.x, e.y, e.id24, e.f44 as u32)
             };
-            for j in 1..POOL {
+            for j in 1..self.ent.len() {
                 if j == i {
                     continue;
                 }
@@ -2492,7 +2497,7 @@ impl Gen {
                 }
             }
             self.snd(44, i);
-            if own == crate::mobs::PLAYER_TARGET {
+            if own == crate::mc1::mobs::PLAYER_TARGET {
                 self.snd_player(44);
             }
         }
@@ -2883,7 +2888,7 @@ impl Gen {
                 // The chime anchors at the CLAIMANT, not the ball
                 // (:29444 sub_55370(claimant, -1, 4)) — the player-
                 // gated id 4 is heard exactly when YOU claim.
-                if src == crate::mobs::PLAYER_TARGET {
+                if src == crate::mc1::mobs::PLAYER_TARGET {
                     self.snd_player(4);
                 }
             }
@@ -2995,8 +3000,8 @@ impl Gen {
             let speed = (d2 % 0x30 + 16) as i16;
             self.ent[b].f30 = yaw;
             self.ent[b].f34 = yaw;
-            let vx = ((speed as i32 * crate::tables::SIN[yaw as usize]) >> 16) as i16;
-            let vy = (-((speed as i32 * crate::tables::COS[yaw as usize]) >> 16)) as i16;
+            let vx = ((speed as i32 * crate::mc1::tables::SIN[yaw as usize]) >> 16) as i16;
+            let vy = (-((speed as i32 * crate::mc1::tables::COS[yaw as usize]) >> 16)) as i16;
             self.ent[b].dest_x = vx as u16;
             self.ent[b].dest_y = vy as u16;
             let ground = self.ground_z(x, y) as i16;

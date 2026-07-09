@@ -1,6 +1,6 @@
 //! MC1 level-entity semantics: how a THING record's (class, model)
 //! selects the entity's *type index* — the row in
-//! [`crate::mc1_sprite_stats::SPRITE_STATS`] that drives its billboard
+//! [`crate::mc1::sprite_stats::SPRITE_STATS`] that drives its billboard
 //! (and later, stats). Traced from the remc1 decompilation's per-model
 //! spawn functions (`dword_96902` class dispatch, sub_main.cpp:5041;
 //! full trace notes in docs/ROADMAP.md "Billboarded sprites").
@@ -33,7 +33,7 @@ pub enum Mc1TypePick {
 /// Type-index selection for one (class, model); `None` = the model
 /// creates no drawable world entity at load (markers, spawner volumes,
 /// logic-only), or is out of scope for load-time placement (class 10
-/// terrain features — consumed by `crate::features`; its model 45
+/// terrain features — consumed by `crate::mc1::features`; its model 45
 /// building/castle entities are the entity track's multi-tile
 /// structure case, not a billboard).
 pub fn mc1_entity_type(class: u16, model: u16) -> Option<Mc1TypePick> {
@@ -96,7 +96,7 @@ pub fn mc1_entity_type(class: u16, model: u16) -> Option<Mc1TypePick> {
 }
 
 /// Trailing body parts of the multi-part creatures (type indices into
-/// [`crate::mc1_sprite_stats::SPRITE_STATS`], spawn order preserved).
+/// [`crate::mc1::sprite_stats::SPRITE_STATS`], spawn order preserved).
 /// The original spawns them stacked on the head (state 120,
 /// parent/child-linked; sub_38030 :44570) and its movement code
 /// strings them out behind it from the first tick on.
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn type_indices_fit_the_stats_table() {
-        use crate::mc1_sprite_stats::SPRITE_STATS;
+        use crate::mc1::sprite_stats::SPRITE_STATS;
         for class in 0..16u16 {
             for model in 0..64u16 {
                 let Some(pick) = mc1_entity_type(class, model) else {

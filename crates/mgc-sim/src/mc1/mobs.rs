@@ -19,11 +19,11 @@
 //!   (:45086-:45087); `link` guards on the placed flag in both the
 //!   original and this port, so the second call is a no-op.
 
-use crate::combat::{Inbox, MailTarget};
-use crate::features::Gen;
-use crate::mc1_behavior::{BEHAVIOR, BehaviorRow};
-use crate::mc1_sprite_stats::SPRITE_STATS;
-use crate::tables::{COS, SIN};
+use crate::mc1::behavior::{BEHAVIOR, BehaviorRow};
+use crate::mc1::combat::{Inbox, MailTarget};
+use crate::mc1::features::Gen;
+use crate::mc1::sprite_stats::SPRITE_STATS;
+use crate::mc1::tables::{COS, SIN};
 
 /// Sentinel chase-target slot for the player's carpet (the original
 /// chases a class-3 pool entity; our player lives outside the pool).
@@ -1745,7 +1745,7 @@ impl Gen {
         if (v4 as u16 + v5 as u16) % 2 == 1 {
             v4 = v4.wrapping_add(1);
         }
-        let h = |cx: u8, cy: u8| self.t.height[crate::features::tile(cx, cy)] as i32;
+        let h = |cx: u8, cy: u8| self.t.height[crate::mc1::features::tile(cx, cy)] as i32;
         let c = [
             h(v4, v5),
             h(v4.wrapping_add(w_tiles), v5),
@@ -2325,8 +2325,12 @@ impl Gen {
     /// The awake pre-pass sub_54F80 (:64300), run before dispatch:
     /// awake creatures count down (+58, mirrored into their body
     /// segments); asleep ones re-arm to 16 (segments 18) when the
-    /// player is within 24 tiles (3D dist² < 0x2400000 — sub_42410
-    /// at :64353 is the 3D form).
+    /// player is within 24 tiles (2D dist² < 0x2400000 — sub_42410
+    /// :52748 reads only x/y; altitude never gates waking. The port
+    /// shipped a 3D test until 2026-07-09, mis-reading :64353 as a
+    /// 3D variant; the MC2 survey caught it — remc2's sub_68C70
+    /// uses the same 2D distance, and the SYNCHRONIZED remc1 body
+    /// settles it).
     pub(crate) fn mob_awake_pass(&mut self, ctx: &MobCtx) {
         for i in 1..self.ent.len() {
             let e = &self.ent[i];
@@ -2348,11 +2352,7 @@ impl Gen {
                 }
             } else if e.f59 > 0 {
                 self.ent[i].f59 -= 1;
-            } else if {
-                let dz = ctx.pz.wrapping_sub(e.z) as i32;
-                Self::dist2_sq(e.x, e.y, ctx.px, ctx.py).wrapping_add(dz.wrapping_mul(dz))
-                    < 0x240_0000
-            } {
+            } else if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000 {
                 self.ent[i].f58 = 16;
                 self.ent[i].f59 = 0;
                 let mut s = self.ent[i].f54 as usize;

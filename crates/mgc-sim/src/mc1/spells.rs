@@ -22,7 +22,7 @@
 
 /// Internal spell type (entity `+65` on a manifestation; 0..24). The
 /// spellbook DISPLAYS spells permuted by [`DISPLAY_ORDER`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpellId(pub u8);
 
 pub const SPELL_COUNT: usize = 24;
