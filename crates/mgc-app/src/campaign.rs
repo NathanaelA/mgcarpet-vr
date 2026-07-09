@@ -81,6 +81,9 @@ pub struct Plausible {
     pub spells: Vec<u8>,
     pub scanned_levels: Vec<u32>,
     pub skipped_levels: Vec<u32>,
+    /// Spells the jar union held but the TARGET level's availability
+    /// mask strips (logged by the caller, never silently dropped).
+    pub masked: Vec<u8>,
 }
 
 /// Compute the plausible spellbook for `target_level`, reading sibling
@@ -98,6 +101,7 @@ pub fn plausible_spellbook(level_dir: &Path, package: &LevelPackage) -> Plausibl
             spells,
             scanned_levels: scanned,
             skipped_levels: skipped,
+            masked: Vec::new(),
         };
     }
 
@@ -123,17 +127,106 @@ pub fn plausible_spellbook(level_dir: &Path, package: &LevelPackage) -> Plausibl
         scanned.push(n);
     }
     spells.sort_unstable();
+    let masked = apply_level_mask(&mut spells, package);
     Plausible {
         spells,
         scanned_levels: scanned,
         skipped_levels: skipped,
+        masked,
     }
+}
+
+/// The original's per-level grant is (availability mask) AND
+/// (collected flag) — sub_main.cpp :49218-41: the human receives
+/// spell v14 iff `var_230983[v14] == 1` besides having collected it.
+/// The mask is the level tail's HUMAN slot-0 `allowed_spells` (all-1
+/// through campaign index 024; SELECTIVE from 025 on — the regime
+/// that strips your book at level start so spells are rediscovered
+/// in play). The jar union models the collected flags, so it must
+/// intersect the target level's mask exactly like retail. Returns
+/// the stripped ids; a maskless package (MC2, old bake) is a no-op.
+fn apply_level_mask(spells: &mut Vec<u8>, package: &LevelPackage) -> Vec<u8> {
+    let Some(mask) = package
+        .wizards
+        .as_ref()
+        .and_then(|w| w.wizards.first())
+        .and_then(|h| h.allowed_spells.as_ref())
+    else {
+        return Vec::new();
+    };
+    let mut masked = Vec::new();
+    spells.retain(|&s| {
+        let ok = mask.get(s as usize).is_none_or(|&v| v == 1);
+        if !ok {
+            masked.push(s);
+        }
+        ok
+    });
+    masked
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use mgc_formats::Thing;
+    use mgc_formats::{BAKE_EPOCH, FORMAT_VERSION, Importer, Meta, WizardConfig, Wizards};
+
+    /// The target level's availability mask (human slot-0
+    /// allowed_spells, retail :49229) intersects the jar union — the
+    /// mask regime past campaign index 024; maskless packages no-op.
+    #[test]
+    fn level_mask_strips_unavailable_spells() {
+        let mut allowed = vec![1u8; 24];
+        allowed[15] = 0; // this level withholds Lightning Bolt
+        allowed[16] = 0; // ...and Create Castle
+        let package = LevelPackage {
+            meta: Meta {
+                format_version: FORMAT_VERSION,
+                bake_epoch: BAKE_EPOCH,
+                game: Game::MagicCarpet1,
+                level: 30,
+                source: None,
+                importer: Importer {
+                    name: "test".into(),
+                    version: "0".into(),
+                },
+            },
+            things: Things { things: Vec::new() },
+            gen_params: None,
+            header: None,
+            wizards: Some(Wizards {
+                wizards: vec![WizardConfig {
+                    aggression: 0,
+                    reflexes: None,
+                    perception: None,
+                    life: None,
+                    starting_spells: vec![0; 24],
+                    unknown_spells: Vec::new(),
+                    blocked_spells: Vec::new(),
+                    accuracy: None,
+                    tempo: None,
+                    castle_level: None,
+                    allowed_spells: Some(allowed),
+                }],
+                player_count: Some(1),
+                tail_38800: None,
+            }),
+            stages: None,
+            terrain: None,
+        };
+        let mut spells = vec![0u8, 3, 15, 16, 20];
+        let masked = apply_level_mask(&mut spells, &package);
+        assert_eq!(spells, vec![0, 3, 20], "mask strips 15/16, keeps the rest");
+        assert_eq!(masked, vec![15, 16], "strips reported for the log");
+        // No mask data (MC2 / old bake) = a no-op, nothing stripped.
+        let bare = LevelPackage {
+            wizards: None,
+            ..package
+        };
+        let mut spells = vec![15u8, 16];
+        assert!(apply_level_mask(&mut spells, &bare).is_empty());
+        assert_eq!(spells, vec![15, 16]);
+    }
 
     fn thing(kind: ThingKind, class: u16, model: u16) -> Thing {
         Thing {

@@ -390,7 +390,7 @@ fn load_level(
             .collect();
         println!(
             "plausible-spellbook: {} spell(s) from {} campaign level(s) before level {} \
-             [{}]{}",
+             [{}]{}{}",
             p.spells.len(),
             p.scanned_levels.len(),
             package.meta.level,
@@ -399,6 +399,20 @@ fn load_level(
                 String::new()
             } else {
                 format!(" (skipped unreadable levels: {:?})", p.skipped_levels)
+            },
+            if p.masked.is_empty() {
+                String::new()
+            } else {
+                // The level's availability mask (retail :49229) strips
+                // these at level start — rediscover them in play.
+                format!(
+                    " (level mask strips: {})",
+                    p.masked
+                        .iter()
+                        .map(|&s| mgc_sim::spells::SpellId(s).name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             },
         );
         p.spells

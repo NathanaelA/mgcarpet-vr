@@ -599,9 +599,15 @@ impl World {
             duel: None,
         };
         w.fire_disposition(0, true);
-        // Starting spells AFTER the level population so the initial
-        // spawns keep their original pool slots (per-slot LCG seeds).
-        w.grant_starting_spells();
+        // NO free starting spells: the retail human grant is
+        // (availability mask) AND (campaign collected flags)
+        // (:49226-33) — with no campaign store, a fresh world's book
+        // is EMPTY, exactly like retail level 1 (idx 000's
+        // starting_spells row is empty; the first three spells are
+        // its JARS, collected in play). The old Fireball+Possess
+        // pregrant was a pre-jar-era hack (removed 2026-07-09,
+        // player-caught on level 032); campaign-progress stand-ins
+        // are the plausible_spellbook / dev_spells instruments.
         // The level-start screen-mode chime (sub_3DC90 :49072 plays
         // sound 14 on every mode set, the init included) — drained
         // by the app's first audio tick.
@@ -1231,14 +1237,6 @@ impl World {
     }
 
     // ---- player spells (sub_46B00_46E40 :55851 + the 24 cast arms) --------
-
-    /// INTERIM until the level-data spell block is decoded: every new
-    /// World grants Fireball (0) + Possess (3), auto-equipped L/R in
-    /// the original's auto-fill order (:49246-54).
-    fn grant_starting_spells(&mut self) {
-        self.grant_spell(SpellId(0));
-        self.grant_spell(SpellId(3));
-    }
 
     /// Materialize an owned spell: a class-12 manifestation ENTITY in
     /// the pool (the original's sub_3BF70 slot economy — spell
@@ -4430,8 +4428,15 @@ mod tests {
     #[test]
     fn casting_fireball_spawns_a_projectile_and_deducts_mana() {
         let mut w = flat_world();
+        // A fresh world's book is EMPTY (the retail human grant is
+        // availability ∩ collected — no campaign store, no spells;
+        // the old Fireball+Possess pregrant was a pre-jar hack).
         let lv = w.loadout();
-        assert!(lv.owned[0] && lv.owned[3], "starting spells granted");
+        assert!(!lv.owned.iter().any(|&o| o), "fresh book starts empty");
+        assert_eq!((lv.left, lv.right), (None, None));
+        w.grant_spells(&[0, 3]);
+        let lv = w.loadout();
+        assert!(lv.owned[0] && lv.owned[3], "granted");
         assert_eq!(
             (lv.left, lv.right),
             (Some(0), Some(3)),
@@ -5410,6 +5415,9 @@ mod tests {
     #[test]
     fn aim_preview_is_hand_keyed_and_cone_gated() {
         let mut w = bare_creature_world(2); // wild lunger at ~(112,110)
+        // Fireball LEFT + Possess RIGHT (the auto-fill order — the
+        // fresh book is empty since the pregrant-hack removal).
+        w.grant_spells(&[0, 3]);
         let alt = w.g.ent[1].z;
         let pose = move |heading: u16| PlayerPose::level(108 << 8, 110 << 8, alt, heading);
         for _ in 0..5 {
