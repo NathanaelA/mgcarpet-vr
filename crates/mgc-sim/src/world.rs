@@ -71,7 +71,7 @@ pub const PLAYER_LIFE_MAX: i32 = 10000;
 /// The class-12 state marking a death-scattered spell jar: it decays
 /// (200-289 ticks, :55545-47) where the THING-placed jar states
 /// (0..=2) sit forever. Pickup works from any sub-MANIFEST state.
-const DROPPED_JAR: u8 = 3;
+pub(crate) const DROPPED_JAR: u8 = 3;
 
 /// The player wizard's life state — the original class-3 states 0
 /// (alive) / 2 (death fall) / 3 (dead, awaiting the respawn key).
@@ -93,7 +93,7 @@ pub enum LifeState {
 /// from the THING post-init) — the jar keeps its spawn state, the
 /// manifestation keeps the jar's pool slot (slot economy is
 /// load-bearing: level 032 depends on it).
-const MANIFEST_BASE: u8 = 200;
+pub(crate) const MANIFEST_BASE: u8 = 200;
 
 /// The human player's carpet-side spell state — the original Type_160
 /// slice: the +308 free mana pool, the var_940/944 hand equips, the
@@ -339,7 +339,7 @@ pub struct PlayerCommand {
 
 /// The runtime world of one loaded MC1/HW level.
 pub struct World {
-    g: Gen,
+    pub(crate) g: Gen,
     /// Live 1-based THING table; dispositions consume from it.
     table: Vec<Rec>,
     /// Terrain planes changed since last cleared (renderer re-upload).
@@ -351,7 +351,28 @@ pub struct World {
     pending_teleport: Option<(f32, f32)>,
     /// The human player's spell/mana state (spells cast through the
     /// per-hand dispatcher, sub_46B00_46E40 :55851).
-    player: Player,
+    pub(crate) player: Player,
+    /// Live AI wizards (player slots 1..=7) — see [`crate::rivals`].
+    pub(crate) rivals: Vec<crate::rivals::Rival>,
+    /// Kill tally [killer slot][victim slot] (the original keeps it
+    /// on the killer's Type_160+30 — the book roster's numbers).
+    pub(crate) kill_tally: [[u16; 8]; 8],
+    /// The human carpet's engine-unit pose, refreshed each tick for
+    /// the rival scans (the original reads the wizard entity; ours
+    /// lives outside the pool).
+    pub(crate) human_pose: (u16, u16, i16),
+    /// Rival deaths this tick (player slots) — drained by the app
+    /// for the death-message ticker (:55499-517).
+    pub(crate) rival_deaths: Vec<u8>,
+    /// The human-cast duel latch (ch4 grip, :55663-82 + :55228-48):
+    /// (victim entity, tick counter, initial-distance hold). The
+    /// CASTER is pulled toward the victim until 1000 ticks, 5120
+    /// distance, or the victim dies.
+    duel: Option<(u16, u16, u32)>,
+    /// Player-start marker tiles by slot (class-3 models 4..=11,
+    /// str_9177 :44068-107), captured before the level-init
+    /// disposition consumes the records.
+    pub(crate) start_markers: [Option<(u16, u16)>; 8],
     /// Level completion threshold: the required banked percentage of
     /// the world total (the u16 at level-file offset 38800 — the
     /// first footer field; gamedata+232595, read by the win check
@@ -418,6 +439,28 @@ pub struct LivePose {
     /// ownership for class 3. Drives the map's team-color rule
     /// (sub_48710: owner class-3 → byte_99B58 team pair).
     pub player_owned: bool,
+    /// Owning wizard's player slot (0 = the human, 1-7 = rivals),
+    /// when wizard-owned: the map team-pair index and the per-team
+    /// castle/balloon stamp offset (58+team / 66+team).
+    pub team: Option<u8>,
+}
+
+/// One rival wizard's presentation snapshot ([`World::rival_views`]).
+#[derive(Debug, Clone)]
+pub struct RivalView {
+    pub slot: u8,
+    pub name: &'static str,
+    pub alive: bool,
+    pub eliminated: bool,
+    /// Live position, tile units.
+    pub x: f32,
+    pub z: f32,
+    pub mana: u32,
+    pub mana_max: u32,
+    pub life_frac: f32,
+    /// This rival's kill row (victim slots 0-7).
+    pub kills: [u16; 8],
+    pub invisible: bool,
 }
 
 /// Minimal live-event view for [`World::debug_pool`].
@@ -464,8 +507,9 @@ pub enum VolumeKind {
     Proximity,
     /// Fires when a watched creature kind is wiped out.
     KillWatch,
-    /// Fires on a collected item (stub until inventory).
-    Inventory,
+    /// The WIN trigger (sub_59B80 :67293): fires its disposition on
+    /// the player's completion latch and consumes the win.
+    WinTrigger,
     /// Teleporter vortex.
     Portal,
 }
@@ -492,7 +536,10 @@ fn drawable(class: u16, model: u16) -> bool {
     // handler, so the player observation rules: invisible.
     (matches!(class, 2 | 3 | 5 | 12) || (class == 9 && model != 18))
         || (class == 10
-            && matches!(model, 34 | 0 | 1 | 5 | 6 | 16 | 19 | 23 | 25 | 38 | 39 | 40 | 43 | 45))
+            && matches!(
+                model,
+                34 | 0 | 1 | 5 | 6 | 16 | 19 | 23 | 25 | 26 | 38 | 39 | 40 | 43 | 45
+            ))
 }
 
 impl World {
@@ -501,6 +548,15 @@ impl World {
     /// initial population spawns. `things` come from the package;
     /// `seed` is the GEN_MAP seed.
     pub fn new(planes: Planes, things: &[Thing], seed: u32, assets: FeatureAssets) -> Self {
+        let mut start_markers: [Option<(u16, u16)>; 8] = Default::default();
+        for t in things {
+            if t.class == 3 && (4..=11).contains(&t.model) {
+                let slot = (t.model - 4) as usize;
+                if start_markers[slot].is_none() {
+                    start_markers[slot] = Some((t.x, t.y));
+                }
+            }
+        }
         let mut table = build_table(things);
         let mut g = Gen::new(planes, assets, seed);
         g.load_time_pass(&mut table);
@@ -520,6 +576,12 @@ impl World {
             pending_respawn: None,
             pending_restart: false,
             invincible: false,
+            rivals: Vec::new(),
+            kill_tally: [[0; 8]; 8],
+            start_markers,
+            human_pose: (0, 0, 0),
+            rival_deaths: Vec::new(),
+            duel: None,
         };
         w.fire_disposition(0, true);
         // Starting spells AFTER the level population so the initial
@@ -587,6 +649,12 @@ impl World {
             if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
                 continue; // owned manifestation, not a drawable
             }
+            // Hidden (dead wizard, :55568) / cloaked (spell 12,
+            // :65689) — the original's byte16 0x20 suppresses the
+            // billboard (the 0x21 draw skip, :36830).
+            if e.flags & 0x20 != 0 {
+                continue;
+            }
             // Houses (m45): the visible building is painted terrain;
             // the entity billboard is the OWNER FLAG (sprite 177 +
             // color row) — drawn only once CLAIMED. APPROX: the
@@ -607,11 +675,28 @@ impl World {
                 alt: e.z as f32 / 256.0,
                 yaw: (e.f30 & 0x7FF) as f32 * (TAU / 2048.0),
                 segment,
-                life_frac: (e.class64 == 5 && !segment && e.max_life > 0).then(|| {
-                    (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
-                }),
+                // Class-5 heads + (playtest request 2026-07-09) the
+                // wizard-family: rival carpets, castles, balloons —
+                // all consumed by the opt-in debug bar overlay only.
+                life_frac: ((e.class64 == 5 && !segment)
+                    || (e.class64 == 3 && e.model65 <= 3))
+                    .then(|| {
+                        if e.max_life == 0 {
+                            return 0.0;
+                        }
+                        (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
+                    }),
                 player_owned: e.id24 == PLAYER_TARGET
                     || (e.class64 == 10 && e.f144 == PLAYER_TARGET),
+                team: {
+                    let owner = if e.class64 == 10 && matches!(e.model65, 39 | 45) {
+                        e.f144
+                    } else {
+                        e.id24
+                    };
+                    // A rival wizard's own billboard is its own team.
+                    self.owner_slot(owner)
+                },
             });
         }
         out
@@ -650,6 +735,30 @@ impl World {
             pyaw: player.heading,
             pmana: self.player.mana,
         };
+        self.human_pose = (player.x, player.y, player.z);
+
+        // The duel pull on the CASTER (:55228-48): while latched,
+        // drag the human toward the victim; release at 1000 ticks,
+        // 5120 distance, or victim death. APPROX: applied through
+        // the knock channel (magnitude formula traced, transport
+        // ours).
+        if let Some((victim, count, hold)) = self.duel {
+            let ve = &self.g.ent[victim as usize];
+            let dead = ve.flags & 0x400 != 0 || ve.act_life < 0 || ve.tick70 != 1;
+            let (vx, vy) = (ve.x, ve.y);
+            let dist = Gen::isqrt(Gen::dist2_sq(player.x, player.y, vx, vy) as u32);
+            if dead || count >= 1000 || dist >= 5120 {
+                self.duel = None;
+            } else {
+                let speed = (player.speed.max(16)) as i32;
+                let denom = (1024 / (3 * speed / 2)).max(1);
+                let pull = ((dist as i32 - hold as i32) / denom)
+                    .clamp(0, 3 * speed / 2);
+                let yaw = Gen::angle_between(player.x, player.y, vx, vy);
+                self.g.player_knock = (yaw, pull.clamp(0, 80) as i16);
+                self.duel = Some((victim, count + 1, hold));
+            }
+        }
 
         // The per-tick mana census (sub_48230 :56839, called :52327
         // BEFORE all entity ticks).
@@ -760,8 +869,8 @@ impl World {
                 // death field).
                 10 if matches!(
                     self.g.ent[i].tick70,
-                    0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 40 | 41 | 42 | 58 | 59
-                        | 60
+                    0 | 1 | 5 | 6 | 12 | 16 | 17 | 18 | 19 | 21 | 23 | 25 | 26 | 40 | 41 | 42 | 58
+                        | 59 | 60
                 ) => {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
@@ -773,11 +882,12 @@ impl World {
                     self.terrain_dirty = true;
                 }
                 11 => self.trigger_tick(i, player, &buckets),
-                // The player-built castle's state machine (class-3
-                // m2) and its mana balloons (m3; wizard castles =
-                // a later track).
+                // Wizard castles and balloons — owner-generic (id24).
                 3 if self.g.ent[i].model65 == 2 => self.g.castle_tick(i),
                 3 if self.g.ent[i].model65 == 3 => self.g.balloon_tick(i),
+                // Rival (AI) wizards; level-authored husks with no
+                // rival record stand and render as before.
+                3 if self.g.ent[i].model65 <= 1 => self.rival_entity_tick(i),
                 // Trees burn (states 0/1/2 + the standing fire).
                 2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
                 // Spell jars (pickup) and owned-spell manifestations
@@ -1469,9 +1579,10 @@ impl World {
             8 => self.g.spawn_spell_lob(4, mx, my, mz),
             // 9 Crater (:65491): c9 m5 down-arc.
             9 => self.g.spawn_spell_lob(5, mx, my, mz),
-            // 11 Duel to the Death (:65620): c9 m7 with a tether
-            // effect on wizards — INTERIM: no rival wizards exist;
-            // the projectile flies and latches nothing.
+            // 11 Duel to the Death (:65620): c9 m7 — detonates into
+            // the (10,26) tether that follows the victim and
+            // broadcasts the ch4 grip (ctor :47116, tick sub_263C0
+            // :28949).
             11 => self.g.spawn_spell_lob(7, mx, my, mz),
             // 13 Steal Mana (:65711): c9 m8 — the mob steal ball's
             // ported tick (explodes only on wizard-family victims).
@@ -1522,6 +1633,12 @@ impl World {
             // its 10000 broadcast over the ring's 10-tick growth
             // (trace-confirmed, sub_25CE0).
             7 => e.f69 = 17,
+            // The duel tether (ctor :47116: +44 = 200, the ch4
+            // per-tick grip amount).
+            11 => {
+                e.f69 = 26;
+                e.f44 = 200;
+            }
             // Steal Mana's damage is forced 2000 (:65754), exploding
             // into the m11 steal flash (ch3).
             13 => {
@@ -1571,7 +1688,7 @@ impl World {
     }
 
     /// The player's established castle slot (teleport anchor).
-    fn player_castle(&self) -> Option<usize> {
+    pub(crate) fn player_castle(&self) -> Option<usize> {
         (1..features::POOL).find(|&j| {
             let e = &self.g.ent[j];
             e.class64 == 3 && e.model65 == 2 && e.id24 == PLAYER_TARGET && e.flags & 0x400 == 0
@@ -1616,6 +1733,14 @@ impl World {
         out
     }
 
+    /// Arm the human-caster duel pull (the victim intake writes the
+    /// ATTACKER's Type_160 u16_314/316/318, :55671-77).
+    pub(crate) fn set_duel_latch(&mut self, victim: u16, hold: u32) {
+        if self.duel.is_none() {
+            self.duel = Some((victim, 0, hold));
+        }
+    }
+
     /// sub_48230 (:56839): the per-tick mana census. The wizard
     /// ceiling (+136) resets to the intrinsic base 1000 (u32_322,
     /// :55031-33) and accumulates the +140 of every CLAIMED (+144)
@@ -1625,9 +1750,18 @@ impl World {
     /// owner. Model-40 claim totems are excluded (:56880). Banked =
     /// house tally + own castle stored (the HUD % numerator, :54721).
     fn recompute_mana(&mut self) {
+        for r in &mut self.rivals {
+            r.mana_max = 1000; // the intrinsic base (u32_322, :55031-33)
+        }
         let mut max = 1000u32;
         let mut houses = 0u32;
-        let mut world = 0u32;
+        // The world total SEEDS with the census caller's intrinsic
+        // base (:56867 — u32_188 = a1's u32_322, the human's 1000).
+        // Wizard-CARRIED mana is NOT counted: the pool walk admits
+        // class 3 models 2/3 only (:56875-78 skips wizards) — adding
+        // it was the playtest-9 "all bars breathe with my pool" bug
+        // (every HUD bar is world-relative).
+        let mut world = 1000u32;
         let mut castle_stored = 0u32;
         for j in 1..features::POOL {
             let e = &self.g.ent[j];
@@ -1642,7 +1776,14 @@ impl World {
             }
             let m = e.f140.max(0) as u32;
             world = world.saturating_add(m);
-            if e.f144 == PLAYER_TARGET {
+            // Claim owner: mana balls/houses carry it in +144, the
+            // wizard-family (castle/balloon) in +24 (:56869-906).
+            let owner = if matches!((e.class64, e.model65), (3, 2) | (3, 3)) {
+                e.id24
+            } else {
+                e.f144
+            };
+            if owner == PLAYER_TARGET {
                 max = max.saturating_add(m);
                 if e.class64 == 10 && e.model65 == 45 {
                     houses = houses.saturating_add(m);
@@ -1650,6 +1791,8 @@ impl World {
                 if e.class64 == 3 && e.model65 == 2 {
                     castle_stored = castle_stored.saturating_add(m);
                 }
+            } else if let Some(r) = self.rivals.iter_mut().find(|r| r.ent == owner) {
+                r.mana_max = r.mana_max.saturating_add(m);
             }
         }
         self.player.mana_max = max;
@@ -1839,7 +1982,11 @@ impl World {
     fn class12_tick(&mut self, i: usize, ctx: &MobCtx) {
         let t = self.g.ent[i].tick70;
         if t >= MANIFEST_BASE {
-            self.manifestation_tick(i, (t - MANIFEST_BASE) as usize);
+            // Rival-owned manifestations (f144 = the owner tag) are
+            // driven by the rival tick, not the player's channels.
+            if self.g.ent[i].f144 == 0 {
+                self.manifestation_tick(i, (t - MANIFEST_BASE) as usize);
+            }
             return;
         }
         // Death-scattered jars decay (life 200-289, :55545-47); the
@@ -2139,6 +2286,53 @@ impl World {
         self.invincible = on;
     }
 
+    /// One rival's app-facing snapshot: the book-roster row
+    /// (sub_22880 :27009-165) and the map name-label pass
+    /// (:57413-48) consume these.
+    pub fn rival_views(&self) -> Vec<RivalView> {
+        self.rivals
+            .iter()
+            .map(|r| {
+                let e = &self.g.ent[r.ent as usize];
+                RivalView {
+                    slot: r.slot,
+                    name: crate::rivals::RIVAL_NAMES[r.slot as usize],
+                    alive: e.tick70 == 1 && !r.eliminated,
+                    eliminated: r.eliminated,
+                    x: e.x as f32 / 256.0,
+                    z: e.y as f32 / 256.0,
+                    mana: r.mana,
+                    mana_max: r.mana_max,
+                    life_frac: if e.max_life > 0 {
+                        (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
+                    } else {
+                        0.0
+                    },
+                    kills: self.kill_tally[r.slot as usize],
+                    invisible: r.invisible,
+                }
+            })
+            .collect()
+    }
+
+    /// The human's kill row of the tally (Type_160+30 on the human).
+    pub fn player_kill_row(&self) -> [u16; 8] {
+        self.kill_tally[0]
+    }
+
+    /// Rival deaths since the last drain (player slots) — the death
+    /// message ticker ("%name% is dead", :55499-517).
+    pub fn take_rival_deaths(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.rival_deaths)
+    }
+
+    /// Beyond Sight is live (v59 = the spell-5 jar's remaining burst,
+    /// :57143-46) — gates rival balloon stamps and the rival name
+    /// labels on the map.
+    pub fn beyond_sight(&self) -> bool {
+        self.player.beyond_sight
+    }
+
     /// Combat stat counters: (kills, shots resolved, aimed hits) —
     /// the original's Type_160 +359/+343/+347.
     pub fn combat_stats(&self) -> (u32, u32, u32) {
@@ -2304,9 +2498,25 @@ impl World {
             // the player to leave (:67249).
             2 | 7 | 11 => self.repeating(i, player, true),
             3 | 8 | 12 => self.repeating(i, player, false),
-            // State 4: fires when the player carries a collected item
-            // (:67293) — stub until inventory exists.
-            4 => {}
+            // State 4: the WIN trigger (sub_59B80 :67293-67315) —
+            // waits for the human's castle-holding completion latch
+            // (13325 bit 2 from the win check), fires its
+            // disposition, despawns, CONSUMES THE WIN (13325 &=
+            // 0xFD) and plays sound 41. Campaign levels script the
+            // goal this way: reaching the share spawns the next
+            // stage instead of ending the level (level 010 unleashes
+            // a mana-stealing genie), and only a re-held share with
+            // no armed win trigger left ends it.
+            4 => {
+                if self.completed && self.player_castle().is_some() {
+                    let dis = self.g.ent[i].id24;
+                    self.fire_disposition(dis, false);
+                    self.g.ent[i].flags |= 0x400;
+                    self.completed = false;
+                    self.win_streak = 0;
+                    self.g.snd(41, i);
+                }
+            }
             // States 13..=29: class-5 bucket 0..=16 empty for 16
             // ticks; state 30: buckets 0..=11 and 16 all empty.
             s @ 13..=29 => self.kill_trigger(i, Some((s - 13) as usize), buckets),
@@ -2467,7 +2677,7 @@ impl World {
         for e in &self.g.ent {
             let kind = match (e.class64, e.tick70) {
                 (11, 0..=3 | 5..=12) => VolumeKind::Proximity,
-                (11, 4) => VolumeKind::Inventory,
+                (11, 4) => VolumeKind::WinTrigger,
                 (11, 13..=30) => VolumeKind::KillWatch,
                 (10, 36) => VolumeKind::Portal,
                 _ => continue,
@@ -3116,7 +3326,10 @@ mod tests {
     fn bare_creature_world(model: u16) -> World {
         let planes = Planes {
             height: vec![100; 0x10000],
-            tile_type: vec![5; 0x10000],
+            // The kraken (m6) is water-masked and now dies on land
+            // (the :21225-91 mover rule) — the bare fixture is an
+            // ocean so every model can live on it.
+            tile_type: vec![0; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
         };
@@ -4577,5 +4790,322 @@ mod tests {
         assert!(!w.loadout().bindable[locked], "stored < req stays locked");
         w.g.ent[castle].f140 = req as i32;
         assert!(w.loadout().bindable[locked], "stored >= req unlocks");
+    }
+
+    // ---- hostile wizards (rival AI) ----------------------------------
+
+    fn rival_cfg(book16: bool, castle_level: u8) -> crate::rivals::RivalConfig {
+        let mut book = [false; SPELL_COUNT];
+        book[0] = true; // fireball
+        book[16] = book16;
+        crate::rivals::RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level,
+            book,
+            allowed: book,
+        }
+    }
+
+    /// A start-marker THING for player slot 1 (class 3 model 5).
+    fn rival_marker_things() -> Vec<Thing> {
+        vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model: 5,
+            x: 120,
+            y: 120,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }]
+    }
+
+    fn rival_world(book16: bool, castle_level: u8) -> World {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let mut w = World::new(planes, &rival_marker_things(), 1, assets());
+        let mut cfgs: [Option<crate::rivals::RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(rival_cfg(book16, castle_level));
+        w.set_wizards(&cfgs, 2);
+        w
+    }
+
+    #[test]
+    fn rival_spawns_at_marker_with_book_and_starting_castle() {
+        let w = rival_world(true, 3);
+        assert_eq!(w.rivals.len(), 1);
+        let r = &w.rivals[0];
+        let e = &w.g.ent[r.ent as usize];
+        assert_eq!((e.class64, e.model65), (3, 1));
+        // Slot 1 wears the second wizard art row (273).
+        assert_eq!(e.type86, 273);
+        assert_eq!((e.x >> 8, e.y >> 8), (120, 120));
+        assert!(r.owned[0] != 0 && r.owned[16] != 0, "the book minted");
+        // The starting castle: level 2 (= tail 3 - 1), full, owned.
+        let c = w.rival_castle(r.ent).expect("starting castle");
+        assert_eq!(w.g.ent[c].f26, 2);
+        assert_eq!(w.g.ent[c].id24, r.ent);
+        assert_eq!(w.g.ent[c].f140, Gen::CASTLE_CAP[2].clamp(0, 320_000));
+        // The census credits the castle to the rival, not the player.
+        let mut w = w;
+        w.tick(away(), PlayerCommand::default());
+        assert!(w.rivals[0].mana_max > 1000);
+        assert_eq!(w.player.mana_max, 1000);
+    }
+
+    #[test]
+    fn rival_at_war_fires_on_the_player() {
+        let mut w = rival_world(false, 0);
+        w.rivals[0].war[0] = true;
+        w.rivals[0].hate[0] = 60000;
+        // Sit the player in range, awake and visible.
+        let pose = PlayerPose::from_tiles(120.5, 108.0 / 8.0, 112.0, 0.0, 0.0, 0.0);
+        let mut fired = false;
+        for _ in 0..400 {
+            w.tick(pose, PlayerCommand::default());
+            let rid = w.rivals[0].ent;
+            if w.g.ent.iter().any(|e| {
+                e.class64 == 9 && e.flags & 0x400 == 0 && e.id24 == rid
+            }) {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "the rival never fired on the player");
+        assert_eq!(w.rivals[0].state, crate::rivals::AiState::AttackWizard);
+    }
+
+    #[test]
+    fn rival_death_scatters_jars_and_castleless_death_eliminates() {
+        let mut w = rival_world(false, 0);
+        let rid = w.rivals[0].ent as usize;
+        // Kill it: a lethal ch0 hit from the player (grace spent).
+        w.rivals[0].grace = 0;
+        w.g.ent[rid].mail[0] = (60000, PLAYER_TARGET);
+        for _ in 0..300 {
+            w.tick(away(), PlayerCommand::default());
+            if w.rivals[0].eliminated {
+                break;
+            }
+        }
+        assert!(w.rivals[0].eliminated, "castle-less death must eliminate");
+        // The kill credited to the human.
+        assert_eq!(w.player_kill_row()[1], 1);
+        // The known book scattered as decaying ground jars + a grave.
+        let jars = w
+            .g
+            .ent
+            .iter()
+            .filter(|e| e.class64 == 12 && e.tick70 == DROPPED_JAR && e.flags & 0x400 == 0)
+            .count();
+        assert_eq!(jars, 1, "one owned spell scatters one jar");
+        assert!(
+            w.g.ent
+                .iter()
+                .any(|e| e.class64 == 10 && e.model65 == 40 && e.flags & 0x400 == 0),
+            "the grave spawned"
+        );
+        // Hidden husk: not in the drawable set.
+        assert!(
+            !w.live_poses()
+                .iter()
+                .any(|p| p.class == 3 && p.model == 1),
+            "the dead wizard billboard must be hidden"
+        );
+        let death_slots = w.take_rival_deaths();
+        assert_eq!(death_slots, vec![1]);
+    }
+
+    #[test]
+    fn rival_with_castle_respawns_with_grace() {
+        let mut w = rival_world(true, 1);
+        let rid = w.rivals[0].ent as usize;
+        w.rivals[0].grace = 0;
+        w.g.ent[rid].mail[0] = (60000, PLAYER_TARGET);
+        let mut respawned = false;
+        for _ in 0..2000 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[rid].tick70 == 1 && w.g.ent[rid].act_life > 0 {
+                respawned = true;
+                break;
+            }
+        }
+        assert!(respawned, "the castled rival must respawn");
+        assert!(!w.rivals[0].eliminated);
+        // Back at the castle.
+        let c = w.rival_castle(w.rivals[0].ent).unwrap();
+        assert_eq!(w.g.ent[rid].x >> 8, w.g.ent[c].x >> 8);
+    }
+
+    #[test]
+    fn castleless_rival_scouts_and_plants_a_castle() {
+        let mut w = rival_world(true, 0);
+        let mut built = None;
+        for _ in 0..6000 {
+            w.tick(away(), PlayerCommand::default());
+            if let Some(c) = w.rival_castle(w.rivals[0].ent) {
+                built = Some(c);
+                break;
+            }
+        }
+        let c = built.expect("the rival never planted its castle");
+        assert_eq!(w.g.ent[c].id24, w.rivals[0].ent);
+        // The free initial plant: level 0 shell, terrain stamped.
+        assert!(w.g.ent[c].f26 >= 0);
+    }
+
+    #[test]
+    fn beached_kraken_dies_landlocked_kraken_swims() {
+        // All-land world: a spawned kraken (row 18, water-only mask)
+        // must die within a few boundary crossings (the :21225-91
+        // mover rule — same-tile shortcut is FIRST-candidate-only).
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let mut w = World::new(planes, &[], 1, assets());
+        let k = w.g.spawn_creature(6, 120 << 8 | 128, 120 << 8 | 128, 3200).unwrap();
+        w.g.ent[k].f58 = 16; // awake
+        let mut died = false;
+        for _ in 0..200 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[k].act_life < 0 || w.g.ent[k].tick70 == 40 {
+                died = true;
+                break;
+            }
+        }
+        assert!(died, "the beached kraken must die");
+
+        // All-water world: it lives.
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![0; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let mut w = World::new(planes, &[], 1, assets());
+        let k = w.g.spawn_creature(6, 120 << 8 | 128, 120 << 8 | 128, 3200).unwrap();
+        w.g.ent[k].f58 = 16;
+        for _ in 0..200 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[k].act_life > 0 && w.g.ent[k].tick70 != 40,
+            "the swimming kraken must live"
+        );
+    }
+
+    #[test]
+    fn win_trigger_consumes_the_completion_and_fires_its_disposition() {
+        // A state-4 win trigger whose disposition 1 spawns a creature.
+        let things = vec![
+            Thing {
+                slot: 0,
+                kind: ThingKind::Entity,
+                class: 11,
+                model: 4,
+                x: 75,
+                y: 162,
+                dis_id: 0,
+                swi_sz: 9,
+                swi_id: 1,
+                parent: 0,
+                child: 0,
+                par3: None,
+            },
+            Thing {
+                slot: 1,
+                kind: ThingKind::Entity,
+                class: 5,
+                model: 2,
+                x: 112,
+                y: 110,
+                dis_id: 1,
+                swi_sz: 0,
+                swi_id: 1,
+                parent: 0,
+                child: 0,
+                par3: None,
+            },
+        ];
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+        };
+        let mut w = World::new(planes, &things, 1, assets());
+        // No win: the trigger sits armed.
+        for _ in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.live_things().len(), 0);
+        // Latch a win with a standing castle: the trigger EATS it.
+        let c = w.g.spawn_class3(2, 100 << 8, 100 << 8, 3200).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.completed = true;
+        for _ in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(!w.completed, "the win trigger must consume the win bit");
+        let creatures = w
+            .live_things()
+            .iter()
+            .filter(|t| t.class == 5)
+            .count();
+        assert_eq!(creatures, 1, "the disposition spawned its stage");
+    }
+
+    #[test]
+    fn castle_balloons_are_damageable() {
+        let mut w = rival_world(true, 3);
+        // The castle tick spawns the fleet on its every-other-tick
+        // dispatcher.
+        let mut balloon = None;
+        for _ in 0..64 {
+            w.tick(away(), PlayerCommand::default());
+            balloon = (1..features::POOL).find(|&j| {
+                let e = &w.g.ent[j];
+                e.class64 == 3 && e.model65 == 3 && e.flags & 0x400 == 0
+            });
+            if balloon.is_some() {
+                break;
+            }
+        }
+        let b = balloon.expect("the level-3 castle must field a balloon");
+        assert_eq!(w.g.ent[b].f28, 1, "the ch0 vulnerability bit (+28)");
+        assert!(w.g.ent[b].flags & 4 != 0, "linked into the cell grid");
+        // Docked at the castle the delivery pass heals it to full
+        // every tick (authentic: sub_47F90's LABEL_17 order) — hit
+        // it IN FLIGHT instead: drag it out of the delivery ring.
+        let (bx, by, bz) = {
+            let e = &w.g.ent[b];
+            (e.x.wrapping_add(2560), e.y.wrapping_add(2560), e.z)
+        };
+        w.g.move_relink(b, bx, by, bz);
+        let before = w.g.ent[b].act_life;
+        let f = w.g.spawn_effect(0, bx, by, bz).unwrap();
+        w.g.ent[f].id24 = PLAYER_TARGET;
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[b].act_life < before,
+            "the flying balloon must take area damage ({} -> {})",
+            before,
+            w.g.ent[b].act_life
+        );
     }
 }

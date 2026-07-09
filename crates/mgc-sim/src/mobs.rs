@@ -489,14 +489,28 @@ impl Gen {
     /// One candidate probe of the movement core: clamp + step from the
     /// current position, then the block test (terrain mask + local
     /// roughness; crossing into a new tile only).
-    fn move_probe(&self, i: usize, yaw: u16, row: &BehaviorRow) -> Option<(u16, u16, i16)> {
+    fn move_probe(
+        &self,
+        i: usize,
+        yaw: u16,
+        row: &BehaviorRow,
+        first: bool,
+    ) -> Option<(u16, u16, i16)> {
         let e = &self.ent[i];
         let mut tmp = (e.x, e.y, e.z);
         let ground = self.ground_z(e.x, e.y) as i16;
         Self::alt_clamp(&mut tmp.2, ground, row);
         Self::polar_step(&mut tmp, yaw, 0, e.f126);
-        if e.x >> 8 == tmp.0 >> 8 && e.y >> 8 == tmp.1 >> 8 {
-            return Some(tmp); // same tile → free (:21225)
+        // The same-tile shortcut applies ONLY to the first candidate
+        // (:21225-30) — the three retry headings test the mask
+        // unconditionally (:21252/:21274/:21291). This is what kills
+        // a BEACHED KRAKEN (row 18's v_20 = water-only): terrain
+        // raised under it → the next boundary crossing fails all
+        // four candidates → life = -1 (player-reported retail rule,
+        // 2026-07-09; our old every-candidate shortcut let it bounce
+        // forever inside the land tile).
+        if first && e.x >> 8 == tmp.0 >> 8 && e.y >> 8 == tmp.1 >> 8 {
+            return Some(tmp);
         }
         // sub_11640 mode 1: capability mask; then roughness < v_16.
         if self.cap_bit(tmp.0, tmp.1) & !row.v_20 != 0 {
@@ -528,7 +542,7 @@ impl Gen {
                 // Failed candidates leave +30 mutated (:21239).
                 self.ent[i].f30 = yaw;
             }
-            if let Some(tmp) = self.move_probe(i, yaw, row) {
+            if let Some(tmp) = self.move_probe(i, yaw, row, k == 0) {
                 self.move_relink(i, tmp.0, tmp.1, tmp.2);
                 committed = true;
                 break;

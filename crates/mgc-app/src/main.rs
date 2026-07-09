@@ -45,6 +45,10 @@ struct WorldInit {
     seed: u32,
     assets: mgc_sim::features::FeatureAssets,
     win_pct: u16,
+    /// Rival wizard configs by player slot (wizards.json) + the
+    /// level's active-slot count.
+    wizards: [Option<mgc_sim::rivals::RivalConfig>; 8],
+    player_count: u16,
 }
 
 impl WorldInit {
@@ -58,8 +62,44 @@ impl WorldInit {
         if self.win_pct > 0 {
             w.set_win_pct(self.win_pct);
         }
+        w.set_wizards(&self.wizards, self.player_count);
         w
     }
+}
+
+/// Resolve the package's wizards.json into per-slot rival configs
+/// (MC1: the 8 x 216-byte level-record tail — aggression/accuracy/
+/// tempo + the two 24-spell masks; the AI's book = pregrant &&
+/// allowed, remc1 :49222).
+fn rival_configs(
+    wizards: Option<&mgc_formats::Wizards>,
+) -> ([Option<mgc_sim::rivals::RivalConfig>; 8], u16) {
+    let mut out: [Option<mgc_sim::rivals::RivalConfig>; 8] = Default::default();
+    let Some(w) = wizards else { return (out, 1) };
+    let count = w.player_count.unwrap_or(1).min(8);
+    for (slot, cfg) in w.wizards.iter().enumerate().take(8).skip(1) {
+        let (Some(acc), Some(tempo), Some(allowed_mask)) =
+            (cfg.accuracy, cfg.tempo, cfg.allowed_spells.as_ref())
+        else {
+            continue; // MC2-shaped config: no MC1 rival data
+        };
+        let mut book = [false; 24];
+        let mut allowed = [false; 24];
+        for s in 0..24 {
+            let a = allowed_mask.get(s).copied().unwrap_or(0) != 0;
+            allowed[s] = a;
+            book[s] = a && cfg.starting_spells.get(s).copied().unwrap_or(0) != 0;
+        }
+        out[slot] = Some(mgc_sim::rivals::RivalConfig {
+            aggression: cfg.aggression.clamp(0, 255) as u8,
+            accuracy: acc.clamp(0, 255) as u8,
+            tempo: tempo.clamp(0, 255) as u8,
+            castle_level: cfg.castle_level.unwrap_or(0),
+            book,
+            allowed,
+        });
+    }
+    (out, count)
 }
 
 struct LoadedLevel {
@@ -121,7 +161,7 @@ fn map_areas(world: &mgc_sim::world::World) -> Vec<mgc_render::MapArea> {
             color: match v.kind {
                 VolumeKind::Proximity => [255, 196, 32],
                 VolumeKind::KillWatch => [255, 64, 64],
-                VolumeKind::Inventory => [64, 208, 255],
+                VolumeKind::WinTrigger => [64, 208, 255],
                 VolumeKind::Portal => [208, 96, 255],
             },
         })
@@ -230,6 +270,7 @@ fn load_level(
                     .as_ref()
                     .and_then(|g| g.footer)
                     .map_or(0, |f| f[0]);
+                let (wizards, player_count) = rival_configs(package.wizards.as_ref());
                 let init = WorldInit {
                     planes: mgc_sim::features::Planes {
                         height: height.clone(),
@@ -241,6 +282,8 @@ fn load_level(
                     seed,
                     assets,
                     win_pct,
+                    wizards,
+                    player_count,
                 };
                 let w = init.build();
                 // The view starts from the post-feature planes.
@@ -381,10 +424,14 @@ fn load_level(
         world_init,
         palette_rgba: bundle.palette,
         map_icons: entities::MapIcons {
-            // Castle = UI sprite 58+team, balloon = 66+team (team 0);
-            // remc1 sub_48710 :57230/:57234.
-            castle: ui_assets.as_ref().and_then(|u| u.map_stamp(58)),
-            balloon: ui_assets.as_ref().and_then(|u| u.map_stamp(66)),
+            // Castle = UI sprite 58+team, balloon = 66+team, all
+            // eight teams; remc1 sub_48710 :57230/:57234.
+            castle: std::array::from_fn(|t| {
+                ui_assets.as_ref().and_then(|u| u.map_stamp(58 + t))
+            }),
+            balloon: std::array::from_fn(|t| {
+                ui_assets.as_ref().and_then(|u| u.map_stamp(66 + t))
+            }),
         },
         map_stamps: Vec::new(),
         ui: ui_assets,
@@ -730,6 +777,15 @@ impl App {
     /// every 8th tick unless terrain actually changed.
     fn sync_world(&mut self) {
         let Some(w) = &mut self.sim.world else { return };
+        for slot in w.take_rival_deaths() {
+            // The retail death broadcast ("%name% <str 54>",
+            // :55499-517) — console interim until DrawText lands.
+            let name = mgc_sim::rivals::RIVAL_NAMES
+                .get(slot as usize)
+                .copied()
+                .unwrap_or("?");
+            eprintln!("{name} is dead");
+        }
         let terrain = w.terrain_dirty;
         let entities = w.entities_dirty;
         if terrain {
@@ -766,7 +822,16 @@ impl App {
                 // toggle byte; ~4 Hz at 30 ticks/s reads right).
                 self.sim.tick >> 3 & 1 == 0,
             );
-            self.level.map_stamps = entities::map_stamps_from_poses(&poses, &self.level.map_icons);
+            self.level.map_stamps = entities::map_stamps_from_poses(
+                &poses,
+                &self.level.map_icons,
+                w.beyond_sight(),
+            );
+            // Beyond-Sight rival position markers (interim for the
+            // retail name labels — DrawText track).
+            self.level
+                .map_dots
+                .extend(entities::rival_markers(&w.rival_views(), w.beyond_sight()));
             self.castle_pos = poses
                 .iter()
                 .find(|p| p.class == 3 && p.model == 2 && p.player_owned)

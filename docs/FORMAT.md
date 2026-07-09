@@ -40,7 +40,7 @@ A `.mgcl` file is a **ZIP archive with all members stored uncompressed**
 | `things.json` | yes | JSON | Entity and marker records |
 | `genparams.json` | no | JSON | Original terrain-generation parameters (provenance) |
 | `level.json` | no | JSON | MC2 level header: environment, player slots (absent on MC1) |
-| `wizards.json` | no | JSON | MC2 per-wizard configuration: AI stats, spell loadouts |
+| `wizards.json` | no | JSON | Per-wizard configuration: AI stats, spell loadouts (MC2 since v1, MC1 since v2) |
 | `stages.json` | no | JSON | MC2 mission script: stage checkpoints and variables |
 | `terrain/height.bin` | no | binary | Expanded heightmap (see below) |
 | `terrain/type.bin` | no | binary | Expanded terrain-type map |
@@ -157,9 +157,13 @@ is omitted where not applicable.
 - `players`: activation flags for the 8 wizard slots.
 - `unk*`: unexplained original header fields, preserved verbatim.
 
-### `wizards.json` (MC2 only)
+### `wizards.json`
 
 Exactly 8 blocks; slot 0 is the human player, 1–7 the AI wizards.
+Both games bake one; per-game fields are omitted where not
+applicable.
+
+MC2 (from the level header block):
 
 ```json
 {
@@ -176,6 +180,39 @@ Spell arrays have 26 entries indexed by MC2 spell ID (0 = Fireball …
 25 = Cave In); `starting_spells` values are upgrade tiers 0–3.
 `unknown_spells` mirrors an unexplained original array, preserved
 verbatim.
+
+MC1/Hidden Worlds (format 2+; from the level record's 8 × 216-byte
+per-player table at offset 37072 and the decoded 12-byte tail —
+which `genparams.json`'s `footer` still preserves verbatim):
+
+```json
+{
+  "wizards": [
+    { "aggression": 128, "accuracy": 128, "tempo": 128,
+      "castle_level": 0,
+      "starting_spells": [1, 0, ...24 values...],
+      "allowed_spells":  [1, 1, ...24 values...] }
+  ],
+  "player_count": 2,
+  "tail_38800": 35
+}
+```
+
+- `player_count`: active wizard slots (the engine services only slots
+  below it; slot 0 = the human).
+- `aggression`/`accuracy`/`tempo` (0–255): the AI personality —
+  remc1 Type_160 `u16_522`/`u16_524`/`u16_526` (hate and war
+  thresholds / aim cone / decision-and-burst cadence, turn agility,
+  respawn delay).
+- `castle_level`: 0 = no starting castle, N = the wizard spawns with
+  a castle at level N−1 (AI slots; nonzero values on slot 0 appear
+  on some levels — semantics for the human unverified).
+- `starting_spells` (the record's var_230883) and `allowed_spells`
+  (var_230983), 24 flags by MC1 spell ID: an AI wizard's level-start
+  book grants spells flagged in BOTH; the human grant intersects
+  `allowed_spells` with campaign-collected flags; `allowed_spells`
+  also gates what an AI may learn mid-level.
+- `tail_38800`: unexplained tail word, preserved verbatim.
 
 ### `stages.json` (MC2 only)
 

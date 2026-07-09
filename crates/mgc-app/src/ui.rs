@@ -425,9 +425,15 @@ pub fn book_quads(
             && cursor.0 < cell[0] + cell[2]
             && cursor.1 >= cell[1]
             && cursor.1 < cell[1] + cell[3];
-        // Only gate-passing owned spells become the bind target
-        // (var_u8_22); every hovered cell still gets feedback below.
-        if over && bindable {
+        // Every OWNED hovered spell becomes the bind target — the
+        // castle-req gate does NOT block assignment (player retail
+        // memory, 2026-07-09: quickselect keys were campaign state
+        // routinely bound to not-yet-castable spells; the equip
+        // command :48717-31 checks ownership only). The :26926
+        // castle gate stays purely visual (the LOCKED wash + the
+        // equipped-panel wash) and the CAST keeps fizzling sim-side
+        // until the castle stores enough.
+        if over && owned {
             hovered = Some(spell_id);
         }
 
@@ -504,13 +510,13 @@ pub fn book_quads(
                 quads.push(solid(cell, LOCKED_WASH));
             }
         }
-        if over && !bindable {
+        if over && !owned {
             // Hover ring (sub_24DA0/sub_24D20, ink byte_AE167): retail
-            // rings EVERY hovered cell — locked and unowned included —
-            // only the bind-candidate recording is gated. The hovered
-            // BINDABLE cell gets the panel redraw below instead of a
-            // ring. (Ring colour = a text-table ink; hand-tuned until
-            // the LUT bake.)
+            // rings EVERY hovered cell — unowned included — only the
+            // bind-candidate recording is gated (on ownership). A
+            // hovered OWNED cell gets the panel redraw below instead
+            // of a ring. (Ring colour = a text-table ink; hand-tuned
+            // until the LUT bake.)
             let f = cell;
             let t = [0.9, 0.85, 0.5, 0.9];
             quads.push(solid([f[0], f[1], f[2], 2.0], t));
@@ -519,7 +525,7 @@ pub fn book_quads(
             quads.push(solid([f[0] + f[2] - 2.0, f[1], 2.0, f[3]], t));
         }
     }
-    // The hovered BINDABLE cell is redrawn as a full equipped-spell
+    // The hovered OWNED cell is redrawn as a full equipped-spell
     // panel at the cell origin — retail calls `sub_23D40(x, y, spell,
     // 1)` AFTER the grid loop (a4=1 = raw opaque DrawBitmap frame, not
     // the translucent sub_23940 blend), overdrawing its neighbours
@@ -602,10 +608,8 @@ const SPR_SPELL_ICON: usize = 6; // spell icon base: [spell + 6]
 const PANEL_TINT: [f32; 4] = [1.0, 1.0, 1.0, mgc_render::HUD_PANEL_ALPHA];
 /// Life-bar color (remc1 uses palette index 0x7B, a team red).
 const LIFE_RED: [f32; 4] = [0.85, 0.15, 0.12, 1.0];
-const CAP_AMBER: [f32; 4] = [0.85, 0.7, 0.2, 1.0];
 /// Collected/banked mana bar (sub_22E50 :27377, color v29 =
-/// byte_99B58[2*owner]) — WHITE, not blue (player 2026-07-07). The
-/// castle-capacity bar under it (v27) stays the amber team tint.
+/// byte_99B58[2*owner]) — WHITE, not blue (player 2026-07-07).
 const MANA_WHITE: [f32; 4] = [0.95, 0.95, 0.95, 1.0];
 /// Spell availability progress bar (sub_23D40 :27705, color v26 =
 /// byte_99B58[1+2*owner]) — GREY, not blue (player 2026-07-07); the
@@ -743,7 +747,7 @@ pub fn hud_quads(
         SPR_WIZ_BG
     };
     push_opt(&mut quads, assets.sprite_quad_tint(slot_a_bg, v22 * s, 2.0 * s, s, panel_tint));
-    if let Some((stored, capacity, level)) = castle {
+    if let Some((_stored, capacity, level)) = castle {
         let ox = v22;
         // Castle-level glyph [43+level] (emblem/heart/orb/digit baked
         // in) then the divider [42].
@@ -759,17 +763,29 @@ pub fn hud_quads(
             .castle_hp
             .map_or(1.0, |(cur, max)| cur.max(0) as f32 / max.max(1) as f32);
         bar(&mut quads, s, ox + BAR_X, 10.0, 10.0, hp, LIFE_RED);
-        // Mana capacity + banked, world-relative (y=28), overlaid.
-        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, capacity as f32 / world, CAP_AMBER);
-        bar(
-            &mut quads,
-            s,
-            ox + BAR_X,
-            28.0,
-            10.0,
-            (stored + loadout.banked) as f32 / world,
-            MANA_WHITE,
-        );
+        // Mana capacity + banked, world-relative (y=28), overlaid
+        // (:27240-66 verbatim): capacity (castle +136) in v27 =
+        // byte_99B58[1+2·team] — the GREY family, same index as the
+        // spell meter (player-certified; our amber was an invention)
+        // — then the BANKED total (houses u32_308 + castle stored
+        // +140 = loadout.banked; adding `stored` again was the
+        // double-count that pinned the bar full). banked == capacity
+        // blinks the single full bar between the pair (:27242-53).
+        if loadout.banked >= capacity && capacity > 0 {
+            let c = if alert_blink { METER_GREY } else { MANA_WHITE };
+            bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, capacity as f32 / world, c);
+        } else {
+            bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, capacity as f32 / world, METER_GREY);
+            bar(
+                &mut quads,
+                s,
+                ox + BAR_X,
+                28.0,
+                10.0,
+                loadout.banked as f32 / world,
+                MANA_WHITE,
+            );
+        }
         win_tick(&mut quads, ox);
     }
 
@@ -829,9 +845,10 @@ pub fn hud_quads(
             vitals.life as f32 / vitals.life_max.max(1) as f32,
             LIFE_RED,
         );
-        // Self mana: capacity (var_136 = mana_max, amber) + current
-        // (var_140 = mana, white) over the world total (:27376-77).
-        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana_max as f32 / world, CAP_AMBER);
+        // Self mana: capacity (var_136 = mana_max, the v27 grey) +
+        // current (var_140 = mana, white) over the world total
+        // (:27376-77).
+        bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana_max as f32 / world, METER_GREY);
         bar(&mut quads, s, ox + BAR_X, 28.0, 10.0, loadout.mana as f32 / world, MANA_WHITE);
         win_tick(&mut quads, ox);
     }

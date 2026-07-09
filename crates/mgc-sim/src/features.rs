@@ -385,6 +385,13 @@ pub(crate) struct Gen {
     /// DIRECT struct writes in the original — spawn grace does NOT
     /// wipe them, so even the invincible dev player gets dragged.
     pub(crate) player_knock: (u16, i16),
+    /// Rival wizard entity by player slot (0 = none; slot 0 = the
+    /// human, unused) — the sprite-family team resolver for owner
+    /// recolors (mana balls 105+8·team, balloons 169+team, castle
+    /// flags 177+team). Maintained by the rival spawn/respawn path;
+    /// claims of an eliminated wizard keep their color (property
+    /// persists).
+    pub(crate) rival_ents: [u16; 8],
     /// The human player's village-aggro timer (the wizard struct's
     /// +528): set to 200 by offenses against village property or
     /// population (building hits, villager-family hits and kills),
@@ -492,6 +499,7 @@ impl Gen {
             erupting: 0,
             plume: 0,
             player_knock: (0, 0),
+            rival_ents: [0; 8],
             player_aggro: 0,
             player_invisible: false,
             player_rebound: false,
@@ -2260,6 +2268,46 @@ impl Gen {
         }
     }
 
+    /// The level-init starting-castle terrain replay (the sub_279D0
+    /// loop :54982-93): the cumulative build-row footprints stamped
+    /// INSTANTLY (divisor-1 flatten + paint per row), protection
+    /// promoted like the painter finish (:30697-707). Rival wizards
+    /// with a nonzero level-tail castle level spawn on this.
+    pub(crate) fn stamp_castle_terrain(&mut self, rows: usize, cx: u8, cy: u8, target: i32) {
+        let rows = rows.clamp(1, 8);
+        for r in 1..=rows {
+            self.flatten_build_row(r, cx, cy, target, 1);
+            self.paint_build_row(r, cx, cy);
+        }
+        let def = self.assets.build_tab[rows % self.assets.build_tab.len()];
+        let x0 = cx.wrapping_sub((def.w >> 1) as u8);
+        let y0 = cy.wrapping_sub((def.h >> 1) as u8);
+        for dy in 0..def.h {
+            for dx in 0..def.w {
+                let t = tile(x0.wrapping_add(dx), y0.wrapping_add(dy));
+                if self.t.angle[t] & 8 != 0 {
+                    self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
+                }
+            }
+        }
+    }
+
+    /// sub_37150 (:43798) + the HP ladder: size a castle entity's
+    /// extents and life to its level (level 0 keeps the ctor shell).
+    pub(crate) fn castle_extents(&mut self, i: usize, lvl: u8) {
+        if lvl >= 1 {
+            let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
+            let e = &mut self.ent[i];
+            e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
+            e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
+            e.f84 = 0x4000;
+        }
+        let hp = Self::CASTLE_HP[(lvl as usize).min(7)];
+        self.ent[i].max_life = hp;
+        self.ent[i].act_life = hp as i32;
+        self.ent[i].site_z = self.ent[i].z;
+    }
+
     /// sub_293D0 (:31009), byte70 45: the castle UPGRADE token — the
     /// delivery receipt the upgrade ball morphs into at the castle.
     /// One armed tick: touching the linked castle (the original
@@ -2317,7 +2365,7 @@ impl Gen {
     /// another castle overlaps the next level's extents, or any
     /// tile on the four edges of the new footprint carries the
     /// protection bit (blocked/steep ground).
-    fn castle_upgrade_space_ok(&self, i: usize) -> bool {
+    pub(crate) fn castle_upgrade_space_ok(&self, i: usize) -> bool {
         let next = (self.ent[i].f26 + 1).clamp(1, 8) as usize;
         let def = self.assets.build_tab[next % self.assets.build_tab.len()];
         let half_w = ((((def.w as u16) << 8).wrapping_add(1280)) >> 1) as i32;
@@ -2381,6 +2429,18 @@ impl Gen {
         }
     }
 
+    /// A wizard owner tag's team slot: PLAYER_TARGET = 0, a rival's
+    /// entity slot = its player slot (wizext var_48 in the original).
+    pub(crate) fn owner_team(&self, owner: u16) -> Option<u8> {
+        if owner == crate::mobs::PLAYER_TARGET {
+            return Some(0);
+        }
+        (owner != 0)
+            .then(|| self.rival_ents.iter().position(|&e| e == owner))
+            .flatten()
+            .map(|s| s as u8)
+    }
+
     /// sub_37A00 (:44266): the mana BALLOON entity (class 3 m3) —
     /// life 10000, speed 48, cargo capacity 10000, behavior row 9,
     /// sprite 169. The castle dispatcher overwrites the ctor's
@@ -2397,14 +2457,24 @@ impl Gen {
             e.f126 = 48;
             e.f136 = 10000;
             e.f140 = 0;
+            // The ch0 vulnerability bit (+28 = 1, :44283) — without
+            // it area writes skip the balloon entirely (the
+            // playtest-9 "balloons are invulnerable" report; the
+            // authored-placement ctor had it, this spawner didn't).
+            e.f28 = 1;
             e.row156 = 9;
             e.id24 = own;
             e.f144 = own;
-            e.x = x;
-            e.y = y;
-            e.z = z;
         }
-        self.set_sprite(i, 169);
+        // Linked at spawn like the ctor (sub_41CF0 :44284) — an
+        // unlinked balloon hovering its home tile was also invisible
+        // to the direct-hit cell scans.
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        // Balloon sprite = 169 + team (the castle dispatcher's
+        // `+86 += var_48`, :56347).
+        let team = self.owner_team(own).unwrap_or(0) as u16;
+        self.set_sprite(i, 169 + team);
         Some(i)
     }
 
@@ -2521,8 +2591,12 @@ impl Gen {
     /// params from the behavior row). Death drops the cargo as a
     /// claimed ball (the dispatcher's slot cleanup, :56368-72).
     pub(crate) fn balloon_tick(&mut self, i: usize) {
-        use crate::mc1_behavior::BEHAVIOR;
-        // ch0 damage inbox (sub_481D0 :56813).
+        self.balloon_move(i);
+        // ch0 damage inbox at the tick's END (sub_481D0, reached via
+        // LABEL_17 :56755-58 — movement/delivery FIRST, so the dock
+        // pass's full heal precedes the damage: a balloon parked in
+        // its castle ring is authentically near-invulnerable to chip
+        // damage; they die in flight, or to a single lethal burst).
         if self.ent[i].mail[0].1 != 0 {
             let amt = self.ent[i].mail[0].0;
             self.ent[i].mail[0].1 = 0;
@@ -2535,11 +2609,14 @@ impl Gen {
         if self.ent[i].act_life < 0 {
             self.corpse_drop(i);
             self.ent[i].flags |= 0x400;
-            return;
         }
+    }
+
+    fn balloon_move(&mut self, i: usize) {
+        use crate::mc1_behavior::BEHAVIOR;
         let t = self.ent[i].f146 as usize;
         if t == 0 || self.ent[t].flags & 0x400 != 0 {
-            return; // idle: inbox only (:56814)
+            return; // idle (:56814)
         }
         let mut pos = {
             let e = &self.ent[i];

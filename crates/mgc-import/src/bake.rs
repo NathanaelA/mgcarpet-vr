@@ -84,7 +84,28 @@ pub fn package_mc1_level(
         },
         things: Things { things },
         header: None,
-        wizards: None,
+        wizards: Some(Wizards {
+            wizards: level
+                .wizards
+                .iter()
+                .zip(level.castle_levels)
+                .map(|(w, castle)| WizardConfig {
+                    aggression: w.aggression as i16,
+                    reflexes: None,
+                    perception: None,
+                    life: None,
+                    starting_spells: w.pregrant.to_vec(),
+                    unknown_spells: Vec::new(),
+                    blocked_spells: Vec::new(),
+                    accuracy: Some(w.accuracy as i16),
+                    tempo: Some(w.tempo as i16),
+                    castle_level: Some(castle),
+                    allowed_spells: Some(w.allowed.to_vec()),
+                })
+                .collect(),
+            player_count: Some(level.player_count),
+            tail_38800: Some(level.tail_38800),
+        }),
         stages: None,
         terrain: None,
         gen_params: Some(GenParams {
@@ -295,14 +316,20 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
                 .iter()
                 .map(|w| WizardConfig {
                     aggression: w.aggression,
-                    reflexes: w.reflexes,
-                    perception: w.perception,
-                    life: w.life,
+                    reflexes: Some(w.reflexes),
+                    perception: Some(w.perception),
+                    life: Some(w.life),
                     starting_spells: w.starting_spells.to_vec(),
                     unknown_spells: w.unknown_spells.to_vec(),
                     blocked_spells: w.blocked_spells.to_vec(),
+                    accuracy: None,
+                    tempo: None,
+                    castle_level: None,
+                    allowed_spells: None,
                 })
                 .collect(),
+            player_count: None,
+            tail_38800: None,
         }),
         terrain: None,
         stages: Some(Stages {

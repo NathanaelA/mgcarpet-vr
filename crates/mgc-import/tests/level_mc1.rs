@@ -29,11 +29,12 @@ fn check_all(archive: &Archive, label: &str) -> Vec<Mc1Level> {
         let level = Mc1Level::parse(&payload)
             .unwrap_or_else(|e| panic!("{label} level {}: {e}", entry.index));
 
-        // Dev leftovers (e.g. DDLEVELS index 198) can be terrain-only
-        // with zero placed entities but still carry markers.
+        // Dev leftovers (e.g. DDLEVELS index 198, a pure terrain
+        // arena) can carry zero placed entities — but then the level
+        // tail still configures wizards.
         let active = level.active_things().count();
         assert!(
-            active > 0 || level.markers().count() > 0,
+            active > 0 || level.markers().count() > 0 || level.player_count > 0,
             "{label} level {} has no content at all",
             entry.index
         );

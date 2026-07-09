@@ -21,6 +21,7 @@ pub mod mc1_entities;
 pub mod mc1_sprite_stats;
 pub mod mc1_tables;
 mod mobs;
+pub mod rivals;
 pub mod spells;
 pub mod world;
 mod tables;

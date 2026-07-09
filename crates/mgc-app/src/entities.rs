@@ -184,11 +184,24 @@ pub fn health_bars_from_poses(
     out
 }
 
-/// The team-0 color pair from `byte_99B58` (remc1 :5740): even entry
-/// = the violet projectile/blink-A color, odd = the blue creature/
-/// blink-B color. Raw palette indices, exactly as plotted.
-const TEAM0_VIOLET: u8 = 0xB7;
-const TEAM0_BLUE: u8 = 0x71;
+/// The team color pairs `byte_99B58[16]` (remc1 :5740): per team,
+/// even entry = the violet-family projectile/blink-A color, odd =
+/// the blue-family creature/blink-B color. Raw palette indices,
+/// exactly as plotted.
+const TEAM_COLORS: [(u8, u8); 8] = [
+    (0xB7, 0x71),
+    (0x7D, 0x7A),
+    (0x9D, 0x9A),
+    (0x07, 0x5A),
+    (0x1D, 0x1B),
+    (0xDD, 0xDA),
+    (0x3C, 0x39),
+    (0x10, 0x0E),
+];
+#[cfg(test)]
+const TEAM0_VIOLET: u8 = TEAM_COLORS[0].0;
+#[cfg(test)]
+const TEAM0_BLUE: u8 = TEAM_COLORS[0].1;
 
 /// Icon patches for the map's UI-sprite markers (cropped from the
 /// composited HSPR atlas): castle = sprite 58+team, balloon = 66+team
@@ -196,8 +209,10 @@ const TEAM0_BLUE: u8 = 0x71;
 /// 83/84 join when trigger markers land.
 #[derive(Default)]
 pub struct MapIcons {
-    pub castle: Option<mgc_render::MapStamp>,
-    pub balloon: Option<mgc_render::MapStamp>,
+    /// Castle stamps 58..=65 by team slot.
+    pub castle: [Option<mgc_render::MapStamp>; 8],
+    /// Balloon stamps 66..=73 by team slot.
+    pub balloon: [Option<mgc_render::MapStamp>; 8],
 }
 
 /// Map dots from the live pose set — the verbatim color switch of
@@ -239,7 +254,8 @@ pub fn map_dots_from_poses(
         }
         // LABEL_32 (:57272-76): owner class-3 → the team color;
         // wild → the LUT[3856] blue-violet.
-        let owner_color = if p.player_owned { TEAM0_VIOLET } else { wild_blue };
+        let team = p.team.map(|t| TEAM_COLORS[(t as usize).min(7)]);
+        let owner_color = team.map(|(v, _)| v).unwrap_or(wild_blue);
         let mut size = 1u8;
         let color = match (p.class, p.model) {
             // Charred trees leave the map (v29 stays 0, :57219).
@@ -250,8 +266,9 @@ pub fn map_dots_from_poses(
             (2, _) => SCENERY,
             // Castle/balloon draw as icon STAMPS, not dots.
             (3, _) => continue,
-            (5, 12..=14) if !p.player_owned => dark_green,
-            (5, _) if p.player_owned => TEAM0_BLUE, // :57252 (odd entry)
+            (5, 12..=14) if team.is_none() => dark_green,
+            // :57252 (the team pair's odd entry).
+            (5, _) if team.is_some() => team.unwrap().1,
             (5, _) => near_black,
             (9, _) => owner_color,
             // Portal vortex: the 2x2 grown dot (v60 = 2, :57270).
@@ -262,8 +279,8 @@ pub fn map_dots_from_poses(
             // Mana balls: wild = 232; claimed BLINK the team pair
             // on the global phase (:57282-91).
             (10, 39 | 40) => {
-                if p.player_owned {
-                    if blink { TEAM0_VIOLET } else { TEAM0_BLUE }
+                if let Some((v, b)) = team {
+                    if blink { v } else { b }
                 } else {
                     WILD_BALL
                 }
@@ -273,7 +290,7 @@ pub fn map_dots_from_poses(
             // village speckles on the retail map). The enhancement
             // grows OWNED dwellings to 2x2 for legibility.
             (10, 45) => {
-                if owned_buildings && p.player_owned {
+                if owned_buildings && team.is_some() {
                     size = 2;
                 }
                 owner_color
@@ -292,24 +309,25 @@ pub fn map_dots_from_poses(
     out
 }
 
-/// Icon stamps from the live pose set: the own castle (sprite
-/// 58+team) and own balloons (66+team) — remc1 :57224-37 draws these
-/// as UI sprites instead of dots. NOTE (fidelity): retail stamps
-/// EVERY castle unconditionally with its team's sprite [58+team] —
-/// only the balloon/wizard markers check the reveal flag (v59). Our
-/// `player_owned` gate exists ONLY because `MapIcons` bakes just the
-/// player-team sprites; when rival wizards land, bake all eight
-/// team icons and lift the castle gate (balloons keep the reveal
-/// check).
+/// Icon stamps from the live pose set — remc1 :57224-37 draws these
+/// as UI sprites instead of dots. Retail rule (sub_48710): EVERY
+/// castle stamps unconditionally with its team's sprite [58+team];
+/// balloons [66+team] only when own or Beyond Sight is live (v59,
+/// :57232-35). `beyond_sight` also reveals rival WIZARD positions —
+/// retail draws their NAME there in team color (:57413-48); until
+/// the DrawText path lands, a 2x2 team-color marker dot stands in
+/// (banked with the font track).
 pub fn map_stamps_from_poses(
     poses: &[LivePose],
     icons: &MapIcons,
+    beyond_sight: bool,
 ) -> Vec<mgc_render::MapStamp> {
     let mut out = Vec::new();
     for p in poses {
+        let team = p.team.map(|t| (t as usize).min(7)).unwrap_or(0);
         let icon = match (p.class, p.model) {
-            (3, 2) if p.player_owned => icons.castle.as_ref(),
-            (3, 3) if p.player_owned => icons.balloon.as_ref(),
+            (3, 2) => icons.castle[team].as_ref(),
+            (3, 3) if p.team == Some(0) || beyond_sight => icons.balloon[team].as_ref(),
             _ => None,
         };
         if let Some(i) = icon {
@@ -320,6 +338,28 @@ pub fn map_stamps_from_poses(
         }
     }
     out
+}
+
+/// The Beyond-Sight rival position markers (interim for the retail
+/// name labels, :57413-48): a 2x2 dot in the rival's team color at
+/// each live, non-cloaked rival wizard.
+pub fn rival_markers(
+    rivals: &[mgc_sim::world::RivalView],
+    beyond_sight: bool,
+) -> Vec<mgc_render::MapDot> {
+    if !beyond_sight {
+        return Vec::new();
+    }
+    rivals
+        .iter()
+        .filter(|r| r.alive && !r.invisible)
+        .map(|r| mgc_render::MapDot {
+            x: r.x,
+            z: r.z,
+            color: TEAM_COLORS[(r.slot as usize).min(7)].1,
+            size: 2,
+        })
+        .collect()
 }
 
 /// Resolve one type index to a billboard at a world position; skips
@@ -501,6 +541,7 @@ mod tests {
             segment: false,
             life_frac: None,
             player_owned: owned,
+            team: owned.then_some(0),
         }
     }
 

@@ -1,24 +1,41 @@
 //! Magic Carpet 1 level format (LEV*.DAT, decompressed).
 //!
-//! Layout per michaelhoward's MagicCarpetFileFormat spec (2025 update),
-//! cross-checked against all 143 levels in the GOG Magic Carpet Plus data
-//! (70 campaign + 73 Hidden Worlds):
+//! Layout originally per michaelhoward's MagicCarpetFileFormat spec
+//! (2025 update), CORRECTED 2026-07-09 against the remc1 decompile's
+//! own accessors (the engine copies the whole record to str_193795 and
+//! address-arithmetic names every field): the spec's "2095-slot entity
+//! table + 12-byte footer" actually ends at offset 37072 — the last 96
+//! pseudo-slots are the 8 x 216-byte per-player WIZARD records
+//! (str_230867_37072, remc1 :49222/:54965-67), and the "footer" is the
+//! decoded tail (u16 map-coord word :27268, u16 player count :51537,
+//! u8[8] per-player starting castle levels :54972-94). Cross-checked
+//! against all 143 levels in the GOG Magic Carpet Plus data (70
+//! campaign + 73 Hidden Worlds).
 //!
 //! ```text
 //! 0x0000   48     GEN_MAP header: 12 x u32 LE (pre-header + 11 terrain
 //!                 generation parameters; terrain is seed-generated, no
 //!                 stored heightmap)
-//! 0x0030   1042   reserved (all zeros in known levels)
-//! 0x0442   37710  entity table: 2095 slots x 18 bytes (THING_INIT)
-//! 0x9790   12     footer: 6 x u16 LE
+//! 0x0030   1042   reserved (all zeros in known levels; the engine's
+//!                 str_1072 slot 0 [1072..1090] is its runtime SCRATCH
+//!                 record, never authored)
+//! 0x0442   35982  entity table: 1999 slots x 18 bytes (THING_INIT,
+//!                 engine slots 1..=1999)
+//! 0x90D0   1728   wizard configs: 8 players x 216 bytes
+//! 0x9790   2      u16, map-screen coordinate math word (:27268)
+//! 0x9792   2      u16, active player (wizard) count
+//! 0x9794   8      u8[8], per-player starting castle level (0 = none,
+//!                 N = spawn the player's castle at level N-1)
 //! total    38812  (0x979C)
 //! ```
 
 pub const MC1_LEVEL_SIZE: usize = 38812;
-pub const THING_SLOTS: usize = 2095;
+pub const THING_SLOTS: usize = 1999;
 
 const RESERVED_OFFSET: usize = 0x0030;
 const THINGS_OFFSET: usize = 0x0442;
+const WIZARDS_OFFSET: usize = 0x90D0;
+const WIZARD_SIZE: usize = 216;
 const FOOTER_OFFSET: usize = 0x9790;
 const THING_SIZE: usize = 18;
 
@@ -131,11 +148,51 @@ impl ThingInit {
     }
 }
 
+/// One per-player wizard config record (str_230867_37072[player], 216
+/// bytes). Field offsets are the remc1 accessors: +4 -> Type_160
+/// u16_522 (:54965), +8 -> u16_526 (:54967), +12 -> u16_524 (:54966),
+/// +16 var_230883[24] (:49222), +116 var_230983[24] (:49229). Bytes
+/// +0..3, +40..115 and +140..215 are read nowhere in the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WizardRecord {
+    /// AI aggression (u16_522): hate rise rate, war thresholds,
+    /// opportunism margins.
+    pub aggression: u16,
+    /// AI tempo (u16_526): decision period, turn agility, fireball
+    /// burst pause, respawn delay.
+    pub tempo: u16,
+    /// AI accuracy (u16_524): commit aim cone, rebound-notice
+    /// probability.
+    pub accuracy: u16,
+    /// Pre-granted spell mask (var_230883): with `allowed`, the AI's
+    /// level-start spellbook (grant iff both nonzero, :49222).
+    pub pregrant: [u8; 24],
+    /// Availability mask (var_230983): the same mask the HUMAN grant
+    /// intersects with collected flags; also the AI's learn-eligible
+    /// list (Type_160+796).
+    pub allowed: [u8; 24],
+}
+
 #[derive(Debug)]
 pub struct Mc1Level {
     pub gen_map: GenMap,
-    /// All 2095 slots, preserving indices (parent/child reference them).
+    /// All 1999 authored slots (engine slots 1..=1999 — the engine's
+    /// slot 0 is a runtime scratch record), preserving indices
+    /// (parent/child reference them).
     pub things: Vec<ThingInit>,
+    /// The 8 per-player wizard config records.
+    pub wizards: [WizardRecord; 8],
+    /// Map-screen coordinate word at 0x9790 (semantics untraced beyond
+    /// the map-compose read :27268).
+    pub tail_38800: u16,
+    /// Active player (wizard) count (engine var_u16_10, :51537).
+    pub player_count: u16,
+    /// Per-player starting castle level: 0 = none, N = a castle at
+    /// level N-1 spawns with the wizard (:54972-94).
+    pub castle_levels: [u8; 8],
+    /// The raw 12-byte tail as 6 u16s (the historically-named
+    /// "footer", = tail_38800/player_count/castle_levels verbatim) —
+    /// kept for the shipped GenParams member.
     pub footer: [u16; 6],
     /// True when the reserved block deviates from the all-zeros norm.
     pub reserved_nonzero: bool,
@@ -182,11 +239,27 @@ impl Mc1Level {
             });
         }
 
+        let wizards = std::array::from_fn(|p| {
+            let o = WIZARDS_OFFSET + p * WIZARD_SIZE;
+            WizardRecord {
+                aggression: u16_at(o + 4),
+                tempo: u16_at(o + 8),
+                accuracy: u16_at(o + 12),
+                pregrant: std::array::from_fn(|s| data[o + 16 + s]),
+                allowed: std::array::from_fn(|s| data[o + 116 + s]),
+            }
+        });
+
         let footer = std::array::from_fn(|i| u16_at(FOOTER_OFFSET + i * 2));
+        let castle_levels = std::array::from_fn(|p| data[FOOTER_OFFSET + 4 + p]);
 
         Ok(Self {
             gen_map,
             things,
+            wizards,
+            tail_38800: u16_at(FOOTER_OFFSET),
+            player_count: u16_at(FOOTER_OFFSET + 2),
+            castle_levels,
             footer,
             reserved_nonzero,
         })
@@ -319,6 +392,17 @@ mod tests {
         data[o..o + 2].copy_from_slice(&5u16.to_le_bytes());
         data[o + 4..o + 6].copy_from_slice(&100u16.to_le_bytes());
         data[o + 6..o + 8].copy_from_slice(&200u16.to_le_bytes());
+        // Wizard slot 1: aggression 200, tempo 128, accuracy 64, a
+        // pre-granted allowed fireball.
+        let w = WIZARDS_OFFSET + WIZARD_SIZE;
+        data[w + 4..w + 6].copy_from_slice(&200u16.to_le_bytes());
+        data[w + 8..w + 10].copy_from_slice(&128u16.to_le_bytes());
+        data[w + 12..w + 14].copy_from_slice(&64u16.to_le_bytes());
+        data[w + 16] = 1;
+        data[w + 116] = 1;
+        // Tail: 2 players, slot-1 starting castle level 3.
+        data[FOOTER_OFFSET + 2..FOOTER_OFFSET + 4].copy_from_slice(&2u16.to_le_bytes());
+        data[FOOTER_OFFSET + 5] = 3;
 
         let level = Mc1Level::parse(&data).unwrap();
         assert_eq!(level.gen_map.seed, 1921);
@@ -333,5 +417,18 @@ mod tests {
             (5, 0, 100, 200)
         );
         assert_eq!(thing_name(thing.class, thing.model), "Dragon");
+        assert_eq!(level.player_count, 2);
+        assert_eq!(level.castle_levels, [0, 3, 0, 0, 0, 0, 0, 0]);
+        let w1 = &level.wizards[1];
+        assert_eq!(
+            (w1.aggression, w1.tempo, w1.accuracy),
+            (200, 128, 64)
+        );
+        assert_eq!(w1.pregrant[0], 1);
+        assert_eq!(w1.allowed[0], 1);
+        assert_eq!(level.wizards[0].pregrant, [0; 24]);
+        // The decoded tail mirrors the raw footer bytes.
+        assert_eq!(level.footer[1], 2);
+        assert_eq!(level.footer[2], (3u16) << 8);
     }
 }

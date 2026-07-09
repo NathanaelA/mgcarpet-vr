@@ -15,7 +15,9 @@ pub mod bundle;
 pub mod mgcl;
 
 /// Current `.mgcl` format version (see docs/FORMAT.md "Versioning").
-pub const FORMAT_VERSION: u32 = 1;
+/// 2: MC1 packages gained `wizards.json` (per-player AI records +
+/// decoded level tail); MC2's wizard fields regrouped as optionals.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.
@@ -146,25 +148,67 @@ pub enum MapType {
     Cave,
 }
 
-/// `wizards.json` — per-level wizard configuration (absent on MC1
-/// packages; MC1 wizard state lives in the engine, not the level file).
+/// `wizards.json` — per-level wizard configuration. Both games carry
+/// one: MC2's level header block, and (since format 2) MC1's level-
+/// record tail — the 8 x 216-byte per-player records at offset 37072
+/// plus the decoded 12-byte tail the spec used to call the "footer"
+/// (which `GenParams::footer` still preserves verbatim).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wizards {
     /// Exactly 8 blocks: slot 0 = human player, 1-7 = AI wizards.
     pub wizards: Vec<WizardConfig>,
+    /// MC1 only: active wizard count (level tail u16 @38802; the
+    /// engine services only player slots below it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_count: Option<u16>,
+    /// MC1 only: the unexplained map-screen coordinate word (level
+    /// tail u16 @38800), preserved verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_38800: Option<u16>,
 }
 
+/// One wizard slot. `aggression` is shared; the other personality
+/// fields are per-game (MC2: reflexes/perception/life; MC1: accuracy/
+/// tempo — remc1 Type_160 u16_524/u16_526). `starting_spells` is
+/// shared: the spells granted at level start (MC2: upgrade tiers 0-3
+/// by MC2 spell id; MC1: the var_230883 pre-grant mask by MC1 spell
+/// id, granted iff `allowed_spells` also flags the slot).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WizardConfig {
     pub aggression: i16,
-    pub reflexes: i16,
-    pub perception: i16,
-    pub life: i16,
-    /// Per-spell starting upgrade tier (0-3), indexed by MC2 spell ID
-    /// (0 = Fireball .. 25 = Cave In).
+    /// MC2 only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflexes: Option<i16>,
+    /// MC2 only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perception: Option<i16>,
+    /// MC2 only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub life: Option<i16>,
+    /// Per-spell starting grant, indexed by the game's spell ID
+    /// (MC2: 26 tiers 0-3; MC1: 24 flags).
     pub starting_spells: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_spells: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_spells: Vec<u8>,
+    /// MC1 only: AI aim accuracy (u16_524 — commit aim cone,
+    /// rebound-notice probability).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accuracy: Option<i16>,
+    /// MC1 only: AI tempo (u16_526 — decision period, turn agility,
+    /// burst pause, respawn delay).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<i16>,
+    /// MC1 only: starting castle level (level tail @38804+slot; 0 =
+    /// none, N = a castle at level N-1 spawns with the wizard).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub castle_level: Option<u8>,
+    /// MC1 only: the var_230983 availability mask by spell id — the
+    /// human grant intersects it with campaign-collected flags; the
+    /// AI's learn-eligibility list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_spells: Option<Vec<u8>>,
 }
 
 /// `stages.json` — MC2 mission script (absent on MC1 packages).

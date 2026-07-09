@@ -447,6 +447,21 @@ impl Gen {
             let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
             consider(tx, ty, tz, j as u16, &mut best);
         }
+        // Rival wizards (class 3, models 0/1): live, not hidden or
+        // cloaked (the shared +16 0x20 bit), not the caster's own.
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 3
+                || c.model65 > 1
+                || c.tick70 != 1
+                || c.flags & (0x400 | 0x20) != 0
+                || c.id24 == own
+            {
+                continue;
+            }
+            let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+            consider(tx, ty, tz, j as u16, &mut best);
+        }
         // Invisible (spell 12, :65689-90 — the +16 0x20 bit): the
         // cloaked player is skipped by mob-side target acquisition.
         if own != PLAYER_TARGET && !self.player_invisible {
@@ -464,6 +479,65 @@ impl Gen {
             self.ent[i].f36 = ty_pitch;
             // Being targeted arms the danger music (:64013/:64095 —
             // acquire of a class-3 m0 human calls sub_46520).
+            if slot == PLAYER_TARGET {
+                self.player_danger = 100;
+            }
+        }
+    }
+
+    /// The wizard-only acquire (sub_54520 blocks 7/8/B/C — duel m7,
+    /// steal m8, undead m11): same cone/range as [`Self::aim_assist`]
+    /// but the candidate set is the class-3 wizard list alone.
+    fn aim_assist_wizards(&mut self, i: usize, ctx: &MobCtx) {
+        let (px, py, pz, yaw, pitch, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f30, e.f32, e.id24)
+        };
+        let mut best: Option<(u16, u32, u16, u16)> = None;
+        let consider = |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
+            let d2 = Self::dist2_sq(px, py, tx, ty);
+            let dz = tz.wrapping_sub(pz) as i32;
+            if d2.wrapping_add(dz.wrapping_mul(dz)) > 5120 * 5120 {
+                return;
+            }
+            let ty_yaw = Self::angle_between(px, py, tx, ty);
+            let dh = Self::isqrt(d2 as u32) as i32;
+            let ty_pitch = Self::pitch_toward(pz, tz, dh);
+            let dy = Self::angdist(yaw, ty_yaw) as u32;
+            let dp = Self::angdist(pitch, ty_pitch) as u32;
+            if dy > 0x71 || dp > 0x71 {
+                return;
+            }
+            let score = dy * dy + dp * dp;
+            if best.is_none_or(|(_, bs, _, _)| score < bs) {
+                *best = Some((slot, score, ty_yaw, ty_pitch));
+            }
+        };
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 3
+                || c.model65 > 1
+                || c.tick70 != 1
+                || c.flags & (0x400 | 0x20) != 0
+                || c.id24 == own
+            {
+                continue;
+            }
+            consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16, &mut best);
+        }
+        if own != PLAYER_TARGET && !self.player_invisible {
+            consider(
+                ctx.px,
+                ctx.py,
+                ctx.pz.wrapping_add(PLAYER_HH as i16),
+                PLAYER_TARGET,
+                &mut best,
+            );
+        }
+        if let Some((slot, _, ty_yaw, ty_pitch)) = best {
+            self.ent[i].f146 = slot;
+            self.ent[i].f34 = ty_yaw;
+            self.ent[i].f36 = ty_pitch;
             if slot == PLAYER_TARGET {
                 self.player_danger = 100;
             }
@@ -1322,6 +1396,9 @@ impl Gen {
         if self.ent[i].model65 == 4 && self.ent[i].f146 == 0 {
             self.aim_assist(i, ctx);
         }
+        if matches!(self.ent[i].model65, 7 | 11) && self.ent[i].f146 == 0 {
+            self.aim_assist_wizards(i, ctx);
+        }
         if self.ent[i].f146 != 0 {
             self.home(i, ctx);
         }
@@ -1398,11 +1475,24 @@ impl Gen {
                     self.refill_life(s);
                 }
             }
-            // Duel to the Death (:65620): INTERIM — no rival wizards
-            // exist to tether; the bolt ends in a hit flash.
+            // Duel to the Death (:65620 → (10,26) ctor :47116): the
+            // tether follows the homed wizard and broadcasts the ch4
+            // grip 200/tick (sub_263C0 :28949). No wizard target →
+            // the bolt ends in a hit flash.
             7 => {
-                if let Some(f) = self.spawn_effect(23, x, y, z) {
-                    self.ent[f].id24 = PLAYER_TARGET;
+                let victim = self.ent[i].f146;
+                let is_wizard = victim == crate::mobs::PLAYER_TARGET
+                    || (victim != 0
+                        && self.ent[victim as usize].class64 == 3
+                        && self.ent[victim as usize].model65 <= 1);
+                if is_wizard {
+                    if let Some(t) = self.spawn_effect(26, x, y, z) {
+                        self.ent[t].id24 = own;
+                        self.ent[t].f146 = victim;
+                        self.ent[t].f44 = 200;
+                    }
+                } else if let Some(f) = self.spawn_effect(23, x, y, z) {
+                    self.ent[f].id24 = own;
                 }
             }
             // Undead Army (:65927 → the (10,36) spawner sub_26E90
@@ -1969,6 +2059,18 @@ impl Gen {
                 self.refill_life(s);
                 self.set_sprite(s, 244);
             }
+            // (10,26) ctor (:47116): the duel tether — life 8,
+            // sprite row 284, +44 = the 200/tick ch4 grip amount.
+            26 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 26;
+                e.max_life = 8;
+                e.f44 = 200;
+                e.flags &= !8;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 284);
+            }
             // sub_3AC70 (:46935): the invisible fire-ring blast driver.
             17 => {
                 let e = &mut self.ent[s];
@@ -2140,12 +2242,10 @@ impl Gen {
         }
         // Owner recolor (:29627-32): claimed balls swap to the owner
         // wizard's color row (base 105 + 8*color, wizext var_48);
-        // unowned/wild stay on the neutral 52 row. Our sole wizard is
-        // the human player = color 0.
-        let base = if self.ent[i].f144 == crate::mobs::PLAYER_TARGET {
-            105
-        } else {
-            52
+        // unowned/wild stay on the neutral 52 row.
+        let base = match self.owner_team(self.ent[i].f144) {
+            Some(team) => 105 + 8 * team as usize,
+            None => 52,
         };
         let ty = (base + size) as u16;
         if self.ent[i].type86 != ty {
@@ -2180,6 +2280,7 @@ impl Gen {
             19 => self.plume_tick(i),
             21 => self.magnet_tick(i),
             23 => self.hit_flash_tick(i, ctx),
+            26 => self.duel_tether_tick(i, ctx),
             25 => self.steal_flash_tick(i, ctx),
             40 => self.storm_cloud_tick(i, ctx),
             41 => self.ball_tick(i),
@@ -2195,6 +2296,36 @@ impl Gen {
             60 => self.death_field_tick(i, ctx),
             _ => false,
         }
+    }
+
+    /// sub_263C0 (:28949), class-10 state 26 — the DUEL TETHER:
+    /// life-- per tick, follows the victim, broadcasts the ch4 grip
+    /// (+44 = 200) into it each tick. The victim's intake latches
+    /// the CASTER-side pull (:55663-82).
+    fn duel_tether_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        let victim = self.ent[i].f146;
+        let amt = self.ent[i].f44 as u32;
+        if victim == crate::mobs::PLAYER_TARGET {
+            // The human victim (AI-cast duel — unreachable today:
+            // no AI selector emits spell 11).
+            let (x, y, z) = (ctx.px, ctx.py, ctx.pz);
+            self.move_relink(i, x, y, z);
+        } else if victim != 0 {
+            let v = &self.ent[victim as usize];
+            if v.flags & 0x400 != 0 || v.act_life < 0 {
+                self.ent[i].flags |= 0x400;
+                return false;
+            }
+            let (x, y, z) = (v.x, v.y, v.z);
+            self.mail_write(MailTarget::Pool(victim as usize), 4, amt, i as u16);
+            self.move_relink(i, x, y, z);
+        }
+        false
     }
 
     /// sub_299D0 (:31263), class-10 STATE 60 — the real GLOBAL DEATH
