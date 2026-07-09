@@ -27,7 +27,12 @@
 //! - `sprites.bin` + `sprites.json` — one 8bpp sprite atlas + its
 //!   index ([`SpriteIndex`]; billboard frames, animations pre-decoded)
 //! - `search.bin`, `build.tab.bin`, `build.dat.bin` — terrain-feature
-//!   pass data (ring search order, building footprints)
+//!   pass data (ring search order — both games; building footprints —
+//!   MC1)
+//! - `bldgprm.bin` — MC2's building-parameter table (BLDGPRM.DAT
+//!   verbatim, 4-byte records)
+//! - `spells.bin` — MC2's spell table (SPELLS.DAT verbatim, 26 rows
+//!   x 80 bytes)
 
 use std::path::{Path, PathBuf};
 
@@ -176,6 +181,17 @@ pub struct MusicTrack {
     /// (menu/intro music) and on redbook tracks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub danger_file: Option<String>,
+    /// The General MIDI arrangement (MC1 `MUSIC<bank>-2`, the
+    /// original's `GENERAL` driver target) rendered through a GM
+    /// soundfont at import time — stereo, ambient mix. Only present
+    /// when the baking host could render GM (fluidsynth + soundfont);
+    /// `file` (the FM render) is always there as the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gm_file: Option<String>,
+    /// GM danger-layer stem, sample-aligned with `gm_file`; same
+    /// contract as `danger_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gm_danger_file: Option<String>,
     /// Provenance: original source (`CGAME1.HMP`, `redbook track 2`).
     pub source: String,
 }
@@ -203,6 +219,14 @@ pub struct Bundle {
     pub search: Option<Vec<u8>>,
     pub build_tab: Option<Vec<u8>>,
     pub build_dat: Option<Vec<u8>>,
+    /// MC2's building-parameter table (BLDGPRM.DAT verbatim: 4-byte
+    /// records {u16 word, u8 flags, u8 chain-next}; retail loads 76
+    /// records into a 77-slot table).
+    pub bldgprm: Option<Vec<u8>>,
+    /// MC2's spell table (SPELLS.DAT verbatim: 26 rows x 80 bytes,
+    /// remc2 Spells.h — {i8, u8 enabled, 3 x 26-byte subspell tiers});
+    /// the par1-authored class-10 overrides and class-15 cast costs.
+    pub spells: Option<Vec<u8>>,
 }
 
 /// Rows in `shade-lut.bin`.
@@ -346,6 +370,8 @@ impl Bundle {
             search: read_opt("search.bin"),
             build_tab: read_opt("build.tab.bin"),
             build_dat: read_opt("build.dat.bin"),
+            bldgprm: read_opt("bldgprm.bin"),
+            spells: read_opt("spells.bin"),
         })
     }
 }

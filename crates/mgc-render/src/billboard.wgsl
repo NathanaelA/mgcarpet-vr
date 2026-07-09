@@ -34,6 +34,10 @@ struct Instance {
     @location(3) uv_size: vec2<f32>,
     // x = horizontal mirror flag, y = shade LUT row.
     @location(4) flags: vec2<u32>,
+    // Opacity: 1.0 opaque; 1/3 (smoke) / 2/3 (glows) for the retail
+    // translucency raster modes. Only takes effect on the blend
+    // pipeline (the opaque pipeline has blending disabled).
+    @location(5) alpha: f32,
 };
 
 struct VsOut {
@@ -52,6 +56,7 @@ struct VsOut {
     // it; tiles in front always hide it; ridge silhouettes still
     // occlude partially because the terrain side varies per pixel.
     @location(5) @interpolate(flat) anchor_depth: f32,
+    @location(6) @interpolate(flat) alpha: f32,
 };
 
 const DEPTH_RANGE: f32 = 768.0;
@@ -74,6 +79,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     out.uv_pos = inst.uv_pos;
     out.uv_size = inst.uv_size;
     out.flags = inst.flags;
+    out.alpha = inst.alpha;
     let tile_center = floor(inst.pos.xz) + vec2<f32>(0.5, 0.5);
     out.anchor_depth = clamp(
         (length(tile_center - globals.camera.xz) - 0.5) / DEPTH_RANGE,
@@ -110,7 +116,7 @@ fn fs_main(in: VsOut) -> FsOut {
     let fog = 1.0 - exp(-dist * globals.camera.w);
     let rgb = mix(base, globals.fog_color.rgb, fog);
     var out: FsOut;
-    out.color = vec4<f32>(rgb, 1.0);
+    out.color = vec4<f32>(rgb, in.alpha);
     out.depth = in.anchor_depth;
     return out;
 }

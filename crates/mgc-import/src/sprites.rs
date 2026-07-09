@@ -91,6 +91,15 @@ pub fn decode_tmaps(
                 }
             }
         } else {
+            // Known retail instances (EXPECTED on every full bake, not
+            // a bake failure): MC1 TMAPS1-0 (arctic) entries 153 and
+            // 156 ship with a mangled header (`flags 2, 1x122`) over a
+            // byte-perfect duplicate of the PREVIOUS entry's pixels
+            // (152's 90x65 / 155's 40x39) — an authoring bug in the
+            // shipped data; the original engine read the same garbage
+            // header, so frame-less is already generous. Verified
+            // against the temperate set (153/156 normal there),
+            // 2026-07-11.
             warnings.push(format!(
                 "sprite {}: {}x{} with {}-byte payload (flags {:#06x}) — corrupt entry, baked frame-less",
                 entry.index,

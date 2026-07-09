@@ -8,8 +8,9 @@
 //! bake as the `mc1-temperate` and `mc1-arctic` variants. MC2 ships
 //! four environment graphics sets from its CD catalogs — `mc2-day`,
 //! `mc2-night`, `mc2-night-fog` (night levels with gfx_type bit 1),
-//! `mc2-cave` — same schema, no build/search members yet (its
-//! terrain-feature pass is a separate port).
+//! `mc2-cave` — same schema; since Phase 3 they carry `search.bin`
+//! (same format as MC1) and `bldgprm.bin` (MC2's building-parameter
+//! table) instead of MC1's BUILD members.
 
 use std::path::Path;
 
@@ -56,10 +57,13 @@ struct VariantSpec {
     palette: &'static str,
     /// 0x14600-byte color-table blob (`DATA/…`).
     tables: &'static str,
-    /// Offset of the 64x256 shade LUT inside the tables blob: MC1 keeps
-    /// it at +0x0000; MC2 keeps a pixel-remap table there and the shade
-    /// LUT at +0x4000 (remc2 Basic.cpp:123, GameRenderNG shading paths).
-    /// The tile-type→map-color table is at +0x14000 in both games.
+    /// Offset of the 64x256 shade LUT inside the tables blob: +0x0000
+    /// in BOTH games (row 32 ≈ identity, row 0 = the fog/sky color,
+    /// row 63 = black). +0x4000 is the 256x256 sprite BLEND matrix
+    /// (`T[0x4000 + (src<<8)|dst]`, remc2 GameRenderObjects
+    /// DrawSprite_41BD3) — see docs/traces/mc2-transparency-drawlist.md,
+    /// which corrected the earlier "+0x4000 shade" misread. The
+    /// tile-type→map-color table is at +0x14000 in both games.
     shade_offset: usize,
     /// Terrain atlas, 256px wide, 152 cells of 32x32; the terrain-type
     /// byte is the cell index in both games (identity mapping, remc2
@@ -67,14 +71,36 @@ struct VariantSpec {
     atlas: &'static str,
     /// TMAPS base name without extension (`DATA/…`): world billboards.
     tmaps: &'static str,
-    /// MC1 only: BUILD base name; implies `SEARCH.DAT` too. MC2's
-    /// terrain-feature pass is a separate original implementation whose
-    /// data semantics are unverified — omitted until that port.
+    /// Ring search-order table (`DATA/SEARCH.DAT`, 1024 bytes) — the
+    /// same 32x32 relative-offset format in BOTH games (remc2 loads it
+    /// via sub_101C0, EventsFunctions.cpp:3589).
+    search: Option<&'static str>,
+    /// BUILD bank base name (6-byte .TAB rows + .DAT cells — building
+    /// footprints/paint). MC1: 1-byte cell codes; MC2 (`BUILD0-0`,
+    /// ONE bank for all environments — remc2 Basic.cpp:271 loads a
+    /// fixed path): 2 bytes per cell {paint code, pad height}, read
+    /// by the build action (ApplyTerrainModification_37240 :27181).
     build: Option<&'static str>,
+    /// MC2 only: the building-parameter table (`DATA/BLDGPRM.DAT`,
+    /// 4-byte records {u16 production rate, u8 flags, u8 chain};
+    /// loader remc2 sub_539A0 EventsFunctions.cpp:38319 — flags:
+    /// 0x10 GenerateEvents pass F/G split, 8 no mana/production,
+    /// 4 no cave second-heightmap, 1 enterable). Footprint sizes
+    /// live in the BUILD bank, NOT here.
+    bldgprm: Option<&'static str>,
+    /// MC2 only: the spell table (`DATA/SPELLS.DAT`, 26 rows x 80
+    /// bytes: {i8, u8 enabled, 3 x 26-byte subspell tiers} — remc2
+    /// Spells.h + Basic.cpp:334 loads it over the Spells.cpp baked-in
+    /// fallback; the retail CD values DIFFER from that fallback, so
+    /// carrying the real file is load-bearing). Feeds the par1-authored
+    /// class-10 effect overrides and the class-15 cast costs.
+    spells: Option<&'static str>,
     /// UI sprite library base name (HSPR = the 640x480 set; see
     /// `crate::hspr`). Implies `DATA/BOOK.PAL` (the book screen's own
-    /// palette) for MC1. MC2's per-environment HSPR{D,N,C} wait for
-    /// its UI track.
+    /// palette) for MC1 only — MC2 has no book screen. MC2's TAB/DAT
+    /// pairs are the same self-describing format (remc2
+    /// `bitmap_pos_struct2_t`, portability/bitmap_pos_struct.h:27 —
+    /// {u32 offset, u8 w, u8 h}; same signed-RLE rows).
     ui: Option<&'static str>,
 }
 
@@ -87,7 +113,10 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         shade_offset: 0,
         atlas: "DATA/BLK0-1.DAT",
         tmaps: "DATA/TMAPS0-0",
+        search: Some("DATA/SEARCH.DAT"),
         build: Some("DATA/BUILD0-0"),
+        bldgprm: None,
+        spells: None,
         ui: Some("DATA/HSPR0-0"),
     },
     VariantSpec {
@@ -98,7 +127,10 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         shade_offset: 0,
         atlas: "DATA/BLK1-1.DAT",
         tmaps: "DATA/TMAPS1-0",
+        search: Some("DATA/SEARCH.DAT"),
         build: Some("DATA/BUILD1-0"),
+        bldgprm: None,
+        spells: None,
         ui: Some("DATA/HSPR1-0"),
     },
 ];
@@ -114,48 +146,58 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         game: Game::MagicCarpet2,
         palette: "DATA/PALD-0.DAT",
         tables: "DATA/TABLESD.DAT",
-        shade_offset: MC2_SHADE_OFFSET,
+        shade_offset: 0,
         atlas: "DATA/BLOCK32.DAT",
         tmaps: "DATA/TMAPS0-0",
-        build: None,
-        ui: None,
+        search: Some("DATA/SEARCH.DAT"),
+        build: Some("DATA/BUILD0-0"),
+        bldgprm: Some("DATA/BLDGPRM.DAT"),
+        spells: Some("DATA/SPELLS.DAT"),
+        ui: Some("DATA/HSPRD0-0"),
     },
     VariantSpec {
         variant: "mc2-night",
         game: Game::MagicCarpet2,
         palette: "DATA/PALN-0.DAT",
         tables: "DATA/TABLESN.DAT",
-        shade_offset: MC2_SHADE_OFFSET,
+        shade_offset: 0,
         atlas: "DATA/BL32N0-0.DAT",
         tmaps: "DATA/TMAPS1-0",
-        build: None,
-        ui: None,
+        search: Some("DATA/SEARCH.DAT"),
+        build: Some("DATA/BUILD0-0"),
+        bldgprm: Some("DATA/BLDGPRM.DAT"),
+        spells: Some("DATA/SPELLS.DAT"),
+        ui: Some("DATA/HSPRN0-0"),
     },
     VariantSpec {
         variant: "mc2-night-fog",
         game: Game::MagicCarpet2,
         palette: "DATA/PALF-0.DAT",
         tables: "DATA/TABLESN.DAT",
-        shade_offset: MC2_SHADE_OFFSET,
+        shade_offset: 0,
         atlas: "DATA/BL32F0-0.DAT",
         tmaps: "DATA/TMAPS1-0",
-        build: None,
-        ui: None,
+        search: Some("DATA/SEARCH.DAT"),
+        build: Some("DATA/BUILD0-0"),
+        bldgprm: Some("DATA/BLDGPRM.DAT"),
+        spells: Some("DATA/SPELLS.DAT"),
+        ui: Some("DATA/HSPRN0-0"),
     },
     VariantSpec {
         variant: "mc2-cave",
         game: Game::MagicCarpet2,
         palette: "DATA/PALC-0.DAT",
         tables: "DATA/TABLESC.DAT",
-        shade_offset: MC2_SHADE_OFFSET,
+        shade_offset: 0,
         atlas: "DATA/BL32C0-0.DAT",
         tmaps: "DATA/TMAPS2-0",
-        build: None,
-        ui: None,
+        search: Some("DATA/SEARCH.DAT"),
+        build: Some("DATA/BUILD0-0"),
+        bldgprm: Some("DATA/BLDGPRM.DAT"),
+        spells: Some("DATA/SPELLS.DAT"),
+        ui: Some("DATA/HSPRC0-0"),
     },
 ];
-
-const MC2_SHADE_OFFSET: usize = 0x4000;
 
 fn bake_bundle_set(
     src: &GameSource,
@@ -281,12 +323,23 @@ pub fn bake_mc1_audio(
     // Music: the AdLib arrangement (`MUSIC<bank>-0`, the `-0` driver
     // digit is AdLib per remc1 :54030 — 0xA002 loads inst/drum.bnk)
     // rendered through OPL3 with the game's own banks, FLAC per song.
+    // When the host can render General MIDI (fluidsynth + a GM
+    // soundfont, see `crate::fluid`), the `-2` arrangement (`GENERAL`,
+    // remc1 :54029-30 — 0xA001 → digit 2) is baked alongside as the
+    // optional GM upgrade; absent hosts still get the full FM bundle.
     let music_dir = dir.join("music");
     std::fs::create_dir_all(&music_dir).map_err(|e| BakeError::Io(music_dir.clone(), e))?;
     let inst = crate::adlib::parse_bnk(&source("DATA/INST.BNK", &mut sources)?)
         .map_err(|e| BakeError::Level(Path::new("DATA/INST.BNK").to_path_buf(), 0, e))?;
     let drum = crate::adlib::parse_bnk(&source("DATA/DRUM.BNK", &mut sources)?)
         .map_err(|e| BakeError::Level(Path::new("DATA/DRUM.BNK").to_path_buf(), 0, e))?;
+    let gm = match crate::fluid::GmRenderer::locate() {
+        Ok(r) => Some(r),
+        Err(why) => {
+            println!("note: mc1 music: no GM render ({why}) — FM only");
+            None
+        }
+    };
     let mut music = MusicIndex { tracks: Vec::new() };
     for bank in 0..=1u32 {
         let dat_rel = format!("DATA/MUSIC{bank}-0.DAT");
@@ -298,6 +351,26 @@ pub fn bake_mc1_audio(
         let tab = source(&tab_rel, &mut sources)?;
         let parsed = crate::sound::parse_bank(bank, &tab, &dat, false)
             .map_err(|e| BakeError::Level(Path::new(&dat_rel).to_path_buf(), 0, e))?;
+        // The GM arrangement, keyed by song stem (`cgame1.gen` ↔
+        // `cgame1.hmp` — same songs, per-driver patches/mix).
+        let mut gm_songs: Vec<(String, crate::hmp::Song)> = Vec::new();
+        if gm.is_some() && src.exists(&format!("DATA/MUSIC{bank}-2.DAT")) {
+            let dat = source(&format!("DATA/MUSIC{bank}-2.DAT"), &mut sources)?;
+            let tab = source(&format!("DATA/MUSIC{bank}-2.TAB"), &mut sources)?;
+            let parsed = crate::sound::parse_bank(bank, &tab, &dat, false)
+                .map_err(|e| BakeError::Level(Path::new("DATA/MUSIC-2.DAT").to_path_buf(), 0, e))?;
+            for (_, name, bytes) in &parsed.entries {
+                let stem = name.split('.').next().unwrap_or(name).to_string();
+                let song = crate::hmp::parse(bytes).map_err(|e| {
+                    BakeError::Level(
+                        Path::new("DATA/MUSIC-2.DAT").to_path_buf(),
+                        0,
+                        format!("{name}: {e}"),
+                    )
+                })?;
+                gm_songs.push((stem, song));
+            }
+        }
         for (_, name, hmp_bytes) in &parsed.entries {
             let err = |e: String| {
                 BakeError::Level(Path::new(&dat_rel).to_path_buf(), 0, format!("{name}: {e}"))
@@ -335,11 +408,76 @@ pub fn bake_mc1_audio(
             } else {
                 None
             };
+            // The GM upgrade: same song from the `-2` arrangement,
+            // fluidsynth-rendered ambient + danger stem (both scaled
+            // by ONE factor — the overlay sum is what must not clip).
+            let mut gm_file = None;
+            let mut gm_danger_file = None;
+            if let (Some(renderer), Some((_, gm_song))) =
+                (gm.as_ref(), gm_songs.iter().find(|(stem, _)| stem == name))
+            {
+                let render = |mix: &crate::adlib::MixSpec, tag: &str| {
+                    let midi = crate::smf::encode(gm_song, mix);
+                    renderer.render(
+                        &midi,
+                        MUSIC_RATE,
+                        &music_dir,
+                        &format!("{bank}-{name}-{tag}"),
+                    )
+                };
+                let layered = crate::adlib::has_danger_layer(gm_song);
+                let base_mix = if layered {
+                    crate::adlib::MixSpec::ambient()
+                } else {
+                    crate::adlib::MixSpec::full()
+                };
+                let mut base = render(&base_mix, "base").map_err(err)?;
+                let mut stem = if layered {
+                    Some(render(&crate::adlib::MixSpec::danger_stem(), "danger").map_err(err)?)
+                } else {
+                    None
+                };
+                let frames = base.len().max(stem.as_ref().map_or(0, Vec::len));
+                base.resize(frames, 0.0);
+                let mut peak = 0f32;
+                if let Some(stem) = &mut stem {
+                    stem.resize(frames, 0.0);
+                    for (b, s) in base.iter().zip(stem.iter()) {
+                        peak = peak.max((b + s).abs());
+                    }
+                } else {
+                    for b in &base {
+                        peak = peak.max(b.abs());
+                    }
+                }
+                let scale = if peak > 0.0 { 30000.0 / peak } else { 1.0 };
+                let quantize = |pcm: &[f32]| -> Vec<i16> {
+                    pcm.iter()
+                        .map(|s| (s * scale).clamp(-32767.0, 32767.0) as i16)
+                        .collect()
+                };
+                let member = format!("music/{bank}-{name}-gm.flac");
+                emit(
+                    &member,
+                    &crate::flac::encode(&quantize(&base), 2, MUSIC_RATE).map_err(err)?,
+                )?;
+                gm_file = Some(member);
+                if let Some(stem) = &stem {
+                    let member = format!("music/{bank}-{name}-gm-danger.flac");
+                    emit(
+                        &member,
+                        &crate::flac::encode(&quantize(stem), 2, MUSIC_RATE).map_err(err)?,
+                    )?;
+                    gm_danger_file = Some(member);
+                }
+            }
             music.tracks.push(MusicTrack {
                 bank,
                 name: name.to_string(),
                 file: member,
                 danger_file,
+                gm_file,
+                gm_danger_file,
                 source: format!("MUSIC{bank}-0 {}.HMP", name.to_ascii_uppercase()),
             });
         }
@@ -448,6 +586,8 @@ pub fn bake_mc2_audio(
             name,
             file: member,
             danger_file: None,
+            gm_file: None,
+            gm_danger_file: None,
             source: format!("redbook track {}", track.number),
         });
     }
@@ -603,7 +743,15 @@ fn bake_variant(
         &serde_json::to_vec_pretty(&packed.index).expect("sprite index serializes"),
     )?;
 
-    // Terrain-feature data (MC1 only for now, see VariantSpec::build).
+    // Ring search-order table — the same 1024-byte 32x32 format in
+    // both games (remc2 sub_101C0).
+    if let Some(sp) = spec.search {
+        let search = source(sp, &mut sources)?;
+        expect(sp, &search, 1024)?;
+        emit("search.bin", &search)?;
+    }
+
+    // Terrain-feature/building data, MC1 flavor (BUILD .TAB/.DAT).
     if let Some(build) = spec.build {
         let tab_file = format!("{build}.TAB");
         let tab = source(&tab_file, &mut sources)?;
@@ -617,12 +765,36 @@ fn bake_variant(
         emit("build.tab.bin", &tab)?;
         let build_dat = source(&format!("{build}.DAT"), &mut sources)?;
         emit("build.dat.bin", &build_dat)?;
-        let search = source("DATA/SEARCH.DAT", &mut sources)?;
-        expect("DATA/SEARCH.DAT", &search, 1024)?;
-        emit("search.bin", &search)?;
     }
 
-    // UI sprites (HSPR) + the book screen palette (MC1 only for now).
+    // Building parameters, MC2 flavor (BLDGPRM 4-byte records; remc2
+    // loads 76 records into a 77-slot table, sub_539A0 :38328).
+    if let Some(bp) = spec.bldgprm {
+        let bldgprm = source(bp, &mut sources)?;
+        if bldgprm.len() % 4 != 0 {
+            return Err(BakeError::Level(
+                Path::new(bp).to_path_buf(),
+                0,
+                format!("{} bytes is not 4-byte records", bldgprm.len()),
+            ));
+        }
+        emit("bldgprm.bin", &bldgprm)?;
+    }
+
+    // Spell table, MC2 flavor (SPELLS.DAT verbatim: 26 rows x 80
+    // bytes — remc2 Spells.h layout, loaded by the Basic.cpp:334
+    // Pathstruct over the source's baked-in fallback).
+    if let Some(sp) = spec.spells {
+        let spells = source(sp, &mut sources)?;
+        expect(sp, &spells, 26 * 80)?;
+        emit("spells.bin", &spells)?;
+    }
+
+    // UI sprites (HSPR) + the book screen palette (MC1 only — MC2 has
+    // no book screen; its CTRL selector pane draws over the live
+    // frame with the variant palette). MC2's blend LUT sits at the
+    // same +0x4000..+0x14000 slice of its TABLES{D,N,C} (remc2
+    // GameUI.cpp:525/1105: `tablesx[0x4000 + 256*dest + src]`).
     if let Some(ui) = spec.ui {
         let dat_file = format!("{ui}.DAT");
         let dat = source(&dat_file, &mut sources)?;
@@ -646,16 +818,18 @@ fn bake_variant(
         // ramp that reads garish under any palette directly.
         emit("blend-lut.bin", &tables[SHADE_LUT_LEN..TILE_COLORS_OFFSET])?;
 
-        let book = source("DATA/BOOK.PAL", &mut sources)?;
-        expect("DATA/BOOK.PAL", &book, 768)?;
-        let mut rgba = Vec::with_capacity(1024);
-        for (i, c) in book.chunks_exact(3).enumerate() {
-            for &v in c {
-                rgba.push((v << 2) | (v >> 4));
+        if spec.game == Game::MagicCarpet1 {
+            let book = source("DATA/BOOK.PAL", &mut sources)?;
+            expect("DATA/BOOK.PAL", &book, 768)?;
+            let mut rgba = Vec::with_capacity(1024);
+            for (i, c) in book.chunks_exact(3).enumerate() {
+                for &v in c {
+                    rgba.push((v << 2) | (v >> 4));
+                }
+                rgba.push(if i == 0 { 0 } else { 255 });
             }
-            rgba.push(if i == 0 { 0 } else { 255 });
+            emit("book-palette.bin", &rgba)?;
         }
-        emit("book-palette.bin", &rgba)?;
     }
 
     let manifest = BundleManifest {

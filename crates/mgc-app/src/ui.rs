@@ -39,6 +39,82 @@ pub struct UiAssets {
     /// Base-atlas frame rects (x, y, w, h) per HSPR sprite id — the
     /// map's icon-marker crops.
     sprite_rects: Vec<Option<(u32, u32, u32, u32)>>,
+    /// MC2 selector GRID tiles (pre-composited box + icon, one bit-
+    /// copy per state so the draw path never layers): uv per spell ×
+    /// [0 castable(89), 1 hovered shot-meter(87), 2 owned-unaffordable
+    /// ghost(91 + LUT-blended icon), 3 unowned grey relief(89 +
+    /// colourize-0xA6 icon)]. Empty on MC1 atlases.
+    pane_uv: Vec<[[f32; 4]; 4]>,
+    /// MC2 selector FLYOUT tiles: uv per (spell·3 + level) ×
+    /// [0 unlocked-affordable(161), 1 unlocked-unaffordable(162)],
+    /// number badge + per-level icon baked in. Empty on MC1 atlases.
+    sub_uv: Vec<[[f32; 4]; 2]>,
+}
+
+/// Icon treatment when compositing a pane tile — the three original
+/// blit rules (trace §2.4): `DrawBitmap` raw, `DrawTransparentBitmap`
+/// through the blend LUT, `DrawColourizedBitmap(0xA6)` = the LUT's
+/// 0xA6 row against the box pixel (the dark-relief ink).
+#[derive(Clone, Copy)]
+enum PaneInk {
+    Raw,
+    Blend,
+    Colour(u8),
+}
+
+/// Overlay one 8bpp sprite onto an 8bpp tile at (ox, oy) with an ink
+/// rule; `resolve` = the blend LUT lookup.
+fn overlay8(
+    tile: &mut [u8],
+    (tw, th): (usize, usize),
+    spr: &(usize, usize, Vec<u8>),
+    (ox, oy): (usize, usize),
+    ink: PaneInk,
+    resolve: &impl Fn(u8, u8) -> u8,
+) {
+    let (iw, ih, px) = spr;
+    for y in 0..*ih {
+        for x in 0..*iw {
+            let (dx, dy) = (ox + x, oy + y);
+            if dx >= tw || dy >= th {
+                continue;
+            }
+            let s = px[y * iw + x];
+            if s == 0 {
+                continue;
+            }
+            let d = &mut tile[dy * tw + dx];
+            *d = match ink {
+                PaneInk::Raw => s,
+                PaneInk::Blend => resolve(s, *d),
+                PaneInk::Colour(c) => resolve(c, *d),
+            };
+        }
+    }
+}
+
+/// Write an 8bpp tile into the RGBA atlas at (tx, ty) through the
+/// palette (0 = transparent).
+fn emit8(
+    rgba: &mut [u8],
+    base_w: usize,
+    palette: &[[u8; 4]; 256],
+    (tx, ty): (usize, usize),
+    (tw, th): (usize, usize),
+    tile: &[u8],
+) {
+    for y in 0..th {
+        for x in 0..tw {
+            let v = tile[y * tw + x];
+            if v == 0 {
+                continue;
+            }
+            let c = palette[v as usize];
+            let o = ((ty + y) * base_w + tx + x) * 4;
+            rgba[o..o + 3].copy_from_slice(&c[..3]);
+            rgba[o + 3] = 255;
+        }
+    }
 }
 
 impl UiAssets {
@@ -52,11 +128,17 @@ impl UiAssets {
     ///   (fireball flame, the possess glow) are luminous
     ///   brighten-the-dest rows that only read correctly over the
     ///   stone slab, exactly as the original draws them.
+    ///
+    /// `book_tiles` = pre-composite the MC1 icon-on-slab tiles (the
+    /// MC1 book/HUD entry map: slab `[3]`, icons `[6+spell]`). False
+    /// for MC2 atlases, whose ids mean different sprites (selector
+    /// pane boxes at 87..91, icons at 97+, sub-icons at 179+).
     pub fn build(
         index: SpriteIndex,
         pixels: &[u8],
         palette: &[[u8; 4]; 256],
         blend_lut: Option<&[u8]>,
+        book_tiles: bool,
     ) -> Self {
         let resolve = |src: u8, dest: u8| -> u8 {
             match blend_lut {
@@ -94,9 +176,31 @@ impl UiAssets {
             .map(|(w, h, _)| (*w, *h))
             .unwrap_or((ICON_W as usize + 2, ICON_H as usize + 3));
         let tiles_per_row = base_w / tile_w;
-        let tile_count = SPELL_COUNT * 3;
+        let tile_count = if book_tiles { SPELL_COUNT * 3 } else { 0 };
         let tile_rows = tile_count.div_ceil(tiles_per_row);
-        let total_h = base_h + tile_rows * tile_h;
+
+        // MC2 selector tiles (docs/traces/mc2-spell-selector-ui.md):
+        // per spell 4 grid variants + 3 levels × 2 flyout variants,
+        // appended below the base atlas like the MC1 book tiles.
+        let pane_box = (!book_tiles).then(|| sprite_px(MC2_SPR_BOX)).flatten();
+        let (gw, gh) = pane_box
+            .as_ref()
+            .map(|(w, h, _)| (*w, *h))
+            .unwrap_or((48, 40));
+        let sub_box = (!book_tiles).then(|| sprite_px(MC2_SPR_SUB_OK)).flatten();
+        let (sw, sh) = sub_box
+            .as_ref()
+            .map(|(w, h, _)| (*w, *h))
+            .unwrap_or((48, 36));
+        let n_mc2 = if book_tiles { 0 } else { MC2_SPELL_NAMES.len() };
+        let grid_per_row = (base_w / gw.max(1)).max(1);
+        let grid_rows = (n_mc2 * 4).div_ceil(grid_per_row);
+        let sub_per_row = (base_w / sw.max(1)).max(1);
+        let sub_rows = (n_mc2 * 3 * 2).div_ceil(sub_per_row);
+        let grid_y0 = base_h + tile_rows * tile_h;
+        let sub_y0 = grid_y0 + grid_rows * gh;
+
+        let total_h = sub_y0 + sub_rows * sh;
         let mut rgba = vec![0u8; base_w * total_h * 4];
 
         // Base atlas = RAW palette colors, no blend. The original draws
@@ -118,7 +222,7 @@ impl UiAssets {
         }
 
         let mut slot_uv = [[[0.0f32; 4]; 3]; SPELL_COUNT];
-        for spell in 0..SPELL_COUNT {
+        for spell in 0..tile_count / 3 {
             let icon = sprite_px(spell + 6);
             for (variant, hilite) in hilites.iter().enumerate() {
                 let tile = spell * 3 + variant;
@@ -169,6 +273,78 @@ impl UiAssets {
             }
         }
 
+        // MC2 selector tiles: every grid/flyout state pre-composited
+        // so the widget draws exactly one textured quad per box — the
+        // ORIGINAL's pixel treatments happen here (raw copy for the
+        // castable states, the blend LUT for the unaffordable ghost,
+        // the 0xA6 colourize row for the unowned relief).
+        let mut pane_uv = Vec::new();
+        let mut sub_uv = Vec::new();
+        if !book_tiles {
+            let meter_box = sprite_px(MC2_SPR_TILE_BAR);
+            let dark_box = sprite_px(MC2_SPR_BOX_DARK);
+            let sub_dark_box = sprite_px(MC2_SPR_SUB_DARK);
+            for spell in 0..n_mc2 {
+                let icon = sprite_px(MC2_SPR_ICON_SMALL + spell);
+                let variants: [(&Option<_>, PaneInk); 4] = [
+                    (&pane_box, PaneInk::Raw),          // castable
+                    (&meter_box, PaneInk::Raw),         // hovered (shot meter tile)
+                    (&dark_box, PaneInk::Blend),        // owned, unaffordable
+                    (&pane_box, PaneInk::Colour(0xA6)), // unowned relief
+                ];
+                let mut uvs = [[0.0f32; 4]; 4];
+                for (variant, (bg, ink)) in variants.iter().enumerate() {
+                    let t = spell * 4 + variant;
+                    let (tx, ty) = ((t % grid_per_row) * gw, grid_y0 + (t / grid_per_row) * gh);
+                    uvs[variant] = [tx as f32, ty as f32, gw as f32, gh as f32];
+                    let mut tile = vec![0u8; gw * gh];
+                    if let Some(b) = bg.as_ref() {
+                        overlay8(&mut tile, (gw, gh), b, (0, 0), PaneInk::Raw, &resolve);
+                    }
+                    if let Some(ic) = &icon {
+                        // At the BOX ORIGIN, not centred — retail's
+                        // `DrawBitmap(posX + posIconsX, posIconsY,
+                        // icon)` (EF:22543); the 41×23 art carries its
+                        // own margins (player 2026-07-10: centring
+                        // read as misaligned vs retail).
+                        overlay8(&mut tile, (gw, gh), ic, (0, 0), *ink, &resolve);
+                    }
+                    emit8(&mut rgba, base_w, palette, (tx, ty), (gw, gh), &tile);
+                }
+                pane_uv.push(uvs);
+
+                // Flyout tiles: number badge at (+6,+10), per-level
+                // icon [179 + 3·spell + level] at (+18,+6) — the
+                // original's fixed insets (trace §4.2).
+                for level in 0..3usize {
+                    let sub_icon = sprite_px(MC2_SPR_SUB_ICON + 3 * spell + level);
+                    let badge = sprite_px(MC2_SPR_SUB_NUM + level);
+                    let mut uvs = [[0.0f32; 4]; 2];
+                    for (variant, (bg, ink)) in
+                        [(&sub_box, PaneInk::Raw), (&sub_dark_box, PaneInk::Blend)]
+                            .iter()
+                            .enumerate()
+                    {
+                        let t = (spell * 3 + level) * 2 + variant;
+                        let (tx, ty) = ((t % sub_per_row) * sw, sub_y0 + (t / sub_per_row) * sh);
+                        uvs[variant] = [tx as f32, ty as f32, sw as f32, sh as f32];
+                        let mut tile = vec![0u8; sw * sh];
+                        if let Some(b) = bg.as_ref() {
+                            overlay8(&mut tile, (sw, sh), b, (0, 0), PaneInk::Raw, &resolve);
+                        }
+                        if let Some(bd) = &badge {
+                            overlay8(&mut tile, (sw, sh), bd, (6, 10), PaneInk::Raw, &resolve);
+                        }
+                        if let Some(ic) = &sub_icon {
+                            overlay8(&mut tile, (sw, sh), ic, (18, 6), *ink, &resolve);
+                        }
+                        emit8(&mut rgba, base_w, palette, (tx, ty), (sw, sh), &tile);
+                    }
+                    sub_uv.push(uvs);
+                }
+            }
+        }
+
         // Frame rects per sprite id in the base atlas region (the
         // map's icon markers crop from here).
         let sprite_rects = index
@@ -187,7 +363,21 @@ impl UiAssets {
             atlas_rgba: rgba,
             slot_uv,
             sprite_rects,
+            pane_uv,
+            sub_uv,
         }
+    }
+
+    /// A pre-composited MC2 selector grid tile (see `pane_uv`); None
+    /// on MC1 atlases.
+    fn pane_tile(&self, spell: usize, variant: usize) -> Option<[f32; 4]> {
+        self.pane_uv.get(spell).map(|v| v[variant])
+    }
+
+    /// A pre-composited MC2 flyout tile (see `sub_uv`); None on MC1
+    /// atlases.
+    fn sub_tile(&self, spell: usize, level: usize, dark: bool) -> Option<[f32; 4]> {
+        self.sub_uv.get(spell * 3 + level).map(|v| v[dark as usize])
     }
 
     /// The UI-atlas UV rect (texels) for one HSPR sprite, for map
@@ -679,12 +869,20 @@ fn meter_dots(quads: &mut Vec<UiQuad>, mx: f32, my: f32, sx: f32, sy: f32, casts
 /// coordinates scaled by `w/640`. The rotating round minimap is drawn by
 /// the renderer; here we place the wizard stat panel (left) and the two
 /// equipped-spell panels (right, x=510/574).
+///
+/// `mc2` = an MC2 atlas is loaded: the equipped-spell panels skip
+/// their icon/meter/wash — the MC1 sprite ids `[6+spell]` mean other
+/// art there, and MC2's real top tile (the big icon `123+spell` + the
+/// Roman-numeral level + mana pool, DrawSpellIcon_2E260) waits on the
+/// Phase-4.2 level machinery + DrawText (player 2026-07-10: leave
+/// aside until then). The whole MC2 HUD layout is the parity track.
 pub fn hud_quads(
     assets: &UiAssets,
     loadout: &LoadoutView,
     vitals: &PlayerVitals,
     transparent: bool,
     alert_blink: bool,
+    mc2: bool,
     w: f32,
     _h: f32,
 ) -> Vec<UiQuad> {
@@ -932,7 +1130,7 @@ pub fn hud_quads(
             &mut quads,
             assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint),
         );
-        if let Some(sp) = spell {
+        if let Some(sp) = spell.filter(|_| !mc2) {
             // Icon drawn raw at the FRAME ORIGIN (sub_23D40's
             // `DrawBitmap(a1, a2, icon)` — the art's own margins do
             // the placement), native size × the HUD scale.
@@ -1105,6 +1303,548 @@ fn diag_glyph(quads: &mut Vec<UiQuad>, cx: f32, cy: f32, s: f32, core: [f32; 4])
             core,
         ));
     }
+}
+
+// ================= The CTRL-hold spell-selector pane ==================
+// MC2's faithful selection surface (docked bottom pane while CTRL is
+// held), verbatim trace: docs/traces/mc2-spell-selector-ui.md. The
+// widget is game-parametric so MC1 can opt in via
+// `spell_selector = mc2 | mc1+mc2` (authenticity-matrix alternate).
+
+/// MC2 selector sprite ids (remc2 GameBitmapIndexes.h; trace §2.6).
+const MC2_SPR_TILE_BAR: usize = 87; // hovered box's live shot-meter tile
+const MC2_SPR_EDGE: usize = 88; // pane end frame column
+const MC2_SPR_BOX: usize = 89; // grid box, affordable
+const MC2_SPR_BOX_FRAME: usize = 90; // hovered-slot highlight frame
+const MC2_SPR_BOX_DARK: usize = 91; // grid box, unaffordable
+const MC2_SPR_ICON_SMALL: usize = 97; // + spell (0..25): the grid icon
+const MC2_SPR_TAG_LEFT: usize = 149; // bound-to-LMB corner tag
+const MC2_SPR_TAG_RIGHT: usize = 150; // bound-to-RMB corner tag
+const MC2_SPR_SUB_OK: usize = 161; // level box, unlocked + affordable
+const MC2_SPR_SUB_DARK: usize = 162; // level box, unlocked + unaffordable
+const MC2_SPR_SUB_LOCKED: usize = 163; // level box, locked (drawn empty)
+const MC2_SPR_SUB_GOLD: usize = 164; // chosen-level gold frame
+const MC2_SPR_SUB_NUM: usize = 165; // + level: the "1/2/3" number bg
+const MC2_SPR_SUB_ICON: usize = 179; // + 3*spell + level: per-level icon
+
+/// MC2 spell names by `spell_t` model index (trace §3; grid order =
+/// identity). Console labels — MC2 shows hint text in-game.
+pub const MC2_SPELL_NAMES: [&str; 26] = [
+    "Fireball",
+    "Possession",
+    "Castle",
+    "Speed Up",
+    "Metamorph",
+    "Heal",
+    "Shield",
+    "Lightning",
+    "Rebound",
+    "Meteor",
+    "Teleport",
+    "Invisible",
+    "Beyond Sight",
+    "Steal Mana",
+    "Duel",
+    "Tremor",
+    "Crater",
+    "Earthquake",
+    "Volcano",
+    "Summon Army",
+    "Gravity Well",
+    "Whirlwind",
+    "Fool's Mana",
+    "Magic Mine",
+    "Alliance",
+    "Cave-In",
+];
+
+/// The CROSS-COLUMN CAST BRIDGE (interim, until the Phase-4.2 MC2
+/// spell column): pane spell (MC2 `spell_t`) → the MC1 manifestation
+/// that stands in for it, so selecting in the MC2 pane equips a
+/// castable hand today. None = no MC1 analogue (selectable in the UI,
+/// equips nothing, logged). Two MC2 quakes share MC1's Earthquake.
+pub const MC2_CAST_BRIDGE: [Option<u8>; 26] = [
+    Some(0),  // fireball -> Fireball
+    Some(3),  // possession -> Possess
+    Some(16), // castle -> Create Castle
+    Some(2),  // speed_up -> Accelerate
+    None,     // metamorph
+    Some(1),  // heal -> Heal
+    Some(4),  // shield -> Shield
+    Some(15), // lightning -> Lightning Bolt
+    Some(14), // rebound -> Rebound
+    Some(7),  // meteor -> Meteor
+    Some(10), // teleport -> Teleport
+    Some(12), // invisible -> Invisible
+    Some(5),  // beyond_sight -> Beyond Sight
+    Some(13), // steal_mana -> Steal Mana
+    Some(11), // duel -> Duel to the Death
+    Some(6),  // tremor -> Earthquake
+    Some(9),  // crater -> Crater
+    Some(6),  // earthquake -> Earthquake
+    Some(8),  // volcano -> Volcano
+    Some(17), // summon_army -> Undead Army
+    None,     // gravity_well
+    None,     // whirlwind
+    None,     // fools_mana
+    None,     // magic_mine
+    None,     // alliance
+    None,     // cave_in
+];
+
+/// MC2 grid order = identity over `spell_t` (`spellIndex_D94FF`,
+/// trace §0/§3): row 0 = 0..12, row 1 = 13..25.
+const MC2_GRID_ORDER: [u8; 26] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+];
+
+/// The pane's per-game shape: grid dimensions, slot→spell order,
+/// level depth, and which art set draws it.
+pub struct SelectorPane {
+    /// Draw with the MC2 sprite set (87..256) vs the MC1 book set.
+    mc2_art: bool,
+    pub cols: usize,
+    /// Grid slot → pane spell id.
+    pub order: &'static [u8],
+    /// Levels per spell (MC2 = 3 with the flyout; MC1 = 1, no flyout).
+    pub levels: u8,
+}
+
+impl SelectorPane {
+    /// MC1 adaptation: 24 spells, 2×12, book display order, MC1 art,
+    /// single-level (no flyout). Cells shrink from the book's 64-wide
+    /// slab to fit 12 across 640 native px.
+    pub fn mc1() -> Self {
+        SelectorPane {
+            mc2_art: false,
+            cols: 12,
+            order: &DISPLAY_ORDER,
+            levels: 1,
+        }
+    }
+
+    /// The faithful MC2 pane: 26 spells, 2×13 in `spell_t` order,
+    /// 3-level flyout.
+    pub fn mc2() -> Self {
+        SelectorPane {
+            mc2_art: true,
+            cols: 13,
+            order: &MC2_GRID_ORDER,
+            levels: 3,
+        }
+    }
+
+    pub fn spell_count(&self) -> usize {
+        self.order.len()
+    }
+}
+
+/// Per-frame pane inputs, indexed by PANE SPELL ID (0..spell_count).
+pub struct SelectorView<'a> {
+    /// Possessed (drawn full, selectable).
+    pub owned: &'a [bool],
+    /// Affordable/enabled (bright box); owned && !castable = dark box
+    /// + ghost icon — the grey-not-disable rule (trace §7).
+    pub castable: &'a [bool],
+    /// The persistent per-spell selected level (`array_0x437`,
+    /// trace §4.3).
+    pub selected_level: &'a [u8],
+    /// Max unlocked level per spell (`SpellLevels_0x41D`); the flyout
+    /// shows locked levels as empty boxes and clamps selection.
+    pub max_level: &'a [u8],
+    /// Pane spell bound to each hand (corner tags; [left, right]).
+    pub bound: [Option<u8>; 2],
+    /// Player mana + per-shot stand-in cost (the hovered box's live
+    /// shot meter).
+    pub mana: u32,
+    pub cost: &'a [u32],
+}
+
+/// What the cursor is over, for the app's click/commit logic.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SelectorHover {
+    /// Grid slot under the cursor (a valid slot, not necessarily
+    /// owned).
+    pub slot: Option<usize>,
+    /// Level under the cursor in the visible flyout, already clamped
+    /// to the anchor spell's max unlocked level.
+    pub level: Option<u8>,
+}
+
+/// One grid cell's screen rect. Native geometry per the trace §2.2:
+/// `x = edgeW + col·boxW`, `y = (480 − 2·boxH) + row·boxH`, bottom-
+/// anchored; we scale native 640×480 by (w/640, h/480) like the rest
+/// of the UI.
+struct PaneGeom {
+    edge_w: f32,
+    box_w: f32,
+    box_h: f32,
+    sub_w: f32,
+    sub_h: f32,
+    sx: f32,
+    sy: f32,
+}
+
+impl PaneGeom {
+    fn new(assets: &UiAssets, pane: &SelectorPane, w: f32, h: f32) -> Self {
+        let (sx, sy) = (w / 640.0, h / 480.0);
+        if pane.mc2_art {
+            let (bw, bh) = assets.sprite_dims(MC2_SPR_BOX).unwrap_or((48.0, 40.0));
+            let (ew, _) = assets.sprite_dims(MC2_SPR_EDGE).unwrap_or((8.0, 80.0));
+            let (sw, sh) = assets
+                .sprite_dims(MC2_SPR_SUB_LOCKED)
+                .unwrap_or((48.0, 36.0));
+            PaneGeom {
+                edge_w: ew,
+                box_w: bw,
+                box_h: bh,
+                sub_w: sw,
+                sub_h: sh,
+                sx,
+                sy,
+            }
+        } else {
+            // MC1 adaptation: 12 cells across 640 with slim margins in
+            // place of the MC2 edge frames; the book's 64×37 slab
+            // shrinks to 52 wide (icons scale with the cell).
+            PaneGeom {
+                edge_w: 8.0,
+                box_w: 52.0,
+                box_h: 37.0,
+                sub_w: 52.0,
+                sub_h: 36.0,
+                sx,
+                sy,
+            }
+        }
+    }
+
+    /// Native y of the grid's top row.
+    fn grid_top(&self) -> f32 {
+        480.0 - 2.0 * self.box_h
+    }
+
+    /// Grid slot rect in screen px.
+    fn cell(&self, slot: usize, cols: usize) -> [f32; 4] {
+        let (col, row) = ((slot % cols) as f32, (slot / cols) as f32);
+        [
+            (self.edge_w + col * self.box_w) * self.sx,
+            (self.grid_top() + row * self.box_h) * self.sy,
+            self.box_w * self.sx,
+            self.box_h * self.sy,
+        ]
+    }
+
+    /// The flyout row's native x origin for an anchor slot: centred
+    /// over the slot's column, clamped to the pane (trace §4.1).
+    fn submenu_x(&self, slot: usize, cols: usize, levels: f32) -> f32 {
+        let cx = self.edge_w + (slot % cols) as f32 * self.box_w + self.box_w / 2.0;
+        (cx - levels * self.sub_w / 2.0).clamp(0.0, 640.0 - levels * self.sub_w)
+    }
+
+    /// The flyout box rect (screen px) for level `l` of an anchored
+    /// flyout ("directly above the grid's top row", trace §4.1).
+    fn sub_cell(&self, slot: usize, cols: usize, levels: f32, l: u8) -> [f32; 4] {
+        let x0 = self.submenu_x(slot, cols, levels);
+        [
+            (x0 + l as f32 * self.sub_w) * self.sx,
+            (self.grid_top() - self.sub_h) * self.sy,
+            self.sub_w * self.sx,
+            self.sub_h * self.sy,
+        ]
+    }
+}
+
+fn rect_hit(r: [f32; 4], c: (f32, f32)) -> bool {
+    c.0 >= r[0] && c.0 < r[0] + r[2] && c.1 >= r[1] && c.1 < r[1] + r[3]
+}
+
+/// Ring outline (the MC1-art hover feedback, book idiom).
+fn ring(quads: &mut Vec<UiQuad>, f: [f32; 4], t: [f32; 4]) {
+    quads.push(solid([f[0], f[1], f[2], 2.0], t));
+    quads.push(solid([f[0], f[1] + f[3] - 2.0, f[2], 2.0], t));
+    quads.push(solid([f[0], f[1], 2.0, f[3]], t));
+    quads.push(solid([f[0] + f[2] - 2.0, f[1], 2.0, f[3]], t));
+}
+
+/// Draw the selector pane + hit-test the cursor. `drag_slot` = the
+/// grid slot anchored by a held click (the flyout live-tracks the
+/// cursor and the anchor stays put, trace §1.3); None = plain hover.
+/// Returns the quads and what the cursor is over.
+pub fn selector_quads(
+    assets: &UiAssets,
+    pane: &SelectorPane,
+    view: &SelectorView,
+    w: f32,
+    h: f32,
+    cursor: (f32, f32),
+    drag_slot: Option<usize>,
+) -> (Vec<UiQuad>, SelectorHover) {
+    let g = PaneGeom::new(assets, pane, w, h);
+    let n = pane.spell_count();
+    let mut quads = Vec::with_capacity(n * 4 + 16);
+    let mut hover = SelectorHover::default();
+
+    // Hit-test the grid (hover is display state; clicks are the app's).
+    for slot in 0..n {
+        if rect_hit(g.cell(slot, pane.cols), cursor) {
+            hover.slot = Some(slot);
+        }
+    }
+
+    // The flyout's anchor: a live drag wins; otherwise the hovered
+    // OWNED spell (the original draws it on plain hover too, §4).
+    let anchor = drag_slot.or_else(|| {
+        hover
+            .slot
+            .filter(|&s| pane.levels > 1 && view.owned[pane.order[s] as usize])
+    });
+
+    // --- The 2×13 (or 2×12) grid ---
+    for slot in 0..n {
+        let spell = pane.order[slot] as usize;
+        let cell = g.cell(slot, pane.cols);
+        let owned = view.owned[spell];
+        let castable = owned && view.castable[spell];
+        let hovered = hover.slot == Some(slot) || drag_slot == Some(slot);
+
+        if pane.mc2_art {
+            // One pre-composited tile per box state (EF:22468-22544):
+            // castable(89+icon), hovered shot-meter(87+icon),
+            // owned-unaffordable ghost(91+blended icon). The bake made
+            // the treatment choice; the draw is a single quad.
+            //
+            // NOT POSSESSED = the plain empty box, exactly like retail
+            // (EF:22557: SPELL_ICON_PANEL only; the grey 0xA6 relief
+            // is retail's "learnable/present" hint, gated on the
+            // learn flags 0x3E9/0x403 we don't model yet). The relief
+            // tile stays baked (variant 3) for a future opt-in —
+            // player 2026-07-10: shadows off for faithful replication.
+            if !owned {
+                push_opt(
+                    &mut quads,
+                    assets.sprite_quad_rect_tint(MC2_SPR_BOX, cell, WHITE),
+                );
+                // Future learnable-hint opt-in (unfaithful-proactive):
+                // if let Some(uv) = assets.pane_tile(spell, 3) {
+                //     quads.push(UiQuad { rect: snap(cell), uv, tint: WHITE });
+                // }
+                continue;
+            }
+            let variant = if !castable {
+                2
+            } else if hovered {
+                1
+            } else {
+                0
+            };
+            if let Some(uv) = assets.pane_tile(spell, variant) {
+                quads.push(UiQuad {
+                    rect: snap(cell),
+                    uv,
+                    tint: WHITE,
+                });
+            }
+            // Shot meter on the hovered castable box, verbatim
+            // geometry (EF:22516-22529): fill line at (+6,+28),
+            // 36 px ruler, 4 tall; one 2×2 dot per whole affordable
+            // cast packed column-major (2 rows), max 36.
+            if hovered && castable {
+                let cost = view.cost[spell].max(1);
+                let frac = (view.mana % cost) as f32 / cost as f32;
+                let (mx, my) = (cell[0] + 6.0 * g.sx, cell[1] + 28.0 * g.sy);
+                quads.push(solid([mx, my, 36.0 * g.sx * frac, 4.0 * g.sy], METER_GREY));
+                let casts = ((view.mana / cost) as usize).min(36);
+                for d in 0..casts {
+                    let (col, row) = ((d / 2) as f32, (d % 2) as f32);
+                    quads.push(solid(
+                        [
+                            mx + col * 2.0 * g.sx,
+                            my + row * 2.0 * g.sy,
+                            2.0 * g.sx,
+                            2.0 * g.sy,
+                        ],
+                        MANA_WHITE,
+                    ));
+                }
+            }
+            // L/R mouse-binding corner tags — retail shows them only
+            // on the HOVERED box (or mid-cast), as transparent blits
+            // (EF:22546-22553); right tag at +boxW−tagLeftW
+            // (EF:22452). The alpha tint stands in for the blend.
+            if hovered {
+                let tag_tint = [1.0, 1.0, 1.0, 0.75];
+                let su = g.sx.min(g.sy);
+                if view.bound[0] == Some(spell as u8) {
+                    push_opt(
+                        &mut quads,
+                        assets.sprite_quad_tint(MC2_SPR_TAG_LEFT, cell[0], cell[1], su, tag_tint),
+                    );
+                }
+                if view.bound[1] == Some(spell as u8) {
+                    let tag_w = assets
+                        .sprite_dims(MC2_SPR_TAG_LEFT)
+                        .map_or(14.0, |(w, _)| w);
+                    push_opt(
+                        &mut quads,
+                        assets.sprite_quad_tint(
+                            MC2_SPR_TAG_RIGHT,
+                            cell[0] + (g.box_w - tag_w) * g.sx,
+                            cell[1],
+                            su,
+                            tag_tint,
+                        ),
+                    );
+                }
+            }
+        } else {
+            // MC1 art: the book's slab + icon idiom in pane cells.
+            push_opt(
+                &mut quads,
+                assets.sprite_quad_rect_tint(SPR_SLOT_BG as usize, cell, SLAB_DIM),
+            );
+            let icon = SPR_SPELL_ICON + spell;
+            let irect = [
+                cell[0],
+                cell[1],
+                cell[2] * (ICON_W / 64.0),
+                cell[3] * (ICON_H / 37.0),
+            ];
+            push_opt(
+                &mut quads,
+                if owned {
+                    assets.sprite_quad_rect_tint(icon, irect, WHITE)
+                } else {
+                    assets.sprite_quad_rect_mask(icon, irect, UNOWNED_MASK)
+                },
+            );
+            if owned && !castable {
+                quads.push(solid(cell, LOCKED_WASH));
+            }
+            // Bound-hand corner marks (small solid tabs; the MC2 art
+            // uses its dedicated corner-tag sprites).
+            let tab = [0.95, 0.95, 0.95, 0.9];
+            if view.bound[0] == Some(spell as u8) {
+                quads.push(solid([cell[0], cell[1], 6.0 * g.sx, 6.0 * g.sy], tab));
+            }
+            if view.bound[1] == Some(spell as u8) {
+                quads.push(solid(
+                    [
+                        cell[0] + cell[2] - 6.0 * g.sx,
+                        cell[1],
+                        6.0 * g.sx,
+                        6.0 * g.sy,
+                    ],
+                    tab,
+                ));
+            }
+            if hovered {
+                ring(&mut quads, cell, [0.9, 0.85, 0.5, 0.9]);
+            }
+            // Shot meter on the hovered castable box (book meter
+            // idiom).
+            if hovered && castable {
+                let cost = view.cost[spell].max(1);
+                let frac = (view.mana % cost) as f32 / cost as f32;
+                let my = cell[1] + cell[3] - 5.0 * g.sy;
+                quads.push(solid(
+                    [
+                        cell[0] + 3.0 * g.sx,
+                        my,
+                        (cell[2] - 6.0 * g.sx) * frac,
+                        2.0 * g.sy,
+                    ],
+                    METER_GREY,
+                ));
+            }
+        }
+    }
+
+    // --- Pane end frames + hovered-slot highlight (MC2 art) ---
+    if pane.mc2_art {
+        let top = g.grid_top() * g.sy;
+        push_opt(
+            &mut quads,
+            assets.sprite_quad_rect_tint(
+                MC2_SPR_EDGE,
+                [0.0, top, g.edge_w * g.sx, 2.0 * g.box_h * g.sy],
+                WHITE,
+            ),
+        );
+        push_opt(
+            &mut quads,
+            assets.sprite_quad_rect_tint(
+                MC2_SPR_EDGE,
+                [
+                    (g.edge_w + pane.cols as f32 * g.box_w) * g.sx,
+                    top,
+                    g.edge_w * g.sx,
+                    2.0 * g.box_h * g.sy,
+                ],
+                WHITE,
+            ),
+        );
+        if let Some(slot) = drag_slot.or(hover.slot) {
+            push_opt(
+                &mut quads,
+                assets.sprite_quad_rect_tint(MC2_SPR_BOX_FRAME, g.cell(slot, pane.cols), WHITE),
+            );
+        }
+    }
+
+    // --- The 3-level flyout (trace §4) ---
+    if let Some(slot) = anchor {
+        let spell = pane.order[slot] as usize;
+        let max = view.max_level[spell].min(pane.levels - 1);
+        let castable = view.castable[spell];
+        // Level under the cursor, clamped to the unlocked max
+        // (SelectSpell_6D4F0's clamp, trace §4.3).
+        let row = g.sub_cell(slot, pane.cols, pane.levels as f32, 0);
+        if cursor.1 >= row[1] && cursor.1 < row[1] + row[3] {
+            let l = ((cursor.0 - row[0]) / row[2].max(1.0)).floor();
+            if l >= 0.0 && l < pane.levels as f32 {
+                hover.level = Some((l as u8).min(max));
+            }
+        }
+        // The gold frame sits on the live-tracked level during a drag,
+        // else on the stored selection.
+        let chosen = if drag_slot.is_some() {
+            hover.level.unwrap_or(view.selected_level[spell].min(max))
+        } else {
+            view.selected_level[spell].min(max)
+        };
+        for l in 0..pane.levels {
+            let cell = g.sub_cell(slot, pane.cols, pane.levels as f32, l);
+            if l > max {
+                // Locked: the empty box, no icon (trace §4.2).
+                push_opt(
+                    &mut quads,
+                    assets.sprite_quad_rect_tint(MC2_SPR_SUB_LOCKED, cell, WHITE),
+                );
+                continue;
+            }
+            // One pre-composited flyout tile (box + number badge +
+            // per-level icon; the dark variant's icon went through
+            // the blend LUT at bake time).
+            if let Some(uv) = assets.sub_tile(spell, l as usize, !castable) {
+                quads.push(UiQuad {
+                    rect: snap(cell),
+                    uv,
+                    tint: WHITE,
+                });
+            }
+            if l == chosen {
+                push_opt(
+                    &mut quads,
+                    assets.sprite_quad_rect_tint(MC2_SPR_SUB_GOLD, cell, WHITE),
+                );
+            }
+        }
+        // (The per-tier XP progress bar, EF:22633-22671, waits on the
+        // MC2 experience model — Phase 4.2.)
+    }
+
+    (quads, hover)
 }
 
 #[cfg(test)]

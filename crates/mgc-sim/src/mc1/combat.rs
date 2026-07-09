@@ -29,6 +29,7 @@ use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::features::{Gen, lcg32, tile};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::sprite_stats::SPRITE_STATS;
+use crate::verbs::{CorpseVerb, TargetingVerb, VerbKind};
 
 /// The player carpet's half-extents (sprite 44 stats halves — the
 /// same constants the trigger/portal overlap uses).
@@ -122,6 +123,10 @@ impl Gen {
     /// (:17465 — the discount that keeps area spells from vaporizing
     /// forests; village buildings are class-10 m45 and take full
     /// amounts).
+    /// Returns the number of mails written (retail's sub_124F0-family
+    /// and MC2's sub_10C80/sub_116A0 return the hit count — the
+    /// spellbook reports and the (10,9) earthquake gate consume it;
+    /// MC1 callers ignore it).
     pub(crate) fn area_write(
         &mut self,
         i: usize,
@@ -130,7 +135,8 @@ impl Gen {
         ctx: &MobCtx,
         building_tenth: bool,
         shake: bool,
-    ) {
+    ) -> u32 {
+        let mut count = 0u32;
         let (wx, wy, id, f66, f67) = {
             let e = &self.ent[i];
             (e.x, e.y, e.id24, e.f66, e.f67)
@@ -155,6 +161,7 @@ impl Gen {
                 }
                 if self.ent[j].id24 != id {
                     self.mail_write(MailTarget::Pool(j), 0, amt, id);
+                    count += 1;
                 }
             }
         }
@@ -188,13 +195,16 @@ impl Gen {
         }
         for (j, a) in victims {
             self.mail_write(MailTarget::Pool(j), ch, a, id);
+            count += 1;
         }
         // The player probe (the human wizard is outside the pool; the
         // original reaches it through the same grid).
         if id != PLAYER_TARGET && Self::filter_admits(f66, f67, 3, 0) && self.player_overlap(i, ctx)
         {
             self.mail_write(MailTarget::Player, ch, amt, id);
+            count += 1;
         }
+        count
     }
 
     // ---- the creature inbox (the block opening every state handler) -------
@@ -413,10 +423,25 @@ impl Gen {
         e.f69 = expl_model;
     }
 
+    /// The TargetingVerb seam (crate::verbs) — the acquire subtypes
+    /// dispatch here. MC2's arm (extended subtype key, model-78
+    /// designated-target pre-acquire, buildings source) lands as
+    /// sibling `*_mc2` functions in Phase 3; until then it serves the
+    /// MC1 scan and notes the fallback.
+    fn aim_assist(&mut self, i: usize, ctx: &MobCtx) {
+        match self.verbs.targeting {
+            TargetingVerb::Mc1 => self.aim_assist_mc1(i, ctx),
+            TargetingVerb::Mc2 => {
+                self.note_verb_fallback(VerbKind::Targeting);
+                self.aim_assist_mc1(i, ctx);
+            }
+        }
+    }
+
     /// One-time target acquisition sub_54520 (:63943): nearest awake
     /// creature (any range) or wizard within the caster row's v_28,
     /// inside a ±0x71 yaw AND pitch cone, 3D distance ≤ 5120.
-    fn aim_assist(&mut self, i: usize, ctx: &MobCtx) {
+    fn aim_assist_mc1(&mut self, i: usize, ctx: &MobCtx) {
         let (px, py, pz, yaw, pitch, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
@@ -583,10 +608,22 @@ impl Gen {
         best.map(|(slot, _)| slot)
     }
 
+    /// The wizard-only acquire subtype's TargetingVerb seam (see
+    /// [`Self::aim_assist`]).
+    fn aim_assist_wizards(&mut self, i: usize, ctx: &MobCtx) {
+        match self.verbs.targeting {
+            TargetingVerb::Mc1 => self.aim_assist_wizards_mc1(i, ctx),
+            TargetingVerb::Mc2 => {
+                self.note_verb_fallback(VerbKind::Targeting);
+                self.aim_assist_wizards_mc1(i, ctx);
+            }
+        }
+    }
+
     /// The wizard-only acquire (sub_54520 blocks 7/8/B/C — duel m7,
     /// steal m8, undead m11): same cone/range as [`Self::aim_assist`]
     /// but the candidate set is the class-3 wizard list alone.
-    fn aim_assist_wizards(&mut self, i: usize, ctx: &MobCtx) {
+    fn aim_assist_wizards_mc1(&mut self, i: usize, ctx: &MobCtx) {
         let (px, py, pz, yaw, pitch, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
@@ -846,11 +883,23 @@ impl Gen {
         false
     }
 
+    /// The possess-acquire subtype's TargetingVerb seam (see
+    /// [`Self::aim_assist`]).
+    fn aim_assist_possess(&mut self, i: usize) {
+        match self.verbs.targeting {
+            TargetingVerb::Mc1 => self.aim_assist_possess_mc1(i),
+            TargetingVerb::Mc2 => {
+                self.note_verb_fallback(VerbKind::Targeting);
+                self.aim_assist_possess_mc1(i);
+            }
+        }
+    }
+
     /// sub_54520 case 1 (:64040-77): possess acquisition — nearest
     /// awake mana ball (m39/40) not already owned/claimed by the
     /// shooter, or any house (m45), inside the ±0x71 yaw+pitch cone
     /// within 5120. Snaps the heading on success.
-    fn aim_assist_possess(&mut self, i: usize) {
+    fn aim_assist_possess_mc1(&mut self, i: usize) {
         let (px, py, pz, yaw, pitch, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
@@ -2080,7 +2129,7 @@ impl Gen {
 
     /// The victim scan evaluated at a prospective position (the
     /// original moves first and scans at the new position).
-    fn victim_scan_at(
+    pub(crate) fn victim_scan_at(
         &mut self,
         i: usize,
         tmp: (u16, u16, i16),
@@ -2116,6 +2165,22 @@ impl Gen {
 
     /// The class-10 effect inits (states = the original's +70 writes).
     pub(crate) fn spawn_effect(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
+        // On the MC2 column the shared-lineage effects resolve into
+        // their NATIVE ctors — the ground fire (0) and the explosion
+        // seeder (1) are the same entity in both engines (life 8/1,
+        // damage 400, sprite 7/41, extents 128) but tick through the
+        // per-game arms (MC2: sub_30D50 worn-path repaints + ring
+        // cluster). Without this, an MC1-fallback fireball on an MC2
+        // world spawned an MC1-shaped fire that the game-keyed
+        // dispatch fed to the MC2 handler (damage field mismatch —
+        // the silent-fire regression this comment guards).
+        if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            match model {
+                0 => return self.mc2_spawn_fire(x, y, z),
+                1 => return self.mc2_spawn_big_explosion(x, y, z),
+                _ => {}
+            }
+        }
         let s = self.new_event()?;
         self.ent[s].class64 = 10;
         self.ent[s].model65 = model;
@@ -2346,7 +2411,7 @@ impl Gen {
     /// = unowned; the owner palette families (105 + 8·player-slot)
     /// are the mana-collection track (our claims use the
     /// PLAYER_TARGET sentinel, not a pool wizard).
-    fn ball_resize(&mut self, i: usize) {
+    pub(crate) fn ball_resize(&mut self, i: usize) {
         let mana = self.ent[i].f140;
         let mut size = 7usize;
         for (k, t) in Self::BALL_SIZES.iter().enumerate() {
@@ -2875,6 +2940,13 @@ impl Gen {
     /// physics (gravity 16, quarter-bounce, 250/256 friction, ±64
     /// clamp), merge on overlap (sub_277D0 :29700).
     fn ball_tick(&mut self, i: usize) -> bool {
+        // A ball absorbed by an earlier slot THIS tick is already
+        // despawning — without this guard two coincident balls merge
+        // into each other mutually and the mana vanishes (retail's
+        // merged ball is display-disabled and can't re-merge).
+        if self.ent[i].flags & 0x400 != 0 {
+            return false;
+        }
         // ch1 collection claim (:29439-45): the ball takes the
         // claimant as owner — only on an owner CHANGE (the possess
         // flash re-broadcasts for 8 ticks; the guard keeps the claim
@@ -2979,10 +3051,23 @@ impl Gen {
 
     // ---- corpse pipeline ----------------------------------------------------
 
+    /// The CorpseVerb seam (crate::verbs): MC1 scatters mana
+    /// balls/jars; MC2's arm (spell tokens, mana-sphere split/merge)
+    /// lands as a sibling function here in Phase 3.
+    pub(crate) fn corpse_drop(&mut self, i: usize) {
+        match self.verbs.corpse {
+            CorpseVerb::Mc1 => self.corpse_drop_mc1(i),
+            CorpseVerb::Mc2 => {
+                self.note_verb_fallback(VerbKind::Corpse);
+                self.corpse_drop_mc1(i);
+            }
+        }
+    }
+
     /// sub_27690 (:29663): the corpse's mana-ball drop — one unused
     /// draw on the CORPSE's seed (kept for stream parity), then the
     /// ball with two launch draws on its OWN seed.
-    pub(crate) fn corpse_drop(&mut self, i: usize) {
+    fn corpse_drop_mc1(&mut self, i: usize) {
         if self.ent[i].f140 <= 0 {
             return;
         }
@@ -3040,8 +3125,9 @@ impl Gen {
     }
 
     /// The fire's scorch dig (sub_40D30(expl, 0, 0, -depth, 1)):
-    /// a single-cell protected dig at the fire's position.
-    fn dig_scorch(&mut self, i: usize, delta: i16) {
+    /// a single-cell protected dig at the fire's position. Also the
+    /// MC2 fire's (sub_30D50 → sub_572C0 — same chassis shape).
+    pub(crate) fn dig_scorch(&mut self, i: usize, delta: i16) {
         if delta == 0 {
             return;
         }

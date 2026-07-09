@@ -15,7 +15,10 @@
 
 pub mod chassis;
 pub mod flight;
+pub mod ids;
 pub mod mc1;
+pub mod mc2;
+pub mod verbs;
 
 use mc1::{features, spells, world};
 
@@ -363,6 +366,17 @@ impl Simulation {
     /// over the integer carpet state; `flyer` is derived from it for
     /// the renderer/camera afterwards.
     fn move_mc1(&mut self, input: &FlightInput) {
+        // Seam telemetry for the boundary verbs this mover consumes
+        // (crate::verbs): pending MC2 arms serve MC1 — the flight
+        // model itself and the wall-commit gate injected below.
+        if let Some(w) = &mut self.world {
+            if w.verbs().flight == verbs::FlightVerb::Mc2 {
+                w.note_verb_fallback(verbs::VerbKind::Flight);
+            }
+            if w.verbs().commit_gate == verbs::CommitGateVerb::Mc2 {
+                w.note_verb_fallback(verbs::VerbKind::CommitGate);
+            }
+        }
         // Accelerate expiry/cancel edge: the spell handler resets the
         // target AND actual speed to +80 — MAX FORWARD, even out of
         // backwards flight (:65191-97; an authentic quirk).

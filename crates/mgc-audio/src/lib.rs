@@ -35,6 +35,9 @@ pub struct Audio {
     /// same ramp at sim-tick granularity over the baked danger stem.
     danger: bool,
     danger_level: f32, // 0..126, the original's fade counter
+    /// Prefer the General MIDI render (`gm_file`) when the bundle
+    /// carries it; the FM render is the always-present fallback.
+    prefer_gm: bool,
 }
 
 impl Audio {
@@ -49,7 +52,15 @@ impl Audio {
             music_playing: None,
             danger: false,
             danger_level: 0.0,
+            prefer_gm: true,
         }
+    }
+
+    /// Pick the music arrangement (config `audio.arrangement`): `true`
+    /// prefers the GM render when baked, `false` forces FM. Applies
+    /// from the next `play_music` — the playing track is not restarted.
+    pub fn set_prefer_gm(&mut self, prefer_gm: bool) {
+        self.prefer_gm = prefer_gm;
     }
 
     /// The danger-mode wish for this tick (the original's wizard
@@ -124,8 +135,12 @@ impl Audio {
         let Some(track) = index.tracks.iter().find(|t| t.name == name) else {
             return Err(format!("no music track named {name}"));
         };
-        let decoded = music::decode_flac(&bundle.dir.join(&track.file))?;
-        let overlay = match &track.danger_file {
+        let (file, danger_file) = match &track.gm_file {
+            Some(gm) if self.prefer_gm => (gm, &track.gm_danger_file),
+            _ => (&track.file, &track.danger_file),
+        };
+        let decoded = music::decode_flac(&bundle.dir.join(file))?;
+        let overlay = match danger_file {
             Some(f) => Some(music::decode_flac(&bundle.dir.join(f))?.pcm),
             None => None,
         };

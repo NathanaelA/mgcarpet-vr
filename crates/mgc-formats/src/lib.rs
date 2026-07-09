@@ -27,7 +27,22 @@ pub const FORMAT_VERSION: u32 = 2;
 /// baked before the field existed deserialize as epoch 0 — always
 /// stale.
 /// 1: first stamped epoch (2026-07-09).
-pub const BAKE_EPOCH: u32 = 1;
+/// 2: mc2 bundles gain search.bin + bldgprm.bin (Phase 3).
+/// 3: mc2 bundles gain build.tab.bin + build.dat.bin (BUILD0-0 —
+///    the building footprint bank; Phase 3.5 building creator).
+/// 4: mc2 bundles gain ui-sprites (HSPR{D,N,C}0-0) + blend-lut.bin
+///    (the CTRL spell-selector pane track).
+/// 5: mc2 shade-lut.bin re-carved from TABLES +0x0000 — the +0x4000
+///    slice it used to carry is the sprite blend matrix, not the
+///    shade LUT (docs/traces/mc2-transparency-drawlist.md).
+/// 6: mc2 bundles gain spells.bin (SPELLS.DAT verbatim, 26x80 — the
+///    par1-authored class-10 overrides + class-15 cast costs; the
+///    retail CD table differs from the decompile's baked-in fallback).
+/// 7: mc1-audio gains the General MIDI arrangement (`MUSIC<bank>-2`
+///    rendered via fluidsynth, `music/*-gm[-danger].flac` + the
+///    gm_file/gm_danger_file music.json fields) on hosts that can
+///    render GM; FM-only hosts re-bake to the same pre-7 content.
+pub const BAKE_EPOCH: u32 = 7;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

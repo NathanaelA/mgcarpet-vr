@@ -41,35 +41,57 @@ const STICK_PER_PIXEL: f32 = 0.4;
 /// over" flow ends in exactly this (respawn at the start of a fresh
 /// level).
 struct WorldInit {
+    /// The sim-side game profile (chassis + verb column selector).
+    game: mgc_sim::ids::GameId,
     planes: mgc_sim::mc1::features::Planes,
     things: Vec<mgc_formats::Thing>,
     seed: u32,
     assets: mgc_sim::mc1::features::FeatureAssets,
     win_pct: u16,
     /// Rival wizard configs by player slot (wizards.json) + the
-    /// level's active-slot count.
+    /// level's active-slot count. MC1 column only.
     wizards: [Option<mgc_sim::mc1::rivals::RivalConfig>; 8],
     player_count: u16,
-    /// The chassis constant set: pristine MC1, or a deliberately
-    /// deviating one (the limit-removing `--pool-slots` dev flag;
-    /// G-class — a run under a bumped pool is not a faithful
-    /// fixture).
+    /// MC2 stage checkpoints (`(index, stage, x, y)` rows) — the
+    /// single-stage objective engine's board. Empty for MC1/HW.
+    stages: Vec<(i8, i16, i16, i16)>,
+    /// MC2 Night/Cave level: the runtime terrain repaint inverts
+    /// relief shading (remc2 Terrain.cpp:2030-2033).
+    night_shade: bool,
+    doom_level: bool,
+    /// Draw stand-in art for unported models (MC2 default until its
+    /// roster closes; the ledger stays truthful either way).
+    placeholders: bool,
+    /// The chassis constant set: the game's pristine profile, or a
+    /// deliberately deviating one (the limit-removing `--pool-slots`
+    /// dev flag; G-class — a run under a bumped pool is not a
+    /// faithful fixture).
     chassis: mgc_sim::chassis::ChassisParams,
 }
 
 impl WorldInit {
     fn build(&self) -> mgc_sim::mc1::world::World {
-        let mut w = mgc_sim::mc1::world::World::new_with_chassis(
+        let mut w = mgc_sim::mc1::world::World::new_full(
             self.planes.clone(),
             &self.things,
             self.seed,
             self.assets.clone(),
             self.chassis.clone(),
+            self.game,
         );
-        if self.win_pct > 0 {
-            w.set_win_pct(self.win_pct);
+        if matches!(self.game, mgc_sim::ids::GameId::Mc2) {
+            w.set_placeholders(self.placeholders);
+            w.set_mc2_night_shade(self.night_shade);
+            w.set_mc2_doom_level(self.doom_level);
+            if !self.stages.is_empty() {
+                w.set_mc2_stages(&self.stages);
+            }
+        } else {
+            if self.win_pct > 0 {
+                w.set_win_pct(self.win_pct);
+            }
+            w.set_wizards(&self.wizards, self.player_count);
         }
-        w.set_wizards(&self.wizards, self.player_count);
         w
     }
 }
@@ -113,6 +135,9 @@ struct LoadedLevel {
     view: LevelView,
     height: Vec<u8>,
     label: String,
+    /// The sim-side game profile — picks the sprite table the pose
+    /// snapshot resolves through (MC1 stats vs MC2 params).
+    game: mgc_sim::ids::GameId,
     /// Bundle sprite data for the renderer (index, atlas pixels).
     sprites: Option<(mgc_formats::bundle::SpriteIndex, Vec<u8>)>,
     /// World entities resolved to billboards (initial population).
@@ -131,6 +156,9 @@ struct LoadedLevel {
     world_init: Option<WorldInit>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
     palette_rgba: [[u8; 4]; 256],
+    /// The MC2 map-marker environment (team-colour table + map-type
+    /// colours) from the level header; Day for MC1/HW.
+    mc2_env: entities::Mc2MapEnv,
     /// The per-game audio bundle directory (`assets/mc1-audio` /
     /// `mc2-audio`), when baked.
     audio_dir: Option<PathBuf>,
@@ -155,7 +183,8 @@ struct LoadedLevel {
 
 /// Resolve the world's live volumes into map overlay circles: amber =
 /// fly-into triggers, red = kill-watchers, cyan = collected-item
-/// triggers, violet = portals.
+/// triggers, violet = portals, green = MC2 stage checkpoints (the
+/// authored route, for troubleshooting — player request).
 fn map_areas(world: &mgc_sim::mc1::world::World) -> Vec<mgc_render::MapArea> {
     use mgc_sim::mc1::world::VolumeKind;
     world
@@ -170,6 +199,7 @@ fn map_areas(world: &mgc_sim::mc1::world::World) -> Vec<mgc_render::MapArea> {
                 VolumeKind::KillWatch => [255, 64, 64],
                 VolumeKind::WinTrigger => [64, 208, 255],
                 VolumeKind::Portal => [208, 96, 255],
+                VolumeKind::Objective => [96, 255, 96],
             },
         })
         .collect()
@@ -229,6 +259,18 @@ fn load_level(
     } else {
         "mc1-temperate"
     };
+    // The MC2 map-marker environment (team-colour table + map-type
+    // colours) follows the level header, independent of any bundle
+    // fallback below.
+    let mc2_env = if package.meta.game == Game::MagicCarpet2 {
+        match package.header.as_ref().map(|h| h.map_type) {
+            Some(mgc_formats::MapType::Night) => entities::Mc2MapEnv::Night,
+            Some(mgc_formats::MapType::Cave) => entities::Mc2MapEnv::Cave,
+            _ => entities::Mc2MapEnv::Day,
+        }
+    } else {
+        entities::Mc2MapEnv::Day
+    };
     if !baked_root.join("assets").join(variant).is_dir() && variant.starts_with("mc2") {
         eprintln!("note: {variant} bundle not baked — using mc1-temperate as a stand-in (rebake)");
         variant = "mc1-temperate";
@@ -252,35 +294,65 @@ fn load_level(
     let mut shading = terrain.shading.clone();
     let mut angle = terrain.angle.clone();
 
-    // The living world (MC1/HW; MC2's feature/entity semantics are a
-    // separate remc2 port, pending): the load-time feature pass, then
-    // disposition 0 spawns the initial population — things authored
-    // behind triggers (dis_id != 0) stay latent until fired. Needs the
-    // shading + angle planes and the bundle's search/build data.
+    // The living world: the load-time feature pass (MC1/HW — MC2
+    // terrain is pre-generated, remc2 has no feature event loop),
+    // then the init spawns — MC1's disposition-0 sweep / MC2's
+    // GenerateEvents passes. Things authored behind triggers
+    // (dis_id != 0 / DisId >= 0) stay latent until fired. Needs the
+    // shading + angle planes and feature-pass data.
+    let game_id = mgc_sim::ids::GameId::from(package.meta.game);
+    let is_mc2 = matches!(game_id, mgc_sim::ids::GameId::Mc2);
     let mut world = None;
     let mut world_init = None;
-    if terrain_features && package.meta.game != Game::MagicCarpet2 {
-        match (
-            &shading,
-            &angle,
-            &bundle.search,
-            &bundle.build_tab,
-            &bundle.build_dat,
-        ) {
-            (Some(sh), Some(an), Some(search), Some(build_tab), Some(build_dat)) => {
-                let assets =
-                    mgc_sim::mc1::features::FeatureAssets::parse(search, build_tab, build_dat)?;
+    if terrain_features {
+        // Feature-pass assets: every game reads them from its own
+        // bundle (mc2 bundles carry SEARCH + the BUILD0-0 footprint
+        // bank since epoch 3, plus BLDGPRM for the building creator);
+        // an old mc2 bake falls back to the mc1-temperate stand-in so
+        // the world still lives.
+        let mut feature_src = (
+            bundle.search.clone(),
+            bundle.build_tab.clone(),
+            bundle.build_dat.clone(),
+        );
+        if is_mc2 && (feature_src.1.is_none() || feature_src.2.is_none()) {
+            eprintln!("note: mc2 bundle lacks build data — mc1-temperate stand-in (rebake)");
+            if let Ok(b) = Bundle::load(&baked_root.join("assets").join("mc1-temperate")) {
+                feature_src = (b.search, b.build_tab, b.build_dat);
+            }
+        }
+        match (&shading, &angle, feature_src) {
+            (Some(sh), Some(an), (Some(search), Some(build_tab), Some(build_dat))) => {
+                let mut assets =
+                    mgc_sim::mc1::features::FeatureAssets::parse(&search, &build_tab, &build_dat)?;
+                if let Some(prm) = bundle.bldgprm.as_deref() {
+                    assets = assets.with_bldgprm(prm);
+                }
+                if let Some(sp) = bundle.spells.as_deref() {
+                    assets = assets.with_spells(sp)?;
+                }
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
-                // The level goal: footer[0] = the required banked
+                // The MC1 level goal: footer[0] = the required banked
                 // percentage of world mana (level offset 38800 —
                 // the win check's threshold and the HUD goal tick).
+                // MC2's win lives on the stage board instead.
                 let win_pct = package
                     .gen_params
                     .as_ref()
                     .and_then(|g| g.footer)
                     .map_or(0, |f| f[0]);
                 let (wizards, player_count) = rival_configs(package.wizards.as_ref());
-                let mut chassis = mgc_sim::chassis::ChassisParams::MC1;
+                let stages = package
+                    .stages
+                    .as_ref()
+                    .map(|st| {
+                        st.checkpoints
+                            .iter()
+                            .map(|c| (c.index, c.stage, c.x, c.y))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut chassis = game_id.chassis();
                 if let Some(n) = pool_slots {
                     chassis.pool_slots = n;
                     println!(
@@ -289,6 +361,7 @@ fn load_level(
                     );
                 }
                 let init = WorldInit {
+                    game: game_id,
                     planes: mgc_sim::mc1::features::Planes {
                         height: height.clone(),
                         tile_type: tile_type.clone(),
@@ -301,9 +374,31 @@ fn load_level(
                     win_pct,
                     wizards,
                     player_count,
+                    stages,
+                    placeholders: is_mc2,
+                    night_shade: is_mc2
+                        && matches!(
+                            package.header.as_ref().map(|h| h.map_type),
+                            Some(mgc_formats::MapType::Night) | Some(mgc_formats::MapType::Cave)
+                        ),
+                    // The doom-palette bit (gfx_type & 2, the
+                    // night-fog variant) gates the (5,10) doomsday
+                    // pyramid's ctor (remc2 EF:33968).
+                    doom_level: is_mc2
+                        && package.header.as_ref().is_some_and(|h| h.gfx_type & 2 != 0),
                     chassis,
                 };
                 let w = init.build();
+                // Truthful seam telemetry at boot: what still serves
+                // through the MC1 fallback, and what spawned as a
+                // stand-in (empty on MC1/HW by construction).
+                let fallbacks = w.verb_fallbacks();
+                if !fallbacks.is_empty() {
+                    println!("verb fallbacks (MC1 arm serving): {}", fallbacks.join(", "));
+                }
+                for &(class, model, n) in w.misfits() {
+                    println!("misfit: ({class},{model}) x{n} — unported model (placeholder art)");
+                }
                 // The view starts from the post-feature planes.
                 height.copy_from_slice(&w.planes().height);
                 tile_type.copy_from_slice(&w.planes().tile_type);
@@ -315,50 +410,68 @@ fn load_level(
                 world = Some(w);
                 world_init = Some(init);
             }
-            (None, ..) | (_, None, ..) => eprintln!(
+            (None, ..) | (_, None, _) => eprintln!(
                 "note: package lacks shading/angle planes — terrain features skipped (rebake)"
             ),
             _ => eprintln!(
-                "note: bundle lacks search/build data — terrain features skipped (rebake)"
+                "note: feature-pass data missing (bundle search/build) — living world skipped (rebake)"
             ),
         }
     }
 
     // World entities as billboards + map dots. With a live world, the
     // sim's pose snapshot is the source of truth (sprite types, spawn
-    // facing and jitter come from the ported spawn handlers); without
-    // one (MC2, --no-terrain-features), every drawable record resolves
-    // statically — the old behavior, kept as the comparison mode.
-    let (billboards, map_dots) = if package.meta.game != Game::MagicCarpet2 {
+    // facing and jitter come from the ported spawn handlers), resolved
+    // through the game's own sprite table; without one
+    // (--no-terrain-features), every drawable record resolves
+    // statically — the old behavior, kept as the comparison mode
+    // (MC1/HW only; MC2 has no static resolver).
+    let (billboards, map_dots) = {
         let index = bundle.sprites.as_ref().map(|(i, _)| i);
         let dims = |id: u16| {
             index
                 .and_then(|i| i.sprites.get(id as usize))
-                .map(|s| (s.width, s.height))
+                .map(|s| (s.width, s.height, s.flags))
         };
         match &world {
             Some(w) => {
                 let poses = w.live_poses();
                 (
-                    entities::billboards_from_poses(&poses, dims),
+                    entities::billboards_from_poses(game_id, &poses, dims),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
                     // (and the blink phase starts low).
-                    entities::map_dots_from_poses(&poses, &bundle.palette, false, false),
+                    entities::map_dots_from_poses(
+                        game_id,
+                        &poses,
+                        &bundle.palette,
+                        false,
+                        mc2_env,
+                        0,
+                    ),
                 )
             }
-            None => (
+            None if !is_mc2 => (
                 entities::billboards(&package.things.things, &height, dims),
                 entities::map_dots(&package.things.things, &bundle.palette),
             ),
+            None => (Vec::new(), Vec::new()),
         }
-    } else {
-        (Vec::new(), Vec::new())
     };
+    if is_mc2 {
+        // Boot telemetry while the MC2 roster is open: how much of
+        // the live population resolved to drawables.
+        println!(
+            "mc2 boot: {} billboards / {} live poses",
+            billboards.len(),
+            world.as_ref().map_or(0, |w| w.live_poses().len())
+        );
+    }
 
-    // The original's spawn: the class-3 m4 start marker's position,
-    // hovering over the (post-feature) terrain, facing north.
-    let start = entities::player_start(&package.things.things).map(|(x, z)| Flyer {
+    // The original's spawn: the start marker's position (MC1 class-3
+    // m4 / MC2 (10,0x52)), hovering over the (post-feature) terrain,
+    // facing north.
+    let start = entities::player_start(game_id, &package.things.things).map(|(x, z)| Flyer {
         x,
         y: entities::ground_at(&height, x, z) + entities::START_HOVER,
         z,
@@ -373,6 +486,9 @@ fn load_level(
             px,
             &bundle.palette,
             bundle.blend_lut.as_deref(),
+            // MC1 pre-composites its book tiles; MC2's sprite ids map
+            // to the selector pane instead (drawn directly).
+            !is_mc2,
         )
     });
 
@@ -454,6 +570,7 @@ fn load_level(
         },
         height,
         label: format!("{game} level {}", package.meta.level),
+        game: game_id,
         sprites: bundle.sprites,
         billboards,
         map_dots,
@@ -462,6 +579,7 @@ fn load_level(
         world,
         world_init,
         palette_rgba: bundle.palette,
+        mc2_env,
         map_icons: entities::MapIcons {
             // Castle = UI sprite 58+team, balloon = 66+team, all
             // eight teams; remc1 sub_48710 :57230/:57234.
@@ -531,6 +649,30 @@ struct App {
     map_owned_buildings: bool,
     /// HUD blends over the sky (faithful MC1) vs opaque (MC2 toggle).
     hud_transparent: bool,
+    /// Which spell-selection surfaces are live (config
+    /// `spell_selector` resolved against the running game): the MC1
+    /// map-screen spellbook and/or the MC2 CTRL-hold pane.
+    selector: config::SelectorSurfaces,
+    /// CTRL currently held (the MC2 selector pane is hold-to-show,
+    /// release-to-close — remc2 PI:505/PI:895).
+    ctrl_held: bool,
+    /// The pane's per-game shape; None when `selector.ctrl_pane` is
+    /// off.
+    pane: Option<ui::SelectorPane>,
+    /// Pane hit under the cursor, refreshed per frame while it's up.
+    selector_hover: ui::SelectorHover,
+    /// A held pane click: (grid slot, hand 0=L/1=R). The flyout
+    /// live-tracks the hovered level until release commits it.
+    selector_drag: Option<(usize, u8)>,
+    /// Pane spell id last bound to each hand (the pane's corner
+    /// tags; MC2 only — MC1 reads the loadout directly).
+    pane_bound: [Option<u8>; 2],
+    /// Per-spell SELECTED LEVEL (MC2 mechanic, `array_0x437` in the
+    /// original: one persistent level per spell, reused by every
+    /// selection route). Indexed by pane spell id; MC1 spells are
+    /// single-level so it stays all-zero there. App-side until the
+    /// MC2 spell column lands sim-side (Phase 4.2).
+    spell_levels: [u8; 26],
     /// Sim tick of the last map-texture recompose (dots/blink are
     /// tick-derived, so update_map runs per tick, not per frame).
     last_map_tick: Option<u64>,
@@ -570,6 +712,10 @@ struct App {
     /// Running pool-exhaustion drop count for this level (the
     /// limit-removing telemetry's playthrough readout).
     pool_dropped_total: u32,
+    /// Misfit-ledger entries already reported (the spawn seam's
+    /// graceful-degradation telemetry — unknown (class, model)
+    /// things; mgc-sim ROADMAP "MULTI-GAME ARCHITECTURE" Phase 2).
+    misfits_reported: usize,
     /// Audio runtime (None in headless paths / when opening failed).
     audio: Option<mgc_audio::Audio>,
     /// F1/F2 runtime toggles (the original's keys) over the config's
@@ -591,6 +737,7 @@ impl App {
         invincible: bool,
         map_owned_buildings: bool,
         hud_transparent: bool,
+        selector: config::SelectorSurfaces,
         audio_cfg: &config::AudioConfig,
         flight: config::FlightConfig,
     ) -> Self {
@@ -600,6 +747,7 @@ impl App {
         let mut audio = None;
         if audio_cfg.sound || audio_cfg.music {
             let mut a = mgc_audio::Audio::open();
+            a.set_prefer_gm(audio_cfg.arrangement.prefer_gm());
             if let Some(dir) = &level.audio_dir {
                 if let Err(e) = a.load_bundle(dir, 0) {
                     eprintln!("note: audio bundle: {e}");
@@ -647,6 +795,13 @@ impl App {
         if let Some(w) = &mut sim.world {
             apply_instruments(w, dev_spells, &level.plausible_spells, invincible);
         }
+        let pane = selector.ctrl_pane.then(|| {
+            if matches!(level.game, mgc_sim::ids::GameId::Mc2) {
+                ui::SelectorPane::mc2()
+            } else {
+                ui::SelectorPane::mc1()
+            }
+        });
         let prev_flyer = sim.flyer;
         Self {
             level,
@@ -660,6 +815,13 @@ impl App {
             pending_demolish: false,
             map_owned_buildings,
             hud_transparent,
+            selector,
+            ctrl_held: false,
+            pane,
+            selector_hover: ui::SelectorHover::default(),
+            selector_drag: None,
+            pane_bound: [None; 2],
+            spell_levels: [0; 26],
             last_map_tick: None,
             paused: false,
             castle_pos: None,
@@ -682,6 +844,7 @@ impl App {
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
             pool_dropped_total: 0,
+            misfits_reported: 0,
             audio,
             sound_on: audio_cfg.sound,
             music_on: audio_cfg.music,
@@ -749,6 +912,7 @@ impl App {
         };
         let mut w = init.build();
         self.pool_dropped_total = 0;
+        self.misfits_reported = 0;
         apply_instruments(
             &mut w,
             self.dev_spells,
@@ -875,19 +1039,21 @@ impl App {
             let dims = |id: u16| {
                 index
                     .and_then(|i| i.sprites.get(id as usize))
-                    .map(|s| (s.width, s.height))
+                    .map(|s| (s.width, s.height, s.flags))
             };
-            self.level.billboards = entities::billboards_from_poses(&poses, dims);
+            self.level.billboards = entities::billboards_from_poses(self.level.game, &poses, dims);
             if self.health_bars {
-                bars = entities::health_bars_from_poses(&poses, dims);
+                bars = entities::health_bars_from_poses(self.level.game, &poses, dims);
             }
             self.level.map_dots = entities::map_dots_from_poses(
+                self.level.game,
                 &poses,
                 &self.level.palette_rgba,
                 self.map_owned_buildings,
-                // The claimed-ball blink phase (the original's global
-                // toggle byte; ~4 Hz at 30 ticks/s reads right).
-                self.sim.tick >> 3 & 1 == 0,
+                self.level.mc2_env,
+                // MC1 derives its ~4 Hz claimed-ball blink from the
+                // tick; MC2's colorIndex_121 phases divide it.
+                self.sim.tick as u32,
             );
             self.level.map_stamps =
                 entities::map_stamps_from_poses(&poses, &self.level.map_icons, w.beyond_sight());
@@ -975,6 +1141,71 @@ impl App {
         }
     }
 
+    /// The CTRL selector pane is up (hold-to-show; needs the pane
+    /// surface enabled and UI sprites baked).
+    fn pane_open(&self) -> bool {
+        self.ctrl_held && self.pane.is_some() && self.level.ui.is_some()
+    }
+
+    /// Pane spell id → the MC1 manifestation the cast path can equip
+    /// today. Identity for MC1; the cross-column bridge for MC2 (the
+    /// deliberate interim until the Phase-4.2 MC2 spell column).
+    fn pane_cast_spell(&self, spell: u8) -> Option<u8> {
+        if matches!(self.level.game, mgc_sim::ids::GameId::Mc2) {
+            ui::MC2_CAST_BRIDGE[spell as usize]
+        } else {
+            Some(spell)
+        }
+    }
+
+    fn pane_spell_name(&self, spell: u8) -> &'static str {
+        if matches!(self.level.game, mgc_sim::ids::GameId::Mc2) {
+            ui::MC2_SPELL_NAMES[spell as usize]
+        } else {
+            mgc_sim::mc1::spells::SpellId(spell).name()
+        }
+    }
+
+    /// Commit a pane selection: persist the spell's chosen level (the
+    /// original's `array_0x437[spell] = level`, every route reuses
+    /// it) and bind the spell to the clicked hand.
+    fn pane_commit(&mut self, slot: usize, hand: u8, level: u8) {
+        let Some(pane) = &self.pane else { return };
+        let spell = pane.order[slot];
+        let multi = pane.levels > 1;
+        self.spell_levels[spell as usize] = level;
+        self.pane_bound[hand as usize] = Some(spell);
+        let hand_name = if hand == 0 { "left" } else { "right" };
+        match self.pane_cast_spell(spell) {
+            Some(cast) => {
+                if hand == 0 {
+                    self.pending_equip.0 = Some(cast);
+                } else {
+                    self.pending_equip.1 = Some(cast);
+                }
+                self.flush_equip_if_paused();
+                if multi {
+                    println!(
+                        "selector: {hand_name} hand = {} level {}",
+                        self.pane_spell_name(spell),
+                        level + 1
+                    );
+                } else {
+                    println!(
+                        "selector: {hand_name} hand = {}",
+                        self.pane_spell_name(spell)
+                    );
+                }
+            }
+            None => println!(
+                "selector: {} noted (level {}) — no castable stand-in until the MC2 \
+                 spell column lands",
+                self.pane_spell_name(spell),
+                level + 1
+            ),
+        }
+    }
+
     fn set_grab(&mut self, grab: bool) {
         let Some(window) = &self.window else { return };
         if grab {
@@ -1028,6 +1259,17 @@ impl ApplicationHandler for App {
                 renderer.set_billboards(self.level.billboards.clone());
                 renderer.set_smooth_shading(self.smooth_shading);
                 renderer.set_hud_transparent(self.hud_transparent);
+                if let Some(sky) = mc2_sky_srgb(&self.level) {
+                    renderer.set_sky_color(sky);
+                }
+                // Map-screen topology follows the book surface: no
+                // map book (MC2, or MC1 with spell_selector=mc2) =
+                // the split layout with the stretched live view.
+                renderer.set_map_layout(if self.selector.map_book {
+                    mgc_render::MapScreenLayout::Mc1Book
+                } else {
+                    mgc_render::MapScreenLayout::Mc2Split
+                });
                 self.renderer = Some(renderer);
             }
             Err(e) => {
@@ -1051,13 +1293,68 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = state == ElementState::Pressed;
+                if self.pane_open() {
+                    // The CTRL selector pane (over flight OR the map
+                    // screen): press anchors the level flyout for the
+                    // clicked hand, release commits level + binding
+                    // (remc2 PI:806-929); SHIFT+click fast-binds the
+                    // stored level (cmd 0x26). Fire never leaks
+                    // through the pane.
+                    let hand = match button {
+                        MouseButton::Left => 0u8,
+                        MouseButton::Right => 1u8,
+                        _ => return,
+                    };
+                    if down {
+                        if let Some(slot) = self.selector_hover.slot {
+                            let spell = self.pane.as_ref().map(|p| p.order[slot]);
+                            // Selectable = bridged ownership, or
+                            // everything under the G instrument in
+                            // MC2 (mirrors the pane view's grant).
+                            let owned = (self.dev_spells
+                                && matches!(self.level.game, mgc_sim::ids::GameId::Mc2))
+                                || spell
+                                    .and_then(|s| self.pane_cast_spell(s))
+                                    .map(|c| {
+                                        self.sim
+                                            .world
+                                            .as_ref()
+                                            .is_some_and(|w| w.loadout().owned[c as usize])
+                                    })
+                                    .unwrap_or(false);
+                            if owned {
+                                if self.shift_held {
+                                    let level = self.spell_levels[spell.unwrap_or(0) as usize];
+                                    self.pane_commit(slot, hand, level);
+                                } else {
+                                    self.selector_drag = Some((slot, hand));
+                                }
+                            }
+                        }
+                    } else if let Some((slot, h)) = self.selector_drag {
+                        if h == hand {
+                            let spell = self.pane.as_ref().map(|p| p.order[slot]).unwrap_or(0);
+                            let level = self
+                                .selector_hover
+                                .level
+                                .unwrap_or(self.spell_levels[spell as usize]);
+                            self.pane_commit(slot, hand, level);
+                            self.selector_drag = None;
+                        }
+                    }
+                    self.fire_held = false;
+                    self.fire_right_held = false;
+                    return;
+                }
                 if self.book_open() {
                     // Book screen: clicking an owned spell binds it to
                     // that hand (the original's commands 0x15/0x16)
                     // AND closes the book back into flight (player-
                     // confirmed original UX). Clicks on unowned slots
-                    // or empty page do nothing.
-                    if down {
+                    // or empty page do nothing. (Without the map book
+                    // — the MC2 layout — the map screen ignores
+                    // clicks; the CTRL pane above is the selector.)
+                    if down && self.selector.map_book {
                         let owned = self
                             .sim
                             .world
@@ -1141,6 +1438,33 @@ impl ApplicationHandler for App {
                         // because tick_input sends zero stick while
                         // the book is open.
                         self.stick = VirtualStick::default();
+                    }
+                    return;
+                }
+                // CTRL = the selector pane, hold-to-show / release-to-
+                // close (remc2 keys[5]=0x1D, PI:505/PI:895). Opening
+                // hijacks the pointer (grab off, OS cursor visible);
+                // closing cancels any live drag and returns to
+                // mouse-look unless the map screen keeps the cursor.
+                if matches!(
+                    event.physical_key,
+                    PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight)
+                ) && self.pane.is_some()
+                {
+                    if down && !self.ctrl_held {
+                        self.ctrl_held = true;
+                        if self.level.ui.is_some() {
+                            self.set_grab(false);
+                            self.fire_held = false;
+                            self.fire_right_held = false;
+                        }
+                    } else if !down && self.ctrl_held {
+                        self.ctrl_held = false;
+                        self.selector_drag = None;
+                        self.selector_hover = ui::SelectorHover::default();
+                        if !self.book_open() {
+                            self.set_grab(true);
+                        }
                     }
                     return;
                 }
@@ -1419,6 +1743,16 @@ impl ApplicationHandler for App {
                             self.pool_dropped_total
                         );
                     }
+                    // The spawn seam's misfit ledger (unknown
+                    // (class, model) things degraded gracefully) —
+                    // report new entries once.
+                    for &(class, model, count) in &w.misfits()[self.misfits_reported..] {
+                        println!(
+                            "WARN: misfit thing (class {class}, model {model}) x{count} — \
+                             unknown to the serving spawn column, degraded"
+                        );
+                        self.misfits_reported += 1;
+                    }
                 }
                 self.sync_world();
                 // Castle-less death confirmed → the level restarts
@@ -1480,14 +1814,22 @@ impl ApplicationHandler for App {
                     // per-frame [55]/[41] alternation at tick parity.
                     let alert_blink = self.sim.tick % 2 == 0;
                     let (mut quads, hovered) = if self.book_open() {
-                        ui::book_quads(
-                            assets,
-                            &loadout,
-                            &self.quick_binds,
-                            size.0,
-                            size.1,
-                            self.cursor,
-                        )
+                        if self.selector.map_book {
+                            ui::book_quads(
+                                assets,
+                                &loadout,
+                                &self.quick_binds,
+                                size.0,
+                                size.1,
+                                self.cursor,
+                            )
+                        } else {
+                            // The MC2-layout map screen has no book
+                            // half — the renderer's split layout shows
+                            // the stretched live view there; the CTRL
+                            // pane below is the selector.
+                            (Vec::new(), None)
+                        }
                     } else {
                         (
                             ui::hud_quads(
@@ -1496,12 +1838,78 @@ impl ApplicationHandler for App {
                                 &vitals,
                                 self.hud_transparent,
                                 alert_blink,
+                                matches!(self.level.game, mgc_sim::ids::GameId::Mc2),
                                 size.0,
                                 size.1,
                             ),
                             None,
                         )
                     };
+                    // The CTRL selector pane, over flight or the map
+                    // screen alike (the original draws the same pane
+                    // in both states, remc2 EF:21788/EF:21959).
+                    if self.pane_open() {
+                        if let Some(pane) = &self.pane {
+                            let n = pane.spell_count();
+                            let mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
+                            let mut owned = [false; 26];
+                            let mut castable = [false; 26];
+                            let mut cost = [0u32; 26];
+                            let mut max_level = [0u8; 26];
+                            for s in 0..n {
+                                let bridge = if mc2 {
+                                    ui::MC2_CAST_BRIDGE[s]
+                                } else {
+                                    Some(s as u8)
+                                };
+                                if let Some(c) = bridge {
+                                    owned[s] = loadout.owned[c as usize];
+                                    castable[s] = loadout.bindable[c as usize];
+                                    cost[s] = mgc_sim::mc1::spells::SPELLS[c as usize].possess_mana;
+                                }
+                                // The G instrument means ALL spells:
+                                // in MC2 that includes the 7 without a
+                                // cast bridge (selectable, level UI
+                                // exercisable; equip stays deferred) —
+                                // player 2026-07-10.
+                                if mc2 && self.dev_spells {
+                                    owned[s] = true;
+                                    castable[s] = bridge
+                                        .map(|c| loadout.bindable[c as usize])
+                                        .unwrap_or(true);
+                                }
+                                // Level-unlock stand-in: all tiers
+                                // selectable until the MC2 XP model
+                                // (SpellLevels_0x41D) lands in 4.2.
+                                max_level[s] = pane.levels - 1;
+                            }
+                            let bound = if mc2 {
+                                self.pane_bound
+                            } else {
+                                [loadout.left, loadout.right]
+                            };
+                            let view = ui::SelectorView {
+                                owned: &owned[..n],
+                                castable: &castable[..n],
+                                selected_level: &self.spell_levels[..n],
+                                max_level: &max_level[..n],
+                                bound,
+                                mana: loadout.mana,
+                                cost: &cost[..n],
+                            };
+                            let (pq, hover) = ui::selector_quads(
+                                assets,
+                                pane,
+                                &view,
+                                size.0,
+                                size.1,
+                                self.cursor,
+                                self.selector_drag.map(|(s, _)| s),
+                            );
+                            quads.extend(pq);
+                            self.selector_hover = hover;
+                        }
+                    }
                     if !self.book_open() {
                         quads.extend(ui::vitals_quads(
                             &vitals,
@@ -1630,6 +2038,8 @@ struct Args {
     map_scale: u32,
     /// Render `--screenshot` showing the book screen instead of the world.
     map_view: bool,
+    /// Spell-selector surface override (config `spell_selector`).
+    spell_selector: Option<config::SpellSelector>,
     /// Animation clock for `--screenshot` (game turns; default 0).
     /// Water-wave phase repeats every 32 (MC1) / 64 (MC2) turns.
     anim_turn: f32,
@@ -1659,6 +2069,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map = None;
     let mut map_scale = 4u32;
     let mut map_view = false;
+    let mut spell_selector = None;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
     let mut pool_slots = None;
@@ -1771,6 +2182,15 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--map-view" => map_view = true,
+            "--spell-selector" => {
+                spell_selector = Some(match it.next().as_deref() {
+                    Some("auto") => config::SpellSelector::Auto,
+                    Some("mc1") => config::SpellSelector::Mc1,
+                    Some("mc2") => config::SpellSelector::Mc2,
+                    Some("mc1+mc2") => config::SpellSelector::Mc1Mc2,
+                    _ => return Err("--spell-selector needs auto|mc1|mc2|mc1+mc2".into()),
+                });
+            }
             "--anim-turn" => {
                 anim_turn = it
                     .next()
@@ -1802,6 +2222,7 @@ fn parse_args() -> Result<Args, String> {
                      [--invincible|--no-invincible] \
                      [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
                      [--bindings classic|wasd] \
+                     [--spell-selector auto|mc1|mc2|mc1+mc2] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
@@ -1832,6 +2253,7 @@ fn parse_args() -> Result<Args, String> {
         map,
         map_scale,
         map_view,
+        spell_selector,
         anim_turn,
         terrain_features,
         pool_slots,
@@ -1877,6 +2299,31 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
     write_png(out, w as u32, h as u32, &rgba)?;
     println!("{} -> {} ({}x{})", level.label, out.display(), w, h);
     Ok(())
+}
+
+/// The MC2 environment's sky/fog color, sRGB: the mode of the bundle
+/// shade LUT's row 0 — the engine's fog FAR color, i.e. what distant
+/// terrain fades into (night/cave = black, day = pale blue; a few
+/// row-0 entries deviate for reserved/animated palette slots, hence
+/// the mode). None for MC1/HW — their certified presentation keeps
+/// the renderer's hand-picked haze constant until the sky trace
+/// lands (the same TABLES row-0 structure exists there too).
+fn mc2_sky_srgb(level: &LoadedLevel) -> Option<[f32; 3]> {
+    if !matches!(level.game, mgc_sim::ids::GameId::Mc2) {
+        return None;
+    }
+    let row0 = level.view.shade_lut.get(..256)?;
+    let mut counts = [0u16; 256];
+    for &i in row0 {
+        counts[i as usize] += 1;
+    }
+    let idx = (0..256).max_by_key(|&i| counts[i])?;
+    let rgb = level.view.palette[idx];
+    Some([
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+    ])
 }
 
 /// Apply the playtest instruments to a freshly built world — ONE place
@@ -1941,6 +2388,9 @@ fn run_screenshot(
     }
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
+    if let Some(sky) = mc2_sky_srgb(&level) {
+        renderer.set_sky_color(sky);
+    }
     // HUD transparency: the config decides (same path as live play);
     // MGC_HUD_OPAQUE overrides for A/B captures — by VALUE, so
     // MGC_HUD_OPAQUE=0 forces transparent and =1 forces opaque.
@@ -1950,6 +2400,14 @@ fn run_screenshot(
     };
     renderer.set_hud_transparent(hud_transparent);
     renderer.set_map_view(map_view);
+    // Screenshots follow the game's faithful map topology (no config
+    // override in the headless path): MC2 = the split layout.
+    let shot_is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
+    renderer.set_map_layout(if shot_is_mc2 {
+        mgc_render::MapScreenLayout::Mc2Split
+    } else {
+        mgc_render::MapScreenLayout::Mc1Book
+    });
     renderer.set_anim_turn(anim_turn);
     // Spell UI (book grid or HUD), from the level-start loadout.
     if let (Some(assets), Some(w)) = (&level.ui, &mut level.world) {
@@ -1958,7 +2416,13 @@ fn run_screenshot(
         let loadout = w.loadout();
         let vitals = w.vitals();
         let quads = if map_view {
-            ui::book_quads(assets, &loadout, &[None; 10], 1280.0, 960.0, (-1.0, -1.0)).0
+            if shot_is_mc2 {
+                // MC2's map screen has no book half; the split layout
+                // shows the stretched live view instead.
+                Vec::new()
+            } else {
+                ui::book_quads(assets, &loadout, &[None; 10], 1280.0, 960.0, (-1.0, -1.0)).0
+            }
         } else {
             // alert_blink=true: a screenshot shows any armed alert.
             ui::hud_quads(
@@ -1967,6 +2431,7 @@ fn run_screenshot(
                 &vitals,
                 hud_transparent,
                 true,
+                shot_is_mc2,
                 1280.0,
                 960.0,
             )
@@ -2095,6 +2560,24 @@ fn main() -> std::process::ExitCode {
         };
     }
 
+    // Spell-selector surfaces, resolved against the loaded game. MC2
+    // owns exactly one shape (the CTRL pane) — an explicit map-book
+    // request there coerces with a note rather than inventing a
+    // 26-spell in-map grid.
+    let selector_choice = args
+        .spell_selector
+        .unwrap_or(cfg.enhancements.spell_selector);
+    let level_is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
+    let selector = selector_choice.resolve(level_is_mc2);
+    if level_is_mc2
+        && matches!(
+            selector_choice,
+            config::SpellSelector::Mc1 | config::SpellSelector::Mc1Mc2
+        )
+    {
+        println!("spell-selector: MC2 has no in-map spellbook — using the faithful CTRL pane");
+    }
+
     println!("mgcarpet {} — {}", env!("CARGO_PKG_VERSION"), level.label);
     let move_keys = match flight.bindings {
         config::Bindings::Classic => "Up/Down arrows accel/decel, Left/Right strafe",
@@ -2115,7 +2598,14 @@ fn main() -> std::process::ExitCode {
     println!("          Space respawns after death (at your castle; no castle = level restart),");
     println!("          Shift+L demolishes your own castle one level per press,");
     println!("          LMB/RMB cast the equipped hand's spell (hold = channel),");
-    println!("          Enter opens the book: click a spell with LMB/RMB to equip,");
+    if selector.map_book {
+        println!("          Enter opens the book: click a spell with LMB/RMB to equip,");
+    } else {
+        println!("          Enter opens the map screen,");
+    }
+    if selector.ctrl_pane {
+        println!("          hold Ctrl for the spell selector: click LMB/RMB to equip a hand,");
+    }
     println!("          hover + 1-9,0 binds a quick key (in flight: equip, Shift = right hand),");
     println!("          T smooth shading, H monster health bars (debug),");
     println!(
@@ -2142,6 +2632,7 @@ fn main() -> std::process::ExitCode {
             cfg.enhancements.hud_transparency,
             config::HudTransparency::Mc1
         ),
+        selector,
         &cfg.audio,
         flight,
     );

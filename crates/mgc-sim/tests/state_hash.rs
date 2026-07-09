@@ -196,16 +196,17 @@ fn level_005_golden_state_hashes() {
     assert_eq!(got, run(&root), "sim is not deterministic");
     println!("state hashes: {got:#018x?}");
 
-    // Pinned 2026-07-09 (after ChassisParams landed in Gen — a
-    // hashed-layout change; behavior verified identical: pool 1000,
-    // buckets 20/{120}, win debounce 16, U32 rand all unchanged).
+    // Pinned 2026-07-09 (Phase 2: VerbSet/GameId/misfit-telemetry
+    // fields joined Gen/World — a hashed-layout change only; the new
+    // fields are unread by any handler, behavior identical. Previous
+    // pin: the ChassisParams landing, same day).
     const GOLDEN: [u64; 6] = [
-        0xd1456ec817d0e800, // post-init (feature pass + disposition 0)
-        0x4a722403f2b1c187, // A: 32 idle ticks far afield
-        0x853f53b53c94eb84, // B: crater trigger fired + 120 dig ticks
-        0xb95f53807b90fd41, // C: ambush disposition fired
-        0x395758190e9e17c9, // D: 64 ticks of two-hand fireball combat
-        0x3ade39bbb0363422, // E: 100 aftermath ticks
+        0x795499327cc36b28, // post-init (feature pass + disposition 0)
+        0xe37dd14011ee7d15, // A: 32 idle ticks far afield
+        0xd586b0f8e4e7a45a, // B: crater trigger fired + 120 dig ticks
+        0x33a250c42d61569b, // C: ambush disposition fired
+        0x2bc5f5aa9f4a1763, // D: 64 ticks of two-hand fireball combat
+        0x51a203e02d23c146, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

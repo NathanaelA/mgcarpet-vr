@@ -133,6 +133,10 @@ pub struct AudioConfig {
     /// Master gains, 0..=1 linear.
     pub sfx_volume: f32,
     pub music_volume: f32,
+    /// Which MC1 music arrangement plays (multi-column matrix option —
+    /// all three shipped on the CD as per-sound-card targets, so each
+    /// column is authentic; MC2's redbook soundtrack is unaffected).
+    pub arrangement: MusicArrangement,
 }
 
 impl Default for AudioConfig {
@@ -142,7 +146,37 @@ impl Default for AudioConfig {
             music: true,
             sfx_volume: 1.0,
             music_volume: 1.0,
+            arrangement: MusicArrangement::default(),
         }
+    }
+}
+
+/// MC1 shipped three interchangeable music arrangements, one per
+/// sound-card family (`MUSIC<bank>-<digit>`, remc1 :54029-30): AdLib
+/// FM (digit 0), Roland MT-32 (1, not baked — no MT-32 renderer), and
+/// General MIDI (2). The bundle always carries the FM render; the GM
+/// render (fluidsynth + a GM soundfont) is baked when the importing
+/// host can produce it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MusicArrangement {
+    /// The best-available render: General MIDI when the bundle
+    /// carries it, else the FM render.
+    #[default]
+    Auto,
+    /// Force the AdLib FM (OPL3) render — the `-0` driver's sound.
+    Fm,
+    /// Force the General MIDI render (falls back to FM with a console
+    /// note when the bundle has no GM tracks — rebake with fluidsynth
+    /// and a GM soundfont installed).
+    Gm,
+}
+
+impl MusicArrangement {
+    /// Resolve to the runtime preference bit ([`mgc_audio::Audio`]
+    /// falls back to FM per track when GM is absent).
+    pub fn prefer_gm(self) -> bool {
+        !matches!(self, MusicArrangement::Fm)
     }
 }
 
@@ -199,6 +233,18 @@ pub struct Enhancements {
     /// "makes the radar map less useful" — opaque is the readable
     /// alternate.
     pub hud_transparency: HudTransparency,
+    /// Which spell-selection interface is live (P-class, multi-column
+    /// matrix option — interface only, the spell economy underneath is
+    /// untouched). MC1's faithful surface = the fullscreen-map
+    /// spellbook page; MC2's = the CTRL-hold docked selector pane
+    /// (with the per-spell level sub-menus). `auto` (default) = each
+    /// game's own faithful surface. MC1 accepts every value —
+    /// including `mc2` (the pane replaces the map book; the map's
+    /// book half becomes the stretched live view, MC2-style) and
+    /// `mc1+mc2` (both surfaces at once). MC2 always resolves to the
+    /// pane: a 26-spell book never had an in-map grid, so `mc1`/
+    /// `mc1+mc2` coerce (with a console note) rather than invent one.
+    pub spell_selector: SpellSelector,
     /// The autoaim crosshair (toggle at runtime with C): a
     /// white-edged black cross at the TRUE aim point (the faithful
     /// camera pitches at half the aim pitch, so aim is never screen
@@ -209,6 +255,65 @@ pub struct Enhancements {
     /// RNG); the original shows no aim UI at all. Acquisition ≠ hit
     /// (homing is capped 5/tick yaw).
     pub crosshair: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpellSelector {
+    /// Each game's faithful surface: MC1 → the map-screen spellbook,
+    /// MC2 → the CTRL pane. The authentic default.
+    #[default]
+    Auto,
+    /// Force the MC1 map-screen spellbook (MC1 only; MC2 coerces to
+    /// the pane).
+    Mc1,
+    /// Force the MC2 CTRL-hold selector pane; the map screen drops
+    /// its spellbook half for the stretched live view.
+    Mc2,
+    /// Both surfaces at once (MC1 only): the map book stays AND the
+    /// CTRL pane works everywhere — the no-compromise loadout.
+    #[serde(rename = "mc1+mc2")]
+    Mc1Mc2,
+}
+
+/// A [`SpellSelector`] resolved against the running game: which of the
+/// two selection surfaces are live this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectorSurfaces {
+    /// The MC1 map-screen spellbook page (its absence also switches
+    /// the map screen's book half to the stretched live view).
+    pub map_book: bool,
+    /// The MC2 CTRL-hold docked selector pane.
+    pub ctrl_pane: bool,
+}
+
+impl SpellSelector {
+    /// Resolve for the running game. MC2 has exactly one shape (the
+    /// pane); anything explicitly asking for the map book there is
+    /// coerced, and the caller prints the note (so the message can
+    /// name the config source).
+    pub fn resolve(self, is_mc2: bool) -> SelectorSurfaces {
+        if is_mc2 {
+            return SelectorSurfaces {
+                map_book: false,
+                ctrl_pane: true,
+            };
+        }
+        match self {
+            SpellSelector::Auto | SpellSelector::Mc1 => SelectorSurfaces {
+                map_book: true,
+                ctrl_pane: false,
+            },
+            SpellSelector::Mc2 => SelectorSurfaces {
+                map_book: false,
+                ctrl_pane: true,
+            },
+            SpellSelector::Mc1Mc2 => SelectorSurfaces {
+                map_book: true,
+                ctrl_pane: true,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -51,13 +51,13 @@ use crate::mc1::tables::{ATAN, BIT_SQRT, COS, PAINT_AC, PAINT_BC, PAINT_EC, PAIN
 use mgc_formats::Thing;
 
 use crate::chassis::{ChassisParams, RandWidth};
+use crate::verbs::{VerbKind, VerbSet};
 
 /// Cells in the 256x256 terrain grid.
 const GRID: usize = 0x10000;
 
-/// Engine entity-table capacity; the feature scan visits 1..=1999.
-pub(crate) const TABLE_SLOTS: usize = 2096;
-
+// THING-table capacity is chassis data (ChassisParams::
+// level_table_slots); the feature/disposition scans are len-driven.
 // Runtime pool size lives in chassis::ChassisParams::pool_slots
 // (slot 0 never allocated); sizing/iteration read `ent.len()`.
 
@@ -89,15 +89,57 @@ pub struct BuildDef {
     pub h: u8,
 }
 
+/// One MC2 `BLDGPRM.DAT` record (4 bytes; remc2
+/// Type_D93C0_Bldgprmbuffer.h + loader sub_539A0 :38319): production
+/// rate, flag bits (0x10 = GenerateEvents pass F/G split, 8 = no
+/// mana/production, 4 = no cave second-heightmap raise, 1 =
+/// enterable), and the objective-chain / font index byte.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct BldgParam {
+    pub rate: u16,
+    pub flags: u8,
+    pub chain: u8,
+}
+
 /// Parsed game data the feature pass needs: the SEARCH.DAT ring table
-/// and the building footprint RLE maps.
-#[derive(Clone, Hash)]
+/// and the building footprint RLE maps. `bldgprm` = MC2's building
+/// parameter table, `spells` = MC2's SPELLS.DAT (both empty on MC1 —
+/// and hash-transparent when empty, so the MC1 goldens' hash stream
+/// is unchanged by the fields).
+#[derive(Clone)]
 pub struct FeatureAssets {
     /// Per ring 0..31: (dx, dy) byte deltas from the dig center, in the
     /// original's row-major emission order (sub_11540, :16784).
     pub rings: Vec<Vec<(u8, u8)>>,
     pub build_tab: Vec<BuildDef>,
     pub build_dat: Vec<u8>,
+    pub bldgprm: Vec<BldgParam>,
+    /// MC2's spell table ([`crate::mc2::spells`]): the par1-authored
+    /// class-10 overrides + class-15 cast costs.
+    pub spells: Vec<crate::mc2::spells::Mc2SpellRow>,
+}
+
+impl std::hash::Hash for FeatureAssets {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let FeatureAssets {
+            rings,
+            build_tab,
+            build_dat,
+            bldgprm,
+            spells,
+        } = self;
+        rings.hash(state);
+        build_tab.hash(state);
+        build_dat.hash(state);
+        // Only when present — an absent table hashes exactly like the
+        // pre-field struct (MC1 goldens hold).
+        if !bldgprm.is_empty() {
+            bldgprm.hash(state);
+        }
+        if !spells.is_empty() {
+            spells.hash(state);
+        }
+    }
 }
 
 impl FeatureAssets {
@@ -150,7 +192,36 @@ impl FeatureAssets {
             rings,
             build_tab: tab,
             build_dat: build_dat.to_vec(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
         })
+    }
+
+    /// Attach MC2's `BLDGPRM.DAT` table (4-byte records; the loader
+    /// reads 76 x 4 of the 77-record file, sub_539A0 :38319 — we take
+    /// every whole record present).
+    pub fn with_bldgprm(mut self, bytes: &[u8]) -> Self {
+        self.bldgprm = bytes
+            .chunks_exact(4)
+            .map(|r| BldgParam {
+                rate: u16::from_le_bytes([r[0], r[1]]),
+                flags: r[2],
+                chain: r[3],
+            })
+            .collect();
+        self
+    }
+
+    /// Attach MC2's `SPELLS.DAT` table (`spells.bin`, 26 x 80 bytes;
+    /// [`crate::mc2::spells::parse`]). A malformed blob is a bake bug
+    /// — surface it instead of silently running on ctor defaults.
+    /// NOTE: retail's LevelInit.cpp:12-21 patch of rows 4 and 19 —
+    /// keyed to MapType (Day vs non-Day), overwriting only tier-0
+    /// life + hintText (docs/traces/mc2-class10-m9-dome-open-closure
+    /// .md §4) — is not yet applied here (Phase 4.2 material).
+    pub fn with_spells(mut self, bytes: &[u8]) -> Result<Self, String> {
+        self.spells = crate::mc2::spells::parse(bytes)?;
+        Ok(self)
     }
 }
 
@@ -446,6 +517,18 @@ pub(crate) struct Gen {
     /// The per-game chassis constant set ([`crate::chassis`]); fixed
     /// at construction, never rebranched on.
     pub(crate) chassis: ChassisParams,
+    /// The per-game tier-5 verb column ([`crate::verbs`]); fixed at
+    /// construction. Branched on ONLY at the dispatch seams — never
+    /// inside a handler.
+    pub(crate) verbs: VerbSet,
+    /// Bitmask of [`crate::verbs::VerbKind`]s whose requested arm is
+    /// pending and fell back to MC1 (seam telemetry, noted once each;
+    /// the app/tests read it via `World::verb_fallbacks`).
+    pub(crate) verb_fallbacks: u8,
+    /// Unknown `(class, model, count)` things the spawn seam refused
+    /// (graceful degradation's ledger; the original has no analogue —
+    /// observability, not behavior).
+    pub(crate) misfits: Vec<(u16, u16, u32)>,
     /// Sound requests emitted this tick at the original's
     /// sub_55370_558A0 call sites; drained by the app into the audio
     /// mixer (which reimplements that routine's attenuation/slot
@@ -457,6 +540,70 @@ pub(crate) struct Gen {
     /// Playtest-8: the final destruction left the tower ON SCREEN —
     /// the sim flattened it but nothing re-uploaded the terrain.
     pub(crate) terrain_dirty: bool,
+    /// MC2 non-day shading: `sub_462A0` inverts the relief shade on
+    /// Night/Cave maps (remc2 Terrain.cpp:2030-2033). Per-LEVEL, set
+    /// by the app from the level's environment. Hash-transparent when
+    /// off so the MC1 golden hash stream is unchanged by the field.
+    pub(crate) mc2_night_shade: NightShade,
+    /// MC2 per-model spawn ordinals (`D41A0_0.array_0x10[model]++`,
+    /// remc2 EventsFunctions.cpp per-ctor) — the per-instance phase
+    /// stagger every MC2 class-5 ctor stores into byte_0x3E_62 (our
+    /// f63). Separate from MC1's `spawn_count` (its own column) and
+    /// hash-transparent while untouched so the MC1 golden stream is
+    /// unchanged by the field.
+    pub(crate) mc2_spawn_ord: Mc2Ord,
+    /// m26's mana leech against the HUMAN accumulates here (remc2
+    /// EF:19331-34 drains the target wizard's mana; the MC2
+    /// wizard-mana ledger consumes this when it lands). Pool wizards
+    /// are debited directly. Hash-transparent at zero.
+    pub(crate) mc2_player_drain: Mc2Quiet,
+    /// Class-14 scroll pickups banked for the Phase-4.2 spell-XP
+    /// system (retail grants 4 XP each in single-player,
+    /// UpdateScroll_59C80 EF:41180-83). Hash-transparent at zero.
+    pub(crate) mc2_scrolls: Mc2Quiet,
+    /// The human's collected MC2 spell tokens, a bitmask by spell
+    /// model 0..25 (retail: `SpellEnabled[model]` on the wizard,
+    /// sub_68FF0 EF:55726) — banked for the Phase-4.2 spell system
+    /// like the scrolls. Hash-transparent at zero.
+    pub(crate) mc2_spell_tokens: Mc2Quiet,
+}
+
+/// See [`Gen::mc2_spawn_ord`] — hashes to NOTHING while all-zero
+/// (golden-stream compatibility across the field addition).
+#[derive(Default)]
+pub(crate) struct Mc2Ord(pub [u8; 32]);
+
+impl std::hash::Hash for Mc2Ord {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.0.iter().any(|&v| v != 0) {
+            state.write(&self.0);
+        }
+    }
+}
+
+/// A counter that hashes to NOTHING at zero (see [`Mc2Ord`]).
+#[derive(Default)]
+pub(crate) struct Mc2Quiet(pub i32);
+
+impl std::hash::Hash for Mc2Quiet {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.0 != 0 {
+            state.write_i32(self.0);
+        }
+    }
+}
+
+/// See [`Gen::mc2_night_shade`] — a bool that hashes to NOTHING when
+/// false (golden-stream compatibility across the field addition).
+#[derive(Default)]
+pub(crate) struct NightShade(pub bool);
+
+impl std::hash::Hash for NightShade {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.0 {
+            state.write_u8(1);
+        }
+    }
 }
 
 /// One sound request: engine sound id (the SNDS bank-0 index), the
@@ -473,10 +620,16 @@ pub struct SoundEvent {
 }
 
 /// Rebuild the original 1-based record table from level things.
-pub(crate) fn build_table(things: &[Thing], slots: usize) -> Vec<Rec> {
+/// Build the 1-based runtime THING table. `base` maps the package's
+/// 0-based `slot` export into engine slots: MC1's 1999-record file
+/// is engine slots 1..=1999 (base 1); MC2's 1200-record file IS the
+/// engine table including the unused slot 0 (base 0) — its stage
+/// checkpoints reference these slots directly (remc2
+/// entity_0x30311[stage_1]).
+pub(crate) fn build_table(things: &[Thing], slots: usize, base: usize) -> Vec<Rec> {
     let mut table = vec![Rec::default(); slots];
     for th in things {
-        let i = th.slot as usize + 1;
+        let i = th.slot as usize + base;
         if i < table.len() {
             table[i] = Rec {
                 class: th.class,
@@ -498,7 +651,13 @@ impl Gen {
     /// A fresh engine over owned planes. `seed` = the level's GEN_MAP
     /// seed (`rand_4`); the retile `pseudoRand` stream is replayed from
     /// the pristine height plane.
-    pub(crate) fn new(t: Planes, assets: FeatureAssets, seed: u32, chassis: ChassisParams) -> Self {
+    pub(crate) fn new(
+        t: Planes,
+        assets: FeatureAssets,
+        seed: u32,
+        chassis: ChassisParams,
+        verbs: VerbSet,
+    ) -> Self {
         let pseudo = post_generation_pseudo_rand(&t.height);
         Gen {
             t,
@@ -531,6 +690,33 @@ impl Gen {
             sounds: Vec::new(),
             terrain_dirty: false,
             chassis,
+            verbs,
+            verb_fallbacks: 0,
+            misfits: Vec::new(),
+            mc2_night_shade: NightShade(false),
+            mc2_spawn_ord: Mc2Ord::default(),
+            mc2_player_drain: Mc2Quiet::default(),
+            mc2_scrolls: Mc2Quiet::default(),
+            mc2_spell_tokens: Mc2Quiet::default(),
+        }
+    }
+
+    /// Note that `kind`'s requested arm is pending and the MC1
+    /// implementation served instead (once per verb per world).
+    pub(crate) fn note_verb_fallback(&mut self, kind: VerbKind) {
+        self.verb_fallbacks |= 1 << kind as u8;
+    }
+
+    /// The spawn seam refused an unknown `(class, model)` — count it.
+    pub(crate) fn note_misfit(&mut self, class: u16, model: u16) {
+        if let Some(m) = self
+            .misfits
+            .iter_mut()
+            .find(|m| m.0 == class && m.1 == model)
+        {
+            m.2 += 1;
+        } else {
+            self.misfits.push((class, model, 1));
         }
     }
 
@@ -560,7 +746,7 @@ impl Gen {
     /// GenerateFeatures_36430: consume the class-10 load-time features
     /// (dis_id 0xFFFF) in slot order and run the fixpoint event loop.
     pub(crate) fn load_time_pass(&mut self, table: &mut [Rec]) {
-        for i in 1..2000usize {
+        for i in 1..table.len() {
             if table[i].dis_id == 0xFFFF && table[i].class == 10 {
                 self.dispatch(table, i);
                 table[i].class = 0;
@@ -581,14 +767,20 @@ pub fn generate_features_mc1(
     seed: u32,
     assets: &FeatureAssets,
 ) {
-    let mut table = build_table(things, ChassisParams::MC1.level_table_slots);
+    let mut table = build_table(things, ChassisParams::MC1.level_table_slots, 1);
     let owned = Planes {
         height: planes.height.to_vec(),
         tile_type: planes.tile_type.to_vec(),
         shading: planes.shading.to_vec(),
         angle: planes.angle.to_vec(),
     };
-    let mut g = Gen::new(owned, assets.clone(), seed, ChassisParams::MC1);
+    let mut g = Gen::new(
+        owned,
+        assets.clone(),
+        seed,
+        ChassisParams::MC1,
+        VerbSet::MC1,
+    );
     g.load_time_pass(&mut table);
     planes.height.copy_from_slice(&g.t.height);
     planes.tile_type.copy_from_slice(&g.t.tile_type);
@@ -611,7 +803,7 @@ impl Gen {
             // "MULTI-GAME ARCHITECTURE") wants a playtest catalogue
             // of the levels that hit the pool ceiling before any
             // bumped-pool option exists.
-            self.exhausted += 1;
+            self.exhausted = self.exhausted.saturating_add(1);
             return None;
         };
         let idx = idx as usize;
@@ -740,7 +932,7 @@ impl Gen {
 
     /// sub_361C0 (:42956): average of the four footprint corners
     /// (x, y), (x+w, y), (x+w, y+h), (x, y+h), u8-wrapping.
-    fn avg4(&self, x: u8, y: u8, h: u8, w: u8) -> u16 {
+    pub(crate) fn avg4(&self, x: u8, y: u8, h: u8, w: u8) -> u16 {
         let p1 = self.t.height[tile(x, y)] as u16;
         let p2 = self.t.height[tile(x.wrapping_add(w), y)] as u16;
         let p3 = self.t.height[tile(x.wrapping_add(w), y.wrapping_add(h))] as u16;
@@ -753,7 +945,7 @@ impl Gen {
     /// grown by one on the -x/-y side through the `byte_B5D40` table
     /// (drawing pseudoRand for types < 8), then recompute shading over
     /// the rect grown once more.
-    fn retile_and_shade(&mut self, ax: u8, ay: u8, bx: u8, by: u8) {
+    pub(crate) fn retile_and_shade(&mut self, ax: u8, ay: u8, bx: u8, by: u8) {
         let x_add = bx.wrapping_sub(ax).wrapping_add(2);
         let y_add = by.wrapping_sub(ay).wrapping_add(2);
         let (sx, sy) = (ax.wrapping_sub(1), ay.wrapping_sub(1));
@@ -1020,7 +1212,7 @@ impl Gen {
     /// sub_11760 (:16869): true when the tile under the position (plain
     /// >>8, no rounding) is water (angle nibble 0) — the walker/digger
     /// > > stop probe.
-    fn on_water(&self, x: u16, y: u16) -> bool {
+    pub(crate) fn on_water(&self, x: u16, y: u16) -> bool {
         self.t.angle[tile((x >> 8) as u8, (y >> 8) as u8)] & 0xF == 0
     }
 
@@ -1134,15 +1326,32 @@ impl Gen {
     fn walk_chain(&mut self, table: &mut [Rec], slot: usize) {
         let class = table[slot].class;
         let model = table[slot].model;
+        // A valid chain is shorter than the table; the caps below are
+        // unreachable on well-formed data and break the CYCLE livelock
+        // on garbage links (frankenstein bycatch: MC2 reuses the
+        // parent/child fields as context params, and a malformed
+        // community MC1 level could hang retail the same way).
         let mut cur = slot;
+        let mut hops = table.len();
         while table[cur].parent != 0 {
-            cur = table[cur].parent as usize % TABLE_SLOTS;
+            cur = table[cur].parent as usize % table.len();
+            hops -= 1;
+            if hops == 0 {
+                self.note_misfit(class, model);
+                return;
+            }
         }
+        let mut hops = table.len();
         loop {
             if table[cur].class != class || table[cur].model != model {
                 return;
             }
-            let child = table[cur].child as usize % TABLE_SLOTS;
+            hops -= 1;
+            if hops == 0 {
+                self.note_misfit(class, model);
+                return;
+            }
+            let child = table[cur].child as usize % table.len();
             table[cur].swi_id = 0;
             if child == 0 {
                 return;
@@ -2583,7 +2792,15 @@ impl Gen {
             let gx = cx.wrapping_add(128);
             let gy = cy.wrapping_add(640);
             let gz = self.ground_z(gx, gy) as i16;
-            if let Some(g) = self.spawn_creature(15, gx, gy, gz) {
+            // Both games park a (5,15) archer in the courtyard; the
+            // guard itself is per-column (MC2: mc2_spawn_m15, retail
+            // EF:61488 — spawning the MC1 creature under the MC2
+            // dispatch was the class-5-model-15 misfit despawn).
+            let guard = match self.verbs.movement {
+                crate::verbs::MovementVerb::Mc2 => self.mc2_spawn_m15(gx, gy, gz),
+                _ => self.spawn_creature(15, gx, gy, gz),
+            };
+            if let Some(g) = guard {
                 self.ent[g].id24 = own;
                 self.ent[g].f144 = own;
                 self.ent[g].f30 = 512;
@@ -3667,6 +3884,7 @@ mod tests {
             assets,
             0,
             ChassisParams::MC1,
+            VerbSet::MC1,
         );
         assert_eq!(g.ring_cells(0, 0).len(), r0 - 1);
         assert_eq!(g.ring_cells(0, 1).len(), r0 + r1 - 1);

@@ -15,7 +15,8 @@
     "map_owned_buildings": false,
     "map_trigger_areas": false,
     "plausible_spellbook": false,
-    "smooth_shading": false
+    "smooth_shading": false,
+    "spell_selector": "auto"
   },
   "flight": {
     "altitude": "faithful",

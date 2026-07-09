@@ -509,7 +509,7 @@ impl Gen {
     /// sub_11810 (:16879): terrain capability bit by the tile's type
     /// byte; a creature may stand on a tile iff its behavior row's
     /// v_20 mask has the bit set.
-    fn cap_bit(&self, x: u16, y: u16) -> u32 {
+    pub(crate) fn cap_bit(&self, x: u16, y: u16) -> u32 {
         let t = self.t.tile_type[(((y >> 8) as usize) << 8) | (x >> 8) as usize];
         match t {
             0 => 1,
@@ -535,7 +535,7 @@ impl Gen {
 
     /// sub_19650 (:21149): local roughness — max corner-height cross
     /// difference of the tile under the position, raw height bytes.
-    fn roughness(&self, x: u16, y: u16) -> i32 {
+    pub(crate) fn roughness(&self, x: u16, y: u16) -> i32 {
         let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
         let h = |dx: u8, dy: u8| {
             self.t.height[(((ty.wrapping_add(dy)) as usize) << 8) | tx.wrapping_add(dx) as usize]

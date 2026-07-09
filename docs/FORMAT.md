@@ -332,15 +332,17 @@ render-time resolve, and index 0 is the sprite-transparent index).
 |---|---|
 | `bundle.json` | manifest: `format_version`, `bake_epoch` (same semantics as `meta.json`), `variant`, `game`, importer, source catalog files + raw-file sha256 |
 | `palette.bin` | 256 x RGBA8, VGA 6-bit expanded (`v<<2\|v>>4`); index 0 has alpha 0 |
-| `shade-lut.bin` | 64 rows x 256: `shade level x palette index -> final palette index` (the light/fog remap; the TABLES blob at +0x0000 in MC1, +0x4000 in MC2 — MC2 keeps a pixel-remap table at +0x0000) |
+| `shade-lut.bin` | 64 rows x 256: `shade level x palette index -> final palette index` (the light/fog remap; the TABLES blob at +0x0000 in BOTH games — row 32 ≈ identity, row 0 = the fog/sky color, row 63 = black; epochs ≤ 4 mis-carved MC2's at +0x4000, which is the sprite blend matrix — see docs/traces/mc2-transparency-drawlist.md) |
 | `tile-colors.bin` | 256: terrain type -> flat map color index (TABLES blob +0x14000, both games) |
 | `terrain-atlas.bin` + `.json` | terrain texture atlas, square cells; the json gives `{cell, width, cells}`; the terrain-type byte indexes cells row-major |
 | `sprites.bin` + `sprites.json` | one 8bpp atlas of all world-sprite frames + its index (below); atlas width doubles from 1024 as needed to stay under the 8192 texture-dimension baseline |
-| `search.bin` | 32x32 ring-order grid (terrain-feature digs) |
-| `build.tab.bin`, `build.dat.bin` | building footprint RLE maps (terrain-feature building pass) |
+| `search.bin` | 32x32 ring-order grid (terrain-feature digs / search scans) — same 1024-byte format in BOTH games (remc2 sub_101C0) |
+| `build.tab.bin`, `build.dat.bin` | MC1: building footprint RLE maps (terrain-feature building pass) |
+| `bldgprm.bin` | MC2: building-parameter table, `BLDGPRM.DAT` verbatim — 4-byte records `{u16 word, u8 flags, u8 chain-next}`; retail loads 76 records into a 77-slot table (remc2 sub_539A0); flags: 0x10 load-pass split, 8 drawing/LOS, 4 cave presence, 1 solid |
+| `spells.bin` | MC2: spell table, `SPELLS.DAT` verbatim — 26 rows x 80 bytes (remc2 Spells.h): `{i8, u8 enabled, 3 x 26-byte subspell tiers}`, each tier `{i32 subSpellIndex, i32 manaCost, i32 maxManaLimit, i32 xpos1, i32 xpos2, i16 hintText, i16 word_0x18, i8 life, u8 fontType}`; feeds the par1-authored class-10 effect overrides (GetSpellIndex map 9→18, 11→16, 15→17, 17→9, 22→21, 67→20, 71→15) and class-15 cast costs; the retail CD table differs from the decompile's Spells.cpp fallback — the CD wins |
 | `ui-sprites.bin` + `.json` | 2D UI sprite library (HSPR: spell icons, HUD panel, mana-bar frames, level pips, map markers), same atlas + `SpriteIndex` schema as `sprites` with one frame per entry and `group == id`; entries 6..=29 are the 24 spell icons keyed by internal spell type, 83/84 the advertised-trigger map X-markers (MC1 only until MC2's UI track) |
 | `book-palette.bin` | 256 x RGBA8 like `palette.bin`: the book/spellbook screen's own palette (MC1 `DATA/BOOK.PAL`) |
-| `blend-lut.bin` | 64KB UI blend table (MC1 TABLES +0x4000..+0x14000, the slice between the shade LUT and map colors): 2D blits resolve `blend[src \| dest<<8]` — UI sprites (spell icons) only show their true colors composited through it (remc1 `strPal.byte_BB934_BB924`, sub_main.cpp:27444) |
+| `blend-lut.bin` | 64KB blend matrix (TABLES +0x4000..+0x14000 in BOTH games, the slice between the shade LUT and map colors; ≈ `nearest_palette(⅓·src + ⅔·dst)`): 2D blits resolve `blend[src \| dest<<8]` — UI sprites (spell icons) only show their true colors composited through it (remc1 `strPal.byte_BB934_BB924`, sub_main.cpp:27444); the same matrix is the world-sprite translucency table (remc2 `T[0x4000 + (src<<8)\|dst]`, raster modes 2/3 — docs/traces/mc2-transparency-drawlist.md) |
 
 `sprites.json` (`mgc_formats::bundle::SpriteIndex`): `atlas_width`,
 `atlas_height`, and one entry per original sprite id (dense — ids are
@@ -360,10 +362,12 @@ Provenance per source (MC1): `PAL{N}-0.DAT`, `TABLES.DAT` /
 (arctic). MC2 (all from the CD image): `PAL{D,N,F,C}-0.DAT`,
 `TABLES{D,N,C}.DAT`, `BLOCK32.DAT` (day) / `BL32{N,F,C}0-0.DAT`,
 `TMAPS{0,1,2}-0.DAT/.TAB` (digit = map_type ordinal; fog shares
-night's tables and TMAPS). MC2 bundles carry no `search.bin` /
-`build.*.bin` yet — its terrain-feature pass is a separate original
-implementation, pending its own port. The versioning/evolution rules
-above apply unchanged (`bundle.json` `format_version`).
+night's tables and TMAPS), `SEARCH.DAT`, `BLDGPRM.DAT` (since bake
+epoch 2 / the Phase-3 slice), `SPELLS.DAT` (since bake epoch 6).
+MC2 bundles carry `search.bin` + `bldgprm.bin` + `spells.bin` in
+place of MC1's `build.*.bin`. The versioning/
+evolution rules above apply unchanged (`bundle.json`
+`format_version`).
 
 ## Audio bundles
 
@@ -379,15 +383,17 @@ AudioBundle`.
 | `bundle.json` | same manifest schema as graphics bundles |
 | `sounds.bin` | one deduplicated blob of raw PCM (unsigned 8-bit mono — the original sample data byte-for-byte) |
 | `sounds.json` | `SoundIndex`: `sample_rate` (22050 — the best tier shipped by both retail games), `encoding` (`"pcm8"`), `banks[]` of `{bank, entries[]}`; each entry `{id, name, offset, len}` — `id` is the ENGINE sound id (the original bank-table index; the mixer's 47 request slots index bank 0 directly) |
-| `music.json` | `MusicIndex`: `tracks[]` of `{bank, name, file, danger_file?, source}` |
-| `music/*.flac` | one FLAC stream per track; MC1 in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) — the original keeps its combat layers on MIDI channels 3/4/5 at CC7 0 and fades them in/out with runtime CC7 ramps (remc1 sub_20BD0/sub_20D00); the runtime overlays the stem with the same ramp. Songs without a muted danger layer (menu/intro) and redbook tracks have no stem |
+| `music.json` | `MusicIndex`: `tracks[]` of `{bank, name, file, danger_file?, gm_file?, gm_danger_file?, source}` |
+| `music/*.flac` | one FLAC stream per track; MC1 in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) — the original keeps its combat layers on MIDI channels 3/4/5 at CC7 0 and fades them in/out with runtime CC7 ramps (remc1 sub_20BD0/sub_20D00); the runtime overlays the stem with the same ramp. Songs without a muted danger layer (menu/intro) and redbook tracks have no stem. `gm_file`/`gm_danger_file` (`*-gm[-danger].flac`, 44100 Hz STEREO, same ambient/stem contract) carry the General MIDI arrangement (`MUSIC<bank>-2`, the original's `GENERAL` driver target — remc1 :54029-30 maps 0xA001→digit 2, 0xA004 Roland→1, 0xA002 AdLib→0) rendered through fluidsynth + a GM soundfont at import; present only when the baking host has both (`MGC_FLUIDSYNTH`/`MGC_SOUNDFONT` override discovery), the FM render is always the fallback. Both GM stems share one per-song normalization factor (peak of the ambient+stem SUM → −0.8 dBFS) so the runtime overlay cannot clip |
 
 Sources: MC1 `DATA/SNDS<bank>-<q>.DAT/.TAB` (bank 0 = the 47-sound
 gameplay bank, 1..13 auxiliary sets; `q` = the original's free-RAM
 quality tier, always baked from `-1` = 22050 Hz) and
-`DATA/MUSIC{0,1}-0.DAT/.TAB` — HMP songs rendered through OPL3
-(nuked-opl3) with the game's own `INST.BNK`/`DRUM.BNK` AdLib patches
-at import, 44100 Hz mono FLAC (`0-cgame1` … `1-cintro6`). MC2
+`DATA/MUSIC{0,1}-{0,2}.DAT/.TAB` — the `-0` AdLib HMP songs rendered
+through OPL3 (nuked-opl3) with the game's own `INST.BNK`/`DRUM.BNK`
+AdLib patches at import, 44100 Hz mono FLAC (`0-cgame1` …
+`1-cintro6`), plus the `-2` General MIDI arrangement via fluidsynth
+when available (above). MC2
 `SOUND/SOUND.DAT` (10 banks, best shipped tier = 8-bit 22050; the
 per-sample WAV containers are stripped to keep `sounds.bin` raw PCM)
 and the 27 redbook audio tracks ripped losslessly from the CD image

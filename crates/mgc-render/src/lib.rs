@@ -480,6 +480,13 @@ pub struct Billboard {
     pub frame: u8,
     /// World height of the quad (engine `var_8 / 256`).
     pub world_h: f32,
+    /// Retail translucency raster mode (MC2 DrawSprite_41BD3 modes;
+    /// docs/traces/mc2-transparency-drawlist.md): 0 = opaque, 2 =
+    /// 33%-opaque (smoke), 3 = 67%-opaque (glows/fades). The blend
+    /// matrix `T[0x4000+…]` is `nearest_palette(⅓·src + ⅔·dst)`, so
+    /// modes 2/3 render as plain alpha 1/3 / 2/3, back-to-front with
+    /// depth writes off (retail draws them inline in painter order).
+    pub blend: u8,
 }
 
 /// 16 view sectors folded to 5 sprites (draw type 19, `byte_906E8`).
@@ -530,11 +537,16 @@ struct BillboardInstance {
     uv_size: [f32; 2],
     /// x = mirror, y = shade LUT row.
     flags: [u32; 2],
-    _pad: [u32; 1],
+    /// Opacity: 1.0 opaque, 1/3 / 2/3 for the translucent raster
+    /// modes (only consumed by the blend pipeline's fragment pass).
+    alpha: f32,
 }
 
-/// Sky/fog color, the classic hazy horizon. sRGB values converted to
-/// linear where uploaded.
+/// Default sky/fog color, the classic hazy horizon (MC1's hand-picked
+/// approximation; kept until the sky presentation trace lands). MC2
+/// levels override per environment via [`Renderer::set_sky_color`] —
+/// the shade LUT's row-0 fill is the engine's fog far color (night =
+/// black, day = pale blue). sRGB, converted to linear where uploaded.
 const SKY_SRGB: [f32; 3] = [0.42, 0.55, 0.75];
 const FOG_DENSITY: f32 = 0.006;
 
@@ -583,6 +595,28 @@ const BOOK_MAP_H: f32 = 416.0;
 /// to place the world viewport.
 pub const BOOK_SPELL_X: f32 = 384.0;
 pub const BOOK_SPELL_Y: f32 = 194.0;
+
+/// Which topology the fullscreen map screen uses (per game / per the
+/// `spell_selector` option — the book half exists only where the MC1
+/// map spellbook is live).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MapScreenLayout {
+    /// MC1's book screen: map pane top-left, world viewport top-right
+    /// (aspect-true to its rect), spellbook bottom-right (app-drawn).
+    #[default]
+    Mc1Book,
+    /// MC2's map screen (remc2 EF:21804-21871 + UI:770-782): minimap
+    /// strip x 0..382, live world x 384..640 × y 0..400 rendered with
+    /// the FLIGHT projection — the same FOV into a narrower
+    /// destination reads horizontally squeezed, the authentic
+    /// non-aspect live view. Bottom 80 native px stay black (the CTRL
+    /// selector pane's zone). No spellbook half.
+    Mc2Split,
+}
+
+/// MC2 map screen: the live-view/minimap bottom edge (native px;
+/// remc2 `locViewportHeight/locMinimapHeight = 400`, EF:21804).
+const MC2_MAP_VIEW_H: f32 = 400.0;
 // The HUD top strip is six tiles packed left-to-right from x=2 with 0px
 // gaps (player pixel-measurements 2026-07-07, matched to native sprite
 // widths at scale 1.668): [40] radar frame (124) | three [41] sub-panels
@@ -611,14 +645,6 @@ fn srgb_to_linear(c: f32) -> f32 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
-}
-
-fn sky_color_linear() -> [f64; 3] {
-    [
-        srgb_to_linear(SKY_SRGB[0]) as f64,
-        srgb_to_linear(SKY_SRGB[1]) as f64,
-        srgb_to_linear(SKY_SRGB[2]) as f64,
-    ]
 }
 
 enum Target {
@@ -655,9 +681,14 @@ pub struct Renderer {
     /// Interpolate per-tile shade across tile centers (enhancement,
     /// off = the original's per-tile shade snap).
     smooth_shading: bool,
+    /// Sky/fog color (sRGB): [`SKY_SRGB`] default, overridden per MC2
+    /// environment from the bundle (shade LUT row 0 — night = black).
+    sky_srgb: [f32; 3],
     /// The book screen (the original's Enter view): overhead map on the
     /// right half, left half reserved for the spell list.
     map_view: bool,
+    /// Which topology the map screen uses (MC1 book vs MC2 split).
+    map_layout: MapScreenLayout,
     map_pipeline: wgpu::RenderPipeline,
     map_globals_buf: wgpu::Buffer,
     map_bind_group_layout: wgpu::BindGroupLayout,
@@ -674,8 +705,10 @@ pub struct Renderer {
     /// default matches the translucent panels, MC2/opaque = 1).
     minimap_alpha: f32,
     fill_pipeline: wgpu::RenderPipeline,
+    fill_bind_group: wgpu::BindGroup,
     // Billboard (world sprite) pass.
     billboard_pipeline: wgpu::RenderPipeline,
+    billboard_blend_pipeline: wgpu::RenderPipeline,
     billboard_bind_group_layout: wgpu::BindGroupLayout,
     billboard_bind_group: Option<wgpu::BindGroup>,
     billboard_buf: Option<wgpu::Buffer>,
@@ -1043,14 +1076,38 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        // Solid sky fill behind the book screen's world viewport.
+        // Solid sky fill behind the book screen's world viewport. The
+        // color comes from the globals' fog_color (the environment
+        // sky), so it tracks `set_sky_color` like the pass clear.
         let fill_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("fill"),
             source: wgpu::ShaderSource::Wgsl(include_str!("fill.wgsl").into()),
         });
+        let fill_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fill"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let fill_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fill"),
+            layout: &fill_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buf.as_entire_binding(),
+            }],
+        });
         let fill_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("fill"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&fill_bind_group_layout],
             push_constant_ranges: &[],
         });
         let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1148,7 +1205,7 @@ impl Renderer {
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x3, 1 => Float32x2, 2 => Float32x2,
-                        3 => Float32x2, 4 => Uint32x2,
+                        3 => Float32x2, 4 => Uint32x2, 5 => Float32,
                     ],
                 }],
             },
@@ -1178,6 +1235,53 @@ impl Renderer {
             multiview: None,
             cache: None,
         });
+        // Translucent billboards (retail raster modes 2/3 → alpha
+        // 1/3 / 2/3): same shader, alpha blending, depth TEST only —
+        // instances draw back-to-front after all opaque world work,
+        // standing in for retail's inline painter-order LUT blend.
+        let billboard_blend_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("billboard-blend"),
+                layout: Some(&billboard_layout),
+                vertex: wgpu::VertexState {
+                    module: &billboard_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<BillboardInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x3, 1 => Float32x2, 2 => Float32x2,
+                            3 => Float32x2, 4 => Uint32x2, 5 => Float32,
+                        ],
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &billboard_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            });
 
         // Health-bar overlay: solid-color instanced quads on the same
         // camera basis; own single-binding layout so bars draw even
@@ -1367,7 +1471,9 @@ impl Renderer {
             plane_texs: None,
             map_tex: None,
             smooth_shading: false,
+            sky_srgb: SKY_SRGB,
             map_view: false,
+            map_layout: MapScreenLayout::default(),
             map_pipeline,
             map_globals_buf,
             minimap_globals_buf,
@@ -1377,7 +1483,9 @@ impl Renderer {
             map_bind_group_layout,
             map_bind_group: None,
             fill_pipeline,
+            fill_bind_group,
             billboard_pipeline,
+            billboard_blend_pipeline,
             billboard_bind_group_layout,
             billboard_bind_group: None,
             billboard_buf: None,
@@ -1413,10 +1521,31 @@ impl Renderer {
         self.map_view
     }
 
+    /// Select the map screen's topology (MC1 book vs MC2 split); set
+    /// once at level load from the game + `spell_selector` resolution.
+    pub fn set_map_layout(&mut self, layout: MapScreenLayout) {
+        self.map_layout = layout;
+    }
+
     /// Toggle smooth (tile-interpolated) shading; off is the original's
     /// per-tile shade snap. Takes effect on the next frame.
     pub fn set_smooth_shading(&mut self, on: bool) {
         self.smooth_shading = on;
+    }
+
+    /// Override the sky/fog color (sRGB) — the environment's fog far
+    /// color (shade LUT row 0): what the clear, the book-screen sky
+    /// fill and the distance fog all fade into.
+    pub fn set_sky_color(&mut self, srgb: [f32; 3]) {
+        self.sky_srgb = srgb;
+    }
+
+    fn sky_color_linear(&self) -> [f64; 3] {
+        [
+            srgb_to_linear(self.sky_srgb[0]) as f64,
+            srgb_to_linear(self.sky_srgb[1]) as f64,
+            srgb_to_linear(self.sky_srgb[2]) as f64,
+        ]
     }
 
     pub fn smooth_shading(&self) -> bool {
@@ -2062,11 +2191,16 @@ impl Renderer {
     /// mirroring, wrap-nearest position) into instance data — the
     /// original's per-sprite draw dispatch (remc1 DrawSprite3D_2F170),
     /// with the yaw quantization done in engine angle units.
-    fn billboard_instances(&self, cam: &CameraView) -> Vec<BillboardInstance> {
+    ///
+    /// Returns the instances with all opaque ones first and the
+    /// translucent tail sorted back-to-front, plus the opaque count —
+    /// the two draw ranges (opaque pipeline / blend pipeline).
+    fn billboard_instances(&self, cam: &CameraView) -> (Vec<BillboardInstance>, u32) {
         let Some(index) = &self.sprite_index else {
-            return Vec::new();
+            return (Vec::new(), 0);
         };
         let mut out = Vec::with_capacity(self.billboards.len());
+        let mut translucent = Vec::new();
         let full = MAP_TILES as f32;
         for b in &self.billboards {
             // 16 view sectors from relative yaw, exactly the engine's
@@ -2086,8 +2220,10 @@ impl Renderer {
                 19 => (VIEW_FOLD_5[view as usize] as u16, view >= 8),
                 20 => (VIEW_FOLD_3[view as usize] as u16, view >= 8),
                 // Animation modes: the entity's anim byte selects the
-                // family member (DrawSprite3D :37552).
-                2..=16 => (b.frame as u16, false),
+                // family member (DrawSprite3D :37552; MC2 adds the
+                // 22-36 band, remc2 GameRenderOriginal LABEL_26 —
+                // same frame-offset draw).
+                2..=16 | 22..=36 => (b.frame as u16, false),
                 // 0/1/21 single view, and anything unknown: base.
                 _ => (0, false),
             };
@@ -2120,16 +2256,36 @@ impl Renderer {
                 }
                 c + d
             };
-            out.push(BillboardInstance {
+            let inst = BillboardInstance {
                 pos: [wrap(b.x, cam.x), b.y, wrap(b.z, cam.z)],
                 size: [world_w, b.world_h],
                 uv_pos: [frame.x as f32, frame.y as f32],
                 uv_size: [w, h],
                 flags: [mirror as u32, 32],
-                _pad: [0],
-            });
+                alpha: match b.blend {
+                    2 => 1.0 / 3.0,
+                    3 => 2.0 / 3.0,
+                    _ => 1.0,
+                },
+            };
+            if b.blend == 2 || b.blend == 3 {
+                translucent.push(inst);
+            } else {
+                out.push(inst);
+            }
         }
-        out
+        let opaque = out.len() as u32;
+        // Back-to-front by plan distance (the depth channel's metric),
+        // so overlapping smoke composites like retail's painter order.
+        translucent.sort_by(|a, b| {
+            let d = |i: &BillboardInstance| {
+                let (dx, dz) = (i.pos[0] - cam.x, i.pos[2] - cam.z);
+                dx * dx + dz * dz
+            };
+            d(b).total_cmp(&d(a))
+        });
+        out.extend(translucent);
+        (out, opaque)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -2163,6 +2319,12 @@ impl Renderer {
         // map pane's height when yaw=0).
         let res_x = w as f32 / 640.0;
         let res_y = hpx as f32 / 480.0;
+        // The map pane's native height differs per topology: MC1 book
+        // 416 (measured), MC2 split 400 (EF:21804 locMinimapHeight).
+        let book_map_h = match self.map_layout {
+            MapScreenLayout::Mc1Book => BOOK_MAP_H,
+            MapScreenLayout::Mc2Split => MC2_MAP_VIEW_H,
+        };
         // The world viewport = the top-right rectangle. Its LEFT edge is
         // the SPELLBOOK's left (384); its BOTTOM recedes by BOOK_GAP above
         // the spellbook top (194−2) so a 2px black gap separates them —
@@ -2172,16 +2334,28 @@ impl Renderer {
             (BOOK_SPELL_X * res_x) as u32,
             0u32,
             w.saturating_sub((BOOK_SPELL_X * res_x) as u32),
-            ((BOOK_SPELL_Y - BOOK_GAP) * res_y) as u32,
+            match self.map_layout {
+                MapScreenLayout::Mc1Book => ((BOOK_SPELL_Y - BOOK_GAP) * res_y) as u32,
+                // MC2: the live view runs the full minimap height
+                // (no spellbook below it), y 0..400 (EF:21804).
+                MapScreenLayout::Mc2Split => (MC2_MAP_VIEW_H * res_y) as u32,
+            },
         );
 
         let aspect = if self.map_view {
+            // Aspect-true to the viewport rect in BOTH layouts: same
+            // fov_y as flight, so the narrow rect shows the MIDDLE
+            // SLICE of the normal view — horizontal FOV shrinks in
+            // proportion to the width. Retail-certified by the player
+            // (2026-07-10, senior over the earlier EF:21864
+            // "squeeze" reading, which stretched the full-FOV frame
+            // into the narrow rect and read squashed).
             view_rect.2 as f32 / view_rect.3.max(1) as f32
         } else {
             w as f32 / hpx as f32
         };
         let view_proj = camera_matrix(cam, aspect);
-        let sky = sky_color_linear();
+        let sky = self.sky_color_linear();
         // Camera right/up for billboard expansion (matches
         // `camera_matrix`'s basis).
         let (sy, cy) = cam.yaw.sin_cos();
@@ -2211,8 +2385,9 @@ impl Renderer {
             .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
         // Billboard instances for this camera (empty when no sprites
-        // are loaded).
-        let instances = self.billboard_instances(cam);
+        // are loaded); opaque range first, translucent tail sorted
+        // back-to-front for the blend pipeline.
+        let (instances, opaque_count) = self.billboard_instances(cam);
         let instance_count = instances.len() as u32;
         if !instances.is_empty() {
             let bytes: &[u8] = bytemuck::cast_slice(&instances);
@@ -2279,7 +2454,7 @@ impl Renderer {
             // active surface, shared by stamps and path.
             let surface = if self.map_view {
                 // Same pane rect as the map-globals block, in px.
-                let (pw, ph) = (BOOK_MAP_W * res_x, BOOK_MAP_H * res_y);
+                let (pw, ph) = (BOOK_MAP_W * res_x, book_map_h * res_y);
                 let cx = (BOOK_MAP_X * res_x) + pw * 0.5;
                 let cy = (BOOK_MAP_Y * res_y) + ph * 0.5;
                 // Icons scale with the pane like every book element
@@ -2371,7 +2546,7 @@ impl Renderer {
             // and yaw-rotated, rectangular (round mask off). Placed by
             // pixel rect → NDC so it matches the stamp projection.
             let (px0, py0) = (BOOK_MAP_X * res_x, BOOK_MAP_Y * res_y);
-            let (pw, ph) = (BOOK_MAP_W * res_x, BOOK_MAP_H * res_y);
+            let (pw, ph) = (BOOK_MAP_W * res_x, book_map_h * res_y);
             let cx_px = px0 + pw * 0.5;
             let cy_px = py0 + ph * 0.5;
             let map_globals: [f32; 12] = [
@@ -2474,10 +2649,19 @@ impl Renderer {
                     &self.billboard_bind_group,
                     &self.billboard_buf,
                 ) {
-                    pass.set_pipeline(&self.billboard_pipeline);
                     pass.set_bind_group(0, bg, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..6, 0..instance_count);
+                    if opaque_count > 0 {
+                        pass.set_pipeline(&self.billboard_pipeline);
+                        pass.draw(0..6, 0..opaque_count);
+                    }
+                    // Translucent tail (back-to-front): after ALL the
+                    // opaque world so smoke blends over terrain and
+                    // sprites alike, depth-tested but not written.
+                    if instance_count > opaque_count {
+                        pass.set_pipeline(&self.billboard_blend_pipeline);
+                        pass.draw(0..6, opaque_count..instance_count);
+                    }
                 }
                 if let (1.., Some(buf)) = (bar_count, &self.bar_buf) {
                     pass.set_pipeline(&self.bar_pipeline);
@@ -2494,6 +2678,7 @@ impl Renderer {
                     pass.set_viewport(vx as f32, vy as f32, vw as f32, vh as f32, 0.0, 1.0);
                     pass.set_scissor_rect(vx, vy, vw, vh);
                     pass.set_pipeline(&self.fill_pipeline);
+                    pass.set_bind_group(0, &self.fill_bind_group, &[]);
                     pass.draw(0..3, 0..1);
                     draw_world(&mut pass);
                     pass.set_viewport(0.0, 0.0, w as f32, hpx as f32, 0.0, 1.0);

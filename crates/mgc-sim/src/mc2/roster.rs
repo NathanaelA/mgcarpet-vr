@@ -1,0 +1,3464 @@
+//! MC2 class-5 roster, wave A — every non-multipart creature on the
+//! shared primitives ([`super::mobs`]), ported from the Phase-4.3
+//! trace bank (docs/traces/mc2-class5-*.md; `EF:` cites =
+//! remc2 EventsFunctions.cpp). Models here: 2, 9, 12, 14, 15, 16,
+//! 17, 18, 19, 20, 21, 23, 24, 25, 26, 28.
+//!
+//! NOT here (still misfits): 10 (the doomsday mana pyramid — its
+//! scripted sequence leans on untraced helpers, docs OPEN list)
+//! and the multipart family 0, 3, 22, 27 (its own subsystem,
+//! docs/traces/mc2-multipart-chains.md). Model 15 (the castle
+//! guard archer) is never authored by any level — its one launch
+//! site is the castle's guard respawn (EF:61488).
+//!
+//! Field-mapping additions over the [`super::mobs`] module doc:
+//! `word_0x2C_44`→f44 (when a model reuses the strength slot as a
+//! counter the trace says so in place) · `word_0x30_48`→f50 ·
+//! `byte_0x46_70` sub-state→f71 · `byte_0x43_67`→f68 ·
+//! `byte_0x44_68`→f69 · `manaRegen_0x88_136`→f136 ·
+//! `fov_0x22_34`→f36 · byte[2] of struct_byte_0xc→flags bits 16..24.
+//!
+//! The per-model spawn ordinal (`byte_0x3E_62 = array_0x10[m]++`)
+//! comes from [`Gen::mc2_spawn_ord`] and lands in f63 — NOTE the
+//! Phase-3 slice creatures (goat/archer/villager) still use the
+//! alloc-slot f63; aligning them is a banked fidelity pass (their
+//! goldens are pinned).
+//!
+//! DELIBERATE APPROXIMATIONS (all flagged in place too):
+//! - Every `+6` state whose body is MISSING from the decompile (m2,
+//!   m9, m16, m17, m18, m19, m20 nominal, m21, m23, m25, m26, m28 —
+//!   the dispatch would crash in remc2) holds inert; retail can
+//!   never reach them (their rows' flee bit is clear).
+//! - m17's dive z-curve (EF:15730-44, "192>>n up then down, clamp
+//!   −192") is reconstructed from the trace's shape description.
+//! - m18's `sub_253B0` duration table is partially pinned (the trace
+//!   lists the formulas, not the (state,sub)→formula map).
+//! - m21's hover physics (`sub_265A0`) is ported to the trace's
+//!   summary (rise by word_0x2C_44 decaying 42/tick, terrain clamp,
+//!   the case-9 sound roll) — not line-verbatim.
+//! - m26's %63 spell-hijack rolls consume their RNG draw but the
+//!   effect needs the class-15 spell column (pending); the human
+//!   drain uses +14 flat (the human's manaRegen isn't modeled yet).
+//! - m12's site-jitter/footprint-clear scans (EF:13991-14093) are
+//!   shaped, not verbatim (the overlap helpers are untraced).
+
+use super::behavior::BEHAVIOR;
+use crate::mc1::features::Gen;
+use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
+
+const M2_BASE: u8 = 16;
+const M9_BASE: u8 = 72;
+const M12_BASE: u8 = 96;
+const M14_BASE: u8 = 112;
+const M15_BASE: u8 = 120;
+const M16_BASE: u8 = 128;
+const M17_BASE: u8 = 136;
+const M18_BASE: u8 = 144;
+const M19_BASE: u8 = 152;
+const M20_BASE: u8 = 160;
+const M21_BASE: u8 = 168;
+const M23_BASE: u8 = 184;
+const M24_BASE: u8 = 192;
+const M25_BASE: u8 = 200;
+const M26_BASE: u8 = 208;
+const M28_BASE: u8 = 224;
+
+impl Gen {
+    // ---- shared bits ---------------------------------------------------------
+
+    /// `D41A0_0.array_0x10[model]++` — the per-model instance
+    /// counter every ctor stores into byte_0x3E_62 (f63).
+    pub(crate) fn mc2_ord(&mut self, model: usize) -> u8 {
+        let o = self.mc2_spawn_ord.0[model];
+        self.mc2_spawn_ord.0[model] = o.wrapping_add(1);
+        o
+    }
+
+    /// The common wake stagger `word_0x1a - ord % word_0x1a + 4`.
+    pub(crate) fn mc2_wake_stagger(row: usize, ord: u8) -> i16 {
+        let v26 = BEHAVIOR[row].v_26.max(1);
+        v26 - (ord as i16 % v26) + 4
+    }
+
+    /// The one-draw facing idiom shared by most ctors:
+    /// `roll = yaw = (rand & 0x7FF) - 1; pitch = roll`.
+    pub(crate) fn mc2_ctor_facing(&mut self, i: usize) {
+        let d = self.mc2_rand(i);
+        let f = ((d & 0x7FF) as i32 - 1) as u16;
+        let e = &mut self.ent[i];
+        e.f34 = f;
+        e.f30 = f;
+        e.f32 = f;
+    }
+
+    /// Face a point and sidestep a crowding packmate (the every-4th
+    /// tick idiom of the custom attack states).
+    fn mc2_aim_avoid(&mut self, i: usize, tx: u16, ty: u16) {
+        let e = &self.ent[i];
+        self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+        self.mc2_avoid_packmate(i);
+    }
+
+    /// Target-is-a-wizard check (class 3 model 0|1; the human counts).
+    fn mc2_is_wizard(&self, t: u16) -> bool {
+        t == PLAYER_TARGET
+            || ((t as usize) < self.ent.len()
+                && t != 0
+                && self.ent[t as usize].class64 == 3
+                && self.ent[t as usize].model65 <= 1)
+    }
+
+    /// `KillEntity_1C930`'s corpse effect is the (10,1) explosion —
+    /// now ported natively, so [`super::mobs`]'s misfit note is
+    /// replaced by the real spawn (id inherited).
+    pub(crate) fn mc2_corpse_burst(&mut self, i: usize) {
+        let (x, y, z, id) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        if let Some(b) = self.mc2_spawn_big_explosion(x, y, z) {
+            self.ent[b].id24 = id;
+        }
+    }
+
+    // =========================================================================
+    // MODEL 2 — day-only pack hunter (ctor sub_4B590 EF:33751,
+    // states 0x10-17, trace: mc2-class5-m2-9-12-14-15.md)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m2(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        if self.mc2_night_shade.0 {
+            return None; // DAY-ONLY (:33758)
+        }
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 2;
+            e.tick70 = M2_BASE + 1; // 17
+            e.f28 = 1; // cross-column damage contract
+            e.f128 = 64;
+            e.f130 = 30;
+            e.max_life = 3000;
+            e.f126 = 32; // minSpeed / 2 (:33771)
+        }
+        self.mc2_set_mana_half(i); // 1500
+        self.mc2_ctor_facing(i);
+        let ord = self.mc2_ord(2);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f44 = 200; // melee damage
+            e.f66 = 3;
+            e.f67 = 0;
+            e.f26 = (i % 100) as i16;
+            e.f56 = 1; // burnable
+            e.row156 = 73;
+            e.f63 = ord;
+        }
+        self.ent[i].f58 = Self::mc2_wake_stagger(73, ord);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 3);
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    /// The wake yelp `(rand & 1) + 12` (:11483 / :11524).
+    fn m2_yelp(&mut self, i: usize) {
+        let d = self.mc2_rand(i);
+        self.snd(((d & 1) + 12) as u8, i);
+    }
+
+    pub(crate) fn m2_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M2_BASE {
+            0 => {
+                self.mc2_patrol(i, M2_BASE);
+                if self.ent[i].tick70 == M2_BASE + 2 {
+                    self.ent[i].f26 = 1;
+                }
+            }
+            1 => {
+                self.mc2_idle(i, M2_BASE, ctx);
+                if self.ent[i].tick70 == M2_BASE + 2 {
+                    self.m2_yelp(i);
+                    self.ent[i].f26 = 1;
+                }
+            }
+            2 => {
+                // sub_1F6D0 (:11490): lunge speed on the countdown's
+                // last tick, vertical homing, chase w/ 1024-melee.
+                if self.ent[i].f26 != 0 {
+                    let v2 = self.ent[i].f26;
+                    self.ent[i].f26 = v2 - 1;
+                    if v2 == 1 {
+                        self.ent[i].f126 = 5 * self.ent[i].f128 / 2; // 160
+                    }
+                }
+                if self.ent[i].f146 != 0 {
+                    // Vertical homing toward the target's top
+                    // (:11509-20); the human's half-height isn't
+                    // modeled — its carpet z serves (APPROX).
+                    if let Some((_, _, tz)) = self.mc2_target(self.ent[i].f146, ctx) {
+                        let top = if self.ent[i].f146 == PLAYER_TARGET {
+                            tz
+                        } else {
+                            let t = &self.ent[self.ent[i].f146 as usize];
+                            t.z.wrapping_add(t.f78 as i16)
+                        };
+                        let v4 = (self.ent[i].z - top).signum();
+                        let step = BEHAVIOR[self.ent[i].row156 as usize].v_14;
+                        self.ent[i].z = self.ent[i].z.wrapping_add(v4 * step);
+                    }
+                    if self.mc2_chase_attack(i, M2_BASE, ctx, Self::mc2_atk_melee_1024) {
+                        self.m2_yelp(i);
+                        self.ent[i].f126 = -self.ent[i].f130; // recoil (:11525)
+                        self.ent[i].f26 = 3 * BEHAVIOR[self.ent[i].row156 as usize].v_26;
+                    }
+                } else {
+                    self.ent[i].tick70 = M2_BASE + 1;
+                }
+                if self.ent[i].tick70 != M2_BASE + 2 {
+                    self.ent[i].f126 = self.ent[i].f128;
+                }
+            }
+            3 => {
+                self.mc2_pack(i, M2_BASE);
+                if self.ent[i].tick70 == M2_BASE + 2 {
+                    self.ent[i].f26 = 1;
+                }
+            }
+            4 => self.mc2_prekill(i, M2_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // no body in the decompile; unreachable (row 73 flee bit clear)
+            _ => {
+                // +7 (:11563): the StageVar2 1..=9 wander jiggle never
+                // fires for our StageVar2==0 spawns.
+                if self.ent[i].tick70 == M2_BASE + 2 {
+                    self.ent[i].f26 = 1;
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // MODEL 9 — the hive imp (ctor sub_4BBB0 EF:33912, states
+    // 0x48-4F; the most-authored creature in the campaign)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m9(&mut self, x: u16, y: u16, _z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 9;
+            e.tick70 = M9_BASE; // 72 — spawns into the materialize countdown
+            e.f28 = 1;
+            e.f128 = 20;
+            e.f130 = 0;
+            e.max_life = 1000;
+            e.f126 = 20;
+        }
+        self.mc2_set_mana_half(i); // 500
+        // ONE draw, modulus 0x832 (NOT the 0x7FF mask — verbatim,
+        // :33937).
+        let d = self.mc2_rand(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            let v5 = ((d % 0x832) as i32 - 1) as u16;
+            e.f34 = v5;
+            e.f30 = v5;
+            e.f32 = v5;
+            e.f44 = 500;
+            e.f56 = 1;
+            e.row156 = 80;
+        }
+        let ord = self.mc2_ord(9);
+        self.ent[i].f63 = ord;
+        self.ent[i].f26 = 16; // the materialize countdown (:33948)
+        self.ent[i].f58 = Self::mc2_wake_stagger(80, ord);
+        let gz = self.ground_z(x, y) as i16;
+        self.link(i, x, y, gz); // :33951 ground snap
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 220);
+        self.mc2_shift_rot(i, 128, 128);
+        // Blocked-placement despawn (:33955-59).
+        if self.mc2_path_blocked(i, (x, y, gz)) {
+            self.free_entity(i);
+            return None;
+        }
+        Some(i)
+    }
+
+    /// `sub_20EC0` (:12283) — the engage pose: stop, sprite 202,
+    /// filter = target's class/model; targeting self resets to idle.
+    fn m9_engage_pose(&mut self, i: usize) {
+        self.ent[i].f126 = 0;
+        self.mc2_set_sprite(i, 202);
+        let t = self.ent[i].f146;
+        if t == i as u16 {
+            self.ent[i].tick70 = M9_BASE + 1;
+            return;
+        }
+        let (c, m) = if t == PLAYER_TARGET {
+            (3, 0)
+        } else if (t as usize) < self.ent.len() {
+            (self.ent[t as usize].class64, self.ent[t as usize].model65)
+        } else {
+            (3, 0)
+        };
+        self.ent[i].f66 = c;
+        self.ent[i].f67 = m;
+    }
+
+    /// `sub_20F20` (:11988) — the walk pose.
+    fn m9_walk_pose(&mut self, i: usize) {
+        self.ent[i].f126 = self.ent[i].f128;
+        self.mc2_set_sprite(i, 201);
+        self.ent[i].f66 = 3;
+        self.ent[i].f67 = 0xFF;
+        self.ent[i].f26 = 50;
+        self.ent[i].f71 = 0;
+    }
+
+    /// The hive's prey-consumption sweep (:12196-12218 / :12399-415):
+    /// bucket = model {4, 12, 13} by `(f63 / v26) % 3`; a victim
+    /// within 0x600 is consumed and a NEW (5,9) materializes there.
+    fn m9_consume_scan(&mut self, i: usize) {
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let range = (row.v_28 as i32) * (row.v_28 as i32);
+        let sel = [4u8, 12, 13][((self.ent[i].f63 as i16 / row.v_26.max(1)) % 3) as usize];
+        let (ex, ey, ez) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let mut best: Option<(usize, i32)> = None;
+        for (j, c) in self.ent.iter().enumerate().skip(1) {
+            if c.class64 == 5
+                && c.model65 == sel
+                && c.act_life >= 0
+                && c.flags & 0x400 == 0
+                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+            {
+                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
+                    best = Some((j, d2));
+                }
+            }
+        }
+        if let Some((j, _)) = best {
+            let (vx, vy, vz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+            if Self::mc2_dist3((ex, ey, ez), (vx, vy, vz)) <= 0x600 {
+                self.ent[j].flags |= 0x400; // consumed
+                let _ = self.mc2_spawn_m9(vx, vy, vz); // the hive splits
+            }
+        }
+    }
+
+    /// The generic cone scan of the m9 brain (:12159-93): nearest
+    /// wizard OR creature in range + FOV (unlike the wizard-only
+    /// shared scan).
+    fn m9_cone_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        let range = (row.v_28 as i32) * (row.v_28 as i32);
+        let cone = row.v_30 as u16;
+        let (ex, ey, eyaw) = (e.x, e.y, e.f30);
+        let mut best: Option<(u16, i32)> = None;
+        let mut consider = |tx: u16, ty: u16, slot: u16| {
+            let d2 = Self::dist2_sq(ex, ey, tx, ty);
+            if d2 > range {
+                return;
+            }
+            if Self::angdist(eyaw, Self::angle_between(ex, ey, tx, ty)) >= cone {
+                return;
+            }
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((slot, d2));
+            }
+        };
+        if !self.player_invisible {
+            consider(ctx.px, ctx.py, PLAYER_TARGET);
+        }
+        for (j, c) in self.ent.iter().enumerate().skip(1) {
+            if j == i || c.act_life < 0 || c.flags & (0x400 | 0x20) != 0 {
+                continue;
+            }
+            let ok = (c.class64 == 3 && c.model65 <= 1)
+                || (c.class64 == 5 && c.model65 != 9 && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA));
+            if ok {
+                consider(c.x, c.y, j as u16);
+            }
+        }
+        best.map(|(s, _)| s)
+    }
+
+    pub(crate) fn m9_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M9_BASE {
+            0 => {
+                // sub_20370 (:11969): the materialize countdown.
+                let v = self.ent[i].f26;
+                self.ent[i].f26 = v - 1;
+                if v != 0 {
+                    if v - 1 < 16 && (v - 1) % 2 == 0 {
+                        self.ent[i].frame88 = self.ent[i].frame88.saturating_add(1);
+                    }
+                } else {
+                    self.m9_walk_pose(i);
+                    self.ent[i].tick70 = M9_BASE + 1;
+                    self.ent[i].f26 = 400;
+                    self.ent[i].f71 = 0;
+                }
+            }
+            1 => {
+                // sub_203D0 (:11998) — the hive brain.
+                if self.ent[i].f26 > 0 {
+                    self.ent[i].f26 -= 1;
+                    if self.ent[i].f26 == 0 {
+                        // sub_20F60: grounded/summon posture.
+                        self.mc2_set_sprite(i, 201);
+                        self.ent[i].f71 = 1;
+                    }
+                }
+                if self.ent[i].f71 != 0 {
+                    // sub_20940 — the grounded variant (:12291):
+                    // negative countdown, then the consume sweep
+                    // (APPROX: the mirror shares the seek path).
+                    self.ent[i].f26 -= 1;
+                    if self.ent[i].f26 <= -50 {
+                        self.mc2_set_sprite(i, 201);
+                        self.ent[i].f71 = 0;
+                        self.ent[i].f26 = 400;
+                    }
+                    let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+                    if self.ent[i].f63 as i16 % period == 0 {
+                        self.m9_consume_scan(i);
+                    }
+                    if self.ent[i].tick70 == M9_BASE + 2 {
+                        self.m9_engage_pose(i);
+                    }
+                    return;
+                }
+                if self.ent[i].f58 != 0 {
+                    self.ent[i].f26 = 400;
+                }
+                match self.mc2_state_head(i) {
+                    1 => {
+                        self.ent[i].f146 = self.ent[i].f40;
+                        self.ent[i].tick70 = M9_BASE + 2;
+                    }
+                    2 => self.ent[i].tick70 = M9_BASE + 4,
+                    _ => {
+                        self.mc2_move_core(i);
+                        let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+                        if self.ent[i].f63 as i16 % period == 0 {
+                            // Prey seek: nearest model-2 (:12118-48).
+                            let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                            let row = &BEHAVIOR[self.ent[i].row156 as usize];
+                            let mut prey: Option<(usize, i32)> = None;
+                            for (j, c) in self.ent.iter().enumerate().skip(1) {
+                                if j != i
+                                    && c.class64 == 5
+                                    && c.model65 == 2
+                                    && c.act_life >= 0
+                                    && c.flags & 0x400 == 0
+                                {
+                                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                    if best_d2(&prey, d2) {
+                                        prey = Some((j, d2));
+                                    }
+                                }
+                            }
+                            if let Some((j, d2)) = prey {
+                                let (tx2, ty2, tf80) =
+                                    (self.ent[j].x, self.ent[j].y, self.ent[j].f80);
+                                self.ent[i].f34 = Self::angle_between(ex, ey, tx2, ty2);
+                                let reach = tf80 as i32 + row.v_28 as i32;
+                                if d2 <= reach * reach {
+                                    self.ent[i].f146 = j as u16;
+                                    self.ent[i].tick70 = M9_BASE + 2;
+                                }
+                            } else {
+                                self.mc2_wander_turn(i);
+                                if self.ent[i].f146 == 0 && self.ent[i].f58 != 0 {
+                                    if let Some(t) = self.m9_cone_scan(i, ctx) {
+                                        self.ent[i].f146 = t;
+                                        self.ent[i].tick70 = M9_BASE + 2;
+                                    }
+                                }
+                                if self.ent[i].f146 == 0 && self.ent[i].tick70 == M9_BASE + 1 {
+                                    self.m9_consume_scan(i);
+                                }
+                            }
+                        }
+                    }
+                }
+                if self.ent[i].tick70 == M9_BASE + 2 {
+                    self.m9_engage_pose(i);
+                }
+            }
+            2 => {
+                // sub_20C50 (:12476) — chase + arrow volley.
+                match self.mc2_state_head(i) {
+                    1 => self.ent[i].f146 = self.ent[i].f40,
+                    2 => self.ent[i].tick70 = M9_BASE + 4,
+                    _ => {
+                        self.mc2_move_core(i);
+                        let slot = self.ent[i].f146;
+                        let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
+                            self.ent[i].tick70 = M9_BASE + 1;
+                            self.m9_walk_pose(i);
+                            return;
+                        };
+                        if self.ent[i].f63 % 10 == 0 {
+                            let e = &self.ent[i];
+                            self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                        }
+                        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+                        let period = row.v_26.max(1);
+                        let range = row.v_28 as u32
+                            + if slot != PLAYER_TARGET
+                                && (slot as usize) < self.ent.len()
+                                && self.ent[slot as usize].class64 == 3
+                                && self.ent[slot as usize].model65 == 2
+                            {
+                                self.ent[slot as usize].f80 as u32
+                            } else {
+                                0
+                            };
+                        if self.ent[i].f63 as i16 % period == 0 {
+                            let e = &self.ent[i];
+                            if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz)) < range {
+                                self.mc2_atk_arrow(i, slot, ctx);
+                            } else {
+                                self.ent[i].tick70 = M9_BASE + 1;
+                            }
+                        }
+                    }
+                }
+                if self.ent[i].tick70 != M9_BASE + 2 {
+                    self.m9_walk_pose(i);
+                }
+            }
+            3 => {
+                self.mc2_pack(i, M9_BASE);
+                if self.ent[i].tick70 == M9_BASE + 2 {
+                    self.m9_engage_pose(i);
+                }
+            }
+            4 => self.mc2_prekill(i, M9_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // missing body — unreachable
+            _ => {
+                if self.ent[i].tick70 == M9_BASE + 2 {
+                    self.m9_engage_pose(i);
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // MODEL 12 — the builder (ctor sub_4BDF0 EF:33999, states
+    // 0x60-67; completing a building RETIRES it into the villager
+    // brain, actionIndex 105)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m12(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 12;
+            e.tick70 = M12_BASE + 1; // 97
+            e.f28 = 1;
+            e.f130 = 24;
+            e.f126 = 24;
+            e.f128 = 54;
+            e.max_life = 1000;
+        }
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f140 = 0;
+            e.f36 = 0;
+            e.f44 = 500;
+            e.f56 = 1;
+            e.row156 = 101;
+            e.f58 = 64;
+            e.f26 = 2;
+        }
+        self.ent[i].f63 = self.mc2_ord(12);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 221);
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    /// State head with the townie wanted-timer stamp on wizard
+    /// offenses (shared by m12/m14, :14186-94 pattern). Returns the
+    /// head code.
+    fn mc2_head_wanted(&mut self, i: usize) -> u8 {
+        let v = self.mc2_state_head(i);
+        if v != 0 {
+            let src = if v == 2 {
+                self.ent[i].f38
+            } else {
+                self.ent[i].f40
+            };
+            if self.mc2_is_wizard(src) {
+                self.mc2_arm_wanted(src);
+            }
+        }
+        v
+    }
+
+    /// `sub_232C0` (:14474): the GLOBAL-LCG building-template pick —
+    /// `rand % 0x3C + 17`, then walk up to 0x4D slots for a
+    /// townie-flagged bldgprm row (byte_2 & 2).
+    fn m12_pick_template(&mut self) -> Option<u16> {
+        self.rand = self.rand.wrapping_mul(9377).wrapping_add(9439);
+        let mut pick = (self.rand % 0x3C + 17) as usize;
+        for _ in 0..0x4D {
+            if self
+                .assets
+                .bldgprm
+                .get(pick)
+                .is_some_and(|p| p.flags & 2 != 0)
+                && self.assets.build_tab.get(pick).is_some()
+            {
+                return Some(pick as u16);
+            }
+            pick += 1;
+            if pick >= self.assets.bldgprm.len().max(1) {
+                pick = 0;
+            }
+        }
+        None
+    }
+
+    pub(crate) fn m12_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M12_BASE {
+            0 => self.mc2_m12_build(i),
+            1 => {
+                // sub_22C80 (:14118) — roam.
+                self.ent[i].f71 = 0;
+                match self.mc2_head_wanted(i) {
+                    1 => {
+                        self.ent[i].f146 = self.ent[i].f40;
+                        self.ent[i].tick70 = M12_BASE + 6;
+                    }
+                    2 => self.ent[i].tick70 = M12_BASE + 4,
+                    _ => {
+                        self.mc2_move_core(i);
+                        let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u8;
+                        if self.ent[i].f63 % period == 0 {
+                            self.mc2_wander_turn(i);
+                            self.ent[i].f26 -= 1;
+                            if self.ent[i].f26 <= 0 {
+                                self.ent[i].tick70 = M12_BASE + 3;
+                                self.ent[i].f26 = 1;
+                            }
+                        }
+                    }
+                }
+                if self.ent[i].tick70 == M12_BASE + 6 {
+                    self.ent[i].f126 = self.ent[i].f128;
+                }
+            }
+            2 => {
+                // sub_22E60 (:14216) — walk to the chosen site.
+                match self.mc2_head_wanted(i) {
+                    1 => {
+                        self.ent[i].f146 = self.ent[i].f40;
+                        self.ent[i].tick70 = M12_BASE + 6;
+                    }
+                    2 => self.ent[i].tick70 = M12_BASE + 4,
+                    _ => {
+                        self.mc2_move_core(i);
+                        let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+                        if (self.ent[i].f63 as i16 % period) / 2 == 0 {
+                            self.ent[i].f26 -= 1;
+                            let t = self.ent[i].f146 as usize;
+                            let live = t != 0
+                                && t < self.ent.len()
+                                && self.ent[t].class64 != 0
+                                && self.ent[t].flags & 0x400 == 0;
+                            if self.ent[i].f26 < 0 || !live {
+                                self.ent[i].f26 = 5;
+                                self.ent[i].tick70 = M12_BASE + 1;
+                            } else {
+                                let (tx, ty, tz) = {
+                                    let s = &self.ent[t];
+                                    (s.x, s.y, s.z)
+                                };
+                                let e = &self.ent[i];
+                                self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                                let e = &self.ent[i];
+                                if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz)) < 0xA00 {
+                                    self.ent[i].tick70 = M12_BASE;
+                                    self.ent[i].f26 = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+                if self.ent[i].tick70 == M12_BASE + 6 {
+                    self.ent[i].f126 = self.ent[i].f128;
+                }
+            }
+            3 => {
+                // sub_23020 (:14323) — pick the nearest building as
+                // the anchor to build near.
+                match self.mc2_head_wanted(i) {
+                    1 => {
+                        self.ent[i].f146 = self.ent[i].f40;
+                        self.ent[i].tick70 = M12_BASE + 6;
+                    }
+                    2 => self.ent[i].tick70 = M12_BASE + 4,
+                    _ => {
+                        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                        let mut best: Option<(usize, i32)> = None;
+                        for (j, c) in self.ent.iter().enumerate().skip(1) {
+                            if c.class64 == 10 && c.model65 == 45 && c.flags & 0x400 == 0 {
+                                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                if best_d2(&best, d2) {
+                                    best = Some((j, d2));
+                                }
+                            }
+                        }
+                        if let Some((j, _)) = best {
+                            self.ent[i].f146 = j as u16;
+                            self.ent[i].f26 = 10;
+                            self.ent[i].tick70 = M12_BASE + 2;
+                        } else {
+                            self.ent[i].f26 = 5;
+                            self.ent[i].tick70 = M12_BASE + 1;
+                        }
+                    }
+                }
+                if self.ent[i].tick70 == M12_BASE + 6 {
+                    self.ent[i].f126 = self.ent[i].f128;
+                }
+            }
+            4 => self.mc2_prekill(i, M12_BASE),
+            5 => {
+                if self.ent[i].f38 == PLAYER_TARGET {
+                    self.mc2_arm_wanted(PLAYER_TARGET);
+                }
+                self.mc2_kill(i);
+            }
+            6 => {
+                self.mc2_flee(i, M12_BASE, ctx);
+                if self.ent[i].tick70 != M12_BASE + 6 {
+                    self.ent[i].f26 = 5;
+                    self.ent[i].f146 = 0;
+                    self.ent[i].tick70 = M12_BASE + 1;
+                    self.ent[i].f126 = self.ent[i].f130;
+                }
+            }
+            _ => {
+                // +7 (:14466): respawn straight into the roam brain.
+                self.ent[i].f26 = 5;
+                self.ent[i].tick70 = M12_BASE + 1;
+                self.m12_tick(i, ctx);
+            }
+        }
+    }
+
+    /// `sub_22760` (:13942) — the build-execute state: jitter a
+    /// candidate around the anchor building, clear-check, place a
+    /// (10,45) and retire into the villager brain. The jitter /
+    /// footprint-clear scans are shaped from the trace, not verbatim
+    /// (module-doc APPROX).
+    fn mc2_m12_build(&mut self, i: usize) {
+        let t = self.ent[i].f146 as usize;
+        let anchor_ok = t != 0
+            && t < self.ent.len()
+            && self.ent[t].class64 == 10
+            && self.ent[t].model65 == 45
+            && self.ent[t].flags & 0x400 == 0;
+        if !anchor_ok {
+            self.ent[i].f26 = 5;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = M12_BASE + 1;
+            return;
+        }
+        let v2 = self.ent[i].f26;
+        self.ent[i].f26 = v2 + 1;
+        if v2 >= 4 {
+            self.ent[i].f26 = 1;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = M12_BASE + 1;
+            return;
+        }
+        let Some(pick) = self.m12_pick_template() else {
+            return;
+        };
+        let (w, h) = self
+            .assets
+            .build_tab
+            .get(pick as usize)
+            .map_or((2u16, 2u16), |d| (d.w as u16, d.h as u16));
+        // Candidate: one of four sides of the anchor by pass number,
+        // jittered by two draws (cases 1-4, :13991-14024).
+        let (ax, ay, az) = {
+            let s = &self.ent[t];
+            (s.x, s.y, s.z)
+        };
+        let d1 = (self.mc2_rand(i) % 3) << 8;
+        let d2 = (self.mc2_rand(i) % 3) << 8;
+        let side = self.ent[t].f80 as i32 + ((w as i32) << 7) + 256 + d1 as i32;
+        let (cx, cy) = match v2 {
+            1 => (
+                (ax as i32 + side) as u16,
+                (ay as i32 + d2 as i32 - 1280) as u16,
+            ),
+            2 => (
+                (ax as i32 - side) as u16,
+                (ay as i32 + d2 as i32 - 1280) as u16,
+            ),
+            3 => (
+                (ax as i32 + d2 as i32 - 1280) as u16,
+                (ay as i32 + side) as u16,
+            ),
+            _ => (
+                (ax as i32 + d2 as i32 - 1280) as u16,
+                (ay as i32 - side) as u16,
+            ),
+        };
+        // Water veto (:14031-35).
+        if self.cap_bit(cx, cy) == 1 {
+            self.ent[i].f26 = 2;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = M12_BASE + 1;
+            return;
+        }
+        // Footprint-clear: no building/wizard bodies on the candidate
+        // tiles (the sub_22640 + overlap scans, APPROX).
+        let tlx = ((cx >> 8) as u8).wrapping_sub((w / 2) as u8);
+        let tly = ((cy >> 8) as u8).wrapping_sub((h / 2) as u8);
+        for dy in 0..h {
+            for dx in 0..w {
+                let cell = crate::mc1::features::tile(
+                    tlx.wrapping_add(dx as u8),
+                    tly.wrapping_add(dy as u8),
+                );
+                let mut j = self.map_entity[cell] as usize;
+                while j != 0 {
+                    let c = &self.ent[j];
+                    if c.flags & 0x400 == 0
+                        && ((c.class64 == 10 && c.model65 == 45) || c.class64 == 3)
+                    {
+                        return; // occupied — try again next tick
+                    }
+                    j = c.next20 as usize;
+                }
+            }
+        }
+        // Place it (:14096-106).
+        if let Some(b) = self.mc2_spawn_building(cx, cy, az, pick) {
+            self.snd(10, i);
+            self.ent[b].tick70 = 51;
+            self.ent[i].f146 = 0;
+            self.ent[i].tick70 = 105; // retire into the villager brain
+        }
+    }
+
+    // =========================================================================
+    // MODEL 14 — the trader (ctor AddTrader_4C0B0 EF:34094, states
+    // 0x70-77; passive, docks into far-away buildings)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m14(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 14;
+            e.tick70 = M14_BASE + 1; // 113
+            e.f28 = 1;
+            e.f130 = 18;
+            e.f126 = 18;
+            e.f128 = 54;
+            e.max_life = 1000;
+        }
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f140 = 0;
+            e.f36 = 0;
+            e.f44 = 500;
+            e.f56 = 1;
+            e.row156 = 100;
+            e.f58 = 64;
+            e.f26 = 2;
+        }
+        self.ent[i].f63 = self.mc2_ord(14);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 219);
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    pub(crate) fn m14_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M14_BASE {
+            0 | 2 | 3 => {
+                self.ent[i].tick70 = M14_BASE + 1;
+                self.m14_brain(i, ctx);
+            }
+            1 => self.m14_brain(i, ctx),
+            4 => {
+                // :14898 — docked traders vanish instead of dying.
+                if self.ent[i].f26 != 0 {
+                    self.ent[i].flags |= 0x400;
+                } else {
+                    self.mc2_prekill(i, M14_BASE);
+                }
+            }
+            5 => {
+                if self.ent[i].f38 == PLAYER_TARGET {
+                    self.mc2_arm_wanted(PLAYER_TARGET);
+                }
+                self.mc2_kill(i);
+            }
+            6 => {
+                self.mc2_flee(i, M14_BASE, ctx);
+                if self.ent[i].tick70 != M14_BASE + 6 {
+                    self.ent[i].f146 = 0;
+                    self.ent[i].f126 = self.ent[i].f130;
+                }
+            }
+            _ => {
+                if self.ent[i].tick70 == M14_BASE + 6 {
+                    self.ent[i].f126 = self.ent[i].f128;
+                } else {
+                    self.ent[i].f126 = self.ent[i].f130;
+                }
+            }
+        }
+    }
+
+    /// `sub_237B0` (:14728) — the trader brain.
+    fn m14_brain(&mut self, i: usize, ctx: &MobCtx) {
+        match self.mc2_head_wanted(i) {
+            1 => {
+                self.ent[i].f146 = self.ent[i].f40;
+                self.ent[i].tick70 = M14_BASE + 6;
+            }
+            2 => self.ent[i].tick70 = M14_BASE + 4,
+            _ => {
+                self.mc2_move_core(i);
+                let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u8;
+                if self.ent[i].f63 % period == 0 {
+                    let t = self.ent[i].f146 as usize;
+                    let building = t != 0
+                        && t < self.ent.len()
+                        && self.ent[t].class64 == 10
+                        && self.ent[t].model65 == 45
+                        && self.ent[t].flags & 0x400 == 0;
+                    if building {
+                        let (sp, tp) = {
+                            let e = &self.ent[i];
+                            let s = &self.ent[t];
+                            ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                        };
+                        if Self::mc2_dist3(sp, tp) > 0x800 {
+                            self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
+                        } else if (self.ent[t].f128 as i32) > self.ent[t].f26 as i32 {
+                            // Dock (:14820-27).
+                            self.ent[i].f26 = 1;
+                            self.ent[i].tick70 = M14_BASE + 4;
+                            self.ent[t].f26 += 1;
+                        } else {
+                            self.ent[i].f146 = 0;
+                            self.ent[i].f126 = self.ent[i].f130;
+                        }
+                    } else {
+                        self.ent[i].f146 = 0;
+                        self.mc2_wander_turn(i);
+                        // Seek a FAR trade building (bldgprm byte_2
+                        // & 1, dist² > 0xE100000 — :14841-68).
+                        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                        let mut best: Option<(usize, i32)> = None;
+                        for (j, c) in self.ent.iter().enumerate().skip(1) {
+                            if c.class64 == 10
+                                && c.model65 == 45
+                                && c.flags & 0x400 == 0
+                                && self
+                                    .assets
+                                    .bldgprm
+                                    .get(c.f71 as usize)
+                                    .is_some_and(|p| p.flags & 1 != 0)
+                            {
+                                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                if d2 > 0xE1_0000 && best_d2(&best, d2) {
+                                    best = Some((j, d2));
+                                }
+                            }
+                        }
+                        if let Some((j, _)) = best {
+                            self.ent[i].f146 = j as u16;
+                            self.ent[i].f126 = self.ent[i].f130 + 12;
+                        }
+                    }
+                }
+                let _ = ctx;
+            }
+        }
+        if self.ent[i].tick70 == M14_BASE + 6 {
+            self.ent[i].f126 = self.ent[i].f128;
+        }
+    }
+
+    // =========================================================================
+    // MODEL 15 — the CASTLE GUARD archer (ctor sub_4C1E0 EF:34129,
+    // states 0x78-7F; trace mc2-class5-m2-9-12-14-15.md §MODEL 15).
+    // Never authored by any level: its one launch site is the castle
+    // guard respawn (EF:61488).
+    // =========================================================================
+
+    /// `sub_4C1E0` (:34129) — ZERO ctor RNG draws; rotations
+    /// hardcoded 0; mana 0 (no SetEvent144). The retail
+    /// `struct_byte[2] |= 2` tracked-entity registration (:34153) has
+    /// no reader in our port (sub_57F20's list isn't modeled).
+    pub(crate) fn mc2_spawn_m15(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 15;
+            e.tick70 = M15_BASE + 1; // actionIndex 121 (:34134)
+            // MC2 carries NO per-channel vulnerability mask; admit
+            // the physical channel at the seam (cross-column damage
+            // contract).
+            e.f28 = 1;
+            e.f128 = 30; // minSpeed (:34137)
+            e.f130 = 0; // maxSpeed (:34138)
+            e.max_life = 1000;
+            e.f126 = 30; // actSpeed = minSpeed (:34141)
+            e.f34 = 0; // yaw = roll = pitch = 0 (:34140-43)
+            e.f30 = 0;
+            e.f32 = 0;
+            e.f140 = 0; // mana (:34144)
+            e.f36 = 0; // fov (:34145)
+            e.f26 = (i % 100) as i16; // (:34146)
+            e.f44 = 500; // subSpellIndex (:34147)
+            e.f56 = 1; // byte_0x38_56 (:34148)
+            e.row156 = 83; // (:34149)
+            e.f66 = 3; // xtype (:34151)
+        }
+        let ord = self.mc2_ord(15);
+        self.ent[i].f63 = ord;
+        self.ent[i].f58 = Self::mc2_wake_stagger(83, ord); // (:34152)
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 0);
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    /// `sub_24100` (:15198) — the engage pose: ONE RNG draw picks
+    /// stand sprite 206 (draw ≤ 10) or 1; stop.
+    fn m15_engage_pose(&mut self, i: usize) {
+        let d = self.mc2_rand(i) % 0x14;
+        self.ent[i].f126 = 0;
+        self.mc2_set_sprite(i, if d <= 10 { 206 } else { 1 });
+    }
+
+    /// `sub_24150` (:15214) — the walk pose: full speed, sprite 0.
+    fn m15_walk_pose(&mut self, i: usize) {
+        self.ent[i].f126 = self.ent[i].f128;
+        self.mc2_set_sprite(i, 0);
+    }
+
+    /// `sub_24190` (:15221) — the guard's own wander. Every 8th
+    /// phase: die where standing is disallowed (`cap & ~v_20`), else
+    /// probe the 4 quadrant headings with RNG-weighted scores
+    /// (`(rand % w + 2) * unblocked`, weights {0x1B58, 0x1B58, 0xA,
+    /// 0x1B58} — the reverse heading is biased against). Every 16th
+    /// phase the move candidate snaps to the tile axis. Packmate
+    /// separation writes the COMMITTED heading (roll) directly; the
+    /// step happens when roll caught up with yaw or on the 55% roll.
+    fn m15_wander(&mut self, i: usize) {
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        if self.ent[i].f63 % 8 == 0 {
+            let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+            if self.cap_bit(ex, ey) & !row.v_20 != 0 {
+                self.ent[i].tick70 = M15_BASE + 4; // (:15248-56)
+                return;
+            }
+            const W: [u32; 4] = [0x1B58, 0x1B58, 0x000A, 0x1B58];
+            let mut heading = self.ent[i].f34;
+            let mut best = 1u16; // v12 init (:15247)
+            for w in W {
+                let mut pos = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+                Self::polar_step(&mut pos, heading, 0, 256);
+                let d = self.mc2_rand(i) % w;
+                let score = (d + 2) as u16 * u16::from(!self.mc2_path_blocked(i, pos));
+                if score > best {
+                    best = score;
+                    self.ent[i].f34 = heading;
+                }
+                heading = (heading + 0x200) & 0x7FF;
+            }
+        }
+        // The move candidate re-seeds from the CURRENT position
+        // (:15284): the %16 tile snap keys on the heading quadrant.
+        let mut pos = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        if self.ent[i].f63 % 16 == 0 {
+            match (self.ent[i].f34.wrapping_sub(256) >> 9) & 3 {
+                0 | 2 => pos.1 = (pos.1 >> 8 << 8) + 128,
+                _ => pos.0 = (pos.0 >> 8 << 8) + 128,
+            }
+        }
+        // Packmate separation (:15301-11): first same-model neighbor
+        // within 256 on both axes — face away (the committed
+        // heading, not the wander target).
+        let (ex, ey, id) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24)
+        };
+        for c in self.ent.iter().skip(1) {
+            if c.class64 == 5
+                && c.model65 == 15
+                && c.id24 != id
+                && c.act_life >= 0
+                && c.flags & 0x400 == 0
+                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < 256
+                && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < 256
+            {
+                let away = Self::angle_between(c.x, c.y, ex, ey);
+                self.ent[i].f30 = away;
+                break;
+            }
+        }
+        if self.ent[i].f30 == self.ent[i].f34 || self.mc2_rand(i) % 0x14 <= 10 {
+            let speed = self.ent[i].f126;
+            Self::polar_step(&mut pos, self.ent[i].f34, 0, speed);
+            self.move_relink(i, pos.0, pos.1, pos.2);
+        }
+        self.mc2_alt_commit(i);
+    }
+
+    /// The brain's acquire scan (:15020-56): nearest CLASS-3 entity
+    /// (any model — wizards, castles, balloons; the human counts) in
+    /// range + cone off the WANDER heading (yaw, not roll), skipping
+    /// invisibles. No ownership filter — verbatim.
+    fn m15_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        let range = (row.v_28 as i32) * (row.v_28 as i32);
+        let cone = row.v_30 as u16;
+        let (ex, ey, eyaw) = (e.x, e.y, e.f34);
+        let mut best: Option<(u16, i32)> = None;
+        let consider = |tx: u16, ty: u16, slot: u16, best: &mut Option<(u16, i32)>| {
+            let d2 = Self::dist2_sq(ex, ey, tx, ty);
+            if d2 > range {
+                return;
+            }
+            if Self::angdist(eyaw, Self::angle_between(ex, ey, tx, ty)) >= cone {
+                return;
+            }
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                *best = Some((slot, d2));
+            }
+        };
+        if !self.player_invisible {
+            consider(ctx.px, ctx.py, PLAYER_TARGET, &mut best);
+        }
+        for (j, c) in self.ent.iter().enumerate().skip(1) {
+            if j != i && c.class64 == 3 && c.act_life >= 0 && c.flags & (0x400 | 0x20) == 0 {
+                consider(c.x, c.y, j as u16, &mut best);
+            }
+        }
+        best.map(|(s, _)| s)
+    }
+
+    /// `sub_23C40` (:14958) — the idle/scan brain. Clean tick:
+    /// wander, then on the row cadence (while the ctor stagger
+    /// lives) the class-3 acquire scan. Non-lethal hit: chase a
+    /// class-3 source. The engage pose fires whenever the tick ends
+    /// in the chase state.
+    fn m15_brain(&mut self, i: usize, ctx: &MobCtx) {
+        match self.mc2_state_head(i) {
+            1 => {
+                // (:15060-70) — retarget ONLY on a class-3 source.
+                let src = self.ent[i].f40;
+                let is_c3 = src == PLAYER_TARGET
+                    || ((src as usize) < self.ent.len()
+                        && src != 0
+                        && self.ent[src as usize].class64 == 3);
+                if is_c3 && src != self.ent[i].id24 {
+                    self.ent[i].tick70 = M15_BASE + 2;
+                    self.ent[i].f146 = src;
+                }
+                self.mc2_alt_commit(i);
+            }
+            2 => self.ent[i].tick70 = M15_BASE + 4,
+            _ => {
+                self.m15_wander(i);
+                let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+                if self.ent[i].f63 as i16 % period == 0
+                    && self.ent[i].f58 != 0
+                    && let Some(t) = self.m15_scan(i, ctx)
+                {
+                    self.ent[i].tick70 = M15_BASE + 2;
+                    self.ent[i].f146 = t;
+                }
+            }
+        }
+        if self.ent[i].tick70 == M15_BASE + 2 {
+            self.m15_engage_pose(i);
+        }
+    }
+
+    /// The (9,13) volley (:15154-66) — the archer's launch minus the
+    /// `sub_200F0` overrides: the projectile keeps its template
+    /// subSpell (NO f44 write) and inherits xtype/xsubtype from the
+    /// GUARD, not the target.
+    fn m15_fire(&mut self, i: usize, target: u16, tpos: (u16, u16, i16)) {
+        let (x, y, z, own, fov) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f84)
+        };
+        let Some(a) = self.mc2_spawn_arrow(x, y, z) else {
+            return;
+        };
+        self.ent[a].id24 = own;
+        self.ent[a].f30 = Self::angle_between(x, y, tpos.0, tpos.1);
+        let dh = Self::isqrt(Self::dist2_sq(x, y, tpos.0, tpos.1) as u32) as i32;
+        self.ent[a].f32 = Self::pitch_toward(z, tpos.2, dh);
+        let (ax, ay) = (self.ent[a].x, self.ent[a].y);
+        let az = self.ent[a].z.wrapping_add((fov / 2) as i16);
+        self.move_relink(a, ax, ay, az);
+        self.ent[a].f146 = self.ent[i].f146;
+        self.ent[a].f66 = self.ent[i].f66;
+        self.ent[a].f67 = self.ent[i].f67;
+        if target == PLAYER_TARGET {
+            self.player_danger = 100; // sub_5EF70
+        }
+        self.shots += 1;
+    }
+
+    /// `sub_23E60` (:15083) — chase/volley. STATIONARY: no move
+    /// core; faces the target every 4th tick (the committed heading
+    /// directly); NO retarget on a non-lethal hit (unlike the
+    /// generic chase core). Out-of-range / dead target → back to the
+    /// brain; the walk pose restores on any exit from the state.
+    fn m15_chase(&mut self, i: usize, ctx: &MobCtx) {
+        match self.mc2_state_head(i) {
+            2 => self.ent[i].tick70 = M15_BASE + 4,
+            _ => {
+                let slot = self.ent[i].f146;
+                match self.mc2_target(slot, ctx) {
+                    None => self.ent[i].tick70 = M15_BASE + 1, // dead/draw-off (:15138-42)
+                    Some((tx, ty, tz)) => {
+                        if self.ent[i].f63 & 3 == 0 {
+                            let e = &self.ent[i];
+                            self.ent[i].f30 = Self::angle_between(e.x, e.y, tx, ty);
+                        }
+                        let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u8;
+                        let mut left = false;
+                        if self.ent[i].f63 % period == 0 {
+                            let e = &self.ent[i];
+                            let d3 = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz));
+                            if d3 >= BEHAVIOR[self.ent[i].row156 as usize].v_28 as u32 {
+                                self.ent[i].tick70 = M15_BASE + 1; // (:15149-53)
+                                left = true;
+                            } else {
+                                self.m15_fire(i, slot, (tx, ty, tz));
+                            }
+                        }
+                        if !left {
+                            self.mc2_alt_commit(i); // sub_1EEE0 (:15168)
+                        }
+                    }
+                }
+            }
+        }
+        if self.ent[i].tick70 != M15_BASE + 2 {
+            self.m15_walk_pose(i); // LABEL_26 (:15175-76)
+        }
+    }
+
+    pub(crate) fn m15_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M15_BASE {
+            0 => self.mc2_patrol(i, M15_BASE),
+            1 => self.m15_brain(i, ctx),
+            2 => self.m15_chase(i, ctx),
+            3 => self.mc2_pack(i, M15_BASE),
+            4 => self.mc2_prekill(i, M15_BASE),
+            5 => self.mc2_kill(i),
+            // +6 (0x243F0): MISSING from the decompile; unreachable
+            // (the row's flee bit is clear). +7 spawn hook sub_1D5D0:
+            // a no-op for StageVar2 == 0.
+            _ => {}
+        }
+    }
+
+    // =========================================================================
+    // MODEL 16 — the boss (ctor sub_4C310 EF:34163, states 0x80-87;
+    // 60000 life, 15-bolt homing bursts, trace mc2-class5-m16-20.md)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m16(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 16;
+            e.tick70 = M16_BASE + 1; // 129
+            e.f28 = 1;
+            e.f128 = 60;
+            e.f130 = 20;
+            e.max_life = 60000;
+            e.f126 = 60;
+        }
+        self.mc2_set_mana_half(i);
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f44 = 500;
+            e.f56 = 1;
+            e.f26 = 0; // :34187 re-zero
+            e.row156 = 84;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(16);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 207);
+        // :34192-94 scales array.yaw off a HUD global — the
+        // sprite-derived f78 stands in (APPROX).
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    /// m16's homing bolt (:15474): a (9,0) with row 61, damage 1600,
+    /// mana 50000, z-lift 6·fov.
+    fn m16_bolt(&mut self, i: usize, target: u16, ctx: &MobCtx) -> bool {
+        let Some(tpos) = self.mc2_target(target, ctx) else {
+            return false;
+        };
+        let (x, y, z, lift) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, (6 * e.f84) as i16)
+        };
+        let Some(p) = self.mc2_spawn_bolt(x, y, z.wrapping_add(lift)) else {
+            return false;
+        };
+        self.ent[p].f68 = 10;
+        self.ent[p].f69 = 0;
+        self.ent[p].row156 = 61;
+        self.ent[p].f44 = 1600;
+        self.ent[p].f140 = 50000;
+        self.mc2_arm_proj(p, i, target, tpos);
+        true
+    }
+
+    pub(crate) fn m16_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M16_BASE {
+            0 => self.mc2_patrol(i, M16_BASE),
+            1 => {
+                // sub_24440 (:15339): the shared idle PLUS the wide
+                // building sweep on the cadence.
+                self.mc2_idle(i, M16_BASE, ctx);
+                let row = &BEHAVIOR[self.ent[i].row156 as usize];
+                let period = (row.v_26 + 1).max(1);
+                if self.ent[i].tick70 == M16_BASE + 1 && self.ent[i].f63 as i16 % period == 0 {
+                    let range = (row.v_28 as i32) * (row.v_28 as i32);
+                    let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                    let mut best: Option<(usize, i32)> = None;
+                    for (j, c) in self.ent.iter().enumerate().skip(1) {
+                        if c.class64 == 10 && c.model65 == 45 && c.flags & 0x400 == 0 {
+                            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                            if d2 <= range && best_d2(&best, d2) {
+                                best = Some((j, d2));
+                            }
+                        }
+                    }
+                    if let Some((j, _)) = best {
+                        self.ent[i].tick70 = M16_BASE + 2;
+                        self.ent[i].f146 = j as u16;
+                    }
+                }
+            }
+            2 => {
+                // sub_24510 (:15389) — the burst-attack brain.
+                match self.mc2_state_head(i) {
+                    1 => self.ent[i].f146 = self.ent[i].f40,
+                    2 => self.ent[i].tick70 = M16_BASE + 4,
+                    _ => {
+                        self.mc2_move_core(i);
+                        let slot = self.ent[i].f146;
+                        let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
+                            self.ent[i].tick70 = M16_BASE + 1;
+                            return;
+                        };
+                        if self.ent[i].f63 & 7 == 0 {
+                            let e = &self.ent[i];
+                            let far = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz)) >= 0x200;
+                            let is_c3 =
+                                slot == PLAYER_TARGET || self.ent[slot as usize].class64 == 3;
+                            if is_c3 || far {
+                                let e = &self.ent[i];
+                                self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                            }
+                        }
+                        if self.ent[i].f26 > 0 {
+                            self.ent[i].f26 -= 1;
+                            self.m16_bolt(i, slot, ctx);
+                        }
+                        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+                        let period = row.v_26.max(1);
+                        if self.ent[i].f63 as i16 % period == 0 {
+                            let e = &self.ent[i];
+                            let d2 = Self::dist2_sq(e.x, e.y, tx, ty);
+                            let range = (row.v_28 as i32) * (row.v_28 as i32);
+                            if d2 < range {
+                                if self.ent[i].f63 as i16 % (2 * period) == 0 {
+                                    self.snd(39, i);
+                                }
+                                let e = &self.ent[i];
+                                let aim = Self::angle_between(e.x, e.y, tx, ty);
+                                if Self::angdist(e.f30, aim) < 0xE3 {
+                                    self.ent[i].f26 = 15; // arm the burst
+                                    self.mc2_danger_poke(slot);
+                                }
+                            } else {
+                                self.ent[i].tick70 = M16_BASE + 1;
+                            }
+                        }
+                    }
+                }
+            }
+            3 => self.mc2_pack(i, M16_BASE),
+            4 => self.mc2_prekill(i, M16_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // no handler in the dispatch — unreachable (row 84 flee clear)
+            _ => {}
+        }
+    }
+
+    // =========================================================================
+    // MODEL 17 — the dive-bomber (ctor sub_4C460 EF:34201, states
+    // 0x88-8F; long-range (9,20) lobs, then a 3x-speed dive on row 87)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m17(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 17;
+            e.tick70 = M17_BASE + 1; // 137
+            e.f28 = 1;
+            e.f128 = 68;
+            e.f130 = 20;
+            e.max_life = 10000;
+            e.f126 = 68;
+        }
+        self.mc2_set_mana_half(i);
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f26 = 0; // :34218/:34226 — set %100 then re-zeroed
+            e.f44 = 350;
+            e.f56 = 1;
+            e.row156 = 85;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(17);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 285);
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    /// The wizard-target validation deviation shared by m17's
+    /// wrapper states (:15560+): a non-wizard acquire is dropped.
+    fn m17_validate(&mut self, i: usize) {
+        if self.ent[i].tick70 == M17_BASE + 2 {
+            let t = self.ent[i].f146;
+            if !self.mc2_is_wizard(t) {
+                self.ent[i].f146 = 0;
+            }
+            self.ent[i].f71 = 0;
+        }
+    }
+
+    /// The dive z-curve (:15730-44): climbs, then plunges, clamped to
+    /// −192 (module-doc APPROX — reconstructed shape).
+    fn m17_dive_step(n: i16) -> i16 {
+        let k = n.clamp(0, 15);
+        if k < 8 {
+            192 >> k
+        } else {
+            (-(192i32 >> (15 - k)) as i16).max(-192)
+        }
+    }
+
+    pub(crate) fn m17_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M17_BASE {
+            0 => {
+                self.mc2_patrol(i, M17_BASE);
+                self.m17_validate(i);
+            }
+            1 => {
+                self.mc2_idle(i, M17_BASE, ctx);
+                self.m17_validate(i);
+            }
+            2 => {
+                // sub_24930 (:15596) — the dive machine.
+                self.snd(58, i); // idle-loop, every tick in state
+                match self.mc2_state_head(i) {
+                    1 => self.ent[i].f146 = self.ent[i].f40,
+                    2 => {
+                        self.ent[i].tick70 = M17_BASE + 4;
+                        return;
+                    }
+                    _ => {}
+                }
+                let v13 = self.mc2_move_core(i);
+                let slot = self.ent[i].f146;
+                let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
+                    self.ent[i].row156 = 85;
+                    self.ent[i].f146 = 0;
+                    self.ent[i].tick70 = M17_BASE + 1;
+                    self.ent[i].f126 = self.ent[i].f128;
+                    return;
+                };
+                if self.ent[i].f63 & 3 == 0 && matches!(self.ent[i].f71, 0 | 4) {
+                    self.mc2_aim_avoid(i, tx, ty);
+                }
+                let row_period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+                match self.ent[i].f71 {
+                    0 => {
+                        if self.ent[i].f63 as i16 % row_period == 0 {
+                            let e = &self.ent[i];
+                            let d = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz));
+                            if d >= BEHAVIOR[e.row156 as usize].v_28 as u32 {
+                                self.ent[i].tick70 = M17_BASE + 1;
+                            } else if d >= 0x700 {
+                                self.mc2_atk_lob20(i, slot, ctx);
+                            } else {
+                                self.ent[i].f71 = 1;
+                            }
+                        }
+                    }
+                    1 => {
+                        let e = &self.ent[i];
+                        let aim = Self::angle_between(e.x, e.y, tx, ty);
+                        self.ent[i].f34 = aim;
+                        self.ent[i].f30 = aim;
+                        self.ent[i].f126 = 3 * self.ent[i].f128; // 204
+                        self.ent[i].row156 = 87; // the dive row
+                        self.ent[i].f26 = 0;
+                        self.ent[i].f71 = 2;
+                    }
+                    2 | 3 => {
+                        if v13 != 3 {
+                            self.ent[i].f30 = self.ent[i].f34;
+                        }
+                        let n = self.ent[i].f26;
+                        self.ent[i].f26 = n + 1;
+                        let v14 = Self::m17_dive_step(n);
+                        self.ent[i].f126 = (self.ent[i].f126 - 8).max(self.ent[i].f130);
+                        let (x, y, z) = {
+                            let e = &self.ent[i];
+                            (e.x, e.y, e.z)
+                        };
+                        let nz = z.wrapping_add(v14);
+                        if nz <= self.ground_z(x, y) as i16 {
+                            self.ent[i].f71 = 4;
+                            self.ent[i].f26 = 18;
+                        } else {
+                            self.ent[i].z = nz;
+                            if self.ent[i].f71 == 2 && self.mc2_atk_melee_768(i, slot, ctx) {
+                                self.ent[i].f71 = 3;
+                            }
+                        }
+                        let _ = tz;
+                    }
+                    4 => {
+                        self.ent[i].f26 -= 1;
+                        if self.ent[i].f26 == 18 {
+                            self.ent[i].row156 = 85;
+                            self.ent[i].f126 = self.ent[i].f130;
+                        }
+                        if self.ent[i].f26 <= 0 {
+                            self.ent[i].f71 = 0;
+                            self.ent[i].f126 = self.ent[i].f128;
+                        }
+                    }
+                    _ => self.ent[i].f71 = 0,
+                }
+            }
+            3 => {
+                self.mc2_pack(i, M17_BASE);
+                self.m17_validate(i);
+            }
+            4 => self.mc2_prekill(i, M17_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // unreachable
+            _ => self.m17_validate(i),
+        }
+    }
+
+    // =========================================================================
+    // MODEL 18 — the slow tank (ctor sub_4C590 EF:34236, states
+    // 0x90-97; ground-locked, 5-shot (9,0) fans)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m18(&mut self, x: u16, y: u16, _z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 18;
+            e.tick70 = M18_BASE + 3; // 147 — spawns into the pack slot (:34240)
+            e.f28 = 1;
+            e.f128 = 10;
+            e.f130 = 6;
+            e.max_life = 36000;
+            e.f126 = 10;
+        }
+        self.mc2_set_mana_half(i);
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f44 = 500;
+            e.f56 = 1;
+            e.row156 = 86;
+            e.f58 = 64;
+            e.f66 = 3;
+            e.f26 = 100; // :34262
+        }
+        self.ent[i].f63 = self.mc2_ord(18);
+        let gz = self.ground_z(x, y) as i16;
+        self.link(i, x, y, gz);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 286);
+        self.mc2_shift_rot(i, 512, 512);
+        Some(i)
+    }
+
+    /// `sub_252E0` (:16092): ground pin + state head; death routes to
+    /// prekill.
+    fn m18_head(&mut self, i: usize) -> u8 {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
+        let v = self.mc2_state_head(i);
+        if v == 2 {
+            self.ent[i].tick70 = M18_BASE + 4;
+        }
+        v
+    }
+
+    /// `sub_253B0` (:16155): enter (state base+`role`, sub-state
+    /// `sub`) with an RNG-jittered duration. The (role,sub)→formula
+    /// map is partially pinned (module-doc APPROX); every %-form
+    /// draws once like retail.
+    fn m18_timer(&mut self, i: usize, role: u8, sub: u8) {
+        self.ent[i].tick70 = M18_BASE + role;
+        self.ent[i].f71 = sub;
+        let d = self.mc2_rand(i);
+        self.ent[i].f26 = match (role, sub) {
+            (0, _) => (d % 400 + 400) as i16,
+            (1, _) => (d % 0x190 + 400) as i16,
+            (2, 0) => (d % 200 + 200) as i16,
+            (2, 1) => (d % 200 + 200) as i16,
+            (2, 2) => 12,
+            (2, 3) => 14,
+            _ => 10,
+        };
+    }
+
+    /// `sub_254E0` (:16232): turn toward the target by `cap`.
+    fn m18_face(&mut self, i: usize, ctx: &MobCtx, cap: i16) {
+        if let Some((tx, ty, _)) = self.mc2_target(self.ent[i].f146, ctx) {
+            let e = &self.ent[i];
+            let aim = Self::angle_between(e.x, e.y, tx, ty);
+            self.ent[i].f34 = aim;
+            let yaw = self.ent[i].f30;
+            self.ent[i].f30 = (yaw as i32 + Self::turn_step(yaw, aim, cap) as i32) as u16 & 0x7FF;
+        }
+    }
+
+    pub(crate) fn m18_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M18_BASE {
+            0 => {
+                // sub_24E20 (:15841) — the watch/roam split on f71.
+                let r = self.m18_head(i);
+                if r == 1 {
+                    self.m18_timer(i, 2, 0);
+                    return;
+                }
+                if r != 0 {
+                    return;
+                }
+                if self.ent[i].f71 != 0 {
+                    if let Some((tx, ty, tz)) = self.mc2_target(self.ent[i].f146, ctx) {
+                        let e = &self.ent[i];
+                        let d = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz));
+                        if d < BEHAVIOR[e.row156 as usize].v_28 as u32 {
+                            self.m18_face(i, ctx, 4);
+                            let d2 = self.mc2_rand(i);
+                            if d2 % 0x31 == 0 {
+                                self.m18_timer(i, 2, 0);
+                            }
+                            return;
+                        }
+                    }
+                    self.ent[i].f146 = 0;
+                    self.m18_timer(i, 0, 0);
+                } else {
+                    self.ent[i].f26 -= 1;
+                    if self.ent[i].f26 > 0 {
+                        if self.ent[i].f58 != 0 {
+                            let d = self.mc2_rand(i);
+                            if d & 1 == 0
+                                && let Some(t) = self.mc2_wizard_scan(i, ctx, false)
+                            {
+                                self.ent[i].f146 = t;
+                                self.m18_timer(i, 0, 1);
+                            }
+                        }
+                    } else {
+                        self.m18_timer(i, 1, 0);
+                    }
+                }
+            }
+            1 => {
+                // sub_25050 (:15952) — the walk.
+                let r = self.m18_head(i);
+                if r == 1 {
+                    self.m18_timer(i, 0, 1);
+                } else if r == 0 {
+                    self.ent[i].f146 = 0;
+                    self.mc2_move_core(i);
+                    self.ent[i].f26 -= 1;
+                    if self.ent[i].f26 <= 0 {
+                        self.m18_timer(i, 0, 0);
+                    }
+                }
+            }
+            2 => {
+                // sub_250B0 (:15976) — the barrage machine.
+                let v2 = self.m18_head(i);
+                if v2 > 1 {
+                    return;
+                }
+                match self.ent[i].f71 {
+                    0 => {
+                        self.m18_face(i, ctx, 4);
+                        if v2 == 1 {
+                            self.ent[i].f26 -= 47;
+                            if self.ent[i].f26 < 0 {
+                                self.m18_timer(i, 2, 1);
+                            }
+                        } else {
+                            let d = self.mc2_rand(i);
+                            if d % 0x29 != 0 {
+                                self.ent[i].f26 -= 1;
+                                if self.ent[i].f26 < 0 {
+                                    self.m18_timer(i, 2, 2);
+                                }
+                            } else {
+                                self.m18_timer(i, 2, 1);
+                            }
+                        }
+                    }
+                    1 => {
+                        self.ent[i].f26 -= 1;
+                        if self.ent[i].f26 <= 0 {
+                            self.m18_timer(i, 2, 2);
+                            return;
+                        }
+                        let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+                        if self.ent[i].f63 as i16 % period == 0 {
+                            let slot = self.ent[i].f146;
+                            if self.mc2_target(slot, ctx).is_none() {
+                                self.m18_timer(i, 2, 2);
+                                return;
+                            }
+                            self.m18_face(i, ctx, 5);
+                            self.mc2_atk_fan(i, slot, ctx);
+                        }
+                    }
+                    2 => {
+                        self.ent[i].f26 -= 1;
+                        if self.ent[i].f26 <= 0 {
+                            self.m18_timer(i, 2, 3);
+                        }
+                    }
+                    _ => {
+                        self.ent[i].f26 -= 1;
+                        if self.ent[i].f26 < 0 {
+                            self.m18_timer(i, 1, 0);
+                        } else if self.ent[i].f26 >= 8 {
+                            let yaw = (self.ent[i].f30 + 170) & 0x7FF;
+                            self.ent[i].f30 = yaw;
+                            self.ent[i].f34 = yaw;
+                        }
+                    }
+                }
+            }
+            3 => self.m18_timer(i, 0, 0), // :16074 — re-enter roam
+            4 => self.mc2_prekill(i, M18_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // unreachable
+            _ => {
+                // +7 (:16247): ground-lock; a chase entry re-arms.
+                let (x, y) = (self.ent[i].x, self.ent[i].y);
+                self.ent[i].z = self.ground_z(x, y) as i16;
+                if self.ent[i].tick70 == M18_BASE + 2 {
+                    self.m18_timer(i, 2, 0);
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // MODEL 19 — the firebug flyer (ctor sub_4C6B0 EF:34271, states
+    // 0x98-9F; level-000's final wave — flank, hover, strafe-bolt,
+    // dive-melee; flight = handler-driven z writes)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m19(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 19;
+            e.tick70 = M19_BASE + 1; // 153
+            e.f28 = 1;
+            e.f128 = 76;
+            e.f130 = 8;
+            e.max_life = 600;
+            e.f126 = 76;
+        }
+        self.mc2_set_mana_half(i); // 300
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f44 = 300;
+            e.f66 = 3;
+            e.f67 = 0;
+            e.f26 = (i % 100) as i16; // kept (:34290)
+            e.f56 = 1;
+            e.row156 = 88;
+        }
+        let ord = self.mc2_ord(19);
+        self.ent[i].f63 = ord;
+        self.ent[i].f58 = Self::mc2_wake_stagger(88, ord); // :34297 staggered wake
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 287);
+        self.mc2_shift_rot(i, 85, 51);
+        Some(i)
+    }
+
+    fn m19_reset(&mut self, i: usize) {
+        if self.ent[i].tick70 == M19_BASE + 2 {
+            self.ent[i].f71 = 0;
+        }
+    }
+
+    /// The flank point 2048 ahead of the target's facing (:16379).
+    fn m19_flank(&mut self, i: usize, ctx: &MobCtx, jitter: bool) -> Option<(u16, u16, i16)> {
+        let slot = self.ent[i].f146;
+        let (tx, ty, tz) = self.mc2_target(slot, ctx)?;
+        let tyaw = if slot == PLAYER_TARGET {
+            ctx.pyaw
+        } else {
+            self.ent[slot as usize].f30
+        };
+        let ang = if jitter {
+            let d = self.mc2_rand(i);
+            (tyaw as i32 - 256 + (((d % 0x5A) << 11) / 360) as i32) as u16 & 0x7FF
+        } else {
+            tyaw
+        };
+        let mut p = (tx, ty, tz);
+        Self::polar_step(&mut p, ang, 0, 2048);
+        Some(p)
+    }
+
+    pub(crate) fn m19_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M19_BASE {
+            0 => {
+                self.mc2_patrol(i, M19_BASE);
+                self.m19_reset(i);
+            }
+            1 => {
+                self.mc2_idle(i, M19_BASE, ctx);
+                self.m19_reset(i);
+            }
+            2 => self.m19_attack(i, ctx),
+            3 => {
+                self.mc2_pack(i, M19_BASE);
+                self.m19_reset(i);
+            }
+            4 => self.mc2_prekill(i, M19_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // unreachable; the hit response is +2 case 7
+            _ => self.m19_reset(i),
+        }
+    }
+
+    /// `HitFirebug_25610` (:16281) — the attack-run machine.
+    fn m19_attack(&mut self, i: usize, ctx: &MobCtx) {
+        match self.mc2_state_head(i) {
+            1 => {
+                self.ent[i].f71 = 7; // damage → straight into a dive
+                self.ent[i].f146 = self.ent[i].f40;
+            }
+            2 => {
+                self.ent[i].tick70 = M19_BASE + 4;
+                return;
+            }
+            _ => {}
+        }
+        self.mc2_move_core(i);
+        let slot = self.ent[i].f146;
+        let Some((tx, ty, tz)) = self.mc2_target(slot, ctx) else {
+            self.ent[i].tick70 = M19_BASE + 1;
+            self.ent[i].f126 = self.ent[i].f128;
+            return;
+        };
+        let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
+        loop {
+            match self.ent[i].f71 {
+                0 => {
+                    self.ent[i].f126 = self.ent[i].f128;
+                    self.ent[i].f71 = 1;
+                }
+                1 => {
+                    let Some(p) = self.m19_flank(i, ctx, true) else {
+                        break;
+                    };
+                    let e = &self.ent[i];
+                    if Self::mc2_dist3((e.x, e.y, e.z), p) <= 0x500 {
+                        self.ent[i].f71 = 2;
+                        continue;
+                    }
+                    let e = &self.ent[i];
+                    self.ent[i].f34 = Self::angle_between(e.x, e.y, p.0, p.1);
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_avoid_packmate(i);
+                    }
+                    break;
+                }
+                2 => {
+                    self.ent[i].f126 = self.ent[i].f130;
+                    let d = self.mc2_rand(i);
+                    self.ent[i].f26 = ((d & 0x3FF) as i32 + tz as i32) as i16; // hover altitude
+                    self.ent[i].f71 = 3;
+                }
+                3 => {
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_aim_avoid(i, tx, ty);
+                    }
+                    let Some(p) = self.m19_flank(i, ctx, false) else {
+                        break;
+                    };
+                    let e = &self.ent[i];
+                    if Self::mc2_dist3((e.x, e.y, e.z), p) > 0x500 {
+                        self.ent[i].f71 = 0;
+                        break;
+                    }
+                    let d = self.mc2_rand(i);
+                    let v16 = d % 0x11F;
+                    if v16 & 0x3F == 0 {
+                        self.ent[i].f71 = 6;
+                    } else if v16 & 0x1F == 0 {
+                        self.ent[i].f71 = 7;
+                        continue;
+                    } else if v16 == 0 {
+                        self.ent[i].f71 = 4;
+                        continue;
+                    } else if v16 & 3 == 0 {
+                        // The vertical bob toward the hover altitude —
+                        // the flying evidence (:16447-61).
+                        let hover = self.ent[i].f26;
+                        self.ent[i].z += if self.ent[i].z <= hover { 64 } else { -64 };
+                    }
+                    break;
+                }
+                4 => {
+                    self.ent[i].f126 = self.ent[i].f128;
+                    self.ent[i].f71 = 5;
+                }
+                5 => {
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_avoid_packmate(i);
+                    }
+                    if self.ent[i].f63 as i16 % period == 0 {
+                        let e = &self.ent[i];
+                        if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz))
+                            < BEHAVIOR[e.row156 as usize].v_28 as u32
+                        {
+                            self.mc2_atk_bolt(i, slot, ctx);
+                        } else {
+                            self.ent[i].f71 = 6;
+                        }
+                    }
+                    break;
+                }
+                6 => {
+                    self.ent[i].tick70 = M19_BASE + 1;
+                    self.ent[i].f126 = self.ent[i].f128;
+                    break;
+                }
+                7 => {
+                    let d = self.mc2_rand(i);
+                    self.ent[i].f126 = 3 * self.ent[i].f128; // 228
+                    self.snd(((d & 1) + 43) as u8, i);
+                    self.ent[i].f26 = 24;
+                    self.ent[i].f71 = 8;
+                }
+                _ => {
+                    // 8/9 — the dive-melee (:16542-63).
+                    self.ent[i].f26 -= 1;
+                    if self.ent[i].f26 <= 0 {
+                        self.ent[i].f71 = 0;
+                        break;
+                    }
+                    if self.ent[i].f26 > 16 {
+                        let e = &self.ent[i];
+                        self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                    }
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_avoid_packmate(i);
+                    }
+                    let dz = (tz as i32 - self.ent[i].z as i32).clamp(-64, 64);
+                    self.ent[i].z = self.ent[i].z.wrapping_add(dz as i16);
+                    if self.ent[i].f71 == 8 && self.mc2_atk_melee_768(i, slot, ctx) {
+                        self.ent[i].f71 = 9;
+                    }
+                    if self.ent[i].f63 as i16 % period == 0 {
+                        let e = &self.ent[i];
+                        if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz))
+                            >= BEHAVIOR[e.row156 as usize].v_28 as u32
+                        {
+                            self.ent[i].f71 = 6;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // MODEL 20 — dual-mode skirmisher (ctor sub_4C7F0 EF:34307,
+    // states 0xA0-A7; (9,21) arcs at range, 1024-melee rushes close)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m20(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 20;
+            e.tick70 = M20_BASE + 1; // 161
+            e.f28 = 1;
+            e.f128 = 32;
+            e.f130 = 20;
+            e.max_life = 5500;
+            e.f126 = 32;
+        }
+        self.mc2_set_mana_half(i);
+        {
+            // :34320 — fov zeroed BEFORE the draw's facing writes.
+            self.ent[i].f36 = 0;
+        }
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f44 = 100;
+            e.f56 = 1;
+            e.row156 = 89;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(20);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 288);
+        self.mc2_shift_rot(i, 384, 512);
+        Some(i)
+    }
+
+    /// The wizard-validation wrapper deviation (:16613+).
+    fn m20_validate(&mut self, i: usize) {
+        if self.ent[i].tick70 == M20_BASE + 2 {
+            let t = self.ent[i].f146;
+            if !self.mc2_is_wizard(t) {
+                self.ent[i].f146 = 0;
+            }
+            self.ent[i].f71 = 0;
+        }
+    }
+
+    pub(crate) fn m20_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M20_BASE {
+            0 => {
+                self.mc2_patrol(i, M20_BASE);
+                self.m20_validate(i);
+            }
+            1 => {
+                self.mc2_idle(i, M20_BASE, ctx);
+                self.m20_validate(i);
+            }
+            2 => {
+                // sub_25E40 (:16649).
+                if self.mc2_target(self.ent[i].f146, ctx).is_none() {
+                    self.ent[i].tick70 = M20_BASE + 1;
+                    self.ent[i].f126 = self.ent[i].f128;
+                    return;
+                }
+                self.snd(32, i);
+                match self.ent[i].f71 {
+                    0 => {
+                        // Approach + (9,21) arcs; a landed thunk
+                        // commits the melee rush. (Retail also
+                        // gates the human on the mobilize counter —
+                        // MC2 flight state, Phase 4.4; APPROX.)
+                        let v3 = self.mc2_chase_attack(i, M20_BASE, ctx, Self::mc2_atk_lob21);
+                        if v3 {
+                            self.ent[i].f71 = 1;
+                        }
+                    }
+                    1 => {
+                        self.ent[i].f71 = 2;
+                        self.ent[i].f26 = 32;
+                        self.ent[i].f126 = 2 * self.ent[i].f128; // 64
+                        let hit = self.mc2_chase_attack(i, M20_BASE, ctx, Self::mc2_atk_melee_1024);
+                        self.ent[i].f26 -= 1;
+                        if hit || self.ent[i].f26 <= 0 {
+                            self.ent[i].f71 = 0;
+                            self.ent[i].f126 = self.ent[i].f128;
+                        }
+                    }
+                    _ => {
+                        let hit = self.mc2_chase_attack(i, M20_BASE, ctx, Self::mc2_atk_melee_1024);
+                        self.ent[i].f26 -= 1;
+                        if hit || self.ent[i].f26 <= 0 {
+                            self.ent[i].f71 = 0;
+                            self.ent[i].f126 = self.ent[i].f128;
+                        }
+                    }
+                }
+                if self.ent[i].tick70 != M20_BASE + 2 {
+                    self.ent[i].f126 = self.ent[i].f128;
+                }
+            }
+            3 => {
+                self.mc2_pack(i, M20_BASE);
+                self.m20_validate(i);
+            }
+            4 => self.mc2_prekill(i, M20_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // unreachable
+            _ => self.m20_validate(i),
+        }
+    }
+
+    // =========================================================================
+    // MODEL 21 — the floating caster (ctor sub_4C8F0 EF:34340,
+    // states 0xA8-AF; hover-bob physics + (9,0) bolts; the third
+    // most-authored creature)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m21(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 21;
+            // actSpeed = maxSpeed READ BEFORE ANY WRITE — NewEvent's
+            // zero, verbatim bug-compatible (:34345).
+            e.f126 = e.f130;
+            e.tick70 = M21_BASE + 1; // 169
+            e.f28 = 1;
+            e.f128 = 96;
+            e.max_life = 1000;
+            e.f140 = 1000;
+            e.f36 = 0;
+        }
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f44 = 400; // subSpell (the bolt thunk hard-sets 500)
+            e.f56 = 1;
+            e.row156 = 96;
+            e.f58 = 64;
+            e.f66 = 3;
+            e.f71 = 0;
+            e.f68 = 64; // byte_0x43_67 — the idle "can-turn" counter
+        }
+        self.ent[i].f63 = self.mc2_ord(21);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.m21_pose(i);
+        self.mc2_shift_rot(i, 128, 128);
+        Some(i)
+    }
+
+    /// `sub_26500` (:16970): sprite by hover sub-state.
+    fn m21_pose(&mut self, i: usize) {
+        let sprite = match self.ent[i].f71 {
+            0 => 311,
+            1..=3 | 9 => 308,
+            4 => 309,
+            5 => 310,
+            6 => 305,
+            7 => 306,
+            8 => 307,
+            _ => 312,
+        };
+        if self.ent[i].type86 != sprite {
+            self.mc2_set_sprite(i, sprite);
+            self.mc2_shift_rot(i, 128, 128);
+        }
+    }
+
+    /// `sub_268F0` (:17212): mode switch — 1 idle (can-turn 64,
+    /// target cleared), 2 attack.
+    fn m21_mode(&mut self, i: usize, mode: u8) {
+        if mode == 1 {
+            self.ent[i].f68 = 64;
+            self.ent[i].f146 = 0;
+        } else {
+            self.ent[i].f68 = 0;
+        }
+        self.ent[i].tick70 = M21_BASE + mode;
+    }
+
+    /// `sub_265A0` (:17010) — the hover-bob physics (module-doc
+    /// APPROX: ported to the trace's summary): climb by the decaying
+    /// f44 charge, sink at 42, re-roll the altitude on the row's
+    /// case-4, occasional croak (sound 42), water splash sub-state.
+    fn m21_hover(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let ground = self.ground_z(x, y) as i16;
+        let on_water = self.cap_bit(x, y) == 1;
+        if on_water && self.ent[i].f71 != 10 {
+            self.ent[i].f71 = 10;
+            let (x, y, z) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            };
+            self.mc2_spawn_splash(x, y, z);
+        }
+        if self.ent[i].f44 > 42 {
+            self.ent[i].z = self.ent[i].z.wrapping_add(42);
+            self.ent[i].f44 -= 42;
+        } else if self.ent[i].z > ground + 140 {
+            self.ent[i].z -= 42;
+        } else {
+            let d = self.mc2_rand(i);
+            self.ent[i].f44 = (d % 0x64 + 140) as u16; // case 4 re-roll
+            if self.ent[i].f71 == 10 && !on_water {
+                self.ent[i].f71 = 0;
+            }
+        }
+        if self.ent[i].z < ground {
+            self.ent[i].z = ground;
+        }
+        if self.ent[i].f63 & 0x1F == 0 {
+            let d = self.mc2_rand(i);
+            if d % 0xB == 0 {
+                self.snd(42, i);
+            }
+        }
+        self.ent[i].f126 = if on_water {
+            40
+        } else if self.ent[i].tick70 == M21_BASE + 2 {
+            66
+        } else {
+            96
+        };
+        self.m21_pose(i);
+    }
+
+    pub(crate) fn m21_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M21_BASE {
+            0 | 3 => self.m21_mode(i, 1),
+            1 => {
+                // sub_26070 (:16760).
+                match self.mc2_state_head(i) {
+                    1 => {
+                        self.ent[i].f146 = self.ent[i].f40;
+                        self.m21_mode(i, 2);
+                    }
+                    2 => self.ent[i].tick70 = M21_BASE + 4,
+                    _ => {
+                        self.mc2_move_core(i);
+                        self.m21_hover(i);
+                        if self.ent[i].f68 != 0 {
+                            self.mc2_wander_turn(i);
+                            self.ent[i].f30 = self.ent[i].f34;
+                        }
+                        if self.ent[i].f63 & 0x3F == 0
+                            && self.ent[i].f58 != 0
+                            && let Some(t) = self.mc2_wizard_scan(i, ctx, false)
+                        {
+                            self.ent[i].f146 = t;
+                            self.m21_mode(i, 2);
+                        }
+                    }
+                }
+            }
+            2 => {
+                // sub_26220 (:16838).
+                match self.mc2_state_head(i) {
+                    1 => self.ent[i].f146 = self.ent[i].f40,
+                    2 => {
+                        self.ent[i].tick70 = M21_BASE + 4;
+                        return;
+                    }
+                    _ => {}
+                }
+                let slot = self.ent[i].f146;
+                let Some((tx, ty, _)) = self.mc2_target(slot, ctx) else {
+                    self.mc2_move_core(i);
+                    self.m21_hover(i);
+                    self.m21_mode(i, 1);
+                    return;
+                };
+                self.mc2_aim_avoid(i, tx, ty);
+                let mut out_of_range = false;
+                if self.ent[i].f63 & 0x1F == 0 {
+                    let e = &self.ent[i];
+                    if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, self.ent[i].z))
+                        < BEHAVIOR[e.row156 as usize].v_28 as u32
+                    {
+                        self.mc2_atk_bolt(i, slot, ctx);
+                    } else {
+                        out_of_range = true;
+                    }
+                }
+                self.mc2_move_core(i);
+                self.m21_hover(i);
+                if out_of_range {
+                    self.m21_mode(i, 1);
+                }
+            }
+            4 => self.mc2_prekill(i, M21_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // sub_26420 MISSING from the decompile — unreachable
+            _ => {
+                // +7 (:16925): 1D5D0 is a no-op for our StageVar2==0
+                // spawns; hover keeps the float alive.
+                self.m21_hover(i);
+            }
+        }
+    }
+
+    // =========================================================================
+    // MODEL 23 — the mana leviathan (ctor sub_4CBF0 EF:34454, states
+    // 0xB8-BF; the only ctor-flying creature: z = 0x2000, siphons
+    // (10,39) mana spheres, (9,9) heavy bolts at wizards)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m23(&mut self, x: u16, y: u16, _z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 23;
+            e.tick70 = M23_BASE; // 184
+            e.f28 = 1;
+            e.f128 = 24;
+            e.f130 = 14;
+            e.f126 = 24;
+            e.max_life = 10000;
+            e.f140 = 100;
+        }
+        let d = self.mc2_rand(i);
+        {
+            let e = &mut self.ent[i];
+            let f = ((d & 0x7FF) as i32 - 1) as u16;
+            e.f34 = f;
+            e.f30 = f;
+            // pitch NOT set — verbatim (:34469 note).
+            e.f44 = 0x2000; // the flying altitude target
+            e.f56 = 1;
+            e.row156 = 91;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(23);
+        self.link(i, x, y, 0x2000);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 289);
+        self.mc2_shift_rot(i, 384, 384);
+        Some(i)
+    }
+
+    /// `sub_27FE0`: state + sub-state + timer in one.
+    fn m23_mode(&mut self, i: usize, action: u8, sub: u8, timer: i16) {
+        self.ent[i].tick70 = action;
+        self.ent[i].f71 = sub;
+        self.ent[i].f26 = timer;
+    }
+
+    /// `sub_28000` (:18384): nearest live (10,39) mana sphere.
+    fn m23_find_node(&self, i: usize) -> Option<u16> {
+        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+        let mut best: Option<(usize, i32)> = None;
+        for (j, c) in self.ent.iter().enumerate().skip(1) {
+            if c.class64 == 10 && c.model65 == 39 && c.flags & 0x400 == 0 {
+                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                if best_d2(&best, d2) {
+                    best = Some((j, d2));
+                }
+            }
+        }
+        best.map(|(j, _)| j as u16)
+    }
+
+    /// `sub_28420` (:18603): the locked node must still be a (10,39).
+    fn m23_node_ok(&self, i: usize) -> bool {
+        let t = self.ent[i].f146 as usize;
+        t != 0
+            && t < self.ent.len()
+            && self.ent[t].class64 == 10
+            && self.ent[t].model65 == 39
+            && self.ent[t].flags & 0x400 == 0
+    }
+
+    /// `sub_28110` (:18445): damage intake + wizard retaliation.
+    fn m23_post(&mut self, i: usize) {
+        match self.mc2_state_head(i) {
+            2 => self.m23_mode(i, M23_BASE + 4, 0, 0),
+            1 => {
+                let src = self.ent[i].f40;
+                if self.mc2_is_wizard(src) {
+                    self.ent[i].f146 = src;
+                    self.m23_mode(i, M23_BASE + 2, 0, 0);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The altitude-keeping z step of `sub_27950` (:18052).
+    fn m23_altitude(&mut self, i: usize) {
+        let v2 = self.ent[i].z as i32 - self.ent[i].f44 as i32;
+        if v2.abs() >= 256 {
+            self.ent[i].z = self.ent[i].z.wrapping_add(if v2 <= 0 { 32 } else { -32 });
+        }
+    }
+
+    pub(crate) fn m23_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M23_BASE {
+            0 => {
+                // sub_27950 — the patrol/hunt loop.
+                self.mc2_move_core(i);
+                self.mc2_avoid_packmate(i);
+                self.m23_altitude(i);
+                match self.ent[i].f71 {
+                    0 => {
+                        self.ent[i].f126 = self.ent[i].f130;
+                        self.ent[i].f26 -= 1;
+                        if self.ent[i].f26 <= 0 {
+                            self.m23_mode(i, M23_BASE, 1, 0);
+                        }
+                    }
+                    1 => {
+                        if let Some(n) = self.m23_find_node(i) {
+                            self.ent[i].f44 = 0x2000;
+                            self.ent[i].f146 = n;
+                            self.m23_mode(i, M23_BASE, 2, 0);
+                        } else {
+                            let (x, y) = (self.ent[i].x, self.ent[i].y);
+                            let hover = (self.ground_z(x, y) as i16).wrapping_add(0x700);
+                            self.ent[i].f44 = hover as u16;
+                            self.m23_mode(i, M23_BASE, 0, 80);
+                        }
+                    }
+                    _ => {
+                        if self.m23_node_ok(i) {
+                            let t = self.ent[i].f146 as usize;
+                            let (sp, tp) = {
+                                let e = &self.ent[i];
+                                let s = &self.ent[t];
+                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                            };
+                            self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
+                            if Self::mc2_dist3(sp, tp) < 768 {
+                                self.m23_mode(i, M23_BASE + 1, 0, 500);
+                            }
+                        } else {
+                            self.m23_mode(i, M23_BASE, 1, 0);
+                        }
+                    }
+                }
+                self.m23_post(i);
+            }
+            1 => {
+                // sub_27B20 — descend/land onto the node.
+                match self.ent[i].f71 {
+                    0 => {
+                        self.ent[i].f126 = self.ent[i].f128;
+                        self.ent[i].f26 -= 1;
+                        if self.m23_node_ok(i) {
+                            let t = self.ent[i].f146 as usize;
+                            let (sp, tp) = {
+                                let e = &self.ent[i];
+                                let s = &self.ent[t];
+                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                            };
+                            // Aligned-over-node = close in 2D (APPROX
+                            // for sub_28390/sub_28060).
+                            self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
+                            self.mc2_move_core(i);
+                            let dz = (tp.2 as i32 - sp.2 as i32).clamp(-32, 32);
+                            self.ent[i].z = self.ent[i].z.wrapping_add(dz as i16);
+                            if Self::dist2_sq(sp.0, sp.1, tp.0, tp.1) < 256 * 256 {
+                                self.m23_mode(i, M23_BASE + 3, 0, 0);
+                            } else if self.ent[i].f26 <= 0 {
+                                self.m23_mode(i, M23_BASE + 1, 1, 0);
+                            }
+                        } else {
+                            self.m23_mode(i, M23_BASE + 1, 1, 0);
+                        }
+                    }
+                    _ => {
+                        if self.ent[i].z >= 0x2000 {
+                            self.ent[i].f44 = 0x2000;
+                            self.m23_mode(i, M23_BASE, 0, 80);
+                        } else {
+                            self.ent[i].z += 32;
+                        }
+                    }
+                }
+                self.m23_post(i);
+            }
+            2 => {
+                // sub_27E00 — the (9,9) ranged retaliation.
+                self.snd(59, i);
+                self.ent[i].f126 = self.ent[i].f128;
+                self.mc2_move_core(i);
+                let slot = self.ent[i].f146;
+                let mut broke = self.mc2_target(slot, ctx).is_none();
+                if !broke {
+                    let (tx, ty, tz) = self.mc2_target(slot, ctx).unwrap();
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_aim_avoid(i, tx, ty);
+                    }
+                    let row = &BEHAVIOR[self.ent[i].row156 as usize];
+                    if self.ent[i].f63 as i16 & row.v_26 == 0 {
+                        let e = &self.ent[i];
+                        if Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz)) < row.v_28 as u32 {
+                            self.mc2_atk_heavy9(i, slot, ctx);
+                        } else {
+                            broke = true;
+                        }
+                    }
+                }
+                self.m23_post(i);
+                if broke {
+                    self.ent[i].f146 = 0;
+                    self.m23_mode(i, M23_BASE + 3, 3, 0);
+                }
+            }
+            3 => {
+                // sub_27C10 — the siphon.
+                self.snd(59, i);
+                match self.ent[i].f71 {
+                    0 => {
+                        if self.m23_node_ok(i) {
+                            let t = self.ent[i].f146 as usize;
+                            if self.ent[t].flags & 0x40 == 0 {
+                                self.ent[i].f44 = 18;
+                                self.m23_mode(i, M23_BASE + 3, 1, 64);
+                            } else {
+                                self.m23_mode(i, M23_BASE + 3, 3, 0);
+                            }
+                        } else {
+                            self.m23_mode(i, M23_BASE + 3, 3, 0);
+                        }
+                    }
+                    1 | 2 => {
+                        if self.m23_node_ok(i) {
+                            let t = self.ent[i].f146 as usize;
+                            self.ent[t].flags |= 0x40; // grabbed
+                            self.ent[t].f146 = i as u16;
+                            self.ent[i].f44 += 10;
+                            let (sp, tp) = {
+                                let e = &self.ent[i];
+                                let s = &self.ent[t];
+                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                            };
+                            if Self::mc2_dist3(sp, tp) < 256 || tp.2 > sp.2 {
+                                // Swallow: steal the mana, consume it.
+                                self.ent[i].f140 += self.ent[t].f140;
+                                self.ent[t].flags |= 0x400;
+                                self.m23_mode(i, M23_BASE + 3, 3, 0);
+                            }
+                        } else {
+                            self.m23_mode(i, M23_BASE + 3, 3, 0);
+                        }
+                    }
+                    _ => {
+                        self.ent[i].f146 = 0;
+                        if let Some(n) = self.m23_find_node(i) {
+                            let t = n as usize;
+                            let (sp, tp) = {
+                                let e = &self.ent[i];
+                                let s = &self.ent[t];
+                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                            };
+                            if Self::mc2_dist3(sp, tp) <= 3584 {
+                                self.ent[i].f146 = n;
+                                self.m23_mode(i, M23_BASE + 1, 0, 500);
+                            } else {
+                                self.m23_mode(i, M23_BASE + 1, 1, 0);
+                            }
+                        } else {
+                            self.m23_mode(i, M23_BASE + 1, 1, 0);
+                        }
+                    }
+                }
+                self.m23_post(i);
+            }
+            4 => self.mc2_prekill(i, M23_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // sub_28460 MISSING — unreachable
+            _ => {}
+        }
+    }
+
+    // =========================================================================
+    // MODEL 24 — cave brute (ctor sub_4CCF0 EF:34487; CAVE-ONLY —
+    // cave levels are Phase 4.5, so the gate returns None today,
+    // exactly like retail off-cave; handlers ready for 4.5)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m24(&mut self, _x: u16, _y: u16, _z: i16) -> Option<usize> {
+        // `if MapType != Cave return 0` (:34490) — no cave levels
+        // boot yet, so this is authentically the no-spawn arm.
+        None
+    }
+
+    /// `sub_28690` (:18723): the shared m24 target acquisition.
+    fn m24_acquire(&mut self, i: usize, ctx: &MobCtx) {
+        if self.ent[i].f58 == 0 || self.ent[i].f63 & 0xF != 0 {
+            return;
+        }
+        if let Some(t) = self.mc2_wizard_scan(i, ctx, false) {
+            self.ent[i].tick70 = M24_BASE + 2;
+            self.ent[i].f146 = t;
+        }
+    }
+
+    /// `sub_287B0` (:18778): sprite/speed by state.
+    fn m24_pose(&mut self, i: usize) {
+        match self.ent[i].tick70 - M24_BASE {
+            0 => {
+                self.mc2_set_sprite(i, 336);
+                self.ent[i].f126 = 0;
+            }
+            2 => self.ent[i].f126 = self.ent[i].f128, // 80
+            6 => self.ent[i].f126 = 2 * self.ent[i].f130, // 48
+            _ => {
+                self.ent[i].f126 = self.ent[i].f130;
+                if self.ent[i].type86 != 335 {
+                    self.mc2_set_sprite(i, 335);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn m24_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M24_BASE {
+            0 => {
+                self.mc2_patrol(i, M24_BASE);
+                if self.ent[i].tick70 == M24_BASE {
+                    if self.ent[i].f63 & 7 == 0 {
+                        let d = self.mc2_rand(i);
+                        if d % 3 == 0 {
+                            self.ent[i].tick70 = M24_BASE + 1;
+                        }
+                    }
+                    if self.ent[i].tick70 == M24_BASE {
+                        self.m24_acquire(i, ctx);
+                    }
+                } else {
+                    self.ent[i].tick70 = M24_BASE + 6;
+                }
+                self.m24_pose(i);
+            }
+            1 => {
+                self.mc2_idle(i, M24_BASE, ctx);
+                if self.ent[i].tick70 == M24_BASE + 1 {
+                    if self.ent[i].f63 & 7 == 0 {
+                        let d = self.mc2_rand(i);
+                        if d % 3 == 0 {
+                            self.ent[i].tick70 = M24_BASE;
+                        }
+                    }
+                    if self.ent[i].tick70 == M24_BASE + 1 {
+                        self.m24_acquire(i, ctx);
+                    }
+                } else if self.ent[i].tick70 == M24_BASE + 2 {
+                    // primitive acquire keeps +2
+                } else {
+                    self.ent[i].tick70 = M24_BASE + 6;
+                }
+                self.m24_pose(i);
+            }
+            2 => {
+                self.snd(7, i);
+                if self.mc2_chase_attack(i, M24_BASE, ctx, Self::mc2_atk_melee_1536) {
+                    self.ent[i].tick70 = M24_BASE + 6;
+                }
+                self.m24_pose(i);
+            }
+            3 => {
+                self.ent[i].tick70 = M24_BASE + 1;
+                self.mc2_patrol(i, M24_BASE);
+                self.m24_pose(i);
+            }
+            4 => self.mc2_prekill(i, M24_BASE),
+            5 => self.mc2_kill(i),
+            6 => {
+                self.mc2_flee(i, M24_BASE, ctx);
+                self.m24_acquire(i, ctx);
+                self.m24_pose(i);
+            }
+            _ => self.m24_pose(i),
+        }
+    }
+
+    // =========================================================================
+    // MODEL 25 — the swarm splitter (ctor sub_4CE00 EF:34523, states
+    // 0xC8-CF; castle-drain minis, splits into 3 on death,
+    // trace mc2-class5-m25-26-28-class2-treeburn.md)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m25(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 25;
+            e.tick70 = M25_BASE + 1; // 201
+            e.f28 = 1;
+            e.f71 = 0;
+            e.f128 = 60;
+            e.f130 = 20;
+            e.max_life = 7500;
+            e.f126 = 60;
+        }
+        self.mc2_set_mana_half(i);
+        {
+            self.ent[i].f36 = 0;
+        }
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f44 = 300; // damage AND the brain's lifetime countdown
+            e.f56 = 1;
+            e.row156 = 92;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(25);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 290);
+        self.mc2_shift_rot(i, 384, 384);
+        Some(i)
+    }
+
+    /// The castle of a wizard slot (class 3 model 2 keyed on id24;
+    /// the human's is id24 == PLAYER_TARGET).
+    fn mc2_castle_of(&self, wiz: u16) -> Option<usize> {
+        let want = if wiz == PLAYER_TARGET {
+            PLAYER_TARGET
+        } else if (wiz as usize) < self.ent.len() {
+            self.ent[wiz as usize].id24
+        } else {
+            return None;
+        };
+        self.ent
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, c)| {
+                c.class64 == 3 && c.model65 == 2 && c.id24 == want && c.flags & 0x400 == 0
+            })
+            .map(|(j, _)| j)
+    }
+
+    pub(crate) fn m25_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M25_BASE {
+            0 => self.m25_brain(i, ctx),
+            1 => {
+                self.mc2_idle(i, M25_BASE, ctx);
+                self.ent[i].act_life = self.ent[i].act_life.max(0); // :19062 clamp
+            }
+            2 => {
+                self.snd(37, i);
+                let _ = self.mc2_chase_attack(i, M25_BASE, ctx, Self::mc2_atk_bolt);
+                self.ent[i].act_life = self.ent[i].act_life.max(0);
+            }
+            3 => {
+                self.ent[i].tick70 = M25_BASE + 1;
+                self.ent[i].act_life = self.ent[i].act_life.max(0);
+            }
+            4 => self.m25_split(i),
+            5 => {
+                // :19187 — kill/score.
+                if self.ent[i].f38 == PLAYER_TARGET {
+                    self.kills += 1;
+                }
+                if self.ent[i].f71 != 0 {
+                    self.mc2_kill(i);
+                } else {
+                    self.ent[i].act_life = -1;
+                    self.ent[i].flags |= 0x400;
+                }
+            }
+            6 => {} // sub_28F40 MISSING — unreachable
+            _ => {
+                // :19205 — respawn hook.
+                if self.ent[i].f71 != 0 {
+                    self.ent[i].tick70 = M25_BASE;
+                    self.ent[i].f71 = 3;
+                } // else sub_1D5D0 no-op
+            }
+        }
+    }
+
+    /// `sub_28860` (:18828) — the mini/adult brain: lifetime
+    /// countdown, castle hunt, water sprite swap.
+    fn m25_brain(&mut self, i: usize, ctx: &MobCtx) {
+        let sub = self.ent[i].f71;
+        let mut v2 = 0u8;
+        if !matches!(sub, 1 | 2) {
+            v2 = self.mc2_state_head(i);
+        }
+        // subSpellIndex-- lifetime (:18896).
+        self.ent[i].f44 = self.ent[i].f44.wrapping_sub(1);
+        if self.ent[i].f44 == 0 {
+            v2 = 2;
+        }
+        if v2 == 2 {
+            self.ent[i].tick70 = M25_BASE + 4;
+            return;
+        }
+        let mut speed_reset = false;
+        match self.ent[i].f71 {
+            1 => {
+                self.ent[i].f26 = 52;
+                self.ent[i].f71 = 2;
+                // fall into 2's regen next tick (retail falls through;
+                // one-tick skew accepted)
+            }
+            2 => {
+                self.ent[i].act_life = self.ent[i].max_life as i32;
+                self.ent[i].mail[0].1 = 0;
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f26 < 0 {
+                    self.ent[i].f71 = 3;
+                    speed_reset = true;
+                } else if self.ent[i].f26 > 13 {
+                    // The hatch spin (:19926-28).
+                    let f34 = self.ent[i].f34;
+                    self.ent[i].f34 = (f34 & 0xFF) | ((((f34 >> 8) + 1) & 7) << 8);
+                }
+            }
+            3 => {
+                let t = self.ent[i].f38;
+                if !self.mc2_is_wizard(t) {
+                    self.ent[i].f71 = 8;
+                    self.ent[i].f26 = 100;
+                } else if self.mc2_castle_of(t).is_some() {
+                    self.ent[i].f71 = 5;
+                    self.ent[i].f146 = t;
+                } else {
+                    let d = self.mc2_rand(i);
+                    self.ent[i].f71 = 4;
+                    self.ent[i].f26 = (d % 100 + 100) as i16;
+                }
+            }
+            4 => {
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f26 < 0 {
+                    self.ent[i].f71 = 3;
+                }
+            }
+            5 => {
+                if let Some(c) = self.mc2_castle_of(self.ent[i].f146) {
+                    if self.ent[i].f63 & 7 == 0 {
+                        let (cx, cy) = (self.ent[c].x, self.ent[c].y);
+                        let e = &self.ent[i];
+                        self.ent[i].f34 = Self::angle_between(e.x, e.y, cx, cy);
+                        // In-range = the box overlap (APPROX for
+                        // CompareAxisWithShift_10750).
+                        let e = &self.ent[i];
+                        let near = ((e.x.wrapping_sub(cx)) as i16 as i32).abs()
+                            < (e.f80 + self.ent[c].f80) as i32
+                            && ((e.y.wrapping_sub(cy)) as i16 as i32).abs()
+                                < (e.f82 + self.ent[c].f82) as i32;
+                        if near {
+                            self.ent[i].f71 = 6;
+                        }
+                    }
+                } else {
+                    self.ent[i].f71 = 3;
+                }
+            }
+            6 | 7 => {
+                self.ent[i].f71 = 7;
+                if let Some(c) = self.mc2_castle_of(self.ent[i].f146) {
+                    let (cx, cy) = (self.ent[c].x, self.ent[c].y);
+                    let e = &self.ent[i];
+                    let near = ((e.x.wrapping_sub(cx)) as i16 as i32).abs()
+                        < (e.f80 + self.ent[c].f80) as i32
+                        && ((e.y.wrapping_sub(cy)) as i16 as i32).abs()
+                            < (e.f82 + self.ent[c].f82) as i32;
+                    if near {
+                        // The castle gnaw: 60 into its inbox (:18992).
+                        let src = self.ent[i].id24;
+                        self.mc2_melee_write(c as u16, 0x3C, src);
+                    } else {
+                        self.ent[i].f71 = 5;
+                        speed_reset = true;
+                    }
+                } else {
+                    self.ent[i].f71 = 3;
+                    speed_reset = true;
+                }
+            }
+            8 => {
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f26 < 0 {
+                    self.ent[i].tick70 = M25_BASE + 4;
+                    return;
+                }
+            }
+            _ => {}
+        }
+        if v2 == 1 {
+            // Damage retarget: the brain hunts the ATTACKER's castle.
+            self.ent[i].f38 = self.ent[i].f40;
+        }
+        // Wander + move (:19018-25).
+        if self.ent[i].f63 & 7 == 0 {
+            let d1 = self.mc2_rand(i);
+            let d2 = self.mc2_rand(i);
+            let sign = 2 * ((d1 % 157) / 79) as i32 - 1;
+            let f34 = self.ent[i].f34;
+            self.ent[i].f34 = (f34 as i32 + sign * (d2 % 381) as i32) as u16 & 0x7FF;
+        }
+        self.mc2_move_core(i);
+        // Water sprite swap (:19026-47).
+        let (x, y, z) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let on_water = self.cap_bit(x, y) == 1;
+        let above = z > self.ground_z(x, y) as i16;
+        if on_water && self.ent[i].type86 == 314 && above {
+            self.mc2_set_sprite(i, 313);
+            speed_reset = true;
+        } else if on_water {
+            if self.ent[i].type86 != 314 {
+                self.mc2_set_sprite(i, 314);
+            }
+            self.ent[i].f128 = 35;
+            speed_reset = true;
+        } else if self.ent[i].type86 != 313 {
+            self.mc2_set_sprite(i, 313);
+            self.ent[i].f128 = 60;
+            speed_reset = true;
+        }
+        if speed_reset {
+            self.ent[i].f126 = self.ent[i].f128;
+            if self.ent[i].f71 == 2 {
+                self.ent[i].f126 = self.ent[i].f128 + 50;
+            }
+        }
+        let _ = ctx;
+    }
+
+    /// `sub_28CE0` (:19103) — the death split: 3 minis + the (10,1)
+    /// burst.
+    fn m25_split(&mut self, i: usize) {
+        if self.ent[i].f71 != 0 {
+            self.mc2_prekill(i, M25_BASE);
+            return;
+        }
+        if self.free.len() <= 1 {
+            self.mc2_mana_spheres(i, false);
+            self.ent[i].tick70 = M25_BASE + 5;
+            return;
+        }
+        let (x, y, z, mana, killer) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f140, e.f40)
+        };
+        let share = mana / 3;
+        for n in 0..3 {
+            let Some(c) = self.new_event() else { continue };
+            {
+                let e = &mut self.ent[c];
+                e.class64 = 5;
+                e.model65 = 25;
+                e.tick70 = M25_BASE;
+                e.f28 = 1;
+                e.f71 = 1;
+                e.f128 = 35;
+                e.f130 = 60;
+                e.f126 = 85;
+                e.f140 = if n == 2 { mana - 2 * share } else { share };
+                e.max_life = 80;
+            }
+            let d = self.mc2_rand(c);
+            {
+                let e = &mut self.ent[c];
+                let f = ((d & 0x7FF) as i32 - 1) as u16;
+                e.f34 = f;
+                e.f30 = f;
+                e.f44 = 15000; // the mini's lifetime seed (:19161)
+                e.f56 = 1;
+                e.row156 = 95;
+                e.f58 = 64;
+                e.f66 = 3;
+                e.f38 = killer;
+            }
+            self.ent[c].f63 = self.mc2_ord(25);
+            self.link(c, x, y, z);
+            self.refill_life(c);
+            self.mc2_set_sprite(c, 314);
+            self.mc2_shift_rot(c, 32, 32);
+        }
+        self.mc2_corpse_burst(i);
+        self.ent[i].tick70 = M25_BASE + 5;
+        self.ent[i].f71 = 0;
+    }
+
+    // =========================================================================
+    // MODEL 26 — the mana leech (ctor sub_4CF00 EF:34557, states
+    // 0xD0-D7; drains wizard mana, forces spell discharges)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m26(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 26;
+            e.tick70 = M26_BASE + 1; // 209
+            e.f28 = 1;
+            e.f128 = 25;
+            e.f130 = 25;
+            e.max_life = 4400;
+            e.f126 = 25;
+        }
+        self.mc2_set_mana_half(i);
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f44 = 300;
+            e.f56 = 1;
+            e.row156 = 99;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(26);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 318);
+        self.mc2_shift_rot(i, 256, 384);
+        // sub_293D0 post-init (:34585) — the wake primitive.
+        self.m26_wake(i);
+        Some(i)
+    }
+
+    /// `sub_293D0` (:19425): outside the attack state, clear the
+    /// target and go full-speed (byte[2] bit 7 = flags bit 23).
+    /// DUAL-PURPOSE bit: the renderer's per-entity override reads it
+    /// as translucency mode 2 (GRO:3779-3805) — retail's wraith is
+    /// deliberately 33%-opaque while hunting, solid while draining
+    /// (docs/traces/mc2-transparency-drawlist.md §6.2).
+    fn m26_wake(&mut self, i: usize) {
+        if self.ent[i].tick70 != M26_BASE + 2 {
+            self.ent[i].f146 = 0;
+            self.ent[i].flags |= 1 << 23;
+            self.ent[i].f126 = self.ent[i].f130;
+        }
+    }
+
+    /// `sub_293B0` (:19411): in the attack state, slow down.
+    fn m26_calm(&mut self, i: usize) {
+        if self.ent[i].tick70 == M26_BASE + 2 {
+            self.ent[i].flags &= !(1 << 23);
+            self.ent[i].f126 = self.ent[i].f128;
+        }
+    }
+
+    pub(crate) fn m26_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M26_BASE {
+            0 => {
+                self.mc2_patrol(i, M26_BASE);
+                self.m26_calm(i);
+            }
+            1 => {
+                self.mc2_idle(i, M26_BASE, ctx);
+                self.m26_calm(i);
+            }
+            2 => {
+                // sub_28FF0 (:19233) — the leech.
+                if self.ent[i].f63 & 0x1F == 0 {
+                    self.snd(62, i);
+                }
+                match self.mc2_state_head(i) {
+                    1 => self.ent[i].f146 = self.ent[i].f40,
+                    2 => {
+                        self.ent[i].tick70 = M26_BASE + 4;
+                        self.m26_wake(i);
+                        return;
+                    }
+                    _ => {}
+                }
+                self.mc2_move_core(i);
+                let slot = self.ent[i].f146;
+                if self.mc2_is_wizard(slot) && self.mc2_target(slot, ctx).is_some() {
+                    let (tx, ty, tz) = self.mc2_target(slot, ctx).unwrap();
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_aim_avoid(i, tx, ty);
+                    }
+                    // The drain (:19331-34): −(manaRegen + 14).
+                    if slot == PLAYER_TARGET {
+                        self.mc2_player_drain.0 += 14; // APPROX: human regen not modeled
+                    } else {
+                        let t = slot as usize;
+                        let amt = self.ent[t].f136 + 14;
+                        self.ent[t].f140 = (self.ent[t].f140 - amt).max(0);
+                    }
+                    if self.ent[i].f63 & 3 == 0 {
+                        let e = &self.ent[i];
+                        let v10 = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz));
+                        let row = &BEHAVIOR[e.row156 as usize];
+                        if v10 <= row.v_28 as u32 {
+                            let target_is_avatar =
+                                slot == PLAYER_TARGET || self.ent[slot as usize].model65 == 0;
+                            if v10 >= 2048 || !target_is_avatar {
+                                self.ent[i].tick70 = M26_BASE + 1;
+                            } else {
+                                // The %63 spell-hijack roll — draw
+                                // consumed; the discharge needs the
+                                // class-15 column (module-doc APPROX).
+                                self.rand = self.rand.wrapping_mul(9377).wrapping_add(9439);
+                                let roll = self.rand % 63;
+                                if !matches!(roll, 4 | 5) && roll >= 4 {
+                                    self.ent[i].tick70 = M26_BASE + 1;
+                                }
+                            }
+                        } else {
+                            self.ent[i].tick70 = M26_BASE + 1;
+                        }
+                    }
+                } else {
+                    self.ent[i].tick70 = M26_BASE + 1;
+                }
+                self.m26_wake(i);
+            }
+            3 => {
+                self.mc2_pack(i, M26_BASE);
+                self.m26_calm(i);
+            }
+            4 => self.mc2_prekill(i, M26_BASE),
+            5 => self.mc2_kill(i),
+            6 => {} // sub_29370 MISSING — unreachable
+            _ => {
+                self.m26_calm(i);
+            }
+        }
+    }
+
+    // =========================================================================
+    // MODEL 28 — the melee brute (ctor sub_4D1D0 EF:34695, states
+    // 0xE0-E7; the fastest creature, 2000-damage swing arcs)
+    // =========================================================================
+
+    pub(crate) fn mc2_spawn_m28(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 28;
+            e.tick70 = M28_BASE + 1; // 225
+            e.f28 = 1;
+            e.f128 = 120;
+            e.f130 = 64;
+            e.max_life = 8000;
+        }
+        self.mc2_set_mana_half(i);
+        // byte[3] |= 8 (:34707) — no ported reader; bit 30 is its
+        // home (27 belongs to the blocked-status mapping).
+        self.ent[i].flags |= 1 << 30;
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f36 = 0;
+            e.f44 = 2000;
+            e.f56 = 1;
+            e.row156 = 93;
+            e.f58 = 64;
+            e.f66 = 3;
+            e.f126 = e.f130 + (e.f128 - e.f130) / 2; // 92 (:34719)
+        }
+        self.ent[i].f63 = self.mc2_ord(28);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 292);
+        self.mc2_shift_rot(i, 85, 42);
+        Some(i)
+    }
+
+    /// `sub_2B860` (:21308): sprite/row config.
+    fn m28_pose(&mut self, i: usize, mode: u8) {
+        match mode {
+            1 => {
+                self.ent[i].row156 = 93;
+                self.mc2_set_sprite(i, 292);
+                self.mc2_shift_rot(i, 85, 42);
+                self.ent[i].f126 = self.ent[i].f130;
+            }
+            2 => {
+                self.ent[i].row156 = 93;
+                self.ent[i].f44 = 0;
+                self.ent[i].f126 = self.ent[i].f128;
+                self.mc2_set_sprite(i, 291);
+                self.mc2_shift_rot(i, 384, 768);
+                // dword_0x10_16 = the strike animation length; the
+                // retail count comes from the anim bank (APPROX 16).
+                self.ent[i].f26 = 16;
+            }
+            _ => {
+                self.ent[i].f58 = 0;
+                self.ent[i].row156 = 94;
+                self.ent[i].f126 = self.ent[i].f128 - 28; // 92
+            }
+        }
+    }
+
+    /// `sub_2BA50` (:21416).
+    fn m28_sub(&mut self, i: usize, n: u8) {
+        self.ent[i].f71 = n;
+        self.ent[i].f26 = match n {
+            2 => 32,
+            8 => 16,
+            _ => 0,
+        };
+    }
+
+    /// `sub_2B7E0` (:21273): only one m28 strikes at a time.
+    fn m28_strike_taken(&self, i: usize) -> bool {
+        self.ent.iter().enumerate().skip(1).any(|(j, c)| {
+            j != i
+                && c.class64 == 5
+                && c.model65 == 28
+                && c.flags & 0x400 == 0
+                && matches!(c.f71, 3 | 4 | 5)
+                && c.tick70 == M28_BASE + 2
+        })
+    }
+
+    pub(crate) fn m28_tick(&mut self, i: usize, ctx: &MobCtx) {
+        match self.ent[i].tick70 - M28_BASE {
+            0 => {
+                self.mc2_patrol(i, M28_BASE);
+                if self.ent[i].tick70 == M28_BASE + 2 {
+                    self.ent[i].f71 = 0;
+                }
+            }
+            1 => {
+                self.mc2_idle(i, M28_BASE, ctx);
+                if self.ent[i].tick70 == M28_BASE + 2 {
+                    self.ent[i].f71 = 0;
+                }
+            }
+            2 => self.m28_attack(i, ctx),
+            3 => self.ent[i].tick70 = M28_BASE + 1,
+            4 => self.mc2_prekill(i, M28_BASE),
+            5 => {
+                self.mc2_kill(i);
+            }
+            6 => {} // sub_2B7A0 MISSING — unreachable
+            _ => {
+                if self.ent[i].tick70 == M28_BASE + 2 {
+                    self.ent[i].f71 = 0;
+                }
+            }
+        }
+    }
+
+    /// `sub_2B260` (:21010) — the swing machine.
+    fn m28_attack(&mut self, i: usize, ctx: &MobCtx) {
+        let v1 = {
+            let v = self.mc2_state_head(i);
+            if v == 2 {
+                self.ent[i].tick70 = M28_BASE + 4;
+                return;
+            }
+            v
+        };
+        if v1 == 1 {
+            self.ent[i].f146 = self.ent[i].f40;
+        }
+        let slot = self.ent[i].f146;
+        match self.ent[i].f71 {
+            0 => {
+                self.m28_pose(i, 3);
+                self.m28_sub(i, 1);
+            }
+            1 => {
+                let (x, y, z) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z)
+                };
+                self.mc2_spawn_splash(x, y, z);
+                self.m28_sub(i, 2);
+            }
+            2 => {
+                let Some((tx, ty, _)) = self.mc2_target(slot, ctx) else {
+                    if !self.m28_strike_taken(i) {
+                        self.m28_sub(i, 3);
+                    }
+                    return;
+                };
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f26 <= 0 {
+                    if !self.m28_strike_taken(i) {
+                        self.m28_sub(i, 3);
+                    }
+                    return;
+                }
+                // Chase the point 768 ahead of the target's facing.
+                let tyaw = if slot == PLAYER_TARGET {
+                    ctx.pyaw
+                } else {
+                    self.ent[slot as usize].f30
+                };
+                let mut pred = (tx, ty, 0i16);
+                Self::polar_step(&mut pred, tyaw, 0, 768);
+                if self.ent[i].f63 & 3 == 0 {
+                    self.mc2_aim_avoid(i, pred.0, pred.1);
+                }
+                let mv = self.mc2_move_core(i);
+                if mv == 3 {
+                    self.m28_sub(i, 7);
+                } else if self.ent[i].f63 & 3 == 0 && self.ent[i].f26 < 14 {
+                    let e = &self.ent[i];
+                    let d2 = Self::dist2_sq(e.x, e.y, tx, ty);
+                    if d2 < 2_768_896 && !self.m28_strike_taken(i) {
+                        self.m28_sub(i, 3);
+                    }
+                }
+            }
+            3 => {
+                self.m28_sub(i, 4);
+                self.m28_pose(i, 2);
+                self.ent[i].f50 = self.ent[i].f30 as i16;
+                self.snd(38, i);
+            }
+            4 | 5 => {
+                if self.ent[i].f26 <= 0 {
+                    self.m28_sub(i, 6);
+                    return;
+                }
+                self.ent[i].f30 = self.ent[i].f50 as u16;
+                self.ent[i].f34 = self.ent[i].f30;
+                if self.ent[i].f71 == 4 {
+                    if let Some((tx, ty, _)) = self.mc2_target(slot, ctx) {
+                        if self.ent[i].f63 & 7 == 0 {
+                            let e = &self.ent[i];
+                            if Self::dist2_sq(e.x, e.y, tx, ty) > 802_816 {
+                                let e = &self.ent[i];
+                                self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+                            }
+                        }
+                        if (4..=12).contains(&self.ent[i].f26)
+                            && self.mc2_atk_melee_768(i, slot, ctx)
+                        {
+                            self.ent[i].f71 = 5;
+                        }
+                    }
+                }
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f63 & 3 == 0 {
+                    self.mc2_avoid_packmate(i);
+                }
+                self.mc2_move_core(i);
+                self.ent[i].f50 = self.ent[i].f30 as i16;
+                let swing = if self.ent[i].f26 & 4 != 0 { 56 } else { -56 };
+                self.ent[i].f30 = (self.ent[i].f30 as i32 + swing) as u16 & 0x7FF;
+            }
+            6 => {
+                self.m28_pose(i, 3);
+                {
+                    let (x, y, z) = {
+                        let e = &self.ent[i];
+                        (e.x, e.y, e.z)
+                    };
+                    self.mc2_spawn_splash(x, y, z);
+                }
+                let ok = self.mc2_target(slot, ctx).is_some_and(|(tx, ty, tz)| {
+                    let e = &self.ent[i];
+                    Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz))
+                        < BEHAVIOR[e.row156 as usize].v_28 as u32
+                });
+                if ok {
+                    self.m28_sub(i, 2);
+                } else {
+                    self.m28_sub(i, 7);
+                }
+            }
+            7 => {
+                let d = self.mc2_rand(i);
+                self.ent[i].f34 = (d & 0x7FF) as u16;
+                self.m28_sub(i, 8);
+            }
+            8 => {
+                self.mc2_move_core(i);
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f26 <= 0 {
+                    self.m28_sub(i, 9);
+                }
+            }
+            _ => {
+                self.m28_pose(i, 1);
+                self.ent[i].tick70 = M28_BASE + 1;
+                self.ent[i].f146 = 0;
+            }
+        }
+    }
+}
+
+/// Nearest-candidate accumulator test.
+fn best_d2(best: &Option<(usize, i32)>, d2: i32) -> bool {
+    best.is_none_or(|(_, bd)| d2 < bd)
+}
