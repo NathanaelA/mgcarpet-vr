@@ -1177,8 +1177,15 @@ pub fn pause_quads(w: f32, _h: f32) -> Vec<UiQuad> {
 
 /// Mortality overlays + the life bar (functional-first placement;
 /// the faithful HUD layout is the banked UI/UX track). `blink`
-/// drives the dead-screen respawn prompt.
-pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad> {
+/// drives the dead-screen respawn prompt; `grace_meter` opts into
+/// the (unfaithful) spawn-grace strip.
+pub fn vitals_quads(
+    v: &PlayerVitals,
+    w: f32,
+    h: f32,
+    blink: bool,
+    grace_meter: bool,
+) -> Vec<UiQuad> {
     let mut quads = Vec::new();
     let scale = (w / 640.0).max(1.0);
     // (The old bottom-center life bar is GONE — player health lives in
@@ -1187,9 +1194,10 @@ pub fn vitals_quads(v: &PlayerVitals, w: f32, h: f32, blink: bool) -> Vec<UiQuad
     let bw = w * 0.25;
     let y = h - 26.0 * scale;
     // Spawn-grace shimmer: a thin white strip draining bottom-center
-    // (no faithful equivalent — retail shows nothing for grace; kept
-    // as the readable invulnerability cue).
-    if v.grace > 0 && v.state == LifeState::Alive {
+    // (no faithful equivalent — retail shows nothing for grace).
+    // Behind `enhancements.grace_meter` since 2026-07-11 (player:
+    // debug cue, not a default overlay).
+    if grace_meter && v.grace > 0 && v.state == LifeState::Alive {
         quads.push(solid(
             [
                 (w - bw) / 2.0,
@@ -1318,6 +1326,20 @@ const MC2_SPR_BOX: usize = 89; // grid box, affordable
 const MC2_SPR_BOX_FRAME: usize = 90; // hovered-slot highlight frame
 const MC2_SPR_BOX_DARK: usize = 91; // grid box, unaffordable
 const MC2_SPR_ICON_SMALL: usize = 97; // + spell (0..25): the grid icon
+
+/// UI-atlas sprite id of a spell's icon in the running game's atlas:
+/// MC1 (both tilesets) bakes the 24 book icons at `[6 + spell]` (the
+/// book/HUD entry map), MC2 the 26 selector grid icons at
+/// `[97 + spell]`. Feeds the expose-jar-spells debug markers.
+pub fn spell_icon_sprite(game: mgc_sim::ids::GameId, spell: u8) -> Option<usize> {
+    use mgc_sim::ids::GameId;
+    match game {
+        GameId::Mc1 | GameId::Mc1Hw => {
+            (usize::from(spell) < SPELL_COUNT).then(|| 6 + usize::from(spell))
+        }
+        GameId::Mc2 => (spell < 26).then(|| MC2_SPR_ICON_SMALL + usize::from(spell)),
+    }
+}
 const MC2_SPR_TAG_LEFT: usize = 149; // bound-to-LMB corner tag
 const MC2_SPR_TAG_RIGHT: usize = 150; // bound-to-RMB corner tag
 const MC2_SPR_SUB_OK: usize = 161; // level box, unlocked + affordable

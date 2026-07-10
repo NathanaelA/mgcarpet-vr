@@ -585,6 +585,22 @@ fn load_level(
             // eight teams; remc1 sub_48710 :57230/:57234.
             castle: std::array::from_fn(|t| ui_assets.as_ref().and_then(|u| u.map_stamp(58 + t))),
             balloon: std::array::from_fn(|t| ui_assets.as_ref().and_then(|u| u.map_stamp(66 + t))),
+            // Spell icons shrunk to marker size, floating over the
+            // jar dot — the expose-jar-spells debug stamps (drawn
+            // only when that option is on).
+            spell: (0..26u8)
+                .map(|s| {
+                    let id = ui::spell_icon_sprite(game_id, s)?;
+                    let mut st = ui_assets.as_ref().and_then(|u| u.map_stamp(id))?;
+                    let f = 12.0 / st.w.max(st.h) as f32;
+                    if f < 1.0 {
+                        st.w = ((st.w as f32 * f) as u32).max(1);
+                        st.h = ((st.h as f32 * f) as u32).max(1);
+                    }
+                    st.anchor = [0.5, 1.0];
+                    Some(st)
+                })
+                .collect(),
         },
         map_stamps: Vec::new(),
         ui: ui_assets,
@@ -641,6 +657,15 @@ struct App {
     dev_spells: bool,
     /// The pre-mortality invincible player (config `invincible`).
     invincible: bool,
+    /// The unfaithful spawn-grace strip (config `grace_meter`).
+    grace_meter: bool,
+    /// Tag spell jars with their spell's icon on map + main view
+    /// (config `expose_jar_spells`, debug).
+    expose_jar_spells: bool,
+    /// Pickable-jar positions `(x, alt, z, spell)` for the floating
+    /// main-view icons; rebuilt with the pose snapshot, empty when
+    /// `expose_jar_spells` is off.
+    jar_markers: Vec<(f32, f32, f32, u8)>,
     /// Space pressed since the last sim tick (respawn confirm).
     pending_respawn: bool,
     /// Shift+L pressed since the last sim tick (castle demolish).
@@ -735,6 +760,8 @@ impl App {
         crosshair: bool,
         dev_spells: bool,
         invincible: bool,
+        grace_meter: bool,
+        expose_jar_spells: bool,
         map_owned_buildings: bool,
         hud_transparent: bool,
         selector: config::SelectorSurfaces,
@@ -811,6 +838,9 @@ impl App {
             crosshair,
             dev_spells,
             invincible,
+            grace_meter,
+            expose_jar_spells,
+            jar_markers: Vec::new(),
             pending_respawn: false,
             pending_demolish: false,
             map_owned_buildings,
@@ -1055,8 +1085,17 @@ impl App {
                 // tick; MC2's colorIndex_121 phases divide it.
                 self.sim.tick as u32,
             );
-            self.level.map_stamps =
-                entities::map_stamps_from_poses(&poses, &self.level.map_icons, w.beyond_sight());
+            self.level.map_stamps = entities::map_stamps_from_poses(
+                &poses,
+                &self.level.map_icons,
+                w.beyond_sight(),
+                self.expose_jar_spells,
+            );
+            self.jar_markers = if self.expose_jar_spells {
+                entities::jar_markers_from_poses(&poses)
+            } else {
+                Vec::new()
+            };
             // Beyond-Sight rival position markers (interim for the
             // retail name labels — DrawText track).
             self.level
@@ -1916,12 +1955,58 @@ impl ApplicationHandler for App {
                             size.0,
                             size.1,
                             (self.sim.tick / 8) % 2 == 0,
+                            self.grace_meter,
                         ));
                     }
                     if self.paused {
                         // Both views: the book screen is exactly where
                         // paused inspection happens.
                         quads.extend(ui::pause_quads(size.0, size.1));
+                    }
+                    // expose-jar-spells (debug): float each pickable
+                    // jar's spell icon over it in the main view (the
+                    // map stamps are the other half). No fancy UI —
+                    // the raw icon on a dark slab, health-bar style.
+                    if self.expose_jar_spells && !self.book_open() {
+                        if let Some(u) = &self.level.ui {
+                            for &(x, alt, z, spell) in &self.jar_markers {
+                                let Some(id) = ui::spell_icon_sprite(self.level.game, spell) else {
+                                    continue;
+                                };
+                                let Some(st) = u.map_stamp(id) else { continue };
+                                let Some((sx, sy)) = mgc_render::world_to_screen(
+                                    &cam,
+                                    size.0,
+                                    size.1,
+                                    x,
+                                    alt + 0.6,
+                                    z,
+                                ) else {
+                                    continue;
+                                };
+                                let s = (size.0 / 640.0).max(1.0);
+                                let ih = 12.0 * s;
+                                let iw = ih * st.w as f32 / st.h as f32;
+                                // A dark slab behind the luminous icon
+                                // ramps, for readability over bright sky/
+                                // terrain.
+                                quads.push(mgc_render::UiQuad {
+                                    rect: [
+                                        sx - iw * 0.5 - s,
+                                        sy - ih - s,
+                                        iw + 2.0 * s,
+                                        ih + 2.0 * s,
+                                    ],
+                                    uv: [0.0; 4],
+                                    tint: [0.0, 0.0, 0.0, 0.45],
+                                });
+                                quads.push(mgc_render::UiQuad {
+                                    rect: [sx - iw * 0.5, sy - ih, iw, ih],
+                                    uv: st.uv,
+                                    tint: [1.0, 1.0, 1.0, 1.0],
+                                });
+                            }
+                        }
                     }
                     // The autoaim crosshair (P-class predictor;
                     // `enhancements.crosshair`, C toggles): the
@@ -2028,6 +2113,10 @@ struct Args {
     plausible_spellbook: Option<bool>,
     /// CLI override of `enhancements.invincible`.
     invincible: Option<bool>,
+    /// CLI override of `enhancements.expose_jar_spells`.
+    expose_jar_spells: Option<bool>,
+    /// CLI override of `enhancements.grace_meter`.
+    grace_meter: Option<bool>,
     /// CLI overrides of the `flight` tier enums; None = use config.
     thrust: Option<config::ThrustModel>,
     altitude: Option<config::AltitudeModel>,
@@ -2063,6 +2152,8 @@ fn parse_args() -> Result<Args, String> {
     let mut dev_spells = None;
     let mut plausible_spellbook = None;
     let mut invincible = None;
+    let mut expose_jar_spells = None;
+    let mut grace_meter = None;
     let mut thrust = None;
     let mut altitude = None;
     let mut bindings = None;
@@ -2147,6 +2238,10 @@ fn parse_args() -> Result<Args, String> {
             "--no-plausible-spellbook" => plausible_spellbook = Some(false),
             "--invincible" => invincible = Some(true),
             "--no-invincible" => invincible = Some(false),
+            "--expose-jar-spells" => expose_jar_spells = Some(true),
+            "--no-expose-jar-spells" => expose_jar_spells = Some(false),
+            "--grace-meter" => grace_meter = Some(true),
+            "--no-grace-meter" => grace_meter = Some(false),
             "--thrust" => {
                 thrust = Some(match it.next().as_deref() {
                     Some("mc1") => config::ThrustModel::Mc1,
@@ -2220,6 +2315,8 @@ fn parse_args() -> Result<Args, String> {
                      [--dev-spells|--no-dev-spells] \
                      [--plausible-spellbook|--no-plausible-spellbook] \
                      [--invincible|--no-invincible] \
+                     [--expose-jar-spells|--no-expose-jar-spells] \
+                     [--grace-meter|--no-grace-meter] \
                      [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
                      [--bindings classic|wasd] \
                      [--spell-selector auto|mc1|mc2|mc1+mc2] \
@@ -2247,6 +2344,8 @@ fn parse_args() -> Result<Args, String> {
         dev_spells,
         plausible_spellbook,
         invincible,
+        expose_jar_spells,
+        grace_meter,
         thrust,
         altitude,
         bindings,
@@ -2498,6 +2597,10 @@ fn main() -> std::process::ExitCode {
         .plausible_spellbook
         .unwrap_or(cfg.enhancements.plausible_spellbook);
     let invincible = args.invincible.unwrap_or(cfg.enhancements.invincible);
+    let expose_jar_spells = args
+        .expose_jar_spells
+        .unwrap_or(cfg.enhancements.expose_jar_spells);
+    let grace_meter = args.grace_meter.unwrap_or(cfg.enhancements.grace_meter);
     let flight = config::FlightConfig {
         thrust: args.thrust.unwrap_or(cfg.flight.thrust),
         altitude: args.altitude.unwrap_or(cfg.flight.altitude),
@@ -2627,6 +2730,8 @@ fn main() -> std::process::ExitCode {
         crosshair,
         dev_spells,
         invincible,
+        grace_meter,
+        expose_jar_spells,
         cfg.enhancements.map_owned_buildings,
         matches!(
             cfg.enhancements.hud_transparency,

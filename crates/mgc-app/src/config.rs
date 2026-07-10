@@ -225,6 +225,19 @@ pub struct Enhancements {
     /// MORTAL (grace window, castle respawn, castle-less death =
     /// level restart).
     pub invincible: bool,
+    /// The spawn-grace shimmer: a thin bottom-center strip draining
+    /// with the respawn invulnerability window. Retail shows NOTHING
+    /// for grace — the strip was a readability aid that used to draw
+    /// unconditionally; it is a P-class debug cue and now defaults
+    /// OFF (faithful: no grace indicator at all).
+    pub grace_meter: bool,
+    /// Tag every pickable spell jar with its granted spell's icon —
+    /// on the overhead map (a small icon stamp over the jar dot) and
+    /// floating over the jar in the main view. P-class level-scouting
+    /// /debug instrument (the original never labels jars; you learn
+    /// by flying through). Covers MC1's class-12 jars (red AND blue)
+    /// and MC2's class-15 spell tokens.
+    pub expose_jar_spells: bool,
     /// HUD transparency (the top-strip panels + radar blend over the
     /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle to
     /// make it opaque for readability (the radar especially). Multi-

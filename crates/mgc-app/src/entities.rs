@@ -274,6 +274,11 @@ pub struct MapIcons {
     pub castle: [Option<mgc_render::MapStamp>; 8],
     /// Balloon stamps 66..=73 by team slot.
     pub balloon: [Option<mgc_render::MapStamp>; 8],
+    /// Spell icons by spell id (game-aware source sprite; see
+    /// `ui::spell_icon_sprite`), shrunk to marker size — the
+    /// expose-jar-spells debug stamps, consumed only when that
+    /// option is on.
+    pub spell: Vec<Option<mgc_render::MapStamp>>,
 }
 
 /// The MC2 map environment — selects the minimap's team-colour table
@@ -595,6 +600,7 @@ pub fn map_stamps_from_poses(
     poses: &[LivePose],
     icons: &MapIcons,
     beyond_sight: bool,
+    expose_jar_spells: bool,
 ) -> Vec<mgc_render::MapStamp> {
     let mut out = Vec::new();
     for p in poses {
@@ -602,6 +608,12 @@ pub fn map_stamps_from_poses(
         let icon = match (p.class, p.model) {
             (3, 2) => icons.castle[team].as_ref(),
             (3, 3) if p.team == Some(0) || beyond_sight => icons.balloon[team].as_ref(),
+            // expose-jar-spells: pickable jars (MC1 class 12, MC2
+            // class-15 tokens; owned manifestations never reach the
+            // pose list) tag with their spell's icon.
+            (12 | 15, m) if expose_jar_spells => {
+                icons.spell.get(m as usize).and_then(Option::as_ref)
+            }
             _ => None,
         };
         if let Some(i) = icon {
@@ -612,6 +624,18 @@ pub fn map_stamps_from_poses(
         }
     }
     out
+}
+
+/// The expose-jar-spells world markers: every pickable spell jar's
+/// `(x, alt, z, spell id)` — MC1 class 12 (pre-placed, red or blue,
+/// and death-scattered) plus MC2's class-15 tokens. model65 = spell
+/// id (off_987DE dispatch, docs/traces/mc1-blue-jars.md).
+pub fn jar_markers_from_poses(poses: &[LivePose]) -> Vec<(f32, f32, f32, u8)> {
+    poses
+        .iter()
+        .filter(|p| matches!(p.class, 12 | 15))
+        .map(|p| (p.x, p.alt, p.z, p.model))
+        .collect()
 }
 
 /// The Beyond-Sight rival position markers (interim for the retail
