@@ -37,6 +37,7 @@ fn build_world(root: &std::path::Path) -> World {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: Vec::new(),
     };
     let assets = FeatureAssets::parse(
         bundle.search.as_ref().unwrap(),
@@ -159,6 +160,7 @@ fn bumped_pool_is_transparent_without_exhaustion() {
             tile_type: terrain.tile_type.clone(),
             shading: terrain.shading.clone().unwrap(),
             angle: terrain.angle.clone().unwrap(),
+            ceiling: Vec::new(),
         };
         let assets = FeatureAssets::parse(
             bundle.search.as_ref().unwrap(),

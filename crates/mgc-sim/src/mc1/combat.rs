@@ -50,7 +50,7 @@ pub(crate) enum AimPreviewSet {
 }
 
 /// A mailbox recipient: a pool event or the out-of-pool player.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MailTarget {
     Pool(usize),
     Player,
@@ -752,6 +752,92 @@ impl Gen {
         None
     }
 
+    /// The CLAIM/possession candidate test `sub_108B0` (EF:3766)'s
+    /// whitelist body. The possession projectile (action 18) does NOT
+    /// collide with every solid like the generic `victim_scan`
+    /// (`sub_10780`) — it detonates ONLY on entities it could claim
+    /// and flies straight through everything else. Whitelist (verbatim
+    /// sub_108B0, EF:3826-58): worm heads (5,22); the 512/random mana
+    /// spheres (10,39)/(10,40); the foreign-owned sphere variant
+    /// (10,57) when its parent tag differs from the caster; and
+    /// buildings (10,45) ONLY when POSSESSABLE — `bldgprm.flags & 8
+    /// == 0`. The un-possessable factory / terrain-modification
+    /// buildings (the level-001 cross sinks, the level-000 spires) and
+    /// every wizard / marker keep the bit set or fall off the list, so
+    /// possession passes through them (player-validated against retail
+    /// 2026-07-13; the port used to reuse the generic probe and wrongly
+    /// consumed the shot on those sinks). The `+148` claim-owner
+    /// half of retail's self-check has no ported field — the `+24`
+    /// (`id24`) half stands (APPROX).
+    fn claim_admits(&self, j: usize, own: u16) -> bool {
+        let c = &self.ent[j];
+        if c.flags & 8 == 0 {
+            return false;
+        }
+        match (c.class64, c.model65) {
+            (5, 22) => c.id24 != own,
+            (10, 39) | (10, 40) => c.id24 != own,
+            // The (10,57) foreign sphere: gated on the parent tag
+            // (+40), no id re-check (sub_108B0's early-return arm).
+            (10, 57) => c.f40 != own,
+            (10, 45) => {
+                c.id24 != own
+                    && self
+                        .assets
+                        .bldgprm
+                        .get(c.f71 as usize)
+                        .is_none_or(|b| b.flags & 8 == 0)
+            }
+            _ => false,
+        }
+    }
+
+    /// The possession victim probe `sub_108B0` (EF:3766): the same
+    /// tile-chain sweep as [`Self::victim_scan`] but under the
+    /// claim whitelist ([`Self::claim_admits`]) — and with NO player
+    /// probe (sub_108B0 never reaches the human wizard; you cannot
+    /// possess a wizard).
+    fn claim_victim_scan(&self, i: usize) -> Option<MailTarget> {
+        let (wx, wy, id) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24)
+        };
+        let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let tx = ((wx >> 8) as i32 + dx) as u8;
+                let ty = ((wy >> 8) as i32 + dy) as u8;
+                let mut j = self.map_entity[tile(tx, ty)] as usize;
+                while j != 0 {
+                    let next = self.ent[j].next20 as usize;
+                    if self.claim_admits(j, id) && self.ent_overlap(i, j) {
+                        return Some(MailTarget::Pool(j));
+                    }
+                    j = next;
+                }
+            }
+        }
+        None
+    }
+
+    /// [`Self::claim_victim_scan`] at a temporary probe position (the
+    /// marched-substep companion of [`Self::victim_scan_at`]).
+    pub(crate) fn claim_victim_scan_at(
+        &mut self,
+        i: usize,
+        tmp: (u16, u16, i16),
+    ) -> Option<MailTarget> {
+        let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        self.ent[i].x = tmp.0;
+        self.ent[i].y = tmp.1;
+        self.ent[i].z = tmp.2;
+        let v = self.claim_victim_scan(i);
+        self.ent[i].x = old.0;
+        self.ent[i].y = old.1;
+        self.ent[i].z = old.2;
+        v
+    }
+
     /// The explode tail shared by the flight handlers: accuracy stats
     /// (sub_526C0 :62585), spawn the +68/+69 effect, despawn. The
     /// generic sub_52770 path (:62759-72) also copies +44 and the
@@ -1239,7 +1325,18 @@ impl Gen {
             cx = cx.wrapping_add(1); // parity snap (:44246-52)
         }
         let (px, py) = ((cx as u16) << 8, (cy as u16) << 8);
-        let z = self.ground_z(px, py) as i16;
+        // The build datum: MC1 = the center ground; MC2's ctor
+        // (sub_4AA40 EF:33390-99) = 32 x the corner-mean over the
+        // BUILD00 row-1 footprint.
+        let z = match self.verbs.movement {
+            crate::verbs::MovementVerb::Mc2 => {
+                let def = self.assets.build_tab[1 % self.assets.build_tab.len()];
+                let tlx = cx.wrapping_sub(def.w / 2);
+                let tly = cy.wrapping_sub(def.h / 2);
+                (32 * self.avg4(tlx, tly, def.h, def.w)) as i16
+            }
+            _ => self.ground_z(px, py) as i16,
+        };
         let s = self.new_event()?;
         {
             let e = &mut self.ent[s];
@@ -1711,9 +1808,12 @@ impl Gen {
             if d2 > 2048 * 2048 || d2 <= 64 * 64 {
                 continue;
             }
-            let dir = Self::angle_between(c.x, c.y, mx, my);
-            let vx = ((64 * crate::mc1::tables::SIN[dir as usize]) >> 16) as i16;
-            let vy = (-((64 * crate::mc1::tables::COS[dir as usize]) >> 16)) as i16;
+            // Mask to 0..2047 — `angle_of` can return 2048 (full-turn
+            // wrap) and SIN/COS are len 2048 (same panic class as the
+            // MC2 magnet, tail.rs).
+            let dir = (Self::angle_between(c.x, c.y, mx, my) & 0x7FF) as usize;
+            let vx = ((64 * crate::mc1::tables::SIN[dir]) >> 16) as i16;
+            let vy = (-((64 * crate::mc1::tables::COS[dir]) >> 16)) as i16;
             self.ent[j].dest_x = vx as u16;
             self.ent[j].dest_y = vy as u16;
         }
@@ -2468,6 +2568,7 @@ impl Gen {
                 self.grave_tick(i);
                 false
             }
+            85 => self.mc2_mine_tick(i, ctx), // Magic Mine (10,78), action 0x55
             58 => self.napalm_tick(i, ctx),
             59 => {
                 self.mana_magnet_tick(i);
@@ -2947,11 +3048,44 @@ impl Gen {
         if self.ent[i].flags & 0x400 != 0 {
             return false;
         }
+        // MC2 Fool's Mana trap (docs/spell-audit/fools-mana.md): a
+        // neutral sphere carrying a trap OWNER in f52 is one of the six
+        // fake-mana decoys `sub_6C870` throws. A NON-owner possession
+        // claim springs the tier retaliation (`sub_36680`) that homes
+        // the possessor instead of transferring ownership; an owner
+        // reclaim is a no-op. f50 = tier, f136 = payload, f146 = latched
+        // claimer (0 = not yet sprung), f56 = counter. MC2-only; MC1 and
+        // ordinary balls carry f52 == 0, so the goldens stay untouched.
+        let is_fool =
+            matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) && self.ent[i].f52 != 0;
+        if is_fool {
+            if self.ent[i].f146 != 0 {
+                // sprung: run the tier machine each tick until spent.
+                if self.mc2_fools_retaliate(i) {
+                    self.ent[i].flags |= 0x400;
+                }
+                return false; // a sprung trap does no ball physics
+            }
+            if self.ent[i].mail[1].1 != 0 {
+                let claim = self.ent[i].mail[1].1;
+                self.ent[i].mail[1] = (0, 0);
+                if claim != self.ent[i].f52 {
+                    self.ent[i].f146 = claim; // latch the possessor → sprung
+                    self.ent[i].f56 = 0;
+                    if self.mc2_fools_retaliate(i) {
+                        self.ent[i].flags |= 0x400;
+                    }
+                    return false;
+                }
+                // owner reclaim: no trap, sphere persists (retail
+                // `sub_36680` parentId==claimer skip).
+            }
+        }
         // ch1 collection claim (:29439-45): the ball takes the
         // claimant as owner — only on an owner CHANGE (the possess
         // flash re-broadcasts for 8 ticks; the guard keeps the claim
         // chime single).
-        if self.ent[i].mail[1].1 != 0 {
+        if !is_fool && self.ent[i].mail[1].1 != 0 {
             let src = self.ent[i].mail[1].1;
             self.ent[i].mail[1] = (0, 0);
             if src != self.ent[i].f144 {
@@ -3011,17 +3145,46 @@ impl Gen {
         // at rest stays at rest (the perpetual-jiggle fix: applying
         // gravity at rest made settled balls oscillate 16 units).
         let mut z = z0;
+        let mut grounded = false;
         if z > ground || self.ent[i].f46 > 0 {
             z = z.wrapping_add(self.ent[i].f46);
             self.ent[i].f46 = (self.ent[i].f46 - 16).max(-128);
         }
         if z <= ground {
             z = ground;
+            grounded = true;
             let v = self.ent[i].f46;
             self.ent[i].f46 = if v < -32 { -v / 4 } else { 0 };
         }
-        vx = (vx as i32 * 250 / 256) as i16;
-        vy = (vy as i32 * 250 / 256) as i16;
+        if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            // MC2 downhill roll + friction — GROUNDED only (retail
+            // `sub_58030` inside `TransformArcherToMana`'s `v22 == z`
+            // branch): a resting ball takes the terrain gradient onto
+            // its velocity, so balls stream down the island's slopes
+            // into the low basin where the 14-tile magnet aura finishes
+            // the merge. THIS is the level-001 "something else pulls
+            // the balls to centre" the aura alone cannot (arm balls
+            // spawn 22–44 tiles out; the aura reaches only 14) —
+            // player-reported 2026-07-13. `sub_58030` is a RAW-heightmap
+            // forward difference over the ball's 2×2 tile quad, added
+            // un-divided (a height byte ≈ 32 world units), then the
+            // 250/256 friction. Airborne balls keep their velocity.
+            if grounded {
+                let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
+                let h = |dx: u8, dy: u8| {
+                    self.t.height[tile(tx.wrapping_add(dx), ty.wrapping_add(dy))] as i32
+                };
+                let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
+                let sy = h(0, 0) + h(1, 0) - h(0, 1) - h(1, 1);
+                vx = ((vx as i32 + sx) * 250 / 256) as i16;
+                vy = ((vy as i32 + sy) * 250 / 256) as i16;
+            }
+        } else {
+            // MC1 (certified; goldens never re-pinned): unconditional
+            // friction, no slope roll — the original ball physics.
+            vx = (vx as i32 * 250 / 256) as i16;
+            vy = (vy as i32 * 250 / 256) as i16;
+        }
         self.ent[i].dest_x = vx as u16;
         self.ent[i].dest_y = vy as u16;
         if (x, y, z) != (x0, y0, z0) {
@@ -3029,16 +3192,45 @@ impl Gen {
         }
         // Merge with an overlapping ball: absorb, despawn the other.
         for j in 1..self.ent.len() {
+            // Fool's-Mana traps never merge — the six decoys stay
+            // distinct, and a real ball must not absorb one (the merge
+            // copies only mana/owner, dropping the trap fields).
             if j == i
+                || is_fool
                 || self.ent[j].class64 != 10
                 || self.ent[j].model65 != 39
+                || self.ent[j].f52 != 0
                 || self.ent[j].flags & 0x400 != 0
             {
                 continue;
             }
             if self.ent_overlap(i, j) {
-                let m = self.ent[j].f140;
-                self.ent[i].f140 += m;
+                let (fi, fj) = (self.ent[i].f140, self.ent[j].f140);
+                // MC2 owner rule (retail `sub_36D50` EF:26919): the
+                // surviving ball takes the OWNER (colour) of the larger
+                // contributor — an unowned ball defers to an owned
+                // partner, two owned balls resolve to the bigger. The
+                // port kept the survivor's own owner, so a merged ball's
+                // colour looked like "the last ball merged" rather than
+                // the dominant one (player-reported 2026-07-13). (Retail
+                // breaks the owned-vs-owned tie on the owner wizards'
+                // maxMana; ball mana is the observable proxy and is what
+                // the single-owner economy levels turn on.) MC1 keeps
+                // its certified merge (survivor's owner, goldens locked).
+                if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                    let (oi, oj) = (self.ent[i].f144, self.ent[j].f144);
+                    let winner = if oi == 0 {
+                        oj
+                    } else if oj == 0 {
+                        oi
+                    } else if fj > fi {
+                        oj
+                    } else {
+                        oi
+                    };
+                    self.ent[i].f144 = winner;
+                }
+                self.ent[i].f140 = fi + fj;
                 self.ent[j].flags |= 0x400;
                 break;
             }

@@ -70,14 +70,44 @@ pub struct TerrainPlanes<'a> {
     pub angle: &'a mut [u8],
 }
 
-/// Owned form of the four planes — what the runtime world keeps and
+/// Owned form of the terrain planes — what the runtime world keeps and
 /// mutates across ticks (`mgc_sim::world`).
-#[derive(Clone, Hash)]
+#[derive(Clone)]
 pub struct Planes {
     pub height: Vec<u8>,
     pub tile_type: Vec<u8>,
     pub shading: Vec<u8>,
     pub angle: Vec<u8>,
+    /// MC2 cave second heightmap (`x_BYTE_14B4E0`): the CEILING, world
+    /// height = 32 * value like the floor. EMPTY everywhere except MC2
+    /// cave levels (retail's `sub_43D50` never writes it off-cave) —
+    /// and hash-transparent when empty, so the MC1/MC2 non-cave golden
+    /// streams are unchanged by the field. On caves, `angle` bit 3
+    /// means SEALED rock (ceiling pinned to floor−1) — the OPPOSITE of
+    /// its non-cave open-sea meaning. Trace:
+    /// docs/traces/mc2-cave-terrain-foundation.md.
+    pub ceiling: Vec<u8>,
+}
+
+impl std::hash::Hash for Planes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Planes {
+            height,
+            tile_type,
+            shading,
+            angle,
+            ceiling,
+        } = self;
+        height.hash(state);
+        tile_type.hash(state);
+        shading.hash(state);
+        angle.hash(state);
+        // Hash-when-present (the FeatureAssets pattern): empty =
+        // absent, not "a zero-length plane".
+        if !ceiling.is_empty() {
+            ceiling.hash(state);
+        }
+    }
 }
 
 /// One building-footprint entry from `BUILD?-0.TAB` (6 bytes on disk:
@@ -117,6 +147,12 @@ pub struct FeatureAssets {
     /// MC2's spell table ([`crate::mc2::spells`]): the par1-authored
     /// class-10 overrides + class-15 cast costs.
     pub spells: Vec<crate::mc2::spells::Mc2SpellRow>,
+    /// MC2's DERIVED sprite-extent pairs (speed_6, rotSpeed_8) per
+    /// particle-param row ([`crate::mc2::derive_sprite_extents`] —
+    /// retail computes these at load from the sprite bitmaps,
+    /// EF:44870-44910). Empty = pre-dims caller → the static table's
+    /// raw values stand (the old zero-box behavior).
+    pub mc2_sprite_ext: Vec<(u16, u16)>,
 }
 
 impl std::hash::Hash for FeatureAssets {
@@ -127,6 +163,7 @@ impl std::hash::Hash for FeatureAssets {
             build_dat,
             bldgprm,
             spells,
+            mc2_sprite_ext,
         } = self;
         rings.hash(state);
         build_tab.hash(state);
@@ -138,6 +175,9 @@ impl std::hash::Hash for FeatureAssets {
         }
         if !spells.is_empty() {
             spells.hash(state);
+        }
+        if !mc2_sprite_ext.is_empty() {
+            mc2_sprite_ext.hash(state);
         }
     }
 }
@@ -194,6 +234,7 @@ impl FeatureAssets {
             build_dat: build_dat.to_vec(),
             bldgprm: Vec::new(),
             spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
         })
     }
 
@@ -215,13 +256,22 @@ impl FeatureAssets {
     /// Attach MC2's `SPELLS.DAT` table (`spells.bin`, 26 x 80 bytes;
     /// [`crate::mc2::spells::parse`]). A malformed blob is a bake bug
     /// — surface it instead of silently running on ctor defaults.
-    /// NOTE: retail's LevelInit.cpp:12-21 patch of rows 4 and 19 —
-    /// keyed to MapType (Day vs non-Day), overwriting only tier-0
-    /// life + hintText (docs/traces/mc2-class10-m9-dome-open-closure
-    /// .md §4) — is not yet applied here (Phase 4.2 material).
+    /// Retail's LevelInit.cpp:12-21 patch of rows 4 and 19 (Day vs
+    /// non-Day, tier-0 life + hintText) is applied later, by
+    /// `World::set_mc2_night_shade` — the seam that declares the
+    /// level's environment ([`crate::mc2::spells::level_init_patch`]).
     pub fn with_spells(mut self, bytes: &[u8]) -> Result<Self, String> {
         self.spells = crate::mc2::spells::parse(bytes)?;
         Ok(self)
+    }
+
+    /// Attach the derived MC2 sprite extents (the retail load-time
+    /// pass over the sprite bitmaps — feed
+    /// [`crate::mc2::derive_sprite_extents`] with the baked sprite
+    /// index dims).
+    pub fn with_mc2_sprite_ext(mut self, ext: Vec<(u16, u16)>) -> Self {
+        self.mc2_sprite_ext = ext;
+        self
     }
 }
 
@@ -271,7 +321,7 @@ pub fn post_generation_pseudo_rand(height: &[u8]) -> u16 {
 /// One record of the original 18-byte THING_INIT table (1-based copy).
 /// The runtime world keeps this table live: dispositions scan it and
 /// one-shot spawns zero the class (`sub_37440_37800`).
-#[derive(Clone, Copy, Default, Hash)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct Rec {
     pub(crate) class: u16,
     pub(crate) model: u16,
@@ -283,6 +333,38 @@ pub(crate) struct Rec {
     pub(crate) swi_id: u16,
     pub(crate) parent: u16,
     pub(crate) child: u16,
+    /// MC2 `par3_18` (the third context parameter; 0 on MC1 records) —
+    /// the cave pit/hill depth seed and the tube-carver radius nibble.
+    pub(crate) par3: u16,
+}
+
+impl std::hash::Hash for Rec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // par3 is STATIC level input (never mutated at runtime, unlike
+        // class/swi_id) — excluded so plumbing it into Rec left every
+        // pinned MC2 state-hash golden untouched.
+        let Rec {
+            class,
+            model,
+            x,
+            y,
+            dis_id,
+            swi_sz,
+            swi_id,
+            parent,
+            child,
+            par3: _,
+        } = self;
+        class.hash(state);
+        model.hash(state);
+        x.hash(state);
+        y.hash(state);
+        dis_id.hash(state);
+        swi_sz.hash(state);
+        swi_id.hash(state);
+        parent.hash(state);
+        child.hash(state);
+    }
 }
 
 /// Runtime event entity — the subset of remc1's 164-byte
@@ -421,6 +503,24 @@ pub(crate) struct Ent {
     pub(crate) site_z: i16,
 }
 
+/// Pending MC2 player debuff-stamp hits (slow webs, paralyze webs).
+/// Manual Hash: contributes to the state hash ONLY while hits are
+/// pending, so goldens pinned before the channel existed are
+/// untouched (the Planes ceiling / Rec par3 discipline).
+#[derive(Default)]
+pub(crate) struct Mc2PlayerDebuffs {
+    pub(crate) slow: u8,
+    pub(crate) stun: u8,
+}
+
+impl std::hash::Hash for Mc2PlayerDebuffs {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.slow != 0 || self.stun != 0 {
+            (self.slow, self.stun).hash(state);
+        }
+    }
+}
+
 /// The event-pool engine: terrain planes + the original's 1000-slot
 /// event pool and PRNG streams. Serves both the load-time feature pass
 /// (fixpoint loop, this module) and the runtime world tick
@@ -465,6 +565,14 @@ pub(crate) struct Gen {
     /// DIRECT struct writes in the original — spawn grace does NOT
     /// wipe them, so even the invincible dev player gets dragged.
     pub(crate) player_knock: (u16, i16),
+    /// Pending MC2 debuff-stamp hits on the player — (10,65) slow
+    /// web / (10,66) paralyze web (`sub_38E70`/`sub_38F70`
+    /// EF:28407/28442) — drained into the flight `Mc2Ext` channels
+    /// by the sim boundary each tick (docs/traces/mc2-flight-model.md
+    /// §5c/5d). Hash-only-when-pending (the Planes pattern): the
+    /// zero state contributes nothing, so every golden pinned before
+    /// the channel existed stands.
+    pub(crate) mc2_debuffs: Mc2PlayerDebuffs,
     /// Rival wizard entity by player slot (0 = none; slot 0 = the
     /// human, unused) — the sprite-family team resolver for owner
     /// recolors (mana balls 105+8·team, balloons 169+team, castle
@@ -472,6 +580,9 @@ pub(crate) struct Gen {
     /// claims of an eliminated wizard keep their color (property
     /// persists).
     pub(crate) rival_ents: [u16; 8],
+    /// Per-color MC2 Life scalar for the castle-HP ladder (see
+    /// [`Mc2LifeScale`]); written by the MC2 rival spawn.
+    pub(crate) mc2_life_scale: Mc2LifeScale,
     /// The human player's village-aggro timer (the wizard struct's
     /// +528): set to 200 by offenses against village property or
     /// population (building hits, villager-family hits and kills),
@@ -566,6 +677,26 @@ pub(crate) struct Gen {
     /// sub_68FF0 EF:55726) — banked for the Phase-4.2 spell system
     /// like the scrolls. Hash-transparent at zero.
     pub(crate) mc2_spell_tokens: Mc2Quiet,
+    /// MC2 spell-XP mail (owner id, spell index): projectile impacts
+    /// award from inside the pool tick (`sub_6D8B0` call sites,
+    /// EF:63189 etc.); the world tick drains it into the wizard's
+    /// book the same turn — empty at hash time like a read mailbox
+    /// (and hash-transparent when empty, so every pinned stream
+    /// holds across the field addition).
+    pub(crate) mc2_cast_xp: Mc2XpMail,
+}
+
+/// See [`Gen::mc2_cast_xp`] — hashes to NOTHING while empty (the
+/// [`Mc2Ord`] pattern).
+#[derive(Default)]
+pub(crate) struct Mc2XpMail(pub Vec<(u16, u16)>);
+
+impl std::hash::Hash for Mc2XpMail {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if !self.0.is_empty() {
+            self.0.hash(state);
+        }
+    }
 }
 
 /// See [`Gen::mc2_spawn_ord`] — hashes to NOTHING while all-zero
@@ -577,6 +708,26 @@ impl std::hash::Hash for Mc2Ord {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         if self.0.iter().any(|&v| v != 0) {
             state.write(&self.0);
+        }
+    }
+}
+
+/// Per-color MC2 Life scalar (`word_0x24A_586` — the wizard-HP AND
+/// castle-HP factor, EF:43768/61695). Default 256 = 1.0x for every
+/// color; hashes to NOTHING while all-default (the [`Mc2Ord`]
+/// pattern — goldens pinned before the field existed stand).
+pub(crate) struct Mc2LifeScale(pub [u16; 8]);
+
+impl Default for Mc2LifeScale {
+    fn default() -> Self {
+        Mc2LifeScale([256; 8])
+    }
+}
+
+impl std::hash::Hash for Mc2LifeScale {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.0 != [256; 8] {
+            self.0.hash(state);
         }
     }
 }
@@ -641,6 +792,7 @@ pub(crate) fn build_table(things: &[Thing], slots: usize, base: usize) -> Vec<Re
                 swi_id: th.swi_id,
                 parent: th.parent,
                 child: th.child,
+                par3: th.par3.unwrap_or(0),
             };
         }
     }
@@ -674,7 +826,9 @@ impl Gen {
             erupting: 0,
             plume: 0,
             player_knock: (0, 0),
+            mc2_debuffs: Mc2PlayerDebuffs::default(),
             rival_ents: [0; 8],
+            mc2_life_scale: Mc2LifeScale::default(),
             player_aggro: 0,
             player_invisible: false,
             player_rebound: false,
@@ -698,6 +852,7 @@ impl Gen {
             mc2_player_drain: Mc2Quiet::default(),
             mc2_scrolls: Mc2Quiet::default(),
             mc2_spell_tokens: Mc2Quiet::default(),
+            mc2_cast_xp: Mc2XpMail::default(),
         }
     }
 
@@ -773,6 +928,7 @@ pub fn generate_features_mc1(
         tile_type: planes.tile_type.to_vec(),
         shading: planes.shading.to_vec(),
         angle: planes.angle.to_vec(),
+        ceiling: Vec::new(),
     };
     let mut g = Gen::new(
         owned,
@@ -904,7 +1060,20 @@ impl Gen {
     /// interpolated across the tile's two triangles, in engine units
     /// (one height byte = 32).
     pub(crate) fn ground_z(&self, x: u16, y: u16) -> i32 {
-        let h = |dx: u8, dy: u8| self.t.height[tile(dx, dy)] as i32;
+        Self::interp_plane(&self.t.height, x, y)
+    }
+
+    /// `sub_10C60` → `sub_B5D68` (remc2 Terrain.cpp:2158-2164): the
+    /// CAVE CEILING altitude — the exact same bilinear ×32 sampler as
+    /// the floor's, reading the second heightmap. Callers must be
+    /// cave-gated (the plane is empty off-cave; retail's array is
+    /// all-zeros there and every retail call site is cave-gated too).
+    pub(crate) fn ceiling_z(&self, x: u16, y: u16) -> i32 {
+        Self::interp_plane(&self.t.ceiling, x, y)
+    }
+
+    fn interp_plane(plane: &[u8], x: u16, y: u16) -> i32 {
+        let h = |dx: u8, dy: u8| plane[tile(dx, dy)] as i32;
         let (cx, cy) = ((x >> 8) as u8, (y >> 8) as u8);
         let (fx, fy) = ((x & 0xFF) as i32, (y & 0xFF) as i32);
         let (p1, comp);
@@ -976,6 +1145,11 @@ impl Gen {
         // Pass 3: shading over the rect grown once more (3x3 for a
         // single cell). shade = NW height - SE height + 32, as signed
         // char; clamp <28 → (s&3)+28, >40 → (s&7)+40; clear angle bit 3.
+        // MC2's twin (`sub_462A0`/`46570`) adds two DATA-variant arms,
+        // both no-ops on MC1 worlds: the non-Day shade inversion
+        // (Terrain.cpp:2030-2033, [`Gen::mc2_night_shade`]) and the
+        // cave floor↔ceiling invariant instead of the blind bit3
+        // clear (Terrain.cpp:2034-2042).
         let mut cy = sy;
         for _ in 0..y_add.wrapping_add(1) {
             let mut cx = sx;
@@ -989,8 +1163,16 @@ impl Gen {
                 } else if (s as i8) > 40 {
                     s = (s & 7) + 40;
                 }
-                self.t.shading[t] = s;
-                self.t.angle[t] &= 0xF7;
+                self.t.shading[t] = if self.mc2_night_shade.0 {
+                    64u8.wrapping_sub(s)
+                } else {
+                    s
+                };
+                if self.is_cave() {
+                    self.cave_seal_fixup(t);
+                } else {
+                    self.t.angle[t] &= 0xF7;
+                }
                 cx = cx.wrapping_add(1);
             }
             cy = cy.wrapping_add(1);
@@ -1109,6 +1291,15 @@ impl Gen {
             return true;
         }
         self.t.height[t] = v as u8;
+        // MC2's twin `sub_56F10` (EF:39534-39543): on a cave the
+        // ceiling counter-shifts by the RAW delta (dig down = roof
+        // up), saturating high at 255 and u8-truncating below zero
+        // exactly like retail's char write; the invariant is then
+        // re-asserted by the tail recompute's shading pass.
+        if self.is_cave() {
+            let c = self.t.ceiling[t] as i32 - delta as i32;
+            self.t.ceiling[t] = if c >= 255 { 255 } else { c as u8 };
+        }
         if v != 0 {
             self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
         } else {
@@ -1199,7 +1390,10 @@ impl Gen {
     }
 
     /// sub_255D0 (:28353): the -3 disc variant that never aborts.
-    fn dig_disc_minus3(&mut self, i: usize, lo: i32, hi: i32) {
+    /// (Also ≡ MC2's `sub_31F00` EF:23460 — the (10,11) scorch
+    /// ring's stamper: same template walk, same −3 dig, same
+    /// f80>>8 radius clamp.)
+    pub(crate) fn dig_disc_minus3(&mut self, i: usize, lo: i32, hi: i32) {
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as i32;
         let cy = ((e.y as u32 + 128) >> 8) as i32;
@@ -3853,6 +4047,7 @@ mod tests {
             tile_type: vec![5; GRID],
             shading: vec![32; GRID],
             angle: vec![5; GRID], // class 5 land
+            ceiling: Vec::new(),
         }
     }
 
@@ -3880,6 +4075,7 @@ mod tests {
                 tile_type: vec![0; GRID],
                 shading: vec![0; GRID],
                 angle: vec![0; GRID],
+                ceiling: Vec::new(),
             },
             assets,
             0,

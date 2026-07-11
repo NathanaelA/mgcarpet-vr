@@ -18,6 +18,7 @@ use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
 use mgc_sim::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellId};
 use mgc_sim::mc1::world::{LifeState, LoadoutView, PlayerVitals};
+use mgc_sim::mc2::cast::Mc2BookView;
 
 /// UI sprite ids (remc1 begSprTab layout; ROADMAP "Spell repertoire").
 const SPR_HILITE_LEFT: u32 = 1;
@@ -49,7 +50,23 @@ pub struct UiAssets {
     /// [0 unlocked-affordable(161), 1 unlocked-unaffordable(162)],
     /// number badge + per-level icon baked in. Empty on MC1 atlases.
     sub_uv: Vec<[[f32; 4]; 2]>,
+    /// Messaging-font glyph UV rects (texels into `atlas_rgba`), indexed
+    /// by sprite id = ASCII char + 1 (id 33 = space); None for absent
+    /// glyphs. The masks are baked WHITE — text is tinted at draw time,
+    /// faithful to the original's `DrawText(text, x, y, color)` where the
+    /// glyph is a coverage mask and `color` picks the ink. Empty when the
+    /// bundle carries no font.
+    glyph_uv: Vec<Option<[f32; 4]>>,
+    /// The font's line height (tallest glyph cell), source pixels.
+    line_height: f32,
 }
+
+/// Inter-glyph advance added to each glyph's own width, source pixels.
+/// The HSPR font glyphs carry their own side-bearing, so 0 tracks the
+/// original's `x += GetLetterWidth` walk.
+const GLYPH_SPACING: f32 = 0.0;
+/// Fallback advance for an unmapped byte (source pixels).
+const GLYPH_FALLBACK_ADVANCE: f32 = 6.0;
 
 /// Icon treatment when compositing a pane tile — the three original
 /// blit rules (trace §2.4): `DrawBitmap` raw, `DrawTransparentBitmap`
@@ -139,6 +156,7 @@ impl UiAssets {
         palette: &[[u8; 4]; 256],
         blend_lut: Option<&[u8]>,
         book_tiles: bool,
+        font: Option<(&SpriteIndex, &[u8])>,
     ) -> Self {
         let resolve = |src: u8, dest: u8| -> u8 {
             match blend_lut {
@@ -200,7 +218,11 @@ impl UiAssets {
         let grid_y0 = base_h + tile_rows * tile_h;
         let sub_y0 = grid_y0 + grid_rows * gh;
 
-        let total_h = sub_y0 + sub_rows * sh;
+        // The messaging font is appended as a WHITE mask block below all
+        // the composited tiles (its glyphs are tinted at draw time).
+        let font_y0 = sub_y0 + sub_rows * sh;
+        let font_h = font.map_or(0, |(fi, _)| fi.atlas_height as usize);
+        let total_h = font_y0 + font_h;
         let mut rgba = vec![0u8; base_w * total_h * 4];
 
         // Base atlas = RAW palette colors, no blend. The original draws
@@ -345,6 +367,42 @@ impl UiAssets {
             }
         }
 
+        // Messaging font: copy its 1-bit glyph atlas as a WHITE mask
+        // block at y=font_y0, and record each glyph's uv (indexed by
+        // sprite id = ASCII char + 1). Ink is baked white so the draw
+        // path can tint any colour, matching DrawText's `color` arg.
+        let mut glyph_uv = Vec::new();
+        let mut line_height = 0.0f32;
+        if let Some((fi, fpx)) = font {
+            let fw = (fi.atlas_width as usize).min(base_w);
+            for y in 0..fi.atlas_height as usize {
+                for x in 0..fw {
+                    if fpx[y * fi.atlas_width as usize + x] != 0 {
+                        let o = ((font_y0 + y) * base_w + x) * 4;
+                        rgba[o..o + 4].copy_from_slice(&[255, 255, 255, 255]);
+                    }
+                }
+            }
+            glyph_uv = fi
+                .sprites
+                .iter()
+                .map(|e| {
+                    e.frames
+                        .first()
+                        .filter(|_| e.width > 0 && e.height > 0)
+                        .map(|f| {
+                            [
+                                f.x as f32,
+                                (font_y0 as u32 + f.y as u32) as f32,
+                                e.width as f32,
+                                e.height as f32,
+                            ]
+                        })
+                })
+                .collect();
+            line_height = fi.sprites.iter().map(|e| e.height).max().unwrap_or(0) as f32;
+        }
+
         // Frame rects per sprite id in the base atlas region (the
         // map's icon markers crop from here).
         let sprite_rects = index
@@ -365,7 +423,84 @@ impl UiAssets {
             sprite_rects,
             pane_uv,
             sub_uv,
+            glyph_uv,
+            line_height,
         }
+    }
+
+    /// The messaging-font line height in source pixels (tallest glyph
+    /// cell) — the caller's vertical metric for stacking lines/banners.
+    /// Retained for the multi-line callers on the deaths/objectives
+    /// track (`text_quads` already advances newlines internally).
+    #[allow(dead_code)]
+    pub fn font_line_height(&self) -> f32 {
+        self.line_height
+    }
+
+    /// Whether the bundle carried a messaging font.
+    pub fn has_font(&self) -> bool {
+        !self.glyph_uv.is_empty()
+    }
+
+    /// Advance width of one byte in the messaging font (source pixels):
+    /// the glyph's own width plus tracking; the original walks
+    /// `x += GetLetterWidth` (proportional).
+    fn glyph_advance(&self, b: u8) -> f32 {
+        match self.glyph_uv.get(b as usize + 1).copied().flatten() {
+            Some(uv) => uv[2] + GLYPH_SPACING,
+            None => GLYPH_FALLBACK_ADVANCE + GLYPH_SPACING,
+        }
+    }
+
+    /// Total advance width of `s` in the messaging font at scale 1
+    /// (source pixels), for centering/right-alignment/clipping. Control
+    /// bytes (tab/newline) count as their nominal advance; callers pass
+    /// single lines. Retained for the banner callers on the deaths/
+    /// objectives track (the plain toast is left-aligned).
+    #[allow(dead_code)]
+    pub fn text_width(&self, s: &str) -> f32 {
+        s.bytes().map(|b| self.glyph_advance(b)).sum()
+    }
+
+    /// Build quads for `s` in the messaging font, top-left at screen
+    /// pixel (x, y), tinted `color`, each source pixel scaled by `scale`.
+    /// Walks the bytes blitting glyph id = byte+1 and advancing by the
+    /// glyph width — the original's `DrawText_2BC10` / `sub_6F940`.
+    /// `\n` = newline (advance y by the line height, x back to the
+    /// start); `\t` = one space-glyph width of horizontal space.
+    pub fn text_quads(&self, s: &str, x: f32, y: f32, color: [f32; 4], scale: f32) -> Vec<UiQuad> {
+        let mut quads = Vec::with_capacity(s.len());
+        let (mut cx, mut cy) = (x, y);
+        for b in s.bytes() {
+            match b {
+                b'\n' => {
+                    cy += self.line_height * scale;
+                    cx = x;
+                    continue;
+                }
+                b'\t' => {
+                    // Retail advances tab (and space) by the space glyph
+                    // width (`GetLetterWidth_6FC10` = glyph[33].width).
+                    cx += self.glyph_advance(b' ') * scale;
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(uv) = self.glyph_uv.get(b as usize + 1).copied().flatten() {
+                let (gw, gh) = (uv[2], uv[3]);
+                if gh > 0.0 && gw > 0.0 {
+                    quads.push(UiQuad {
+                        rect: snap([cx, cy, gw * scale, gh * scale]),
+                        uv,
+                        tint: color,
+                    });
+                }
+                cx += (gw + GLYPH_SPACING) * scale;
+            } else {
+                cx += (GLYPH_FALLBACK_ADVANCE + GLYPH_SPACING) * scale;
+            }
+        }
+        quads
     }
 
     /// A pre-composited MC2 selector grid tile (see `pane_uv`); None
@@ -429,6 +564,28 @@ impl UiAssets {
     pub fn sprite_dims(&self, id: usize) -> Option<(f32, f32)> {
         let (_, _, w, h) = self.sprite_rects.get(id).copied().flatten()?;
         (w != 0 && h != 0).then_some((w as f32, h as f32))
+    }
+
+    /// The top-of-screen notification anchor in 640-native HUD coords:
+    /// the LEFT edge of the wizard info-boxes (just right of the radar
+    /// cap [40]) and just BELOW the panel strip [41] — where the toast
+    /// belongs relative to OUR 640-native HSPR HUD. (Retail's 320-native
+    /// `132,50` literal was authored against the half-size MSPR strip and
+    /// doesn't map onto the bigger HSPR panels; anchoring to the live
+    /// sprite geometry keeps it below the castle/balloon boxes at any
+    /// resolution.) Left-aligned from this x.
+    pub fn hud_notification_anchor(&self) -> (f32, f32) {
+        let radar_w = self.sprite_dims(SPR_PANEL_BG).map_or(124.0, |(w, _)| w);
+        let panel_h = self
+            .sprite_dims(SPR_WIZ_BG)
+            .or_else(|| self.sprite_dims(SPR_PANEL_BG))
+            .map_or(45.0, |(_, h)| h);
+        // x: 2px inset + radar width = the sub-panel origin (v22 in
+        // hud_quads), plus a small gap so the first glyph clears the
+        // radar's right edge instead of kissing it (retail leaves a
+        // little air there — player 2026-07-14). y: 2px top inset +
+        // panel height + a 2px gap below the info-boxes.
+        (2.0 + radar_w + 6.0, 2.0 + panel_h + 2.0)
     }
 
     /// Blit `begSprTab[id]` at screen pixel (x, y), opaque. For the
@@ -807,6 +964,10 @@ const MANA_WHITE: [f32; 4] = [0.95, 0.95, 0.95, 1.0];
 /// byte_99B58[1+2*owner]) — GREY, not blue (player 2026-07-07); the
 /// partial mana toward the next cast, under the equipped-spell icon.
 const METER_GREY: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+/// The flyout XP bar (EF:22668-70): background = CLRD code 0,
+/// fill = CLRD 3840 (0xF00 — pure red).
+const XP_BAR_BG: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+const XP_BAR_RED: [f32; 4] = [0.85, 0.1, 0.05, 1.0];
 /// Locked-spell overlay (sub_24230 :27860 + sub_23D40 :27767): when a
 /// spell's castle_req (+132) exceeds the linked castle's STORED mana
 /// (+140) — or no castle stands — retail remaps the whole cell/panel
@@ -883,6 +1044,7 @@ pub fn hud_quads(
     transparent: bool,
     alert_blink: bool,
     mc2: bool,
+    mc2_book: Option<&Mc2BookView>,
     w: f32,
     _h: f32,
 ) -> Vec<UiQuad> {
@@ -1118,19 +1280,70 @@ pub fn hud_quads(
     // meter at y=+36: a progress bar (partial mana toward the next cast)
     // plus a row of dots (whole casts currently affordable) — sub_23D40
     // :27700-34.
-    for (spell, px) in [(loadout.left, 510.0), (loadout.right, 574.0)] {
+    for (hand, px) in [(0usize, 510.0), (1usize, 574.0)] {
+        // The bound spell + cast-in-progress state per column: MC1
+        // reads the loadout; MC2 reads the native spell book (the
+        // Phase-4.2 quick-slots + the armed cast window).
+        let (spell, active) = if let Some(bv) = mc2_book.filter(|_| mc2) {
+            let b = if hand == 0 { bv.left } else { bv.right };
+            let sp = u8::try_from(b).ok();
+            (sp, sp.is_some_and(|sp| bv.armed[sp as usize]))
+        } else {
+            let sp = if hand == 0 {
+                loadout.left
+            } else {
+                loadout.right
+            };
+            (sp, sp.is_some_and(|sp| loadout.cooldown[sp as usize] > 0.0))
+        };
         // Frame [2] = the CAST-IN-PROGRESS highlight (sub_23D40 :27675:
         // `a3x->var_48` = the burst counter, nonzero only while firing/
         // channeling), else the idle frame [1]. Equipped ≠ casting — the
         // highlight flashes on projectile casts and stays lit for
         // duration effects (speed etc.), driven by the burst counter.
-        let active = spell.is_some_and(|sp| loadout.cooldown[sp as usize] > 0.0);
         let frame = if active { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
         push_opt(
             &mut quads,
             assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint),
         );
-        if let Some(sp) = spell.filter(|_| !mc2) {
+        if mc2 {
+            // MC2 hand panel: the dedicated BIG spell-icon run —
+            // retail's `DrawSpellIcon_2E260` draws
+            // `posistruct[model + SPELL_FIREBALL_BIG]` = sprite
+            // 123 + spell (GameUI.cpp:374; the CTRL grid's small
+            // run at 97+ is DIFFERENT art — playtest-12 round 2,
+            // "weird artefact"). Same MSPR/HSPR bank, icon at the
+            // frame origin like the MC1 panel; the meter below is
+            // retail's DrawLine primitives
+            // (docs/traces/mc2-hud-hand-icons.md).
+            let Some(bv) = mc2_book else { continue };
+            let Some(sp) = spell else { continue };
+            push_opt(
+                &mut quads,
+                assets.sprite_quad(123 + sp as usize, px * s, 2.0 * s, s),
+            );
+            // The selected LEVEL numeral (retail's per-level "I/II/III"
+            // art), top-right of the big icon — the SAME baked sprite the
+            // CTRL-pane flyout uses (`MC2_SPR_SUB_NUM + level`), not
+            // hand-drawn text (docs/traces/mc2-hud-hand-icons.md §2d).
+            let level = bv.sel.get(sp as usize).copied().unwrap_or(0).min(2) as usize;
+            let (nw, _nh) = assets
+                .sprite_dims(MC2_SPR_SUB_NUM + level)
+                .unwrap_or((10.0, 12.0));
+            push_opt(
+                &mut quads,
+                assets.sprite_quad(MC2_SPR_SUB_NUM + level, (px + 60.0 - nw) * s, 3.0 * s, s),
+            );
+            let cost = bv.cost[sp as usize].max(1);
+            let mana = loadout.mana;
+            let mx = (px + 4.0) * s;
+            let my = (2.0 + 36.0) * s;
+            let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
+            quads.push(solid([mx, my, partial * s, 4.0 * s], METER_GREY));
+            meter_dots(&mut quads, mx, my, s, s, (mana / cost).min(54) as usize);
+            continue;
+        }
+        if let Some(sp) = spell {
             // Icon drawn raw at the FRAME ORIGIN (sub_23D40's
             // `DrawBitmap(a1, a2, icon)` — the art's own margins do
             // the placement), native size × the HUD scale.
@@ -1380,40 +1593,6 @@ pub const MC2_SPELL_NAMES: [&str; 26] = [
     "Cave-In",
 ];
 
-/// The CROSS-COLUMN CAST BRIDGE (interim, until the Phase-4.2 MC2
-/// spell column): pane spell (MC2 `spell_t`) → the MC1 manifestation
-/// that stands in for it, so selecting in the MC2 pane equips a
-/// castable hand today. None = no MC1 analogue (selectable in the UI,
-/// equips nothing, logged). Two MC2 quakes share MC1's Earthquake.
-pub const MC2_CAST_BRIDGE: [Option<u8>; 26] = [
-    Some(0),  // fireball -> Fireball
-    Some(3),  // possession -> Possess
-    Some(16), // castle -> Create Castle
-    Some(2),  // speed_up -> Accelerate
-    None,     // metamorph
-    Some(1),  // heal -> Heal
-    Some(4),  // shield -> Shield
-    Some(15), // lightning -> Lightning Bolt
-    Some(14), // rebound -> Rebound
-    Some(7),  // meteor -> Meteor
-    Some(10), // teleport -> Teleport
-    Some(12), // invisible -> Invisible
-    Some(5),  // beyond_sight -> Beyond Sight
-    Some(13), // steal_mana -> Steal Mana
-    Some(11), // duel -> Duel to the Death
-    Some(6),  // tremor -> Earthquake
-    Some(9),  // crater -> Crater
-    Some(6),  // earthquake -> Earthquake
-    Some(8),  // volcano -> Volcano
-    Some(17), // summon_army -> Undead Army
-    None,     // gravity_well
-    None,     // whirlwind
-    None,     // fools_mana
-    None,     // magic_mine
-    None,     // alliance
-    None,     // cave_in
-];
-
 /// MC2 grid order = identity over `spell_t` (`spellIndex_D94FF`,
 /// trace §0/§3): row 0 = 0..12, row 1 = 13..25.
 const MC2_GRID_ORDER: [u8; 26] = [
@@ -1480,6 +1659,11 @@ pub struct SelectorView<'a> {
     /// shot meter).
     pub mana: u32,
     pub cost: &'a [u32],
+    /// Effective spell XP (banked + volatile) — the flyout's per-tier
+    /// unlock-progress bar (EF:22633-71). Empty on MC1.
+    pub xp: &'a [i32],
+    /// Per-tier `xpos1` thresholds (single-player ladder), same bar.
+    pub xpos: &'a [[i32; 3]],
 }
 
 /// What the cursor is over, for the app's click/commit logic.
@@ -1861,9 +2045,38 @@ pub fn selector_quads(
                     assets.sprite_quad_rect_tint(MC2_SPR_SUB_GOLD, cell, WHITE),
                 );
             }
+            // The per-tier XP progress bar (EF:22633-71): unlocked
+            // boxes below the third draw a 54×2 line at (+6,+28) —
+            // background CLRD 0, fill CLRD 3840 (0xF00 red). The
+            // in-progress level (l == max) fills
+            // (xp − xpos1[l]) / (xpos1[l+1] − xpos1[l]); levels
+            // already passed draw the full bar.
+            if l + 1 < pane.levels {
+                let (Some(&xp), Some(lad)) = (view.xp.get(spell), view.xpos.get(spell)) else {
+                    continue;
+                };
+                let bar = [
+                    cell[0] + 6.0 * g.sx,
+                    cell[1] + 28.0 * g.sy,
+                    54.0 * g.sx,
+                    2.0 * g.sy,
+                ];
+                quads.push(solid(bar, XP_BAR_BG));
+                let frac = if l < max {
+                    1.0
+                } else {
+                    let (x0, x1) = (lad[l as usize], lad[l as usize + 1]);
+                    if x1 > x0 {
+                        ((xp - x0) as f32 / (x1 - x0) as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                };
+                if frac > 0.0 {
+                    quads.push(solid([bar[0], bar[1], bar[2] * frac, bar[3]], XP_BAR_RED));
+                }
+            }
         }
-        // (The per-tier XP progress bar, EF:22633-22671, waits on the
-        // MC2 experience model — Phase 4.2.)
     }
 
     (quads, hover)

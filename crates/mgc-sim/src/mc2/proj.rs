@@ -20,8 +20,9 @@
 //!   pre-lock `word_0x96_150`. Until the spell column lands, a
 //!   target-less flyer snapshots its aim once (the retail else-arm,
 //!   EF:62914-16) and flies straight.
-//! - Water splash: retail spawns (10,5) (EF:62957-63); the (10,5)
-//!   ctor/tick are unported — counted as a misfit, flyer despawns.
+//! - Water splash: retail spawns (10,5) (EF:62957-63) — ported
+//!   (`mc2_spawn_splash`), gated inside the terrain-contact branch
+//!   per docs/traces/mc2-projectile-terrain-water.md §3.
 //! - An impact whose (f68, f69) effect is unported applies its f44
 //!   as channel-0 area damage at the impact point (the effect IS the
 //!   damage carrier in retail) and counts the misfit — damage lands,
@@ -41,6 +42,23 @@ use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 pub(crate) const F_MC2PROJ: u32 = 1 << 29;
 /// byte[0] bit 1 — the flyer's "aim acquired" latch (EF:62904).
 const F_AIMED: u32 = 2;
+
+/// The virtual projectile the acquisition scan scores from — either
+/// a live flyer on its first tick (`mc2_autoaim`) or the crosshair
+/// instrument's would-be launch (`World::mc2_aim_preview`).
+pub(crate) struct AimProbe {
+    pub x: u16,
+    pub y: u16,
+    pub z: i16,
+    pub yaw: u16,
+    pub pitch: u16,
+    /// The PROJECTILE model — keys the candidate lists.
+    pub model: u8,
+    pub own: u16,
+    /// Lightning's wizard range = minSpeed · maxLife (EF:54896);
+    /// unused for every other model.
+    pub reach: i64,
+}
 
 impl Gen {
     // ---- class-9 creators ---------------------------------------------------
@@ -67,6 +85,75 @@ impl Gen {
         self.refill_life(i);
         self.mc2_set_sprite(i, 340);
         Some(i)
+    }
+
+    /// `sub_4D500` (EF:34810) — the (9,3) METEOR SHOT (spell 9's
+    /// projectile; the doomsday pyramid's case-9 summon): action 3,
+    /// speed 384, life 21, mana 50, row 60 (yaw/pitch caps 22),
+    /// sprite 76, untargetable. The launcher arms impact/damage/fuse
+    /// (docs/traces/mc2-class9-m3-m26.md §1). No RNG in the ctor.
+    pub(crate) fn mc2_spawn_meteor_shot(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 9;
+            e.model65 = 3;
+            e.tick70 = 3;
+            e.f126 = 384;
+            e.f128 = 384;
+            e.f140 = 50;
+            e.max_life = (0x2000 / 384) as u32; // 21
+            e.row156 = 60;
+            e.flags = (e.flags & !8) | F_MC2PROJ;
+        }
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 76);
+        Some(i)
+    }
+
+    /// `sub_4E180` (EF:35266) — the (9,26) WHIRLWIND SEED (spell 21's
+    /// projectile; the pyramid's case-8 summon): the meteor-shot
+    /// numbers under action 27 with sprite 320. Its impact
+    /// owner-lock-clear (`sub_67890` EF:59181 — a player-avatar
+    /// homing-lock release) only fires on the 4.2 cast path; for the
+    /// pyramid owner it is retail's own no-op, so it banks with the
+    /// spell column (same doc §3.2).
+    pub(crate) fn mc2_spawn_whirlwind_seed(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.mc2_spawn_meteor_shot(x, y, z)?;
+        self.ent[i].model65 = 26;
+        self.ent[i].tick70 = 27;
+        self.mc2_set_sprite(i, 320);
+        Some(i)
+    }
+
+    /// `sub_66180` (EF:63340, action 3) — the meteor shot's wrapper
+    /// around the flyer core: every tick lay one damage-suppressed
+    /// (10,0) spark (dword |= 0x10080) at a ±64-box jitter around the
+    /// shot (2 draws of its own stream), life 4, frame 3, yaw
+    /// inherited. Retail lays it even on the impact tick (the class
+    /// stays set until the removal pass). The fuse stamp onto the
+    /// impact entity (`v1x->maxLife/life = byte_0x46_70`) is IDENTITY
+    /// for the pyramid values (fuse 10 = the meteor ctor's maxLife
+    /// 10) — the charge-tiered player-cast fuse lands with 4.2.
+    pub(crate) fn mc2_meteor_shot_tick(&mut self, i: usize, ctx: &MobCtx) {
+        self.mc2_flyer_tick(i, ctx);
+        let (x, y, z, id, yaw) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f30)
+        };
+        let jx = (self.ent_rand(i) % 0x81) as u16;
+        let jy = (self.ent_rand(i) % 0x81) as u16;
+        let sx = x.wrapping_add(jx).wrapping_sub(160);
+        let sy = y.wrapping_add(jy).wrapping_sub(160);
+        if let Some(s) = self.mc2_spawn_fire(sx, sy, z) {
+            let e = &mut self.ent[s];
+            e.flags |= 0x10080;
+            e.id24 = id;
+            e.act_life = 4;
+            e.frame88 = 3;
+            e.f30 = yaw;
+        }
     }
 
     /// `sub_4DC40` (EF:35071) — the (9,20) lob: action 21, speed 394,
@@ -160,10 +247,95 @@ impl Gen {
         }
     }
 
+    /// `sub_50780` (EF:36912) — the (10,65) STAGGER stamp ctor:
+    /// action 0x46 = 70, byte[0] = (&0xF6)|1, position only — no
+    /// life override, not map-linked, no extents, no sprite, no RNG.
+    /// A one-tick carrier the projectile impact seam aims at its
+    /// victim (the flyer copy hands it `word_0x96_150` → f146).
+    pub(crate) fn mc2_spawn_stagger(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        let e = &mut self.ent[i];
+        e.class64 = 10;
+        e.model65 = 65;
+        e.tick70 = 70;
+        e.flags = (e.flags & !0x9) | 1;
+        e.x = x;
+        e.y = y;
+        e.z = z;
+        Some(i)
+    }
+
+    /// `sub_507C0` (EF:36928) — the (10,66) PARALYZE stamp: the
+    /// stagger ctor + subSpell 200 (the mail its tick delivers).
+    pub(crate) fn mc2_spawn_paralyze(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.mc2_spawn_stagger(x, y, z)?;
+        self.ent[i].model65 = 66;
+        self.ent[i].tick70 = 71;
+        self.ent[i].f140 = 200;
+        Some(i)
+    }
+
+    /// `sub_38E70` (EF:28400, action 0x46) / `sub_38F70` (EF:28424,
+    /// action 0x47) — the one-tick wizard-debuff stamps: if the
+    /// carried victim (`word_0x96_150` → f146) is a wizard body
+    /// (class-3 model-0 / the human player), kick it BACKWARD
+    /// (`moveBoost_0x1E_30 = -80`) with the 54..57 grunt
+    /// (`54 + rand&3` on the stamp's own stream); the paralyze
+    /// variant additionally mails its subSpell (200, `sub_11900`)
+    /// and arms the mobilize stun. Then self-despawn.
+    ///
+    /// The flight-struct channels have ported homes since the 4.4
+    /// flight arm: `moveSpeed_0x14C_332` 0..3 stagger ramp (65) and
+    /// the `mobilizeCounter_0x14E_334` stun latch (66) queue through
+    /// `Gen::mc2_debuffs` into the boundary's
+    /// `flight::Mc2Ext`; the kick rides `player_knock` (backward =
+    /// pyaw + half turn — the retail `moveBoost = −80`, EF:28411/
+    /// 28437, both variants). The `SetPaletteModification_5C830`
+    /// red tint stays presentation-banked (the app can read the
+    /// slow level off the ext). Rival bodies take the mail + grunt
+    /// (their brain owns their movement — no positional kick
+    /// channel).
+    pub(crate) fn mc2_debuff_stamp_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let (victim, id, amt) = {
+            let e = &self.ent[i];
+            (e.f146, e.id24, e.f140 as u32)
+        };
+        let paralyze = self.ent[i].tick70 == 71;
+        if victim == PLAYER_TARGET {
+            let grunt = 54 + (self.ent_rand(i) & 3) as u8;
+            self.snd_player(grunt);
+            self.player_knock = ((ctx.pyaw.wrapping_add(1024)) & 0x7FF, 80);
+            if paralyze {
+                self.mc2_debuffs.stun = self.mc2_debuffs.stun.saturating_add(1);
+                self.mail_write(MailTarget::Player, 0, amt, id);
+            } else {
+                self.mc2_debuffs.slow = self.mc2_debuffs.slow.saturating_add(1);
+            }
+        } else {
+            let v = victim as usize;
+            if v != 0
+                && v < self.ent.len()
+                && self.ent[v].class64 == 3
+                && self.ent[v].model65 == 0
+                && self.ent[v].flags & 0x400 == 0
+            {
+                let grunt = 54 + (self.ent_rand(i) & 3) as u8;
+                self.snd(grunt, v);
+                if paralyze {
+                    self.mail_write(MailTarget::Pool(v), 0, amt, id);
+                }
+            }
+        }
+        self.ent[i].flags |= 0x400;
+    }
+
     /// Impact-effect spawn (the sub_65820 expiry block, EF:62972-96):
     /// spawn `(f68, f69)` at the flyer's position, hand it the id,
-    /// heading, victim and carried damage. Unported effects apply the
-    /// damage directly (module-doc APPROX) and count the misfit.
+    /// heading, victim and carried damage. Routed: fire, big
+    /// explosion, meteor, whirlwind, blast23, and the (10,65)/(10,66)
+    /// debuff stamps (the (9,20)/(9,21) lobs' payloads). Unported
+    /// effects apply the damage directly (module-doc APPROX) and
+    /// count the misfit.
     fn mc2_proj_impact(&mut self, i: usize, victim: u16, ctx: &MobCtx) {
         let (fc, fm, x, y, z, id, yaw, dmg) = {
             let e = &self.ent[i];
@@ -172,6 +344,211 @@ impl Gen {
         let spawned = match (fc, fm) {
             (10, 0) => self.mc2_spawn_fire(x, y, z),
             (10, 1) => self.mc2_spawn_big_explosion(x, y, z),
+            // The possession delivery (the (9,17) player cast): the
+            // pulse is the ch1 claim mail, not damage — the same
+            // writer gate the possess column traced
+            // (docs/traces/mc2-possession-delivery.md).
+            (10, 12) => {
+                self.area_write(i, 1, dmg as u32, ctx, false, false);
+                None
+            }
+            // Possession tiers 1/2 (docs/spell-audit/possession.md):
+            // the weak claim pulse PLUS a persistent attract aura —
+            // the Mana Magnet (model 54, range 15 tiles) / Mana Lock
+            // (model 69, range 20). The aura (`mc2_spawn_aura` +
+            // `mc2_aura_tick`) drags unowned mana spheres to the
+            // caster and merges under the caster's owner. Range = the
+            // tier's `subSpell` (15/20, CD spells.bin); the ctor
+            // default 14 is for authored magnets.
+            //
+            // The magnet manifests ONLY when the possession actually
+            // CLAIMS A MANA SPHERE — retail's magnet rides the claimed
+            // ball. A possession bolt that misses mana "evaporates
+            // without trace" and must NOT drop a free-floating magnet
+            // at its empty-space / terrain detonation (player-confirmed
+            // 2026-07-13: the old unconditional spawn made a redundant
+            // magnet wherever the bolt happened to expire). Building /
+            // worm possession does NOT magnet either — the player
+            // suspects buildings never attracted mana; gate to spheres
+            // pending a retail trace. (T2's building-lock bit — forced
+            // claim + `byte[2]&0x20` — and the deferred building-attract
+            // question are both the rival track's.)
+            (10, 54) | (10, 69) => {
+                self.area_write(i, 1, dmg as u32, ctx, false, false);
+                let claimed_mana = victim != PLAYER_TARGET
+                    && (victim as usize) < self.ent.len()
+                    && matches!(
+                        (
+                            self.ent[victim as usize].class64,
+                            self.ent[victim as usize].model65,
+                        ),
+                        (10, 39) | (10, 40) | (10, 57)
+                    );
+                if claimed_mana {
+                    if let Some(a) = self.mc2_spawn_aura(x, y, z) {
+                        self.ent[a].model65 = fm;
+                        self.ent[a].f26 = if fm == 54 { 15 } else { 20 };
+                        self.ent[a].id24 = id;
+                    }
+                }
+                None
+            }
+            // The crater spell's scorch ring (spell 16's arm). Retail
+            // carve geometry is tier-INDEPENDENT (radius 32, −3/tick,
+            // 40-tick life — `sub_31FB0` EF:23490); only the burn
+            // damage scales, which rides `f140` below
+            // (docs/spell-audit/quake-family.md).
+            (10, 11) => self.mc2_spawn_scorch_ring(x, y, z),
+            // Meteor (spell 9): the action wrapper `sub_66180`
+            // (EF:63372-73) overrides the impact's maxLife with the
+            // tier charge `byte_0x46_70` (life_0x1A = 2/5/10) — the
+            // per-tier fuse. Without it every tier ran the ctor
+            // default 10 ticks/rings identically (T0 too wide, T2
+            // "not powerful enough" — docs/spell-audit/meteor.md).
+            (10, 17) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_meteor(x, y, z);
+                if let Some(s) = s {
+                    let ml = (charge as u32).max(1);
+                    self.ent[s].max_life = ml;
+                    self.ent[s].act_life = ml as i32;
+                }
+                s
+            }
+            // The ground/quake family (docs/spell-audit/quake-family
+            // .md + gravity-cavein.md): each spell's projectile impact
+            // routes to a terrain effect whose handler is already
+            // ported — they were only missing this dispatch arm and
+            // fell to the misfit branch below ("effect absent"). The
+            // impact tail propagates the tier's subSpell→f140 (damage)
+            // and leaves f71 as the ctor's phase seed.
+            (10, 71) => self.mc2_spawn_fissure(x, y, z), // Tremor (spell 15)
+            // Earthquake (spell 17): the trail's TRAVEL DISTANCE scales
+            // with the tier — the action wrapper (like whirlwind's
+            // `sub_678E0`, EF:59202) overrides the spawned trail's life
+            // with `8 * byte_0x46_70` (life_0x1A = 16/32/64) → 128/256/512
+            // ticks = ~2× reach per level (player-confirmed 2026-07-14).
+            // The old port kept the ctor's fixed 128 (= 8·16, the tier-0
+            // value) so tiers 1/2 never travelled further.
+            (10, 15) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_fire_trail(x, y, z);
+                if let Some(s) = s {
+                    let ml = 8 * (charge as u32).max(1);
+                    self.ent[s].max_life = ml;
+                    self.ent[s].act_life = ml as i32;
+                }
+                s
+            }
+            (10, 9) => self.mc2_spawn_dome(x, y, z), // Volcano (spell 18)
+            (10, 67) => self.mc2_spawn_flood(x, y, z), // Gravity Well (spell 20)
+            // The whirlwind's action wrapper `sub_678E0` (class-9
+            // action 27, EF:59109-22) overrides `AddWind`'s ctor life
+            // with `8 * byte_0x46_70` (the tier charge) — THIS is what
+            // scales Tornado I/II/III (row-21 tier lives 5/10/10 →
+            // 40/80/80 ticks). Without it every tier cast at the ctor
+            // default 500 and roamed identically (player-reported
+            // 2026-07-13 "Tornado I/II/III nearly identical").
+            (10, 22) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_whirlwind(x, y, z);
+                if let Some(s) = s {
+                    let ml = 8 * charge as u32;
+                    self.ent[s].max_life = ml;
+                    self.ent[s].act_life = ml as i32;
+                }
+                s
+            }
+            // The CHARGED/repeat fireball's firestorm (spell 0, tier
+            // life>=2 → arm 28/(10,76)): retail's action `sub_65B50`
+            // (EF:246b50) spawns the (10,76) fire orb via `sub_65C20`,
+            // then overrides the head's maxLife to 30 — a brief burst
+            // vs the level's 80-life authored firestorm; the chain
+            // despawns with the head. Missing here → the (10,76) impact
+            // fell to the misfit arm and degraded to a bare damage
+            // write (player-reported "misfit (10,76) x1" 2026-07-13).
+            (10, 76) => {
+                let s = self.mc2_spawn_fire_orb(x, y, z);
+                if let Some(s) = s {
+                    self.ent[s].max_life = 30;
+                    self.ent[s].act_life = 30;
+                }
+                s
+            }
+            // Steal Mana (13): the (10,25) burst stamps the struck
+            // wizard's channel-3 "steal" inbox (retail `sub_33E20` →
+            // `sub_10C80` type-3, EF:24817). The ch3 consumers are
+            // already ported and drain the victim's personal mana +
+            // credit the caster (rivals.rs `mc2_rival_intake`, world.rs
+            // `apply_player_damage`). Retail spawns the burst ONLY on a
+            // direct class-3 model-0/1 wizard hit (EF:63537) — so gate
+            // on the victim: terrain / creature fizzles. Amount = the
+            // tier's `sub_spell` (f44 = `dmg`): L1 2000 / L2 4000 / L3
+            // 10. The bolt's u8 `f71` can't carry 2000, so we stamp
+            // `mail[3]` DIRECTLY (the drain amount, not retail's tier
+            // byte). L3's castle-% drain + (10,39) sphere re-emit is the
+            // deferred tail — it lands here as the flat 10-point
+            // fallback (faithful when the victim has no castle). The AoE
+            // spread to OTHER nearby wizards is a refinement (direct
+            // victim only for now). docs/spell-audit/steal-mana.md §5.
+            (10, 25) => {
+                let amt = dmg as u32;
+                if victim == PLAYER_TARGET {
+                    self.player_mail[3] = (amt, id);
+                } else if victim != 0
+                    && (victim as usize) < self.ent.len()
+                    && self.ent[victim as usize].class64 == 3
+                    && matches!(self.ent[victim as usize].model65, 0 | 1)
+                {
+                    self.ent[victim as usize].mail[3] = (amt, id);
+                }
+                None
+            }
+            // Magic Mine (spell 23): the (9,29) carrier lands and places
+            // a PERSISTENT proximity mine `(10,78)` (`sub_50840`), not a
+            // fireball. The carrier arrives ~15 tiles ahead (maxLife 10 ×
+            // speed 384 fuse), snapped to ground by the spawner. It
+            // carries the tier lifespan (f44 = subSpell = dmg) and the
+            // tier index (f71 = charge); the impact tail stamps the owner
+            // (id24). docs/spell-audit/magic-mine.md.
+            (10, 78) => {
+                let tier = self.ent[i].f71;
+                self.mc2_spawn_magic_mine(x, y, tier, dmg as i32)
+            }
+            // Summon Army (spell 19): the (9,24) carrier lands and spawns
+            // a ring of allied class-5 creatures (`sub_51800`→`sub_3A5B0`
+            // node ring, collapsed to a direct ring here). The creature
+            // MODEL rides f71 (19/2 firefly-or-bee, 25 Cymmerian, 16
+            // wyvern), which also sets the army size. NOT a quake — the
+            // "byte_0x44_68 = 72" is a MODEL, re-traced (player-confirmed;
+            // docs/spell-audit/summon-creatures.md Part B).
+            (10, 72) => {
+                let model = self.ent[i].f71;
+                self.mc2_spawn_summon_ring(x, y, model, id);
+                None
+            }
+            (10, 23) => self.mc2_spawn_blast23(x, y, z),
+            // Lightning L1/L2 storm burst (`sub_66FD0`'s hard-coded
+            // `(10,38)` spawn, EF:58813). Full retail internals (the
+            // chained second-order `(9,9)` beam, exact life/sprite) are
+            // untraced — interim: a one-shot area-damage flash carrying
+            // the tier's subSpell (via the f140 tail below), so the
+            // storm is visible + damaging and the (9,9) misfit is gone.
+            (10, 38) => self.mc2_spawn_lightning_burst(x, y, z),
+            (10, 65) => self.mc2_spawn_stagger(x, y, z),
+            (10, 66) => self.mc2_spawn_paralyze(x, y, z),
+            // The Cave-In ground effect: the action-31 wrapper's
+            // post-impact fixup rides here (sub_67910 EF:59218-30 —
+            // maxLife = the tier charge, phase reset to 0).
+            (10, 89) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_cave_in(x, y, z);
+                if let Some(s) = s {
+                    self.ent[s].max_life = charge as u32;
+                    self.ent[s].f71 = 0;
+                }
+                s
+            }
             _ => {
                 self.note_misfit(fc as u16, fm as u16);
                 let amt = dmg as u32;
@@ -186,16 +563,147 @@ impl Gen {
             e.f146 = victim;
             e.f140 = dmg as i32; // subSpellIndex rides onto the effect
         }
+        // The impact XP award (`sub_6D8B0(id, spell, 1)` on a victim
+        // hit — EF:63189 fireball, EF:58411 lightning, the §1.1
+        // table): player casts carry their spell index in f40; the
+        // world tick drains the mail into the book. Creature bolts
+        // (owner ≠ the human wizard) never award — the class-3
+        // model-0 gate.
+        if victim != 0 && id == PLAYER_TARGET && self.ent[i].flags & F_MC2PROJ != 0 {
+            let spell = self.ent[i].f40;
+            if spell < 26 {
+                self.mc2_cast_xp.0.push((id, spell));
+            }
+        }
         self.ent[i].flags |= 0x400;
+    }
+
+    /// `sub_66750` (EF:58268) — the tier-0 LIGHTNING BEAM: a ONE-TICK
+    /// hitscan, not a traveling ball. Retail walks the aim ray to the
+    /// first blocker and detonates the `(10,23)` blast there the same
+    /// tick. The tested flyer core already marches, probes, applies the
+    /// terrain/victim law, and detonates the `(10,23)` impact with XP —
+    /// so run it to COMPLETION here (until it despawns or its ~9-step
+    /// reach expires) rather than one step per tick. Net: fire → instant
+    /// flash → gone, re-laid every RAPID tick (the authentic crackle),
+    /// instead of the old crawling slow-bolt stream
+    /// (docs/spell-audit/lightning.md §5.A). The jagged cosmetic trail
+    /// nodes are presentation, omitted (keeps the sim RNG-order stable).
+    pub(crate) fn mc2_lightning_beam_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let (sx, sy, sz, yaw, pitch, speed, id) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f30, e.f32, e.f126.max(384), e.id24)
+        };
+        // Resolve the whole hitscan THIS tick — the flyer marches,
+        // probes, applies the terrain/victim law, and detonates the
+        // (10,23) impact + XP. maxLife (~9) bounds the reach; the 64 cap
+        // is a pure safety backstop (the flyer always sets 0x400).
+        for _ in 0..64 {
+            self.mc2_flyer_tick(i, ctx);
+            if self.ent[i].flags & 0x400 != 0 {
+                break;
+            }
+        }
+        // Lay the VISIBLE jagged flash: `sub_66750`'s cosmetic sprite-216
+        // trail (EF:58320) from the muzzle to the impact. Without it the
+        // one-tick beam despawns before it can render (player-reported
+        // 2026-07-13: "the visual projectile flash is completely
+        // absent"). `i` is despawned here but its fields are still live.
+        let end = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        self.mc2_lay_lightning_trail(i, (sx, sy, sz), end, yaw, pitch, speed, id);
+    }
+
+    /// `sub_66750`'s trail (EF:58320-58399): sprite-216 billboards along
+    /// the beam every `actSpeed/8` (=48) units, jittered by a ±1 random
+    /// walk (amplitude clamp 8, tapering to 0 at the far end). Each node
+    /// is a 1-frame self-despawning class-9/model-9 billboard
+    /// (action 14 = `sub_67410`). These ARE the visible flash.
+    #[allow(clippy::too_many_arguments)]
+    fn mc2_lay_lightning_trail(
+        &mut self,
+        src: usize,
+        start: (u16, u16, i16),
+        end: (u16, u16, i16),
+        yaw: u16,
+        pitch: u16,
+        speed: i16,
+        id: u16,
+    ) {
+        let (sx, sy, sz) = start;
+        let dx = end.0.wrapping_sub(sx) as i16 as i32;
+        let dy = end.1.wrapping_sub(sy) as i16 as i32;
+        let dist = Self::isqrt((dx * dx + dy * dy) as u32) as i32;
+        let spacing = (speed as i32 / 8).max(16); // 48 at actSpeed 384
+        let n = (dist / spacing).clamp(1, 96);
+        let unit = (spacing / 4).max(1) as i16; // 12
+        let perp = yaw.wrapping_add(512) & 0x7FF; // +90°
+        let (mut wz, mut wp) = (0i32, 0i32);
+        let jag =
+            |w: i32, amp: i32, r: u32| (w + 2 * ((r % 0x9D) as i32 / 79) - 1).clamp(-amp, amp);
+        for k in 1..=n {
+            let mut p = (sx, sy, sz);
+            Self::polar_step(&mut p, yaw, pitch, (spacing * k) as i16);
+            let amp = (n - k).clamp(0, 8);
+            let r = self.ent_rand(src);
+            wz = jag(wz, amp, r);
+            let r = self.ent_rand(src);
+            wp = jag(wp, amp, r);
+            p.2 = p.2.wrapping_add((wz as i16).wrapping_mul(unit));
+            Self::polar_step(&mut p, perp, 0, (wp as i16).wrapping_mul(unit));
+            if let Some(nn) = self.mc2_spawn_lightning_node(p.0, p.1, p.2) {
+                self.ent[nn].id24 = id;
+                self.ent[nn].f30 = yaw;
+            }
+        }
+    }
+
+    /// One `sub_66750` trail billboard: class-9 model-9 sprite-216,
+    /// action 14 (`sub_67410` = pure life-- decay), ~1-frame life.
+    fn mc2_spawn_lightning_node(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 9;
+            e.model65 = 9;
+            e.tick70 = 14;
+            e.max_life = 1;
+            e.flags = (e.flags & !8) | F_MC2PROJ;
+        }
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 216);
+        Some(i)
+    }
+
+    /// `sub_67410` (EF:58906, action 14) — the inert trail-node tick:
+    /// pure `life--`, despawn at `< 0`. No flight, no logic.
+    pub(crate) fn mc2_lightning_node_tick(&mut self, i: usize) {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+        }
     }
 
     /// `sub_65820` (EF:62882) — the shared class-9 flyer/projectile
     /// tick: per-tick homing with the behavior row's yaw/pitch caps
     /// (`sub_65610`, EF:62781 — caps v_2/v_6 via `sub_58350`), a ±2
     /// speed ramp toward minSpeed, the polar step, the tile-chain
-    /// victim probe under the xtype/xsubtype filter, terrain CLAMP
-    /// (flyers skim, they don't detonate on ground), water despawn,
-    /// life expiry, and the (f68, f69) impact spawn.
+    /// victim probe under the xtype/xsubtype filter, the per-state
+    /// terrain law, the water splash, life expiry, and the
+    /// (f68, f69) impact spawn.
+    ///
+    /// TERRAIN LAW (docs/traces/mc2-projectile-terrain-water.md —
+    /// corrects the round-2 "shared skim" reading): every ballistic
+    /// state DETONATES on terrain contact (`getTerrainAlt > z`,
+    /// EF:62950/63135 — the contact clamp only places the burst);
+    /// POSSESSION (action 18) alone runs a PRE-move ground-raise
+    /// (EF:63262-64) and therefore skims — and has NO water arm.
+    /// The water test is NESTED inside the contact branch
+    /// (EF:62956/63141): only a projectile flying AT the water
+    /// surface splashes; flight over water never runs it.
     pub(crate) fn mc2_flyer_tick(&mut self, i: usize, ctx: &MobCtx) {
         // Homing / acquisition (EF:62902-21).
         match self.mc2_target(self.ent[i].f146, ctx) {
@@ -215,11 +723,35 @@ impl Gen {
             }
             None => {
                 if self.ent[i].flags & F_AIMED == 0 {
-                    // Snapshot aim once (the no-acquisition arm).
-                    let e = &mut self.ent[i];
-                    e.flags |= F_AIMED;
-                    e.f34 = e.f30;
-                    e.f36 = e.f32;
+                    self.ent[i].flags |= F_AIMED;
+                    // One-shot acquisition (`sub_67CB0`): the
+                    // FIREBALL states nudge yaw ≤34 units toward the
+                    // lock and snap pitch (EF:63106-19, the
+                    // "assisted not locked" launch feel —
+                    // docs/traces/mc2-mouse-aim.md §5; action 29 =
+                    // the charged body, same law APPROX, provenance
+                    // OPEN); every other state snaps both axes (the
+                    // generic init law, EF:62907-13). No target =
+                    // snapshot and fly straight (the retail
+                    // else-arm).
+                    if self.mc2_autoaim(i, ctx) {
+                        let (yaw, dy, dp, act) = {
+                            let e = &self.ent[i];
+                            (e.f30, e.f34, e.f36, e.tick70)
+                        };
+                        let e = &mut self.ent[i];
+                        if matches!(act, 0 | 29) {
+                            e.f30 =
+                                (yaw as i32 + Self::turn_step(yaw, dy, 34) as i32) as u16 & 0x7FF;
+                        } else {
+                            e.f30 = dy;
+                        }
+                        e.f32 = dp;
+                    } else {
+                        let e = &mut self.ent[i];
+                        e.f34 = e.f30;
+                        e.f36 = e.f32;
+                    }
                 }
             }
         }
@@ -232,35 +764,119 @@ impl Gen {
                 e.f126 -= 2;
             }
         }
-        // Polar step + victim probe.
+        // Polar step + victim probe. Retail's probe (`sub_10780`,
+        // EF:3739) ray-marches the MAP CELLS along the flight — an
+        // end-point-only test TUNNELS at cast speeds (the boost
+        // clamp allows up to 0x2000/tick, and several projectile
+        // sprites carry a zero-width box, e.g. the fireball's row
+        // 340 speed_6 = 0 — playtest-12 round 2, "fireball flies
+        // through its target"). March the chord in ≤128-unit
+        // sub-steps and probe each; the movement itself stays the
+        // single polar step (trajectory unchanged).
+        // Possession (action 18) rides the CLAIM probe `sub_108B0`
+        // (`claim_victim_scan`) instead of the generic `sub_10780` —
+        // it detonates only on claimable targets (mana spheres,
+        // possessable buildings, worms) and flies through everything
+        // else (the un-possessable factory sinks / spires). Every
+        // other spell uses the generic any-solid probe. This is the
+        // ONE player spell with the whitelist behavior (sub_108B0 has
+        // exactly two callers, both possession — CastPosses_65F60 +
+        // sub_674C0).
+        let is_possess = self.ent[i].tick70 == 18;
         let e = &self.ent[i];
-        let mut pos = (e.x, e.y, e.z);
+        let start = (e.x, e.y, e.z);
+        let mut pos = start;
         Self::polar_step(&mut pos, e.f30, e.f32, e.f126);
-        let scanned = self.victim_scan_at(i, pos, ctx);
+        let dx = pos.0.wrapping_sub(start.0) as i16 as i32;
+        let dy = pos.1.wrapping_sub(start.1) as i16 as i32;
+        let dz = (pos.2 as i32) - (start.2 as i32);
+        let dist = Self::isqrt((dx * dx + dy * dy) as u32) as i32;
+        let n = ((dist + 127) / 128).max(1);
+        let mut scanned = None;
+        for k in 1..=n {
+            let sub = (
+                start.0.wrapping_add((dx * k / n) as u16),
+                start.1.wrapping_add((dy * k / n) as u16),
+                (start.2 as i32 + dz * k / n) as i16,
+            );
+            scanned = if is_possess {
+                self.claim_victim_scan_at(i, sub)
+            } else {
+                self.victim_scan_at(i, sub, ctx)
+            };
+            if scanned.is_some() {
+                pos = sub;
+                break;
+            }
+        }
+        // Possession's PRE-move skim clamp (EF:63262-64) — the ONE
+        // state that follows the ground; applied before the probe
+        // like retail (clamp, commit, then sub_108B0). On caves it
+        // also GLIDES along the ceiling (clamp to ceiling − fov, no
+        // detonate — EF:63265-70); floor raise runs first, so a
+        // sealed gap leaves z below the floor and the post-move
+        // contact test fires like retail.
+        if is_possess {
+            let g = self.ground_z(pos.0, pos.1) as i16;
+            if pos.2 < g {
+                pos.2 = g;
+            }
+            if self.is_cave() {
+                let c = (self.ceiling_z(pos.0, pos.1) - self.ent[i].f84 as i32) as i16;
+                if pos.2 > c {
+                    pos.2 = c;
+                }
+            }
+        }
         let hit = self.mc2_proj_filter(i, scanned);
         if hit.is_none() {
-            // Terrain clamp — skim, don't detonate (EF:62947-53).
             let ground = self.ground_z(pos.0, pos.1) as i16;
-            if pos.2 < ground {
-                pos.2 = ground;
-            }
-            // Water despawn, models {4,22,24,26} exempt: spawn the
-            // (10,5) splash with the projectile's id (EF:62955-65 —
-            // was a pending-splash misfit note before the class-10
-            // effects band landed the creator).
-            if !matches!(self.ent[i].model65, 4 | 22 | 24 | 26) && self.cap_bit(pos.0, pos.1) == 1 {
-                let own = self.ent[i].id24;
-                if let Some(s) = self.mc2_spawn_splash(pos.0, pos.1, pos.2) {
-                    self.ent[s].id24 = own;
+            // Terrain CONTACT — floor, or on caves the CEILING at
+            // ceiling − fov (the comma arm at EF:62951-53/63136-38/
+            // 63281-88; floor wins when both, sealed-gap case). A
+            // fireball reaching the ceiling detonates exactly as if
+            // it hit ground. Possession's post-move test is the same
+            // law (EF:63279-90) — after its pre-clamps it only fires
+            // across a sealed gap.
+            let contact_z = if pos.2 < ground {
+                Some(ground)
+            } else if self.is_cave() {
+                let c = (self.ceiling_z(pos.0, pos.1) - self.ent[i].f84 as i32) as i16;
+                (pos.2 > c).then_some(c)
+            } else {
+                None
+            };
+            if let Some(cz) = contact_z {
+                // Clamp z only to PLACE the burst (EF:62954/63139-40)
+                // — offensive projectiles never skim.
+                pos.2 = cz;
+                // Water tile, nested in the contact branch
+                // (EF:62956/63141): (10,5) splash, owner inherited,
+                // despawn — no impact effect, no XP. Model gate: the
+                // fireball/lightning states exempt 4 only, the
+                // generic exempts {4,22,24,26}; models 22/24/26 fly
+                // only generic states, so one set serves all.
+                // Possession has NO water arm at all (EF:63279-95).
+                if !is_possess
+                    && !matches!(self.ent[i].model65, 4 | 22 | 24 | 26)
+                    && self.cap_bit(pos.0, pos.1) == 1
+                {
+                    let own = self.ent[i].id24;
+                    if let Some(s) = self.mc2_spawn_splash(pos.0, pos.1, pos.2) {
+                        self.ent[s].id24 = own;
+                    }
+                    self.ent[i].flags |= 0x400;
+                    return;
                 }
-                self.ent[i].flags |= 0x400;
-                return;
-            }
-            // Life countdown (EF:62966-70).
-            self.ent[i].act_life -= 1;
-            if self.ent[i].act_life >= 0 {
-                self.move_relink(i, pos.0, pos.1, pos.2);
-                return;
+                // Dry contact → fall through to the impact block
+                // (v14/v20 = 1, EF:62964/63157).
+            } else {
+                // No contact: life countdown (EF:62966-70).
+                self.ent[i].act_life -= 1;
+                if self.ent[i].act_life >= 0 {
+                    self.move_relink(i, pos.0, pos.1, pos.2);
+                    return;
+                }
             }
         }
         // Impact / expiry: land on the victim, spawn the effect.
@@ -314,6 +930,319 @@ impl Gen {
             let t = &self.ent[target as usize];
             (t.class64, t.model65)
         }
+    }
+
+    /// `sub_582B0` (Sound.cpp:6569) — shortest-arc absolute angular
+    /// distance between two 11-bit engine angles.
+    pub(crate) fn arc_err(a: u16, b: u16) -> u16 {
+        let d = a.wrapping_sub(b) & 0x7FF;
+        d.min(0x800 - d)
+    }
+
+    /// `sub_68490` (EF:55101) — the acquisition scorer: reject
+    /// outside the yaw/pitch cones or beyond 3-D distance 5120,
+    /// else score = on-axis(cos)² terms + (4·sin(err))² terms — the
+    /// off-axis angular error weighted ×16, so alignment dominates
+    /// and distance tie-breaks. The castle variant `sub_685D0`
+    /// (EF:55157) is the same law modulo term order — one body
+    /// serves both (docs/traces/mc2-autoaim.md §2). Lower = better;
+    /// None = rejected. Zero RNG.
+    #[allow(clippy::too_many_arguments)]
+    fn mc2_aim_score(
+        &self,
+        probe: &AimProbe,
+        tx: u16,
+        ty: u16,
+        tz: i16,
+        yaw_cone: u16,
+        pitch_cone: u16,
+    ) -> Option<u64> {
+        use crate::mc2::sin_lut::SIN_DB750;
+        let yaw_err = Self::arc_err(probe.yaw, Self::angle_between(probe.x, probe.y, tx, ty));
+        if yaw_err > yaw_cone {
+            return None;
+        }
+        let d2 = Self::dist2_sq(probe.x, probe.y, tx, ty) as i64;
+        let dh = Self::isqrt(d2 as u32) as i32;
+        let pitch_err = Self::arc_err(probe.pitch, Self::pitch_toward(probe.z, tz, dh));
+        if pitch_err > pitch_cone {
+            return None;
+        }
+        let dz = (tz as i64) - (probe.z as i64);
+        let dist = Self::isqrt((d2 + dz * dz).min(u32::MAX as i64) as u32) as i64;
+        if dist > 5120 {
+            return None;
+        }
+        let sin = |a: u16| SIN_DB750[a as usize] as i64;
+        let cos = |a: u16| SIN_DB750[0x200 + a as usize] as i64;
+        let v9 = (dist * cos(yaw_err)) >> 16;
+        let v10 = (4 * dist * sin(yaw_err)) >> 16;
+        let v11 = (dist * cos(pitch_err)) >> 16;
+        let v12 = (4 * dist * sin(pitch_err)) >> 16;
+        Some((v11 * v11 + v9 * v9 + v10 * v10 + v12 * v12) as u64)
+    }
+
+    // `sub_67CB0` (EF:54710) — the auto-target acquisition, split
+    // into the pure scan (`mc2_aim_scan`, shared with the crosshair
+    // instrument) + the mutating first-tick lock (`mc2_autoaim`).
+    // Best scorer result wins, first-scanned breaks ties. APPROX
+    // register (cited):
+    // - the owner's lock range rides the wizard row 59's v_28
+    //   (4096 — every class-9 row carries the same value; the
+    //   out-of-pool human has no row156);
+    // - the awake gate `byte_0x39_57` → f58 > 0;
+    // - bucket 22 = the worm family, approximated as model-22
+    //   heads + their f54 chains;
+    // - the cave-in `sub_3A7F0` on-ground filter → z within one
+    //   step of the terrain;
+    // - the offensive branch's EF:54788 self-self distance is a
+    //   flagged decompile artifact — the correct two-point form of
+    //   the parallel branches is used (trace §9).
+
+    /// The model-keyed candidate lists + cones (trace §1/§8):
+    /// (wizards, creatures, worms_always, spheres, buildings,
+    /// yaw cone, pitch cone, wizard alarm, grounded-only). None =
+    /// a model with no acquisition switch arm.
+    #[allow(clippy::type_complexity)]
+    fn mc2_aim_lists(model: u8) -> Option<(bool, bool, bool, bool, bool, u16, u16, bool, bool)> {
+        Some(match model {
+            0 | 3 | 4 | 0x12 | 0x13 | 0x16 | 0x1A | 0x1C | 0x1E => {
+                (true, true, false, false, false, 0x71, 0x71, true, false)
+            }
+            1 | 0x11 => (false, false, true, true, true, 0x71, 0x71, false, false),
+            7 | 8 | 0xB | 0xC => (true, false, false, false, false, 0x71, 0x71, true, false),
+            9 => (true, true, true, false, false, 0x71, 0x200, false, false),
+            0x10 => (true, true, false, false, false, 0x100, 0x71, true, false),
+            0x19 => (false, true, false, false, false, 0x71, 0x71, false, true),
+            _ => return None,
+        })
+    }
+
+    /// The pure acquisition scan under an [`AimProbe`] — the scoring
+    /// sweep of `sub_67CB0` with no writes (shared by the live
+    /// first-tick lock and the crosshair instrument's preview).
+    /// `human` = the human wizard candidate position (None = owner
+    /// is the human, or invisible).
+    pub(crate) fn mc2_aim_scan(
+        &self,
+        probe: &AimProbe,
+        human: Option<(u16, u16, i16)>,
+    ) -> Option<u16> {
+        let (wizards, creatures, worms_always, spheres, buildings, yc, pc, _alarm, grounded) =
+            Self::mc2_aim_lists(probe.model)?;
+        let own = probe.own;
+        let range = BEHAVIOR[crate::mc2::behavior::ROW_BASE].v_28 as i64;
+        // Lightning's wizard range = the projectile's own reach
+        // (minSpeed · maxLife, EF:54896).
+        let wiz_range = if probe.model == 9 { probe.reach } else { range };
+        let mut best: Option<(u16, u64)> = None;
+        let consider =
+            |g: &Self, best: &mut Option<(u16, u64)>, slot: u16, pos: (u16, u16, i16), yc, pc| {
+                if let Some(sc) = g.mc2_aim_score(probe, pos.0, pos.1, pos.2, yc, pc) {
+                    if best.is_none_or(|(_, b)| sc < b) {
+                        *best = Some((slot, sc));
+                    }
+                }
+            };
+        if wizards {
+            // The class-3 family list (wizards/castles/balloons),
+            // own-owner and invisibles skipped; range-gated by the
+            // owner row. The human is a candidate only for non-human
+            // owners (player casts never self-target).
+            for v in 1..self.ent.len() {
+                let e = &self.ent[v];
+                if e.class64 != 3 || e.flags & 0x400 != 0 || e.act_life < 0 {
+                    continue;
+                }
+                if e.id24 == own || v as u16 == own || e.flags & 0x20 != 0 {
+                    continue;
+                }
+                let dz = (e.z as i64) - (probe.z as i64);
+                let d = Self::isqrt(
+                    (Self::dist2_sq(probe.x, probe.y, e.x, e.y) as i64 + dz * dz)
+                        .min(u32::MAX as i64) as u32,
+                ) as i64;
+                if d > wiz_range {
+                    continue;
+                }
+                let pos = (e.x, e.y, e.z + e.f78 as i16);
+                consider(self, &mut best, v as u16, pos, yc, pc);
+            }
+            if let Some((hx, hy, hz)) = human {
+                let dz = (hz as i64) - (probe.z as i64);
+                let d = Self::isqrt(
+                    (Self::dist2_sq(probe.x, probe.y, hx, hy) as i64 + dz * dz).min(u32::MAX as i64)
+                        as u32,
+                ) as i64;
+                if d <= wiz_range {
+                    consider(self, &mut best, PLAYER_TARGET, (hx, hy, hz), yc, pc);
+                }
+            }
+        }
+        if creatures {
+            // The per-model buckets, worm family (22) excluded here
+            // (offensive scans it only as the fallback); awake gate;
+            // multipart segments skip like the census.
+            for v in 1..self.ent.len() {
+                let e = &self.ent[v];
+                if e.class64 != 5
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                    || e.f58 <= 0
+                    || e.id24 == own
+                {
+                    continue;
+                }
+                if e.model65 == 22 && !worms_always {
+                    continue;
+                }
+                if matches!(e.tick70, 0xB4 | 0xE8 | 0xEA) && !worms_always {
+                    continue;
+                }
+                if grounded {
+                    let g = self.ground_z(e.x, e.y) as i16;
+                    if (e.z - g).unsigned_abs() > 256 {
+                        continue;
+                    }
+                }
+                let pos = (e.x, e.y, e.z + e.f78 as i16);
+                consider(self, &mut best, v as u16, pos, yc, pc);
+            }
+        }
+        if spheres {
+            // The mana-sphere list: unowned or foreign spheres only
+            // (EF:55017-31).
+            for v in 1..self.ent.len() {
+                let e = &self.ent[v];
+                if e.class64 != 10
+                    || !matches!(e.model65, 39 | 57)
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                    || e.f144 == own
+                {
+                    continue;
+                }
+                consider(
+                    self,
+                    &mut best,
+                    v as u16,
+                    (e.x, e.y, e.z + e.f78 as i16),
+                    yc,
+                    pc,
+                );
+            }
+        }
+        if buildings {
+            // The buildings list: skip own and the un-possessable
+            // (bldgprm byte_2 & 8, EF:55053).
+            for v in 1..self.ent.len() {
+                let e = &self.ent[v];
+                if e.class64 != 10
+                    || e.model65 != 45
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                    || e.f144 == own
+                {
+                    continue;
+                }
+                if self
+                    .assets
+                    .bldgprm
+                    .get(e.f71 as usize)
+                    .is_some_and(|b| b.flags & 8 != 0)
+                {
+                    continue;
+                }
+                consider(
+                    self,
+                    &mut best,
+                    v as u16,
+                    (e.x, e.y, e.z + e.f78 as i16),
+                    yc,
+                    pc,
+                );
+            }
+        }
+        if best.is_none()
+            && (spheres
+                || matches!(
+                    probe.model,
+                    0 | 3 | 4 | 0x12 | 0x13 | 0x16 | 0x1A | 0x1C | 0x1E
+                ))
+        {
+            // The worm-bucket fallback: model-22 heads + chains.
+            for v in 1..self.ent.len() {
+                let e = &self.ent[v];
+                if e.class64 != 5
+                    || e.model65 != 22
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                    || e.id24 == own
+                {
+                    continue;
+                }
+                consider(
+                    self,
+                    &mut best,
+                    v as u16,
+                    (e.x, e.y, e.z + e.f78 as i16),
+                    yc,
+                    pc,
+                );
+            }
+        }
+        best.map(|(target, _)| target)
+    }
+
+    /// `sub_67CB0` (EF:54710) — the ONE-SHOT acquisition on a live
+    /// flyer's first tick: run the pure scan under the projectile's
+    /// own probe, then apply the lock (`sub_655C0` — f146 + desired
+    /// aim, target z raised by its half-height) and the "you are
+    /// targeted" alarm on wizard locks (`sub_5EF70`).
+    pub(crate) fn mc2_autoaim(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let probe = {
+            let e = &self.ent[i];
+            AimProbe {
+                x: e.x,
+                y: e.y,
+                z: e.z,
+                yaw: e.f30,
+                pitch: e.f32,
+                model: e.model65,
+                own: e.id24,
+                reach: e.f128 as i64 * e.max_life as i64,
+            }
+        };
+        let human = (probe.own != PLAYER_TARGET && !self.player_invisible)
+            .then_some((ctx.px, ctx.py, ctx.pz));
+        let Some(target) = self.mc2_aim_scan(&probe, human) else {
+            return false;
+        };
+        let alarm = Self::mc2_aim_lists(probe.model).is_some_and(|l| l.7);
+        // `sub_655C0`: the lock + the desired aim toward it.
+        let (tx, ty, tz) = if target == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz)
+        } else {
+            let t = &self.ent[target as usize];
+            (t.x, t.y, t.z + t.f78 as i16)
+        };
+        let e = &self.ent[i];
+        let yaw = Self::angle_between(e.x, e.y, tx, ty);
+        let dh = Self::isqrt(Self::dist2_sq(e.x, e.y, tx, ty) as u32) as i32;
+        let pitch = Self::pitch_toward(e.z, tz, dh);
+        let e = &mut self.ent[i];
+        e.f146 = target;
+        e.f34 = yaw;
+        e.f36 = pitch;
+        if alarm {
+            let is_wizard = target == PLAYER_TARGET
+                || (self.ent[target as usize].class64 == 3
+                    && self.ent[target as usize].model65 == 0);
+            if is_wizard {
+                self.mc2_danger_poke(target);
+            }
+        }
+        true
     }
 
     /// Shared field arming every launch thunk performs after the

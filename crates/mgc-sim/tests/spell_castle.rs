@@ -28,6 +28,7 @@ fn build_world(root: &std::path::Path) -> World {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: Vec::new(),
     };
     let assets = FeatureAssets::parse(
         bundle.search.as_ref().unwrap(),
@@ -190,6 +191,69 @@ fn create_castle_builds_on_clear_ground() {
         (lvl2, cap2),
         (2, 20_000),
         "the token upgrade raised level 2"
+    );
+}
+
+/// The castle-spell UPGRADE LOCK (`f26`) tracks the castle TRANSFORM,
+/// not a fixed `count` (101-tick) timer — the same fix as MC2
+/// (`mc2_castle_spell_tick`). The old MC1 path armed `f26 = count` and
+/// counted it down, so the lock (and its regen suppression) lasted ~2×
+/// the build. Here the lock must engage during the build and clear the
+/// moment the castle is ESTABLISHED (`f59 == 4`), well before 101 ticks.
+#[test]
+fn mc1_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let mut w = build_world(&root);
+    w.set_dev_spells(true);
+    let (cx, cy) = clear_spot(&w);
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+
+    assert_eq!(w.debug_castle_lock(), 0, "lock clear before casting");
+    w.tick(
+        pose,
+        PlayerCommand {
+            equip_left: Some(SpellId(16)),
+            ..Default::default()
+        },
+    );
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    let mut active_ticks = 0usize;
+    let mut cleared_at = None;
+    for t in 0..101 {
+        w.tick(pose, PlayerCommand::default());
+        if w.debug_castle_lock() > 0 {
+            active_ticks += 1;
+        } else if active_ticks > 0 && cleared_at.is_none() {
+            cleared_at = Some(t);
+            break;
+        }
+    }
+    assert!(active_ticks > 0, "the lock engaged during the build");
+    let cleared = cleared_at.expect("the lock cleared after the build");
+    assert!(
+        cleared < 101,
+        "the lock cleared at tick {cleared} with the build, not a 101-tick timer"
+    );
+    // Established → lock clear (the between-transformations window).
+    for _ in 0..20 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    assert_eq!(
+        w.debug_castle_lock(),
+        0,
+        "the lock stays clear once the castle is established (f59 == 4)"
     );
 }
 

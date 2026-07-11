@@ -35,9 +35,18 @@ pub struct Audio {
     /// same ramp at sim-tick granularity over the baked danger stem.
     danger: bool,
     danger_level: f32, // 0..126, the original's fade counter
+    /// Per-game danger ramp steps per 30 Hz sim tick on the 0..126
+    /// counter. MC1: +4 / −1.33 (CC7 step 2 at 0x3C/0x14 Hz). MC2:
+    /// ±3 both ways (cc11 step ±1 at 90 Hz — Sound.cpp:5877/6076).
+    danger_up: f32,
+    danger_down: f32,
     /// Prefer the General MIDI render (`gm_file`) when the bundle
     /// carries it; the FM render is the always-present fallback.
     prefer_gm: bool,
+    /// Voiceover duck state: retail drops music+sfx to 1/3 the
+    /// instant a line starts (FadeDownSoundVolume_59A50) and ramps
+    /// them back when it ends (the 120 Hz FadeUpSoundVolume timer).
+    duck_gain: f32,
 }
 
 impl Audio {
@@ -52,8 +61,19 @@ impl Audio {
             music_playing: None,
             danger: false,
             danger_level: 0.0,
+            danger_up: 4.0,
+            danger_down: -2.0 * 20.0 / 30.0,
             prefer_gm: true,
+            duck_gain: 1.0,
         }
+    }
+
+    /// MC2's danger ramp: cc11 expression step ±1 at 90 Hz on the
+    /// war channels (Sound.cpp:5877, timer 30×3 Hz) → ±3 per 30 Hz
+    /// sim tick, both directions.
+    pub fn set_mc2_danger_ramp(&mut self) {
+        self.danger_up = 3.0;
+        self.danger_down = -3.0;
     }
 
     /// Pick the music arrangement (config `audio.arrangement`): `true`
@@ -107,17 +127,67 @@ impl Audio {
         if let Some(sounds) = &self.sounds {
             self.mixer.tick(sounds, &self.out.tx, self.out.live_mask());
         }
-        // Danger-stem ramp: step 2 per driver callback, callback rate
-        // 0x3C/s in danger, 0x14/s in calm (sub_20D00) → per 30 Hz
-        // sim tick: +4 / -1.33 on the 0..126 counter.
+        // Danger-stem ramp on the 0..126 counter, per-game rates
+        // (see `danger_up`/`danger_down`).
         let target = if self.danger { 126.0 } else { 0.0 };
         if (self.danger_level - target).abs() > f32::EPSILON {
-            let step = if self.danger { 4.0 } else { -2.0 * 20.0 / 30.0 };
+            let step = if self.danger {
+                self.danger_up
+            } else {
+                self.danger_down
+            };
             self.danger_level = (self.danger_level + step).clamp(0.0, 126.0);
             let _ = self.out.tx.send(output::Cmd::MusicOverlayGain {
                 gain: self.danger_level / 126.0,
             });
         }
+        // Voiceover duck recovery: once the line ends, ramp music+sfx
+        // back up (retail's 120 Hz FadeUpSoundVolume ≈ 0.7 s full
+        // traverse — APPROX, the exact per-callback step is a
+        // volume-scale detail).
+        if self.duck_gain < 1.0 && !self.out.speech_live() {
+            self.duck_gain = (self.duck_gain + (2.0 / 3.0) / 21.0).min(1.0);
+            let _ = self.out.tx.send(output::Cmd::Duck {
+                gain: self.duck_gain,
+            });
+        }
+    }
+
+    /// Play one voiceover clip (`CdTracks_DB080` address: table row =
+    /// 0-based level number, segment slot). Ducks music+sfx to 1/3
+    /// for the clip's duration; a new line interrupts the playing one
+    /// (retail `PlayCDTrackSegment_86FF0` stops before starting).
+    /// Missing clips (empty retail slots) are a quiet no-op.
+    pub fn play_speech(&mut self, row: u32, segment: u32) -> Result<(), String> {
+        let Some(bundle) = &self.bundle else {
+            return Err("no audio bundle loaded".into());
+        };
+        let Some(index) = &bundle.speech else {
+            return Err("bundle has no speech".into());
+        };
+        let Some(clip) = index
+            .clips
+            .iter()
+            .find(|c| c.row == row && c.segment == segment)
+        else {
+            return Ok(()); // empty slot — retail no-ops on length 0
+        };
+        let decoded = music::decode_flac(&bundle.dir.join(&clip.file))?;
+        let _ = self.out.tx.send(output::Cmd::Speech {
+            pcm: decoded.pcm,
+            channels: decoded.channels,
+            sample_rate: decoded.sample_rate,
+        });
+        self.duck_gain = 1.0 / 3.0;
+        let _ = self.out.tx.send(output::Cmd::Duck {
+            gain: self.duck_gain,
+        });
+        Ok(())
+    }
+
+    /// Whether the bundle carries voiceover clips at all.
+    pub fn has_speech(&self) -> bool {
+        self.bundle.as_ref().is_some_and(|b| b.speech.is_some())
     }
 
     /// Play a bundle music track by name (`cgame1`, `track-02`),

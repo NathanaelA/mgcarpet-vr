@@ -17,7 +17,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use mgc_formats::bundle::{
-    BUNDLE_VERSION, BundleManifest, BundleSource, MusicIndex, MusicTrack, TerrainAtlasInfo,
+    BUNDLE_VERSION, BundleManifest, BundleSource, MusicIndex, MusicTrack, SpeechClip, SpeechIndex,
+    TerrainAtlasInfo,
 };
 use mgc_formats::{Game, Importer};
 
@@ -102,6 +103,18 @@ struct VariantSpec {
     /// `bitmap_pos_struct2_t`, portability/bitmap_pos_struct.h:27 —
     /// {u32 offset, u8 w, u8 h}; same signed-RLE rows).
     ui: Option<&'static str>,
+    /// The messaging/notification bitmap font base name (same HSPR
+    /// TAB/DAT format, decoded by `crate::hspr`). BOTH games render the
+    /// top-of-screen notification with the small `DATA/FONT1` (~4x7):
+    /// `FontType_D419D` is only ever 1 or 3 and the font table
+    /// `E9B20[4] = {FONT0, FONT1, HFONT3, FONT1}` maps both to FONT1
+    /// (remc2 Basic.cpp:241/324; remc1 sub_main.cpp `sub_5A3C0(1)`) —
+    /// HFONT3 is never on this path. Glyphs are 1-bit masks (every ink
+    /// pixel = index 1); the sprite id for ASCII char `c` is `c + 1`
+    /// (id 0 null, id 33 = space). Baked to `font.bin`/`font.json` —
+    /// the app appends the glyph masks to its UI atlas as white and
+    /// tints per DrawText's `color` argument.
+    font: Option<&'static str>,
 }
 
 const MC1_VARIANTS: [VariantSpec; 2] = [
@@ -118,6 +131,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         bldgprm: None,
         spells: None,
         ui: Some("DATA/HSPR0-0"),
+        font: Some("DATA/FONT1"),
     },
     VariantSpec {
         variant: "mc1-arctic",
@@ -132,6 +146,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         bldgprm: None,
         spells: None,
         ui: Some("DATA/HSPR1-0"),
+        font: Some("DATA/FONT1"),
     },
 ];
 
@@ -154,6 +169,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         bldgprm: Some("DATA/BLDGPRM.DAT"),
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRD0-0"),
+        font: Some("DATA/FONT1"),
     },
     VariantSpec {
         variant: "mc2-night",
@@ -168,6 +184,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         bldgprm: Some("DATA/BLDGPRM.DAT"),
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRN0-0"),
+        font: Some("DATA/FONT1"),
     },
     VariantSpec {
         variant: "mc2-night-fog",
@@ -182,6 +199,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         bldgprm: Some("DATA/BLDGPRM.DAT"),
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRN0-0"),
+        font: Some("DATA/FONT1"),
     },
     VariantSpec {
         variant: "mc2-cave",
@@ -196,6 +214,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         bldgprm: Some("DATA/BLDGPRM.DAT"),
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRC0-0"),
+        font: Some("DATA/FONT1"),
     },
 ];
 
@@ -508,11 +527,23 @@ pub fn bake_mc1_audio(
         .collect())
 }
 
-/// Bake MC2's audio bundle (`baked/assets/mc2-audio/`): the redbook
-/// soundtrack ripped from the CD image — MC2's primary music path in
-/// retail (the AIL XMI arrangement was the no-CD fallback; a future
-/// faithful-alternate). Samples (`SOUND/SOUND.DAT`) are a separate
-/// step on this track.
+/// Bake MC2's audio bundle (`baked/assets/mc2-audio/`).
+///
+/// Three member families (traces docs/traces/mc2-music-law.md,
+/// mc2-music-dat-xmi.md, mc2-voiceover-triggers.md):
+/// - samples: `SOUND/SOUND.DAT`, best shipped tier;
+/// - music: the `SOUND/MUSIC.DAT` GM bank-0 XMI sub-songs (the "C2" =
+///   Magic Carpet 2 set — GAME1/2/3 = the MapType tracks Night/Day/
+///   Cave, SETUP = menu) rendered through fluidsynth — retail gameplay
+///   music is NEVER the redbook, and bank 0 (not the `-music2` bank-1
+///   "C1"/MC1 set) is the default. cc119-tagged channels are the
+///   war/danger layers
+///   (expression-zeroed in peace, combat-ramped — Sound.cpp:851/
+///   5880), baked as the MC1-style ambient mix + sample-aligned
+///   danger stem;
+/// - speech: the redbook voiceover pre-sliced by `CdTracks_DB080`
+///   (table row r = level r → rip track r+2; row 27 = dead data) —
+///   the runtime plays whole clips, never seeks inside a track.
 pub fn bake_mc2_audio(
     src: &GameSource,
     out_dir: &Path,
@@ -565,35 +596,178 @@ pub fn bake_mc2_audio(
         &serde_json::to_vec_pretty(&index).expect("sound index serializes"),
     )?;
 
+    // Gameplay music: MUSIC.DAT GM bank 0 (the "C2" = Magic Carpet 2
+    // set), sub-songs 0..=3 by role. Bank 0 is the DEFAULT gameplay
+    // bank: `musicChannel_E3814 = 0` (Sound.cpp:49, never reassigned)
+    // → `InitMusic_8D970` loads `InitMusicBank(0)` (Sound.cpp:801).
+    // Bank 1 (the "C1" = Magic Carpet 1 set) loads ONLY under the
+    // hidden `-music2` command-line flag (EF:39191/43023 guarded by
+    // `setting_byte4_25 & 0x40`, default clear) — the classic-MC1-
+    // soundtrack alternate, a future opt-in (authenticity matrix), NOT
+    // the default. (Baking bank 1 was the "wrong/unfamiliar gameplay
+    // tracks, aggressive cave" bug — docs/traces/mc2-music-law.md.)
+    // Requires the GM renderer — MC2 has no pure-Rust FM fallback yet
+    // (the F section is a future faithful-alternate).
+    let mut music = MusicIndex { tracks: Vec::new() };
+    let music_dat = src
+        .read("SOUND/MUSIC.DAT")
+        .map_err(|e| BakeError::Io(Path::new("SOUND/MUSIC.DAT").to_path_buf(), e))?;
+    sources.push(BundleSource {
+        file: "MUSIC.DAT".into(),
+        sha256: hex(&Sha256::digest(&music_dat)),
+    });
+    match crate::fluid::GmRenderer::locate() {
+        Err(why) => println!("note: mc2 music: no GM render ({why}) — music skipped"),
+        Ok(renderer) => {
+            let subsongs = crate::mc2_music::parse_gm_bank(&music_dat, 0)
+                .map_err(|e| BakeError::Level(Path::new("SOUND/MUSIC.DAT").to_path_buf(), 0, e))?;
+            // MapType track n → sub-song n-1 (the ±1 lives in AIL:
+            // `SOUND_start_sequence(track-1)`, Sound.cpp:4974): Night=1
+            // →GAME1, Day=2→GAME2, Cave=3→GAME3; menu StartMusic(4)→
+            // SETUP (idx 3, the shared C2SETUP).
+            const ROLES: [(usize, &str); 4] = [
+                (0, "mc2-night"),
+                (1, "mc2-day"),
+                (2, "mc2-cave"),
+                (3, "mc2-menu"),
+            ];
+            for (idx, role) in ROLES {
+                let sub = subsongs.get(idx).ok_or_else(|| {
+                    BakeError::Level(
+                        Path::new("SOUND/MUSIC.DAT").to_path_buf(),
+                        0,
+                        format!("GM bank 1 has no sub-song {idx}"),
+                    )
+                })?;
+                let err = |e: String| {
+                    BakeError::Level(
+                        Path::new("SOUND/MUSIC.DAT").to_path_buf(),
+                        0,
+                        format!("{}: {e}", sub.name),
+                    )
+                };
+                let layered = sub.song.has_war_layer();
+                let base_mix = if layered {
+                    crate::xmi::Mix::Ambient
+                } else {
+                    crate::xmi::Mix::Full
+                };
+                let render = |mix: crate::xmi::Mix, tag: &str| {
+                    let midi = crate::xmi::encode_smf(&sub.song, mix);
+                    renderer.render(&midi, MUSIC_RATE, &music_dir, &format!("{role}-{tag}"))
+                };
+                let mut base = render(base_mix, "base").map_err(err)?;
+                let mut stem = if layered {
+                    Some(render(crate::xmi::Mix::WarStem, "danger").map_err(err)?)
+                } else {
+                    None
+                };
+                // One shared normalization factor per song — the
+                // overlay SUM is what must not clip (MC1 GM contract).
+                let frames = base.len().max(stem.as_ref().map_or(0, Vec::len));
+                base.resize(frames, 0.0);
+                let mut peak = 0f32;
+                if let Some(stem) = &mut stem {
+                    stem.resize(frames, 0.0);
+                    for (b, s) in base.iter().zip(stem.iter()) {
+                        peak = peak.max((b + s).abs());
+                    }
+                } else {
+                    for b in &base {
+                        peak = peak.max(b.abs());
+                    }
+                }
+                let scale = if peak > 0.0 { 30000.0 / peak } else { 1.0 };
+                let quantize = |pcm: &[f32]| -> Vec<i16> {
+                    pcm.iter()
+                        .map(|s| (s * scale).clamp(-32767.0, 32767.0) as i16)
+                        .collect()
+                };
+                let member = format!("music/{role}.flac");
+                emit(
+                    &member,
+                    &crate::flac::encode(&quantize(&base), 2, MUSIC_RATE).map_err(err)?,
+                )?;
+                let danger_file = match &stem {
+                    Some(stem) => {
+                        let member = format!("music/{role}-danger.flac");
+                        emit(
+                            &member,
+                            &crate::flac::encode(&quantize(stem), 2, MUSIC_RATE).map_err(err)?,
+                        )?;
+                        Some(member)
+                    }
+                    None => None,
+                };
+                music.tracks.push(MusicTrack {
+                    bank: 0,
+                    name: role.to_string(),
+                    file: member,
+                    danger_file,
+                    gm_file: None,
+                    gm_danger_file: None,
+                    source: format!("MUSIC.DAT G bank 0 {}", sub.name),
+                });
+            }
+        }
+    }
+    emit(
+        "music.json",
+        &serde_json::to_vec_pretty(&music).expect("music index serializes"),
+    )?;
+
+    // Voiceover: slice each rip track by its CdTracks_DB080 row.
     let image_len = std::fs::metadata(&image)
         .map_err(|e| BakeError::Io(image.clone(), e))?
         .len();
     let tracks = crate::redbook::parse_cue(&cue, image_len / crate::redbook::SECTOR)
         .map_err(|e| BakeError::Level(cue_path.clone(), 0, e))?;
-
-    let mut music = MusicIndex { tracks: Vec::new() };
-    for track in tracks {
-        let pcm = crate::redbook::read_track(&image, track)
+    let speech_dir = dir.join("speech");
+    std::fs::create_dir_all(&speech_dir).map_err(|e| BakeError::Io(speech_dir.clone(), e))?;
+    let mut speech = SpeechIndex { clips: Vec::new() };
+    for (row, entry) in crate::cdtracks::CD_TRACKS.iter().enumerate() {
+        // Table row r = level r → rip track r+2 (duration-fit proof
+        // in the trace; row 27 implies track 29 = dead data).
+        let rip_number = entry.track as u32 + 1;
+        let Some(track) = tracks.iter().find(|t| t.number == rip_number) else {
+            continue;
+        };
+        let pcm = crate::redbook::read_track(&image, *track)
             .map_err(|e| BakeError::Io(image.clone(), e))?;
-        let flac = crate::flac::encode(&pcm, 2, crate::redbook::RATE).map_err(|e| {
-            BakeError::Level(image.clone(), 0, format!("track {}: {e}", track.number))
-        })?;
-        let name = format!("track-{:02}", track.number);
-        let member = format!("music/{name}.flac");
-        emit(&member, &flac)?;
-        music.tracks.push(MusicTrack {
-            bank: 0,
-            name,
-            file: member,
-            danger_file: None,
-            gm_file: None,
-            gm_danger_file: None,
-            source: format!("redbook track {}", track.number),
-        });
+        for (seg, &(start, len)) in entry.segments.iter().enumerate() {
+            if len == 0 {
+                continue; // empty slot — retail no-ops on length 0
+            }
+            let start_ms = crate::cdtracks::frames_to_ms(start);
+            let len_ms = crate::cdtracks::frames_to_ms(len);
+            let rate = u64::from(crate::redbook::RATE);
+            let a = (u64::from(start_ms) * rate / 1000 * 2) as usize;
+            let b = (u64::from(start_ms + len_ms) * rate / 1000 * 2) as usize;
+            let (a, b) = (a.min(pcm.len()), b.min(pcm.len()));
+            if a >= b {
+                println!("note: mc2 speech: row {row} seg {seg} out of track — skipped");
+                continue;
+            }
+            let flac = crate::flac::encode(&pcm[a..b], 2, crate::redbook::RATE).map_err(|e| {
+                BakeError::Level(image.clone(), 0, format!("row {row} seg {seg}: {e}"))
+            })?;
+            let member = format!("speech/level-{row:02}-seg-{seg}.flac");
+            emit(&member, &flac)?;
+            speech.clips.push(SpeechClip {
+                row: row as u32,
+                segment: seg as u32,
+                file: member,
+                ms: len_ms,
+                source: format!(
+                    "redbook track {rip_number} @ {start_ms}..{}ms",
+                    start_ms + len_ms
+                ),
+            });
+        }
     }
     emit(
-        "music.json",
-        &serde_json::to_vec_pretty(&music).expect("music index serializes"),
+        "speech.json",
+        &serde_json::to_vec_pretty(&speech).expect("speech index serializes"),
     )?;
 
     let manifest = BundleManifest {
@@ -830,6 +1004,26 @@ fn bake_variant(
             }
             emit("book-palette.bin", &rgba)?;
         }
+    }
+
+    // Messaging/notification font (HFONT3/FONT2): the same HSPR TAB/DAT
+    // format, decoded to single-frame glyph sprites and packed into one
+    // atlas. The glyphs are 1-bit coverage masks (every ink pixel =
+    // index 1); the app appends them to its UI atlas as white and tints
+    // per DrawText's `color` argument, so no palette bakes here — the
+    // atlas is palette-independent. Sprite id for ASCII char `c` = c+1.
+    if let Some(font) = spec.font {
+        let dat_file = format!("{font}.DAT");
+        let dat = source(&dat_file, &mut sources)?;
+        let tab = source(&format!("{font}.TAB"), &mut sources)?;
+        let decoded = crate::hspr::decode(&dat, &tab)
+            .map_err(|e| BakeError::Level(Path::new(&dat_file).to_path_buf(), 0, e.to_string()))?;
+        let packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
+        emit("font.bin", &packed.atlas)?;
+        emit(
+            "font.json",
+            &serde_json::to_vec_pretty(&packed.index).expect("font index serializes"),
+        )?;
     }
 
     let manifest = BundleManifest {

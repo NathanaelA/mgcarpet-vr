@@ -152,6 +152,39 @@ faithful defaults:
 
 ---
 
+## Spell jars — owned-spell removal (unfaithful improvement)
+
+**Original.** Both MC1 and MC2 leave every spell jar in the world even
+when the local player already owns that spell. The pickup gate
+(`sub_68FF0` MC2 / the class-12 pickup MC1) flies you *through* an
+already-owned jar without collecting it, and AUTHORED/PLACED jars carry
+`life = 0` so they never decay. The authors scattered redundant spell
+sources as a safety net for players who missed one — but for a player
+who already has the spell they become permanent, unidentifiable clutter
+(you can't tell what a jar holds without flying into it). Only
+DEATH-scattered jars self-cull (life 200-289).
+
+**Improvement (P-class, opt-in; player-directed 2026-07-14).** With
+`enhancements.prune_owned_jars` on, any jar whose spell the local player
+already owns — and therefore can never pick up — is removed. The
+criterion is exactly the retail pickup gate ("owns `s`" = "can't take
+it"). Single-player entity removal (in MP, gate on the local human or
+make it presentation-only — deferred until MP exists). Implemented as a
+per-tick self-cull at each game's jar tick, which covers BOTH the
+level-load sweep and the instant the player gains the spell (every jar
+of it despawns on its next tick). **This is the lone enhancement that
+defaults ON** — player-judged "one no one will ever complain about";
+the faithful behavior is a `--no-prune-owned-jars` (config `false`)
+away. CLI `--prune-owned-jars` / `--no-prune-owned-jars`.
+
+**Verified.** `owned_spell_jars_are_pruned_when_enabled` (MC1) +
+`mc2_owned_spell_tokens_are_pruned_when_enabled` (MC2): with it off the
+jar remains, on removes it. The sim default (`World::prune_owned_jars`)
+stays OFF so state-hash goldens are unaffected; only the app config
+turns it on.
+
+---
+
 *Entries to come (the full subsystem list, in rough dependency
 order): terrain features & villages; triggers, events & portals;
 monsters (per-model AI); combat & damage channels; projectiles &

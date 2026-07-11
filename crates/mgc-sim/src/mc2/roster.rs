@@ -1147,13 +1147,17 @@ impl Gen {
     /// The brain's acquire scan (:15020-56): nearest CLASS-3 entity
     /// (any model — wizards, castles, balloons; the human counts) in
     /// range + cone off the WANDER heading (yaw, not roll), skipping
-    /// invisibles. No ownership filter — verbatim.
+    /// invisibles AND same-owner entities — retail gates the walk on
+    /// `id_0x1A_26 != own` (:15031), so a CASTLE GUARD never turns
+    /// on its own castle/balloons/wizard (the playtest "archers on
+    /// the ramparts shooting the flag" report; a wild archer's id24
+    /// is its own slot, so the gate only drops self-aggro there).
     fn m15_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         let range = (row.v_28 as i32) * (row.v_28 as i32);
         let cone = row.v_30 as u16;
-        let (ex, ey, eyaw) = (e.x, e.y, e.f34);
+        let (ex, ey, eyaw, own) = (e.x, e.y, e.f34, e.id24);
         let mut best: Option<(u16, i32)> = None;
         let consider = |tx: u16, ty: u16, slot: u16, best: &mut Option<(u16, i32)>| {
             let d2 = Self::dist2_sq(ex, ey, tx, ty);
@@ -1167,11 +1171,16 @@ impl Gen {
                 *best = Some((slot, d2));
             }
         };
-        if !self.player_invisible {
+        if !self.player_invisible && own != PLAYER_TARGET {
             consider(ctx.px, ctx.py, PLAYER_TARGET, &mut best);
         }
         for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if j != i && c.class64 == 3 && c.act_life >= 0 && c.flags & (0x400 | 0x20) == 0 {
+            if j != i
+                && c.class64 == 3
+                && c.id24 != own
+                && c.act_life >= 0
+                && c.flags & (0x400 | 0x20) == 0
+            {
                 consider(c.x, c.y, j as u16, &mut best);
             }
         }
@@ -1304,6 +1313,56 @@ impl Gen {
     // MODEL 16 — the boss (ctor sub_4C310 EF:34163, states 0x80-87;
     // 60000 life, 15-bolt homing bursts, trace mc2-class5-m16-20.md)
     // =========================================================================
+
+    /// `sub_67800`/`sub_51800`→`sub_3A5B0` (EF:59138) — the Summon Army
+    /// creature ring. The army SIZE keys off the model: firefly/bee
+    /// (19/2) → 8, Cymmerian (25) → 4, wyvern (16) → 2 (weak swarm vs
+    /// strong pack). Each node spawns a class-5 creature marked as the
+    /// allied controlled-creature (StageVar2/site_z = 13, action `8*M+7`,
+    /// owner = caster, 250-tick `f26` life). Radius 512, angle
+    /// `k·2048/N` (docs/spell-audit/summon-creatures.md Part B).
+    pub(crate) fn mc2_spawn_summon_ring(&mut self, x: u16, y: u16, model: u8, own: u16) {
+        let n: u32 = match model {
+            25 => 4,
+            16 => 2,
+            _ => 8, // firefly (19) / bee (2)
+        };
+        for k in 0..n {
+            let ang = ((k * 2048 / n) as u16) & 0x7FF;
+            let mut p = (x, y, self.ground_z(x, y) as i16);
+            Gen::polar_step(&mut p, ang, 0, 512);
+            let gz = self.ground_z(p.0, p.1) as i16;
+            let Some(s) = self.mc2_spawn_creature_model(model, p.0, p.1, gz) else {
+                continue;
+            };
+            let e = &mut self.ent[s];
+            e.site_z = 13; // StageVar2 = 13 (summon-army allied AI)
+            e.tick70 = model.wrapping_mul(8).wrapping_add(7); // action 8*M+7
+            e.id24 = own; // caster's team → allied
+            e.f26 = 250; // 250-tick lifespan
+            e.f146 = 0; // no target yet
+        }
+    }
+
+    /// Spawn a controlled-creature roster model (the Metamorph / Summon
+    /// Army `{2,16,19,25}` ladder) through its normal class-5 ctor. The
+    /// caller then overrides the action to `8*M+7` and the StageVar2
+    /// marker (site_z) — docs/spell-audit/summon-creatures.md.
+    pub(crate) fn mc2_spawn_creature_model(
+        &mut self,
+        model: u8,
+        x: u16,
+        y: u16,
+        z: i16,
+    ) -> Option<usize> {
+        match model {
+            2 => self.mc2_spawn_m2(x, y, z),
+            16 => self.mc2_spawn_m16(x, y, z),
+            19 => self.mc2_spawn_m19(x, y, z),
+            25 => self.mc2_spawn_m25(x, y, z),
+            _ => None,
+        }
+    }
 
     pub(crate) fn mc2_spawn_m16(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
@@ -2279,6 +2338,15 @@ impl Gen {
         if self.ent[i].z < ground {
             self.ent[i].z = ground;
         }
+        // Cave ceiling clamp + charge reset (EF:17111-20).
+        if self.is_cave() {
+            let (x, y) = (self.ent[i].x, self.ent[i].y);
+            let c = (self.ceiling_z(x, y) as i16 as i32 - self.ent[i].f84 as i32) as i16;
+            if self.ent[i].z > c {
+                self.ent[i].f44 = 0;
+                self.ent[i].z = c;
+            }
+        }
         if self.ent[i].f63 & 0x1F == 0 {
             let d = self.mc2_rand(i);
             if d % 0xB == 0 {
@@ -2647,14 +2715,44 @@ impl Gen {
 
     // =========================================================================
     // MODEL 24 — cave brute (ctor sub_4CCF0 EF:34487; CAVE-ONLY —
-    // cave levels are Phase 4.5, so the gate returns None today,
-    // exactly like retail off-cave; handlers ready for 4.5)
+    // aggros the class-3 building list via the shared idle scan,
+    // not the player; melee 1500 @ 1536; snd 7 on chase)
     // =========================================================================
 
-    pub(crate) fn mc2_spawn_m24(&mut self, _x: u16, _y: u16, _z: i16) -> Option<usize> {
-        // `if MapType != Cave return 0` (:34490) — no cave levels
-        // boot yet, so this is authentically the no-spawn arm.
-        None
+    pub(crate) fn mc2_spawn_m24(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        if !self.is_cave() {
+            return None; // `if MapType != Cave return 0` (:34490)
+        }
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 5;
+            e.model65 = 24;
+            e.tick70 = M24_BASE + 1; // 193 idle (:34495)
+            e.f28 = 1;
+            e.f71 = 0;
+            e.f128 = 80;
+            e.f130 = 24;
+            e.max_life = 16000;
+            e.f126 = 24; // actSpeed = maxSpeed (:34502)
+        }
+        self.mc2_set_mana_half(i);
+        self.ent[i].f36 = 0;
+        self.mc2_ctor_facing(i);
+        {
+            let e = &mut self.ent[i];
+            e.f44 = 1500; // melee damage (sub_1CF20 @ 1536)
+            e.f56 = 1;
+            e.row156 = 102;
+            e.f58 = 64;
+            e.f66 = 3;
+        }
+        self.ent[i].f63 = self.mc2_ord(24);
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 335);
+        self.mc2_shift_rot(i, 256, 640);
+        Some(i)
     }
 
     /// `sub_28690` (:18723): the shared m24 target acquisition.

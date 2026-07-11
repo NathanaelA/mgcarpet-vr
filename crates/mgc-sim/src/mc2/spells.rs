@@ -92,6 +92,27 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Mc2SpellRow>, String> {
         .collect())
 }
 
+/// `LevelInit_56C00`'s SPELLS patch (LevelInit.cpp:12-21, verbatim):
+/// every level init re-writes rows 4 and 19, tier 0 only — life +
+/// hintText — keyed to MapType. Non-Day (Night/Cave) is the default
+/// arm (life 19, hints 199/245); Day overrides it (life 2, hints
+/// 198/244). Runs over the freshly-loaded DAT in retail; here over
+/// the bundle-parsed table, re-applied whenever the environment is
+/// (re)declared — idempotent per `day` value, like retail's
+/// unconditional writes (docs/traces/mc2-class10-m9-dome-open-closure
+/// .md §4.5).
+pub fn level_init_patch(rows: &mut [Mc2SpellRow], day: bool) {
+    let (life, h4, h19) = if day { (2, 198, 244) } else { (19, 199, 245) };
+    if let Some(r) = rows.get_mut(4) {
+        r.tiers[0].life = life;
+        r.tiers[0].hint_text = h4;
+    }
+    if let Some(r) = rows.get_mut(19) {
+        r.tiers[0].life = life;
+        r.tiers[0].hint_text = h19;
+    }
+}
+
 /// `GetSpellIndex_6E020` (EF:44240) — class-10 effect model → spell
 /// row. Everything unlisted resolves to row 0.
 pub fn spell_index(model: u8) -> usize {
@@ -107,9 +128,159 @@ pub fn spell_index(model: u8) -> usize {
     }
 }
 
+/// The retail `LANGUAGE/L1.TXT` spell-name strings (English), lang
+/// indices **159..=265**, extracted verbatim from `game.gog` and
+/// cross-verified 1:1 against the SPELLS.DAT `hintText` indices
+/// (docs/spell-audit/spell-names.md §2). Index 159 = the level-up
+/// format string; 160..185 = the UPPERCASE base names (one per spell
+/// row); 186..265 = the mixed-case per-tier hint names the hover /
+/// spell-change surfaces show. There is NO roman-numeral generator —
+/// "Crater / Crater II / Crater III" are three literal strings; the
+/// engine indexes one string per (spell,tier) via `hintText`. The
+/// rows-4/19 tier-0 Day/non-Day alternates (198/199, 244/245) are
+/// applied at runtime by [`level_init_patch`], so resolving the LIVE
+/// `hint_text` yields the correct environment name automatically.
+/// (CD import for other locales / a bundle bake are deferred; the
+/// shipped English game is byte-identical to this table.)
+const LANG_BASE: usize = 159;
+static MC2_LANG: [&str; 107] = [
+    "Your ability to cast %s has improved.", // 159
+    "FIREBALL",                              // 160
+    "POSSESS",                               // 161
+    "CASTLE",                                // 162
+    "SPEED UP",                              // 163
+    "MORPH",                                 // 164
+    "HEAL",                                  // 165
+    "SHIELD",                                // 166
+    "LIGHTNING",                             // 167
+    "REBOUND",                               // 168
+    "METEOR",                                // 169
+    "TELEPORT",                              // 170
+    "INVISIBLE",                             // 171
+    "BEYOND SIGHT",                          // 172
+    "STEAL MANA",                            // 173
+    "DUEL",                                  // 174
+    "TREMOR",                                // 175
+    "CRATER",                                // 176
+    "EARTHQUAKE",                            // 177
+    "VOLCANO",                               // 178
+    "SUMMON ARMY",                           // 179
+    "GRAVITY WELL",                          // 180
+    "WHIRLWIND",                             // 181
+    "FOOL'S MANA",                           // 182
+    "MAGIC MINE",                            // 183
+    "ALLIANCE",                              // 184
+    "CAVE IN",                               // 185
+    "FireBall",                              // 186 spell 0
+    "Rapid Fire",                            // 187
+    "Fire Storm",                            // 188
+    "Possession",                            // 189 spell 1
+    "Mana Magnet",                           // 190
+    "Mana Lock",                             // 191
+    "Castle",                                // 192 spell 2
+    "Fire Tower",                            // 193
+    "Lightning Tower",                       // 194
+    "Speed Up",                              // 195 spell 3
+    "Super Speed",                           // 196
+    "Super Speed II",                        // 197
+    "Bee Morph",                             // 198 spell 4 (Day tier 0)
+    "Firefly Morph",                         // 199 spell 4 (non-Day tier 0)
+    "Cymmerian Morph",                       // 200
+    "Wyvern Morph",                          // 201
+    "Heal",                                  // 202 spell 5
+    "Aid",                                   // 203
+    "Constitution",                          // 204
+    "Shield",                                // 205 spell 6
+    "Shield II",                             // 206
+    "Invulnerable",                          // 207
+    "Lightning",                             // 208 spell 7
+    "Thunderbolt",                           // 209
+    "Thunderstorm",                          // 210
+    "Rebound",                               // 211 spell 8
+    "Rebound II",                            // 212
+    "Amplify",                               // 213
+    "Meteor",                                // 214 spell 9
+    "Meteor II",                             // 215
+    "Meteor III",                            // 216
+    "Teleport",                              // 217 spell 10
+    "Teleport II",                           // 218
+    "Castle Port",                           // 219
+    "Invisible",                             // 220 spell 11
+    "Possess Invisible",                     // 221
+    "Attack Invisible",                      // 222
+    "Beyond Sight",                          // 223 spell 12
+    "See Invisible",                         // 224
+    "See All",                               // 225
+    "Steal Mana",                            // 226 spell 13
+    "Double Steal",                          // 227
+    "Burgle",                                // 228
+    "Duel",                                  // 229 spell 14
+    "Mana Drain",                            // 230
+    "Health Drain",                          // 231
+    "Tremor",                                // 232 spell 15
+    "Tremor II",                             // 233
+    "Tremor III",                            // 234
+    "Crater",                                // 235 spell 16
+    "Crater II",                             // 236
+    "Crater III",                            // 237
+    "Earthquake",                            // 238 spell 17
+    "Earthquake II",                         // 239
+    "Earthquake III",                        // 240
+    "Volcano",                               // 241 spell 18
+    "Volcano II",                            // 242
+    "Volcano III",                           // 243
+    "Bee Army",                              // 244 spell 19 (Day tier 0)
+    "Firefly Army",                          // 245 spell 19 (non-Day tier 0)
+    "Cymmerian Army",                        // 246
+    "Wyvern Army",                           // 247
+    "Gravity Well",                          // 248 spell 20
+    "Gravity Well II",                       // 249
+    "Gravity Well III",                      // 250
+    "Whirlwind",                             // 251 spell 21
+    "Whirlwind II",                          // 252
+    "Whirlwind III",                         // 253
+    "Fool's Mana",                           // 254 spell 22
+    "Rapid Fire",                            // 255
+    "Lightning Fire",                        // 256
+    "Magic Mine",                            // 257 spell 23
+    "Magic Mine II",                         // 258
+    "Magic Mine III",                        // 259
+    "Alliance",                              // 260 spell 24
+    "Alliance II",                           // 261
+    "Alliance III",                          // 262
+    "Cave In",                               // 263 spell 25
+    "Cave In II",                            // 264
+    "Cave In III",                           // 265
+];
+
+/// Resolve a `LANGUAGE/L1.TXT` lang-string index (159..=265) to its
+/// verbatim English string. Out-of-range → `""`.
+pub fn lang(idx: i16) -> &'static str {
+    (idx as usize)
+        .checked_sub(LANG_BASE)
+        .and_then(|i| MC2_LANG.get(i))
+        .copied()
+        .unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lang_resolves_per_tier_names() {
+        // The three surfaces read distinct strings per tier — no numeral
+        // generator (docs/spell-audit/spell-names.md).
+        assert_eq!(lang(159), "Your ability to cast %s has improved.");
+        assert_eq!(lang(160), "FIREBALL"); // base name (level-up banner)
+        assert_eq!(lang(189), "Possession"); // spell 1 tier 0
+        assert_eq!(lang(190), "Mana Magnet"); // spell 1 tier 1
+        assert_eq!(lang(191), "Mana Lock"); // spell 1 tier 2
+        assert_eq!(lang(199), "Firefly Morph"); // spell 4 non-Day tier 0
+        assert_eq!(lang(265), "Cave In III"); // last entry
+        assert_eq!(lang(158), ""); // below range
+        assert_eq!(lang(266), ""); // above range
+    }
 
     #[test]
     fn parses_synthetic_row() {
@@ -131,6 +302,34 @@ mod tests {
     #[test]
     fn rejects_wrong_length() {
         assert!(parse(&[0u8; 80]).is_err());
+    }
+
+    #[test]
+    fn level_init_patch_rows_4_19() {
+        // LevelInit.cpp:12-21 verbatim: non-Day default arm, Day
+        // override; tier 0 only, other tiers/rows untouched.
+        let mut rows = vec![Mc2SpellRow::default(); MC2_SPELL_ROWS];
+        rows[4].tiers[1].life = 7;
+        level_init_patch(&mut rows, false);
+        assert_eq!(
+            (rows[4].tiers[0].life, rows[4].tiers[0].hint_text),
+            (19, 199)
+        );
+        assert_eq!(
+            (rows[19].tiers[0].life, rows[19].tiers[0].hint_text),
+            (19, 245)
+        );
+        level_init_patch(&mut rows, true);
+        assert_eq!(
+            (rows[4].tiers[0].life, rows[4].tiers[0].hint_text),
+            (2, 198)
+        );
+        assert_eq!(
+            (rows[19].tiers[0].life, rows[19].tiers[0].hint_text),
+            (2, 244)
+        );
+        assert_eq!(rows[4].tiers[1].life, 7);
+        assert_eq!(rows[5], Mc2SpellRow::default());
     }
 
     #[test]

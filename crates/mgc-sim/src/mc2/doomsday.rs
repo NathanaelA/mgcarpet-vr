@@ -32,8 +32,11 @@
 //! - `sub_5C800` palette flashes (case-7 beam flash 6) are
 //!   presentation (docs/traces/mc2-class10-tail-helper-closure.md
 //!   §4) — skipped like every flash before.
-//! - The (9,3)/(9,26) projectile bursts (selector 9/8) are unported
-//!   creators — ledgered via note_misfit, not silent.
+//! - The (9,3)/(9,26) projectile bursts (selector 9/8) LANDED
+//!   2026-07-11 (mc2::proj meteor shot / whirlwind seed —
+//!   docs/traces/mc2-class9-m3-m26.md): pre-locked at the avatar
+//!   via mc2_arm_proj (retail self-acquires on tick 1 — the proj
+//!   module's acquisition APPROX).
 //! - `sub_21F60`'s player-spell-slot test (`SpellEnabled[8]`'s
 //!   word_0x2E_46 > 0 → trip the death script) waits on the MC2
 //!   cast column (4.2); proximity still trips it.
@@ -681,10 +684,34 @@ impl World {
                 let toward = Gen::angle_between(ctx.px, ctx.py, ex, ey);
                 self.g.player_knock = (toward, (f >> 3) as i16);
             }
-            8 | 9 => {
-                // (9,26) / (9,3) — unported creators (module doc).
-                self.g
-                    .note_misfit(9, if self.g.ent[i].f68 == 8 { 26 } else { 3 });
+            sel @ (8 | 9) => {
+                // Case 8 = the (9,26) whirlwind seed, case 9 = the
+                // (9,3) meteor shot (EF:13457-13488 + the shared
+                // preamble :13313-25): launch at pyramid pos stepped
+                // 640 along the pyramid yaw, z + 768; owner = the
+                // pyramid; aimed straight at the avatar; impact/
+                // damage/fuse armed per case; sound 15 at the
+                // pyramid (docs/traces/mc2-class9-m3-m26.md §1).
+                let mut lp = (ex, ey, ez);
+                Gen::polar_step(&mut lp, self.g.ent[i].f30, 0, 640);
+                lp.2 = ez.wrapping_add(768);
+                let spawned = if sel == 8 {
+                    self.g.mc2_spawn_whirlwind_seed(lp.0, lp.1, lp.2)
+                } else {
+                    self.g.mc2_spawn_meteor_shot(lp.0, lp.1, lp.2)
+                };
+                if let Some(p) = spawned {
+                    {
+                        let e = &mut self.g.ent[p];
+                        e.f68 = 10;
+                        e.f69 = if sel == 8 { 22 } else { 17 };
+                        e.f44 = if sel == 8 { 20 } else { 6000 };
+                        e.f71 = if sel == 8 { 3 } else { 10 };
+                    }
+                    self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
+                    self.g.mc2_danger_poke(PLAYER_TARGET);
+                    self.g.snd(15, i);
+                }
             }
             _ => {}
         }

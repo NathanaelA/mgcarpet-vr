@@ -19,6 +19,7 @@ fn main() {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: terrain.ceiling.clone().unwrap_or_default(),
     };
     let seed = package.gen_params.as_ref().unwrap().seed;
     let mut w = mgc_sim::mc1::world::World::new(planes, &package.things.things, seed, assets);

@@ -155,14 +155,20 @@ is omitted where not applicable.
 {
   "level_id": 3, "gfx_type": 0, "map_type": "day",
   "players": [1, 1, 0, 0, 0, 0, 0, 0],
-  "unk05": 0, "unk07": 10, "unk09": 0
+  "basic_height": 0, "unk07": 10, "number_of_players": 3
 }
 ```
 
 - `map_type`: `"day"`, `"night"`, or `"cave"` — selects the entire asset
   set the original engine loads (sprites, sky, palette, tables, blocks).
-- `players`: activation flags for the 8 wizard slots.
-- `unk*`: unexplained original header fields, preserved verbatim.
+- `players`: authored starting-castle LEVEL per wizard color (0 = none,
+  N = a level N−1 castle built at that wizard's spawn).
+- `basic_height` (epoch 8; alias `unk05`): the cave ceiling mirror
+  pivot; meaningless off-cave.
+- `number_of_players` (epoch 9; alias `unk09`): colors 0..n−1 spawn
+  wizard carpets — 0 = the human, 1..n−1 = AI rivals.
+- `unk07`: unexplained original header field, preserved verbatim
+  (retail repurposes it as runtime objective scratch).
 
 ### `wizards.json`
 
@@ -177,7 +183,7 @@ MC2 (from the level header block):
   "wizards": [
     { "aggression": 128, "reflexes": 100, "perception": 80, "life": 500,
       "starting_spells": [1, 0, ...26 values...],
-      "unknown_spells":  [0, ...],
+      "starting_spell_levels": [0, ...],
       "blocked_spells":  [0, ...] }
   ]
 }
@@ -185,8 +191,9 @@ MC2 (from the level header block):
 
 Spell arrays have 26 entries indexed by MC2 spell ID (0 = Fireball …
 25 = Cave In); `starting_spells` values are upgrade tiers 0–3.
-`unknown_spells` mirrors an unexplained original array, preserved
-verbatim.
+`starting_spell_levels` (epoch 9; alias `unknown_spells`) is the
+per-spell STARTING XP LEVEL 0–2 — the AI rivals' spell-XP seed
+(docs/traces/mc2-rivals-spawn-mortality.md §3).
 
 MC1/Hidden Worlds (format 2+; from the level record's 8 × 216-byte
 per-player table at offset 37072 and the decoded 12-byte tail —
@@ -384,7 +391,9 @@ AudioBundle`.
 | `sounds.bin` | one deduplicated blob of raw PCM (unsigned 8-bit mono — the original sample data byte-for-byte) |
 | `sounds.json` | `SoundIndex`: `sample_rate` (22050 — the best tier shipped by both retail games), `encoding` (`"pcm8"`), `banks[]` of `{bank, entries[]}`; each entry `{id, name, offset, len}` — `id` is the ENGINE sound id (the original bank-table index; the mixer's 47 request slots index bank 0 directly) |
 | `music.json` | `MusicIndex`: `tracks[]` of `{bank, name, file, danger_file?, gm_file?, gm_danger_file?, source}` |
-| `music/*.flac` | one FLAC stream per track; MC1 in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) — the original keeps its combat layers on MIDI channels 3/4/5 at CC7 0 and fades them in/out with runtime CC7 ramps (remc1 sub_20BD0/sub_20D00); the runtime overlays the stem with the same ramp. Songs without a muted danger layer (menu/intro) and redbook tracks have no stem. `gm_file`/`gm_danger_file` (`*-gm[-danger].flac`, 44100 Hz STEREO, same ambient/stem contract) carry the General MIDI arrangement (`MUSIC<bank>-2`, the original's `GENERAL` driver target — remc1 :54029-30 maps 0xA001→digit 2, 0xA004 Roland→1, 0xA002 AdLib→0) rendered through fluidsynth + a GM soundfont at import; present only when the baking host has both (`MGC_FLUIDSYNTH`/`MGC_SOUNDFONT` override discovery), the FM render is always the fallback. Both GM stems share one per-song normalization factor (peak of the ambient+stem SUM → −0.8 dBFS) so the runtime overlay cannot clip |
+| `music/*.flac` | one FLAC stream per track; in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) the runtime overlays with the original's combat gain ramp. MC1: the combat layers are MIDI channels 3/4/5 at CC7 0, faded by CC7 ramps (remc1 sub_20BD0/sub_20D00); `file` = the OPL3/FM render, `gm_file`/`gm_danger_file` (`*-gm[-danger].flac`, 44100 Hz STEREO, same ambient/stem contract) carry the General MIDI arrangement (`MUSIC<bank>-2`) rendered through fluidsynth + a GM soundfont at import — present only when the baking host has both (`MGC_FLUIDSYNTH`/`MGC_SOUNDFONT` override discovery), FM always the fallback. MC2 (`mc2-night/day/cave/menu`): `file` IS the GM render (no FM fallback yet — the F section is a future faithful-alternate) of the MUSIC.DAT G-driver bank-1 XMI sub-songs; the war/danger layers are the cc119-TAGGED channels (expression-zeroed in peace, combat-ramped — remc2 Sound.cpp:851/5880, docs/traces/mc2-music-dat-xmi.md), split into the same ambient + danger-stem pair. Songs without a muted danger layer (menu/intro) have no stem. Paired stems share one per-song normalization factor (peak of the ambient+stem SUM → −0.8 dBFS) so the runtime overlay cannot clip |
+| `speech.json` (MC2) | `SpeechIndex`: `clips[]` of `{row, segment, file, ms, source}` — the CD voiceover pre-sliced at import by the compiled `CdTracks_DB080` segment table (docs/traces/mc2-voiceover-triggers.md; the runtime plays whole clips, never seeks). `row` = 0-based level number (table row r slices rip track r+2 — TrackIdx counts AUDIO tracks; row 27 = dead data); segment 0 = the map-screen intro line, N+1 = objective row N's line, 9 = the level-completion line; rows 25/26 = the secret-level one-liners |
+| `speech/*.flac` (MC2) | one 44100 Hz stereo FLAC per clip (`level-RR-seg-S.flac`), cut by retail's truncating frames→ms law (`× 1000/75`) |
 
 Sources: MC1 `DATA/SNDS<bank>-<q>.DAT/.TAB` (bank 0 = the 47-sound
 gameplay bank, 1..13 auxiliary sets; `q` = the original's free-RAM
@@ -395,8 +404,14 @@ AdLib patches at import, 44100 Hz mono FLAC (`0-cgame1` …
 `1-cintro6`), plus the `-2` General MIDI arrangement via fluidsynth
 when available (above). MC2
 `SOUND/SOUND.DAT` (10 banks, best shipped tier = 8-bit 22050; the
-per-sample WAV containers are stripped to keep `sounds.bin` raw PCM)
-and the 27 redbook audio tracks ripped losslessly from the CD image
-(`game.gog` + `game.ins` cue) as 44100 Hz stereo FLAC
-(`track-02` … `track-28`) — CD audio was retail MC2's primary music
-path; its AIL XMI arrangement is a future faithful-alternate.
+per-sample WAV containers are stripped to keep `sounds.bin` raw PCM),
+`SOUND/MUSIC.DAT` (the AIL XMI music bank: trailer u32 → 4-driver ×
+2-bank directory; gameplay = G driver bank 1, six single-song
+`FORM XDIR…CAT XMID` containers GAME1/2/3/SETUP/INTRO/CUTS; MapType
+picks GAMEn — Night/Day/Cave — and the menu plays SETUP; XMI → SMF
+via the summed-run delta / embedded note-duration / strip-cc110-119
+laws in docs/traces/mc2-music-dat-xmi.md, division 60 + tempo
+pass-through, whole-song cc116/117 loop = loop the FLAC), and the 27
+redbook audio tracks inside the CD image (`game.gog` + `game.ins`
+cue) — the redbook is the per-level objective VOICEOVER (sliced into
+`speech/`, above), never gameplay music.

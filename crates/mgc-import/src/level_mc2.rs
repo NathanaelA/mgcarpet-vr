@@ -6,7 +6,8 @@
 //!
 //! ```text
 //! 0x0000     23  header: version(u16)=2, level id(u16), gfx type(u8),
-//!                unk05(u8), map type(u8: 0 day/1 night/2 cave),
+//!                basic height(u8: the cave ceiling mirror pivot,
+//!                byte_0x2FED3), map type(u8: 0 day/1 night/2 cave),
 //!                unk07(i16), unk09(i16), players(i8[8]), pad[4]
 //! 0x0017     46  terrain generation params: 12 values, each u16 LE +
 //!                2 pad bytes, EXCEPT River (true u32 LE) and the final
@@ -92,11 +93,28 @@ pub struct Mc2Header {
     pub version: u16,
     pub level_id: u16,
     pub gfx_type: u8,
-    pub unk05: u8,
+    /// Cave basic height (byte_0x2FED3 — the ceiling mirror pivot on
+    /// cave levels; was `unk05` before identification).
+    pub basic_height: u8,
     pub map_type: MapType,
+    /// `word_0x2FED5` — authored initial value of a field retail
+    /// REPURPOSES at runtime as the current-objective scratch word
+    /// (EF:40573/40760-61); the authored value (10/93/100 observed)
+    /// has no identified load-time consumer.
     pub unk07: i16,
+    /// `word_0x2FED7` = **NumberOfPlayers** (EF:39382/39461 →
+    /// `NumberOfPlayers_0xe`): colors `0..n-1` spawn wizard carpets
+    /// (the input pump that consumes the spawn enqueue is bounded by
+    /// it — docs/traces/mc2-rivals-spawn-mortality.md §1). Color 0 =
+    /// the human in single player (`LevelIndex_0xc = 0`, EF:43127);
+    /// 1..n-1 = AI rivals. Retail name pending a field rename (the
+    /// serde key rides the next BAKE_EPOCH bump).
     pub unk09: i16,
-    /// Per-slot activation flags for the 8 wizard slots.
+    /// `player_0x2FED9[8]` — authored starting-castle LEVEL per wizard
+    /// color (0 = none, N = a castle at level N-1 built at the
+    /// wizard's spawn; consumers EF:43777/43789, docs/traces/
+    /// mc2-castle-data-tables.md §3). Mis-documented as "activation
+    /// flags" before the castle-column trace.
     pub players: [i8; 8],
 }
 
@@ -158,11 +176,20 @@ pub struct WizardSettings {
     pub aggression: i16,
     pub reflexes: i16,
     pub perception: i16,
-    /// Per-spell starting upgrade tier (0-3), indexed by spell ID
-    /// (0=Fireball .. 25=Cave In).
+    /// `StartingSpells_0x360E1x` — per-spell GRANT FLAG, indexed by
+    /// spell ID (0=Fireball .. 25=Cave In). Consumed by
+    /// `InitialiseSpells_54A50` (EF:38650).
     pub starting_spells: [u8; SPELL_COUNT],
+    /// `byte_0x360FBx` — per-spell STARTING XP LEVEL 0..2 (was
+    /// "unknown" before the rivals trace): for an AI wizard,
+    /// `SpellLevels[spell] = min(this, 2)` at book init (EF:38693;
+    /// docs/traces/mc2-rivals-spawn-mortality.md §3). Field rename
+    /// rides the next BAKE_EPOCH bump (serde key compat).
     pub unknown_spells: [u8; SPELL_COUNT],
+    /// `BlockedSpells_0x36115x` — per-spell DENY flag.
     pub blocked_spells: [u8; SPELL_COUNT],
+    /// `Life_0x3612F` — AI life scale (16.8; also scales maxLife,
+    /// EF:43768-71). Human always 256 (EF:43720).
     pub life: i16,
 }
 
@@ -227,7 +254,7 @@ impl Mc2Level {
             version,
             level_id: u16le(0x02),
             gfx_type: data[0x04],
-            unk05: data[0x05],
+            basic_height: data[0x05],
             map_type: MapType::from_byte(data[0x06]),
             unk07: u16le(0x07) as i16,
             unk09: u16le(0x09) as i16,

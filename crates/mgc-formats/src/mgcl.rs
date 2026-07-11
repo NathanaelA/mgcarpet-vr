@@ -130,6 +130,10 @@ pub fn write<W: Write + Seek>(sink: W, package: &LevelPackage) -> Result<(), Mgc
             zip.start_file("terrain/angle.bin", opts)?;
             zip.write_all(angle)?;
         }
+        if let Some(ceiling) = &terrain.ceiling {
+            zip.start_file("terrain/ceiling.bin", opts)?;
+            zip.write_all(ceiling)?;
+        }
     }
 
     zip.finish()?;
@@ -203,6 +207,8 @@ pub fn read<R: Read + Seek>(source: R) -> Result<LevelPackage, MgclError> {
         member_bytes(&mut zip, "terrain/shading.bin")?.filter(|s| s.len() == TERRAIN_GRID_BYTES);
     let angle =
         member_bytes(&mut zip, "terrain/angle.bin")?.filter(|s| s.len() == TERRAIN_GRID_BYTES);
+    let ceiling =
+        member_bytes(&mut zip, "terrain/ceiling.bin")?.filter(|s| s.len() == TERRAIN_GRID_BYTES);
     let terrain = match (height, tile_type) {
         (Some(height), Some(tile_type))
             if height.len() == TERRAIN_GRID_BYTES && tile_type.len() == TERRAIN_GRID_BYTES =>
@@ -212,6 +218,7 @@ pub fn read<R: Read + Seek>(source: R) -> Result<LevelPackage, MgclError> {
                 tile_type,
                 shading,
                 angle,
+                ceiling,
             })
         }
         (None, None) => None,
@@ -338,6 +345,7 @@ mod tests {
             tile_type: vec![7; TERRAIN_GRID_BYTES],
             shading: None,
             angle: None,
+            ceiling: None,
         });
         let bytes = write_to_vec(&package);
         let loaded = read(Cursor::new(&bytes)).unwrap();
@@ -345,6 +353,7 @@ mod tests {
 
         package.terrain.as_mut().unwrap().shading = Some(vec![33; TERRAIN_GRID_BYTES]);
         package.terrain.as_mut().unwrap().angle = Some(vec![0x50; TERRAIN_GRID_BYTES]);
+        package.terrain.as_mut().unwrap().ceiling = Some(vec![44; TERRAIN_GRID_BYTES]);
         let bytes = write_to_vec(&package);
         let loaded = read(Cursor::new(&bytes)).unwrap();
         assert_eq!(loaded, package);

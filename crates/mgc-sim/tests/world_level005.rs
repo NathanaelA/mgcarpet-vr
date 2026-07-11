@@ -26,6 +26,7 @@ fn build_world(root: &std::path::Path) -> (World, usize) {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: Vec::new(),
     };
     let assets = FeatureAssets::parse(
         bundle.search.as_ref().unwrap(),

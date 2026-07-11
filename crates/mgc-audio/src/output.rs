@@ -53,6 +53,19 @@ pub enum Cmd {
         gain: f32,
     },
     StopMusic,
+    /// One-shot voiceover stream (interleaved i16), on its own lane —
+    /// unaffected by the duck gain, never looped.
+    Speech {
+        pcm: Arc<Vec<i16>>,
+        channels: u16,
+        sample_rate: u32,
+    },
+    StopSpeech,
+    /// Voiceover duck: multiplies music AND sfx (retail drops both to
+    /// 1/3 while a line plays, then fades back up — EF:41069/41103).
+    Duck {
+        gain: f32,
+    },
     /// Master gains, 0..=1 linear.
     MasterVol {
         sfx: f32,
@@ -90,8 +103,12 @@ pub struct Renderer {
     rx: Receiver<Cmd>,
     channels: Vec<Channel>,
     music: MusicState,
+    /// Voiceover lane — a second decoded stream, one-shot.
+    speech: MusicState,
     sfx_gain: f32,
     music_gain: f32,
+    /// Voiceover duck on music+sfx (speech itself is exempt).
+    duck_gain: f32,
     out_rate: f64,
     /// Game pause: stream silence, hold every play position.
     suspended: bool,
@@ -120,8 +137,18 @@ impl Renderer {
                 step: 0,
                 looped: false,
             },
+            speech: MusicState {
+                pcm: None,
+                overlay: None,
+                overlay_gain: 0.0,
+                channels: 2,
+                pos: 0,
+                step: 0,
+                looped: false,
+            },
             sfx_gain: 1.0,
             music_gain: 1.0,
+            duck_gain: 1.0,
             out_rate: f64::from(out_rate),
             suspended: false,
         }
@@ -182,6 +209,19 @@ impl Renderer {
                 self.music.pcm = None;
                 self.music.overlay = None;
             }
+            Cmd::Speech {
+                pcm,
+                channels,
+                sample_rate,
+            } => {
+                self.speech.step =
+                    ((f64::from(sample_rate) / self.out_rate) * (1u64 << 32) as f64) as u64;
+                self.speech.pcm = Some(pcm);
+                self.speech.channels = channels.max(1);
+                self.speech.pos = 0;
+            }
+            Cmd::StopSpeech => self.speech.pcm = None,
+            Cmd::Duck { gain } => self.duck_gain = gain,
             Cmd::MasterVol { sfx, music } => {
                 self.sfx_gain = sfx;
                 self.music_gain = music;
@@ -228,7 +268,7 @@ impl Renderer {
                         idx as usize
                     }],
                 ) - 128.0;
-                let s = (s0 + (s1 - s0) * frac) / 128.0 * ch.vol * self.sfx_gain;
+                let s = (s0 + (s1 - s0) * frac) / 128.0 * ch.vol * self.sfx_gain * self.duck_gain;
                 l += s * (1.0 - ch.pan);
                 r += s * ch.pan;
                 ch.pos += ch.step;
@@ -264,17 +304,45 @@ impl Renderer {
                             mr += or_ * self.music.overlay_gain;
                         }
                     }
-                    l += ml / 32768.0 * self.music_gain;
-                    r += mr / 32768.0 * self.music_gain;
+                    l += ml / 32768.0 * self.music_gain * self.duck_gain;
+                    r += mr / 32768.0 * self.music_gain * self.duck_gain;
                     self.music.pos += self.music.step;
                 }
             }
             if music_done {
                 self.music.pcm = None;
             }
+            // The voiceover lane: one-shot, duck-exempt.
+            let mut speech_done = false;
+            if let Some(pcm) = self.speech.pcm.as_ref() {
+                let chans = self.speech.channels as u64;
+                let frames = pcm.len() as u64 / chans;
+                let idx = self.speech.pos >> 32;
+                if idx >= frames {
+                    speech_done = true;
+                } else {
+                    let at = (idx * chans) as usize;
+                    let (sl, sr) = if chans >= 2 {
+                        (f32::from(pcm[at]), f32::from(pcm[at + 1]))
+                    } else {
+                        (f32::from(pcm[at]), f32::from(pcm[at]))
+                    };
+                    l += sl / 32768.0;
+                    r += sr / 32768.0;
+                    self.speech.pos += self.speech.step;
+                }
+            }
+            if speech_done {
+                self.speech.pcm = None;
+            }
             frame[0] = l.clamp(-1.0, 1.0);
             frame[1] = r.clamp(-1.0, 1.0);
         }
+    }
+
+    /// A voiceover clip is still playing.
+    pub fn speech_live(&self) -> bool {
+        self.speech.pcm.is_some()
     }
 
     /// Channel-liveness snapshot for the mixer (best-effort; the
@@ -297,6 +365,7 @@ pub struct Output {
     /// Kept alive for the stream's lifetime.
     _stream: Option<cpal::Stream>,
     live: Arc<std::sync::atomic::AtomicU32>,
+    speech_live: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Output {
@@ -306,6 +375,7 @@ impl Output {
         use cpal::traits::{DeviceTrait, HostTrait};
         let (tx, rx) = std::sync::mpsc::channel();
         let live = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let speech_live = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let stream = (|| {
             let host = cpal::default_host();
@@ -314,6 +384,7 @@ impl Output {
             let rate = config.sample_rate();
             let mut renderer = Renderer::new(rx, rate);
             let live_w = live.clone();
+            let speech_live_w = speech_live.clone();
             let stream = device
                 .build_output_stream(
                     cpal::StreamConfig {
@@ -324,6 +395,8 @@ impl Output {
                     move |data: &mut [f32], _| {
                         renderer.render(data);
                         live_w.store(renderer.live_mask(), std::sync::atomic::Ordering::Relaxed);
+                        speech_live_w
+                            .store(renderer.speech_live(), std::sync::atomic::Ordering::Relaxed);
                     },
                     |e| eprintln!("audio stream error: {e}"),
                     None,
@@ -340,10 +413,15 @@ impl Output {
             tx,
             _stream: stream,
             live,
+            speech_live,
         }
     }
 
     pub fn live_mask(&self) -> u32 {
         self.live.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn speech_live(&self) -> bool {
+        self.speech_live.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

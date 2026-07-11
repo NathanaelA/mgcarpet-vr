@@ -112,8 +112,10 @@ impl GameId {
                 // mc2-class10-m50-chains-and-tail.md): 8 = the dead
                 // creator (a known no-spawn), 11 = the fire spray
                 // (model-19 remap), 15 fire trail, 17 meteor, 23/25
-                // blasts, 52 castle anchor, 54 aura.
-                | (10, 8 | 11 | 15 | 17 | 22 | 23 | 25 | 52 | 54 | 71 | 76)
+                // blasts, 52 castle anchor, 54 aura, 67 = the
+                // flood/quake (mc2::flood,
+                // mc2-class10-m67-flood-helpers.md).
+                | (10, 8 | 11 | 15 | 17 | 22 | 23 | 25 | 52 | 54 | 67 | 71 | 76)
                 // The (10,9) raise-land / apocalypse dome
                 // (mc2::morph, mc2-class10-m9-dome-geometry.md).
                 | (10, 9)
@@ -128,10 +130,20 @@ impl GameId {
                 // sub_4F900/sub_4F950, actions 0x44/0x45 —
                 // docs/traces/mc2-class14-m1-riser.md §6).
                 | (10, 63 | 64)
+                // The class-10 high band = the CAVE TERRAIN
+                // GENERATOR (mc2::cave, PORTED Phase 4.5): the
+                // (10,80)→(10,81) tunnel chains + the settle-band
+                // sculptors (mesa/dome/pit/hill) + the (10,86)
+                // drips (docs/traces/mc2-class10-high-band.md +
+                // mc2-terrain-author-painters.md §4 +
+                // mc2-cave-terrain-foundation.md).
+                | (10, 80..=86)
                 // The authored ground mana economy: 512-mana spheres
                 // + the 2560 variant (CreateManaSphere512/2560,
-                // EF:36595/:36601; both create model 39).
-                | (10, 39 | 58)
+                // EF:36595/:36601; both create model 39) + the
+                // (10,57) RANDOM-value sphere (sub_50130,
+                // docs/traces/mc2-class10-m57.md).
+                | (10, 39 | 57 | 58)
                 // Class-14 special map objects (X/end markers, the
                 // pickup scroll, the terrain risers).
                 | (14, 0..=5)

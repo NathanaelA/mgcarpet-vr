@@ -135,8 +135,12 @@ pub struct AudioConfig {
     pub music_volume: f32,
     /// Which MC1 music arrangement plays (multi-column matrix option —
     /// all three shipped on the CD as per-sound-card targets, so each
-    /// column is authentic; MC2's redbook soundtrack is unaffected).
+    /// column is authentic; MC2's XMI gameplay music is unaffected).
     pub arrangement: MusicArrangement,
+    /// MC2 objective voiceovers (the redbook speech clips) — the
+    /// original's in-game "Speech On/Off" toggle
+    /// (`OptionsSettingFlag & 0x40`, remc2 PlayerInput.cpp:1221).
+    pub speech: bool,
 }
 
 impl Default for AudioConfig {
@@ -147,6 +151,7 @@ impl Default for AudioConfig {
             sfx_volume: 1.0,
             music_volume: 1.0,
             arrangement: MusicArrangement::default(),
+            speech: true,
         }
     }
 }
@@ -180,9 +185,11 @@ impl MusicArrangement {
     }
 }
 
-/// Modern-convenience switches, all defaulting to off (= authentic).
-/// Grows alongside the roadmap: extended controls, savepoints, ...
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+/// Modern-convenience switches, all defaulting to off (= authentic) —
+/// with ONE deliberate exception, `prune_owned_jars` (a player-endorsed
+/// improvement so universally wanted it ships on; see its field doc +
+/// the manual `Default` below).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Enhancements {
     /// Interpolate terrain shade across tile centers instead of the
@@ -238,6 +245,18 @@ pub struct Enhancements {
     /// by flying through). Covers MC1's class-12 jars (red AND blue)
     /// and MC2's class-15 spell tokens.
     pub expose_jar_spells: bool,
+    /// Remove any spell jar whose spell the local player already owns —
+    /// and therefore can never pick up. Retail (BOTH MC1 and MC2)
+    /// leaves such jars in the world forever (placed jars never decay),
+    /// so they become permanent, unidentifiable clutter. An INTENTIONAL
+    /// deviation from retail (P-class unfaithful improvement, player-
+    /// directed 2026-07-14): sweeps at level load AND the instant the
+    /// player gains a spell. Single-player entity removal. The lone
+    /// enhancement that defaults ON ("no one will ever complain") —
+    /// disable with `--no-prune-owned-jars` for a purist run. Covers
+    /// MC1's class-12 jars and MC2's class-15 spell tokens. See
+    /// docs/FIDELITY.md.
+    pub prune_owned_jars: bool,
     /// HUD transparency (the top-strip panels + radar blend over the
     /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle to
     /// make it opaque for readability (the radar especially). Multi-
@@ -268,6 +287,30 @@ pub struct Enhancements {
     /// RNG); the original shows no aim UI at all. Acquisition ≠ hit
     /// (homing is capped 5/tick yaw).
     pub crosshair: bool,
+}
+
+impl Default for Enhancements {
+    fn default() -> Self {
+        Self {
+            smooth_shading: false,
+            map_trigger_areas: false,
+            health_bars: false,
+            dev_spells: false,
+            plausible_spellbook: false,
+            map_owned_buildings: false,
+            invincible: false,
+            grace_meter: false,
+            expose_jar_spells: false,
+            // The lone default-ON enhancement (player-directed
+            // 2026-07-14): removing jars you can never pick up is
+            // "one no one will ever complain about". Purists disable
+            // it with `--no-prune-owned-jars`.
+            prune_owned_jars: true,
+            hud_transparency: HudTransparency::default(),
+            spell_selector: SpellSelector::default(),
+            crosshair: false,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

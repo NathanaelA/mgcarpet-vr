@@ -196,6 +196,33 @@ pub struct MusicTrack {
     pub source: String,
 }
 
+/// `speech.json` (MC2 only): the CD voiceover, pre-sliced at import
+/// by the compiled segment table `CdTracks_DB080` (remc2
+/// `Type_DB080_CdTrack.h`; trace docs/traces/mc2-voiceover-
+/// triggers.md) — the runtime plays whole clips and never seeks
+/// inside a track. `row` = the 0-based level number; segment 0 = the
+/// map-screen intro line, segment N+1 = objective row N's line,
+/// segment 9 = the level-completion line. Rows 25/26 = the secret-
+/// level one-liners.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeechIndex {
+    pub clips: Vec<SpeechClip>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeechClip {
+    /// `CdTracks_DB080` table row = 0-based level number.
+    pub row: u32,
+    /// Segment slot 0..=9 (empty slots are not emitted).
+    pub segment: u32,
+    /// Bundle member holding the FLAC clip.
+    pub file: String,
+    /// Clip length in milliseconds (retail's truncating frames→ms).
+    pub ms: u32,
+    /// Provenance (`redbook track 2 @ 0..9999ms`).
+    pub source: String,
+}
+
 /// A fully-loaded bundle.
 #[derive(Debug, Clone)]
 pub struct Bundle {
@@ -210,6 +237,11 @@ pub struct Bundle {
     /// UI sprite library (HSPR: spell icons, HUD, map markers) — same
     /// index schema as `sprites`, single frame per entry.
     pub ui_sprites: Option<(SpriteIndex, Vec<u8>)>,
+    /// Messaging/notification bitmap font (MC2 HFONT3, MC1 FONT2) —
+    /// same index schema as `sprites`; glyphs are 1-bit coverage masks
+    /// (every ink pixel = index 1). Sprite id for ASCII char `c` is
+    /// `c + 1` (id 0 null, id 33 = space).
+    pub font: Option<(SpriteIndex, Vec<u8>)>,
     /// 256 RGBA entries: the book screen's own palette (DATA/BOOK.PAL).
     pub book_palette: Option<[[u8; 4]; 256]>,
     /// 64KB UI blend LUT (TABLES +0x4000): 2D blits resolve
@@ -337,6 +369,21 @@ impl Bundle {
             None => None,
         };
 
+        let font = match read_opt("font.bin") {
+            Some(data) => {
+                let index_path = dir.join("font.json");
+                let index: SpriteIndex = serde_json::from_slice(&read("font.json")?)
+                    .map_err(|e| BundleError::Json(index_path, e))?;
+                expect(
+                    "font.bin",
+                    &data,
+                    index.atlas_width as usize * index.atlas_height as usize,
+                )?;
+                Some((index, data))
+            }
+            None => None,
+        };
+
         let book_palette = match read_opt("book-palette.bin") {
             Some(data) => {
                 expect("book-palette.bin", &data, 256 * 4)?;
@@ -365,6 +412,7 @@ impl Bundle {
             terrain_atlas,
             sprites,
             ui_sprites,
+            font,
             book_palette,
             blend_lut,
             search: read_opt("search.bin"),
@@ -384,6 +432,8 @@ pub struct AudioBundle {
     pub manifest: BundleManifest,
     pub sounds: Option<(SoundIndex, Vec<u8>)>,
     pub music: Option<MusicIndex>,
+    /// MC2 voiceover clips (`speech.json`), absent elsewhere.
+    pub speech: Option<SpeechIndex>,
     /// Bundle directory, for resolving [`MusicTrack::file`].
     pub dir: PathBuf,
 }
@@ -432,10 +482,19 @@ impl AudioBundle {
             Err(_) => None,
         };
 
+        let speech = match std::fs::read(dir.join("speech.json")) {
+            Ok(bytes) => Some(
+                serde_json::from_slice(&bytes)
+                    .map_err(|e| BundleError::Json(dir.join("speech.json"), e))?,
+            ),
+            Err(_) => None,
+        };
+
         Ok(Self {
             manifest,
             sounds,
             music,
+            speech,
             dir: dir.to_path_buf(),
         })
     }

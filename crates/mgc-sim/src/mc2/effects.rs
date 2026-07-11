@@ -147,11 +147,16 @@ impl Gen {
     /// EF:36607) — the authored ground mana economy: (10,39) = the
     /// 512-mana sphere, (10,58) = the 2560 variant (strA1 rows
     /// 0x27/0x3A; the created entity is ALWAYS model 39, action 0x29
-    /// — the m59-m60 §8 numbering note). Unowned (the neutral 52
-    /// sprite family). Rides the shared MC1 ball machinery exactly
-    /// like the death-drop spheres (mobs.rs module-doc APPROX: the
-    /// MC2 action-0x29 tick column is unported; the MC1 (10,39) ball
-    /// tick rests/flies/claims them).
+    /// — the m59-m60 §8 numbering note) — plus (10,57) = the
+    /// RANDOM-VALUE sphere (`sub_50130` EF:36631, its own model with
+    /// action 0x3E; docs/traces/mc2-class10-m57.md): mana = one draw
+    /// of the sphere's own stream `% 0x7D0` = 0..1999. Unowned (the
+    /// neutral 52 sprite family). All ride the shared MC1 ball
+    /// machinery exactly like the death-drop spheres (mobs.rs
+    /// module-doc APPROX: the MC2 action-0x29/0x3E tick columns are
+    /// unported; the MC1 (10,39) ball tick rests/flies/claims them —
+    /// m57's AI-avoidance gate `word_0x244_580` rides the same
+    /// APPROX).
     pub(crate) fn mc2_spawn_mana_sphere(
         &mut self,
         model: u8,
@@ -160,7 +165,11 @@ impl Gen {
         z: i16,
     ) -> Option<usize> {
         let i = self.spawn_mana_ball(x, y, z)?;
-        self.ent[i].f140 = if model == 58 { 2560 } else { 512 };
+        self.ent[i].f140 = match model {
+            58 => 2560,
+            57 => (self.ent_rand(i) % 0x7D0) as i32,
+            _ => 512,
+        };
         self.ent[i].f144 = 0;
         self.ball_resize(i);
         Some(i)
@@ -200,6 +209,114 @@ impl Gen {
         self.mc2_set_sprite(i, 228);
         self.mc2_shift_rot(i, 272, 1536);
         Some(i)
+    }
+
+    /// `sub_50840` (EF:36960) — the Magic Mine (spell 23) persistent
+    /// proximity mine `(10,78)`: sprite 66, sits on the ground, life =
+    /// the tier lifespan (1000/5000/10000). Placed by the carrier's
+    /// landing (mc2_proj_impact `(10,78)`); the owner is stamped by the
+    /// impact tail (id24). `f44` = the blast intensity (`byte_0x43`,
+    /// 1/2/4/8 by tier); `f26` = the random arm delay (16..65 ticks,
+    /// `rand%0x32 + 16`). Ticks via [`Gen::mc2_mine_tick`] (action 0x55)
+    /// — docs/spell-audit/magic-mine.md.
+    pub(crate) fn mc2_spawn_magic_mine(
+        &mut self,
+        x: u16,
+        y: u16,
+        tier: u8,
+        lifespan: i32,
+    ) -> Option<usize> {
+        let i = self.new_event()?;
+        let gz = self.ground_z(x, y) as i16;
+        let blast = 1u16 << tier.min(3); // 0→1, 1→2, 2→4, 3→8
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 10;
+            e.model65 = 78;
+            e.tick70 = 85; // action 0x55 = sub_3A8B0
+            e.max_life = lifespan.max(1) as u32;
+            e.f44 = blast; // blast intensity (byte_0x43)
+            e.flags = (e.flags & !0x2_0008) | 0x2_0000;
+        }
+        self.link(i, x, y, gz);
+        self.refill_life(i);
+        let r = self.ent_rand(i);
+        self.ent[i].f26 = ((r % 0x32) + 16) as i16; // arm delay 16..65
+        self.mc2_set_sprite(i, 66);
+        Some(i)
+    }
+
+    /// `sub_3A8B0` (EF:29749), class-10 action 0x55 — the Magic Mine
+    /// tick. Lifespan countdown (self-expire at 0), then a random arm
+    /// delay (`f26`), then a PROXIMITY scan every 16 ticks for an enemy
+    /// wizard/castle (class 3, model ≤ 1, or the out-of-pool human)
+    /// within 14 tiles (3584 units), excluding the owner. On a hit it
+    /// detonates. The exact `sub_6DCA0` detonation family + the
+    /// `word_0x36_54` armed gate are untraced (OPEN, magic-mine.md §6);
+    /// the port arms after the random delay and delivers a direct ch0
+    /// blast scaled by the tier intensity.
+    pub(crate) fn mc2_mine_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].f26 > 0 {
+            self.ent[i].f26 -= 1; // arming
+            return false;
+        }
+        if self.ent[i].act_life & 0xF != 0 {
+            return false; // scan cadence: every 16 ticks
+        }
+        let (mx, my, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24)
+        };
+        // A rival-owned mine triggers on the out-of-pool human; a
+        // player-owned mine scans the pool for rival avatars/castles.
+        let mut hit = own != crate::mc1::mobs::PLAYER_TARGET
+            && Self::isqrt(Self::dist2_sq(mx, my, ctx.px, ctx.py) as u32) < 3584;
+        if !hit {
+            for j in 1..self.ent.len() {
+                if j == i {
+                    continue;
+                }
+                let e = &self.ent[j];
+                if e.class64 != 3
+                    || e.model65 > 1
+                    || e.act_life < 0
+                    || e.flags & 0x400 != 0
+                    || e.id24 == own
+                {
+                    continue;
+                }
+                if Self::isqrt(Self::dist2_sq(mx, my, e.x, e.y) as u32) < 3584 {
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if hit {
+            self.mc2_mine_detonate(i, ctx);
+        }
+        false
+    }
+
+    /// The mine's detonation: a ch0 area blast scaled by the tier
+    /// intensity (`f44` = 1/2/4/8) plus the big-explosion visual, then
+    /// despawn. APPROX for the untraced `sub_6DCA0` relaunch (OPEN); the
+    /// owner-immunity rides `area_write` (the mine's id24), and the
+    /// detonation XP award is deferred (the Gen layer can't reach the
+    /// spellbook).
+    fn mc2_mine_detonate(&mut self, i: usize, ctx: &MobCtx) {
+        let (x, y, z, blast) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f44 as u32)
+        };
+        let dmg = blast.saturating_mul(250);
+        self.area_write(i, 0, dmg, ctx, false, false);
+        self.mc2_spawn_big_explosion(x, y, z);
+        self.ent[i].flags |= 0x400;
     }
 
     /// `sub_4FE40` (EF:36506) — the (10,34) MC2 TELEPORTER pad

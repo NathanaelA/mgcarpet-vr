@@ -97,6 +97,9 @@ pub struct FlightInput {
     /// screen or a quick key) — the original's commands 0x15/0x16.
     pub equip_left: Option<spells::SpellId>,
     pub equip_right: Option<spells::SpellId>,
+    /// MC2 spell selection (the CTRL-pane commit): (spell index
+    /// 0..25, tier, hand 0 = left / 1 = right).
+    pub mc2_select: Option<(u8, u8, u8)>,
     /// The respawn key (Space; the original's command 15) — consumed
     /// only while dead.
     pub respawn: bool,
@@ -160,6 +163,11 @@ pub struct Simulation {
     /// [`ThrustModel::Mc1`]; `flyer` is derived from it after each
     /// tick for the renderer/camera.
     pub carpet: flight::Mc1State,
+    /// The MC2-only carpet channels (slow/stun webs, displacement
+    /// mailbox, nudge latch, tuning row) — live under the
+    /// [`verbs::FlightVerb::Mc2`] arm; the enhanced mover services
+    /// the debuff channels too (the webs are gameplay).
+    pub carpet_mc2: flight::Mc2Ext,
     /// The Accelerate override was live last tick (its expiry resets
     /// the speed target to +80 max forward, :65191-97).
     accel_was_active: bool,
@@ -261,7 +269,20 @@ impl Simulation {
         }
 
         match self.thrust_model {
-            ThrustModel::Mc1 => self.move_mc1(input),
+            ThrustModel::Mc1 => {
+                // The faithful mover is game-keyed by the world's
+                // flight verb: MC2 worlds fly sub_5D530, everything
+                // else (and world-less sims) the MC1 arm.
+                let mc2 = self
+                    .world
+                    .as_ref()
+                    .is_some_and(|w| w.verbs().flight == verbs::FlightVerb::Mc2);
+                if mc2 {
+                    self.move_mc2(input);
+                } else {
+                    self.move_mc1(input);
+                }
+            }
             ThrustModel::Enhanced => self.move_enhanced(input),
         }
 
@@ -326,6 +347,7 @@ impl Simulation {
                     fire_right: input.fire_right,
                     equip_left: input.equip_left,
                     equip_right: input.equip_right,
+                    mc2_select: input.mc2_select,
                     respawn: input.respawn,
                     demolish: input.demolish,
                 },
@@ -462,9 +484,31 @@ impl Simulation {
             }
         }
 
-        // Derive the float flyer for the renderer: yaw stays
-        // CONTINUOUS (accumulated radians) across the 11-bit wrap so
-        // the camera lerp never spins the long way.
+        // MC2 cave ceiling: the player clamps (no bounce, no damage)
+        // at ceiling − 384 (sub_5D530 EF:59758-63). After extended
+        // lift so the deviation can't pierce the roof either. The
+        // floor band wins in a low-headroom pinch (retail's branch
+        // order — the roof never pins the carpet under the terrain).
+        if let Some(w) = &self.world {
+            if let Some(c) = w.player_cave_ceiling(self.carpet.x, self.carpet.y) {
+                let floor = w
+                    .ground_z_engine(self.carpet.x, self.carpet.y)
+                    .saturating_add(128);
+                let c = c.max(floor);
+                if self.carpet.z > c {
+                    self.carpet.z = c;
+                }
+            }
+        }
+
+        self.derive_flyer(prev);
+    }
+
+    /// Derive the float flyer for the renderer from the integer
+    /// carpet: yaw stays CONTINUOUS (accumulated radians) across the
+    /// 11-bit wrap so the camera lerp never spins the long way.
+    /// Shared tail of the two faithful movers.
+    fn derive_flyer(&mut self, prev: flight::Mc1State) {
         const RAD: f32 = std::f32::consts::TAU / 2048.0;
         let mut dyaw = (self.carpet.yaw as i32 - prev.yaw as i32) & 0x7FF;
         if dyaw > 1024 {
@@ -486,6 +530,100 @@ impl Simulation {
         f.y = c.z as f32 / 256.0;
     }
 
+    /// The faithful MC2 mover (remc2 sub_5D530, ported in
+    /// [`flight::mc2_move`]) — the real [`verbs::FlightVerb::Mc2`]
+    /// arm (Phase 4.4, docs/traces/mc2-flight-model.md). Same
+    /// boundary contract as [`Self::move_mc1`]: integer carpet state
+    /// is authoritative, the flyer derives after.
+    fn move_mc2(&mut self, input: &FlightInput) {
+        if self.world.is_none() {
+            // World-less sims have no MC2 gate/ceiling data.
+            return self.move_mc1(input);
+        }
+
+        // The tuning row per map type (spawn-time in retail via
+        // AddPlayer_4A920; the map type never changes mid-level).
+        if let Some(w) = &self.world {
+            self.carpet_mc2.row = w.mc2_carpet_row();
+        }
+
+        // The speed-up (MC2 spell 3) rides the Accelerate channel —
+        // same expiry edge as MC1 (:65191-97 shape).
+        let over = self.world.as_ref().and_then(|w| w.accel_override());
+        if self.accel_was_active && over.is_none() {
+            self.carpet.tgt_speed = 80;
+            self.carpet.act_speed = 80;
+        }
+        self.accel_was_active = over.is_some();
+
+        let knock = self.world.as_mut().and_then(|w| w.take_knock_step());
+        // Debuff-stamp hits → the slow/stun web channels (§5c/5d).
+        if let Some(w) = &mut self.world {
+            let (slow, stun) = w.take_mc2_debuffs();
+            for _ in 0..slow {
+                self.carpet_mc2.slow_hit();
+            }
+            for _ in 0..stun {
+                self.carpet_mc2.stun_hit();
+            }
+        }
+
+        let inp = flight::Mc1Input {
+            stick_x: input.stick_x.clamp(-127, 127),
+            stick_y: input.stick_y.clamp(-127, 127),
+            speed_up: input.thrust > 0.0,
+            speed_down: input.thrust < 0.0,
+            strafe_left: input.strafe < 0.0,
+            strafe_right: input.strafe > 0.0,
+        };
+        let prev = self.carpet;
+        let w = self.world.as_ref().expect("checked above");
+        let moved = flight::mc2_move(
+            &mut self.carpet,
+            &mut self.carpet_mc2,
+            &inp,
+            over,
+            knock,
+            &|x, y| w.ground_z_engine(x, y),
+            &|x, y| w.player_cave_ceiling(x, y),
+            &|cur, prop| w.player_mc2_gate(cur, prop),
+            &|pos, latched| w.player_mc2_stuck(pos, latched),
+        );
+        if moved.accel_cancel
+            && let Some(w) = &mut self.world
+        {
+            w.mc2_cancel_accel();
+        }
+
+        // Extended lift (the deviation) — lift key only: the faithful
+        // row-0xe buoyancy IS the idle settle on this arm, so the MC1
+        // path's idle-sink branch is deliberately absent. The floor
+        // is ground+256 (the MC2 clearance, trace §9), and the cave
+        // roof re-clamps after so the deviation can't pierce it.
+        if self.altitude_model == AltitudeModel::ExtendedLift && input.lift != 0.0 {
+            let (cx, cy) = (self.carpet.x, self.carpet.y);
+            let w = self.world.as_ref().expect("checked above");
+            let g = w.ground_z_engine(cx, cy);
+            let floor = g.saturating_add(self.carpet_mc2.row.clearance);
+            let ceil = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
+            let dz = (input.lift * LIFT_STEP) as i16;
+            let new_z = self.carpet.z.saturating_add(dz);
+            self.carpet.z = if dz > 0 {
+                new_z.min(ceil.max(self.carpet.z))
+            } else {
+                new_z.max(floor)
+            };
+            if let Some(c) = w.player_cave_ceiling(cx, cy) {
+                let c = c.max(floor);
+                if self.carpet.z > c {
+                    self.carpet.z = c;
+                }
+            }
+        }
+
+        self.derive_flyer(prev);
+    }
+
     /// The enhanced mover: hold-to-fly with automatic deceleration —
     /// a deliberate deviation from the original (see [`ThrustModel`]).
     /// Obeys the level-plane thrust rule: thrust and the Accelerate
@@ -493,6 +631,28 @@ impl Simulation {
     /// far you aim up or down (player ground truth, 2026-07-07 — aim
     /// pitch must never bleed dodge mobility into vertical motion).
     fn move_enhanced(&mut self, input: &FlightInput) {
+        // The MC2 debuff webs are gameplay, so the deviation mover
+        // services their channels too: drain the stamp hits, tick
+        // the decay, scale the applied step by the slow level and
+        // full-stop + settle under the paralyze (the faithful laws
+        // live in flight::mc2_move; this is their float analog).
+        if let Some(w) = &mut self.world {
+            let (slow, stun) = w.take_mc2_debuffs();
+            for _ in 0..slow {
+                self.carpet_mc2.slow_hit();
+            }
+            for _ in 0..stun {
+                self.carpet_mc2.stun_hit();
+            }
+        }
+        self.carpet_mc2.tick_debuffs();
+        let web_stop = self.carpet_mc2.mobilize > 0;
+        let web_scale = if web_stop {
+            0.0
+        } else {
+            (4 - self.carpet_mc2.move_speed) as f32 / 4.0
+        };
+
         let f = &mut self.flyer;
 
         f.yaw += input.yaw_delta;
@@ -540,9 +700,14 @@ impl Simulation {
         }
 
         let from = (f.x, f.z, f.y);
-        f.x += f.vx * TICK_DT;
-        f.y += f.vy * TICK_DT;
-        f.z += f.vz * TICK_DT;
+        f.x += f.vx * TICK_DT * web_scale;
+        f.z += f.vz * TICK_DT * web_scale;
+        if web_stop {
+            // The paralyze settle (−51 engine units/tick, EF:59750).
+            f.y -= 51.0 / 256.0;
+        } else {
+            f.y += f.vy * TICK_DT;
+        }
 
         // Forced knock displacement (the kraken buffet, Type_160
         // v_22/v_24 — :55204-218): part of the move, BEFORE the wall
@@ -587,6 +752,15 @@ impl Simulation {
         let dead_fall = self.world.as_ref().is_some_and(|w| w.player_falling());
         let floor = ground + if dead_fall { 0.5 } else { MIN_CLEARANCE };
         let ceiling = self.lift_ceiling();
+        // MC2 cave roof (sub_5D530 EF:59758-63): hard clamp at
+        // ceiling − 384 on THIS model too — the enhanced thrust
+        // must not fly through the cave ceiling either (playtest,
+        // level 003: "watch the entire level from above").
+        let cave_ceiling = self.world.as_ref().and_then(|w| {
+            let ex = (self.flyer.x.rem_euclid(256.0) * 256.0) as u16;
+            let ez = (self.flyer.z.rem_euclid(256.0) * 256.0) as u16;
+            w.player_cave_ceiling(ex, ez).map(|c| c as f32 / 256.0)
+        });
         let f = &mut self.flyer;
         if f.y < floor {
             f.y = floor;
@@ -598,6 +772,20 @@ impl Simulation {
         if f.y > ceiling && f.y > from.2 {
             f.y = from.2.max(ceiling);
             f.vy = f.vy.min(0.0);
+        }
+        // The cave roof is a HARD clamp (retail clamps every tick,
+        // no altitude grandfathering under a rock ceiling) — but the
+        // FLOOR band wins in a low-headroom pinch: retail's mover
+        // only ceiling-clamps when z is above floor+clearance
+        // (sub_5D530's branch order), so the roof can never pin the
+        // carpet under the terrain (playtest-cave round 2: sinking
+        // "through the floor" on the door-edge slopes).
+        if let Some(c) = cave_ceiling {
+            let c = c.max(floor);
+            if f.y > c {
+                f.y = c;
+                f.vy = f.vy.min(0.0);
+            }
         }
         // The faithful passive settle, inherited: at rest above the
         // soft-ceiling band, sink 8 engine units/tick (the original's
@@ -643,6 +831,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let mut grid = vec![31u8; 1024];
         for y in 0..32i32 {

@@ -12,21 +12,62 @@
 //! mc2-* asset bundles.
 
 pub mod behavior;
+pub mod cast;
+pub(crate) mod castle;
+pub(crate) mod cave;
 pub(crate) mod doomsday;
 pub(crate) mod effects;
+pub(crate) mod flood;
 pub(crate) mod mobs;
 pub(crate) mod morph;
 pub(crate) mod multipart;
 pub(crate) mod proj;
 pub(crate) mod riser;
+pub mod rivals;
 pub(crate) mod roster;
 pub(crate) mod scenery;
 pub mod sin_lut;
 pub mod spells;
 pub mod sprite_params;
+pub(crate) mod stagevars;
 pub(crate) mod tail;
 pub mod terrain_paint;
 pub(crate) mod tokens;
+
+/// The retail sprite-extents derivation (`sub_718.. init pass`,
+/// remc2 EF:44870-44910): the shipped particle-param table stores
+/// only ONE of the (speed_6, rotSpeed_8) pair per row — at load the
+/// engine decompresses each row's sprite and derives the other from
+/// the bitmap aspect: `speed_6 = width·rotSpeed_8/height` (or the
+/// transpose). THIS is why the static table's speed_6 column is
+/// zero almost everywhere (the PLAYTEST-11 worm-spacing "provenance
+/// OPEN" — closed) and why zero-box projectiles could never collide.
+/// `dims[sprite_id]` = (width, height) from the baked sprite index;
+/// missing/zero dims take retail's 255×255 fallback. Returns the
+/// per-row derived (speed_6, rot_speed_8).
+pub fn derive_sprite_extents(dims: &[(u16, u16)]) -> Vec<(u16, u16)> {
+    sprite_params::SPRITE_PARAMS
+        .iter()
+        .map(|p| {
+            let (mut w, mut h) = dims.get(p.word_0 as usize).copied().unwrap_or((0, 0));
+            if w == 0 || h == 0 {
+                (w, h) = (255, 255);
+            }
+            let (mut s6, mut r8) = (p.speed_6 as u32, p.rot_speed_8 as u32);
+            if s6 != 0 {
+                if r8 == 0 {
+                    r8 = h as u32 * s6 / w as u32;
+                }
+            } else {
+                s6 = w as u32 * r8 / h as u32;
+            }
+            (
+                s6.min(u16::MAX as u32) as u16,
+                r8.min(u16::MAX as u32) as u16,
+            )
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {

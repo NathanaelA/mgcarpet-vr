@@ -201,7 +201,7 @@ mod tests {
                     perception: None,
                     life: None,
                     starting_spells: vec![0; 24],
-                    unknown_spells: Vec::new(),
+                    starting_spell_levels: Vec::new(),
                     blocked_spells: Vec::new(),
                     accuracy: None,
                     tempo: None,

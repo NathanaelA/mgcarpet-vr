@@ -80,6 +80,12 @@ pub struct LevelView {
     pub angle: Option<Vec<u8>>,
     /// The game's water-surface animation rule.
     pub wave: WaveMode,
+    /// MC2 cave second heightmap (`terrain/ceiling.bin`): 256x256
+    /// ceiling bytes. Some ⇒ the renderer draws the CEILING PASS
+    /// (the same grid, inverted plane, fixed wall texture) and the
+    /// caller should keep the sky the cave fill color. None on
+    /// every non-cave level.
+    pub ceiling: Option<Vec<u8>>,
 }
 
 /// One entity dot on the overhead map: tile-unit position and the
@@ -165,6 +171,15 @@ pub fn map_pixels(level: &LevelView, overlay: &MapOverlay) -> Vec<u8> {
     let n = MAP_TILES;
     let mut out = vec![0u8; n * n * 4];
     for i in 0..n * n {
+        // The CAVE map variant (remc2 GameUI:2414-2443): a SEALED
+        // tile (mapAngle bit3 — floor meets ceiling) draws palette
+        // index 0, pitch black; only open cells show their terrain
+        // color.
+        if level.ceiling.is_some() && level.angle.as_ref().is_some_and(|a| a[i] & 8 != 0) {
+            out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[0]);
+            out[i * 4 + 3] = 255;
+            continue;
+        }
         let ty = level.tile_type[i] as usize;
         let shade = level
             .shading
@@ -666,8 +681,17 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
+    /// The CEILING pass twin of `globals_buf` (`atlas.w = 1` — the
+    /// shader's cave-ceiling arm selector); only written/drawn when
+    /// the level carries a ceiling plane.
+    ceiling_globals_buf: wgpu::Buffer,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: Option<wgpu::BindGroup>,
+    /// The MC2 cave ceiling pass: the same terrain grid drawn again
+    /// with the ceiling heightmap (fixed wall texture, no water
+    /// animation). None off-cave.
+    ceiling_bind_group: Option<wgpu::BindGroup>,
+    ceiling_tex: Option<wgpu::Texture>,
     vertex_buf: Option<wgpu::Buffer>,
     index_buf: Option<wgpu::Buffer>,
     index_count: u32,
@@ -983,6 +1007,12 @@ impl Renderer {
 
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ceiling_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ceiling globals"),
             size: std::mem::size_of::<Globals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -1462,6 +1492,9 @@ impl Renderer {
             globals_buf,
             bind_group_layout,
             bind_group: None,
+            ceiling_globals_buf,
+            ceiling_bind_group: None,
+            ceiling_tex: None,
             vertex_buf: None,
             index_buf: None,
             index_count: 0,
@@ -1750,6 +1783,11 @@ impl Renderer {
         };
         let angle_tex = byte_tex("tile angles", angle, n as u32, n as u32);
         let height_tex = byte_tex("tile heights", &level.height, n as u32, n as u32);
+        // MC2 cave second heightmap (the ceiling pass's height slot).
+        let cave_ceiling_tex = level
+            .ceiling
+            .as_ref()
+            .map(|c| byte_tex("ceiling heights", c, n as u32, n as u32));
 
         // Colormap (x = palette index, y = shade): the engine's shade
         // remap composed with the palette on the CPU. sRGB format so
@@ -1848,6 +1886,68 @@ impl Renderer {
                 },
             ],
         }));
+        // The MC2 cave CEILING pass: the identical grid drawn again
+        // with the second heightmap in the height slot and the
+        // ceiling globals (atlas.w = 1) in the uniform slot; all the
+        // other planes are shared views.
+        self.ceiling_bind_group = None;
+        self.ceiling_tex = None;
+        if let Some(ceiling_tex) = cave_ceiling_tex {
+            self.ceiling_bind_group =
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("terrain ceiling"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.ceiling_globals_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &type_tex.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                &shade_tex.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                &colormap_tex.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(
+                                &tile_colors_tex.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::TextureView(
+                                &atlas_tex.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::TextureView(
+                                &angle_tex.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::TextureView(
+                                &ceiling_tex.create_view(&Default::default()),
+                            ),
+                        },
+                    ],
+                }));
+            self.ceiling_tex = Some(ceiling_tex);
+        }
         self.plane_texs = Some([type_tex, shade_tex, angle_tex, height_tex]);
 
         // Overhead map for the book screen, composed on the CPU through
@@ -1944,6 +2044,9 @@ impl Renderer {
         }
         if let Some(a) = &level.angle {
             write(angle_tex, a);
+        }
+        if let (Some(c), Some(tex)) = (&level.ceiling, &self.ceiling_tex) {
+            write(tex, c);
         }
         self.update_map(level, overlay);
     }
@@ -2383,6 +2486,24 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
+        if self.ceiling_bind_group.is_some() {
+            // The ceiling pass twin: atlas.w = 1 selects the shader's
+            // cave-ceiling arms (fixed wall texture, no water wave).
+            let ceiling_globals = Globals {
+                atlas: [
+                    self.atlas_cells,
+                    self.smooth_shading as u32,
+                    self.wave_mode,
+                    1,
+                ],
+                ..globals
+            };
+            self.queue.write_buffer(
+                &self.ceiling_globals_buf,
+                0,
+                bytemuck::bytes_of(&ceiling_globals),
+            );
+        }
 
         // Billboard instances for this camera (empty when no sprites
         // are loaded); opaque range first, translucent tail sorted
@@ -2643,6 +2764,15 @@ impl Renderer {
                     pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                     // 3x3 wrap copies; the vertex shader offsets by instance.
                     pass.draw_indexed(0..self.index_count, 0, 0..9);
+                    // The MC2 cave ceiling: the same grid again with
+                    // the ceiling heightmap + ceiling globals (the
+                    // pipeline never culls, so the downward faces
+                    // draw as-is; painter plan-depth composites it
+                    // like retail's ceiling raster pass).
+                    if let Some(cbg) = &self.ceiling_bind_group {
+                        pass.set_bind_group(0, cbg, &[]);
+                        pass.draw_indexed(0..self.index_count, 0, 0..9);
+                    }
                 }
                 if let (1.., Some(bg), Some(buf)) = (
                     instance_count,

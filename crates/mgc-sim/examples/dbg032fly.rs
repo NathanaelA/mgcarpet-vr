@@ -18,6 +18,7 @@ fn main() {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: terrain.ceiling.clone().unwrap_or_default(),
     };
     let assets = FeatureAssets::parse(
         bundle.search.as_ref().unwrap(),

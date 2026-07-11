@@ -30,7 +30,13 @@ use crate::mc1::mobs::MobCtx;
 
 /// The whirlwind's victim GRAB latch (retail byte[3] & 0x10, dword
 /// 0x1000_0000) — a free high bit next to the mobs.rs MC2 band.
-pub(crate) const F_GRABBED: u32 = 1 << 29;
+// NB: NOT 1 << 29 — that is [`super::proj::F_MC2PROJ`]'s bit, and the
+// whirlwind teardown clears this flag over a radius-12 disc on EVERY
+// entity class (tail of `sub_338D0`), which stripped the MC2-column
+// marker off any projectile caught in the sweep (found by the 4.3b
+// rival sweep: a rival fan-bolt fell to the MC1 handler with an MC2
+// behavior row and crashed the MC1 homing).
+pub(crate) const F_GRABBED: u32 = 1 << 22;
 
 impl Gen {
     // ---- ctors ---------------------------------------------------------------
@@ -104,6 +110,83 @@ impl Gen {
         Some(i)
     }
 
+    /// `sub_4FFB0` (EF:36559) — the (10,38) LIGHTNING STORM cloud
+    /// (Lightning L1/L2's `sub_66FD0` detonation, EF:58821): class-10
+    /// model-38, action 40, maxLife 32, sprite 272, render scale 512. It
+    /// hovers to +1024 above terrain, then RAINS (9,9) beams — the tick
+    /// ([`Gen::mc2_storm_tick`]). The impact tail seeds `f140` with the
+    /// tier's subSpell (300/800), which the tick hands to each beam.
+    pub(crate) fn mc2_spawn_lightning_burst(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 10;
+            e.model65 = 38;
+            e.tick70 = 40;
+            e.max_life = 32;
+            e.f140 = 300; // overridden by the impact tail (subSpell)
+            e.flags &= !8;
+        }
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 272);
+        self.mc2_shift_rot(i, 512, 512);
+        Some(i)
+    }
+
+    /// `sub_35640` (EF:25876, action 40) — the (10,38) STORM tick: first
+    /// rise to +1024 above terrain (64/tick, life frozen while settling),
+    /// then each tick fire TWO opposite-yaw (9,9) lightning beams DOWN
+    /// (pitch 56), each with a third of the beam reach and a (10,23)
+    /// ground impact carrying the storm's subSpell damage; the first of
+    /// the pair claps thunder (sound 23). ~2 bolts/tick over 32 ticks =
+    /// the rain. (docs/spell-audit/lightning.md — the storm is a cloud
+    /// that rains chained beams, NOT a single blast.)
+    pub(crate) fn mc2_storm_tick(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let ground = self.ground_z(x, y) as i32;
+        let target = (ground + 1024).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let z = self.ent[i].z;
+        // Settle at the hover height before raining (life frozen).
+        if z < target {
+            self.ent[i].z = z.saturating_add(64).min(target);
+            return;
+        }
+        if z > target {
+            self.ent[i].z = target;
+            return;
+        }
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let (sz, id, dmg) = {
+            let e = &self.ent[i];
+            (e.z, e.id24, e.f140)
+        };
+        let r = self.mc2_rand(i);
+        let base = (r & 0x7FF) as u16;
+        for k in 0..2u16 {
+            let yaw = base.wrapping_add(k.wrapping_mul(1024)) & 0x7FF; // opposite
+            if let Some(b) = self.mc2_spawn_cast_proj(9, x, y, sz) {
+                let e = &mut self.ent[b];
+                e.id24 = id; // the storm's owner owns the rained beams
+                e.f30 = yaw;
+                e.f32 = 56; // pitch DOWN
+                e.f34 = yaw;
+                e.f36 = 56;
+                e.f146 = 0; // no homing — rain straight down
+                e.f68 = 10;
+                e.f69 = 23; // each beam impacts into (10,23)
+                e.f44 = dmg.clamp(0, u16::MAX as i32) as u16;
+                e.max_life = (e.max_life / 3).max(1);
+                e.act_life = e.max_life as i32;
+            }
+        }
+        self.snd(23, i);
+    }
+
     /// `AddMeteor_4ED70` (EF:35731) — the (10,17) METEOR impact:
     /// maxLife 10, subSpell 3000, untargetable, NOT map-registered,
     /// no sprite of its own (the tick grows the quad). No RNG.
@@ -151,12 +234,18 @@ impl Gen {
         Some(i)
     }
 
-    /// `NewAdd0A0B_4E840` (EF:35553) — the (10,11) GROUND-FIRE-SPRAY
-    /// creator, which REMAPS the entity to model/action 19 (0x13) —
-    /// a (10,11) THING IS a (10,19) entity (the m6-doc §0 numbering
-    /// trap; never port 11 as a distinct model). Sprite 228 (the
-    /// fire family), maxLife 240, subSpell 200, map-registered,
-    /// byte[0] bit0 set / bit3 clear. No RNG.
+    /// The (10,19) GROUND-FIRE-SPRAY creator (sprite 228, the fire
+    /// family; maxLife 240, subSpell 200, map-registered, byte[0]
+    /// bit0 set / bit3 clear, no RNG) — spawned by the dome summit
+    /// and the (10,16) vortex machinery.
+    ///
+    /// TRACE CORRECTION (playtest-cave round 2, decompile-verified):
+    /// the m6-doc §0 claim that "a (10,11) THING IS a (10,19)
+    /// entity" is WRONG — retail's creator-table row 0xB is
+    /// `NewAdd0A0B_4E840` (EF:1715 → :35553), the (10,11) SCORCH
+    /// RING below, a 40-tick one-shot. Routing authored (10,11)s
+    /// here gave level 003 thirty-four permanent smoke fountains
+    /// and exhausted the pool.
     pub(crate) fn mc2_spawn_fire_spray(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
@@ -174,6 +263,74 @@ impl Gen {
         self.mc2_set_sprite(i, 228);
         self.mc2_shift_rot(i, 512, 512);
         Some(i)
+    }
+
+    /// `NewAdd0A0B_4E840` (EF:35553) — the REAL (10,11): the SCORCH
+    /// RING (the volcano-spell ground burn; also the authored
+    /// lava-pool decorations). Action 11, maxLife 40, subSpell 200
+    /// (→ f140), `word_0x26_38 = 11` (→ f40, the spell-XP row key),
+    /// extents (2304, 0x2000), byte[2] |= 2 with bit3 cleared,
+    /// INVISIBLE (no sprite), NOT map-registered, no RNG.
+    pub(crate) fn mc2_spawn_scorch_ring(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 10;
+            e.model65 = 11;
+            e.tick70 = 11;
+            e.max_life = 40;
+            e.f140 = 200;
+            e.f40 = 11;
+            e.f26 = 0;
+            e.flags = (e.flags & !0x8) | 0x2_0000;
+            e.x = x;
+            e.y = y;
+            e.z = z;
+        }
+        self.refill_life(i);
+        self.mc2_shift_rot(i, 2304, 0x2000);
+        Some(i)
+    }
+
+    /// `sub_31FB0` (EF:23490) — the (10,11) action-11 tick: radius
+    /// grows every 3rd frame; 40-tick life (despawn on expiry or a
+    /// class-0 water cell); area burn each tick (full subSpell the
+    /// FIRST tick, /25 after — byte[0] bit1 latches); on reaching
+    /// the extents cap (f80>>8 − 1) the OUTER ring stamps once;
+    /// every tick the disc 0..radius digs −3 (`sub_31F00` ≡
+    /// [`Gen::dig_disc_minus3`]); sound 10. The `sub_6D8B0` XP
+    /// rows 0x10/0x11 (f40 = 11/15) bank with the 4.2 ledger like
+    /// the dome's row 18. Returns terrain-dirty.
+    pub(crate) fn mc2_scorch_ring_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        if self.ent[i].f63 % 3 == 0 {
+            self.ent[i].f26 += 1;
+        }
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life -= 1;
+        let raw =
+            crate::mc1::features::tile((self.ent[i].x >> 8) as u8, (self.ent[i].y >> 8) as u8);
+        if life < 0 || (1u32 << (self.t.angle[raw] & 0xF)) & 1 != 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        let amt = if self.ent[i].flags & 2 != 0 {
+            self.ent[i].f140 / 25
+        } else {
+            self.ent[i].f140
+        } as u32;
+        let _hits = self.area_write(i, 0, amt, ctx, false, false);
+        let cap = (self.ent[i].f80 >> 8) as i32;
+        let mut r = self.ent[i].f26 as i32;
+        if r > cap - 1 {
+            r = cap - 1;
+            if self.ent[i].flags & 2 == 0 {
+                self.dig_disc_minus3(i, cap, cap);
+            }
+        }
+        self.ent[i].flags |= 2;
+        self.dig_disc_minus3(i, 0, r);
+        self.snd(10, i);
+        true
     }
 
     /// `AddAuxiliary_50500` (EF:36812) — the (10,54) proximity AURA
@@ -195,7 +352,11 @@ impl Gen {
         let d = self.mc2_rand(i);
         {
             let e = &mut self.ent[i];
-            e.f26 = 0; // dword_0x10_16 is i16-homed; the squared range is a const below
+            // dword_0x10_16 is homed in f26 as the TILE range; the
+            // squared reach is derived in the tick. 14 = the ctor
+            // default ((14<<8)² = 12845056); a disposition spawn
+            // overrides it from the THING's stageTag (sub_4A310).
+            e.f26 = 14;
             e.f30 = (d & 0x7FF) as u16;
             e.x = x;
             e.y = y;
@@ -303,6 +464,45 @@ impl Gen {
             n = next;
         }
         Some(h)
+    }
+
+    /// `sub_4EDC0` (EF:35749) — the (10,16) TORNADO-DRAG the summit
+    /// vortex (mc2::morph model 18) emits each pulse: subSpell 200,
+    /// life 100..199 (RNG 1), wander speed 52..101 (RNG 2), random
+    /// heading (RNG 3), radius param 256, sprite 210, hover 64 above
+    /// ground, reclaimable (byte[2] bit 1), untargetable. Its ACTION
+    /// is `sub_33110` — THE SAME driver as the (10,22) whirlwind
+    /// head (docs/traces/mc2-class10-m18-m91-summit.md §4.1): the
+    /// dispatch routes action 16 onto [`Gen::mc2_whirlwind_tick`]
+    /// (single node — no tail chain to drag).
+    pub(crate) fn mc2_spawn_tornado16(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 10;
+            e.model65 = 16;
+            e.tick70 = 16;
+            e.f140 = 200;
+            e.f44 = 256;
+            e.flags = (e.flags & !8) | 0x2_0000;
+        }
+        let r1 = self.ent_rand(i);
+        self.ent[i].max_life = (r1 % 0x64 + 100) as u32;
+        let r2 = self.ent_rand(i);
+        self.ent[i].f126 = (r2 % 0x32 + 52) as i16;
+        let r3 = self.ent_rand(i);
+        let yaw = (r3 & 0x7FF) as u16;
+        self.ent[i].f30 = yaw;
+        self.link(i, x, y, z);
+        let gz = (self.ground_z(x, y) + 64) as i16;
+        self.ent[i].z = gz;
+        let mut eye = (x, y, gz);
+        Self::polar_step(&mut eye, yaw, 0, self.ent[i].f126);
+        self.ent[i].dest_x = eye.0;
+        self.ent[i].dest_y = eye.1;
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 210);
+        Some(i)
     }
 
     /// `sub_51790` (EF:37439) — the (10,71) expanding FISSURE:
@@ -492,6 +692,14 @@ impl Gen {
         let floor = (self.ground_z(x, y) as i16).wrapping_add(self.ent[i].f44 as i16);
         if self.ent[i].z < floor {
             self.ent[i].z = floor;
+        }
+        // Cave ceiling clamp, margin = the RADIUS not fov
+        // (EF:24751-58: ceiling − word_0x2C_44).
+        if self.is_cave() {
+            let c = (self.ceiling_z(x, y) as i16).wrapping_sub(self.ent[i].f44 as i16);
+            if self.ent[i].z > c {
+                self.ent[i].z = c;
+            }
         }
         // sub_33AD0 — the breathe bounce.
         {
@@ -815,6 +1023,15 @@ impl Gen {
                     Self::polar_step(&mut pos, swirl, 0, drift);
                 }
                 if pos != (vx, vy, vz) {
+                    // Cave ceiling clamp on the thrown victim
+                    // (EF:24382-88), before the commit.
+                    if self.is_cave() {
+                        let c = (self.ceiling_z(pos.0, pos.1) as i16 as i32
+                            - self.ent[j].f84 as i32) as i16;
+                        if pos.2 > c {
+                            pos.2 = c;
+                        }
+                    }
                     self.move_relink(j, pos.0, pos.1, pos.2);
                 }
                 if airborne {
@@ -824,21 +1041,40 @@ impl Gen {
                 j = next;
             }
         }
-        // The player arm — damage on eye-ring overlap (lift APPROX-
-        // banked on the flight takeover seam).
-        let pd2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as i64;
-        if pd2 < 0x40000 {
-            self.mail_write(MailTarget::Player, 0, amt, id);
-            hits += 1;
+        // The player arm — the tornado SWAY (retail `sub_33340`'s
+        // wizard branch, EF:24296: the human [class 3, model 0] is
+        // swirled at yaw-step 56 and dragged toward the eye). The full
+        // grab / lift / camera-roll takeover is the deferred FlightVerb
+        // seam; the observable "the funnel drags you in" rides the
+        // `player_knock` channel like the flood shove — a pull toward
+        // the eye bent ~45° tangentially so it spirals inward rather
+        // than sucking straight through. The old arm only DAMAGED the
+        // player on eye overlap, which is why the outer tornadoes felt
+        // inert (player-reported 2026-07-13: "no violent attraction");
+        // retail's whirlwind sways the wizard, it does not chip HP.
+        let pd = Self::isqrt(Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32) as i32;
+        if pd < 3328 {
+            let toward = Self::angle_between(ctx.px, ctx.py, ex, ey);
+            let dir = (toward as i32 + 256) as u16 & 0x7FF; // +45° spiral bias
+            // Stronger closer (0..128 across the funnel), clamped to
+            // the knock channel's band and never overshooting the eye.
+            let mag = ((((3328 - pd) << 8) / 3328) << 7 >> 8).clamp(8, 80).min(pd);
+            self.player_knock = (dir, mag as i16);
         }
         let _ = hits; // sub_6D8B0(id, 0x15, hits) — Phase 4.2
     }
 
-    /// `sub_33710` (EF:24416) — the every-8th-tick CONTACT pass:
-    /// overlapping castles take the 1000 mail + the 30-tick blast
-    /// shake (retail writes word_0x30_48 = 30, our f50 shake home),
-    /// and overlapping effect entities take the mail directly. The
-    /// spellbook report banks with 4.2.
+    /// `sub_33710` (EF:24416) — the every-8th-tick CONTACT pass,
+    /// re-traced 2026-07-11 against the list builder (EF:39964-40075,
+    /// the flood-port correction): `dword_38527` is the class-10
+    /// MODEL-45 list ⇒ pass 1 mails overlapping village BUILDINGS
+    /// (sub_11900 ch0, EF:24428-24430 — no owner gate); pass 2 =
+    /// CASTLES (the class-3 list, model 2): the 30-tick shake
+    /// (word_0x30_48 → f50), owner stamp (word_0x26_38 → f40) and
+    /// the subSpell mail — also ungated (your own castle takes it).
+    /// Overlap = CompareAxisWithShift_10750 (XY-only — the shared
+    /// [`Gen::mc2_overlap_xy`]). The `sub_6D8B0(id, 0x15, 2n)`
+    /// report banks with 4.2.
     fn mc2_whirlwind_contact(&mut self, i: usize) {
         if self.ent[i].f63 & 7 != 0 {
             return;
@@ -850,15 +1086,16 @@ impl Gen {
             if j == i || c.flags & 0x400 != 0 {
                 continue;
             }
-            let castle = c.class64 == 3 && c.model65 == 2;
-            let effect = c.class64 == 10 && c.flags & 8 != 0 && c.f28 & 1 != 0;
-            if (castle || effect) && c.id24 != id && self.ent_overlap(i, j) {
+            let castle = c.class64 == 3 && c.model65 == 2 && c.act_life >= 0;
+            let building = c.class64 == 10 && c.model65 == 45;
+            if (castle || building) && self.mc2_overlap_xy(i, j) {
                 hits.push((j, castle));
             }
         }
         for (j, castle) in hits {
             if castle {
                 self.ent[j].f50 = 30;
+                self.ent[j].f40 = i as u16;
             }
             self.mail_write(MailTarget::Pool(j), 0, amt, id);
         }
@@ -1011,11 +1248,21 @@ impl Gen {
             e.z = pos.2;
         }
         let (fov, id) = (self.ent[i].f84, self.ent[i].id24);
-        if let Some(s) = self.mc2_spawn_fire_spray(pos.0, pos.1, pos.2) {
+        // The trail lays a child SCORCH RING (10,11) — the earth-CARVE
+        // (`sub_31FB0` digs the disc −3), NOT the (10,19) ground-fire
+        // SPRAY it was mis-spawning. The spray is a fire effect that
+        // itself spews (10,14) smoke puffs every odd tick, so a trail
+        // dropping one per tick over its 128-life detonated the pool
+        // (player-reported entity-pool exhaustion 2026-07-13) AND
+        // rendered as explosions instead of a travelling crater. Same
+        // (10,11)-vs-(10,19) confusion the cave column already hit
+        // (docs/spell-audit/quake-family.md §Earthquake; the m6-doc §0
+        // numbering trap). f40=15 keys the ring's Earthquake-XP branch.
+        if let Some(s) = self.mc2_spawn_scorch_ring(pos.0, pos.1, pos.2) {
             let e = &mut self.ent[s];
             e.f84 = fov;
             e.act_life = 10;
-            e.f40 = 15; // word_0x26_38
+            e.f40 = 15; // word_0x26_38 → Earthquake XP row
             e.id24 = id;
         }
     }
@@ -1065,37 +1312,60 @@ impl Gen {
         self.area_write(i, 0, amt, ctx, false, false);
     }
 
-    /// `sub_38D80` (EF:28349) — the (10,54) aura tick: life-- (< 0 →
-    /// despawn), then scan the creature list and stamp every entity
-    /// within the SQUARED range 0xC40000 whose channel-4 mailbox
-    /// source is clear: `mail[4] = (min(isqrt(d²), 42), self id)` —
-    /// the word_0x76/78/7A field triplet (amount ≤ 42 so the high
-    /// word is always 0). First-come, one tag per victim, no direct
-    /// HP damage, no sound.
+    /// `sub_38D80` (EF:28349) — the (10,54) MANA-MAGNET aura (retail
+    /// `AddAuxiliary_50500`, `dword_0x10_16 = 0xC40000`): life-- (< 0
+    /// → despawn), then over the SQUARED range 0xC40000 (≈14 tiles)
+    /// drag every unowned MANA SPHERE toward the eye. Retail stamps
+    /// each sphere a homing target (`word_0x7A_122` = this aura) +
+    /// pull speed (`word_0x76_118 = min(dist, 42)`) which the ball
+    /// tick (EF:26369) flies in, merging coincident balls into one.
+    ///
+    /// The port reuses the established magnet path: [`Self::ball_tick`]
+    /// already consumes `dest_x/dest_y` as a decaying drift AND merges
+    /// overlapping balls, so the aura writes the pull velocity onto
+    /// each ball's dest exactly like [`Self::magnet_tick`] — the
+    /// homing triplet collapses to the same observable motion. The
+    /// original port read this as a CREATURE grip (`mail[4]` over
+    /// class 5), which never touched the balls, so the level-001
+    /// centre magnet did nothing and its mana never consolidated
+    /// (player-reported 2026-07-13).
     pub(crate) fn mc2_aura_tick(&mut self, i: usize) {
-        const RANGE_SQ: i32 = 12_845_056; // 0xC40000
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
         if life < 0 {
             self.ent[i].flags |= 0x400;
             return;
         }
-        let (ax, ay, src) = {
-            let e = &self.ent[i];
-            (e.x, e.y, e.id24)
-        };
+        // dword_0x10_16 = (tile range << 8)² — f26 holds the tile
+        // range (ctor default 14; disposition spawn overrides it from
+        // the THING's stageTag, sub_4A310). level-001's staged magnets
+        // carry 33/45/64/31-tile reach, which is how they pull the arm
+        // balls sitting 20-44 tiles out (the 14-tile default never
+        // could — player-reported 2026-07-13).
+        let r = (self.ent[i].f26 as i32) << 8;
+        let range_sq = r * r;
+        let (ax, ay) = (self.ent[i].x, self.ent[i].y);
         for j in 1..self.ent.len() {
-            if j == i || self.ent[j].class64 != 5 || self.ent[j].flags & 0x400 != 0 {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
                 continue;
             }
-            if self.ent[j].mail[4].1 != 0 {
+            let d2 = Self::dist2_sq(ax, ay, c.x, c.y);
+            if d2 >= range_sq {
                 continue;
             }
-            let d2 = Self::dist2_sq(ax, ay, self.ent[j].x, self.ent[j].y);
-            if d2 < RANGE_SQ {
-                let mag = Self::isqrt(d2 as u32).min(42);
-                self.ent[j].mail[4] = (mag, src);
-            }
+            // Pull speed = min(linear distance, 42) — retail's radix_3d
+            // cap; it eases to 0 at the eye so the merged ball settles.
+            let speed = (Self::isqrt(d2 as u32).min(42)) as i32;
+            // `angle_of` returns 0..=2048 (2048 = the full-turn wrap);
+            // mask to the table's 0..2047 like `advance` does, or a
+            // ball at the exact diagonal panics SIN[2048] (len 2048) —
+            // player crash 2026-07-13 with the magnet pulling a ball.
+            let dir = (Self::angle_between(c.x, c.y, ax, ay) & 0x7FF) as usize;
+            let vx = ((speed * crate::mc1::tables::SIN[dir]) >> 16) as i16;
+            let vy = (-((speed * crate::mc1::tables::COS[dir]) >> 16)) as i16;
+            self.ent[j].dest_x = vx as u16;
+            self.ent[j].dest_y = vy as u16;
         }
     }
 }

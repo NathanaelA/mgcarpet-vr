@@ -159,7 +159,7 @@ impl Gen {
 
     /// `sub_58210_radix_tan` — the vertical bearing FROM a TO b
     /// (the MC1 segment-follow idiom, mc1/mobs.rs :21107 port).
-    fn mc2_radix_tan(a: (u16, u16, i16), b: (u16, u16, i16)) -> u16 {
+    pub(crate) fn mc2_radix_tan(a: (u16, u16, i16), b: (u16, u16, i16)) -> u16 {
         let dh = Self::isqrt(Self::dist2_sq(a.0, a.1, b.0, b.1) as u32) as i16;
         Self::angle_of(a.2.wrapping_sub(b.2), dh.wrapping_neg())
     }
@@ -321,14 +321,26 @@ impl Gen {
             if m3 {
                 self.mc2_set_sprite(seg, 89 + ci);
                 // Per-child particle metrics override the /2 quad
-                // (EF:33846-51): 65% of the row's raw values.
-                let p = &SPRITE_PARAMS[(89 + ci) as usize];
-                let (sh, fov) = (65 * p.speed_6 / 100, 65 * p.rot_speed_8 / 100);
+                // (EF:33846-51): 65% of the row's raw values (the
+                // DERIVED pair — retail computes speed_6 from the
+                // sprite bitmap at load, EF:44870-44910).
+                let (ps6, pr8) = self.mc2_params_ext((89 + ci) as usize);
+                let (sh, fov) = (65 * ps6 / 100, 65 * pr8 / 100);
                 self.mc2_shift_rot(seg, sh, fov);
                 self.ent[seg].f56 = if ci == 0 { 125 * sh / 100 } else { sh };
             } else {
                 self.mc2_set_sprite(seg, 19 + ci);
                 self.ent[seg].f56 = self.ent[seg].f80; // word_0x36_54 = array.pitch
+            }
+            // PROVENANCE CLOSED (playtest-12): the table's zero
+            // speed_6 was never the runtime value — retail DERIVES
+            // it at load from the sprite bitmap's aspect
+            // (EF:44870-44910, speed_6 = w·rotSpeed/h), which the
+            // dims-fed assets now reproduce. The 96 floor stays
+            // only for dims-less callers (unit fixtures) where the
+            // derivation can't run — the PLAYTEST-11 stand-in.
+            if self.ent[seg].f56 == 0 {
+                self.ent[seg].f56 = 96;
             }
             self.link(seg, x, y, z);
             self.refill_life(seg);
@@ -377,8 +389,9 @@ impl Gen {
 
     /// `sub_1F040` (EF:11233) — the m0 vertical bob: velocity in
     /// f26 (`dword_0x10_16`), gravity −5/tick, floor bounce +150 at
-    /// terrain+256. The cave ceiling clamp (−150) waits on Phase
-    /// 4.5 — open levels have no upper clamp, exactly retail.
+    /// terrain+256; on caves, ceiling BOUNCE −150 above ceiling−256
+    /// (EF:11244-48) — open levels have no upper clamp, exactly
+    /// retail.
     fn m0_bob(&mut self, i: usize) {
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let z = self.ent[i].z.wrapping_add(self.ent[i].f26);
@@ -387,6 +400,8 @@ impl Gen {
         self.ent[i].f26 -= 5;
         if z < ground.wrapping_add(256) {
             self.ent[i].f26 = 150;
+        } else if self.is_cave() && z as i32 > self.ceiling_z(x, y) - 256 {
+            self.ent[i].f26 = -150;
         }
     }
 
@@ -1146,8 +1161,12 @@ impl Gen {
 
     /// `sub_4D000`: 1 body + 5 branches + 45 segments = 51 slots,
     /// one linear f54 chain; every member's f52/id24 point at the
-    /// BODY. Cave gate = Phase 4.5 (no cave levels boot yet).
+    /// BODY. CAVE-EXCLUDED — on caves `v16 = 1` skips the whole
+    /// construction and returns 0 (EF:34608-34690).
     pub(crate) fn mc2_spawn_m27(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        if self.is_cave() {
+            return None;
+        }
         if self.free.len() < 51 {
             return None;
         }

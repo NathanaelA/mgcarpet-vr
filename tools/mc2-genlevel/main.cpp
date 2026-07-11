@@ -12,7 +12,9 @@
 //                  +0x10000  heightmap      (256x256 u8)
 //                  +0x20000  shading        (256x256 u8)
 //                  +0x30000  angle          (256x256 u8)
-//                  +0x40000  zeros          (array not produced here)
+//                  +0x40000  second heightmap / cave ceiling (256x256
+//                            u8; zeros off-cave — sub_43D50 never
+//                            writes it)
 //                  +0x50000  entity index   (256x256 i16 LE)
 
 #include "Terrain.h"
@@ -74,6 +76,11 @@ int main(int argc, char** argv) {
     lvl.rkSte_0x2FF11 = u16le(level + 0x43);
 
     isCaveLevel_D41B6 = (map_type == 2);
+    // Retail LevelInit_56C00 (LevelInit.cpp:36): on cave levels the
+    // ceiling mirror pivot comes from level byte 0x05 (byte_0x2FED3);
+    // off-cave it stays the weak default 44 (Terrain.cpp:15).
+    if (isCaveLevel_D41B6)
+        MapBasicHeight_D41B7 = level[0x05];
     D41A0_0.terrain_2FECE = lvl;
 
     GenerateLevelMap_43830(&lvl);

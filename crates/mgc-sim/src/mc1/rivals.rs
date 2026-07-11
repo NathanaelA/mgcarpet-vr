@@ -362,12 +362,21 @@ impl World {
 
     /// Resolve an owner tag (projectile id24 / claim f144) to a
     /// player slot: PLAYER_TARGET = 0 (the human), a live rival's
-    /// entity slot = its player slot.
+    /// entity slot = its player slot. Consults both rival columns.
     pub(crate) fn owner_slot(&self, owner: u16) -> Option<u8> {
         if owner == PLAYER_TARGET {
             return Some(0);
         }
-        self.rivals.iter().find(|r| r.ent == owner).map(|r| r.slot)
+        self.rivals
+            .iter()
+            .find(|r| r.ent == owner)
+            .map(|r| r.slot)
+            .or_else(|| {
+                self.mc2_rivals
+                    .iter()
+                    .find(|r| r.ent == owner)
+                    .map(|r| r.slot)
+            })
     }
 
     // ---- the per-tick brain (sub_13170 :17842) ---------------------------
@@ -567,7 +576,7 @@ impl World {
     /// Resolve a mailbox source id to the attacking wizard's slot:
     /// sources carry the attacker's owner tag directly (our writers
     /// pass id24 through).
-    fn owner_slot_of_source(&self, src: u16) -> Option<u8> {
+    pub(crate) fn owner_slot_of_source(&self, src: u16) -> Option<u8> {
         if src == PLAYER_TARGET {
             return Some(0);
         }
@@ -595,12 +604,16 @@ impl World {
     }
 
     /// Credit stolen mana to a wizard by owner tag.
-    fn credit_wizard_mana(&mut self, owner: u16, amount: u32) {
+    pub(crate) fn credit_wizard_mana(&mut self, owner: u16, amount: u32) {
         if owner == PLAYER_TARGET {
             self.player.mana = (self.player.mana + amount).min(self.player.mana_max);
             return;
         }
         if let Some(r) = self.rivals.iter_mut().find(|r| r.ent == owner) {
+            r.mana = (r.mana + amount).min(r.mana_max);
+            return;
+        }
+        if let Some(r) = self.mc2_rivals.iter_mut().find(|r| r.ent == owner) {
             r.mana = (r.mana + amount).min(r.mana_max);
         }
     }
@@ -1196,24 +1209,41 @@ impl World {
     }
 
     /// A wizard's live position by slot (0 = the human).
-    fn wizard_pos(&self, slot: u8) -> Option<(u16, u16, i16)> {
+    pub(crate) fn wizard_pos(&self, slot: u8) -> Option<(u16, u16, i16)> {
         if slot == 0 {
             return (self.player.state == LifeState::Alive).then_some(self.human_pose);
         }
-        let r = self.rivals.iter().find(|r| r.slot == slot)?;
-        let e = &self.g.ent[r.ent as usize];
+        let ent = self
+            .rivals
+            .iter()
+            .find(|r| r.slot == slot)
+            .map(|r| r.ent)
+            .or_else(|| {
+                self.mc2_rivals
+                    .iter()
+                    .find(|r| r.slot == slot)
+                    .map(|r| r.ent)
+            })?;
+        let e = &self.g.ent[ent as usize];
         (e.tick70 == 1).then_some((e.x, e.y, e.z))
     }
 
     /// A wizard's mana ceiling (the wealth term in the hate gates).
-    fn wizard_wealth(&self, slot: u8) -> u32 {
+    pub(crate) fn wizard_wealth(&self, slot: u8) -> u32 {
         if slot == 0 {
             return self.player.mana_max;
         }
         self.rivals
             .iter()
             .find(|r| r.slot == slot)
-            .map_or(0, |r| r.mana_max)
+            .map(|r| r.mana_max)
+            .or_else(|| {
+                self.mc2_rivals
+                    .iter()
+                    .find(|r| r.slot == slot)
+                    .map(|r| r.mana_max)
+            })
+            .unwrap_or(0)
     }
 
     // ---- state handlers -----------------------------------------------
@@ -1765,8 +1795,12 @@ impl World {
                 self.g.kills = self.g.kills.saturating_add(1);
             }
         }
-        // Death message for the app ticker.
-        self.rival_deaths.push(self.rivals[ri].slot);
+        // Death message for the app ticker + toast (retail lang 54
+        // "%name% is dead", :55499-517).
+        let slot = self.rivals[ri].slot;
+        self.rival_deaths.push(slot);
+        let name = RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
+        self.set_notification(format!("{name} is dead"), 120, [0xFF, 0, 0]);
         // JAR SCATTER (:55519-49): every owned manifestation detaches
         // into a decaying ground jar around the corpse.
         let (cx, cy) = (self.g.ent[i].x, self.g.ent[i].y);

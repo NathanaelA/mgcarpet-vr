@@ -48,6 +48,24 @@
 //! deliberate deviation; both obey the player-directed rule that aim
 //! pitch never steals meaningful mobility (the faithful model's cos
 //! shrink maxes at ~29%, and thrust stays fully live while aiming).
+//!
+//! [`Mc2Ext`] + [`mc2_move`] are the Phase-4.4 `FlightVerb::Mc2` arm —
+//! remc2's `sub_5D530` (EF:59610) with its `sub_5F380` command
+//! integration (EF:60748) and `moveTest_5D0A0` commit gate (EF:59429,
+//! supplied by the world through [`Mc2GateOut`]); the full trace is
+//! docs/traces/mc2-flight-model.md. The speed/strafe/pose halves are
+//! MC1's verbatim (same 16/±80/−4 constants — trace §4c); what
+//! differs: the row-data climb ramp (band 1024 open / 3072 cave, row
+//! 66/104 — NOT row 59, trace §0.1), the ground+256 clearance with the
+//! always-on row-`0xe` buoyancy sink, the water/cave gate that zeroes
+//! target speed on CAVE refusal, the `sub_5DD50` 128-unit nudge, and
+//! the slow/mobilize debuff channels (the spider-web tint/stun).
+//! Deliberately unported here (cited, banked): the `sub_5DE30`
+//! possess/tornado leash (worklist item 7 — needs the grab spells) and
+//! the trailing cave-ambient/water-loop sound block (EF:59776-59850,
+//! presentation). MC2's tick makes NO flutter roll (MC1's :55294-99
+//! LCG is replaced by that sound block; the draw is carpet-private
+//! state, so omitting it moves no world golden).
 
 use crate::mc1::features::Gen;
 
@@ -260,6 +278,353 @@ pub fn mc1_move(
         flutter = st.rand % 0xB == 0;
     }
     Mc1Moved { flutter }
+}
+
+/// The MC2 carpet's `str_D7BD6` tuning row — `AddPlayer_4A920`
+/// explicitly overwrites the generic default with row 104 on cave
+/// maps, row 66 otherwise (EF:33329-32; trace §0.1 — row 59 is the
+/// pre-overwrite default and must NOT be used).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mc2Row {
+    /// `word_160_0xa_10`: the climb-ramp band / soft-ceiling offset.
+    pub band: i16,
+    /// `word_160_0xc_12`: ground clearance (the z-floor offset).
+    pub clearance: i16,
+    /// `word_160_0xe_14`: the always-on buoyancy step above the
+    /// clearance band (negative = sink).
+    pub buoyancy: i16,
+}
+
+impl Mc2Row {
+    /// Row 66 (L:78): open (day/night) maps.
+    pub const OPEN: Mc2Row = Mc2Row {
+        band: 1024,
+        clearance: 256,
+        buoyancy: -16,
+    };
+    /// Row 104 (L:116): cave maps — triple climb band, gentler sink.
+    pub const CAVE: Mc2Row = Mc2Row {
+        band: 3072,
+        clearance: 256,
+        buoyancy: -8,
+    };
+}
+
+impl Default for Mc2Row {
+    fn default() -> Self {
+        Mc2Row::OPEN
+    }
+}
+
+/// The MC2-only carpet channels (trace §5) layered over [`Mc1State`]
+/// — the shared pose/speed/strafe state stays in the MC1 struct so
+/// the renderer/camera derivation is model-agnostic.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Mc2Ext {
+    /// `moveSpeed_0x14C_332` (0..3): the spider-web SLOW — scales the
+    /// pose delta, forward and strafe speed by (4−n)/4. Drives the
+    /// red screen tint (presentation reads it).
+    pub move_speed: u8,
+    /// `moveSpeedCounter_0x14D_333`: 8-tick decay counter per level.
+    pub move_speed_ctr: u8,
+    /// `mobilizeCounter_0x14E_334`: the FULL-STOP web (stun) — all
+    /// speed forced 0, −51/tick settle toward the ground.
+    pub mobilize: u8,
+    /// `mobilizeCounter2_0x150_336`: 10-tick decay counter.
+    pub mobilize_ctr: u8,
+    /// `xAdd/yAdd/zAdd_0x1A6/8/A`: one-shot world-space displacement
+    /// mailbox — external systems write, the move applies once and
+    /// clears (EF:59713-18).
+    pub add: (i16, i16, i16),
+    /// `waterCounter_0x262_610`: ++ on a wet predicted tile (in the
+    /// gate), −− each tick; gates the water-flight sound loop.
+    pub water_ctr: u16,
+    /// `byte_0x261_609`: the "nudging out of a wall" latch
+    /// (`sub_5DD50`).
+    pub nudge_latch: bool,
+    /// The tuning row (selected by map type at level hand-off).
+    pub row: Mc2Row,
+}
+
+impl Mc2Ext {
+    /// The slow/mobilize decay walk (`sub_5D530` EF:59722-43, block
+    /// 8) — split out so the enhanced (deviation) mover can service
+    /// the debuff channels on the same cadence.
+    pub fn tick_debuffs(&mut self) {
+        if self.move_speed > 0 {
+            self.move_speed_ctr = self.move_speed_ctr.wrapping_sub(1);
+            if self.move_speed_ctr == 0 {
+                self.move_speed -= 1;
+                if self.move_speed > 0 {
+                    self.move_speed_ctr = 8;
+                }
+            }
+        }
+        if self.mobilize > 0 {
+            self.mobilize_ctr = self.mobilize_ctr.wrapping_sub(1);
+            if self.mobilize_ctr == 0 {
+                self.mobilize -= 1;
+            }
+        }
+    }
+
+    /// A debuff-stamp SLOW hit (`sub_38E70` EF:28407-17): ramp one
+    /// level to the cap 3, re-arm the 8-tick counter.
+    pub fn slow_hit(&mut self) {
+        if self.move_speed < 3 {
+            self.move_speed += 1;
+        }
+        self.move_speed_ctr = 8;
+    }
+
+    /// A debuff-stamp PARALYZE hit (`sub_38F70` EF:28442-43): latch
+    /// the full-stop with its 10-tick counter (the −80 backward kick
+    /// rides the knock channel at the stamp).
+    pub fn stun_hit(&mut self) {
+        self.mobilize = 1;
+        self.mobilize_ctr = 10;
+    }
+
+    /// The `(4−moveSpeed)/4` slow scale (round toward zero), applied
+    /// to pose deltas and speeds while the web slow is active.
+    fn slow_scale(&self, v: i32) -> i32 {
+        (v * (4 - self.move_speed as i32)) / 4
+    }
+}
+
+/// What the world's `moveTest_5D0A0` gate hands back to [`mc2_move`].
+#[derive(Debug, Clone, Copy)]
+pub struct Mc2GateOut {
+    /// `Some((committed candidate, yaw turn))` — the candidate may
+    /// have been slid along a water cardinal or steered around a cave
+    /// wall (the yaw turn is the cave steer-assist's ±(17·i)/6,
+    /// EF:59578-84; 0 otherwise). `None` = the move is refused.
+    pub pass: Option<((u16, u16, i16), i16)>,
+    /// The predicted tile was deep water (`waterCounter`++, EF:59480).
+    pub wet: bool,
+    /// The refusal happened in-cave: target speed zeroes and the
+    /// speed-up spell cancels (EF:59599-605 — the block runs after
+    /// the non-cave early return at EF:59513, so open-level water
+    /// refusals do NOT zero speed).
+    pub zero_speed: bool,
+}
+
+/// What [`mc2_move`] reports back to the sim boundary.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Mc2Moved {
+    /// A cave refusal cancelled the speed-up spell (retail clears the
+    /// `SpellEnabled[3]` manifestation's `word_0x2E_46`, EF:59603 —
+    /// MC2 spell 3 = the accelerate channel).
+    pub accel_cancel: bool,
+}
+
+/// The faithful MC2 human move — `sub_5F380`'s command integration
+/// followed by `sub_5D530` in the original's statement order (trace
+/// docs/traces/mc2-flight-model.md). `ground` is `getTerrainAlt`;
+/// `ceiling` returns the cave clamp target `ceiling − 384` (None
+/// off-cave — [`crate::mc1::world::World::player_cave_ceiling`]);
+/// `gate` is `moveTest_5D0A0` (water slide + cave steer, world-side);
+/// `stuck` is `sub_5DD50`'s wedged test at the CURRENT position
+/// (water / sealed / latched-and-colliding). `accel_over` and `knock`
+/// ride the same channels as [`mc1_move`] — the MC2 knock constants
+/// (cap 128, decay −4, snap <4; EF:59695-711) equal the MC1 channel's,
+/// and `moveBoost` IS that channel's retail home.
+#[allow(clippy::too_many_arguments)]
+pub fn mc2_move(
+    st: &mut Mc1State,
+    ext: &mut Mc2Ext,
+    inp: &Mc1Input,
+    accel_over: Option<f32>,
+    knock: Option<(u16, i16)>,
+    ground: &dyn Fn(u16, u16) -> i16,
+    ceiling: &dyn Fn(u16, u16) -> Option<i16>,
+    gate: &dyn Fn((u16, u16, i16), (u16, u16, i16)) -> Mc2GateOut,
+    stuck: &dyn Fn((u16, u16, i16), bool) -> bool,
+) -> Mc2Moved {
+    let mut moved = Mc2Moved::default();
+
+    // ---- sub_5F380 (EF:60748): command integration, pre-move ----
+    // Identical numbers to MC1's sub_46840 (trace §4c: the D4B8x
+    // constants match 16/±80/−4 exactly).
+    let mut dir: i16 = 0;
+    if inp.speed_up && st.tgt_speed < 80 {
+        dir = 1;
+    }
+    if inp.speed_down && st.tgt_speed > -80 {
+        dir = -1;
+    }
+    if dir != 0 {
+        st.tgt_speed = (st.tgt_speed + 16 * dir).clamp(-80, 80);
+    }
+    let sdir: i16 = match (inp.strafe_left, inp.strafe_right) {
+        (true, false) => -1,
+        (false, true) => 1,
+        _ => 0,
+    };
+    if sdir != 0 {
+        st.strafe = (st.strafe + 16 * sdir).clamp(-80, 80);
+    } else if st.strafe != 0 {
+        let s = st.strafe.signum();
+        st.strafe -= 4 * s;
+        if st.strafe.signum() != s {
+            st.strafe = 0;
+        }
+    }
+
+    // The speed-up spell override (EF:56189 arms it; the channel's
+    // shape is shared with MC1's Accelerate).
+    if let Some(k) = accel_over {
+        let v = (k * 80.0) as i16;
+        st.tgt_speed = v;
+        st.act_speed = v;
+    }
+
+    // ---- sub_5D530 (EF:59610), statement order ----
+    // (0) pose: the filtered delta (EF:38060-66, ÷4 toward zero),
+    // slow-scaled while the web slow is active (EF:59622-30), then
+    // yaw as a RATE and the published absolute aim pitch.
+    let dr = ((2 * inp.stick_x as i32 - st.roll_f as i32) / 4) as i16;
+    let dp = ((2 * inp.stick_y as i32 - st.pitch_f as i32) / 4) as i16;
+    if ext.move_speed > 0 {
+        st.roll_f += ext.slow_scale(dr as i32) as i16;
+        st.pitch_f += ext.slow_scale(dp as i32) as i16;
+    } else {
+        st.roll_f += dr;
+        st.pitch_f += dp;
+    }
+    st.yaw = ((st.yaw as i32 + st.roll_f as i32 / 8) & 0x7FF) as u16; // EF:59635
+
+    // (1) actual speed chases the target in ±16 sign steps
+    // (EF:59636-44).
+    let d = st.tgt_speed - st.act_speed;
+    if d != 0 {
+        st.act_speed += d.signum() * 16;
+    }
+
+    // (2) the climb ramp — the row-data band (EF:59645-66): authority
+    // −256..+256 normalized by the band, folded into the effective
+    // pitch with the same four-quadrant raw/ramped law as MC1 (climb
+    // toward the band ramps, dives pass raw).
+    let mut cand = (st.x, st.y, st.z);
+    let g = ground(st.x, st.y) as i32;
+    let band = ext.row.band as i32;
+    let alt_diff = (((st.z as i32 - g - band) << 10) / band).clamp(-256, 256);
+    st.aim_pitch = (st.pitch_f as u16) & 0x7FF; // published (EF:59651-52)
+    let mut v6 = st.aim_pitch as i32;
+    if v6 > 1024 {
+        v6 -= 2048;
+    }
+    let s = st.act_speed;
+    if s != 0 && v6 != 0 {
+        let dive = (s > 0 && v6 > 0) || (s < 0 && v6 < 0);
+        st.eff_pitch = if dive {
+            st.aim_pitch
+        } else {
+            // Round-toward-zero fold (the −sign·255 >> 8 idiom).
+            ((((v6 * -alt_diff) / 256) as i16) as u16) & 0x7FF
+        };
+    }
+    // (No speed-0 sink here — MC2's sink is the post-gate row-0xe
+    // buoyancy; eff_pitch stays stale on the zero branches, verbatim.)
+
+    // (3) forward polar step, slow/mobilize-scaled (EF:59668-80).
+    let fwd = if ext.move_speed > 0 {
+        ext.slow_scale(st.act_speed as i32) as i16
+    } else if ext.mobilize > 0 {
+        0
+    } else {
+        st.act_speed
+    };
+    Gen::polar_step(&mut cand, st.yaw, st.eff_pitch, fwd);
+
+    // (4) strafe at yaw+512, same scaling (EF:59681-93).
+    if st.strafe != 0 {
+        let sf = if ext.move_speed > 0 {
+            ext.slow_scale(st.strafe as i32) as i16
+        } else if ext.mobilize > 0 {
+            0
+        } else {
+            st.strafe
+        };
+        Gen::polar_step(&mut cand, st.yaw.wrapping_add(512) & 0x7FF, 0, sf);
+    }
+
+    // (5) the moveBoost knockback impulse (EF:59695-711) — the cap
+    // 128 / decay −4 / snap <4 law lives in the world's knock channel
+    // (take_knock_step), identical math.
+    if let Some((kdir, kmag)) = knock {
+        Gen::polar_step(&mut cand, kdir, 0, kmag);
+    }
+
+    // (6) the one-shot displacement mailbox (EF:59713-18) + water
+    // counter decay (EF:59719-20).
+    cand.0 = cand.0.wrapping_add(ext.add.0 as u16);
+    cand.1 = cand.1.wrapping_add(ext.add.1 as u16);
+    cand.2 = cand.2.wrapping_add(ext.add.2);
+    ext.add = (0, 0, 0);
+    if ext.water_ctr > 0 {
+        ext.water_ctr -= 1;
+    }
+
+    // (7) the sub_5DE30 possess/tornado leash — UNPORTED (banked,
+    // trace §6/worklist 7: needs the grab-spell machinery).
+
+    // (8) slow/mobilize decay (EF:59722-43).
+    ext.tick_debuffs();
+
+    // (9) the commit gate + vertical resolution (EF:59745-69).
+    let out = gate((st.x, st.y, st.z), cand);
+    if out.wet {
+        ext.water_ctr += 1;
+    }
+    match out.pass {
+        Some((p, dyaw)) => {
+            st.yaw = ((st.yaw as i32 + dyaw as i32) & 0x7FF) as u16;
+            let g = ground(p.0, p.1) as i32;
+            let clr = ext.row.clearance as i32;
+            let mut z = p.2 as i32;
+            if ext.mobilize > 0 {
+                z -= 51; // settle while frozen (EF:59750)
+            } else if z > g + clr {
+                z += ext.row.buoyancy as i32; // the row-0xe sink (EF:59755)
+            }
+            if z >= g + clr {
+                // Above the clearance band: the cave roof clamps (no
+                // bounce, no damage — EF:59757-63). The floor+
+                // clearance max is the PLAYTEST-CAVE round-2 guard:
+                // where headroom pinches below 384+clearance (door
+                // slopes) the raw retail clamp would pin the carpet
+                // under the terrain.
+                if let Some(c) = ceiling(p.0, p.1) {
+                    z = z.min((c as i32).max(g + clr));
+                }
+            } else {
+                z = g + clr; // floor clamp to ground+256 (EF:59768)
+            }
+            st.x = p.0;
+            st.y = p.1;
+            st.z = z.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+        None => {
+            if out.zero_speed {
+                st.tgt_speed = 0; // dead-stop into a cave wall (EF:59602)
+                moved.accel_cancel = true;
+            }
+            // sub_5DD50 (EF:59854): the un-gated 128-unit forward
+            // shove out of whatever the carpet is wedged in.
+            if stuck((st.x, st.y, st.z), ext.nudge_latch) {
+                ext.nudge_latch = true;
+                let mut a = (st.x, st.y, st.z);
+                Gen::polar_step(&mut a, st.yaw, 0, 128);
+                st.x = a.0;
+                st.y = a.1;
+                st.z = a.2;
+            } else {
+                ext.nudge_latch = false;
+            }
+        }
+    }
+    moved
 }
 
 #[cfg(test)]
@@ -498,5 +863,246 @@ mod tests {
         let dy = y0.wrapping_sub(st.y) as i16 as i32; // yaw 0 = -y
         assert!(dy >= 55, "horizontal survives full dive: {dy} of 80");
         assert!(dy <= 80);
+    }
+
+    // ---- the MC2 arm (sub_5D530 / moveTest_5D0A0) ----
+
+    fn open_gate2(_: (u16, u16, i16), p: (u16, u16, i16)) -> Mc2GateOut {
+        Mc2GateOut {
+            pass: Some((p, 0)),
+            wet: false,
+            zero_speed: false,
+        }
+    }
+    fn no_ceiling(_: u16, _: u16) -> Option<i16> {
+        None
+    }
+    fn never_stuck(_: (u16, u16, i16), _: bool) -> bool {
+        false
+    }
+
+    fn step2(st: &mut Mc1State, ext: &mut Mc2Ext, inp: &Mc1Input) -> Mc2Moved {
+        mc2_move(
+            st,
+            ext,
+            inp,
+            None,
+            None,
+            &flat_ground,
+            &no_ceiling,
+            &open_gate2,
+            &never_stuck,
+        )
+    }
+
+    #[test]
+    fn mc2_buoyancy_sinks_to_clearance_and_holds() {
+        // The row-0xe sink runs whenever above ground+256 (unlike
+        // MC1's speed-0-above-band-only sink) and parks AT the
+        // clearance floor.
+        let mut st = Mc1State {
+            z: 512,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let idle = Mc1Input::default();
+        for _ in 0..16 {
+            step2(&mut st, &mut ext, &idle);
+        }
+        assert_eq!(st.z, 256, "sank 16/tick to ground+clearance");
+        step2(&mut st, &mut ext, &idle);
+        assert_eq!(st.z, 256, "the floor clamp holds");
+    }
+
+    #[test]
+    fn mc2_cave_band_triples_climb_ceiling() {
+        let aim_up = Mc1Input {
+            stick_y: -127,
+            ..Default::default()
+        };
+        let climb = |row: Mc2Row| -> i16 {
+            let mut st = Mc1State {
+                z: 256,
+                act_speed: 80,
+                tgt_speed: 80,
+                ..Default::default()
+            };
+            let mut ext = Mc2Ext {
+                row,
+                ..Default::default()
+            };
+            for _ in 0..600 {
+                step2(&mut st, &mut ext, &aim_up);
+            }
+            st.z
+        };
+        let open = climb(Mc2Row::OPEN);
+        let cave = climb(Mc2Row::CAVE);
+        // The authority zero sits at ground+band; the buoyancy sink
+        // fights the last ramp sliver, so the carpet parks near but
+        // below the band.
+        assert!(
+            open <= 1024 && open > 700,
+            "open band parks under 1024: {open}"
+        );
+        assert!(
+            cave <= 3072 && cave > 2300,
+            "cave band parks under 3072: {cave}"
+        );
+    }
+
+    #[test]
+    fn mc2_mobilize_full_stops_and_settles() {
+        let mut st = Mc1State {
+            z: 800,
+            act_speed: 80,
+            tgt_speed: 80,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        ext.stun_hit();
+        let idle = Mc1Input::default();
+        let (x0, y0) = (st.x, st.y);
+        let z0 = st.z;
+        step2(&mut st, &mut ext, &idle);
+        assert_eq!((st.x, st.y), (x0, y0), "full stop: no horizontal step");
+        assert_eq!(st.z, z0 - 51, "the −51 settle while frozen");
+        // The 10-tick counter releases the stun.
+        for _ in 0..9 {
+            step2(&mut st, &mut ext, &idle);
+        }
+        assert_eq!(ext.mobilize, 0, "released after 10 ticks");
+        let x1 = st.x;
+        step2(&mut st, &mut ext, &idle);
+        assert!(!(st.x == x1 && st.y == y0), "moving again");
+    }
+
+    #[test]
+    fn mc2_slow_quarters_speed_and_decays() {
+        let mut st = Mc1State {
+            z: 256,
+            act_speed: 80,
+            tgt_speed: 80,
+            yaw: 512,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        ext.slow_hit();
+        ext.slow_hit();
+        ext.slow_hit();
+        assert_eq!(ext.move_speed, 3);
+        let idle = Mc1Input::default();
+        let x0 = st.x;
+        step2(&mut st, &mut ext, &idle);
+        let dx = st.x.wrapping_sub(x0) as i16;
+        assert_eq!(dx, 20, "moveSpeed 3 = quarter speed (80/4)");
+        // 8 ticks per level: fully clear after 24.
+        for _ in 0..24 {
+            step2(&mut st, &mut ext, &idle);
+        }
+        assert_eq!(ext.move_speed, 0, "slow decays 1 level / 8 ticks");
+    }
+
+    #[test]
+    fn mc2_cave_block_zeroes_target_and_cancels_accel() {
+        let mut st = Mc1State {
+            z: 256,
+            act_speed: 80,
+            tgt_speed: 80,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let blocked = |_: (u16, u16, i16), _: (u16, u16, i16)| Mc2GateOut {
+            pass: None,
+            wet: false,
+            zero_speed: true,
+        };
+        let moved = mc2_move(
+            &mut st,
+            &mut ext,
+            &Mc1Input::default(),
+            None,
+            None,
+            &flat_ground,
+            &no_ceiling,
+            &blocked,
+            &never_stuck,
+        );
+        assert_eq!(st.tgt_speed, 0, "cave block zeroes the TARGET speed");
+        assert!(moved.accel_cancel, "and cancels the speed-up spell");
+        // actSpeed still slews down over the following ticks (the
+        // carpet decelerates, it doesn't freeze).
+        assert_eq!(st.act_speed, 80);
+    }
+
+    #[test]
+    fn mc2_nudge_shoves_128_forward_when_wedged() {
+        let mut st = Mc1State {
+            z: 256,
+            yaw: 512, // east = +x
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let blocked = |_: (u16, u16, i16), _: (u16, u16, i16)| Mc2GateOut {
+            pass: None,
+            wet: false,
+            zero_speed: false,
+        };
+        let wedged = |_: (u16, u16, i16), _: bool| true;
+        let x0 = st.x;
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &Mc1Input::default(),
+            None,
+            None,
+            &flat_ground,
+            &no_ceiling,
+            &blocked,
+            &wedged,
+        );
+        assert!(ext.nudge_latch, "the nudge latches");
+        let dx = st.x.wrapping_sub(x0) as i16;
+        assert!((dx - 128).abs() <= 1, "128-unit forward shove: {dx}");
+    }
+
+    #[test]
+    fn mc2_ceiling_clamp_only_above_clearance() {
+        // The clamp target is ceiling−384 (the closure supplies it
+        // pre-subtracted); a carpet under the clearance band is never
+        // yanked — the floor wins (EF:59757 branch order).
+        let mut st = Mc1State {
+            z: 800,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let low_roof = |_: u16, _: u16| -> Option<i16> { Some(500) };
+        let idle = Mc1Input::default();
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &idle,
+            None,
+            None,
+            &flat_ground,
+            &low_roof,
+            &open_gate2,
+            &never_stuck,
+        );
+        assert_eq!(st.z, 500, "clamped to the roof");
+        // A roof target below the clearance floor: the floor wins.
+        let pinch = |_: u16, _: u16| -> Option<i16> { Some(100) };
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &idle,
+            None,
+            None,
+            &flat_ground,
+            &pinch,
+            &open_gate2,
+            &never_stuck,
+        );
+        assert_eq!(st.z, 256, "the clearance floor beats the roof");
     }
 }

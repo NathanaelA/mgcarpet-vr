@@ -96,7 +96,7 @@ pub fn package_mc1_level(
                     perception: None,
                     life: None,
                     starting_spells: w.pregrant.to_vec(),
-                    unknown_spells: Vec::new(),
+                    starting_spell_levels: Vec::new(),
                     blocked_spells: Vec::new(),
                     accuracy: Some(w.accuracy as i16),
                     tempo: Some(w.tempo as i16),
@@ -185,6 +185,8 @@ pub fn bake_mc1_archive(
             height: generated.height,
             shading: Some(generated.shading),
             angle: Some(generated.angle),
+            // MC1 has no cave levels / second heightmap.
+            ceiling: None,
         });
 
         let name = format!("level-{:03}.mgcl", entry.index);
@@ -253,11 +255,17 @@ fn generate_terrain(
             format!("oracle output {} bytes, expected 0x70000", block.len()),
         ));
     }
+    // +0x40000 = the second heightmap (cave ceiling). The oracle only
+    // writes it on cave levels (sub_43B40; sub_43D50 leaves it zeroed),
+    // so an all-zero plane = not a cave — omit it from the package.
+    let ceiling = &block[4 * TERRAIN_GRID_BYTES..5 * TERRAIN_GRID_BYTES];
+    let ceiling = ceiling.iter().any(|&b| b != 0).then(|| ceiling.to_vec());
     Ok(Terrain {
         tile_type: block[..TERRAIN_GRID_BYTES].to_vec(),
         height: block[TERRAIN_GRID_BYTES..2 * TERRAIN_GRID_BYTES].to_vec(),
         shading: Some(block[2 * TERRAIN_GRID_BYTES..3 * TERRAIN_GRID_BYTES].to_vec()),
         angle: Some(block[3 * TERRAIN_GRID_BYTES..4 * TERRAIN_GRID_BYTES].to_vec()),
+        ceiling,
     })
 }
 
@@ -308,9 +316,9 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
                 Mc2MapType::Unknown(_) => unreachable!("unknown map type"),
             },
             players: h.players,
-            unk05: h.unk05,
+            basic_height: h.basic_height,
             unk07: h.unk07,
-            unk09: h.unk09,
+            number_of_players: h.unk09,
         }),
         wizards: Some(Wizards {
             wizards: level
@@ -322,7 +330,7 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
                     perception: Some(w.perception),
                     life: Some(w.life),
                     starting_spells: w.starting_spells.to_vec(),
-                    unknown_spells: w.unknown_spells.to_vec(),
+                    starting_spell_levels: w.unknown_spells.to_vec(),
                     blocked_spells: w.blocked_spells.to_vec(),
                     accuracy: None,
                     tempo: None,

@@ -60,18 +60,43 @@ impl Gen {
         Some(i)
     }
 
-    /// `sub_4AFE0` (EF:33555) — the cave bee (2,6): CAVE-ONLY; no
-    /// cave levels boot yet (Phase 4.5) so the gate returns None,
-    /// exactly retail's off-cave arm. (4 RNG draws when live: life
-    /// 100..179, x/y jitter, sprite 324..327.)
-    pub(crate) fn mc2_spawn_cave_bee(&mut self, _x: u16, _y: u16, _z: i16) -> Option<usize> {
-        None
+    /// `sub_4AFE0` (EF:33555) — the cave bee (2,6): CAVE-ONLY. A
+    /// passive, ground-pinned, non-flying, non-attacking, SILENT
+    /// sprite — only a damage TARGET; no behavior row, no aggro
+    /// (roster trace §1). 4 RNG draws: life 100..179, ±32 x/y
+    /// scatter, sprite 324..327. Keeps the NewEvent targetable bit.
+    pub(crate) fn mc2_spawn_cave_bee(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        if !self.is_cave() {
+            return None; // (:33561)
+        }
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 2;
+            e.model65 = 6;
+            e.tick70 = 18;
+            e.f28 = 1; // byte_0x38_56 = 1 (ch0; model != 0 ⇒ FULL damage, EF:4273)
+            e.f56 = 1;
+        }
+        let d = self.mc2_rand(i);
+        self.ent[i].max_life = d % 0x50 + 100;
+        let jx = ((self.mc2_rand(i) & 0x3F) as i32 - 32) as i16;
+        let jy = ((self.mc2_rand(i) & 0x3F) as i32 - 32) as i16;
+        self.link(i, x.wrapping_add(jx as u16), y.wrapping_add(jy as u16), z);
+        self.refill_life(i);
+        let d = self.mc2_rand(i);
+        self.mc2_set_sprite(i, ((d & 3) + 324) as u16);
+        Some(i)
     }
 
     /// `sub_4B150` (EF:33608) — the falling scenery (2,7)/(2,8):
     /// burnable physics props with gravity. THREE RNG draws (life
-    /// 400..2447, x/y jitter).
+    /// 400..2447, x/y jitter). CAVE-EXCLUDED — both per-model ctors
+    /// return 0 on caves (sub_4B0F0/sub_4B120, EF:33590/33601).
     pub(crate) fn mc2_spawn_falling(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
+        if self.is_cave() {
+            return None;
+        }
         let i = self.new_event()?;
         {
             let e = &mut self.ent[i];
@@ -265,9 +290,47 @@ impl Gen {
             (0, 1) => self.mc2_tree_burning_tick(i),
             (0, 2) => self.mc2_tree_stump_tick(i),
             (1..=3, _) => self.mc2_scenery_snap_tick(i),
-            (6, 18) => {} // cave bee — Phase 4.5
+            (6, 18) => self.mc2_cave_bee_tick(i),
+            (6, 19) => self.mc2_bee_snap_water(i),
             (7 | 8, _) => self.mc2_falling_tick(i),
             _ => {} // models 4/5: the authentic no-op ticks
+        }
+    }
+
+    /// `sub_651B0` (EF:62548) — the LIVE cave bee (action 18): the
+    /// ground/static draw flag (byte[2] |= 2), the damage mailbox
+    /// (death → corpse action 19, clear the targetable bit, death
+    /// sprite row +4, ONE (10,13) puff — no sound anywhere in the
+    /// family), then the floor snap + water despawn.
+    fn mc2_cave_bee_tick(&mut self, i: usize) {
+        self.ent[i].flags |= 0x2_0000; // byte[2] |= 2 (EF:62558)
+        if self.ent[i].mail[0].1 != 0 {
+            let (amt, _src) = self.ent[i].mail[0];
+            self.ent[i].act_life -= amt as i32;
+            if self.ent[i].act_life < 0 {
+                self.ent[i].tick70 = 19;
+                self.ent[i].flags &= !8;
+                let row = self.ent[i].type86.wrapping_add(4);
+                self.mc2_set_sprite(i, row); // death sprite 328..331
+                let (x, y, z) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z)
+                };
+                self.mc2_spawn_smoke_particle_for(13, x, y, z);
+            }
+            self.ent[i].mail[0].1 = 0;
+        }
+        self.mc2_bee_snap_water(i);
+    }
+
+    /// `sub_65240` (EF:62582) — the bee corpse (action 19) AND the
+    /// live tick's tail: z pinned to the floor every frame, despawn
+    /// over water.
+    fn mc2_bee_snap_water(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
+        if self.cap_bit(x, y) == 1 {
+            self.ent[i].flags |= 0x400;
         }
     }
 }

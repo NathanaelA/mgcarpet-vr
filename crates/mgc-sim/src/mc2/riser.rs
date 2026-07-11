@@ -9,8 +9,10 @@
 //! flank level, then terrain-type restore), 3/4 = idle built/removed.
 //! It rewrites height, tile type (8 = ridge/wall), angle (class
 //! nibble 1 — clears the deep-water bit), shading and the renderer
-//! dirty bit itself — no retile. The cave second-heightmap arms are
-//! Phase-4.5 (no ceiling plane yet); every non-cave arm is verbatim.
+//! dirty bit itself — no retile. On caves every bit-3 clear becomes
+//! the full floor↔ceiling invariant ([`Gen::cave_seal_fixup`],
+//! Phase 4.5) — this is what makes a riser a solid pillar in a cave
+//! (ceiling-sim trace §5a).
 //!
 //! Field map (remc2 -> ours): `life_0x8` -> `act_life`,
 //! `dword_0x10_16` (length, THING par2) -> `f26`,
@@ -140,15 +142,19 @@ impl Gen {
             }
             col = w(col, -1);
         }
-        // (d) NON-CAVE deep-water/solid clear — 4 cols bx+1..bx-2
-        // (init word+1, step x--) x (L+2) rows by-1..by+L
-        // (EF:41564-41583). The cave ceiling arm (c) needs the second
-        // heightmap — Phase 4.5.
+        // (c)/(d) bit-3 sync — 4 cols bx+1..bx-2 (init word+1, step
+        // x--) x (L+2) rows by-1..by+L: on caves the full invariant
+        // (EF:41535-41563), else the plain deep-water/solid clear
+        // (EF:41564-41583).
         let mut col = w(bb, 1);
         for _ in 0..4 {
             let mut cell = w(col, -256);
             for _ in 0..(l + 2) {
-                self.t.angle[cell] &= 0xF7;
+                if self.is_cave() {
+                    self.cave_seal_fixup(cell);
+                } else {
+                    self.t.angle[cell] &= 0xF7;
+                }
                 cell = b(cell, 0, 1);
             }
             col = b(col, -1, 0);
@@ -196,13 +202,18 @@ impl Gen {
             }
             col = w(col, 1);
         }
-        // (d') NON-CAVE clear — cols bx-1..bx+L (L+2) x 4 rows
-        // by+1..by-2 (init +256, y--) (EF:41714-41733).
+        // (c')/(d') bit-3 sync — cols bx-1..bx+L (L+2) x 4 rows
+        // by+1..by-2 (init +256, y--): cave invariant (EF:41686-
+        // 41713) else the plain clear (EF:41714-41733).
         let mut col = w(bb, -1);
         for _ in 0..(l + 2) {
             let mut cell = w(col, 256);
             for _ in 0..4 {
-                self.t.angle[cell] &= 0xF7;
+                if self.is_cave() {
+                    self.cave_seal_fixup(cell);
+                } else {
+                    self.t.angle[cell] &= 0xF7;
+                }
                 cell = b(cell, 0, -1);
             }
             col = w(col, 1);
@@ -277,11 +288,19 @@ impl Gen {
                     self.riser_stamp_y(bb, l);
                 }
                 // +1 height, rows by+3..by+L-4, cols bx and bx-1
-                // (EF:41938-41955; cave ceiling fixup = 4.5).
+                // (EF:41938-41955), then the cave invariant re-walk
+                // over the same cells (EF:41957-41991).
                 for k in 3..(l - 3) {
                     for d in [0, -1] {
                         let cell = b(bb, d, k);
                         self.t.height[cell] = self.t.height[cell].wrapping_add(1);
+                    }
+                }
+                if self.is_cave() {
+                    for k in 3..(l - 3) {
+                        for d in [0, -1] {
+                            self.cave_seal_fixup(b(bb, d, k));
+                        }
                     }
                 }
                 if last {
@@ -300,11 +319,19 @@ impl Gen {
                     self.riser_stamp_x(bb, l);
                 }
                 // +1 height, cols bx+3..bx+L-4, rows by and by-1
-                // (EF:41996-42043).
+                // (EF:41996-42010), then the cave invariant re-walk
+                // (EF:42012-42043).
                 for k in 3..(l - 3) {
                     for d in [0, -1] {
                         let cell = b(bb, k, d);
                         self.t.height[cell] = self.t.height[cell].wrapping_add(1);
+                    }
+                }
+                if self.is_cave() {
+                    for k in 3..(l - 3) {
+                        for d in [0, -1] {
+                            self.cave_seal_fixup(b(bb, k, d));
+                        }
                     }
                 }
                 if last {
@@ -339,18 +366,20 @@ impl Gen {
             col = w(col, -1);
         }
         // NON-CAVE CLEAR — 4 cols bx+1..bx-2 (word--) x rows
-        // by+2..by+L-3 (EF:41838-41857; cave levels do their ceiling
-        // fixups per raise tick instead — 4.5).
-        let mut col = w(bb, 1);
-        for _ in 0..4 {
-            let mut cell = w(col, 512);
-            let mut k = 2;
-            while k < l - 2 {
-                self.t.angle[cell] &= 0xF7;
-                cell = b(cell, 0, 1);
-                k += 1;
+        // by+2..by+L-3 (`if (!isCaveLevel)` EF:41838-41857; cave
+        // levels run the per-raise-tick invariant instead).
+        if !self.is_cave() {
+            let mut col = w(bb, 1);
+            for _ in 0..4 {
+                let mut cell = w(col, 512);
+                let mut k = 2;
+                while k < l - 2 {
+                    self.t.angle[cell] &= 0xF7;
+                    cell = b(cell, 0, 1);
+                    k += 1;
+                }
+                col = w(col, -1);
             }
-            col = w(col, -1);
         }
         self.riser_dirty_y(bb, l); // EF:41858-41874
     }
@@ -371,17 +400,19 @@ impl Gen {
             k += 1;
         }
         // NON-CAVE CLEAR — cols bx+2..bx+L-3 x 4 rows by+1..by-2
-        // (init +256, y--) (EF:41897-41916).
-        let mut col = w(bb, 2);
-        let mut k = 2;
-        while k < l - 2 {
-            let mut cell = w(col, 256);
-            for _ in 0..4 {
-                self.t.angle[cell] &= 0xF7;
-                cell = b(cell, 0, -1);
+        // (init +256, y--) (`if (!isCaveLevel)` EF:41897-41916).
+        if !self.is_cave() {
+            let mut col = w(bb, 2);
+            let mut k = 2;
+            while k < l - 2 {
+                let mut cell = w(col, 256);
+                for _ in 0..4 {
+                    self.t.angle[cell] &= 0xF7;
+                    cell = b(cell, 0, -1);
+                }
+                col = w(col, 1);
+                k += 1;
             }
-            col = w(col, 1);
-            k += 1;
         }
         self.riser_dirty_x(bb, l); // EF:41917-41931
     }
@@ -466,10 +497,19 @@ impl Gen {
                 self.t.shading[cell] = 32;
             }
         }
-        // NON-CAVE ENDCAP — clear bit 3 across row by+3
-        // (EF:42317-42325; the cave arm = 4.5).
-        for d in [1, 0, -1, -2] {
-            self.t.angle[b(bb, d, 3)] &= 0xF7;
+        // Bit-3 sync: on caves the invariant over the SAME restored
+        // strip cells, rows by+3..by+L-5 (EF:42253-42312); else the
+        // 4-cell endcap clear across row by+3 (EF:42317-42325).
+        if self.is_cave() {
+            for k in 3..(l - 4) {
+                for d in [1, 0, -1, -2] {
+                    self.cave_seal_fixup(b(bb, d, k));
+                }
+            }
+        } else {
+            for d in [1, 0, -1, -2] {
+                self.t.angle[b(bb, d, 3)] &= 0xF7;
+            }
         }
         // DIRTY — the SYMMETRIC word++ form (trace OPEN-1: remc2's
         // transcription steps y here, asymmetric vs every other dirty
@@ -494,9 +534,19 @@ impl Gen {
                 self.t.shading[cell] = 32;
             }
         }
-        // NON-CAVE ENDCAP — col bx+3, rows by+1..by-2 (EF:42456-42472).
-        for d in [1, 0, -1, -2] {
-            self.t.angle[b(bb, 3, d)] &= 0xF7;
+        // Bit-3 sync: cave invariant over the restored strip, cols
+        // bx+3..bx+L-5 (EF:42390-42450); else the 4-cell endcap
+        // clear at col bx+3 (EF:42456-42472).
+        if self.is_cave() {
+            for k in 3..(l - 4) {
+                for d in [1, 0, -1, -2] {
+                    self.cave_seal_fixup(b(bb, k, d));
+                }
+            }
+        } else {
+            for d in [1, 0, -1, -2] {
+                self.t.angle[b(bb, 3, d)] &= 0xF7;
+            }
         }
         self.riser_dirty_x(bb, l); // EF:42473-42490
     }

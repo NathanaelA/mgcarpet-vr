@@ -686,12 +686,25 @@ impl Gen {
     /// wall slide; both blocked → the whole move is discarded (None).
     /// The routine's unconditional trailing z-floor (ground + row
     /// v_12) stays with the flyer's own clamp for now (Phase 5).
+    ///
+    /// CAVE ARM (MC2, Phase 4.5): sealed bit3 tiles block like walls
+    /// — retail's MC2 commit gate refuses any move onto a sealed
+    /// tile (`moveTest_5D0A0` EF:59594-97). The full headroom
+    /// steer-search (EF:59515-93) belongs to the real MC2 commit
+    /// gate (Phase 4.4); until then the MC1 cardinal slide stands in
+    /// for the steer.
     pub(crate) fn player_wall_gate(
         &self,
         cur: (u16, u16, i16),
         prop: (u16, u16, i16),
     ) -> Option<(u16, u16, i16)> {
-        if self.cap_bit(prop.0, prop.1) != 0x100 {
+        let blocked = |x: u16, y: u16| {
+            self.cap_bit(x, y) == 0x100
+                || (self.is_cave()
+                    && self.t.angle[crate::mc1::features::tile((x >> 8) as u8, (y >> 8) as u8)] & 8
+                        != 0)
+        };
+        if !blocked(prop.0, prop.1) {
             return Some(prop);
         }
         let v1 = Self::angle_between(cur.0, cur.1, prop.0, prop.1);
@@ -704,7 +717,7 @@ impl Gen {
             let scaled = (v7 * (512 - Self::angdist(v1, cardinal) as i32)) >> 9;
             let mut slid = cur;
             Self::polar_step(&mut slid, cardinal, v8, scaled as i16);
-            if self.cap_bit(slid.0, slid.1) != 0x100 {
+            if !blocked(slid.0, slid.1) {
                 return Some(slid);
             }
         }

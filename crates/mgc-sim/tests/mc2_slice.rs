@@ -14,7 +14,6 @@
 
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::spells::SpellId;
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
@@ -33,6 +32,7 @@ fn build_world(root: &std::path::Path) -> Option<World> {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: terrain.ceiling.clone().unwrap_or_default(),
     };
     // The mc2-night bundle's own feature data (level-000 is a night
     // map): SEARCH + the BUILD0-0 footprint bank + BLDGPRM — the
@@ -49,6 +49,10 @@ fn build_world(root: &std::path::Path) -> Option<World> {
     if let Some(sp) = bundle.spells.as_deref() {
         assets = assets.with_spells(sp).unwrap();
     }
+    if let Some((sidx, _)) = bundle.sprites.as_ref() {
+        let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+        assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
+    }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
     let mut w = World::new_for_game(planes, &pkg.things.things, seed, assets, GameId::Mc2);
     w.set_placeholders(true);
@@ -62,6 +66,12 @@ fn build_world(root: &std::path::Path) -> Option<World> {
             .map(|c| (c.index, c.stage, c.x, c.y))
             .collect();
         w.set_mc2_stages(&rows);
+        let vars: Vec<(i8, i8, u8, u8, u32)> = st
+            .variables
+            .iter()
+            .map(|v| (v.index, v.stage, v.x, v.y, v.data))
+            .collect();
+        w.set_mc2_stagevars(&vars);
     }
     Some(w)
 }
@@ -103,23 +113,26 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
     }
     hashes.push(w.state_hash());
 
-    // D: two-hand fireball at the nearest goat (the player's MC1
-    // spells through the targeting fallback — deliberate
-    // cross-column play until the MC2 spell column lands).
+    // D: NATIVE fireballs at the nearest goat (playtest-13: the MC1
+    // equip bridge no longer casts on the MC2 column — the seeded
+    // book's LEFT fireball is the cast path now). RIGHT unbinds so
+    // possession pulses don't spray claims over the script; tier-0
+    // fireball is CLICK cadence, so the volley pulses the edge.
     w.set_dev_spells(true);
     if let Some((vx, vz)) = find_creature(&w, 5, 1) {
-        let equip = PlayerCommand {
-            equip_left: Some(SpellId(0)),
-            equip_right: Some(SpellId(23)),
+        let unbind_r = PlayerCommand {
+            mc2_select: Some((255, 0, 1)),
             ..Default::default()
         };
-        hover(&mut w, vx + 1.5, vz, 1, equip);
+        hover(&mut w, vx + 1.5, vz, 1, unbind_r);
         let firing = PlayerCommand {
             fire_left: true,
-            fire_right: true,
             ..Default::default()
         };
-        hover(&mut w, vx + 1.5, vz, 96, firing);
+        for _ in 0..48 {
+            hover(&mut w, vx + 1.5, vz, 1, firing);
+            hover(&mut w, vx + 1.5, vz, 1, idle);
+        }
     }
     hashes.push(w.state_hash());
 
@@ -321,16 +334,22 @@ fn mc2_slice_behaviors_and_goldens() {
     );
 
     // Kill an ARCHER with the fireball: model 4 earns kill credit;
-    // mana 500 drops a sphere.
-    let equip = PlayerCommand {
-        equip_left: Some(SpellId(0)),
-        equip_right: Some(SpellId(23)),
+    // mana 500 drops a sphere. NATIVE cast (playtest-13: the MC1
+    // equip bridge no longer casts on the MC2 column): rebind the
+    // seeded fireball onto LEFT, keep RIGHT unbound (no possession
+    // claims over the kill loop).
+    let bind_l = PlayerCommand {
+        mc2_select: Some((0, 0, 0)),
         ..Default::default()
     };
-    hover(&mut w, 16.0, 16.0, 1, equip);
+    hover(&mut w, 16.0, 16.0, 1, bind_l);
+    let unbind_r = PlayerCommand {
+        mc2_select: Some((255, 0, 1)),
+        ..Default::default()
+    };
+    hover(&mut w, 16.0, 16.0, 1, unbind_r);
     let firing = PlayerCommand {
         fire_left: true,
-        fire_right: true,
         ..Default::default()
     };
     // Fire straight DOWN from directly overhead in short volleys: MC2
@@ -339,7 +358,8 @@ fn mc2_slice_behaviors_and_goldens() {
     // is the explosion FIRE landing ON the cell — whose area write
     // fires ONCE per fire. Volley, let the fire burn out (a live fire
     // captures follow-up fireballs and drifts out of the z band),
-    // volley again: ~3 connected drops beat the archer's 1000. The
+    // volley again: 4 connected 250-payload drops beat the
+    // archer's 1000 (docs/traces/mc2-fireball-damage.md). The
     // hands spawn ~±1 tile lateral of the carpet — park one tile east
     // so the LEFT hand's drop lands on the cell.
     'kill: for _ in 0..12 {
@@ -524,12 +544,79 @@ fn mc2_slice_behaviors_and_goldens() {
         // (hash-when-present, like bldgprm) — every checkpoint moves
         // by the asset hash alone; no behavior consumed it yet at
         // pin time.
-        0x2affa65dbdd12468, // post-init (GenerateEvents + dis 0)
-        0x6ba908f9adfa9cdf, // A: 64 idle ticks afield
-        0xfc14aa5e54c0806b, // B: the type-5 fly-to latched
-        0xb21f581a15a92cec, // C: goat awake/flee window
-        0x91ae0b9c55329610, // D: fireball combat over the goat
-        0x9239c64a5908b8eb, // E: census + villager/archer provocation
+        // Re-pinned 2026-07-11 (DELIBERATE), the worm link-length
+        // floor (multipart.rs): zero-spacing chain children keep the
+        // head's authored 96 — the PLAYTEST-11 "the whole worm is a
+        // blob" fix. Only checkpoint E moved (the chain spawned in
+        // its window carries the new f56).
+        // Re-pinned 2026-07-11 (DELIBERATE), the objective-chime
+        // correction (stage-engine trace): the advance chime is
+        // retail's 61 (Success2), fired only when the CURRENT row
+        // completes or the level ends and suppressed at cursor 0 —
+        // was a 41 stand-in played on every completion. B onward
+        // move (the fly-to latch tick emits the new sound event).
+        // Re-pinned 2026-07-11 (DELIBERATE), the Phase-4.2 SPELL
+        // COLUMN landing: (1) SetDefaultSpells_5C0A0 — every MC2
+        // world seeds fireball + possess manifestations at init
+        // (2 pool slots + the spell book hash from post-init on);
+        // (2) the jar pickup KEEPS the collected entity as the
+        // manifestation (retail's slot economy — the bank-and-
+        // despawn interim is closed); (3) the D/E windows unbind
+        // the native MC2 hands (MC1 dev methodology stays the
+        // script's subject). Every checkpoint moves.
+        // Re-pinned 2026-07-11 (DELIBERATE), the playtest-12 spell
+        // fixes: the SetSpell cadence flag (`byte_0x3B_59` → f59 on
+        // the seeded manifestations — post-init moves) and the
+        // sub_67CB0 one-shot auto-aim (lock-less projectiles
+        // acquire targets instead of flying straight — D/E move).
+        // Re-pinned 2026-07-11 (DELIBERATE), the derived sprite
+        // extents (the retail load-time pass EF:44870-44910 —
+        // speed_6 from the bitmap aspect): every entity's collision
+        // box changes from spawn on (the zero-box fireball/goat
+        // tunneling fix + the PLAYTEST-11 worm-spacing provenance
+        // closure).
+        // Re-pinned 2026-07-11 (DELIBERATE), the playtest-13 ghost-
+        // cast gate: the MC1 equip bridge no longer casts on the
+        // MC2 column (grant_spell no-ops, the MC1 hand arm is
+        // column-gated) — the D/E combat legs now fire the NATIVE
+        // book's fireball (click-cadence edge pulses; payload 250
+        // per docs/traces/mc2-fireball-damage.md). D/E move,
+        // post-init through C are unchanged.
+        // Re-pinned 2026-07-11 (DELIBERATE), the Phase-4.5 session-2
+        // load-time cave arms: the shared chassis retile_and_shade
+        // (dig_cell's tail recompute) gained MC2's twin arms — the
+        // non-Day shade INVERSION (Terrain.cpp:2030-2033; retail's
+        // sub_56F10 digs resolve through sub_462A0/46570, which
+        // invert on night/cave maps — ours didn't) and the cave
+        // floor↔ceiling invariant. Level-000 is a night level, so
+        // every dig after load now writes inverted shades: A onward
+        // move, post-init is unchanged (no dig in settle). MC1
+        // goldens untouched (both arms are data-variant no-ops
+        // there); cave levels get their first correct dig shading.
+        // Re-pinned 2026-07-12 (DELIBERATE), the audio column: the
+        // objective-message trigger ramp (`byte_0x36E02`,
+        // docs/traces/mc2-voiceover-triggers.md §3) is new retail
+        // sim state hashed with the stage board — set_mc2_stages
+        // arms the briefing voiceover at load, so every checkpoint
+        // including post-init moved. MC1 goldens untouched (the
+        // ramp only ever arms through the MC2 stage machinery).
+        // Re-pinned 2026-07-14 (objective types 1/2 bind field): the
+        // `Mc2Stage` struct gained a `bound: Option<u16>` slot for the
+        // named-target entity binding. level-000 authors no type-1/2
+        // objective, so no binding occurs and no behavior changed — the
+        // move is purely the extra `None` joining each stage's hash
+        // (present from load, so every checkpoint moved uniformly).
+        // Re-pinned 2026-07-14 (StageVar subsystem): the level's StageVar
+        // table now loads + hashes. level-000's three kind-1 vars are
+        // INERT (word=0, no matching THING), so nothing is held and no
+        // behaviour changed — the move is purely the StageVar table
+        // joining the hash (present from load → every checkpoint moved).
+        0xdae4409d5a6168a8, // post-init (GenerateEvents + dis 0)
+        0xd751a3f1cadddcef, // A: 64 idle ticks afield
+        0x5d8778a11af07cb5, // B: the type-5 fly-to latched
+        0x8ed6f81e715cee0e, // C: goat awake/flee window
+        0x41bc756f3088cc9e, // D: fireball combat over the goat
+        0x2de9f1b1aa9971e8, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -592,25 +679,20 @@ fn mc2_level000_mission_chain() {
     );
     assert_eq!(count(&w, 5, 4), 4, "dis 3 released the archer wave");
 
-    // Kill the archers (dev fireballs; the ball flies toward -y).
-    w.set_dev_spells(true);
-    let equip = PlayerCommand {
-        equip_left: Some(SpellId(0)),
-        equip_right: Some(SpellId(23)),
-        ..Default::default()
-    };
-    hover(&mut w, 194.5, 213.5, 1, equip);
-    for round in 0..80 {
-        let Some((ax, az)) = find_creature(&w, 5, 4) else {
-            break;
-        };
-        let firing = PlayerCommand {
-            fire_left: true,
-            fire_right: true,
-            ..Default::default()
-        };
-        hover(&mut w, ax, az + 1.5 + (round % 3) as f32, 24, firing);
-    }
+    // Kill the archers (dev fireballs, LEFT hand only — the
+    // firehose sprays strays that kill villagers, and a village
+    // offense floods model-4 MILITIA into the type-7 extinction
+    // predicate; authentic, but not this test's subject). The
+    // native MC2 hands are unbound (the default fireball/possess
+    // book), and the runner is invincible — arrows aren't the
+    // subject either.
+    // Extinguish the wave with the smite instrument — this test's
+    // subject is the OBJECTIVE CHAIN reacting to model-4 extinction,
+    // not marksmanship (the old firehose loop was a marginal fight:
+    // strays kill villagers → village offense → model-4 MILITIA
+    // flood the extinction predicate; authentic, separately owned
+    // by the combat fixtures).
+    assert!(w.debug_smite(5, 4) >= 4, "the wave was live to smite");
     hover(&mut w, 194.5, 213.5, 48, idle);
     assert_eq!(count(&w, 5, 4), 0, "the archer wave died");
     let (_, stages) = w.mc2_objective_view();
@@ -632,18 +714,9 @@ fn mc2_level000_mission_chain() {
     assert_eq!(cur, 4, "the cursor advanced to the firefly hunt");
     assert!(!w.completed(), "the wave must die first");
 
-    // Hunt the wave down → all rows complete → the level ends.
-    for round in 0..80 {
-        let Some((fx, fz)) = find_creature(&w, 5, 19) else {
-            break;
-        };
-        let firing = PlayerCommand {
-            fire_left: true,
-            fire_right: true,
-            ..Default::default()
-        };
-        hover(&mut w, fx, fz + 1.5 + (round % 3) as f32, 24, firing);
-    }
+    // Extinguish the wave → all rows complete → the level ends
+    // (the smite instrument again — the chain is the subject).
+    assert!(w.debug_smite(5, 19) >= 1, "fireflies live to smite");
     hover(&mut w, 170.0, 200.0, 64, idle);
     assert_eq!(count(&w, 5, 19), 0, "the firefly wave died");
     assert!(w.completed(), "all stages done — the level completed");
@@ -684,6 +757,7 @@ fn mc2_par1_spells_overrides() {
         tile_type: vec![1; 65536],
         shading: vec![32; 65536],
         angle: vec![0; 65536],
+        ceiling: Vec::new(),
     };
     let thing = |slot, model, x, par1| mgc_formats::Thing {
         slot,
@@ -702,12 +776,14 @@ fn mc2_par1_spells_overrides() {
     let things = [thing(1, 11, 100, 1), thing(2, 15, 120, 2)];
     let w = World::new_for_game(planes, &things, 1, assets, GameId::Mc2);
     let (_, pool) = w.debug_pool();
-    // (10,11) remaps to entity model 19 (NewAdd0A0B_4E840).
-    let spray = pool
+    // (10,11) = the SCORCH RING (NewAdd0A0B_4E840 — the playtest-
+    // cave round-2 trace correction; the old "remaps to model 19"
+    // reading was the m6-doc numbering trap).
+    let ring = pool
         .iter()
-        .find(|e| e.class == 10 && e.model == 19)
-        .expect("the (10,11) spray spawned");
-    assert_eq!(spray.life, 12, "row 16 tier 1 life (CD SPELLS.DAT)");
+        .find(|e| e.class == 10 && e.model == 11)
+        .expect("the (10,11) scorch ring spawned");
+    assert_eq!(ring.life, 12, "row 16 tier 1 life (CD SPELLS.DAT)");
     let trail = pool
         .iter()
         .find(|e| e.class == 10 && e.model == 15)
@@ -746,6 +822,7 @@ fn mc2_dome_raises_and_finalizes() {
         tile_type: vec![1; 65536],
         shading: vec![32; 65536],
         angle: vec![0; 65536],
+        ceiling: Vec::new(),
     };
     let things = [mgc_formats::Thing {
         slot: 1,
@@ -792,11 +869,21 @@ fn mc2_dome_raises_and_finalizes() {
     assert_eq!(h(102, 101), 140, "plateau east of the cap");
     // Far outside the 7-tile disc: untouched flat ground.
     assert_eq!(h(120, 100), 50, "ground beyond the footprint");
-    // The unported (10,18) summit child is ledgered, not silent.
+    // The (10,18) summit child is REAL since the 2026-07-11 misfit
+    // sweep (mc2::morph summit vortex): the ledger is clean and the
+    // eruption family (the vortex or what it emitted before its
+    // ground-shift teardown) actually ran — the finalize pass moves
+    // the terrain under the vortex, so by now it may have despawned;
+    // the (10,19) fire column it raised on tick 0 persists.
     assert!(
-        w.misfits().iter().any(|&(c, m, _)| (c, m) == (10, 18)),
-        "the (10,18) child misfit is on the ledger: {:?}",
+        !w.misfits().iter().any(|&(c, m, _)| (c, m) == (10, 18)),
+        "no (10,18) misfit anymore: {:?}",
         w.misfits()
+    );
+    let (_, pool) = w.debug_pool();
+    assert!(
+        pool.iter().any(|e| e.class == 10 && e.model == 19),
+        "the summit fire-spray column exists"
     );
 }
 
@@ -826,6 +913,7 @@ fn mc2_doomsday_pyramid_extinction_script() {
         tile_type: vec![2; 65536],
         shading: vec![32; 65536],
         angle: vec![0; 65536],
+        ceiling: Vec::new(),
     };
     let thing = |slot: u32, class: u16, model: u16, x: u16, y: u16| mgc_formats::Thing {
         slot,

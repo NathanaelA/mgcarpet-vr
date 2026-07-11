@@ -643,14 +643,16 @@ pub fn jar_markers_from_poses(poses: &[LivePose]) -> Vec<(f32, f32, f32, u8)> {
 /// each live, non-cloaked rival wizard.
 pub fn rival_markers(
     rivals: &[mgc_sim::mc1::world::RivalView],
-    beyond_sight: bool,
+    beyond_sight: Option<u8>,
 ) -> Vec<mgc_render::MapDot> {
-    if !beyond_sight {
+    let Some(tier) = beyond_sight else {
         return Vec::new();
-    }
+    };
+    // Tier 0 excludes Invisible rivals; tier ≥ 1 (Mana-Lock sight)
+    // reveals them too (docs/spell-audit/beyond-sight.md).
     rivals
         .iter()
-        .filter(|r| r.alive && !r.invisible)
+        .filter(|r| r.alive && (tier >= 1 || !r.invisible))
         .map(|r| mgc_render::MapDot {
             x: r.x,
             z: r.z,

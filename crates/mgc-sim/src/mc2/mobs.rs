@@ -102,14 +102,29 @@ impl Gen {
     /// `SetEntityIndexAndRot_49CD0` (:32837): store the sprite-param
     /// row and derive the rot/extent quad from it (/2). No RNG.
     pub(crate) fn mc2_set_sprite(&mut self, i: usize, idx: u16) {
-        let p = &SPRITE_PARAMS[idx as usize];
+        let (s6, r8) = self.mc2_params_ext(idx as usize);
         let e = &mut self.ent[i];
         e.type86 = idx;
         e.frame88 = 0;
-        e.f78 = p.rot_speed_8 / 2; // array.yaw
-        e.f80 = p.speed_6 / 2; // array.pitch
-        e.f82 = p.speed_6 / 2; // array.roll
-        e.f84 = p.rot_speed_8 / 2; // array.fov
+        e.f78 = r8 / 2; // array.yaw
+        e.f80 = s6 / 2; // array.pitch
+        e.f82 = s6 / 2; // array.roll
+        e.f84 = r8 / 2; // array.fov
+    }
+
+    /// The (speed_6, rotSpeed_8) pair for a particle-param row —
+    /// the DERIVED table when the dims-fed assets carry it
+    /// ([`crate::mc2::derive_sprite_extents`]), else the raw static
+    /// row (pre-dims callers keep the old behavior).
+    pub(crate) fn mc2_params_ext(&self, idx: usize) -> (u16, u16) {
+        self.assets
+            .mc2_sprite_ext
+            .get(idx)
+            .copied()
+            .unwrap_or_else(|| {
+                let p = &SPRITE_PARAMS[idx];
+                (p.speed_6, p.rot_speed_8)
+            })
     }
 
     /// `sub_49E10` (:32865): sprite + the quad doubled (the arrow's
@@ -161,7 +176,8 @@ impl Gen {
     /// `sub_102D0` with a3 = 1 (:3632): walk up to max(array.pitch,
     /// array.roll) units along yaw in 256 steps; blocked when a
     /// tile's capability bit falls outside the row's permission
-    /// mask. (Cave branch = Phase 4; level-000 is a night map.)
+    /// mask, and on caves also when the probe tile is bit3-SEALED or
+    /// the ceiling poke test fires (:3674-83).
     pub(crate) fn mc2_path_blocked(&self, i: usize, from: (u16, u16, i16)) -> bool {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -180,6 +196,14 @@ impl Gen {
             }
             if !row.v_20 & self.cap_bit(pos.0, pos.1) != 0 {
                 return true;
+            }
+            if self.is_cave() {
+                let t = crate::mc1::features::tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
+                if self.t.angle[t] & 8 != 0
+                    || self.cave_poke(e.f84 as i32, row.v_12 as i32, pos.0, pos.1)
+                {
+                    return true;
+                }
             }
             walked += 256;
             Self::polar_step(&mut pos, self.ent[i].f30, 0, 256);
@@ -1590,8 +1614,8 @@ impl Gen {
     /// under the cross-column mask contract, gated on byte[2] bit 0;
     /// terrain burn — worn-path repaints 26/10/11 through the
     /// texture-band painter, else the scorch dig; flicker draw; sound
-    /// 3), the z rule (drift by flicker above ground, clamp up), anim
-    /// advance. Cave ceiling clamp APPROX-skipped (Phase 4.5).
+    /// 3), the z rule (drift by flicker above ground, clamp up, cave
+    /// ceiling clamp), anim advance.
     pub(crate) fn mc2_fire_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         if self.ent[i].f26 & 3 != 0 {
             self.ent[i].f26 -= 1;
@@ -1659,6 +1683,13 @@ impl Gen {
         let mut nz = self.ent[i].z;
         Self::mc2_alt_core(&mut nz, ground, 0, self.ent[i].f44 as i16);
         self.ent[i].z = nz;
+        // Cave ceiling clamp (EF:22752-58).
+        if self.is_cave() {
+            let c = (self.ceiling_z(x, y) - self.ent[i].f84 as i32) as i16;
+            if self.ent[i].z > c {
+                self.ent[i].z = c;
+            }
+        }
         // sub_585A0: frame advance (the renderer's 22..=36 band caps
         // by the sprite's span; retail caps by x_BYTE_D8A2E).
         self.ent[i].frame88 = self.ent[i].frame88.saturating_add(1);
@@ -1833,11 +1864,17 @@ impl Gen {
     ///
     /// APPROX register: the one-at-a-time build carousel
     /// (IsNextEvent0A_2A_37740/sub_377A0) is skipped — all authored
-    /// buildings raise concurrently at load; the cave
-    /// second-heightmap raise (:27349) waits for cave levels. The
-    /// sub_462A0 retile, the sub_45DC0 texture-band paint and the
-    /// sub_48A20 pad-edge rings are the real ports
-    /// ([`crate::mc2::terrain_paint`]) at the retail cadence.
+    /// buildings raise concurrently at load. The sub_462A0 retile,
+    /// the sub_45DC0 texture-band paint and the sub_48A20 pad-edge
+    /// rings are the real ports ([`crate::mc2::terrain_paint`]) at
+    /// the retail cadence. On caves, unless the bldgprm row carries
+    /// flag 4 (no-cave-raise), EVERY footprint cell (pad or not)
+    /// lerps the ceiling toward `min(max(floor, base) + 80, 255)`
+    /// and re-asserts the invariant per tick (:27349-27373) — the
+    /// headroom bubble that makes rock-embedded buildings enterable.
+    /// The instant-placement sibling (`sub_36FC0`, same arm at
+    /// :27114-27137) has no ported caller yet (`sub_5C950` stage
+    /// machinery — unported).
     pub(crate) fn mc2_building_tick(&mut self, i: usize) -> bool {
         let bldg = self.ent[i].f71 as usize;
         let Some(def) = self.assets.build_tab.get(bldg).copied() else {
@@ -1862,6 +1899,14 @@ impl Gen {
         let tlx = cx.wrapping_sub((w / 2) as u8);
         let tly = cy.wrapping_sub((h / 2) as u8);
         let base = self.ent[i].z >> 5; // v35
+        // v50 (:27251): raise the cave ceiling over the footprint
+        // unless the bldgprm row says no-cave-raise (flags & 4).
+        let cave_raise = self.is_cave()
+            && self
+                .assets
+                .bldgprm
+                .get(bldg)
+                .is_none_or(|b| b.flags & 4 == 0);
         self.ent[i].act_life -= 1;
         let life = self.ent[i].act_life;
 
@@ -1911,25 +1956,35 @@ impl Gen {
         }
 
         // Height lerp toward pad height + base (:27341-44), marking
-        // touched flat tiles as village ground (angle low bits 1).
+        // touched flat tiles as village ground (angle low bits 1);
+        // then the cave headroom-bubble ceiling lerp on EVERY
+        // footprint cell — pad or not (:27349-73).
         for dy in 0..h {
             for dx in 0..w {
                 let cell = dy * w + dx;
                 let pad = cells[2 * cell + 1];
-                if pad == 0xff {
-                    continue;
-                }
                 let t = crate::mc1::features::tile(
                     tlx.wrapping_add(dx as u8),
                     tly.wrapping_add(dy as u8),
                 );
-                let target = pad as i32 + base as i32;
-                let cur = self.t.height[t] as i32;
-                self.t.height[t] = (cur + (target - cur) / life as i32) as u8;
-                if self.t.angle[t] & 7 == 0 {
-                    self.t.angle[t] = (self.t.angle[t] & 0xF0) | 1;
-                    let (cx2, cy2) = (tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
-                    self.mc2_retile_region(cx2, cy2, cx2, cy2);
+                if pad != 0xff {
+                    let target = pad as i32 + base as i32;
+                    let cur = self.t.height[t] as i32;
+                    self.t.height[t] = (cur + (target - cur) / life as i32) as u8;
+                    if self.t.angle[t] & 7 == 0 {
+                        self.t.angle[t] = (self.t.angle[t] & 0xF0) | 1;
+                        let (cx2, cy2) = (tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
+                        self.mc2_retile_region(cx2, cy2, cx2, cy2);
+                    }
+                }
+                if cave_raise {
+                    let bubble = (self.t.height[t] as i32).max(base as i32) + 80;
+                    let bubble = bubble.min(255);
+                    let cur = self.t.ceiling[t] as i32;
+                    if bubble > cur {
+                        self.t.ceiling[t] = (cur + (bubble - cur) / life as i32) as u8;
+                    }
+                    self.cave_seal_fixup(t);
                 }
             }
         }
@@ -2079,6 +2134,20 @@ impl Gen {
     /// (:40177) and count a misfit.
     pub(crate) fn mc2_creature_tick(&mut self, i: usize, ctx: &MobCtx) {
         let action = self.ent[i].tick70;
+        // The shared class-5 `8*M+7` slot (`sub_1D5D0`, EF:9977) — a
+        // CONTROLLED creature. StageVar2 (port field: site_z, free on
+        // creatures) selects the body: 12 = Metamorph pose-puppet, 13 =
+        // Summon-Army allied AI. StageVar2 == 0 (every ordinary spawn)
+        // is a no-op, so those fall through to the per-model dispatch
+        // (docs/spell-audit/summon-creatures.md).
+        if action & 7 == 7 && self.ent[i].site_z != 0 {
+            match self.ent[i].site_z {
+                12 => self.mc2_metamorph_creature_tick(i, ctx),
+                13 => self.mc2_summon_creature_tick(i, ctx),
+                _ => {}
+            }
+            return;
+        }
         match action {
             0..=7 => self.m0_tick(i, ctx),
             8..=15 => self.goat_tick(i, ctx),
@@ -2115,6 +2184,117 @@ impl Gen {
         }
     }
 
+    /// `sub_1E4D0` (EF:10650), StageVar2 == 12 — the METAMORPH creature:
+    /// a cosmetic pose-PUPPET slaved to the caster every tick (position +
+    /// facing copied). The engine never rebinds control — the wizard
+    /// stays under normal control and keeps casting; the carpet is just
+    /// hidden (player.metamorph) and this creature draws in its place.
+    /// The human is out of the pool, so the parent pose comes from `ctx`
+    /// (the live player pose), not a pooled parent. The per-model z
+    /// offset (m16 −896, m25 −512, EF:10664-74) drops the creature's
+    /// origin so its sprite aligns where the carpet was. Teardown rides
+    /// the cast window (mc2_cast_expire). No autonomous combat.
+    fn mc2_metamorph_creature_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let off: i16 = match self.ent[i].model65 {
+            16 => 896,
+            25 => 512,
+            _ => 0,
+        };
+        let z = ctx.pz.saturating_sub(off);
+        self.move_relink(i, ctx.px, ctx.py, z);
+        self.ent[i].f30 = ctx.pyaw;
+        self.ent[i].f34 = ctx.pyaw;
+        // The creature's cry LOOPS while morphed — the player-confirmed
+        // (2026-07-14) FP effect: no visible sprite from first person,
+        // just the monster's scream on a loop (plus the distinct Morph
+        // cast sound 60). Play the model's characteristic cry on a
+        // ~24-tick loop, anchored at the creature (= the player pose).
+        if self.ent[i].f26 <= 0 {
+            let cry = match self.ent[i].model65 {
+                16 => 39, // Wyvern
+                25 => 37, // Cymmerian
+                2 => 12,  // Day creature
+                _ => 43,  // FireFly (19)
+            };
+            self.snd(cry, i);
+            self.ent[i].f26 = 24;
+        } else {
+            self.ent[i].f26 -= 1;
+        }
+    }
+
+    /// `sub_1E580` (EF:10689), StageVar2 == 13 — the SUMMON-ARMY allied
+    /// creature: free-roam AI that hunts enemy wizards for the caster
+    /// (no player input). Acquire the nearest enemy wizard (class 3,
+    /// model ≤ 1, not our team); with none, follow the caster; face and
+    /// move toward it via the creature move core; once in engage range,
+    /// hand off to the model's normal `+2` attack state (the landed
+    /// class-5 combat). Self-expires after its 250-tick life (`f26`) with
+    /// a fire puff. The idle-follow + acquire resolve the caster to the
+    /// out-of-pool human via `ctx` (docs/spell-audit/summon-creatures.md).
+    fn mc2_summon_creature_tick(&mut self, i: usize, ctx: &MobCtx) {
+        // Life countdown (word_0x2E_46 → f26): expire with a puff.
+        self.ent[i].f26 -= 1;
+        if self.ent[i].f26 <= 0 {
+            let (x, y, z) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            self.mc2_spawn_fire(x, y, z);
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let own = self.ent[i].id24;
+        let (mx, my) = (self.ent[i].x, self.ent[i].y);
+        // Re-acquire on the throttle (byte_0x3E_62 & 7) or when the lock
+        // is stale — nearest ENEMY wizard by 2-D distance.
+        let mut target = self.ent[i].f146;
+        let valid = target != 0
+            && target != crate::mc1::mobs::PLAYER_TARGET
+            && (target as usize) < self.ent.len()
+            && self.ent[target as usize].class64 == 3
+            && self.ent[target as usize].model65 <= 1
+            && self.ent[target as usize].flags & 0x400 == 0
+            && self.ent[target as usize].act_life >= 0;
+        if !valid && self.ent[i].f63 & 7 == 0 {
+            target = 0;
+            let mut best = i32::MAX;
+            for j in 1..self.ent.len() {
+                let e = &self.ent[j];
+                if e.class64 != 3
+                    || e.model65 > 1
+                    || e.id24 == own
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                {
+                    continue;
+                }
+                let d = Self::dist2_sq(mx, my, e.x, e.y);
+                if d < best {
+                    best = d;
+                    target = j as u16;
+                }
+            }
+            self.ent[i].f146 = target;
+        }
+        // Face + move toward the target, or follow the caster (the human,
+        // resolved via ctx) when there is none.
+        let (tx, ty) = if target != 0 && (target as usize) < self.ent.len() {
+            (self.ent[target as usize].x, self.ent[target as usize].y)
+        } else {
+            (ctx.px, ctx.py)
+        };
+        let yaw = Self::angle_between(mx, my, tx, ty);
+        self.ent[i].f34 = yaw;
+        self.mc2_move_core(i);
+        // In engage range → hand off to the model's `+2` attack state
+        // (leaving the controlled slot: StageVar2 → 0).
+        if target != 0 {
+            let d = Self::isqrt(Self::dist2_sq(mx, my, tx, ty) as u32);
+            if d < 1536 {
+                self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
+                self.ent[i].site_z = 0;
+            }
+        }
+    }
+
     /// The MC2 class-9 dispatch — the TargetingVerb::Mc2 arm's
     /// projectile side. Only the (9,13) arrow is MC2-ported; every
     /// other flight state falls back to the MC1 projectile handler
@@ -2129,8 +2309,26 @@ impl Gen {
             // The creature-launched family all rides the shared
             // flyer core (sub_65820 ≡ states 2..8, 0x0B, 0x0E-0x1C;
             // state 0's CastPlayerFire delta is initial-aim only —
-            // creature launches pre-aim, so the core serves).
-            self.mc2_flyer_tick(i, ctx);
+            // creature launches pre-aim, so the core serves). The
+            // (9,3) meteor shot's action-3 wrapper adds the trailing
+            // spark (sub_66180, mc2::proj).
+            if self.ent[i].model65 == 3 && self.ent[i].tick70 == 3 {
+                self.mc2_meteor_shot_tick(i, ctx);
+            } else if self.ent[i].model65 == 9 && self.ent[i].tick70 == 9 {
+                // Lightning L0 (subtype 9) = the `sub_66750` one-tick
+                // hitscan BEAM, not a traveling ball. Resolve it whole
+                // this tick (docs/spell-audit/lightning.md §5.A) so it
+                // flashes to its impact and is gone — under RAPID
+                // re-fire that reads as the authentic crackle, vs the
+                // old slow-bolt "stream of projectiles".
+                self.mc2_lightning_beam_tick(i, ctx);
+            } else if self.ent[i].model65 == 9 && self.ent[i].tick70 == 14 {
+                // The beam's cosmetic sprite-216 trail billboards
+                // (`sub_67410`, action 14): inert, self-despawning.
+                self.mc2_lightning_node_tick(i);
+            } else {
+                self.mc2_flyer_tick(i, ctx);
+            }
             return;
         }
         match self.ent[i].tick70 {

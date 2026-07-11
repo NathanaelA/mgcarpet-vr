@@ -42,7 +42,31 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    rendered via fluidsynth, `music/*-gm[-danger].flac` + the
 ///    gm_file/gm_danger_file music.json fields) on hosts that can
 ///    render GM; FM-only hosts re-bake to the same pre-7 content.
-pub const BAKE_EPOCH: u32 = 7;
+/// 8: mc2 cave levels carry `terrain/ceiling.bin` (the second
+///    heightmap, oracle plane +0x40000) and the oracle now seeds
+///    `MapBasicHeight` from header byte 0x05 (pre-8 cave bakes
+///    mirrored about the weak default 44, so their angle plane's
+///    sealed-bit-3 mask was wrong too); `level.json` renames
+///    unk05 → basic_height.
+/// 9: the MC2 audio column — mc2-audio drops the interim redbook
+///    `track-NN` music members for (a) the MUSIC.DAT GM bank-1 XMI
+///    renders (`music/mc2-{night,day,cave,menu}.flac` + war-channel
+///    danger stems) and (b) the voiceover clips (`speech/*.flac` +
+///    `speech.json`, the CdTracks_DB080 slices); `wizards.json`
+///    renames unknown_spells → starting_spell_levels and
+///    `level.json` renames unk09 → number_of_players.
+/// 10: every graphics bundle gains `font.bin`/`font.json` — the
+///    messaging/notification bitmap font (`DATA/FONT1`, the small
+///    ~4x7 font both games draw the top-of-screen toast with),
+///    HSPR-format 1-bit glyph masks packed to one atlas (sprite id =
+///    ASCII char + 1). Feeds the top-of-screen notification surface.
+/// 11: mc2-audio gameplay music re-baked from MUSIC.DAT GM **bank 0**
+///    (the "C2"/Magic Carpet 2 set — the default `musicChannel_E3814`),
+///    correcting the bank-1 "C1"/MC1 tracks that were wrongly shipping
+///    as gameplay music (docs/traces/mc2-music-law.md). Night/Day/Cave
+///    now = C2GAME1/2/3; the sparse ~80bpm C2GAME3 restores the quiet
+///    cave. `music.json` track `bank` field flips 1→0.
+pub const BAKE_EPOCH: u32 = 11;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.
@@ -159,12 +183,28 @@ pub struct LevelHeader {
     pub level_id: u16,
     pub gfx_type: u8,
     pub map_type: MapType,
-    /// Per-slot activation flags for the 8 wizard slots.
+    /// `player_0x2FED9[8]` — authored starting-castle LEVEL per
+    /// wizard color (0 = none, N = a castle at level N-1 built at
+    /// the wizard's spawn; consumers EF:43777/43789,
+    /// docs/traces/mc2-castle-data-tables.md §3). Mis-documented as
+    /// "activation flags" before the castle-column trace.
     pub players: [i8; 8],
-    /// Unexplained header fields, preserved verbatim.
-    pub unk05: u8,
+    /// Cave basic height (header byte 0x05 = `byte_0x2FED3`): the
+    /// ceiling mirror pivot on cave levels (`MapBasicHeight_D41B7`,
+    /// LevelInit.cpp:36; docs/traces/mc2-cave-terrain-foundation.md
+    /// §4.1). Meaningless off-cave (retail keeps the default 44).
+    /// Named `unk05` before the field was identified.
+    #[serde(alias = "unk05")]
+    pub basic_height: u8,
+    /// `word_0x2FED5`, preserved verbatim (retail repurposes the
+    /// field at runtime as objective scratch; no load consumer).
     pub unk07: i16,
-    pub unk09: i16,
+    /// `word_0x2FED7` = NumberOfPlayers: colors 0..n-1 spawn wizard
+    /// carpets (0 = the human in single player, 1..n-1 = AI rivals
+    /// — docs/traces/mc2-rivals-spawn-mortality.md §1). Named
+    /// `unk09` before the field was identified (renamed at EPOCH 9).
+    #[serde(alias = "unk09")]
+    pub number_of_players: i16,
 }
 
 /// Environment type; selects which asset set (day/night/cave variants
@@ -199,9 +239,11 @@ pub struct Wizards {
 /// One wizard slot. `aggression` is shared; the other personality
 /// fields are per-game (MC2: reflexes/perception/life; MC1: accuracy/
 /// tempo — remc1 Type_160 u16_524/u16_526). `starting_spells` is
-/// shared: the spells granted at level start (MC2: upgrade tiers 0-3
-/// by MC2 spell id; MC1: the var_230883 pre-grant mask by MC1 spell
-/// id, granted iff `allowed_spells` also flags the slot).
+/// shared: the spells GRANTED at level start (MC2:
+/// `StartingSpells_0x360E1x` grant flags by MC2 spell id, consumed by
+/// InitialiseSpells_54A50 EF:38650; MC1: the var_230883 pre-grant
+/// mask by MC1 spell id, granted iff `allowed_spells` also flags the
+/// slot).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WizardConfig {
     pub aggression: i16,
@@ -211,14 +253,24 @@ pub struct WizardConfig {
     /// MC2 only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perception: Option<i16>,
-    /// MC2 only.
+    /// MC2 only: AI life scale, 16.8 (also scales maxLife,
+    /// EF:43768-71; the human is always 256).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub life: Option<i16>,
-    /// Per-spell starting grant, indexed by the game's spell ID
-    /// (MC2: 26 tiers 0-3; MC1: 24 flags).
+    /// Per-spell starting grant flags, indexed by the game's spell
+    /// ID (MC2: 26 flags; MC1: 24 flags).
     pub starting_spells: Vec<u8>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unknown_spells: Vec<u8>,
+    /// MC2 only: per-spell STARTING XP LEVEL 0..2 (`byte_0x360FBx` —
+    /// identified 2026-07-12, docs/traces/mc2-rivals-spawn-mortality
+    /// .md §3: an AI's `SpellLevels[spell]` seeds from this, clamped
+    /// ≤2). Named `unknown_spells` before identification (renamed at
+    /// EPOCH 9).
+    #[serde(
+        default,
+        alias = "unknown_spells",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub starting_spell_levels: Vec<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_spells: Vec<u8>,
     /// MC1 only: AI aim accuracy (u16_524 — commit aim cone,
@@ -288,6 +340,12 @@ pub struct Terrain {
     /// texture). Optional: packages baked before this member existed
     /// omit it.
     pub angle: Option<Vec<u8>>,
+    /// `terrain/ceiling.bin` — MC2 cave second heightmap
+    /// (`x_BYTE_14B4E0`, the oracle block's +0x40000 plane): the cave
+    /// ceiling, world height = 32 * value like the floor. Present only
+    /// on cave levels (docs/traces/mc2-cave-terrain-foundation.md);
+    /// day/night packages and pre-cave bakes omit it.
+    pub ceiling: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Terrain {

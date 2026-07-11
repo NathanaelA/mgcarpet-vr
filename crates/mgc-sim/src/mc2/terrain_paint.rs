@@ -32,10 +32,12 @@
 //!   plus `SetHeightmapByBuilding_48B90` (:32475): the pad-edge
 //!   heightmap smoothing bands the building park state runs.
 //!
-//! APPROX register: the cave second-heightmap maintenance inside
-//! sub_45DC0 (:1875-1913), sub_462A0 (:2034-2042) and 48B90
-//! (:32531-32542) is skipped until cave levels land (Phase 4.5) —
-//! the non-cave arms are ported exactly.
+//! The cave second-heightmap maintenance inside sub_45DC0
+//! (:1875-1913), sub_462A0/46570 (:2034-2042), sub_46180
+//! (EF:31061-31071) and 48B90 (EF:32531-32542) is live (Phase 4.5
+//! session 2) — each write re-asserts the floor↔ceiling invariant
+//! ([`Gen::cave_seal_fixup`]) where retail's non-cave arm blind-clears
+//! bit3.
 
 use crate::mc1::features::{Gen, tile};
 
@@ -376,8 +378,10 @@ impl Gen {
             0x16 => band(self, 0x30, 0, false),
             _ => {}
         }
-        // Lock the texture, clear the cave bit over the quad
-        // (:1874, non-cave arm :1914-1923; cave APPROX-skipped).
+        // Lock the texture, then bit3 over the quad: non-cave clears
+        // it (:1914-1923); a cave re-asserts the floor↔ceiling
+        // invariant per quad cell instead (:1875-1912 — the early
+        // return on the 4th cell's seal path is the same fixup).
         self.t.angle[t] |= 0x80;
         for (qx, qy) in [
             (cx, cy),
@@ -385,7 +389,12 @@ impl Gen {
             (cx.wrapping_add(1), cy.wrapping_add(1)),
             (cx, cy.wrapping_add(1)),
         ] {
-            self.t.angle[tile(qx, qy)] &= 0xF7;
+            let q = tile(qx, qy);
+            if self.is_cave() {
+                self.cave_seal_fixup(q);
+            } else {
+                self.t.angle[q] &= 0xF7;
+            }
         }
     }
 
@@ -506,7 +515,13 @@ impl Gen {
                 } else {
                     s
                 };
-                self.t.angle[t] &= 0xF7;
+                // Cave arm (:2034-2042): seal/open per the invariant
+                // instead of the blind bit3 clear.
+                if self.is_cave() {
+                    self.cave_seal_fixup(t);
+                } else {
+                    self.t.angle[t] &= 0xF7;
+                }
                 cx = cx.wrapping_add(1);
             }
             cy = cy.wrapping_add(1);
@@ -517,9 +532,9 @@ impl Gen {
     /// STAMP: terrain type on the 2x2 quad {(x,y),(x-1,y),(x-1,y-1),
     /// (x,y-1)}, then the NW-SE relief shading over the 3x3 centered
     /// on the cell (identical clamp bands + night inversion to
-    /// [`Gen::mc2_retile_region`] pass 3), clearing the cave bit
-    /// (non-cave arm; the cave second-heightmap coupling is the
-    /// Phase-4.5 APPROX like the rest of this module).
+    /// [`Gen::mc2_retile_region`] pass 3), with the same bit3 law:
+    /// clear off-cave, re-assert the invariant on caves
+    /// (EF:31061-31071).
     pub(crate) fn mc2_ridge_stamp(&mut self, cx: u8, cy: u8, ty: u8) {
         for (qx, qy) in [
             (cx, cy),
@@ -547,7 +562,11 @@ impl Gen {
                 } else {
                     s
                 };
-                self.t.angle[t] &= 0xF7;
+                if self.is_cave() {
+                    self.cave_seal_fixup(t);
+                } else {
+                    self.t.angle[t] &= 0xF7;
+                }
             }
         }
     }
@@ -718,7 +737,8 @@ impl Gen {
     /// counting only cells NOT carrying a building texture (types
     /// 6..=0x22), and only when the cell itself has a blend nibble, a
     /// nonzero height, and none of its quad-corner cells are
-    /// building-textured. Cave arm APPROX-skipped.
+    /// building-textured. On caves the write re-asserts the invariant
+    /// (EF:32531-32542; no off-cave else arm in retail).
     fn mc2_smooth_pad_edge(&mut self, cx: u8, cy: u8) {
         let is_building = |ty: u8| (6..=0x22).contains(&ty);
         let t = tile(cx, cy);
@@ -751,6 +771,7 @@ impl Gen {
         }
         if count != 0 {
             self.t.height[t] = (sum / count) as u8;
+            self.cave_seal_fixup(t);
         }
     }
 

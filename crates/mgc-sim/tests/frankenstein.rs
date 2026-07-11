@@ -36,6 +36,7 @@ fn build_world(root: &std::path::Path) -> Option<World> {
         tile_type: terrain.tile_type.clone(),
         shading: terrain.shading.clone().unwrap(),
         angle: terrain.angle.clone().unwrap(),
+        ceiling: Vec::new(),
     };
     // The mc2-night bundle's own feature data (level-000 is night):
     // SEARCH + the BUILD0-0 footprint bank + BLDGPRM — the building
@@ -48,6 +49,13 @@ fn build_world(root: &std::path::Path) -> Option<World> {
     )
     .unwrap()
     .with_bldgprm(bundle.bldgprm.as_deref().unwrap_or_default());
+    let assets = match bundle.sprites.as_ref() {
+        Some((sidx, _)) => {
+            let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+            assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims))
+        }
+        None => assets,
+    };
     let assets = match bundle.spells.as_deref() {
         Some(sp) => assets.with_spells(sp).unwrap(),
         None => assets,

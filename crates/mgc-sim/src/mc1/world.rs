@@ -154,7 +154,26 @@ pub struct Player {
     /// The accelerate channel's cast button was held this tick — the
     /// held factor is 3.0 ("hold down the mouse button to achieve
     /// maximum speed"), 2.0 after release (:65169/:65175).
-    accel_held: bool,
+    pub(crate) accel_held: bool,
+    /// MC2 Speed spell (`GetScroll_69DB0`): the per-tier travel
+    /// multiplier `subSpellIndex_2` = {2,3,4} for tiers 0/1/2, held
+    /// CONSTANT across the armed window (no MC1 held/released 3-vs-2
+    /// distinction). 0 = inactive / use the MC1 accel factor.
+    /// docs/spell-audit/speed.md.
+    pub(crate) accel_mc2_factor: i8,
+    /// MC2 Invisibility strength (`byte_0x1BF_447`): the invis tier's
+    /// `life_0x1A` = {1,2,3}, set on the invis first tick, zeroed at
+    /// window end / break. Drives the per-tier break-on-self-cast law
+    /// (`sub_5F7E0` EF:60987): T0 any cast breaks, T1 all-but-possess,
+    /// T2 nothing. docs/spell-audit/rival-spells.md §2.
+    pub(crate) invis_strength: i8,
+    /// MC2 Metamorph (spell 4): the class-5 model the caster is
+    /// transformed into (2/19/25/16), or 0 when not transformed. Set on
+    /// the metamorph cast, cleared at the cast-window expiry. The app
+    /// reads it to HIDE the carpet (retail `caster.byte[0] |= 0x20`) —
+    /// the pooled creature draws in its place (docs/spell-audit/
+    /// summon-creatures.md Part A).
+    pub(crate) metamorph: u8,
     /// Cached signed thrust-override factor (0.0 = inactive) —
     /// [`World::accel_override`].
     speed_boost: f32,
@@ -213,6 +232,9 @@ impl Default for Player {
             heal_active: false,
             accel: 0,
             accel_held: false,
+            accel_mc2_factor: 0,
+            invis_strength: 0,
+            metamorph: 0,
             speed_boost: 0.0,
             teleport_return: None,
             life: PLAYER_LIFE_MAX,
@@ -250,6 +272,17 @@ impl std::hash::Hash for Player {
             heal_active,
             accel,
             accel_held,
+            // Not hashed directly: the derived `speed_boost` below
+            // already reflects it, and skipping it keeps the goldens
+            // byte-stable across the field addition.
+            accel_mc2_factor: _,
+            // MC2-only, nonzero only mid-invis-window; skipped to keep
+            // the goldens byte-stable across the field addition (same
+            // rationale as accel_mc2_factor — no fixture casts invis).
+            invis_strength: _,
+            // MC2-only, nonzero only while transformed; skipped for the
+            // same golden-stability reason (no fixture casts metamorph).
+            metamorph: _,
             speed_boost,
             teleport_return,
             life,
@@ -433,6 +466,10 @@ pub struct PlayerCommand {
     /// :48717-48731) — from the book screen or a quick key.
     pub equip_left: Option<crate::mc1::spells::SpellId>,
     pub equip_right: Option<crate::mc1::spells::SpellId>,
+    /// MC2 spell selection (the CTRL-pane commit — retail's
+    /// PlayerAction 0x1F/0x20 "Change Spell", remc2 EF:37898):
+    /// (spell index 0..25, tier 0..2, hand 0 = left / 1 = right).
+    pub mc2_select: Option<(u8, u8, u8)>,
     /// The respawn key (Space, command 15 :20081/:48620) — only
     /// consumed while dead.
     pub respawn: bool,
@@ -466,6 +503,15 @@ struct Mc2Stage {
     /// and the cursor advance stay pass-timed, so the m32 pause can
     /// bridge the follow-up spawns.
     force: bool,
+    /// The live pool slot the row's NAMED target bound to (`sub_58DA0`,
+    /// EF:40650-90) — types 1/2 only. `None` until the referenced THING
+    /// (index = `target`) spawns and the bind seam
+    /// ([`World::mc2_bind_stage_target`]) matches it. The decompile's
+    /// `str_3654D_byte1 & 1` "bound" bit is `bound.is_some()`. Because
+    /// our slots recycle (LIFO free list), the completion test re-checks
+    /// `thing_slot == target` identity rather than trusting a raw life
+    /// read of a possibly-reused slot (see [`World::mc2_bound_gone`]).
+    bound: Option<u16>,
 }
 
 pub struct World {
@@ -480,6 +526,14 @@ pub struct World {
     /// goldens hold across this layout change).
     mc2_stages: Vec<Mc2Stage>,
     mc2_stage_current: usize,
+    /// The MC2 StageVar table (the triggered-spawn / hold-gate layer,
+    /// `crate::mc2::stagevars`). Index-aligned with the level file's
+    /// 11-slot array; empty on MC1 and StageVar-less MC2 levels (both
+    /// vecs hash only when populated so those goldens hold).
+    pub(crate) mc2_stagevars: Vec<crate::mc2::stagevars::Mc2StageVar>,
+    /// The live HELD-creature ↔ StageVar bindings (retail's per-entity
+    /// `StageVar1`/`word_0x4A_74`, kept off `Ent` for hash discipline).
+    pub(crate) mc2_sv_held: Vec<crate::mc2::stagevars::Mc2Held>,
     /// `ObjectiveDone_2` (:40724-27): the objective engine's pause
     /// countdown. The m32 stage-gated switch sets 1 as it fires
     /// (:54371) — the skipped pass bridges the one-tick gap between
@@ -487,12 +541,32 @@ pub struct World {
     /// NEXT row's targets (without it a current type-7 row latches
     /// vacuously before its creatures exist).
     mc2_objective_pause: i16,
+    /// `D41A0_0.byte_0x36E02` — the objective-message/voiceover
+    /// trigger ramp (docs/traces/mc2-voiceover-triggers.md §3): set
+    /// to 1 at level load and when the CURRENT stage row completes
+    /// or the level ends; walks 1→8 over ~7 ticks (the deliberate
+    /// delay between the objective latching and the voice), fires
+    /// the sound-41 pre-cue at step 7 and the speech cue + the
+    /// sound-61 advance chime at step 8, then idles 9→0xC8 (a long
+    /// quiet tail so it can't re-fire) and resets.
+    mc2_speech_ramp: u8,
+    /// The pending speech cue (the segment index retail passes to
+    /// `PlayCDTrackSegmentNumber`: objective row + 1, or 9 at level
+    /// end), drained by [`World::take_audio`]. Presentation-side
+    /// transient, never hashed.
+    mc2_speech_cue: Option<u8>,
     /// `D41A0_0.byte_0x36E03` — the APOCALYPSE latch: selects the
     /// (10,9) dome's endgame variant (no damage, sound 63, (10,91)
     /// child). Cleared by the dome ctor (EF:35527 — done at the
     /// spawn call sites); set by the doomsday pyramid's case 0xF
     /// (`mc2::doomsday`, EF:12871).
     pub(crate) mc2_apocalypse: bool,
+    /// The game-turn counter (retail `Turn_2BE0_11248`) — the
+    /// (10,86) cave-drip spawner's 8-turn cadence key. HASH-EXCLUDED
+    /// (Rec.par3 precedent): a pure function of the tick() call
+    /// count; its effects reach the hash through the spawns it
+    /// makes.
+    mc2_turn: u32,
     /// The doomsday HUD meter `x_BYTE_D9F50[0x87a]` (0..1200),
     /// driven by the pyramid's bit-5 ramp — banked for the 4.9 HUD
     /// track (hash-transparent while 0, like the latch).
@@ -522,6 +596,10 @@ pub struct World {
     pub(crate) player: Player,
     /// Live AI wizards (player slots 1..=7) — see [`crate::mc1::rivals`].
     pub(crate) rivals: Vec<crate::mc1::rivals::Rival>,
+    /// Live MC2-column AI wizards (colors 1..player_count) — see
+    /// [`crate::mc2::rivals`]. Empty on MC1 worlds and on MC2 worlds
+    /// wired before the rival column (hash-gated on non-empty).
+    pub(crate) mc2_rivals: Vec<crate::mc2::rivals::Mc2Rival>,
     /// Kill tally [killer slot][victim slot] (the original keeps it
     /// on the killer's Type_160+30 — the book roster's numbers).
     pub(crate) kill_tally: [[u16; 8]; 8],
@@ -537,6 +615,11 @@ pub struct World {
     /// CASTER is pulled toward the victim until 1000 ticks, 5120
     /// distance, or the victim dies.
     duel: Option<(u16, u16, u32)>,
+    /// The human wizard's MC2 spell book (`str_611` subset: learned
+    /// manifestations, XP, levels, tiers, quick-slots) — the Phase
+    /// 4.2 cast column ([`crate::mc2::cast`]). Hashed only once
+    /// touched (pristine = hash-transparent, the MC1 goldens hold).
+    pub(crate) mc2_book: crate::mc2::cast::Mc2Spellbook,
     /// Player-start marker tiles by slot (class-3 models 4..=11,
     /// str_9177 :44068-107), captured before the level-init
     /// disposition consumes the records.
@@ -553,7 +636,15 @@ pub struct World {
     /// +13325 bit 2).
     completed: bool,
     /// Dev/playtest "all spells + infinite mana" switch (G-class).
-    dev_spells: bool,
+    pub(crate) dev_spells: bool,
+    /// Unfaithful improvement (P-class, RIVALS-POLISH #3): remove any
+    /// spell jar the local player already owns. Retail leaves such
+    /// jars in the world forever (placed jars carry life 0), but they
+    /// can never be picked up — permanent, unidentifiable clutter. When
+    /// on (single-player entity removal), an owned-spell jar self-culls
+    /// on its next tick, covering both the level-load sweep and the
+    /// instant the player gains the spell. Faithful default = OFF.
+    pub(crate) prune_owned_jars: bool,
     /// Last tick's fire-button states — casts are EDGE-triggered (one
     /// cast per press) except the traced hold spells; the edges are
     /// derived sim-side from the held booleans.
@@ -572,6 +663,30 @@ pub struct World {
     /// dev family): the pre-mortality behavior — damage totaled for
     /// display, never applied.
     invincible: bool,
+    /// The top-of-screen notification line (retail's per-player
+    /// `CurrentNotificationText_0x01c_2BFA` + its ~200-tick life): the
+    /// shared, game-generic message surface — spell selection, spell
+    /// level-ups, and later deaths/rival events/objectives. Presentation
+    /// transient, HASH-EXCLUDED (the goldens never see it). See
+    /// [`World::set_notification`] / [`World::notification`].
+    notification: Option<Notification>,
+}
+
+/// A transient top-of-screen notification (retail `CurrentNotification
+/// Text`). `color` is the ink RGB — the original resolves DrawText's
+/// colour from a CLRD-0 RGB444 code (the plain toast is `0xF00` = pure
+/// red) to the nearest palette index; we carry the intended truecolor
+/// RGB and let the app tint the white glyph mask, matching the intent
+/// without the palette-quantization step (the UI already renders
+/// truecolor). The team-colour categories (alliance/objective flashes)
+/// will extend this later.
+#[derive(Clone, Debug)]
+pub struct Notification {
+    pub text: String,
+    /// Ticks remaining before the line clears.
+    pub timer: u16,
+    /// Ink colour, RGB (DrawText's resolved `color`).
+    pub color: [u8; 3],
 }
 
 /// One live drawable entity, resolved for the app's billboard / map
@@ -656,6 +771,8 @@ pub struct DebugEvent {
     pub tx: u8,
     pub ty: u8,
     pub life: i32,
+    pub row: u8,
+    pub flags: u32,
 }
 
 /// One tick's audio outputs: drained sound requests + the ambient
@@ -670,6 +787,10 @@ pub struct AudioFrame {
     /// Danger-music mode (the wizard's v_46 countdown is live —
     /// recently hit or targeted; :55282-92).
     pub danger: bool,
+    /// MC2 voiceover cue: the pending speech SEGMENT (objective
+    /// row + 1, or 9 at level end — the app supplies the level-row
+    /// half of the `CdTracks_DB080` address). One-shot, drained.
+    pub speech: Option<u8>,
 }
 
 /// A live gameplay volume for the map overlay (an opt-in enhancement
@@ -732,7 +853,36 @@ fn drawable(class: u16, model: u16) -> bool {
         || (class == 10
             && matches!(
                 model,
-                34 | 0 | 1 | 5 | 6 | 13 | 14 | 16 | 19 | 23 | 25 | 26 | 38 | 39 | 40 | 43 | 45
+                34 | 0 | 1
+                    | 5
+                    | 6
+                    | 13
+                    | 14
+                    | 16
+                    | 19
+                    | 23
+                    | 25
+                    | 26
+                    | 38
+                    | 39
+                    | 40
+                    | 43
+                    | 45
+                    // MC2 effect billboards whose sprite-carrying
+                    // entities were absent from the allowlist, so the
+                    // whole effect ran INVISIBLE though it ticked
+                    // (damage + sound) — player-reported 2026-07-13
+                    // ("tornado/firestorm have no visual"): the (10,22)
+                    // WHIRLWIND head + its (10,75) funnel column (sprite
+                    // rows 293+index, mc2::tail), and the (10,76) FIRE
+                    // ORB's 25 (10,77) satellites (sprite 340). The orb
+                    // hub (76) + wind eye carry no sprite (pure
+                    // controllers) and stay out, as does the (10,54)
+                    // magnet aura (retail AddAuxiliary_50500 sets no
+                    // SetEntityIndex — the visual is the streaming mana).
+                    | 22
+                    | 75
+                    | 77
             ))
 }
 
@@ -819,8 +969,13 @@ impl World {
             table,
             mc2_stages: Vec::new(),
             mc2_stage_current: 0,
+            mc2_stagevars: Vec::new(),
+            mc2_sv_held: Vec::new(),
             mc2_objective_pause: 0,
+            mc2_speech_ramp: 0,
+            mc2_speech_cue: None,
             mc2_apocalypse: false,
+            mc2_turn: 0,
             mc2_doom_meter: 0,
             mc2_doom_level: false,
             terrain_dirty: false,
@@ -831,17 +986,21 @@ impl World {
             win_streak: 0,
             completed: false,
             dev_spells: false,
+            prune_owned_jars: false,
             prev_fire: (false, false),
             accel_veto: (false, false),
             pending_respawn: None,
             pending_restart: false,
             invincible: false,
             rivals: Vec::new(),
+            mc2_rivals: Vec::new(),
             kill_tally: [[0; 8]; 8],
             start_markers,
             human_pose: (0, 0, 0),
             rival_deaths: Vec::new(),
             duel: None,
+            mc2_book: Default::default(),
+            notification: None,
         };
         // MC2 level init (remc2 EventsFunctions.cpp:39390-39425):
         // the GenerateEvents at-load passes over DisId == -1 records
@@ -852,6 +1011,13 @@ impl World {
             w.mc2_generate_events();
         }
         w.fire_disposition(0, true);
+        // MC2's campaign baseline (`SetDefaultSpells_5C0A0`, the
+        // LevelInit_56C00 tail): every level starts with fireball +
+        // possess granted at 0 XP (player-retail note 2026-07-11).
+        // MC1 stays spell-less below — different game, different law.
+        if matches!(w.game, GameId::Mc2) {
+            w.mc2_seed_default_spells();
+        }
         // NO free starting spells: the retail human grant is
         // (availability mask) AND (campaign collected flags)
         // (:49226-33) — with no campaign store, a fresh world's book
@@ -892,6 +1058,13 @@ impl World {
             if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
                 continue;
             }
+            // MC2 likewise: a class-15 token in its effect state
+            // (3·model) with a rebound owner is a wizard's spell
+            // object; fresh authored state-3M jars keep their own
+            // slot in id24 and stay visible (inert, like retail).
+            if e.class64 == 15 && e.tick70 == e.model65.wrapping_mul(3) && e.id24 != i as u16 {
+                continue;
+            }
             out.push(Thing {
                 slot: (e.thing_slot as u32).saturating_sub(1),
                 kind: ThingKind::Entity,
@@ -916,12 +1089,17 @@ impl World {
     pub fn live_poses(&self) -> Vec<LivePose> {
         const TAU: f32 = std::f32::consts::TAU;
         let mut out = Vec::new();
-        for e in self.g.ent.iter().skip(1) {
+        for (i, e) in self.g.ent.iter().enumerate().skip(1) {
             if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
                 continue;
             }
             if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
                 continue; // owned manifestation, not a drawable
+            }
+            // MC2 owned-spell manifestations (state 3M, rebound
+            // owner) — cast machinery, not a drawable.
+            if e.class64 == 15 && e.tick70 == e.model65.wrapping_mul(3) && e.id24 != i as u16 {
+                continue;
             }
             // Hidden (dead wizard, :55568) / cloaked (spell 12,
             // :65689) — the original's byte16 0x20 suppresses the
@@ -947,7 +1125,18 @@ impl World {
             if unclaimed_house && !matches!(self.game, GameId::Mc2) {
                 continue;
             }
-            let segment = e.class64 == 5 && e.tick70 == 120;
+            // Body segments hide from map dots + health bars (the
+            // heads carry both) — game-keyed states: MC1's 120 vs
+            // MC2's chain children 0xE8/m27 branches 0xE9-0xEA
+            // (retail's own map plot skips exactly 0xB4 + 0xE8..0xEA,
+            // GameUI.cpp:1220) and the m22 tail 0xB4. MC1's 120 is
+            // MC2's (5,15) guard brain state — the old shared test
+            // wrongly hid idle guards on MC2 worlds.
+            let segment = e.class64 == 5
+                && match self.game {
+                    GameId::Mc2 => matches!(e.tick70, 0xB4 | 0xE8..=0xEA),
+                    _ => e.tick70 == 120,
+                };
             out.push(LivePose {
                 class: e.class64,
                 model: e.model65,
@@ -961,13 +1150,35 @@ impl World {
                 // Class-5 heads + (playtest request 2026-07-09) the
                 // wizard-family: rival carpets, castles, balloons —
                 // all consumed by the opt-in debug bar overlay only.
-                life_frac: ((e.class64 == 5 && !segment) || (e.class64 == 3 && e.model65 <= 3))
-                    .then(|| {
-                        if e.max_life == 0 {
-                            return 0.0;
-                        }
-                        (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
-                    }),
+                // (Playtest 2026-07-11:) destructible STRUCTURES
+                // join — dwellings (10,45), building anchors
+                // (10,52), castle stage pieces (10,79).
+                life_frac: ((e.class64 == 5 && !segment)
+                    || (e.class64 == 3 && e.model65 <= 3)
+                    || (e.class64 == 10 && matches!(e.model65, 45 | 52 | 79)))
+                .then(|| {
+                    // A parked MC2 dwelling's act_life IS its
+                    // production countdown (mc2_building_tick parks
+                    // with 1000 x rate; retail CompareEvent08 drains
+                    // the SAME field on damage — the playtest "bar
+                    // never moves but it eventually dies" report):
+                    // the bar denominates against the parked value,
+                    // so damage visibly eats it.
+                    let denom = if matches!(self.game, GameId::Mc2)
+                        && e.class64 == 10
+                        && e.model65 == 45
+                        && e.tick70 == 52
+                        && e.f140 > 0
+                    {
+                        (1000 * e.f140) as f32
+                    } else {
+                        e.max_life as f32
+                    };
+                    if denom <= 0.0 {
+                        return 0.0;
+                    }
+                    (e.act_life.max(0) as f32 / denom).min(1.0)
+                }),
                 player_owned: e.id24 == PLAYER_TARGET
                     || (e.class64 == 10 && e.f144 == PLAYER_TARGET),
                 team: {
@@ -1014,6 +1225,17 @@ impl World {
     pub fn tick(&mut self, player: PlayerPose, cmd: PlayerCommand) {
         // One global LCG draw per tick, before any handler (:52223).
         lcg32(&mut self.g.rand);
+
+        // The top-of-screen notification decays on its own clock (retail
+        // decrements the per-player message life each frame, clearing at
+        // zero). Presentation transient — hash-excluded, so this never
+        // perturbs the goldens.
+        if let Some(n) = &mut self.notification {
+            n.timer = n.timer.saturating_sub(1);
+            if n.timer == 0 {
+                self.notification = None;
+            }
+        }
 
         // Broad-phase bucket counts for the kill triggers: class-5
         // events by model, excluding state 120 (multipart body
@@ -1075,7 +1297,12 @@ impl World {
         // (sub_58F00, single-player types 0/5/7).
         match self.g.verbs.objective {
             ObjectiveVerb::Mc1 => self.objective_mc1(),
-            ObjectiveVerb::Mc2 => self.objective_mc2(),
+            ObjectiveVerb::Mc2 => {
+                self.objective_mc2();
+                // The objective-message presenter runs right after
+                // the stage engine every tick (EF:31817-31818).
+                self.speech_ramp_mc2();
+            }
         }
 
         // The wizard mana tick (:55385-421) — BEFORE cast handling,
@@ -1119,17 +1346,37 @@ impl World {
         );
         self.prev_fire = (cmd.fire_left, cmd.fire_right);
         let alive = self.player.state == LifeState::Alive;
-        if alive
-            && cmd.fire_left
-            && let Some(s) = self.player.left
-        {
-            self.cast_spell(s, false, edge.0, player, &ctx);
+        // The MC1 hand cast never runs on the MC2 column — since the
+        // 4.2 native spell column, ALL MC2 casts ride mc2_cast_input;
+        // a bound MC1 hand here was the playtest-13 "ghost fireball
+        // on every cast" (the dev grant auto-filled player.left).
+        if !matches!(self.game, GameId::Mc2) {
+            if alive
+                && cmd.fire_left
+                && let Some(s) = self.player.left
+            {
+                self.cast_spell(s, false, edge.0, player, &ctx);
+            }
+            if alive
+                && cmd.fire_right
+                && let Some(s) = self.player.right
+            {
+                self.cast_spell(s, true, edge.1, player, &ctx);
+            }
         }
-        if alive
-            && cmd.fire_right
-            && let Some(s) = self.player.right
-        {
-            self.cast_spell(s, true, edge.1, player, &ctx);
+
+        // The MC2 spell column (Phase 4.2): pane selection, the
+        // class-15 cast gate (held-button semantics — the gate
+        // itself refuses re-arm, sub_5F660), the per-manifestation
+        // effect states, and the impact-XP mail drain.
+        if matches!(self.game, GameId::Mc2) {
+            if let Some((s, t, h)) = cmd.mc2_select {
+                self.mc2_select_spell(s, t, h);
+            }
+            if alive {
+                self.mc2_cast_input(edge, (cmd.fire_left, cmd.fire_right));
+            }
+            self.mc2_cast_tick(player, &ctx);
         }
 
         // The demolish key (:55846-50): the OWN castle's life goes
@@ -1149,6 +1396,51 @@ impl World {
             AwakeVerb::Mc1 => self.g.mob_awake_pass(&ctx),
             AwakeVerb::Mc2 => self.g.mc2_awake_pass(&ctx),
         }
+
+        // The (10,86) cave-drip ambient spawner (`sub_58630`
+        // EF:40468, run cave-only each frame from UpdateEntities
+        // EF:40113-14): single-player fires on every 8th turn; the
+        // probe lands 2560 ahead of the player's facing; a 20×20
+        // tile window is walked from GLOBAL-stream offsets — draw #1
+        // = the FIRST row's column offset (zeroed for later rows,
+        // retail v17 = 0), draw #2 = the row offset; columns step
+        // 11; the first empty (type 0) non-sealed tile gets the
+        // drip (roster trace §4).
+        self.mc2_turn = self.mc2_turn.wrapping_add(1);
+        if self.g.is_cave() && self.mc2_turn & 7 == 0 {
+            let mut probe = (player.x, player.y, player.z);
+            Gen::polar_step(&mut probe, player.heading, 0, 2560);
+            let ox = ((probe.0.wrapping_add(128) >> 8) as u8).wrapping_sub(10);
+            let oy = ((probe.1.wrapping_add(128) >> 8) as u8).wrapping_sub(10);
+            let d1 = features::lcg32(&mut self.g.rand) % 20; // col offset
+            let d2 = features::lcg32(&mut self.g.rand) % 20; // row offset
+            let mut col0 = d1 as i32;
+            let mut row = d2 as i32;
+            let mut y = oy.wrapping_add(d2 as u8);
+            'drip: while row < 20 {
+                let mut col = col0;
+                let mut x = ox.wrapping_add(col0 as u8);
+                col0 = 0;
+                while col < 20 {
+                    let t = features::tile(x, y);
+                    if self.g.t.tile_type[t] == 0 && self.g.t.angle[t] & 8 == 0 {
+                        self.g
+                            .mc2_spawn_cave_drip((x as u16) << 8, (y as u16) << 8, 0);
+                        break 'drip;
+                    }
+                    col += 11;
+                    x = x.wrapping_add(11);
+                }
+                row += 1;
+                y = y.wrapping_add(1);
+            }
+        }
+
+        // The StageVar hold-gate pass (sub_12780 scan + sub_12500 react,
+        // EF:40095-40103): update the fired bits + release any held
+        // creature whose gate is satisfied, BEFORE the per-model tick so
+        // a released creature acts this same tick. No-op off MC2/StageVars.
+        self.mc2_stagevar_tick();
 
         for i in 1..self.g.ent.len() {
             if self.g.ent[i].class64 == 0 {
@@ -1282,13 +1574,40 @@ impl World {
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 19 => {
                     self.g.mc2_fire_spray_tick(i, &ctx)
                 }
+                // The (10,38) lightning STORM cloud (Lightning L1/L2):
+                // hovers then rains (9,9) beams (mc2::tail).
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 40 => {
+                    self.g.mc2_storm_tick(i)
+                }
+                // The (10,11) scorch ring (mc2::tail — the volcano
+                // burn / authored lava pools).
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 11 => {
+                    if self.g.mc2_scorch_ring_tick(i, &ctx) {
+                        self.terrain_dirty = true;
+                    }
+                }
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x3B => {
                     self.g.mc2_aura_tick(i)
                 }
                 // The (10,22) whirlwind head; its model-75 tail
                 // nodes (action 82) are EV no-ops the head drags.
-                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 22 => {
+                // Action 16 = the (10,16) summit TORNADO — retail's
+                // SAME driver sub_33110 under its own action row
+                // (mc2-class10-m18-m91-summit.md §4.1); shadows
+                // MC1's state 16 like the meteor's 17.
+                10 if matches!(self.game, GameId::Mc2)
+                    && matches!(self.g.ent[i].tick70, 16 | 22) =>
+                {
                     self.g.mc2_whirlwind_tick(i, &ctx)
+                }
+                // The dome's summit children (mc2::morph): 18 = the
+                // ground-vortex eruption controller (shadows MC1's
+                // state 18), 98 = the apocalypse mana rain.
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 18 => {
+                    self.g.mc2_summit18_tick(i)
+                }
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 98 => {
+                    self.g.mc2_summit91_tick(i)
                 }
                 // The (10,9) raise-land / apocalypse dome
                 // (mc2::morph — the three-phase terrain morph).
@@ -1303,11 +1622,42 @@ impl World {
                         self.terrain_dirty = true;
                     }
                 }
+                // The (10,65)/(10,66) one-tick wizard-debuff stamps
+                // (actions 0x46/0x47 — the (9,20)/(9,21) lob
+                // payloads, mc2::proj).
+                10 if matches!(self.game, GameId::Mc2)
+                    && matches!(self.g.ent[i].tick70, 70 | 71) =>
+                {
+                    self.g.mc2_debuff_stamp_tick(i, &ctx)
+                }
+                // The (10,67) flood/quake (mc2::flood): action 72 =
+                // the dome-morph driver, 73 = the shove hold, 74 =
+                // the restore finisher.
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 72 => {
+                    if self.g.mc2_flood_tick(i, &ctx) {
+                        self.terrain_dirty = true;
+                    }
+                }
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 73 => {
+                    self.g.mc2_flood_shove_tick(i, &ctx)
+                }
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 74 => {
+                    if self.g.mc2_flood_finisher_tick(i, &ctx) {
+                        self.terrain_dirty = true;
+                    }
+                }
                 // The (10,76) fire-sphere orb hub; its model-77
                 // satellites (action 0x54) have NO handler — the hub
                 // repositions them.
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x53 => {
                     self.g.mc2_fire_orb_tick(i, &ctx)
+                }
+                // The (10,89) Cave-In collapse (mc2::cave, action
+                // 0x60 — sub_311E0; terrain is the weapon).
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x60 => {
+                    if self.g.mc2_cave_in_tick(i) {
+                        self.terrain_dirty = true;
+                    }
                 }
                 // Headless MC2 states that must NOT reach the MC1
                 // class-10 catch-all below (it despawns unknown
@@ -1326,6 +1676,17 @@ impl World {
                 {
                     self.g.mc2_riser_trigger_tick(i)
                 }
+                // The MC2 castle court (mc2::castle): the (10,42)
+                // build painter (action 0x2C) and the (10,79)
+                // defender stage piece (action 0x56).
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x2C => {
+                    if self.g.mc2_castle_painter_tick(i) {
+                        self.terrain_dirty = true;
+                    }
+                }
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x56 => {
+                    self.g.mc2_castle_piece_tick(i)
+                }
                 // Live village buildings and their collapse.
                 10 if self.g.ent[i].tick70 == 52 => self.g.tick_building_live(i),
                 10 if self.g.ent[i].tick70 == 53 => {
@@ -1336,7 +1697,7 @@ impl World {
                 // flash, lava bomb, blast ring, eruption driver,
                 // plume, magnet, hit-flash, steal-flash, storm
                 // cloud, mana ball, grave, napalm, collapse magnet,
-                // death field).
+                // death field, magic mine).
                 10 if matches!(
                     self.g.ent[i].tick70,
                     0 | 1
@@ -1357,10 +1718,38 @@ impl World {
                         | 58
                         | 59
                         | 60
+                        | 85
                 ) =>
                 {
                     if self.g.effect_tick(i, &ctx) {
                         self.terrain_dirty = true;
+                    }
+                }
+                // The cave sculptor band (mc2::cave) — normally
+                // settle-consumed at load; these arms serve
+                // disposition-fired records and the runtime drips.
+                10 if matches!(self.game, GameId::Mc2)
+                    && matches!(self.g.ent[i].tick70, 0x57..=0x5D) =>
+                {
+                    match self.g.ent[i].tick70 {
+                        0x57 => self.g.ent[i].flags |= 0x400,
+                        0x58 => {
+                            self.g.mc2_tube_carve_tick(i);
+                            self.terrain_dirty = true;
+                        }
+                        0x59 => {
+                            self.g.mc2_cave_mesa_tick(i);
+                            self.terrain_dirty = true;
+                        }
+                        0x5A => {
+                            self.g.mc2_cave_dome_tick(i);
+                            self.terrain_dirty = true;
+                        }
+                        0x5B | 0x5C => {
+                            self.g.mc2_cave_pit_hill_tick(i);
+                            self.terrain_dirty = true;
+                        }
+                        _ => self.g.mc2_cave_drip_tick(i),
                     }
                 }
                 10 => {
@@ -1374,8 +1763,22 @@ impl World {
                 11 if matches!(self.game, GameId::Mc2) => self.mc2_switch_tick(i),
                 11 => self.trigger_tick(i, player, &buckets),
                 // Wizard castles and balloons — owner-generic (id24).
+                // MC2 runs its native column (mc2::castle): the
+                // three-actionIndex castle (tick70 4/5/6) and the
+                // AddBallon_60AB0 balloon.
+                3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 2 => {
+                    self.g.mc2_castle_tick(i)
+                }
+                3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 3 => {
+                    self.g.mc2_balloon_tick(i)
+                }
                 3 if self.g.ent[i].model65 == 2 => self.g.castle_tick(i),
                 3 if self.g.ent[i].model65 == 3 => self.g.balloon_tick(i),
+                // MC2 rival (AI) wizards — the MC2-native brain
+                // column (mc2::rivals); husks with no record stand.
+                3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 <= 1 => {
+                    self.mc2_rival_entity_tick(i)
+                }
                 // Rival (AI) wizards; level-authored husks with no
                 // rival record stand and render as before.
                 3 if self.g.ent[i].model65 <= 1 => self.rival_entity_tick(i),
@@ -1417,6 +1820,15 @@ impl World {
         if self.g.terrain_dirty {
             self.g.terrain_dirty = false;
             self.terrain_dirty = true;
+        }
+        // Drain the MC2 impact-XP mail the same tick it was pushed
+        // (the pool ticks above are the `sub_6D8B0` award sites) —
+        // empty again by hash time, like a read mailbox.
+        if !self.g.mc2_cast_xp.0.is_empty() {
+            let mail = std::mem::take(&mut self.g.mc2_cast_xp.0);
+            for (owner, spell) in mail {
+                self.mc2_award_xp(owner, spell as usize, 1);
+            }
         }
 
         // ---- player damage intake (the wizard tick's mailbox block,
@@ -1537,6 +1949,13 @@ impl World {
         // ticks so an expired burst drops the override the same turn.
         self.player.speed_boost = match self.player.accel {
             0 => 0.0,
+            // MC2 Speed: constant per-tier factor (2/3/4) for the
+            // whole window — 160/240/320 sustained at ×80 base
+            // (docs/spell-audit/speed.md); direction follows the
+            // channel sign (accel is +1 forward on the MC2 cast).
+            a if self.player.accel_mc2_factor != 0 => {
+                self.player.accel_mc2_factor as f32 * a.signum() as f32
+            }
             a => (if self.player.accel_held { 3.0 } else { 2.0 }) * a.signum() as f32,
         };
         self.player.accel_held = false;
@@ -1625,7 +2044,21 @@ impl World {
             self.player.hit_flash = 5;
             self.g.player_alert = 4;
             self.player.regen_delay = 16;
-            self.g.snd_player(17);
+            // The player-hit "ugh" grunt. MC1 uses sound 17; MC2's bank
+            // maps 17 to a creature scream (Cymmerian), so the shared
+            // path played the WRONG sound for MC2 (player-reported
+            // 2026-07-14). MC2's real wizard grunt is 54-57 — the same
+            // one the debuff-hit path already uses (mc2/proj.rs). Vary by
+            // attacker id (not the RNG stream, so MC1 goldens are
+            // untouched). NOTE: whether a hit WHILE MORPHED swaps to the
+            // creature's own hurt cry is unverified (player to confirm) —
+            // kept as the wizard grunt for now.
+            let hit = if matches!(self.g.verbs.damage, DamageVerb::Mc2) {
+                54 + (src & 3) as u8
+            } else {
+                17
+            };
+            self.g.snd_player(hit);
             if self.player.life < 0 {
                 // Fatal (:55729): latch the killer; the state flip
                 // + death sound are the wizard tick's death check
@@ -1752,6 +2185,14 @@ impl World {
     /// +44 damage → f44 (count/possess read from the static table).
     /// Auto-fills an empty hand, LEFT first (:49246-54).
     fn grant_spell(&mut self, spell: SpellId) -> Option<usize> {
+        // MC1 class-12 manifestations never exist on the MC2 column
+        // (the native book owns spells there; the dev/plausible
+        // instruments grant through mc2_dev_grant instead). Without
+        // this gate the dev toggle bound player.left with an MC1
+        // fireball — the playtest-13 ghost cast.
+        if matches!(self.game, GameId::Mc2) {
+            return None;
+        }
         let id = spell.0 as usize;
         if id >= SPELL_COUNT {
             return None;
@@ -1810,6 +2251,16 @@ impl World {
         self.dev_spells
     }
 
+    /// Unfaithful improvement (P-class): remove spell jars the local
+    /// player already owns (and therefore can never pick up). Faithful
+    /// default = off (retail keeps the jars). Applies to both games'
+    /// jar systems; the removal is single-player entity deletion, so it
+    /// affects the state hash only when enabled (goldens run with it
+    /// off). See [[rivals-polish-track]] / docs/FIDELITY.md.
+    pub fn set_prune_owned_jars(&mut self, on: bool) {
+        self.prune_owned_jars = on;
+    }
+
     /// Allocations dropped on pool exhaustion since the last call —
     /// the limit-removing register's telemetry (the app logs it; the
     /// sim itself fails open exactly like the original).
@@ -1834,30 +2285,39 @@ impl World {
             placeholders,
             mc2_stages,
             mc2_stage_current,
+            mc2_stagevars,
+            mc2_sv_held,
             mc2_objective_pause,
+            mc2_speech_ramp,
+            mc2_speech_cue: _,
             mc2_apocalypse,
             mc2_doom_meter,
             mc2_doom_level,
+            mc2_turn: _,
             table,
             terrain_dirty: _,
             entities_dirty: _,
             pending_teleport: _,
             player,
             rivals,
+            mc2_rivals,
             kill_tally,
             human_pose,
             rival_deaths: _,
             duel,
+            mc2_book,
             start_markers,
             win_pct,
             win_streak,
             completed,
             dev_spells,
+            prune_owned_jars: _,
             prev_fire,
             accel_veto: _,
             pending_respawn: _,
             pending_restart: _,
             invincible,
+            notification: _,
         } = self;
         let mut h = Fnv(0xcbf2_9ce4_8422_2325);
         g.hash(&mut h);
@@ -1879,6 +2339,7 @@ impl World {
             mc2_stages.hash(&mut h);
             mc2_stage_current.hash(&mut h);
             mc2_objective_pause.hash(&mut h);
+            mc2_speech_ramp.hash(&mut h);
             // Hash-transparent while clear (the bldgprm/spells
             // precedent): only the unported endgame machine sets it,
             // so current pins hold.
@@ -1891,6 +2352,23 @@ impl World {
             if *mc2_doom_level {
                 mc2_doom_level.hash(&mut h);
             }
+        }
+        // The MC2 spell book (Phase 4.2): pristine = transparent
+        // (MC1 goldens hold; every MC2 world touches it via the
+        // fireball+possess baseline, so it always hashes there).
+        if !mc2_book.is_pristine() {
+            mc2_book.hash(&mut h);
+        }
+        // The MC2 rival column (Phase 4.3b): hash-gated on presence
+        // — every pre-rivals golden stands.
+        if !mc2_rivals.is_empty() {
+            mc2_rivals.hash(&mut h);
+        }
+        // The MC2 StageVar subsystem (the hold-gate layer): hash-gated
+        // on presence so MC1 + StageVar-less MC2 goldens are untouched.
+        if !mc2_stagevars.is_empty() {
+            mc2_stagevars.hash(&mut h);
+            mc2_sv_held.hash(&mut h);
         }
         h.finish()
     }
@@ -1910,8 +2388,13 @@ impl World {
     /// MC2 non-day environment (Night/Cave level): the runtime terrain
     /// repaint inverts relief shading (remc2 Terrain.cpp:2030-2033).
     /// Set by the app from the level's gfx environment; no-op on MC1.
+    /// Also applies retail's LevelInit SPELLS rows-4/19 patch, which
+    /// keys on exactly the same Day vs non-Day split
+    /// ([`crate::mc2::spells::level_init_patch`]; empty table = MC1 or
+    /// pre-spells bundle → no-op, hash-transparent).
     pub fn set_mc2_night_shade(&mut self, on: bool) {
         self.g.mc2_night_shade = crate::mc1::features::NightShade(on);
+        crate::mc2::spells::level_init_patch(&mut self.g.assets.spells, !on);
     }
 
     /// The doom-palette level bit (`byte_0x2FED2 & 2` — the
@@ -2070,7 +2553,7 @@ impl World {
         // FULL next-stage amount; the fresh castle keeps the ctor
         // 1000).
         if id == 16 {
-            if self.castle_build_lives() {
+            if self.castle_lock_active() {
                 self.g.snd_player(29); // the pinned-charge fizzle
                 return;
             }
@@ -2183,7 +2666,7 @@ impl World {
     /// Muzzle placement shared by the hand casts (sub_56090 :65056-)
     /// — 256 units to the casting hand's side, launch height = the
     /// carpet's half-height, reverted when inside terrain.
-    fn muzzle(&self, p: PlayerPose, right: bool) -> (u16, u16, i16) {
+    pub(crate) fn muzzle(&self, p: PlayerPose, right: bool) -> (u16, u16, i16) {
         use crate::mc1::combat::PLAYER_HH;
         let myaw = if right {
             p.heading.wrapping_add(512)
@@ -2321,7 +2804,7 @@ impl World {
     /// (the authentic anchor); the recast returns to the cast site.
     /// INTERIM (no castle built): the 64-tile LCG hop (0x4000 units,
     /// :65579-81) along a manifestation-LCG yaw.
-    fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
+    pub(crate) fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
         if let Some((rx, ry)) = self.player.teleport_return.take() {
             self.pending_teleport = Some((rx as f32 / 256.0, ry as f32 / 256.0));
         } else {
@@ -2338,6 +2821,112 @@ impl World {
         }
     }
 
+    /// MC2 Castle Teleport (`sub_6AD60` EF:56860) — a real 3-tier
+    /// spell keyed on the manifestation tier `life`
+    /// (docs/spell-audit/teleport.md): **T0** teleport to the own
+    /// castle; **T1** a save/return toggle (to the castle, then back
+    /// to where you cast it on the next press); **T2** cycle own
+    /// castle → each rival's castle, one hop per cast. All land at
+    /// the castle offset `-448` along `(yaw-204)`. The no-castle
+    /// fallback is a SILENT random hop; a real castle teleport plays
+    /// sound 22. The cycle/return state rides the manifestation's
+    /// `f146` (`word_0x96_150`); the T1 saved position reuses the
+    /// player's `teleport_return`. (Flight-speed zero on resolve —
+    /// retail `speed_0xc_12 = 0` — is a banked follow-up.)
+    pub(crate) fn mc2_cast_teleport(&mut self, m: usize, p: PlayerPose) {
+        let tier = self.g.ent[m].f71;
+        let yaw = p.heading;
+        let mut castle_ok = false;
+        match tier {
+            0 => {
+                if let Some(c) = self.player_castle() {
+                    self.mc2_teleport_to(c, yaw);
+                    castle_ok = true;
+                } else {
+                    self.mc2_teleport_random(m, p);
+                }
+                self.g.ent[m].f146 = 0;
+            }
+            1 => {
+                if let Some(c) = self.player_castle() {
+                    if self.g.ent[m].f146 == 1 {
+                        if let Some((rx, ry)) = self.player.teleport_return.take() {
+                            self.pending_teleport = Some((rx as f32 / 256.0, ry as f32 / 256.0));
+                            castle_ok = true;
+                        }
+                        self.g.ent[m].f146 = 0;
+                    } else {
+                        self.player.teleport_return = Some((p.x, p.y));
+                        self.mc2_teleport_to(c, yaw);
+                        self.g.ent[m].f146 = 1;
+                        castle_ok = true;
+                    }
+                } else {
+                    self.mc2_teleport_random(m, p);
+                }
+            }
+            _ => {
+                castle_ok = self.mc2_teleport_cycle(m, yaw);
+                if !castle_ok {
+                    self.mc2_teleport_random(m, p);
+                }
+            }
+        }
+        if castle_ok {
+            self.g.snd_player(22);
+        }
+    }
+
+    /// Stage a relocation to a castle slot at the `-448`/`(yaw-204)`
+    /// offset (all MC2 teleport castle branches).
+    fn mc2_teleport_to(&mut self, c: usize, yaw: u16) {
+        let e = &self.g.ent[c];
+        let mut d = (e.x, e.y, e.z);
+        Gen::polar_step(&mut d, yaw.wrapping_sub(204) & 0x7FF, 0, -448);
+        self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0));
+    }
+
+    /// T2 cycle: advance the `f146` state 0..9 until a reachable
+    /// castle — state 0 = own, 1 = skip, 2..8 = the `(state-2)`-th
+    /// live rival's castle. One hop per cast.
+    fn mc2_teleport_cycle(&mut self, m: usize, yaw: u16) -> bool {
+        for _ in 0..9 {
+            let state = self.g.ent[m].f146;
+            self.g.ent[m].f146 = (state + 1) % 9;
+            let castle = match state {
+                0 => self.player_castle(),
+                1 => None,
+                s => {
+                    let idx = (s - 2) as usize;
+                    let rent = self
+                        .mc2_rivals
+                        .iter()
+                        .filter(|r| !r.eliminated)
+                        .nth(idx)
+                        .map(|r| r.ent);
+                    rent.and_then(|e| self.rival_castle(e))
+                }
+            };
+            if let Some(c) = castle {
+                self.mc2_teleport_to(c, yaw);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The no-castle random hop (`0x4000` ahead of the current pose),
+    /// silent. (Retail's LCG `9377·r+9439` differs from `ent_rand`;
+    /// reusing `ent_rand` keeps the fallback deterministic — the
+    /// exact stream is a banked nicety.)
+    fn mc2_teleport_random(&mut self, m: usize, p: PlayerPose) {
+        let yaw = (self.g.ent_rand(m) & 0x7FF) as u16;
+        let mut d = (p.x, p.y, 0i16);
+        Gen::polar_step(&mut d, yaw, 0, 0x4000);
+        self.g.ent[m].f146 = 0;
+        self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0));
+    }
+
     /// The cast lockout: a castle ball (9,10) or upgrade token
     /// (10,43) still in flight. A STANDING castle no longer locks —
     /// the recast on it is the UPGRADE (:65904-08 morphs the ball
@@ -2348,6 +2937,23 @@ impl World {
                 && e.id24 == PLAYER_TARGET
                 && ((e.class64 == 9 && e.model65 == 10) || (e.class64 == 10 && e.model65 == 43))
         })
+    }
+
+    /// The MC1 castle-spell UPGRADE LOCK: engaged while a cast is in
+    /// transit (the (9,10) ball / (10,43) token) OR the player's castle
+    /// is mid-transform — any `castle_tick` state other than ESTABLISHED
+    /// (`f59 == 4`, the standing/damage-intake tick). Retail pins the
+    /// castle-spell manifestation throughout the transform (MC2's
+    /// `sub_5F890`; the MC1 decompile is truncated but the port already
+    /// runs the between-transformations window in `castle_tick` — the
+    /// "dragon-squat" trick), so the lock must follow the WHOLE transform,
+    /// not just the ball flight. This is what lets you rebuild in the
+    /// split second between an enemy's level-by-level downgrades.
+    fn castle_lock_active(&self) -> bool {
+        if self.castle_build_lives() {
+            return true;
+        }
+        self.player_castle().is_some_and(|c| self.g.ent[c].f59 != 4)
     }
 
     /// The player's established castle slot (teleport anchor).
@@ -2442,6 +3048,15 @@ impl World {
             ) {
                 continue;
             }
+            // Fool's Mana decoys (MC2, f52 = trap owner) are FAKE mana:
+            // they must NOT inflate the world-mana denominator, or their
+            // permanently-uncollectable share (you can't trip your own
+            // trap) dilutes the castle-share goal below reachability
+            // (player 2026-07-13; docs/spell-audit/fools-mana.md). MC1
+            // and ordinary balls carry f52 == 0.
+            if e.class64 == 10 && e.model65 == 39 && e.f52 != 0 {
+                continue;
+            }
             let m = e.f140.max(0) as u32;
             world = world.saturating_add(m);
             // Claim owner: mana balls/houses carry it in +144, the
@@ -2510,7 +3125,7 @@ impl World {
     /// wizard mana tick applies it next turn and clamps at 0.
     /// (Authored behavior: remc1's maintainer ships this commented
     /// out — a known mis-fix.)
-    fn mana_debit(&mut self, cost: u32) {
+    pub(crate) fn mana_debit(&mut self, cost: u32) {
         if self.dev_spells {
             return;
         }
@@ -2522,6 +3137,18 @@ impl World {
         }
     }
 
+    /// sub_55E80/sub_68DE0 mid-burst else branch: while a spell burst
+    /// is live past its first-fire tick, pin the caster's positive
+    /// regen accumulator to 0 so an active spell blocks mana
+    /// regeneration (docs/spell-audit/mana-regen.md). The `> 0` guard
+    /// preserves a same-frame negative cast debit; dev_spells (the
+    /// infinite-mana pin) is exempt.
+    pub(crate) fn suppress_regen(&mut self) {
+        if !self.dev_spells && self.player.mana_delta > 0 {
+            self.player.mana_delta = 0;
+        }
+    }
+
     /// 16 Create Castle (sub_57610 :65862): the class-9 m10 castle
     /// ball from the caster. NO castle standing: target 16 tiles
     /// (4096 units) ahead at ground level (:65894-902), morph =
@@ -2530,7 +3157,7 @@ impl World {
     /// then build). Castle standing: the RECAST is the UPGRADE —
     /// the ball flies AT the castle and morphs into the (10,43)
     /// upgrade token instead (+68/69, +146 = castle idx, :65904-08).
-    fn cast_castle(&mut self, p: PlayerPose) {
+    pub(crate) fn cast_castle(&mut self, p: PlayerPose) {
         use crate::mc1::combat::PLAYER_HH;
         let z = p.z.wrapping_add(PLAYER_HH as i16);
         let castle = self.player_castle();
@@ -2673,6 +3300,21 @@ impl World {
             }
             return;
         }
+        // Unfaithful improvement (RIVALS-POLISH #3): a jar whose spell
+        // the player already owns can never be picked up (try_pickup's
+        // owned gate below) — remove it instead of leaving permanent
+        // clutter. Covers both THING-placed (0..=2, life-0 forever) and
+        // death-scatter (3) jars; self-culling here handles both the
+        // level-load sweep and the tick after the player gains the
+        // spell (every jar of it despawns on its next tick).
+        if self.prune_owned_jars {
+            let spell = self.g.ent[i].model65 as usize;
+            if spell < SPELL_COUNT && self.player.owned[spell] != 0 {
+                self.g.ent[i].flags |= 0x400;
+                self.entities_dirty = true;
+                return;
+            }
+        }
         // Death-scattered jars decay (life 200-289, :55545-47); the
         // THING-placed states 0..=2 sit forever.
         if t == DROPPED_JAR {
@@ -2725,8 +3367,35 @@ impl World {
     /// the refire spacing — and the continuous/toggle effects derive
     /// from it.
     fn manifestation_tick(&mut self, i: usize, spell: usize) {
+        // CASTLE (16) is the UPGRADE LOCK, not a timed burst: its `f26`
+        // tracks the castle transform (the flying ball / the `f59`
+        // build-upgrade-downgrade state machine), NOT the fixed `count`
+        // countdown, and it does NOT suppress mana regen — retail's
+        // castle effect touches the caster's mana only at cast (the
+        // one-shot debit), never during the hold (unlike a channelled
+        // spell). Mirrors the MC2 fix (`mc2_castle_spell_tick`).
+        if spell == 16 {
+            self.g.ent[i].f26 = if self.castle_lock_active() {
+                (SPELLS[16].count as i16 - 1).max(1)
+            } else {
+                0
+            };
+            return;
+        }
+        // `sub_55E80` (:64936) mid-burst regen suppression: while a
+        // spell burst is live, pin the caster's regen accumulator to
+        // 0 — the "an active spell blocks mana regeneration" law
+        // (docs/spell-audit/mana-regen.md). The first-fire tick
+        // already stamped `mana_delta` negative (`mana_debit`), so
+        // the `> 0` guard preserves that per-cast debit and only the
+        // positive regen the wizard tick recomputed this frame
+        // (world.rs:1225) is clamped away.
+        let was_live = self.g.ent[i].f26 > 0;
         if self.g.ent[i].f26 > 0 {
             self.g.ent[i].f26 -= 1;
+        }
+        if was_live {
+            self.suppress_regen();
         }
         let active = self.g.ent[i].f26 > 0;
         match spell {
@@ -2804,6 +3473,17 @@ impl World {
     /// still evade. The marker shows what the shot will CHASE.
     pub fn aim_preview(&self, p: PlayerPose) -> [Option<AimLock>; 2] {
         let hand = |right: bool| -> Option<AimLock> {
+            // An MC2-bound hand previews through the MC2 twin (the
+            // projectile-side first-tick acquisition — retail MC2
+            // has no reticle at all, so this is pure instrument).
+            let mc2 = if right {
+                self.mc2_book.right
+            } else {
+                self.mc2_book.left
+            };
+            if mc2 >= 0 {
+                return self.mc2_aim_preview(p, right, mc2 as usize);
+            }
             let spell = if right {
                 self.player.right?.0
             } else {
@@ -2919,6 +3599,35 @@ impl World {
     /// thrust cancels/vetoes type 2, positive thrust type 21. The
     /// veto also blocks re-triggering for the rest of the tick.
     pub fn thrust_cancel(&mut self, thrust: f32) {
+        // MC2 Speed: a braking input INTERRUPTS the armed window early
+        // (player 2026-07-14: "it flies way further than you need" — it
+        // must be interruptible). We terminate the window AND zero its
+        // burst timer `f26` so mana regen lifts immediately: functional
+        // termination clears the burst (the player's 2026-07-13
+        // directive), otherwise the boost would stop while the window
+        // keeps regen pinned off (the effect/timer decoupling that first
+        // motivated running the window to completion). NB the literal
+        // decompile `GetScroll_69DB0` hard-overrides speed every tick
+        // with no brake input (docs/spell-audit/speed.md §5) — this is
+        // the player-observed interruptibility restored over the trace
+        // (recorded gameplay is senior); reclassify as a P-class
+        // playability toggle only if a retail playthrough disproves it.
+        // A reverse thrust brakes the (always-forward) boost; under the
+        // MC1 thrust model ANY press reaches the `-1.0` call, matching
+        // MC1's "any Up/Down press cancels" accelerate law.
+        if self.player.accel_mc2_factor != 0 {
+            if thrust < 0.0 {
+                let m = self.mc2_book.ent[3] as usize;
+                if m != 0 {
+                    self.g.ent[m].f26 = 0;
+                    self.mc2_cast_expire(3, m);
+                } else {
+                    self.player.accel = 0;
+                    self.player.accel_mc2_factor = 0;
+                }
+            }
+            return;
+        }
         if thrust < 0.0 {
             self.accel_veto.0 = true;
             if self.player.accel == 1 {
@@ -3023,33 +3732,67 @@ impl World {
         self.invincible = on;
     }
 
+    /// Test/debug hook: set the player's mana pool directly (clamped to
+    /// the current ceiling). Used to exercise the cast-affordability
+    /// gates without scripting a full economy.
+    pub fn set_player_mana(&mut self, mana: u32) {
+        self.player.mana = mana.min(self.player.mana_max);
+    }
+
+    /// Test/debug hook: raise the player's mana ceiling (and clamp the
+    /// pool into it). Lets tests observe large mana credits/debits that
+    /// the default 1000 ceiling would otherwise cap.
+    pub fn set_player_mana_max(&mut self, mana_max: u32) {
+        self.player.mana_max = mana_max;
+        self.player.mana = self.player.mana.min(mana_max);
+    }
+
     /// One rival's app-facing snapshot: the book-roster row
     /// (sub_22880 :27009-165) and the map name-label pass
-    /// (:57413-48) consume these.
+    /// (:57413-48) consume these. Serves both columns — MC1 rivals
+    /// and the MC2 rival column, whichever is populated.
     pub fn rival_views(&self) -> Vec<RivalView> {
-        self.rivals
-            .iter()
-            .map(|r| {
-                let e = &self.g.ent[r.ent as usize];
-                RivalView {
-                    slot: r.slot,
-                    name: crate::mc1::rivals::RIVAL_NAMES[r.slot as usize],
-                    alive: e.tick70 == 1 && !r.eliminated,
-                    eliminated: r.eliminated,
-                    x: e.x as f32 / 256.0,
-                    z: e.y as f32 / 256.0,
-                    mana: r.mana,
-                    mana_max: r.mana_max,
-                    life_frac: if e.max_life > 0 {
-                        (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
-                    } else {
-                        0.0
-                    },
-                    kills: self.kill_tally[r.slot as usize],
-                    invisible: r.invisible,
-                }
-            })
-            .collect()
+        let mc1 = self.rivals.iter().map(|r| {
+            let e = &self.g.ent[r.ent as usize];
+            RivalView {
+                slot: r.slot,
+                name: crate::mc1::rivals::RIVAL_NAMES[r.slot as usize],
+                alive: e.tick70 == 1 && !r.eliminated,
+                eliminated: r.eliminated,
+                x: e.x as f32 / 256.0,
+                z: e.y as f32 / 256.0,
+                mana: r.mana,
+                mana_max: r.mana_max,
+                life_frac: if e.max_life > 0 {
+                    (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
+                } else {
+                    0.0
+                },
+                kills: self.kill_tally[r.slot as usize],
+                invisible: r.invisible,
+            }
+        });
+        let mc2 = self.mc2_rivals.iter().map(|r| {
+            let e = &self.g.ent[r.ent as usize];
+            RivalView {
+                slot: r.slot,
+                name: crate::mc2::rivals::MC2_RIVAL_NAMES[r.slot as usize],
+                alive: e.tick70 == 1 && !r.eliminated,
+                eliminated: r.eliminated,
+                x: e.x as f32 / 256.0,
+                z: e.y as f32 / 256.0,
+                mana: r.mana,
+                mana_max: r.mana_max,
+                life_frac: if e.max_life > 0 {
+                    (e.act_life.max(0) as f32 / e.max_life as f32).min(1.0)
+                } else {
+                    0.0
+                },
+                kills: self.kill_tally[r.slot as usize],
+                invisible: r.invisible,
+            }
+        });
+        mc1.chain(mc2).collect()
     }
 
     /// The human's kill row of the tally (Type_160+30 on the human).
@@ -3068,6 +3811,21 @@ impl World {
     /// labels on the map.
     pub fn beyond_sight(&self) -> bool {
         self.player.beyond_sight
+    }
+
+    /// The live Beyond-Sight TIER (0/1/2) while the spell is armed,
+    /// else `None` — the map reveal knob (docs/spell-audit/
+    /// beyond-sight.md). MC2 reads it from the class-15 manifestation
+    /// (`byte_0x46_70` while `word_0x2E_46 > 0`); the three tiers
+    /// reveal progressively more (T0 plain wizards, T1 also through
+    /// Invisible, T2 also enemy creatures). MC1 has no tiers — its
+    /// bool maps to tier 0.
+    pub fn beyond_sight_tier(&self) -> Option<u8> {
+        if matches!(self.game, GameId::Mc2) {
+            let m = self.mc2_book.ent[12] as usize;
+            return (m != 0 && self.g.ent[m].f26 > 0).then(|| self.g.ent[m].f71.min(2));
+        }
+        self.player.beyond_sight.then_some(0)
     }
 
     /// Combat stat counters: (kills, shots resolved, aimed hits) —
@@ -3145,10 +3903,10 @@ impl World {
                     // cases {0x1C,0x1D,0x1F,0x32,0x50} EV:323-336 →
                     // sub_49090): 0x1D = waterpath, 0x32 = the
                     // (10,51) ridge-beam fence, 0x1C = the road
-                    // staircase, 0x1F = the river (retail-inert).
-                    // 0x50 = the CAVE tube carver — Phase 4.5
+                    // staircase, 0x1F = the river (retail-inert),
+                    // 0x50 = the (10,81) cave tube carver
                     // (docs/traces/mc2-terrain-author-painters.md).
-                    if r.class == 10 && matches!(r.model, 0x1C | 0x1D | 0x1F | 0x32) {
+                    if r.class == 10 && matches!(r.model, 0x1C | 0x1D | 0x1F | 0x32 | 0x50) {
                         self.mc2_author_chain(i);
                     } else {
                         self.spawn_from_thing(i);
@@ -3156,7 +3914,78 @@ impl World {
                     self.table[i].class = 0;
                 }
             }
+            // `ApplyEvents_498A0` between passes (EV:161-282): tick
+            // the live cave sculptors in slot order to completion —
+            // the settle-TICK band (painters trace §4.4). Slot-order
+            // rounds mean every animated sculptor's phase-0 terrain
+            // SAMPLE happens before any same-pass sculptor's phase-1
+            // WRITE, exactly like retail; dead slots are reaped so
+            // later passes reuse them (per-entity rand = slot +
+            // global stream).
+            self.mc2_settle_cave_band();
         }
+    }
+
+    /// The load-time settle for the cave sculptor band — the cave
+    /// slice of `ApplyEvents_498A0` (EV:410-526). Ticks actions
+    /// 0x57..=0x5C in slot order until the band is quiet; action
+    /// 0x5D (the drip) is in the settle DISABLE band (EV:516-25) —
+    /// a live one despawns without running. No-op off-cave.
+    fn mc2_settle_cave_band(&mut self) {
+        if !self.g.is_cave() {
+            return;
+        }
+        for _ in 0..1024 {
+            let mut live = false;
+            for i in 1..self.g.ent.len() {
+                if self.g.ent[i].flags & 0x400 != 0 {
+                    continue;
+                }
+                // The (14,2) pillar spawns in its own pass (EV:226-33)
+                // and its MEASURE (life 0) runs in the ApplyEvents
+                // settle like everything else; grow/retract can only
+                // be trigger-fired at runtime.
+                if self.g.ent[i].class64 == 14 && self.g.ent[i].tick70 == 7 {
+                    if self.g.mc2_pillar_tick(i) {
+                        live = true;
+                    }
+                    continue;
+                }
+                if self.g.ent[i].class64 != 10 {
+                    continue;
+                }
+                match self.g.ent[i].tick70 {
+                    0x57 => self.g.ent[i].flags |= 0x400,
+                    0x58 => {
+                        self.g.mc2_tube_carve_tick(i);
+                        live = true;
+                    }
+                    0x59 => {
+                        self.g.mc2_cave_mesa_tick(i);
+                        live = true;
+                    }
+                    0x5A => {
+                        self.g.mc2_cave_dome_tick(i);
+                        live = true;
+                    }
+                    0x5B | 0x5C => {
+                        self.g.mc2_cave_pit_hill_tick(i);
+                        live = true;
+                    }
+                    0x5D => self.g.ent[i].flags |= 0x400,
+                    _ => continue,
+                }
+            }
+            if !live {
+                break;
+            }
+        }
+        for i in 1..self.g.ent.len() {
+            if self.g.ent[i].class64 != 0 && self.g.ent[i].flags & 0x400 != 0 {
+                self.free_slot(i);
+            }
+        }
+        self.terrain_dirty = true;
     }
 
     /// The GenerateEvents terrain-authoring chains (remc2 `sub_49090`
@@ -3222,6 +4051,21 @@ impl World {
                 // geometry rides the level header). The walk still
                 // consumes the chain's stage tags, faithfully.
                 0x1F => {}
+                // (10,80) cave tunnel chain → one (10,81) tube
+                // carver per leg (sub_48930 EV:5621): packed radii
+                // f71 = FROM node's par3 (high nibble) | TO node's
+                // par3 (low, EV:5348-52), dest = the TO node;
+                // settle-ticked to completion by the pass settle.
+                0x50 => {
+                    let np3 = self.table[next].par3;
+                    let (fx, fy) = (node.x << 8, node.y << 8);
+                    if let Some(c) = self.g.mc2_spawn_tube_carver(fx, fy, 0) {
+                        let e = &mut self.g.ent[c];
+                        e.f71 = ((np3 & 0xF) | ((node.par3 & 0xF) << 4)) as u8;
+                        e.dest_x = nx << 8;
+                        e.dest_y = ny << 8;
+                    }
+                }
                 _ => {}
             }
             cur = next;
@@ -3316,6 +4160,9 @@ impl World {
         self.mc2_stages.clear();
         self.mc2_stage_current = 0;
         self.mc2_objective_pause = 0;
+        // Level load arms the briefing voiceover (LevelInit.cpp:41).
+        self.mc2_speech_ramp = 1;
+        self.mc2_speech_cue = None;
         for (row, &(index, stage, x, y)) in checkpoints.iter().enumerate() {
             if index < 0 {
                 continue;
@@ -3326,6 +4173,21 @@ impl World {
             let target = match index {
                 // Type 7 stores the target's MODEL (:40628-30).
                 7 => self.table.get(stage as usize).map_or(0, |r| r.model as u32),
+                // Type 9 (destroy building) stores the referenced
+                // THING's par1 = the BUILDING-TYPE tag (:40611-42,
+                // `entity_0x30311[stage_1].par1_14`). par1 is our
+                // `Thing.parent`; the spawned (10,45) building carries
+                // the same value in `f71` (mc2_spawn_building), so the
+                // completion test matches `f71 == target`. (level-001's
+                // stage 153 → par1 21 = the two vaults by the tower.)
+                9 => self
+                    .table
+                    .get(stage as usize)
+                    .map_or(0, |r| r.parent as u32),
+                // Type 3 (kill enemy player) rides InitStages'
+                // DEFAULT arm (:40640: `stage_1 - 1`) — the authored
+                // payload is the 1-BASED wizard color.
+                3 => (stage as i32 - 1).max(0) as u32,
                 _ => stage as u32,
             };
             self.mc2_stages.push(Mc2Stage {
@@ -3335,8 +4197,67 @@ impl World {
                 state: 1,
                 row: row as u8,
                 force: false,
+                bound: None,
             });
         }
+        // Retroactive bind (`sub_58DA0` at the load boundary): retail
+        // runs `InitStages` BEFORE any entity spawns, so a single
+        // spawn-time bind suffices there. Our port inverts the order —
+        // `new_for_game` fires disposition 0 (the dis==0 THINGs) INSIDE
+        // the ctor, before the app hands us the checkpoints here — so a
+        // type-1/2 target authored at dis 0 is already live when the
+        // stages register. Walk the live pool once to catch those; every
+        // later (disposition-fired / stage-gated) spawn binds through the
+        // spawn-seam hook in `spawn_from_thing`.
+        for i in 1..self.g.ent.len() {
+            if self.g.ent[i].class64 != 0 {
+                self.mc2_bind_stage_target(i);
+            }
+        }
+    }
+
+    /// `sub_58DA0` (remc2 EF:40650-90) — bind a named-target objective
+    /// row (types 1/2) to the live entity it just matched. The retail
+    /// template-pointer equality `a1x == &entity_0x30311[stage_1]`
+    /// reduces in the port to `thing_slot == target` (the authored
+    /// THING index the spawn seam stamps on every entity). Binds each
+    /// matching row once (first spawned instance), mirroring the one
+    /// authored named entity per row. Types 4/6 share this seam in
+    /// retail but stay unported (types 4/6 = 0 shipped levels; type 6 is
+    /// un-completable in retail too — see
+    /// docs/traces/mc2-objective-types-1-2-4-6.md).
+    fn mc2_bind_stage_target(&mut self, slot: usize) {
+        let ti = self.g.ent[slot].thing_slot;
+        if ti == 0 {
+            return;
+        }
+        for st in &mut self.mc2_stages {
+            if matches!(st.kind, 1 | 2)
+                && st.state == 1
+                && st.bound.is_none()
+                && st.target == ti as u32
+            {
+                st.bound = Some(slot as u16);
+            }
+        }
+    }
+
+    /// The bound named target is no longer a LIVE instance of its
+    /// authored THING — the completion condition for objective types
+    /// 1/2 (retail reads `ptr0x6E8E->life_0x8 <= -1`, EF:40765/40773).
+    /// Our slots recycle through a LIFO free list, so a raw life read of
+    /// the bound slot could observe a REUSED entity; we anchor on the
+    /// `thing_slot` identity instead. "Gone" = the slot was freed
+    /// (`class64 == 0`), reused by a different THING (`thing_slot !=
+    /// target`), dead-marked (`flags & 0x400`), or negative-life —
+    /// every terminal, one-way transition of the original creature.
+    fn mc2_bound_gone(&self, slot: u16, target: u32) -> bool {
+        self.g.ent.get(slot as usize).is_none_or(|e| {
+            e.class64 == 0
+                || e.thing_slot as u32 != target
+                || e.flags & 0x400 != 0
+                || e.act_life <= -1
+        })
     }
 
     /// The stage board for the HUD/tests: the current-stage cursor +
@@ -3416,8 +4337,92 @@ impl World {
                                 && e.flags & 0x400 == 0
                         })
                 }
-                // Types 1/2/3/4/6/8/9 need the entity binding /
-                // rival machinery — Phase 4 (none on level-000).
+                // Kill enemy player (:40780-86): the target COLOR's
+                // alive-flag (`byte_0x006_2BE4_11236`) is clear —
+                // our rival's `eliminated`. A color that never
+                // spawned (>= NumberOfPlayers dead data) reads as
+                // vacuously done, like retail's zeroed stat block.
+                3 => {
+                    let color = st.target as u8;
+                    color != 0
+                        && !self
+                            .mc2_rivals
+                            .iter()
+                            .any(|r| r.slot == color && !r.eliminated)
+                }
+                // Kill ALL players (:40835-50): every other color's
+                // alive-flag clear. Current stage only.
+                8 => idx == self.mc2_stage_current && self.mc2_rivals.iter().all(|r| r.eliminated),
+                // DESTROY BUILDING (:40851-75): no live class-10
+                // model-45 building whose `byte_0x46_70` (= our `f71`,
+                // the par1 the ctor stamped) is in the target's
+                // DEGRADATION CHAIN remains. Current stage only (like
+                // 5/7/8) — the m32 stage-gated switch (mc2_switch_tick
+                // model 32) fires the vault-spawn disposition + the
+                // 1-tick objective pause when the PRIOR row completes,
+                // so the buildings exist before this row is first
+                // tested (no vacuous latch).
+                //
+                // THE CHAIN (EF:40851-75): a razed building does not
+                // vanish — its state-53 `mc2_house_collapse` spawns a
+                // FRESH tag-`bldgprm[N].chain` stage (the next BLDGPRM
+                // byte_3 link) unless the link is 0. So the objective
+                // needs EVERY stage in the chain gone, not just par1.
+                // level-001's vault: par1 21 → 54 → 0, so each vault
+                // takes two hits (tag 21 collapses to tag 54, which
+                // collapses to nothing). Walk ≤8 links like retail,
+                // with a cycle guard for the self-loop rows (a row
+                // whose byte_3 points at itself never chains onward).
+                9 => {
+                    idx == self.mc2_stage_current && {
+                        let mut chain = [0u32; 8];
+                        let mut n = 0;
+                        let mut j = st.target;
+                        while j != 0 && n < 8 {
+                            chain[n] = j;
+                            n += 1;
+                            j = self
+                                .g
+                                .assets
+                                .bldgprm
+                                .get(j as usize)
+                                .map_or(0, |b| b.chain as u32);
+                            if chain[..n].contains(&j) {
+                                break;
+                            }
+                        }
+                        let chain = &chain[..n];
+                        !self.g.ent.iter().skip(1).any(|e| {
+                            e.class64 == 10
+                                && e.model65 == 45
+                                && e.flags & 0x400 == 0
+                                && chain.contains(&(e.f71 as u32))
+                        })
+                    }
+                }
+                // KILL NAMED CREATURE (type 1, EF:40763-70): the row's
+                // bound entity is dead. Requires the `& 1` bound bit
+                // (`bound.is_some()`, set by `sub_58DA0`) so it cannot
+                // fire before the target spawns. NOT current-stage gated
+                // — a background kill row, like type 0. A morph husk
+                // counts as gone (type 1 accepts any death).
+                1 => st.bound.is_some_and(|b| self.mc2_bound_gone(b, st.target)),
+                // KILL FOR REAL (type 2, EF:40771-79): retail adds the
+                // `!fontTypeIndex_0x3D_61` term (reject a death that is a
+                // mid-transform handoff) and follows the successor via
+                // `sub_59760`. The port has NO slot-swap creature
+                // succession — MC2 metamorph is a cosmetic pose-puppet
+                // (mc2::cast, no rebind), the dome/land morph is terrain
+                // — so no port death is ever a transform handoff and no
+                // re-point site exists; type 2 reduces to type 1 here.
+                // (Flag: if a slot-swap morph is ever added, port the
+                // `sub_59760` re-point + the offset-61 pose gate.)
+                2 => st.bound.is_some_and(|b| self.mc2_bound_gone(b, st.target)),
+                // Types 4/6 need the same bind seam plus (4) a
+                // player-owner check / (6) an item carry-slot inventory
+                // that nothing in the decompile writes — both authored
+                // in ZERO shipped levels; kept unported
+                // (docs/traces/mc2-objective-types-1-2-4-6.md §3/§4).
                 _ => false,
             };
             if done {
@@ -3427,13 +4432,59 @@ impl World {
         }
         if achieved {
             // Advance to the next still-active stage or end the
-            // level (:40881-98). Sound 41 stands in for retail's
-            // objective chime until the MC2 sound map lands.
-            self.g.snd_player(41);
+            // level (:40881-98).
+            let cur_done = self
+                .mc2_stages
+                .get(self.mc2_stage_current)
+                .is_some_and(|s| s.state == 2);
             match self.mc2_stages.iter().position(|s| s.state == 1) {
                 Some(next) => self.mc2_stage_current = next,
                 None => self.completed = true,
             }
+            // The objective-message trigger (EF:40899/40911): armed
+            // when the CURRENT row completed or the level ended —
+            // never by a background row latching out of turn. The
+            // chimes (41 pre-cue / 61 Success2) and the voiceover
+            // ride the ramp in `speech_ramp_mc2`.
+            if cur_done || self.completed {
+                self.mc2_speech_ramp = 1;
+            }
+        }
+    }
+
+    /// `PresentObjective_59820`'s speech-enabled arm (EF:40957-41066;
+    /// docs/traces/mc2-voiceover-triggers.md §3): walk the
+    /// `byte_0x36E02` ramp — ~7 quiet ticks, the sound-41 pre-cue at
+    /// step 7, the actual voiceover cue + the sound-61 advance chime
+    /// at step 8 (61 suppressed while the cursor sits at row 0 — the
+    /// briefing), then the long quiet tail to 0xC8. The retail
+    /// fade-in gate (`paletteMod_51 >= 3`) has no analog here — we
+    /// have no load fade. OPEN: the type-31 beacon variant
+    /// (`byte_0x36E0B & 1` → secret-row speech + chime 41) waits on
+    /// the beacon switch port.
+    fn speech_ramp_mc2(&mut self) {
+        match self.mc2_speech_ramp {
+            0 => {}
+            7 => {
+                self.mc2_speech_ramp = 8;
+                self.g.snd_player(41); // pre-cue chime (EF:41058)
+            }
+            8 => {
+                self.mc2_speech_ramp = 9;
+                if self.mc2_stage_current != 0 {
+                    self.g.snd_player(61); // advance chime (EF:41019)
+                }
+                // Segment = objective row + 1, or 9 at level end
+                // (EF:41031-44). The app owns the row = level-number
+                // half of the address.
+                self.mc2_speech_cue = Some(if self.completed {
+                    9
+                } else {
+                    (self.mc2_stage_current as u8).saturating_add(1)
+                });
+            }
+            0xC8 => self.mc2_speech_ramp = 0,
+            _ => self.mc2_speech_ramp += 1,
         }
     }
 
@@ -3443,6 +4494,9 @@ impl World {
     /// matches; one-shot consumes the records. (The disId-0 mana
     /// recount is the mana track's concern and omitted.)
     fn fire_disposition(&mut self, dis: u16, one_shot: bool) {
+        // sub_4A1E0 (EF:32967): firing a disposition arms every kind-7
+        // StageVar keyed to it (a no-op when no StageVars are loaded).
+        self.mc2_stagevar_arm_disposition(dis);
         for i in 1..self.table.len() {
             if self.table[i].class != 0 && self.table[i].dis_id == dis {
                 self.spawn_from_thing(i);
@@ -3451,6 +4505,14 @@ impl World {
                 }
             }
         }
+        // sub_4A1E0 tail (EF:32994): re-arm the watch-by-model gates.
+        self.mc2_stagevar_rearm_watchers();
+    }
+
+    /// The MODEL of the THING at `slot` in the level table (used by the
+    /// StageVar loader to resolve subtype/extinction references).
+    pub(crate) fn mc2_table_model(&self, slot: usize) -> Option<u8> {
+        self.table.get(slot).map(|r| r.model as u8)
     }
 
     /// sub_37560_37920 (:43988): spawn one THING record as a pool
@@ -3588,7 +4650,7 @@ impl World {
                     self.mc2_apocalypse = false;
                     self.g.mc2_spawn_dome(x, y, z)
                 }
-                (10, 11) => self.g.mc2_spawn_fire_spray(x, y, z),
+                (10, 11) => self.g.mc2_spawn_scorch_ring(x, y, z),
                 (10, 15) => self.g.mc2_spawn_fire_trail(x, y, z),
                 (10, 17) => self.g.mc2_spawn_meteor(x, y, z),
                 (10, 23) => self.g.mc2_spawn_blast23(x, y, z),
@@ -3596,8 +4658,25 @@ impl World {
                 (10, 52) => self.g.mc2_spawn_castle_anchor(x, y, z),
                 (10, 54) => self.g.mc2_spawn_aura(x, y, z),
                 (10, 22) => self.g.mc2_spawn_whirlwind(x, y, z),
+                // The (10,67) flood/quake (mc2::flood; the ctor
+                // sub_51730 consumes no THING fields — the triggered
+                // par1 seam lands in the post-init below).
+                (10, 67) => self.g.mc2_spawn_flood(x, y, z),
                 (10, 71) => self.g.mc2_spawn_fissure(x, y, z),
                 (10, 76) => self.g.mc2_spawn_fire_orb(x, y, z),
+                // The cave sculptor band (mc2::cave, Phase 4.5) —
+                // cave-only ctors. (10,80..85) settle at load (the
+                // per-pass mc2_settle_cave_band); (10,86) drips are
+                // in NO generate pass (EV:161-282) — latent unless
+                // disposition-fired; the live ambience is the
+                // runtime spawner (sub_58630, roster port).
+                (10, 80) => self.g.mc2_spawn_cave_marker80(x, y, z),
+                (10, 81) => self.g.mc2_spawn_tube_carver(x, y, z),
+                (10, 82) => self.g.mc2_spawn_cave_mesa(x, y, z),
+                (10, 83) => self.g.mc2_spawn_cave_dome(x, y, z),
+                (10, 84) => self.g.mc2_spawn_cave_pit(x, y, z),
+                (10, 85) => self.g.mc2_spawn_cave_hill(x, y, z),
+                (10, 86) => self.g.mc2_spawn_cave_drip(x, y, z),
                 // Smoke particles authored directly (their global-RNG
                 // life roll survives only on this path).
                 (10, 13 | 14 | 87) => self.g.mc2_spawn_smoke_particle_for(r.model as u8, x, y, z),
@@ -3619,7 +4698,7 @@ impl World {
                 // The authored ground mana economy: (10,39) 512-mana
                 // spheres + the (10,58) 2560 variant — both yield a
                 // model-39 ball (CreateManaSphere_500C0).
-                (10, 39 | 58) => self.g.mc2_spawn_mana_sphere(r.model as u8, x, y, z),
+                (10, 39 | 57 | 58) => self.g.mc2_spawn_mana_sphere(r.model as u8, x, y, z),
                 // par1 (our `parent`) = the BUILD00/BLDGPRM id.
                 (10, 45) => self.g.mc2_spawn_building(x, y, z, r.parent),
                 // Switches (AddSwitchXX_50A90 :37059): state = model,
@@ -3645,6 +4724,20 @@ impl World {
         };
         let Some(s) = slot else { return };
         self.g.ent[s].thing_slot = ti as u16;
+        // `sub_58DA0` (EF:40650-90): bind any named-target objective row
+        // (types 1/2) whose authored THING index matches the entity we
+        // just spawned. Covers every post-load spawn (disposition-fired,
+        // stage-gated waves); the load-time dis-0 spawns are caught by
+        // the retroactive pass in `set_mc2_stages`.
+        if !self.mc2_stages.is_empty() {
+            self.mc2_bind_stage_target(s);
+        }
+        // `sub_12100` (EF:4684-4750): a class-5 spawn may be HELD by a
+        // StageVar (hold-gate layer). Load-time dis-0 spawns are caught
+        // by the retroactive pass in `set_mc2_stagevars`.
+        if r.class == 5 && !self.mc2_stagevars.is_empty() {
+            self.mc2_stagevar_attach(s, ti);
+        }
         if r.class == 11 {
             // Trigger volumes feed the map overlay, not billboards.
             self.entities_dirty = true;
@@ -3712,6 +4805,75 @@ impl World {
                     }
                 }
             }
+            // The disposition-spawned WHIRLWIND (arm tornado) scaled
+            // to its tier, like the cast path (`sub_678E0` →
+            // life = 8 × row-21 tier.life). remc2's generate switch
+            // (EV:387 / Events.cpp:362) omits model 22, leaving
+            // `AddWind`'s 500-tick roamer that drifts ~60 tiles off the
+            // arm — but player-observed retail confines the arm
+            // tornadoes to a couple seconds (Tornado I, par1=0 →
+            // 8×5 = 40 ticks; it moves off-centre but dies before it
+            // gets anywhere). This is "the map-data modifier we failed
+            // to implement" (player note 2026-07-13); it unifies both
+            // spawn paths under the 8×charge law.
+            (10, 22) if matches!(self.game, GameId::Mc2) => {
+                let row = crate::mc2::spells::spell_index(22);
+                if let Some(row) = self.g.assets.spells.get(row) {
+                    let tier = row.tiers[(r.parent as usize).min(2)];
+                    let ml = 8 * tier.life.max(0) as u32;
+                    let e = &mut self.g.ent[s];
+                    e.max_life = ml;
+                    e.act_life = ml as i32;
+                }
+            }
+            // The disposition-spawned mana-magnet aura reads its RANGE
+            // and LIFE from the THING's stageTag (`sub_4A310`
+            // EF:33095-33104, the v4<=0x36 arm): range = (stageTag<<8)²
+            // = stageTag tiles, life = 8*stageTag+16 (floor 128). The
+            // `AddAuxiliary` ctor's 14-tile/128 defaults are only the
+            // pre-override seed — a level never disposition-fires an
+            // aura without this. level-001's 4 staged magnets carry
+            // stageTag 33/45/64/31 → 33/45/64/31-tile reach (they pull
+            // the arm balls 20-44 tiles out; the 14-tile default left
+            // them stranded — player-reported 2026-07-13). Our
+            // `swi_id` is the `stageTag_12` field.
+            (10, 54) if matches!(self.game, GameId::Mc2) => {
+                let tag = r.swi_id as u32;
+                let e = &mut self.g.ent[s];
+                e.f26 = r.swi_id as i16;
+                e.max_life = (8 * tag + 16).max(128);
+                e.act_life = e.max_life as i32;
+            }
+            // The cave sculptors' THING wiring (sub_4A310
+            // EF:33118-46, high-band trace §4): dome radius =
+            // word_10; pit/hill radius = word_10, depth/height seed
+            // = par3 (via the z sentinel), recentred onto the tile
+            // corner (−128,−128). (10,80)/(10,82) consume nothing.
+            (10, 83) if matches!(self.game, GameId::Mc2) => {
+                self.g.ent[s].dest_x = r.swi_sz;
+            }
+            (10, 84 | 85) if matches!(self.game, GameId::Mc2) => {
+                let e = &mut self.g.ent[s];
+                e.x = e.x.wrapping_sub(128);
+                e.y = e.y.wrapping_sub(128);
+                e.dest_x = r.swi_sz;
+                e.z = r.par3 as i16;
+            }
+            // The (10,67) flood's par1 seam is TRIGGER-ONLY: the
+            // sub_4A310 case-0xA path (EF:33148/:33165 → SPELLS row
+            // 20 life + subSpell) fires for dis-gated rows, while
+            // the load-time generate pass (EV:387's case list is
+            // 9/0xB/0xF only) leaves the ctor defaults — the
+            // flood-helpers trace's correction #3.
+            (10, 67) if matches!(self.game, GameId::Mc2) && r.dis_id != 0 => {
+                let row = crate::mc2::spells::spell_index(67);
+                if let Some(row) = self.g.assets.spells.get(row) {
+                    let tier = row.tiers[(r.parent as usize).min(2)];
+                    let e = &mut self.g.ent[s];
+                    e.f140 = tier.sub_spell;
+                    e.act_life = tier.life as i32;
+                }
+            }
             // The MC2 class-15 token state bump (the shared class-
             // 12/15 spawn case, remc2 EF:33209-17): actionIndex +=
             // stageTag (0 = inert cast-slot, 1 = pickup, 2 = self-
@@ -3731,6 +4893,15 @@ impl World {
                 let e = &mut self.g.ent[s];
                 e.f71 = (r.parent & 0xFF) as u8;
                 e.f26 = r.child as i16;
+            }
+            // The (14,2) cave pillar's THING wiring (sub_4A310 case
+            // 0xE model-2 arm, remc2 EF:33236-41): par1 → orientation
+            // (word_0x2C_44), par3 → half-width koef (word_0x96_150).
+            // par2/word_10/stageTag are NOT consumed.
+            (14, 2) if matches!(self.game, GameId::Mc2) => {
+                let e = &mut self.g.ent[s];
+                e.f44 = r.parent;
+                e.f146 = r.par3;
             }
             // The MC2 stage-gated switch stores par1 = the stage row
             // instead of extents (remc2 :33200-01; its tick never
@@ -3760,14 +4931,18 @@ impl World {
     /// (sprite 77), 1 = the terrain wall-riser (ctor sub_51660
     /// EF:37378: action 6, maxLife/life 0 ⇒ instant-build on the
     /// first tick, untargetable, NO sprite — invisible machinery;
-    /// tick = [`crate::mc2::riser`]), 2 = cave pillar (cave-only →
-    /// None until 4.5), 3 = the map "X" checkpoint marker (sprite
+    /// tick = [`crate::mc2::riser`]), 2 = the cave pillar (ctor
+    /// sub_516C0 EF:37397: CAVE-ONLY, action 7, life 0 ⇒ the measure
+    /// phase runs in the load settle, orientation/half-width zeroed
+    /// for the THING wiring, retail leaves maxLife at the NewEvent
+    /// default; tick = [`crate::mc2::cave`]), 3 = the map "X"
+    /// checkpoint marker (sprite
     /// 338; hidden by switch model 12), 4 = the level-end marker
     /// (sprite 339; switch model 31), 5 = the pickup scroll (sprite
     /// 280, box 768x1280, 4 XP).
     fn mc2_spawn_class14(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
-        if model == 2 {
-            return None; // cave-only (sub_516C0 :37397)
+        if model == 2 && !self.g.is_cave() {
+            return None; // cave-only (sub_516C0 :37400)
         }
         let s = self.g.new_event()?;
         {
@@ -3778,6 +4953,7 @@ impl World {
             e.tick70 = match model {
                 0 => 0,
                 1 => 6,
+                2 => 7,
                 3 => 8,
                 4 => 9,
                 _ => 10,
@@ -3789,9 +4965,19 @@ impl World {
                 e.max_life = 0;
                 e.f44 = 0;
             }
+            if model == 2 {
+                // byte[0] &= 0xF6 |= 1; life = 0 (maxLife untouched);
+                // word_0x2C_44 = word_0x96_150 = 0 (EF:37406-37414).
+                e.flags = (e.flags & !0x8) | 1;
+                e.f44 = 0;
+                e.f146 = 0;
+            }
         }
         self.g.link(s, x, y, z);
         self.g.refill_life(s);
+        if model == 2 {
+            self.g.ent[s].act_life = 0; // life_0x8 = 0 (EF:37410)
+        }
         if model != 1 {
             let sprite = match model {
                 0 => 77,
@@ -3814,11 +5000,17 @@ impl World {
     /// grants 4 XP single-player, banked in [`Gen::mc2_scrolls`]
     /// until the Phase-4.2 XP system; sound 63), 6 = the terrain
     /// riser (sub_59F60, [`crate::mc2::riser`]), 7 = the cave pillar
-    /// (never spawns until 4.5), 0..=5 = the authentic no-ops.
+    /// (sub_5B100, [`crate::mc2::cave`]), 0..=5 = the authentic
+    /// no-ops.
     fn mc2_class14_tick(&mut self, i: usize) {
         match self.g.ent[i].tick70 {
             6 => {
                 if self.g.mc2_riser_tick(i) {
+                    self.terrain_dirty = true;
+                }
+            }
+            7 => {
+                if self.g.mc2_pillar_tick(i) {
                     self.terrain_dirty = true;
                 }
             }
@@ -3840,6 +5032,19 @@ impl World {
                     self.g.mc2_scrolls.0 += 1;
                     self.g.ent[i].flags |= 0x400;
                     self.entities_dirty = true;
+                    // `UpdateExperience_6E090` (EF:44262): the scroll
+                    // grants the FULL `countXP` to EVERY owned spell —
+                    // no split / round-robin (docs/spell-audit/
+                    // xp-scrolls.md corrects the equal-split
+                    // hypothesis). 4 single-player (50 MP, out of
+                    // scope). The castle-XP clamp at 7 and the
+                    // level-up notification live in `mc2_award_xp`/
+                    // `mc2_relevel`.
+                    for s in 0..26usize {
+                        if self.mc2_book.ent[s] != 0 {
+                            self.mc2_award_xp(PLAYER_TARGET, s, 4);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -3852,19 +5057,16 @@ impl World {
     /// tokens — authored jars carry 0), fall −128/tick to the
     /// terrain (sub_580E0), and every 4th phase an AABB overlap scan
     /// against the wizards — single-player: the human. Collection
-    /// (sound 18, played at the collector) banks the grant into
-    /// [`Gen::mc2_spell_tokens`] until the Phase-4.2 spell system;
-    /// state 3M+2 drops a fresh state-3M+2 token in place
-    /// (`sub_69250`). State 3M (the spell EFFECT, cast-gated) and
-    /// the junk state 253 are inert.
-    ///
-    /// APPROX register: retail KEEPS the collected/expired entity
-    /// (the token becomes the wizard's live spell object; expiry only
-    /// stops its drawing) — we despawn it and bank the grant, exactly
-    /// like the class-14 scroll. Phase 4.2 restores the slot economy
-    /// with the cast machinery. The "local player already owns the
-    /// spell" byte[0] re-mark (EF:55706) is presentation-side
-    /// (token tint) and unmodeled.
+    /// (sound 18, played at the collector) KEEPS the entity — it
+    /// becomes the wizard's live spell manifestation, state 3M
+    /// ([`World::mc2_adopt_manifestation`], the Phase-4.2 slot
+    /// economy); state 3M+2 drops a fresh state-3M+2 token in place
+    /// (`sub_69250`). State 3M (the spell EFFECT — the cast
+    /// machinery ticks it wizard-side) and the junk state 253 are
+    /// inert here. The "local player already owns the spell"
+    /// byte[0] re-mark (EF:55706) is presentation-side (token tint)
+    /// and unmodeled; [`Gen::mc2_spell_tokens`] stays in sync as
+    /// the grant mask.
     fn mc2_spell_token_tick(&mut self, i: usize) {
         let t = self.g.ent[i].tick70;
         let model = self.g.ent[i].model65;
@@ -3898,7 +5100,18 @@ impl World {
         }
         // The wizard scan — the human, alive, not yet holding this
         // spell (the SpellEnabled[model] gate, EF:55713).
-        if self.player.state != LifeState::Alive || self.g.mc2_spell_tokens.0 & (1 << model) != 0 {
+        let owned = self.g.mc2_spell_tokens.0 & (1 << model) != 0;
+        if owned && self.prune_owned_jars {
+            // Unfaithful improvement (RIVALS-POLISH #3): an owned-spell
+            // jar can never be collected — remove it instead of leaving
+            // permanent clutter. Self-culling here covers both the
+            // level-load sweep and the tick after the player gains the
+            // spell (every jar of it despawns on its next tick).
+            self.g.ent[i].flags |= 0x400;
+            self.entities_dirty = true;
+            return;
+        }
+        if self.player.state != LifeState::Alive || owned {
             return;
         }
         let (px, py, pz) = self.human_pose;
@@ -3911,10 +5124,12 @@ impl World {
             && wd(py, ty) < bx as i32
             && ((pz as i32) - (tz as i32)).abs() < bz as i32
         {
-            // COLLECT (EF:55715-55749).
+            // COLLECT (EF:55715-55749): the token is KEPT and
+            // becomes the wizard's live spell manifestation
+            // (state 3M) — the Phase-4.2 slot economy; the old
+            // bank-and-despawn interim is closed.
             self.g.snd_player(18);
             self.g.mc2_spell_tokens.0 |= 1 << model;
-            self.g.ent[i].flags |= 0x400;
             self.entities_dirty = true;
             if t == model.wrapping_mul(3).wrapping_add(2) {
                 // The self-replenishing state drops a replacement.
@@ -3922,6 +5137,7 @@ impl World {
                     self.g.ent[n].tick70 = model.wrapping_mul(3).wrapping_add(2);
                 }
             }
+            self.mc2_adopt_manifestation(i, model as usize);
         }
     }
 
@@ -4132,7 +5348,7 @@ impl World {
         Some(s)
     }
 
-    fn free_slot(&mut self, i: usize) {
+    pub(crate) fn free_slot(&mut self, i: usize) {
         if drawable(self.g.ent[i].class64 as u16, self.g.ent[i].model65 as u16)
             || self.g.ent[i].class64 == 11
         {
@@ -4548,6 +5764,28 @@ impl World {
         self.pending_teleport.take()
     }
 
+    /// Raise the top-of-screen notification (retail `SetCurrentNotif
+    /// icationMessage`): `text` shown for `ticks` (retail's level-up
+    /// path uses 200, the select toast 20), inked `color` (RGB). The
+    /// shared message surface — spell selection/level-ups now, deaths/
+    /// rival events/objectives later. Replaces any current line (last
+    /// writer wins, like the single retail buffer).
+    pub(crate) fn set_notification(&mut self, text: impl Into<String>, ticks: u16, color: [u8; 3]) {
+        self.notification = Some(Notification {
+            text: text.into(),
+            timer: ticks,
+            color,
+        });
+    }
+
+    /// The active notification (text, ink RGB) for the app to draw, or
+    /// None when the line is idle/expired.
+    pub fn notification(&self) -> Option<(&str, [u8; 3])> {
+        self.notification
+            .as_ref()
+            .map(|n| (n.text.as_str(), n.color))
+    }
+
     /// Drain this tick's sound requests plus the ambient-loop inputs
     /// the original's player tick derives (:55254-82): waves XOR wind
     /// from the terrain under the carpet, fire and market loops from
@@ -4586,6 +5824,7 @@ impl World {
             fire_near,
             market_near,
             danger: self.g.player_danger > 0,
+            speech: self.mc2_speech_cue.take(),
         }
     }
 
@@ -4722,6 +5961,62 @@ impl World {
         self.g.ground_z(x, y) as i16
     }
 
+    /// The MC2 player mover's cave ceiling clamp target (sub_5D530
+    /// EF:59758-63): the player CLAMPS — no bounce, no damage — at
+    /// `ceiling − 384`. None off-cave (no ceiling plane).
+    pub fn player_cave_ceiling(&self, x: u16, y: u16) -> Option<i16> {
+        self.g
+            .is_cave()
+            .then(|| (self.g.ceiling_z(x, y) - 384) as i16)
+    }
+
+    /// The MC2 player flight commit gate — `moveTest_5D0A0`
+    /// (EF:59429), the [`crate::flight::mc2_move`] boundary hook
+    /// (docs/traces/mc2-flight-model.md §2). Carpet head clearance
+    /// `fov` = 100 (params row 44 `rotSpeed/2`, EF:33334), ground
+    /// clearance 256 (tuning row `0xc`).
+    pub fn player_mc2_gate(
+        &self,
+        cur: (u16, u16, i16),
+        prop: (u16, u16, i16),
+    ) -> crate::flight::Mc2GateOut {
+        self.g.mc2_flight_gate(100, 256, cur, prop)
+    }
+
+    /// `sub_5DD50`'s wedged test for the MC2 nudge (EF:59854-81).
+    pub fn player_mc2_stuck(&self, pos: (u16, u16, i16), latched: bool) -> bool {
+        self.g.mc2_flight_stuck(100, 256, pos, latched)
+    }
+
+    /// The MC2 carpet tuning row by map type (`AddPlayer_4A920`
+    /// EF:33329-32: row 104 on caves, row 66 otherwise — NOT the
+    /// generic default row 59; trace §0.1).
+    pub fn mc2_carpet_row(&self) -> crate::flight::Mc2Row {
+        if self.g.is_cave() {
+            crate::flight::Mc2Row::CAVE
+        } else {
+            crate::flight::Mc2Row::OPEN
+        }
+    }
+
+    /// The cave-block speed-up cancel (EF:59603 clears the
+    /// `SpellEnabled[3]` manifestation's `word_0x2E_46` — MC2 spell
+    /// 3 = the accelerate channel).
+    pub fn mc2_cancel_accel(&mut self) {
+        self.player.accel = 0;
+        self.player.speed_boost = 0.0;
+    }
+
+    /// Pending MC2 debuff-stamp hits on the player — (slow webs,
+    /// paralyze webs) since the last drain; the boundary feeds them
+    /// into the flight ext's `slow_hit`/`stun_hit`.
+    pub fn take_mc2_debuffs(&mut self) -> (u8, u8) {
+        let out = (self.g.mc2_debuffs.slow, self.g.mc2_debuffs.stun);
+        self.g.mc2_debuffs.slow = 0;
+        self.g.mc2_debuffs.stun = 0;
+        out
+    }
+
     /// The sub_45410 wall gate in engine units (the faithful mover
     /// applies the routine's trailing z-floor itself).
     pub fn player_wall_gate_fixed(
@@ -4786,6 +6081,157 @@ impl World {
         }
     }
 
+    /// The live StageVar HELD bindings as `(entity_slot, model, kind)` —
+    /// the hold-gate layer's oracle (test/dev instrument). A held
+    /// creature is frozen at its phase-7 wait action until its gate
+    /// fires.
+    #[doc(hidden)]
+    pub fn debug_mc2_held(&self) -> Vec<(u16, u8, u8)> {
+        self.mc2_sv_held
+            .iter()
+            .map(|h| {
+                (
+                    h.ent,
+                    self.g.ent.get(h.ent as usize).map_or(0, |e| e.model65),
+                    self.g.ent.get(h.ent as usize).map_or(0, |e| e.site_z as u8),
+                )
+            })
+            .collect()
+    }
+
+    /// The MC2 manifestation's "cast in progress" timer (`word_0x2E_46`
+    /// → `f26`) for a spell — the HUD glow + re-cast gate. For the castle
+    /// spell (2) this is the UPGRADE LOCK, nonzero while the castle is
+    /// transforming (test/dev instrument).
+    #[doc(hidden)]
+    pub fn debug_mc2_spell_active(&self, spell: usize) -> i16 {
+        let m = self.mc2_book.ent.get(spell).copied().unwrap_or(0) as usize;
+        self.g.ent.get(m).map_or(0, |e| e.f26)
+    }
+
+    /// The castle-spell manifestation's active timer (`f26`) — the
+    /// UPGRADE LOCK, for whichever game (MC2 book slot 2 / MC1 owned
+    /// slot 16). Nonzero while the castle is transforming (test/dev).
+    #[doc(hidden)]
+    pub fn debug_castle_lock(&self) -> i16 {
+        let m = match self.game {
+            GameId::Mc2 => self.mc2_book.ent.get(2).copied().unwrap_or(0) as usize,
+            _ => self.player.owned.get(16).copied().unwrap_or(0) as usize,
+        };
+        self.g.ent.get(m).map_or(0, |e| e.f26)
+    }
+
+    /// Count live class-10 model-45 buildings carrying the given
+    /// build-type tag (`f71`) — the type-9 destroy-building objective's
+    /// per-stage oracle (test/dev instrument; RIVALS-POLISH level-001
+    /// vaults). Alive = present in the census (`flags & 0x400 == 0`),
+    /// matching the objective's own test.
+    #[doc(hidden)]
+    pub fn debug_mc2_count_buildings(&self, tag: u8) -> usize {
+        self.g
+            .ent
+            .iter()
+            .skip(1)
+            .filter(|e| e.class64 == 10 && e.model65 == 45 && e.f71 == tag && e.flags & 0x400 == 0)
+            .count()
+    }
+
+    /// Smite every live (class, model) pool entity — life to -1, the
+    /// death paths run normally next tick (test/dev instrument for
+    /// exercising kill objectives without marksmanship; the 4.3b
+    /// level-grind checklist tool). Returns how many were hit.
+    #[doc(hidden)]
+    pub fn debug_smite(&mut self, class: u8, model: u8) -> usize {
+        let mut n = 0;
+        for e in self.g.ent.iter_mut().skip(1) {
+            if e.class64 == class && e.model65 == model && e.act_life >= 0 && e.flags & 0x400 == 0 {
+                e.act_life = -1;
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Test hook (Fool's Mana): stamp a possession claim from `claimer`
+    /// onto the first un-sprung decoy (a class-10 trap sphere, f52 != 0
+    /// and f146 == 0), exactly as a possession bolt's ch1 mail would
+    /// (mc1/combat.rs `ball_tick`). Returns the sphere's slot, or 0.
+    #[doc(hidden)]
+    pub fn debug_mc2_claim_fool_sphere(&mut self, claimer: u16) -> usize {
+        for (slot, e) in self.g.ent.iter_mut().enumerate().skip(1) {
+            if e.class64 == 10 && e.f52 != 0 && e.f146 == 0 && e.flags & 0x400 == 0 {
+                e.mail[1] = (0, claimer);
+                return slot;
+            }
+        }
+        0
+    }
+
+    /// The class-5 model the human is currently transformed into
+    /// (Metamorph, spell 4), or 0 when not transformed. The app HIDES the
+    /// carpet while this is nonzero (the pooled creature draws in its
+    /// place — docs/spell-audit/summon-creatures.md Part A).
+    pub fn mc2_metamorph_model(&self) -> u8 {
+        self.player.metamorph
+    }
+
+    /// Test hook (Magic Mine): place a persistent proximity mine at a
+    /// tile with the given tier and owner (bypassing the carrier), as
+    /// the carrier's landing would. Returns the mine slot, or 0.
+    #[doc(hidden)]
+    pub fn debug_mc2_place_mine(&mut self, cx: u16, cy: u16, tier: u8, owner: u16) -> usize {
+        let (x, y) = ((cx << 8) | 0x80, (cy << 8) | 0x80);
+        let lifespan = self
+            .g
+            .assets
+            .spells
+            .get(23)
+            .map_or(1000, |r| r.tiers[tier.min(2) as usize].sub_spell.max(1));
+        if let Some(s) = self.g.mc2_spawn_magic_mine(x, y, tier, lifespan) {
+            self.g.ent[s].id24 = owner;
+            return s;
+        }
+        0
+    }
+
+    /// Test hook (rival grave / mana reclaim, RIVALS-POLISH #2): stamp
+    /// a possession claim from `claimer` onto the first live (10,40)
+    /// grave and run its action once, exactly as a possession bolt's
+    /// ch1 mail into `grave_tick` (action 42) would. Returns
+    /// `(spheres_owned_by_grave_before, spheres_now_owned_by_claimer,
+    /// grave_freed)`, or None when no grave is live. Verifies the grave
+    /// is reachable (targetable bit 8 kept, `f28 == 2`) as a debug
+    /// assert — a broken inert grave would have neither.
+    #[doc(hidden)]
+    pub fn debug_mc2_possess_grave(&mut self, claimer: u16) -> Option<(usize, usize, bool)> {
+        let g = self
+            .g
+            .ent
+            .iter()
+            .position(|e| e.class64 == 10 && e.model65 == 40 && e.flags & 0x400 == 0)?;
+        debug_assert_eq!(self.g.ent[g].flags & 8, 8, "grave must keep targetable bit");
+        debug_assert_eq!(
+            self.g.ent[g].f28, 2,
+            "grave must carry the ch1 claim channel"
+        );
+        let before = self
+            .g
+            .ent
+            .iter()
+            .filter(|e| e.class64 != 0 && e.f144 == g as u16)
+            .count();
+        self.g.ent[g].mail[1] = (0, claimer);
+        self.g.grave_tick(g);
+        let after = self
+            .g
+            .ent
+            .iter()
+            .filter(|e| e.class64 != 0 && e.f144 == claimer)
+            .count();
+        let freed = self.g.ent[g].class64 == 0 || self.g.ent[g].flags & 0x400 != 0;
+        Some((before, after, freed))
+    }
+
     /// Pool diagnostics (debug tooling; the level-032 chain-stall
     /// investigation): free slot count + a minimal live-event view.
     #[doc(hidden)]
@@ -4806,6 +6252,8 @@ impl World {
                 tx: (e.x >> 8) as u8,
                 ty: (e.y >> 8) as u8,
                 life: e.act_life,
+                row: e.row156,
+                flags: e.flags,
             })
             .collect();
         (free, ev)
@@ -4818,6 +6266,12 @@ impl World {
         out.tile_type.copy_from_slice(&self.g.t.tile_type);
         out.shading.copy_from_slice(&self.g.t.shading);
         out.angle.copy_from_slice(&self.g.t.angle);
+    }
+
+    /// The LIVE cave ceiling plane (empty off-cave) — the renderer's
+    /// fifth plane.
+    pub fn ceiling_plane(&self) -> &[u8] {
+        &self.g.t.ceiling
     }
 }
 
@@ -4891,6 +6345,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         World::new(planes, &micro_things(), 1, assets())
     }
@@ -4912,6 +6367,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         for y in 0..=255 {
             planes.tile_type[tile(120, y)] = 8;
@@ -4972,6 +6428,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         for y in 0..=255 {
             planes.tile_type[tile(120, y)] = 8;
@@ -5089,6 +6546,7 @@ mod tests {
             tile_type: vec![0; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         planes.tile_type[tile(100, 100)] = 5;
         let things = vec![Thing {
@@ -5132,6 +6590,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 0,
@@ -5197,6 +6656,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let bee = |slot, x, y| Thing {
             slot,
@@ -5247,6 +6707,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 0,
@@ -5331,6 +6792,7 @@ mod tests {
             tile_type: vec![0; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 0,
@@ -5782,6 +7244,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let t = |slot, class, model, x, y| Thing {
             slot,
@@ -5954,6 +7417,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, class, model, x, y| Thing {
             slot,
@@ -6026,6 +7490,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 0,
@@ -6175,6 +7640,54 @@ mod tests {
     }
 
     #[test]
+    fn active_spell_burst_blocks_mana_regen() {
+        // docs/spell-audit/mana-regen.md (general note 2): while a
+        // spell burst is live, the caster's regen accumulator is
+        // pinned to 0 (`sub_55E80`/`sub_68DE0` else branch) so an
+        // active spell suppresses mana regeneration. Before the fix
+        // the port regenerated every tick and out-paced the cast
+        // debit (fireball spam gained mana).
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        let m = w.grant_spell(SpellId(0)).unwrap(); // Fireball (cost 200, burst 5)
+        w.player.left = Some(SpellId(0));
+        // Afield (see `away()`, far from any castle) → slow-regen
+        // floor 100/tick, with headroom below the 1000 ceiling.
+        w.player.mana = 500;
+        // Fire once → arms the burst (f26 = count) and stamps the
+        // negative cast debit.
+        w.tick(
+            away(),
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        assert!(w.g.ent[m].f26 > 0, "a burst is live right after firing");
+        // Tick through the rest of the burst WITHOUT firing: mana must
+        // never climb while the burst counter is live (regen pinned).
+        let mut prev = w.player.mana;
+        while w.g.ent[m].f26 > 0 {
+            w.tick(away(), PlayerCommand::default());
+            assert!(
+                w.player.mana <= prev,
+                "no regen while a burst is live (was {prev}, now {})",
+                w.player.mana
+            );
+            prev = w.player.mana;
+        }
+        // Once the burst expires, idle regen resumes.
+        let idle_start = w.player.mana;
+        for _ in 0..5 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            w.player.mana > idle_start,
+            "regen resumes once no burst is live (stuck at {idle_start})"
+        );
+    }
+
+    #[test]
     fn trees_burn_to_char_and_spark_a_standing_fire() {
         use crate::mc1::combat::MailTarget;
         let planes = Planes {
@@ -6182,6 +7695,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 0,
@@ -6235,6 +7749,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, class, model, x, y| Thing {
             slot,
@@ -6340,6 +7855,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, class, model, x, y| Thing {
             slot,
@@ -6450,6 +7966,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         // A class-12 jar carrying spell 7 (Meteor) via its model.
         let things = vec![Thing {
@@ -6489,6 +8006,67 @@ mod tests {
             w.tick(on_jar, PlayerCommand::default());
         }
         assert_eq!(w.debug_pool().0, free1);
+    }
+
+    /// RIVALS-POLISH #3 (MC1): with `prune_owned_jars` on, a placed jar
+    /// whose spell the player already owns self-culls — retail leaves
+    /// such uncollectable jars in the world forever. Faithful default
+    /// (off) keeps them.
+    #[test]
+    fn owned_spell_jars_are_pruned_when_enabled() {
+        use crate::mc1::spells::SpellId;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // A placed class-12 jar carrying spell 7, far from the carpet.
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 200,
+            y: 200,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let jars = |w: &World| {
+            w.debug_pool()
+                .1
+                .into_iter()
+                .filter(|e| e.class == 12 && e.state < MANIFEST_BASE && e.flags & 0x400 == 0)
+                .count()
+        };
+
+        // Faithful default: the jar of an already-owned spell stays.
+        let mut keep = World::new(planes.clone(), &things, 1, assets());
+        keep.grant_spell(SpellId(7));
+        let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
+        for _ in 0..8 {
+            keep.tick(away, PlayerCommand::default());
+        }
+        assert_eq!(
+            jars(&keep),
+            1,
+            "off by default: the uncollectable jar remains"
+        );
+
+        // With the improvement on, the same jar is removed.
+        let mut prune = World::new(planes, &things, 1, assets());
+        prune.set_prune_owned_jars(true);
+        prune.grant_spell(SpellId(7));
+        assert_eq!(jars(&prune), 1, "jar present before it ticks");
+        for _ in 0..8 {
+            prune.tick(away, PlayerCommand::default());
+        }
+        assert_eq!(jars(&prune), 0, "the owned-spell jar self-culls");
     }
 
     #[test]
@@ -6687,6 +8265,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 0,
@@ -7173,6 +8752,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let mut w = World::new(planes, &rival_marker_things(), 1, assets());
         let mut cfgs: [Option<crate::mc1::rivals::RivalConfig>; 8] = Default::default();
@@ -7314,6 +8894,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let mut w = World::new(planes, &[], 1, assets());
         let k =
@@ -7336,6 +8917,7 @@ mod tests {
             tile_type: vec![0; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let mut w = World::new(planes, &[], 1, assets());
         let k =
@@ -7389,6 +8971,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let mut w = World::new(planes, &things, 1, assets());
         // No win: the trigger sits armed.
@@ -7490,12 +9073,530 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         World::new_for_game(planes, &[], 1, assets(), GameId::Mc2)
     }
 
     fn mc2_pos(tx: u16, ty: u16) -> (u16, u16) {
         ((tx << 8) | 128, (ty << 8) | 128)
+    }
+
+    /// The possession projectile (action 18) rides the CLAIM probe
+    /// `sub_108B0` — it detonates only on claimable targets (mana
+    /// spheres, possessable buildings, worm heads) and flies THROUGH
+    /// everything else (un-possessable factory/terrain buildings,
+    /// wizards). Regression for the level-001 cross sinks eating the
+    /// possession shot (player-validated against retail 2026-07-13);
+    /// the port used to reuse the generic any-solid `victim_scan`.
+    #[test]
+    fn mc2_possession_claim_probe_whitelists_targets() {
+        use crate::mc1::combat::MailTarget;
+        use crate::mc1::features::BldgParam;
+
+        // Build a world with a possession projectile at tile (100,100)
+        // and ONE candidate overlapping it; return the claim-probe hit.
+        let setup = |class: u8, model: u8, f71: u8| -> (usize, Option<MailTarget>) {
+            let mut w = mc2_flat_world();
+            w.g.assets.bldgprm = vec![
+                // 0: un-possessable factory / terrain-mod sink.
+                BldgParam {
+                    rate: 50,
+                    flags: 0x08,
+                    chain: 0,
+                },
+                // 1: a possessable building.
+                BldgParam {
+                    rate: 20,
+                    flags: 0x00,
+                    chain: 0,
+                },
+            ];
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let p = w.g.new_event().expect("projectile slot");
+            {
+                let e = &mut w.g.ent[p];
+                e.class64 = 9;
+                e.model65 = 17;
+                e.tick70 = 18;
+                e.id24 = crate::mc1::mobs::PLAYER_TARGET;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+                e.f78 = 0;
+            }
+            w.g.link(p, x, y, gz);
+            let j = w.g.new_event().expect("candidate slot");
+            {
+                let e = &mut w.g.ent[j];
+                e.class64 = class;
+                e.model65 = model;
+                e.flags |= 8; // solid
+                e.f71 = f71;
+                e.id24 = 7; // a foreign owner (≠ PLAYER_TARGET)
+                e.f40 = 7;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+                e.f78 = 0;
+            }
+            w.g.link(j, x, y, gz);
+            (j, w.g.claim_victim_scan_at(p, (x, y, gz)))
+        };
+
+        // Un-possessable factory building (bldgprm flags&8) → passthrough.
+        assert!(
+            setup(10, 45, 0).1.is_none(),
+            "possession flies through the un-possessable sink building"
+        );
+        // A possessable building → claim it.
+        let (j, hit) = setup(10, 45, 1);
+        assert_eq!(
+            hit,
+            Some(MailTarget::Pool(j)),
+            "claims a possessable building"
+        );
+        // Mana spheres (10,39)/(10,40)/(10,57) → detonate.
+        for m in [39u8, 40, 57] {
+            let (j, hit) = setup(10, m, 0);
+            assert_eq!(
+                hit,
+                Some(MailTarget::Pool(j)),
+                "possession detonates on mana sphere model {m}"
+            );
+        }
+        // Worm head (5,22) → detonate.
+        let (j, hit) = setup(5, 22, 0);
+        assert_eq!(hit, Some(MailTarget::Pool(j)), "detonates on a worm head");
+        // A wizard body (class 3) is NOT claimable → passthrough.
+        assert!(setup(3, 1, 0).1.is_none(), "flies through a wizard body");
+        // A generic creature (class 5, non-worm) → passthrough.
+        assert!(
+            setup(5, 3, 0).1.is_none(),
+            "flies through a non-worm creature"
+        );
+    }
+
+    /// The (10,54) mana-magnet aura (`sub_38D80`) drags nearby mana
+    /// balls toward its eye so they converge and merge — the retail
+    /// centre-island magnet. Regression for the mis-port that gripped
+    /// creatures and left the balls untouched (player-reported
+    /// 2026-07-13).
+    #[test]
+    fn mc2_aura_magnetizes_mana_balls() {
+        let mut w = mc2_flat_world();
+        let (ax, ay) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(ax, ay) as i16;
+        let aura = w.g.mc2_spawn_aura(ax, ay, gz).expect("aura");
+        // Two mana balls ~6 tiles out on opposite sides, inside the
+        // ~14-tile magnet range.
+        let (b1x, b1y) = mc2_pos(106, 100);
+        let (b2x, b2y) = mc2_pos(94, 100);
+        let b1 =
+            w.g.spawn_mana_ball(b1x, b1y, w.g.ground_z(b1x, b1y) as i16)
+                .expect("ball 1");
+        let b2 =
+            w.g.spawn_mana_ball(b2x, b2y, w.g.ground_z(b2x, b2y) as i16)
+                .expect("ball 2");
+        let hdist = |w: &World, j: usize| -> f64 {
+            let (a, b) = (&w.g.ent[aura], &w.g.ent[j]);
+            let dx = (a.x.wrapping_sub(b.x)) as i16 as f64;
+            let dy = (a.y.wrapping_sub(b.y)) as i16 as f64;
+            (dx * dx + dy * dy).sqrt()
+        };
+        let (d1_0, d2_0) = (hdist(&w, b1), hdist(&w, b2));
+        // Fly the player far away so it never collects the balls.
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        for _ in 0..40 {
+            w.tick(far, PlayerCommand::default());
+        }
+        // Both balls were pulled a long way inward (≥ 2 tiles).
+        assert!(
+            hdist(&w, b1) < d1_0 - 512.0,
+            "ball 1 magnetized inward: {d1_0} -> {}",
+            hdist(&w, b1)
+        );
+        assert!(
+            hdist(&w, b2) < d2_0 - 512.0,
+            "ball 2 magnetized inward: {d2_0} -> {}",
+            hdist(&w, b2)
+        );
+    }
+
+    /// A CHARGED/repeat fireball impact spawns the (10,76) fire-orb
+    /// firestorm — it must not fall through to the misfit arm. Regression
+    /// for the "misfit thing (10,76) x1" warning (player-reported
+    /// 2026-07-13): `mc2_proj_impact` had no (10,76) case, so the
+    /// charged fireball degraded to a bare damage write.
+    #[test]
+    fn mc2_charged_fireball_impact_spawns_firestorm() {
+        let mut w = mc2_flat_world();
+        w.g.assets.mc2_sprite_ext = crate::mc2::derive_sprite_extents(&[(32, 32); 400]);
+        let (x, y) = mc2_pos(100, 100);
+        let ground = w.g.ground_z(x, y) as i16;
+        // A charged-fireball projectile (subtype 28) aimed at the
+        // (10,76) impact, placed below the surface so it detonates.
+        let p =
+            w.g.mc2_spawn_cast_proj(28, x, y, ground - 200)
+                .expect("proj");
+        {
+            let e = &mut w.g.ent[p];
+            e.f68 = 10;
+            e.f69 = 76;
+            e.id24 = crate::mc1::mobs::PLAYER_TARGET;
+        }
+        let misfits0 = w.misfits().len();
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        for _ in 0..4 {
+            w.tick(far, PlayerCommand::default());
+        }
+        assert!(count(&w, 10, 76) > 0, "the fire-orb firestorm spawned");
+        assert!(count(&w, 10, 77) > 0, "with its satellite ring");
+        assert_eq!(
+            w.misfits().len(),
+            misfits0,
+            "no (10,76) misfit was logged: {:?}",
+            w.misfits()
+        );
+    }
+
+    /// The magnet aura must not panic when it pulls a ball whose
+    /// bearing rounds to the full-turn wrap: `angle_of` returns 0..=2048
+    /// and SIN/COS are len 2048, so the index needs masking. Regression
+    /// for the in-gameplay crash `SIN[2048]` (player-reported
+    /// 2026-07-13, the magnet pulling a diagonally-placed ball).
+    #[test]
+    fn mc2_aura_pull_survives_full_turn_bearing() {
+        let mut w = mc2_flat_world();
+        let (ax, ay) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(ax, ay) as i16;
+        let aura = w.g.mc2_spawn_aura(ax, ay, gz).expect("aura");
+        // angle_between(ball, aura) = angle_of(ax-bx, ay-by): place the
+        // ball so that offset is (-1, -300), which `angle_of` maps to
+        // exactly 2048 (the 2048 - lut(1,300)=2048-0 branch).
+        let (bx, by) = (ax.wrapping_add(1), ay.wrapping_add(300));
+        assert_eq!(
+            crate::mc1::features::Gen::angle_between(bx, by, ax, ay),
+            2048,
+            "the crafted bearing hits the wrap value"
+        );
+        let ball =
+            w.g.spawn_mana_ball(bx, by, w.g.ground_z(bx, by) as i16)
+                .expect("ball");
+        // The aura tick runs here — must not panic on SIN[2048].
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        w.tick(far, PlayerCommand::default());
+        // And the ball got a real (masked, angle-0) pull.
+        assert!(
+            w.g.ent[ball].dest_x != 0 || w.g.ent[ball].dest_y != 0,
+            "the ball was still magnetized"
+        );
+        let _ = aura;
+    }
+
+    /// When two MC2 mana balls merge, the survivor inherits the OWNER
+    /// (colour) of the BIGGER contributor — retail `sub_36D50`. The port
+    /// used to keep the survivor's own owner, so a merged ball took the
+    /// colour of "the last ball merged" (player-reported 2026-07-13).
+    #[test]
+    fn mc2_mana_merge_takes_bigger_owner() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        // Two coincident balls. Spawn the SMALLER first so it holds the
+        // lower slot and ticks first — it becomes the survivor, so the
+        // owner it ends with is decided by the merge RULE (bigger wins),
+        // not by which ball happened to survive. Without the fix it
+        // would keep its own (smaller) owner.
+        let small = w.g.spawn_mana_ball(x, y, gz).expect("small");
+        let big = w.g.spawn_mana_ball(x, y, gz).expect("big");
+        for &b in &[big, small] {
+            // Non-zero collision boxes so the coincident pair overlaps
+            // (the flat fixture bakes no sprite dims).
+            let e = &mut w.g.ent[b];
+            e.f78 = 0;
+            e.f80 = 200;
+            e.f82 = 200;
+            e.f84 = 200;
+            e.f46 = 0; // no launch hop
+        }
+        w.g.ent[big].f140 = 5000;
+        w.g.ent[big].f144 = 20; // bigger ball's owner
+        w.g.ent[small].f140 = 200;
+        w.g.ent[small].f144 = 10; // smaller ball's owner
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        w.tick(far, PlayerCommand::default());
+        // Exactly one survives, holding the summed mana and the bigger
+        // contributor's owner (20), not the smaller's (10).
+        let live: Vec<usize> = [big, small]
+            .into_iter()
+            .filter(|&j| w.g.ent[j].flags & 0x400 == 0)
+            .collect();
+        assert_eq!(live.len(), 1, "one ball absorbed the other");
+        let s = live[0];
+        assert_eq!(w.g.ent[s].f140, 5200, "mana summed");
+        assert_eq!(
+            w.g.ent[s].f144, 20,
+            "the merged ball carries the BIGGER ball's owner, not the last-merged"
+        );
+    }
+
+    /// A DISPOSITION-spawned (10,54) aura reads its RANGE and LIFE from
+    /// the THING's stageTag (`swi_id`) — `sub_4A310`: range = swi_id
+    /// tiles (squared), life = 8·swi_id + 16 (floor 128). This is how
+    /// level-001's staged magnets (swi_id 33/45/64/31) reach the arm
+    /// balls sitting 20-44 tiles out; the `AddAuxiliary` 14-tile/128
+    /// ctor default left them stranded (player-reported 2026-07-13).
+    #[test]
+    fn mc2_aura_range_and_life_from_stagetag() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // A 40-tile magnet at (100,100), disposition-fired.
+        let things = vec![Thing {
+            slot: 1,
+            kind: ThingKind::Entity,
+            class: 10,
+            model: 54,
+            x: 100,
+            y: 100,
+            dis_id: 5,
+            swi_sz: 0,
+            swi_id: 40,
+            parent: 0,
+            child: 0,
+            par3: Some(0),
+        }];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        w.debug_fire_disposition(5);
+        let aura = (1..w.g.ent.len())
+            .find(|&i| w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 54)
+            .expect("aura spawned");
+        // stageTag → range (f26) + life (8·40+16 = 336).
+        assert_eq!(w.g.ent[aura].f26, 40, "range = stageTag tiles");
+        assert_eq!(w.g.ent[aura].max_life, 336, "life = 8·stageTag + 16");
+        // A ball 25 tiles out — beyond the 14-tile ctor default, but
+        // inside the 40-tile staged reach — is pulled inward.
+        let (bx, by) = mc2_pos(125, 100);
+        let ball =
+            w.g.spawn_mana_ball(bx, by, w.g.ground_z(bx, by) as i16)
+                .expect("ball");
+        let (ax, ay) = (w.g.ent[aura].x, w.g.ent[aura].y);
+        let hdist = |w: &World| -> f64 {
+            let b = &w.g.ent[ball];
+            let dx = (ax.wrapping_sub(b.x)) as i16 as f64;
+            let dy = (ay.wrapping_sub(b.y)) as i16 as f64;
+            (dx * dx + dy * dy).sqrt()
+        };
+        let d0 = hdist(&w);
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        for _ in 0..40 {
+            w.tick(far, PlayerCommand::default());
+        }
+        assert!(
+            hdist(&w) < d0 - 512.0,
+            "the 25-tile ball is pulled by the 40-tile magnet: {d0} -> {}",
+            hdist(&w)
+        );
+    }
+
+    /// The MC2 rival carpet carries `byte_0x38_56 = 29` (the wizard
+    /// vulnerability mask). Regression for the "unkillable Nyphur"
+    /// bug: without it f28 stays 0 and `area_write`'s per-channel gate
+    /// drops every hit at the mailbox, so a fireball detonates on the
+    /// rival but deals nothing (player-reported 2026-07-12).
+    #[test]
+    fn mc2_rival_wizard_carries_the_vulnerability_mask() {
+        use crate::mc2::rivals::Mc2RivalConfig;
+        let mut w = mc2_flat_world();
+        let mut cfg: [Option<Mc2RivalConfig>; 8] = Default::default();
+        cfg[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 0,
+            start: [false; 26],
+            start_level: [0; 26],
+            blocked: [false; 26],
+        });
+        w.set_mc2_wizards(&cfg, 2);
+        let rival = (1..w.g.ent.len())
+            .find(|&j| w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 1)
+            .expect("rival spawned");
+        assert_eq!(
+            w.g.ent[rival].f28, 29,
+            "the rival carpet carries the ch0 vulnerability mask"
+        );
+
+        // End-to-end: a fireball's ground fire delivers ch0 area damage
+        // that `area_write` now ADMITS (f28 & 1 != 0) into the mailbox.
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        w.g.move_relink(rival, x, y, gz);
+        let fire = w.g.mc2_spawn_fire(x, y, gz).expect("fire");
+        w.g.ent[fire].id24 = crate::mc1::mobs::PLAYER_TARGET; // foreign owner
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+        };
+        w.g.area_write(fire, 0, 400, &ctx, false, false);
+        assert!(
+            w.g.ent[rival].mail[0].1 != 0,
+            "the fire's ch0 area damage reached the rival's mailbox"
+        );
+    }
+
+    /// The (10,22) whirlwind SWAYS the human player (retail
+    /// `sub_33340`'s wizard branch): within the funnel it drags the
+    /// player toward the eye via `player_knock`. Regression for the
+    /// outer tornadoes feeling inert (the old arm only chipped HP on
+    /// direct overlap; player-reported "no violent attraction"
+    /// 2026-07-13).
+    #[test]
+    fn mc2_whirlwind_sways_the_player() {
+        let mut w = mc2_flat_world();
+        let (wx, wy) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(wx, wy) as i16;
+        w.g.mc2_spawn_whirlwind(wx, wy, gz).expect("whirlwind");
+        // Park the player ~4 tiles from the funnel — inside the sway
+        // band (< 13 tiles).
+        let pose = PlayerPose::from_tiles(104.0, 14.0, 100.0, 0.0, 0.0, 0.0);
+        w.tick(pose, PlayerCommand::default());
+        assert!(
+            w.g.player_knock.1 > 0,
+            "the whirlwind drags the player inward (knock = {:?})",
+            w.g.player_knock
+        );
+    }
+
+    /// The whirlwind scales its life by tier (`sub_678E0` /
+    /// EV:387-omitted arm-tornado modifier): `8 × row-21 tier.life`,
+    /// overriding `AddWind`'s 500-tick ctor default. Tornado I
+    /// (par1 0, tier life 5) = 40 ticks — a couple seconds, so it dies
+    /// before drifting off the arm. Regression for "Tornado I/II/III
+    /// nearly identical + the level-01 arm tornado travels away"
+    /// (player-reported 2026-07-13).
+    #[test]
+    fn mc2_arm_tornado_scales_to_tier() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Spawn each tier in its own world (a whirlwind reserves 12
+        // slots; a couple per world keeps the synthetic pool clear).
+        let spawn_tier = |tier: u16| -> u32 {
+            let mut a = assets();
+            let mut spells = vec![
+                crate::mc2::spells::Mc2SpellRow::default();
+                crate::mc2::spells::MC2_SPELL_ROWS
+            ];
+            // Row 21 (whirlwind) tier lives, per baked SPELLS.DAT.
+            spells[21].tiers[0].life = 5;
+            spells[21].tiers[1].life = 10;
+            spells[21].tiers[2].life = 10;
+            a.spells = spells;
+            // dis 5 = trigger-fired, like the level-01 arm dispositions
+            // (9/11/13/15) — not a level-init (dis 0) spawn.
+            let things = vec![Thing {
+                slot: 1,
+                kind: ThingKind::Entity,
+                class: 10,
+                model: 22,
+                x: 100,
+                y: 100,
+                dis_id: 5,
+                swi_sz: 0,
+                swi_id: 5,
+                parent: tier,
+                child: 0,
+                par3: Some(0),
+            }];
+            let planes = planes.clone();
+            let mut w = World::new_for_game(planes, &things, 1, a, GameId::Mc2);
+            w.debug_fire_disposition(5);
+            let head = (1..w.g.ent.len())
+                .find(|&i| w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 22)
+                .expect("arm tornado spawned");
+            w.g.ent[head].max_life
+        };
+        // Tornado I = 8×5 = 40, Tornado III = 8×10 = 80 — no longer the
+        // identical 500-tick roamer.
+        assert_eq!(spawn_tier(0), 40, "Tornado I = 8 × tier-0 life (5)");
+        assert_eq!(spawn_tier(2), 80, "Tornado III = 8 × tier-2 life (10)");
+    }
+
+    /// Mana balls roll DOWNHILL under the terrain gradient (retail
+    /// `sub_58030` inside the ball tick) — the level-001 transport that
+    /// carries arm balls into the central basin before the 14-tile
+    /// magnet aura can reach them. Regression for "the aura clearly
+    /// isn't the only thing pulling the balls to centre" (2026-07-13).
+    #[test]
+    fn mc2_mana_balls_roll_downhill() {
+        // A west-facing slope: height rises with x, so a grounded ball
+        // accelerates toward −x (the lower ground).
+        let mut height = vec![0u8; 0x10000];
+        for ty in 0..256usize {
+            for tx in 0..256usize {
+                height[(ty << 8) | tx] = (tx as u8).min(120);
+            }
+        }
+        let planes = Planes {
+            height,
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new_for_game(planes, &[], 1, assets(), GameId::Mc2);
+        let (bx, by) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let ball = w.g.mc2_spawn_mana_sphere(39, bx, by, gz).expect("ball");
+        let x_start = w.g.ent[ball].x;
+        let pose = PlayerPose::from_tiles(200.0, 20.0, 200.0, 0.0, 0.0, 0.0);
+        for _ in 0..40 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[ball].x < x_start,
+            "the resting ball rolled downhill (west): {} -> {}",
+            x_start,
+            w.g.ent[ball].x
+        );
+    }
+
+    /// The (10,22) whirlwind funnel and (10,76) fire-orb satellites
+    /// carry real sprites and must appear as billboards — regression
+    /// for the "tornado/firestorm have no visual" report (2026-07-13):
+    /// the sprite-carrying effect entities were missing from the
+    /// `drawable` allowlist, so the whole effect ran invisible.
+    #[test]
+    fn mc2_whirlwind_and_fire_orb_are_drawable() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        w.g.mc2_spawn_whirlwind(x, y, gz).expect("whirlwind");
+        let (fx, fy) = mc2_pos(120, 120);
+        let fz = w.g.ground_z(fx, fy) as i16 + 500;
+        w.g.mc2_spawn_fire_orb(fx, fy, fz).expect("fire orb");
+        let poses = w.live_poses();
+        let has = |c: u8, m: u8| poses.iter().any(|p| p.class == c && p.model == m);
+        assert!(has(10, 22), "the whirlwind head draws");
+        assert!(has(10, 75), "the whirlwind funnel column draws");
+        assert!(has(10, 77), "the fire-orb satellites draw");
+        // The invisible controllers stay out of the draw list.
+        assert!(!has(10, 76), "the fire-orb hub is an invisible controller");
     }
 
     /// m18's 5-shot fan (sub_1D460): forcing the strike sub-state
@@ -7658,6 +9759,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = vec![Thing {
             slot: 1,
@@ -7718,6 +9820,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, x, y, parent, child| Thing {
             slot,
@@ -7760,6 +9863,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, x, y, parent, child| Thing {
             slot,
@@ -7827,25 +9931,36 @@ mod tests {
         );
     }
 
-    /// The (10,15) fire trail (sub_32530): wanders dropping
-    /// (10,11→19) spray entities that ring (10,14) smoke and deal
-    /// per-tick channel-0 area damage.
+    /// The (10,15) fire trail (sub_32530): wanders dropping a (10,11)
+    /// SCORCH RING (the earth-carve) each tick — each child lives only
+    /// 10 ticks, so the concurrent population stays ~11 (NOT the (10,19)
+    /// spray it used to lay, whose 240-life smoke-spewing flooded the
+    /// pool — player-reported 2026-07-13, decompile re-verified).
     #[test]
-    fn mc2_fire_trail_drops_spray() {
+    fn mc2_fire_trail_drops_scorch_rings() {
         let mut w = mc2_flat_world();
         let (x, y) = mc2_pos(140, 140);
         let gz = w.g.ground_z(x, y) as i16;
         w.g.mc2_spawn_fire_trail(x, y, gz).expect("trail");
         let player = away();
-        for _ in 0..6 {
-            w.tick(player, PlayerCommand::default());
-        }
-        let sprays =
+        let live = |w: &World, m: u8| {
             w.g.ent
                 .iter()
-                .filter(|e| e.class64 == 10 && e.model65 == 19 && e.flags & 0x400 == 0)
-                .count();
-        assert!(sprays >= 3, "the trail laid spray entities, got {sprays}");
+                .filter(|e| e.class64 == 10 && e.model65 == m && e.flags & 0x400 == 0)
+                .count()
+        };
+        let mut peak_rings = 0;
+        for _ in 0..30 {
+            w.tick(player, PlayerCommand::default());
+            peak_rings = peak_rings.max(live(&w, 11));
+            assert_eq!(live(&w, 19), 0, "the trail lays NO (10,19) fire sprays");
+        }
+        assert!(peak_rings >= 3, "the trail lays (10,11) scorch rings");
+        // 10-tick child life keeps the concurrent count small — no flood.
+        assert!(
+            peak_rings <= 20,
+            "scorch rings are transient (~11 concurrent), got {peak_rings}"
+        );
     }
 
     /// The (10,22) whirlwind (AddWind_4F040 + sub_33110): the head
@@ -7907,6 +10022,262 @@ mod tests {
         assert!(moved, "the fissure jittered the heightmap");
     }
 
+    /// The (10,67) flood/quake (mc2::flood, sub_39040 + the 72/73/74
+    /// action chain): the crater center punches to height 0 by the
+    /// end of phase 2, the damage pass grabs+shakes+mails an
+    /// overlapping castle (±17-tile AABB, XY-only), the shove tags a
+    /// center bystander with the tossed latch, and the action-74
+    /// finisher restores the terrain, releases the castle and
+    /// despawns.
+    #[test]
+    fn mc2_flood_quake_craters_shoves_and_restores() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(180, 180);
+        // Retail's (pos+128)>>8 center-tile trap: the machine runs on
+        // tile (181, 181).
+        let (cx, cy) = (181u8, 181u8);
+        let gz = w.g.ground_z(x, y) as i16;
+        let f = w.g.mc2_spawn_flood(x, y, gz).expect("flood");
+        assert_eq!(
+            (w.g.ent[f].act_life, w.g.ent[f].f140, w.g.ent[f].f80),
+            (120, 20000, 4352),
+            "ctor: life 120, subSpell 20000, ±17-tile AABB"
+        );
+        let goat = w.g.mc2_spawn_goat(x, y, gz).expect("goat");
+        // A castle 15 tiles east: inside the grab AABB (3968 < 4352),
+        // outside the 13-tile shove disc (so only the finisher's
+        // phase-2 scan releases it).
+        let castle = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.x = (cx as u16 + 15) << 8;
+            e.y = (cy as u16) << 8;
+            e.max_life = 100_000;
+            e.act_life = 100_000;
+            e.f59 = 4; // standing
+        }
+        let player = away();
+        // Tick 1 = probe, tick 2 = sample + first morph (countdown
+        // 12→11), ticks 3..8 → countdown 5 = the damage pass.
+        for _ in 0..8 {
+            w.tick(player, PlayerCommand::default());
+        }
+        use crate::mc2::mobs::F_NO_CORPSE;
+        assert!(
+            w.g.ent[castle].flags & F_NO_CORPSE != 0,
+            "damage pass grabbed the castle"
+        );
+        assert_eq!(w.g.ent[castle].f40, f as u16, "grab owner = the flood");
+        assert!(w.g.ent[castle].f50 > 0, "the 30-tick castle shake armed");
+        assert!(
+            w.g.ent[castle].act_life < 100_000 || w.g.ent[castle].mail[0].0 > 0,
+            "the castle took the 20000 subSpell mail"
+        );
+        // Run out phase 2 (countdown → 0 at tick 13) into phase 3.
+        for _ in 0..6 {
+            w.tick(player, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[f].tick70, 73, "phase 3 handed to action 73");
+        assert_eq!(
+            w.g.t.height[tile(cx, cy)],
+            0,
+            "the 2x2 crater floor punched to height 0"
+        );
+        assert!(
+            w.g.t.height[tile(cx.wrapping_sub(5), cy)] < 100,
+            "the inner disc sank"
+        );
+        assert!(
+            w.g.ent[goat].flags & crate::mc2::flood::F_TOSSED != 0
+                || w.g.ent[goat].flags & 0x400 != 0,
+            "the center bystander was tossed (or killed on the 1-in-7)"
+        );
+        // Fast-forward the action-73 shove hold into the finisher.
+        w.g.ent[f].act_life = 1;
+        w.tick(player, PlayerCommand::default());
+        assert_eq!(w.g.ent[f].tick70, 74, "life out → the restore finisher");
+        for _ in 0..24 {
+            w.tick(player, PlayerCommand::default());
+        }
+        assert!(w.g.ent[f].flags & 0x400 != 0, "the flood despawned");
+        assert!(
+            w.g.ent[castle].flags & F_NO_CORPSE == 0 && w.g.ent[castle].f40 == 0,
+            "the finisher released the grabbed castle"
+        );
+        assert!(
+            w.g.t.height[tile(cx, cy)] > 40,
+            "the settle eased the crater back toward the rim, got {}",
+            w.g.t.height[tile(cx, cy)]
+        );
+    }
+
+    /// The (10,67) par1 seam is TRIGGER-ONLY (the flood-helpers
+    /// trace correction #3): a dis-0 authored flood keeps the ctor
+    /// defaults (EV:387's override list is 9/0xB/0xF), while a
+    /// dis-fired one consumes par1 → SPELLS row 20 life + subSpell
+    /// (sub_4A310 case 0xA, EF:33148/:33165).
+    #[test]
+    fn mc2_flood_par1_trigger_seam() {
+        // Synthetic SPELLS.DAT: row 20 tier 2 = subSpell 5555, life 77.
+        let mut bytes = vec![0u8; 26 * 80];
+        let base = 20 * 80 + 2 + 26 * 2;
+        bytes[base..base + 4].copy_from_slice(&5555i32.to_le_bytes());
+        bytes[base + 24] = 77;
+        let mut a = assets();
+        a.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let rec = |slot, x, dis| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class: 10,
+            model: 67,
+            x,
+            y: 60,
+            dis_id: dis,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 2, // par1 = tier 2
+            child: 0,
+            par3: None,
+        };
+        let things = [rec(1, 60, 0), rec(2, 200, 7)];
+        let mut w = World::new_for_game(planes, &things, 1, a, GameId::Mc2);
+        let at = |w: &World, tx: u16| {
+            (1..w.g.ent.len())
+                .find(|&i| {
+                    w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 67 && w.g.ent[i].x >> 8 == tx
+                })
+                .expect("flood spawned")
+        };
+        let a0 = at(&w, 60);
+        assert_eq!(
+            (w.g.ent[a0].act_life, w.g.ent[a0].f140),
+            (120, 20000),
+            "dis-0 (the generate pass) keeps the ctor defaults"
+        );
+        w.fire_disposition(7, true);
+        let a1 = at(&w, 200);
+        assert_eq!(
+            (w.g.ent[a1].act_life, w.g.ent[a1].f140),
+            (77, 5555),
+            "the triggered spawn consumed par1 via SPELLS row 20"
+        );
+    }
+
+    /// The (10,18) summit vortex (sub_32A70, mc2::morph): tick 0's
+    /// unconditional pulse seizes the vortex/plume singletons and
+    /// births the (10,19) fire column, a (10,16) tornado (the
+    /// whirlwind driver under action 16) and the visual (9,0) bolt.
+    #[test]
+    fn mc2_summit_vortex_erupts() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(140, 200);
+        let gz = w.g.ground_z(x, y) as i16;
+        let v = w.g.mc2_spawn_summit18(x, y, gz).expect("vortex");
+        let player = away();
+        w.tick(player, PlayerCommand::default());
+        let live = |w: &World, c: u8, m: u8| {
+            w.g.ent
+                .iter()
+                .any(|e| e.class64 == c && e.model65 == m && e.flags & 0x400 == 0)
+        };
+        assert!(live(&w, 10, 19), "the fire-spray column rose");
+        assert!(live(&w, 10, 16), "a tornado spun up");
+        assert_eq!(w.g.erupting, v as u16, "the vortex latch seized");
+        assert_eq!(
+            w.g.plume,
+            w.g.ent
+                .iter()
+                .position(|e| e.class64 == 10 && e.model65 == 19 && e.flags & 0x400 == 0)
+                .unwrap() as u16,
+            "the plume latch tracks the column"
+        );
+        for _ in 0..30 {
+            w.tick(player, PlayerCommand::default());
+        }
+        assert!(w.g.ent[v].f26 > 30, "the pulse clock advances");
+    }
+
+    /// The (10,91) apocalypse mana rain (sub_32CF0, mc2::morph):
+    /// three thrown (10,39) spheres per tick, mana 1..=2560 (the
+    /// 5-draw arming order), riding the ball machinery.
+    #[test]
+    fn mc2_summit91_rains_mana() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(60, 200);
+        let gz = w.g.ground_z(x, y) as i16;
+        let c = w.g.mc2_spawn_summit91(x, y, gz).expect("rain");
+        let player = away();
+        // Capture each sphere's roll the tick it appears — resting
+        // balls MERGE (mobs.rs ball tick, f140 sums), so a late
+        // sweep can read a summed value instead of the arming roll.
+        let mut seen = std::collections::HashSet::new();
+        let mut balls: Vec<i32> = Vec::new();
+        for _ in 0..4 {
+            w.tick(player, PlayerCommand::default());
+            for (j, e) in w.g.ent.iter().enumerate() {
+                if j != c
+                    && e.class64 == 10
+                    && e.model65 == 39
+                    && e.flags & 0x400 == 0
+                    && seen.insert(j)
+                {
+                    balls.push(e.f140);
+                }
+            }
+        }
+        assert!(
+            balls.len() >= 9,
+            "3 spheres/tick rained, got {}",
+            balls.len()
+        );
+        // ≥ 9 in-band rolls pins the arming law; a same-tick merge
+        // can still fold two rolls into one out-of-band sum.
+        assert!(
+            balls.iter().filter(|&&m| (1..=2560).contains(&m)).count() >= 9,
+            "mana in the 1..=2560 roll band: {balls:?}"
+        );
+    }
+
+    /// The (10,65)/(10,66) one-tick debuff stamps (sub_38E70/38F70,
+    /// mc2::proj): a paralyze stamp aimed at a wizard body mails its
+    /// subSpell 200 and despawns; the stagger variant mails nothing.
+    #[test]
+    fn mc2_debuff_stamps_mail_wizards() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(70, 200);
+        // A rival wizard body husk.
+        let wiz = w.g.new_event().expect("wizard slot");
+        {
+            let e = &mut w.g.ent[wiz];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.max_life = 1000;
+            e.act_life = 1000;
+            e.x = x;
+            e.y = y;
+        }
+        let s = w.g.mc2_spawn_paralyze(x, y, 3200).expect("stamp");
+        w.g.ent[s].f146 = wiz as u16;
+        let g = w.g.mc2_spawn_stagger(x, y, 3200).expect("stagger");
+        w.g.ent[g].f146 = wiz as u16;
+        let player = away();
+        w.tick(player, PlayerCommand::default());
+        assert_eq!(w.g.ent[wiz].mail[0].0, 200, "the paralyze 200 mail landed");
+        assert!(
+            w.g.ent[s].flags & 0x400 != 0 && w.g.ent[g].flags & 0x400 != 0,
+            "one-tick stamps despawned"
+        );
+    }
+
     /// The (10,76) fire-sphere orb (AddFireSpheres_4F2A0): hub + 25
     /// satellites (5 targetable slot-0 damage carriers), pulsing and
     /// tumbling; collapse leaves a (10,0) ground fire and tears the
@@ -7966,6 +10337,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, class, model, x, y, dis_id, swi_sz, swi_id| Thing {
             slot,
@@ -8041,6 +10413,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = riser_things(100, 100, 0, 8, false);
         let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
@@ -8077,6 +10450,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = riser_things(150, 150, 1, 8, false);
         let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
@@ -8105,6 +10479,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let things = riser_things(100, 100, 0, 8, true);
         let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
@@ -8151,6 +10526,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, model, x: u16| Thing {
             slot,
@@ -8201,6 +10577,7 @@ mod tests {
             tile_type: vec![5; 0x10000],
             shading: vec![32; 0x10000],
             angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
         };
         let th = |slot, model, x: u16, swi_id| Thing {
             slot,
@@ -8236,20 +10613,393 @@ mod tests {
             "spell 4 banked for Phase 4.2"
         );
         assert!(sound18, "the pickup chime at the collector");
-        // The replacement token sits in state 3M+2 at the same spot —
-        // and is NOT re-collected (the SpellEnabled gate).
-        let repl: Vec<_> =
+        // The collected jar is KEPT as the wizard's manifestation
+        // (state 3M, book-linked — the 4.2 slot economy); the
+        // replacement sits in state 3M+2 at the same spot and is
+        // NOT re-collected (the SpellEnabled gate).
+        let live: Vec<_> =
             w.g.ent
                 .iter()
                 .filter(|e| e.class64 == 15 && e.model65 == 4 && e.flags & 0x400 == 0)
                 .collect();
-        assert_eq!(repl.len(), 1, "one replacement jar");
-        assert_eq!(repl[0].tick70, 4 * 3 + 2);
+        assert_eq!(live.len(), 2, "manifestation + replacement jar");
+        assert!(live.iter().any(|e| e.tick70 == 4 * 3 + 2), "replacement");
+        assert!(live.iter().any(|e| e.tick70 == 4 * 3), "manifestation");
+        assert_ne!(w.mc2_book.ent[4], 0, "spell 4 learned into the book");
         // The junk-state record never collects.
         for _ in 0..8 {
             w.tick(pose, PlayerCommand::default());
         }
         assert_eq!(w.g.mc2_spell_tokens.0 & (1 << 7), 0, "state 253 is inert");
+    }
+
+    /// RIVALS-POLISH #3 (MC2): with `prune_owned_jars` on, a class-15
+    /// spell token whose spell the player already owns self-culls (the
+    /// SpellEnabled gate would otherwise leave it uncollectable). Both
+    /// the level-load sweep and the post-gain sweep come free from the
+    /// per-tick self-cull. Faithful default (off) keeps the token.
+    #[test]
+    fn mc2_owned_spell_tokens_are_pruned_when_enabled() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let th = |model, swi_id| Thing {
+            slot: 1,
+            kind: ThingKind::Entity,
+            class: 15,
+            model,
+            x: 200,
+            y: 200,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let live_tokens = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 15 && e.model65 == 4 && e.flags & 0x400 == 0)
+                .count()
+        };
+
+        // A spell-4 token, carpet parked far away; pretend the player
+        // already banked spell 4 (the SpellEnabled bit set).
+        let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
+
+        // Faithful default: the uncollectable token stays put.
+        let mut keep = World::new_for_game(planes.clone(), &[th(4, 2)], 1, assets(), GameId::Mc2);
+        keep.g.mc2_spell_tokens.0 |= 1 << 4;
+        for _ in 0..8 {
+            keep.tick(away, PlayerCommand::default());
+        }
+        assert_eq!(live_tokens(&keep), 1, "off by default: token remains");
+
+        // With the improvement on, the owned-spell token is removed.
+        let mut prune = World::new_for_game(planes, &[th(4, 2)], 1, assets(), GameId::Mc2);
+        prune.set_prune_owned_jars(true);
+        prune.g.mc2_spell_tokens.0 |= 1 << 4;
+        for _ in 0..8 {
+            prune.tick(away, PlayerCommand::default());
+        }
+        assert_eq!(live_tokens(&prune), 0, "the owned-spell token self-culls");
+    }
+
+    /// The Phase-4.2 CAST COLUMN laws on a synthetic SPELLS table:
+    /// the SetDefaultSpells baseline (fireball+possess, left/right),
+    /// SetSpell tier wiring, the sub_5F660 gate + mana debit, the
+    /// first-tick (9,0) spawn, and the sub_6D9C0 xpos1 level ladder
+    /// with the selected-tier clamp.
+    #[test]
+    fn mc2_cast_column_laws() {
+        let mut w = mc2_flat_world();
+        // The campaign baseline (SetDefaultSpells_5C0A0).
+        let v = w.mc2_book_view();
+        assert!(v.owned[0] && v.owned[1], "fireball + possess granted");
+        assert_eq!((v.left, v.right), (0, 1), "default hand binding");
+        assert_eq!(v.xp[0], 0, "0 XP at init");
+        // Synthetic table: fireball = 3 tiers, cost 100, duration 5,
+        // payload 250, xpos1 ladder {0, 400, 12000} (the CD shape).
+        let mut bytes = vec![0u8; 26 * 80];
+        for (t, (cost, xp1, life)) in [(100i32, 0i32, 0i8), (250, 400, 1), (2500, 12000, 2)]
+            .iter()
+            .enumerate()
+        {
+            let b = 2 + 26 * t;
+            bytes[b..b + 4].copy_from_slice(&250i32.to_le_bytes());
+            bytes[b + 4..b + 8].copy_from_slice(&cost.to_le_bytes());
+            bytes[b + 12..b + 16].copy_from_slice(&xp1.to_le_bytes());
+            bytes[b + 22] = 5; // word_0x18 duration
+            bytes[b + 24] = *life as u8;
+        }
+        bytes[0] = 3; // byte_0 = tier count
+        w.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        // Re-select tier 0 → SetSpell wires the manifestation.
+        w.mc2_select_spell(0, 0, 0);
+        let m = w.mc2_book.ent[0] as usize;
+        assert_eq!(w.g.ent[m].f28, 5, "duration = word_0x18");
+        assert_eq!(w.g.ent[m].max_life, 100, "full cost = tier manaCost");
+        assert_eq!(w.g.ent[m].f30, 250, "payload = subSpellIndex");
+        // Fire: the gate arms, the first effect tick spawns (9,0)
+        // and debits the cost (the negative-delta stamp lands on the
+        // NEXT tick's mana step).
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 3712, 0);
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let mana0 = w.player.mana;
+        assert!(mana0 >= 100, "regen gave enough for one cast");
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        w.tick(pose, fire);
+        let balls =
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 9 && e.model65 == 0 && e.flags & 0x400 == 0)
+                .count();
+        assert_eq!(balls, 1, "the first cast tick spawned the fireball");
+        let before = w.player.mana;
+        w.tick(pose, PlayerCommand::default());
+        assert!(
+            w.player.mana < before || w.player.mana <= mana0,
+            "the cast cost landed through the delta stamp"
+        );
+        // The XP ladder: +400 effective XP crosses tier-1 xpos1.
+        w.mc2_award_xp(crate::mc1::mobs::PLAYER_TARGET, 0, 400);
+        let v = w.mc2_book_view();
+        assert_eq!(v.levels[0], 1, "xpos1 400 reached → level 1");
+        assert_eq!(v.xp[0], 400);
+        // Tier select clamps to the level.
+        w.mc2_select_spell(0, 2, 0);
+        assert_eq!(w.mc2_book_view().sel[0], 1, "selected tier ≤ level");
+        // The cast window is still live (duration 5, two ticks
+        // spent) — the change is PENDING (sub_6D880) and applies
+        // when the timer expires.
+        assert!(w.g.ent[m].f44 > 0, "tier change deferred mid-cast");
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[m].f71, 1, "live tier = clamped selection");
+        assert_eq!(w.g.ent[m].max_life, 250, "tier-1 cost wired");
+    }
+
+    /// The all-spells (G) instrument keeps EVERY tier exercisable
+    /// regardless of earned XP — the sim's select clamp must honour
+    /// `dev_spells` the same way the app's pane does (main.rs:2035).
+    /// Regression for "can select a higher spell level in the pane but
+    /// LMB still casts level 1" (player-reported 2026-07-13): the sim
+    /// clamped the selected tier to the XP level even under the dev
+    /// toggle, so the manifestation stayed at tier 0.
+    #[test]
+    fn mc2_dev_spells_selects_any_tier() {
+        let mut w = mc2_flat_world();
+        // Synthetic 3-tier fireball with distinct per-tier costs so the
+        // wired tier is readable off the manifestation.
+        let mut bytes = vec![0u8; 26 * 80];
+        for (t, (cost, life)) in [(100i32, 0i8), (250, 1), (2500, 2)].iter().enumerate() {
+            let b = 2 + 26 * t;
+            bytes[b + 4..b + 8].copy_from_slice(&cost.to_le_bytes());
+            bytes[b + 24] = *life as u8;
+        }
+        bytes[0] = 3; // tier count
+        w.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        // 0 XP → earned level 0. Without the dev arm a tier-2 select
+        // clamps to 0 (the bug); with it, the top tier wires through.
+        w.set_dev_spells(true);
+        w.mc2_select_spell(0, 2, 0);
+        let m = w.mc2_book.ent[0] as usize;
+        assert_eq!(
+            w.mc2_book_view().sel[0],
+            2,
+            "the dev instrument selects the top tier at 0 XP"
+        );
+        assert_eq!(
+            w.g.ent[m].f71, 2,
+            "the manifestation is wired to tier 2, not clamped to level 0"
+        );
+        // A mid-play XP relevel must not yank the dev selection down.
+        w.mc2_award_xp(crate::mc1::mobs::PLAYER_TARGET, 0, 0);
+        assert_eq!(
+            w.mc2_book_view().sel[0],
+            2,
+            "the XP relevel keeps the dev-selected tier"
+        );
+        // And faithful (non-dev) play still clamps to the earned level.
+        let mut w2 = mc2_flat_world();
+        w2.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        w2.mc2_select_spell(0, 2, 0);
+        assert_eq!(
+            w2.mc2_book_view().sel[0],
+            0,
+            "without the dev toggle, tier stays clamped to XP level 0"
+        );
+    }
+
+    /// The cast CADENCE law (docs/traces/mc2-cast-input.md §1-2):
+    /// fire bits are EDGE-triggered — a held button gives ONE cast
+    /// for a click tier, and auto-repeats only on a RAPID tier
+    /// (`fontType_0x1B & 1`, e.g. Repeat Fireball). Plus the
+    /// sub_67CB0 auto-aim: a cast with a creature in the cone locks
+    /// and curves; the alarm-free straight flight otherwise.
+    #[test]
+    fn mc2_cast_cadence_and_autoaim() {
+        let mut w = mc2_flat_world();
+        // The load-time extents derivation (EF:44870-44910) with
+        // uniform synthetic dims: speed_6 = rotSpeed_8 per row —
+        // real collision boxes (the flat fixture has no baked
+        // sprite index).
+        w.g.assets.mc2_sprite_ext = crate::mc2::derive_sprite_extents(&[(32, 32); 400]);
+        // Synthetic fireball row: tier 0 CLICK, tier 1 RAPID
+        // (fontType 1), free-ish costs, duration 5.
+        let mut bytes = vec![0u8; 26 * 80];
+        for (t, font) in [0u8, 1, 0].iter().enumerate() {
+            let b = 2 + 26 * t;
+            bytes[b..b + 4].copy_from_slice(&250i32.to_le_bytes());
+            bytes[b + 4..b + 8].copy_from_slice(&10i32.to_le_bytes());
+            bytes[b + 12..b + 16].copy_from_slice(&(400 * t as i32).to_le_bytes());
+            bytes[b + 22] = 5;
+            bytes[b + 25] = *font;
+        }
+        bytes[0] = 3;
+        w.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        w.mc2_select_spell(0, 0, 0);
+        let balls = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 9 && e.model65 == 0 && e.flags & 0x400 == 0)
+                .count()
+        };
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 3712, 0);
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        // CLICK tier: 8 held ticks = ONE cast (the press edge).
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        for _ in 0..8 {
+            w.tick(pose, fire);
+        }
+        assert_eq!(balls(&w), 1, "click tier: one cast per press");
+        // Release, unlock + select the RAPID tier, hold again.
+        w.tick(pose, PlayerCommand::default());
+        w.mc2_award_xp(crate::mc1::mobs::PLAYER_TARGET, 0, 400);
+        w.mc2_select_spell(0, 1, 0);
+        let before = balls(&w);
+        for _ in 0..8 {
+            w.tick(pose, fire);
+        }
+        assert!(
+            balls(&w) > before + 1,
+            "rapid tier: auto-repeat while held ({} -> {})",
+            before,
+            balls(&w)
+        );
+        // Auto-aim: a goat parked ahead-but-off-axis gets locked by
+        // the next cast (sub_67CB0 offensive branch; heading 0 =
+        // -y, the goat sits 4 tiles out, ~1 tile east).
+        for _ in 0..30 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        // On-axis for the LEFT-hand muzzle (the launch sits a
+        // 256-unit lateral step west of the pose): the faithful
+        // first-tick turn is yaw-capped at 34 (EF:63108-13) with
+        // 5/tick row-64 homing after — an off-axis goat grazes past
+        // and ground-detonates — so the pin geometry puts the goat
+        // straight down the muzzle line.
+        let (gx, gy) = (99u16 << 8, (93 << 8) | 128u16);
+        let gz = w.g.ground_z(gx, gy) as i16;
+        let goat = w.g.mc2_spawn_goat(gx, gy, gz).expect("goat");
+        // Low pass so the pitch bearing stays inside the 0x71 cone,
+        // and a couple of ticks so the awake pre-pass arms the goat
+        // (the `byte_0x39_57` acquisition gate).
+        let pose = PlayerPose::level(100 << 8, 100 << 8, gz + 150, 0);
+        for _ in 0..3 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let before: Vec<usize> =
+            w.g.ent
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.class64 == 9 && e.model65 == 0 && e.flags & 0x400 == 0)
+                .map(|(j, _)| j)
+                .collect();
+        w.tick(pose, fire);
+        w.tick(pose, PlayerCommand::default());
+        let new_ball =
+            w.g.ent
+                .iter()
+                .enumerate()
+                .find(|(j, e)| {
+                    e.class64 == 9 && e.model65 == 0 && e.flags & 0x400 == 0 && !before.contains(j)
+                })
+                .map(|(j, _)| j)
+                .expect("the aimed cast spawned");
+        assert_eq!(
+            w.g.ent[new_ball].f146, goat as u16,
+            "auto-aim locked the goat"
+        );
+        // The lock must CONNECT: the chord-marched probe (sub_10780's
+        // cell walk) lands the hit, and the impact XP award fires
+        // only on a victim strike (playtest-12 round 2: the
+        // end-point-only probe tunneled through the zero-box
+        // fireball's targets).
+        let xp0 = w.mc2_book_view().xp[0];
+        for _ in 0..25 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(
+            w.mc2_book_view().xp[0] > xp0,
+            "the aimed fireball STRUCK (impact XP awarded)"
+        );
+        // The carried damage is the TIER's subSpellIndex (250 here,
+        // matching retail's shipped value — EF:55864, the playtest-13
+        // deficit fix: the projectile must not keep the new_event
+        // default 100). One strike's (10,0) fire burns ≥ 250 off the
+        // goat (docs/traces/mc2-fireball-damage.md; goat retail
+        // maxLife 600 → dead in 3).
+        assert!(
+            w.g.ent[goat].act_life <= 600 - 250,
+            "the strike delivered the tier payload ({} left of 600)",
+            w.g.ent[goat].act_life
+        );
+    }
+
+    /// The playtest-13 GHOST FIREBALL: the G dev toggle granted all
+    /// 24 MC1 spells (auto-filling player.left with the MC1
+    /// fireball), and the MC1 hand-cast arm still ran on the MC2
+    /// column — so EVERY MC2 cast (heal, shield, ...) also launched
+    /// an MC1 fireball. Both gates pinned here: grant_spell no-ops
+    /// on MC2, and the MC1 cast arm is column-gated.
+    #[test]
+    fn mc2_dev_spells_cast_no_mc1_ghost() {
+        let mut w = mc2_flat_world();
+        let mut bytes = vec![0u8; 26 * 80];
+        for sp in 0..26 {
+            let b = 80 * sp + 2;
+            bytes[b..b + 4].copy_from_slice(&250i32.to_le_bytes());
+            bytes[b + 4..b + 8].copy_from_slice(&10i32.to_le_bytes());
+            bytes[b + 22] = 5;
+        }
+        bytes[0] = 3;
+        w.g.assets.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        // The trigger: the dev toggle (G) — must NOT materialize MC1
+        // manifestations or bind the MC1 hands on the MC2 column.
+        w.set_dev_spells(true);
+        assert_eq!(w.player.left, None, "no MC1 hand bind on MC2");
+        assert!(
+            !w.g.ent
+                .iter()
+                .any(|e| e.class64 == 12 && e.flags & 0x400 == 0),
+            "no MC1 class-12 manifestations on MC2"
+        );
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 3712, 0);
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        // Select HEAL (spell 5, dev-granted) onto the LEFT hand, fire.
+        w.mc2_select_spell(5, 0, 0);
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        w.tick(pose, fire);
+        w.tick(pose, PlayerCommand::default());
+        assert!(w.player.heal_active, "heal armed");
+        assert!(
+            !w.g.ent
+                .iter()
+                .any(|e| e.class64 == 9 && e.flags & 0x400 == 0),
+            "a non-projectile MC2 cast spawns NO projectile (the ghost fireball)"
+        );
     }
 
     // ---- Phase-4.3 MC2 multipart probes -------------------------------
@@ -8282,9 +11032,20 @@ mod tests {
                 "the qmemcpy keeps the head's id across the chain"
             );
         }
-        // First link is 25% longer than its row metric.
+        // First link is 25% longer than its row metric — but the
+        // particle rows' speed_6 column is zero (verified in the
+        // pristine EXE too), which collapsed the whole chain onto
+        // the head (PLAYTEST-11 round 3, "the worm is a blob"):
+        // zero-length links keep the head ctor's authored 96
+        // (multipart.rs APPROX; the true retail spacing source is
+        // an OPEN banked with the disassembly-authors questions).
         let p89 = 65 * crate::mc2::sprite_params::SPRITE_PARAMS[89].speed_6 / 100;
-        assert_eq!(w.g.ent[chain[1]].f56, 125 * p89 / 100);
+        let link = if p89 == 0 { 96 } else { 125 * p89 / 100 };
+        assert_eq!(w.g.ent[chain[1]].f56, link);
+        assert_ne!(
+            w.g.ent[chain[1]].f56, 0,
+            "a zero link length re-blobs the worm"
+        );
         // Awake (player at tile 100.5) the chain stretches behind
         // the head — consecutive links end up near their follow
         // distance apart.

@@ -20,7 +20,10 @@ struct Globals {
     // x = atlas cell count (0 = untextured),
     // y = smooth shading (1 = interpolate the per-tile shade level
     //     across tile centers instead of the original's per-tile snap),
-    // z = water wave rule (0 = off, 1 = MC1, 2 = MC2), w reserved
+    // z = water wave rule (0 = off, 1 = MC1, 2 = MC2),
+    // w = ceiling pass (1 = the MC2 cave second-heightmap draw:
+    //     t_height carries the CEILING bytes, texture fixed to the
+    //     wall cell, water animation off)
     atlas: vec4<u32>,
 };
 
@@ -92,7 +95,7 @@ fn vs_main(in: VsIn) -> VsOut {
     // (S = 6 for MC1, 5 for MC2). Gating is per VERTEX cell, so shared
     // corners displace consistently across tiles. The wave repeats
     // every 256 tiles, so the 3x3 torus copies stay seamless.
-    if globals.atlas.z != 0u {
+    if globals.atlas.z != 0u && globals.atlas.w == 0u {
         let g = vec2<i32>(
             (i32(in.pos.x) % 256 + 256) % 256,
             (i32(in.pos.z) % 256 + 256) % 256,
@@ -163,7 +166,15 @@ fn fs_main(in: VsOut) -> FsOut {
         (i32(floor(in.world.x)) % 256 + 256) % 256,
         (i32(floor(in.world.z)) % 256 + 256) % 256,
     );
-    let ty = i32(textureLoad(t_type, tile, 0).r);
+    // The cave-ceiling pass paints every cell with the fixed WALL
+    // texture (atlas cell 1 — retail's cave rock; the sculptors stamp
+    // tile_type 1 on carved walls), lit by the same shade plane.
+    var ty: i32;
+    if globals.atlas.w == 1u {
+        ty = 1;
+    } else {
+        ty = i32(textureLoad(t_type, tile, 0).r);
+    }
 
     // Palette index: atlas texel (terrain type = atlas cell, nearest
     // sampling like the original rasterizer) or the flat tile color.
