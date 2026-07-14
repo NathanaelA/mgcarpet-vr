@@ -2549,15 +2549,19 @@ impl World {
             return;
         }
 
-        // Edge-triggered casts (15 streams while held), paced by the
-        // burst spacing (fireball 5, meteor 11, castle 101 ticks).
-        // 22 Global Death STACKS: retail lets you prime multiple
-        // charges, each detonating on its own delay (player-retail-
-        // confirmed, playtest-8 round 3: "launch multiple and make a
-        // flyby") — the recast resets the burst instead of gating on
-        // it. Whether other spells share this is the banked
-        // cast-cadence item.
-        if (!edge && id != 15) || (armed && id != 22) {
+        // Edge-triggered casts (15 streams while held). A LIVE BURST
+        // DOES NOT GATE THE RE-CAST: `sub_46B00_46E40` (:55851) reloads
+        // the manifestation's +48 burst counter (`var_48 = var_50`,
+        // LABEL_32 :55893) on EVERY fire, for every hand spell — the
+        // only type it hard-gates on a live +48 is CASTLE (16, :55903:
+        // `if (var_48) buzz`), which we handle in its own block below.
+        // So fireball (and the rest) refire as fast as the player can
+        // click, each recast resetting the burst; the re-arm's negative
+        // mana delta keeps regen suppressed for the whole stream — the
+        // "activity blocks regen but not re-fire" law the player
+        // confirmed from retail. (The old `armed` cadence gate was the
+        // banked cast-cadence item; the decompile resolves it: no gate.)
+        if !edge && id != 15 {
             return;
         }
         // Create Castle (the model-16 trigger arm, :55901-11): a
