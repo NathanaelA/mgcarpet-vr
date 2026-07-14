@@ -149,6 +149,23 @@ pub struct MapPath {
     pub phase: u8,
 }
 
+/// One target of the current MC2 objective, for the non-optional
+/// objective-guide overlay (retail cannot disable it). Drawn
+/// screen-space over whichever map surface is active — a blinking red
+/// outline on every mark, plus a red arrow from the player (surface
+/// center) toward the `nearest` one, so far/off-radar targets still
+/// steer the player. Position in tile units (like `MapDot`); projected
+/// with the same transform as the icon stamps.
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectiveMark {
+    pub x: f32,
+    pub z: f32,
+    pub nearest: bool,
+    /// Outline colour: YELLOW for the fly-to point, RED otherwise
+    /// (remc2 GameUI: only type-5 uses CLRD 0xFF0).
+    pub yellow: bool,
+}
+
 /// Everything baked into the map terrain texture, in draw order: areas
 /// (enhancement), then entity dots. (Icon stamps and the guide path
 /// draw screen-space at render time — see `Renderer::set_map_stamps` /
@@ -435,6 +452,172 @@ fn project_guide_path(
             tint: ANT_INK,
         });
         t += step;
+    }
+    quads
+}
+
+/// The MC2 objective-guide overlay on one map surface (retail GameUI
+/// :3040-3264): a tight blinking box outline around every
+/// current-objective target (yellow for the fly-to point, red
+/// otherwise), plus a red arrow-glyph that sits between the player
+/// (surface center) and the nearest target, floating in front of it as
+/// you approach. Vertices/edges are rasterized as dot runs (the UiQuad
+/// stream is axis-aligned), so the rotated glyph works at any heading.
+/// Blink is tick-driven to match retail exactly: the OUTLINE draws
+/// 1-in-4 ticks (`!(tick & 3)` — a rapid shimmer), the ARROW draws when
+/// `(tick & 0x40) && ((tick/6) & 1)` — ~5 six-tick blinks during the
+/// 64-tick bit-6 window, then a 64-tick pause. Same projection transform
+/// as [`project_map_stamps`].
+#[allow(clippy::too_many_arguments)]
+fn project_objective_marks(
+    marks: &[ObjectiveMark],
+    tick: u32,
+    cx: f32,
+    cy: f32,
+    half_x: f32,
+    half_y: f32,
+    px: f32,
+    pz: f32,
+    yaw: f32,
+    zoom: f32,
+    round: bool,
+    aspect: f32,
+    scale: f32,
+) -> Vec<UiQuad> {
+    let half_tiles = zoom * 0.5;
+    let tiles = MAP_TILES as f32;
+    let (s, c) = yaw.sin_cos();
+    // World point → surface pixels (shortest-wrap image of the delta),
+    // plus whether it lands on the visible surface.
+    let project = |wx: f32, wz: f32| -> (f32, f32, bool) {
+        let dx = (wx - px + tiles * 0.5).rem_euclid(tiles) - tiles * 0.5;
+        let dz = (wz - pz + tiles * 0.5).rem_euclid(tiles) - tiles * 0.5;
+        let ox = dx * c + dz * s;
+        let oy = dx * s - dz * c;
+        let mut nx = ox / half_tiles;
+        let mut ny = -oy / half_tiles;
+        if aspect >= 1.0 {
+            nx /= aspect;
+        } else {
+            ny *= aspect;
+        }
+        let on = if round {
+            nx * nx + ny * ny <= 1.0
+        } else {
+            nx.abs() <= 1.0 && ny.abs() <= 1.0
+        };
+        (cx + nx * half_x, cy + ny * half_y, on)
+    };
+    let mut quads = Vec::new();
+    let dot = scale.max(1.0);
+    // Retail blink gates (remc2 GameUI): outline 1-in-4 ticks; arrow the
+    // ~5-blinks-then-pause pattern.
+    let outline_on = tick & 3 == 0;
+    let arrow_on = tick & 0x40 != 0 && (tick / 6) & 1 != 0;
+    let bounds = [cx - half_x, cy - half_y, half_x * 2.0, half_y * 2.0];
+    // The target mark: retail's DrawObjectiveRectangle_64CE0 draws a
+    // TIGHT 3·scale px box (scale-thick edges) centered on the projected
+    // marker, blinking — the map dot/flag just gets a small blinking
+    // outline. YELLOW for the fly-to point, RED otherwise.
+    let half = (1.5 * scale).max(1.5);
+    let bar = scale.max(1.0);
+    let push_ring = |quads: &mut Vec<UiQuad>, mx: f32, my: f32, yellow: bool| {
+        let ink = if yellow {
+            [1.0, 1.0, 0.15, 1.0]
+        } else {
+            [1.0, 0.15, 0.15, 1.0]
+        };
+        for edge in [
+            [mx - half, my - half, 2.0 * half, bar],
+            [mx - half, my + half - bar, 2.0 * half, bar],
+            [mx - half, my - half, bar, 2.0 * half],
+            [mx + half - bar, my - half, bar, 2.0 * half],
+        ] {
+            let x0 = edge[0].max(bounds[0]);
+            let y0 = edge[1].max(bounds[1]);
+            let x1 = (edge[0] + edge[2]).min(bounds[0] + bounds[2]);
+            let y1 = (edge[1] + edge[3]).min(bounds[1] + bounds[3]);
+            if x1 > x0 && y1 > y0 {
+                quads.push(UiQuad {
+                    rect: [x0, y0, x1 - x0, y1 - y0],
+                    uv: [0.0, 0.0, 0.0, 0.0],
+                    tint: ink,
+                });
+            }
+        }
+    };
+    let mut nearest: Option<(f32, f32)> = None; // nearest target TILE pos
+    for m in marks {
+        if outline_on {
+            let (mx, my, on) = project(m.x, m.z);
+            if on {
+                push_ring(&mut quads, mx, my, m.yellow);
+            }
+        }
+        if m.nearest {
+            nearest = Some((m.x, m.z));
+        }
+    }
+    // The steer arrow (retail GameUI :3186-3260): a RED 7-vertex outline
+    // glyph placed at the WORLD point `player + dir·min(dist−512, 15872)`
+    // — i.e. ~2 tiles short of the target (512 eng), capped at 62 tiles
+    // (15872 eng) — so it floats in front of the target when close and
+    // never overshoots. Rotated to point at the target; always red,
+    // regardless of the outline colour.
+    if let Some((twx, twz)) = nearest.filter(|_| arrow_on) {
+        let dxw = (twx - px + tiles * 0.5).rem_euclid(tiles) - tiles * 0.5;
+        let dzw = (twz - pz + tiles * 0.5).rem_euclid(tiles) - tiles * 0.5;
+        let dist_w = dxw.hypot(dzw);
+        if dist_w > 0.01 {
+            let reach = (dist_w - 2.0).clamp(0.0, 62.0);
+            let (uxw, uzw) = (dxw / dist_w, dzw / dist_w);
+            let (ax, ay, _) = project(px + uxw * reach, pz + uzw * reach);
+            let (tx, ty, _) = project(twx, twz);
+            // Screen forward = arrow → target; fall back to center →
+            // target if the arrow sits on the target.
+            let (mut fx, mut fy) = (tx - ax, ty - ay);
+            if fx.hypot(fy) < 0.01 {
+                fx = tx - cx;
+                fy = ty - cy;
+            }
+            let fl = fx.hypot(fy).max(0.01);
+            let (fx, fy) = (fx / fl, fy / fl);
+            // Retail arrow polygon (local px; tip at origin, stem +y),
+            // scaled. Rotate local −y (tip) → screen forward.
+            let s = scale;
+            let verts = [
+                (0.0, 0.0),
+                (9.0 * s, 13.0 * s),
+                (4.0 * s, 13.0 * s),
+                (4.0 * s, 23.0 * s),
+                (-4.0 * s, 23.0 * s),
+                (-4.0 * s, 13.0 * s),
+                (-9.0 * s, 13.0 * s),
+            ];
+            let map = |lx: f32, ly: f32| (ax + lx * fy - ly * fx, ay - lx * fx - ly * fy);
+            let arrow_ink = [1.0, 0.1, 0.1, 1.0];
+            let mut edge = |a: (f32, f32), b: (f32, f32)| {
+                let (p0, p1) = (map(a.0, a.1), map(b.0, b.1));
+                let (rx, ry) = (p1.0 - p0.0, p1.1 - p0.1);
+                let steps = (rx.hypot(ry).max(1.0) / dot).ceil() as i32;
+                for i in 0..=steps {
+                    let f = i as f32 / steps as f32;
+                    quads.push(UiQuad {
+                        rect: [p0.0 + rx * f, p0.1 + ry * f, dot, dot],
+                        uv: [0.0, 0.0, 0.0, 0.0],
+                        tint: arrow_ink,
+                    });
+                }
+            };
+            // The 7-edge closed outline (GameUI :3254-3260 order).
+            edge(verts[0], verts[1]);
+            edge(verts[1], verts[2]);
+            edge(verts[2], verts[3]);
+            edge(verts[3], verts[4]);
+            edge(verts[4], verts[5]);
+            edge(verts[5], verts[6]);
+            edge(verts[6], verts[0]);
+        }
     }
     quads
 }
@@ -763,6 +946,13 @@ pub struct Renderer {
     /// The marching-ants guide path (player → castle), projected onto
     /// the active map surface each frame in 4-surface-px steps.
     map_path: Option<MapPath>,
+    /// The MC2 objective-guide targets (blinking marks + steer arrow),
+    /// projected onto the active map surface each frame. Empty off-MC2
+    /// or when the current objective has nothing spatial to point at.
+    objective_marks: Vec<ObjectiveMark>,
+    /// The sim tick, set with the marks — drives the retail blink gates
+    /// (outline 1-in-4, arrow 5-then-pause) in `project_objective_marks`.
+    objective_tick: u32,
     /// UI atlas dimensions, needed to convert stamp texel UVs. Set by
     /// `load_ui_atlas`.
     ui_atlas_size: (u32, u32),
@@ -1541,6 +1731,8 @@ impl Renderer {
             ui_quads: Vec::new(),
             map_stamps: Vec::new(),
             map_path: None,
+            objective_marks: Vec::new(),
+            objective_tick: 0,
             ui_atlas_size: (1, 1),
         }
     }
@@ -2199,6 +2391,15 @@ impl Renderer {
         self.map_path = path;
     }
 
+    /// Set the MC2 objective-guide targets + the current sim `tick`
+    /// (drives the retail blink gates). Drawn screen-space over the
+    /// active map surface as blinking outlines + a steer arrow to the
+    /// nearest (see [`project_objective_marks`]); empty draws nothing.
+    pub fn set_objective_marks(&mut self, marks: Vec<ObjectiveMark>, tick: u32) {
+        self.objective_marks = marks;
+        self.objective_tick = tick;
+    }
+
     /// The in-flight radar disc: (diameter, center_x, center_y) in
     /// pixels. The disc is anchored at the screen CORNER (0,0) so its
     /// center sits at its radius (retail DrawMinimap(0,0)) — scaled by
@@ -2615,6 +2816,23 @@ impl Renderer {
                 if let Some(path) = &self.map_path {
                     stamp_quads.extend(project_guide_path(
                         path, cx, cy, hx, hy, cam.x, cam.z, cam.yaw, zoom, round, aspect, scale,
+                    ));
+                }
+                if !self.objective_marks.is_empty() {
+                    stamp_quads.extend(project_objective_marks(
+                        &self.objective_marks,
+                        self.objective_tick,
+                        cx,
+                        cy,
+                        hx,
+                        hy,
+                        cam.x,
+                        cam.z,
+                        cam.yaw,
+                        zoom,
+                        round,
+                        aspect,
+                        scale,
                     ));
                 }
             }

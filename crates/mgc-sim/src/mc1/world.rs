@@ -820,6 +820,24 @@ pub enum VolumeKind {
     Objective,
 }
 
+/// A live world-space target of the CURRENT MC2 objective, for the
+/// non-optional objective-guide overlay (the flashing map/minimap
+/// marks + the nearest-target arrow). Position is in TILE units,
+/// matching [`LivePose`], so the app projects it with the same
+/// map/minimap transform it uses for entities. `nearest` flags the
+/// single closest piece of the goal (the arrow anchor); the rest are
+/// highlight-only. `yellow` picks the retail outline colour — YELLOW
+/// (CLRD 0xFF0) for the fly-to POINT objective (type 5), RED (0xF00)
+/// for creature and building targets (remc2 GameUI DrawObjectiveRectangle
+/// switch: only `case 8`/type-5 uses 0xFF0).
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectiveTarget {
+    pub x: f32,
+    pub z: f32,
+    pub nearest: bool,
+    pub yellow: bool,
+}
+
 /// Records the app can draw (mc1_entities has a sprite mapping).
 /// Class 9 = projectiles; class 10 is logic/terrain except the portal
 /// vortex and the combat effects (fire, flame, splash, flashes, mana
@@ -4269,6 +4287,119 @@ impl World {
         )
     }
 
+    /// Live world positions of every target of the CURRENT objective
+    /// stage — the data behind MC2's objective-guide overlay (the
+    /// flashing map/minimap marks + the nearest-target arrow, which
+    /// retail cannot disable). Reuses the exact predicates in
+    /// [`Self::objective_mc2`]: type 5 = the authored fly-to point;
+    /// type 7 = every live class-5 of the target model (dwelling-spawned
+    /// stragglers included, since it re-enumerates each call); type 9 =
+    /// every live `(10,45)` whose `f71` tag is in the degradation chain;
+    /// types 1/2 = the single bound entity. Non-spatial stages (0 mana,
+    /// 3/8 kill-players) yield nothing to point at → empty. The closest
+    /// piece to the human is flagged `nearest` (the arrow anchor), using
+    /// the same torus-wrapped metric as the type-5 latch. Tile units.
+    /// A read-only view — no state, so no hash/golden impact.
+    pub fn mc2_objective_targets(&self) -> Vec<ObjectiveTarget> {
+        let mut out = Vec::new();
+        let Some(st) = self.mc2_stages.get(self.mc2_stage_current) else {
+            return out;
+        };
+        if st.state != 1 {
+            return out;
+        }
+        // Retail outline colour: YELLOW only for the fly-to point
+        // (type 5), RED for creature/building targets.
+        let yellow = st.kind == 5;
+        let mut push = |x: u16, y: u16| {
+            out.push(ObjectiveTarget {
+                x: x as f32 / 256.0,
+                z: y as f32 / 256.0,
+                nearest: false,
+                yellow,
+            });
+        };
+        match st.kind {
+            // Fly-to point (the authored checkpoint itself is the mark).
+            5 => {
+                if st.point != (0, 0) {
+                    push(st.point.0, st.point.1);
+                }
+            }
+            // Kill-by-MODEL: mirror objective_mc2's type-7 live test.
+            7 => {
+                for e in self.g.ent.iter().skip(1) {
+                    if e.class64 == 5
+                        && e.model65 as u32 == st.target
+                        && e.act_life >= 0
+                        && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+                        && e.flags & 0x400 == 0
+                    {
+                        push(e.x, e.y);
+                    }
+                }
+            }
+            // Destroy-building: rebuild the degradation chain (identical
+            // walk to objective_mc2's type-9 arm) then plot every live
+            // (10,45) still in it.
+            9 => {
+                let mut chain = [0u32; 8];
+                let mut n = 0;
+                let mut j = st.target;
+                while j != 0 && n < 8 {
+                    chain[n] = j;
+                    n += 1;
+                    j = self
+                        .g
+                        .assets
+                        .bldgprm
+                        .get(j as usize)
+                        .map_or(0, |b| b.chain as u32);
+                    if chain[..n].contains(&j) {
+                        break;
+                    }
+                }
+                let chain = &chain[..n];
+                for e in self.g.ent.iter().skip(1) {
+                    if e.class64 == 10
+                        && e.model65 == 45
+                        && e.flags & 0x400 == 0
+                        && chain.contains(&(e.f71 as u32))
+                    {
+                        push(e.x, e.y);
+                    }
+                }
+            }
+            // Kill-named (bound entity): plot the one live bound target.
+            1 | 2 => {
+                if let Some(b) = st.bound
+                    && !self.mc2_bound_gone(b, st.target)
+                    && let Some(e) = self.g.ent.get(b as usize)
+                {
+                    push(e.x, e.y);
+                }
+            }
+            _ => {}
+        }
+        // Flag the closest piece as the arrow anchor (torus-wrapped
+        // |dx|,|dy| like the type-5 latch, EF:40803-14).
+        let (px, py, _) = self.human_pose;
+        let (pxf, pyf) = (px as f32 / 256.0, py as f32 / 256.0);
+        let span = crate::MAP_TILES as f32;
+        let wrap = |d: f32| {
+            let d = d.abs();
+            d.min(span - d)
+        };
+        if let Some((best, _)) = out.iter().enumerate().min_by(|(_, a), (_, b)| {
+            let da = wrap(a.x - pxf).hypot(wrap(a.z - pyf));
+            let db = wrap(b.x - pxf).hypot(wrap(b.z - pyf));
+            da.total_cmp(&db)
+        }) {
+            out[best].nearest = true;
+        }
+        out
+    }
+
     /// `sub_58F00_game_objectives` (remc2 :40693), the single-player
     /// subset for types 0/5/7 (level-000's set): every tick, test
     /// active stages — type 0 anywhere in the list, types 5/7 only
@@ -6235,6 +6366,18 @@ impl World {
     /// Pool diagnostics (debug tooling; the level-032 chain-stall
     /// investigation): free slot count + a minimal live-event view.
     #[doc(hidden)]
+    /// Diagnostic: the actSpeed (`f126`) of every live creature of
+    /// `(class, model)` — for the flocking speed-compounding probe.
+    pub fn debug_creature_speeds(&self, class: u8, model: u8) -> Vec<i16> {
+        self.g
+            .ent
+            .iter()
+            .skip(1)
+            .filter(|e| e.class64 == class && e.model65 == model && e.act_life >= 0)
+            .map(|e| e.f126)
+            .collect()
+    }
+
     pub fn debug_pool(&self) -> (usize, Vec<DebugEvent>) {
         let free = self.g.free.len();
         let ev = self

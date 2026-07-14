@@ -241,10 +241,17 @@ struct LoadedLevel {
     map_icons: entities::MapIcons,
     /// Live icon stamps (own castle/balloons), refreshed per tick.
     map_stamps: Vec<mgc_render::MapStamp>,
+    /// MC2 objective-guide targets (blinking marks + steer arrow),
+    /// refreshed per tick from the current objective. Empty off-MC2.
+    objective_marks: Vec<mgc_render::ObjectiveMark>,
     /// The plausible-spellbook grant set (spell ids), computed from the
     /// campaign jars before this level when the instrument is on; empty
-    /// otherwise. Granted into the world after init.
+    /// otherwise. Granted into the world after init. MC1 arm.
     plausible_spells: Vec<u8>,
+    /// The MC2 plausible-spellbook grants: `(spell, banked_xp)` per
+    /// learned spell (MC2's book is XP-driven). Empty off-MC2 or when
+    /// the instrument is off. Installed via `mc2_grant_plausible`.
+    plausible_book_mc2: Vec<(u8, i32)>,
 }
 
 /// Resolve the world's live volumes into map overlay circles: amber =
@@ -617,7 +624,34 @@ fn load_level(
     // Plausible spellbook (playtest instrument): the union of spell
     // jars in the campaign levels before this one. Only scanned when
     // the toggle is on — it reads the sibling `level-NNN.mgcl` files.
-    let plausible_spells = if plausible_spellbook {
+    // MC2 arm: the XP-driven book. Reads the same sibling files, but
+    // unions class-15 jars → learned set and counts class-14 scrolls →
+    // banked XP (see campaign::plausible_spellbook_mc2). Archive-index
+    // order — MC2 has no campaign-progression data (logged honestly).
+    let plausible_book_mc2 = if plausible_spellbook && package.meta.game == Game::MagicCarpet2 {
+        let dir = level_path.parent().unwrap_or(Path::new("."));
+        let p = campaign::plausible_spellbook_mc2(dir, &package);
+        println!(
+            "plausible-spellbook (MC2): {} spell(s) at ~{} XP each from {} scroll(s) across {} \
+             level(s) before level {} (archive-index order — MC2 has no verified campaign \
+             route){}",
+            p.grants.len(),
+            p.grants.first().map_or(0, |g| g.1),
+            p.scroll_count,
+            p.scanned_levels.len(),
+            package.meta.level,
+            if p.skipped_levels.is_empty() {
+                String::new()
+            } else {
+                format!(" (skipped unreadable levels: {:?})", p.skipped_levels)
+            },
+        );
+        p.grants
+    } else {
+        Vec::new()
+    };
+
+    let plausible_spells = if plausible_spellbook && package.meta.game == Game::MagicCarpet1 {
         let dir = level_path.parent().unwrap_or(Path::new("."));
         let p = campaign::plausible_spellbook(dir, &package);
         let names: Vec<&str> = p
@@ -708,6 +742,8 @@ fn load_level(
                 .collect(),
         },
         map_stamps: Vec::new(),
+        objective_marks: Vec::new(),
+        plausible_book_mc2,
         ui: ui_assets,
         audio_dir,
         music_track,
@@ -934,7 +970,13 @@ impl App {
             sim.sync_carpet_from_flyer();
         }
         if let Some(w) = &mut sim.world {
-            apply_instruments(w, dev_spells, &level.plausible_spells, invincible);
+            apply_instruments(
+                w,
+                dev_spells,
+                &level.plausible_spells,
+                &level.plausible_book_mc2,
+                invincible,
+            );
         }
         let pane = selector.ctrl_pane.then(|| {
             if matches!(level.game, mgc_sim::ids::GameId::Mc2) {
@@ -1080,6 +1122,7 @@ impl App {
             &mut w,
             self.dev_spells,
             &self.level.plausible_spells,
+            &self.level.plausible_book_mc2,
             self.invincible,
         );
         w.terrain_dirty = true;
@@ -1253,6 +1296,20 @@ impl App {
                 .find(|p| p.class == 3 && p.model == 2 && p.player_owned)
                 .map(|p| (p.x, p.z));
             self.level.map_areas = map_areas(w);
+            // MC2 objective-guide targets (non-optional): the current
+            // objective's live world targets → blinking marks + a steer
+            // arrow. Empty off-MC2 (mc2_stages empty), so MC1/HW draw
+            // nothing.
+            self.level.objective_marks = w
+                .mc2_objective_targets()
+                .into_iter()
+                .map(|t| mgc_render::ObjectiveMark {
+                    x: t.x,
+                    z: t.z,
+                    nearest: t.nearest,
+                    yellow: t.yellow,
+                })
+                .collect();
         }
         w.terrain_dirty = false;
         w.entities_dirty = false;
@@ -1272,6 +1329,10 @@ impl App {
                 to: (cx, cz),
                 phase: (self.sim.tick & 3) as u8,
             }));
+            // The objective-guide blink is tick-driven (retail gates:
+            // outline 1-in-4, arrow 5-then-pause) — see
+            // project_objective_marks.
+            r.set_objective_marks(self.level.objective_marks.clone(), self.sim.tick as u32);
             if terrain {
                 r.update_terrain(&self.level.view, &overlay);
                 self.last_map_tick = Some(self.sim.tick);
@@ -2649,6 +2710,7 @@ fn apply_instruments(
     w: &mut mgc_sim::mc1::world::World,
     dev_spells: bool,
     plausible_spells: &[u8],
+    plausible_book_mc2: &[(u8, i32)],
     invincible: bool,
 ) {
     if dev_spells {
@@ -2656,6 +2718,9 @@ fn apply_instruments(
     }
     if !plausible_spells.is_empty() {
         w.grant_spells(plausible_spells);
+    }
+    if !plausible_book_mc2.is_empty() {
+        w.mc2_grant_plausible(plausible_book_mc2);
     }
     if invincible {
         w.set_invincible(true);
@@ -2687,6 +2752,22 @@ fn run_screenshot(
     };
     renderer.load_level(&level.view, &overlay);
     renderer.set_map_stamps(level.map_stamps.clone());
+    // Objective-guide marks in map-view captures (steady, no blink).
+    if let Some(w) = &level.world {
+        let marks: Vec<_> = w
+            .mc2_objective_targets()
+            .into_iter()
+            .map(|t| mgc_render::ObjectiveMark {
+                x: t.x,
+                z: t.z,
+                nearest: t.nearest,
+                yellow: t.yellow,
+            })
+            .collect();
+        // Tick 68 = both blink gates "on" (outline 1-in-4 + arrow window),
+        // so a still capture shows the full overlay.
+        renderer.set_objective_marks(marks, 68);
+    }
     if let Some((index, atlas)) = &level.sprites {
         renderer.load_sprites(index.clone(), atlas);
     }
@@ -2727,7 +2808,13 @@ fn run_screenshot(
     // Spell UI (book grid or HUD), from the level-start loadout.
     if let (Some(assets), Some(w)) = (&level.ui, &mut level.world) {
         // invincible=false: a single headless frame takes no damage.
-        apply_instruments(w, dev_spells, &level.plausible_spells, false);
+        apply_instruments(
+            w,
+            dev_spells,
+            &level.plausible_spells,
+            &level.plausible_book_mc2,
+            false,
+        );
         let loadout = w.loadout();
         let vitals = w.vitals();
         let mc2_book = shot_is_mc2.then(|| w.mc2_book_view());

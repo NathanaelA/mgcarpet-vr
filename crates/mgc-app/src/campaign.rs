@@ -165,6 +165,122 @@ fn apply_level_mask(spells: &mut Vec<u8>, package: &LevelPackage) -> Vec<u8> {
     masked
 }
 
+// ---------------------------------------------------------------------------
+// MC2 arm — a plausible spellbook that carries spell EXPERIENCE, not just a
+// learned set (MC2's book is XP-driven: each spell has a per-tier `xpos1`
+// ladder). Unlike MC1 there is NO campaign-progression / secret-branch table
+// anywhere in the game data — levels are addressed purely by archive index and
+// the only hint that any level is "secret" is a speech-row comment. So a
+// plausible passthrough for MC2 is, unavoidably, ARCHIVE-INDEX ORDER
+// (`0..target`), the same assumption MC1 makes — flagged in the log so the
+// estimate is never mistaken for a verified route. It is an UPPER BOUND: the
+// learned set unions every collectable spell jar, and the XP assumes the
+// player owned every spell when every scroll was collected (the "found every
+// secret, maxed everything" ceiling the playtest wants).
+
+/// The MC2 spell jar class (class-15 token; `model` = spell id 0..25).
+const JAR_CLASS_MC2: u16 = 15;
+/// The MC2 XP scroll: class 14, model 5 (`UpdateScroll_59C80`, tick state 10).
+const SCROLL_CLASS_MC2: u16 = 14;
+const SCROLL_MODEL_MC2: u16 = 5;
+/// The 26-spell MC2 book width.
+const MC2_SPELL_COUNT: usize = 26;
+/// Single-player scroll XP: `UpdateExperience_6E090` grants this to EVERY
+/// owned spell per scroll (not per-spell-targeted).
+const MC2_SCROLL_XP: i32 = 4;
+/// Fireball(0) + Possess(1): `mc2_seed_default_spells` grants these at every
+/// MC2 level start, so they are always in the "could have" learned set.
+const MC2_SEED_SPELLS: [u8; 2] = [0, 1];
+
+/// A plausible MC2 spellbook: per learned spell, a plausible BANKED XP (the
+/// sim derives the tier from each spell's `xpos1` ladder). Plus the census
+/// provenance for an honest log.
+pub struct PlausibleMc2 {
+    /// `(spell_id, banked_xp)` for each spell plausibly learned by this point.
+    pub grants: Vec<(u8, i32)>,
+    pub scanned_levels: Vec<u32>,
+    pub skipped_levels: Vec<u32>,
+    /// Total XP scrolls acquirable in the scanned levels (the per-spell
+    /// banked XP = `2 × scroll_count × MC2_SCROLL_XP`, the debug heuristic).
+    pub scroll_count: u32,
+}
+
+/// The class-15 spell ids and class-14 scroll count placed in one level's
+/// records. Counts latent (disposition/stage-gated) records too — they are
+/// still class-15/14 THINGs in the table, collectable in a full playthrough
+/// (same rationale as [`jar_spells_in`]).
+fn mc2_jars_and_scrolls(things: &Things) -> (Vec<u8>, u32) {
+    let mut jars = Vec::new();
+    let mut scrolls = 0u32;
+    for t in &things.things {
+        if t.kind != ThingKind::Entity {
+            continue;
+        }
+        if t.class == JAR_CLASS_MC2 && (t.model as usize) < MC2_SPELL_COUNT {
+            let s = t.model as u8;
+            if !jars.contains(&s) {
+                jars.push(s);
+            }
+        } else if t.class == SCROLL_CLASS_MC2 && t.model == SCROLL_MODEL_MC2 {
+            scrolls += 1;
+        }
+    }
+    (jars, scrolls)
+}
+
+/// Compute the plausible MC2 spellbook for `target_level` by scanning sibling
+/// `level-NNN.mgcl` files in archive-index order `0..target` (see the module
+/// note on the missing ordering data). Non-MC2 packages return empty.
+pub fn plausible_spellbook_mc2(level_dir: &Path, package: &LevelPackage) -> PlausibleMc2 {
+    let mut learned: Vec<u8> = MC2_SEED_SPELLS.to_vec();
+    let mut scroll_count = 0u32;
+    let mut scanned = Vec::new();
+    let mut skipped = Vec::new();
+
+    if package.meta.game != Game::MagicCarpet2 {
+        return PlausibleMc2 {
+            grants: Vec::new(),
+            scanned_levels: scanned,
+            skipped_levels: skipped,
+            scroll_count,
+        };
+    }
+
+    for n in 0..package.meta.level {
+        let path = level_dir.join(format!("level-{n:03}.mgcl"));
+        let Ok(file) = std::fs::File::open(&path) else {
+            skipped.push(n);
+            continue;
+        };
+        let Ok(pkg) = mgcl::read(file) else {
+            skipped.push(n);
+            continue;
+        };
+        let (jars, scrolls) = mc2_jars_and_scrolls(&pkg.things);
+        for s in jars {
+            if !learned.contains(&s) {
+                learned.push(s);
+            }
+        }
+        scroll_count += scrolls;
+        scanned.push(n);
+    }
+    learned.sort_unstable();
+    // Each scroll grants MC2_SCROLL_XP to every owned spell. As a DEBUG
+    // heuristic we count 2× the collectable scrolls: usage-based XP (which
+    // we can't simulate) is a real second source, and testing later levels
+    // showed the scroll-only floor lands too low. The sim's `mc2_relevel`
+    // still clamps to each spell's tier ladder, so over-shooting is safe.
+    let xp = MC2_SCROLL_XP * (2 * scroll_count) as i32;
+    let grants = learned.into_iter().map(|s| (s, xp)).collect();
+    PlausibleMc2 {
+        grants,
+        scanned_levels: scanned,
+        skipped_levels: skipped,
+        scroll_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +376,28 @@ mod tests {
         let mut got = jar_spells_in(&things);
         got.sort_unstable();
         assert_eq!(got, vec![0, 3]);
+    }
+
+    #[test]
+    fn mc2_census_unions_class15_jars_and_counts_class14_scrolls() {
+        let things = Things {
+            things: vec![
+                thing(ThingKind::Entity, 15, 4),  // spell-4 jar
+                thing(ThingKind::Entity, 15, 9),  // spell-9 jar
+                thing(ThingKind::Entity, 15, 4),  // dup — ignored
+                thing(ThingKind::Entity, 14, 5),  // XP scroll
+                thing(ThingKind::Entity, 14, 5),  // XP scroll
+                thing(ThingKind::Entity, 14, 1),  // a RISER (class-14 model 1), NOT a scroll
+                thing(ThingKind::Entity, 14, 0),  // class-14 model 0, NOT a scroll
+                thing(ThingKind::Entity, 12, 0),  // an MC1 jar class — ignored in MC2
+                thing(ThingKind::Marker, 15, 3),  // marker, not a placed jar
+                thing(ThingKind::Entity, 15, 99), // out-of-range spell — ignored
+            ],
+        };
+        let (mut jars, scrolls) = mc2_jars_and_scrolls(&things);
+        jars.sort_unstable();
+        assert_eq!(jars, vec![4, 9], "class-15 jars deduped by spell model");
+        assert_eq!(scrolls, 2, "only class-14 model-5 counts as an XP scroll");
     }
 
     #[test]

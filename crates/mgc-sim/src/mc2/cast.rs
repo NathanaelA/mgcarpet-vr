@@ -608,6 +608,39 @@ impl World {
         }
     }
 
+    /// Install a plausible MC2 spellbook — the MC2 arm of the
+    /// `plausible_spellbook` playtest instrument (MC1's lives in
+    /// `campaign::plausible_spellbook` + `grant_spells`). For each
+    /// `(spell, banked_xp)`: learn the spell if unowned (a hidden
+    /// manifestation like the dev grant) and set its BANKED
+    /// (campaign-carried) XP, then re-derive the tier from the SPELLS
+    /// `xpos1` ladder — the same thresholds a real playthrough crosses,
+    /// so a plausible scroll count yields a plausible tier. `banked_xp`
+    /// is the app's campaign estimate (jar union → learned set; scroll
+    /// census → XP). No-op off-MC2 (the book is MC2-only state).
+    pub fn mc2_grant_plausible(&mut self, grants: &[(u8, i32)]) {
+        if !matches!(self.game(), crate::ids::GameId::Mc2) {
+            return;
+        }
+        for &(spell, xp) in grants {
+            let s = spell as usize;
+            if s >= 26 {
+                continue;
+            }
+            if self.mc2_book.ent[s] == 0 {
+                self.mc2_dev_grant(s);
+            }
+            // Grant can fail if the event pool is exhausted; skip XP.
+            if self.mc2_book.ent[s] == 0 {
+                continue;
+            }
+            self.mc2_book.xp_bank[s] = xp.max(0);
+            // Derive the level from the new banked XP (no re-bank, no
+            // level-up toast — this is an init-time install).
+            self.mc2_relevel(s, false, false);
+        }
+    }
+
     /// The collect wiring shared by the jar pickup and the dev grant
     /// (token trace §3, EF:55715-49): the token BECOMES the wizard's
     /// spell object — state 3M, cooldown 64, owner rebound; grant +

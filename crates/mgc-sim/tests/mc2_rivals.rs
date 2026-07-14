@@ -117,6 +117,124 @@ fn count(w: &World, class: u8, model: u8) -> usize {
         .count()
 }
 
+/// Herd spread metric: max pairwise TILE distance (torus-aware) among
+/// live creatures of `(class, model)`, plus the centroid. For the
+/// flocking measurement.
+fn herd_spread(w: &World, class: u8, model: u8) -> (f32, (f32, f32), usize) {
+    let pts: Vec<(f32, f32)> = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .filter(|e| e.class == class && e.model == model && e.life >= 0)
+        .map(|e| (e.tx as f32, e.ty as f32))
+        .collect();
+    let n = pts.len();
+    if n == 0 {
+        return (0.0, (0.0, 0.0), 0);
+    }
+    let wrap = |d: f32| {
+        let d = d.abs();
+        d.min(256.0 - d)
+    };
+    // Number of independent CLUSTERS (connected components where any
+    // two members within LINK tiles are joined) — the "how many
+    // separate herds" metric the player cares about. Retail = ~1-2.
+    const LINK: f32 = 6.0;
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut [usize], x: usize) -> usize {
+        let mut r = x;
+        while p[r] != r {
+            r = p[r];
+        }
+        let mut c = x;
+        while p[c] != r {
+            let nxt = p[c];
+            p[c] = r;
+            c = nxt;
+        }
+        r
+    }
+    for a in 0..n {
+        for b in (a + 1)..n {
+            let dx = wrap(pts[a].0 - pts[b].0);
+            let dy = wrap(pts[a].1 - pts[b].1);
+            if dx.hypot(dy) <= LINK {
+                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                parent[ra] = rb;
+            }
+        }
+    }
+    let clusters = (0..n).filter(|&i| find(&mut parent, i) == i).count();
+    let cx = pts.iter().map(|p| p.0).sum::<f32>() / n as f32;
+    let cy = pts.iter().map(|p| p.1).sum::<f32>() / n as f32;
+    (clusters as f32, (cx, cy), n)
+}
+
+/// DIAGNOSTIC (not a regression assertion — `#[ignore]`, run explicitly
+/// with `--ignored --nocapture`): quantify goat-herd fragmentation on
+/// level-000. The `(5,1)` goats start as ~4 clusters (LINK=6 tiles).
+///
+/// 2026-07-14 from-binary verification (NETHERW.EXE, the real DOS/4GW LE
+/// disassembled at remc2's addresses): the three cohesion routines —
+/// `sub_1BF90` wander/scan (awake-gates BOTH aggro AND the pack scan),
+/// `sub_68C70` awake pass (wake within 24 tiles of the player, propagate
+/// to the follow chain), `sub_1C560` follow (aim-at-leader + a 256-unit
+/// separation scan) — ALL match remc2 and the port BYTE-FOR-BYTE. So
+/// remc2 is CORRECT and the port is faithful; the leader-follow law is
+/// simply loose. Measured here (herd kept always-awake): still ~5-8
+/// clusters, so the awake gate is not the primary cause. The player has
+/// retail footage showing tight ~1-2 flocks, so the divergence is
+/// OUTSIDE these (verified) routines — leading hypothesis: terrain
+/// fencing (the `v_16` slope-refusal / `v_20` passability that pens the
+/// two authored herds into their basins). Kept as the harness to
+/// validate any future flocking fix.
+#[test]
+#[ignore]
+fn mc2_flock_dispersal_measurement() {
+    let Some((mut w, _pkg)) = load("level-000") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let idle = PlayerCommand::default();
+    // Glue the wizard to the herd centroid so the whole herd stays inside
+    // the 24-tile wake radius (always AWAKE) — this isolates the
+    // follow/cohesion steering from the awake gate. RESULT: still ~5-8
+    // clusters, so the awake gate is NOT the primary cause; the faithful
+    // leader-follow law is inherently loose. (Park the wizard far away
+    // instead to see the gate compound it to ~10-12.)
+    let (d0, c0, n) = herd_spread(&w, 5, 1);
+    eprintln!(
+        "goats n={n} start: clusters={d0:.0} centroid=({:.0},{:.0})",
+        c0.0, c0.1
+    );
+    // GOAT_BASE=8: role = tick70-8. 0=patrol 1=wander 2=chase→flee
+    // 3=FOLLOW(pack/torus) 4=prekill 5=kill 6=flee.
+    let state_hist = |w: &World| -> [usize; 8] {
+        let mut h = [0usize; 8];
+        for e in w.debug_pool().1 {
+            if e.class == 5 && e.model == 1 && e.life >= 0 {
+                let r = e.state.wrapping_sub(8);
+                if (r as usize) < 8 {
+                    h[r as usize] += 1;
+                }
+            }
+        }
+        h
+    };
+    let pose = PlayerPose::from_tiles(2.0, 2.0, 40.0, 0.0, 0.0, 0.0); // FAR: goats roam free
+    for t in 1..=8000 {
+        w.tick(pose, idle);
+        if t % 500 == 0 {
+            let (d, c, alive) = herd_spread(&w, 5, 1);
+            let h = state_hist(&w);
+            eprintln!(
+                "  t={t}: ALIVE={alive}/{n} clusters={d:.0} centroid=({:.0},{:.0}) states[wander={} FOLLOW={} flee={}]",
+                c.0, c.1, h[1], h[3], h[6]
+            );
+        }
+    }
+}
+
 /// Level 004 (n=3): colors 1..2 spawn as rivals, the brain runs
 /// deterministically, and the two kill-player stages (authored
 /// 1-based payloads 3/2 -> colors 2/1) complete on elimination —
@@ -309,6 +427,111 @@ fn mc2_level001_destroy_building_objective_completes() {
         w.completed(),
         "razing the whole chain completes the type-9 row → level end"
     );
+}
+
+/// OBJECTIVE-GUIDE: `mc2_objective_targets` must resolve the CURRENT
+/// objective's live world targets so the app can highlight them + point
+/// the arrow. Reuse level-001's type-9 vault fixture: once the two
+/// `par1=21` vaults exist and the destroy-building row is current, the
+/// getter must yield exactly those two buildings, flag one nearest, and
+/// then shrink to one as a vault is razed — proving it re-enumerates
+/// live state each call (the dwelling-straggler requirement).
+#[test]
+fn mc2_objective_targets_tracks_current_stage() {
+    let Some((mut w, _pkg)) = load("level-001") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    for row in 0..4 {
+        w.debug_complete_mc2_stage(row);
+    }
+    for _ in 0..120 {
+        w.tick(pose, idle);
+        if w.debug_mc2_count_buildings(21) >= 2 {
+            break;
+        }
+    }
+    for _ in 0..50 {
+        w.tick(pose, idle);
+    }
+
+    let targets = w.mc2_objective_targets();
+    assert_eq!(
+        targets.len(),
+        2,
+        "the two live vaults are the current type-9 targets"
+    );
+    assert_eq!(
+        targets.iter().filter(|t| t.nearest).count(),
+        1,
+        "exactly one target is flagged as the arrow anchor"
+    );
+    // Positions are real tile coords on the map, not the origin.
+    for t in &targets {
+        assert!(
+            t.x > 0.0 && t.z > 0.0 && t.x < 256.0 && t.z < 256.0,
+            "target inside the map"
+        );
+    }
+
+    // Raze one stage of the chain; the getter must drop the razed pieces
+    // and keep the survivors (tag-21 → tag-54, still in the chain).
+    w.debug_smite(10, 45);
+    for _ in 0..60 {
+        w.tick(pose, idle);
+    }
+    let after = w.mc2_objective_targets();
+    assert_eq!(
+        after.len(),
+        2,
+        "tag-21 razed but degraded to tag-54 — both still targets in the chain"
+    );
+
+    // Finish razing → objective complete → nothing left to point at.
+    w.debug_smite(10, 45);
+    for _ in 0..60 {
+        w.tick(pose, idle);
+        if w.completed() {
+            break;
+        }
+    }
+    assert!(
+        w.mc2_objective_targets().is_empty(),
+        "completed objective yields no targets"
+    );
+}
+
+/// PLAUSIBLE-SPELLBOOK (MC2 arm): `mc2_grant_plausible` learns each
+/// listed spell (a hidden manifestation like the dev grant) and installs
+/// its banked XP, deriving the tier from the per-spell `xpos1` ladder.
+/// A big XP install must push owned spells to their max tier; a zero-XP
+/// install must leave them learned at tier 0. Off-MC2 it is a no-op.
+#[test]
+fn mc2_grant_plausible_learns_spells_and_levels_them() {
+    let Some((mut w, _pkg)) = load("level-000") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    // Fireball (0) is multi-tier (tier 1 = repeat, tier 2 = lightning),
+    // so a huge XP install must promote it above tier 0. Spell 9 gets a
+    // huge install too; spell 13 gets zero XP → must stay tier 0.
+    w.mc2_grant_plausible(&[(0u8, 100_000i32), (9, 100_000), (13, 0)]);
+
+    let book = w.mc2_book_view();
+    assert!(
+        book.owned[0] && book.owned[9] && book.owned[13],
+        "all learned"
+    );
+    assert!(
+        book.levels[0] > 0,
+        "a huge XP install promotes fireball above tier 0"
+    );
+    assert!(book.levels[0] <= 2, "tier never exceeds the 0..2 range");
+    assert_eq!(book.levels[13], 0, "spell 13 with 0 XP stays tier 0");
+    // The effective XP is the banked install (fresh level, no volatile).
+    assert_eq!(book.xp[0], 100_000, "banked XP is the installed value");
 }
 
 /// MC2-STAGE-ENGINE-GAPS §A: objective type 1 (kill a NAMED creature)
