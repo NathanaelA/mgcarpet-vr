@@ -10,7 +10,9 @@ authors.workspace = true
 flacenc = "0.5.1"
 mgc-formats = { path = "../mgc-formats" }
 mgc-sim = { path = "../mgc-sim" }
+midly = { version = "0.5.3", default-features = false, features = ["std"] }
 nuked-opl3 = "0.1.0"
+oxisynth = { version = "0.1.0", features = ["i16-out"] }
 serde_json = "1"
 sha2 = "0.10"
 

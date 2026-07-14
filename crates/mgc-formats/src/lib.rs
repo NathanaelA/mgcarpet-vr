@@ -66,7 +66,13 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    as gameplay music (docs/traces/mc2-music-law.md). Night/Day/Cave
 ///    now = C2GAME1/2/3; the sparse ~80bpm C2GAME3 restores the quiet
 ///    cave. `music.json` track `bank` field flips 1→0.
-pub const BAKE_EPOCH: u32 = 11;
+/// 12: GM music now renders through the pure-Rust oxisynth (was the
+///    external fluidsynth CLI), so the General MIDI arrangement bakes on
+///    any host from a bundled soundfont — no system binary. Forces a
+///    re-bake so installs that had no fluidsynth (FM-only) pick up the
+///    GM upgrade. Render output differs (different synth); FM path
+///    unchanged. See crates/mgc-import/src/synth.rs.
+pub const BAKE_EPOCH: u32 = 12;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

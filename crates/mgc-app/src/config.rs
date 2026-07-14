@@ -160,8 +160,9 @@ impl Default for AudioConfig {
 /// sound-card family (`MUSIC<bank>-<digit>`, remc1 :54029-30): AdLib
 /// FM (digit 0), Roland MT-32 (1, not baked — no MT-32 renderer), and
 /// General MIDI (2). The bundle always carries the FM render; the GM
-/// render (fluidsynth + a GM soundfont) is baked when the importing
-/// host can produce it.
+/// render (the pure-Rust oxisynth + a GM soundfont, `crate::synth`) is
+/// baked when a soundfont is present — the game ships one, so GM is the
+/// out-of-the-box default on every platform.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MusicArrangement {
@@ -172,8 +173,9 @@ pub enum MusicArrangement {
     /// Force the AdLib FM (OPL3) render — the `-0` driver's sound.
     Fm,
     /// Force the General MIDI render (falls back to FM with a console
-    /// note when the bundle has no GM tracks — rebake with fluidsynth
-    /// and a GM soundfont installed).
+    /// note when the bundle has no GM tracks — the shipped soundfont was
+    /// missing at bake time; drop one in or set `MGC_SOUNDFONT` and
+    /// rebake).
     Gm,
 }
 

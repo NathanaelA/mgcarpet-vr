@@ -16,7 +16,7 @@ pub mod cdtracks;
 pub mod dattab;
 pub mod flac;
 pub mod flc;
-pub mod fluid;
+pub mod synth;
 pub mod gamedata;
 pub mod hmp;
 pub mod hspr;

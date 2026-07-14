@@ -343,7 +343,7 @@ pub fn bake_mc1_audio(
     // digit is AdLib per remc1 :54030 — 0xA002 loads inst/drum.bnk)
     // rendered through OPL3 with the game's own banks, FLAC per song.
     // When the host can render General MIDI (fluidsynth + a GM
-    // soundfont, see `crate::fluid`), the `-2` arrangement (`GENERAL`,
+    // soundfont, see `crate::synth`), the `-2` arrangement (`GENERAL`,
     // remc1 :54029-30 — 0xA001 → digit 2) is baked alongside as the
     // optional GM upgrade; absent hosts still get the full FM bundle.
     let music_dir = dir.join("music");
@@ -352,7 +352,7 @@ pub fn bake_mc1_audio(
         .map_err(|e| BakeError::Level(Path::new("DATA/INST.BNK").to_path_buf(), 0, e))?;
     let drum = crate::adlib::parse_bnk(&source("DATA/DRUM.BNK", &mut sources)?)
         .map_err(|e| BakeError::Level(Path::new("DATA/DRUM.BNK").to_path_buf(), 0, e))?;
-    let gm = match crate::fluid::GmRenderer::locate() {
+    let gm = match crate::synth::GmRenderer::locate() {
         Ok(r) => Some(r),
         Err(why) => {
             println!("note: mc1 music: no GM render ({why}) — FM only");
@@ -435,14 +435,9 @@ pub fn bake_mc1_audio(
             if let (Some(renderer), Some((_, gm_song))) =
                 (gm.as_ref(), gm_songs.iter().find(|(stem, _)| stem == name))
             {
-                let render = |mix: &crate::adlib::MixSpec, tag: &str| {
+                let render = |mix: &crate::adlib::MixSpec| {
                     let midi = crate::smf::encode(gm_song, mix);
-                    renderer.render(
-                        &midi,
-                        MUSIC_RATE,
-                        &music_dir,
-                        &format!("{bank}-{name}-{tag}"),
-                    )
+                    renderer.render(&midi, MUSIC_RATE)
                 };
                 let layered = crate::adlib::has_danger_layer(gm_song);
                 let base_mix = if layered {
@@ -450,9 +445,9 @@ pub fn bake_mc1_audio(
                 } else {
                     crate::adlib::MixSpec::full()
                 };
-                let mut base = render(&base_mix, "base").map_err(err)?;
+                let mut base = render(&base_mix).map_err(err)?;
                 let mut stem = if layered {
-                    Some(render(&crate::adlib::MixSpec::danger_stem(), "danger").map_err(err)?)
+                    Some(render(&crate::adlib::MixSpec::danger_stem()).map_err(err)?)
                 } else {
                     None
                 };
@@ -616,7 +611,7 @@ pub fn bake_mc2_audio(
         file: "MUSIC.DAT".into(),
         sha256: hex(&Sha256::digest(&music_dat)),
     });
-    match crate::fluid::GmRenderer::locate() {
+    match crate::synth::GmRenderer::locate() {
         Err(why) => println!("note: mc2 music: no GM render ({why}) — music skipped"),
         Ok(renderer) => {
             let subsongs = crate::mc2_music::parse_gm_bank(&music_dat, 0)
@@ -652,13 +647,13 @@ pub fn bake_mc2_audio(
                 } else {
                     crate::xmi::Mix::Full
                 };
-                let render = |mix: crate::xmi::Mix, tag: &str| {
+                let render = |mix: crate::xmi::Mix| {
                     let midi = crate::xmi::encode_smf(&sub.song, mix);
-                    renderer.render(&midi, MUSIC_RATE, &music_dir, &format!("{role}-{tag}"))
+                    renderer.render(&midi, MUSIC_RATE)
                 };
-                let mut base = render(base_mix, "base").map_err(err)?;
+                let mut base = render(base_mix).map_err(err)?;
                 let mut stem = if layered {
-                    Some(render(crate::xmi::Mix::WarStem, "danger").map_err(err)?)
+                    Some(render(crate::xmi::Mix::WarStem).map_err(err)?)
                 } else {
                     None
                 };

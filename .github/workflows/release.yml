@@ -52,6 +52,18 @@ jobs:
             cp "$bin/mgcarpet" "$bin/mgc-import" "dist/$name/"
           fi
           cp README.md LICENSE "dist/$name/"
+          # The GM music soundfont + its license, committed under
+          # assets/static/ and shipped beside the binary so the first-run
+          # bake renders the General MIDI arrangement out of the box (no
+          # system fluidsynth — the synth is pure Rust, see
+          # crates/mgc-import/src/synth.rs). Non-fatal: without the font
+          # the bake falls back to the AdLib FM arrangement, as before.
+          if cp assets/static/GeneralUser-GS.sf2 "dist/$name/"; then
+            cp assets/static/GeneralUser-GS-LICENSE.txt "dist/$name/" || true
+            echo "bundled soundfont from assets/static/"
+          else
+            echo "::warning::assets/static/GeneralUser-GS.sf2 missing — release will be FM-only"
+          fi
           # The ready-to-fill gamedata/ folder: its README describes
           # the expected GOG-install layout (referenced by the main
           # README's quickstart) — testers drop their retail packs in
