@@ -16,7 +16,7 @@
 
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
-use mgc_sim::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellId};
+use mgc_sim::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SpellId};
 use mgc_sim::mc1::world::{LifeState, LoadoutView, PlayerVitals};
 use mgc_sim::mc2::cast::Mc2BookView;
 
@@ -911,8 +911,9 @@ pub fn book_quads(
             );
         }
         // Availability meter (sub_23D40 :27703-34): partial-cast
-        // progress bar + one shaded dot per whole affordable cast.
-        let cost = SPELLS[sp as usize].possess_mana.max(1);
+        // progress bar + one shaded dot per whole affordable cast. Live
+        // per-cast cost (castle scales with level), not the static table.
+        let cost = loadout.cost[sp as usize].max(1);
         let mana = loadout.mana;
         let (mx, my) = (cell[0] + 4.0 * sx, cell[1] + 36.0 * sy);
         let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
@@ -1353,8 +1354,11 @@ pub fn hud_quads(
             );
             // Availability meter at (frame+4, frame+36) — sub_23D40
             // :27703-34: the grey partial-cast progress bar, then one
-            // 2×2 SHADED dot per whole affordable cast over it.
-            let cost = SPELLS[sp as usize].possess_mana.max(1);
+            // 2×2 SHADED dot per whole affordable cast over it. The cost
+            // is the LIVE per-cast cost (castle scales with its level),
+            // not the static table (sub_23D40 divides by the
+            // manifestation's +136).
+            let cost = loadout.cost[sp as usize].max(1);
             let mana = loadout.mana;
             let mx = (px + 4.0) * s; // sub_23D40 a1+4
             let my = (2.0 + 36.0) * s; // a2+36

@@ -366,6 +366,12 @@ pub struct LoadoutView {
     pub right: Option<u8>,
     /// 0.0 = ready, 1.0 = just fired (burst counter / count).
     pub cooldown: [f32; 24],
+    /// Effective per-cast mana cost of each spell RIGHT NOW
+    /// ([`World::spell_cast_cost`]) — the HUD availability meter divides
+    /// the pool by this (sub_23D40 :27703 reads the manifestation's live
+    /// +136). Castle (16) scales with the own castle's level; the rest
+    /// are static.
+    pub cost: [u32; 24],
     pub mana: u32,
     pub mana_max: u32,
     /// Banked mana (claimed houses + castle stored) and the world
@@ -2470,6 +2476,29 @@ impl World {
         self.completed
     }
 
+    /// The effective per-cast mana cost of a spell RIGHT NOW. Only
+    /// castle (16) is dynamic: retail rewrites the manifestation's +136
+    /// to the capacity ladder at the OWN castle's current level on every
+    /// init/level-up (sub_47C60/sub_47DD0), so the real cost climbs with
+    /// the castle — and the HUD availability dots (sub_23D40 :27703)
+    /// divide the pool by this LIVE +136, not the static table. A fresh
+    /// castle (none built) keeps the ctor 1000. Every other spell's cost
+    /// is its static possess-mana. Shared by the cast gate and
+    /// [`World::loadout`] so the shown dots can never drift from what a
+    /// cast actually charges.
+    pub(crate) fn spell_cast_cost(&self, id: usize) -> u32 {
+        if id >= SPELL_COUNT {
+            return 1;
+        }
+        if id == 16 {
+            return self
+                .player_castle()
+                .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
+                .unwrap_or(SPELLS[16].possess_mana);
+        }
+        SPELLS[id].possess_mana
+    }
+
     /// One hand's cast trigger — the port of sub_46B00_46E40 :55851 +
     /// LABEL_32 :55892, simplified per the agreed interim semantics.
     /// Gate: owned && mana covers the possess cost && the
@@ -2579,10 +2608,7 @@ impl World {
                 self.g.snd_player(29); // the pinned-charge fizzle
                 return;
             }
-            let cost = self
-                .player_castle()
-                .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
-                .unwrap_or(def.possess_mana);
+            let cost = self.spell_cast_cost(id);
             if !self.dev_spells && self.player.mana < cost {
                 return; // silent (:55908-10)
             }
@@ -3544,7 +3570,9 @@ impl World {
     pub fn loadout(&self) -> LoadoutView {
         let mut owned = [false; SPELL_COUNT];
         let mut cooldown = [0f32; SPELL_COUNT];
+        let mut cost = [0u32; SPELL_COUNT];
         for s in 0..SPELL_COUNT {
+            cost[s] = self.spell_cast_cost(s);
             let m = self.player.owned[s] as usize;
             if m != 0 {
                 owned[s] = true;
@@ -3567,6 +3595,7 @@ impl World {
             left: self.player.left.map(|s| s.0),
             right: self.player.right.map(|s| s.0),
             cooldown,
+            cost,
             mana: if self.dev_spells {
                 self.player.mana_max
             } else {

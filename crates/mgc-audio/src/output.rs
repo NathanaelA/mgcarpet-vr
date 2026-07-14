@@ -17,6 +17,17 @@ use std::sync::mpsc::{Receiver, Sender};
 /// word_CBFF0 table).
 pub const CHANNELS: usize = 32;
 
+/// Linear interpolation between two i16 PCM samples. The music/speech
+/// FLAC rate (44100/22050) rarely matches the device rate, and reading
+/// the nearest source frame (zero-order hold) stair-steps the waveform
+/// into a harsh high-overtone buzz that reads as "grainy, low-bit-depth"
+/// audio; interpolating removes it (same treatment the SFX lane gets).
+#[inline]
+fn lerp_i16(a: i16, b: i16, t: f32) -> f32 {
+    let a = f32::from(a);
+    a + (f32::from(b) - a) * t
+}
+
 /// Commands into the audio callback.
 pub enum Cmd {
     /// Start `pcm` on channel `ch` (replacing whatever runs there).
@@ -287,18 +298,41 @@ impl Renderer {
                     }
                 }
                 if !music_done {
-                    let at = (idx * chans) as usize;
-                    let (mut ml, mut mr) = if chans >= 2 {
-                        (f32::from(pcm[at]), f32::from(pcm[at + 1]))
+                    // Interpolate between the current and next frame
+                    // (wrapping when looped) — nearest-neighbor here was
+                    // the "grainy" music artifact ([`lerp_i16`]).
+                    let frac = (self.music.pos & 0xFFFF_FFFF) as f32 / 4294967296.0;
+                    let next = if idx + 1 < frames {
+                        idx + 1
+                    } else if self.music.looped {
+                        0
                     } else {
-                        (f32::from(pcm[at]), f32::from(pcm[at]))
+                        idx
+                    };
+                    let at = (idx * chans) as usize;
+                    let nx = (next * chans) as usize;
+                    let (mut ml, mut mr) = if chans >= 2 {
+                        (
+                            lerp_i16(pcm[at], pcm[nx], frac),
+                            lerp_i16(pcm[at + 1], pcm[nx + 1], frac),
+                        )
+                    } else {
+                        let s = lerp_i16(pcm[at], pcm[nx], frac);
+                        (s, s)
                     };
                     if let Some(ov) = self.music.overlay.as_ref() {
-                        if self.music.overlay_gain > 0.0 && at + 1 < ov.len().max(1) {
+                        // The danger stem is baked sample-aligned with
+                        // the base (stem.len() == pcm.len()); the length
+                        // guard keeps both frame reads in range.
+                        if self.music.overlay_gain > 0.0 && ov.len() >= pcm.len() {
                             let (ol, or_) = if chans >= 2 {
-                                (f32::from(ov[at]), f32::from(ov[at + 1]))
+                                (
+                                    lerp_i16(ov[at], ov[nx], frac),
+                                    lerp_i16(ov[at + 1], ov[nx + 1], frac),
+                                )
                             } else {
-                                (f32::from(ov[at]), f32::from(ov[at]))
+                                let s = lerp_i16(ov[at], ov[nx], frac);
+                                (s, s)
                             };
                             ml += ol * self.music.overlay_gain;
                             mr += or_ * self.music.overlay_gain;
@@ -321,11 +355,20 @@ impl Renderer {
                 if idx >= frames {
                     speech_done = true;
                 } else {
+                    // Interpolate (one-shot, no loop) — same anti-grain
+                    // treatment as the music lane.
+                    let frac = (self.speech.pos & 0xFFFF_FFFF) as f32 / 4294967296.0;
+                    let next = if idx + 1 < frames { idx + 1 } else { idx };
                     let at = (idx * chans) as usize;
+                    let nx = (next * chans) as usize;
                     let (sl, sr) = if chans >= 2 {
-                        (f32::from(pcm[at]), f32::from(pcm[at + 1]))
+                        (
+                            lerp_i16(pcm[at], pcm[nx], frac),
+                            lerp_i16(pcm[at + 1], pcm[nx + 1], frac),
+                        )
                     } else {
-                        (f32::from(pcm[at]), f32::from(pcm[at]))
+                        let s = lerp_i16(pcm[at], pcm[nx], frac);
+                        (s, s)
                     };
                     l += sl / 32768.0;
                     r += sr / 32768.0;
