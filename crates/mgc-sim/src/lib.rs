@@ -24,11 +24,12 @@ use mc1::{features, spells, world};
 
 /// Fixed simulation tick rate.
 ///
-/// Placeholder value. The original advanced one "game turn" per rendered
-/// frame, capped by hardware and later by remc2's 24 FPS limiter; the
-/// authentic cadence needs to be measured against the reference before
-/// gameplay logic lands here.
-pub const TICK_RATE_HZ: u32 = 30;
+/// 24 Hz — faithful to retail MC2, whose engine advanced one "game turn"
+/// per rendered frame under remc2's 24 FPS limiter. MC1 has no single
+/// "correct" tick rate (it ran uncapped, hardware-bound), so it borrows
+/// the MC2 cadence as the best available estimate. Both games share this
+/// constant.
+pub const TICK_RATE_HZ: u32 = 24;
 
 /// Seconds per tick (render-side interpolation uses the same constant,
 /// so keep a single definition).

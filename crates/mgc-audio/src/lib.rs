@@ -35,9 +35,12 @@ pub struct Audio {
     /// same ramp at sim-tick granularity over the baked danger stem.
     danger: bool,
     danger_level: f32, // 0..126, the original's fade counter
-    /// Per-game danger ramp steps per 30 Hz sim tick on the 0..126
-    /// counter. MC1: +4 / −1.33 (CC7 step 2 at 0x3C/0x14 Hz). MC2:
-    /// ±3 both ways (cc11 step ±1 at 90 Hz — Sound.cpp:5877/6076).
+    /// Per-game danger ramp steps per sim tick (24 Hz =
+    /// `mgc_sim::TICK_RATE_HZ`) on the 0..126 counter — derived from the
+    /// original's real-time timer Hz so the audible fade is
+    /// tick-rate-independent. MC1: CC7 step 2 at 0x3C/0x14 Hz →
+    /// `2·60/24` up / `−2·20/24` down. MC2: cc11 step ±1 at 90 Hz →
+    /// `±90/24` (Sound.cpp:5877/6076).
     danger_up: f32,
     danger_down: f32,
     /// Prefer the General MIDI render (`gm_file`) when the bundle
@@ -61,19 +64,19 @@ impl Audio {
             music_playing: None,
             danger: false,
             danger_level: 0.0,
-            danger_up: 4.0,
-            danger_down: -2.0 * 20.0 / 30.0,
+            danger_up: 2.0 * 60.0 / 24.0,
+            danger_down: -2.0 * 20.0 / 24.0,
             prefer_gm: true,
             duck_gain: 1.0,
         }
     }
 
     /// MC2's danger ramp: cc11 expression step ±1 at 90 Hz on the
-    /// war channels (Sound.cpp:5877, timer 30×3 Hz) → ±3 per 30 Hz
-    /// sim tick, both directions.
+    /// war channels (Sound.cpp:5877) → `±90/24` per 24 Hz sim tick,
+    /// both directions (`24` = `mgc_sim::TICK_RATE_HZ`).
     pub fn set_mc2_danger_ramp(&mut self) {
-        self.danger_up = 3.0;
-        self.danger_down = -3.0;
+        self.danger_up = 90.0 / 24.0;
+        self.danger_down = -90.0 / 24.0;
     }
 
     /// Pick the music arrangement (config `audio.arrangement`): `true`
@@ -122,7 +125,8 @@ impl Audio {
         }
     }
 
-    /// Per-sim-tick flush (30 Hz — the fade ramps are per-tick).
+    /// Per-sim-tick flush (24 Hz = `mgc_sim::TICK_RATE_HZ` — the fade
+    /// ramps are per-tick).
     pub fn tick(&mut self) {
         if let Some(sounds) = &self.sounds {
             self.mixer.tick(sounds, &self.out.tx, self.out.live_mask());
@@ -144,9 +148,11 @@ impl Audio {
         // Voiceover duck recovery: once the line ends, ramp music+sfx
         // back up (retail's 120 Hz FadeUpSoundVolume ≈ 0.7 s full
         // traverse — APPROX, the exact per-callback step is a
-        // volume-scale detail).
+        // volume-scale detail). Step = the 1/3→1 span over 0.7 s of
+        // 24 Hz sim ticks (`0.7·24` = 16.8 ticks) so the recovery time
+        // is tick-rate-independent.
         if self.duck_gain < 1.0 && !self.out.speech_live() {
-            self.duck_gain = (self.duck_gain + (2.0 / 3.0) / 21.0).min(1.0);
+            self.duck_gain = (self.duck_gain + (2.0 / 3.0) / (0.7 * 24.0)).min(1.0);
             let _ = self.out.tx.send(output::Cmd::Duck {
                 gain: self.duck_gain,
             });
