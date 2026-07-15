@@ -286,6 +286,7 @@ impl World {
     /// ground jars).
     fn mint_manifestation(&mut self, spell: usize, owner: u16) -> Option<usize> {
         let m = self.g.new_event()?;
+        let f44 = self.spells()[spell].damage.min(u16::MAX as u32) as u16;
         {
             let e = &mut self.g.ent[m];
             e.class64 = 12;
@@ -293,7 +294,7 @@ impl World {
             e.tick70 = crate::mc1::world::MANIFEST_BASE + spell as u8;
             e.flags &= !8;
             e.f26 = 0;
-            e.f44 = SPELLS[spell].damage.min(u16::MAX as u32) as u16;
+            e.f44 = f44;
             e.f144 = owner;
         }
         self.g.set_sprite(m, 77);
@@ -1463,7 +1464,7 @@ impl World {
             }
             // Affordable by ceiling but cooling/poor → save up and
             // WAIT (:19527-40).
-            if self.rivals[ri].mana_max >= SPELLS[s].possess_mana {
+            if self.rivals[ri].mana_max >= self.spells()[s].possess_mana {
                 return None;
             }
         }
@@ -1482,7 +1483,7 @@ impl World {
         if m == 0 || r.cooldown[s] != 0 {
             return false;
         }
-        let def = &SPELLS[s];
+        let def = &self.spells()[s];
         if r.mana < def.possess_mana {
             return false;
         }
@@ -1524,7 +1525,7 @@ impl World {
         if !self.rival_cast_ready(ri, s) {
             return false;
         }
-        let def = &SPELLS[s];
+        let def = &self.spells()[s];
         // Group gates beyond readiness (:19113-19209).
         let (tx, ty, tz) = match self.rivals[ri].target {
             0 => {
@@ -1676,7 +1677,7 @@ impl World {
     ) {
         let owner = self.rivals[ri].ent;
         let target = self.rivals[ri].target;
-        let def = &SPELLS[s];
+        let def = &self.spells()[s];
         let speed = self.g.ent[i].f126;
         let snd = match s {
             0 | 11 | 13 | 17 | 20 => Some(9u8),

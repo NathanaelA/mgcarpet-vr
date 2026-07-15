@@ -67,6 +67,18 @@ pub enum TargetingVerb {
     Mc1,
     /// PENDING (Phase 3): falls back to [`TargetingVerb::Mc1`].
     Mc2,
+    /// Hidden Worlds: identical to [`TargetingVerb::Mc1`] for every
+    /// acquire scan (the creature/wizard/possess cones are all 0x71),
+    /// but adds the **model-16 case 0x10** — the Fire Storm fire child
+    /// (spell 20 → homing meteor) acquires awake entities within a
+    /// widened yaw cone `0x100` (pitch stays `0x71`) and homes. Base
+    /// MC1 has no case 16, so its firewall child flies straight
+    /// (fire-rain). remc1hw acquire switch :60322; docs/SURVEY-MC1HW.md
+    /// §3a. Consumed in [`crate::mc1::combat`]'s `proj_firewall_tick`;
+    /// every other targeting site treats it exactly as `Mc1`. Ordered
+    /// LAST so `Mc1`/`Mc2` keep their discriminants (the VerbSet feeds
+    /// the state hash — a reorder would move every MC2 golden).
+    Mc1Hw,
 }
 
 /// Damage application / player intake (survey 2: PARAMETERIZED —
@@ -204,6 +216,22 @@ impl VerbSet {
         awake: AwakeVerb::Mc1,
         movement: MovementVerb::Mc1,
         targeting: TargetingVerb::Mc1,
+        damage: DamageVerb::Mc1,
+        objective: ObjectiveVerb::Mc1,
+        corpse: CorpseVerb::Mc1,
+        commit_gate: CommitGateVerb::Mc1,
+        flight: FlightVerb::Mc1,
+    };
+
+    /// The Hidden Worlds column — the MC1 column with the one live HW
+    /// engine divergence flipped: [`TargetingVerb::Mc1Hw`] (the Fire
+    /// Storm homing meteor, docs/SURVEY-MC1HW.md §3a). Everything else
+    /// is MC1; the spell-20 stat rebalance is data (spells table), the
+    /// napalm-geometry fork is a separate handler branch.
+    pub const MC1HW: VerbSet = VerbSet {
+        awake: AwakeVerb::Mc1,
+        movement: MovementVerb::Mc1,
+        targeting: TargetingVerb::Mc1Hw,
         damage: DamageVerb::Mc1,
         objective: ObjectiveVerb::Mc1,
         corpse: CorpseVerb::Mc1,

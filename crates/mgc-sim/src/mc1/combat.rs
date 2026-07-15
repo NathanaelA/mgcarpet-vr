@@ -430,7 +430,7 @@ impl Gen {
     /// MC1 scan and notes the fallback.
     fn aim_assist(&mut self, i: usize, ctx: &MobCtx) {
         match self.verbs.targeting {
-            TargetingVerb::Mc1 => self.aim_assist_mc1(i, ctx),
+            TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => self.aim_assist_mc1(i, ctx),
             TargetingVerb::Mc2 => {
                 self.note_verb_fallback(VerbKind::Targeting);
                 self.aim_assist_mc1(i, ctx);
@@ -438,10 +438,32 @@ impl Gen {
         }
     }
 
+    /// Is this the Hidden Worlds engine? HW's entire live sim delta is
+    /// the original's single compiled `IsHiddenWord` bool (two branches:
+    /// the model-16 homing meteor and the napalm-geometry fork). We
+    /// carry it as the one HW-distinct verb — the targeting column —
+    /// rather than a parallel flag; every HW branch reads it here. If HW
+    /// ever needs a divergence on a column that also varies for MC2,
+    /// promote this to a dedicated field.
+    pub(crate) fn is_hidden_worlds(&self) -> bool {
+        matches!(self.verbs.targeting, TargetingVerb::Mc1Hw)
+    }
+
     /// One-time target acquisition sub_54520 (:63943): nearest awake
     /// creature (any range) or wizard within the caster row's v_28,
     /// inside a ±0x71 yaw AND pitch cone, 3D distance ≤ 5120.
     fn aim_assist_mc1(&mut self, i: usize, ctx: &MobCtx) {
+        self.aim_assist_mc1_cone(i, ctx, 0x71, 0x71);
+    }
+
+    /// [`Self::aim_assist_mc1`] with an explicit acquire cone. The base
+    /// MC1 scan is `0x71`/`0x71`; Hidden Worlds' Fire Storm child (model
+    /// 16, acquire switch case 0x10, remc1hw :60322) widens the YAW cone
+    /// to `0x100` while the pitch stays `0x71`. APPROX: case 0x10 scans
+    /// the spatial buckets for any awake entity; we reuse the shared
+    /// creature+wizard+player candidate set (the meaningful enemy set),
+    /// only widening the cone.
+    fn aim_assist_mc1_cone(&mut self, i: usize, ctx: &MobCtx, yaw_cone: u32, pitch_cone: u32) {
         let (px, py, pz, yaw, pitch, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
@@ -460,7 +482,7 @@ impl Gen {
                 let ty_pitch = Self::pitch_toward(pz, tz, dh);
                 let dy = Self::angdist(yaw, ty_yaw) as u32;
                 let dp = Self::angdist(pitch, ty_pitch) as u32;
-                if dy > 0x71 || dp > 0x71 {
+                if dy > yaw_cone || dp > pitch_cone {
                     return;
                 }
                 let score = dy * dy + dp * dp;
@@ -612,7 +634,7 @@ impl Gen {
     /// [`Self::aim_assist`]).
     fn aim_assist_wizards(&mut self, i: usize, ctx: &MobCtx) {
         match self.verbs.targeting {
-            TargetingVerb::Mc1 => self.aim_assist_wizards_mc1(i, ctx),
+            TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => self.aim_assist_wizards_mc1(i, ctx),
             TargetingVerb::Mc2 => {
                 self.note_verb_fallback(VerbKind::Targeting);
                 self.aim_assist_wizards_mc1(i, ctx);
@@ -973,7 +995,7 @@ impl Gen {
     /// [`Self::aim_assist`]).
     fn aim_assist_possess(&mut self, i: usize) {
         match self.verbs.targeting {
-            TargetingVerb::Mc1 => self.aim_assist_possess_mc1(i),
+            TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => self.aim_assist_possess_mc1(i),
             TargetingVerb::Mc2 => {
                 self.note_verb_fallback(VerbKind::Targeting);
                 self.aim_assist_possess_mc1(i);
@@ -1177,6 +1199,16 @@ impl Gen {
     fn proj_firewall_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let e = &mut self.ent[i];
         e.f126 += (e.f128 - e.f126).clamp(-2, 2);
+        // Hidden Worlds turns Fire Storm (spell 20) into a homing meteor:
+        // the m16 child is acquire-switch case 0x10 (remc1hw :60322) —
+        // while untargeted it scans awake entities within a WIDENED yaw
+        // cone 0x100 (pitch stays 0x71) and homes on the pick. Base MC1
+        // has no case 16, so f146 stays 0 and the child flies straight
+        // (the fire-rain wall). Seamed on TargetingVerb::Mc1Hw; every
+        // other acquire site treats HW exactly as MC1. SURVEY-MC1HW §3a.
+        if self.is_hidden_worlds() && self.ent[i].f146 == 0 {
+            self.aim_assist_mc1_cone(i, ctx, 0x100, 0x71);
+        }
         if self.ent[i].f146 != 0 {
             self.home(i, ctx);
         }
@@ -2394,22 +2426,35 @@ impl Gen {
                 self.set_sprite(s, 228);
                 self.extents(s, 512, 512);
             }
-            // sub_3B8E0 (:47639): the Wall of Fire NAPALM cloud
-            // (state 58 — NOT 53; class-10 state 53 is the building
-            // collapse walker), life 128, f44 100, random yaw,
-            // extents 1024/0x4000.
+            // The Wall of Fire NAPALM cloud (state 58 — NOT 53;
+            // class-10 state 53 is the building collapse walker). The
+            // model-53 creator was SWAPPED between builds (both spell-20
+            // paths detonate the m16 bolt into this (10,53) via the
+            // +68=10/+69=53 descriptor — trace SURVEY-MC1HW §3/§7):
+            // - base MC1 `sub_3B8E0` (:47639): a persistent low-damage
+            //   wall — life 128, f44 100, random yaw, extents 1024/0x4000.
+            // - Hidden Worlds `sub_3BC60` (remc1hw :43766): a brief,
+            //   devastating expanding-ring detonation — life 6, f44 3000,
+            //   NO extents (the state-58 HW handler re-derives them each
+            //   tick) and NO yaw LCG draw (stream-faithful).
             53 => {
+                let hw = self.is_hidden_worlds();
                 let e = &mut self.ent[s];
                 e.tick70 = 58;
-                e.max_life = 128;
-                e.f44 = 100;
                 e.f26 = 0;
-                let d = lcg32(&mut e.rand);
-                e.f30 = (d & 0x7FF) as u16;
                 e.flags &= !8;
-                e.f80 = 1024;
-                e.f82 = 1024;
-                e.f84 = 0x4000;
+                if hw {
+                    e.max_life = 6;
+                    e.f44 = 3000;
+                } else {
+                    e.max_life = 128;
+                    e.f44 = 100;
+                    let d = lcg32(&mut e.rand);
+                    e.f30 = (d & 0x7FF) as u16;
+                    e.f80 = 1024;
+                    e.f82 = 1024;
+                    e.f84 = 0x4000;
+                }
                 self.link(s, x, y, z);
                 self.refill_life(s);
             }
@@ -2672,15 +2717,24 @@ impl Gen {
     }
 
     /// sub_29780 (:31140), class-10 state 58 (the m53 Wall of Fire
-    /// cloud): 15 waves of standing flames over the impact ring
-    /// (112-unit pitch over SEARCH rings 0..1, ±64 jitter, the -96
-    /// 2x2-center recenter): wave 0 = a persistent 14-tick ground
-    /// fire patch, waves 1..14 = 1-tick flame sheets climbing 128
-    /// units per wave — the rising fire curtain. The cloud's own
-    /// ch0 write is +44/maxLife = 100/128 = 0 (kept verbatim); the
-    /// flames' inherited 100/tick is the damage. Silent in single
-    /// player (:31200 plays 30 only on the multiplayer branch).
+    /// cloud). The original branches on `IsHiddenWord`:
+    /// - base MC1 (`!IsHiddenWord`, below): 15 waves of standing flames
+    ///   over the impact ring (112-unit pitch over SEARCH rings 0..1,
+    ///   ±64 jitter, the -96 2x2-center recenter): wave 0 = a persistent
+    ///   14-tick ground fire patch, waves 1..14 = 1-tick flame sheets
+    ///   climbing 128 units per wave — the rising fire curtain. The
+    ///   cloud's own ch0 write is +44/maxLife; the flames' inherited
+    ///   100/tick is the damage.
+    /// - Hidden Worlds ([`Self::napalm_tick_hw`]): a different geometry —
+    ///   one EXPANDING (10,0) ring per tick (160-unit pitch), stepped
+    ///   `(var26+2)%7`, until `actLife` runs out; sound 30 once. The
+    ///   `IsHiddenWord=true` else-branch (remc1hw :29740). The prior
+    ///   "multiplayer branch" note here was a MISLABEL — it is the HW
+    ///   path (SURVEY-MC1HW §2).
     fn napalm_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        if self.is_hidden_worlds() {
+            return self.napalm_tick_hw(i, ctx);
+        }
         {
             let e = &mut self.ent[i];
             e.f80 = 512;
@@ -2714,6 +2768,63 @@ impl Gen {
         if wave >= 14 {
             self.ent[i].flags |= 0x400;
         }
+        false
+    }
+
+    /// The Hidden Worlds Wall-of-Fire cloud (sub_29780 `IsHiddenWord`
+    /// else-branch, remc1hw :29740). Where base MC1 stacks rising waves,
+    /// HW paints ONE expanding ground ring per tick: the (10,0) fire on
+    /// a 160-unit grid at radius `var26` (`+26`), the radius stepped
+    /// `(var26+2)%7` so it sweeps 0,2,4,6,1,3,5, running until the
+    /// cloud's `actLife` expires (no wave cap — the spawner's life is the
+    /// terminator). Sound 30 plays once (the `+16` bit-1 latch plus a
+    /// persistent 0x10000 marker set together on the first surviving
+    /// tick). The cloud's own extent tracks the ring (192·var26 wide =
+    /// `(768·var26)>>2`, 512 tall); each child is a full 512³ (10,0)
+    /// flame inheriting the cloud's owner and yaw, keeping the (10,0)
+    /// ctor's own life/damage.
+    ///
+    /// NOTE (SURVEY-MC1HW §7 — emit chain UNTRACED): the observable
+    /// damage/duration follow the cloud's spawn params (`f44`/`max_life`)
+    /// and WHICH creator HW's Fire Storm routes through (`sub_3B8E0`
+    /// life-128/f44-100 vs `sub_3BC60` life-6/f44-3000), and whether HW
+    /// spell-20 spawns a napalm cloud at all beside the homing meteor.
+    /// This handler is faithful for any params; only the trigger is open.
+    fn napalm_tick_hw(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 0x10002;
+            self.snd(30, i);
+        }
+        let var26 = self.ent[i].f26;
+        self.extents(i, 192u16.wrapping_mul(var26 as u16), 512);
+        let amt = self.ent[i].f44 as u32 / self.ent[i].max_life.max(1);
+        self.area_write(i, 0, amt, ctx, false, false);
+        let (x, y, z, own, yaw) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24, e.f30)
+        };
+        for (dx, dy) in self.ring_cells_pub(var26 as i32, var26 as i32) {
+            let d1 = self.ent_rand(i);
+            let d2 = self.ent_rand(i);
+            let fx = x.wrapping_add((160 * dx as i32 + (d1 % 0x81) as i32 - 64 - 96) as u16);
+            let fy = y.wrapping_add((160 * dy as i32 + (d2 % 0x81) as i32 - 64 - 96) as u16);
+            if let Some(f) = self.spawn_effect(0, fx, fy, z) {
+                let e = &mut self.ent[f];
+                e.id24 = own;
+                e.f30 = yaw; // child copies the cloud's yaw (var30)
+                e.flags |= 0x10080;
+                e.f80 = 512;
+                e.f82 = 512;
+                e.f84 = 512;
+                e.f26 = 0;
+            }
+        }
+        self.ent[i].f26 = (var26 + 2) % 7;
         false
     }
 

@@ -154,6 +154,32 @@ pub const SPELLS: [SpellDef; SPELL_COUNT] = [
     def(600, 3, false, false, 50000, 50),
 ];
 
+/// Hidden Worlds diverges from base MC1 in **exactly one** spell row:
+/// Fire Storm (20) becomes the homing meteor. Its constructor call
+/// `sub_3C2B0(a1,20,60,5000,26,1,0,60000,5000)` (remc1hw :44266) vs base
+/// `sub_3BF70(a1,20,60,5000,51,1,0,12000,24464)` (remc1 :48142) — burst
+/// count 51→26, castle_req 12000→60000, damage 24464→5000. Total mana
+/// (5000) and the fire/charge flags are unchanged. See
+/// docs/SURVEY-MC1HW.md §3b. The homing targeting is a separate seam
+/// (§3a, `proj_firewall_tick`), not a stat.
+pub const SPELLS_HW: [SpellDef; SPELL_COUNT] = {
+    let mut t = SPELLS;
+    t[20] = def(5000, 26, true, false, 60000, 5000);
+    t
+};
+
+/// The player-spell stat table for a game. Only `Mc1Hw` diverges (row
+/// 20); `Mc1` and `Mc2` share the base table (MC2 carries its own spell
+/// system elsewhere and never reads row 20 from here). Routing MC1-family
+/// `SPELLS[id]` reads through this keeps MC1 goldens pinned by
+/// construction.
+pub fn spells(game: crate::ids::GameId) -> &'static [SpellDef; SPELL_COUNT] {
+    match game {
+        crate::ids::GameId::Mc1Hw => &SPELLS_HW,
+        _ => &SPELLS,
+    }
+}
+
 const fn def(
     possess_mana: u32,
     count: u16,

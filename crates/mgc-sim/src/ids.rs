@@ -41,7 +41,8 @@ impl GameId {
     /// The game's pristine tier-5 verb column.
     pub const fn verbs(self) -> VerbSet {
         match self {
-            GameId::Mc1 | GameId::Mc1Hw => VerbSet::MC1,
+            GameId::Mc1 => VerbSet::MC1,
+            GameId::Mc1Hw => VerbSet::MC1HW,
             GameId::Mc2 => VerbSet::MC2,
         }
     }

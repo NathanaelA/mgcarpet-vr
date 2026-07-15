@@ -61,7 +61,7 @@ use crate::mc1::features::{
     self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
 };
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
-use crate::mc1::spells::{SPELL_COUNT, SPELLS, SpellId};
+use crate::mc1::spells::{SPELL_COUNT, SPELLS, SpellDef, SpellId};
 use crate::mc1::sprite_stats::SPRITE_STATS;
 use crate::verbs::{
     AwakeVerb, CommitGateVerb, DamageVerb, MovementVerb, ObjectiveVerb, TargetingVerb, VerbKind,
@@ -911,6 +911,15 @@ fn drawable(class: u16, model: u16) -> bool {
 }
 
 impl World {
+    /// The player-spell stat table for this world's game — routes MC1/HW
+    /// `SPELLS[id]` reads through the per-game accessor so Hidden Worlds'
+    /// one divergent row (20, Fire Storm) applies without touching the
+    /// base MC1 table or its goldens. Returns a `'static` reference, so
+    /// `&self.spells()[id]` holds no borrow on `self`.
+    pub(crate) fn spells(&self) -> &'static [SpellDef; SPELL_COUNT] {
+        crate::mc1::spells::spells(self.game)
+    }
+
     /// Build the world: apply the load-time feature pass to the
     /// pristine planes, then fire disposition 0 (level init) so the
     /// initial population spawns. `things` come from the package;
@@ -1493,7 +1502,7 @@ impl World {
                 // column (acquire/homing live inside the per-game
                 // flight handlers).
                 9 => match self.g.verbs.targeting {
-                    TargetingVerb::Mc1 => {
+                    TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => {
                         if self.g.proj_tick(i, &ctx) {
                             self.terrain_dirty = true;
                         }
@@ -2225,6 +2234,7 @@ impl World {
             return Some(self.player.owned[id] as usize);
         }
         let m = self.g.new_event()?;
+        let f44 = self.spells()[id].damage.min(u16::MAX as u32) as u16;
         {
             let e = &mut self.g.ent[m];
             e.class64 = 12;
@@ -2232,7 +2242,7 @@ impl World {
             e.tick70 = MANIFEST_BASE + spell.0;
             e.flags &= !8; // never a damage victim
             e.f26 = 0;
-            e.f44 = SPELLS[id].damage.min(u16::MAX as u32) as u16;
+            e.f44 = f44;
         }
         // The class-12 ctor sub_3BF70 (:47979-) gives EVERY jar sprite
         // type 77 + a 4x extent override; without it a death-scattered
@@ -2496,7 +2506,7 @@ impl World {
                 .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
                 .unwrap_or(SPELLS[16].possess_mana);
         }
-        SPELLS[id].possess_mana
+        self.spells()[id].possess_mana
     }
 
     /// One hand's cast trigger — the port of sub_46B00_46E40 :55851 +
@@ -2527,7 +2537,7 @@ impl World {
         if m == 0 {
             return;
         }
-        let def = &SPELLS[id];
+        let def = &self.spells()[id];
 
         // 23: the firehose.
         if id == 23 {
@@ -2736,7 +2746,7 @@ impl World {
         let Some(pr) = self.g.spawn_fireball(mx, my, mz) else {
             return;
         };
-        let def = &SPELLS[id];
+        let def = &self.spells()[id];
         let e = &mut self.g.ent[pr];
         e.f126 += p.speed; // inherits carpet speed (:65060)
         e.f128 = e.f126;
@@ -2791,7 +2801,7 @@ impl World {
             _ => None,
         };
         let Some(pr) = pr else { return };
-        let def = &SPELLS[id];
+        let def = &self.spells()[id];
         // APPROX(original per-spell launch pitches, :65579-style):
         // the down-arc terrain spells get a fixed downward bias on
         // the pose pitch (engine pitch positive = down).
@@ -3145,7 +3155,7 @@ impl World {
         if m != 0 && self.g.ent[m].flags & BLUE_SPELL != 0 {
             0
         } else {
-            SPELLS[id].castle_req
+            self.spells()[id].castle_req
         }
     }
 
@@ -3284,7 +3294,7 @@ impl World {
         let Some(pr) = self.g.spawn_firewall_bolt(mx, my, mz) else {
             return;
         };
-        let def = &SPELLS[20];
+        let def = &self.spells()[20];
         let e = &mut self.g.ent[pr];
         e.f126 += p.speed;
         e.f128 = e.f126;
@@ -3396,12 +3406,13 @@ impl World {
         if spell >= SPELL_COUNT || self.player.owned[spell] != 0 {
             return;
         }
+        let f44 = self.spells()[spell].damage.min(u16::MAX as u32) as u16;
         {
             let e = &mut self.g.ent[i];
             e.tick70 = MANIFEST_BASE + spell as u8;
             e.flags &= !8;
             e.f26 = 0;
-            e.f44 = SPELLS[spell].damage.min(u16::MAX as u32) as u16;
+            e.f44 = f44;
         }
         self.player.owned[spell] = i as u16;
         self.player.left = Some(SpellId(spell as u8)); // auto-equip LEFT
@@ -3576,7 +3587,7 @@ impl World {
             let m = self.player.owned[s] as usize;
             if m != 0 {
                 owned[s] = true;
-                cooldown[s] = self.g.ent[m].f26.max(0) as f32 / SPELLS[s].count as f32;
+                cooldown[s] = self.g.ent[m].f26.max(0) as f32 / self.spells()[s].count as f32;
             }
         }
         // One castle scan feeds castle/castle_hp/balloons/bindable.
@@ -6532,6 +6543,102 @@ mod tests {
 
     fn at_trigger() -> PlayerPose {
         PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0)
+    }
+
+    #[test]
+    fn hidden_worlds_spell20_stats_diverge_only_at_row_20() {
+        // Fire Storm (20) → homing meteor is the ONLY table divergence
+        // (SURVEY-MC1HW §3b): count 51→26, castle_req 12000→60000,
+        // damage 24464→5000. Every other row equals base MC1 — the
+        // guard that keeps MC1 goldens pinned.
+        let mc1 = crate::mc1::spells::spells(GameId::Mc1);
+        let hw = crate::mc1::spells::spells(GameId::Mc1Hw);
+        for i in 0..SPELL_COUNT {
+            if i == 20 {
+                continue;
+            }
+            assert_eq!(mc1[i], hw[i], "spell {i} must match base MC1");
+        }
+        assert_eq!(hw[20].count, 26, "HW burst count");
+        assert_eq!(hw[20].castle_req, 60000, "HW castle req");
+        assert_eq!(hw[20].damage, 5000, "HW damage");
+        assert_eq!(mc1[20].count, 51, "base count untouched");
+        assert_eq!(mc1[20].damage, 24464, "base damage untouched");
+    }
+
+    #[test]
+    fn hidden_worlds_verbset_wiring_preserves_discriminants() {
+        use crate::verbs::{TargetingVerb, VerbSet};
+        assert_eq!(GameId::Mc1Hw.verbs().targeting, TargetingVerb::Mc1Hw);
+        assert_eq!(GameId::Mc1.verbs().targeting, TargetingVerb::Mc1);
+        assert_eq!(GameId::Mc2.verbs().targeting, TargetingVerb::Mc2);
+        // The HW column is the MC1 column with only targeting flipped.
+        assert_eq!(VerbSet::MC1HW.awake, VerbSet::MC1.awake);
+        assert_eq!(VerbSet::MC1HW.flight, VerbSet::MC1.flight);
+        assert_eq!(VerbSet::MC1HW.commit_gate, VerbSet::MC1.commit_gate);
+        // Mc1/Mc2 discriminants MUST precede Mc1Hw: the VerbSet feeds the
+        // state hash, so inserting the HW variant anywhere but last would
+        // move every MC2 golden.
+        assert!((TargetingVerb::Mc1 as u8) < (TargetingVerb::Mc1Hw as u8));
+        assert!((TargetingVerb::Mc2 as u8) < (TargetingVerb::Mc1Hw as u8));
+    }
+
+    #[test]
+    fn hidden_worlds_firewall_child_homes_in_the_widened_cone() {
+        // The m16 Fire Storm child (state 17) runs acquire case 0x10 in
+        // HW (yaw cone 0x100) but has NO acquire case in base MC1. A
+        // creature at yaw offset 0xA0 (> 0x71, < 0x100), pitch aligned,
+        // is picked up only under HW (SURVEY-MC1HW §3a).
+        fn acquires(game: GameId) -> bool {
+            let planes = Planes {
+                height: vec![0; 0x10000],
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            };
+            let mut w = World::new_for_game(planes, &[], 1, assets(), game);
+            let (bx, by, bz) = (100u16 << 8, 100u16 << 8, 1000i16);
+            let bolt = w.g.spawn_firewall_bolt(bx, by, bz).expect("bolt slot");
+            w.g.ent[bolt].id24 = PLAYER_TARGET;
+            // A live class-5 creature 10 tiles east, same altitude.
+            let (cx, cy) = (110u16 << 8, 100u16 << 8);
+            let cre = w.g.new_event().expect("creature slot");
+            {
+                let c = &mut w.g.ent[cre];
+                c.class64 = 5;
+                c.f58 = 1; // awake / alive
+                c.act_life = 100;
+                c.tick70 = 1; // != 120 (the asleep state)
+                c.id24 = 7; // not the bolt's owner
+                c.f78 = 0;
+                c.x = cx;
+                c.y = cy;
+                c.z = bz;
+            }
+            // Aim so the creature sits exactly 0xA0 off the bolt's yaw.
+            let a = Gen::angle_between(bx, by, cx, cy);
+            w.g.ent[bolt].f30 = (a + 0xA0) & 0x7FF;
+            w.g.ent[bolt].f32 = 0;
+            w.g.ent[bolt].f146 = 0;
+            let ctx = MobCtx {
+                px: 10 << 8,
+                py: 10 << 8,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+            };
+            w.g.proj_tick(bolt, &ctx);
+            w.g.ent[bolt].f146 != 0
+        }
+        assert!(
+            acquires(GameId::Mc1Hw),
+            "HW firewall child homes (case 0x10, cone 0x100)"
+        );
+        assert!(
+            !acquires(GameId::Mc1),
+            "base MC1 firewall child flies straight (no case 16)"
+        );
     }
 
     #[test]
