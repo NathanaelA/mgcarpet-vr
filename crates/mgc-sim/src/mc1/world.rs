@@ -1881,24 +1881,37 @@ impl World {
                     self.player.grace = 2;
                 }
             }
-            if self.invincible || self.player.grace > 0 {
-                // The grace memset (:55367-71): every channel wiped,
-                // total immunity — steal and grip included, and the
-                // danger music stays calm (sub_46540 never runs).
-                // Under the dev invincibility we keep the old
-                // playtest behaviors: the ch0 total accumulates for
-                // display and any mail arms the danger music.
-                if self.invincible {
-                    if self.g.player_mail[0].1 != 0 {
-                        let amt = self.g.player_mail[0].0 as u64;
-                        self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
-                    }
-                    if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
-                        self.g.player_danger = 100;
-                    }
-                } else {
-                    self.player.grace -= 1;
+            if self.invincible {
+                // Dev god-mode = LIFE immunity only, and it OVERRIDES
+                // spawn grace (a tester wants to see hostile effects
+                // immediately, not wait out the 100-tick grace). The mana
+                // steal (ch3) still DRAINS (and arms its 16-tick regen
+                // stall) so the mana economy stays fully testable — a
+                // genie can pin you castless and defenseless, you just
+                // can't be killed. ch0 physical accumulates for the
+                // damage readout and arms the flash/danger, but never
+                // costs life or kills. (Blocking ch3 too was why genies
+                // "didn't drain" under invincibility — the whole point of
+                // testing them.)
+                if self.g.player_mail[3].1 != 0 {
+                    let amt = self.g.player_mail[3].0;
+                    self.player.mana = self.player.mana.saturating_sub(amt);
+                    self.player.regen_delay = 16;
                 }
+                if self.g.player_mail[0].1 != 0 {
+                    let amt = self.g.player_mail[0].0 as u64;
+                    self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
+                }
+                if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
+                    self.g.player_danger = 100;
+                }
+                self.g.player_mail = [(0, 0); 6];
+            } else if self.player.grace > 0 {
+                // The spawn-grace memset (:55367-71): every channel
+                // wiped, total immunity — steal and grip included, and
+                // the danger music stays calm (sub_46540 never runs).
+                // FAITHFUL; unchanged.
+                self.player.grace -= 1;
                 self.g.player_mail = [(0, 0); 6];
             } else {
                 // The player damage intake — the DamageVerb seam
@@ -6543,6 +6556,95 @@ mod tests {
 
     fn at_trigger() -> PlayerPose {
         PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0)
+    }
+
+    #[test]
+    fn genie_steal_flash_drains_stationary_player() {
+        // Repro of the level-042 genie mana-steal gap: a genie-owned
+        // ch3 steal flash (state 25) sitting on the player must drain
+        // the pool. Big extents isolate the mana path from overlap
+        // geometry.
+        let mut w = flat_world();
+        w.player.mana = 1000;
+        w.player.mana_max = 1000;
+        w.player.grace = 0; // past spawn invulnerability
+        let pose = PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let flash =
+            w.g.spawn_effect(25, 100u16 << 8, 100u16 << 8, 800)
+                .expect("flash slot");
+        w.g.ent[flash].id24 = 9; // a non-player owner (a "genie")
+        w.g.ent[flash].f44 = 3000;
+        w.g.ent[flash].f80 = 30000;
+        w.g.ent[flash].f82 = 30000;
+        w.g.ent[flash].f84 = 30000;
+        let before = w.player.mana;
+        // Two ticks: the flash writes ch3 on its first tick, the apply
+        // pass drains on the same/next.
+        w.tick(pose, PlayerCommand::default());
+        w.tick(pose, PlayerCommand::default());
+        assert!(
+            w.player.mana + 500 < before,
+            "genie steal must drain the player (was {before}, now {})",
+            w.player.mana
+        );
+    }
+
+    #[test]
+    fn genie_seeker_end_to_end_drains_stationary_player() {
+        // The genie's actual steal seeker (m8 projectile, payload 3000,
+        // detonating into the ch3 flash 25) fired at a stationary player
+        // must land a drain.
+        let mut w = flat_world();
+        let pose = PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let (px, py, pz) = (25728u16, 25728u16, 3360i16);
+        w.tick(pose, PlayerCommand::default());
+        w.player.mana = 1000;
+        w.player.mana_max = 1000;
+        w.player.grace = 0;
+        let before = w.player.mana;
+        // Fire from 3 tiles west, aimed at the player.
+        let seeker = w.g.spawn_seeker(px - 3 * 256, py, pz).expect("seeker slot");
+        w.g.arm_projectile(seeker, 9, 3, 0xFF, PLAYER_TARGET, px, py, pz, 3000, 25);
+        let mut min_mana = before;
+        for _ in 0..12 {
+            w.tick(pose, PlayerCommand::default());
+            min_mana = min_mana.min(w.player.mana);
+        }
+        assert!(
+            min_mana + 500 < before,
+            "one seeker should land a drain (min {min_mana}, before {before})"
+        );
+    }
+
+    #[test]
+    fn invincibility_is_life_only_mana_steal_still_drains() {
+        // God-mode must NOT block the genie mana steal (ch3) — that was
+        // the level-042 "genies don't drain" report. Life stays immune;
+        // mana drains.
+        let mut w = flat_world();
+        w.invincible = true;
+        w.player.mana = 1000;
+        w.player.mana_max = 1000;
+        w.player.grace = 0;
+        let life_before = w.player.life;
+        let pose = PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let flash =
+            w.g.spawn_effect(25, 100u16 << 8, 100u16 << 8, 800)
+                .expect("flash slot");
+        w.g.ent[flash].id24 = 9;
+        w.g.ent[flash].f44 = 3000;
+        w.g.ent[flash].f80 = 30000;
+        w.g.ent[flash].f82 = 30000;
+        w.g.ent[flash].f84 = 30000;
+        w.tick(pose, PlayerCommand::default());
+        w.tick(pose, PlayerCommand::default());
+        assert!(
+            w.player.mana < 500,
+            "steal drains even under invincibility (was 1000, now {}) — not the old wipe-all",
+            w.player.mana
+        );
+        assert_eq!(w.player.life, life_before, "life stays immune");
+        assert_eq!(w.player.state, LifeState::Alive, "still can't be killed");
     }
 
     #[test]
