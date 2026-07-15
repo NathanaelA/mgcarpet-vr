@@ -69,7 +69,7 @@ fn policy(id: u8) -> Policy {
         1 | 2 => Policy::Loop(70),
         5 => Policy::Loop(120),
         31 => Policy::Loop(85),
-        3 | 9 | 15 | 16 | 18..=28 | 30 | 40 | 43..=45 => Policy::Restart,
+        3 | 9 | 15 | 16 | 18..=28 | 30 | 40 | 42..=45 => Policy::Restart,
         4 | 14 | 29 => Policy::RestartPlayerOnly,
         7 | 8 | 10..=13 | 32..=39 | 41 => Policy::KeepRunning,
         17 => Policy::KeepRunningPlayerOnly,

@@ -1899,8 +1899,33 @@ impl World {
                     self.player.regen_delay = 16;
                 }
                 if self.g.player_mail[0].1 != 0 {
-                    let amt = self.g.player_mail[0].0 as u64;
-                    self.g.player_damage += if self.player.shield { amt / 4 } else { amt };
+                    let (amt, src) = self.g.player_mail[0];
+                    self.g.player_damage += if self.player.shield {
+                        amt as u64 / 4
+                    } else {
+                        amt as u64
+                    };
+                    // Positional KNOCKBACK still lands (god-mode is
+                    // life-only): a hit shoves the player, so the kraken's
+                    // lightning still pushes you OUT — the other half of
+                    // the buffet-vs-knockback "screenshake fight". Without
+                    // this the buffet (a direct struct write, unshielded)
+                    // pulled you in with nothing pushing back.
+                    let s = src as usize;
+                    if src != 0
+                        && src != PLAYER_TARGET
+                        && s < self.g.ent.len()
+                        && self.g.ent[s].class64 != 0
+                    {
+                        let dir = Gen::angle_between(
+                            self.g.ent[s].x,
+                            self.g.ent[s].y,
+                            player.x,
+                            player.y,
+                        ) & 0x7FF;
+                        self.g.player_knock = (dir, ((amt / 10) as i16).clamp(0, 80));
+                    }
+                    self.player.hit_flash = 5;
                 }
                 if self.g.player_mail.iter().any(|&(_, from)| from != 0) {
                     self.g.player_danger = 100;

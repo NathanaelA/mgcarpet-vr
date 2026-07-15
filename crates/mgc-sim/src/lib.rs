@@ -141,8 +141,20 @@ impl Default for Flyer {
 
 /// Flight tuning. Placeholder feel, to be eyeballed against remc2
 /// side-by-side before habits form (see docs/ROADMAP.md).
-const ACCEL: f32 = 40.0; // tiles/s^2 at full thrust
 const DRAG_PER_TICK: f32 = 0.90; // velocity retained per tick
+/// The faithful carpet's base cruise, in tiles/sec — the reference
+/// "how fast" for BOTH movers. `Mc1State` cruises at 80 engine
+/// units/tick = 80/256 tiles/tick. The Enhanced deviation changes only
+/// the CONTROL response (hold-to-fly vs. accelerate-buildup), never the
+/// speed ceiling (player directive 2026-07-15), so its terminal is
+/// PINNED to this rather than tuned independently — otherwise a fixed-
+/// size hazard (the kraken buffet, 80/tick) is proportionally weak
+/// under the faster deviation and you slip a tether you shouldn't.
+const FAITHFUL_CRUISE_TPS: f32 = 80.0 / 256.0 * TICK_RATE_HZ as f32; // 7.5 @ 24 Hz
+/// Enhanced float acceleration, DERIVED so the DRAG-governed terminal
+/// (`ACCEL·dt·drag/(1−drag)`) equals [`FAITHFUL_CRUISE_TPS`]. DRAG alone
+/// shapes the approach snappiness; the ceiling stays pinned regardless.
+const ACCEL: f32 = FAITHFUL_CRUISE_TPS * (1.0 - DRAG_PER_TICK) / (TICK_DT * DRAG_PER_TICK);
 const MAX_PITCH: f32 = 1.45; // radians
 const MIN_CLEARANCE: f32 = 0.75; // tiles above ground
 /// Extended-lift float rate, engine units/tick at full input (an
@@ -692,7 +704,9 @@ impl Simulation {
         f.vz *= DRAG_PER_TICK;
         if let Some(k) = over {
             // The enhanced model's full-thrust terminal speed:
-            // v = a·dt·d/(1-d) (12 tiles/s at current tuning).
+            // v = a·dt·d/(1−d) — pinned to FAITHFUL_CRUISE_TPS (7.5
+            // tiles/s), so accelerate here reaches k× the SAME ceiling
+            // the faithful carpet does.
             let vmax = ACCEL * TICK_DT * DRAG_PER_TICK / (1.0 - DRAG_PER_TICK);
             let tv = [fwd[0] * k * vmax, fwd[2] * k * vmax];
             // Snappy approach: "propelled", not "accelerating".

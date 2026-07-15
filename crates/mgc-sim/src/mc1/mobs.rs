@@ -885,10 +885,12 @@ impl Gen {
                 let (kx, ky) = (self.ent[i].x, self.ent[i].y);
                 let dir = Self::angle_between(kx, ky, ctx.px, ctx.py).wrapping_add(0x400) & 0x7FF;
                 self.player_knock = (dir, 80);
-                // Victim buffet cue (:23223). Sound 42 falls into
-                // sub_55370's default case — the faithful mixer
-                // drops it, exactly like retail; emitted anyway so
-                // an enhanced mixer may honor it.
+                // Victim buffet cue (:23223) — the kraken tether's
+                // distinctive "resonance". Sound 42 has its OWN mixer
+                // case (sub_55370 :64625, priority-1, same group as
+                // 3/9/40/43); retail PLAYS it. (An earlier note here
+                // wrongly claimed it hits the default-drop — corrected,
+                // and the mixer policy now admits 42.)
                 self.snd(42, i);
             }
             // Kraken growl every v_26 in range → sound 37 (:23240).
