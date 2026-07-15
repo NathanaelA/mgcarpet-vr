@@ -112,19 +112,21 @@ impl GameId {
                 // The tail-effect band (mc2::tail,
                 // mc2-class10-m50-chains-and-tail.md): 8 = the dead
                 // creator (a known no-spawn), 11 = the fire spray
-                // (model-19 remap), 15 fire trail, 17 meteor, 23/25
-                // blasts, 52 castle anchor, 54 aura, 67 = the
-                // flood/quake (mc2::flood,
-                // mc2-class10-m67-flood-helpers.md).
+                // (model-19 remap), 15 fire trail, 17 meteor, 22 =
+                // the whirlwind head, 23/25 blasts, 52 castle
+                // anchor, 54 aura, 67 = the flood/quake (mc2::flood,
+                // mc2-class10-m67-flood-helpers.md), 71 = the
+                // expanding fissure, 76 = the orbiting fire orb.
                 | (10, 8 | 11 | 15 | 17 | 22 | 23 | 25 | 52 | 54 | 67 | 71 | 76)
                 // The (10,9) raise-land / apocalypse dome
                 // (mc2::morph, mc2-class10-m9-dome-geometry.md).
                 | (10, 9)
                 // The class-10 effects band: the (10,5) splash, the
                 // smoke-column family ((10,13)/(10,14) particles +
-                // the (10,59)/(10,60) "quest point" emitters), and
-                // the (10,29) one-tick stage marker / waypoint-chain
-                // record (docs/traces/mc2-class10-m59-m60.md +
+                // the (10,59)/(10,60) "quest point" emitters), the
+                // (10,29) one-tick stage marker / waypoint-chain
+                // record, and the (10,87) cave smoke puff
+                // (mc2::cave) (docs/traces/mc2-class10-m59-m60.md +
                 // mc2-class10-m29-m5-m13.md).
                 | (10, 5 | 13 | 14 | 29 | 59 | 60 | 87)
                 // The (14,1) riser's lower/raise triggers (ctors
@@ -139,10 +141,11 @@ impl GameId {
                 // mc2-terrain-author-painters.md §4 +
                 // mc2-cave-terrain-foundation.md).
                 | (10, 80..=86)
-                // The authored ground mana economy: 512-mana spheres
-                // + the 2560 variant (CreateManaSphere512/2560,
-                // EF:36595/:36601; both create model 39) + the
-                // (10,57) RANDOM-value sphere (sub_50130,
+                // The authored ground mana economy: (10,39) 512-mana
+                // spheres + the (10,58) 2560-variant record
+                // (CreateManaSphere512/2560, EF:36595/:36601; the
+                // CREATED entity is always model 39 — mc2::effects)
+                // + the (10,57) RANDOM-value sphere (sub_50130,
                 // docs/traces/mc2-class10-m57.md).
                 | (10, 39 | 57 | 58)
                 // Class-14 special map objects (X/end markers, the

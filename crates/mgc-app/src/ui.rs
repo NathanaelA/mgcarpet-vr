@@ -1412,7 +1412,7 @@ pub fn vitals_quads(
     let y = h - 26.0 * scale;
     // Spawn-grace shimmer: a thin white strip draining bottom-center
     // (no faithful equivalent — retail shows nothing for grace).
-    // Behind `enhancements.grace_meter` since 2026-07-11 (player:
+    // Behind `render.debug.grace_meter` since 2026-07-11 (player:
     // debug cue, not a default overlay).
     if grace_meter && v.grace > 0 && v.state == LifeState::Alive {
         quads.push(solid(
@@ -1456,7 +1456,7 @@ pub fn vitals_quads(
     quads
 }
 
-/// The autoaim crosshair instrument (`enhancements.crosshair` / C —
+/// The autoaim crosshair instrument (`render.debug.crosshair` / C —
 /// P-class, playtest predictor, not a combat aid): a black,
 /// white-edged cross at the TRUE aim point (the faithful camera
 /// pitches at HALF the aim pitch, so the aim is never screen

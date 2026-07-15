@@ -391,7 +391,7 @@ AudioBundle`.
 | `sounds.bin` | one deduplicated blob of raw PCM (unsigned 8-bit mono — the original sample data byte-for-byte) |
 | `sounds.json` | `SoundIndex`: `sample_rate` (22050 — the best tier shipped by both retail games), `encoding` (`"pcm8"`), `banks[]` of `{bank, entries[]}`; each entry `{id, name, offset, len}` — `id` is the ENGINE sound id (the original bank-table index; the mixer's 47 request slots index bank 0 directly) |
 | `music.json` | `MusicIndex`: `tracks[]` of `{bank, name, file, danger_file?, gm_file?, gm_danger_file?, source}` |
-| `music/*.flac` | one FLAC stream per track; in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) the runtime overlays with the original's combat gain ramp. MC1: the combat layers are MIDI channels 3/4/5 at CC7 0, faded by CC7 ramps (remc1 sub_20BD0/sub_20D00); `file` = the OPL3/FM render, `gm_file`/`gm_danger_file` (`*-gm[-danger].flac`, 44100 Hz STEREO, same ambient/stem contract) carry the General MIDI arrangement (`MUSIC<bank>-2`) rendered through fluidsynth + a GM soundfont at import — present only when the baking host has both (`MGC_FLUIDSYNTH`/`MGC_SOUNDFONT` override discovery), FM always the fallback. MC2 (`mc2-night/day/cave/menu`): `file` IS the GM render (no FM fallback yet — the F section is a future faithful-alternate) of the MUSIC.DAT G-driver bank-1 XMI sub-songs; the war/danger layers are the cc119-TAGGED channels (expression-zeroed in peace, combat-ramped — remc2 Sound.cpp:851/5880, docs/traces/mc2-music-dat-xmi.md), split into the same ambient + danger-stem pair. Songs without a muted danger layer (menu/intro) have no stem. Paired stems share one per-song normalization factor (peak of the ambient+stem SUM → −0.8 dBFS) so the runtime overlay cannot clip |
+| `music/*.flac` | one FLAC stream per track; in-game songs split into a base AMBIENT mix (`file`) plus a sample-aligned DANGER stem (`danger_file`, `*-danger.flac`) the runtime overlays with the original's combat gain ramp. MC1: the combat layers are MIDI channels 3/4/5 at CC7 0, faded by CC7 ramps (remc1 sub_20BD0/sub_20D00); `file` = the OPL3/FM render, `gm_file`/`gm_danger_file` (`*-gm[-danger].flac`, 44100 Hz STEREO, same ambient/stem contract) carry the General MIDI arrangement (`MUSIC<bank>-2`) rendered through oxisynth + a GM soundfont at import — present only when a soundfont is found (`MGC_SOUNDFONT` override, then the shipped/distro locations), FM always the fallback. MC2 (`mc2-night/day/cave/menu`): `file` IS the GM render (no FM fallback yet — the F section is a future faithful-alternate) of the MUSIC.DAT G-driver bank-0 ("C2") XMI sub-songs — bank 1 is the hidden `-music2` "C1"/MC1-set alternate, not baked as the default; the war/danger layers are the cc119-TAGGED channels (expression-zeroed in peace, combat-ramped — remc2 Sound.cpp:851/5880, docs/traces/mc2-music-dat-xmi.md), split into the same ambient + danger-stem pair. Songs without a muted danger layer (menu/intro) have no stem. Paired stems share one per-song normalization factor (peak of the ambient+stem SUM → −0.8 dBFS) so the runtime overlay cannot clip |
 | `speech.json` (MC2) | `SpeechIndex`: `clips[]` of `{row, segment, file, ms, source}` — the CD voiceover pre-sliced at import by the compiled `CdTracks_DB080` segment table (docs/traces/mc2-voiceover-triggers.md; the runtime plays whole clips, never seeks). `row` = 0-based level number (table row r slices rip track r+2 — TrackIdx counts AUDIO tracks; row 27 = dead data); segment 0 = the map-screen intro line, N+1 = objective row N's line, 9 = the level-completion line; rows 25/26 = the secret-level one-liners |
 | `speech/*.flac` (MC2) | one 44100 Hz stereo FLAC per clip (`level-RR-seg-S.flac`), cut by retail's truncating frames→ms law (`× 1000/75`) |
 
@@ -401,12 +401,12 @@ quality tier, always baked from `-1` = 22050 Hz) and
 `DATA/MUSIC{0,1}-{0,2}.DAT/.TAB` — the `-0` AdLib HMP songs rendered
 through OPL3 (nuked-opl3) with the game's own `INST.BNK`/`DRUM.BNK`
 AdLib patches at import, 44100 Hz mono FLAC (`0-cgame1` …
-`1-cintro6`), plus the `-2` General MIDI arrangement via fluidsynth
-when available (above). MC2
+`1-cintro6`), plus the `-2` General MIDI arrangement via oxisynth
+when a soundfont is available (above). MC2
 `SOUND/SOUND.DAT` (10 banks, best shipped tier = 8-bit 22050; the
 per-sample WAV containers are stripped to keep `sounds.bin` raw PCM),
 `SOUND/MUSIC.DAT` (the AIL XMI music bank: trailer u32 → 4-driver ×
-2-bank directory; gameplay = G driver bank 1, six single-song
+2-bank directory; gameplay = G driver bank 0 ("C2"), six single-song
 `FORM XDIR…CAT XMID` containers GAME1/2/3/SETUP/INTRO/CUTS; MapType
 picks GAMEn — Night/Day/Cave — and the menu plays SETUP; XMI → SMF
 via the summed-run delta / embedded note-duration / strip-cc110-119

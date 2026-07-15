@@ -20,16 +20,37 @@
 //! (`mc2_stagevars`, `mc2_sv_held`) that hash ONLY when populated — MC1
 //! and any MC2 level with no StageVars are byte-identical to before.
 //!
-//! HELD = frozen: a phase-7 class-5 entity with `site_z != 0` early-
-//! returns in `mc2_creature_tick` (mobs.rs), so a held creature runs no
-//! per-model behaviour. Retail also runs the model's phase-7 action
-//! while held, but for these gated creatures that action is a wait/idle;
-//! with no retail hash to match, "held until the gate, then active" is
-//! the behaviour we reproduce. `site_z` carries the KIND (retail's
-//! `StageVar2_0x49_73`), the same field metamorph/summon use (12/13) —
-//! level kinds are 1..9, so they never collide.
+//! HELD ≠ frozen (Session H6/E16): a phase-7 class-5 entity with
+//! `site_z` in 1..=10/15 is intercepted at the world dispatch seam and
+//! runs [`World::mc2_held_tick`] — the port of `sub_1D5D0`'s per-kind
+//! held action (EF:9977). Every held tick drains the damage inbox
+//! (held creatures are KILLABLE — a lethal hit routes to the model's
+//! prekill, `actionIndex = 8m+4`), a hit from a foreign class/model
+//! breaks the hold into aggro (`StageVar2 = 10` + `sub_1E040`'s
+//! `8m+2`/`8m+6` FLEE split), and the kind-3/4 guardian arm aggros on
+//! the watched entity (kind 3, the ambush law) or its target (kind 4)
+//! when it nears `v_28`. The m27 kraken body instead runs its full
+//! 0xDF stage-command state ([`World::mc2_m27_held_tick`] =
+//! `sub_29930`). `site_z` carries the KIND (retail's
+//! `StageVar2_0x49_73`), the same field metamorph/summon use (12/13,
+//! which stay on the mobs.rs path) — level kinds are 1..9 plus the
+//! runtime 10 (aggro-broken) and 15 (inert), so they never collide.
+//!
+//! APPROX register (held reductions, deliberate): the per-model
+//! phase-7 wrapper EXTRAS around retail's `sub_1D5D0` (ambient-sound
+//! draws and speed refresh, e.g. the goat's `AddGoat05_01_1F5B0`
+//! bleat; m18's ground re-snap), the idle FACING choreography (`roll`
+//! writes with the 64-tick LCG jitter) and the `sub_1B8C0`/`sub_1EEE0`
+//! physics settle are not run — a held creature keeps its spawn pose
+//! and draws no idle RNG. Gates reading `f63 & 7` see the STATIC
+//! spawn ordinal: retail never increments `byte_0x3E_62` while held
+//! (verified on the m0/goat/m16/m18 wrappers), so the guardian-arm
+//! cadence is ordinal-keyed, not time-keyed.
 
+use super::super::mc1::mobs::MobCtx;
 use super::super::mc1::world::World;
+use super::behavior::{BEHAVIOR, Mc2BehaviorRow};
+use super::multipart::BRANCH_STATE;
 
 /// One live StageVar slot (`D41A0_0.StageVars2_0x365F4[slot]`, LS:249).
 /// Index-aligned with the level file's 11-slot array; slot 0 is unused.
@@ -79,7 +100,9 @@ pub(crate) struct Mc2Held {
     pub(crate) ent: u16,
     /// The StageVar slot gating it (retail `StageVar1_0x48_72`).
     pub(crate) slot: u8,
-    /// `word_0x4A_74` — the kind-6 countdown (0 for other kinds).
+    /// `word_0x4A_74`, retail's dual-use word: the kind-6 countdown,
+    /// AND the kind-3/4 cached watch handle on `&2` (watch-model)
+    /// slots (`sub_1E3E0` writes it, the kind-3 release clears it).
     pub(crate) timer: i16,
 }
 
@@ -91,20 +114,24 @@ impl World {
     pub fn set_mc2_stagevars(&mut self, vars: &[(i8, i8, u8, u8, u32)]) {
         self.mc2_stagevars.clear();
         self.mc2_sv_held.clear();
-        // Count = highest slot 1..10 whose byte0 low nibble is nonzero
-        // (EF:4635-40); nothing to load below that.
+        self.mc2_sv_deferred.clear();
+        // Count = highest slot 1..10 whose byte0 low nibble is nonzero;
+        // SLOT 0 IS INERT — retail's fill loop runs `index = 1..count`
+        // (EF:4641) and every consumer scans from 1, so an authored
+        // slot 0 never loads (H7iii; no shipped level authors one).
         let count = vars
             .iter()
             .enumerate()
             .take(11)
+            .skip(1)
             .filter(|(_, v)| (v.0 as u8) & 0xF != 0)
             .map(|(i, _)| i)
             .max();
         let Some(count) = count else { return };
-        for &(index, stage, x, y, data) in vars.iter().take(count + 1) {
+        for (slot, &(index, stage, x, y, data)) in vars.iter().take(count + 1).enumerate() {
             let byte0 = index as u8;
             let kind = byte0 & 0xF;
-            if kind == 0 {
+            if kind == 0 || slot == 0 {
                 self.mc2_stagevars.push(Mc2StageVar::default());
                 continue;
             }
@@ -197,7 +224,16 @@ impl World {
             }
         }
         if let Some(slot) = hit {
-            self.mc2_stagevar_arm(ent, slot as u8);
+            // m9 (hive imp) DEFERS the hold (retail's third arg
+            // `model == 0x9` at EF:33030 → park the slot in word74,
+            // EF:4716-22): the imp finishes its 16-tick materialize
+            // first, then `sub_122A0` arms the parked slot (H3).
+            if self.g.ent[ent].model65 == 9 {
+                self.mc2_sv_deferred.retain(|d| d.0 as usize != ent);
+                self.mc2_sv_deferred.push((ent as u16, slot as u8));
+            } else {
+                self.mc2_stagevar_arm(ent, slot as u8);
+            }
         }
         // Pass 3 — bind the live entity for a death-watch (kinds
         // 3/4/5/8/9 with &2 clear whose watch_template == this spawn),
@@ -233,7 +269,11 @@ impl World {
         };
         let model = self.g.ent[ent].model65;
         if skip {
-            self.mc2_stagevar_release(ent, slot, false);
+            // Retail's skip path calls `sub_12470` DIRECTLY (EF:5010-14)
+            // — the unconditional full clear, never the chain-aware
+            // `sub_12410` — so a skip cycle releases straight to active
+            // even when the slot has a chain byte.
+            self.mc2_stagevar_release(ent, slot, true);
             return;
         }
         let kind = self.mc2_stagevars[slot as usize].kind;
@@ -257,13 +297,17 @@ impl World {
     }
 
     /// `sub_12410`/`sub_12470` (EF:5024-42) — release a held creature.
-    /// If the slot's chain byte is set, RE-ARM the creature onto slot
-    /// #chain (a chained/repeating trigger); otherwise fully release to
-    /// the active action `8*model+1` and clear the binding. `via_chain`
-    /// guards the recursion (a chain step never re-chains here).
-    fn mc2_stagevar_release(&mut self, ent: usize, slot: u8, via_chain: bool) {
+    /// `direct == false` = the chain-aware release (`sub_12410`,
+    /// EF:5023-33): a nonzero chain byte RE-ARMS the creature onto slot
+    /// #chain (a chained/repeating trigger) — used by the per-tick
+    /// reaction. `direct == true` = the unconditional full clear
+    /// (`sub_12470`, EF:5035-42, a leaf): release to the active action
+    /// `8*model+1` and drop the binding, bypassing the chain — used by
+    /// the cadence-skip path in `mc2_stagevar_arm`, which retail routes
+    /// straight to `sub_12470`.
+    fn mc2_stagevar_release(&mut self, ent: usize, slot: u8, direct: bool) {
         let chain = self.mc2_stagevars.get(slot as usize).map_or(0, |v| v.chain);
-        if chain != 0 && !via_chain && (chain as usize) < self.mc2_stagevars.len() {
+        if chain != 0 && !direct && (chain as usize) < self.mc2_stagevars.len() {
             // Re-arm onto the chain slot (sub_12330 again).
             self.mc2_stagevar_arm(ent, chain);
             return;
@@ -275,6 +319,20 @@ impl World {
             e.tick70 = model.wrapping_mul(8).wrapping_add(1); // 8*model+1 = active
         }
         self.mc2_sv_held.retain(|h| h.ent as usize != ent);
+    }
+
+    /// `sub_122A0` (EF:4953-58) — arm a DEFERRED m9 hold: called when
+    /// the imp's 16-tick materialize completes (the `dword_0x10_16`
+    /// countdown tail, EF:11984-95). No-op unless a slot was parked.
+    pub(crate) fn mc2_stagevar_arm_deferred(&mut self, ent: usize) {
+        if let Some(pos) = self
+            .mc2_sv_deferred
+            .iter()
+            .position(|d| d.0 as usize == ent)
+        {
+            let (_, slot) = self.mc2_sv_deferred.remove(pos);
+            self.mc2_stagevar_arm(ent, slot);
+        }
     }
 
     /// `sub_122C0` (EF:4961-68) — firing disposition `dis` arms every
@@ -292,12 +350,46 @@ impl World {
     }
 
     /// `sub_12780` (EF:5135-5211) global scan + `sub_12500` (EF:5045-
-    /// 5131) per-entity reaction, run once per tick BEFORE the entity
-    /// tick loop (so a released creature acts the same tick, like
-    /// retail's UpdateEntities ordering).
+    /// 5131) per-entity reaction, run once per tick FIRST among the
+    /// pre-passes — retail's UpdateEntities order is stagevar → awake
+    /// → drip → entity loop (EF:40093-40116, H8i) — so a released
+    /// creature is awake-passed and acts the same tick.
     pub(crate) fn mc2_stagevar_tick(&mut self) {
         if self.mc2_stagevars.is_empty() {
             return;
+        }
+        // ---- deferred m9 arms (`sub_122A0`): an imp that finished
+        // its materialize (left state 72) picks up its parked hold.
+        // Retail arms inside the completion tick itself (EF:11984-95);
+        // this pre-loop pass arms one boundary later — same observable
+        // sequence, and no shipped level authors a held m9 (census).
+        // A deferred imp that died/despawned just drops its entry.
+        if !self.mc2_sv_deferred.is_empty() {
+            let pending: Vec<(u16, u8)> = self
+                .mc2_sv_deferred
+                .iter()
+                .copied()
+                .filter(|&(e, _)| {
+                    let e = e as usize;
+                    e >= self.g.ent.len()
+                        || self.g.ent[e].class64 != 5
+                        || self.g.ent[e].act_life < 0
+                        || self.g.ent[e].flags & 0x400 != 0
+                        || self.g.ent[e].tick70 != 72
+                })
+                .collect();
+            for (e, _) in &pending {
+                let ent = *e as usize;
+                let alive = ent < self.g.ent.len()
+                    && self.g.ent[ent].class64 == 5
+                    && self.g.ent[ent].act_life >= 0
+                    && self.g.ent[ent].flags & 0x400 == 0;
+                if alive {
+                    self.mc2_stagevar_arm_deferred(ent);
+                } else {
+                    self.mc2_sv_deferred.retain(|d| d.0 != *e);
+                }
+            }
         }
         // ---- global scan: latch the FIRED bit for the watch kinds ----
         for s in 1..self.mc2_stagevars.len() {
@@ -312,7 +404,7 @@ impl World {
                         self.mc2_model_extinct(v.watch_model)
                     } else {
                         // watch a bound entity's death
-                        v.watch_ent != 0 && self.mc2_ent_dead(v.watch_ent)
+                        v.watch_ent != 0 && self.mc2_ent_dead(v.watch_ent, v.watch_template)
                     };
                     if fired {
                         self.mc2_stagevars[s].flags |= 0x04;
@@ -354,31 +446,49 @@ impl World {
             let (ex, ey) = (self.g.ent[ent].x, self.g.ent[ent].y);
             let release = match v.kind {
                 1 => abs16(v.point.0, ex) <= 2048 && abs16(v.point.1, ey) <= 2048,
-                3 => v.flags & 0x04 != 0,
-                4 | 5 | 8 | 9 => {
+                // Kind 3 (EF:5077-90): the fired bit clears the
+                // word74 watch cache UNCONDITIONALLY, but releases
+                // only outside phases 2/6 — the two aggro-break
+                // targets (`sub_1E040`'s `8m+2`/`8m+6`), so a
+                // guardian that broke into attack/flee is not
+                // clobbered back to active-start mid-fight.
+                3 => {
                     if v.flags & 0x04 != 0 {
-                        true
-                    } else if v.flags & 0x02 == 0
-                        && v.kind == 9
-                        && (v.point.0 != 0 || v.point.1 != 0)
-                    {
-                        abs16(v.point.0, ex) <= 3072 && abs16(v.point.1, ey) <= 3072
+                        if let Some(x) = self.mc2_sv_held.iter_mut().find(|x| x.ent == h.ent) {
+                            x.timer = 0;
+                        }
+                        !matches!(phase, 2 | 6)
                     } else {
                         false
                     }
                 }
+                // Kinds 4/5/8/9 release on the fired watch bit ONLY.
+                // Retail's kind-9 "proximity fallback" (EF:5108-12)
+                // reads `str_0x3647C_4.axis` — but the spawn bind
+                // wrote a POINTER into that union (EF:4740), so the
+                // "coordinates" are pointer bytes whose high half can
+                // never sit within 3072 of a world position: the
+                // branch is unreachable garbage in retail and is NOT
+                // reproduced (H7i; 3 shipped kind-9 levels, all
+                // death-watch-released).
+                4 | 5 | 8 | 9 => v.flags & 0x04 != 0,
                 6 => {
-                    // Timer countdown lives in the binding.
+                    // Timer countdown lives in the binding. Retail's
+                    // `word_0x4A_74` is an UNSIGNED word released at
+                    // exactly 0 (EF:5116-18): an authored-zero timer
+                    // wraps 0→0xFFFF and holds ~65536 ticks — never
+                    // release-on-negative (H7ii; no shipped level
+                    // authors a zero, but the wrap is the law).
                     let t = self
                         .mc2_sv_held
                         .iter_mut()
                         .find(|x| x.ent == h.ent)
                         .map(|x| {
-                            x.timer -= 1;
-                            x.timer
+                            x.timer = (x.timer as u16).wrapping_sub(1) as i16;
+                            x.timer as u16
                         })
                         .unwrap_or(0);
-                    t <= 0
+                    t == 0
                 }
                 7 => {
                     if v.flags & 0x18 != 0 {
@@ -420,12 +530,272 @@ impl World {
         })
     }
 
-    /// A bound live entity slot reads dead / being-removed.
-    fn mc2_ent_dead(&self, slot: u16) -> bool {
-        self.g
-            .ent
-            .get(slot as usize)
-            .is_none_or(|e| e.class64 == 0 || e.act_life < 0 || e.flags & 0x400 != 0)
+    /// A bound live entity slot reads dead / being-removed. Anchored
+    /// on the `thing_slot` identity like `mc2_bound_gone` (H8ii): our
+    /// pool recycles through a LIFO free list, so a raw read of the
+    /// bound slot could observe a REUSED entity as "alive" and the
+    /// gate would never fire; a slot whose occupant no longer carries
+    /// the watched template is the original's death.
+    fn mc2_ent_dead(&self, slot: u16, template: u16) -> bool {
+        self.g.ent.get(slot as usize).is_none_or(|e| {
+            e.class64 == 0 || e.thing_slot != template || e.act_life < 0 || e.flags & 0x400 != 0
+        })
+    }
+
+    // ---- Session H6/E16: the HELD action (`sub_1D5D0`, EF:9977) ----
+
+    /// The per-kind held head, run at the entity's own turn in the
+    /// tick loop (the world dispatch seam calls this before the
+    /// per-model machines). Returns `true` when the tick was consumed
+    /// (a stage-held creature); `false` falls through to the normal
+    /// dispatch (not held, or metamorph/summon 12/13). See the module
+    /// doc for the law + the APPROX register.
+    pub(crate) fn mc2_held_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let e = &self.g.ent[i];
+        if e.class64 != 5 || e.tick70 & 7 != 7 {
+            return false;
+        }
+        let kind = e.site_z;
+        if !matches!(kind, 1..=10 | 15) {
+            return false;
+        }
+        if e.model65 == 27 {
+            self.mc2_m27_held_tick(i, ctx);
+            return true;
+        }
+        let base = self.g.ent[i].model65.wrapping_mul(8);
+        match kind {
+            // `sub_1D5D0` default arm: kinds without a handler (15,
+            // the m27 inert marker — unreachable for other models in
+            // shipped data) do nothing.
+            15 => {}
+            // Case 0xA: an aggro-broken creature that re-entered its
+            // phase-7 wait re-raises straight back out (`sub_1E040`).
+            10 => self.mc2_aggro_raise(i, base),
+            _ => match self.g.mc2_state_head(i) {
+                // Lethal: route to the model's prekill (`a2 + 4`) —
+                // held creatures are killable (EF:10242-45).
+                2 => self.g.ent[i].tick70 = base.wrapping_add(4),
+                1 => self.mc2_held_hit(i, base),
+                _ => self.mc2_held_watch(i, base),
+            },
+        }
+        true
+    }
+
+    /// `sub_1E040` (EF:10459-71): leave the hold for the model's
+    /// aggro state — `8m+6` for FLEE-flagged rows, else `8m+2`.
+    fn mc2_aggro_raise(&mut self, i: usize, base: u8) {
+        let flee = BEHAVIOR[self.g.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
+        self.g.ent[i].tick70 = base.wrapping_add(if flee { 6 } else { 2 });
+    }
+
+    /// The non-lethal-hit arm shared by every kind handler
+    /// (EF:10227-39): an attacker of a foreign class or model breaks
+    /// the hold — target it, mark `StageVar2 = 10`, raise to aggro.
+    /// (Retail follows with the `sub_1EEE0` ground settle — APPROX
+    /// skipped, module doc.)
+    fn mc2_held_hit(&mut self, i: usize, base: u8) {
+        let src = self.g.ent[i].f40 as usize;
+        let differs = src == 0
+            || src >= self.g.ent.len()
+            || self.g.ent[src].class64 != self.g.ent[i].class64
+            || self.g.ent[src].model65 != self.g.ent[i].model65;
+        if differs {
+            self.g.ent[i].f146 = self.g.ent[i].f40;
+            self.g.ent[i].site_z = 10;
+            self.mc2_aggro_raise(i, base);
+        }
+    }
+
+    /// The kind-3/4 GUARDIAN arm, every 8th tick of the STATIC f63
+    /// ordinal (module doc). Kind 3 (`sub_1D7C0`, EF:10069-95) is the
+    /// AMBUSH law: aggro on the WATCHED entity itself when it comes
+    /// within the row's `v_28`. Kind 4 (`sub_1D700`, EF:10022-66)
+    /// joins the watched entity's FIGHT: aggro on its current target
+    /// when that target nears. Both mark `StageVar2 = 10` + raise.
+    fn mc2_held_watch(&mut self, i: usize, base: u8) {
+        if self.g.ent[i].f63 & 7 != 0 {
+            return;
+        }
+        let kind = self.g.ent[i].site_z;
+        if !matches!(kind, 3 | 4) {
+            return;
+        }
+        let Some(hpos) = self.mc2_sv_held.iter().position(|h| h.ent as usize == i) else {
+            return;
+        };
+        let slot = self.mc2_sv_held[hpos].slot as usize;
+        let Some(v) = self.mc2_stagevars.get(slot).copied() else {
+            return;
+        };
+        // Resolve the watch: `&2` slots cache the handle in word74
+        // (`sub_1E3E0`, resolved on first need — retail resolves it in
+        // `sub_1D8C0`'s idle arm); else the bound entity.
+        let watch = if v.flags & 0x02 != 0 {
+            let mut w = self.mc2_sv_held[hpos].timer as u16;
+            if w == 0 {
+                w = self.mc2_resolve_watch(i, slot);
+                self.mc2_sv_held[hpos].timer = w as i16;
+            }
+            w
+        } else {
+            v.watch_ent
+        } as usize;
+        if watch == 0
+            || watch >= self.g.ent.len()
+            || self.g.ent[watch].class64 == 0
+            || self.g.ent[watch].act_life < 0
+        {
+            return;
+        }
+        let aggro_at = match kind {
+            3 => watch,
+            _ => {
+                let t = self.g.ent[watch].f146 as usize;
+                if t == 0 || t >= self.g.ent.len() {
+                    return;
+                }
+                t
+            }
+        };
+        let me = {
+            let e = &self.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let tp = {
+            let e = &self.g.ent[aggro_at];
+            (e.x, e.y, e.z)
+        };
+        let reach = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as u32;
+        if super::super::mc1::features::Gen::mc2_dist3(me, tp) <= reach {
+            self.g.ent[i].f146 = aggro_at as u16;
+            self.g.ent[i].site_z = 10;
+            self.mc2_aggro_raise(i, base);
+        }
+    }
+
+    /// `sub_1E3E0` (EF:10609-48): resolve a `&2` slot's watch handle —
+    /// on `&1` (subtype-matched) slots first reuse a same-slot
+    /// sibling's cached word74, else the nearest live class-5 of the
+    /// watched subtype by 2D distance. (Retail scans the per-model
+    /// live list; we scan the pool — comparison-only, same nearest.)
+    fn mc2_resolve_watch(&self, i: usize, slot: usize) -> u16 {
+        let v = &self.mc2_stagevars[slot];
+        if v.flags & 0x01 != 0 {
+            for h in &self.mc2_sv_held {
+                if h.slot as usize == slot && h.ent as usize != i && h.timer != 0 {
+                    return h.timer as u16;
+                }
+            }
+        }
+        let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+        let mut best = 0u16;
+        let mut bd = u64::MAX;
+        for (j, e) in self.g.ent.iter().enumerate().skip(1) {
+            if e.class64 == 5
+                && e.model65 == v.watch_model
+                && e.act_life >= 0
+                && e.flags & 0x400 == 0
+                && j != i
+            {
+                let dx = (x.wrapping_sub(e.x) as i16 as i64).unsigned_abs();
+                let dy = (y.wrapping_sub(e.y) as i16 as i64).unsigned_abs();
+                let d = dx * dx + dy * dy;
+                if d < bd {
+                    bd = d;
+                    best = j as u16;
+                }
+            }
+        }
+        best
+    }
+
+    /// `sub_29930` (EF:19696-733) — the m27 body's 0xDF stage-command
+    /// state (Session E16). Order is retail-verbatim: the `sub_1D5D0`
+    /// head first (which may re-raise `tick70`), then the pose select
+    /// on the possibly-updated kind, the life refresh, the command
+    /// arms on the possibly-updated `tick70`, and the branch drive
+    /// (tentacles animate while held/emerging).
+    fn mc2_m27_held_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let kind = self.g.ent[i].site_z;
+        if matches!(kind, 1..=9) {
+            // The m27 head (`sub_1D8C0` shape) — drain-only: retail's
+            // `model != 27` gate EXCLUDES the kraken body from the
+            // weakest-linked-life inherit (its branch chain would
+            // otherwise leak branch lives into the 1e6 body).
+            let mut v = 0u8;
+            if self.g.ent[i].mail[0].1 != 0 {
+                let (amt, src) = self.g.ent[i].mail[0];
+                self.g.ent[i].act_life -= amt as i32;
+                self.g.ent[i].mail[0].1 = 0;
+                self.g.ent[i].f40 = src;
+                v = 1;
+            } else {
+                self.g.ent[i].f40 = 0;
+            }
+            if self.g.ent[i].act_life < 0 {
+                self.g.ent[i].f38 = self.g.ent[i].f40;
+                v = 2;
+            }
+            match v {
+                // 216+4 = 0xDC: the m27 prekill cascade next tick.
+                2 => self.g.ent[i].tick70 = 220,
+                1 => self.mc2_held_hit(i, 216),
+                _ => {
+                    // `sub_1B8C0`'s m27 arm = `sub_2AF10` — the held
+                    // kraken still WALKS; a blocked path (code 4) arms
+                    // tick70 = 216 inside m27_move, which the 0xD8 arm
+                    // below converts to the inert StageVar2 = 15.
+                    // Kinds 1/3/4/5 (sub_1DDA0/1D7C0/1D700/1D8C0)
+                    // always run the physics head; the generic
+                    // kind-6..9 handler (`sub_1E1C0`, EF:11238-40)
+                    // gates it on the type-row `&2` flag — SET for
+                    // m27 (row 97 flags 0x7), so those holds stand
+                    // still.
+                    let physics = matches!(kind, 1 | 3 | 4 | 5)
+                        || BEHAVIOR[self.g.ent[i].row156 as usize].flags & 2 == 0;
+                    if physics {
+                        self.g.m27_move(i, true);
+                    }
+                    self.mc2_held_watch(i, 216);
+                }
+            }
+        } else if kind == 10 {
+            self.mc2_aggro_raise(i, 216);
+        }
+        // Pose select on the (possibly updated) kind (EF:19700-06):
+        // ATTACK pose 337 for kinds {2, 6..9}, else idle 315.
+        let v1 = self.g.ent[i].site_z;
+        let pose = if v1 == 2 || (6..=9).contains(&v1) {
+            337
+        } else {
+            315
+        };
+        self.g.m27_pose(i, pose);
+        self.g.ent[i].act_life = 1_000_000;
+        match self.g.ent[i].tick70 {
+            // 0xDA — the MASS-ATTACK broadcast (EF:19708-27): every
+            // branch still in its idle scan (f71 == 1) jumps to the
+            // begin-whip state (2) aimed at the body's target.
+            218 => {
+                self.g.ent[i].site_z = 10;
+                let target = self.g.ent[i].f146;
+                let mut j = self.g.ent[i].f54 as usize;
+                while j != 0 {
+                    if self.g.ent[j].tick70 == BRANCH_STATE && self.g.ent[j].f71 == 1 {
+                        self.g.ent[j].f71 = 2;
+                        self.g.ent[j].f146 = target;
+                    }
+                    j = self.g.ent[j].f54 as usize;
+                }
+            }
+            // 0xD8 — an emerge/teleport armed while held marks the
+            // body inert to the stage machinery (EF:19728-29).
+            216 => self.g.ent[i].site_z = 15,
+            _ => {}
+        }
+        self.g.m27_drive(i, ctx);
     }
 }
 

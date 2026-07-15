@@ -62,7 +62,13 @@
 //!   guess is the flee slot; retail-check banked.
 //! - `struct_byte_0xc` group markers (m27 byte[2]/byte[3] bits, the
 //!   m22 byte[2]|=0x20 sound split) are not modeled; the m27
-//!   show/hide of segments (byte[0] bit 0) maps to flags bit 0x20 —
+//!   show/hide of segments (byte[0] bit 0) writes flags bit 0
+//!   VERBATIM (the awake pass's hidden-skip and retail's 0x21 draw
+//!   law read it) PLUS the port's 0x20 draw alias (the renderer's
+//!   certified billboard skip — widening it to 0x21 globally would
+//!   break the MC2 map-only house pose and the cave balloon), and
+//!   the burrow ops carry the bit-3 targetable toggle (flags 0x08,
+//!   E9 2026-07-15) —
 //!   the billboard-suppress bit live_poses already honors.
 //! - `byte_0x5D_93` (palette-shade byte of `sub_49D50`) is
 //!   renderer-side and unmodeled; the particle-row recolor lands in
@@ -476,7 +482,11 @@ impl Gen {
             e.class64 = 5;
             e.model65 = 22;
             e.tick70 = M22_BASE; // 176
-            e.f28 = 1; // byte_0x38_56 = 3 — subsumed by the contract admit
+            // byte_0x38_56 = 3 (EF:34400) — bit 1 ADMITS the ch1
+            // designation mail (the mc1/combat.rs:180 gate is
+            // faithful); f28=1 dropped every tag, deadening the
+            // whole retarget→colorize machine (E5).
+            e.f28 = 3;
             e.f128 = 128;
             e.f130 = 16;
             e.f126 = 16;
@@ -679,18 +689,34 @@ impl Gen {
             let (mn, mx) = (self.ent[head].f128, self.ent[head].f130);
             self.ent[head].f126 = ((mn - mx) >> 2) + mx;
             if let Some((ax, ay, _)) = self.mc2_raw_pos(src, ctx) {
-                let (hx, hy) = (self.ent[head].x, self.ent[head].y);
-                let yaw = Self::angle_between(hx, hy, ax, ay);
+                // Surge AWAY: yaw = tan2(attacker → hit SEGMENT)
+                // (EF:17472-74) — anchored at the SEGMENT, not the
+                // head, and away from the attacker (E6).
+                let (sx, sy) = (self.ent[i].x, self.ent[i].y);
+                let yaw = Self::angle_between(ax, ay, sx, sy);
                 self.ent[head].f30 = yaw;
                 self.ent[head].f34 = yaw;
             }
-            // Steer the spin by the segment's ring position, clamped
-            // to [11, 227].
+            // Spin law (EF:17475-94): ADDITIVE and orbit-signed —
+            // v4 = 56·|seg pos|/(len/2) unclamped, negated when the
+            // segment sits on the far half of the ring (head yaw vs
+            // the segment's orbit angle f44), ADDED to the head's
+            // spin, and the SUM clamps min ±11 / max ±227.
             let so = (self.ent[i].f71 as i8).unsigned_abs() as i32;
             let half = (self.ent[head].f71 >> 1).max(1) as i32;
-            let mag = (56 * so / half).clamp(11, 227) as i16;
-            let cur = self.ent[head].f44 as i16;
-            self.ent[head].f44 = (if cur < 0 { -mag } else { mag }) as u16;
+            let mut v4 = (56 * so / half) as i16;
+            let orbit = self.ent[i].f44;
+            if self.ent[head].f30.wrapping_sub(orbit) & 0x7FF >= 1024 {
+                v4 = -v4;
+            }
+            let mut v5 = v4 + self.ent[head].f44 as i16;
+            if v5.abs() < 11 {
+                v5 = if v5 <= 0 { -11 } else { 11 };
+            }
+            if v5.abs() > 227 {
+                v5 = if v5 <= 0 { -227 } else { 227 };
+            }
+            self.ent[head].f44 = v5 as u16;
             // Clear the hit source on EVERY segment (EF:17520).
             let mut j = self.ent[head].f54 as usize;
             while j != 0 {
@@ -1154,7 +1180,9 @@ impl Gen {
     }
 
     // =========================================================================
-    // MODEL 27 — the 3-tier tree kraken
+    // MODEL 27 — the HYDRA ("tree/kraken" in older notes): 5 bolt-
+    // spitting HEADS (branches) that retract and re-grow when killed;
+    // the body is attackable only while the f50 head gauge is 0.
     // (ctor sub_4D000 EF:34591 + finalizers; body brains EF:19443-
     // 19736; the branch machine docs/traces/mc2-m27-branch-machine.md)
     // =========================================================================
@@ -1245,15 +1273,17 @@ impl Gen {
         self.mc2_shift_rot(body, 1024, 1536);
     }
 
-    /// `sub_2AD40` (EF:20770) — branch finalize: sprite 316, TWO
-    /// RNG draws each (roll then fov), life ladder 460*k+920, and
-    /// the first table placement.
+    /// `sub_2AD40` (EF:20770-800) — branch finalize: sprite 316, TWO
+    /// RNG draws each (roll then fov), life ladder 460*v2+920 where
+    /// v2 counts every chain NODE (the increment sits OUTSIDE the
+    /// branch guard, EF:20798-99): branches sit at positions
+    /// 1/11/21/31/41 → 1380/5980/10580/15180/19780. Counting only
+    /// branches made 2-5 up to 6× too weak (E7).
     fn m27_branch_init(&mut self, body: usize) {
-        let mut k = 0i32;
+        let mut v2 = 1i32;
         let mut j = self.ent[body].f54 as usize;
         while j != 0 {
             if self.ent[j].tick70 == BRANCH_STATE {
-                k += 1;
                 self.mc2_set_sprite(j, 316);
                 let d1 = self.mc2_rand(j);
                 self.ent[j].f34 = (d1 & 0x7FF) as u16; // roll
@@ -1265,15 +1295,50 @@ impl Gen {
                     e.f126 = 16;
                     e.row156 = 103;
                     e.f28 = 1;
-                    let v5 = (460 * k + 920) as u32;
+                    let v5 = (460 * v2 + 920) as u32;
                     e.max_life = v5;
                     e.act_life = v5 as i32;
                 }
                 // sub_2A940 places the fresh branch (EF:20798).
                 self.m27_swing_branch(body, j);
             }
+            v2 += 1;
             j = self.ent[j].f54 as usize;
         }
+    }
+
+    /// `sub_2A6F0` (EF:20452-83) — the m27 branch's OWN wizard scan:
+    /// walks the wizard list with STRICT `<` on both dist² and the
+    /// nearest compare and NO invisibility/hidden filter — unlike
+    /// the shared `mc2_wizard_scan` (a different retail sub), which
+    /// must keep its filters for its other callers (E14).
+    fn m27_wizard_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        let range = (row.v_28 as i32) * (row.v_28 as i32);
+        let cone = row.v_30 as u16;
+        let (ex, ey, eyaw) = (e.x, e.y, e.f30);
+        let mut best: Option<(u16, i32)> = None;
+        let mut consider = |tx: u16, ty: u16, slot: u16| {
+            let d2 = Self::dist2_sq(ex, ey, tx, ty);
+            if d2 >= range {
+                return; // strict < (EF:20461)
+            }
+            let bearing = Self::angle_between(ex, ey, tx, ty);
+            if Self::angdist(eyaw, bearing) >= cone {
+                return;
+            }
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((slot, d2));
+            }
+        };
+        consider(ctx.px, ctx.py, PLAYER_TARGET);
+        for (j, c) in self.ent.iter().enumerate().skip(1) {
+            if c.class64 == 3 && c.model65 <= 1 && c.act_life >= 0 && c.flags & 0x400 == 0 {
+                consider(c.x, c.y, j as u16);
+            }
+        }
+        best.map(|(s, _)| s)
     }
 
     /// `sub_2AE30` (EF:20808) — segment finalize: sprite 317 only.
@@ -1644,7 +1709,7 @@ impl Gen {
                             if v34 > 4 {
                                 self.ent[br].f71 = 4;
                             }
-                        } else if let Some(t) = self.mc2_wizard_scan(br, ctx, false) {
+                        } else if let Some(t) = self.m27_wizard_scan(br, ctx) {
                             self.ent[br].f71 = 2;
                             self.ent[br].f146 = t;
                         }
@@ -1816,9 +1881,12 @@ impl Gen {
                         if v18 > 10 {
                             self.ent[br].f71 = 8;
                         } else {
-                            // Progressively re-show the chain from
-                            // the far end (draw bit → flags 0x20).
-                            let show: usize = if v18 != 0 {
+                            // Progressively HIDE the chain from the
+                            // far end — retail `(byte[0]|1) & 0xF7`
+                            // per node (EF:20055/20069-70): hidden +
+                            // UNTARGETABLE while burrowing. The old
+                            // "re-show" op was inverted (E9).
+                            let hide: usize = if v18 != 0 {
                                 let mut s = self.ent[br].f54 as usize;
                                 let mut k = 0;
                                 while k < 9 - v18 && s != 0 {
@@ -1829,8 +1897,9 @@ impl Gen {
                             } else {
                                 br
                             };
-                            if show != 0 {
-                                self.ent[show].flags &= !0x20;
+                            if hide != 0 {
+                                let f = &mut self.ent[hide].flags;
+                                *f = (*f | 0x21) & !0x08;
                             }
                             let v22 = self.ent[br].f68 + 1;
                             self.ent[br].f26 += 1;
@@ -1870,7 +1939,9 @@ impl Gen {
                     e.f44 = 5;
                     e.f26 = 7;
                     e.f146 = first_seg;
-                    e.flags &= !0x20; // re-show the branch head
+                    // Case 0xA re-show: `(byte[0] & 0xF6) | 8` —
+                    // shown AND re-targetable (EF:20113-17, E9).
+                    e.flags = (e.flags & !0x21) | 0x08;
                     e.f34 = row[D404C_W12] as u16;
                     e.f126 = 156;
                     e.f36 = row[D404C_W14] as u16;
@@ -1892,7 +1963,9 @@ impl Gen {
                         k += 1;
                     }
                     if s != 0 {
-                        self.ent[s].flags &= !0x20;
+                        // Case 0xC: `byte[0] &= 0xFE` — show only,
+                        // bit 3 untouched (EF:20144, E9).
+                        self.ent[s].flags &= !0x21;
                         self.ent[br].f146 = self.ent[s].f54;
                     }
                     self.ent[br].f26 += 1;
@@ -1921,7 +1994,8 @@ impl Gen {
                 self.ent[br].f71 = 8;
                 let mut m = br;
                 for _ in 0..10 {
-                    self.ent[m].flags |= 0x20;
+                    // `(byte[0]|1) & 0xF7` on all 10 (EF:20177, E9).
+                    self.ent[m].flags = (self.ent[m].flags | 0x21) & !0x08;
                     m = self.ent[m].f54 as usize;
                     if m == 0 {
                         break;
@@ -1967,7 +2041,7 @@ impl Gen {
     /// The m27 ground mover (`sub_2AF10` EF:20869) — returns
     /// 1 same-tile / 2 moved / 3 turned / 4 fully blocked (which
     /// arms the 0xD8 teleport in place). `commit` = the a2 flag.
-    fn m27_move(&mut self, body: usize, commit: bool) -> u8 {
+    pub(crate) fn m27_move(&mut self, body: usize, commit: bool) -> u8 {
         let (x, y, z, yaw, roll, spd) = {
             let e = &self.ent[body];
             (e.x, e.y, e.z, e.f30, e.f34, e.f126)
@@ -2024,7 +2098,10 @@ impl Gen {
             self.move_relink(body, pred.0, pred.1, pred.2);
         }
         if turned {
-            let cap = BEHAVIOR[self.ent[body].row156 as usize].v_4;
+            // The live clamp is sub_58350's LAST arg = row v_2 = 22
+            // (EF:20967-72); v_4 (=5) is the dead third arg — the
+            // same trap mobs.rs:238-244 documents (E8).
+            let cap = BEHAVIOR[self.ent[body].row156 as usize].v_2;
             let e = &self.ent[body];
             let step = Self::turn_step(e.f30, e.f34, cap);
             self.ent[body].f30 = (self.ent[body].f30 as i32 + step as i32) as u16 & 0x7FF;
@@ -2051,7 +2128,7 @@ impl Gen {
     }
 
     /// `sub_2AED0` (EF:20852): pose set (on change only).
-    fn m27_pose(&mut self, i: usize, row: u16) {
+    pub(crate) fn m27_pose(&mut self, i: usize, row: u16) {
         if self.ent[i].type86 != row {
             self.ent[i].type86 = row;
             self.ent[i].frame88 = 0;
@@ -2218,7 +2295,16 @@ impl Gen {
             }
             // 0xDE — no unique body (tail of sub_298D0).
             6 => {}
-            // 0xDF — spawn/appear: StageVar2==0 → pose + life only.
+            // 0xDF with StageVar2==0 (an ordinary spawn/appear —
+            // never stage-held): retail's sub_29930 head `sub_1D5D0`
+            // is a no-op at kind 0, the pose select reads v1=0 → 315,
+            // and neither command arm can fire (tick70 stays 223), so
+            // pose + life + drive IS the verbatim reduction. A
+            // stage-HELD body (site_z 1..=9/10/15) never reaches this
+            // dispatch — the world loop routes it through
+            // `World::mc2_m27_held_tick` (stagevars.rs), the full
+            // sub_29930 port with the 0xDA mass-attack broadcast and
+            // the 0xD8→StageVar2=15 arm (Session E16).
             _ => {
                 self.m27_pose(i, 315);
                 self.ent[i].act_life = 1_000_000;

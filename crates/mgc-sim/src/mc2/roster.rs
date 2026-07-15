@@ -273,6 +273,7 @@ impl Gen {
             e.f44 = 500;
             e.f56 = 1;
             e.row156 = 80;
+            e.f66 = 3; // xtype_0x41_65 = 3 (EF:33947, E27)
         }
         let ord = self.mc2_ord(9);
         self.ent[i].f63 = ord;
@@ -586,6 +587,7 @@ impl Gen {
             e.f56 = 1;
             e.row156 = 101;
             e.f58 = 64;
+            e.f66 = 3; // xtype_0x41_65 = 3 (EF:34026, E27)
             e.f26 = 2;
         }
         self.ent[i].f63 = self.mc2_ord(12);
@@ -616,8 +618,12 @@ impl Gen {
 
     /// `sub_232C0` (:14474): the GLOBAL-LCG building-template pick —
     /// `rand % 0x3C + 17`, then walk up to 0x4D slots for a
-    /// townie-flagged bldgprm row (byte_2 & 2).
-    fn m12_pick_template(&mut self) -> Option<u16> {
+    /// townie-flagged bldgprm row (byte_2 & 2). The walk wraps the
+    /// LOW BYTE at 0x4C back to 17 (EF:14489-91) and exhaustion
+    /// returns 17, never a failure (EF:14493) — E19: the old wrap at
+    /// len()→0 and the Option return were both invented, as was the
+    /// extra build_tab gate (retail accepts on byte_2 & 2 alone).
+    pub(crate) fn m12_pick_template(&mut self) -> u16 {
         self.rand = self.rand.wrapping_mul(9377).wrapping_add(9439);
         let mut pick = (self.rand % 0x3C + 17) as usize;
         for _ in 0..0x4D {
@@ -626,16 +632,15 @@ impl Gen {
                 .bldgprm
                 .get(pick)
                 .is_some_and(|p| p.flags & 2 != 0)
-                && self.assets.build_tab.get(pick).is_some()
             {
-                return Some(pick as u16);
+                return pick as u16;
             }
-            pick += 1;
-            if pick >= self.assets.bldgprm.len().max(1) {
-                pick = 0;
+            pick = (pick + 1) & 0xFF;
+            if pick >= 0x4C {
+                pick = 17;
             }
         }
-        None
+        17
     }
 
     pub(crate) fn m12_tick(&mut self, i: usize, ctx: &MobCtx) {
@@ -793,9 +798,7 @@ impl Gen {
             self.ent[i].tick70 = M12_BASE + 1;
             return;
         }
-        let Some(pick) = self.m12_pick_template() else {
-            return;
-        };
+        let pick = self.m12_pick_template();
         let (w, h) = self
             .assets
             .build_tab
@@ -893,6 +896,7 @@ impl Gen {
             e.f56 = 1;
             e.row156 = 100;
             e.f58 = 64;
+            e.f66 = 3; // xtype_0x41_65 = 3 (EF:34117, E27)
             e.f26 = 2;
         }
         self.ent[i].f63 = self.mc2_ord(14);
@@ -994,7 +998,9 @@ impl Gen {
                                     .is_some_and(|p| p.flags & 1 != 0)
                             {
                                 let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
-                                if d2 > 0xE1_0000 && best_d2(&best, d2) {
+                                // 0xE100000 (~60 tiles, EF:14854) —
+                                // a dropped nibble made it ~15 (E18).
+                                if d2 > 0xE100000 && best_d2(&best, d2) {
                                     best = Some((j, d2));
                                 }
                             }
@@ -1091,7 +1097,7 @@ impl Gen {
                 return;
             }
             const W: [u32; 4] = [0x1B58, 0x1B58, 0x000A, 0x1B58];
-            let mut heading = self.ent[i].f34;
+            let mut heading = self.ent[i].f30;
             let mut best = 1u16; // v12 init (:15247)
             for w in W {
                 let mut pos = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
@@ -1100,7 +1106,7 @@ impl Gen {
                 let score = (d + 2) as u16 * u16::from(!self.mc2_path_blocked(i, pos));
                 if score > best {
                     best = score;
-                    self.ent[i].f34 = heading;
+                    self.ent[i].f30 = heading;
                 }
                 heading = (heading + 0x200) & 0x7FF;
             }
@@ -1109,14 +1115,18 @@ impl Gen {
         // (:15284): the %16 tile snap keys on the heading quadrant.
         let mut pos = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         if self.ent[i].f63 % 16 == 0 {
-            match (self.ent[i].f34.wrapping_sub(256) >> 9) & 3 {
+            match (self.ent[i].f30.wrapping_sub(256) >> 9) & 3 {
                 0 | 2 => pos.1 = (pos.1 >> 8 << 8) + 128,
                 _ => pos.0 = (pos.0 >> 8 << 8) + 128,
             }
         }
         // Packmate separation (:15301-11): first same-model neighbor
-        // within 256 on both axes — face away (the committed
-        // heading, not the wander target).
+        // within 256 on both axes — the away bearing lands in ROLL
+        // (f34), the wander heading stays in YAW (f30): retail
+        // scores/steps yaw_0x1C_28 and writes roll_0x20_32 here
+        // (EF:15257-316). The port had the pair inverted — self-
+        // consistent, but hardened to convention before anything
+        // routes m15 through the shared arms (E27).
         let (ex, ey, id) = {
             let e = &self.ent[i];
             (e.x, e.y, e.id24)
@@ -1132,13 +1142,13 @@ impl Gen {
                 && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < 256
             {
                 let away = Self::angle_between(c.x, c.y, ex, ey);
-                self.ent[i].f30 = away;
+                self.ent[i].f34 = away;
                 break;
             }
         }
         if self.ent[i].f30 == self.ent[i].f34 || self.mc2_rand(i) % 0x14 <= 10 {
             let speed = self.ent[i].f126;
-            Self::polar_step(&mut pos, self.ent[i].f34, 0, speed);
+            Self::polar_step(&mut pos, self.ent[i].f30, 0, speed);
             self.move_relink(i, pos.0, pos.1, pos.2);
         }
         self.mc2_alt_commit(i);
@@ -1157,7 +1167,7 @@ impl Gen {
         let row = &BEHAVIOR[e.row156 as usize];
         let range = (row.v_28 as i32) * (row.v_28 as i32);
         let cone = row.v_30 as u16;
-        let (ex, ey, eyaw, own) = (e.x, e.y, e.f34, e.id24);
+        let (ex, ey, eyaw, own) = (e.x, e.y, e.f30, e.id24);
         let mut best: Option<(u16, i32)> = None;
         let consider = |tx: u16, ty: u16, slot: u16, best: &mut Option<(u16, i32)>| {
             let d2 = Self::dist2_sq(ex, ey, tx, ty);
@@ -1250,7 +1260,8 @@ impl Gen {
         if target == PLAYER_TARGET {
             self.player_danger = 100; // sub_5EF70
         }
-        self.shots += 1;
+        // No shots++: retail's volley (EF:15154-66) never touches
+        // the player stat — the counter is the PLAYER's own (E27).
     }
 
     /// `sub_23E60` (:15083) — chase/volley. STATIONARY: no move
@@ -1678,7 +1689,7 @@ impl Gen {
     // 0x90-97; ground-locked, 5-shot (9,0) fans)
     // =========================================================================
 
-    pub(crate) fn mc2_spawn_m18(&mut self, x: u16, y: u16, _z: i16) -> Option<usize> {
+    pub(crate) fn mc2_spawn_m18(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
             let e = &mut self.ent[i];
@@ -1704,8 +1715,11 @@ impl Gen {
             e.f26 = 100; // :34262
         }
         self.ent[i].f63 = self.mc2_ord(18);
-        let gz = self.ground_z(x, y) as i16;
-        self.link(i, x, y, gz);
+        // The ctor keeps the loader's z (EF:34262 passes the record
+        // straight through); the state head snaps to ground on the
+        // first TICK — the eager snap was a spawn-tick divergence
+        // (E27 nit).
+        self.link(i, x, y, z);
         self.refill_life(i);
         self.mc2_set_sprite(i, 286);
         self.mc2_shift_rot(i, 512, 512);
@@ -1724,22 +1738,36 @@ impl Gen {
         v
     }
 
-    /// `sub_253B0` (:16155): enter (state base+`role`, sub-state
-    /// `sub`) with an RNG-jittered duration. The (role,sub)→formula
-    /// map is partially pinned (module-doc APPROX); every %-form
-    /// draws once like retail.
-    fn m18_timer(&mut self, i: usize, role: u8, sub: u8) {
+    /// `sub_253B0` (:16155-229): enter (state base+`role`, sub-state
+    /// `sub`) with the pinned duration table. ONLY the %-forms draw
+    /// the per-entity LCG — the flat forms (0,≥2)/(2,1..3) draw
+    /// NOTHING (the old unconditional pre-draw desynced every tank's
+    /// rand stream, and (0,1)/(2,1) had wrong values — E3).
+    pub(crate) fn m18_timer(&mut self, i: usize, role: u8, sub: u8) {
         self.ent[i].tick70 = M18_BASE + role;
         self.ent[i].f71 = sub;
-        let d = self.mc2_rand(i);
         self.ent[i].f26 = match (role, sub) {
-            (0, _) => (d % 400 + 400) as i16,
-            (1, _) => (d % 0x190 + 400) as i16,
-            (2, 0) => (d % 200 + 200) as i16,
-            (2, 1) => (d % 200 + 200) as i16,
-            (2, 2) => 12,
-            (2, 3) => 14,
-            _ => 10,
+            (0, 0) => {
+                let d = self.mc2_rand(i);
+                (d % 400 + 400) as i16
+            }
+            (0, 1) => {
+                let d = self.mc2_rand(i);
+                (d % 60 + 60) as i16 // :16172-86, v4 = 60
+            }
+            (0, _) => return, // ≥2: no draw, f26 unchanged (:16187)
+            (1, _) => {
+                let d = self.mc2_rand(i);
+                (d % 0x190 + 400) as i16
+            }
+            (2, 0) => {
+                let d = self.mc2_rand(i);
+                (d % 200 + 200) as i16
+            }
+            (2, 1) => 10, // flat, no draw (:16215)
+            (2, 2) => 12, // flat, no draw (:16220)
+            (2, 3) => 14, // flat, no draw (:16225)
+            _ => return,  // (2,≥4): no draw, f26 unchanged
         };
     }
 
@@ -1771,7 +1799,7 @@ impl Gen {
                         let e = &self.ent[i];
                         let d = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz));
                         if d < BEHAVIOR[e.row156 as usize].v_28 as u32 {
-                            self.m18_face(i, ctx, 4);
+                            self.m18_face(i, ctx, 22); // (4<<11)/360 (EF:15875, E4)
                             let d2 = self.mc2_rand(i);
                             if d2 % 0x31 == 0 {
                                 self.m18_timer(i, 2, 0);
@@ -1820,7 +1848,7 @@ impl Gen {
                 }
                 match self.ent[i].f71 {
                     0 => {
-                        self.m18_face(i, ctx, 4);
+                        self.m18_face(i, ctx, 22); // (4<<11)/360 (EF:15995, E4)
                         if v2 == 1 {
                             self.ent[i].f26 -= 47;
                             if self.ent[i].f26 < 0 {
@@ -1851,7 +1879,7 @@ impl Gen {
                                 self.m18_timer(i, 2, 2);
                                 return;
                             }
-                            self.m18_face(i, ctx, 5);
+                            self.m18_face(i, ctx, 0x400); // barrage-1 inlines the 0x400 snap (EF:16038, E4)
                             self.mc2_atk_fan(i, slot, ctx);
                         }
                     }
@@ -2027,9 +2055,19 @@ impl Gen {
                     self.ent[i].f71 = 3;
                 }
                 3 => {
-                    if self.ent[i].f63 & 3 == 0 {
-                        self.mc2_aim_avoid(i, tx, ty);
+                    // Aim runs EVERY tick, BEFORE the gate
+                    // (EF:16419); the `f63 & 3` gate covers all of
+                    // the avoidance/flank/roll below (EF:16420) —
+                    // the old shape gated only the aim and rolled
+                    // every tick (4× the dive rate, E2).
+                    {
+                        let e = &self.ent[i];
+                        self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
                     }
+                    if self.ent[i].f63 & 3 != 0 {
+                        break;
+                    }
+                    self.mc2_avoid_packmate(i);
                     let Some(p) = self.m19_flank(i, ctx, false) else {
                         break;
                     };
@@ -2040,17 +2078,23 @@ impl Gen {
                     }
                     let d = self.mc2_rand(i);
                     let v16 = d % 0x11F;
+                    // CASCADING independent ifs (EF:16449-55): a
+                    // 0x3F-multiple arms 6, a 0x1F-multiple then
+                    // OVERRIDES to 7, zero lands 4; the bob fires on
+                    // every multiple of 4 including the above (the
+                    // else-if chain made 4 unreachable and 6 final).
                     if v16 & 0x3F == 0 {
                         self.ent[i].f71 = 6;
-                    } else if v16 & 0x1F == 0 {
+                    }
+                    if v16 & 0x1F == 0 {
                         self.ent[i].f71 = 7;
-                        continue;
-                    } else if v16 == 0 {
+                    }
+                    if v16 == 0 {
                         self.ent[i].f71 = 4;
-                        continue;
-                    } else if v16 & 3 == 0 {
+                    }
+                    if v16 & 3 == 0 {
                         // The vertical bob toward the hover altitude —
-                        // the flying evidence (:16447-61).
+                        // the flying evidence (:16455-61).
                         let hover = self.ent[i].f26;
                         self.ent[i].z += if self.ent[i].z <= hover { 64 } else { -64 };
                     }
@@ -2543,8 +2587,12 @@ impl Gen {
                 match self.ent[i].f71 {
                     0 => {
                         self.ent[i].f126 = self.ent[i].f130;
-                        self.ent[i].f26 -= 1;
-                        if self.ent[i].f26 <= 0 {
+                        // PRE-decrement test (EF:18100-02: `if (v5y)
+                        // return` on the OLD value) — the post-test
+                        // fired one tick early (E17c).
+                        let old = self.ent[i].f26;
+                        self.ent[i].f26 = old - 1;
+                        if old <= 0 {
                             self.m23_mode(i, M23_BASE, 1, 0);
                         }
                     }
@@ -2609,7 +2657,9 @@ impl Gen {
                     }
                     _ => {
                         if self.ent[i].z >= 0x2000 {
-                            self.ent[i].f44 = 0x2000;
+                            // No f44 write (EF:18174-84 leaves the
+                            // stale value — it governs the NEXT
+                            // descent's target, E17b).
                             self.m23_mode(i, M23_BASE, 0, 80);
                         } else {
                             self.ent[i].z += 32;
@@ -2663,27 +2713,41 @@ impl Gen {
                             self.m23_mode(i, M23_BASE + 3, 3, 0);
                         }
                     }
-                    1 | 2 => {
+                    1 => {
+                        // The siphon runs the 64-tick f26 timeout
+                        // (seeded by the sub-1 entry): decrement
+                        // INSIDE the node-ok arm (retail's `v3x &&
+                        // (--f26)` short-circuit, EF:18261-86) — an
+                        // unreachable ball aborts to re-hunt instead
+                        // of siphoning forever (E17a).
                         if self.m23_node_ok(i) {
-                            let t = self.ent[i].f146 as usize;
-                            self.ent[t].flags |= 0x40; // grabbed
-                            self.ent[t].f146 = i as u16;
-                            self.ent[i].f44 += 10;
-                            let (sp, tp) = {
-                                let e = &self.ent[i];
-                                let s = &self.ent[t];
-                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
-                            };
-                            if Self::mc2_dist3(sp, tp) < 256 || tp.2 > sp.2 {
-                                // Swallow: steal the mana, consume it.
-                                self.ent[i].f140 += self.ent[t].f140;
-                                self.ent[t].flags |= 0x400;
+                            self.ent[i].f26 -= 1;
+                            if self.ent[i].f26 != 0 {
+                                let t = self.ent[i].f146 as usize;
+                                self.ent[t].flags |= 0x40; // grabbed
+                                self.ent[t].f146 = i as u16;
+                                self.ent[i].f44 += 10;
+                                let (sp, tp) = {
+                                    let e = &self.ent[i];
+                                    let s = &self.ent[t];
+                                    ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                                };
+                                if Self::mc2_dist3(sp, tp) < 256 || tp.2 > sp.2 {
+                                    // Swallow: steal the mana, consume it.
+                                    self.ent[i].f140 += self.ent[t].f140;
+                                    self.ent[t].flags |= 0x400;
+                                    self.m23_mode(i, M23_BASE + 3, 3, 0);
+                                }
+                            } else {
                                 self.m23_mode(i, M23_BASE + 3, 3, 0);
                             }
                         } else {
                             self.m23_mode(i, M23_BASE + 3, 3, 0);
                         }
                     }
+                    // Retail sub 2 is a NO-OP (the EF:18261 gate is
+                    // strictly `== 1`); it was folded into 1 before.
+                    2 => {}
                     _ => {
                         self.ent[i].f146 = 0;
                         if let Some(n) = self.m23_find_node(i) {
@@ -2760,7 +2824,11 @@ impl Gen {
         if self.ent[i].f58 == 0 || self.ent[i].f63 & 0xF != 0 {
             return;
         }
-        if let Some(t) = self.mc2_wizard_scan(i, ctx, false) {
+        // sub_28690 (:18744-71) walks the WHOLE class-3 list — the
+        // brute aggros castles and balloons too, nearest-wins, not
+        // just wizards (E20). Winner validity: alive + not reaped
+        // (the byte[1]&4 check = our 0x400, already in the scan).
+        if let Some(t) = self.mc2_class3_scan(i, ctx) {
             self.ent[i].tick70 = M24_BASE + 2;
             self.ent[i].f146 = t;
         }
@@ -2924,8 +2992,9 @@ impl Gen {
             }
             4 => self.m25_split(i),
             5 => {
-                // :19187 — kill/score.
-                if self.ent[i].f38 == PLAYER_TARGET {
+                // :19187 — kill/score (the shared 1C890 gate:
+                // human killer + self-id exclusion, E27).
+                if self.ent[i].f38 == PLAYER_TARGET && self.ent[i].id24 != PLAYER_TARGET {
                     self.kills += 1;
                 }
                 if self.ent[i].f71 != 0 {
@@ -3026,6 +3095,11 @@ impl Gen {
                 }
             }
             6 | 7 => {
+                if self.ent[i].f71 == 6 {
+                    // The 6→7 transition sets v26 unconditionally
+                    // (EF:18980-83) before falling into LABEL_41.
+                    speed_reset = true;
+                }
                 self.ent[i].f71 = 7;
                 if let Some(c) = self.mc2_castle_of(self.ent[i].f146) {
                     let (cx, cy) = (self.ent[c].x, self.ent[c].y);
@@ -3075,16 +3149,20 @@ impl Gen {
             (e.x, e.y, e.z)
         };
         let on_water = self.cap_bit(x, y) == 1;
-        let above = z > self.ground_z(x, y) as i16;
-        if on_water && self.ent[i].type86 == 314 && above {
-            self.mc2_set_sprite(i, 313);
-            speed_reset = true;
-        } else if on_water {
-            if self.ent[i].type86 != 314 {
+        if on_water {
+            if self.ent[i].type86 == 314 {
+                // Already swimming: ABOVE ground swaps back to 313
+                // with no minSpeed and no v26; otherwise a total
+                // no-op (EF:19029-35) — the port's old shape re-set
+                // minSpeed 35 + v26 every swim tick.
+                if z > self.ground_z(x, y) as i16 {
+                    self.mc2_set_sprite(i, 313);
+                }
+            } else {
                 self.mc2_set_sprite(i, 314);
+                self.ent[i].f128 = 35;
+                speed_reset = true;
             }
-            self.ent[i].f128 = 35;
-            speed_reset = true;
         } else if self.ent[i].type86 != 313 {
             self.mc2_set_sprite(i, 313);
             self.ent[i].f128 = 60;
@@ -3106,15 +3184,26 @@ impl Gen {
             self.mc2_prekill(i, M25_BASE);
             return;
         }
-        if self.free.len() <= 1 {
-            self.mc2_mana_spheres(i, false);
-            self.ent[i].tick70 = M25_BASE + 5;
-            return;
-        }
         let (x, y, z, mana, killer) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f140, e.f40)
         };
+        // Pool exhaustion trades the 3 minis for a sphere dump, but
+        // FALLS THROUGH to the shared burst + state advance — the
+        // (10,1) spawn sits outside the if/else (EF:19176-81); the
+        // old early return skipped the burst.
+        if self.free.len() <= 1 {
+            self.mc2_mana_spheres(i, false);
+        } else {
+            self.m25_split_minis(x, y, z, mana, killer);
+        }
+        self.mc2_corpse_burst(i);
+        self.ent[i].tick70 = M25_BASE + 5;
+        self.ent[i].f71 = 0;
+    }
+
+    /// The 3-mini spawn loop of `sub_28CE0` (:19110-70).
+    fn m25_split_minis(&mut self, x: u16, y: u16, z: i16, mana: i32, killer: u16) {
         let share = mana / 3;
         for n in 0..3 {
             let Some(c) = self.new_event() else { continue };
@@ -3150,9 +3239,6 @@ impl Gen {
             self.mc2_set_sprite(c, 314);
             self.mc2_shift_rot(c, 32, 32);
         }
-        self.mc2_corpse_burst(i);
-        self.ent[i].tick70 = M25_BASE + 5;
-        self.ent[i].f71 = 0;
     }
 
     // =========================================================================
@@ -3262,17 +3348,20 @@ impl Gen {
                         if v10 <= row.v_28 as u32 {
                             let target_is_avatar =
                                 slot == PLAYER_TARGET || self.ent[slot as usize].model65 == 0;
-                            if v10 >= 2048 || !target_is_avatar {
-                                self.ent[i].tick70 = M26_BASE + 1;
-                            } else {
+                            // ALL in-range paths STAY DRAINING: every
+                            // `return sub_293D0` is a state no-op at
+                            // 210 (EF:19338-76 + 19426-40) — the only
+                            // exit to 209 is v10 > v_28 below. The
+                            // old exits here were the inverted-leech
+                            // bug (E1).
+                            if !(v10 >= 2048 || !target_is_avatar) {
                                 // The %63 spell-hijack roll — draw
-                                // consumed; the discharge needs the
-                                // class-15 column (module-doc APPROX).
+                                // consumed (RNG parity); the
+                                // discharge needs the class-15
+                                // column (module-doc APPROX). No
+                                // roll value changes state.
                                 self.rand = self.rand.wrapping_mul(9377).wrapping_add(9439);
-                                let roll = self.rand % 63;
-                                if !matches!(roll, 4 | 5) && roll >= 4 {
-                                    self.ent[i].tick70 = M26_BASE + 1;
-                                }
+                                let _roll = self.rand % 63;
                             }
                         } else {
                             self.ent[i].tick70 = M26_BASE + 1;

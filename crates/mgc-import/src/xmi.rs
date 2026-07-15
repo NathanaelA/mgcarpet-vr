@@ -216,6 +216,17 @@ pub fn parse_evnt(data: &[u8]) -> Result<Song, String> {
                 p += 2;
                 match ctrl {
                     119 => war_channels |= 1 << ch,
+                    // A FOR-loop start anywhere but tick 0 would be a
+                    // real mid-song loop this strip would silently
+                    // flatten — no retail bank-0 song has one; guard
+                    // the invariant for the future bank-1 alternate
+                    // bake (review 2026-07-15 D7).
+                    116 if tick != 0 => {
+                        return Err(format!(
+                            "cc116 FOR-loop start at nonzero tick {tick} — \
+                             mid-song loop unsupported"
+                        ));
+                    }
                     // The AIL-private band (channel lock, banks, FOR
                     // loops 116/117, callbacks): never emitted.
                     110..=119 => {}

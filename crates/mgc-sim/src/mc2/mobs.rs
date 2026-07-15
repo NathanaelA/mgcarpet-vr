@@ -213,7 +213,11 @@ impl Gen {
     /// One predicted candidate of the MC2 move core: altitude core +
     /// polar step at the CURRENT yaw, then the block test (crossing
     /// into a new tile only).
-    fn mc2_move_candidate(&self, i: usize) -> ((u16, u16, i16), bool) {
+    /// `always_test`: the retry predictions run the block/roughness
+    /// test UNCONDITIONALLY (EF:8826/8840/8852) — only the FIRST
+    /// prediction gates it on the tile change (EF:8806). A rotated
+    /// retry that stays in-tile must still be terrain-tested (E13).
+    fn mc2_move_candidate(&self, i: usize, always_test: bool) -> ((u16, u16, i16), bool) {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         let mut pos = (e.x, e.y, e.z);
@@ -221,7 +225,7 @@ impl Gen {
         Self::mc2_alt_core(&mut pos.2, ground, row.v_12, row.v_14);
         Self::polar_step(&mut pos, e.f30, 0, e.f126);
         let crossed = e.x >> 8 != pos.0 >> 8 || e.y >> 8 != pos.1 >> 8;
-        let blocked = crossed
+        let blocked = (always_test || crossed)
             && (self.mc2_path_blocked(i, pos) || self.roughness(pos.0, pos.1) >= row.v_16 as i32);
         (pos, blocked)
     }
@@ -250,7 +254,7 @@ impl Gen {
             g.ent[i].f30 = turned & 0x7FF;
         }
 
-        let (pos, blocked) = self.mc2_move_candidate(i);
+        let (pos, blocked) = self.mc2_move_candidate(i, false);
         let same_tile = self.ent[i].x >> 8 == pos.0 >> 8 && self.ent[i].y >> 8 == pos.1 >> 8;
         if same_tile {
             commit(self, i, pos, turn_cap);
@@ -266,7 +270,7 @@ impl Gen {
         let yaw0 = self.ent[i].f30;
         // Retry 1: +341 (:8815).
         self.ent[i].f30 = yaw0.wrapping_add(341) & 0x7FF;
-        let (pos, blocked) = self.mc2_move_candidate(i);
+        let (pos, blocked) = self.mc2_move_candidate(i, true);
         if !blocked {
             commit(self, i, pos, turn_cap);
             return 3;
@@ -276,7 +280,7 @@ impl Gen {
         let lo = yaw0.wrapping_sub(85) as u8;
         let hi = ((yaw0.wrapping_sub(341) >> 8) & 7) as u8;
         self.ent[i].f30 = u16::from_le_bytes([lo, hi]);
-        let (pos, blocked) = self.mc2_move_candidate(i);
+        let (pos, blocked) = self.mc2_move_candidate(i, true);
         if !blocked {
             commit(self, i, pos, turn_cap);
             return 3;
@@ -284,7 +288,7 @@ impl Gen {
         // Retry 3: (yaw0 + 0x400) & (0x700 + LOBYTE(yaw0)) — the
         // decompile's precedence quirk kept verbatim (:8846).
         self.ent[i].f30 = yaw0.wrapping_add(0x400) & (0x700 + (yaw0 & 0xFF));
-        let (pos, blocked) = self.mc2_move_candidate(i);
+        let (pos, blocked) = self.mc2_move_candidate(i, true);
         if !blocked {
             commit(self, i, pos, turn_cap);
             return 3;
@@ -344,18 +348,64 @@ impl Gen {
 
     /// Arm the wizard "wanted" timer (`word_0x248_584 = 200`) on a
     /// hit/kill source when it is a wizard — the human maps to the
-    /// shared aggro register (module doc).
+    /// shared aggro register, pool wizards to the hash-quiet
+    /// `mc2_wanted` side channel (E12; the rival column is live).
     pub(crate) fn mc2_arm_wanted(&mut self, src: u16) {
         if src == PLAYER_TARGET {
             self.player_aggro = 200;
         } else {
             let j = src as usize;
             if j > 0 && j < self.ent.len() && self.ent[j].class64 == 3 && self.ent[j].model65 <= 1 {
-                // Pool wizards (rivals) get theirs when the MC2
-                // rival column lands; the field has no reader for
-                // them in the slice.
+                self.mc2_wanted.0.insert(src, 200);
             }
         }
+    }
+
+    /// Is `slot`'s wanted timer live? (the archer Scan-A post-reject
+    /// gate, :11799-802.)
+    pub(crate) fn mc2_wanted_live(&self, slot: u16) -> bool {
+        if slot == PLAYER_TARGET {
+            self.player_aggro > 0
+        } else {
+            self.mc2_wanted.0.get(&slot).is_some_and(|&t| t > 0)
+        }
+    }
+
+    /// The full class-3 pool walk shared by the archer's Scan A
+    /// (:11768-95) and m24 acquire (sub_28690 :18744-64): nearest
+    /// class-3 ANYTHING (wizards, castles, balloons) with `d2 <=
+    /// v_28²`, cone `< v_30`, skipping only invisibles (byte[0] &
+    /// 0x20). The human wizard sits in retail's dword_38519 like any
+    /// pool entity, so the out-of-pool pseudo-target joins the walk.
+    pub(crate) fn mc2_class3_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        let range = (row.v_28 as i32) * (row.v_28 as i32);
+        let cone = row.v_30 as u16;
+        let (ex, ey, eyaw) = (e.x, e.y, e.f30);
+        let mut best: Option<(u16, i32)> = None;
+        let mut consider = |tx: u16, ty: u16, slot: u16| {
+            let d2 = Self::dist2_sq(ex, ey, tx, ty);
+            if d2 > range {
+                return;
+            }
+            let bearing = Self::angle_between(ex, ey, tx, ty);
+            if Self::angdist(eyaw, bearing) >= cone {
+                return;
+            }
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((slot, d2));
+            }
+        };
+        if !self.player_invisible {
+            consider(ctx.px, ctx.py, PLAYER_TARGET);
+        }
+        for (j, c) in self.ent.iter().enumerate().skip(1) {
+            if c.class64 == 3 && c.act_life >= 0 && c.flags & 0x400 == 0 && c.flags & 0x20 == 0 {
+                consider(c.x, c.y, j as u16);
+            }
+        }
+        best.map(|(s, _)| s)
     }
 
     /// The wizard-target scan of `sub_1BF90` (:9152-95): nearest
@@ -461,6 +511,10 @@ impl Gen {
             if c.class64 == 5
                 && c.model65 == model
                 && c.id24 != id
+                // Retail iterates the LIVE per-model bucket — the
+                // dying never appear (EF:9641-50); the full-array
+                // walk needs the explicit life gate (E27).
+                && c.act_life >= 0
                 && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
                 && c.flags & 0x400 == 0
                 && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < pitch
@@ -772,7 +826,14 @@ impl Gen {
         }
         let killer = self.ent[i].f38;
         let model = self.ent[i].model65;
-        if killer == PLAYER_TARGET && !matches!(model, 9 | 12 | 13 | 14 | 15) {
+        // PreKillEntity_1C890 (EF:9543-51): credit gates on killer
+        // class-3 MODEL-0 (the human avatar only — rivals are (3,1)
+        // and never score creature kills) AND the SELF-ID check:
+        // killing your own creature earns nothing (E27).
+        if killer == PLAYER_TARGET
+            && self.ent[i].id24 != PLAYER_TARGET
+            && !matches!(model, 9 | 12 | 13 | 14 | 15)
+        {
             self.kills += 1;
         }
         self.ent[i].tick70 = base + 5;
@@ -835,13 +896,16 @@ impl Gen {
             let speed = (d2 % 0x30 + 16) as i16;
             // Velocity into the MC1 ball's dest fields (the shared
             // ball tick consumes them), fall arc into f46 — signed
-            // floor /8, NO clamp (MC1 clamps ≥ 0; MC2 does not).
+            // TRUNCATING /8 like the C idiom at EF:26909 (div_euclid
+            // floored: off by one for deaths > 1024 above terrain;
+            // castle.rs:530 was already right), NO clamp (MC1 clamps
+            // ≥ 0; MC2 does not).
             let mut v = (0u16, 0u16, 0i16);
             Self::polar_step(&mut v, yaw, 0, speed);
             self.ent[b].dest_x = v.0;
             self.ent[b].dest_y = v.1;
             let zdiff = (z as i32) - (ground as i32);
-            self.ent[b].f46 = ((1024 - zdiff) as i16).div_euclid(8);
+            self.ent[b].f46 = ((1024 - zdiff) / 8) as i16;
         }
         self.ent[i].f140 = 0;
         self.ent[i].f144 = 0;
@@ -878,6 +942,9 @@ impl Gen {
             e.row156 = 98; // ABSOLUTE row index (:33739)
         }
         self.ent[i].f58 = BEHAVIOR[98].v_26 + 1;
+        // Per-model spawn ordinal → f63 (:33740) — the herd cadence
+        // de-sync (E10; every `f63 & N` gate ran in lockstep at 0).
+        self.ent[i].f63 = self.mc2_ord(1);
         self.link(i, x, y, z);
         self.refill_life(i);
         self.mc2_set_sprite(i, 238);
@@ -915,6 +982,10 @@ impl Gen {
             e.f44 = 500;
             e.row156 = 75; // ABSOLUTE row index (:33899)
         }
+        // Ordinal FIRST (:33900) — it feeds the wake stagger on the
+        // very next line; unset f63 collapsed f58 to the constant
+        // period+4 (no stagger — the degenerate archer wake, E10).
+        self.ent[i].f63 = self.mc2_ord(4);
         let period = BEHAVIOR[75].v_26.max(1);
         self.ent[i].f58 = (period - (self.ent[i].f63 as i16 % period)) + 4; // :33902
         self.link(i, x, y, z);
@@ -958,6 +1029,8 @@ impl Gen {
             e.f58 = 64;
             e.f26 = 2;
         }
+        // Per-model spawn ordinal → f63 (:34062) — herd cadence (E10).
+        self.ent[i].f63 = self.mc2_ord(13);
         self.link(i, x, y, z);
         self.refill_life(i);
         let d2 = self.mc2_rand(i); // draw #2 (:34065)
@@ -1174,9 +1247,15 @@ impl Gen {
                 self.mc2_wander_turn(i);
                 let period4 = 4 * period;
                 if self.ent[i].f63 as i16 % period4 == 0 {
-                    // Scan A: wizards with a live wanted timer
-                    // (:11768-11800).
-                    let mut target = self.mc2_wizard_scan(i, ctx, true);
+                    // Scan A (:11768-11804): nearest class-3 ANYTHING,
+                    // then POST-REJECT the single winner unless it is
+                    // a wizard (model ≤ 1) with a live wanted timer —
+                    // a nearer castle/balloon/non-wanted wizard voids
+                    // the whole scan (falls to Scan B). E12.
+                    let mut target = self.mc2_class3_scan(i, ctx).filter(|&s| {
+                        let wizard = s == PLAYER_TARGET || self.ent[s as usize].model65 <= 1;
+                        wizard && self.mc2_wanted_live(s)
+                    });
                     if target.is_none() {
                         // Scan B: nearest model-9 creature, no cone
                         // (:11811).
@@ -1290,7 +1369,8 @@ impl Gen {
         if target == PLAYER_TARGET {
             self.player_danger = 100; // sub_5EF70 (:60598)
         }
-        self.shots += 1;
+        // No shots++: a creature volley never bumps the player's
+        // accuracy stat in retail (E27 sibling of roster's m15).
         true
     }
 
@@ -2137,8 +2217,11 @@ impl Gen {
         // The shared class-5 `8*M+7` slot (`sub_1D5D0`, EF:9977) — a
         // CONTROLLED creature. StageVar2 (port field: site_z, free on
         // creatures) selects the body: 12 = Metamorph pose-puppet, 13 =
-        // Summon-Army allied AI. StageVar2 == 0 (every ordinary spawn)
-        // is a no-op, so those fall through to the per-model dispatch
+        // Summon-Army allied AI. Stage-HELD kinds (1..=10, 15) never
+        // reach here — the world dispatch seam routes them through
+        // `World::mc2_held_tick` (stagevars.rs, Session H6/E16).
+        // StageVar2 == 0 (every ordinary spawn) is a no-op, so those
+        // fall through to the per-model dispatch
         // (docs/spell-audit/summon-creatures.md).
         if action & 7 == 7 && self.ent[i].site_z != 0 {
             match self.ent[i].site_z {
@@ -2362,30 +2445,54 @@ impl Gen {
                 self.ent[i].f59 = 0;
                 continue;
             }
-            if self.ent[i].f58 != 0 {
-                let v = self.ent[i].f58;
-                let mut j = self.ent[i].f54 as usize;
-                while j != 0 {
-                    self.ent[j].f58 = v;
-                    j = self.ent[j].f54 as usize;
-                }
-                self.ent[i].f58 = v - 1;
-                continue;
-            }
-            if self.ent[i].f59 != 0 {
-                self.ent[i].f59 -= 1;
-                continue;
-            }
-            let e = &self.ent[i];
-            if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000 {
-                self.ent[i].f58 = 16;
-                let mut j = self.ent[i].f54 as usize;
-                while j != 0 {
-                    self.ent[j].f58 = 18;
-                    j = self.ent[j].f54 as usize;
-                }
-            }
-            self.ent[i].f59 = 0;
+            self.mc2_awake_one(i, ctx);
         }
+        // sub_68BF0's SECOND loop (EF:55489-90): dword_38523 = the
+        // mana-sphere family (10, 39/40) awake-ticks too — spheres
+        // near the player arm their f58 like creatures do. No dead
+        // reset here (retail's sphere loop is unconditional). E15.
+        for i in 1..self.ent.len() {
+            let e = &self.ent[i];
+            if e.class64 == 10 && matches!(e.model65, 39 | 40) && e.flags & 0x400 == 0 {
+                self.mc2_awake_one(i, ctx);
+            }
+        }
+    }
+
+    /// One entity's `sub_68C70` body (EF:55494): f58 propagate +
+    /// decrement, the HIDDEN-skip, the f59 hold, proximity-wake.
+    fn mc2_awake_one(&mut self, i: usize, ctx: &MobCtx) {
+        if self.ent[i].f58 != 0 {
+            let v = self.ent[i].f58;
+            let mut j = self.ent[i].f54 as usize;
+            while j != 0 {
+                self.ent[j].f58 = v;
+                j = self.ent[j].f54 as usize;
+            }
+            self.ent[i].f58 = v - 1;
+            return;
+        }
+        // The hidden-skip (`byte[0] & 1`, EF:55515): a hidden entity
+        // (burrowed m27 etc.) never proximity-wakes. Registry: flags
+        // bit 0 = hidden, bit 5 (0x20) = scan-invisible — both are
+        // verbatim byte[0] mappings, distinct from the synthesized
+        // high bits (F_STOP &c). E15.
+        if self.ent[i].flags & 1 != 0 {
+            return;
+        }
+        if self.ent[i].f59 != 0 {
+            self.ent[i].f59 -= 1;
+            return;
+        }
+        let e = &self.ent[i];
+        if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000 {
+            self.ent[i].f58 = 16;
+            let mut j = self.ent[i].f54 as usize;
+            while j != 0 {
+                self.ent[j].f58 = 18;
+                j = self.ent[j].f54 as usize;
+            }
+        }
+        self.ent[i].f59 = 0;
     }
 }

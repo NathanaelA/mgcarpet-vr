@@ -116,6 +116,15 @@ struct MusicState {
     pos: u64,
     step: u64,
     looped: bool,
+    /// Declick release for StopMusic / track replacement: `Some(g)` =
+    /// ramping out; at 0 the stream clears (and `pending` installs).
+    /// Same artifact class the ~2.5 ms SFX release fixed — a hard
+    /// `pcm = None` mid-waveform is an audible click/thump (review
+    /// 2026-07-15 D6).
+    release: Option<f32>,
+    /// The next track, installed once the release ramp completes.
+    #[allow(clippy::type_complexity)]
+    pending: Option<(Arc<Vec<i16>>, Option<Arc<Vec<i16>>>, u16, u64, bool)>,
 }
 
 pub struct Renderer {
@@ -134,6 +143,8 @@ pub struct Renderer {
     release_step: f32,
     /// Game pause: stream silence, hold every play position.
     suspended: bool,
+    /// The pause edge ease (D6): 1 = running, 0 = fully muted.
+    suspend_gain: f32,
 }
 
 impl Renderer {
@@ -159,6 +170,8 @@ impl Renderer {
                 pos: 0,
                 step: 0,
                 looped: false,
+                release: None,
+                pending: None,
             },
             speech: MusicState {
                 pcm: None,
@@ -168,6 +181,8 @@ impl Renderer {
                 pos: 0,
                 step: 0,
                 looped: false,
+                release: None,
+                pending: None,
             },
             sfx_gain: 1.0,
             music_gain: 1.0,
@@ -177,6 +192,7 @@ impl Renderer {
             // short enough not to smear the retriggered attack.
             release_step: 1.0 / (f64::from(out_rate) * 0.0025).max(1.0) as f32,
             suspended: false,
+            suspend_gain: 1.0,
         }
     }
 
@@ -232,18 +248,32 @@ impl Renderer {
                 sample_rate,
                 looped,
             } => {
-                self.music.step =
-                    ((f64::from(sample_rate) / self.out_rate) * (1u64 << 32) as f64) as u64;
-                self.music.pcm = Some(pcm);
-                self.music.overlay = overlay;
-                self.music.channels = channels.max(1);
-                self.music.pos = 0;
-                self.music.looped = looped;
+                let step = ((f64::from(sample_rate) / self.out_rate) * (1u64 << 32) as f64) as u64;
+                if self.music.pcm.is_some() {
+                    // Replace: ramp the playing track out first, then
+                    // install (declick, review 2026-07-15 D6).
+                    self.music.pending = Some((pcm, overlay, channels.max(1), step, looped));
+                    if self.music.release.is_none() {
+                        self.music.release = Some(1.0);
+                    }
+                } else {
+                    self.music.step = step;
+                    self.music.pcm = Some(pcm);
+                    self.music.overlay = overlay;
+                    self.music.channels = channels.max(1);
+                    self.music.pos = 0;
+                    self.music.looped = looped;
+                    self.music.release = None;
+                    self.music.pending = None;
+                }
             }
             Cmd::MusicOverlayGain { gain } => self.music.overlay_gain = gain,
             Cmd::StopMusic => {
-                self.music.pcm = None;
-                self.music.overlay = None;
+                // Ramp out instead of the hard cut (D6).
+                self.music.pending = None;
+                if self.music.pcm.is_some() && self.music.release.is_none() {
+                    self.music.release = Some(1.0);
+                }
             }
             Cmd::Speech {
                 pcm,
@@ -269,9 +299,11 @@ impl Renderer {
     /// Fill an interleaved stereo f32 buffer.
     pub fn render(&mut self, out: &mut [f32]) {
         self.drain_cmds();
-        if self.suspended {
+        if self.suspended && self.suspend_gain <= 0.0 {
             // Game pause: silence, positions held (retail suspends
-            // ALL sound and resumes where it left off).
+            // ALL sound and resumes where it left off). The edge in
+            // and out is eased by `suspend_gain` below — the old
+            // instant mute/unmute stepped mid-waveform (D6).
             out.fill(0.0);
             return;
         }
@@ -373,13 +405,32 @@ impl Renderer {
                             mr += or_ * self.music.overlay_gain;
                         }
                     }
-                    l += ml / 32768.0 * self.music_gain * self.duck_gain;
-                    r += mr / 32768.0 * self.music_gain * self.duck_gain;
+                    let rel = self.music.release.unwrap_or(1.0);
+                    l += ml / 32768.0 * self.music_gain * self.duck_gain * rel;
+                    r += mr / 32768.0 * self.music_gain * self.duck_gain * rel;
                     self.music.pos += self.music.step;
+                    // Advance the release; at silence, clear (and
+                    // install the pending replacement — D6 declick).
+                    if let Some(g) = self.music.release.as_mut() {
+                        *g -= self.release_step;
+                        if *g <= 0.0 {
+                            music_done = true;
+                        }
+                    }
                 }
             }
             if music_done {
                 self.music.pcm = None;
+                self.music.overlay = None;
+                self.music.release = None;
+                if let Some((pcm, overlay, channels, step, looped)) = self.music.pending.take() {
+                    self.music.pcm = Some(pcm);
+                    self.music.overlay = overlay;
+                    self.music.channels = channels;
+                    self.music.step = step;
+                    self.music.pos = 0;
+                    self.music.looped = looped;
+                }
             }
             // The voiceover lane: one-shot, duck-exempt.
             let mut speech_done = false;
@@ -413,8 +464,19 @@ impl Renderer {
             if speech_done {
                 self.speech.pcm = None;
             }
-            frame[0] = l.clamp(-1.0, 1.0);
-            frame[1] = r.clamp(-1.0, 1.0);
+            // Suspend edge ease (~2.5 ms): ramp toward mute on pause
+            // and back on resume; playback positions drift a few ms
+            // during the ramp, then hold.
+            let target = if self.suspended { 0.0 } else { 1.0 };
+            if self.suspend_gain != target {
+                self.suspend_gain = if self.suspended {
+                    (self.suspend_gain - self.release_step).max(0.0)
+                } else {
+                    (self.suspend_gain + self.release_step).min(1.0)
+                };
+            }
+            frame[0] = (l * self.suspend_gain).clamp(-1.0, 1.0);
+            frame[1] = (r * self.suspend_gain).clamp(-1.0, 1.0);
         }
     }
 

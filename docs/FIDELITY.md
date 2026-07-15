@@ -165,7 +165,7 @@ who already has the spell they become permanent, unidentifiable clutter
 DEATH-scattered jars self-cull (life 200-289).
 
 **Improvement (P-class, opt-in; player-directed 2026-07-14).** With
-`enhancements.prune_owned_jars` on, any jar whose spell the local player
+`gameplay.enhancement.prune_owned_jars` on, any jar whose spell the local player
 already owns — and therefore can never pick up — is removed. The
 criterion is exactly the retail pickup gate ("owns `s`" = "can't take
 it"). Single-player entity removal (in MP, gate on the local human or
@@ -182,6 +182,163 @@ away. CLI `--prune-owned-jars` / `--no-prune-owned-jars`.
 jar remains, on removes it. The sim default (`World::prune_owned_jars`)
 stays OFF so state-hash goldens are unaffected; only the app config
 turns it on.
+
+---
+
+## Vertical projection (crosshair/pitch feel) — APPROX, player-ruled
+
+**Original.** Retail renders pitch as an affine horizon SHEAR: the
+eye-level row shifts by `width·pitch/256` (`:33872`/`:38245`), object
+elevation is added separately as `fowDist·tan(α)` (`:36853`,
+`fowDist = √(W²+H²)/2`), and the camera pitch is HALF the aim pitch
+(`:52434`). The shot fires on the full aim, so the half-pitch shear
+near-cancels its elevation: at full aim the crosshair sits at ~1/3
+(up) / ~2/3 (down) of screen height (player-measured in retail).
+
+**Port.** A true perspective camera pitched at aim/2 (FOV_Y 60°,
+`mgc-render`); the crosshair predictor projects the aim ray through
+the same camera (`mgc-app`). No shear cancellation, so the aim/pitch
+disparity reads ~2.4× stronger (~0.145/0.855 at full aim). The
+crosshair stays exactly over where port-rendered shots fly — the
+property certified during the autoaim work.
+
+**Verified.** Formula-level comparison against the decompile, both
+projections quantified: docs/traces/mc1-crosshair-pitch-law.md.
+
+**Deviations & interims.** The projection model itself is the
+deviation. **Player ruling 2026-07-15: keep the perspective renderer
+as-is** — retail's shear is the technically-wrong projection; a
+crosshair-only correction was rejected (it would desync the predictor
+from visible shot paths). The trace holds the full affine law should
+a faithful-shear renderer alternate ever be wanted.
+
+---
+
+## MC2 level-7 castle downgrade haircut — APPROX (overflow not reproduced)
+
+**Original.** `sub_605E0` (remc2 EF:61622) computes the 10% capacity
+haircut as i32 `10 * maxMana / 100`. At the level-7 cap
+(`MC2_CASTLE_CAP[7] = 300_000_000`) the multiply ALWAYS overflows
+into a negative cut — a maxed level-7 castle downgrade *raises* its
+cap and scatters no mana. Lower levels compute normally.
+
+**Port.** The multiply widens to i64 (`mgc-sim mc2/castle.rs`,
+`mc2_castle_downgrade`), so level 7 takes a genuine 10% haircut like
+every other level. (The widening originally fixed a player crash —
+the shift+L downgrade overflow panic, 2026-07-13.)
+
+**Verified.** Decompile re-read 2026-07-16 (review item G9n).
+Terrain restore is unaffected either way — only the mana-scatter
+amount differs.
+
+**Deviations & interims.** Deliberate idealization: we keep the sane
+10% rather than reproduce an integer-overflow bug whose only effect
+is a broken edge (no scatter at the top rung).
+
+---
+
+## MC2 "under attack" owner flags — APPROX (player-only HUD latch)
+
+**Original.** Castle damage sets the OWNER's `byte_0x195_405 = 4`
+and balloon damage `byte_0x197_407 = 4` for ANY owner (remc2
+EF:61752 / EF:61947) — rival wizards receive the same flags.
+
+**Port.** A single player-side alert latch (`castle_alert` /
+`balloon_alert` in `mgc-sim mc2/castle.rs`); rival owners have no
+per-owner record, and the rival brain does not consume an
+under-attack signal yet.
+
+**Verified.** Decompile-cited (review 2026-07-15 item G9c).
+
+**Deviations & interims.** Becomes real work when a rival defense-AI
+consumer lands; until then the flags are HUD-only and hash-excluded.
+
+---
+
+## MC2 doomsday pyramid — APPROX register (module-doc promoted)
+
+**Original.** The (5,10) doomsday machine's full retail script:
+sprite-length-derived state timers (`sub_221F0` EF:13661), the
+`sub_5C800` case-7 palette beam flash, self-acquiring projectile
+bursts, the case-0xE global wipe's `byte[1] |= 0x20` render bit, and
+per-list (dword_38531) bucket scans.
+
+**Port.** `mgc-sim mc2/doomsday.rs` — the machine, phases, devour,
+terrain flatten and death script are ported; the module doc's
+DELIBERATE APPROXIMATIONS register covers the deltas: seeded 16/32
+state timers (no TMAPS frame counts in the sim — cadence-only),
+palette flashes skipped (presentation), projectile bursts pre-locked
+at the avatar (the proj module's acquisition APPROX), the unmapped
+0x20 render bit skipped, pool slot-order scans for the list scans.
+Also: the `dword_0x364D2` devour tally is banked for the stats
+screen, and the hurl-away pose transport is app-side.
+
+**Verified.** Review sessions C (2026-07-15) items C2/C7 +
+extinction-script fixture (`mc2_doomsday_pyramid_extinction_script`).
+
+**Deviations & interims.** All of the above are deliberate; none is
+hash-visible beyond the seeded timers, which the goldens pin.
+
+---
+
+## MC2 held creatures (StageVar holds) — APPROX (idle reductions)
+
+**Original.** A held creature runs its per-model phase-7 wrapper
+around `sub_1D5D0`: ambient-sound draws, speed refresh, idle FACING
+choreography (64-tick LCG roll jitter) and the `sub_1B8C0`/`sub_1EEE0`
+physics settle.
+
+**Port.** `mgc-sim mc2/stagevars.rs` (module-doc APPROX register):
+the hold gate, killability, aggro-break and the kind-3 ambush law are
+faithful; the idle EXTRAS are not run — a held creature keeps its
+spawn pose and draws no idle RNG. Gates reading `f63 & 7` see the
+static spawn ordinal, which matches retail (never increments while
+held; verified on the m0/goat/m16/m18 wrappers).
+
+**Verified.** Session H (2026-07-16) — the hold seam traced against
+`sub_1D5D0` + four per-model wrappers.
+
+**Deviations & interims.** Idle presentation/RNG only; the ordinal
+law (the part that gates behavior) is faithful.
+
+---
+
+## MC2 rival DEFENSE disguise — APPROX (visual unported)
+
+**Original.** The AI DEFENSE state's metamorph disguise draws the
+picked creature IN PLACE of the AI carpet (remc2 sub_15FC0/sub_161A0).
+
+**Port.** `mgc-sim mc2/rivals.rs`: the state machine, tier pick,
+shadowing and speed law are faithful (reworked per review 2026-07-15
+P1-6); the disguise VISUAL is presentation-side unported — the rival
+still renders as a carpet while disguised.
+
+**Verified.** Review session E27 (2026-07-16) re-verified the state
+law against the decompile.
+
+**Deviations & interims.** Presentation gap, banked with the rivals
+polish track; the sim state is faithful, so no golden is affected.
+
+---
+
+## MC2 worm chain link length — APPROX floor 96 (provenance OPEN)
+
+**Original.** The multipart worm's link spacing derives from the
+particle sprite rows' `speed_6` metric — which is ZERO in the
+pristine EXE's rows (verified), the value that collapsed retail's
+formula to nothing.
+
+**Port.** `mgc-sim mc2/multipart.rs`: zero-length links fall back to
+the head ctor's authored 96 (`f56 = 96` floor) so the chain stretches
+instead of re-blobbing onto the head (PLAYTEST-11 round 3, "the worm
+is a blob").
+
+**Verified.** Fixture asserts a nonzero link and the 89+i sprite
+chain; the pristine-EXE zero was re-checked against the original data.
+
+**Deviations & interims.** The true retail spacing source is an OPEN
+question banked with the disassembly-authors questions; 96 is the
+plausible-and-playable floor until it resolves.
 
 ---
 

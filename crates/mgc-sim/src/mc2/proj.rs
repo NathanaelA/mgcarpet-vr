@@ -129,8 +129,11 @@ impl Gen {
 
     /// `sub_66180` (EF:63340, action 3) — the meteor shot's wrapper
     /// around the flyer core: every tick lay one damage-suppressed
-    /// (10,0) spark (dword |= 0x10080) at a ±64-box jitter around the
-    /// shot (2 draws of its own stream), life 4, frame 3, yaw
+    /// (10,0) spark (dword |= 0x10080) at a ±64-box jitter centered
+    /// 96 units toward −x/−y of the shot (`rand%0x81 + pos − 160`
+    /// per axis, EF:63356-59 — the code is byte-faithful; the old
+    /// "around the shot" gloss was wrong, F7) (2 draws of its own
+    /// stream), life 4, frame 3, yaw
     /// inherited. Retail lays it even on the impact tick (the class
     /// stays set until the removal pass). The fuse stamp onto the
     /// impact entity (`v1x->maxLife/life = byte_0x46_70`) is IDENTITY
@@ -393,12 +396,20 @@ impl Gen {
                 }
                 None
             }
-            // The crater spell's scorch ring (spell 16's arm). Retail
-            // carve geometry is tier-INDEPENDENT (radius 32, −3/tick,
-            // 40-tick life — `sub_31FB0` EF:23490); only the burn
-            // damage scales, which rides `f140` below
-            // (docs/spell-audit/quake-family.md).
-            (10, 11) => self.mc2_spawn_scorch_ring(x, y, z),
+            // Crater (spell 16): the action wrapper `sub_66280`
+            // (EF:63400-02) overrides the scorch ring's LIFE with the
+            // tier charge (6/12/24) — the carve radius grows every
+            // 3rd frame, so life IS the tier scaling. The audit's
+            // "tier-independent" verdict missed this wrapper (F2;
+            // the player's "all 3 levels same" was a real bug).
+            (10, 11) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_scorch_ring(x, y, z);
+                if let Some(s) = s {
+                    self.ent[s].act_life = charge as i32; // 6/12/24
+                }
+                s
+            }
             // Meteor (spell 9): the action wrapper `sub_66180`
             // (EF:63372-73) overrides the impact's maxLife with the
             // tier charge `byte_0x46_70` (life_0x1A = 2/5/10) — the
@@ -422,26 +433,62 @@ impl Gen {
             // fell to the misfit branch below ("effect absent"). The
             // impact tail propagates the tier's subSpell→f140 (damage)
             // and leaves f71 as the ctor's phase seed.
-            (10, 71) => self.mc2_spawn_fissure(x, y, z), // Tremor (spell 15)
-            // Earthquake (spell 17): the trail's TRAVEL DISTANCE scales
-            // with the tier — the action wrapper (like whirlwind's
-            // `sub_678E0`, EF:59202) overrides the spawned trail's life
-            // with `8 * byte_0x46_70` (life_0x1A = 16/32/64) → 128/256/512
-            // ticks = ~2× reach per level (player-confirmed 2026-07-14).
-            // The old port kept the ctor's fixed 128 (= 8·16, the tier-0
-            // value) so tiers 1/2 never travelled further.
+            // Tremor (spell 15): `sub_677D0` (EF:59128-32) sets BOTH
+            // lives to `charge & 0xF0` (60/80/120 → 48/80/112) and
+            // zeroes the phase seed — resolving the audit's open
+            // question (the wrapper DOES zero byte_0x46_70; the ctor's
+            // flat 120 life was the divergence). F2.
+            (10, 71) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_fissure(x, y, z);
+                if let Some(s) = s {
+                    let ml = (charge & 0xF0) as u32;
+                    self.ent[s].max_life = ml;
+                    self.ent[s].act_life = ml as i32;
+                    self.ent[s].f71 = 0;
+                }
+                s
+            }
+            // Earthquake (spell 17): the action wrapper `sub_66160`
+            // (EF:63333-35) sets the trail's LIFE = 1× charge
+            // (16/32/64), life ONLY — the 8× law belongs to
+            // whirlwind's sub_678E0 alone and had been copied here
+            // (F1; the tier ×2 relative scaling the player confirmed
+            // holds under both laws — absolute reach is now 8×
+            // shorter, re-check at playtest).
             (10, 15) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_fire_trail(x, y, z);
                 if let Some(s) = s {
-                    let ml = 8 * (charge as u32).max(1);
-                    self.ent[s].max_life = ml;
-                    self.ent[s].act_life = ml as i32;
+                    self.ent[s].act_life = charge as i32; // 16/32/64
                 }
                 s
             }
-            (10, 9) => self.mc2_spawn_dome(x, y, z), // Volcano (spell 18)
-            (10, 67) => self.mc2_spawn_flood(x, y, z), // Gravity Well (spell 20)
+            // Volcano (spell 18): `sub_66250` (EF:63388-90) overrides
+            // the dome's MAX life (the radius law R = maxLife|1 →
+            // 7/9/11 per tier) and zeroes the phase seed; act_life
+            // (the raise duration 17) stays the ctor's. F2.
+            (10, 9) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_dome(x, y, z);
+                if let Some(s) = s {
+                    self.ent[s].max_life = charge as u32; // 7/9/11
+                    self.ent[s].f71 = 0;
+                }
+                s
+            }
+            // Gravity Well (spell 20): `sub_677A0` (EF:59112-14) sets
+            // the flood's LIFE = charge (16/26/40) + phase 0; the
+            // ctor's flat 120 was the divergence. F2.
+            (10, 67) => {
+                let charge = self.ent[i].f71;
+                let s = self.mc2_spawn_flood(x, y, z);
+                if let Some(s) = s {
+                    self.ent[s].act_life = charge as i32; // 16/26/40
+                    self.ent[s].f71 = 0;
+                }
+                s
+            }
             // The whirlwind's action wrapper `sub_678E0` (class-9
             // action 27, EF:59109-22) overrides `AddWind`'s ctor life
             // with `8 * byte_0x46_70` (the tier charge) — THIS is what
@@ -566,13 +613,16 @@ impl Gen {
         // The impact XP award (`sub_6D8B0(id, spell, 1)` on a victim
         // hit — EF:63189 fireball, EF:58411 lightning, the §1.1
         // table): player casts carry their spell index in f40; the
-        // world tick drains the mail into the book. Creature bolts
-        // (owner ≠ the human wizard) never award — the class-3
-        // model-0 gate.
+        // world tick drains the mail into the book. Rival and
+        // creature owners never award — sub_6D8B0's own guard is
+        // `class == 3 && model == 0`, the HUMAN wizard only
+        // (EF:58240-41, decompile-verified 2026-07-15: the review's
+        // B17 "award any wizard owner" claim is REFUTED — retail
+        // rivals have no spell-XP progression at all).
         if victim != 0 && id == PLAYER_TARGET && self.ent[i].flags & F_MC2PROJ != 0 {
             let spell = self.ent[i].f40;
             if spell < 26 {
-                self.mc2_cast_xp.0.push((id, spell));
+                self.mc2_cast_xp.0.push((id, spell, 1));
             }
         }
         self.ent[i].flags |= 0x400;
@@ -1049,6 +1099,12 @@ impl Gen {
             // own-owner and invisibles skipped; range-gated by the
             // owner row. The human is a candidate only for non-human
             // owners (player casts never self-target).
+            // LIGHTNING's wizard scan runs a TIGHT pitch cone
+            // (sub_67CB0 case 9: 0x71/0x71 for the wizard list vs
+            // 0x71/0x200 for creatures, EF:54889-933 — the only
+            // model where the two differ; F4). The table pc stays
+            // 0x200 for the creature/sphere branches below.
+            let wiz_pc = if probe.model == 9 { 0x71 } else { pc };
             for v in 1..self.ent.len() {
                 let e = &self.ent[v];
                 if e.class64 != 3 || e.flags & 0x400 != 0 || e.act_life < 0 {
@@ -1066,7 +1122,7 @@ impl Gen {
                     continue;
                 }
                 let pos = (e.x, e.y, e.z + e.f78 as i16);
-                consider(self, &mut best, v as u16, pos, yc, pc);
+                consider(self, &mut best, v as u16, pos, yc, wiz_pc);
             }
             if let Some((hx, hy, hz)) = human {
                 let dz = (hz as i64) - (probe.z as i64);
@@ -1075,7 +1131,7 @@ impl Gen {
                         as u32,
                 ) as i64;
                 if d <= wiz_range {
-                    consider(self, &mut best, PLAYER_TARGET, (hx, hy, hz), yc, pc);
+                    consider(self, &mut best, PLAYER_TARGET, (hx, hy, hz), yc, wiz_pc);
                 }
             }
         }

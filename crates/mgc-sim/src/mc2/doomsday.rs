@@ -37,25 +37,29 @@
 //!   docs/traces/mc2-class9-m3-m26.md): pre-locked at the avatar
 //!   via mc2_arm_proj (retail self-acquires on tick 1 — the proj
 //!   module's acquisition APPROX).
-//! - `sub_21F60`'s player-spell-slot test (`SpellEnabled[8]`'s
-//!   word_0x2E_46 > 0 → trip the death script) waits on the MC2
-//!   cast column (4.2); proximity still trips it.
 //! - The case-0xE global wipe writes byte[1]|=0x20 on every entity —
 //!   an unmapped render-side bit (name-inferred); we apply the
 //!   life/maxLife=140 reset and skip the bit.
 //! - Retail's per-list scans (dword_38531 buckets) are pool
 //!   slot-order scans — the mobs.rs list APPROX.
-//! - The beam drag moves the human via the shared knock channel
-//!   (`Gen::player_knock` — the kraken/buffet writer's home) rather
-//!   than teleporting the pose (the app owns the pose; same
-//!   observable: forced displacement toward the pyramid).
+//! - The case-7 HURL-AWAY beam moves the human via the shared knock
+//!   channel (`Gen::player_knock` — the kraken/buffet writer's home)
+//!   rather than teleporting the pose with moveTest + floor clamp
+//!   (the app owns the pose; same observable: violent outward
+//!   displacement, 944 units on the first push decaying to 10).
+//! - The `rand += setting_30` LCG perturb after the two pick rolls
+//!   is unmodeled — the project-wide convention (multipart.rs:71).
+//! - `word_0x36548` (set case 0, cleared case 0xF) has NO reader in
+//!   retail (savegame/debug only) — not carried.
 
 use crate::mc1::features::{Gen, tile};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::world::World;
 
-/// The devourable creature models near the pyramid (EF:13542-13600).
-const DEVOUR_MODELS: [u8; 7] = [2, 4, 5, 0x16, 0x17, 0x19, 30];
+/// The devourable class-9 projectile SUBTYPES (EF:13545-63) — the
+/// pyramid is an anti-magic zone eating incoming spell projectiles;
+/// subtype 10 (the castle-build projectile) has its own branch.
+const DEVOUR_SUBTYPES: [u8; 7] = [2, 4, 5, 0x16, 0x17, 0x19, 30];
 
 impl Gen {
     /// `sub_4BD00` (EF:33965) — the pyramid ctor MINUS the map gate
@@ -113,6 +117,15 @@ impl Gen {
         let t = tile(x, y);
         let h = (self.t.height[t] as i16 - 1).clamp(0, 200);
         self.t.height[t] = h as u8;
+        // The sub_56F10 cave arm (EF:39534-43, review 2026-07-15
+        // C10): on a cave the ceiling counter-shifts by the raw
+        // delta (dig down = roof up), saturating at 255 with
+        // retail's char truncation below zero — the same arm the
+        // shared dig_cell chassis carries.
+        if self.is_cave() {
+            let c = self.t.ceiling[t] as i32 + 1;
+            self.t.ceiling[t] = if c >= 255 { 255 } else { c as u8 };
+        }
         if h != 0 {
             self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
         } else {
@@ -193,6 +206,11 @@ impl Gen {
                 self.ent[i].act_life -= v;
                 self.ent[i].f40 = src;
                 self.ent[i].mail[0].1 = 0;
+            } else {
+                // No pending hit: the attacker memory clears
+                // (`else word_0x26_38 = 0`, EF:13648-51 — review C9;
+                // the field is f40, NOT the ring-angle f42 home).
+                self.ent[i].f40 = 0;
             }
         }
         if self.ent[i].act_life < 10 {
@@ -218,8 +236,8 @@ impl World {
             return;
         }
         let mut death_sound = false;
-        // Prologue: proximity-devour trips phase bit0.
-        if self.mc2_pyramid_devour(i, ctx) {
+        // Prologue: the projectile-devour pass trips phase bit0.
+        if self.mc2_pyramid_devour(i) {
             self.g.ent[i].f44 |= 1;
         }
         let state = self.g.ent[i].f71;
@@ -228,169 +246,186 @@ impl World {
         }
         let cx = ((self.g.ent[i].x.wrapping_add(128)) >> 8) as u8;
         let cy = ((self.g.ent[i].y.wrapping_add(128)) >> 8) as u8;
-        match self.g.ent[i].f71 {
-            0 => {
-                // Doomsday active ON; arm the terrain-flatten bit;
-                // wipe the footprint; target the player.
-                self.g.ent[i].f71 = 1;
-                self.g.ent[i].f44 = 8;
-                self.g.ent[i].f26 = 15;
-                self.g.ent[i].f46 = 22;
-                self.g.ent[i].f146 = PLAYER_TARGET;
-                self.mc2_doom_meter = 60;
-                self.g.mc2_pyramid_wipe(cx, cy, i);
-                self.mc2_pyramid_attack(i, ctx, cx, cy);
-            }
-            1 => {
-                if self.mc2_pyramid_attack(i, ctx, cx, cy) {
-                    self.g.ent[i].f71 = 4;
-                    self.g.ent[i].f44 |= 0x80;
+        // Retail's setup cases fall THROUGH to their successor's body
+        // in the same tick (goto, no break — EF §5; review 2026-07-15
+        // C4: every phase used to run a tick long, the first summon
+        // fired a tick late).
+        let mut fall = true;
+        while std::mem::take(&mut fall) {
+            match self.g.ent[i].f71 {
+                0 => {
+                    // Doomsday active ON; arm the terrain-flatten bit;
+                    // wipe the footprint; target the player. Falls into
+                    // case 1 — the first flatten tick runs NOW.
+                    self.g.ent[i].f71 = 1;
+                    self.g.ent[i].f44 = 8;
+                    self.g.ent[i].f26 = 15;
+                    self.g.ent[i].f46 = 22;
+                    self.g.ent[i].f146 = PLAYER_TARGET;
+                    self.mc2_doom_meter = 60;
+                    self.g.mc2_pyramid_wipe(cx, cy, i);
+                    fall = true;
                 }
-            }
-            2 => {
-                let d = self.g.ent_rand(i);
-                let (life, maxl) = (self.g.ent[i].act_life, self.g.ent[i].max_life as i32);
-                let v = (26 * life / maxl.max(1)) - (d & 7) as i32;
-                self.g.ent[i].f26 = v.clamp(3, 26) as i16;
-                self.g.ent[i].f71 = 3;
-                self.g.ent[i].f69 = 0;
-                self.g.ent[i].f46 = 22;
-                self.g.mc2_set_sprite(i, 341);
-            }
-            3 => {
-                if self.g.ent[i].act_life < 10 {
-                    self.g.ent[i].f71 = 12;
-                } else if self.g.ent[i].f44 & 1 != 0 {
-                    self.g.ent[i].f71 = 6;
-                } else {
-                    self.g.ent[i].f26 -= 1;
-                    let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
-                    let dx = (ctx.px as i32 - ex as i32) as i16 as i32;
-                    let dy = (ctx.py as i32 - ey as i32) as i16 as i32;
-                    let near = dx * dx + dy * dy < 0x2000i32.pow(2);
-                    if near && self.g.ent[i].f26 <= 0 {
-                        let d = self.g.ent_rand(i);
-                        self.g.ent[i].f71 = if d % 0xC < 9 { 4 } else { 6 };
+                1 => {
+                    if self.mc2_pyramid_attack(i, ctx, cx, cy) {
+                        self.g.ent[i].f71 = 4;
+                        self.g.ent[i].f44 |= 0x80;
                     }
                 }
-            }
-            4 => {
-                self.g.ent[i].f71 = 5;
-                self.g.ent[i].f26 = 6;
-                self.g.ent[i].f69 = 2;
-                self.g.ent[i].f46 = 113;
-            }
-            5 => {
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    self.g.ent[i].f71 = 6;
+                2 => {
+                    let d = self.g.ent_rand(i);
+                    let (life, maxl) = (self.g.ent[i].act_life, self.g.ent[i].max_life as i32);
+                    let v = (26 * life / maxl.max(1)) - (d & 7) as i32;
+                    self.g.ent[i].f26 = v.clamp(3, 26) as i16;
+                    self.g.ent[i].f71 = 3;
+                    self.g.ent[i].f69 = 0;
+                    self.g.ent[i].f46 = 22;
+                    self.g.mc2_set_sprite(i, 341);
+                    fall = true;
                 }
-            }
-            6 => {
-                self.g.ent[i].f71 = 7;
-                self.g.ent[i].f26 = 16;
-                self.g.ent[i].f69 = 0;
-                self.g.ent[i].f46 = 113;
-                self.g.mc2_set_sprite(i, 343);
-            }
-            7 => {
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    self.g.ent[i].f71 = 8;
-                }
-            }
-            8 => {
-                self.g.ent[i].f71 = 9;
-                self.g.ent[i].f26 = 0;
-                self.g.ent[i].f69 = 3;
-                self.g.ent[i].f46 = 22;
-                self.g.mc2_set_sprite(i, 342);
-                self.mc2_pyramid_pick_summon(i);
-            }
-            9 => {
-                self.mc2_pyramid_do_summon(i, ctx);
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    self.g.ent[i].f71 = 10;
-                }
-            }
-            0xA => {
-                self.g.ent[i].f71 = 11;
-                self.g.ent[i].f26 = 16;
-                self.g.ent[i].f46 = 22;
-                self.g.mc2_set_sprite(i, 344);
-            }
-            0xB => {
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    self.g.ent[i].f71 = 2;
-                }
-            }
-            0xC => {
-                // Death script begins: the (10,17) doomsday sphere.
-                self.g.ent[i].f71 = 13;
-                self.g.ent[i].f26 = 32;
-                let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
-                if let Some(s) = self.g.mc2_spawn_meteor(x, y, 0) {
-                    self.g.ent[s].z = 0;
-                    self.g.ent[s].max_life = 70;
-                    self.g.ent[s].act_life = 70;
-                    self.g.ent[s].id24 = PLAYER_TARGET;
-                }
-            }
-            0xD => {
-                death_sound = true;
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    self.g.ent[i].f71 = 14;
-                    self.g.ent[i].f26 = 32;
-                    self.g.mc2_set_sprite(i, 345);
-                }
-            }
-            0xE => {
-                death_sound = true;
-                self.g.snd(10, i);
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    self.g.ent[i].f71 = 15;
-                    self.g.ent[i].f26 = 60;
-                    self.g.ent[i].act_life = -1;
-                    self.mc2_kill_all_creatures();
-                    // The global life reset (byte[1]|=0x20 render bit
-                    // skipped — module doc).
-                    for e in self.g.ent.iter_mut().skip(1) {
-                        if e.class64 != 0 {
-                            e.max_life = 140;
-                            e.act_life = 140;
+                3 => {
+                    if self.g.ent[i].act_life < 10 {
+                        self.g.ent[i].f71 = 12;
+                    } else if self.g.ent[i].f44 & 1 != 0 {
+                        self.g.ent[i].f71 = 6;
+                    } else {
+                        self.g.ent[i].f26 -= 1;
+                        let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
+                        let dx = (ctx.px as i32 - ex as i32) as i16 as i32;
+                        let dy = (ctx.py as i32 - ey as i32) as i16 as i32;
+                        let near = dx * dx + dy * dy < 0x2000i32.pow(2);
+                        if near && self.g.ent[i].f26 <= 0 {
+                            let d = self.g.ent_rand(i);
+                            self.g.ent[i].f71 = if d % 0xC < 9 { 4 } else { 6 };
                         }
                     }
                 }
-            }
-            0xF => {
-                self.mc2_kill_all_creatures();
-                death_sound = true;
-                self.g.ent[i].f26 -= 1;
-                if self.g.ent[i].f26 <= 0 {
-                    // THE APOCALYPSE: the (10,9) dome in its endgame
-                    // variant — create, force fields, THEN latch
-                    // (the order is load-bearing: the ctor call site
-                    // clears the latch, EF:12864-12872).
-                    let (x, y, z) = {
-                        let e = &self.g.ent[i];
-                        (e.x, e.y, e.z)
-                    };
-                    self.mc2_apocalypse = false;
-                    if let Some(d) = self.g.mc2_spawn_dome(x, y, z) {
-                        self.g.ent[d].act_life = 32;
-                        self.g.ent[d].max_life = 11;
-                        self.g.ent[d].id24 = PLAYER_TARGET;
-                        self.mc2_apocalypse = true;
-                    }
-                    self.mc2_doom_meter = 0;
-                    self.g.ent[i].flags |= 0x400;
+                4 => {
+                    self.g.ent[i].f71 = 5;
+                    self.g.ent[i].f26 = 6;
+                    self.g.ent[i].f69 = 2;
+                    self.g.ent[i].f46 = 113;
+                    fall = true; // states 4+5 span 6 ticks INCL. entry
                 }
+                5 => {
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        self.g.ent[i].f71 = 6;
+                    }
+                }
+                6 => {
+                    self.g.ent[i].f71 = 7;
+                    self.g.ent[i].f26 = 16;
+                    self.g.ent[i].f69 = 0;
+                    self.g.ent[i].f46 = 113;
+                    self.g.mc2_set_sprite(i, 343);
+                    fall = true;
+                }
+                7 => {
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        self.g.ent[i].f71 = 8;
+                    }
+                }
+                8 => {
+                    self.g.ent[i].f71 = 9;
+                    self.g.ent[i].f26 = 0;
+                    self.g.ent[i].f69 = 3;
+                    self.g.ent[i].f46 = 22;
+                    self.g.mc2_set_sprite(i, 342);
+                    self.mc2_pyramid_pick_summon(i);
+                    fall = true; // the pick AND the first shot same tick
+                }
+                9 => {
+                    self.mc2_pyramid_do_summon(i, ctx);
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        self.g.ent[i].f71 = 10;
+                    }
+                }
+                0xA => {
+                    self.g.ent[i].f71 = 11;
+                    self.g.ent[i].f26 = 16;
+                    self.g.ent[i].f46 = 22;
+                    self.g.mc2_set_sprite(i, 344);
+                    fall = true;
+                }
+                0xB => {
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        self.g.ent[i].f71 = 2;
+                    }
+                }
+                0xC => {
+                    // Death script begins: the (10,17) doomsday sphere.
+                    self.g.ent[i].f71 = 13;
+                    self.g.ent[i].f26 = 32;
+                    let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+                    if let Some(s) = self.g.mc2_spawn_meteor(x, y, 0) {
+                        self.g.ent[s].z = 0;
+                        self.g.ent[s].max_life = 70;
+                        self.g.ent[s].act_life = 70;
+                        self.g.ent[s].id24 = PLAYER_TARGET;
+                    }
+                    fall = true;
+                }
+                0xD => {
+                    death_sound = true;
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        self.g.ent[i].f71 = 14;
+                        self.g.ent[i].f26 = 32;
+                        self.g.mc2_set_sprite(i, 345);
+                    }
+                }
+                0xE => {
+                    death_sound = true;
+                    self.g.snd(10, i);
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        self.g.ent[i].f71 = 15;
+                        self.g.ent[i].f26 = 60;
+                        self.g.ent[i].act_life = -1;
+                        self.mc2_kill_all_creatures();
+                        // The life reset walks `dword_38523` — the SPHERE
+                        // family (10, 39/40/57) — not the whole pool
+                        // (EF:12847-54; review 2026-07-15 P0-4). The
+                        // byte[1]|=0x20 render bit is skipped — module doc.
+                        for e in self.g.ent.iter_mut().skip(1) {
+                            if e.class64 == 10 && matches!(e.model65, 39 | 40 | 57) {
+                                e.max_life = 140;
+                                e.act_life = 140;
+                            }
+                        }
+                    }
+                }
+                0xF => {
+                    self.mc2_kill_all_creatures();
+                    death_sound = true;
+                    self.g.ent[i].f26 -= 1;
+                    if self.g.ent[i].f26 <= 0 {
+                        // THE APOCALYPSE: the (10,9) dome in its endgame
+                        // variant — create, force fields, THEN latch
+                        // (the order is load-bearing: the ctor call site
+                        // clears the latch, EF:12864-12872).
+                        let (x, y, z) = {
+                            let e = &self.g.ent[i];
+                            (e.x, e.y, e.z)
+                        };
+                        self.mc2_apocalypse = false;
+                        if let Some(d) = self.g.mc2_spawn_dome(x, y, z) {
+                            self.g.ent[d].act_life = 32;
+                            self.g.ent[d].max_life = 11;
+                            self.g.ent[d].id24 = PLAYER_TARGET;
+                            self.mc2_apocalypse = true;
+                        }
+                        // Retail leaves the doom meter AT 1200 here — no
+                        // zero write in case 0xF (review 2026-07-15 C9).
+                        self.g.ent[i].flags |= 0x400;
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
         // LABEL_48: the death-phase rumble + ground-clamp/facing.
         if death_sound && self.g.ent[i].f63 & 3 == 0 {
@@ -399,44 +434,75 @@ impl World {
         self.g.mc2_pyramid_face(i, ctx);
     }
 
-    /// `sub_21F60` (EF:13518) — proximity-devour: nearby devourable
-    /// creatures are eaten (mana-absorb (10,0) + despawn) and the
-    /// player within 0xC00 trips the death script.
-    fn mc2_pyramid_devour(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        let (ex, ey, ez) = {
+    /// `sub_21F60` (EF:13519-13620) — the DEVOUR pass: the pyramid
+    /// eats incoming class-9 spell PROJECTILES (an anti-magic zone —
+    /// review 2026-07-15 P1-24/C1: the old creature walk + the
+    /// player-proximity trip were misreads). Eligible subtypes within
+    /// 0xC00 (3-D) are absorbed: a (10,0) mana-absorb spawns at the
+    /// projectile (owner = the pyramid) and it despawns. Subtype 10
+    /// (the castle-build projectile) instead tests the pyramid's
+    /// (5120,5120) exclusion box against the player's castle (or the
+    /// landing spot) and, devoured, CANCELS the Castle spell (the
+    /// manifestation window zeroed). Trip = devoured anything this
+    /// tick OR the player's Rebound window is live (EF:13616-18) —
+    /// Rebound would reflect the pyramid's shots, so it switches to
+    /// the un-reboundable beam.
+    fn mc2_pyramid_devour(&mut self, i: usize) -> bool {
+        let (ex, ey, ez, own) = {
             let e = &self.g.ent[i];
-            (e.x, e.y, e.z)
+            (e.x, e.y, e.z, e.id24)
         };
-        let near = |x: u16, y: u16, z: i16| -> bool {
-            let dx = (x as i32 - ex as i32) as i16 as i32;
-            let dy = (y as i32 - ey as i32) as i16 as i32;
-            let dz = (z as i32 - ez as i32) as i16 as i32;
-            dx * dx + dy * dy + dz * dz <= 0xC00i32.pow(2)
-        };
-        let mut trip = near(ctx.px, ctx.py, ctx.pz);
+        let mut devoured = false;
         for j in 1..self.g.ent.len() {
-            if j == i || self.g.ent[j].class64 != 5 {
-                continue;
-            }
-            let m = self.g.ent[j].model65;
-            if !DEVOUR_MODELS.contains(&m) {
-                continue;
-            }
-            let (x, y, z) = {
+            let (sub, x, y, z) = {
                 let e = &self.g.ent[j];
-                (e.x, e.y, e.z)
-            };
-            if near(x, y, z) {
-                trip = true;
-                // Devour: the mana-absorb fire + despawn.
-                let own = self.g.ent[i].id24;
-                if let Some(s) = self.g.mc2_spawn_fire(x, y, z) {
-                    self.g.ent[s].id24 = own;
+                if e.class64 != 9 || e.flags & 0x400 != 0 {
+                    continue;
                 }
-                self.g.ent[j].flags |= 0x400;
+                (e.model65, e.x, e.y, e.z)
+            };
+            let eat = if DEVOUR_SUBTYPES.contains(&sub) {
+                let dx = (x.wrapping_sub(ex) as i16) as i64;
+                let dy = (y.wrapping_sub(ey) as i16) as i64;
+                let dz = (z as i64) - (ez as i64);
+                dx * dx + dy * dy + dz * dz <= 0xC00 * 0xC00
+            } else if sub == 10 {
+                // The castle-build projectile: bbox overlap between
+                // the pyramid's (5120,5120) box and the player's
+                // castle extents (else the projectile's own spot).
+                let (tx, ty, hx, hy) = match self.player_castle() {
+                    Some(c) => {
+                        let e = &self.g.ent[c];
+                        (e.x, e.y, e.f80 as i32, e.f82 as i32)
+                    }
+                    None => (x, y, 5120, 5120),
+                };
+                let dx = ((tx.wrapping_sub(ex)) as i16 as i32).abs();
+                let dy = ((ty.wrapping_sub(ey)) as i16 as i32).abs();
+                dx <= 5120 + hx && dy <= 5120 + hy
+            } else {
+                false
+            };
+            if !eat {
+                continue;
             }
+            devoured = true;
+            if sub == 10 {
+                // Cancel the Castle spell (EF:13608-09; guarded —
+                // retail writes the entity-0 sentinel unguarded).
+                let m = self.mc2_book.ent[2] as usize;
+                if m != 0 {
+                    self.g.ent[m].f26 = 0;
+                }
+            }
+            if let Some(s) = self.g.mc2_spawn_fire(x, y, z) {
+                self.g.ent[s].id24 = own;
+            }
+            self.g.ent[j].flags |= 0x400;
         }
-        trip
+        // The Rebound trip (EF:13616-18).
+        let m8 = self.mc2_book.ent[8] as usize;
+        devoured || (m8 != 0 && self.g.ent[m8].f26 > 0)
     }
 
     /// `sub_21490` (EF:12886) — the phase-bit attack driver. Returns
@@ -475,9 +541,22 @@ impl World {
             self.mc2_kill_all_creatures();
             let v7 = self.g.ent[i].f26;
             self.g.ent[i].f26 -= 1;
+            if v7 == 70 {
+                // First tick of the kill-all phase: retail zeroes
+                // `countStageVars_0x36E00` — the whole hold-gate/
+                // objective StageVar subsystem dies with the world
+                // (EF:12996-98; review 2026-07-15 C5). Clearing the
+                // vec is the port's registration-count zero.
+                self.mc2_stagevars.clear();
+            }
             if v7 == 1 {
+                // Checkpoint 1 despawns `dword_38523` — the sphere
+                // family (10, 39/40/57) — NOT the world: retail's
+                // v29==3 arm runs DisableEntityDrawing over that list
+                // only (EF:13048-66; review 2026-07-15 P0-4). Castles,
+                // wizards and effects survive the activation crater.
                 for e in self.g.ent.iter_mut().skip(1) {
-                    if e.class64 != 0 && e.model65 != 10 {
+                    if e.class64 == 10 && matches!(e.model65, 39 | 40 | 57) {
                         e.flags |= 0x400;
                     }
                 }
@@ -528,7 +607,10 @@ impl World {
                 let mut p = (ex, ey, ez);
                 Gen::polar_step(&mut p, ang, 0, 192);
                 if let Some(r) = self.g.mc2_spawn_smoke_particle_for(14, p.0, p.1, p.2) {
-                    let d = self.g.ent_rand(r);
+                    // Each successful spawn draws the PYRAMID's own
+                    // LCG once for the rock's life (EF:13086-87;
+                    // review C9 — was rolled on the rock's stream).
+                    let d = self.g.ent_rand(i);
                     self.g.ent[r].act_life = ((d & 7) + 8) as i32;
                 }
             }
@@ -536,80 +618,132 @@ impl World {
         idle
     }
 
-    /// `sub_21850` (EF:13100) — pick the summon: a weighted roll
-    /// over creatures (population-capped), projectile bursts, or the
-    /// player beam. Two RNG draws.
+    /// `sub_21850` (EF:13101-13265) — pick the summon: a weighted
+    /// roll over creatures (population-capped), projectile bursts,
+    /// or the player beam. Reworked per review 2026-07-15 C2/C8/C9:
+    /// the f26/f38/f50 writes PRECEDE the cap test (a cap-failed
+    /// roll still mutates them — retail quirk); the caps for picks
+    /// 4/6 are evaluated against the MODEL-0 population (verbatim —
+    /// sub_223E0's three identical bucket-0 loops; only picks 3 and
+    /// 5 count their own kind, 5 excluding action 200); roll-2
+    /// picks 8/9 fire ONE shot (f38=1, f26=5); the bit7 escalation
+    /// forces roll 1 to 0; a trip while asleep writes NO pick
+    /// fields; the trip-laser re-arms the beam ramp (bit1 — C8).
     fn mc2_pyramid_pick_summon(&mut self, i: usize) {
-        // Population counts (retail's sub_223E0 recount, pool scan).
-        let count = |g: &Gen, m: u8| -> usize {
+        // sub_223E0's population counts over the class-5 buckets
+        // (live + bucketed: life >= 0, action not a corpse state).
+        let count = |g: &Gen, m: u8, excl_200: bool| -> usize {
             g.ent
                 .iter()
                 .skip(1)
-                .filter(|e| e.class64 == 5 && e.model65 == m)
+                .filter(|e| {
+                    e.class64 == 5
+                        && e.model65 == m
+                        && e.flags & 0x400 == 0
+                        && e.act_life >= 0
+                        && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+                        && !(excl_200 && e.tick70 == 200)
+                })
                 .count()
         };
+        // bit1 cleared on every entry (EF:13122).
         self.g.ent[i].f44 &= !2;
         let mut laser = false;
-        let mut picked = 0u8;
+        let mut picked: Option<u8> = None;
         if self.g.ent[i].f44 & 1 != 0 {
+            // The devour/rebound trip: forced laser when awake, WITH
+            // the bit1 beam-ramp re-arm (EF:13127-31). Asleep: bit0
+            // clears and NOTHING else is written (stale selector).
             self.g.ent[i].f44 &= !1;
             if self.g.ent[i].f58 != 0 {
                 laser = true;
+                self.g.ent[i].f44 |= 2;
             }
         } else {
             self.g.ent[i].f44 |= 2;
-            let d = self.g.ent_rand(i);
-            let v4 = d % 0x46;
+            // bit7: the post-opening escalation forces roll 1 to 0 —
+            // straight to the projectile roll (EF:13141-45).
+            let v4 = if self.g.ent[i].f44 & 0x80 != 0 {
+                self.g.ent[i].f44 &= 0x7F;
+                0
+            } else {
+                self.g.ent_rand(i) % 0x46
+            };
+            let creature_writes = |w: &mut Self, f38: i16, f50: i16| {
+                w.g.ent[i].f26 = 8;
+                w.g.ent[i].f38 = f38 as u16;
+                w.g.ent[i].f50 = f50;
+            };
             match v4 {
                 3..=6 => laser = true,
-                40..=48 if count(&self.g, 19) < 28 => {
-                    picked = 6;
-                    self.g.ent[i].f38 = 8;
-                    self.g.ent[i].f26 = 8;
-                    self.g.ent[i].f50 = 256;
+                40..=48 => {
+                    creature_writes(self, 8, 256);
+                    if count(&self.g, 0, false) < 28 {
+                        picked = Some(6);
+                    }
                 }
-                49..=58 if count(&self.g, 0) < 4 => {
-                    picked = 3;
-                    self.g.ent[i].f38 = 3;
-                    self.g.ent[i].f50 = 682;
+                49..=58 => {
+                    creature_writes(self, 3, 682);
+                    if count(&self.g, 0, false) < 4 {
+                        picked = Some(3);
+                    }
                 }
-                59..=68 if count(&self.g, 25) < 6 => picked = 5,
-                69.. if count(&self.g, 21) < 12 => picked = 4,
+                59..=68 => {
+                    creature_writes(self, 3, 682);
+                    if count(&self.g, 25, true) < 6 {
+                        picked = Some(5);
+                    }
+                }
+                _ if v4 >= 69 => {
+                    creature_writes(self, 3, 682);
+                    if count(&self.g, 0, false) < 12 {
+                        picked = Some(4);
+                    }
+                }
                 _ => {}
             }
-            if picked == 0 && !laser {
-                let d = self.g.ent_rand(i);
-                match d % 0x1D {
+            if picked.is_none() && !laser {
+                match self.g.ent_rand(i) % 0x1D {
                     0..=7 => {
-                        picked = 1;
+                        picked = Some(1);
                         self.g.ent[i].f38 = 10;
+                        self.g.ent[i].f26 = 10;
                     }
                     8..=17 => {
-                        picked = 2;
+                        picked = Some(2);
                         self.g.ent[i].f38 = 8;
+                        self.g.ent[i].f26 = 8;
                     }
                     18..=25 => {
-                        picked = 9;
-                        self.g.ent[i].f38 = 5;
+                        picked = Some(9);
+                        self.g.ent[i].f38 = 1;
+                        self.g.ent[i].f26 = 5;
                     }
                     26..=27 => {
-                        picked = 8;
-                        self.g.ent[i].f38 = 5;
+                        picked = Some(8);
+                        self.g.ent[i].f38 = 1;
+                        self.g.ent[i].f26 = 5;
                     }
                     _ => laser = true,
                 }
             }
         }
         if laser {
-            picked = 7;
+            picked = Some(7);
             self.g.ent[i].f38 = 24;
             self.g.ent[i].f26 = 32;
         }
-        self.g.ent[i].f68 = picked;
+        if let Some(p) = picked {
+            self.g.ent[i].f68 = p;
+        }
     }
 
-    /// `sub_21AB0` (EF:13270) — execute the summon/fire each state-9
-    /// tick while the repeat count lasts.
+    /// `sub_21AB0` (EF:13270-13511) — execute the summon/fire each
+    /// state-9 tick while the repeat count lasts. Every launch
+    /// shares the preamble (EF:13317-25): pyramid pos stepped 640
+    /// along the pyramid yaw at z+768; creatures step 1792 further
+    /// at the stride bearing (review 2026-07-15 C6 — projectiles
+    /// used to fire from the raw center).
     fn mc2_pyramid_do_summon(&mut self, i: usize, ctx: &MobCtx) {
         if self.g.ent[i].f38 == 0 {
             return;
@@ -620,31 +754,38 @@ impl World {
             (e.x, e.y, e.z, e.id24)
         };
         let tpos = (ctx.px, ctx.py, ctx.pz);
+        // The shared launch point (EF:13321-25).
+        let mut lp = (ex, ey, ez);
+        Gen::polar_step(&mut lp, self.g.ent[i].f30, 0, 640);
+        lp.2 = ez.wrapping_add(768);
         match self.g.ent[i].f68 {
             1 => {
-                if let Some(p) = self.g.mc2_spawn_bolt(ex, ey, ez) {
+                if let Some(p) = self.g.mc2_spawn_bolt(lp.0, lp.1, lp.2) {
                     self.g.ent[p].f44 = 800;
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
                     self.g.snd(15, i);
                 }
             }
             2 => {
-                if let Some(p) = self.g.mc2_spawn_bolt9(ex, ey, ez) {
+                if let Some(p) = self.g.mc2_spawn_bolt9(lp.0, lp.1, lp.2) {
                     self.g.ent[p].f44 = 800;
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
                     self.g.snd(23, i);
                 }
             }
             3..=6 => {
-                // The creature summon ring: aim stride * remaining.
+                // The creature summon ring: aim stride × the ALREADY
+                // DECREMENTED repeat (EF:13364), stepped 1792 from
+                // the shared point, z re-forced +768 (EF:13365-68).
                 let sel = self.g.ent[i].f68;
                 let stride = self.g.ent[i].f50 as u16;
                 let ang = stride
                     .wrapping_mul(self.g.ent[i].f38)
                     .wrapping_add(self.g.ent[i].f30)
                     & 0x7FF;
-                let mut p = (ex, ey, ez);
+                let mut p = lp;
                 Gen::polar_step(&mut p, ang, 0, 1792);
+                p.2 = ez.wrapping_add(768);
                 let spawned = match sel {
                     3 => self.g.mc2_spawn_m0(p.0, p.1, p.2),
                     4 => self.g.mc2_spawn_m21(p.0, p.1, p.2),
@@ -652,13 +793,35 @@ impl World {
                     _ => self.g.mc2_spawn_m19(p.0, p.1, p.2),
                 };
                 if let Some(s) = spawned {
+                    // The summoned-creature writes (EF:13388-13425,
+                    // review C7): stage tag 17, parent = the pyramid,
+                    // and the ACTION OVERRIDES over the creators'
+                    // defaults — written LAST (m0 1→7, m21 169→175,
+                    // m25 201→207, m19 153→159).
                     let e = &mut self.g.ent[s];
                     e.f146 = PLAYER_TARGET;
                     e.id24 = own_id;
+                    e.site_z = 17; // StageVar2_0x49_73
                     e.f46 = 250;
                     e.f126 = 320;
+                    // `parentId_0x28_40 = pyramid` is unmodeled: the
+                    // port has no creature parent-link home (f40 is
+                    // the roster's attacker word) and no consumer
+                    // reads it yet — APPROX. The dword_0x364D2 tally
+                    // question is CLOSED (E23 census): it is the
+                    // total-creatures-spawned DENOMINATOR of the
+                    // level-complete "creatures killed %" stat
+                    // (EF:43498-505; ++ at EF:13390/32988, boxed-in
+                    // walkers decrement, EF:8860). Wire it when the
+                    // stats screen is ported — no sim consumer today.
                     e.f30 = ang;
                     e.f34 = ang;
+                    e.tick70 = match sel {
+                        3 => 7,
+                        4 => 175,
+                        5 => 207,
+                        _ => 159,
+                    };
                     self.g.snd(
                         match sel {
                             3 => 8,
@@ -671,30 +834,28 @@ impl World {
                 }
             }
             7 => {
-                // THE TRACTOR BEAM: ramp the pull force and drag the
-                // player toward the pyramid (the knock channel; the
-                // palette flash is presentation-skipped).
+                // THE HURL-AWAY BEAM (EF:13427-56, review C3): ramp
+                // 1024 → −80/tick → floor 10, applied OUTWARD along
+                // pyramid→player. The pose displacement rides the
+                // shared knock channel at the FULL ramp magnitude
+                // (retail: MoveEntity + moveTest + floor clamp on
+                // the pose — the app owns the pose; module APPROX).
                 if self.g.ent[i].f44 & 2 != 0 {
                     self.g.ent[i].f52 = 1024;
                     self.g.snd(19, i);
                     self.g.ent[i].f44 &= !2;
                 }
-                let f = self.g.ent[i].f52.saturating_sub(80).clamp(10, 1024);
+                let f = (self.g.ent[i].f52 - 80).clamp(10, 1024);
                 self.g.ent[i].f52 = f;
-                let toward = Gen::angle_between(ctx.px, ctx.py, ex, ey);
-                self.g.player_knock = (toward, (f >> 3) as i16);
+                let away = Gen::angle_between(ex, ey, ctx.px, ctx.py);
+                self.g.player_knock = (away, f as i16);
             }
             sel @ (8 | 9) => {
                 // Case 8 = the (9,26) whirlwind seed, case 9 = the
-                // (9,3) meteor shot (EF:13457-13488 + the shared
-                // preamble :13313-25): launch at pyramid pos stepped
-                // 640 along the pyramid yaw, z + 768; owner = the
-                // pyramid; aimed straight at the avatar; impact/
-                // damage/fuse armed per case; sound 15 at the
-                // pyramid (docs/traces/mc2-class9-m3-m26.md §1).
-                let mut lp = (ex, ey, ez);
-                Gen::polar_step(&mut lp, self.g.ent[i].f30, 0, 640);
-                lp.2 = ez.wrapping_add(768);
+                // (9,3) meteor shot (EF:13457-88): from the shared
+                // launch point; owner = the pyramid; aimed at the
+                // avatar; impact/damage/fuse armed per case; sound
+                // 15 (docs/traces/mc2-class9-m3-m26.md §1).
                 let spawned = if sel == 8 {
                     self.g.mc2_spawn_whirlwind_seed(lp.0, lp.1, lp.2)
                 } else {

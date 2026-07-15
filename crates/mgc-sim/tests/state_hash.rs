@@ -20,6 +20,9 @@ use mgc_sim::mc1::spells::SpellId;
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
     p.join("mc1/level-005.mgcl").exists().then_some(p)
@@ -95,24 +98,28 @@ fn fly(w: &mut World, x: f32, z: f32, ticks: usize, cmd: PlayerCommand) {
 }
 
 /// The scripted run; returns the checkpoint hashes.
-fn run(root: &std::path::Path) -> Vec<u64> {
+fn run(root: &std::path::Path) -> (Vec<u64>, Vec<u64>) {
     let mut w = build_world(root);
     let idle = PlayerCommand::default();
-    let mut hashes = vec![w.state_hash()]; // post-init, pre-tick
+    let mut hashes = vec![w.state_hash()];
+    let mut obs = vec![w.observable_digest()]; // post-init, pre-tick
 
     // A: idle far from everything — ambient economy + rival brains.
     fly(&mut w, 20.0, 20.0, 32, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // B: the (99,115) proximity trigger → disposition 1 (crater +
     // follow-up trigger); back off while the crater digs.
     fly(&mut w, 101.5, 117.5, 16, idle);
     fly(&mut w, 20.0, 20.0, 120, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // C: the follow-up trigger → disposition 2 (8-creature ambush).
     fly(&mut w, 95.5, 109.5, 16, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // D: combat over the ambush — dev spells, fireballs both hands
     // (projectiles, mailboxes, deaths, corpse mana balls).
@@ -130,12 +137,14 @@ fn run(root: &std::path::Path) -> Vec<u64> {
     };
     fly(&mut w, 95.5, 109.5, 64, firing);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // E: aftermath — regen, decay, wandering survivors.
     fly(&mut w, 20.0, 20.0, 100, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
-    hashes
+    (hashes, obs)
 }
 
 /// The limit-removing property (ROADMAP "MULTI-GAME ARCHITECTURE"):
@@ -147,7 +156,7 @@ fn run(root: &std::path::Path) -> Vec<u64> {
 #[test]
 fn bumped_pool_is_transparent_without_exhaustion() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked data not present");
+        common::golden_skip("baked data not present");
         return;
     };
     let observe = |chassis: mgc_sim::chassis::ChassisParams| {
@@ -190,30 +199,64 @@ fn bumped_pool_is_transparent_without_exhaustion() {
 #[test]
 fn level_005_golden_state_hashes() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked data not present");
+        common::golden_skip("baked data not present");
         return;
     };
-    let got = run(&root);
+    let (got, obs) = run(&root);
     // Bit-identical across runs before anything else.
-    assert_eq!(got, run(&root), "sim is not deterministic");
+    assert_eq!(
+        (got.clone(), obs.clone()),
+        run(&root),
+        "sim is not deterministic"
+    );
     println!("state hashes: {got:#018x?}");
 
-    // Pinned 2026-07-09 (Phase 2: VerbSet/GameId/misfit-telemetry
-    // fields joined Gen/World — a hashed-layout change only; the new
-    // fields are unread by any handler, behavior identical. Previous
-    // pin: the ChassisParams landing, same day).
+    // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL — the first MC1
+    // re-pin for a behavior fix): the house-emit gate is retail's
+    // EXACT equality `f26 == f128` (:30819), not the `>=` that let
+    // every over-full house emit villagers forever (the level-001
+    // runaway ecology: unbounded peasants + loose mana until pool
+    // saturation; traced + runtime-reproduced). Checkpoints D/E move
+    // (the fixture's first house fills during the combat window);
+    // A-C hold. The OBSERVABLE projection below moves at the same
+    // checkpoints — expected and REQUIRED for a behavior fix.
+    // Previous pin 2026-07-09 (Phase 2 layout-only).
     const GOLDEN: [u64; 6] = [
         0x795499327cc36b28, // post-init (feature pass + disposition 0)
         0xe37dd14011ee7d15, // A: 32 idle ticks far afield
         0xd586b0f8e4e7a45a, // B: crater trigger fired + 120 dig ticks
         0x33a250c42d61569b, // C: ambush disposition fired
-        0x2bc5f5aa9f4a1763, // D: 64 ticks of two-hand fireball combat
-        0x51a203e02d23c146, // E: 100 aftermath ticks
+        0x9f6a5fd47305a944, // D: 64 ticks of two-hand fireball combat
+        0xd81dccfbd92bcbd9, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
         "state hash diverged from the golden fixture — if this change \
          in behavior is DELIBERATE, re-pin (run with --nocapture) and \
          say so in the commit"
+    );
+
+    // The layout-INDEPENDENT companion golden (review J3, pinned
+    // 2026-07-16): the observable projection (poses + terrain +
+    // population) at the same checkpoints. It must SURVIVE
+    // hashed-layout re-pins — when GOLDEN moves but OBSERVABLE holds,
+    // the re-pin is layout-only by construction; if OBSERVABLE moves
+    // too, behavior moved and the claim must say so.
+    // D/E re-pinned 2026-07-16 with GOLDEN above (the house-emit
+    // equality fix) — the population genuinely changes, so the
+    // observable moves WITH the hash: a behavioral re-pin, correctly
+    // self-declared.
+    const OBSERVABLE: [u64; 6] = [
+        0x09a4bbee6ed601d4,
+        0x797dd4817a1d1f11,
+        0xbb23b68555315fd5,
+        0xfa89ab230f971f40,
+        0x5cf85ee7f75b41d2,
+        0x8e471bd2f137dbb4,
+    ];
+    assert_eq!(
+        obs, OBSERVABLE,
+        "the OBSERVABLE projection diverged — this is a behavior \
+         change, never a layout-only one"
     );
 }

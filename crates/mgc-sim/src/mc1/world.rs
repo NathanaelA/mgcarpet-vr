@@ -540,6 +540,13 @@ pub struct World {
     /// The live HELD-creature ↔ StageVar bindings (retail's per-entity
     /// `StageVar1`/`word_0x4A_74`, kept off `Ent` for hash discipline).
     pub(crate) mc2_sv_held: Vec<crate::mc2::stagevars::Mc2Held>,
+    /// Deferred m9 (hive imp) holds: `(ent, slot)` parked at spawn
+    /// (retail stores the pending slot in `word_0x4A_74`, EF:4716-22)
+    /// and armed when the 16-tick materialize completes (`sub_122A0`,
+    /// EF:4953-58) — the imp visibly rises out of the ground BEFORE
+    /// freezing on its gate (Session H3). Hash rides the stagevar
+    /// gate (populated ⇒ mc2_stagevars is too).
+    pub(crate) mc2_sv_deferred: Vec<(u16, u8)>,
     /// `ObjectiveDone_2` (:40724-27): the objective engine's pause
     /// countdown. The m32 stage-gated switch sets 1 as it fires
     /// (:54371) — the skipped pass bridges the one-tick gap between
@@ -848,7 +855,7 @@ pub struct ObjectiveTarget {
 /// Class 9 = projectiles; class 10 is logic/terrain except the portal
 /// vortex and the combat effects (fire, flame, splash, flashes, mana
 /// ball — the model-17 blast driver is invisible by design).
-fn drawable(class: u16, model: u16) -> bool {
+fn drawable(game: GameId, class: u16, model: u16) -> bool {
     // The (10,12) possess flash carries the ctor's sprite row 41 but
     // draws NOTHING in retail (player-confirmed) — its draw gate is
     // whatever +16 bit the ctor clears; excluded here. Also excluded:
@@ -872,42 +879,32 @@ fn drawable(class: u16, model: u16) -> bool {
     // their (10,59)/(10,60) emitters are invisible by construction
     // (no sprite, never map-linked) and stay excluded.
     // Class 15 = MC2's spell-jar tokens (fixed sprite 77).
-    (matches!(class, 2 | 3 | 5 | 12 | 15) || (class == 14 && !matches!(model, 1 | 2)))
+    // The MC2-era arms (classes 14/15, class-10 models 13/14/22/75/77)
+    // are gated on the game: an MC1 world's (10,13..) etc. are
+    // unrelated logic models and must not acquire a sprite pose.
+    let mc2 = matches!(game, GameId::Mc2);
+    (matches!(class, 2 | 3 | 5 | 12)
+        || (mc2 && (class == 15 || (class == 14 && !matches!(model, 1 | 2)))))
         || (class == 9 && model != 18)
         || (class == 10
-            && matches!(
+            && (matches!(
                 model,
-                34 | 0 | 1
-                    | 5
-                    | 6
-                    | 13
-                    | 14
-                    | 16
-                    | 19
-                    | 23
-                    | 25
-                    | 26
-                    | 38
-                    | 39
-                    | 40
-                    | 43
-                    | 45
-                    // MC2 effect billboards whose sprite-carrying
-                    // entities were absent from the allowlist, so the
-                    // whole effect ran INVISIBLE though it ticked
-                    // (damage + sound) — player-reported 2026-07-13
-                    // ("tornado/firestorm have no visual"): the (10,22)
-                    // WHIRLWIND head + its (10,75) funnel column (sprite
-                    // rows 293+index, mc2::tail), and the (10,76) FIRE
-                    // ORB's 25 (10,77) satellites (sprite 340). The orb
-                    // hub (76) + wind eye carry no sprite (pure
-                    // controllers) and stay out, as does the (10,54)
-                    // magnet aura (retail AddAuxiliary_50500 sets no
-                    // SetEntityIndex — the visual is the streaming mana).
-                    | 22
-                    | 75
-                    | 77
-            ))
+                34 | 0 | 1 | 5 | 6 | 16 | 19 | 23 | 25 | 26 | 38 | 39 | 40 | 43 | 45
+            )
+                // MC2 effect billboards whose sprite-carrying
+                // entities were absent from the allowlist, so the
+                // whole effect ran INVISIBLE though it ticked
+                // (damage + sound) — player-reported 2026-07-13
+                // ("tornado/firestorm have no visual"): the (10,22)
+                // WHIRLWIND head + its (10,75) funnel column (sprite
+                // rows 293+index, mc2::tail), and the (10,76) FIRE
+                // ORB's 25 (10,77) satellites (sprite 340). The orb
+                // hub (76) + wind eye carry no sprite (pure
+                // controllers) and stay out, as does the (10,54)
+                // magnet aura (retail AddAuxiliary_50500 sets no
+                // SetEntityIndex — the visual is the streaming mana).
+                // (10,13)/(10,14) are the MC2 smoke particles.
+                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77))))
 }
 
 impl World {
@@ -1004,6 +1001,7 @@ impl World {
             mc2_stage_current: 0,
             mc2_stagevars: Vec::new(),
             mc2_sv_held: Vec::new(),
+            mc2_sv_deferred: Vec::new(),
             mc2_objective_pause: 0,
             mc2_speech_ramp: 0,
             mc2_speech_cue: None,
@@ -1074,13 +1072,34 @@ impl World {
         &self.g.t
     }
 
+    /// A LAYOUT-INDEPENDENT digest of the OBSERVABLE world: sprite
+    /// poses (type + quantized position), the terrain height plane,
+    /// and the population count. Deliberately blind to the hashed
+    /// state's LAYOUT (field order, conditional-contribution shape),
+    /// so a golden pinned on THIS survives layout-only `state_hash`
+    /// re-pins and carries behavioral continuity across them
+    /// (review J3; the same projection the pool-transparency test
+    /// compares).
+    pub fn observable_digest(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+        for p in self.live_poses() {
+            h.write_u16(p.type_index);
+            h.write_i32((p.x * 256.0) as i32);
+            h.write_i32((p.z * 256.0) as i32);
+        }
+        self.g.t.height.hash(&mut h);
+        h.write_usize(self.live_things().len());
+        h.finish()
+    }
+
     /// Snapshot of the live drawable entities as THING-shaped records
     /// (kind = Entity), one per creature/scenery/pickup — multipart
     /// body segments excluded, like the original's entity lists.
     pub fn live_things(&self) -> Vec<Thing> {
         let mut out = Vec::new();
         for (i, e) in self.g.ent.iter().enumerate().skip(1) {
-            if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
+            if e.class64 == 0 || !drawable(self.game, e.class64 as u16, e.model65 as u16) {
                 continue;
             }
             if e.class64 == 5 && e.tick70 == 120 {
@@ -1123,7 +1142,7 @@ impl World {
         const TAU: f32 = std::f32::consts::TAU;
         let mut out = Vec::new();
         for (i, e) in self.g.ent.iter().enumerate().skip(1) {
-            if e.class64 == 0 || !drawable(e.class64 as u16, e.model65 as u16) {
+            if e.class64 == 0 || !drawable(self.game, e.class64 as u16, e.model65 as u16) {
                 continue;
             }
             if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
@@ -1188,7 +1207,10 @@ impl World {
                 // (10,52), castle stage pieces (10,79).
                 life_frac: ((e.class64 == 5 && !segment)
                     || (e.class64 == 3 && e.model65 <= 3)
-                    || (e.class64 == 10 && matches!(e.model65, 45 | 52 | 79)))
+                    // MC2 buildings only — MC1's (10,45) is unrelated.
+                    || (matches!(self.game, GameId::Mc2)
+                        && e.class64 == 10
+                        && matches!(e.model65, 45 | 52 | 79)))
                 .then(|| {
                     // A parked MC2 dwelling's act_life IS its
                     // production countdown (mc2_building_tick parks
@@ -1422,6 +1444,13 @@ impl World {
             }
         }
 
+        // The StageVar hold-gate pass (sub_12780 scan + sub_12500
+        // react): retail runs it FIRST among the pre-passes —
+        // stagevar → awake → drip → entity loop (UpdateEntities
+        // EF:40093-40116) — so a released creature is awake-passed
+        // and acts the same tick (H8i). No-op off MC2/StageVars.
+        self.mc2_stagevar_tick();
+
         // The awake pre-pass runs before dispatch — the AwakeVerb
         // seam: MC1 sub_54F00 (:64266) vs MC2 sub_68BF0/sub_68C70
         // (remc2 :55469).
@@ -1469,12 +1498,6 @@ impl World {
             }
         }
 
-        // The StageVar hold-gate pass (sub_12780 scan + sub_12500 react,
-        // EF:40095-40103): update the fired bits + release any held
-        // creature whose gate is satisfied, BEFORE the per-model tick so
-        // a released creature acts this same tick. No-op off MC2/StageVars.
-        self.mc2_stagevar_tick();
-
         for i in 1..self.g.ent.len() {
             if self.g.ent[i].class64 == 0 {
                 continue;
@@ -1496,7 +1519,17 @@ impl World {
                 }
                 5 => match self.g.verbs.movement {
                     MovementVerb::Mc1 => self.g.creature_tick(i, &ctx),
-                    MovementVerb::Mc2 => self.g.mc2_creature_tick(i, &ctx),
+                    // A stage-HELD creature (phase 7, site_z 1..=10 or
+                    // 15) runs `sub_1D5D0`'s held action on World —
+                    // it needs the StageVar table (mc2::stagevars,
+                    // Session H6/E16); metamorph/summon (12/13) and
+                    // everything else fall through to the per-model
+                    // machines.
+                    MovementVerb::Mc2 => {
+                        if !self.mc2_held_tick(i, &ctx) {
+                            self.g.mc2_creature_tick(i, &ctx);
+                        }
+                    }
                 },
                 // The projectile family rides the TargetingVerb
                 // column (acquire/homing live inside the per-game
@@ -1837,7 +1870,10 @@ impl World {
             // NULL dispatch entries in retail — their phase clock is
             // the body's manual increment (sub_29A90 EF:19806), so
             // the loop must not double-clock them.
-            if !(self.g.ent[i].class64 == 5 && matches!(self.g.ent[i].tick70, 233 | 234)) {
+            if !(matches!(self.game, GameId::Mc2)
+                && self.g.ent[i].class64 == 5
+                && matches!(self.g.ent[i].tick70, 233 | 234))
+            {
                 self.g.ent[i].f63 = self.g.ent[i].f63.wrapping_add(1);
             }
             if self.g.ent[i].flags & 0x400 != 0 {
@@ -1859,8 +1895,8 @@ impl World {
         // empty again by hash time, like a read mailbox.
         if !self.g.mc2_cast_xp.0.is_empty() {
             let mail = std::mem::take(&mut self.g.mc2_cast_xp.0);
-            for (owner, spell) in mail {
-                self.mc2_award_xp(owner, spell as usize, 1);
+            for (owner, spell, amount) in mail {
+                self.mc2_award_xp(owner, spell as usize, amount);
             }
         }
 
@@ -2012,6 +2048,13 @@ impl World {
         if self.g.player_aggro > 0 {
             self.g.player_aggro -= 1;
         }
+        // Pool wizards' wanted timers (word_0x248_584) run down on
+        // the same cadence; a drained entry leaves the map so the
+        // hash-quiet side channel returns to silence (E12).
+        self.g.mc2_wanted.0.retain(|_, t| {
+            *t = t.saturating_sub(1);
+            *t > 0
+        });
 
         // Types 2/21 thrust-override factor for the flyer (3.0 while
         // the cast button is held — "hold down the mouse button to
@@ -2359,6 +2402,7 @@ impl World {
             mc2_stage_current,
             mc2_stagevars,
             mc2_sv_held,
+            mc2_sv_deferred,
             mc2_objective_pause,
             mc2_speech_ramp,
             mc2_speech_cue: _,
@@ -2413,17 +2457,33 @@ impl World {
             mc2_objective_pause.hash(&mut h);
             mc2_speech_ramp.hash(&mut h);
             // Hash-transparent while clear (the bldgprm/spells
-            // precedent): only the unported endgame machine sets it,
-            // so current pins hold.
+            // precedent). Each contribution is preceded by a distinct
+            // FIELD TAG: without one, adjacent conditional fields of
+            // equal width alias (apocalypse=true/doom_level=false and
+            // its mirror fed identical byte streams — review J2). The
+            // tags live INSIDE the conditions, so worlds where the
+            // fields are clear (every pinned golden) are unmoved.
             if *mc2_apocalypse {
+                h.write_u8(0xA1);
                 mc2_apocalypse.hash(&mut h);
             }
             if *mc2_doom_meter != 0 {
+                h.write_u8(0xA2);
                 mc2_doom_meter.hash(&mut h);
             }
             if *mc2_doom_level {
+                h.write_u8(0xA3);
                 mc2_doom_level.hash(&mut h);
             }
+        } else if *mc2_speech_ramp != 0 {
+            // H8iii leak close: `set_mc2_stages` arms the ramp even
+            // when ZERO rows register, and `speech_ramp_mc2` then
+            // pushes chime sounds into the hashed `sounds` vec on a
+            // stage-less MC2 world — the driver must be hash-visible
+            // wherever its side effects are. Transparent-while-clear
+            // AND appended after the (empty) stages gate, so every
+            // existing pin's byte stream is unchanged.
+            mc2_speech_ramp.hash(&mut h);
         }
         // The MC2 spell book (Phase 4.2): pristine = transparent
         // (MC1 goldens hold; every MC2 world touches it via the
@@ -2441,6 +2501,11 @@ impl World {
         if !mc2_stagevars.is_empty() {
             mc2_stagevars.hash(&mut h);
             mc2_sv_held.hash(&mut h);
+            // Deferred m9 holds join only when live (own gate: an
+            // empty vec must not shift the pinned stagevar goldens).
+            if !mc2_sv_deferred.is_empty() {
+                mc2_sv_deferred.hash(&mut h);
+            }
         }
         h.finish()
     }
@@ -2555,17 +2620,22 @@ impl World {
     /// per-shot deduction remc1 ships commented out by its maintainer
     /// (:64946-50, a known mis-fix pattern); we implement it.
     ///
-    /// Trigger classes (player-validated 2026-07-06):
-    /// - 23 Rapid Fireball: the ONLY hold-to-autofire — held fire
-    ///   re-arms the window every tick (:20627-30), one emission per
-    ///   game tick (the firehose).
+    /// Trigger classes. Retail's latch re-issues a held cast only for
+    /// spells whose manifestation +60 == 0 (:20601/:20621; ctor
+    /// :47981, per-thunk args :48020-160) — that set is exactly
+    /// {2, 15, 21, 23}. The old "1/4/5/12/14 are hold-to-channel"
+    /// reading was a misvalidation; the player re-ruled FAITHFUL
+    /// edge-only 2026-07-16 (review Session I, item I2):
+    /// - 23 Rapid Fireball: hold-to-autofire — held fire re-arms the
+    ///   window every tick (:20627-30), one emission per game tick
+    ///   (the firehose).
     /// - 15 Lightning Bolt: hold = continuous stream that keeps
     ///   emitting at its burst pacing (manual: "hold down the mouse
-    ///   for a continuous stream").
-    /// - 1/2/4/5/12/14/21: hold-to-channel toggles.
-    /// - Everything else (incl. 0 Fireball): EDGE-triggered — one
-    ///   cast per press, release + re-press to fire again, still
-    ///   paced by the burst counter.
+    ///   for a continuous stream"); a dry stream needs a re-click.
+    /// - 2/21 Accelerate fwd/back: hold-to-channel toggles.
+    /// - Everything else (incl. 0 Fireball, and the 1/4/5/12/14
+    ///   channels): EDGE-triggered — one cast per press, release +
+    ///   re-press to renew, still paced by the burst counter.
     fn cast_spell(&mut self, spell: SpellId, right: bool, edge: bool, p: PlayerPose, ctx: &MobCtx) {
         let id = spell.0 as usize;
         if id >= SPELL_COUNT {
@@ -2600,8 +2670,11 @@ impl World {
 
         let armed = self.g.ent[m].f26 > 0;
 
-        // The hold-to-channel toggles re-arm while held (:55871..).
-        if matches!(id, 1 | 2 | 4 | 5 | 12 | 14 | 21) {
+        // The hold-to-channel toggles re-arm while held — retail's
+        // +60==0 latch set minus 15/23, i.e. the two Accelerates
+        // ONLY (:20601/:20621). Heal/Shield/Beyond-Sight/Invis/
+        // Rebound are +60==1 → edge-only, handled below (I2 ruling).
+        if matches!(id, 2 | 21) {
             // The Accelerate brake veto (manual: "press the down
             // cursor to cancel"): a resisting thrust input this tick
             // keeps the channel down ([`World::thrust_cancel`]).
@@ -2638,7 +2711,29 @@ impl World {
         // "activity blocks regen but not re-fire" law the player
         // confirmed from retail. (The old `armed` cadence gate was the
         // banked cast-cadence item; the decompile resolves it: no gate.)
-        if !edge && id != 15 {
+        //
+        // 15 Lightning held stream: the retail latch re-issues the
+        // cast every held tick (+60==0, :20626-32) but ONLY while the
+        // burst is live (+48 > 0) — a dry stream stays dry until a
+        // fresh click (no auto-resume). The re-issued cast's mana
+        // check is SILENT (:55890 — no buzz, no debit, no reload on
+        // empty); the re-arm itself is free, the stream's cost is the
+        // per-shot debit at cost/count (the firehose idiom), which
+        // also keeps regen suppressed for the stream's duration.
+        if !edge && id == 15 {
+            if !armed {
+                return; // dry stream: re-click to restart
+            }
+            if !self.dev_spells && self.player.mana < def.possess_mana {
+                return; // silent (:55890)
+            }
+            self.mana_debit(def.possess_mana / def.count as u32);
+            self.g.ent[m].f26 = def.count as i16;
+            self.break_cloak(id);
+            self.emit_spell(id, m, p, right, ctx);
+            return;
+        }
+        if !edge {
             return;
         }
         // Create Castle (the model-16 trigger arm, :55901-11): a
@@ -3117,6 +3212,14 @@ impl World {
         for r in &mut self.rivals {
             r.mana_max = 1000; // the intrinsic base (u32_322, :55031-33)
         }
+        // The MC2 column keeps its own roster; retail grows the same
+        // per-wizard ceiling there (`maxMana_0x8C_140`, sub_13CE0
+        // EF:6135 — the ladder/afford gates read it). Left uncredited
+        // it pinned at 1000 forever: no castle past rung 1, expensive
+        // spells locked (review 2026-07-15 P0-3).
+        for r in &mut self.mc2_rivals {
+            r.mana_max = 1000;
+        }
         let mut max = 1000u32;
         let mut houses = 0u32;
         // The world total SEEDS with the census caller's intrinsic
@@ -3171,6 +3274,8 @@ impl World {
                     castle_stored = castle_stored.saturating_add(m);
                 }
             } else if let Some(r) = self.rivals.iter_mut().find(|r| r.ent == owner) {
+                r.mana_max = r.mana_max.saturating_add(m);
+            } else if let Some(r) = self.mc2_rivals.iter_mut().find(|r| r.ent == owner) {
                 r.mana_max = r.mana_max.saturating_add(m);
             }
         }
@@ -3395,6 +3500,22 @@ impl World {
                 self.manifestation_tick(i, (t - MANIFEST_BASE) as usize);
             }
             return;
+        }
+        // PR-1 (2026-07-15): a resting jar rides its tile's ground.
+        // Retail spawns at ground (:44005) and never legitimately
+        // diverges (jars have no gravity and terrain writes ignore
+        // class 12, :51729) — but HW's level shaping raised ground
+        // over ours (buried) and destroyed ground left ours hovering.
+        // Idempotent snap: hash-neutral while z already matches, so
+        // MC1 goldens only move where terrain genuinely reshaped
+        // under a jar.
+        {
+            let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+            let gz = self.g.ground_z(x, y) as i16;
+            if self.g.ent[i].z != gz {
+                self.g.ent[i].z = gz;
+                self.entities_dirty = true;
+            }
         }
         // Unfaithful improvement (RIVALS-POLISH #3): a jar whose spell
         // the player already owns can never be picked up (try_pickup's
@@ -3712,9 +3833,9 @@ impl World {
         // the player-observed interruptibility restored over the trace
         // (recorded gameplay is senior); reclassify as a P-class
         // playability toggle only if a retail playthrough disproves it.
-        // A reverse thrust brakes the (always-forward) boost; under the
-        // MC1 thrust model ANY press reaches the `-1.0` call, matching
-        // MC1's "any Up/Down press cancels" accelerate law.
+        // A reverse thrust brakes the (always-forward) boost — the
+        // same resisting-only law as MC1 Accelerate below (retail's
+        // v_14 arms only when the press moves v_12, :55766-80).
         if self.player.accel_mc2_factor != 0 {
             if thrust < 0.0 {
                 let m = self.mc2_book.ent[3] as usize;
@@ -3739,6 +3860,31 @@ impl World {
             if self.player.accel == -1 {
                 self.stop_accel(21);
             }
+        }
+    }
+
+    /// The Backspace full-stop's spell kill (retail MC2 action 0x27,
+    /// EF:37959-62: clears the `SpellEnabled[3]` manifestation's
+    /// `word_0x2E_46`; the spell's drive block is GUARDED on that
+    /// counter, so no minSpeed restore ever fires — EF:56203). Ends
+    /// whichever accelerate channel is live, either game (the MC1
+    /// side is the enhancement mirror of the same law).
+    pub fn full_stop_cancel_accel(&mut self) {
+        if self.player.accel_mc2_factor != 0 {
+            let m = self.mc2_book.ent[3] as usize;
+            if m != 0 {
+                self.g.ent[m].f26 = 0;
+                self.mc2_cast_expire(3, m);
+            } else {
+                self.player.accel = 0;
+                self.player.accel_mc2_factor = 0;
+            }
+            return;
+        }
+        match self.player.accel {
+            1 => self.stop_accel(2),
+            -1 => self.stop_accel(21),
+            _ => {}
         }
     }
 
@@ -3837,6 +3983,19 @@ impl World {
     /// gates without scripting a full economy.
     pub fn set_player_mana(&mut self, mana: u32) {
         self.player.mana = mana.min(self.player.mana_max);
+    }
+
+    /// Test/debug hook: mark every owned manifestation BLUE (the
+    /// blue-jar grant flag, :54908-12), zeroing its live castle
+    /// requirement — lets tests exercise the cast/refire laws of
+    /// castle-laddered spells without scripting a castle economy.
+    pub fn debug_bless_owned_spells(&mut self) {
+        for s in 0..SPELL_COUNT {
+            let m = self.player.owned[s] as usize;
+            if m != 0 {
+                self.g.ent[m].flags |= BLUE_SPELL;
+            }
+        }
     }
 
     /// Test/debug hook: raise the player's mana ceiling (and clamp the
@@ -4267,9 +4426,21 @@ impl World {
             if index < 0 {
                 continue;
             }
-            if matches!(index, 1 | 2 | 4 | 6 | 7 | 9) && stage == 0 {
-                continue;
-            }
+            // H4 (LE-binary verified): retail's InitStages "drop typed
+            // rows with stage==0" guard is DEAD CODE — its switch
+            // selector reads the memset-zero DESTINATION row
+            // (`stages_0x3654C[stageIndex].byte0`, EF:40589), never
+            // the source type, so it always falls to `default` and
+            // EVERY `index != -1` row registers, ACTIVE (state 1,
+            // EF:40607-09). 13 shipped levels author such rows; some
+            // (type-1/2 at stage 0) bind the empty record 0 and are
+            // faithfully un-completable — retail leaves them stuck
+            // and those levels end by other paths (the model-31
+            // X-marker latch). Dropping them severed level-198's
+            // m32 chain (par1=1 on a vacuously-completable type-7
+            // row). Registration order matches retail's compaction:
+            // the baker already removed the `-1` slots, so this
+            // enumerate index == retail's compacted row index.
             let target = match index {
                 // Type 7 stores the target's MODEL (:40628-30).
                 7 => self.table.get(stage as usize).map_or(0, |r| r.model as u32),
@@ -4320,11 +4491,14 @@ impl World {
     /// row (types 1/2) to the live entity it just matched. The retail
     /// template-pointer equality `a1x == &entity_0x30311[stage_1]`
     /// reduces in the port to `thing_slot == target` (the authored
-    /// THING index the spawn seam stamps on every entity). Binds each
-    /// matching row once (first spawned instance), mirroring the one
-    /// authored named entity per row. Types 4/6 share this seam in
-    /// retail but stay unported (types 4/6 = 0 shipped levels; type 6 is
-    /// un-completable in retail too — see
+    /// THING index the spawn seam stamps on every entity). Retail
+    /// re-points UNCONDITIONALLY on EVERY matching spawn (EF:40656-63:
+    /// no already-bound guard, no state gate) — the row tracks the
+    /// NEWEST instance, so a respawning named template must be killed
+    /// in its latest incarnation (H7v; the old first-spawn latch could
+    /// complete on a stale corpse). Types 4/6 share this seam in
+    /// retail but stay unported (types 4/6 = 0 shipped levels; type 6
+    /// is un-completable in retail too — see
     /// docs/traces/mc2-objective-types-1-2-4-6.md).
     fn mc2_bind_stage_target(&mut self, slot: usize) {
         let ti = self.g.ent[slot].thing_slot;
@@ -4332,11 +4506,7 @@ impl World {
             return;
         }
         for st in &mut self.mc2_stages {
-            if matches!(st.kind, 1 | 2)
-                && st.state == 1
-                && st.bound.is_none()
-                && st.target == ti as u32
-            {
+            if matches!(st.kind, 1 | 2) && st.target == ti as u32 {
                 st.bound = Some(slot as u16);
             }
         }
@@ -4380,8 +4550,10 @@ impl World {
     /// types 1/2 = the single bound entity. Non-spatial stages (0 mana,
     /// 3/8 kill-players) yield nothing to point at → empty. The closest
     /// piece to the human is flagged `nearest` (the arrow anchor), using
-    /// the same torus-wrapped metric as the type-5 latch. Tile units.
-    /// A read-only view — no state, so no hash/golden impact.
+    /// a torus-wrapped metric — DELIBERATELY unlike the type-5 latch,
+    /// which is retail's plain sign-extended abs (Session H5); the
+    /// overlay is a UI heuristic and the short way round is the useful
+    /// arrow. Tile units. A read-only view — no hash/golden impact.
     pub fn mc2_objective_targets(&self) -> Vec<ObjectiveTarget> {
         let mut out = Vec::new();
         let Some(st) = self.mc2_stages.get(self.mc2_stage_current) else {
@@ -4463,8 +4635,9 @@ impl World {
             }
             _ => {}
         }
-        // Flag the closest piece as the arrow anchor (torus-wrapped
-        // |dx|,|dy| like the type-5 latch, EF:40803-14).
+        // Flag the closest piece as the arrow anchor (torus-wrapped —
+        // an overlay-only heuristic; the type-5 LATCH is retail's
+        // plain sign-extended abs, EF:40803-14).
         let (px, py, _) = self.human_pose;
         let (pxf, pyf) = (px as f32 / 256.0, py as f32 / 256.0);
         let span = crate::MAP_TILES as f32;
@@ -4522,14 +4695,16 @@ impl World {
                             >= st.target as u64
                 }
                 // Fly-to-point, current stage only: |dx|,|dy| ≤ 768
-                // engine units = 3 tiles (:40803-14).
+                // engine units = 3 tiles (:40803-14). Retail's metric
+                // is ONE plain abs over sign-extended int16 operands —
+                // no torus/shortest-wrap min (its seam discontinuity is
+                // the genuine quirk). The guide overlay keeps its torus
+                // metric deliberately (UI heuristic, not the latch).
                 5 => {
                     idx == self.mc2_stage_current && {
                         let (px, py, _) = self.human_pose;
-                        let dx = (st.point.0 as i32 - px as i16 as i32).abs();
-                        let dy = (st.point.1 as i32 - py as i16 as i32).abs();
-                        let dx = (st.point.0.wrapping_sub(px) as i16 as i32).abs().min(dx);
-                        let dy = (st.point.1.wrapping_sub(py) as i16 as i32).abs().min(dy);
+                        let dx = ((st.point.0 as i16 as i32) - (px as i16 as i32)).abs();
+                        let dy = ((st.point.1 as i16 as i32) - (py as i16 as i32)).abs();
                         dx <= 768 && dy <= 768
                     }
                 }
@@ -4586,8 +4761,12 @@ impl World {
                 // collapses to nothing). Walk ≤8 links like retail,
                 // with a cycle guard for the self-loop rows (a row
                 // whose byte_3 points at itself never chains onward).
+                // Retail scans only every 16th frame
+                // (`!(FrameTimingIndex_26 & 0xF)`, EF:40852) — the
+                // one objective with a frame gate (H7); `mc2_turn`
+                // is the port's hash-excluded frame counter.
                 9 => {
-                    idx == self.mc2_stage_current && {
+                    idx == self.mc2_stage_current && self.mc2_turn & 0xF == 0 && {
                         let mut chain = [0u32; 8];
                         let mut n = 0;
                         let mut j = st.target;
@@ -4620,17 +4799,39 @@ impl World {
                 // — a background kill row, like type 0. A morph husk
                 // counts as gone (type 1 accepts any death).
                 1 => st.bound.is_some_and(|b| self.mc2_bound_gone(b, st.target)),
-                // KILL FOR REAL (type 2, EF:40771-79): retail adds the
-                // `!fontTypeIndex_0x3D_61` term (reject a death that is a
-                // mid-transform handoff) and follows the successor via
-                // `sub_59760`. The port has NO slot-swap creature
-                // succession — MC2 metamorph is a cosmetic pose-puppet
-                // (mc2::cast, no rebind), the dome/land morph is terrain
-                // — so no port death is ever a transform handoff and no
-                // re-point site exists; type 2 reduces to type 1 here.
-                // (Flag: if a slot-swap morph is ever added, port the
-                // `sub_59760` re-point + the offset-61 pose gate.)
-                2 => st.bound.is_some_and(|b| self.mc2_bound_gone(b, st.target)),
+                // KILL FOR REAL (type 2, EF:40771-79): life <= -1 AND
+                // `!fontTypeIndex_0x3D_61` — reject a death that is a
+                // mid-degradation handoff. Every shipped type-2 target
+                // is a (10,45) BUILDING, and building degradation IS a
+                // slot swap: `mc2_house_collapse`'s chain branch spawns
+                // the byte_3 successor in a fresh slot and re-points
+                // this row's `bound` to it (`sub_59760`, EF:40921-54).
+                // A building's fontTypeIndex ≡ `bldgprm[type].byte_3`
+                // (sub_49A30 EF:32794-98), never written elsewhere, so
+                // the port reads the chain byte directly: a dead
+                // building with a successor PENDING (chain != 0, the
+                // pre-collapse window before the re-point runs) is not
+                // done; only the FINAL stage (chain == 0) completes.
+                // No `thing_slot` identity term here (unlike type 1):
+                // the re-point deliberately moves `bound` to successor
+                // slots whose thing_slot differs from the authored
+                // target, and it keeps the binding live-tracked, so
+                // the LIFO-reuse window type 1 guards against is
+                // closed by the re-point cadence instead.
+                2 => st.bound.is_some_and(|b| match self.g.ent.get(b as usize) {
+                    None => true,
+                    Some(e) => {
+                        let dead = e.class64 == 0 || e.flags & 0x400 != 0 || e.act_life <= -1;
+                        dead && (!(e.class64 == 10 && e.model65 == 45)
+                            || self
+                                .g
+                                .assets
+                                .bldgprm
+                                .get(e.f71 as usize)
+                                .map_or(0, |bp| bp.chain)
+                                == 0)
+                    }
+                }),
                 // Types 4/6 need the same bind seam plus (4) a
                 // player-owner check / (6) an item carry-slot inventory
                 // that nothing in the decompile writes — both authored
@@ -5134,7 +5335,7 @@ impl World {
             _ => {}
         }
 
-        if drawable(r.class, r.model) {
+        if drawable(self.game, r.class, r.model) {
             self.entities_dirty = true;
         }
     }
@@ -5369,9 +5570,9 @@ impl World {
     /// (AddBuildingToTerrain_46570's 343*(angle&7) block table) and
     /// the SetHeightmapByBuildingArea_48B50 smoothing run through
     /// mc2_retile_region over the footprint window (bodies unread —
-    /// flagged in docs/traces); sub_59760 on the chain rebuild is
-    /// unread (OPEN); the id-68 player-castle global lands with MC2
-    /// castles.
+    /// flagged in docs/traces); the id-68 player-castle global lands
+    /// with MC2 castles. The `sub_59760` type-2 objective re-point on
+    /// the chain rebuild is PORTED below (Session H1).
     fn mc2_house_collapse(&mut self, i: usize) {
         let bldg = self.g.ent[i].f71 as usize;
         let chain = self.g.assets.bldgprm.get(bldg).map_or(0, |b| b.chain);
@@ -5396,6 +5597,19 @@ impl World {
                     self.g.ent[n].f144 = owner;
                     self.g.ent[n].flags |= 1; // :28196 verbatim
                     self.g.mc2_set_sprite(n, 177);
+                }
+                // `sub_59760` (:28204, body EF:40921-54): every ACTIVE
+                // type-2 objective row bound to the collapsing building
+                // follows the successor slot — the degradation-chain
+                // succession that keeps a kill-named-building objective
+                // alive across intermediate collapses. Type 2 ONLY
+                // (retail checks `byte0 == 2`); type 1 never re-points.
+                if !self.completed {
+                    for st in &mut self.mc2_stages {
+                        if st.kind == 2 && st.state == 1 && st.bound == Some(i as u16) {
+                            st.bound = Some(n as u16);
+                        }
+                    }
                 }
             }
             // The footprint dirty-bit clear (:28225-33).
@@ -5562,8 +5776,11 @@ impl World {
     }
 
     pub(crate) fn free_slot(&mut self, i: usize) {
-        if drawable(self.g.ent[i].class64 as u16, self.g.ent[i].model65 as u16)
-            || self.g.ent[i].class64 == 11
+        if drawable(
+            self.game,
+            self.g.ent[i].class64 as u16,
+            self.g.ent[i].model65 as u16,
+        ) || self.g.ent[i].class64 == 11
         {
             self.entities_dirty = true; // a drawable/overlay entity left
         }
@@ -5642,9 +5859,11 @@ impl World {
             // (`stage_0x3659F[par1] == 2`). Level-000 chains its
             // whole progression through these: checkpoint 1 → dis 2,
             // checkpoint 2 → dis 3 (the kill-target archers), the
-            // kill objective → dis 5, the mana goal → dis 6. A row
-            // that never registered (authored -1 / dropped) never
-            // completes — same as retail's state-0 hold.
+            // kill objective → dis 5, the mana goal → dis 6. Every
+            // authored (`index != -1`) row registers (H4), so par1
+            // always resolves; a row that can never complete (the
+            // faithfully-stuck type-1/2 stage-0 binds) holds its
+            // switch forever, like retail.
             32 => {
                 let par1 = self.g.ent[i].f71;
                 if self
@@ -6032,7 +6251,22 @@ impl World {
             }
         }
         AudioFrame {
-            events: std::mem::take(&mut self.g.sounds),
+            events: {
+                let mut evs = std::mem::take(&mut self.g.sounds);
+                // The mixer's channel key is the (OWNER word, id)
+                // pair (remc1 sub_483C0 matches both words; review
+                // 2026-07-15 D2). The hashed pending vec carries the
+                // EMITTER index — resolve it to the emitter's owner
+                // tag HERE, at drain time: the frame is not hashed,
+                // and the sim-side vec must stay byte-stable (the
+                // "audio fixes go in mgc-audio, not snd()" trap).
+                for e in &mut evs {
+                    if !e.player && (e.tag as usize) < self.g.ent.len() {
+                        e.tag = self.g.ent[e.tag as usize].id24;
+                    }
+                }
+                evs
+            },
             over_water,
             fire_near,
             market_near,
@@ -6186,19 +6420,22 @@ impl World {
     /// The MC2 player flight commit gate — `moveTest_5D0A0`
     /// (EF:59429), the [`crate::flight::mc2_move`] boundary hook
     /// (docs/traces/mc2-flight-model.md §2). Carpet head clearance
-    /// `fov` = 100 (params row 44 `rotSpeed/2`, EF:33334), ground
-    /// clearance 256 (tuning row `0xc`).
+    /// `fov` = 100 (params row 44 `rotSpeed/2`, EF:33334 — a genuine
+    /// constant); ground clearance comes from the map-type tuning
+    /// row (`0xc`), the same row the mover reads.
     pub fn player_mc2_gate(
         &self,
         cur: (u16, u16, i16),
         prop: (u16, u16, i16),
     ) -> crate::flight::Mc2GateOut {
-        self.g.mc2_flight_gate(100, 256, cur, prop)
+        let clr = self.mc2_carpet_row().clearance as i32;
+        self.g.mc2_flight_gate(100, clr, cur, prop)
     }
 
     /// `sub_5DD50`'s wedged test for the MC2 nudge (EF:59854-81).
     pub fn player_mc2_stuck(&self, pos: (u16, u16, i16), latched: bool) -> bool {
-        self.g.mc2_flight_stuck(100, 256, pos, latched)
+        let clr = self.mc2_carpet_row().clearance as i32;
+        self.g.mc2_flight_stuck(100, clr, pos, latched)
     }
 
     /// The MC2 carpet tuning row by map type (`AddPlayer_4A920`
@@ -6294,10 +6531,37 @@ impl World {
         }
     }
 
+    /// Deliver a raw melee-mailbox hit `(amount, source)` to an
+    /// entity — the held-creature damage-path oracle (Session H6).
+    #[doc(hidden)]
+    pub fn debug_mail_hit(&mut self, i: usize, amount: u32, src: u16) {
+        if let Some(e) = self.g.ent.get_mut(i) {
+            e.mail[0] = (amount, src);
+        }
+    }
+
+    /// An m27 body's `(tick70, branches)` where each branch reports
+    /// `(f71 sub-state, f63 tick counter)` — the kraken stage-command
+    /// oracle (Session E16).
+    #[doc(hidden)]
+    pub fn debug_mc2_m27_branches(&self, body: usize) -> (u8, Vec<(u8, u8)>) {
+        let mut out = Vec::new();
+        let mut j = self.g.ent.get(body).map_or(0, |e| e.f54) as usize;
+        while j != 0 {
+            let e = &self.g.ent[j];
+            if e.tick70 == 233 {
+                out.push((e.f71, e.f63));
+            }
+            j = e.f54 as usize;
+        }
+        (self.g.ent.get(body).map_or(0, |e| e.tick70), out)
+    }
+
     /// The live StageVar HELD bindings as `(entity_slot, model, kind)` —
     /// the hold-gate layer's oracle (test/dev instrument). A held
-    /// creature is frozen at its phase-7 wait action until its gate
-    /// fires.
+    /// creature runs `sub_1D5D0`'s held action at its phase-7 wait
+    /// until its gate fires (killable; kind-3/4 guardian arms live —
+    /// Session H6).
     #[doc(hidden)]
     pub fn debug_mc2_held(&self) -> Vec<(u16, u8, u8)> {
         self.mc2_sv_held
@@ -7883,6 +8147,82 @@ mod tests {
         assert!(w.mc2_apocalypse, "the extinction latch is set");
     }
 
+    /// The doomsday checkpoints act on `dword_38523` — the SPHERE
+    /// family (10, 39/40/57) — plus the class-5 creature buckets
+    /// (`KillAllCreatures_1B5F0`), NOT the whole pool: retail's v29==3
+    /// wipe is `DisableEntityDrawing` over that list only
+    /// (EF:13048-66) and case 0xE's 140-life reset walks the same list
+    /// (EF:12847-54). The port wiped every non-pyramid entity —
+    /// castles included — ~70 ticks before the endgame (review
+    /// 2026-07-15 P0-4).
+    #[test]
+    fn mc2_doomsday_checkpoint_spares_the_world() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let th = |slot, class, model, x, y| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        // A pyramid, a goat (kill-all's legitimate victim), and two
+        // witnesses crafted below: a castle and a mana sphere.
+        let things = vec![th(1, 5, 10, 100, 100), th(2, 5, 1, 90, 90)];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        w.set_mc2_doom_level(true);
+        w.tick(away(), PlayerCommand::default());
+        let p = find_slot(&w, 5, 10);
+        let (x, y) = mc2_pos(110, 110);
+        let gz = w.g.ground_z(x, y) as i16;
+        let craft = |w: &mut World, class: u8, model: u8| -> usize {
+            let j = w.g.mc2_spawn_fire(x, y, gz).expect("slot");
+            let e = &mut w.g.ent[j];
+            e.class64 = class;
+            e.model65 = model;
+            e.tick70 = 0;
+            e.max_life = 2000;
+            e.act_life = 2000;
+            j
+        };
+        let castle = craft(&mut w, 3, 2);
+        let sphere = craft(&mut w, 10, 39);
+        // Jump the attack driver (states 0/1 run it) to the kill-all
+        // countdown's final checkpoint (bits & 4, v7 == 1).
+        w.g.ent[p].f71 = 1;
+        w.g.ent[p].f44 = 4;
+        w.g.ent[p].f26 = 1;
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            w.g.ent[sphere].flags & 0x400 != 0,
+            "the sphere family IS despawned at checkpoint 1"
+        );
+        assert!(
+            w.g.ent[castle].flags & 0x400 == 0,
+            "the castle survives the activation crater"
+        );
+        assert_eq!(
+            w.g.ent[castle].max_life, 2000,
+            "no 140-life reset outside the sphere family"
+        );
+        assert!(
+            w.g.ent[find_slot(&w, 5, 1)].act_life < 0 || count(&w, 5, 1) == 0,
+            "the creature mass-kill still lands (goat dead)"
+        );
+    }
+
     fn find_slot(w: &World, class: u8, model: u8) -> usize {
         w.debug_pool()
             .1
@@ -8416,6 +8756,78 @@ mod tests {
             w.tick(on_jar, PlayerCommand::default());
         }
         assert_eq!(w.debug_pool().0, free1);
+    }
+
+    /// PR-1 (2026-07-15): a resting jar rides its tile's ground —
+    /// raised terrain must not bury it (HW level 00 spawned one below
+    /// the surface) and destroyed ground must not leave it hovering.
+    /// Retail spawns at ground (:44005) and its static z can never
+    /// legitimately diverge (jars have no gravity, terrain writes
+    /// ignore class 12, :51729); the snap is idempotent so it is
+    /// hash-neutral wherever a jar already sits right.
+    #[test]
+    fn jars_ride_terrain_changes() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 12,
+            model: 7,
+            x: 200,
+            y: 200,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
+        w.tick(away, PlayerCommand::default());
+        let jar = (1..w.g.ent.len())
+            .find(|&i| w.g.ent[i].class64 == 12 && w.g.ent[i].flags & 0x400 == 0)
+            .expect("the placed jar exists");
+        let (x, y) = (w.g.ent[jar].x, w.g.ent[jar].y);
+        assert_eq!(
+            w.g.ent[jar].z,
+            w.g.ground_z(x, y) as i16,
+            "spawns on ground"
+        );
+
+        // Raise the ground under it (the HW burial shape): the jar
+        // must ride up, not stay buried.
+        let (tx, ty) = ((x >> 8) as usize, (y >> 8) as usize);
+        for dy in 0..2 {
+            for dx in 0..2 {
+                w.g.t.height[(ty + dy) % 256 * 256 + (tx + dx) % 256] = 140;
+            }
+        }
+        w.tick(away, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[jar].z,
+            w.g.ground_z(x, y) as i16,
+            "raised ground lifts the jar"
+        );
+
+        // Destroy the ground: the jar settles down instead of hovering.
+        for dy in 0..2 {
+            for dx in 0..2 {
+                w.g.t.height[(ty + dy) % 256 * 256 + (tx + dx) % 256] = 40;
+            }
+        }
+        w.tick(away, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[jar].z,
+            w.g.ground_z(x, y) as i16,
+            "lowered ground drops the jar"
+        );
     }
 
     /// RIVALS-POLISH #3 (MC1): with `prune_owned_jars` on, a placed jar
@@ -9862,6 +10274,291 @@ mod tests {
         assert!(
             w.g.ent[rival].mail[0].1 != 0,
             "the fire's ch0 area damage reached the rival's mailbox"
+        );
+    }
+
+    fn one_rival_world(start_spell: usize) -> World {
+        use crate::mc2::rivals::Mc2RivalConfig;
+        let mut w = mc2_flat_world();
+        let mut cfg: [Option<Mc2RivalConfig>; 8] = Default::default();
+        let mut start = [false; 26];
+        start[start_spell] = true;
+        cfg[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 0,
+            start,
+            start_level: [0; 26],
+            blocked: [false; 26],
+        });
+        w.set_mc2_wizards(&cfg, 2);
+        w
+    }
+
+    /// Every manifestation's armed window (`word_0x2E_46`) is a LIVE
+    /// countdown in retail — the class-15 entity's own action counts
+    /// it down and the readiness gates (EF:6997/7014/7065) rely on it
+    /// expiring. The port only counted the buff set down, so one cast
+    /// of possess or any homing spell locked that spell for the
+    /// rival's whole life (review 2026-07-15 P0-2).
+    #[test]
+    fn mc2_rival_armed_window_expires_for_homing_spells() {
+        let mut w = one_rival_world(1); // possess — in the homing set
+        let m = w.mc2_rivals[0].book.ent[1] as usize;
+        assert!(m != 0, "the possess manifestation exists");
+        // Arm the window exactly as a landed cast does.
+        w.g.ent[m].f26 = (w.g.ent[m].f28 as i16).max(1);
+        let window = w.g.ent[m].f26;
+        assert!(window > 0);
+        for _ in 0..(window as usize + 1) {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.ent[m].f26, 0,
+            "the homing armed window counts down to 0 (was pinned forever)"
+        );
+    }
+
+    /// `recompute_mana` grows the MC2 rival's `mana_max` from claimed
+    /// entities exactly as it does the MC1 vec (retail
+    /// `maxMana_0x8C_140`, sub_13CE0 EF:6135). Left uncredited it
+    /// pinned at the intrinsic 1000 — no castle past rung 1 and the
+    /// expensive-spell ceiling gate shut forever (review 2026-07-15
+    /// P0-3).
+    #[test]
+    fn mc2_rival_mana_ceiling_grows_with_claims() {
+        let mut w = one_rival_world(1);
+        let rival = w.mc2_rivals[0].ent;
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        // A mana ball claimed by the rival (+144 = the claim owner).
+        let ball = w.g.mc2_spawn_fire(x, y, gz).expect("slot");
+        {
+            let e = &mut w.g.ent[ball];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.max_life = 0;
+            e.act_life = 1;
+            e.tick70 = 0;
+            e.f140 = 500;
+            e.f144 = rival;
+        }
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.mc2_rivals[0].mana_max, 1500,
+            "the census credits the MC2 rival's ceiling (1000 base + 500 claimed)"
+        );
+    }
+
+    /// Synthetic SPELLS.DAT rows: 3 tiers with the given per-tier
+    /// costs, armed window 6 (word_0x18), no ceiling gate.
+    fn mc2_synth_spell_rows(rows: &[(usize, [i32; 3])]) -> Vec<crate::mc2::spells::Mc2SpellRow> {
+        let mut spells =
+            vec![crate::mc2::spells::Mc2SpellRow::default(); crate::mc2::spells::MC2_SPELL_ROWS];
+        for &(s, costs) in rows {
+            spells[s].byte_0 = 3;
+            for t in 0..3 {
+                spells[s].tiers[t].mana_cost = costs[t];
+                spells[s].tiers[t].word_0x18 = 6;
+            }
+        }
+        spells
+    }
+
+    /// A flat MC2 world with the synthetic spell table and rivals
+    /// granted `(spell, authored level)` per config slot.
+    fn mc2_brain_world(grants: &[&[(usize, u8)]], rows: &[(usize, [i32; 3])]) -> World {
+        use crate::mc2::rivals::Mc2RivalConfig;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut a = assets();
+        a.spells = mc2_synth_spell_rows(rows);
+        let mut w = World::new_for_game(planes, &[], 1, a, GameId::Mc2);
+        let mut cfg: [Option<Mc2RivalConfig>; 8] = Default::default();
+        for (slot, gs) in grants.iter().enumerate() {
+            let mut start = [false; 26];
+            let mut start_level = [0u8; 26];
+            for &(s, lvl) in gs.iter() {
+                start[s] = true;
+                start_level[s] = lvl;
+            }
+            cfg[slot + 1] = Some(Mc2RivalConfig {
+                aggression: 128,
+                perception: 128,
+                reflexes: 128,
+                life: 0,
+                castle_level: 0,
+                start,
+                start_level,
+                blocked: [false; 26],
+            });
+        }
+        w.set_mc2_wizards(&cfg, grants.len() as u16 + 1);
+        w
+    }
+
+    /// The attack pick TIER-DOWNS instead of holding (review
+    /// 2026-07-15 P1-8/B3): a crater (0x10) authored at tier 2 with
+    /// only tier 0 affordable is still picked — at tier 0, with the
+    /// manifestation retuned by the walk's SetSpell side effect. The
+    /// old code returned None ("save up and WAIT") and one cooling
+    /// spell stalled ALL attack casting.
+    #[test]
+    fn mc2_rival_attack_pick_tiers_down_instead_of_waiting() {
+        let mut w = mc2_brain_world(&[&[(0x10, 2)]], &[(0x10, [100, 1000, 10_000])]);
+        // mana 500: >= maxMana/4 (no poverty), affords tier 0 only.
+        w.mc2_rivals[0].mana = 500;
+        let pick = w.mc2_rival_attack_pick(0, true);
+        assert_eq!(pick, Some(0x10), "the walk lands on the affordable tier");
+        let m = w.mc2_rivals[0].book.ent[0x10] as usize;
+        assert_eq!(
+            w.g.ent[m].f71, 0,
+            "the winning probe left the manifestation retuned to tier 0"
+        );
+        assert_eq!(
+            w.g.ent[m].max_life, 100,
+            "the tier-0 cost stamp rode the retune"
+        );
+    }
+
+    /// A homing-family spell casts, cools down, and casts AGAIN —
+    /// the end-to-end cast-twice pin on top of the P0-2 window fix
+    /// (one possess used to lock the spell for the rival's life).
+    #[test]
+    fn mc2_rival_casts_the_same_spell_twice() {
+        let mut w = mc2_brain_world(&[&[(1, 0)]], &[(1, [50, 50, 50])]);
+        let i = w.mc2_rivals[0].ent as usize;
+        assert!(w.mc2_rival_cast(0, i, 1), "the first possess fires");
+        assert!(
+            !w.mc2_rival_cast(0, i, 1),
+            "immediately after, the armed window + cooldown refuse"
+        );
+        // Window 6 + AI_RECAST[1] = 10 → a dozen-plus brain ticks
+        // clear both.
+        for _ in 0..16 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        let i = w.mc2_rivals[0].ent as usize;
+        assert!(
+            w.mc2_rival_cast(0, i, 1),
+            "after window + cooldown expire the spell re-arms (cast-twice)"
+        );
+    }
+
+    /// A landed cast de-latches the war toward ANY wizard target —
+    /// not just the human (EF:5966-68, review B4). Rival 1 at war
+    /// with rival 2 closes in, fires, and the war flag drops.
+    #[test]
+    fn mc2_rival_war_delatches_on_landed_cast_vs_rival() {
+        let mut w = mc2_brain_world(&[&[(0x10, 0)], &[]], &[(0x10, [50, 50, 50])]);
+        let (r1, r2) = (w.mc2_rivals[0].ent, w.mc2_rivals[1].ent);
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        w.g.move_relink(r1 as usize, x, y, gz + 300);
+        let (x2, _) = mc2_pos(104, 100);
+        w.g.move_relink(r2 as usize, x2, y, gz + 300);
+        let slot2 = w.mc2_rivals[1].slot as usize;
+        w.mc2_rivals[0].war[slot2] = true;
+        w.mc2_set_rival_state(0, crate::mc2::rivals::Mc2AiState::AttackWizard, r2);
+        w.mc2_rivals[0].grace = 0;
+        let mut delatched = false;
+        for _ in 0..200 {
+            w.tick(away(), PlayerCommand::default());
+            if !w.mc2_rivals[0].war[slot2] {
+                delatched = true;
+                break;
+            }
+        }
+        assert!(
+            delatched,
+            "a landed cast on a RIVAL wizard clears the war flag toward it"
+        );
+    }
+
+    /// The castle raid NEVER claims the castle (review P1-7/B2):
+    /// retail state 7 lobs spells on cadence; the old port re-owned
+    /// it (`id24 = me`) once aimed.
+    #[test]
+    fn mc2_rival_raid_never_steals_the_castle() {
+        let mut w = mc2_brain_world(
+            &[&[(0x10, 0)], &[(2, 0)]],
+            &[(0x10, [50, 50, 50]), (2, [100, 100, 100])],
+        );
+        let (r1, r2) = (w.mc2_rivals[0].ent, w.mc2_rivals[1].ent);
+        // Rival 2's castle, standing.
+        let (cx, cy) = mc2_pos(110, 100);
+        let gz = w.g.ground_z(cx, cy) as i16;
+        let c = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.tick70 = 4;
+            e.max_life = 40000;
+            e.id24 = r2;
+        }
+        w.g.link(c, cx, cy, gz);
+        w.g.refill_life(c);
+        // Rival 1 parked inside the 2048 cast ring, facing it.
+        let (x, y) = mc2_pos(106, 100);
+        w.g.move_relink(r1 as usize, x, y, gz + 300);
+        w.mc2_set_rival_state(0, crate::mc2::rivals::Mc2AiState::RaidCastle, c as u16);
+        let i = r1 as usize;
+        for _ in 0..8 {
+            w.mc2_rival_state_tick(0, i, true);
+        }
+        assert_eq!(
+            w.g.ent[c].id24, r2,
+            "the raided castle keeps its owner — no steal"
+        );
+        assert_eq!(
+            w.mc2_rivals[0].state,
+            crate::mc2::rivals::Mc2AiState::RaidCastle,
+            "the raid posture holds (no claim-and-done exit)"
+        );
+    }
+
+    /// The DEFENSE selector is the metamorph MIMICRY pick (review
+    /// P1-6/B1): a wizard threat nearby + a disguisable creature
+    /// near THAT WIZARD arms the matching metamorph tier and targets
+    /// the CREATURE — never casts from the old bucket table.
+    #[test]
+    fn mc2_rival_defense_picks_the_disguise_tier() {
+        let mut w = mc2_brain_world(&[&[(4, 2)]], &[(4, [10, 10, 10])]);
+        let i = w.mc2_rivals[0].ent as usize;
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        w.g.move_relink(i, x, y, gz + 300);
+        // The human 4 tiles away (inside 0x1400 = 20 tiles)...
+        let pose = PlayerPose::from_tiles(104.5, (gz as f32 + 300.0) / 256.0, 100.5, 0.0, 0.0, 0.0);
+        w.tick(pose, PlayerCommand::default());
+        // ...and a tier-1 disguise creature (model 0x19) next to
+        // the human.
+        let (mx, my) = mc2_pos(105, 100);
+        let anchor =
+            w.g.mc2_spawn_creature_model(0x19, mx, my, gz)
+                .expect("anchor creature");
+        let picked = w.mc2_rival_pick_defense(0, i);
+        assert!(picked, "the mimicry pick engages");
+        assert_eq!(
+            w.mc2_rivals[0].state,
+            crate::mc2::rivals::Mc2AiState::Defense
+        );
+        assert_eq!(
+            w.mc2_rivals[0].target, anchor as u16,
+            "the disguise ANCHOR creature is the target — not the wizard"
+        );
+        let m4 = w.mc2_rivals[0].book.ent[4] as usize;
+        assert_eq!(
+            w.g.ent[m4].f71, 1,
+            "model 0x19 maps to metamorph tier 1 (EF:7705-06)"
         );
     }
 

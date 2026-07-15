@@ -24,10 +24,23 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets
       - name: Test
-        run: cargo test --workspace
+        shell: bash
+        run: cargo test --workspace 2>&1 | tee test.log
+      - name: Golden skip report
+        shell: bash
+        # Goldens self-skip without baked/ (never available in CI) but
+        # each skip prints a grep-able GOLDEN-SKIP line — this step
+        # makes the count visible instead of the suite reading as
+        # "everything verified". A fixture-equipped runner (or the
+        # local pre-release check) runs the suite with
+        # MGC_REQUIRE_GOLDENS=1, which turns every skip into a FAILURE.
+        run: echo "golden tests skipped (no baked fixtures) — $(grep -c 'GOLDEN-SKIP' test.log || true)"
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
     # Game data is never available in CI; the gamedata integration test
-    # self-skips. Real-data verification happens locally.
+    # self-skips (see the Golden skip report step above). Real-data
+    # verification happens locally: the required pre-release step is
+    #   MGC_REQUIRE_GOLDENS=1 cargo test --workspace
+    # against a real baked/ tree, which FAILS on any golden skip.

@@ -630,8 +630,34 @@ pub struct CameraView {
     pub z: f32,
     pub yaw: f32,
     pub pitch: f32,
+    /// Camera bank in radians, positive = bank right (the faithful
+    /// turn cue — retail renders the roll stick at full value,
+    /// remc1 :52432 / remc2 EF:40258). Rolls the whole view basis:
+    /// terrain, billboards and sky bank together, the true-3D
+    /// equivalent of retail's DrawSky/SetBillboards screen rotation.
+    pub roll: f32,
     /// Vertical field of view in radians.
     pub fov_y: f32,
+}
+
+/// The rolled camera basis (right, up, fwd) shared by the view
+/// matrix and the billboard expansion vectors.
+fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let (sy, cy) = cam.yaw.sin_cos();
+    let (sp, cp) = cam.pitch.sin_cos();
+    let fwd = [sy * cp, sp, -cy * cp];
+    let flat_right = [cy, 0.0, sy];
+    let flat_up = [
+        flat_right[1] * fwd[2] - flat_right[2] * fwd[1],
+        flat_right[2] * fwd[0] - flat_right[0] * fwd[2],
+        flat_right[0] * fwd[1] - flat_right[1] * fwd[0],
+    ];
+    // Bank: rotate right/up about fwd; positive roll tips the up
+    // vector toward +right (the camera leans into a right turn).
+    let (sr, cr) = cam.roll.sin_cos();
+    let right = std::array::from_fn(|i| flat_right[i] * cr - flat_up[i] * sr);
+    let up = std::array::from_fn(|i| flat_up[i] * cr + flat_right[i] * sr);
+    (right, up, fwd)
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -2661,16 +2687,10 @@ impl Renderer {
         let view_proj = camera_matrix(cam, aspect);
         let sky = self.sky_color_linear();
         // Camera right/up for billboard expansion (matches
-        // `camera_matrix`'s basis).
-        let (sy, cy) = cam.yaw.sin_cos();
-        let (sp, cp) = cam.pitch.sin_cos();
-        let fwd = [sy * cp, sp, -cy * cp];
-        let right = [cy, 0.0, sy];
-        let up = [
-            right[1] * fwd[2] - right[2] * fwd[1],
-            right[2] * fwd[0] - right[0] * fwd[2],
-            right[0] * fwd[1] - right[1] * fwd[0],
-        ];
+        // `camera_matrix`'s basis, bank included — billboards stay
+        // screen-aligned in the rolled view like retail's
+        // SetBillboards_3B560(-roll)).
+        let (right, up, _fwd) = camera_basis(cam);
         let globals = Globals {
             view_proj,
             camera: [cam.x, cam.y, cam.z, FOG_DENSITY],
@@ -3205,15 +3225,7 @@ pub fn world_to_screen(
 }
 
 fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
-    let (sy, cy) = cam.yaw.sin_cos();
-    let (sp, cp) = cam.pitch.sin_cos();
-    let fwd = [sy * cp, sp, -cy * cp];
-    let right = [cy, 0.0, sy];
-    let up = [
-        right[1] * fwd[2] - right[2] * fwd[1],
-        right[2] * fwd[0] - right[0] * fwd[2],
-        right[0] * fwd[1] - right[1] * fwd[0],
-    ];
+    let (right, up, fwd) = camera_basis(cam);
     let eye = [cam.x, cam.y, cam.z];
     let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
@@ -3261,6 +3273,7 @@ mod tests {
             z: 10.0,
             yaw: 0.0, // fwd = [0, 0, -1]
             pitch: 0.0,
+            roll: 0.0,
             fov_y: 1.0,
         };
         let (w, h) = (640.0, 480.0);

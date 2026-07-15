@@ -11,6 +11,9 @@ use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
     p.join("mc1/level-005.mgcl").exists().then_some(p)
@@ -70,7 +73,7 @@ fn region_height(w: &World, x0: usize, y0: usize, x1: usize, y1: usize) -> u32 {
 #[test]
 fn level_005_trigger_cascade() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked data not present");
+        common::golden_skip("baked data not present");
         return;
     };
     let (mut w, drawable_records) = build_world(&root);
@@ -130,7 +133,7 @@ fn creature_count(w: &World) -> usize {
 #[test]
 fn level_005_deterministic() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked data not present");
+        common::golden_skip("baked data not present");
         return;
     };
     let run = || {

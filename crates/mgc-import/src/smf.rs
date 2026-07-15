@@ -1,7 +1,7 @@
 //! Standard MIDI File (type 0) encoder for parsed HMP songs — the
 //! bridge from `MUSIC<bank>-2` (the General MIDI arrangement, driver
 //! digit 2 = the original's `GENERAL` target, remc1 :54029-30) to an
-//! external GM renderer (fluidsynth).
+//! GM renderer (oxisynth, crate::synth).
 //!
 //! The HMP tick rate is `bpm` ticks/SECOND (see [`crate::hmp`]); the
 //! SMF is written with division = tick_rate ticks per quarter and a

@@ -19,6 +19,9 @@ use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
     (p.join("mc2/level-014.mgcl").exists() && p.join("assets/mc2-cave/build.tab.bin").exists())
@@ -132,16 +135,18 @@ fn invariant_violations(w: &World) -> usize {
 }
 
 /// The scripted cave run; returns the checkpoint hashes.
-fn run(root: &std::path::Path) -> Option<Vec<u64>> {
+fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     let mut w = build_world(root)?;
     let (sx, sy) = open_spot(&w);
     let idle = PlayerCommand::default();
     let mut hashes = vec![w.state_hash()];
+    let mut obs = vec![w.observable_digest()];
 
     // A: idle in an open cavern — the walker/bee cadences + the drip
     // spawner's 8-turn cadence in front of the parked pose.
     hover(&mut w, sx, sy, 64, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // B: a NATIVE Cave-In (spell 25, LEFT hand, tier 0) fired into
     // the cavern — the (9,30) manifestation detonates on the nearest
@@ -160,6 +165,7 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
     hover(&mut w, sx, sy, 2, firing);
     hover(&mut w, sx, sy, 96, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // C: the sweep's disposition storm (matches mc2sweep) — trips
     // the switch column, materializing the dis-gated brutes/bees.
@@ -168,19 +174,18 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
     }
     hover(&mut w, sx, sy, 64, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
-    // StageVar sanity: level-014 authors two inert kind-1 vars (word=0,
-    // no matching THING) + one kind-9 whose model-18 target never spawns
-    // in-range during this run, so NOTHING is held — the golden move is
-    // purely the (now-populated) StageVar table joining the hash, no
-    // behaviour change.
     // StageVar hold-gate: level-014 authors two inert kind-1 vars
     // (word=0, no matching THING) + one kind-9 that HOLDS the model-18
     // creature (THING 334) until its referenced entity (template 6)
     // dies. That trigger does not fire in this run, so the one model-18
-    // stays dormant at its phase-7 wait — faithful to the decompile (it
-    // is still targetable/killable, just not acting). The golden move is
-    // the StageVar table + this one held binding joining the hash.
+    // stays dormant at its phase-7 wait, running `sub_1D5D0`'s held
+    // head (killable; kind 9 has no guardian arm — Session H6). The
+    // golden move was the StageVar table + this one held binding
+    // joining the hash. (An older sibling comment claiming "NOTHING is
+    // held" pre-dated the landed subsystem and contradicted the
+    // assertion below — removed, Session H9.)
     let held = w.debug_mc2_held();
     assert_eq!(
         held,
@@ -188,20 +193,24 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
         "level-014: exactly the kind-9 model-18 is held (its gate never fired)"
     );
 
-    Some(hashes)
+    Some((hashes, obs))
 }
 
 #[test]
 fn mc2_cave_behaviors_and_goldens() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
-    let Some(got) = run(&root) else {
-        eprintln!("skipped: mc2 level-014 has no baked ceiling (pre-EPOCH-8 bake)");
+    let Some((got, obs)) = run(&root) else {
+        common::golden_skip("mc2 level-014 has no baked ceiling (pre-EPOCH-8 bake)");
         return;
     };
-    assert_eq!(got, run(&root).unwrap(), "cave run is not deterministic");
+    assert_eq!(
+        (got.clone(), obs.clone()),
+        run(&root).unwrap(),
+        "cave run is not deterministic"
+    );
     println!("mc2 cave hashes: {got:#018x?}");
 
     // Behavior probes on a fresh world.
@@ -314,18 +323,80 @@ fn mc2_cave_behaviors_and_goldens() {
     // is purely the extra `None` joining each stage's hash.
     // Re-pinned 2026-07-14 (StageVar subsystem): the level's StageVar
     // table (`crate::mc2::stagevars`) now loads + hashes. level-014's
-    // three vars hold no creature in this run (two inert kind-1 word=0,
-    // one kind-9 whose model-18 target never spawns in-range — asserted
-    // above), so the move is purely the StageVar table joining the hash;
-    // no behaviour changed.
+    // kind-9 var HOLDS the one model-18 (THING 334) at its phase-7
+    // wait — its gate (template-6 death) never fires in this run, and
+    // the two kind-1 vars (word=0) match nothing — so the move was
+    // the StageVar table PLUS that one held binding joining the hash
+    // (this note originally claimed "no creature held"; corrected
+    // Session H9 to match the assertion above).
+    // Re-pinned 2026-07-16 (DELIBERATE), Session E creature batch:
+    // level-014's two (5,22) worms now carry the retail ctor
+    // `f28 = 3` (E5 — the ch1 designation-mail admit; the whole
+    // retarget→colorize machine was dead code behind f28=1), plus
+    // the shared-mover/awake changes (E13 unconditional retry
+    // terrain test, E15 hidden-skip + sphere pass) that shift any
+    // creature trajectory from load. The file's behavioral asserts
+    // (incl. count(5,27)==0) still pass. MC1 goldens untouched.
+    // Re-pinned 2026-07-16 (DELIBERATE), Session G castle/cave
+    // geometry — the review-fix batch (docs/REVIEW-FIX-PLAN-
+    // 2026-07-15.md Session G) absorbed in ONE pin:
+    //   G3  mesa floor writes now always retile (sub_570F0 keys the
+    //       retile on a4, EF:39702-08) + clear the low nibble on
+    //       h==0 (EF:39660) — tile_type/shading/angle move over
+    //       mesa footprints;
+    //   G7  the drip sprite roll (EF:37025) and pit/hill depth roll
+    //       (EF:25639) draw the u16 entity rand, not raw lcg32 —
+    //       the load-time cave-gen RNG stream shifts from the first
+    //       draw;
+    //   G8a dome/pit/hill measure to the tile CORNER (i<<8,
+    //       EF:25496/25666 — no +128): every bowl/mound shifts half
+    //       a tile;
+    //   G8b the dome seal sync is bit3-only (EF:25522-25 — the old
+    //       ceiling=floor−1 pin was the pit/hill law leaking in);
+    //   G8c the tube wall ring covers side+1 dims (EF:25243);
+    //   G9f cave_wall_ring is sub_34B00 VERBATIM: the SE corner is
+    //       never stamped, the bottom row/right column stamp
+    //       angle+retile without the type write;
+    //   G9h the cave-in debris z reads retail's stale one-past-the-
+    //       box neighbor cell (EF:23052-77) — this fixture's
+    //       Cave-In cast moves with it.
+    // All behavioral asserts above still pass; MC1 goldens and every
+    // other fixture untouched (verified this session).
+    // Re-pinned 2026-07-16 (DELIBERATE), Session J2 hash field tags —
+    // LAYOUT-ONLY, zero behavior change: conditional hash-quiet fields
+    // now write a distinct tag byte when (and only when) they
+    // contribute, closing the adjacent-field aliasing class
+    // (drain/scrolls/tokens, aura_claim/wanted, debuffs,
+    // apocalypse/doom). This fixture legitimately exercises two of
+    // them — mc2_spell_tokens is live from load (the fireball+possess
+    // baseline, bitmask 3, moves checkpoint 0 too) and mc2_aura_claim
+    // carries 10 live claims once ticked — so every checkpoint gains
+    // tag bytes. Verified by instrumenting the tag writes: only tags
+    // 3 (spell_tokens) and 4 (aura_claim) fire here. mc2_slice and
+    // all MC1 goldens unmoved (their tagged fields never fire).
     assert_eq!(
         got,
         vec![
-            0xfb1cae65b82c50c7u64,
-            0x2a2bb52724157205,
-            0xd277ef689afad167,
-            0x4d3d22ac62703998,
+            0x412400459003a46fu64,
+            0xb06c5dbab4269e6c,
+            0xf6d1f65428b61759,
+            0xbde1c85211d87fc3,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
+    );
+
+    // The layout-INDEPENDENT companion golden (review J3, pinned
+    // 2026-07-16) — see state_hash.rs: survives hashed-layout
+    // re-pins; moves ONLY with real behavior.
+    const OBSERVABLE: [u64; 4] = [
+        0x5fdfbe7cfbf8fc43,
+        0xa8e12e16527d90a5,
+        0xbdd186cdf9aa0e8b,
+        0xed754c9e194c0d11,
+    ];
+    assert_eq!(
+        obs, OBSERVABLE,
+        "the OBSERVABLE projection diverged — this is a behavior \
+         change, never a layout-only one"
     );
 }

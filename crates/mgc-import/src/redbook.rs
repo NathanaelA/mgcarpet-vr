@@ -46,6 +46,20 @@ pub fn parse_cue(cue: &str, image_sectors: u64) -> Result<Vec<AudioTrack>, Strin
             Some("INDEX") => {
                 let idx = words.next().ok_or("INDEX without number")?;
                 let msf = words.next().ok_or("INDEX without MSF")?;
+                if idx == "00" {
+                    // A pregap start: the PREVIOUS track's audio ends
+                    // HERE, not at the next INDEX 01 — otherwise the
+                    // ~2 s pregap leaks into its tail (review
+                    // 2026-07-15 D7; the GOG sheet uses PREGAP
+                    // directives so this is insurance for other rips).
+                    let sector = msf_to_sector(msf)?;
+                    if let Some(prev) = tracks.last_mut() {
+                        if prev.end_sector == 0 {
+                            prev.end_sector = sector;
+                        }
+                    }
+                    continue;
+                }
                 if idx != "01" {
                     continue;
                 }

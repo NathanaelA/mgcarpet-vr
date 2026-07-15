@@ -22,8 +22,10 @@
 //!   respawn timer is a flat 1200, and a castle-less dead rival is
 //!   BANISHED — the elimination signal the staged objective engine's
 //!   case 3/8 reads;
-//! - rivals earn spell XP through the shared `sub_6D8B0` award
-//!   plumbing (the owner-tagged impact mail), not a private ladder.
+//! - rivals earn NO spell XP — `sub_6D8B0`'s guard is class-3
+//!   model-0, the human only (EF:58240-41); a rival's tiers are its
+//!   authored map levels, and the per-cast TIER-DOWN walk
+//!   (sub_15F20) supplies the tier dynamics.
 //!
 //! Deliberate original asymmetries, ported as traced: the AI at its
 //! own castle DISCARDS damage (grace pinned 2, mailbox memset —
@@ -34,11 +36,11 @@
 //!
 //! Known interim deviations (ours, flagged inline): the hate feed
 //! rides damage intake instead of the per-projectile scan sub_159E0
-//! (the MC1-column position); the defense STATE (sub_161A0) folds
-//! into the reactive-defense jink + cast (sub_15CB0 chain is ported
-//! verbatim; the state's own weave re-pick is approximated by the
-//! shared combat weave); the grave (10,40) is an inert census anchor
-//! (its retail action untraced — provenance OPEN).
+//! (the MC1-column position); the DEFENSE state's disguise VISUAL
+//! (retail draws the metamorph creature in place of the AI carpet)
+//! is presentation-side unported — the state machine, tier pick,
+//! shadowing and speed law are faithful (sub_15FC0/sub_161A0,
+//! reworked per review 2026-07-15 P1-6).
 
 use crate::mc1::features::{Gen, tile};
 use crate::mc1::mobs::PLAYER_TARGET;
@@ -65,8 +67,24 @@ const AI_RECAST: [u16; MC2_SPELLS] = [
 const ATTACK_WIZARD: [u8; 8] = [0x10, 0x12, 0x09, 0x07, 0x14, 0x15, 0x13, 0x00];
 /// Attack-priority walk vs a CASTLE — `unk_D3F89x` (EF:1072).
 const ATTACK_CASTLE: [u8; 7] = [0x10, 0x12, 0x07, 0x09, 0x11, 0x14, 0x00];
-/// The defense state's reactive table — `unk_D3F91x` (EF:1073).
-const DEFENSE_REACTIVE: [u8; 4] = [0x02, 0x13, 0x19, 0x10];
+/// The DEFENSE state's DISGUISE-MODEL table — `unk_D3F91x` (EF:1073):
+/// the class-5 creature models Metamorph's tiers turn a wizard into
+/// (2 = tier-0 Day bird, 0x13 = tier-0 non-Day, 0x19 = tier 1,
+/// 0x10 = tier 2), walked in scan-priority order by `sub_15FC0`
+/// (EF:7664-79). NOT a cast list — the old reading cast these as
+/// spell ids, so a rival "dodged" by casting Create Castle (review
+/// 2026-07-15 P1-6).
+const DISGUISE_MODELS: [u8; 4] = [0x02, 0x13, 0x19, 0x10];
+
+/// Metamorph tier for a disguise model (`SetSpell` switch,
+/// EF:7685-7711): 2/0x13 → tier 0, 0x19 → 1, 0x10 → 2.
+fn mc2_disguise_tier(model: u8) -> u8 {
+    match model {
+        0x19 => 1,
+        0x10 => 2,
+        _ => 0,
+    }
+}
 /// Raid-castle offense gate `sub_164B0` (EF:6182 caller).
 const OFFENSE_RAID: [u8; 9] = [0x11, 0x10, 0x12, 0x07, 0x09, 0x14, 0x13, 0x15, 0x00];
 /// Attack-wizard/balloon/hunt offense gate `sub_15E60` (EF:6233).
@@ -94,9 +112,13 @@ pub const MC2_RIVAL_NAMES: [&str; 8] = [
     "Zanzamar", "Nyphur", "Rahn", "Belix", "Jark", "Elyssia", "Yragore", "Prish",
 ];
 
-/// The AI wizard's behavior row: absolute 60 = ROW_BASE(59) + model 1
-/// (spawn row 59+model, survey §movement).
-const WIZARD_ROW: u8 = 60;
+/// The AI wizard's tuning row: the rival ctor PINS `str_D7BD6[67]`
+/// (sub_4A9C0 EF:33351 — decompile-verified 2026-07-15), overriding
+/// the spawn law 59+model=60. Row 67 carries the retail AI band
+/// (ceiling ground+768, floor ground+128), turn caps (v_4 5, v_2
+/// 256), climb -4 and the 8192 engagement range v_28 — row 60's
+/// 1792/0/22/4096 were all wrong for the brain's consumers.
+const WIZARD_ROW: u8 = 67;
 
 /// Per-color config from the level record (the 110-byte
 /// `WizardMapSettings_0x360D2` block + the header's authored
@@ -194,10 +216,11 @@ pub(crate) struct Mc2Rival {
     /// negative lockout of (Reflexes-255)/8-1 ticks (EF:6813-15).
     burst: i16,
     /// Poverty latch (word_0x1A4_420): mana < max/4 stops attack
-    /// casting until min(max/4+6000, max/2) (EF:7191-98).
+    /// casting; the release is max/4 + 6000, clamped to max/2 only
+    /// when the sum overshoots the ceiling (EF:7191-7205).
     poverty: bool,
     /// Current target: entity slot or [`PLAYER_TARGET`]; 0 = none.
-    target: u16,
+    pub(crate) target: u16,
     target_sig: u16,
     /// Scouted castle site (axis_0x9A_154x).
     site: (u16, u16),
@@ -207,6 +230,13 @@ pub(crate) struct Mc2Rival {
     strafe: i16,
     /// The combat-weave micro-FSM (str_611_byte_0x45D_1117, 0..20).
     weave: u8,
+    /// The weave's committed direction (str_611_byte_0x45C_1116):
+    /// 1 = port (-512), 2 = starboard (+512).
+    weave_dir: u8,
+    /// The two-stage shield absorb (the wizard byte[1]/byte[2] 0x40
+    /// pair, EF:60676-93): 0 spent, 1 armed (next hit nulled +
+    /// promotes), 2 charged (next hit quartered, mana-paid, spends).
+    shield_state: u8,
     /// The water-steer micro-FSM (byte_0x45E_1118): 0 idle, 1/2
     /// committed left/right, 3..7 frozen arc, >=8 re-detect.
     avoid: u8,
@@ -251,6 +281,8 @@ impl Mc2Rival {
             site: (0, 0),
             strafe: 0,
             weave: 0,
+            weave_dir: 1,
+            shield_state: 0,
             avoid: 0,
             avoid_exit: 0,
             vdes: 0,
@@ -595,7 +627,7 @@ impl World {
         if think {
             self.mc2_rival_react_defense(ri, i);
             if self.g.ent[i].act_life < self.g.ent[i].max_life as i32 {
-                self.mc2_rival_cast(ri, i, 5);
+                self.mc2_rival_walk_cast(ri, i, 5);
             }
         }
 
@@ -664,15 +696,33 @@ impl World {
         if dmg <= 0 {
             return;
         }
-        // Shield: quarter, paid by mana (EF:60684-99).
-        if self.mc2_rivals[ri].shield && self.mc2_rivals[ri].mana > 0 {
-            dmg /= 4;
-            let pay = (dmg as u32).min(self.mc2_rivals[ri].mana);
-            self.mc2_rivals[ri].mana -= pay;
+        // Shield: the two-stage absorb (EF:60676-93, review B11): an
+        // ARMED shield NULLS the hit outright and promotes to
+        // CHARGED; a CHARGED shield quarters the hit, pays the
+        // quarter from mana and is spent. (Retail calls the shield-XP
+        // award here too — a structural no-op for rivals through
+        // sub_6D8B0's model-0 guard.)
+        if self.mc2_rivals[ri].shield {
+            match self.mc2_rivals[ri].shield_state {
+                1 => {
+                    self.mc2_rivals[ri].shield_state = 2;
+                    dmg = 0;
+                }
+                2 => {
+                    dmg /= 4;
+                    let pay = (dmg as u32).min(self.mc2_rivals[ri].mana);
+                    self.mc2_rivals[ri].mana -= pay;
+                    self.mc2_rivals[ri].shield_state = 0;
+                }
+                _ => {}
+            }
         }
         self.g.ent[i].act_life -= dmg;
         self.g.ent[i].f38 = src; // killer latch (word_0x24_36)
-        self.g.snd(17, i);
+        // Wizard hit sound rand 54..57 on the entity LCG
+        // (EF:60712-13; was a flat 17 — review B11).
+        let hs = 54 + (self.g.ent_rand(i) & 3) as u8;
+        self.g.snd(hs, i);
         // Hate feed (+3000 heavy / +500 base folded to the heavy
         // rate on the source owner; the MC1-column APPROX).
         if let Some(shooter) = self.owner_slot_of_source(src) {
@@ -982,30 +1032,54 @@ impl World {
 
     // ---- buffs + reactive defense -----------------------------------------
 
-    /// Buff flags from the manifestations' armed windows (the rival's
-    /// class-15 entities are inert in the world tick — their cast
-    /// windows count down here). Heal (5) heals while armed.
+    /// The manifestations' armed windows (the rival's class-15
+    /// entities are inert in the world tick — their cast windows count
+    /// down here). Retail's class-15 action maintains `word_0x2E_46`
+    /// as a live countdown on EVERY spell's manifestation — the
+    /// readiness gates (EF:6997/7014/7065) rely on it expiring, so the
+    /// homing set {1,9,0x10,0x12,0x13,0x15} re-arms after `f28` ticks
+    /// like retail instead of locking for the rival's whole life
+    /// (review 2026-07-15 P0-2). Buff flags read the post-decrement
+    /// window; Heal (5) heals while armed.
     fn mc2_rival_buffs(&mut self, ri: usize) {
-        let mut get = |spell: usize| -> bool {
-            let m = self.mc2_rivals[ri].book.ent[spell] as usize;
-            if m == 0 {
-                return false;
-            }
-            if self.g.ent[m].f26 > 0 {
+        let book = self.mc2_rivals[ri].book.ent;
+        // Heal fires on the pre-decrement window (including the 1→0
+        // tick) — capture before the countdown pass.
+        let heal_live = book[5] != 0 && self.g.ent[book[5] as usize].f26 > 0;
+        let own = self.mc2_rivals[ri].ent;
+        for (s, m) in book.iter().enumerate() {
+            let m = *m as usize;
+            if m != 0 && self.g.ent[m].f26 > 0 {
                 self.g.ent[m].f26 -= 1;
+                if self.g.ent[m].f26 == 0 {
+                    // Shield window expiry drops the absorb stages.
+                    if s == 6 {
+                        self.mc2_rivals[ri].shield_state = 0;
+                    }
+                    // A tier queued mid-effect (`SetSpell`'s f44 =
+                    // t+1 stash) applies at window expiry — the
+                    // retail word_0x2C_44 drain (Level:1505-18; the
+                    // defense state's disguise re-pick relies on it).
+                    if self.g.ent[m].f44 != 0 {
+                        let queued = (self.g.ent[m].f44 - 1) as u8;
+                        self.g.ent[m].f44 = 0;
+                        self.mc2_rival_set_spell(m, queued, own);
+                    }
+                }
             }
-            self.g.ent[m].f26 > 0
+        }
+        let live = |g: &Gen, spell: usize| -> bool {
+            let m = book[spell] as usize;
+            m != 0 && g.ent[m].f26 > 0
         };
-        let shield = get(6);
-        let rebound = get(8);
-        let invisible = get(0xB);
-        let _speed = get(3); // the approach boost window
+        let shield = live(&self.g, 6);
+        let rebound = live(&self.g, 8);
+        let invisible = live(&self.g, 0xB);
+        // (3 = the approach boost window, read by the movers.)
         // Heal channel (5): heal while the window is live (the shared
         // effect-state law; rate APPROX maxLife/20 per armed tick —
         // the MC1-column certified rate, MC2 numeric trace banked).
-        let heal_m = self.mc2_rivals[ri].book.ent[5] as usize;
-        if heal_m != 0 && self.g.ent[heal_m].f26 > 0 {
-            self.g.ent[heal_m].f26 -= 1;
+        if heal_live {
             let i = self.mc2_rivals[ri].ent as usize;
             let max = self.g.ent[i].max_life as i32;
             self.g.ent[i].act_life = (self.g.ent[i].act_life + max / 20).min(max);
@@ -1055,12 +1129,27 @@ impl World {
             let model = self.g.ent[threat].model65;
             match model {
                 0 | 3 => {
-                    if !self.mc2_rival_cast(ri, i, 8) {
-                        self.mc2_rival_cast(ri, i, 6);
+                    // Rebound tier-walk; shield falls back ONLY when
+                    // no rebound tier PROBED castable (the a1-capture
+                    // law, EF:7518-43) — a probe that passed but a
+                    // cast that then whiffed does NOT re-open the
+                    // shield fallback.
+                    let mut probed8 = false;
+                    let mut tier = self.mc2_rivals[ri].book.levels[8] as i16;
+                    while tier >= 0 {
+                        if self.mc2_rival_tier_probe(ri, tier, 8) == 8 {
+                            probed8 = true;
+                            self.mc2_rival_cast(ri, i, 8);
+                            break;
+                        }
+                        tier -= 1;
+                    }
+                    if !probed8 {
+                        self.mc2_rival_walk_cast(ri, i, 6);
                     }
                 }
                 4 => {
-                    self.mc2_rival_cast(ri, i, 6);
+                    self.mc2_rival_walk_cast(ri, i, 6);
                 }
                 _ => {}
             }
@@ -1080,10 +1169,14 @@ impl World {
             self.mc2_rivals[ri].state = Mc2AiState::Build;
             return;
         }
-        // 2. Flee home hurt (sub_13DC0 EF:6163) — every tick.
-        if castle.is_some() && self.g.ent[i].act_life < (self.g.ent[i].max_life / 2) as i32 {
-            self.mc2_set_rival_state(ri, Mc2AiState::Home, 0);
-            return;
+        // 2. Flee home hurt (sub_13DC0 EF:6163) — every tick. The
+        // steer target = the OWN castle (EF:6174-75 — the water
+        // detour scanner walks toward it; review 2026-07-15 B10).
+        if let Some(c) = castle {
+            if self.g.ent[i].act_life < (self.g.ent[i].max_life / 2) as i32 {
+                self.mc2_set_rival_state(ri, Mc2AiState::Home, c as u16);
+                return;
+            }
         }
         if !think {
             return;
@@ -1097,7 +1190,8 @@ impl World {
                 && self.mc2_rival_afford_castle(ri)
                 && self.g.mc2_castle_space_ok(c)
             {
-                self.mc2_set_rival_state(ri, Mc2AiState::Upgrade, 0);
+                // Steer target = the own castle (EF:6114-15, B10).
+                self.mc2_set_rival_state(ri, Mc2AiState::Upgrade, c as u16);
                 return;
             }
         }
@@ -1136,15 +1230,19 @@ impl World {
         if self.mc2_rival_owns_any(ri, &OFFENSE_ATTACK) && self.mc2_rival_pick_mana(ri, i) {
             return;
         }
-        // 10. Idle (sub_14630 EF:6383).
-        if castle.is_some() && self.g.ent[i].act_life < self.g.ent[i].max_life as i32 {
-            self.mc2_set_rival_state(ri, Mc2AiState::Home, 0);
+        // 10. Idle (sub_14630 EF:6383): hurt + castle → home (steer
+        // target = the castle, EF:6394-96); else cruise.
+        if let (Some(c), true) = (
+            castle,
+            self.g.ent[i].act_life < self.g.ent[i].max_life as i32,
+        ) {
+            self.mc2_set_rival_state(ri, Mc2AiState::Home, c as u16);
         } else {
             self.mc2_rivals[ri].state = Mc2AiState::Cruise;
         }
     }
 
-    fn mc2_set_rival_state(&mut self, ri: usize, s: Mc2AiState, target: u16) {
+    pub(crate) fn mc2_set_rival_state(&mut self, ri: usize, s: Mc2AiState, target: u16) {
         self.mc2_rivals[ri].state = s;
         self.mc2_rivals[ri].target = target;
         self.mc2_rivals[ri].target_sig = self.mc2_target_sig(target);
@@ -1195,48 +1293,38 @@ impl World {
         LADDER[lvl]
     }
 
-    /// Castle-site scout (sub_13B00 EF:6056-6100): 4x4-supercell
-    /// sweep; a site is OK when the nearest foreign castle is more
-    /// than 12288 world units away in CHEBYSHEV max(|dx|,|dy|)
-    /// distance (`sub_583B0` — open-closure §2).
+    /// Castle-site scout (sub_13B00 EF:6056-6103): walk the 4x4
+    /// sector grid from the OWN sector (+x inner, +y outer, wrapping
+    /// mod 4); a sector CORNER qualifies when the nearest foreign
+    /// castle is over 12288 away in CHEBYSHEV max(|dx|,|dy|)
+    /// (`sub_583B0`). The FIRST qualifying corner wins — no
+    /// nearest-ranking, no water veto, no +128 centre offset, no
+    /// second candidate (review 2026-07-15 B13: all three were
+    /// invented; the duplicated check in the decompile is a
+    /// loop-unroll artifact).
     fn mc2_rival_scout_site(&mut self, ri: usize, i: usize) -> bool {
         let me = self.mc2_rivals[ri].ent;
-        let (sx, sy) = (self.g.ent[i].x, self.g.ent[i].y);
-        let cheby = |ax: u16, ay: u16, bx: u16, by: u16| -> i32 {
-            let dx = (bx as i32 - ax as i32).abs();
-            let dy = (by as i32 - ay as i32).abs();
-            dx.max(dy)
-        };
-        let mut best: Option<((u16, u16), i32)> = None;
-        for cell in 0..16u16 {
-            let bx = ((sx >> 14).wrapping_add(cell & 3) & 3) << 14;
-            let by = ((sy >> 14).wrapping_add(cell >> 2) & 3) << 14;
-            for (ox, oy) in [(0u16, 0u16), (0x1F00, 0x1F00)] {
-                let (tx, ty) = (
-                    bx.wrapping_add(ox).wrapping_add(128),
-                    by.wrapping_add(oy).wrapping_add(128),
-                );
+        let (sx, sy) = (self.g.ent[i].x >> 14, self.g.ent[i].y >> 14);
+        for row in 0..4u16 {
+            for col in 0..4u16 {
+                let tx = (sx.wrapping_add(col) & 3) << 14;
+                let ty = (sy.wrapping_add(row) & 3) << 14;
                 let mut near = i32::MAX;
                 for j in 1..self.g.ent.len() {
                     let e = &self.g.ent[j];
                     if e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 != me {
-                        near = near.min(cheby(tx, ty, e.x, e.y));
+                        let dx = (e.x as i32 - tx as i32).abs();
+                        let dy = (e.y as i32 - ty as i32).abs();
+                        near = near.min(dx.max(dy));
                     }
                 }
-                if near > 0x3000 && !self.mc2_steer_water((tx >> 8) as i32, (ty >> 8) as i32) {
-                    let d = Gen::dist2_sq(sx, sy, tx, ty);
-                    if best.is_none_or(|(_, bd)| d < bd) {
-                        best = Some(((tx, ty), d));
-                    }
+                if near > 0x3000 {
+                    self.mc2_rivals[ri].site = (tx, ty);
+                    return true;
                 }
             }
         }
-        if let Some(((tx, ty), _)) = best {
-            self.mc2_rivals[ri].site = (tx, ty);
-            true
-        } else {
-            false
-        }
+        false
     }
 
     /// The hate gate: hate[slot] over the wealth-scaled threshold.
@@ -1412,92 +1500,236 @@ impl World {
         }
     }
 
-    /// Reactive-defense selector (sub_15FC0 EF:7616, cascade step 7):
-    /// the nearest live enemy wizard inside the 0xA00..0x1400 dodge
-    /// band flips to the DEFENSE state (body APPROX — the weave +
-    /// reactive-table cast run in the state handler).
-    fn mc2_rival_pick_defense(&mut self, ri: usize, i: usize) -> bool {
-        if !self.mc2_rival_owns_any(ri, &DEFENSE_REACTIVE) {
-            return false;
-        }
-        let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
-        let mut best: Option<(u16, i32)> = None;
-        let mut consider = |tgt: u16, x: u16, y: u16| {
-            let d2 = Gen::dist2_sq(px, py, x, y);
-            if d2 >= 0xA00 * 0xA00 && d2 <= 0x1400 * 0x1400 && best.is_none_or(|(_, bd)| d2 < bd) {
-                best = Some((tgt, d2));
-            }
+    /// Nearest live enemy wizard by 3-D distance — the shared scan of
+    /// `sub_15FC0`/`sub_161A0` (EF:7644-59/7782-98): class-3 model 0|1
+    /// on a foreign team. NO invisibility filter (retail has none
+    /// here) and no hostility gate. Returns (target, pos, dist²).
+    fn mc2_nearest_wizard(&self, ri: usize, i: usize) -> Option<(u16, (u16, u16, i16), i64)> {
+        let (px, py, pz) = {
+            let e = &self.g.ent[i];
+            (e.x, e.y, e.z)
         };
-        if self.player.state == LifeState::Alive && !self.player.invisible {
-            consider(PLAYER_TARGET, self.human_pose.0, self.human_pose.1);
+        let d3 = |x: u16, y: u16, z: i16| -> i64 {
+            let dx = (px.wrapping_sub(x) as i16) as i64;
+            let dy = (py.wrapping_sub(y) as i16) as i64;
+            let dz = pz as i64 - z as i64;
+            dx * dx + dy * dy + dz * dz
+        };
+        let mut best: Option<(u16, (u16, u16, i16), i64)> = None;
+        if self.player.state == LifeState::Alive {
+            let (hx, hy, hz) = self.human_pose;
+            let d = d3(hx, hy, hz);
+            best = Some((PLAYER_TARGET, (hx, hy, hz), d));
         }
         for oj in 0..self.mc2_rivals.len() {
-            if oj == ri || self.mc2_rivals[oj].eliminated || self.mc2_rivals[oj].invisible {
+            if oj == ri || self.mc2_rivals[oj].eliminated {
                 continue;
             }
-            let e = &self.g.ent[self.mc2_rivals[oj].ent as usize];
-            if e.tick70 == 1 {
-                consider(self.mc2_rivals[oj].ent, e.x, e.y);
+            let ent = self.mc2_rivals[oj].ent;
+            let e = &self.g.ent[ent as usize];
+            if e.tick70 != 1 {
+                continue;
+            }
+            let d = d3(e.x, e.y, e.z);
+            if best.is_none_or(|(_, _, bd)| d < bd) {
+                best = Some((ent, (e.x, e.y, e.z), d));
             }
         }
-        // Only at war/hate does the dodge engage — a neutral passerby
-        // is not a threat.
-        if let Some((t, _)) = best {
-            let hostile = match t {
-                PLAYER_TARGET => {
-                    self.mc2_rivals[ri].war[0] || self.mc2_hate_over(ri, 0, self.player.mana_max)
-                }
-                _ => self.owner_slot(t).is_some_and(|s| {
-                    self.mc2_rivals[ri].war[s as usize]
-                        || self.mc2_hate_over(ri, s, self.wizard_wealth(s))
-                }),
-            };
-            if hostile {
-                self.mc2_set_rival_state(ri, Mc2AiState::Defense, t);
-                return true;
-            }
-        }
-        false
+        best
     }
 
-    /// Mana-ball pick (sub_148E0 EF:6518): the class-10 sphere chain
-    /// — model 39 always, the model-57 random sphere only on a
-    /// Perception roll (rand%255 < Perception); skip own claims;
-    /// at-war owners always eligible, neutral-owned only if unguarded
-    /// (no owner wizard within 5120).
+    /// DEFENSE selector (sub_15FC0 EF:7616, cascade step 7): the
+    /// metamorph MIMICRY pick — blend into the local fauna. Requires
+    /// Metamorph (4) owned; finds the nearest enemy wizard within
+    /// 0x1400 (3-D), then the nearest disguisable creature (the
+    /// [`DISGUISE_MODELS`] table, walked in order) within 0x1400 OF
+    /// THAT WIZARD; pre-arms the matching metamorph tier on the
+    /// manifestation (SetSpell — mid-effect queues via f44) and
+    /// targets the CREATURE (the disguise anchor). A live disguise
+    /// window with a valid target signature holds the state without
+    /// rescanning (EF:7639/7717). No hostility filter — any foreign
+    /// wizard nearby triggers the mimicry (review 2026-07-15 P1-6:
+    /// the cast-the-bucket-table body + invented war gate deleted).
+    pub(crate) fn mc2_rival_pick_defense(&mut self, ri: usize, i: usize) -> bool {
+        let m4 = self.mc2_rivals[ri].book.ent[4] as usize;
+        if m4 == 0 {
+            return false; // metamorph not owned (EF:7641-43)
+        }
+        if self.g.ent[m4].f26 > 0
+            && self.mc2_target_alive(self.mc2_rivals[ri].target, self.mc2_rivals[ri].target_sig)
+        {
+            self.mc2_rivals[ri].state = Mc2AiState::Defense;
+            return true;
+        }
+        let Some((_, (wx, wy, wz), wd)) = self.mc2_nearest_wizard(ri, i) else {
+            return false;
+        };
+        if wd > 0x1400 * 0x1400 {
+            return false; // no wizard close enough (EF:7660-63)
+        }
+        // Scan 2: the disguise anchor — nearest table-model creature
+        // to the WIZARD (not to self, EF:7673). Corpse states are
+        // excluded like retail's per-model alive lists (EF:39987-40008
+        // skip actions 0xB4/0xE8/0xEA).
+        let me = self.mc2_rivals[ri].ent;
+        let mut best: Option<(usize, i64, u8)> = None;
+        for &dm in &DISGUISE_MODELS {
+            for j in 1..self.g.ent.len() {
+                let e = &self.g.ent[j];
+                if e.class64 != 5
+                    || e.model65 != dm
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                    || matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+                    || e.id24 == me
+                {
+                    continue;
+                }
+                let dx = (wx.wrapping_sub(e.x) as i16) as i64;
+                let dy = (wy.wrapping_sub(e.y) as i16) as i64;
+                let dz = wz as i64 - e.z as i64;
+                let d = dx * dx + dy * dy + dz * dz;
+                if best.is_none_or(|(_, bd, _)| d < bd) {
+                    best = Some((j, d, dm));
+                }
+            }
+        }
+        let Some((anchor, d, dm)) = best else {
+            return false;
+        };
+        if d >= 0x1400 * 0x1400 {
+            return false; // no plausible fauna near the threat
+        }
+        self.mc2_rival_set_spell(m4, mc2_disguise_tier(dm), me);
+        self.mc2_set_rival_state(ri, Mc2AiState::Defense, anchor as u16);
+        true
+    }
+
+    /// Mana-ball pick (sub_148E0 EF:6518-6609, review 2026-07-15
+    /// B8): walk the class-10 sphere chain — the (10,39)/(10,40)
+    /// spheres in pool order, then the (10,57) randoms (retail's
+    /// list is built in that order). A model-57 sphere BREAKS the
+    /// whole walk on a Perception roll, keeping the best so far (a
+    /// failed roll evaluates it like any other ball). Skip own
+    /// claims. A ball owned by a NOT-hated wizard is taken only
+    /// when isolated — the nearest wizard TO THE BALL (self
+    /// excluded) beyond 5120; NO wizard in the world skips it too
+    /// (the retail quirk) — and not parked at the nearest non-own
+    /// castle (bbox overlap). A HATED owner's balls skip both tests
+    /// and rank from the rival's OWN castle (castle-less anchors to
+    /// self — retail reads the Entities[0] sentinel there,
+    /// documented idealization). Unowned balls rank from self. An
+    /// empty walk falls back to the nearest class-5 model-22
+    /// flying-chain ball not already owned.
     fn mc2_rival_pick_ball(&mut self, ri: usize, i: usize) -> bool {
         let me = self.mc2_rivals[ri].ent;
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let per = self.mc2_rivals[ri].per;
+        let own_castle = self.rival_castle(me);
+        let anchor = own_castle
+            .map(|c| (self.g.ent[c].x, self.g.ent[c].y))
+            .unwrap_or((px, py));
         let mut best: Option<(u16, i32)> = None;
-        for j in 1..self.g.ent.len() {
-            let e = &self.g.ent[j];
-            if e.class64 != 10 || !matches!(e.model65, 39 | 57) || e.flags & 0x400 != 0 {
-                continue;
-            }
-            if e.f144 == me {
-                continue;
-            }
-            if e.model65 == 57 && (self.g.ent_rand(i) % 255) as u16 >= per {
-                continue; // the Perception spotting roll (EF:6546)
-            }
-            let owner = self.owner_slot(self.g.ent[j].f144);
-            if let Some(o) = owner {
-                let at_war = self.mc2_rivals[ri].war[o as usize]
-                    || self.mc2_hate_over(ri, o, self.wizard_wealth(o));
-                if !at_war {
-                    let guarded = self.wizard_pos(o).is_some_and(|(wx, wy, _)| {
-                        Gen::dist2_sq(self.g.ent[j].x, self.g.ent[j].y, wx, wy) < 5120 * 5120
-                    });
-                    if guarded {
+        'walk: for pass in 0..2u8 {
+            for j in 1..self.g.ent.len() {
+                let (model, claim, bx, by) = {
+                    let e = &self.g.ent[j];
+                    if e.class64 != 10 || e.flags & 0x400 != 0 {
                         continue;
                     }
+                    (e.model65, e.f144, e.x, e.y)
+                };
+                let wanted = if pass == 0 {
+                    matches!(model, 39 | 40)
+                } else {
+                    model == 57
+                };
+                if !wanted || claim == me {
+                    continue;
+                }
+                if model == 57 && ((self.g.ent_rand(i) % 255) as u16) < per {
+                    break 'walk; // the 57-break (EF:6544-49)
+                }
+                let score = if let Some(o) = self.owner_slot(claim) {
+                    let hated = self.mc2_hate_over(ri, o, self.wizard_wealth(o));
+                    if !hated {
+                        // Nearest wizard to the BALL, self excluded.
+                        let mut wnear: Option<i32> = None;
+                        if self.player.state == LifeState::Alive {
+                            wnear =
+                                Some(Gen::dist2_sq(bx, by, self.human_pose.0, self.human_pose.1));
+                        }
+                        for oj in 0..self.mc2_rivals.len() {
+                            if oj == ri || self.mc2_rivals[oj].eliminated {
+                                continue;
+                            }
+                            let oe = &self.g.ent[self.mc2_rivals[oj].ent as usize];
+                            if oe.tick70 != 1 {
+                                continue;
+                            }
+                            let d = Gen::dist2_sq(bx, by, oe.x, oe.y);
+                            if wnear.is_none_or(|w| d < w) {
+                                wnear = Some(d);
+                            }
+                        }
+                        let Some(wd) = wnear else {
+                            continue; // no wizard at all → skip (EF:6560-62)
+                        };
+                        if wd <= 5120 * 5120 {
+                            continue; // guarded (EF:6565-69)
+                        }
+                        // At-castle skip vs the nearest non-own castle.
+                        let mut cnear: Option<(usize, i32)> = None;
+                        for k in 1..self.g.ent.len() {
+                            let c = &self.g.ent[k];
+                            if c.class64 == 3
+                                && c.model65 == 2
+                                && c.flags & 0x400 == 0
+                                && own_castle != Some(k)
+                            {
+                                let d = Gen::dist2_sq(bx, by, c.x, c.y);
+                                if cnear.is_none_or(|(_, bd)| d < bd) {
+                                    cnear = Some((k, d));
+                                }
+                            }
+                        }
+                        if let Some((k, _)) = cnear {
+                            let c = &self.g.ent[k];
+                            if ((bx.wrapping_sub(c.x) as i16).unsigned_abs()) <= c.f80
+                                && ((by.wrapping_sub(c.y) as i16).unsigned_abs()) <= c.f82
+                            {
+                                continue; // parked at a castle (EF:6570-71)
+                            }
+                        }
+                        Gen::dist2_sq(px, py, bx, by)
+                    } else {
+                        Gen::dist2_sq(anchor.0, anchor.1, bx, by)
+                    }
+                } else {
+                    Gen::dist2_sq(px, py, bx, by)
+                };
+                if best.is_none_or(|(_, bd)| score < bd) {
+                    best = Some((j as u16, score));
                 }
             }
-            let e = &self.g.ent[j];
-            let d = Gen::dist2_sq(px, py, e.x, e.y);
-            if best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((j as u16, d));
+        }
+        // Second-chain fallback: the wild flying-chain balls
+        // (class 5 model 22 — EF:6593-6604).
+        if best.is_none() {
+            for j in 1..self.g.ent.len() {
+                let e = &self.g.ent[j];
+                if e.class64 != 5
+                    || e.model65 != 22
+                    || e.flags & 0x400 != 0
+                    || e.act_life < 0
+                    || e.f144 == me
+                {
+                    continue;
+                }
+                let d = Gen::dist2_sq(px, py, e.x, e.y);
+                if best.is_none_or(|(_, bd)| d < bd) {
+                    best = Some((j as u16, d));
+                }
             }
         }
         if let Some((t, _)) = best {
@@ -1540,7 +1772,7 @@ impl World {
 
     // ---- state handlers ----------------------------------------------------
 
-    fn mc2_rival_state_tick(&mut self, ri: usize, i: usize, think: bool) {
+    pub(crate) fn mc2_rival_state_tick(&mut self, ri: usize, i: usize, think: bool) {
         let needs_target = matches!(
             self.mc2_rivals[ri].state,
             Mc2AiState::Possess
@@ -1572,7 +1804,7 @@ impl World {
                 };
                 if self.mc2_rival_approach(ri, i, cx, cy, 512, 2048) {
                     self.mc2_rival_hover(i, cz.saturating_add(512));
-                    self.mc2_rival_cast(ri, i, 2);
+                    self.mc2_rival_walk_cast(ri, i, 2);
                 }
             }
             // Fly to the scouted site, plant (sub_13100 EF:5620;
@@ -1580,57 +1812,75 @@ impl World {
             Mc2AiState::Build => {
                 let (sx, sy) = self.mc2_rivals[ri].site;
                 if self.mc2_rival_approach(ri, i, sx, sy, 2048, 4096) {
-                    self.mc2_rival_cast(ri, i, 2);
+                    self.mc2_rival_walk_cast(ri, i, 2);
                     if self.rival_castle(self.mc2_rivals[ri].ent).is_some() {
                         self.mc2_rivals[ri].state = Mc2AiState::Fresh;
                     }
                 }
             }
-            // Claim the ball with possess-1 (sub_131F0 EF:5658;
-            // approach 256/2048) — the projectile's possession
-            // delivery does the claim.
+            // Claim the ball with possess-1 (sub_135C0 EF:5822-68;
+            // approach 1024/3072): tier-walk the possess cast in the
+            // act zone; a SUCCESSFUL cast aimed strictly under 0x1C
+            // writes the claim directly (EF:5849-50 — the rival-side
+            // guarantee; the projectile's stamp delivery remains the
+            // general law). A whiffed cast hovers at ball z+512. No
+            // internal "claimed → done" exit — the selector
+            // re-arbitrates and the ball pick skips own claims
+            // (review 2026-07-15 P1-7/B2).
             Mc2AiState::Possess => {
                 let t = self.mc2_rivals[ri].target as usize;
-                let (tx, ty) = (self.g.ent[t].x, self.g.ent[t].y);
+                let (tx, ty, tz) = {
+                    let e = &self.g.ent[t];
+                    (e.x, e.y, e.z)
+                };
                 self.mc2_rival_face(i, tx, ty);
-                if self.mc2_rival_approach(ri, i, tx, ty, 256, 2048) {
-                    self.mc2_rival_cast(ri, i, 1);
-                    // Claimed (the delivery re-tagged it)? Done.
-                    if self.g.ent[t].f144 == self.mc2_rivals[ri].ent {
-                        self.mc2_rivals[ri].state = Mc2AiState::Fresh;
+                if self.mc2_rival_approach(ri, i, tx, ty, 1024, 3072) {
+                    if self.mc2_rival_walk_cast(ri, i, 1) {
+                        let aim = Gen::angdist(
+                            self.g.ent[i].f30,
+                            Gen::angle_between(self.g.ent[i].x, self.g.ent[i].y, tx, ty),
+                        );
+                        if aim < 0x1C {
+                            self.g.ent[t].f144 = self.mc2_rivals[ri].ent;
+                        }
+                    } else {
+                        self.mc2_rivals[ri].vdes = 0;
+                        self.mc2_rival_hover(i, tz.saturating_add(512));
                     }
                 }
             }
-            // Castle raid (sub_13710 EF:5872; approach 1024/3072):
-            // the castle-attack pick on cadence; once aimed within
-            // 0x1C the castle is CLAIMED (EF:5849 — the raid's
-            // possess steal writes the owner link).
+            // Castle raid (sub_13710 EF:5872-5913; approach
+            // 2048/3584): INSIDE the cast ring the castle-walk pick
+            // fires ON CADENCE; a whiffed or unavailable cast hovers
+            // at castle z+512. NO ownership write — retail never
+            // claims the raided castle (review 2026-07-15 P1-7: the
+            // steal deleted).
             Mc2AiState::RaidCastle => {
                 let t = self.mc2_rivals[ri].target as usize;
-                let (tx, ty) = (self.g.ent[t].x, self.g.ent[t].y);
+                let (tx, ty, tz) = {
+                    let e = &self.g.ent[t];
+                    (e.x, e.y, e.z)
+                };
                 self.mc2_rival_face(i, tx, ty);
-                let arrived = self.mc2_rival_approach(ri, i, tx, ty, 1024, 3072);
-                if think {
-                    if let Some(s) = self.mc2_rival_attack_pick(ri, false) {
-                        self.mc2_rival_cast(ri, i, s);
-                    }
-                }
-                if arrived && self.mc2_rivals[ri].book.ent[1] != 0 {
-                    let facing = Gen::angdist(
-                        self.g.ent[i].f30,
-                        Gen::angle_between(self.g.ent[i].x, self.g.ent[i].y, tx, ty),
-                    );
-                    if facing <= 0x1C && self.mc2_rival_cast(ri, i, 1) {
-                        let me = self.mc2_rivals[ri].ent;
-                        self.g.ent[t].id24 = me;
-                        self.g.snd(4, t);
-                        self.mc2_rivals[ri].state = Mc2AiState::Fresh;
+                let arrived = self.mc2_rival_approach(ri, i, tx, ty, 2048, 3584);
+                if arrived && think {
+                    let cast_ok = match self.mc2_rival_attack_pick(ri, false) {
+                        Some(s) => self.mc2_rival_cast(ri, i, s),
+                        None => false,
+                    };
+                    if !cast_ok {
+                        self.mc2_rivals[ri].vdes = 0;
+                        self.mc2_rival_hover(i, tz.saturating_add(512));
                     }
                 }
             }
             // Wizard / balloon / mana-holder attack (sub_13890
-            // EF:5937; approach 3328/4608): burst-gated pick + the
-            // strafe WEAVE micro-FSM on the whiff path.
+            // EF:5937-6050; approach 3328/4608): the pick + cast run
+            // only INSIDE the ring with burst budget; a landed cast
+            // de-latches the war toward ANY wizard target
+            // (EF:5966-68, review B4); the whiff path stops, weaves
+            // (wizard targets only, review B5) and z-tracks the
+            // target + 512.
             Mc2AiState::AttackWizard | Mc2AiState::RaidBalloon | Mc2AiState::HuntMana => {
                 let (tx, ty, tz) = match self.mc2_rivals[ri].target {
                     PLAYER_TARGET => self.human_pose,
@@ -1640,92 +1890,205 @@ impl World {
                     }
                 };
                 self.mc2_rival_face(i, tx, ty);
-                self.mc2_rival_approach(ri, i, tx, ty, 3328, 4608);
-                self.mc2_rival_hover(i, tz.saturating_add(512));
-                let mut fired = false;
-                if self.mc2_rivals[ri].burst >= 0 {
-                    if let Some(s) = self.mc2_rival_attack_pick(ri, true) {
-                        fired = self.mc2_rival_cast(ri, i, s);
-                        if fired && self.mc2_rivals[ri].target == PLAYER_TARGET {
-                            // A landed cast clears the war flag
-                            // toward that wizard.
-                            self.mc2_rivals[ri].war[0] = false;
+                let arrived = self.mc2_rival_approach(ri, i, tx, ty, 3328, 4608);
+                if arrived && self.mc2_rivals[ri].burst >= 0 {
+                    let fired = match self.mc2_rival_attack_pick(ri, true) {
+                        Some(s) => self.mc2_rival_cast(ri, i, s),
+                        None => false,
+                    };
+                    if fired {
+                        let slot = match self.mc2_rivals[ri].target {
+                            PLAYER_TARGET => Some(0u8),
+                            t => self.mc2_rivals.iter().find(|r| r.ent == t).map(|r| r.slot),
+                        };
+                        if let Some(s) = slot {
+                            self.mc2_rivals[ri].war[s as usize] = false;
                         }
+                    } else {
+                        self.mc2_rivals[ri].vdes = 0;
+                        let wizard_target = matches!(self.mc2_rivals[ri].target, PLAYER_TARGET)
+                            || self
+                                .mc2_rivals
+                                .iter()
+                                .any(|r| r.ent == self.mc2_rivals[ri].target);
+                        if wizard_target {
+                            self.mc2_rival_weave(ri, i);
+                        }
+                        self.mc2_rival_hover(i, tz.saturating_add(512));
                     }
-                }
-                if !fired {
-                    self.mc2_rival_weave(ri, i);
                 }
             }
             // Home (sub_133B0 EF:5745; approach 256/2048): cloak-0xB
             // while fleeing; heal up at the castle.
             Mc2AiState::Home => {
                 let Some(c) = self.rival_castle(self.mc2_rivals[ri].ent) else {
-                    self.mc2_rival_cast(ri, i, 0xB);
+                    self.mc2_rival_walk_cast(ri, i, 0xB);
                     self.mc2_rivals[ri].state = Mc2AiState::Cruise;
                     return;
                 };
                 let (cx, cy) = (self.g.ent[c].x, self.g.ent[c].y);
-                self.mc2_rival_cast(ri, i, 0xB);
+                self.mc2_rival_walk_cast(ri, i, 0xB);
                 self.mc2_rival_approach(ri, i, cx, cy, 256, 2048);
                 if self.g.ent[i].act_life >= self.g.ent[i].max_life as i32 {
                     self.mc2_rivals[ri].state = Mc2AiState::Fresh;
                 }
             }
-            // Cruise (sub_13270 EF:5680): full throttle, heading
-            // held. (The Perception-gated scroll grab of spell 0x16
-            // rides the pickup surface — banked with the class-14
-            // scroll wiring.)
+            // Cruise (sub_13270 EF:5680-5740): a Perception-rolled
+            // Fool's-Mana lure when not hovering over the own castle
+            // (the tier pick carries retail's verbatim SpellIndex[2]
+            // quirk — a single probe at the CASTLE spell's level,
+            // EF:5698/5705); else keep the speed-up boost topped
+            // (readiness has no cooldown for 3 — the live window is
+            // the only re-cast gate); else plain cruise at minSpeed
+            // (review 2026-07-15 B6).
             Mc2AiState::Cruise => {
-                self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
-            }
-            // Defense (sub_161A0 EF:7724): weave hard, cast the
-            // reactive table, drop out when the threat leaves the
-            // 0xA00..0x1400 band.
-            Mc2AiState::Defense => {
-                let (tx, ty) = match self.mc2_rivals[ri].target {
-                    PLAYER_TARGET => (self.human_pose.0, self.human_pose.1),
-                    t => (self.g.ent[t as usize].x, self.g.ent[t as usize].y),
-                };
-                self.mc2_rival_face(i, tx, ty);
-                self.mc2_rival_weave(ri, i);
-                if think {
-                    for &s in &DEFENSE_REACTIVE {
-                        if self.mc2_rival_cast(ri, i, s as usize) {
-                            break;
+                let me = self.mc2_rivals[ri].ent;
+                if ((self.g.ent_rand(i) % 255) as u16) < self.mc2_rivals[ri].per {
+                    let over_castle = self.rival_castle(me).is_some_and(|c| {
+                        let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
+                        let e = &self.g.ent[c];
+                        ((ex.wrapping_sub(e.x) as i16).unsigned_abs()) <= e.f80
+                            && ((ey.wrapping_sub(e.y) as i16).unsigned_abs()) <= e.f82
+                    });
+                    if !over_castle {
+                        let quirk_tier = self.mc2_rivals[ri].book.levels[2] as i16;
+                        if self.mc2_rival_tier_probe(ri, quirk_tier, 0x16) == 0x16
+                            && self.mc2_rival_cast(ri, i, 0x16)
+                        {
+                            return;
                         }
                     }
                 }
-                let d2 = Gen::dist2_sq(self.g.ent[i].x, self.g.ent[i].y, tx, ty);
-                if !(0xA00 * 0xA00..=0x1400 * 0x1400).contains(&d2) {
-                    self.mc2_rivals[ri].state = Mc2AiState::Fresh;
+                let m3 = self.mc2_rivals[ri].book.ent[3] as usize;
+                let boosted = m3 != 0 && self.g.ent[m3].f26 > 0;
+                if !boosted && self.mc2_rival_cast_ready(ri, 3) {
+                    self.mc2_rival_cast(ri, i, 3);
+                    return;
                 }
+                if !boosted {
+                    self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
+                }
+            }
+            // Defense (sub_161A0 EF:7724): the metamorph DISGUISE
+            // posture — refresh the cast, shadow the anchor creature
+            // at z+512 (retail's duplicated climb-step block = two
+            // steps/tick), tier-0 heading wiggle, engage a mid-band
+            // (0xA00..0x1400) wizard, disguise-scaled speed. No
+            // internal band exit — the selector owns leaving the
+            // state. The disguise VISUAL (drawing the anchor model in
+            // place of the carpet) is presentation-side, APPROX
+            // unported.
+            Mc2AiState::Defense => {
+                let (tx, ty, tz) = match self.mc2_rivals[ri].target {
+                    PLAYER_TARGET => self.human_pose,
+                    t => {
+                        let e = &self.g.ent[t as usize];
+                        (e.x, e.y, e.z)
+                    }
+                };
+                // Refresh the disguise (readiness gates: window clear,
+                // the 300-tick cooldown, mana, the 0xE3 cone).
+                self.mc2_rival_cast(ri, i, 4);
+                // Shadow the anchor (EF:7748-71 — the z block runs
+                // twice verbatim).
+                self.mc2_rival_face(i, tx, ty);
+                let step = BEHAVIOR[self.g.ent[i].row156 as usize].v_14.abs().max(1);
+                for _ in 0..2 {
+                    let want = tz.saturating_add(512);
+                    let e = &mut self.g.ent[i];
+                    if e.z < want {
+                        e.z = e.z.saturating_add(step);
+                    } else if e.z > want {
+                        e.z = e.z.saturating_sub(step);
+                    }
+                }
+                // Tier-0 (bird) heading wiggle: two LCG draws in
+                // retail order (EF:7774-80).
+                let m4 = self.mc2_rivals[ri].book.ent[4] as usize;
+                let tier0 = m4 != 0 && self.g.ent[m4].f71 == 0;
+                if tier0 {
+                    let r1 = self.g.ent_rand(i);
+                    let v5 = 2 * ((r1 % 0x9D) / 79); // {0, 2}
+                    let r2 = self.g.ent_rand(i);
+                    let jink = (v5 as i32 - 1) * (r2 % 0x55) as i32;
+                    let e = &mut self.g.ent[i];
+                    e.f34 = (e.f34 as i32 + jink) as u16 & 0x7FF;
+                }
+                // Wizard rescan: the mid-band flips to an engage —
+                // retarget the WIZARD + attack pick (EF:7799-7809).
+                let wiz = self.mc2_nearest_wizard(ri, i);
+                let mut in_band = false;
+                if let Some((wt, _, wd)) = wiz {
+                    if wd > 0xA00 * 0xA00 && wd < 0x1400 * 0x1400 {
+                        in_band = true;
+                        self.mc2_set_rival_state(ri, Mc2AiState::Defense, wt);
+                        self.mc2_rivals[ri].vdes = 0;
+                        if let Some(s) = self.mc2_rival_attack_pick(ri, true) {
+                            if self.mc2_rival_cast(ri, i, s) {
+                                return; // steer + selector still run
+                            }
+                        }
+                    }
+                }
+                if !in_band {
+                    // Face + z-track the wizard (overrides the anchor
+                    // heading, EF:7815-40); none → origin, the remc2
+                    // //fix for retail's null read.
+                    let (wx, wy, wz) = wiz.map(|(_, p, _)| p).unwrap_or((0, 0, 0));
+                    self.mc2_rival_face(i, wx, wy);
+                    let want = wz.saturating_add(512);
+                    let e = &mut self.g.ent[i];
+                    if e.z < want {
+                        e.z = e.z.saturating_add(step);
+                    } else if e.z > want {
+                        e.z = e.z.saturating_sub(step);
+                    }
+                }
+                // Disguise-scaled speed (EF:7842-48): the tier-0 bird
+                // flies 3x minSpeed, tiers 1/2 plain minSpeed.
+                let min = self.g.ent[i].f128;
+                self.mc2_rivals[ri].vdes = if tier0 { min.saturating_mul(3) } else { min };
             }
         }
     }
 
-    /// The combat strafe weave (sub_13890's whiff path, EF:5980-6033):
-    /// the 0..20 micro-FSM alternates yaw+-512 jinks and drives the
-    /// strafe channel at 3*minSpeed*Reflexes/255.
+    /// The combat whiff weave (sub_13890 EF:5980-6034), WIZARD
+    /// targets only: tick 0 rolls the committed direction on the
+    /// entity LCG and snaps the ACTUAL yaw ±512; ticks 1-2 jink the
+    /// setpoint ±512 and pulse the actual speed to
+    /// 3·minSpeed·Reflexes/255; ticks 3..19 coast; 20 restarts.
+    /// (The old strafe-channel weave with invented magnitude was
+    /// deleted — review 2026-07-15 B5.)
     fn mc2_rival_weave(&mut self, ri: usize, i: usize) {
-        let w = self.mc2_rivals[ri].weave;
-        let min_speed = self.g.ent[i].f128.max(1);
-        let impulse = (3 * min_speed as i32 * self.mc2_rivals[ri].refl as i32 / 255) as i16;
-        match w {
-            0..=2 => {
-                self.mc2_rivals[ri].strafe = impulse;
+        let cnt = self.mc2_rivals[ri].weave;
+        match cnt {
+            0 => {
+                let r = self.g.ent_rand(i);
+                let dir = if (r % 255) >= 127 { 2u8 } else { 1 };
+                self.mc2_rivals[ri].weave_dir = dir;
+                let e = &mut self.g.ent[i];
+                e.f30 = if dir == 2 {
+                    e.f30.wrapping_add(512) & 0x7FF
+                } else {
+                    e.f30.wrapping_sub(512) & 0x7FF
+                };
+                self.mc2_rivals[ri].weave = 1;
             }
-            3..=4 => {
-                self.mc2_rivals[ri].strafe = -impulse;
+            1..=2 => {
+                let jink: i32 = if self.mc2_rivals[ri].weave_dir == 1 {
+                    -512
+                } else {
+                    512
+                };
+                let refl = self.mc2_rivals[ri].refl as i32;
+                let e = &mut self.g.ent[i];
+                e.f34 = ((e.f34 as i32 + jink) & 0x7FF) as u16;
+                e.f126 = (3 * e.f128 as i32 * refl / 255) as i16;
+                self.mc2_rivals[ri].weave = cnt + 1;
             }
-            5..=19 => {}
-            _ => {
-                self.mc2_rivals[ri].weave = 0;
-                return;
-            }
+            3..=19 => self.mc2_rivals[ri].weave = cnt + 1,
+            _ => self.mc2_rivals[ri].weave = 0,
         }
-        self.mc2_rivals[ri].weave = w.wrapping_add(1);
-        self.mc2_rivals[ri].vdes = impulse.max(self.g.ent[i].f128 / 2);
     }
 
     /// Shared travel helper (sub_14C90 EF:6713): inside arriveR ->
@@ -1749,7 +2112,13 @@ impl World {
         }
         self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
         if d2 > boost.saturating_mul(boost) {
-            self.mc2_rival_cast(ri, i, 3);
+            // Speed-up beyond the boost ring, gated on the live
+            // window (sub_156F0 — readiness itself has no cooldown
+            // for 3, so the window is the only re-cast brake).
+            let m3 = self.mc2_rivals[ri].book.ent[3] as usize;
+            if m3 == 0 || self.g.ent[m3].f26 == 0 {
+                self.mc2_rival_cast(ri, i, 3);
+            }
         }
         false
     }
@@ -1772,18 +2141,29 @@ impl World {
     }
 
     /// The attack-spell picker (sub_15790 EF:7175 wizard /
-    /// sub_15910 EF:7246 castle): the poverty latch, the MC2
-    /// anti-buff branch (target holds a live spell-8 -> prefer 7 at
-    /// Perception%), then the MC2 priority walk.
-    fn mc2_rival_attack_pick(&mut self, ri: usize, vs_wizard: bool) -> Option<usize> {
-        // The poverty latch (EF:7190-98).
+    /// sub_15910 EF:7246 castle): the poverty hysteresis, the
+    /// anti-rebound lightning preference, then the priority walk
+    /// with the per-spell TIER-DOWN (sub_15F20) — every spell is
+    /// probed at every tier and a refused/unaffordable tier just
+    /// keeps walking. The winning probe leaves the manifestation
+    /// retuned to the passing tier; the caller's cast fires at it.
+    /// The old "affordable by ceiling → save up and WAIT" hold was
+    /// an invention (review 2026-07-15 P1-8).
+    pub(crate) fn mc2_rival_attack_pick(&mut self, ri: usize, vs_wizard: bool) -> Option<usize> {
+        // The poverty latch (EF:7190-7205): enter under maxMana/4;
+        // release at maxMana/4 + 6000, clamped to maxMana/2 ONLY
+        // when the sum overshoots the ceiling (review 2026-07-15 B7
+        // — the old unconditional min() was wrong for mid wealth).
         {
             let r = &mut self.mc2_rivals[ri];
             if r.mana < r.mana_max / 4 {
                 r.poverty = true;
             } else if r.poverty {
-                let release = (r.mana_max / 4 + 6000).min(r.mana_max / 2);
-                if r.mana > release {
+                let mut release = r.mana_max / 4 + 6000;
+                if release >= r.mana_max {
+                    release = r.mana_max / 2;
+                }
+                if r.mana >= release {
                     r.poverty = false;
                 }
             }
@@ -1791,10 +2171,20 @@ impl World {
                 return None;
             }
         }
-        let mut order: Vec<usize> = Vec::with_capacity(9);
+        let walk = |w: &mut Self, s: usize| -> bool {
+            let mut tier = w.mc2_rivals[ri].book.levels[s] as i16;
+            while tier >= 0 {
+                if w.mc2_rival_tier_probe(ri, tier, s) == s as i32 {
+                    return true;
+                }
+                tier -= 1;
+            }
+            false
+        };
         if vs_wizard {
-            // Anti-buff (EF:7209): the target visibly holding a live
-            // spell-8 (rebound) prefers 7, Perception% of the time.
+            // Anti-rebound (EF:7209-19): a target visibly holding a
+            // live rebound (8) prefers a lightning (7) tier-walk,
+            // Perception% of the time.
             let target_buffed = match self.mc2_rivals[ri].target {
                 PLAYER_TARGET => self.player.rebound,
                 t => self
@@ -1806,8 +2196,8 @@ impl World {
             if target_buffed {
                 let me = self.mc2_rivals[ri].ent as usize;
                 let roll = (self.g.ent_rand(me) % 255) as u16;
-                if roll < self.mc2_rivals[ri].per {
-                    order.push(7);
+                if roll < self.mc2_rivals[ri].per && walk(self, 7) {
+                    return Some(7);
                 }
             }
             let target_is_wizard = matches!(self.mc2_rivals[ri].target, PLAYER_TARGET)
@@ -1817,27 +2207,19 @@ impl World {
                     .get(self.mc2_rivals[ri].target as usize)
                     .is_some_and(|e| e.class64 == 3 && e.model65 <= 1);
             for &s in &ATTACK_WIZARD {
-                // Spell 0x13 only against a wizard body (EF:7223).
+                // Spell 0x13 only against a wizard body (EF:7230-37).
                 if s == 0x13 && !target_is_wizard {
                     continue;
                 }
-                order.push(s as usize);
+                if walk(self, s as usize) {
+                    return Some(s as usize);
+                }
             }
         } else {
-            order.extend(ATTACK_CASTLE.iter().map(|&s| s as usize));
-        }
-        for s in order {
-            if self.mc2_rivals[ri].book.ent[s] == 0 {
-                continue;
-            }
-            if self.mc2_rival_cast_ready(ri, s) {
-                return Some(s);
-            }
-            // Affordable by ceiling but cooling/poor: save up and
-            // WAIT (the sub_15F20 walk's hold).
-            let m = self.mc2_rivals[ri].book.ent[s] as usize;
-            if self.mc2_rivals[ri].mana_max as i64 >= self.g.ent[m].f136 as i64 {
-                return None;
+            for &s in &ATTACK_CASTLE {
+                if walk(self, s as usize) {
+                    return Some(s as usize);
+                }
             }
         }
         None
@@ -1846,59 +2228,117 @@ impl World {
     // ---- the cast arm (readiness sub_15170 EF:6887 + executor
     // ---- sub_14E10 EF:6759) -----------------------------------------------
 
-    /// Readiness: owned + cooldown clear + the tier's ceiling unlock
-    /// (maxMana >= maxManaLimit) + affordable now + (aimed groups)
-    /// the Perception-scaled cone ((255-P)/4+20 degrees, EF:6974).
+    /// Readiness `sub_15170` (EF:6888-7095) — the per-spell-CLASS
+    /// gate table, re-keyed per retail (review 2026-07-15 B12).
+    /// Common to every class: owned + the tier's ceiling unlock
+    /// (maxMana >= maxManaLimit) + affordable now (the castle reads
+    /// the ladder fresh, B15). Per class:
+    /// - {0,7,0xD,0xE,0x16}: cooldown + the Perception cone;
+    /// - {1,9,0x10,0x12,0x13,0x15}: + the armed-window refusal;
+    /// - 2 with a castle: armed + cooldown + cone + the space check
+    ///   (sub_11A10); without one: cooldown only — the first castle
+    ///   is aim-free (EF:7046-49);
+    /// - 3 speed-up: NO cooldown check at all (EF:7051-63);
+    /// - {4,6,8,0xB} buff/self: armed + cooldown, no cone (EF:7078);
+    /// - the rest (5,0xA,0xC,0xF,0x11,0x14,0x17,0x18,0x19): cooldown
+    ///   only (the LABEL_43 generic arm).
+    ///
+    /// The cone is yaw-vs-setpoint (`sub_582B0(yaw, roll)` — the
+    /// state handlers keep f34 on the target): (255-P)/4+20 degrees.
     fn mc2_rival_cast_ready(&self, ri: usize, s: usize) -> bool {
         let r = &self.mc2_rivals[ri];
         let m = r.book.ent[s] as usize;
-        if m == 0 || r.cooldown[s] != 0 {
+        if m == 0 {
             return false;
         }
         let e = &self.g.ent[m];
         if (r.mana_max as i64) < e.f136 as i64 {
             return false; // the maxManaLimit ceiling gate
         }
-        if (r.mana as u64) < e.max_life as u64 {
-            return false; // affordable now
-        }
-        // Homing-aimed spells refuse mid-burst (EF:6979).
-        if matches!(s, 1 | 9 | 0x10 | 0x12 | 0x13 | 0x15) && e.f26 > 0 {
+        let cost = if s == 2 {
+            self.mc2_castle_ladder_cost(ri) as i64
+        } else {
+            e.max_life as i64
+        };
+        if (r.mana as i64) < cost {
             return false;
         }
-        // Castle: space check + not mid-anything (EF:7014).
-        if s == 2 {
-            if let Some(c) = self.rival_castle(r.ent) {
-                if self.g.ent[c].tick70 != 4 || !self.g.mc2_castle_space_ok(c) {
-                    return false;
-                }
-            }
-        }
-        // The aimed groups' readiness pre-cone.
-        if matches!(
-            s,
-            0 | 1 | 7 | 9 | 0xD | 0xE | 0x10 | 0x12 | 0x13 | 0x15 | 0x16
-        ) && r.target != 0
-        {
+        let armed = e.f26 > 0;
+        let cooling = r.cooldown[s] != 0;
+        let cone_ok = || {
             let cone = ((255 - r.per as u32) / 4 + 20) * 2048 / 360;
             let e = &self.g.ent[r.ent as usize];
-            let (tx, ty) = match r.target {
-                PLAYER_TARGET => (self.human_pose.0, self.human_pose.1),
-                t => (self.g.ent[t as usize].x, self.g.ent[t as usize].y),
-            };
-            let want = Gen::angle_between(e.x, e.y, tx, ty);
-            if Gen::angdist(e.f30, want) as u32 > cone {
-                return false;
-            }
+            (Gen::angdist(e.f30, e.f34) as u32) < cone
+        };
+        match s {
+            0 | 7 | 0xD | 0xE | 0x16 => !cooling && cone_ok(),
+            1 | 9 | 0x10 | 0x12 | 0x13 | 0x15 => !armed && !cooling && cone_ok(),
+            2 => match self.rival_castle(r.ent) {
+                Some(c) => {
+                    !armed
+                        && !cooling
+                        && cone_ok()
+                        && self.g.ent[c].tick70 == 4
+                        && self.g.mc2_castle_space_ok(c)
+                }
+                None => !cooling,
+            },
+            3 => true,
+            4 | 6 | 8 | 0xB => !armed && !cooling,
+            _ => !cooling,
         }
-        true
+    }
+
+    /// `sub_15F20` (EF:7581-7611) — the tier-down probe: retune the
+    /// manifestation to `tier` FIRST (retail's SetSpell side effect
+    /// happens even when the probe then fails — a live window queues
+    /// via f44 instead), then the readiness gate + the tier's raw
+    /// table costs. Returns the spell id when castable at this tier,
+    /// -1 when only mana blocks it, 0 otherwise.
+    fn mc2_rival_tier_probe(&mut self, ri: usize, tier: i16, s: usize) -> i32 {
+        let Some(row) = self.g.assets.spells.get(s).copied() else {
+            return 0;
+        };
+        if tier < 0 || row.byte_0 as i16 <= tier {
+            return 0;
+        }
+        let m = self.mc2_rivals[ri].book.ent[s] as usize;
+        if m == 0 {
+            return 0;
+        }
+        let own = self.mc2_rivals[ri].ent;
+        self.mc2_rival_set_spell(m, tier as u8, own);
+        if !self.mc2_rival_cast_ready(ri, s) {
+            return 0;
+        }
+        let sub = row.tiers[(tier as usize).min(2)];
+        let r = &self.mc2_rivals[ri];
+        if (r.mana_max as i64) < sub.max_mana_limit as i64 || (r.mana as i64) < sub.mana_cost as i64
+        {
+            return -1;
+        }
+        s as i32
+    }
+
+    /// The tier-down cast walk every retail pick site shares
+    /// (`for k = SpellLevels[s]; k >= 0; k--` + cast on the first
+    /// passing tier — EF:5470/5591/5759/5840...).
+    pub(crate) fn mc2_rival_walk_cast(&mut self, ri: usize, i: usize, s: usize) -> bool {
+        let mut tier = self.mc2_rivals[ri].book.levels[s] as i16;
+        while tier >= 0 {
+            if self.mc2_rival_tier_probe(ri, tier, s) == s as i32 {
+                return self.mc2_rival_cast(ri, i, s);
+            }
+            tier -= 1;
+        }
+        false
     }
 
     /// The commit (sub_14E10 EF:6759): burst gun on the precision
     /// family, aim pitch at the target, arm the recast cooldown,
     /// debit through the regen delta, emit through the shared MC2
     /// class-9 spawners. Spell 0xF is never AI-cast (EF:6885).
-    fn mc2_rival_cast(&mut self, ri: usize, i: usize, s: usize) -> bool {
+    pub(crate) fn mc2_rival_cast(&mut self, ri: usize, i: usize, s: usize) -> bool {
         if s >= MC2_SPELLS || s == 0xF {
             return false;
         }
@@ -1965,6 +2405,10 @@ impl World {
         }
         // Arm the manifestation window (buffs/heal read it).
         self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16;
+        if s == 6 {
+            // A fresh shield starts ARMED (the byte[2] 0x40 stage).
+            self.mc2_rivals[ri].shield_state = 1;
+        }
         // Absolute aim pitch to the target (EF:6803).
         let dh = Gen::isqrt(Gen::dist2_sq(ex, ey, tx, ty) as u32) as i32;
         let pitch = Gen::pitch_toward(ez, tz, dh);
@@ -1977,7 +2421,12 @@ impl World {
     /// the DIRECT (3,2) spawn at the scouted site — MC2 runtime AI
     /// castles build the real thing (no MC1 free-plant).
     fn mc2_rival_cast_castle(&mut self, ri: usize, i: usize) -> bool {
-        self.mc2_rivals[ri].cooldown[2] = AI_RECAST[2].max(1);
+        // Affordability re-check FIRST — a whiffed attempt must not
+        // burn the recast cooldown (review 2026-07-15 B15; the cost
+        // is re-read fresh off the ladder, not the manifestation's
+        // stale stamp). The cooldown arms ONLY after a successful
+        // upgrade fire (EF:6828); the first-castle direct spawn
+        // never arms it at all (EF:6831-40).
         let cost = self.mc2_castle_ladder_cost(ri);
         if (self.mc2_rivals[ri].mana as i64) < cost as i64 {
             return false;
@@ -2000,6 +2449,7 @@ impl World {
             // skipped like the MC1 column).
             let own = self.mc2_rivals[ri].ent;
             self.g.ent[c].mail[5] = (10, own);
+            self.mc2_rivals[ri].cooldown[2] = AI_RECAST[2].max(1);
             return true;
         }
         // Castle-less: the direct (3,2) spawn at the site (EF:6833
@@ -2139,37 +2589,32 @@ impl World {
         self.entities_dirty = true;
     }
 
-    /// Relevel a rival's spell from its effective XP (the sub_6D9C0
-    /// law over xpos1; the castle XP hard-cap at 7) and re-wire the
-    /// manifestation tier. Rivals always select their highest tier.
-    pub(crate) fn mc2_rival_relevel(&mut self, ri: usize, spell: usize) {
-        let Some(row) = self.g.assets.spells.get(spell).copied() else {
-            return;
-        };
-        if self.mc2_rivals[ri].book.xp_vol[2] > 7 {
-            self.mc2_rivals[ri].book.xp_vol[2] = 7;
+    // NOTE (decompile-verified 2026-07-15): retail rivals have NO
+    // spell-XP progression — `sub_6D8B0`'s guard is class-3 model-0,
+    // the human only (EF:58240-41). A rival's spell tiers are its
+    // authored map levels for life; the per-cast TIER-DOWN walk
+    // (`mc2_rival_tier_probe`) supplies all tier dynamics. The old
+    // `mc2_rival_relevel` XP ladder was deleted as unfaithful (the
+    // review's B17 "award any wizard owner" claim is refuted).
+
+    /// Test hook: the rival's book as (owned, level) rows plus its
+    /// castle's (stored, cap) mana — `None` castle-less. The lifecycle
+    /// tests pin the authored grant/tier law and the spawns-full
+    /// castle bank with this (review 2026-07-15 B18).
+    #[doc(hidden)]
+    pub fn debug_mc2_rival_economy(
+        &self,
+        slot: u8,
+    ) -> Option<([(bool, u8); MC2_SPELLS], Option<(i32, i32)>)> {
+        let r = self.mc2_rivals.iter().find(|r| r.slot == slot)?;
+        let mut book = [(false, 0u8); MC2_SPELLS];
+        for (s, row) in book.iter_mut().enumerate() {
+            *row = (r.book.ent[s] != 0, r.book.levels[s]);
         }
-        let xp = self.mc2_rivals[ri].book.xp_vol[spell] + self.mc2_rivals[ri].book.xp_bank[spell];
-        let mut v6 = row.byte_0 as i32;
-        loop {
-            v6 -= 1;
-            if v6 < 0 || xp >= row.tiers[(v6 as usize).min(2)].xpos1 {
-                break;
-            }
-        }
-        let lvl = v6.max(0) as u8;
-        // The authored starting tier is a floor — the AI never
-        // regresses below its map-seeded level (EF:38693).
-        let lvl = lvl.max(self.mc2_rivals[ri].book.levels[spell]);
-        if lvl != self.mc2_rivals[ri].book.levels[spell] {
-            self.mc2_rivals[ri].book.levels[spell] = lvl;
-            self.mc2_rivals[ri].book.sel[spell] = lvl;
-            let m = self.mc2_rivals[ri].book.ent[spell] as usize;
-            let own = self.mc2_rivals[ri].ent;
-            if m != 0 {
-                self.mc2_rival_set_spell(m, lvl, own);
-            }
-        }
+        let bank = self
+            .rival_castle(r.ent)
+            .map(|c| (self.g.ent[c].f140, self.g.ent[c].f136));
+        Some((book, bank))
     }
 
     /// Test hook: zero a rival's grace and hand it a lethal hit from
@@ -2185,35 +2630,34 @@ impl World {
 
     // ---- mortality (sub_5E310 EV:2882 + sub_5E7C0 EV:2895) -----------------
 
-    /// Action 2 — the death fall: -2/tick (floor -256), the (10,1)
-    /// death-FX puff per tick, ground contact runs the payout once.
+    /// Action 2 — the death fall (sub_5E310 EF:60074-60099): Z-ONLY
+    /// — integrate the OLD velocity, then gravity -2/tick, terminal
+    /// -256, positive (upward) velocity zeroed immediately; floor =
+    /// ground + the tuning row's v_12 (row 67 = 128, row-driven);
+    /// the (10,1) owner-flagged death puff each tick; EXACT floor
+    /// contact runs the payout. The old polar_step drift displaced
+    /// graves/tokens (review 2026-07-15 B9).
     fn mc2_rival_death_fall(&mut self, ri: usize, i: usize) {
+        let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+        let ground = self.g.ground_z(x, y) as i16;
+        let floor = ground.saturating_add(BEHAVIOR[self.g.ent[i].row156 as usize].v_12);
         {
             let e = &mut self.g.ent[i];
-            e.f46 = (e.f46 - 2).max(-256);
+            let mut z = e.z.saturating_add(e.f46);
+            e.f46 = (e.f46 - 2).clamp(-256, 0);
+            if z < floor {
+                z = floor;
+            }
+            e.z = z;
         }
-        let (yaw, speed, vz) = {
-            let e = &self.g.ent[i];
-            (e.f30, e.f126, e.f46)
-        };
-        let mut pos = {
-            let e = &self.g.ent[i];
-            (e.x, e.y, e.z)
-        };
-        Gen::polar_step(&mut pos, yaw, 0, speed);
-        pos.2 = pos.2.saturating_add(vz);
-        let ground = self.g.ground_z(pos.0, pos.1) as i16;
-        // The (10,1) death puff (EF:60092), owner-flagged.
-        if let Some(s) = self.g.mc2_spawn_big_explosion(pos.0, pos.1, pos.2) {
+        let z = self.g.ent[i].z;
+        // The (10,1) death puff (EF:60092-97), owner-flagged.
+        if let Some(s) = self.g.mc2_spawn_big_explosion(x, y, z) {
             self.g.ent[s].flags |= 0x80;
             self.g.ent[s].id24 = self.mc2_rivals[ri].ent;
         }
-        if pos.2 <= ground.saturating_add(128) {
-            pos.2 = ground.saturating_add(128);
-            self.g.move_relink(i, pos.0, pos.1, pos.2);
+        if z == floor {
             self.mc2_rival_death_impact(ri, i);
-        } else {
-            self.g.move_relink(i, pos.0, pos.1, pos.2);
         }
         self.entities_dirty = true;
     }
@@ -2244,7 +2688,9 @@ impl World {
         // The death broadcast (retail lang 374 "has died.") — the MC2
         // wizard name table (WizardsNames_D93A0), NOT the MC1 one.
         let name = MC2_RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
-        self.set_notification(format!("{name} has died."), 120, [0xFF, 0, 0]);
+        // Notification life 100 (retail's toast countdown — review
+        // 2026-07-15 B16; was 120).
+        self.set_notification(format!("{name} has died."), 100, [0xFF, 0, 0]);
         // The SPELL-TOKEN scatter (EF:60137-62): every owned
         // manifestation detaches into a loose pickup token (state
         // 3M+1), scattered +-256, lifetime rand%90+200. The book
@@ -2356,7 +2802,10 @@ impl World {
         }
         {
             let r = &mut self.mc2_rivals[ri];
+            // maxMana wiped to the base 1000 — the mana progression
+            // does NOT survive death (EF:43722, review B14).
             r.mana = 1000;
+            r.mana_max = 1000;
             r.mana_delta = 0;
             r.grace = 100;
             r.state = Mc2AiState::Fresh;
@@ -2365,11 +2814,17 @@ impl World {
             r.poverty = false;
             r.strafe = 0;
             r.weave = 0;
+            r.shield_state = 0;
             r.avoid = 0;
             r.avoid_exit = 0;
+            // Own hate ledger back to neutral (EF:43848-50); the WAR
+            // latches survive death — retail never clears them here
+            // (review B14: the old full reset was invented).
             r.hate = [HATE_NEUTRAL; 8];
-            r.war = [false; 8];
-            r.cooldown = [0; MC2_SPELLS];
+            // Cooldowns are KEPT except the castle slot, staggered
+            // by color: SpellEnabled[2] = 4·color (EF:43851) — the
+            // old zero-all reset let every respawn rebuild at once.
+            r.cooldown[2] = 4 * r.slot as u16;
         }
         // The post-respawn truce toward this color.
         let slot = self.mc2_rivals[ri].slot as usize;

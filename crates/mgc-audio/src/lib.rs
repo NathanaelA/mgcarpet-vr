@@ -22,6 +22,12 @@ use std::path::Path;
 use mgc_formats::bundle::AudioBundle;
 pub use mixer::{FaithfulMixer, Listener, Sounds, Source};
 
+/// Sim ticks per second the per-tick ramps are calibrated against
+/// (mirrors `mgc_sim::TICK_RATE_HZ` — this crate deliberately has no
+/// sim dependency; review 2026-07-15 D7 replaced the three bare 24.0
+/// literals).
+const TICK_RATE: f32 = 24.0;
+
 pub struct Audio {
     out: output::Output,
     pub mixer: FaithfulMixer,
@@ -64,8 +70,8 @@ impl Audio {
             music_playing: None,
             danger: false,
             danger_level: 0.0,
-            danger_up: 2.0 * 60.0 / 24.0,
-            danger_down: -2.0 * 20.0 / 24.0,
+            danger_up: 2.0 * 60.0 / TICK_RATE,
+            danger_down: -2.0 * 20.0 / TICK_RATE,
             prefer_gm: true,
             duck_gain: 1.0,
         }
@@ -73,10 +79,13 @@ impl Audio {
 
     /// MC2's danger ramp: cc11 expression step ±1 at 90 Hz on the
     /// war channels (Sound.cpp:5877) → `±90/24` per 24 Hz sim tick,
-    /// both directions (`24` = `mgc_sim::TICK_RATE_HZ`).
+    /// both directions (`24` = `mgc_sim::TICK_RATE_HZ`). Also switches
+    /// the mixer to MC2's per-id sound law (`PrepareEventSound_6E450`
+    /// — ids up to 69; the MC1 switch dropped everything ≥ 47).
     pub fn set_mc2_danger_ramp(&mut self) {
-        self.danger_up = 90.0 / 24.0;
-        self.danger_down = -90.0 / 24.0;
+        self.danger_up = 90.0 / TICK_RATE;
+        self.danger_down = -90.0 / TICK_RATE;
+        self.mixer.set_mc2(true);
     }
 
     /// Pick the music arrangement (config `audio.arrangement`): `true`
@@ -141,9 +150,16 @@ impl Audio {
                 self.danger_down
             };
             self.danger_level = (self.danger_level + step).clamp(0.0, 126.0);
-            let _ = self.out.tx.send(output::Cmd::MusicOverlayGain {
-                gain: self.danger_level / 126.0,
-            });
+            // cc11 expression → amplitude follows the GM square law
+            // (L = 40·log10(v/127) dB ⇒ amp ≈ (v/127)²). The baked
+            // stem is the war channels at FULL expression, so the
+            // overlay gain must ride the same curve — the old linear
+            // PCM gain ran the mid-fade hot (review 2026-07-15 D5).
+            let lvl = self.danger_level / 126.0;
+            let _ = self
+                .out
+                .tx
+                .send(output::Cmd::MusicOverlayGain { gain: lvl * lvl });
         }
         // Voiceover duck recovery: once the line ends, ramp music+sfx
         // back up (retail's 120 Hz FadeUpSoundVolume ≈ 0.7 s full
@@ -152,7 +168,7 @@ impl Audio {
         // 24 Hz sim ticks (`0.7·24` = 16.8 ticks) so the recovery time
         // is tick-rate-independent.
         if self.duck_gain < 1.0 && !self.out.speech_live() {
-            self.duck_gain = (self.duck_gain + (2.0 / 3.0) / (0.7 * 24.0)).min(1.0);
+            self.duck_gain = (self.duck_gain + (2.0 / 3.0) / (0.7 * TICK_RATE)).min(1.0);
             let _ = self.out.tx.send(output::Cmd::Duck {
                 gain: self.duck_gain,
             });

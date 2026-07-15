@@ -615,16 +615,22 @@ impl Gen {
     /// One-shot in retail (settle-ticked then despawned) — collapsed
     /// to a synchronous stamp like the waterpath's (10,30) segments
     /// (no RNG anywhere in the family).
-    fn mc2_road_strip_y(&mut self, tx: u8, ty: u8, adv: i32) {
+    fn mc2_road_strip_y(&mut self, tx: u8, ty: u8, step: i32, rem: i32) {
         const W: u8 = 2; // (10,27) ctor life = strip width (EF:36156)
-        let (x0, mut cy, step, rows) = if adv >= 0 {
+        // G9e: retail picks the walker family from the STEP sign
+        // alone (EV:5423-33 / 5468-77, v20/v12 — never the combined
+        // advance); the first-step remainder folds into the SIGNED
+        // row count. A degenerate step==0 && rem<0 leg stays in the
+        // +Y snap family with FEWER rows — it does not flip to the
+        // −Y walker.
+        let (x0, mut cy, dir, rows) = if step >= 0 {
             let mut x0 = tx;
             if x0 & 1 == 1 {
                 x0 = x0.wrapping_add(1);
             }
-            (x0.wrapping_sub(W - 1), ty, 1i8, W as i32 + adv)
+            (x0.wrapping_sub(W - 1), ty, 1i8, W as i32 + (step + rem))
         } else {
-            (tx, ty.wrapping_add(2), -1i8, W as i32 - adv)
+            (tx, ty.wrapping_add(2), -1i8, W as i32 + (-step - rem))
         };
         for _ in 0..rows {
             self.t.angle[tile(x0.wrapping_sub(1), cy)] |= 0x80;
@@ -632,7 +638,7 @@ impl Gen {
                 self.mc2_road_cell(x0.wrapping_add(k), cy);
             }
             self.t.angle[tile(x0.wrapping_add(W), cy)] |= 0x80;
-            cy = cy.wrapping_add(step as u8);
+            cy = cy.wrapping_add(dir as u8);
         }
     }
 
@@ -703,9 +709,8 @@ impl Gen {
             let step_x = dx / steps;
             let mut rem_x = dx - steps * step_x;
             for _ in 0..steps {
-                let adv_y = step_y + rem_y;
-                self.mc2_road_strip_y(px as u8, py as u8, adv_y);
-                py += adv_y;
+                self.mc2_road_strip_y(px as u8, py as u8, step_y, rem_y);
+                py += step_y + rem_y;
                 let adv_x = rem_x + step_x;
                 self.mc2_road_strip_x(px as u8, py as u8, adv_x);
                 px += adv_x;
@@ -723,9 +728,8 @@ impl Gen {
                 let adv_x = rem_x + step_x;
                 self.mc2_road_strip_x(px as u8, py as u8, adv_x);
                 px += adv_x;
-                let adv_y = step_y + rem_y;
-                self.mc2_road_strip_y(px as u8, py as u8, adv_y);
-                py += adv_y;
+                self.mc2_road_strip_y(px as u8, py as u8, step_y, rem_y);
+                py += step_y + rem_y;
                 rem_x = 0;
                 rem_y = 0;
             }
@@ -739,39 +743,44 @@ impl Gen {
     /// nonzero height, and none of its quad-corner cells are
     /// building-textured. On caves the write re-asserts the invariant
     /// (EF:32531-32542; no off-cave else arm in retail).
-    fn mc2_smooth_pad_edge(&mut self, cx: u8, cy: u8) {
-        let is_building = |ty: u8| (6..=0x22).contains(&ty);
-        let t = tile(cx, cy);
-        if self.t.angle[t] & 7 == 0 || self.t.height[t] == 0 {
+    /// Shared by the pad-edge ring and the castle-unstamp finalizer
+    /// (G5). Neighbour indexing is retail's PACKED-WORD arithmetic
+    /// (`word − 0x101` borrows across the y byte at x==0; the
+    /// kernel's `uint16 i` wraps) — reproduced with wrapping u16
+    /// index math, torus like the rest of the port. (Retail's GATE
+    /// reads signed-negative offsets near y==0 — remc2's FIX pins
+    /// those to 0/natural; our torus wrap reads the far edge
+    /// instead. Divergence only for footprints touching row 0.)
+    pub(crate) fn mc2_smooth_pad_edge(&mut self, cx: u8, cy: u8) {
+        let t = tile(cx, cy) as u16;
+        let natural = |g: &Self, idx: u16| {
+            let ty = g.t.tile_type[idx as usize];
+            ty <= 5 || ty > 0x22
+        };
+        if self.t.angle[t as usize] & 7 == 0 || self.t.height[t as usize] == 0 {
             return;
         }
-        for (qx, qy) in [
-            (cx.wrapping_sub(1), cy.wrapping_sub(1)),
-            (cx, cy.wrapping_sub(1)),
-            (cx.wrapping_sub(1), cy),
-            (cx, cy),
-        ] {
-            if is_building(self.t.tile_type[tile(qx, qy)]) {
+        for off in [0x101u16, 0x100, 0x1, 0] {
+            if !natural(self, t.wrapping_sub(off)) {
                 return;
             }
         }
         let mut sum = 0u32;
         let mut count = 0u32;
-        for dy in 0..3u8 {
-            for dx in 0..3u8 {
-                let n = tile(
-                    cx.wrapping_sub(1).wrapping_add(dx),
-                    cy.wrapping_sub(1).wrapping_add(dy),
-                );
-                if !is_building(self.t.tile_type[n]) {
+        let mut idx = t.wrapping_sub(0x101);
+        for _ in 0..3 {
+            for _ in 0..3 {
+                if natural(self, idx) {
                     count += 1;
-                    sum += self.t.height[n] as u32;
+                    sum += self.t.height[idx as usize] as u32;
                 }
+                idx = idx.wrapping_add(1);
             }
+            idx = idx.wrapping_add(0xFD);
         }
         if count != 0 {
-            self.t.height[t] = (sum / count) as u8;
-            self.cave_seal_fixup(t);
+            self.t.height[t as usize] = (sum / count) as u8;
+            self.cave_seal_fixup(t as usize);
         }
     }
 

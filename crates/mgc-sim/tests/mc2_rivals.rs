@@ -583,16 +583,18 @@ fn mc2_level008_kill_named_creature_objective_completes() {
 }
 
 /// MC2-STAGE-ENGINE-GAPS §A: objective type 2 (kill NAMED target "for
-/// real") shares type 1's bind seam; in the port it reduces to type 1
-/// (no slot-swap creature succession exists — metamorph is a cosmetic
-/// pose-puppet, so no death is ever a transform handoff, and the razed
-/// building's collapse successor is a fresh slot the bound row does not
-/// follow). EVERY shipped type-2 target is a NAMED BUILDING (class-10
-/// model-45), not a plain creature. Level-008 row 3 names THING slot 63
-/// = a building released by disposition 1 — so this exercises the
-/// SPAWN-TIME bind hook in `spawn_from_thing` (vs the type-1 test's
-/// retroactive load-time bind). The row must bind the named instance
-/// specifically, not any model-45, and latch when that instance dies.
+/// real") shares type 1's bind seam PLUS the degradation-chain
+/// succession (Session H1): razing an intermediate building spawns its
+/// `bldgprm.chain` successor and the bound row FOLLOWS it
+/// (`sub_59760`, EF:40921-54), so the row completes only when the
+/// FINAL stage of the chain dies (retail's `!fontTypeIndex` term,
+/// EF:40771-79). EVERY shipped type-2 target is a NAMED BUILDING
+/// (class-10 model-45), not a plain creature. Level-008 row 3 names
+/// THING slot 63 = a building released by disposition 1 — so this
+/// exercises the SPAWN-TIME bind hook in `spawn_from_thing` (vs the
+/// type-1 test's retroactive load-time bind). The row must bind the
+/// named instance specifically, not any model-45, survive the
+/// intermediate collapses, and latch when the chain is exhausted.
 #[test]
 fn mc2_level008_kill_named_building_type2_completes() {
     let Some((mut w, _pkg)) = load("level-008") else {
@@ -629,15 +631,37 @@ fn mc2_level008_kill_named_building_type2_completes() {
     let (_, board) = w.mc2_objective_view();
     assert_eq!(board[3].1, 1, "row 3 still open — the bound building lives");
 
-    // Raze it: the bound type-2 row latches on the next objective pass.
+    // Raze it. The building degrades down its bldgprm chain — each
+    // intermediate collapse spawns a successor the bound row follows —
+    // so the row must stay OPEN after the first raze and latch only
+    // when the whole chain is exhausted.
     assert!(w.debug_smite(10, 45) >= 1, "razed the named building");
     for _ in 0..8 {
         w.tick(pose, idle);
     }
     let (_, board) = w.mc2_objective_view();
     assert_eq!(
-        board[3].1, 2,
-        "razing the named building completes the type-2 row"
+        board[3].1, 1,
+        "row 3 still open — the razed building degraded to its chain successor"
+    );
+    // Keep razing until the chain dies out (≤8 links by construction).
+    let mut done = false;
+    for _ in 0..8 {
+        if w.debug_smite(10, 45) == 0 {
+            break;
+        }
+        for _ in 0..8 {
+            w.tick(pose, idle);
+        }
+        let (_, board) = w.mc2_objective_view();
+        if board[3].1 == 2 {
+            done = true;
+            break;
+        }
+    }
+    assert!(
+        done,
+        "razing the full degradation chain completes the type-2 row"
     );
 }
 
@@ -747,6 +771,43 @@ fn mc2_rivals_authored_castles() {
         expected,
         "one authored castle per configured color"
     );
+    // The authored BOOK law (InitialiseSpells_54A50: grant = start &&
+    // !blocked, level = authored tier clamped <= 2) and the authored
+    // castle bank (spawns FULL, clamped 320000 — EF:43812-17), pinned
+    // at load before the brain spends anything (review 2026-07-15 B18
+    // — the old test claimed these, asserted neither).
+    let (configs, _) = rival_configs(&pkg);
+    for slot in 1..8u8 {
+        let Some(cfg) = &configs[slot as usize] else {
+            continue;
+        };
+        let (book, bank) = w
+            .debug_mc2_rival_economy(slot)
+            .expect("a live rival record per configured color");
+        for s in 0..26 {
+            let want = cfg.start[s] && !cfg.blocked[s];
+            assert_eq!(
+                book[s].0, want,
+                "slot {slot} spell {s}: authored grant = start && !blocked"
+            );
+            if want {
+                assert_eq!(
+                    book[s].1,
+                    cfg.start_level[s].min(2),
+                    "slot {slot} spell {s}: authored starting tier"
+                );
+            }
+        }
+        if cfg.castle_level > 0 && book[2].0 {
+            let (stored, cap) = bank.expect("an authored castle for the configured color");
+            assert_eq!(
+                stored,
+                cap.clamp(0, 320_000),
+                "slot {slot}: the authored castle spawns FULL (clamped 320000)"
+            );
+            assert!(stored > 0, "slot {slot}: a non-empty castle bank");
+        }
+    }
     // The castles stand (action 4) and survive the brain running.
     let idle = PlayerCommand::default();
     let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
@@ -788,5 +849,202 @@ fn mc2_steal_mana_casts_a_projectile_not_a_stub() {
         count(&w, 9, 8),
         1,
         "casting Steal Mana launches the (9,8) homing bolt"
+    );
+}
+
+/// Session E16/H6: the m27 kraken's 0xDF stage-command state
+/// (`sub_29930`). Level-058 authors a kind-3 StageVar (byte0 0x43,
+/// watch-by-model) holding its m27 (THING 165) — the AMBUSH kraken:
+/// the guardian arm aggros on the WATCHED subtype's nearest instance
+/// when it comes within the row's v_28 (4608 units = 18 tiles). On
+/// this level the watch is already in reach at load, so the ambush
+/// fires within the body's every-tick guardian cadence (spawn ordinal
+/// 0) — the body self-raises to the 0xDA chase and the MASS-ATTACK
+/// broadcast throws every idle branch (f71 == 1) into begin-whip (2)
+/// at the ambushed target.
+#[test]
+fn mc2_level058_kind3_ambush_kraken_mass_attacks() {
+    let Some((mut w, _pkg)) = load("level-058") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let held = w.debug_mc2_held();
+    let Some(&(body, _, kind)) = held.iter().find(|&&(_, model, _)| model == 27) else {
+        panic!("level-058 holds its m27 at load: {held:?}");
+    };
+    assert_eq!(kind, 3, "the kraken hold is the kind-3 ambush gate");
+
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    for _ in 0..12 {
+        w.tick(pose, idle);
+    }
+    let (state, branches) = w.debug_mc2_m27_branches(body as usize);
+    assert_eq!(
+        state, 218,
+        "the ambush fired: the held kraken self-raised to the 0xDA chase"
+    );
+    assert!(
+        branches.iter().all(|&(f71, _)| f71 != 1),
+        "mass-attack broadcast: no branch left in idle scan: {branches:?}"
+    );
+    assert!(
+        branches.iter().any(|&(_, t)| t > 0),
+        "the tentacle machine ran (branch ticks advanced): {branches:?}"
+    );
+}
+
+/// Session E16/H6 counterpart: a SYNTHETIC kind-6 (timer) hold on the
+/// same level-058 kraken. Kind 6 routes through the generic handler
+/// (`sub_1E1C0`) — no guardian arm, physics gated OFF by the m27
+/// type-row `&2` flag — so the body must STAY at its 0xDF wait while
+/// the tentacle machine keeps animating (retail never hard-freezes a
+/// held creature), and a hit from a foreign attacker must break the
+/// hold (`sub_1E040`: m27 FLEE clear → `216+2 = 0xDA`) with the
+/// broadcast aimed at the attacker.
+#[test]
+fn mc2_held_kraken_animates_and_breaks_hold_on_hit() {
+    let Some((mut w, _pkg)) = load("level-058") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    // Re-author the StageVar table: one kind-6 slot, huge timer,
+    // holding THING 165 (the kraken). The retroactive attach re-holds
+    // the live body on the new slot.
+    w.set_mc2_stagevars(&[(0, 0, 0, 0, 0), (6, 0, 165, 0, 5000)]);
+    let held = w.debug_mc2_held();
+    let Some(&(body, _, kind)) = held.iter().find(|&&(_, model, _)| model == 27) else {
+        panic!("the synthetic kind-6 var holds the m27: {held:?}");
+    };
+    assert_eq!(kind, 6, "kind-6 timer hold");
+
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    for _ in 0..12 {
+        w.tick(pose, idle);
+    }
+    // Still held (timer far from zero), NOT frozen: branches animate.
+    assert!(
+        w.debug_mc2_held()
+            .iter()
+            .any(|&(e, m, _)| e == body && m == 27),
+        "kraken still held while the timer runs"
+    );
+    let (state, branch_ticks) = w.debug_mc2_m27_branches(body as usize);
+    assert_eq!(state, 223, "body waits at 0xDF (phase-7 stage state)");
+    assert!(
+        branch_ticks.iter().any(|&(_, t)| t > 0),
+        "held kraken branches animate (not frozen): {branch_ticks:?}"
+    );
+
+    // A non-lethal hit from a foreign attacker (the human pseudo-slot)
+    // breaks the hold into 0xDA with the mass-attack broadcast.
+    w.debug_mail_hit(body as usize, 100, 1);
+    w.tick(pose, idle);
+    let (state, branches) = w.debug_mc2_m27_branches(body as usize);
+    assert_eq!(state, 218, "hit broke the held kraken into 0xDA chase");
+    assert!(
+        branches.iter().all(|&(f71, _)| f71 != 1),
+        "mass-attack broadcast: no branch left in idle scan: {branches:?}"
+    );
+}
+
+/// H8(iv): the coverage storms fire dispositions 1..=64, but shipped
+/// levels author REAL creature/scroll dispositions up to 110
+/// (level-020's staggered m24 waves; class-0 rows additionally carry
+/// garbage ids up to 30720 — excluded, they spawn nothing).
+/// Pin the true bound so a future re-bake that moves it fails loudly,
+/// and so the storms' partial coverage stays an HONEST, documented
+/// choice rather than a silent one.
+#[test]
+fn mc2_disposition_id_census_bound() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../baked/mc2");
+    let Ok(dir) = std::fs::read_dir(&root) else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let mut max_dis = 0u16;
+    let mut levels = 0;
+    for entry in dir.filter_map(Result::ok) {
+        let p = entry.path();
+        if p.extension().is_none_or(|x| x != "mgcl") {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(&p) else {
+            continue;
+        };
+        let Ok(pkg) = mgc_formats::mgcl::read(file) else {
+            continue;
+        };
+        levels += 1;
+        for t in &pkg.things.things {
+            if t.class != 0 && t.dis_id != 0xFFFF {
+                max_dis = max_dis.max(t.dis_id);
+            }
+        }
+    }
+    assert_eq!(levels, 165, "the full MC2 level census");
+    assert_eq!(
+        max_dis, 110,
+        "authored disposition ids top out at 110 — update the storm \
+         bounds (and this pin) if a re-bake moves it"
+    );
+}
+
+/// H8(iv) companion: a NON-GOLDEN wide storm on level-020 (the deepest
+/// disposition ladder, m24 waves to dis 110+). Fires every authored
+/// id and ticks — asserts the misfit census stays empty (every spawn
+/// materialized into a ported machine) without touching the pinned
+/// 1..=64 golden fixtures.
+#[test]
+fn mc2_level020_wide_disposition_storm_no_misfits() {
+    let Some((mut w, _pkg)) = load("level-020") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    for dis in 1..=120 {
+        w.debug_fire_disposition(dis);
+    }
+    let idle = PlayerCommand::default();
+    let pose = PlayerPose::from_tiles(8.0, 20.0, 8.0, 0.0, 0.0, 0.0);
+    for _ in 0..32 {
+        w.tick(pose, idle);
+    }
+    assert_eq!(
+        w.misfits(),
+        &[],
+        "every wide-storm spawn runs a ported machine"
+    );
+}
+
+/// H4 (LE-binary verified): retail's InitStages "drop typed rows with
+/// stage==0" guard is dead code — it reads the zeroed DESTINATION row,
+/// so every `index != -1` row registers, active. The port used to take
+/// the guard literally and dropped such rows on 13 levels, severing
+/// level-198's m32 chain (its par1=1 switch gates on a stage0 type-7
+/// row that retail completes vacuously). Pin the un-drop: level-198
+/// registers all four type-7 rows (rows 1/2 are the stage0 pair) and
+/// level-038 registers its full 7-row board including the stage0
+/// type-1 row 6 (faithfully un-completable — binds the empty record).
+#[test]
+fn mc2_stage0_typed_rows_register() {
+    let Some((w, _pkg)) = load("level-198") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    let (_, board) = w.mc2_objective_view();
+    assert_eq!(
+        board.iter().map(|&(k, _)| k).collect::<Vec<_>>(),
+        vec![7, 7, 7, 7],
+        "level-198: all four type-7 rows registered (stage0 pair kept)"
+    );
+    let Some((w, _pkg)) = load("level-038") else {
+        return;
+    };
+    let (_, board) = w.mc2_objective_view();
+    assert_eq!(
+        board.iter().map(|&(k, _)| k).collect::<Vec<_>>(),
+        vec![7, 5, 2, 0, 1, 5, 1],
+        "level-038: the full 7-row board registered (stage0 type-1 row 6 kept)"
     );
 }

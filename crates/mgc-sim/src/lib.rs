@@ -101,6 +101,13 @@ pub struct FlightInput {
     /// MC2 spell selection (the CTRL-pane commit): (spell index
     /// 0..25, tier, hand 0 = left / 1 = right).
     pub mc2_select: Option<(u8, u8, u8)>,
+    /// The Backspace full stop (retail MC2 action 0x27, EF:37954-66):
+    /// zero the actual AND target speed, kill an active Speed/
+    /// Accelerate channel, recenter the steering (the app resets the
+    /// virtual stick — retail's SetCenterScreenForFlyAssistant).
+    /// Enhancement-class in MC1/HW (retail MC1's Backspace is
+    /// text-entry only) — player directive 2026-07-16.
+    pub full_stop: bool,
     /// The respawn key (Space; the original's command 15) — consumed
     /// only while dead.
     pub respawn: bool,
@@ -122,6 +129,13 @@ pub struct Flyer {
     pub yaw: f32,
     /// Radians; positive looks up. Clamped to just short of vertical.
     pub pitch: f32,
+    /// Camera bank, radians; positive banks right (into a right
+    /// turn). The faithful movers publish the filtered roll stick at
+    /// FULL value — retail's render pose takes `u16_327` unhalved
+    /// (:52432) while pitch is halved (:52433); MC2 identical
+    /// (`rotation.roll = roll_0x155_341`, EF:40258). The enhanced
+    /// mover leaves it 0 (player directive: no tilt in mouse-look).
+    pub roll: f32,
 }
 
 impl Default for Flyer {
@@ -135,6 +149,7 @@ impl Default for Flyer {
             vz: 0.0,
             yaw: 0.0,
             pitch: -0.2,
+            roll: 0.0,
         }
     }
 }
@@ -264,21 +279,39 @@ impl Simulation {
         let input = &input;
 
         // The Accelerate cancel reads the tick's raw thrust input
-        // BEFORE anything moves. Faithful MC1: ANY Up/Down press
-        // cancels (the handler ends on the v_14 speed-touched flag,
-        // :65144-51). Enhanced keeps the playtest-settled semantics —
-        // only the RESISTING input cancels (manual: "press the down
-        // cursor to cancel", generalized per direction).
+        // BEFORE anything moves. Retail cancels on the v_14
+        // speed-TOUCHED flag (:65144-51), and v_14 arms only when
+        // the press actually moves v_12 (:55766-80) — while boosted,
+        // v_12 (±160/240) sits outside the ±80 input clamp, so the
+        // aligned press is inert and only the RESISTING press bites
+        // (manual: "press the down cursor to cancel"). Both thrust
+        // models share the directional law; the old both-directions
+        // MC1 arm (1012805) misread v_14 as any-press and killed
+        // hold + re-cast (PR-2, fixed 2026-07-15).
         if let Some(w) = &mut self.world {
-            match self.thrust_model {
-                ThrustModel::Mc1 => {
-                    if input.thrust != 0.0 {
-                        w.thrust_cancel(1.0);
-                        w.thrust_cancel(-1.0);
-                    }
-                }
-                ThrustModel::Enhanced => w.thrust_cancel(input.thrust),
+            w.thrust_cancel(input.thrust);
+        }
+
+        // The Backspace full stop, applied before the move like
+        // retail's action dispatch (EF:37954): actual + target speed
+        // to 0, the live Speed/Accelerate channel killed. Retail does
+        // NOT touch strafe (it decays on its own) or hard-zero the
+        // steering filters (they decay once the stick recenters).
+        // `accel_was_active` clears too: retail's zeroed counter
+        // skips the spell's guarded drive block, so no +80/minSpeed
+        // restore may fire (EF:56203 guard).
+        if input.full_stop {
+            self.carpet.act_speed = 0;
+            self.carpet.tgt_speed = 0;
+            // The enhanced mover's float velocities are its speed
+            // state — the enhancement's analog of the same stop.
+            self.flyer.vx = 0.0;
+            self.flyer.vy = 0.0;
+            self.flyer.vz = 0.0;
+            if let Some(w) = &mut self.world {
+                w.full_stop_cancel_accel();
             }
+            self.accel_was_active = false;
         }
 
         match self.thrust_model {
@@ -402,8 +435,9 @@ impl Simulation {
     /// the renderer/camera afterwards.
     fn move_mc1(&mut self, input: &FlightInput) {
         // Seam telemetry for the boundary verbs this mover consumes
-        // (crate::verbs): pending MC2 arms serve MC1 — the flight
-        // model itself and the wall-commit gate injected below.
+        // (crate::verbs). The MC2 mover is live (`move_mc2`), so an
+        // MC2 verb set reaching THIS mover is a wiring bug — the
+        // fallback notes make it visible instead of silent.
         if let Some(w) = &mut self.world {
             if w.verbs().flight == verbs::FlightVerb::Mc2 {
                 w.note_verb_fallback(verbs::VerbKind::Flight);
@@ -535,6 +569,11 @@ impl Simulation {
         // This is the FULL aim pitch (casts use it); the app camera
         // renders half of it under the mc1 model (:52434).
         f.pitch = -(c.aim_signed() as f32) * RAD;
+        // The camera bank: the same filtered stick that drives the
+        // yaw rate, published at FULL value (:52432 / EF:40258) so
+        // the horizon telegraphs the turn. Positive roll_f = stick
+        // right = turn right = bank right.
+        f.roll = c.roll_f as f32 * RAD;
         f.vx = wrapd(prev.x, c.x) / TICK_DT;
         f.vz = wrapd(prev.y, c.y) / TICK_DT;
         f.vy = (c.z.wrapping_sub(prev.z) as f32 / 256.0) / TICK_DT;
@@ -606,6 +645,13 @@ impl Simulation {
             && let Some(w) = &mut self.world
         {
             w.mc2_cancel_accel();
+            // Retail's cave-wall cancel zeroes the same guarded
+            // counter as Backspace (EF:59603) — the spell dies with
+            // NO minSpeed restore, so the expiry edge must not fire
+            // +80 next tick over the dead stop (it did until
+            // 2026-07-16 — a latent divergence found tracing the
+            // full-stop key).
+            self.accel_was_active = false;
         }
 
         // Extended lift (the deviation) — lift key only: the faithful
@@ -926,6 +972,76 @@ mod tests {
             }
         }
         panic!("the corpse never landed (enhanced, far from spawn)");
+    }
+
+    /// Backspace full stop (retail action 0x27): both the actual and
+    /// the TARGET speed zero — the carpet does not coast back up to a
+    /// held target — and the stop sticks under idle input.
+    #[test]
+    fn full_stop_zeroes_actual_and_target_speed() {
+        let mut sim = Simulation::new();
+        let fwd = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            sim.step(&fwd);
+        }
+        assert_eq!(sim.carpet.tgt_speed, 80);
+        assert_eq!(sim.carpet.act_speed, 80);
+        sim.step(&FlightInput {
+            full_stop: true,
+            ..Default::default()
+        });
+        assert_eq!(sim.carpet.tgt_speed, 0);
+        assert_eq!(sim.carpet.act_speed, 0);
+        for _ in 0..30 {
+            sim.step(&FlightInput::default());
+        }
+        assert_eq!(sim.carpet.act_speed, 0, "no coast-back after the stop");
+    }
+
+    /// The full stop must also SUPPRESS the Accelerate expiry edge:
+    /// retail's zeroed spell counter skips the guarded drive block,
+    /// so no +80 restore fires over the stop (EF:56203 guard).
+    #[test]
+    fn full_stop_beats_the_accel_expiry_rebound() {
+        let mut sim = Simulation::new();
+        // A live boost last tick that vanished this tick (the shape
+        // of a spell cancel): without full_stop this edge writes
+        // tgt = act = +80 (:65191-97).
+        sim.accel_was_active = true;
+        sim.carpet.act_speed = 240;
+        sim.carpet.tgt_speed = 240;
+        sim.step(&FlightInput {
+            full_stop: true,
+            ..Default::default()
+        });
+        assert_eq!(sim.carpet.tgt_speed, 0, "no +80 rebound over the stop");
+        assert_eq!(sim.carpet.act_speed, 0);
+    }
+
+    /// The enhanced mover's analog: the float velocities stop dead.
+    #[test]
+    fn full_stop_zeroes_enhanced_velocity() {
+        let mut sim = Simulation::new();
+        sim.thrust_model = ThrustModel::Enhanced;
+        let fwd = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..30 {
+            sim.step(&fwd);
+        }
+        assert!(sim.flyer.vz.abs() > 0.1, "moving before the stop");
+        sim.step(&FlightInput {
+            full_stop: true,
+            ..Default::default()
+        });
+        let v = sim.flyer.vx.abs() + sim.flyer.vy.abs() + sim.flyer.vz.abs();
+        // One idle tick of drag may run after the zero; the stop
+        // itself leaves at most that residue.
+        assert!(v < 0.05, "stopped, |v| = {v}");
     }
 
     #[test]

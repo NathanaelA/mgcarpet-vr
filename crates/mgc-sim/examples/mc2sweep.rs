@@ -11,10 +11,16 @@ use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::collections::BTreeMap;
 
 fn main() {
-    let ticks: u32 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(64);
+    // Usage: mc2sweep [ticks] [--combat]
+    // --combat: a longer, hotter profile — the player hovers mid-map
+    // firing native fireballs, so creature aggro/attack/impact paths
+    // run too (default profile parks the player far away, idle).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let combat = args.iter().any(|a| a == "--combat");
+    let ticks: u32 = args
+        .iter()
+        .find_map(|s| s.parse().ok())
+        .unwrap_or(if combat { 512 } else { 64 });
     let root = std::path::Path::new("baked");
     let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc2-night")).unwrap();
     let assets = FeatureAssets::parse(
@@ -102,10 +108,25 @@ fn main() {
             for dis in 1..=64 {
                 w.debug_fire_disposition(dis);
             }
-            let idle = PlayerCommand::default();
-            let pose = PlayerPose::from_tiles(2.0, 20.0, 2.0, 0.0, 0.0, 0.0);
-            for _ in 0..ticks {
-                w.tick(pose, idle);
+            if combat {
+                // Hover mid-map and fire in re-clicked bursts (edge
+                // every other tick) while slowly spinning, so acquire/
+                // impact/corpse paths get exercised in every quadrant.
+                let pose =
+                    |t: u32| PlayerPose::from_tiles(32.0, 16.0, 32.0, (t as f32) * 0.01, -0.2, 0.0);
+                for t in 0..ticks {
+                    let cmd = PlayerCommand {
+                        fire_left: t % 2 == 0,
+                        ..Default::default()
+                    };
+                    w.tick(pose(t), cmd);
+                }
+            } else {
+                let idle = PlayerCommand::default();
+                let pose = PlayerPose::from_tiles(2.0, 20.0, 2.0, 0.0, 0.0, 0.0);
+                for _ in 0..ticks {
+                    w.tick(pose, idle);
+                }
             }
             w.misfits().to_vec()
         });
@@ -127,7 +148,18 @@ fn main() {
             }
         }
     }
-    println!("runtime misfit union (class, model): levels-with / examples");
+    println!(
+        "runtime misfit union (class, model): levels-with / examples\n\
+         scope: {} ticks/level, dispositions 1..=64 fired blind, rival\n\
+         brains wired, NO stage engine, {} — an empty union means none\n\
+         SURFACED under this profile, not that every path is covered",
+        ticks,
+        if combat {
+            "combat profile (mid-map, firing)"
+        } else {
+            "idle far-away player (try --combat)"
+        }
+    );
     if tally.is_empty() {
         println!("  (none)");
     }

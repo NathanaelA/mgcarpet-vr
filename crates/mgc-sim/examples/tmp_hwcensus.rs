@@ -4,6 +4,7 @@
 //!   2. `(10,53)` THING         — the HW mana-drain entity (§4 content gap)
 //!   3. new-homing models 16/18/19 as authored THINGS (any class)
 //!   4. reached TMAPS `sprite_base` — flags 153/156 (corrupt arctic) + 76/177
+//!
 //! Mirrors the runtime spawn gate: entity records only, marker rows
 //! (x|y >= 256) never spawn.
 use mgc_formats::{LevelPackage, ThingKind};

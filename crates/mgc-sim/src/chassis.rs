@@ -26,7 +26,7 @@ pub enum RandWidth {
     U16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChassisParams {
     /// Level THING-table capacity, records addressed 1-based (MC1
     /// scans 1..=1999; MC2 shrank the table to 0x4B0 = 1200). Ours
@@ -48,6 +48,16 @@ pub struct ChassisParams {
     /// Consecutive over-threshold ticks the banked-% win check needs
     /// (MC1 16; MC2's objective engine latches immediately).
     pub win_streak_ticks: u16,
+    /// The creature awake gate, squared engine units: the awake
+    /// pre-pass re-arms a sleeping creature's f58 when the player is
+    /// closer than this (dist² < gate). 0x240_0000 = 24 tiles in
+    /// BOTH retail engines (remc1 sub_54F80; remc2 EF:55526 — same
+    /// literal). A raised gate is the limit-removing class like
+    /// `pool_slots` (sleep was a period CPU optimization: asleep
+    /// creatures still MOVE but don't scan, take mail damage, or
+    /// re-derive segment spacing — see the 2026-07-16 wake-death and
+    /// dragon-dilution traces); `i32::MAX` = always awake.
+    pub awake_gate_sq: i32,
 }
 
 impl ChassisParams {
@@ -59,6 +69,7 @@ impl ChassisParams {
         bucket_models: 20,
         bucket_excluded_states: &[120],
         win_streak_ticks: 16,
+        awake_gate_sq: 0x240_0000,
     };
 
     /// The pristine MC2 set (remc2; survey values — the MC2 sim
@@ -70,11 +81,47 @@ impl ChassisParams {
         bucket_models: 29,
         bucket_excluded_states: &[0xB4, 0xE8, 0xEA],
         win_streak_ticks: 1,
+        awake_gate_sq: 0x240_0000,
     };
 }
 
 impl Default for ChassisParams {
     fn default() -> Self {
         ChassisParams::MC1
+    }
+}
+
+/// Manual (was a derive) since `awake_gate_sq` landed: the chassis is
+/// hashed inside `Gen`, so a NEW field must be hash-transparent at
+/// its pristine value or every golden moves for a layout-only reason
+/// (the J2 tag discipline; the `Player` destructure precedent — a
+/// future field addition is a compile error here, extend
+/// deliberately). A deviating gate (`--awake-range`) hashes with a
+/// tag byte: deviated runs are hash-visible, as replays require.
+impl std::hash::Hash for ChassisParams {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        let ChassisParams {
+            level_table_slots,
+            pool_slots,
+            ent_rand_width,
+            bucket_models,
+            bucket_excluded_states,
+            win_streak_ticks,
+            awake_gate_sq,
+        } = self;
+        // The pre-field stream, byte-identical (declaration order).
+        (
+            level_table_slots,
+            pool_slots,
+            ent_rand_width,
+            bucket_models,
+            bucket_excluded_states,
+            win_streak_ticks,
+        )
+            .hash(h);
+        if *awake_gate_sq != 0x240_0000 {
+            h.write_u8(0xC5);
+            awake_gate_sq.hash(h);
+        }
     }
 }

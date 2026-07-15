@@ -119,9 +119,11 @@ impl Val {
                 variants.get(*cur).copied().unwrap_or("?").to_string()
             }
             Val::Scalar { text, .. } => text.clone(),
-            Val::Override { val, faithful } => match val {
+            // The hint column already spells out the faithful default;
+            // repeating it here printed it twice on one line.
+            Val::Override { val, .. } => match val {
                 Some(v) => v.clone(),
-                None => format!("({faithful})"),
+                None => "default".into(),
             },
         }
     }
@@ -184,7 +186,20 @@ impl Spec {
     /// the registry literals stay uncluttered.
     pub fn mutability(&self) -> Mutability {
         match self.cfg_path {
-            "sim.parameters.entity_pool_size" | "dev.plausible_spellbook" => Mutability::Startup,
+            "sim.parameters.entity_pool_size"
+            | "sim.parameters.awake_range"
+            | "dev.plausible_spellbook" => Mutability::Startup,
+            // Consumers that snapshot at construction with no cheap
+            // re-apply path: the selector pane is built once from the
+            // resolved scheme, and switching the music arrangement
+            // means reloading the baked track set.
+            "gameplay.enhancement.spell_selector" | "audio.arrangement" => Mutability::Startup,
+            // NOTE for the future runtime menu: thrust/altitude,
+            // invincible and prune_owned_jars are Live by the "can
+            // trivially gain a live apply path" clause — the World
+            // setters exist (set_invincible, set_prune_owned_jars,
+            // sim.thrust_model/altitude_model) but nothing re-applies
+            // them mid-run yet. Wire those hooks when the menu lands.
             _ => Mutability::Live,
         }
     }
@@ -228,6 +243,25 @@ pub fn registry() -> Vec<Spec> {
                 faithful: "per-game default 1000",
             },
         },
+        Spec {
+            domain: Sim,
+            group: "sim · parameters",
+            label: "awake_range",
+            class: Cheat,
+            key: None,
+            cli: Some("--awake-range TILES"),
+            cfg_path: "sim.parameters.awake_range",
+            read: |c| Val::Override {
+                val: c.sim.parameters.awake_range.map(|n| {
+                    if n == 0 {
+                        "off (always awake)".to_string()
+                    } else {
+                        format!("{n} tiles")
+                    }
+                }),
+                faithful: "24 tiles (both retail engines)",
+            },
+        },
         // ---- render · enhancement ---------------------------------------
         Spec {
             domain: Render,
@@ -241,7 +275,10 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
-            group: "render · enhancement",
+            // A Preference (visual, fidelity-neutral) — its own
+            // heading; the cfg_path keeps the legacy "enhancement"
+            // segment so saved configs stay valid.
+            group: "render · preference",
             label: "hud_transparency",
             class: Preference,
             key: None,
@@ -268,9 +305,13 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
-            group: "render · enhancement",
+            // A level-scouting instrument that only lets you SEE more
+            // (the original never labels jars) — Debug, not
+            // Enhancement; the cfg_path keeps its legacy segment so
+            // saved configs stay valid.
+            group: "render · debug",
             label: "expose_jar_spells",
-            class: Enhancement,
+            class: Debug,
             key: None,
             cli: Some("--expose-jar-spells"),
             cfg_path: "render.enhancement.expose_jar_spells",
@@ -359,6 +400,26 @@ pub fn registry() -> Vec<Spec> {
             read: |c| Val::Toggle {
                 on: c.controls.preferences.invert_y,
                 faithful: false,
+            },
+        },
+        Spec {
+            domain: Controls,
+            group: "controls · preferences",
+            label: "fly_assistant",
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "controls.preferences.fly_assistant",
+            read: |c| Val::Choice {
+                cur: match c.controls.preferences.fly_assistant {
+                    crate::config::FlyAssistant::Auto => 0,
+                    crate::config::FlyAssistant::On => 1,
+                    crate::config::FlyAssistant::Off => 2,
+                },
+                // auto = each game's retail arrangement (MC2 had the
+                // option, MC1 never did).
+                faithful: 0,
+                variants: &["auto", "on", "off"],
             },
         },
         // ---- controls · models ------------------------------------------

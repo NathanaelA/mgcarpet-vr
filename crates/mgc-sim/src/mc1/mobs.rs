@@ -877,8 +877,11 @@ impl Gen {
         // mailbox — spawn grace does not shield them (the "tractor
         // beam"). v_26 = 256 is written but read by nothing.
         if model == 6 {
-            self.ent[i].f26 += 1;
-            if self.ent[i].f26 > 40 {
+            // Retail compares the PRE-increment value (:23219-22), so
+            // 41 is still an ON tick before the reset to -90.
+            let old = self.ent[i].f26;
+            self.ent[i].f26 = old + 1;
+            if old > 40 {
                 self.ent[i].f26 = -90;
             }
             if self.ent[i].f26 > 0 && tgt == PLAYER_TARGET {
@@ -892,12 +895,6 @@ impl Gen {
                 // wrongly claimed it hits the default-drop — corrected,
                 // and the mixer policy now admits 42.)
                 self.snd(42, i);
-            }
-            // Kraken growl every v_26 in range → sound 37 (:23240).
-            if self.ent[i].f63 as u16 % BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u16
-                == 0
-            {
-                self.snd(37, i);
             }
         }
         // m6's spit burst (:23243-66): while +71 > 0, one lightning
@@ -922,7 +919,10 @@ impl Gen {
             if Self::isqrt(sq as u32) >= row.v_28 as u32 {
                 self.ent[i].tick70 = base + 1;
             } else if model == 6 {
-                // Kraken: arm the 5-bolt spit (:23235-42).
+                // Kraken: growl + arm the 5-bolt spit (:23240-42).
+                // Sound 37 sits BEHIND the range gate — an out-of-range
+                // cadence tick bails silent (goto LABEL_30, no growl).
+                self.snd(37, i);
                 self.ent[i].f71 = 5;
             } else {
                 self.attack_thunk(i, model, tgt, tx, ty, tz, tf66, tf67);
@@ -2367,7 +2367,7 @@ impl Gen {
                 }
             } else if e.f59 > 0 {
                 self.ent[i].f59 -= 1;
-            } else if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < 0x240_0000 {
+            } else if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < self.chassis.awake_gate_sq {
                 self.ent[i].f58 = 16;
                 self.ent[i].f59 = 0;
                 let mut s = self.ent[i].f54 as usize;

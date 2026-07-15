@@ -14,12 +14,17 @@
 //! `FORM XDIR … CAT XMID` holding the 6 sub-songs, in slot order:
 //! GAME1, GAME2, GAME3, SETUP, INTRO, CUTS.
 //!
-//! Gameplay music = driver G, **bank 1** (the "C1" set —
-//! `InitMusicBank_8EAD0(1)` at boot, EF:43023); MapType picks
+//! Gameplay music = driver G, **bank 0** (the "C2" = Magic Carpet 2
+//! set — `musicChannel_E3814 = 0`, Sound.cpp:49, never reassigned;
+//! player-ear-confirmed 2026-07-12). Bank 1 is the "C1" MC1-set
+//! alternate behind the hidden `-music2` flag (EF:39191/43023 gated
+//! by `setting_byte4_25 & 0x40`) — a future opt-in, NOT the default;
+//! baking bank 1 was the wrong-gameplay-tracks bug (review
+//! 2026-07-15 D4 fixed this header's stale claim). MapType picks
 //! GAMEn (Night=1, Day=2, Cave=3 → sub-song n-1), the menu plays
 //! SETUP (track 4 → sub-song 3).
 
-/// One named sub-song: (`C1GAME1.GEN`, parsed XMI).
+/// One named sub-song: (`C2GAME1.GEN`, parsed XMI).
 pub struct SubSong {
     pub name: String,
     pub song: crate::xmi::Song,
@@ -44,8 +49,9 @@ fn maybe_rnc(raw: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Parse the GM section of the given bank (gameplay = 1) into its
-/// six named sub-songs.
+/// Parse the GM section of the given bank (gameplay = 0, the "C2"
+/// set; 1 = the hidden `-music2` "C1" alternate) into its six named
+/// sub-songs.
 pub fn parse_gm_bank(data: &[u8], bank: usize) -> Result<Vec<SubSong>, String> {
     if data.len() < 12 {
         return Err("MUSIC.DAT too short".into());
@@ -57,7 +63,9 @@ pub fn parse_gm_bank(data: &[u8], bank: usize) -> Result<Vec<SubSong>, String> {
             .try_into()
             .unwrap(),
     );
-    if bank >= banks as usize {
+    // A corrupt/negative count must not wrap huge through the usize
+    // cast (review 2026-07-15 D7).
+    if banks < 0 || bank >= banks as usize {
         return Err(format!("GM section has {banks} banks, wanted {bank}"));
     }
     let rec = datapos + 8 + bank * 64 + DRIVER_GM * 16;

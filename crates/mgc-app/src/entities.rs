@@ -218,7 +218,7 @@ pub fn billboards_from_poses(
 }
 
 /// Monster health bars from the live pose set (unfaithful debug
-/// overlay, `enhancements.health_bars` / H): one classic red-on-black
+/// overlay, `render.debug.health_bars` / H): one classic red-on-black
 /// bar hovering above each class-5 chain head, width tied to the
 /// sprite's world width, life fraction sim-owned.
 pub fn health_bars_from_poses(

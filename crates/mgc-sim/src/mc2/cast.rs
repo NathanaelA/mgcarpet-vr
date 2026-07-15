@@ -152,7 +152,8 @@ pub(crate) struct DispatchArm {
 }
 
 /// Class-9 creator parameters (low-band trace + flyers trace Part 1):
-/// (subtype, action, speed, maxLife, behavior row [255 = none],
+/// (subtype, action, speed, maxLife, behavior row (always a real
+/// str_D7BD6 index — a 255 would panic the BEHAVIOR lookup, F7),
 /// sprite). model = subtype throughout except 0x1C (model 28 rides
 /// the fireball body). All creators: mana 50, no RNG.
 const CREATORS: [(u8, u8, i16, u32, u8, u16); 18] = [
@@ -223,15 +224,22 @@ impl Gen {
         match tier {
             0 => {
                 self.mc2_fools_bolt(i, 0, (10, 0), claimer);
+                // XP lands when the trap SPRINGS (EF:26636), not on
+                // the cast (F6 — the cast-side award was inverted).
+                self.mc2_fools_award(i);
                 true
             }
             1 => {
                 let c = self.ent[i].f56;
                 self.ent[i].f56 = c.wrapping_add(1);
                 if c >= 8 {
+                    self.mc2_fools_award(i); // after the 8th (EF:26646)
                     return true;
                 }
-                if c & 1 == 0 {
+                // The fireball fires when the POST-increment counter
+                // is even = old counter ODD (EF:26648 `!(++c & 1)`) —
+                // the port's even-phase was inverted (F6).
+                if c & 1 != 0 {
                     self.mc2_fools_bolt(i, 0, (10, 0), claimer);
                 }
                 false
@@ -243,8 +251,23 @@ impl Gen {
                     self.mc2_fools_bolt(i, 9, (10, 23), claimer);
                     return false;
                 }
-                c > 2
+                // Despawn at old counter 2 (`v3+1 > 2`, EF:26661) —
+                // `c > 2` ran one tick late (F6).
+                let done = c > 1;
+                if done {
+                    self.mc2_fools_award(i); // on despawn (EF:26663)
+                }
+                done
             }
+        }
+    }
+
+    /// `sub_6D8B0(parentId, 0x16, 1)` at the trap's SPEND points —
+    /// via the XP mail (this is `Gen`; the book lives on `World`).
+    fn mc2_fools_award(&mut self, i: usize) {
+        let owner = self.ent[i].f52;
+        if owner == PLAYER_TARGET {
+            self.mc2_cast_xp.0.push((owner, 22, 1));
         }
     }
 
@@ -259,11 +282,27 @@ impl Gen {
     fn mc2_fools_bolt(&mut self, i: usize, subtype: u8, impact: (u8, u8), claimer: u16) {
         let (x, y, z, owner, payload, heading) = {
             let e = &self.ent[i];
+            // DEFERRED (F6): retail lifts the launch z by the box
+            // fov (`position.z += array_0x52_82.fov`, EF:26688/
+            // 26718) — centering the bolt on the sphere. Applying it
+            // verbatim self-detonates the trap here: OUR generic
+            // victim probe (victim_scan_at) admits the launcher
+            // sphere, retail's sub_10780 evidently does not. Needs
+            // the sphere-admission trace before the lift can land.
             (e.x, e.y, e.z, e.f52, e.f136, e.f30)
         };
         let Some(pr) = self.mc2_spawn_cast_proj(subtype, x, y, z) else {
             return;
         };
+        // The fireball's water-spawn splash (EF:26690-95, inside the
+        // spawn-success arm): a (10,5) splash + sound 27 when the
+        // sphere sits on water — F6.
+        if subtype == 0 && self.cap_bit(x, y) == 1 {
+            if let Some(s) = self.mc2_spawn_splash(x, y, z) {
+                self.ent[s].id24 = owner;
+                self.snd(27, s);
+            }
+        }
         let (yaw, pitch) = if claimer != PLAYER_TARGET
             && (claimer as usize) < self.ent.len()
             && self.ent[claimer as usize].flags & 0x400 == 0
@@ -288,8 +327,27 @@ impl Gen {
             e.f36 = pitch;
             e.f146 = claimer; // homing lock on the possessor
         }
+        // The LIGHTNING bolt re-rows to the homing row 64 and stamps
+        // the claimer's class/model as its xtype/xsubtype filter
+        // (sub_36850 EF:26701-20); the fireball stamps none — F6.
+        if subtype == 9 {
+            let (tc, tm) = if claimer == PLAYER_TARGET || claimer as usize >= self.ent.len() {
+                (3, 0)
+            } else {
+                (
+                    self.ent[claimer as usize].class64,
+                    self.ent[claimer as usize].model65,
+                )
+            };
+            let e = &mut self.ent[pr];
+            e.row156 = 64;
+            e.f66 = tc;
+            e.f67 = tm;
+        }
         if subtype == 0 {
-            self.snd(9, i);
+            // Sound 9 rides the NEW fireball (EF:26689), not the
+            // sphere — F6.
+            self.snd(9, pr);
         }
     }
 }
@@ -429,6 +487,13 @@ impl World {
             return;
         };
         let owned = self.mc2_book.ent[spell] != 0;
+        // Retail's v5 gate (EF:43876-78): `(array_0x3E9 ||
+        // SpellsEnabled) && (isCaveLevel || spell != 25)` — the port
+        // unifies grant + manifestation into `ent` (the OR collapses;
+        // no path sets one without the other), so v5 = owned + the
+        // CAVE gate: Cave-In (25) never notifies or banks on a
+        // surface level. The LEVEL derive stays unconditional (F5).
+        let v5 = owned && (self.g.is_cave() || spell != 25);
         // Castle XP clamp (EF:43885-86; `setting_byte2_23` guard OPEN
         // — single-player campaign always clamps).
         if self.mc2_book.xp_vol[2] > 7 {
@@ -445,7 +510,7 @@ impl World {
         let lvl = v6.max(0) as u8;
         if lvl != self.mc2_book.levels[spell] {
             self.mc2_book.levels[spell] = lvl;
-            if owned && notify {
+            if v5 && notify {
                 // `sub_6DC40_improve_ability`: on-screen message
                 // (string 159 + 160+idx) + sound 61.
                 let msg = self.mc2_relevel_message(spell);
@@ -465,32 +530,27 @@ impl World {
         if self.mc2_book.sel[spell] > sel_cap {
             self.mc2_book.sel[spell] = sel_cap;
         }
-        if owned && bank {
+        if v5 && bank {
             let cap = row.tiers[2].xpos1;
             self.mc2_book.xp_bank[spell] = xp.min(cap);
         }
     }
 
     /// `sub_6D8B0` (EF:58228) — the XP award: `amount` onto the
-    /// volatile XP of `owner`'s spell, for any live WIZARD owner —
-    /// the human (PLAYER_TARGET) or a pool rival (owner-tagged; the
-    /// rival arm re-derives its level and re-wires its manifestation
-    /// tier). The castle arm re-syncs the manifestation tier; the
-    /// level re-derives (per-award calls never bank, `a4=0`).
+    /// volatile XP of the owner's spell. Retail's own guard is
+    /// `class == 3 && model == 0` — the HUMAN wizard ONLY
+    /// (EF:58240-41, decompile-verified 2026-07-15). Rival owners
+    /// are a structural no-op: retail rivals have NO spell-XP
+    /// progression — their tiers are the authored map levels for
+    /// life, and the tier-down walk supplies the dynamics. The
+    /// castle arm re-syncs the manifestation tier; the level
+    /// re-derives (per-award calls never bank, `a4=0`).
     pub(crate) fn mc2_award_xp(&mut self, owner: u16, spell: usize, amount: i32) {
         if spell >= 26 {
             return;
         }
         if owner != PLAYER_TARGET {
-            // A rival's award (the AI earns XP through the same
-            // shared plumbing — brain trace §4).
-            if let Some(ri) = self.mc2_rivals.iter().position(|r| r.ent == owner) {
-                if !self.mc2_rivals[ri].eliminated {
-                    self.mc2_rivals[ri].book.xp_vol[spell] += amount;
-                    self.mc2_rival_relevel(ri, spell);
-                }
-            }
-            return;
+            return; // the model-0 guard — rivals never accrue
         }
         if self.player.state != LifeState::Alive {
             return;
@@ -720,10 +780,17 @@ impl World {
                     return;
                 }
             }
-            // Posses: an active cast is left alone (EF:60899-907;
-            // the re-press `byte_0x3C_60 = 1` release signal is a
-            // banked nuance).
-            1 if armed > 0 => return,
+            // Possess: an active cast is not re-armed/re-charged,
+            // but the re-press STILL records the firing hand and
+            // runs the invis-break law before bailing (EF:60900-07
+            // calls sub_5F7E0 before LABEL_23; the old early return
+            // skipped it — F7). The `byte_0x3C_60 = 1` release
+            // signal stays a banked nuance.
+            1 if armed > 0 => {
+                self.g.ent[m].f50 = if right { 512 } else { 256 };
+                self.mc2_arm_invis_break(spell);
+                return;
+            }
             // Castle: a re-cast while the ball flies buzzes
             // (EF:60908-13).
             2 if armed > 0 => {
@@ -745,18 +812,10 @@ impl World {
             9 | 0xA | 0xD | 0xF | 0x10..=0x18 if armed > 0 => return,
             _ => {}
         }
-        // Castle (2): the cost RISES with the OWN castle level, which
-        // changes via build/downgrade with NO re-select — retail keeps
-        // `max_life` fresh through the +1 castle XP awarded on each
-        // upgrade (`sub_6D8B0(owner,2,1)` → SetSpell). Our upgrade path
-        // lives in `Gen` and can't reach the book, so re-sync here: both
-        // this mana gate AND the first-tick debit then charge the live
-        // tier-scaled cost (player 2026-07-13: "can cast below the shown
-        // cost"). The castle is unarmed at this point (armed>0 returned
-        // above), so `mc2_set_spell` fully applies.
-        if self.g.ent[m].model65 == 2 {
-            self.mc2_set_spell(m, self.mc2_book.sel[2]);
-        }
+        // (The old castle-cost re-sync hack here is RETIRED — F3's
+        // upgrade award (`sub_6D8B0(owner,2,1)` → the XP drain's
+        // spell-2 SetSpell branch) now keeps `max_life` fresh the
+        // faithful way, within the tick of the upgrade.)
         // THE MANA GATE (EF:60953): caster mana vs the tier's full
         // cost. Insufficient → UI flash + sound 29 (EF:60964-67).
         let cost = self.g.ent[m].max_life;
@@ -772,19 +831,21 @@ impl World {
         // muzzle.
         self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16;
         self.g.ent[m].f50 = if right { 512 } else { 256 };
-        let _ = tier;
+        self.mc2_arm_invis_break(spell);
+    }
 
-        // The Invisibility per-tier break-on-self-cast law (`sub_5F7E0`
-        // EF:60987, run from the arm path `sub_5F7B0`): arming ANY spell
-        // may break an active cloak. `s = byte_0x1BF_447` (invis
-        // strength): T0 (s=1) any cast breaks; T1 (s=2) breaks on
-        // everything except possess (spell 1); T2 (s=3) nothing breaks.
-        // The invis FIRST cast doesn't self-break — strength is still 0
-        // here (it's set on the invis effect's first tick). On break we
-        // also zero the invis window's `f26` so the mana-regen block
-        // lifts with the cloak (player 2026-07-13: functional
-        // termination must clear the burst). docs/spell-audit/
-        // rival-spells.md §2.
+    /// The Invisibility per-tier break-on-self-cast law (`sub_5F7E0`
+    /// EF:60987, run from the arm path `sub_5F7B0` AND the possess
+    /// re-press): arming ANY spell may break an active cloak.
+    /// `s = byte_0x1BF_447` (invis strength): T0 (s=1) any cast
+    /// breaks; T1 (s=2) breaks on everything except possess (spell
+    /// 1); T2 (s=3) nothing breaks. The invis FIRST cast doesn't
+    /// self-break — strength is still 0 here (set on the invis
+    /// effect's first tick). On break we also zero the invis
+    /// window's `f26` so the mana-regen block lifts with the cloak
+    /// (player 2026-07-13: functional termination must clear the
+    /// burst). docs/spell-audit/rival-spells.md §2.
+    fn mc2_arm_invis_break(&mut self, spell: usize) {
         let s = self.player.invis_strength;
         if s != 0 && (s < 2 || (s <= 2 && spell != 1)) {
             self.player.invisible = false;
@@ -814,7 +875,10 @@ impl World {
                 return false;
             }
         }
-        if e.f26 as u16 == e.f28 {
+        // `.max(1)` mirrors the arm/first-tick sites — a zero-
+        // duration row arms f26=1, and comparing against the raw 0
+        // silently skipped the first-tick full-cost re-check (F7).
+        if e.f26 as u16 == e.f28.max(1) {
             return self.dev_spells || self.player.mana as u64 >= e.max_life as u64;
         }
         true
@@ -1059,8 +1123,9 @@ impl World {
                 7 => 23,
                 _ => 15,
             };
-            self.mc2_launch(spell, m, &arm, sub, p);
-            self.g.snd_player(v6);
+            if self.mc2_launch(spell, m, &arm, sub, p) {
+                self.g.snd_player(v6);
+            }
             return;
         }
 
@@ -1080,7 +1145,7 @@ impl World {
                     1 => (10, 54),
                     _ => (10, 69),
                 };
-                self.mc2_launch(
+                if self.mc2_launch(
                     spell,
                     m,
                     &DispatchArm {
@@ -1090,8 +1155,10 @@ impl World {
                     },
                     sub,
                     p,
-                );
-                self.g.snd_player(40);
+                ) {
+                    // Sound 40 only on a successful spawn (F7).
+                    self.g.snd_player(40);
+                }
             }
             // castle: the castle-ball cast (the MC1 machinery on the
             // MC2 column — the sub_69AB0 build queue is the castle
@@ -1155,7 +1222,7 @@ impl World {
             // creature MODEL (life = 19/2/25/16) in f71 (the ring's army
             // size + model). Sound 9 (docs/spell-audit/summon-creatures.md).
             0x13 => {
-                self.mc2_launch(
+                if self.mc2_launch(
                     spell,
                     m,
                     &DispatchArm {
@@ -1165,8 +1232,9 @@ impl World {
                     },
                     sub,
                     p,
-                );
-                self.g.snd_player(9);
+                ) {
+                    self.g.snd_player(9);
+                }
             }
             // fools_mana (`sub_6C870` EF:57868): a SHOTGUN of six
             // neutral fake-mana decoys (not one real sphere — the old
@@ -1174,9 +1242,12 @@ impl World {
             // detonates on an enemy's possession claim. Cast sound 11
             // once after the burst (docs/spell-audit/fools-mana.md).
             0x16 => {
-                self.mc2_cast_fools_mana(m, p, sub);
-                self.mc2_award_xp(PLAYER_TARGET, 22, 1);
-                self.g.snd_player(11);
+                // XP moved to the trap's SPEND points (F6 — retail's
+                // sub_6C870 cast awards nothing; sub_36680 does);
+                // sound 11 gates on the burst spawning (EF:57924).
+                if self.mc2_cast_fools_mana(m, p, sub) {
+                    self.g.snd_player(11);
+                }
             }
             // magic_mine (`sub_6CAC0` EF:57960): the (9,29) carrier flies
             // forward and LANDS to place a persistent (10,78) proximity
@@ -1186,7 +1257,7 @@ impl World {
             // the tier lifespan (subSpell). Sound 15
             // (docs/spell-audit/magic-mine.md).
             0x17 => {
-                self.mc2_launch(
+                if self.mc2_launch(
                     spell,
                     m,
                     &DispatchArm {
@@ -1196,13 +1267,14 @@ impl World {
                     },
                     sub,
                     p,
-                );
-                self.g.snd_player(15);
+                ) {
+                    self.g.snd_player(15);
+                }
             }
             // alliance: class-9 subtype 25 direct (EF:58039),
             // sound 9.
             0x18 => {
-                self.mc2_launch(
+                if self.mc2_launch(
                     spell,
                     m,
                     &DispatchArm {
@@ -1212,8 +1284,9 @@ impl World {
                     },
                     sub,
                     p,
-                );
-                self.g.snd_player(9);
+                ) {
+                    self.g.snd_player(9);
+                }
             }
             // metamorph (`sub_6A030` EF:56294): transform the caster
             // into a pooled class-5 creature (pose-puppet), carpet hidden.
@@ -1241,11 +1314,12 @@ impl World {
     /// possession claims one, the sphere's tick springs the tier
     /// retaliation (mc1/combat.rs `ball_tick` → [`Gen::mc2_fools_retaliate`])
     /// instead of handing over the mana (docs/spell-audit/fools-mana.md).
-    fn mc2_cast_fools_mana(&mut self, m: usize, p: PlayerPose, sub: Mc2SubSpell) {
+    fn mc2_cast_fools_mana(&mut self, m: usize, p: PlayerPose, sub: Mc2SubSpell) -> bool {
         let right = self.g.ent[m].f50 == 512;
         let (mx, my, _mz) = self.muzzle(p, right);
         let payload = sub.sub_spell.max(0);
         let tier = sub.life.clamp(0, 3) as i16;
+        let mut spawned = false;
         for _ in 0..6 {
             let z = self.g.ground_z(mx, my) as i16;
             let Some(s) = self.g.mc2_spawn_mana_sphere(57, mx, my, z) else {
@@ -1265,7 +1339,9 @@ impl World {
             e.f30 = yaw; // launch heading (fallback retaliation aim)
             e.dest_x = pos.0.wrapping_sub(mx);
             e.dest_y = pos.1.wrapping_sub(my);
+            spawned = true;
         }
+        spawned
     }
 
     /// `sub_6A030` (EF:56294) — Metamorph: spawn ONE class-5 creature
@@ -1304,7 +1380,7 @@ impl World {
         arm: &DispatchArm,
         sub: Mc2SubSpell,
         p: PlayerPose,
-    ) {
+    ) -> bool {
         // Hand muzzle: launch from the firing hand's side (recorded
         // at arm time; the MC1 lateral-step law stands in until the
         // retail hand-offset trace lands — the certified bridge
@@ -1312,7 +1388,8 @@ impl World {
         let right = self.g.ent[m].f50 == 512;
         let (mx, my, mz) = self.muzzle(p, right);
         let Some(i) = self.g.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
-            return;
+            return false; // pool full: no projectile, NO cast sound
+            // (retail gates the sound on the spawn, EF:44224-39 — F7)
         };
         {
             let e = &mut self.g.ent[i];
@@ -1350,6 +1427,7 @@ impl World {
             e.type86 = 42;
             e.frame88 = 0;
         }
+        true
     }
 
     /// The crosshair instrument's MC2 arm (P-class; `aim_preview`

@@ -424,10 +424,10 @@ impl Gen {
     }
 
     /// The TargetingVerb seam (crate::verbs) — the acquire subtypes
-    /// dispatch here. MC2's arm (extended subtype key, model-78
-    /// designated-target pre-acquire, buildings source) lands as
-    /// sibling `*_mc2` functions in Phase 3; until then it serves the
-    /// MC1 scan and notes the fallback.
+    /// dispatch here. MC2's own acquire column lives in mc2::mobs;
+    /// this dispatcher is only reached from MC1-spell paths, where an
+    /// MC2 world serves the MC1 scan and notes the fallback (the
+    /// pinned frankenstein ledger).
     fn aim_assist(&mut self, i: usize, ctx: &MobCtx) {
         match self.verbs.targeting {
             TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => self.aim_assist_mc1(i, ctx),
@@ -1206,8 +1206,21 @@ impl Gen {
         // has no case 16, so f146 stays 0 and the child flies straight
         // (the fire-rain wall). Seamed on TargetingVerb::Mc1Hw; every
         // other acquire site treats HW exactly as MC1. SURVEY-MC1HW §3a.
-        if self.is_hidden_worlds() && self.ent[i].f146 == 0 {
+        //
+        // Acquisition is ONE-SHOT, latched on flags bit 2 even on a
+        // miss (remc1hw :58731-49): a miss flies straight forever, a
+        // hit SNAPS the live heading to the pick (f30/f32 = f34/f36,
+        // :58742-43). Only the post-lock tracker eases (sub_52550,
+        // :58754 = home()). Same idiom as the m9 beam (proj_m9_tick).
+        // The latch stays inside the HW gate so the shared MC1 path
+        // never writes flags bit 2.
+        if self.is_hidden_worlds() && self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
             self.aim_assist_mc1_cone(i, ctx, 0x100, 0x71);
+            if self.ent[i].f146 != 0 {
+                self.ent[i].f30 = self.ent[i].f34;
+                self.ent[i].f32 = self.ent[i].f36;
+            }
         }
         if self.ent[i].f146 != 0 {
             self.home(i, ctx);
@@ -3298,6 +3311,10 @@ impl Gen {
         }
         self.ent[i].dest_x = vx as u16;
         self.ent[i].dest_y = vy as u16;
+        // The MC2 aura claim clears once the ball has consumed the
+        // pull (EF:28383) — the one-tick handshake's release side.
+        // No-op for MC1 (the map only fills under MC2 auras).
+        self.mc2_aura_claim.0.remove(&(i as u16));
         if (x, y, z) != (x0, y0, z0) {
             self.move_relink(i, x, y, z);
         }
@@ -3355,8 +3372,10 @@ impl Gen {
     // ---- corpse pipeline ----------------------------------------------------
 
     /// The CorpseVerb seam (crate::verbs): MC1 scatters mana
-    /// balls/jars; MC2's arm (spell tokens, mana-sphere split/merge)
-    /// lands as a sibling function here in Phase 3.
+    /// balls/jars. MC2's death drops (spell tokens, mana-sphere
+    /// split/merge) live in the mc2 death handlers, which do not
+    /// route through here — an MC2 world reaching THIS drop serves
+    /// the MC1 scatter and says so in telemetry.
     pub(crate) fn corpse_drop(&mut self, i: usize) {
         match self.verbs.corpse {
             CorpseVerb::Mc1 => self.corpse_drop_mc1(i),

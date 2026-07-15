@@ -156,12 +156,18 @@ impl Gen {
     /// intake; a lethal hit spawns the flame, re-seeds 130..189 burn
     /// life and advances to the burning state.
     pub(crate) fn mc2_tree_tick(&mut self, i: usize) {
+        // Unconditional byte[2] |= 2 at the top (EF:62415).
+        self.ent[i].flags |= 0x2_0000;
         if let Some((amt, src)) = self.mc2_scenery_hit(i) {
             self.ent[i].act_life -= amt as i32;
             if self.ent[i].act_life < 0 {
                 // The flame: the real (10,6) standing fire
                 // (EF:62421-56 — id from the attacker, the
                 // word_0x2C_44 = (3*fov)>>2 lift, re-seeded burn).
+                // EVERYTHING is gated on the spawn succeeding
+                // (EF:62424 `if (v3x)`): on pool failure retail
+                // draws NO rand, re-seeds nothing and does NOT
+                // advance — the tree just takes the damage.
                 let (x, y, z, fov) = {
                     let e = &self.ent[i];
                     (e.x, e.y, e.z, e.f84)
@@ -178,11 +184,14 @@ impl Gen {
                     let burn = (d % 0x3C + 130) as i32;
                     self.ent[f].act_life = burn;
                     self.ent[i].act_life = burn;
-                } else {
-                    let d = self.mc2_rand(i);
-                    self.ent[i].act_life = (d % 0x3C + 130) as i32;
+                    // `dword &= 0xFFFDFFF7; byte[2] |= 2`
+                    // (EF:62439-42): the burning tree stops being a
+                    // TARGET (bit 8 clear — same op as
+                    // mc2_spawn_fire).
+                    let e = &mut self.ent[i];
+                    e.flags = (e.flags & !0x2_0008) | 0x2_0000;
+                    e.tick70 = 1;
                 }
-                self.ent[i].tick70 = 1;
             }
         }
         let (x, y) = (self.ent[i].x, self.ent[i].y);
@@ -232,24 +241,47 @@ impl Gen {
             return;
         }
         let (x, y) = (self.ent[i].x, self.ent[i].y);
-        let ground = self.ground_z(x, y) as i16;
         let mut pos = (x, y, self.ent[i].z);
-        if pos.2 > ground {
+        if pos.2 > self.ground_z(x, y) as i16 {
             if self.ent[i].f126 != 0 {
                 let (yaw, spd) = (self.ent[i].f30, self.ent[i].f126);
                 Self::polar_step(&mut pos, yaw, 0, spd);
             }
         } else {
             self.ent[i].f126 = 0;
+            // sub_654B0 (EF:62705-45): a landed prop on rough ground
+            // (roughness > 20) rolls off — scan 8 yaws from f30
+            // (+256 & 0x7FF) at 64 units, take the LOWEST-alt
+            // neighbor (sentinel 0x10000: some neighbor always
+            // wins). No RNG.
+            if self.roughness(pos.0, pos.1) > 20 {
+                let mut best = pos;
+                let mut best_alt = 0x10000u32;
+                let mut yaw = self.ent[i].f30;
+                for _ in 0..8 {
+                    let mut cand = pos;
+                    Self::polar_step(&mut cand, yaw, 0, 64);
+                    let alt = self.ground_z(cand.0, cand.1) as u32;
+                    if alt < best_alt {
+                        best_alt = alt;
+                        best = cand;
+                    }
+                    yaw = yaw.wrapping_add(256) & 0x7FF;
+                }
+                pos = best;
+            }
         }
         if self.ent[i].f126 > 0 {
             self.ent[i].f126 -= 1;
         }
-        // Gravity (EF:62650-60).
-        let mut v = self.ent[i].f44 as i16;
-        v = (v - 24).clamp(-192, 192);
-        self.ent[i].f44 = v as u16;
-        pos.2 = pos.2.wrapping_add(v).max(ground);
+        // Gravity (EF:62650-60): position takes the OLD velocity,
+        // THEN the velocity decrements (clamped ±192 after the
+        // write); the ground clamp samples terrain at the MOVED x,y.
+        let v_old = self.ent[i].f44 as i16;
+        pos.2 = pos.2.wrapping_add(v_old);
+        self.ent[i].f44 = (v_old - 24).clamp(-192, 192) as u16;
+        let ground = self.ground_z(pos.0, pos.1) as i16;
+        pos.2 = pos.2.max(ground);
         self.move_relink(i, pos.0, pos.1, pos.2);
         // Burn/impact intake (EF:62661-87).
         if let Some((amt, _src)) = self.mc2_scenery_hit(i) {
@@ -257,8 +289,12 @@ impl Gen {
                 let kick = ((amt >> 2) as i16).clamp(2, 192);
                 let d1 = self.mc2_rand(i);
                 self.ent[i].f44 = ((d1 % kick as u32) as i16 + kick) as u16;
+                // The 2nd draw's divisor is the JUST-WRITTEN f44
+                // (`v8 >> 1`, EF:62675), not kick>>1 (f44 ≥ 2 so
+                // the max(1) is only a div-by-zero guard).
+                let half = ((self.ent[i].f44 as u32) >> 1).max(1);
                 let d2 = self.mc2_rand(i);
-                self.ent[i].f126 = ((d2 % ((kick as u32 >> 1).max(1))) + 1) as i16;
+                self.ent[i].f126 = ((d2 % half) + 1) as i16;
                 let d3 = self.mc2_rand(i);
                 self.ent[i].f30 = (d3 & 0x7FF) as u16;
                 self.ent[i].z = self.ent[i].z.wrapping_add(self.ent[i].f44 as i16);

@@ -157,7 +157,16 @@ impl Gen {
                 }
                 cell = b(cell, 0, 1);
             }
-            col = b(col, -1, 0);
+            // G9i: the CAVE loop steps the column byte-wise
+            // (EF:41560); the NON-CAVE loop decrements the packed
+            // WORD (EF:41579) — at x==0 the borrow crosses into
+            // y−1. (The build-X mirror is word-stepped in BOTH
+            // branches, EF:41711/41731 — no split there.)
+            col = if self.is_cave() {
+                b(col, -1, 0)
+            } else {
+                w(col, -1)
+            };
         }
         // (e) SHADING — L+1 cells (bx, by-1+k) off the NW-SE diagonal
         // h[(bx-1, by+k-2)] - h[(bx+1, by+k)] + 32 (EF:41584-41622).

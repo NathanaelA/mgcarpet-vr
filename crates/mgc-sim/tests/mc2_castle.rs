@@ -212,6 +212,18 @@ fn mc2_castle_builds_upgrades_and_demolishes() {
     }
     let (_, cap6, _) = w.loadout().castle.expect("castle at level 6");
     assert_eq!(cap6, 317_400, "the MC2 level-6 capacity rung");
+    // F3: each upgrade awards +1 castle XP (`sub_6D8B0(owner,2,1)`
+    // EF:61596) — five upgrades landed above (2..=6), so the ladder
+    // that unlocks Fire/Lightning Tower tiers has climbed, and the
+    // XP drain's spell-2 branch keeps the pane cost synced (the old
+    // cast-gate re-sync hack is retired; this is its regression
+    // guard).
+    let book = w.mc2_book_view();
+    assert!(
+        book.xp[2] >= 5,
+        "castle upgrades awarded spell-2 XP (got {})",
+        book.xp[2]
+    );
     // The guard roster survives on the (correctly aligned) walkways
     // — with the one-tile ring offset they died as fast as they
     // spawned (blocked on all four sides).

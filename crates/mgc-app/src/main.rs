@@ -36,6 +36,12 @@ const MOUSE_SENSITIVITY: f32 = 0.0022;
 /// deflection ~160 px from the center of a 320-wide screen (~0.8/px);
 /// half that suits modern DPI while sensitivity 1.0 keeps the range.
 const STICK_PER_PIXEL: f32 = 0.4;
+/// The book's canonical spell order (`byte_99B88`, remc1 :5752) —
+/// retail's scan order for the level-init quickselect pre-seed
+/// (:49216-59); identical in HW (remc1hw :4381).
+const SPELL_CANON: [u8; 24] = [
+    0, 3, 2, 16, 1, 14, 4, 12, 6, 9, 7, 8, 15, 18, 17, 19, 13, 5, 11, 10, 20, 21, 22, 23,
+];
 
 /// Pristine inputs to rebuild the [`mgc_sim::mc1::world::World`] for a
 /// LEVEL RESTART — the original's castle-less-death "lost + level
@@ -296,6 +302,7 @@ fn load_level(
     plausible_spellbook: bool,
     prune_owned_jars: bool,
     pool_slots: Option<usize>,
+    awake_range: Option<u32>,
 ) -> Result<LoadedLevel, String> {
     let file =
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
@@ -457,6 +464,26 @@ fn load_level(
                     println!(
                         "chassis: pool_slots {n} (limit-removing override; \
                          G-class — not a faithful run)"
+                    );
+                }
+                if let Some(tiles) = awake_range {
+                    // 0 = always awake; otherwise (tiles·256)² with a
+                    // saturate — ≥128 tiles exceeds the torus's max
+                    // shortest-wrap distance, so it saturates to
+                    // always-awake too.
+                    chassis.awake_gate_sq = if tiles == 0 {
+                        i32::MAX
+                    } else {
+                        ((tiles as i64 * 256).pow(2)).min(i32::MAX as i64) as i32
+                    };
+                    println!(
+                        "chassis: awake_range {} (faithful = 24 tiles; \
+                         G-class — not a faithful run)",
+                        if tiles == 0 {
+                            "off (always awake)".to_string()
+                        } else {
+                            format!("{tiles} tiles")
+                        }
                     );
                 }
                 let init = WorldInit {
@@ -798,7 +825,18 @@ struct App {
     /// main-view icons; rebuilt with the pose snapshot, empty when
     /// `render.enhancement.expose_jar_spells` is off.
     jar_markers: Vec<(f32, f32, f32, u8)>,
+    /// Ticks since the mouse last moved — the retail MC2 "fly
+    /// assistant" (PlayerInput.cpp:2001-09): 0x30 idle polls with no
+    /// action pending recenter the cursor, i.e. our virtual stick.
+    /// Without it the grabbed stick rests wherever the last flick
+    /// left it — a permanent invisible deflection (the player's
+    /// "level flight declines to the very ground": a parked stick_y
+    /// of 5+ units defeats the sine-LUT truncation that makes true
+    /// near-level flight hold altitude). Faithful for MC2;
+    /// enhancement-class in MC1/HW like Backspace.
+    stick_idle_ticks: u16,
     /// Space pressed since the last sim tick (respawn confirm).
+    pending_full_stop: bool,
     pending_respawn: bool,
     /// Shift+L pressed since the last sim tick (castle demolish).
     pending_demolish: bool,
@@ -809,6 +847,10 @@ struct App {
     /// CTRL currently held (the MC2 selector pane is hold-to-show,
     /// release-to-close — remc2 PI:505/PI:895).
     ctrl_held: bool,
+    /// Whether the cursor was grabbed when CTRL went down, so release
+    /// restores THAT state instead of force-grabbing (the cursor may
+    /// have been deliberately freed via Escape or focus loss).
+    ctrl_grab_restore: bool,
     /// The pane's per-game shape; None when `selector.ctrl_pane` is
     /// off.
     pane: Option<ui::SelectorPane>,
@@ -851,9 +893,14 @@ struct App {
     /// refreshed each frame the book is open).
     hovered: Option<mgc_sim::mc1::spells::SpellId>,
     /// Quick-key bindings 1..9,0 → spell id (session-local; set in the
-    /// book by hovering + pressing a digit). Our enhancement — the
-    /// original only has the obscure Ctrl+]+digit chord.
+    /// book by hovering + pressing a digit, or auto-assigned on spell
+    /// acquisition like retail, :64858-67). Manual rebinding beyond
+    /// the book's Ctrl+]+digit chord is our enhancement.
     quick_binds: [Option<u8>; 10],
+    /// Last tick's owned-spell set — the acquisition edge detector
+    /// feeding the retail quickselect auto-assign (app-side only,
+    /// never part of the sim hash).
+    prev_owned: [bool; 24],
     /// Equip requests to feed the next sim tick (LMB hand, RMB hand).
     pending_equip: (Option<u8>, Option<u8>),
     /// Pending MC2 pane commit: (spell, tier, hand) — the sim's
@@ -954,10 +1001,13 @@ impl App {
             level,
             cfg,
             jar_markers: Vec::new(),
+            stick_idle_ticks: 0,
+            pending_full_stop: false,
             pending_respawn: false,
             pending_demolish: false,
             selector,
             ctrl_held: false,
+            ctrl_grab_restore: false,
             pane,
             selector_hover: ui::SelectorHover::default(),
             selector_drag: None,
@@ -979,6 +1029,7 @@ impl App {
             cursor: (0.0, 0.0),
             hovered: None,
             quick_binds: [None; 10],
+            prev_owned: [false; 24],
             pending_equip: (None, None),
             pending_mc2_select: None,
             shift_held: false,
@@ -1017,7 +1068,12 @@ impl App {
                     let source = if e.player {
                         mgc_audio::Source::Player
                     } else {
-                        mgc_audio::Source::World { pos: e.pos }
+                        // e.tag = the emitter's OWNER word (resolved
+                        // by take_audio) — the channel-pair key (D2).
+                        mgc_audio::Source::World {
+                            pos: e.pos,
+                            owner: e.tag,
+                        }
                     };
                     audio.event(e.id, source, &listener);
                 }
@@ -1074,6 +1130,11 @@ impl App {
         let mut w = init.build();
         self.pool_dropped_total = 0;
         self.misfits_reported = 0;
+        // Retail wipes + reseeds the quick keys at level init
+        // (:49216-59) — the acquisition diff below re-seeds the
+        // starting spells in canonical order on the first tick.
+        self.quick_binds = [None; 10];
+        self.prev_owned = [false; 24];
         apply_instruments(
             &mut w,
             self.cfg.gameplay.cheat.dev_spells,
@@ -1132,11 +1193,37 @@ impl App {
                 .take()
                 .map(mgc_sim::mc1::spells::SpellId),
             mc2_select: self.pending_mc2_select.take(),
+            full_stop: std::mem::take(&mut self.pending_full_stop),
             respawn: std::mem::take(&mut self.pending_respawn),
             demolish: std::mem::take(&mut self.pending_demolish),
             ..Default::default()
         };
         if mc1 {
+            // The retail MC2 fly assistant (PlayerInput.cpp:2001-09):
+            // mouse untouched and no action pending for 0x30
+            // consecutive polls recenters the cursor — our virtual
+            // stick. Retail gates on the raw position + pending
+            // action bytes; ours on the motion-reset counter + held
+            // fire. Game-keyed default (player ruling 2026-07-16):
+            // MC2 = retail option on, MC1/HW = authentically absent
+            // (parked-cursor deflections persist, as retail MC1's
+            // visible-cursor scheme did) — `fly_assistant: on` opts
+            // the enhancement in everywhere.
+            let assist = self
+                .cfg
+                .controls
+                .preferences
+                .fly_assistant
+                .enabled(matches!(self.level.game, mgc_sim::ids::GameId::Mc2));
+            if !assist || input.fire_left || input.fire_right {
+                self.stick_idle_ticks = 0;
+            } else if self.stick.x != 0.0 || self.stick.y != 0.0 {
+                self.stick_idle_ticks = self.stick_idle_ticks.saturating_add(1);
+                if self.stick_idle_ticks > 0x30 {
+                    self.stick = VirtualStick::default();
+                    self.stick_idle_ticks = 0;
+                }
+            }
             // The MC1 model steers from the virtual stick; the delta
             // accumulators stay zero (the sim ignores them, but keep
             // the recorded input honest for future replays).
@@ -1542,7 +1629,9 @@ impl ApplicationHandler for App {
                                 if self.shift_held {
                                     let level = self.spell_levels[spell.unwrap_or(0) as usize];
                                     self.pane_commit(slot, hand, level);
-                                } else {
+                                } else if self.selector_drag.is_none() {
+                                    // A second button joining mid-drag
+                                    // must not steal the live drag.
                                     self.selector_drag = Some((slot, hand));
                                 }
                             }
@@ -1669,6 +1758,7 @@ impl ApplicationHandler for App {
                 {
                     if down && !self.ctrl_held {
                         self.ctrl_held = true;
+                        self.ctrl_grab_restore = self.grabbed;
                         if self.level.ui.is_some() {
                             self.set_grab(false);
                             self.fire_held = false;
@@ -1678,7 +1768,7 @@ impl ApplicationHandler for App {
                         self.ctrl_held = false;
                         self.selector_drag = None;
                         self.selector_hover = ui::SelectorHover::default();
-                        if !self.book_open() {
+                        if !self.book_open() && self.ctrl_grab_restore {
                             self.set_grab(true);
                         }
                     }
@@ -1749,7 +1839,15 @@ impl ApplicationHandler for App {
                             },
                         );
                     }
-                    println!("sound: {}", if self.cfg.audio.sound { "on" } else { "off" });
+                    println!(
+                        "sound: {}{}",
+                        if self.cfg.audio.sound { "on" } else { "off" },
+                        if self.audio.is_none() {
+                            " (no audio device)"
+                        } else {
+                            ""
+                        }
+                    );
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::F2) {
@@ -1772,7 +1870,15 @@ impl ApplicationHandler for App {
                             a.stop_music();
                         }
                     }
-                    println!("music: {}", if self.cfg.audio.music { "on" } else { "off" });
+                    println!(
+                        "music: {}{}",
+                        if self.cfg.audio.music { "on" } else { "off" },
+                        if self.audio.is_none() {
+                            " (no audio device)"
+                        } else {
+                            ""
+                        }
+                    );
                     return;
                 }
                 // Pause (retail P, drawing PAUSED at 132,50): the sim
@@ -1925,6 +2031,18 @@ impl ApplicationHandler for App {
                             self.pending_respawn = true;
                         }
                     }
+                    // Backspace = the retail MC2 full stop (action
+                    // 0x27): speeds zero, Speed spell dies, steering
+                    // recenters. Enhancement-class in MC1/HW (player
+                    // directive 2026-07-16). The stick reset is
+                    // retail's SetCenterScreenForFlyAssistant mouse
+                    // recenter (EF:37965 → EF:44387).
+                    PhysicalKey::Code(KeyCode::Backspace) => {
+                        if down {
+                            self.pending_full_stop = true;
+                            self.stick = VirtualStick::default();
+                        }
+                    }
                     PhysicalKey::Code(KeyCode::ShiftLeft) => {
                         self.shift_held = down;
                     }
@@ -1960,6 +2078,32 @@ impl ApplicationHandler for App {
                 // is how the catalogue of ceiling-hitting levels
                 // (032's starved trigger, 039's walls) gets built.
                 if let Some(w) = self.sim.world.as_mut() {
+                    // Retail quickselect auto-assign (:64858-67): a
+                    // newly acquired spell takes the FIRST FREE quick
+                    // key (scan 1→9→0, cap 10, silent when full;
+                    // already-bound spells never re-assign). Walking
+                    // the book's canonical order (byte_99B88) also
+                    // reproduces the level-init pre-seed (:49216-59):
+                    // at level start every owned spell diffs in at
+                    // once, in that order. MC1-key schemes only —
+                    // MC2 controls have no quickselect bank.
+                    if self.selector.map_book {
+                        let owned = w.loadout().owned;
+                        for &s in &SPELL_CANON {
+                            let s = s as usize;
+                            if owned[s]
+                                && !self.prev_owned[s]
+                                && !self.quick_binds.contains(&Some(s as u8))
+                            {
+                                if let Some(slot) =
+                                    self.quick_binds.iter_mut().find(|b| b.is_none())
+                                {
+                                    *slot = Some(s as u8);
+                                }
+                            }
+                        }
+                        self.prev_owned = owned;
+                    }
                     let dropped = w.take_pool_exhausted();
                     if dropped > 0 {
                         self.pool_dropped_total += dropped;
@@ -2014,9 +2158,13 @@ impl ApplicationHandler for App {
                 // (remc1 :52434: pitch_8 = u16_329/2) — casts still
                 // aim along the full published pitch.
                 let aim = a.pitch + (b.pitch - a.pitch) * alpha;
-                let view_pitch = match self.cfg.controls.models.thrust {
-                    config::ThrustModel::Mc1 => aim * 0.5,
-                    config::ThrustModel::Enhanced => aim,
+                // Faithful only: the horizon bank from the filtered
+                // roll stick, full value (remc1 :52432 — the missing
+                // turn cue). The enhanced mouse-look stays flat by
+                // player directive.
+                let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
+                    config::ThrustModel::Mc1 => (aim * 0.5, a.roll + (b.roll - a.roll) * alpha),
+                    config::ThrustModel::Enhanced => (aim, 0.0),
                 };
                 let cam = CameraView {
                     x: lerp_wrap(a.x, b.x),
@@ -2024,6 +2172,7 @@ impl ApplicationHandler for App {
                     z: lerp_wrap(a.z, b.z),
                     yaw: a.yaw + (b.yaw - a.yaw) * alpha,
                     pitch: view_pitch - kick,
+                    roll: view_roll,
                     fov_y: FOV_Y,
                 };
                 // Spell UI quads (book grid or in-flight HUD).
@@ -2215,7 +2364,7 @@ impl ApplicationHandler for App {
                         }
                     }
                     // The autoaim crosshair (P-class predictor;
-                    // `enhancements.crosshair`, C toggles): the
+                    // `render.debug.crosshair`, C toggles): the
                     // white-edged cross at the TRUE aim point (full
                     // aim pitch — the faithful camera runs half), and
                     // +/x lock markers on the target each hand's
@@ -2322,6 +2471,7 @@ impl ApplicationHandler for App {
                 let s = STICK_PER_PIXEL * self.cfg.controls.preferences.mouse_sensitivity;
                 self.stick.x = (self.stick.x + dx as f32 * s).clamp(-127.0, 127.0);
                 self.stick.y = (self.stick.y - dy as f32 * s).clamp(-127.0, 127.0);
+                self.stick_idle_ticks = 0;
             } else {
                 let s = MOUSE_SENSITIVITY * self.cfg.controls.preferences.mouse_sensitivity;
                 self.mouse.yaw += dx as f32 * s;
@@ -2341,24 +2491,24 @@ struct Args {
     tileset: Option<u8>,
     /// Config file path; None = the default `mgcarpet.json` lookup.
     config: Option<PathBuf>,
-    /// CLI override of `enhancements.smooth_shading`; None = use config.
+    /// CLI override of `render.enhancement.smooth_shading`; None = use config.
     smooth_shading: Option<bool>,
-    /// CLI override of `enhancements.map_trigger_areas`.
+    /// CLI override of `render.debug.map_trigger_areas`.
     map_triggers: Option<bool>,
-    /// CLI override of `enhancements.health_bars`.
+    /// CLI override of `render.debug.health_bars`.
     health_bars: Option<bool>,
     crosshair: Option<bool>,
-    /// CLI override of `enhancements.dev_spells`.
+    /// CLI override of `gameplay.cheat.dev_spells`.
     dev_spells: Option<bool>,
-    /// CLI override of `enhancements.plausible_spellbook`.
+    /// CLI override of `dev.plausible_spellbook`.
     plausible_spellbook: Option<bool>,
-    /// CLI override of `enhancements.prune_owned_jars`.
+    /// CLI override of `gameplay.enhancement.prune_owned_jars`.
     prune_owned_jars: Option<bool>,
-    /// CLI override of `enhancements.invincible`.
+    /// CLI override of `gameplay.cheat.invincible`.
     invincible: Option<bool>,
-    /// CLI override of `enhancements.expose_jar_spells`.
+    /// CLI override of `render.enhancement.expose_jar_spells`.
     expose_jar_spells: Option<bool>,
-    /// CLI override of `enhancements.grace_meter`.
+    /// CLI override of `render.debug.grace_meter`.
     grace_meter: Option<bool>,
     /// CLI overrides of the `flight` tier enums; None = use config.
     thrust: Option<config::ThrustModel>,
@@ -2380,6 +2530,7 @@ struct Args {
     /// Entity-pool size override (limit-removing dev flag, G-class);
     /// None = the game's pristine chassis value (1000).
     pool_slots: Option<usize>,
+    awake_range: Option<u32>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -2407,6 +2558,7 @@ fn parse_args() -> Result<Args, String> {
     let mut spell_selector = None;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
+    let mut awake_range = None;
     let mut pool_slots = None;
 
     /// `--level` accepts a package path or the path-free shorthand
@@ -2551,6 +2703,14 @@ fn parse_args() -> Result<Args, String> {
                 }
                 pool_slots = Some(n);
             }
+            "--awake-range" => {
+                let n: u32 = it
+                    .next()
+                    .ok_or("--awake-range needs a tile count (0 = always awake)")?
+                    .parse()
+                    .map_err(|e| format!("--awake-range: {e}"))?;
+                awake_range = Some(n);
+            }
             "--help" | "-h" => {
                 return Err(format!(
                     "usage: mgcarpet [--level <game:index> | <baked/.../level-NNN.mgcl>] \
@@ -2558,6 +2718,7 @@ fn parse_args() -> Result<Args, String> {
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
                      [--crosshair|--no-crosshair] \
+                     [--health-bars|--no-health-bars] \
                      [--dev-spells|--no-dev-spells] \
                      [--plausible-spellbook|--no-plausible-spellbook] \
                      [--prune-owned-jars|--no-prune-owned-jars] \
@@ -2570,7 +2731,7 @@ fn parse_args() -> Result<Args, String> {
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
-                     [--pool-slots N]\n\
+                     [--pool-slots N] [--awake-range TILES (0 = always awake)]\n\
                      enhancements persist in {} (see crates/mgc-app/src/config.rs)",
                     config::DEFAULT_PATH
                 ));
@@ -2604,6 +2765,7 @@ fn parse_args() -> Result<Args, String> {
         anim_turn,
         terrain_features,
         pool_slots,
+        awake_range,
     })
 }
 
@@ -2760,9 +2922,17 @@ fn run_screenshot(
     }
     // HUD transparency: the config decides (same path as live play);
     // MGC_HUD_OPAQUE overrides for A/B captures — by VALUE, so
-    // MGC_HUD_OPAQUE=0 forces transparent and =1 forces opaque.
+    // MGC_HUD_OPAQUE=0 forces transparent and =1 forces opaque; an
+    // unrecognized value warns and defers to the config.
     let hud_transparent = match std::env::var("MGC_HUD_OPAQUE") {
-        Ok(v) => v == "0" || v.is_empty(),
+        Ok(v) => match v.as_str() {
+            "" | "0" | "false" | "off" => true,
+            "1" | "true" | "on" => false,
+            other => {
+                eprintln!("MGC_HUD_OPAQUE={other} not understood (use 0/1); using config");
+                cfg_hud_transparent
+            }
+        },
         Err(_) => cfg_hud_transparent,
     };
     renderer.set_hud_transparent(hud_transparent);
@@ -2827,6 +2997,7 @@ fn run_screenshot(
         z,
         yaw: yaw_deg.to_radians(),
         pitch: pitch_deg.to_radians(),
+        roll: 0.0,
         fov_y: FOV_Y,
     };
     renderer.render(&cam).map_err(|e| format!("render: {e}"))?;
@@ -2908,11 +3079,23 @@ fn main() -> std::process::ExitCode {
         cfg.dev.plausible_spellbook = v;
     }
     // The entity pool is an OFFLINE parameter: CLI wins over config, and
-    // the effective value is reflected back for the summary.
+    // the effective value is reflected back for the summary. The config
+    // path applies the CLI's 2..=60000 guard too — slot indices are u16,
+    // and an unvalidated 70000 would silently truncate the free stack.
     let pool_slots = args
         .pool_slots
         .or(cfg.sim.parameters.entity_pool_size.map(|n| n as usize));
+    if let Some(n) = pool_slots
+        && !(2..=60000).contains(&n)
+    {
+        eprintln!("error: sim.parameters.entity_pool_size must be in 2..=60000 (slots are u16)");
+        return std::process::ExitCode::FAILURE;
+    }
     cfg.sim.parameters.entity_pool_size = pool_slots.map(|n| n as u32);
+    // Same offline pattern for the wake radius: CLI wins over config,
+    // effective value reflected back for the summary.
+    let awake_range = args.awake_range.or(cfg.sim.parameters.awake_range);
+    cfg.sim.parameters.awake_range = awake_range;
 
     // First-run / stale-epoch auto-bake: regenerate the baked tree
     // from the original game data before touching it.
@@ -2928,6 +3111,7 @@ fn main() -> std::process::ExitCode {
         cfg.dev.plausible_spellbook,
         cfg.gameplay.enhancement.prune_owned_jars,
         pool_slots,
+        awake_range,
     ) {
         Ok(l) => l,
         Err(e) => {
@@ -3007,6 +3191,7 @@ fn main() -> std::process::ExitCode {
     if cfg.controls.models.altitude == config::AltitudeModel::ExtendedLift {
         println!("          E/Q float up/down (extended lift, capped at the highest terrain),");
     }
+    println!("          Backspace full-stops the carpet (speed + steering; MC2's stabilize key),");
     println!("          Space respawns after death (at your castle; no castle = level restart),");
     println!("          Shift+L demolishes your own castle one level per press,");
     println!("          LMB/RMB cast the equipped hand's spell (hold = channel),");

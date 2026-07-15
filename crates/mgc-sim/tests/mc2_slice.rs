@@ -17,6 +17,9 @@ use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
     (p.join("mc2/level-000.mgcl").exists() && p.join("assets/mc2-night/build.tab.bin").exists())
@@ -94,24 +97,28 @@ fn find_creature(w: &World, class: u8, model: u8) -> Option<(f32, f32)> {
 }
 
 /// The scripted slice run; returns the checkpoint hashes.
-fn run(root: &std::path::Path) -> Option<Vec<u64>> {
+fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     let mut w = build_world(root)?;
     let idle = PlayerCommand::default();
     let mut hashes = vec![w.state_hash()];
+    let mut obs = vec![w.observable_digest()];
 
     // A: idle far from everything — awake pass + wander cadences.
     hover(&mut w, 16.0, 16.0, 64, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // B: the type-5 fly-to objective at (115, 212).
     hover(&mut w, 115.5, 212.5, 8, idle);
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // C: park next to a goat — awake + flee.
     if let Some((vx, vz)) = find_creature(&w, 5, 1) {
         hover(&mut w, vx + 2.0, vz, 96, idle);
     }
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // D: NATIVE fireballs at the nearest goat (playtest-13: the MC1
     // equip bridge no longer casts on the MC2 column — the seeded
@@ -135,6 +142,7 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
         }
     }
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
     // E: materialize the rest of the authored population (archers
     // sit behind dispositions the sweep never trips) and provoke
@@ -154,21 +162,26 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
         hover(&mut w, ax + 3.0, az, 160, idle);
     }
     hashes.push(w.state_hash());
+    obs.push(w.observable_digest());
 
-    Some(hashes)
+    Some((hashes, obs))
 }
 
 #[test]
 fn mc2_slice_behaviors_and_goldens() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
-    let Some(got) = run(&root) else {
-        eprintln!("skipped: mc2 level-000 has no baked terrain");
+    let Some((got, obs)) = run(&root) else {
+        common::golden_skip("mc2 level-000 has no baked terrain");
         return;
     };
-    assert_eq!(got, run(&root).unwrap(), "slice is not deterministic");
+    assert_eq!(
+        (got.clone(), obs.clone()),
+        run(&root).unwrap(),
+        "slice is not deterministic"
+    );
     println!("mc2 slice hashes: {got:#018x?}");
 
     // Re-run the script with behavior probes at each phase.
@@ -611,17 +624,56 @@ fn mc2_slice_behaviors_and_goldens() {
         // INERT (word=0, no matching THING), so nothing is held and no
         // behaviour changed — the move is purely the StageVar table
         // joining the hash (present from load → every checkpoint moved).
-        0xdae4409d5a6168a8, // post-init (GenerateEvents + dis 0)
-        0xd751a3f1cadddcef, // A: 64 idle ticks afield
-        0x5d8778a11af07cb5, // B: the type-5 fly-to latched
-        0x8ed6f81e715cee0e, // C: goat awake/flee window
-        0x41bc756f3088cc9e, // D: fireball combat over the goat
-        0x2de9f1b1aa9971e8, // E: census + villager/archer provocation
+        // Re-pinned 2026-07-16 (DELIBERATE), Session E creature
+        // batch: spawn ordinals now land in f63 for goats/archers/
+        // villagers (E10 — archer wake stagger de-degenerates, herd
+        // cadences de-sync), the move-core retries terrain-test
+        // unconditionally (E13), the awake pass hidden-skips and
+        // runs the sphere family (E15), m18 tank timers/turn caps
+        // are the pinned retail values incl. the RNG-draw pattern
+        // (E3/E4), m19 firebug rolls every 4th tick with cascading
+        // overrides (E2), plus the E27 nit batch (xtype=3 ctors,
+        // packmate life gate, kill-credit self-id, disc-center
+        // rounding). Every checkpoint moved (ordinals + mover from
+        // load). The file's behavioral asserts all still pass —
+        // certified flows (archer wanted fire, wander cadence, kill
+        // exclusions) verified unchanged. MC1 goldens untouched.
+        // Re-pinned 2026-07-16 (DELIBERATE), Session J2 hash field
+        // tags — LAYOUT-ONLY, zero behavior change: conditional
+        // hash-quiet fields now write a distinct tag byte when they
+        // contribute (the adjacent-field aliasing fix). Instrumented:
+        // the ONLY tag firing here is 3 — mc2_spell_tokens, live from
+        // load at bitmask 3 (the fireball+possess baseline), so every
+        // checkpoint gains exactly one tag byte. MC1 goldens unmoved
+        // (no tagged field ever fires on an MC1 world).
+        0xda20b93276d574ff, // post-init (GenerateEvents + dis 0)
+        0xe2cadc9f6ec10f44, // A: 64 idle ticks afield
+        0xbb4389b816e7746f, // B: the type-5 fly-to latched
+        0xc3cf5bec4c73f562, // C: goat awake/flee window
+        0xaa56ce1af33172ac, // D: fireball combat over the goat
+        0xd49af55e5b761f2f, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
         "the MC2 slice diverged from its goldens — if DELIBERATE, \
          re-pin (--nocapture) and say so in the commit"
+    );
+
+    // The layout-INDEPENDENT companion golden (review J3, pinned
+    // 2026-07-16) — see state_hash.rs: survives hashed-layout
+    // re-pins; moves ONLY with real behavior.
+    const OBSERVABLE: [u64; 6] = [
+        0x9a885593f099242c,
+        0x836e974d5671c993,
+        0x9b4b2bb045a13ad7,
+        0xc8609292536fb202,
+        0xd3c573ce941990e7,
+        0x578e99face09a467,
+    ];
+    assert_eq!(
+        obs, OBSERVABLE,
+        "the OBSERVABLE projection diverged — this is a behavior \
+         change, never a layout-only one"
     );
 }
 
@@ -640,11 +692,11 @@ fn mc2_slice_behaviors_and_goldens() {
 #[test]
 fn mc2_level000_mission_chain() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
     let Some(mut w) = build_world(&root) else {
-        eprintln!("skipped: mc2 level-000 has no baked terrain");
+        common::golden_skip("mc2 level-000 has no baked terrain");
         return;
     };
     let idle = PlayerCommand::default();
@@ -736,12 +788,12 @@ fn mc2_level000_mission_chain() {
 #[test]
 fn mc2_par1_spells_overrides() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
     let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc2-night")).unwrap();
     let Some(sp) = bundle.spells.as_deref() else {
-        eprintln!("skipped: bundle predates spells.bin (rebake)");
+        common::golden_skip("bundle predates spells.bin (rebake)");
         return;
     };
     let assets = FeatureAssets::parse(
@@ -801,12 +853,12 @@ fn mc2_par1_spells_overrides() {
 #[test]
 fn mc2_dome_raises_and_finalizes() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
     let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc2-night")).unwrap();
     let Some(sp) = bundle.spells.as_deref() else {
-        eprintln!("skipped: bundle predates spells.bin (rebake)");
+        common::golden_skip("bundle predates spells.bin (rebake)");
         return;
     };
     let assets = FeatureAssets::parse(
@@ -898,7 +950,7 @@ fn mc2_dome_raises_and_finalizes() {
 #[test]
 fn mc2_doomsday_pyramid_extinction_script() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
     let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc2-night")).unwrap();

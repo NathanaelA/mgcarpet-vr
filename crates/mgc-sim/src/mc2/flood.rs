@@ -253,10 +253,16 @@ impl Gen {
         }
         let rolled = forced || self.ent_rand(i) % 7 == 0;
         if rolled && !suppressed && self.ent[j].f28 & 1 != 0 {
-            let amt = (self.ent[j].act_life + 1).max(1) as u32;
+            // Retail adds life+1 with NO floor (EF:29435); the u32
+            // mail clamps the never-in-practice life < -1 arm to 0
+            // (G9m — the old .max(1) was invented).
+            let amt = (self.ent[j].act_life + 1).max(0) as u32;
             let id = self.ent[i].id24;
             self.mail_write(MailTarget::Pool(j), 0, amt, id);
-            // sub_6D8B0(id, 0x14, 1) — Phase 4.2.
+            // +1 per near-guaranteed kill (EF:29437) — F3.
+            if id == crate::mc1::mobs::PLAYER_TARGET {
+                self.mc2_cast_xp.0.push((id, 20, 1));
+            }
         }
     }
 
@@ -392,11 +398,17 @@ impl Gen {
             self.ent[j].act_life = -1;
             self.ent[j].f46 = 0; // fontTypeIndex_0x3D_61
         }
+        let castles_hit = castles.len() as i32;
         for j in castles {
             self.ent[j].flags |= F_QUAKE_GRAB;
             self.ent[j].f50 = 30; // the grab timer = the blast shake
             self.ent[j].f40 = i as u16; // owner = self slot
             self.mail_write(MailTarget::Pool(j), 0, amt, id);
+        }
+        // +2 per grabbed CASTLE (EF:29374 `v8 += 2`; buildings do
+        // NOT count) — F3.
+        if castles_hit != 0 && id == crate::mc1::mobs::PLAYER_TARGET {
+            self.mc2_cast_xp.0.push((id, 20, 2 * castles_hit));
         }
         let cx = (self.ent[i].x.wrapping_add(128) >> 8) as u8;
         let cy = (self.ent[i].y.wrapping_add(128) >> 8) as u8;

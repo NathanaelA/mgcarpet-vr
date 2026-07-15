@@ -107,22 +107,26 @@ impl Gen {
     }
 
     /// `sub_48E60` → `sub_48F20` (EF:32623/32647) — MIN terrain
-    /// height over the PERIMETER of the `w x h` tile box at (ox, oy):
-    /// top row `y=oy` + bottom row `y=oy+h` over `w` cells, then
-    /// right column `x=ox+w` + left column `x=ox` over `h` cells
-    /// (init 250; the u8 coords wrap like retail's byte packing).
+    /// height over the PERIMETER of the tile box at (ox, oy), with
+    /// retail's TRANSPOSED walk kept verbatim (G9g): the row loop
+    /// runs `h` samples in +x with the bottom row at `y = oy + w`;
+    /// the column loop runs `w` samples in +y at `x = ox + h`
+    /// (right) and `ox` (left). Square boxes — every caller today —
+    /// are unaffected; a non-square authored box genuinely samples
+    /// this transposed shape (init 250; u8 coords wrap like
+    /// retail's byte packing).
     pub(crate) fn mc2_perimeter_min(&self, ox: u8, oy: u8, w: u16, h: u16) -> i32 {
         let mut result = 250i32;
         let mut x = ox;
-        for _ in 0..w {
+        for _ in 0..h {
             result = result.min(self.t.height[tile(x, oy)] as i32);
-            result = result.min(self.t.height[tile(x, oy.wrapping_add(h as u8))] as i32);
+            result = result.min(self.t.height[tile(x, oy.wrapping_add(w as u8))] as i32);
             x = x.wrapping_add(1);
         }
         let mut y = oy;
-        for _ in 0..h {
+        for _ in 0..w {
             result = result.min(self.t.height[tile(x, y)] as i32);
-            result = result.min(self.t.height[tile(x.wrapping_sub(w as u8), y)] as i32);
+            result = result.min(self.t.height[tile(x.wrapping_sub(h as u8), y)] as i32);
             y = y.wrapping_add(1);
         }
         result
@@ -291,12 +295,15 @@ impl Gen {
             }
         }
         // Combat + audio pulse: type-0 area beat (sub_116A0) unless
-        // apocalypse; the hit count's sub_6D8B0 row-18 XP credit
-        // banks with 4.2. Rumble sound 10 every tick; the apocalypse
-        // adds 63 on the byte_0x3E_62 (f63) 4-tick cadence.
+        // apocalypse, with the row-18 batch XP (EF:23388-95) — F3.
+        // Rumble sound 10 every tick; the apocalypse adds 63 on the
+        // byte_0x3E_62 (f63) 4-tick cadence.
         if !apocalypse {
             let amt = self.ent[i].f140 as u32;
-            let _hits = self.area_write(i, 0, amt, ctx, false, false);
+            let hits = self.area_write(i, 0, amt, ctx, false, false);
+            if hits != 0 && self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
+                self.mc2_cast_xp.0.push((self.ent[i].id24, 18, hits as i32));
+            }
         }
         self.snd(10, i);
         if apocalypse && self.ent[i].f63 & 3 == 0 {

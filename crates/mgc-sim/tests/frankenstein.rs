@@ -1,24 +1,26 @@
-//! The Phase-2 EXIT CHECKPOINT (ROADMAP "MULTI-GAME ARCHITECTURE"):
-//! the FRANKENSTEIN smoke test — real MC2 level data pushed through
-//! the superset seam under the MC2 profile (MC2 chassis: 1200-slot
-//! THING table, u16 entity LCG, 29 buckets, instant win latch; MC2
-//! verb column: every arm pending → serves MC1 with telemetry).
+//! Born as the Phase-2 EXIT CHECKPOINT (ROADMAP "MULTI-GAME
+//! ARCHITECTURE"): the FRANKENSTEIN smoke test — real MC2 level data
+//! pushed through the superset seam under the MC2 profile (MC2
+//! chassis: 1200-slot THING table, u16 entity LCG, 29 buckets,
+//! instant win latch; MC2 verb column).
 //!
-//! Expected shape, per the seam contract: mostly placeholders and a
-//! few MISFIT spawns (MC2 things the MC1 arms happen to understand
-//! come up as MC1 entities — trees, feeders, worms), graceful
-//! degradation everywhere else, NO crash, and a deterministic state
-//! stream. The feature assets are the mc1-temperate stand-in (MC2
-//! bundles carry no search/build members yet) — this is deliberately
-//! "MC1 content through the seam at an MC2 level".
-//!
-//! Disposable scaffolding: when Phase 3 lands real MC2 arms, the
-//! fallback assertions here shrink verb by verb.
+//! At HEAD the MC2 verb columns are LIVE and the world builds against
+//! the real mc2-night bundle (search/build/bldgprm + sprites — see
+//! `build_world` below), so the original "placeholders + MISFIT
+//! spawns over mc1-temperate stand-ins" expectation is history. What
+//! the test still guards: level-000 loads through the seam, ticks
+//! with NO crash, produces a deterministic state stream, and the
+//! fallback ledger stays exactly as pinned at the bottom (damage
+//! still notes the shared player-intake fallback; awake/movement/
+//! objective serve MC2 natively).
 
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
+
+#[path = "common/mod.rs"]
+mod common;
 
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
@@ -91,11 +93,11 @@ fn run(root: &std::path::Path) -> Option<Vec<u64>> {
 #[test]
 fn mc2_level_through_the_seam_no_crash_deterministic() {
     let Some(root) = baked_root() else {
-        eprintln!("skipped: baked mc2 data not present");
+        common::golden_skip("baked mc2 data not present");
         return;
     };
     let Some(got) = run(&root) else {
-        eprintln!("skipped: mc2 level-000 has no baked terrain (genlevel oracle absent)");
+        common::golden_skip("mc2 level-000 has no baked terrain (genlevel oracle absent)");
         return;
     };
     // Bit-identical across runs: the MC2 chassis (u16 entity rand,

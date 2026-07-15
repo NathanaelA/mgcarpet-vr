@@ -837,7 +837,8 @@ fn mc2_fools_mana_decoys_do_not_count_toward_world_mana() {
         },
     );
     w.tick(pose, PlayerCommand::default()); // recompute the census
-    assert_eq!(count(&w, 10, 39) >= 6, true, "six decoys exist");
+    let decoys = count(&w, 10, 39);
+    assert!(decoys >= 6, "six decoys exist, got {decoys}");
     let after = w.loadout().world_mana;
     // Six decoys carry up to 6×1999 ≈ 12000 fake mana; excluded, the
     // denominator barely moves (a decoy would add thousands each).
@@ -931,10 +932,12 @@ fn mc2_summon_army_spawns_an_allied_ring() {
 #[test]
 fn mc2_earthquake_travel_scales_with_tier() {
     // The earthquake trail's travel distance scales with the spell level
-    // (~2× per tier): life_0x1A {16,32,64} → trail life 8× = {128,256,512}
-    // ticks (player-confirmed 2026-07-14; docs/spell-audit/00-PLAN.md).
-    // The (10,15) trail persists for its life as it travels, so its total
-    // presence is a proxy for reach.
+    // (~2× per tier): life_0x1A {16,32,64} = the trail life 1× (F1,
+    // sub_66160 EF:63333-35 — the 8× law is whirlwind's alone; the
+    // 2026-07-14 player confirmation was of the RELATIVE scaling,
+    // which holds under both laws). The (10,15) trail persists for
+    // its life as it travels, so its total presence is a proxy for
+    // reach.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -969,10 +972,91 @@ fn mc2_earthquake_travel_scales_with_tier() {
         0
     };
     let (l0, l2) = (trail_life(0), trail_life(2));
-    // life_0x1A {16,64} → trail life {128,512}: tier 2 lives ~4× longer.
+    // life_0x1A {16,64}: tier 2 lives ~4× longer.
     assert!(
         l0 > 0 && l2 >= l0 * 2,
         "tier-2 earthquake trail lives much longer than tier 0 (l0={l0}, l2={l2})"
+    );
+}
+
+#[test]
+fn mc2_quake_family_lifetimes_scale_with_tier() {
+    // F2 (P1-22): the action wrappers stamp per-tier LIVES onto the
+    // ground effects — Crater `sub_66280` life = charge {6,12,24};
+    // Gravity Well `sub_677A0` life = charge {16,26,40}; Tremor
+    // `sub_677D0` BOTH lives = charge & 0xF0 {48,80,112}. Before the
+    // fix every tier ran the ctor default (40/120/120).
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    // A cast spot with a DRY LANE ahead (north): the tremor carrier
+    // (model 23) has no water exemption — a wet tile under the
+    // descent is a faithful splash-fizzle, not an impact.
+    let dry_lane_spot = |w: &World| -> (u16, u16) {
+        let p = w.planes();
+        let dry = |cx: u16, cy: u16| {
+            let t = (cy as usize % 256) * 256 + (cx as usize % 256);
+            p.angle[t] & 0x80 == 0 && p.angle[t] & 0xF != 0
+        };
+        for cy in (24..222u16).step_by(3) {
+            for cx in (24..232u16).step_by(3) {
+                if (0..8).all(|d| dry(cx, cy.wrapping_sub(d))) {
+                    return (cx, cy);
+                }
+            }
+        }
+        panic!("no dry lane on the level");
+    };
+    let effect_life = |spell: u8, tier: u8, model: u8, pitch: f32| -> i32 {
+        let mut w = build_world(&root).unwrap();
+        w.set_dev_spells(true);
+        let (cx, cy) = dry_lane_spot(&w);
+        let (px, pz) = (cx as f32 + 0.5, cy as f32 + 0.5);
+        let alt = w.ground_height_tiles(px, pz) + 2.0;
+        // Quake/crater carriers hug the ground at any pitch; the
+        // gravity-well/tremor carriers FLY — pitch them into the
+        // terrain so the impact spawns inside the scan window.
+        let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, pitch, 0.0);
+        w.mc2_select_spell(spell, tier, 0);
+        w.tick(
+            pose,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+            if let Some(e) = w
+                .debug_pool()
+                .1
+                .iter()
+                .find(|e| e.class == 10 && e.model == model && e.life >= 0)
+            {
+                return e.life;
+            }
+        }
+        0
+    };
+    // Crater (16) → (10,11): 6 vs 24 (read on the first visible tick,
+    // so allow the one-tick decay slack).
+    let (c0, c2) = (effect_life(16, 0, 11, 0.0), effect_life(16, 2, 11, 0.0));
+    assert!(
+        c0 > 0 && c0 <= 6 && c2 > 3 * c0,
+        "crater life is the tier charge 6/24 (c0={c0}, c2={c2})"
+    );
+    // Gravity Well (20) → (10,67): 16 vs 40.
+    let (g0, g2) = (effect_life(20, 0, 67, -0.6), effect_life(20, 2, 67, -0.6));
+    assert!(
+        g0 > 0 && g0 <= 16 && g2 >= 2 * g0,
+        "gravity well life is the tier charge 16/40 (g0={g0}, g2={g2})"
+    );
+    // Tremor (15) → (10,71): 48 vs 112 (charge & 0xF0).
+    let (t0, t2) = (effect_life(15, 0, 71, -0.6), effect_life(15, 2, 71, -0.6));
+    assert!(
+        t0 > 0 && t0 <= 48 && t2 > 2 * t0,
+        "tremor life is charge & 0xF0 = 48/112 (t0={t0}, t2={t2})"
     );
 }
 

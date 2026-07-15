@@ -17,6 +17,13 @@
 //!   converging on 2× the raw ±127 input. Signed 16-bit throughout —
 //!   remc1's `uint16` filter fields are a transcription bug (the
 //!   sign-division idioms prove the original sign-extended).
+//!   NOTE for future reviewers: the decompile's
+//!   `(env − (my_sign32(env)<<2) + my_sign32(env)) >> 2` (:49018,
+//!   EF:38061) IS plain trunc-toward-zero `/4` — `my_sign32` returns
+//!   −1 for negative and 0 otherwise (engine_support.cpp:2962,
+//!   Basic.cpp:3), a negative-indicator, NOT a signum. Reading it as
+//!   a true ±1 signum invents a phantom asymmetric rounding law
+//!   (refuted 2026-07-16); same for the `−7·sign >> 3` yaw feed.
 //! - Speed is command-driven: Up/Down step the TARGET ±16/tick held,
 //!   clamp ±80, and the target HOLDS on release (no stop key, no
 //!   decay — the authentic quantum-hunting standstill); actual speed

@@ -41,7 +41,7 @@
 //! spell launch (EF:30195-30284) bank with the 4.2 cast machinery —
 //! pieces stand, dwell and ground-clamp, but do not fire yet.
 
-use crate::mc1::features::{Gen, lcg32, tile};
+use crate::mc1::features::{Gen, tile};
 
 /// `sub_60810` (EF:61695): capacity by level. Differs from MC1 at
 /// every level >= 1; the level-7 sentinel is 300M (MC1: 30M).
@@ -200,13 +200,19 @@ impl Gen {
     /// gated on free pool slots (retail sub_4A810: "spheres can
     /// spawn"), one level off + ejector + roster, then a 5-tick
     /// settle into the repaint. No slots → retry from action 4.
+    /// The ejector runs UNCONDITIONALLY (EF:61228) — a level-0
+    /// death inside the downgrade still spills the whole bank as
+    /// owned (10,39) spheres (the eject's f26==0 arm); roster at
+    /// level 0 is a no-op and the state writes are inert on a dead
+    /// entity, matching retail's straight-line body (G2, review
+    /// 2026-07-15 P1-20). Ordering nuance vs retail: our downgrade
+    /// death arm front-loads the balloon conversion where retail
+    /// leaves it to the roster call, so balloon-spheres draw before
+    /// the bank-spheres (same mana, different LCG interleave).
     fn mc2_castle_destroy(&mut self, i: usize) {
         if !self.free.is_empty() {
             self.mc2_castle_downgrade(i);
             self.ent[i].tick70 = 4;
-            if self.ent[i].flags & 0x400 != 0 {
-                return; // level 0 died inside the downgrade
-            }
             self.mc2_castle_eject(i);
             self.mc2_castle_roster(i);
             self.ent[i].f59 = 0;
@@ -236,7 +242,10 @@ impl Gen {
             self.ent[i].mail[0] = (0, 0);
             result = 1;
             // Owner "castle under attack" HUD flag (byte_0x195_405
-            // = 4) — ours is the player-side alert latch.
+            // = 4). APPROX (G9c): retail latches it for ANY owner
+            // (EF:61752); ours is a single player-side HUD latch —
+            // per-owner records land with a rival defense-AI
+            // consumer.
             if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                 self.castle_alert = 4;
             }
@@ -245,10 +254,12 @@ impl Gen {
         // the delivered (10,43) token writes our mail[5] = (10,
         // owner), the same protocol both columns share (sub_389F0
         // EF:28240 writes word_0x7C_124 = 10 + word_0x80_128 = id).
-        if self.ent[i].mail[5].1 != 0 {
-            let sender = self.ent[i].mail[5].1;
+        // Retail clears the channel only INSIDE the id match
+        // (EF:61754-58) — a non-matching value sticks forever
+        // (faithful quirk, G9b; never authored in practice).
+        if self.ent[i].mail[5].1 == self.ent[i].id24 && self.ent[i].mail[5].1 != 0 {
             self.ent[i].mail[5] = (0, 0);
-            if sender == self.ent[i].id24 && self.ent[i].f26 < 7 {
+            if self.ent[i].f26 < 7 {
                 self.ent[i].flags |= F_UPGRADE_ARMED;
             }
         }
@@ -257,8 +268,10 @@ impl Gen {
 
     /// `sub_60480` (EF:61563) — the LEVEL-UP: painter spawn, sound
     /// 10, level++, back to wait-for-painter, extents, ladder,
-    /// stage-piece rebuild. (+1 castle XP `sub_6D8B0(owner,2,1)`
-    /// EF:61596 banks with 4.2.)
+    /// stage-piece rebuild, +1 castle XP (`sub_6D8B0(owner,2,1)`
+    /// EF:61596 — the ladder that makes Fire/Lightning Tower tiers
+    /// selectable; the XP drain's spell-2 branch also re-syncs the
+    /// manifestation tier, retiring the cast-gate hack. F3).
     fn mc2_castle_upgrade(&mut self, i: usize) {
         let lvl = (self.ent[i].f26 + 1).clamp(1, 7);
         // The painter first — retail aborts the whole level-up if
@@ -274,6 +287,10 @@ impl Gen {
         self.mc2_castle_extents_ent(p, lvl as u8);
         self.mc2_castle_ladder(i);
         self.mc2_castle_stages(i);
+        let own = self.ent[i].id24;
+        if own == crate::mc1::mobs::PLAYER_TARGET {
+            self.mc2_cast_xp.0.push((own, 2, 1));
+        }
     }
 
     /// `sub_605E0` (EF:61612) — ONE LEVEL DOWN: 10% capacity mana
@@ -286,8 +303,12 @@ impl Gen {
             // castle over-filled past the normal cap ladder (the
             // level-0 mana-availability bug) can carry an f136 large
             // enough that `10 * f136` overflows i32 — player crash on
-            // shift+L downgrade 2026-07-13. Same integer result as
-            // retail's `10 * x / 100`.
+            // shift+L downgrade 2026-07-13. DOCUMENTED IDEALIZATION
+            // (G9n, FIDELITY.md): retail's i32 `10 * x / 100`
+            // overflows at the always-overflowing level-7 rung
+            // (10 × 300M) into a NEGATIVE cut — a maxed level-7
+            // castle downgrade *raises* its cap and scatters nothing.
+            // We keep the sane 10%.
             let cut = (10i64 * self.ent[i].f136 as i64 / 100) as i32;
             self.ent[i].f136 -= cut;
             self.mc2_castle_eject(i);
@@ -408,10 +429,13 @@ impl Gen {
         }
     }
 
-    /// `sub_11A10` (EF:4421) — the space check: (a) any class-10
-    /// model-2 OBJECT overlapping the next-level box → no room;
-    /// (b) scan the RING of newly-added border cells between the
-    /// current and next footprints — a cell with `mapAngle` bit7
+    /// `sub_11A10` (EF:4421) — the space check: (a) any OTHER CASTLE
+    /// (dword_38519 = the class-3 list, model-2 filter — EF:4449-51;
+    /// G1, review 2026-07-15 P1-19) overlapping the next-level box →
+    /// no room (z-term omitted: castle fov is pinned 0x4000 both
+    /// sides, so retail's |Δz+Δyaw| < 0x8000 is tautological);
+    /// (b) walk retail's QUIRKY partial ring of border cells between
+    /// the current and next footprints — a cell with `mapAngle` bit7
     /// (built/blocked), or on caves bit3 (SEALED), fails
     /// (`sub_11C80` EF:4543).
     pub(crate) fn mc2_castle_space_ok(&self, i: usize) -> bool {
@@ -430,8 +454,9 @@ impl Gen {
         for j in 1..self.ent.len() {
             let e = &self.ent[j];
             if j != i
-                && e.class64 == 10
+                && e.class64 == 3
                 && e.model65 == 2
+                && e.act_life >= 0
                 && e.flags & 0x400 == 0
                 && wd(e.x, x) < e.f80 as i32 + half_w
                 && wd(e.y, y) < e.f82 as i32 + half_h
@@ -452,8 +477,14 @@ impl Gen {
             let a = self.t.angle[tile(gx, gy)];
             a & 0x80 != 0 || (self.is_cave() && a & 8 != 0)
         };
-        // Top + bottom bands (my rows of full 2*ow width) and the
-        // left/right columns (mx wide over the inner rows).
+        // Retail's QUIRKY partial band walk, kept VERBATIM
+        // (EF:4464-4535; faithful-quirk ruling, G1): EVERY band —
+        // the two side slivers included — iterates `my` rows, so
+        // the side rows below oy+my and the whole EAST border
+        // column are never tested (my==0 ⇒ no ring cells at all).
+        // Band 4's first row starts at ox+ow−mx (near the CENTER,
+        // inside the inner footprint) and its x-cursor then resets
+        // to ox, duplicating band 3 one row down.
         for row in 0..my {
             for col in 0..2 * ow as u8 {
                 if blocked(ox.wrapping_add(col), oy.wrapping_add(row))
@@ -468,16 +499,19 @@ impl Gen {
                 }
             }
         }
-        for row in 0..(2 * ih) as u8 {
+        for row in 0..my {
             for col in 0..mx {
-                if blocked(ox.wrapping_add(col), oy.wrapping_add(my).wrapping_add(row))
-                    || blocked(
-                        ox.wrapping_add((2 * ow) as u8)
-                            .wrapping_sub(mx)
-                            .wrapping_add(col),
-                        oy.wrapping_add(my).wrapping_add(row),
-                    )
-                {
+                // Band 3 (left sliver at oy+my).
+                if blocked(ox.wrapping_add(col), oy.wrapping_add(my).wrapping_add(row)) {
+                    return false;
+                }
+                // Band 4 (the center-collapse walk).
+                let sx = if row == 0 {
+                    ox.wrapping_add(ow as u8).wrapping_sub(mx)
+                } else {
+                    ox
+                };
+                if blocked(sx.wrapping_add(col), oy.wrapping_add(my).wrapping_add(row)) {
                     return false;
                 }
             }
@@ -508,7 +542,16 @@ impl Gen {
         if spill <= 0 {
             return;
         }
-        let count = (spill / 1000).clamp(1, 32);
+        // Retail caps the count by the free-pool HEADROOM and splits
+        // the FULL spill across the clamped count (EF:61272-96) —
+        // fewer-but-bigger spheres on a short pool, never an
+        // under-eject (G9a). (Retail's zero-headroom arm spawns
+        // nothing after a failed GC pass; our free list is exact.)
+        let headroom = self.free.len() as i32;
+        if headroom == 0 {
+            return;
+        }
+        let count = (spill / 1000).clamp(1, 32).min(headroom);
         let mut share = spill / count;
         let (cx, cy, cz) = {
             let e = &self.ent[i];
@@ -528,8 +571,10 @@ impl Gen {
             // word_0x2C_44 vertical arc (EF:61286) — our ball pop
             // home is f46 (the MC1 column's shared machinery).
             self.ent[b].f46 = ((1024 - (cz.wrapping_sub(ground)) as i32) / 8) as i16;
-            let dist = (lcg32(&mut self.ent[i].rand) % 0x1400 + 3840) as i16;
-            let yaw = (lcg32(&mut self.ent[i].rand) & 0x7FF) as u16;
+            // The castle's rand_0x14_20 is a u16 (EF:61312-16) — the
+            // chassis u16 draw, not the raw 32-bit LCG (G7).
+            let dist = (self.ent_rand(i) % 0x1400 + 3840) as i16;
+            let yaw = (self.ent_rand(i) & 0x7FF) as u16;
             let mut pos = (cx, cy, cz);
             Self::polar_step(&mut pos, yaw, 0, dist);
             self.move_relink(b, pos.0, pos.1, pos.2);
@@ -633,7 +678,10 @@ impl Gen {
         // room, skipping the siblings' claims.
         let bank = self.mc2_owner_bank(own);
         let full = bank.saturating_add(self.ent[i].f140.max(0)) >= self.ent[i].f136;
-        let stagger = !alive.is_empty() && self.ent[i].f63 as usize % alive.len() == 0;
+        // Retail's stagger modulus is the QUOTA (sub_60400,
+        // EF:61405), not the live-fleet size — they differ only on
+        // a pool-starved shortfall (G9l).
+        let stagger = bq != 0 && self.ent[i].f63 as usize % bq == 0;
         for k in 0..alive.len() {
             let b = alive[k];
             if full {
@@ -759,6 +807,13 @@ impl Gen {
         use super::behavior::{BEHAVIOR, ROW_BASE};
         let t = self.ent[i].f146 as usize;
         let row = &BEHAVIOR[ROW_BASE + self.ent[i].row156 as usize];
+        // Stale-slot guard (2026-07-15): same latent retail bug as
+        // MC1 balloon_move — a recycled ball slot must not be
+        // "absorbed" as if it were still the claimed (10,39) ball.
+        if t != 0 && self.ent[t].class64 == 10 && self.ent[t].model65 != 39 {
+            self.ent[i].f146 = 0;
+            return;
+        }
         if t != 0 && self.ent[t].flags & 0x400 == 0 {
             let mut pos = {
                 let e = &self.ent[i];
@@ -876,6 +931,8 @@ impl Gen {
         if self.ent[i].act_life >= 0 && self.ent[i].mail[0].1 != 0 {
             let (amt, src) = self.ent[i].mail[0];
             self.ent[i].act_life -= amt as i32;
+            // APPROX (G9c): retail sets byte_0x197_407 for ANY
+            // owner (EF:61947); ours is the player-side HUD latch.
             if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                 self.balloon_alert = 4;
             }
@@ -951,10 +1008,13 @@ impl Gen {
             return false;
         };
         // The working frame = the level row's footprint, widened to
-        // the largest accumulated row (only bites at stage 7, whose
-        // BUILD00 row is a degenerate 1x1 — retail's scratch there
-        // writes OUTSIDE its buffer, a genuine memory stomp we
-        // cannot reproduce; the widened frame repaints sanely).
+        // the largest accumulated row. G9j correction (BUILD00 tab
+        // dumped 2026-07-16): rows 1-7 are 8/21/21/35/35/48/48 —
+        // monotone non-decreasing, row 7 = 48×48 like row 6; the
+        // 1×1 rows are 8-16 and are never a castle level. The old
+        // "row-7 degenerate 1×1 / retail memory stomp" story was
+        // FALSE, and this widening loop is a proven no-op for every
+        // reachable level (kept as belt-and-braces for modded tabs).
         let (mut w, mut h) = (def.w as usize, def.h as usize);
         for r in 1..=row {
             if let Some(rd) = self.assets.build_tab.get(r) {
@@ -971,12 +1031,16 @@ impl Gen {
             // ── phase B: settle, then finalize ──
             self.ent[i].f26 += 1;
             if self.ent[i].f26 == 0 {
-                // bit3 → bit7 over the footprint (EF:27737-45).
-                for dy in 0..h {
-                    for dx in 0..w {
-                        let t = tile(tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
-                        if self.t.angle[t] & 8 != 0 {
-                            self.t.angle[t] = (self.t.angle[t] & 0xF7) | 0x80;
+                // bit3 → bit7 over the footprint (EF:27737-45) —
+                // NON-CAVE only (EF:27729): on caves bit3 is the
+                // seal, owned by the ceiling-rise arm (G4).
+                if !self.is_cave() {
+                    for dy in 0..h {
+                        for dx in 0..w {
+                            let t = tile(tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
+                            if self.t.angle[t] & 8 != 0 {
+                                self.t.angle[t] = (self.t.angle[t] & 0xF7) | 0x80;
+                            }
                         }
                     }
                 }
@@ -1041,24 +1105,45 @@ impl Gen {
                 }
             }
         }
-        // (2) apply 1/countdown of each delta (EF:27846-70).
+        // (2) apply 1/countdown of each delta (EF:27846-70). The
+        // cave ceiling-rise arm (EF:27871-94) and the non-cave
+        // countdown==2 bit3 sweep (EF:27895) sit OUTSIDE the
+        // active-delta gate — they run for every frame cell (G4).
         for dy in 0..h {
             for dx in 0..w {
                 let d = delta[dy * w + dx];
-                if d == 0 {
-                    continue;
-                }
                 let (gx, gy) = (tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
                 let t = tile(gx, gy);
-                if self.t.height[t] == 0 || super::flood::burn_flags(self.t.tile_type[t]) {
-                    self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
-                    self.mc2_add_building_region(gx, gy, gx, gy);
+                if d != 0 {
+                    if self.t.height[t] == 0 || super::flood::burn_flags(self.t.tile_type[t]) {
+                        self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
+                        self.mc2_add_building_region(gx, gy, gx, gy);
+                    }
+                    self.t.height[t] = (self.t.height[t] as i32 + d / countdown) as u8;
+                    if countdown == 1 && self.t.angle[t] & 0x80 != 0 {
+                        // Last rise tick: clear bit7; on NON-cave
+                        // also set bit3 for phase B to re-promote
+                        // (EF:27859-69 — the cave seal arm below is
+                        // the only bit3 authority on caves).
+                        self.t.angle[t] &= 0x7F;
+                        if !self.is_cave() {
+                            self.t.angle[t] |= 8;
+                        }
+                    }
                 }
-                self.t.height[t] = (self.t.height[t] as i32 + d / countdown) as u8;
-                if countdown == 1 && self.t.angle[t] & 0x80 != 0 {
-                    // Last rise tick: clear bit7, set bit3 — phase B
-                    // re-promotes it (EF:27875-83).
-                    self.t.angle[t] = (self.t.angle[t] & 0x7F) | 8;
+                if self.is_cave() {
+                    // Carve the headroom bubble: ceiling eases to
+                    // max(floor, datum)+100, then the seal invariant
+                    // re-asserts (EF:27871-94).
+                    let floor = self.t.height[t] as i32;
+                    let tgt = (floor.max(datum) + 100).min(255);
+                    let c = self.t.ceiling[t] as i32;
+                    if tgt > c {
+                        self.t.ceiling[t] = (c + (tgt - c) / countdown) as u8;
+                    }
+                    self.cave_seal_fixup(t);
+                } else if countdown == 2 {
+                    self.t.angle[t] &= !8;
                 }
             }
         }
@@ -1125,12 +1210,23 @@ impl Gen {
                 }
             }
         }
-        self.mc2_retile_region(
-            tlx.wrapping_sub(1),
-            tly.wrapping_sub(1),
-            tlx.wrapping_add(w as u8),
-            tly.wrapping_add(h as u8),
-        );
+        // Retail's finalizer is the gated 3×3 height smoother over
+        // exactly the footprint (SetHeightmapByBuildingArea_48B50,
+        // EF:28171) — NOT a retile (G5, review 2026-07-15).
+        self.mc2_smooth_heights_region(tlx, tly, h as u8, w as u8);
+    }
+
+    /// `SetHeightmapByBuildingArea_48B50` (EF:32446) — the unstamp
+    /// finalizer: row-major over rows×cols from the origin, the
+    /// gated 3×3 floor smoother (`SetHeightmapByBuilding_48B90` =
+    /// [`Gen::mc2_smooth_pad_edge`]) on every cell (no 0xff skip,
+    /// no border).
+    fn mc2_smooth_heights_region(&mut self, x: u8, y: u8, rows: u8, cols: u8) {
+        for r in 0..rows {
+            for c in 0..cols {
+                self.mc2_smooth_pad_edge(x.wrapping_add(c), y.wrapping_add(r));
+            }
+        }
     }
 
     // ---- the (10,79) stage pieces --------------------------------------------
@@ -1258,12 +1354,22 @@ impl Gen {
         }
         match self.ent[i].f71 {
             0 => {
-                self.ent[i].f71 = 1;
+                // Latch the axis-home (retail axis_0x9A_154,
+                // EF:30182) — the 4.2 launch arms return here (G9k).
+                let e = &mut self.ent[i];
+                e.dest_x = e.x;
+                e.dest_y = e.y;
+                e.site_z = e.z;
+                e.f71 = 1;
             }
             1 => {
                 let d = self.mc2_rand(i);
                 self.ent[i].f44 = (d % 0x30 + 16) as u16;
                 self.ent[i].f71 = 2;
+                // Retail falls through into the first decrement the
+                // same tick (LABEL_9, EF:30190-96) — the dwell is
+                // seed−1 ticks long, not seed (G9k).
+                self.ent[i].f44 -= 1;
             }
             2 => {
                 self.ent[i].f44 = self.ent[i].f44.saturating_sub(1);
@@ -1287,10 +1393,10 @@ impl Gen {
 /// `x_BYTE_DB038` (EF:2594) — the (10,79) piece offsets per level,
 /// decoded (mc2-castle-data-tables.md §1.3): count at `[2*lvl]`,
 /// pair-slot index at `[1+2*lvl]`, pairs at `[18..]`. Tile offsets
-/// from the footprint's NW corner. L2/3, L4/5 and L6/7 share lists;
-/// level 7 keeps L6's 48x48 list against BUILD00's degenerate 1x1
-/// row 7 (retail reads it unclamped — the L7 extent quirk is the
-/// data doc's OPEN).
+/// from the footprint's NW corner. L2/3, L4/5 and L6/7 share lists —
+/// consistently: BUILD00 row 7 is 48×48 like row 6 (G9j correction;
+/// the 1×1 rows are 8-16, never a castle level — the old
+/// "degenerate row 7" story was false).
 const MC2_STAGE_PARTS: [&[(u8, u8)]; 8] = [
     &[],
     &[(4, 4)],
@@ -1327,7 +1433,7 @@ fn mc2_stage_parts(lvl: u8) -> &'static [(u8, u8)] {
 #[cfg(test)]
 mod tests {
     use crate::chassis::ChassisParams;
-    use crate::mc1::features::{FeatureAssets, Gen, Planes};
+    use crate::mc1::features::{BuildDef, FeatureAssets, Gen, Planes, tile};
     use crate::verbs::VerbSet;
 
     fn flat_gen() -> Gen {
@@ -1373,6 +1479,181 @@ mod tests {
         // Must not panic on `10 * i32::MAX`.
         g.mc2_castle_downgrade(i);
         assert_eq!(g.ent[i].f26, 6, "one level off, no overflow");
+    }
+
+    /// flat_gen + a synthetic BUILD00 (rows 0/1 = 3×3, row 2 = 5×5,
+    /// all cells inert 0xff/0xff) so the space check and the
+    /// destroy path run their full bodies.
+    fn castle_gen() -> Gen {
+        let mut g = flat_gen();
+        g.assets.build_tab = vec![
+            BuildDef {
+                offset: 0,
+                w: 3,
+                h: 3,
+            },
+            BuildDef {
+                offset: 0,
+                w: 3,
+                h: 3,
+            },
+            BuildDef {
+                offset: 0,
+                w: 5,
+                h: 5,
+            },
+        ];
+        g.assets.build_dat = vec![0xff; 2 * 25];
+        g
+    }
+
+    fn place_castle(g: &mut Gen, x: u16, y: u16, lvl: i16, own: u16) -> usize {
+        let i = g.new_event().expect("castle slot");
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.f26 = lvl;
+            e.id24 = own;
+            e.act_life = 1;
+        }
+        let z = g.ground_z(x, y) as i16;
+        g.link(i, x, y, z);
+        g.mc2_castle_extents(i, lvl.clamp(0, 7) as u8);
+        i
+    }
+
+    /// G1 (review 2026-07-15 P1-19): the "no room" scan reads the
+    /// class-3 castle list (retail dword_38519 + model-2 filter,
+    /// EF:4449-51) — another CASTLE in the next-level box blocks;
+    /// a (10,2) prop at the same spot must NOT.
+    #[test]
+    fn space_check_blocks_on_castles_not_props() {
+        let mut g = castle_gen();
+        let a = place_castle(&mut g, 100 << 8, 100 << 8, 1, 1);
+        assert!(g.mc2_castle_space_ok(a), "clear ground upgrades fine");
+        let b = place_castle(&mut g, 101 << 8, 100 << 8, 1, 2);
+        assert!(!g.mc2_castle_space_ok(a), "a rival castle blocks");
+        // Swap the blocker to a (10,2) prop: retail never scans it.
+        g.ent[b].class64 = 10;
+        assert!(g.mc2_castle_space_ok(a), "a (10,2) prop does not block");
+    }
+
+    /// G2 (review 2026-07-15 P1-20): a castle driven to death spills
+    /// its ENTIRE stored bank as owner-tagged (10,39) spheres — the
+    /// eject runs unconditionally after the downgrade (EF:61228),
+    /// even when the level-0 death happened inside it.
+    #[test]
+    fn castle_death_spills_the_whole_bank() {
+        let mut g = castle_gen();
+        let i = place_castle(&mut g, 100 << 8, 100 << 8, 1, 7);
+        g.ent[i].f136 = 50_000; // capacity
+        g.ent[i].f140 = 20_000; // stored bank
+        g.mc2_castle_destroy(i);
+        assert_ne!(g.ent[i].flags & 0x400, 0, "level-1 destroy kills");
+        let spilled: i32 = (1..g.ent.len())
+            .filter(|&j| {
+                j != i
+                    && g.ent[j].class64 == 10
+                    && g.ent[j].model65 == 39
+                    && g.ent[j].f144 == 7
+                    && g.ent[j].flags & 0x400 == 0
+            })
+            .map(|j| g.ent[j].f140)
+            .sum();
+        assert_eq!(spilled, 20_000, "the whole bank rides out as spheres");
+    }
+
+    /// G5 (review 2026-07-15): the unstamp finalizer is the gated
+    /// 3×3 floor smoother (`SetHeightmapByBuilding_48B90`,
+    /// EF:32475), not a retile: floor = integer average of the
+    /// natural 3×3 neighbours; any building-material corner sample
+    /// (terrain type 6..=0x22) vetoes the cell.
+    #[test]
+    fn unstamp_smoother_averages_natural_neighbours() {
+        let mut g = flat_gen();
+        let t = tile(50, 50);
+        g.t.height[t] = 200;
+        g.mc2_smooth_pad_edge(50, 50);
+        assert_eq!(g.t.height[t] as u32, (200 + 8 * 100) / 9, "3×3 average");
+        let t2 = tile(60, 60);
+        g.t.height[t2] = 200;
+        g.t.tile_type[tile(59, 59)] = 0x10; // building material
+        g.mc2_smooth_pad_edge(60, 60);
+        assert_eq!(g.t.height[t2], 200, "corner sample gate vetoes");
+    }
+
+    /// G4 (review 2026-07-15): a castle painted on a CAVE level
+    /// carves the headroom bubble — ceiling eases to
+    /// max(floor, datum)+100 (EF:27871-94) — and the cave seal
+    /// invariant `(ceiling > floor) ⟺ bit3 clear` holds over the
+    /// footprint; the non-cave bit3 blind-set / bit3→bit7 phase-B
+    /// promote must NOT run (EF:27729, 27866-67).
+    #[test]
+    fn cave_painter_carves_headroom_and_keeps_the_seal() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: vec![120; 0x10000],
+        };
+        // Synthetic BUILD00: rows 0/1 share a 3×3 footprint, every
+        // cell height-target 40, no paint codes.
+        let mut build_dat = Vec::new();
+        for _ in 0..9 {
+            build_dat.extend_from_slice(&[0xff, 40]);
+        }
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: vec![
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+                BuildDef {
+                    offset: 0,
+                    w: 3,
+                    h: 3,
+                },
+            ],
+            build_dat,
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        let mut g = Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2);
+        let i = g.new_event().expect("painter slot");
+        {
+            let e = &mut g.ent[i];
+            e.class64 = 10;
+            e.model65 = 42;
+            e.f40 = 0; // no parent castle
+            e.f71 = 1; // BUILD00 row 1
+            e.f59 = 0; // repaint settle (-1)
+            e.x = 50 << 8;
+            e.y = 50 << 8;
+            e.z = 100 << 5; // datum 100
+            e.flags &= !2;
+        }
+        for _ in 0..2000 {
+            if g.ent[i].flags & 0x400 != 0 {
+                break;
+            }
+            g.mc2_castle_painter_tick(i);
+        }
+        assert_ne!(g.ent[i].flags & 0x400, 0, "painter finished");
+        for gy in 49..=51u8 {
+            for gx in 49..=51u8 {
+                let t = tile(gx, gy);
+                let (floor, ceil, angle) = (g.t.height[t], g.t.ceiling[t], g.t.angle[t]);
+                assert_eq!(floor, 140, "target = c[1] 40 + datum 100");
+                assert_eq!(ceil, 240, "headroom = max(floor,datum)+100");
+                assert_eq!(angle & 8, 0, "open cell: bit3 clear");
+                assert_eq!(angle & 0x80, 0, "no phase-B bit7 promote on caves");
+            }
+        }
     }
 
     /// Decode the verbatim `x_BYTE_DB038` bytes (EF:2594) and prove

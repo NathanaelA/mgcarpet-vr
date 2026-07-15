@@ -11,12 +11,15 @@
 //! arms. [`crate::flight`] is the precedent: per-game movers behind
 //! an enum picked at the boundary, replay-recordable.
 //!
-//! **Phase-2 state**: every MC2 arm is declared but PENDING — its
-//! dispatch falls back to the MC1 implementation and notes the
-//! fallback (graceful degradation at the seam: never crash, tell the
-//! truth in telemetry). Phase 3 lands the real arms one verb at a
-//! time; the dispatch match in this file is exactly where that code
-//! change goes.
+//! **State at HEAD**: the MC2 port columns are LANDED (Phases 3-4,
+//! the 2026-07-10..12 columns). A few dispatch sites deliberately
+//! still note a fallback where the shared MC1 routine IS the serving
+//! implementation: the player damage intake (MC2's channels/XP
+//! decorators ride the widened combat mail instead) and the MC1-spell
+//! acquire paths under an MC2 world — tests/frankenstein.rs pins that
+//! ledger. The telemetry stays as the safety net: any arm that isn't
+//! natively served degrades gracefully to MC1 and tells the truth in
+//! `World::verb_fallbacks`.
 //!
 //! Two inventory rows deliberately carry NO enum:
 //! - **Tick orchestration** — the 4-phase skeleton is IDENTICAL
@@ -42,7 +45,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AwakeVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`AwakeVerb::Mc1`].
+    /// LIVE — the MC2 two-scan with the type-flag byte policy
+    /// (dispatched in `mc1::world`'s awake pass).
     Mc2,
 }
 
@@ -54,7 +58,7 @@ pub enum AwakeVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MovementVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`MovementVerb::Mc1`].
+    /// LIVE — the MC2 roster brain (mc2::roster / mc2::multipart).
     Mc2,
 }
 
@@ -65,7 +69,8 @@ pub enum MovementVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TargetingVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`TargetingVerb::Mc1`].
+    /// LIVE — the MC2 acquire column (extended subtype key,
+    /// designated-target pre-acquire, table-driven homing caps).
     Mc2,
     /// Hidden Worlds: identical to [`TargetingVerb::Mc1`] for every
     /// acquire scan (the creature/wizard/possess cones are all 0x71),
@@ -88,7 +93,10 @@ pub enum TargetingVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DamageVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`DamageVerb::Mc1`].
+    /// LIVE — the MC2 intake channels + spell-XP decorators ride the
+    /// widened (owner, spell, amount) combat mail; the PLAYER-intake
+    /// dispatch itself still serves the shared MC1 routine and notes
+    /// the fallback (tests/frankenstein.rs pins it).
     Mc2,
 }
 
@@ -107,7 +115,9 @@ pub enum DamageVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjectiveVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`ObjectiveVerb::Mc1`].
+    /// LIVE — the MC2 stage/objective machine (mc2::stagevars +
+    /// the stage engine), including the spawn-side stage binding
+    /// hooked at the spawn seam per the SCOPE NOTE above.
     Mc2,
 }
 
@@ -117,7 +127,9 @@ pub enum ObjectiveVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CorpseVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`CorpseVerb::Mc1`].
+    /// LIVE — MC2 spell-token scatter + mana-sphere split/merge, in
+    /// the mc2 death handlers (not routed through `corpse_drop`; an
+    /// MC2 world reaching the MC1 drop notes the fallback).
     Mc2,
 }
 
@@ -128,7 +140,8 @@ pub enum CorpseVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommitGateVerb {
     Mc1,
-    /// PENDING (Phase 3): falls back to [`CommitGateVerb::Mc1`].
+    /// LIVE — the MC2 water/blocked-flag/cave-steer gate
+    /// (`player_mc2_gate`), zeroing target speed on block.
     Mc2,
 }
 
@@ -150,8 +163,8 @@ pub enum CommitGateVerb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FlightVerb {
     Mc1,
-    /// PENDING (Phase 4 — deferred out of the Phase-3 slice, see
-    /// ROADMAP): falls back to [`FlightVerb::Mc1`].
+    /// LIVE — the MC2 mover (`crate::flight::mc2_move`, Phase 4.4:
+    /// tuning row 66/104, clearance 256, cave-only speed-zero).
     Mc2,
 }
 
@@ -239,8 +252,8 @@ impl VerbSet {
         flight: FlightVerb::Mc1,
     };
 
-    /// The pristine MC2 column — every arm pending in Phase 2 (falls
-    /// back to MC1 with telemetry); Phase 3 lands them one by one.
+    /// The pristine MC2 column — every arm LIVE at HEAD (the
+    /// Phase 3-4 port columns; `verb_fallbacks` reports none).
     pub const MC2: VerbSet = VerbSet {
         awake: AwakeVerb::Mc2,
         movement: MovementVerb::Mc2,

@@ -342,7 +342,7 @@ pub fn bake_mc1_audio(
     // Music: the AdLib arrangement (`MUSIC<bank>-0`, the `-0` driver
     // digit is AdLib per remc1 :54030 — 0xA002 loads inst/drum.bnk)
     // rendered through OPL3 with the game's own banks, FLAC per song.
-    // When the host can render General MIDI (fluidsynth + a GM
+    // When the host can render General MIDI (oxisynth + a GM
     // soundfont, see `crate::synth`), the `-2` arrangement (`GENERAL`,
     // remc1 :54029-30 — 0xA001 → digit 2) is baked alongside as the
     // optional GM upgrade; absent hosts still get the full FM bundle.
@@ -428,7 +428,7 @@ pub fn bake_mc1_audio(
                 None
             };
             // The GM upgrade: same song from the `-2` arrangement,
-            // fluidsynth-rendered ambient + danger stem (both scaled
+            // oxisynth-rendered ambient + danger stem (both scaled
             // by ONE factor — the overlay sum is what must not clip).
             let mut gm_file = None;
             let mut gm_danger_file = None;
@@ -529,7 +529,7 @@ pub fn bake_mc1_audio(
 /// - samples: `SOUND/SOUND.DAT`, best shipped tier;
 /// - music: the `SOUND/MUSIC.DAT` GM bank-0 XMI sub-songs (the "C2" =
 ///   Magic Carpet 2 set — GAME1/2/3 = the MapType tracks Night/Day/
-///   Cave, SETUP = menu) rendered through fluidsynth — retail gameplay
+///   Cave, SETUP = menu) rendered through oxisynth — retail gameplay
 ///   music is NEVER the redbook, and bank 0 (not the `-music2` bank-1
 ///   "C1"/MC1 set) is the default. cc119-tagged channels are the
 ///   war/danger layers
@@ -548,14 +548,19 @@ pub fn bake_mc2_audio(
     };
     let image = image.to_path_buf();
     let cue_path = image.with_extension("ins");
+    // A missing cue sheet loses ONLY the redbook voiceover rip —
+    // sounds.bin and the music renders still bake (review 2026-07-15
+    // D3: this used to drop the whole mc2-audio bundle while printing
+    // "skipping redbook rip").
     let cue = match std::fs::read_to_string(&cue_path) {
-        Ok(c) => c,
+        Ok(c) => Some(c),
         Err(_) => {
             eprintln!(
-                "note: mc2: no cue sheet at {} — skipping redbook rip",
+                "note: mc2: no cue sheet at {} — speech clips will not be baked \
+                 (sounds + music proceed)",
                 cue_path.display()
             );
-            return Ok(Vec::new());
+            None
         }
     };
 
@@ -631,7 +636,7 @@ pub fn bake_mc2_audio(
                     BakeError::Level(
                         Path::new("SOUND/MUSIC.DAT").to_path_buf(),
                         0,
-                        format!("GM bank 1 has no sub-song {idx}"),
+                        format!("GM bank 0 has no sub-song {idx}"),
                     )
                 })?;
                 let err = |e: String| {
@@ -711,53 +716,57 @@ pub fn bake_mc2_audio(
         &serde_json::to_vec_pretty(&music).expect("music index serializes"),
     )?;
 
-    // Voiceover: slice each rip track by its CdTracks_DB080 row.
-    let image_len = std::fs::metadata(&image)
-        .map_err(|e| BakeError::Io(image.clone(), e))?
-        .len();
-    let tracks = crate::redbook::parse_cue(&cue, image_len / crate::redbook::SECTOR)
-        .map_err(|e| BakeError::Level(cue_path.clone(), 0, e))?;
-    let speech_dir = dir.join("speech");
-    std::fs::create_dir_all(&speech_dir).map_err(|e| BakeError::Io(speech_dir.clone(), e))?;
+    // Voiceover: slice each rip track by its CdTracks_DB080 row —
+    // only with a cue sheet; an empty speech index otherwise.
     let mut speech = SpeechIndex { clips: Vec::new() };
-    for (row, entry) in crate::cdtracks::CD_TRACKS.iter().enumerate() {
-        // Table row r = level r → rip track r+2 (duration-fit proof
-        // in the trace; row 27 implies track 29 = dead data).
-        let rip_number = entry.track as u32 + 1;
-        let Some(track) = tracks.iter().find(|t| t.number == rip_number) else {
-            continue;
-        };
-        let pcm = crate::redbook::read_track(&image, *track)
-            .map_err(|e| BakeError::Io(image.clone(), e))?;
-        for (seg, &(start, len)) in entry.segments.iter().enumerate() {
-            if len == 0 {
-                continue; // empty slot — retail no-ops on length 0
-            }
-            let start_ms = crate::cdtracks::frames_to_ms(start);
-            let len_ms = crate::cdtracks::frames_to_ms(len);
-            let rate = u64::from(crate::redbook::RATE);
-            let a = (u64::from(start_ms) * rate / 1000 * 2) as usize;
-            let b = (u64::from(start_ms + len_ms) * rate / 1000 * 2) as usize;
-            let (a, b) = (a.min(pcm.len()), b.min(pcm.len()));
-            if a >= b {
-                println!("note: mc2 speech: row {row} seg {seg} out of track — skipped");
+    if let Some(cue) = &cue {
+        let image_len = std::fs::metadata(&image)
+            .map_err(|e| BakeError::Io(image.clone(), e))?
+            .len();
+        let tracks = crate::redbook::parse_cue(cue, image_len / crate::redbook::SECTOR)
+            .map_err(|e| BakeError::Level(cue_path.clone(), 0, e))?;
+        let speech_dir = dir.join("speech");
+        std::fs::create_dir_all(&speech_dir).map_err(|e| BakeError::Io(speech_dir.clone(), e))?;
+        for (row, entry) in crate::cdtracks::CD_TRACKS.iter().enumerate() {
+            // Table row r = level r → rip track r+2 (duration-fit proof
+            // in the trace; row 27 implies track 29 = dead data).
+            let rip_number = entry.track as u32 + 1;
+            let Some(track) = tracks.iter().find(|t| t.number == rip_number) else {
                 continue;
+            };
+            let pcm = crate::redbook::read_track(&image, *track)
+                .map_err(|e| BakeError::Io(image.clone(), e))?;
+            for (seg, &(start, len)) in entry.segments.iter().enumerate() {
+                if len == 0 {
+                    continue; // empty slot — retail no-ops on length 0
+                }
+                let start_ms = crate::cdtracks::frames_to_ms(start);
+                let len_ms = crate::cdtracks::frames_to_ms(len);
+                let rate = u64::from(crate::redbook::RATE);
+                let a = (u64::from(start_ms) * rate / 1000 * 2) as usize;
+                let b = (u64::from(start_ms + len_ms) * rate / 1000 * 2) as usize;
+                let (a, b) = (a.min(pcm.len()), b.min(pcm.len()));
+                if a >= b {
+                    println!("note: mc2 speech: row {row} seg {seg} out of track — skipped");
+                    continue;
+                }
+                let flac =
+                    crate::flac::encode(&pcm[a..b], 2, crate::redbook::RATE).map_err(|e| {
+                        BakeError::Level(image.clone(), 0, format!("row {row} seg {seg}: {e}"))
+                    })?;
+                let member = format!("speech/level-{row:02}-seg-{seg}.flac");
+                emit(&member, &flac)?;
+                speech.clips.push(SpeechClip {
+                    row: row as u32,
+                    segment: seg as u32,
+                    file: member,
+                    ms: len_ms,
+                    source: format!(
+                        "redbook track {rip_number} @ {start_ms}..{}ms",
+                        start_ms + len_ms
+                    ),
+                });
             }
-            let flac = crate::flac::encode(&pcm[a..b], 2, crate::redbook::RATE).map_err(|e| {
-                BakeError::Level(image.clone(), 0, format!("row {row} seg {seg}: {e}"))
-            })?;
-            let member = format!("speech/level-{row:02}-seg-{seg}.flac");
-            emit(&member, &flac)?;
-            speech.clips.push(SpeechClip {
-                row: row as u32,
-                segment: seg as u32,
-                file: member,
-                ms: len_ms,
-                source: format!(
-                    "redbook track {rip_number} @ {start_ms}..{}ms",
-                    start_ms + len_ms
-                ),
-            });
         }
     }
     emit(
@@ -775,18 +784,25 @@ pub fn bake_mc2_audio(
             version: env!("CARGO_PKG_VERSION").into(),
         },
         sources: {
-            sources.push(BundleSource {
-                file: format!(
-                    "{} (redbook tracks)",
-                    image
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                ),
-                // Hashing the 400 MB image per bake is
-                // disproportionate; provenance is the cue sheet's
-                // digest instead.
-                sha256: hex(&Sha256::digest(cue.as_bytes())),
+            let image_name = image
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            sources.push(match &cue {
+                Some(cue) => BundleSource {
+                    file: format!("{image_name} (redbook tracks)"),
+                    // Hashing the 400 MB image per bake is
+                    // disproportionate; provenance is the cue sheet's
+                    // digest instead.
+                    sha256: hex(&Sha256::digest(cue.as_bytes())),
+                },
+                None => BundleSource {
+                    file: format!(
+                        "{image_name} (redbook tracks) — cue sheet MISSING, \
+                         speech clips not baked"
+                    ),
+                    sha256: String::new(),
+                },
             });
             sources
         },
