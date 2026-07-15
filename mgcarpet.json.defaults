@@ -5,25 +5,51 @@
     "music": true,
     "music_volume": 1.0,
     "sfx_volume": 1.0,
-    "sound": true
+    "sound": true,
+    "speech": true
   },
-  "enhancements": {
-    "crosshair": false,
-    "dev_spells": false,
-    "health_bars": false,
-    "hud_transparency": "mc1",
-    "invincible": false,
-    "map_owned_buildings": false,
-    "map_trigger_areas": false,
-    "plausible_spellbook": false,
-    "smooth_shading": false,
-    "spell_selector": "auto"
+  "controls": {
+    "models": {
+      "altitude": "faithful",
+      "thrust": "mc1"
+    },
+    "preferences": {
+      "bindings": "classic",
+      "invert_y": false,
+      "mouse_sensitivity": 1.0
+    }
   },
-  "flight": {
-    "altitude": "faithful",
-    "bindings": "classic",
-    "invert_y": false,
-    "mouse_sensitivity": 1.0,
-    "thrust": "mc1"
+  "dev": {
+    "plausible_spellbook": false
+  },
+  "gameplay": {
+    "cheat": {
+      "dev_spells": false,
+      "invincible": false
+    },
+    "enhancement": {
+      "prune_owned_jars": true,
+      "spell_selector": "auto"
+    }
+  },
+  "render": {
+    "debug": {
+      "crosshair": false,
+      "grace_meter": false,
+      "health_bars": false,
+      "map_trigger_areas": false
+    },
+    "enhancement": {
+      "expose_jar_spells": false,
+      "hud_transparency": "mc1",
+      "map_owned_buildings": false,
+      "smooth_shading": false
+    }
+  },
+  "sim": {
+    "options": {},
+    "parameters": {
+      "entity_pool_size": null
+    }
   }
 }

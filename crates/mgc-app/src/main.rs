@@ -13,6 +13,7 @@ mod bakecheck;
 mod campaign;
 mod config;
 mod entities;
+mod settings;
 mod ui;
 
 use std::path::{Path, PathBuf};
@@ -787,35 +788,20 @@ struct VirtualStick {
 
 struct App {
     level: LoadedLevel,
-    smooth_shading: bool,
-    /// Map trigger-volume overlay (enhancement/debug; V toggles).
-    map_triggers: bool,
-    /// Monster health bars (enhancement/debug; H toggles).
-    health_bars: bool,
-    /// The autoaim crosshair predictor (P-class instrument; C
-    /// toggles): true aim point + per-hand acquire lock markers.
-    crosshair: bool,
-    /// All spells + infinite mana (playtest instrument; G toggles).
-    dev_spells: bool,
-    /// The pre-mortality invincible player (config `invincible`).
-    invincible: bool,
-    /// The unfaithful spawn-grace strip (config `grace_meter`).
-    grace_meter: bool,
-    /// Tag spell jars with their spell's icon on map + main view
-    /// (config `expose_jar_spells`, debug).
-    expose_jar_spells: bool,
+    /// The single resolved options source of truth (defaults + config
+    /// file + CLI overrides, merged in `main`). Every option is read
+    /// live off this struct; runtime keys mutate it and re-apply, so a
+    /// future in-game menu drives the exact same path. See the
+    /// `settings` registry for the option taxonomy.
+    cfg: config::Config,
     /// Pickable-jar positions `(x, alt, z, spell)` for the floating
     /// main-view icons; rebuilt with the pose snapshot, empty when
-    /// `expose_jar_spells` is off.
+    /// `render.enhancement.expose_jar_spells` is off.
     jar_markers: Vec<(f32, f32, f32, u8)>,
     /// Space pressed since the last sim tick (respawn confirm).
     pending_respawn: bool,
     /// Shift+L pressed since the last sim tick (castle demolish).
     pending_demolish: bool,
-    /// Claimed dwellings highlighted on the map (MC2-style opt-in).
-    map_owned_buildings: bool,
-    /// HUD blends over the sky (faithful MC1) vs opaque (MC2 toggle).
-    hud_transparent: bool,
     /// Which spell-selection surfaces are live (config
     /// `spell_selector` resolved against the running game): the MC1
     /// map-screen spellbook and/or the MC2 CTRL-hold pane.
@@ -854,9 +840,6 @@ struct App {
     prev_flyer: Flyer,
     keys: HeldKeys,
     mouse: MouseAccum,
-    /// Flight-control tiers (thrust/altitude models mirror into the
-    /// sim; bindings + sensitivity are app-side input mapping).
-    flight: config::FlightConfig,
     stick: VirtualStick,
     /// Left/right button held while grabbed: the two casting hands.
     fire_held: bool,
@@ -888,41 +871,19 @@ struct App {
     misfits_reported: usize,
     /// Audio runtime (None in headless paths / when opening failed).
     audio: Option<mgc_audio::Audio>,
-    /// F1/F2 runtime toggles (the original's keys) over the config's
-    /// audio preferences.
-    sound_on: bool,
-    music_on: bool,
-    /// MC2 objective voiceovers (config `audio.speech`).
-    speech_on: bool,
-    sfx_volume: f32,
-    music_volume: f32,
 }
 
 impl App {
-    fn new(
-        mut level: LoadedLevel,
-        smooth_shading: bool,
-        map_triggers: bool,
-        health_bars: bool,
-        crosshair: bool,
-        dev_spells: bool,
-        invincible: bool,
-        grace_meter: bool,
-        expose_jar_spells: bool,
-        map_owned_buildings: bool,
-        hud_transparent: bool,
-        selector: config::SelectorSurfaces,
-        audio_cfg: &config::AudioConfig,
-        flight: config::FlightConfig,
-    ) -> Self {
+    fn new(mut level: LoadedLevel, cfg: config::Config) -> Self {
+        let is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
         // Audio: open the device, load the game's audio bundle, start
         // the level music. Any failure degrades to silence, never to
         // an unplayable game.
         let mut audio = None;
-        if audio_cfg.sound || audio_cfg.music {
+        if cfg.audio.sound || cfg.audio.music {
             let mut a = mgc_audio::Audio::open();
-            a.set_prefer_gm(audio_cfg.arrangement.prefer_gm());
-            if matches!(level.game, mgc_sim::ids::GameId::Mc2) {
+            a.set_prefer_gm(cfg.audio.arrangement.prefer_gm());
+            if is_mc2 {
                 a.set_mc2_danger_ramp();
             }
             if let Some(dir) = &level.audio_dir {
@@ -933,18 +894,18 @@ impl App {
                 eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
             }
             a.set_volumes(
-                if audio_cfg.sound {
-                    audio_cfg.sfx_volume
+                if cfg.audio.sound {
+                    cfg.audio.sfx_volume
                 } else {
                     0.0
                 },
-                if audio_cfg.music {
-                    audio_cfg.music_volume
+                if cfg.audio.music {
+                    cfg.audio.music_volume
                 } else {
                     0.0
                 },
             );
-            if audio_cfg.music {
+            if cfg.audio.music {
                 if let Some(track) = &level.music_track {
                     if let Err(e) = a.play_music(track, true) {
                         eprintln!("note: music: {e}");
@@ -957,11 +918,11 @@ impl App {
             Some(w) => Simulation::with_world(w),
             None => Simulation::with_terrain(level.height.clone()),
         };
-        sim.thrust_model = match flight.thrust {
+        sim.thrust_model = match cfg.controls.models.thrust {
             config::ThrustModel::Mc1 => mgc_sim::ThrustModel::Mc1,
             config::ThrustModel::Enhanced => mgc_sim::ThrustModel::Enhanced,
         };
-        sim.altitude_model = match flight.altitude {
+        sim.altitude_model = match cfg.controls.models.altitude {
             config::AltitudeModel::Faithful => mgc_sim::AltitudeModel::Faithful,
             config::AltitudeModel::ExtendedLift => mgc_sim::AltitudeModel::ExtendedLift,
         };
@@ -972,14 +933,17 @@ impl App {
         if let Some(w) = &mut sim.world {
             apply_instruments(
                 w,
-                dev_spells,
+                cfg.gameplay.cheat.dev_spells,
                 &level.plausible_spells,
                 &level.plausible_book_mc2,
-                invincible,
+                cfg.gameplay.cheat.invincible,
             );
         }
+        // Which spell-selection surfaces are live, resolved against the
+        // running game (MC2 owns exactly the CTRL pane).
+        let selector = cfg.gameplay.enhancement.spell_selector.resolve(is_mc2);
         let pane = selector.ctrl_pane.then(|| {
-            if matches!(level.game, mgc_sim::ids::GameId::Mc2) {
+            if is_mc2 {
                 ui::SelectorPane::mc2()
             } else {
                 ui::SelectorPane::mc1()
@@ -988,19 +952,10 @@ impl App {
         let prev_flyer = sim.flyer;
         Self {
             level,
-            smooth_shading,
-            map_triggers,
-            health_bars,
-            crosshair,
-            dev_spells,
-            invincible,
-            grace_meter,
-            expose_jar_spells,
+            cfg,
             jar_markers: Vec::new(),
             pending_respawn: false,
             pending_demolish: false,
-            map_owned_buildings,
-            hud_transparent,
             selector,
             ctrl_held: false,
             pane,
@@ -1017,7 +972,6 @@ impl App {
             prev_flyer,
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
-            flight,
             stick: VirtualStick::default(),
             fire_held: false,
             fire_right_held: false,
@@ -1033,12 +987,17 @@ impl App {
             pool_dropped_total: 0,
             misfits_reported: 0,
             audio,
-            sound_on: audio_cfg.sound,
-            music_on: audio_cfg.music,
-            speech_on: audio_cfg.speech,
-            sfx_volume: audio_cfg.sfx_volume,
-            music_volume: audio_cfg.music_volume,
         }
+    }
+
+    /// The HUD blends over the sky (faithful MC1) vs opaque solid
+    /// panels (the MC2 readability toggle). Derived live from
+    /// `render.enhancement.hud_transparency`.
+    fn hud_transparent(&self) -> bool {
+        matches!(
+            self.cfg.render.enhancement.hud_transparency,
+            config::HudTransparency::Mc1
+        )
     }
 
     /// Per-sim-tick audio: drain the world's sound requests into the
@@ -1053,7 +1012,7 @@ impl App {
         };
         if let Some(w) = &mut self.sim.world {
             let frame = w.take_audio(pose);
-            if self.sound_on {
+            if self.cfg.audio.sound {
                 for e in frame.events {
                     let source = if e.player {
                         mgc_audio::Source::Player
@@ -1075,7 +1034,7 @@ impl App {
             // levels 30-34 address row 0 (seg 4) / row 10 (seg 9) —
             // retail EF:41020-29, ported verbatim.
             if let Some(seg) = frame.speech {
-                if self.speech_on {
+                if self.cfg.audio.speech {
                     let lvl = self.level.level_number;
                     let (row, seg) = if (30..=34).contains(&lvl) {
                         if seg == 9 { (10, 9) } else { (0, 4) }
@@ -1097,7 +1056,7 @@ impl App {
     /// is the app-side path for view toggles the sim never sees.
     fn ui_ding(&mut self) {
         let Some(audio) = &mut self.audio else { return };
-        if !self.sound_on {
+        if !self.cfg.audio.sound {
             return;
         }
         let f = &self.sim.flyer;
@@ -1120,10 +1079,10 @@ impl App {
         self.misfits_reported = 0;
         apply_instruments(
             &mut w,
-            self.dev_spells,
+            self.cfg.gameplay.cheat.dev_spells,
             &self.level.plausible_spells,
             &self.level.plausible_book_mc2,
-            self.invincible,
+            self.cfg.gameplay.cheat.invincible,
         );
         w.terrain_dirty = true;
         w.entities_dirty = true;
@@ -1151,10 +1110,10 @@ impl App {
         // Keyboard turn rate: radians per tick (enhanced model only).
         let key_turn = 2.2 * TICK_DT;
         let book = self.book_open();
-        let mc1 = self.flight.thrust == config::ThrustModel::Mc1;
+        let mc1 = self.cfg.controls.models.thrust == config::ThrustModel::Mc1;
         // Explicit float up/down is the extended-lift enhancement; the
         // faithful altitude model has no vertical control at all.
-        let lift_keys = self.flight.altitude == config::AltitudeModel::ExtendedLift;
+        let lift_keys = self.cfg.controls.models.altitude == config::AltitudeModel::ExtendedLift;
         let mut input = FlightInput {
             thrust: axis(k.back, k.forward),
             strafe: axis(k.left, k.right),
@@ -1261,14 +1220,14 @@ impl App {
                     .map(|s| (s.width, s.height, s.flags))
             };
             self.level.billboards = entities::billboards_from_poses(self.level.game, &poses, dims);
-            if self.health_bars {
+            if self.cfg.render.debug.health_bars {
                 bars = entities::health_bars_from_poses(self.level.game, &poses, dims);
             }
             self.level.map_dots = entities::map_dots_from_poses(
                 self.level.game,
                 &poses,
                 &self.level.palette_rgba,
-                self.map_owned_buildings,
+                self.cfg.render.enhancement.map_owned_buildings,
                 self.level.mc2_env,
                 // MC1 derives its ~4 Hz claimed-ball blink from the
                 // tick; MC2's colorIndex_121 phases divide it.
@@ -1278,9 +1237,9 @@ impl App {
                 &poses,
                 &self.level.map_icons,
                 w.beyond_sight(),
-                self.expose_jar_spells,
+                self.cfg.render.enhancement.expose_jar_spells,
             );
-            self.jar_markers = if self.expose_jar_spells {
+            self.jar_markers = if self.cfg.render.enhancement.expose_jar_spells {
                 entities::jar_markers_from_poses(&poses)
             } else {
                 Vec::new()
@@ -1357,7 +1316,7 @@ impl App {
     fn map_overlay(&self) -> mgc_render::MapOverlay {
         mgc_render::MapOverlay {
             dots: self.level.map_dots.clone(),
-            areas: if self.map_triggers {
+            areas: if self.cfg.render.debug.map_trigger_areas {
                 self.level.map_areas.clone()
             } else {
                 Vec::new()
@@ -1514,8 +1473,8 @@ impl ApplicationHandler for App {
                     renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
                 }
                 renderer.set_billboards(self.level.billboards.clone());
-                renderer.set_smooth_shading(self.smooth_shading);
-                renderer.set_hud_transparent(self.hud_transparent);
+                renderer.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
+                renderer.set_hud_transparent(self.hud_transparent());
                 if let Some(sky) = mc2_sky_srgb(&self.level) {
                     renderer.set_sky_color(sky);
                 }
@@ -1570,7 +1529,7 @@ impl ApplicationHandler for App {
                             // everything under the G instrument in
                             // MC2 (mirrors the pane view's grant).
                             let mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
-                            let owned = (self.dev_spells && mc2)
+                            let owned = (self.cfg.gameplay.cheat.dev_spells && mc2)
                                 || spell
                                     .map(|c| {
                                         self.sim.world.as_ref().is_some_and(|w| {
@@ -1778,37 +1737,45 @@ impl ApplicationHandler for App {
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::F1) {
                     // The original's sound toggle (remc1 :20086).
-                    self.sound_on = !self.sound_on;
+                    self.cfg.audio.sound = !self.cfg.audio.sound;
                     if let Some(a) = &mut self.audio {
                         a.set_volumes(
-                            if self.sound_on { self.sfx_volume } else { 0.0 },
-                            if self.music_on {
-                                self.music_volume
+                            if self.cfg.audio.sound {
+                                self.cfg.audio.sfx_volume
+                            } else {
+                                0.0
+                            },
+                            if self.cfg.audio.music {
+                                self.cfg.audio.music_volume
                             } else {
                                 0.0
                             },
                         );
                     }
-                    println!("sound: {}", if self.sound_on { "on" } else { "off" });
+                    println!("sound: {}", if self.cfg.audio.sound { "on" } else { "off" });
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::F2) {
                     // The original's music toggle (remc1 :20100).
-                    self.music_on = !self.music_on;
+                    self.cfg.audio.music = !self.cfg.audio.music;
                     if let Some(a) = &mut self.audio {
-                        if self.music_on {
+                        if self.cfg.audio.music {
                             if let Some(track) = &self.level.music_track {
                                 let _ = a.play_music(track, true);
                             }
                             a.set_volumes(
-                                if self.sound_on { self.sfx_volume } else { 0.0 },
-                                self.music_volume,
+                                if self.cfg.audio.sound {
+                                    self.cfg.audio.sfx_volume
+                                } else {
+                                    0.0
+                                },
+                                self.cfg.audio.music_volume,
                             );
                         } else {
                             a.stop_music();
                         }
                     }
-                    println!("music: {}", if self.music_on { "on" } else { "off" });
+                    println!("music: {}", if self.cfg.audio.music { "on" } else { "off" });
                     return;
                 }
                 // Pause (retail P, drawing PAUSED at 132,50): the sim
@@ -1825,13 +1792,14 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyT) {
-                    self.smooth_shading = !self.smooth_shading;
+                    self.cfg.render.enhancement.smooth_shading =
+                        !self.cfg.render.enhancement.smooth_shading;
                     if let Some(r) = &mut self.renderer {
-                        r.set_smooth_shading(self.smooth_shading);
+                        r.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
                     }
                     println!(
                         "shading: {}",
-                        if self.smooth_shading {
+                        if self.cfg.render.enhancement.smooth_shading {
                             "smooth (enhanced)"
                         } else {
                             "per-tile (original)"
@@ -1840,14 +1808,15 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyV) {
-                    self.map_triggers = !self.map_triggers;
+                    self.cfg.render.debug.map_trigger_areas =
+                        !self.cfg.render.debug.map_trigger_areas;
                     let overlay = self.map_overlay();
                     if let Some(r) = &mut self.renderer {
                         r.update_map(&self.level.view, &overlay);
                     }
                     println!(
                         "map trigger overlay: {}",
-                        if self.map_triggers {
+                        if self.cfg.render.debug.map_trigger_areas {
                             "on (enhanced)"
                         } else {
                             "off (original)"
@@ -1883,13 +1852,13 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyG) {
-                    self.dev_spells = !self.dev_spells;
+                    self.cfg.gameplay.cheat.dev_spells = !self.cfg.gameplay.cheat.dev_spells;
                     if let Some(w) = &mut self.sim.world {
-                        w.set_dev_spells(self.dev_spells);
+                        w.set_dev_spells(self.cfg.gameplay.cheat.dev_spells);
                     }
                     println!(
                         "dev spells: {}",
-                        if self.dev_spells {
+                        if self.cfg.gameplay.cheat.dev_spells {
                             "on — all spells, infinite mana (playtest instrument)"
                         } else {
                             "off (authentic acquisition/mana)"
@@ -1898,8 +1867,8 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyH) {
-                    self.health_bars = !self.health_bars;
-                    if !self.health_bars {
+                    self.cfg.render.debug.health_bars = !self.cfg.render.debug.health_bars;
+                    if !self.cfg.render.debug.health_bars {
                         if let Some(r) = &mut self.renderer {
                             r.set_health_bars(Vec::new());
                         }
@@ -1908,7 +1877,7 @@ impl ApplicationHandler for App {
                     // tick while creatures move).
                     println!(
                         "monster health bars: {}",
-                        if self.health_bars {
+                        if self.cfg.render.debug.health_bars {
                             "on (debug enhancement)"
                         } else {
                             "off (original)"
@@ -1917,10 +1886,10 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyC) {
-                    self.crosshair = !self.crosshair;
+                    self.cfg.render.debug.crosshair = !self.cfg.render.debug.crosshair;
                     println!(
                         "autoaim crosshair: {}",
-                        if self.crosshair {
+                        if self.cfg.render.debug.crosshair {
                             "on (predictor instrument)"
                         } else {
                             "off (original)"
@@ -1928,7 +1897,7 @@ impl ApplicationHandler for App {
                     );
                     return;
                 }
-                let wasd = self.flight.bindings == config::Bindings::Wasd;
+                let wasd = self.cfg.controls.preferences.bindings == config::Bindings::Wasd;
                 let k = &mut self.keys;
                 match event.physical_key {
                     // Thrust/strafe keys by binding profile. Classic =
@@ -2048,7 +2017,7 @@ impl ApplicationHandler for App {
                 // (remc1 :52434: pitch_8 = u16_329/2) — casts still
                 // aim along the full published pitch.
                 let aim = a.pitch + (b.pitch - a.pitch) * alpha;
-                let view_pitch = match self.flight.thrust {
+                let view_pitch = match self.cfg.controls.models.thrust {
                     config::ThrustModel::Mc1 => aim * 0.5,
                     config::ThrustModel::Enhanced => aim,
                 };
@@ -2098,7 +2067,7 @@ impl ApplicationHandler for App {
                                 assets,
                                 &loadout,
                                 &vitals,
-                                self.hud_transparent,
+                                self.hud_transparent(),
                                 alert_blink,
                                 matches!(self.level.game, mgc_sim::ids::GameId::Mc2),
                                 mc2_book.as_ref(),
@@ -2133,14 +2102,15 @@ impl ApplicationHandler for App {
                                 let bv = self.sim.world.as_ref().map(|w| w.mc2_book_view());
                                 if let Some(bv) = bv {
                                     for s in 0..n {
-                                        owned[s] = bv.owned[s] || self.dev_spells;
+                                        owned[s] =
+                                            bv.owned[s] || self.cfg.gameplay.cheat.dev_spells;
                                         castable[s] = owned[s];
                                         cost[s] = bv.cost[s];
                                         // The G instrument keeps all
                                         // tiers exercisable (player
                                         // 2026-07-10); the earned
                                         // ceiling is the XP level.
-                                        max_level[s] = if self.dev_spells {
+                                        max_level[s] = if self.cfg.gameplay.cheat.dev_spells {
                                             pane.levels - 1
                                         } else {
                                             bv.levels[s]
@@ -2194,7 +2164,7 @@ impl ApplicationHandler for App {
                             size.0,
                             size.1,
                             (self.sim.tick / 8) % 2 == 0,
-                            self.grace_meter,
+                            self.cfg.render.debug.grace_meter,
                         ));
                     }
                     if self.paused {
@@ -2206,7 +2176,7 @@ impl ApplicationHandler for App {
                     // jar's spell icon over it in the main view (the
                     // map stamps are the other half). No fancy UI —
                     // the raw icon on a dark slab, health-bar style.
-                    if self.expose_jar_spells && !self.book_open() {
+                    if self.cfg.render.enhancement.expose_jar_spells && !self.book_open() {
                         if let Some(u) = &self.level.ui {
                             for &(x, alt, z, spell) in &self.jar_markers {
                                 let Some(id) = ui::spell_icon_sprite(self.level.game, spell) else {
@@ -2254,7 +2224,7 @@ impl ApplicationHandler for App {
                     // +/x lock markers on the target each hand's
                     // equipped spell would acquire this instant
                     // (World::aim_preview — the pure scan twin).
-                    if self.crosshair
+                    if self.cfg.render.debug.crosshair
                         && !self.book_open()
                         && vitals.state == mgc_sim::mc1::world::LifeState::Alive
                     {
@@ -2341,18 +2311,22 @@ impl ApplicationHandler for App {
             return;
         }
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-            let dy = if self.flight.invert_y { -dy } else { dy };
-            if self.flight.thrust == config::ThrustModel::Mc1 {
+            let dy = if self.cfg.controls.preferences.invert_y {
+                -dy
+            } else {
+                dy
+            };
+            if self.cfg.controls.models.thrust == config::ThrustModel::Mc1 {
                 // Relative motion integrates into the virtual stick
                 // POSITION (the original reads the DOS cursor offset
                 // from screen center, clamped ±127 — on a 320-wide
                 // screen that's ~0.8 stick units per pixel; modern
                 // default trades a little of that for precision).
-                let s = STICK_PER_PIXEL * self.flight.mouse_sensitivity;
+                let s = STICK_PER_PIXEL * self.cfg.controls.preferences.mouse_sensitivity;
                 self.stick.x = (self.stick.x + dx as f32 * s).clamp(-127.0, 127.0);
                 self.stick.y = (self.stick.y - dy as f32 * s).clamp(-127.0, 127.0);
             } else {
-                let s = MOUSE_SENSITIVITY * self.flight.mouse_sensitivity;
+                let s = MOUSE_SENSITIVITY * self.cfg.controls.preferences.mouse_sensitivity;
                 self.mouse.yaw += dx as f32 * s;
                 self.mouse.pitch -= dy as f32 * s;
             }
@@ -2877,7 +2851,7 @@ fn main() -> std::process::ExitCode {
         Some(p) => (p.clone(), true),
         None => (PathBuf::from(config::DEFAULT_PATH), false),
     };
-    let cfg = match config::Config::load(&config_path, explicit) {
+    let mut cfg = match config::Config::load(&config_path, explicit) {
         Ok(c) => {
             if config_path.exists() {
                 println!("config: {}", config_path.display());
@@ -2889,33 +2863,59 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let smooth_shading = args
-        .smooth_shading
-        .unwrap_or(cfg.enhancements.smooth_shading);
-    let map_triggers = args
-        .map_triggers
-        .unwrap_or(cfg.enhancements.map_trigger_areas);
-    let health_bars = args.health_bars.unwrap_or(cfg.enhancements.health_bars);
-    let crosshair = args.crosshair.unwrap_or(cfg.enhancements.crosshair);
-    let dev_spells = args.dev_spells.unwrap_or(cfg.enhancements.dev_spells);
-    let plausible_spellbook = args
-        .plausible_spellbook
-        .unwrap_or(cfg.enhancements.plausible_spellbook);
-    let prune_owned_jars = args
-        .prune_owned_jars
-        .unwrap_or(cfg.enhancements.prune_owned_jars);
-    let invincible = args.invincible.unwrap_or(cfg.enhancements.invincible);
-    let expose_jar_spells = args
-        .expose_jar_spells
-        .unwrap_or(cfg.enhancements.expose_jar_spells);
-    let grace_meter = args.grace_meter.unwrap_or(cfg.enhancements.grace_meter);
-    let flight = config::FlightConfig {
-        thrust: args.thrust.unwrap_or(cfg.flight.thrust),
-        altitude: args.altitude.unwrap_or(cfg.flight.altitude),
-        bindings: args.bindings.unwrap_or(cfg.flight.bindings),
-        mouse_sensitivity: cfg.flight.mouse_sensitivity,
-        invert_y: cfg.flight.invert_y,
-    };
+    // Fold the one-run CLI overrides into the resolved config, so `cfg`
+    // is the single source of truth from here on (the App reads it live;
+    // the startup summary and a future menu are views over it).
+    let en = &mut cfg.render.enhancement;
+    if let Some(v) = args.smooth_shading {
+        en.smooth_shading = v;
+    }
+    if let Some(v) = args.expose_jar_spells {
+        en.expose_jar_spells = v;
+    }
+    let de = &mut cfg.render.debug;
+    if let Some(v) = args.map_triggers {
+        de.map_trigger_areas = v;
+    }
+    if let Some(v) = args.health_bars {
+        de.health_bars = v;
+    }
+    if let Some(v) = args.crosshair {
+        de.crosshair = v;
+    }
+    if let Some(v) = args.grace_meter {
+        de.grace_meter = v;
+    }
+    if let Some(v) = args.thrust {
+        cfg.controls.models.thrust = v;
+    }
+    if let Some(v) = args.altitude {
+        cfg.controls.models.altitude = v;
+    }
+    if let Some(v) = args.bindings {
+        cfg.controls.preferences.bindings = v;
+    }
+    if let Some(v) = args.spell_selector {
+        cfg.gameplay.enhancement.spell_selector = v;
+    }
+    if let Some(v) = args.prune_owned_jars {
+        cfg.gameplay.enhancement.prune_owned_jars = v;
+    }
+    if let Some(v) = args.dev_spells {
+        cfg.gameplay.cheat.dev_spells = v;
+    }
+    if let Some(v) = args.invincible {
+        cfg.gameplay.cheat.invincible = v;
+    }
+    if let Some(v) = args.plausible_spellbook {
+        cfg.dev.plausible_spellbook = v;
+    }
+    // The entity pool is an OFFLINE parameter: CLI wins over config, and
+    // the effective value is reflected back for the summary.
+    let pool_slots = args
+        .pool_slots
+        .or(cfg.sim.parameters.entity_pool_size.map(|n| n as usize));
+    cfg.sim.parameters.entity_pool_size = pool_slots.map(|n| n as u32);
 
     // First-run / stale-epoch auto-bake: regenerate the baked tree
     // from the original game data before touching it.
@@ -2928,9 +2928,9 @@ fn main() -> std::process::ExitCode {
         &args.level,
         args.tileset,
         args.terrain_features,
-        plausible_spellbook,
-        prune_owned_jars,
-        args.pool_slots,
+        cfg.dev.plausible_spellbook,
+        cfg.gameplay.enhancement.prune_owned_jars,
+        pool_slots,
     ) {
         Ok(l) => l,
         Err(e) => {
@@ -2940,7 +2940,12 @@ fn main() -> std::process::ExitCode {
     };
 
     if let Some(out) = &args.map {
-        return match run_map(&level, out, args.map_scale, map_triggers) {
+        return match run_map(
+            &level,
+            out,
+            args.map_scale,
+            cfg.render.debug.map_trigger_areas,
+        ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -2954,13 +2959,13 @@ fn main() -> std::process::ExitCode {
             level,
             out,
             args.camera,
-            smooth_shading,
+            cfg.render.enhancement.smooth_shading,
             args.map_view,
             args.anim_turn,
-            map_triggers,
-            dev_spells,
+            cfg.render.debug.map_trigger_areas,
+            cfg.gameplay.cheat.dev_spells,
             matches!(
-                cfg.enhancements.hud_transparency,
+                cfg.render.enhancement.hud_transparency,
                 config::HudTransparency::Mc1
             ),
         ) {
@@ -2976,9 +2981,7 @@ fn main() -> std::process::ExitCode {
     // owns exactly one shape (the CTRL pane) — an explicit map-book
     // request there coerces with a note rather than inventing a
     // 26-spell in-map grid.
-    let selector_choice = args
-        .spell_selector
-        .unwrap_or(cfg.enhancements.spell_selector);
+    let selector_choice = cfg.gameplay.enhancement.spell_selector;
     let level_is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
     let selector = selector_choice.resolve(level_is_mc2);
     if level_is_mc2
@@ -2990,12 +2993,12 @@ fn main() -> std::process::ExitCode {
         println!("spell-selector: MC2 has no in-map spellbook — using the faithful CTRL pane");
     }
 
-    println!("mgcarpet {} — {}", env!("CARGO_PKG_VERSION"), level.label);
-    let move_keys = match flight.bindings {
+    println!("mgcarpet {}", env!("CARGO_PKG_VERSION"));
+    let move_keys = match cfg.controls.preferences.bindings {
         config::Bindings::Classic => "Up/Down arrows accel/decel, Left/Right strafe",
         config::Bindings::Wasd => "W/S accel/decel, A/D strafe",
     };
-    match flight.thrust {
+    match cfg.controls.models.thrust {
         config::ThrustModel::Mc1 => println!(
             "controls: faithful MC1 — mouse = stick (offset steers, recenter to fly straight),\n\
              \x20         {move_keys} (impulses: speed persists until countered),"
@@ -3004,7 +3007,7 @@ fn main() -> std::process::ExitCode {
             println!("controls: enhanced — mouse look, {move_keys} (hold-to-fly),")
         }
     }
-    if flight.altitude == config::AltitudeModel::ExtendedLift {
+    if cfg.controls.models.altitude == config::AltitudeModel::ExtendedLift {
         println!("          E/Q float up/down (extended lift, capped at the highest terrain),");
     }
     println!("          Space respawns after death (at your castle; no castle = level restart),");
@@ -3019,10 +3022,11 @@ fn main() -> std::process::ExitCode {
         println!("          hold Ctrl for the spell selector: click LMB/RMB to equip a hand,");
     }
     println!("          hover + 1-9,0 binds a quick key (in flight: equip, Shift = right hand),");
-    println!("          T smooth shading, H monster health bars (debug),");
-    println!(
-        "          G all spells + infinite mana (dev), V map trigger overlay, Esc twice quits"
-    );
+    println!("          Esc twice quits.");
+
+    // The structured options summary: every toggle, its current value,
+    // the alternatives (faithful `*`-marked), and how to change it.
+    settings::print_summary(&cfg, level.game, &level.label);
 
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
@@ -3031,25 +3035,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(
-        level,
-        smooth_shading,
-        map_triggers,
-        health_bars,
-        crosshair,
-        dev_spells,
-        invincible,
-        grace_meter,
-        expose_jar_spells,
-        cfg.enhancements.map_owned_buildings,
-        matches!(
-            cfg.enhancements.hud_transparency,
-            config::HudTransparency::Mc1
-        ),
-        selector,
-        &cfg.audio,
-        flight,
-    );
+    let mut app = App::new(level, cfg);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

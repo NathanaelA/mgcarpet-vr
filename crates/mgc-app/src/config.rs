@@ -15,8 +15,26 @@
 //! CLI flags override both for one run. Unknown fields are ignored
 //! (older binaries tolerate newer configs).
 //!
+//! # Taxonomy
+//!
+//! Options are grouped first by **domain** (where they act) and, within
+//! a domain, by **class** (how faithful they are). The domains:
+//!
+//! - **`sim`** — feeds the deterministic world model / the state-hash
+//!   goldens. Any non-default here means the run is not a faithful
+//!   fixture. Split into tunable `parameters` and discrete `options`.
+//! - **`render`** — presentation only, never touches the sim.
+//!   `enhancement` = fair visual/info opt-ins; `debug` = dev overlays
+//!   that visualise the real sim (not for normal play).
+//! - **`controls`** — input devices. `preferences` = neutral bindings/
+//!   sensitivity; `models` = the flight-control tiers.
+//! - **`audio`** — banks, voiceover, volumes. All faithful preferences.
+//! - **`gameplay`** — `enhancement` = fair play opt-ins; `cheat` =
+//!   otherwise-impossible power (invulnerability, all spells).
+//! - **`dev`** — pure troubleshooting instruments, never gameplay.
+//!
 //! ```json
-//! { "enhancements": { "smooth_shading": true } }
+//! { "render": { "enhancement": { "smooth_shading": true } } }
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -30,30 +48,144 @@ pub const DEFAULT_PATH: &str = "mgcarpet.json";
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub enhancements: Enhancements,
+    /// Options that feed the deterministic world model (state-hash
+    /// critical — any non-default here breaks faithful fixtures).
+    pub sim: SimConfig,
+    /// Presentation options — never touch the sim.
+    pub render: RenderConfig,
+    /// Input-device options: bindings, sensitivity, flight-control tiers.
+    pub controls: ControlsConfig,
+    /// Audio preferences.
     pub audio: AudioConfig,
-    pub flight: FlightConfig,
+    /// Play-affecting options: fair enhancements and power cheats.
+    pub gameplay: GameplayConfig,
+    /// Development/troubleshooting instruments.
+    pub dev: DevConfig,
     /// Where the original game installs live, for the first-run /
     /// stale-epoch auto-bake (src/bakecheck.rs). Unset = `MGC_GAMEDATA`
-    /// or `gamedata/` in the working directory.
+    /// or `gamedata/` in the working directory. A system path, outside
+    /// the option taxonomy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gamedata: Option<PathBuf>,
 }
 
-/// The flight-control tiers (ROADMAP "Flight-control tiers"): three
-/// ORTHOGONAL enums, freely combinable, authentic values as defaults.
-/// Enums rather than booleans by design (authenticity-matrix rule 3 —
-/// room for named alternates like `mc2` or `torso-aim` later).
+// ===========================================================================
+// sim — deterministic world model (fidelity-critical)
+// ===========================================================================
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SimConfig {
+    /// Tunable numeric parameters.
+    pub parameters: SimParameters,
+    /// Discrete sim choices (reserved: `game_speed` lands here).
+    pub options: SimOptions,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SimParameters {
+    /// Entity-pool capacity override (G-class — a larger pool can carry
+    /// a roster the original would have dropped, so a replay taped with
+    /// it enlarged is not a faithful fixture). `None` = the per-game
+    /// faithful chassis default (`ChassisParams`, 1000 both games).
+    /// Also settable for one run with `--pool-slots N` (2..=60000).
+    pub entity_pool_size: Option<u32>,
+}
+
+/// Discrete sim options. Empty today — reserved so `game_speed` and
+/// similar tick-level choices have a faithful home when they land.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SimOptions {}
+
+// ===========================================================================
+// render — presentation only
+// ===========================================================================
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RenderConfig {
+    /// Fair visual/informational opt-ins.
+    pub enhancement: RenderEnhancement,
+    /// Dev overlays that visualise the real sim — not for normal play.
+    pub debug: RenderDebug,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RenderEnhancement {
+    /// Interpolate terrain shade across tile centers instead of the
+    /// original's one shade level per tile (toggle at runtime with T).
+    pub smooth_shading: bool,
+    /// HUD transparency (the top-strip panels + radar blend over the
+    /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle to
+    /// make it opaque for readability (the radar especially). Multi-
+    /// column matrix option: `Mc1` faithful transparent (default) |
+    /// `Opaque` the MC2-style solid HUD. Player 2026-07-07: transparency
+    /// "makes the radar map less useful" — opaque is the readable
+    /// alternate. (Visual preference — does not affect run fidelity.)
+    pub hud_transparency: HudTransparency,
+    /// Highlight claimed/possessed dwellings on the overhead map in
+    /// the owner's color — MC2's map behavior brought to MC1 as an
+    /// opt-in (P-class; MC1 never marks houses). Player proposal
+    /// 2026-07-07: "helps visibility".
+    pub map_owned_buildings: bool,
+    /// Tag every pickable spell jar with its granted spell's icon —
+    /// on the overhead map (a small icon stamp over the jar dot) and
+    /// floating over the jar in the main view. P-class level-scouting
+    /// instrument (the original never labels jars; you learn by flying
+    /// through). Covers MC1's class-12 jars (red AND blue) and MC2's
+    /// class-15 spell tokens.
+    pub expose_jar_spells: bool,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RenderDebug {
+    /// Red-on-black health bars floating above monsters (toggle at
+    /// runtime with H). The original never shows creature life — the
+    /// combat-system debugging instrument.
+    pub health_bars: bool,
+    /// The autoaim crosshair (toggle at runtime with C): a
+    /// white-edged black cross at the TRUE aim point (the faithful
+    /// camera pitches at half the aim pitch, so aim is never screen
+    /// center) plus per-hand lock markers — left `+`, right `×`,
+    /// blinking red — on the target each hand's equipped spell would
+    /// acquire this instant. A crude, strictly-functional
+    /// projectile-behavior predictor (pure preview: no sim writes, no
+    /// RNG); the original shows no aim UI at all. Acquisition ≠ hit
+    /// (homing is capped 5/tick yaw).
+    pub crosshair: bool,
+    /// Overlay live trigger volumes / portals on the overhead map as
+    /// tinted circles (toggle at runtime with V). The original never
+    /// reveals trigger areas — this is a sanctioned deviation, and the
+    /// event-system debugging instrument.
+    pub map_trigger_areas: bool,
+    /// The spawn-grace shimmer: a thin bottom-center strip draining
+    /// with the respawn invulnerability window. Retail shows NOTHING
+    /// for grace — the strip was a readability aid that used to draw
+    /// unconditionally; it is a debug cue and defaults OFF (faithful:
+    /// no grace indicator at all).
+    pub grace_meter: bool,
+}
+
+// ===========================================================================
+// controls — input devices
+// ===========================================================================
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ControlsConfig {
+    /// Neutral input preferences (bindings, sensitivity, axis).
+    pub preferences: ControlPreferences,
+    /// The flight-control tiers.
+    pub models: ControlModels,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct FlightConfig {
-    /// Thrust + steering model. G-CLASS (physics — a replay taped
-    /// under `enhanced` is not a faithful fixture).
-    pub thrust: ThrustModel,
-    /// Altitude model. G-CLASS. Extended lift adds explicit float
-    /// up/down keys (no original equivalent); it never bypasses wall
-    /// blocking and float-up is capped at the level's highest terrain.
-    pub altitude: AltitudeModel,
+pub struct ControlPreferences {
     /// Key-binding profile. P-class, input mapping ahead of the
     /// `FlightInput` seam.
     pub bindings: Bindings,
@@ -65,6 +197,32 @@ pub struct FlightConfig {
     /// option). false = the authentic polarity: mouse-forward = dive,
     /// like a flight stick.
     pub invert_y: bool,
+}
+
+impl Default for ControlPreferences {
+    fn default() -> Self {
+        Self {
+            bindings: Bindings::default(),
+            mouse_sensitivity: 1.0,
+            invert_y: false,
+        }
+    }
+}
+
+/// The flight-control tiers (ROADMAP "Flight-control tiers"): two
+/// ORTHOGONAL enums, freely combinable, authentic values as defaults.
+/// Enums rather than booleans by design (authenticity-matrix rule 3 —
+/// room for named alternates like `mc2` or `torso-aim` later).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ControlModels {
+    /// Thrust + steering model. G-CLASS (physics — a replay taped
+    /// under `enhanced` is not a faithful fixture).
+    pub thrust: ThrustModel,
+    /// Altitude model. G-CLASS. Extended lift adds explicit float
+    /// up/down keys (no original equivalent); it never bypasses wall
+    /// blocking and float-up is capped at the level's highest terrain.
+    pub altitude: AltitudeModel,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,21 +265,13 @@ pub enum Bindings {
     Wasd,
 }
 
-impl Default for FlightConfig {
-    fn default() -> Self {
-        FlightConfig {
-            thrust: ThrustModel::default(),
-            altitude: AltitudeModel::default(),
-            bindings: Bindings::default(),
-            mouse_sensitivity: 1.0,
-            invert_y: false,
-        }
-    }
-}
+// ===========================================================================
+// audio — faithful preferences
+// ===========================================================================
 
 /// Audio preferences. Volumes are plain preference, not authenticity
 /// flips; the MIXER selection (faithful tile-rule vs enhanced
-/// distance-weighted emitters) will join `enhancements` when the
+/// distance-weighted emitters) will join `render`/`gameplay` when the
 /// enhanced mixer exists — only the faithful port is implemented.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -187,86 +337,23 @@ impl MusicArrangement {
     }
 }
 
-/// Modern-convenience switches, all defaulting to off (= authentic) —
-/// with ONE deliberate exception, `prune_owned_jars` (a player-endorsed
-/// improvement so universally wanted it ships on; see its field doc +
-/// the manual `Default` below).
+// ===========================================================================
+// gameplay — play-affecting opt-ins and cheats
+// ===========================================================================
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GameplayConfig {
+    /// Fair play opt-ins (still authentic-legal — no impossible power).
+    pub enhancement: GameplayEnhancement,
+    /// Cheats: otherwise-impossible power. Any of these on = a
+    /// non-canonical run.
+    pub cheat: GameplayCheat,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Enhancements {
-    /// Interpolate terrain shade across tile centers instead of the
-    /// original's one shade level per tile (toggle at runtime with T).
-    pub smooth_shading: bool,
-    /// Overlay live trigger volumes / portals on the overhead map as
-    /// tinted circles (toggle at runtime with V). The original never
-    /// reveals trigger areas — this is a sanctioned deviation, and the
-    /// event-system debugging instrument.
-    pub map_trigger_areas: bool,
-    /// Red-on-black health bars floating above monsters (toggle at
-    /// runtime with H). The original never shows creature life — the
-    /// combat-system debugging instrument.
-    pub health_bars: bool,
-    /// All 24 spells granted + infinite mana (toggle at runtime with
-    /// G). The spell-track playtest instrument; gameplay-affecting
-    /// (G-class) — a replay taped with it on is not a faithful
-    /// fixture. The original ships the equivalent debug commands
-    /// ("access all spells" / "more mana", remc1's :48836 cheat menu).
-    pub dev_spells: bool,
-    /// Seed the spellbook at level start with the spells a diligent
-    /// player COULD legitimately hold entering this level — the union
-    /// of every spell jar in the campaign levels before this one
-    /// (MC1 only; see `campaign::plausible_spellbook`). Unlike
-    /// `dev_spells` this respects the campaign's spell economy (it
-    /// never grants a spell the campaign couldn't have delivered yet),
-    /// so bugs found while playtesting an individual level are real.
-    /// G-class playtest instrument — NOT campaign state; a level so
-    /// launched is not a faithful fixture. Grants on top of whatever
-    /// the world already gave (starting spells etc.).
-    pub plausible_spellbook: bool,
-    /// Highlight claimed/possessed dwellings on the overhead map in
-    /// the owner's color — MC2's map behavior brought to MC1 as an
-    /// opt-in (P-class; MC1 never marks houses). Player proposal
-    /// 2026-07-07: "helps visibility".
-    pub map_owned_buildings: bool,
-    /// Player invincibility — the pre-mortality dev behavior (damage
-    /// totaled for display, never applied; no death). G-class
-    /// playtest/accessibility instrument; the authentic default is
-    /// MORTAL (grace window, castle respawn, castle-less death =
-    /// level restart).
-    pub invincible: bool,
-    /// The spawn-grace shimmer: a thin bottom-center strip draining
-    /// with the respawn invulnerability window. Retail shows NOTHING
-    /// for grace — the strip was a readability aid that used to draw
-    /// unconditionally; it is a P-class debug cue and now defaults
-    /// OFF (faithful: no grace indicator at all).
-    pub grace_meter: bool,
-    /// Tag every pickable spell jar with its granted spell's icon —
-    /// on the overhead map (a small icon stamp over the jar dot) and
-    /// floating over the jar in the main view. P-class level-scouting
-    /// /debug instrument (the original never labels jars; you learn
-    /// by flying through). Covers MC1's class-12 jars (red AND blue)
-    /// and MC2's class-15 spell tokens.
-    pub expose_jar_spells: bool,
-    /// Remove any spell jar whose spell the local player already owns —
-    /// and therefore can never pick up. Retail (BOTH MC1 and MC2)
-    /// leaves such jars in the world forever (placed jars never decay),
-    /// so they become permanent, unidentifiable clutter. An INTENTIONAL
-    /// deviation from retail (P-class unfaithful improvement, player-
-    /// directed 2026-07-14): sweeps at level load AND the instant the
-    /// player gains a spell. Single-player entity removal. The lone
-    /// enhancement that defaults ON ("no one will ever complain") —
-    /// disable with `--no-prune-owned-jars` for a purist run. Covers
-    /// MC1's class-12 jars and MC2's class-15 spell tokens. See
-    /// docs/FIDELITY.md.
-    pub prune_owned_jars: bool,
-    /// HUD transparency (the top-strip panels + radar blend over the
-    /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle to
-    /// make it opaque for readability (the radar especially). Multi-
-    /// column matrix option: `Mc1` faithful transparent (default) |
-    /// `Opaque` the MC2-style solid HUD. Player 2026-07-07: transparency
-    /// "makes the radar map less useful" — opaque is the readable
-    /// alternate.
-    pub hud_transparency: HudTransparency,
+pub struct GameplayEnhancement {
     /// Which spell-selection interface is live (P-class, multi-column
     /// matrix option — interface only, the spell economy underneath is
     /// untouched). MC1's faithful surface = the fullscreen-map
@@ -279,40 +366,48 @@ pub struct Enhancements {
     /// pane: a 26-spell book never had an in-map grid, so `mc1`/
     /// `mc1+mc2` coerce (with a console note) rather than invent one.
     pub spell_selector: SpellSelector,
-    /// The autoaim crosshair (toggle at runtime with C): a
-    /// white-edged black cross at the TRUE aim point (the faithful
-    /// camera pitches at half the aim pitch, so aim is never screen
-    /// center) plus per-hand lock markers — left `+`, right `×`,
-    /// blinking red — on the target each hand's equipped spell would
-    /// acquire this instant. P-class projectile-behavior
-    /// predictor/debug instrument (pure preview: no sim writes, no
-    /// RNG); the original shows no aim UI at all. Acquisition ≠ hit
-    /// (homing is capped 5/tick yaw).
-    pub crosshair: bool,
+    /// Remove any spell jar whose spell the local player already owns —
+    /// and therefore can never pick up. Retail (BOTH MC1 and MC2)
+    /// leaves such jars in the world forever (placed jars never decay),
+    /// so they become permanent, unidentifiable clutter. An INTENTIONAL
+    /// deviation from retail (P-class unfaithful improvement, player-
+    /// directed 2026-07-14): sweeps at level load AND the instant the
+    /// player gains a spell. Single-player entity removal. The lone
+    /// enhancement that defaults ON ("no one will ever complain") —
+    /// disable with `--no-prune-owned-jars` for a purist run. Covers
+    /// MC1's class-12 jars and MC2's class-15 spell tokens. See
+    /// docs/FIDELITY.md.
+    pub prune_owned_jars: bool,
 }
 
-impl Default for Enhancements {
+impl Default for GameplayEnhancement {
     fn default() -> Self {
         Self {
-            smooth_shading: false,
-            map_trigger_areas: false,
-            health_bars: false,
-            dev_spells: false,
-            plausible_spellbook: false,
-            map_owned_buildings: false,
-            invincible: false,
-            grace_meter: false,
-            expose_jar_spells: false,
+            spell_selector: SpellSelector::default(),
             // The lone default-ON enhancement (player-directed
             // 2026-07-14): removing jars you can never pick up is
             // "one no one will ever complain about". Purists disable
             // it with `--no-prune-owned-jars`.
             prune_owned_jars: true,
-            hud_transparency: HudTransparency::default(),
-            spell_selector: SpellSelector::default(),
-            crosshair: false,
         }
     }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GameplayCheat {
+    /// All 24 spells granted + infinite mana (toggle at runtime with
+    /// G). The spell-track playtest instrument; gameplay-affecting
+    /// (G-class) — a replay taped with it on is not a faithful
+    /// fixture. The original ships the equivalent debug commands
+    /// ("access all spells" / "more mana", remc1's :48836 cheat menu).
+    pub dev_spells: bool,
+    /// Player invincibility — the pre-mortality dev behavior (damage
+    /// totaled for display, never applied; no death). G-class
+    /// playtest/accessibility instrument; the authentic default is
+    /// MORTAL (grace window, castle respawn, castle-less death =
+    /// level restart).
+    pub invincible: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,6 +480,30 @@ pub enum HudTransparency {
     /// readability. P-class, presentation-only.
     Opaque,
 }
+
+// ===========================================================================
+// dev — troubleshooting instruments
+// ===========================================================================
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DevConfig {
+    /// Seed the spellbook at level start with the spells a diligent
+    /// player COULD legitimately hold entering this level — the union
+    /// of every spell jar in the campaign levels before this one
+    /// (MC1 only; see `campaign::plausible_spellbook`). Unlike
+    /// `gameplay.cheat.dev_spells` this respects the campaign's spell
+    /// economy (it never grants a spell the campaign couldn't have
+    /// delivered yet), so bugs found while playtesting an individual
+    /// level are real. G-class playtest instrument — NOT campaign
+    /// state; a level so launched is not a faithful fixture. Grants on
+    /// top of whatever the world already gave (starting spells etc.).
+    pub plausible_spellbook: bool,
+}
+
+// ===========================================================================
+// two-layer load
+// ===========================================================================
 
 impl Config {
     /// Load the two layers: `<path>.defaults` (generated when missing;
