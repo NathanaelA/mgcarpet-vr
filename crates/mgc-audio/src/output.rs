@@ -98,6 +98,14 @@ struct Channel {
     vol: f32,
     pan: f32,
     looped: bool,
+    /// Declick release envelope: `Some(g)` = the voice is ramping out
+    /// after a `Stop` (remaining gain `g`, 1.0 → 0.0), then it clears.
+    /// A hard `pcm = None` cut mid-waveform steps the output to zero in
+    /// one sample — an audible click; the meteor's fire trail restarts
+    /// the same voice ~24×/s, so those clicks stack into the reported
+    /// crackle. A ~2.5 ms fade removes them without touching the
+    /// (faithful) retrigger cadence. `None` = playing normally.
+    release: Option<f32>,
 }
 
 struct MusicState {
@@ -121,6 +129,9 @@ pub struct Renderer {
     /// Voiceover duck on music+sfx (speech itself is exempt).
     duck_gain: f32,
     out_rate: f64,
+    /// Per-sample gain decrement for the ~2.5 ms declick release ramp
+    /// (see [`Channel::release`]).
+    release_step: f32,
     /// Game pause: stream silence, hold every play position.
     suspended: bool,
 }
@@ -137,6 +148,7 @@ impl Renderer {
                     vol: 0.0,
                     pan: 0.5,
                     looped: false,
+                    release: None,
                 })
                 .collect(),
             music: MusicState {
@@ -161,6 +173,9 @@ impl Renderer {
             music_gain: 1.0,
             duck_gain: 1.0,
             out_rate: f64::from(out_rate),
+            // ~2.5 ms release: long enough to remove the step-cut click,
+            // short enough not to smear the retriggered attack.
+            release_step: 1.0 / (f64::from(out_rate) * 0.0025).max(1.0) as f32,
             suspended: false,
         }
     }
@@ -197,8 +212,18 @@ impl Renderer {
                 c.vol = f32::from(vol) / 32767.0;
                 c.pan = f32::from(pan) / 65535.0;
                 c.looped = looped;
+                c.release = None;
             }
-            Cmd::Stop { ch } => self.channels[ch].pcm = None,
+            // Ramp out over ~2.5 ms instead of a hard cut (declick);
+            // `render` clears `pcm` when the ramp completes. A channel
+            // already releasing keeps its lower gain rather than jumping
+            // back to full.
+            Cmd::Stop { ch } => {
+                let c = &mut self.channels[ch];
+                if c.pcm.is_some() && c.release.is_none() {
+                    c.release = Some(1.0);
+                }
+            }
             Cmd::SetVol { ch, vol } => self.channels[ch].vol = f32::from(vol) / 32767.0,
             Cmd::Music {
                 pcm,
@@ -279,10 +304,20 @@ impl Renderer {
                         idx as usize
                     }],
                 ) - 128.0;
-                let s = (s0 + (s1 - s0) * frac) / 128.0 * ch.vol * self.sfx_gain * self.duck_gain;
+                let rel = ch.release.unwrap_or(1.0);
+                let s =
+                    (s0 + (s1 - s0) * frac) / 128.0 * ch.vol * self.sfx_gain * self.duck_gain * rel;
                 l += s * (1.0 - ch.pan);
                 r += s * ch.pan;
                 ch.pos += ch.step;
+                // Advance the declick release; drop the voice once silent.
+                if let Some(g) = ch.release.as_mut() {
+                    *g -= self.release_step;
+                    if *g <= 0.0 {
+                        ch.pcm = None;
+                        ch.release = None;
+                    }
+                }
             }
             let mut music_done = false;
             if let Some(pcm) = self.music.pcm.as_ref() {

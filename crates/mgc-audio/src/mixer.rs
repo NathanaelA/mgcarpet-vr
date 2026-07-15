@@ -84,10 +84,16 @@ fn policy(id: u8) -> Policy {
 pub enum Source {
     /// UI / player-own sounds: full volume, center pan.
     Player,
-    /// World-positioned, tagged by the emitting entity so repeated
-    /// requests restart the same instance (the original's
-    /// entity+24 tag through `word_12CD26`).
-    World { pos: (u16, u16, i16), tag: u16 },
+    /// World-positioned: the emitter's coordinates drive the spatial
+    /// volume/pan. The mixer channel is keyed by SOUND ID alone, NOT by
+    /// the emitter — retail's `sub_55370_558A0` writes every request
+    /// into the per-id slot `word_12CD24[5*id]` (the entity supplies
+    /// only the vol/pan math; `word_12CD26` is metadata inside that
+    /// id-indexed slot, not a channel key). So many entities playing the
+    /// same sound at once (a meteor's trail of ground fires all crackling
+    /// sound 3, a blast ring's fire cluster) restart ONE channel instead
+    /// of each grabbing their own and flooding all 32.
+    World { pos: (u16, u16, i16) },
 }
 
 /// Listener state for one tick.
@@ -184,7 +190,7 @@ impl FaithfulMixer {
         }
         let (vol, pan, tag, player_sourced) = match source {
             Source::Player => (0x7FFF_u16, 0x7FFF_u16, 0u16, true),
-            Source::World { pos, tag } => {
+            Source::World { pos } => {
                 // Torus-wrapped deltas (the original's i16 truncation).
                 let dx = i64::from(pos.0.wrapping_sub(listener.pos.0) as i16);
                 let dy = i64::from(pos.1.wrapping_sub(listener.pos.1) as i16);
@@ -221,7 +227,9 @@ impl FaithfulMixer {
                 } else {
                     0x7FFF
                 };
-                (vol, pan, tag, false)
+                // Channel identity is the sound id alone (see `Source`):
+                // a constant 0 tag, matching the player + ambient paths.
+                (vol, pan, 0, false)
             }
         };
 

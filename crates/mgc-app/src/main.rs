@@ -1017,10 +1017,7 @@ impl App {
                     let source = if e.player {
                         mgc_audio::Source::Player
                     } else {
-                        mgc_audio::Source::World {
-                            pos: e.pos,
-                            tag: e.tag,
-                        }
+                        mgc_audio::Source::World { pos: e.pos }
                     };
                     audio.event(e.id, source, &listener);
                 }
