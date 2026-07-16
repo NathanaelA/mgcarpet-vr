@@ -69,9 +69,16 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         vec2<f32>(-0.5, 0.0), vec2<f32>(0.5, 1.0), vec2<f32>(-0.5, 1.0),
     );
     let c = corners[vid];
-    let world = inst.pos
+    var world = inst.pos
         + globals.cam_right.xyz * (c.x * inst.size.x)
         + globals.cam_up.xyz * (c.y * inst.size.y);
+    // The water-reflection MIRROR pass (atlas.w = 2): flip the
+    // finished quad about the sea plane — the sprite's reflection
+    // hangs upside-down below the water (the swapped corners mirror
+    // the image vertically for free).
+    if globals.atlas.w == 2u {
+        world.y = -world.y;
+    }
     var out: VsOut;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
     out.frac = vec2<f32>(c.x + 0.5, 1.0 - c.y);
@@ -113,7 +120,17 @@ fn fs_main(in: VsOut) -> FsOut {
     let base = textureLoad(t_colormap, vec2<i32>(i32(index), shade), 0).rgb;
 
     let dist = distance(in.world, globals.camera.xyz);
-    let fog = 1.0 - exp(-dist * globals.camera.w);
+    // Distance fog, the retail band law (see terrain.wgsl fog_amount):
+    // linear in squared distance across 0.75·D..0.95·D, D = camera.w
+    // tiles (0 = off). Retail fogs sprites on the same ramp as
+    // terrain (GRO:3499-3511).
+    var fog = 0.0;
+    let d = globals.camera.w;
+    if d > 0.0 {
+        let start2 = 0.5625 * d * d;
+        let end2 = 0.9025 * d * d;
+        fog = clamp((dist * dist - start2) / (end2 - start2), 0.0, 1.0);
+    }
     let rgb = mix(base, globals.fog_color.rgb, fog);
     var out: FsOut;
     out.color = vec4<f32>(rgb, in.alpha);

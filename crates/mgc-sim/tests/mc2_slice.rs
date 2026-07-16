@@ -671,12 +671,20 @@ fn mc2_slice_behaviors_and_goldens() {
         // creature trajectory legitimately moves from load — the
         // POST-INIT checkpoint moves too (the StageVar table content
         // + bind state itself hashes).
+        // Re-pinned 2026-07-16 (DELIBERATE, inherited from commit
+        // 0cf699e "mc1/2 level completion sequence, mc2 castle
+        // turrets" — that session re-pinned mc2_cave but missed this
+        // file): ONLY checkpoint E moved; post-init through D are
+        // byte-identical, so the level data/assets/load path are
+        // unchanged and the divergence is that commit's endgame/
+        // castle-tick behavior first exercised in the E window.
+        // Verified deterministic across runs before re-pinning.
         0x3f29a575e74ed7ce, // post-init (GenerateEvents + dis 0)
         0xac2894c19444ec6b, // A: 64 idle ticks afield
         0x52c4a61b85ac224c, // B: the type-5 fly-to latched
         0x5da0547d0f700eaf, // C: goat awake/flee window
         0xf83f8f81b271eae7, // D: fireball combat over the goat
-        0xdf479f5593fca17e, // E: census + villager/archer provocation
+        0x7bc91738e9e0901e, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -691,13 +699,16 @@ fn mc2_slice_behaviors_and_goldens() {
     // load-time checkpoint is UNCHANGED (same world composition at
     // t=0) and every ticked checkpoint moves with the now-leashed
     // herd's trajectories — the projection working as designed.
+    // Moved 2026-07-16 at E ONLY (with the 0cf699e inherited re-pin
+    // above): the observables confirm the endgame/castle-tick change
+    // is real behavior in the final window, not layout.
     const OBSERVABLE: [u64; 6] = [
         0x9a885593f099242c,
         0xc8a0f078fd10afd7,
         0xddc9ae4bc40fafc9,
         0xd9ff6a0b332668d2,
         0x2861dfece633f89a,
-        0xeb07ab1f52ff2990,
+        0xc419744a214ba321,
     ];
     assert_eq!(
         obs, OBSERVABLE,

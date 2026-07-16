@@ -275,6 +275,69 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
+            group: "render · preference",
+            label: "sky",
+            class: Preference,
+            key: None,
+            cli: Some("--no-sky"),
+            cfg_path: "render.preference.sky",
+            // Faithful = ON (retail ships the Sky option enabled).
+            read: |c| Val::Toggle {
+                on: c.render.preference.sky,
+                faithful: true,
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
+            label: "reflections",
+            class: Preference,
+            key: None,
+            cli: Some("--no-reflections"),
+            cfg_path: "render.preference.reflections",
+            // Faithful = ON (retail ships the Reflections option
+            // enabled).
+            read: |c| Val::Toggle {
+                on: c.render.preference.reflections,
+                faithful: true,
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
+            label: "light_sources",
+            class: Preference,
+            key: None,
+            cli: Some("--no-light-sources"),
+            cfg_path: "render.preference.light_sources",
+            // Faithful = ON (retail MC2 ships Dynamic Lighting
+            // enabled; it self-gates to Night/Cave either way).
+            read: |c| Val::Toggle {
+                on: c.render.preference.light_sources,
+                faithful: true,
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
+            label: "fog_distance",
+            class: Preference,
+            key: None,
+            cli: Some("--fog-distance TILES"),
+            cfg_path: "render.preference.fog_distance",
+            read: |c| Val::Scalar {
+                text: match c.render.preference.fog_distance {
+                    0 => "off (no fog)".to_string(),
+                    n => format!("{n} tiles"),
+                },
+                // Val::Scalar compares text == faithful for the
+                // deviation mark, so this is the exact default text
+                // (retail band 15..19, geometry cutoff 20).
+                faithful: "20 tiles",
+            },
+        },
+        Spec {
+            domain: Render,
             // A Preference (visual, fidelity-neutral) — its own
             // heading; the cfg_path keeps the legacy "enhancement"
             // segment so saved configs stay valid.
@@ -539,6 +602,26 @@ pub fn registry() -> Vec<Spec> {
             read: |c| Val::Toggle {
                 on: c.audio.speech,
                 faithful: true,
+            },
+        },
+        Spec {
+            domain: Audio,
+            group: "audio",
+            label: "subtitles",
+            class: Preference,
+            key: None,
+            cli: Some("--subtitles"),
+            cfg_path: "audio.subtitles",
+            read: |c| Val::Choice {
+                cur: match c.audio.subtitles {
+                    crate::config::Subtitles::Auto => 0,
+                    crate::config::Subtitles::On => 1,
+                    crate::config::Subtitles::Off => 2,
+                },
+                // auto = the retail objective-textbox law (text shows
+                // exactly when the voiceover doesn't play).
+                faithful: 0,
+                variants: &["auto", "on", "off"],
             },
         },
         // ---- gameplay · enhancement -------------------------------------

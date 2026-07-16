@@ -115,6 +115,17 @@ struct VariantSpec {
     /// the app appends the glyph masks to its UI atlas as white and
     /// tints per DrawText's `color` argument.
     font: Option<&'static str>,
+    /// The sentence bank (`DATA/ETEXT.DAT`): null-terminated strings,
+    /// decoded to `etext.json` with indices preserved (empty slots
+    /// stay). English base; localized `LANGUAGE/L<n>.TXT` overlays use
+    /// the same indices (remc2 LoadLanguageFile) — not baked.
+    etext: Option<&'static str>,
+    /// The parallax sky bitmap (256x256 8bpp raw, RNC on MC1): MC1
+    /// `SKY.DAT`/`SKY1-0.DAT` per tileset; MC2 `SKY{D,N}0-0.DAT` with
+    /// night-fog sharing night's (remc2 ReadAndDecompress.cpp:41/88)
+    /// and cave loading NONE (`SKYC0-0.DAT` exists on the CD but no
+    /// code path reads it).
+    sky: Option<&'static str>,
 }
 
 const MC1_VARIANTS: [VariantSpec; 2] = [
@@ -132,6 +143,8 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         spells: None,
         ui: Some("DATA/HSPR0-0"),
         font: Some("DATA/FONT1"),
+        etext: Some("DATA/ETEXT.DAT"),
+        sky: Some("DATA/SKY.DAT"),
     },
     VariantSpec {
         variant: "mc1-arctic",
@@ -147,6 +160,8 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         spells: None,
         ui: Some("DATA/HSPR1-0"),
         font: Some("DATA/FONT1"),
+        etext: Some("DATA/ETEXT.DAT"),
+        sky: Some("DATA/SKY1-0.DAT"),
     },
 ];
 
@@ -170,6 +185,8 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRD0-0"),
         font: Some("DATA/FONT1"),
+        etext: Some("DATA/ETEXT.DAT"),
+        sky: Some("DATA/SKYD0-0.DAT"),
     },
     VariantSpec {
         variant: "mc2-night",
@@ -185,6 +202,8 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRN0-0"),
         font: Some("DATA/FONT1"),
+        etext: Some("DATA/ETEXT.DAT"),
+        sky: Some("DATA/SKYN0-0.DAT"),
     },
     VariantSpec {
         variant: "mc2-night-fog",
@@ -200,6 +219,8 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRN0-0"),
         font: Some("DATA/FONT1"),
+        etext: Some("DATA/ETEXT.DAT"),
+        sky: Some("DATA/SKYN0-0.DAT"),
     },
     VariantSpec {
         variant: "mc2-cave",
@@ -215,6 +236,8 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         spells: Some("DATA/SPELLS.DAT"),
         ui: Some("DATA/HSPRC0-0"),
         font: Some("DATA/FONT1"),
+        etext: Some("DATA/ETEXT.DAT"),
+        sky: None,
     },
 ];
 
@@ -1035,6 +1058,36 @@ fn bake_variant(
             "font.json",
             &serde_json::to_vec_pretty(&packed.index).expect("font index serializes"),
         )?;
+    }
+
+    // Sentence bank (ETEXT.DAT): null-terminated strings, decoded with
+    // indices preserved — empty slots stay as "" so sentence ids keep
+    // their alignment (MC2's objective tables index this directly).
+    // Bytes are DOS code page; decoded as Latin-1 (the shipped English
+    // banks are plain ASCII).
+    if let Some(et) = spec.etext {
+        let raw = source(et, &mut sources)?;
+        let mut entries: Vec<String> = raw
+            .split(|&b| b == 0)
+            .map(|s| s.iter().map(|&b| b as char).collect())
+            .collect();
+        // Trailing NUL terminators leave empty tail slots — split
+        // artifacts, not sentences (MC2's file ends with a double
+        // NUL). Interior empties stay: they keep ids aligned.
+        while entries.last().is_some_and(String::is_empty) {
+            entries.pop();
+        }
+        emit(
+            "etext.json",
+            &serde_json::to_vec_pretty(&entries).expect("etext serializes"),
+        )?;
+    }
+
+    // Parallax sky bitmap: 256x256 8bpp raw (RNC-wrapped on MC1).
+    if let Some(sky) = spec.sky {
+        let bitmap = source(sky, &mut sources)?;
+        expect(sky, &bitmap, 256 * 256)?;
+        emit("sky.bin", &bitmap)?;
     }
 
     let manifest = BundleManifest {

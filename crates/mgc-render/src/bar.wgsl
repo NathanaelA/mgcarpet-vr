@@ -1,7 +1,8 @@
 // Health-bar overlay (unfaithful debug enhancement): screen-aligned
 // solid-color quads above monsters — the classic red-fill-on-black
-// rectangle showing remaining life. No texture, no fog: a debug
-// instrument should stay readable at any distance.
+// rectangle showing remaining life. No texture, no fog shading, but
+// CUT at the fog wall — an overlay must not reveal monsters the fog
+// hides (player directive 2026-07-16).
 
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -45,6 +46,17 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         + globals.cam_right.xyz * (c.x * inst.size.x)
         + globals.cam_up.xyz * (c.y * inst.size.y);
     var out: VsOut;
+    // The fog-wall cut (camera.w = fog view distance in tiles, 0 =
+    // fog off; terrain fully occludes at 0.95·D — terrain.wgsl
+    // fog_amount): collapse the quad behind the near plane.
+    let fog_d = globals.camera.w;
+    if fog_d > 0.0 && distance(inst.pos, globals.camera.xyz) > 0.95 * fog_d {
+        out.clip = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+        out.fx = vec2<f32>(0.0, 0.0);
+        out.frac = 0.0;
+        out.anchor_depth = 0.999999;
+        return out;
+    }
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
     out.fx = vec2<f32>(c.x + 0.5, c.y);
     out.frac = inst.frac;

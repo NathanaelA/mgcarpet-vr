@@ -33,6 +33,10 @@
 //!   verbatim, 4-byte records)
 //! - `spells.bin` — MC2's spell table (SPELLS.DAT verbatim, 26 rows
 //!   x 80 bytes)
+//! - `etext.json` — the game's sentence bank (ETEXT.DAT), a JSON
+//!   string array indexed by the engine's sentence id
+//! - `sky.bin` — the 256x256 8bpp parallax sky bitmap (absent on
+//!   variants without one, e.g. MC2 cave)
 
 use std::path::{Path, PathBuf};
 
@@ -259,6 +263,17 @@ pub struct Bundle {
     /// remc2 Spells.h — {i8, u8 enabled, 3 x 26-byte subspell tiers});
     /// the par1-authored class-10 overrides and class-15 cast costs.
     pub spells: Option<Vec<u8>>,
+    /// The game's sentence bank (ETEXT.DAT decoded to strings, index
+    /// = the engine's sentence id; empty slots preserved so indices
+    /// stay aligned). MC2: 471 entries — 23..=47 the map-screen level
+    /// briefings, 48..=158 the per-level objective/completion blocks
+    /// (indexed by remc2 GameUI.cpp:20-42's IndexLevelText/
+    /// LevelEndText tables). MC1: 80 entries — 60/61 the win message.
+    pub etext: Option<Vec<String>>,
+    /// 256x256 8bpp parallax sky bitmap, row-major (retail samples
+    /// u = index low byte, v = high byte — remc2 DrawSky_40950).
+    /// Absent where retail loads none (MC2 cave).
+    pub sky: Option<Vec<u8>>,
 }
 
 /// Rows in `shade-lut.bin`.
@@ -404,6 +419,22 @@ impl Bundle {
             None => None,
         };
 
+        let etext = match read_opt("etext.json") {
+            Some(bytes) => Some(
+                serde_json::from_slice(&bytes)
+                    .map_err(|e| BundleError::Json(dir.join("etext.json"), e))?,
+            ),
+            None => None,
+        };
+
+        let sky = match read_opt("sky.bin") {
+            Some(data) => {
+                expect("sky.bin", &data, 256 * 256)?;
+                Some(data)
+            }
+            None => None,
+        };
+
         Ok(Self {
             manifest,
             palette,
@@ -420,6 +451,8 @@ impl Bundle {
             build_dat: read_opt("build.dat.bin"),
             bldgprm: read_opt("bldgprm.bin"),
             spells: read_opt("spells.bin"),
+            etext,
+            sky,
         })
     }
 }

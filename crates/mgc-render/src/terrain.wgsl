@@ -12,7 +12,9 @@
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    // xyz = camera position (tile units), w = fog density
+    // xyz = camera position (tile units), w = fog view distance in
+    // tiles (full occlusion at 0.95·w, band from 0.75·w — the retail
+    // 15..19-tile ramp scaled; 0 = fog off)
     camera: vec4<f32>,
     // rgb = fog/sky color (linear), a = water animation turn (the
     // game's per-tick counter, fractional for render interpolation)
@@ -21,11 +23,28 @@ struct Globals {
     // y = smooth shading (1 = interpolate the per-tile shade level
     //     across tile centers instead of the original's per-tile snap),
     // z = water wave rule (0 = off, 1 = MC1, 2 = MC2),
-    // w = ceiling pass (1 = the MC2 cave second-heightmap draw:
-    //     t_height carries the CEILING bytes, texture fixed to the
-    //     wall cell, water animation off)
+    // w = pass arm: 0 = normal, 1 = the MC2 cave ceiling draw
+    //     (t_height carries the CEILING bytes, texture fixed to the
+    //     wall cell, water animation off), 2 = the water-reflection
+    //     MIRROR draw (terrain y-flipped about the sea plane)
     atlas: vec4<u32>,
+    // Camera basis (billboard/sky consumers) — unused here, declared
+    // to keep the buffer layout aligned with the Rust Globals struct.
+    cam_right: vec4<f32>,
+    cam_up: vec4<f32>,
+    // xy = framebuffer size (px); z = 1 when this pass may sample the
+    // mirror texture for sea reflections (0 in the mirror pass and
+    // with reflections off); w = dynamic light count.
+    viewport: vec4<f32>,
+    // Dynamic point lights: xyz = world pos (tiles), w = intensity
+    // (1 = retail's 128 spell baseline). Night/Cave only (app gate).
+    lights: array<vec4<f32>, 16>,
 };
+
+// The mirror texture (last mirror pass's output) for sea reflections;
+// a 1x1 dummy when viewport.z = 0.
+@group(1) @binding(0) var t_mirror: texture_2d<f32>;
+@group(1) @binding(1) var s_mirror: sampler;
 
 // Atlas geometry: 256 px wide, 32x32 cells, 8 per row (BLK*-1.DAT).
 const ATLAS_CELL: i32 = 32;
@@ -95,7 +114,7 @@ fn vs_main(in: VsIn) -> VsOut {
     // (S = 6 for MC1, 5 for MC2). Gating is per VERTEX cell, so shared
     // corners displace consistently across tiles. The wave repeats
     // every 256 tiles, so the 3x3 torus copies stay seamless.
-    if globals.atlas.z != 0u && globals.atlas.w == 0u {
+    if globals.atlas.z != 0u && globals.atlas.w != 1u {
         let g = vec2<i32>(
             (i32(in.pos.x) % 256 + 256) % 256,
             (i32(in.pos.z) % 256 + 256) % 256,
@@ -126,10 +145,38 @@ fn vs_main(in: VsIn) -> VsOut {
         }
     }
 
+    // The reflection MIRROR pass: flip the (waved) terrain about the
+    // sea plane y = 0 — same camera, mirrored geometry = the planar
+    // reflection the main pass's sea fragments sample.
+    if globals.atlas.w == 2u {
+        pos.y = -pos.y;
+    }
+
     out.clip = globals.view_proj * vec4<f32>(pos, 1.0);
     out.world = pos;
     out.light = in.light;
     return out;
+}
+
+// Dynamic-light shade boost (retail sub_84EA0, per-pixel instead of
+// the 5x5 cell grid): each light adds `31 · (1 − d²/R²) · intensity`
+// shade rows within R = 543 world units ≈ 2.12 tiles (R² ≈ 4.5),
+// capped at retail's 31. On the Night/Cave tables added rows =
+// brighter (the polarity that makes retail gate day off — the app
+// sends no lights on day maps).
+fn light_boost(world: vec3<f32>) -> f32 {
+    var add = 0.0;
+    let n = u32(globals.viewport.w);
+    for (var i = 0u; i < n; i = i + 1u) {
+        let l = globals.lights[i];
+        let d = world - l.xyz;
+        let d2 = dot(d, d);
+        const R2: f32 = 4.5;
+        if d2 < R2 {
+            add += 31.0 * (1.0 - d2 / R2) * l.w;
+        }
+    }
+    return min(add, 31.0);
 }
 
 // Shade level of a tile, wrapped to the torus, clamped to the LUT.
@@ -219,7 +266,7 @@ fn fs_main(in: VsOut) -> FsOut {
                 mix(shade_at(t0), shade_at(t0 + vec2<i32>(1, 0)), f.x),
                 mix(shade_at(t0 + vec2<i32>(0, 1)), shade_at(t0 + vec2<i32>(1, 1)), f.x),
                 f.y,
-            ) + in.shade_wave,
+            ) + in.shade_wave + light_boost(in.world),
             0.0,
             63.0,
         );
@@ -232,9 +279,14 @@ fn fs_main(in: VsOut) -> FsOut {
         );
     } else {
         // Original look: one shade level per tile, plus the water
-        // shimmer. The original rounds: pnt5 carries (shade<<8 + 128)
-        // <<8 + 8*sinprod and the rasterizer truncates the top byte.
-        let shade = clamp(i32(round(shade_at(tile) + in.shade_wave)), 0, 63);
+        // shimmer and the dynamic-light boost. The original rounds:
+        // pnt5 carries (shade<<8 + 128) <<8 + 8*sinprod and the
+        // rasterizer truncates the top byte.
+        let shade = clamp(
+            i32(round(shade_at(tile) + in.shade_wave + light_boost(in.world))),
+            0,
+            63,
+        );
         base = textureLoad(t_colormap, vec2<i32>(index, shade), 0).rgb;
     }
 
@@ -243,10 +295,70 @@ fn fs_main(in: VsOut) -> FsOut {
     let lit = base * in.light;
 
     let dist = distance(in.world, globals.camera.xyz);
-    let fog = 1.0 - exp(-dist * globals.camera.w);
-    let rgb = mix(lit, globals.fog_color.rgb, fog);
+    var rgb = mix(lit, globals.fog_color.rgb, fog_amount(dist));
+
+    // Sea reflection (retail GRO reflection block, simplified): sea
+    // fragments at sea level blend the mirror texture at their own
+    // screen position, the sample point wobbled by the same wave that
+    // shimmers the shade — the reflection ripples with the water.
+    // Water identification is per game: MC2 = angle bit 3, the map
+    // generator's OPEN-SEA flag (`mapAngle |= 8`, remc2 sub_43D50 —
+    // the same bit that routes retail to the water raster mode 26;
+    // tile TYPE 0 also covers the muddy shore, the 2026-07-16 wrong-
+    // tiles report); MC1 = angle slope-nibble 0 (sub_11760's water
+    // probe; deep sea sets bit 3 on top, so mask &7). The mirror
+    // image is already fogged; 50% mirror keeps the water texture
+    // readable (retail's <0xC texel holes blend about half the area).
+    // WATER IS PER-TEXEL, exactly retail (playtest round 5, player
+    // insight "the reflecting property is part of the data"): the
+    // water raster blends screen content only where the TEXTURE's
+    // palette index is < 0x0C (remc2 GRO:13945-65 mode 26) — the
+    // waterline is painted into the transition-tile textures (atlas
+    // data: cell 0 = 1024/1024 sub-0x0C texels, shore cells partial,
+    // land 0 plus single-texel noise). So the mirror blend keys on
+    // the fragment's own palette index; no tile flags at all.
+    //
+    // In the MIRROR pass those water texels are the mirror itself —
+    // never part of the mirrored scene (a mirrored self-copy ghosted
+    // in counterphase); discard them so the mirrored landscape / sky
+    // shows through, while a transition tile's LAND texels still
+    // reflect.
+    let watery = index < 12;
+    if globals.atlas.w == 2u && watery {
+        discard;
+    }
+    if globals.viewport.z > 0.5 && globals.atlas.w == 0u && watery {
+        // Altitude fade (0.2..0.6 tiles): elevated tiles reusing the
+        // low palette indices (dark speckles) must not mirror.
+        let water = clamp((0.6 - in.world.y) / 0.4, 0.0, 1.0);
+        if water > 0.0 {
+            let wob = in.shade_wave * globals.viewport.y * 0.0006;
+            let uv = (in.clip.xy + vec2<f32>(wob, wob)) / globals.viewport.xy;
+            // A heavy cool cast on the mirrored image (player taste,
+            // round 3) — water never reflects neutrally.
+            let mirror = textureSampleLevel(t_mirror, s_mirror, uv, 0.0).rgb
+                * vec3<f32>(0.60, 0.78, 1.20);
+            rgb = mix(rgb, mirror, 0.5 * water);
+        }
+    }
+
     var out: FsOut;
     out.color = vec4<f32>(rgb, 1.0);
     out.depth = plan_depth(in.world.xz);
     return out;
+}
+
+// Distance fog, the retail law (remc2 GRO:1038-1074): linear in
+// SQUARED distance across the FogStart..FogEnd band. Retail hardcodes
+// 15..19 tiles (cutoff 20); we scale that band by the configured view
+// distance D (camera.w): start = 0.75·D, full = 0.95·D. D = 0 turns
+// fog off.
+fn fog_amount(dist: f32) -> f32 {
+    let d = globals.camera.w;
+    if d <= 0.0 {
+        return 0.0;
+    }
+    let start2 = 0.5625 * d * d;  // (0.75 D)^2
+    let end2 = 0.9025 * d * d;    // (0.95 D)^2
+    return clamp((dist * dist - start2) / (end2 - start2), 0.0, 1.0);
 }

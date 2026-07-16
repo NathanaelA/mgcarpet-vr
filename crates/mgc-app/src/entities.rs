@@ -638,6 +638,31 @@ pub fn jar_markers_from_poses(poses: &[LivePose]) -> Vec<(f32, f32, f32, u8)> {
         .collect()
 }
 
+/// Dynamic point lights `(x, alt, z, intensity)` for the renderer's
+/// terrain light pass. Retail (remc2 `AddEvent2_847D0`, EF:47172)
+/// hand-attaches lights to exactly seven spawn ctors — the fireball
+/// projectiles (9,0)/(9,9)/(10,23), the explosions (10,0)/(10,1) at
+/// intensity 128, and the standing fire (10,6) at 80 — never a flag
+/// or class rule. Intensity here is normalized to the 128 spell
+/// baseline; the caller gates on Night/Cave (retail's MapType gate —
+/// day shade tables invert, added rows would darken) and the
+/// `light_sources` option. Capped at 16 (retail: 50 cell-grid slots;
+/// our per-pixel pass keeps a uniform-friendly cap).
+pub fn lights_from_poses(poses: &[LivePose]) -> Vec<[f32; 4]> {
+    poses
+        .iter()
+        .filter_map(|p| {
+            let intensity = match (p.class, p.model) {
+                (9, 0) | (9, 9) | (10, 0) | (10, 1) | (10, 23) => 1.0,
+                (10, 6) => 80.0 / 128.0,
+                _ => return None,
+            };
+            Some([p.x, p.alt, p.z, intensity])
+        })
+        .take(16)
+        .collect()
+}
+
 /// The Beyond-Sight rival position markers (interim for the retail
 /// name labels, :57413-48): a 2x2 dot in the rival's team color at
 /// each live, non-cloaked rival wizard.

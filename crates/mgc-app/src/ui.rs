@@ -429,10 +429,9 @@ impl UiAssets {
     }
 
     /// The messaging-font line height in source pixels (tallest glyph
-    /// cell) — the caller's vertical metric for stacking lines/banners.
-    /// Retained for the multi-line callers on the deaths/objectives
-    /// track (`text_quads` already advances newlines internally).
-    #[allow(dead_code)]
+    /// cell) — the caller's vertical metric for stacking lines/banners
+    /// (the subtitle block; `text_quads` already advances newlines
+    /// internally).
     pub fn font_line_height(&self) -> f32 {
         self.line_height
     }
@@ -455,9 +454,8 @@ impl UiAssets {
     /// Total advance width of `s` in the messaging font at scale 1
     /// (source pixels), for centering/right-alignment/clipping. Control
     /// bytes (tab/newline) count as their nominal advance; callers pass
-    /// single lines. Retained for the banner callers on the deaths/
-    /// objectives track (the plain toast is left-aligned).
-    #[allow(dead_code)]
+    /// single lines (the subtitle wrap/centering; the plain toast is
+    /// left-aligned).
     pub fn text_width(&self, s: &str) -> f32 {
         s.bytes().map(|b| self.glyph_advance(b)).sum()
     }

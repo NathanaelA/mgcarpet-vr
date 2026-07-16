@@ -115,10 +115,58 @@ pub struct SimOptions {}
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {
+    /// Neutral visual preferences (fidelity-free knobs).
+    pub preference: RenderPreference,
     /// Fair visual/informational opt-ins.
     pub enhancement: RenderEnhancement,
     /// Dev overlays that visualise the real sim — not for normal play.
     pub debug: RenderDebug,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RenderPreference {
+    /// The textured parallax sky (retail's Sky option, on by
+    /// default): the per-environment 256x256 cloud plane scrolled by
+    /// yaw (4 wraps per revolution), slid by pitch, rolled with the
+    /// bank. Off = the flat horizon-color fill (retail's sky-off
+    /// keyColor). Caves never have one, exactly like retail.
+    pub sky: bool,
+    /// Water reflections (retail's Reflections option, on by
+    /// default): sea tiles mirror the landscape about the water
+    /// plane, wobbling with the wave (remc2 GRO:1104-1431 — terrain
+    /// only, never sprites; our planar-mirror pass works from any
+    /// altitude where retail cut off when flying high). Off = the
+    /// plain animated water.
+    pub reflections: bool,
+    /// Dynamic light sources (retail MC2's Dynamic Lighting option,
+    /// on by default): fireballs, explosions and standing fire cast
+    /// a sphere of light that brightens the terrain around them —
+    /// Night/Cave levels only, exactly retail's gate (remc2
+    /// AddEvent2_847D0: day tables invert, added shade rows would
+    /// darken). Terrain only, like retail — sprites are never lit.
+    pub light_sources: bool,
+    /// Fog view distance in TILES — where the distance fog fully
+    /// occludes (the fade band runs 0.75·D..0.95·D, retail's hardcoded
+    /// 15..19-tile ramp scaled). 20 = the retail constants (remc2
+    /// GRO:668-679), which deliberately overlap the monster
+    /// sight/acquisition radii (15-20 tiles) so pop-in hides in the
+    /// fog; raising it reveals creatures acting before you can see
+    /// them and, past ~128, the torus wrap. 0 = fog off. Max useful ≈
+    /// 255 (the map is 256 tiles around — you'd see the back of your
+    /// own carpet one tile short).
+    pub fog_distance: u32,
+}
+
+impl Default for RenderPreference {
+    fn default() -> Self {
+        Self {
+            sky: true,
+            reflections: true,
+            light_sources: true,
+            fog_distance: 20,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -341,6 +389,14 @@ pub struct AudioConfig {
     /// original's in-game "Speech On/Off" toggle
     /// (`OptionsSettingFlag & 0x40`, remc2 PlayerInput.cpp:1221).
     pub speech: bool,
+    /// Narration subtitles: the ETEXT sentence behind each objective
+    /// voiceover, drawn as a top-of-screen overtitle when the cue
+    /// fires. Retail MC2 shows this text INSTEAD of audio (the
+    /// objective textbox is its speech-off/no-CD fallback,
+    /// DrawCurrentObjectiveTextbox_30630); `auto` reproduces exactly
+    /// that, `on` shows it alongside the voiceover too (the
+    /// accessibility overtitle).
+    pub subtitles: Subtitles,
 }
 
 impl Default for AudioConfig {
@@ -352,6 +408,34 @@ impl Default for AudioConfig {
             music_volume: 1.0,
             arrangement: MusicArrangement::default(),
             speech: true,
+            subtitles: Subtitles::default(),
+        }
+    }
+}
+
+/// When narration subtitles show (see [`AudioConfig::subtitles`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Subtitles {
+    /// The retail law: text exactly when the voiceover does NOT play
+    /// (speech off / clips not baked) — the original's no-audio
+    /// objective textbox.
+    #[default]
+    Auto,
+    /// Always — subtitle every narration even while it plays.
+    On,
+    /// Never (retail with speech on shows no text either way).
+    Off,
+}
+
+impl Subtitles {
+    /// Should the sentence show, given whether the voiceover clip is
+    /// actually about to play?
+    pub fn show(self, speech_audible: bool) -> bool {
+        match self {
+            Subtitles::Auto => !speech_audible,
+            Subtitles::On => true,
+            Subtitles::Off => false,
         }
     }
 }

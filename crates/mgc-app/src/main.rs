@@ -239,6 +239,14 @@ struct LoadedLevel {
     /// 0-based level number = the `CdTracks_DB080` speech row
     /// (docs/traces/mc2-voiceover-triggers.md §4).
     level_number: u32,
+    /// The bundle's sentence bank (ETEXT.DAT, index = sentence id);
+    /// empty on pre-epoch-14 bakes. Feeds the narration subtitles and
+    /// the MC1 win message (entries 60/61).
+    etext: Vec<String>,
+    /// The bundle's 256x256 8bpp parallax-sky bitmap (`sky.bin`);
+    /// None on caves (retail loads no cave sky) and pre-epoch-14
+    /// bakes. Resolved through `palette_rgba` at renderer load.
+    sky: Option<Vec<u8>>,
     /// HSPR UI sprites composited to RGBA (spellbook/HUD); None when
     /// the bundle has no UI members (MC2 until its UI track).
     ui: Option<ui::UiAssets>,
@@ -776,8 +784,89 @@ fn load_level(
         audio_dir,
         music_track,
         level_number: package.meta.level,
+        etext: bundle.etext.unwrap_or_default(),
+        sky: bundle.sky,
         plausible_spells,
     })
+}
+
+/// The fog-wall overlay cut (player directive 2026-07-16): world-
+/// anchored debug overlays (jar icons, crosshair lock markers — the
+/// health bars cut in their own shader) must not reveal what the
+/// distance fog hides. `wall` = the full-occlusion distance in tiles
+/// (0.95·fog_distance; 0 = fog off, never cut). Torus-wrapped 3D
+/// distance like the shaders' wrap-adjusted geometry.
+fn fog_cut(cam: &mgc_render::CameraView, x: f32, alt: f32, z: f32, wall: f32) -> bool {
+    if wall <= 0.0 {
+        return false;
+    }
+    let wrap = |d: f32| (d + 128.0).rem_euclid(256.0) - 128.0;
+    let (dx, dy, dz) = (wrap(x - cam.x), alt - cam.y, wrap(z - cam.z));
+    dx * dx + dy * dy + dz * dz > wall * wall
+}
+
+/// Greedy word-wrap for the messaging font: split `s` into lines no
+/// wider than `max_w` SOURCE pixels (`UiAssets::text_width` units;
+/// the caller applies its own scale). A single over-long word gets
+/// its own line rather than being broken.
+fn wrap_font_text(assets: &ui::UiAssets, s: &str, max_w: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for word in s.split_whitespace() {
+        let candidate = if cur.is_empty() {
+            word.to_string()
+        } else {
+            format!("{cur} {word}")
+        };
+        if !cur.is_empty() && assets.text_width(&candidate) > max_w {
+            lines.push(std::mem::take(&mut cur));
+            cur = word.to_string();
+        } else {
+            cur = candidate;
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+/// Per-level FIRST-objective sentence id (remc2 GameUI.cpp:20
+/// `IndexLevelText_DB4EE`): objective row k of level L reads ETEXT
+/// entry `MC2_OBJECTIVE_TEXT[L] + k`. The display path is
+/// `DrawCurrentObjectiveTextbox_30630` (GameUI.cpp:544-575) — an
+/// explicit table, NOT a base-48 formula.
+const MC2_OBJECTIVE_TEXT: [u16; 25] = [
+    48, 54, 60, 66, 69, 72, 77, 79, 86, 92, 97, 102, 105, 110, 115, 118, 124, 126, 131, 133, 136,
+    140, 143, 151, 156,
+];
+/// Per-level COMPLETION-line sentence id (remc2 GameUI.cpp:29
+/// `LevelEndText_DB507`).
+const MC2_LEVEL_END_TEXT: [u16; 25] = [
+    53, 59, 65, 68, 71, 76, 78, 85, 91, 96, 101, 104, 109, 114, 117, 123, 125, 130, 132, 135, 139,
+    142, 150, 156, 158,
+];
+/// Subtitle dwell: retail parks the objective textbox for 200 ticks
+/// (`byte_counter_current_objective_box_0x36E04 = 200`).
+const SUBTITLE_TICKS: u16 = 200;
+
+/// The ETEXT sentence behind one speech cue: `lvl` = 0-based level,
+/// `seg` = the CD segment the sim's trigger ramp handed over (N+1 =
+/// objective row N, 9 = level complete). Special levels 30-34 show the
+/// generic in-progress/complete lines 51/101 (GameUI.cpp:556-561).
+fn mc2_narration_etext(lvl: u32, seg: u8) -> Option<usize> {
+    if (30..=34).contains(&lvl) {
+        return Some(if seg == 9 { 101 } else { 51 });
+    }
+    let lvl = lvl as usize;
+    if lvl >= MC2_OBJECTIVE_TEXT.len() {
+        return None;
+    }
+    match seg {
+        9 => Some(MC2_LEVEL_END_TEXT[lvl] as usize),
+        1..=8 => Some(MC2_OBJECTIVE_TEXT[lvl] as usize + (seg as usize - 1)),
+        _ => None,
+    }
 }
 
 /// Currently-held key axes, sampled into a `FlightInput` per tick.
@@ -835,6 +924,12 @@ struct App {
     /// near-level flight hold altitude). Faithful for MC2;
     /// enhancement-class in MC1/HW like Backspace.
     stick_idle_ticks: u16,
+    /// The live narration subtitle: sentence + remaining dwell ticks
+    /// (retail parks the objective textbox for 200 ticks —
+    /// `byte_counter_current_objective_box_0x36E04`, EF:22000). Set
+    /// when a speech cue fires (per `audio.subtitles`), counted down
+    /// per sim tick, drawn centered over the live view.
+    subtitle: Option<(String, u16)>,
     /// Space pressed since the last sim tick (respawn confirm).
     pending_full_stop: bool,
     pending_respawn: bool,
@@ -1009,6 +1104,7 @@ impl App {
             cfg,
             jar_markers: Vec::new(),
             stick_idle_ticks: 0,
+            subtitle: None,
             pending_full_stop: false,
             pending_respawn: false,
             pending_demolish: false,
@@ -1095,16 +1191,36 @@ impl App {
             // levels 30-34 address row 0 (seg 4) / row 10 (seg 9) —
             // retail EF:41020-29, ported verbatim.
             if let Some(seg) = frame.speech {
+                let lvl = self.level.level_number;
+                let mut audible = false;
                 if self.cfg.audio.speech {
-                    let lvl = self.level.level_number;
-                    let (row, seg) = if (30..=34).contains(&lvl) {
+                    let (row, cseg) = if (30..=34).contains(&lvl) {
                         if seg == 9 { (10, 9) } else { (0, 4) }
                     } else {
                         (lvl, u32::from(seg))
                     };
-                    if let Err(e) = audio.play_speech(row, seg) {
-                        eprintln!("note: speech: {e}");
+                    match audio.play_speech(row, cseg) {
+                        Ok(()) => audible = true,
+                        Err(e) => eprintln!("note: speech: {e}"),
                     }
+                }
+                // The narration subtitle: the same cue's ETEXT
+                // sentence (retail's objective textbox is this text —
+                // its speech-off fallback; `auto` mirrors that law,
+                // `on` overtitles the voiceover too).
+                if self.cfg.audio.subtitles.show(audible)
+                    && let Some(idx) = mc2_narration_etext(lvl, seg)
+                    && let Some(text) = self.level.etext.get(idx).filter(|s| !s.is_empty())
+                {
+                    self.subtitle = Some((text.clone(), SUBTITLE_TICKS));
+                }
+            }
+            // Subtitle dwell countdown (one per sim tick, like the
+            // retail box counter).
+            if let Some((_, ticks)) = &mut self.subtitle {
+                *ticks -= 1;
+                if *ticks == 0 {
+                    self.subtitle = None;
                 }
             }
         }
@@ -1303,8 +1419,18 @@ impl App {
             }
         }
         let mut bars = Vec::new();
+        let mut lights = Vec::new();
         if entities {
             let poses = w.live_poses();
+            // Dynamic light sources (retail's Dynamic Lighting
+            // option): fireballs/explosions/standing fire brighten
+            // the terrain, Night/Cave only (retail's MapType gate —
+            // the day tables invert, added rows would darken).
+            if self.cfg.render.preference.light_sources
+                && self.level.mc2_env != entities::Mc2MapEnv::Day
+            {
+                lights = entities::lights_from_poses(&poses);
+            }
             let index = self.level.sprites.as_ref().map(|(i, _)| i);
             let dims = |id: u16| {
                 index
@@ -1369,6 +1495,7 @@ impl App {
             if entities {
                 r.set_billboards(self.level.billboards.clone());
                 r.set_health_bars(bars);
+                r.set_lights(&lights);
             }
             // Upright map icons + the guide path are drawn screen-space
             // by the renderer (never baked into the rotated map
@@ -1566,10 +1693,17 @@ impl ApplicationHandler for App {
                 }
                 renderer.set_billboards(self.level.billboards.clone());
                 renderer.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
+                renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
                 renderer.set_hud_transparent(self.hud_transparent());
                 if let Some(sky) = mc2_sky_srgb(&self.level) {
                     renderer.set_sky_color(sky);
                 }
+                if self.cfg.render.preference.sky
+                    && let Some(bitmap) = &self.level.sky
+                {
+                    renderer.load_sky(bitmap, &self.level.palette_rgba);
+                }
+                renderer.set_reflections(self.cfg.render.preference.reflections);
                 // Map-screen topology follows the book surface: no
                 // map book (MC2, or MC1 with spell_selector=mc2) =
                 // the split layout with the stretched live view.
@@ -2183,6 +2317,10 @@ impl ApplicationHandler for App {
                     roll: view_roll,
                     fov_y: FOV_Y,
                 };
+                // The overlay fog wall: terrain fully occludes at
+                // 0.95·fog_distance (see terrain.wgsl fog_amount);
+                // world-anchored overlays cut there (`fog_cut`).
+                let fog_wall = 0.95 * self.cfg.render.preference.fog_distance as f32;
                 // Spell UI quads (book grid or in-flight HUD).
                 if let (Some(assets), Some(w)) = (&self.level.ui, &self.sim.world) {
                     let size = self
@@ -2333,6 +2471,15 @@ impl ApplicationHandler for App {
                     if self.cfg.render.enhancement.expose_jar_spells && !self.book_open() {
                         if let Some(u) = &self.level.ui {
                             for &(x, alt, z, spell) in &self.jar_markers {
+                                // The fog-wall cut (player directive
+                                // 2026-07-16): overlays must not
+                                // reveal jars the fog hides. Torus-
+                                // wrapped distance vs the fog's
+                                // full-occlusion point (0.95·D;
+                                // 0 = fog off).
+                                if fog_cut(&cam, x, alt, z, fog_wall) {
+                                    continue;
+                                }
                                 let Some(id) = ui::spell_icon_sprite(self.level.game, spell) else {
                                     continue;
                                 };
@@ -2400,6 +2547,12 @@ impl ApplicationHandler for App {
                         );
                         let locks = w.aim_preview(pose).map(|l| {
                             l.and_then(|l| {
+                                // Lock markers honor the fog wall too
+                                // (relevant when fog_distance < the
+                                // 20-tile acquire range).
+                                if fog_cut(&cam, l.x, l.alt, l.z, fog_wall) {
+                                    return None;
+                                }
                                 mgc_render::world_to_screen(&cam, size.0, size.1, l.x, l.alt, l.z)
                             })
                         });
@@ -2454,24 +2607,56 @@ impl ApplicationHandler for App {
                             let hud_s = size.0 / 640.0;
                             let font_s = size.0 / 320.0;
                             let black = [0.0, 0.0, 0.0, 1.0];
-                            // One string — the font's own line height
+                            // The two sentences are ETEXT 60/61, read
+                            // from the bundle's baked bank (literal
+                            // fallback for pre-epoch-14 bakes). One
+                            // string — the font's own line height
                             // spaces the two lines (the manual offset
                             // pass under-spaced and the lines
                             // overlapped, playtest 2026-07-16). A
                             // live toast owns the anchor row; the
                             // win block steps one line below it.
-                            let msg = if w.notification().is_some() {
-                                "\nWorld restored.\nPress the space bar to continue."
-                            } else {
-                                "World restored.\nPress the space bar to continue."
+                            let line = |idx: usize, fallback: &str| -> String {
+                                match self.level.etext.get(idx) {
+                                    Some(s) if !s.is_empty() => s.clone(),
+                                    _ => fallback.to_string(),
+                                }
                             };
+                            let msg = format!(
+                                "{}{}\n{}",
+                                if w.notification().is_some() { "\n" } else { "" },
+                                line(60, "World restored."),
+                                line(61, "Press the space bar to continue."),
+                            );
                             quads.extend(assets.text_quads(
-                                msg,
+                                &msg,
                                 ax * hud_s,
                                 ay * hud_s,
                                 black,
                                 font_s,
                             ));
+                        }
+                        // The narration subtitle (MC2 objective
+                        // voiceover text): word-wrapped, centered,
+                        // one line-height below the toast row so the
+                        // two never collide. White ink — the
+                        // conventional subtitle color (the retail
+                        // textbox look is not reproduced; P-class
+                        // presentation).
+                        if let Some((text, _)) = &self.subtitle {
+                            let (_, ay) = assets.hud_notification_anchor();
+                            let hud_s = size.0 / 640.0;
+                            let font_s = size.0 / 320.0;
+                            let lh = assets.font_line_height();
+                            let white = [1.0, 1.0, 1.0, 1.0];
+                            let max_w = size.0 * 0.8 / font_s;
+                            let mut y = ay * hud_s + 1.5 * lh * font_s;
+                            for line in wrap_font_text(assets, text, max_w) {
+                                let w_px = assets.text_width(&line) * font_s;
+                                let x = (size.0 - w_px) / 2.0;
+                                quads.extend(assets.text_quads(&line, x, y, white, font_s));
+                                y += lh * font_s;
+                            }
                         }
                     }
                     // The end-of-game fadeout: the MC2 ending's
@@ -2589,6 +2774,17 @@ struct Args {
     map_view: bool,
     /// Spell-selector surface override (config `spell_selector`).
     spell_selector: Option<config::SpellSelector>,
+    /// Narration-subtitle override (config `audio.subtitles`).
+    subtitles: Option<config::Subtitles>,
+    /// Fog view-distance override in tiles (config
+    /// `render.preference.fog_distance`; 0 = fog off).
+    fog_distance: Option<u32>,
+    /// Textured parallax-sky override (config `render.preference.sky`).
+    sky: Option<bool>,
+    /// Water-reflection override (config `render.preference.reflections`).
+    reflections: Option<bool>,
+    /// Dynamic-lights override (config `render.preference.light_sources`).
+    light_sources: Option<bool>,
     /// Animation clock for `--screenshot` (game turns; default 0).
     /// Water-wave phase repeats every 32 (MC1) / 64 (MC2) turns.
     anim_turn: f32,
@@ -2638,6 +2834,11 @@ fn parse_args() -> Result<Args, String> {
     let mut map_scale = 4u32;
     let mut map_view = false;
     let mut spell_selector = None;
+    let mut subtitles = None;
+    let mut fog_distance = None;
+    let mut sky = None;
+    let mut reflections = None;
+    let mut light_sources = None;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
     let mut awake_range = None;
@@ -2773,6 +2974,12 @@ fn parse_args() -> Result<Args, String> {
             "--no-expose-jar-spells" => expose_jar_spells = Some(false),
             "--grace-meter" => grace_meter = Some(true),
             "--no-grace-meter" => grace_meter = Some(false),
+            "--sky" => sky = Some(true),
+            "--no-sky" => sky = Some(false),
+            "--reflections" => reflections = Some(true),
+            "--no-reflections" => reflections = Some(false),
+            "--light-sources" => light_sources = Some(true),
+            "--no-light-sources" => light_sources = Some(false),
             "--thrust" => {
                 thrust = Some(match it.next().as_deref() {
                     Some("mc1") => config::ThrustModel::Mc1,
@@ -2815,6 +3022,25 @@ fn parse_args() -> Result<Args, String> {
                     Some("mc2") => config::SpellSelector::Mc2,
                     Some("mc1+mc2") => config::SpellSelector::Mc1Mc2,
                     _ => return Err("--spell-selector needs auto|mc1|mc2|mc1+mc2".into()),
+                });
+            }
+            "--fog-distance" => {
+                let n: u32 = it
+                    .next()
+                    .ok_or("--fog-distance needs a tile count (0 = no fog)")?
+                    .parse()
+                    .map_err(|e| format!("--fog-distance: {e}"))?;
+                if n > 255 {
+                    return Err("--fog-distance must be 0..=255 (the map is 256 tiles)".into());
+                }
+                fog_distance = Some(n);
+            }
+            "--subtitles" => {
+                subtitles = Some(match it.next().as_deref() {
+                    Some("auto") => config::Subtitles::Auto,
+                    Some("on") => config::Subtitles::On,
+                    Some("off") => config::Subtitles::Off,
+                    _ => return Err("--subtitles needs auto|on|off".into()),
                 });
             }
             "--anim-turn" => {
@@ -2861,6 +3087,9 @@ fn parse_args() -> Result<Args, String> {
                      [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
                      [--bindings classic|wasd] \
                      [--spell-selector auto|mc1|mc2|mc1+mc2] \
+                     [--subtitles auto|on|off] [--fog-distance TILES (0 = no fog)] \
+                     [--sky|--no-sky] [--reflections|--no-reflections] \
+                     [--light-sources|--no-light-sources] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
@@ -2898,6 +3127,11 @@ fn parse_args() -> Result<Args, String> {
         map_scale,
         map_view,
         spell_selector,
+        subtitles,
+        fog_distance,
+        sky,
+        reflections,
+        light_sources,
         anim_turn,
         terrain_features,
         pool_slots,
@@ -3399,6 +3633,10 @@ fn run_screenshot(
     out: &Path,
     camera: Option<[f32; 5]>,
     smooth_shading: bool,
+    fog_distance: u32,
+    sky_texture: bool,
+    reflections: bool,
+    light_sources: bool,
     map_view: bool,
     anim_turn: f32,
     map_triggers: bool,
@@ -3450,8 +3688,19 @@ fn run_screenshot(
     }
     renderer.set_billboards(level.billboards.clone());
     renderer.set_smooth_shading(smooth_shading);
+    renderer.set_fog_distance(fog_distance as f32);
     if let Some(sky) = mc2_sky_srgb(&level) {
         renderer.set_sky_color(sky);
+    }
+    if sky_texture && let Some(bitmap) = &level.sky {
+        renderer.load_sky(bitmap, &level.palette_rgba);
+    }
+    renderer.set_reflections(reflections);
+    if light_sources
+        && level.mc2_env != entities::Mc2MapEnv::Day
+        && let Some(w) = &level.world
+    {
+        renderer.set_lights(&entities::lights_from_poses(&w.live_poses()));
     }
     // HUD transparency: the config decides (same path as live play);
     // MGC_HUD_OPAQUE overrides for A/B captures — by VALUE, so
@@ -3599,6 +3848,21 @@ fn main() -> std::process::ExitCode {
     if let Some(v) = args.spell_selector {
         cfg.gameplay.enhancement.spell_selector = v;
     }
+    if let Some(v) = args.subtitles {
+        cfg.audio.subtitles = v;
+    }
+    if let Some(v) = args.fog_distance {
+        cfg.render.preference.fog_distance = v;
+    }
+    if let Some(v) = args.sky {
+        cfg.render.preference.sky = v;
+    }
+    if let Some(v) = args.reflections {
+        cfg.render.preference.reflections = v;
+    }
+    if let Some(v) = args.light_sources {
+        cfg.render.preference.light_sources = v;
+    }
     if let Some(v) = args.prune_owned_jars {
         cfg.gameplay.enhancement.prune_owned_jars = v;
     }
@@ -3693,6 +3957,10 @@ fn main() -> std::process::ExitCode {
             out,
             args.camera,
             cfg.render.enhancement.smooth_shading,
+            cfg.render.preference.fog_distance,
+            cfg.render.preference.sky,
+            cfg.render.preference.reflections,
+            cfg.render.preference.light_sources,
             args.map_view,
             args.anim_turn,
             cfg.render.debug.map_trigger_areas,

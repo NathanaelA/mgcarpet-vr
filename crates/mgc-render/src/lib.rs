@@ -675,10 +675,27 @@ struct Globals {
     fog_color: [f32; 4],
     /// x = atlas cell count (0 = untextured), y/z/w reserved.
     atlas: [u32; 4],
-    /// Camera basis for billboard expansion (screen-aligned quads).
+    /// Camera basis for billboard expansion (screen-aligned quads);
+    /// the w slots carry tan(fov/2) h/v for the sky ray.
     cam_right: [f32; 4],
     cam_up: [f32; 4],
+    /// x/y = framebuffer size in pixels, z = water-reflection flag
+    /// for this pass (1 = the main pass may sample the mirror
+    /// texture; 0 in the mirror pass itself and when reflections are
+    /// off), w = dynamic light count. Only terrain.wgsl declares this
+    /// field on — the other shaders' shorter Globals structs bind a
+    /// prefix.
+    viewport: [f32; 4],
+    /// Dynamic point lights: xyz = world position (tile units), w =
+    /// intensity (1 = retail's 128 spell/explosion baseline; the
+    /// standing fire is 80/128). Live count in `viewport.w`.
+    lights: [[f32; 4]; MAX_LIGHTS],
 }
+
+/// Uniform-array cap for dynamic lights (retail keeps a 50-slot
+/// cell-grid registry; our per-pixel pass rarely needs more than a
+/// handful on screen).
+const MAX_LIGHTS: usize = 16;
 
 /// One world sprite to draw, resolved from a level entity. Static data;
 /// the view-dependent part (which rotation view, mirroring) is computed
@@ -772,7 +789,12 @@ struct BillboardInstance {
 /// the shade LUT's row-0 fill is the engine's fog far color (night =
 /// black, day = pale blue). sRGB, converted to linear where uploaded.
 const SKY_SRGB: [f32; 3] = [0.42, 0.55, 0.75];
-const FOG_DENSITY: f32 = 0.006;
+/// Default fog VIEW DISTANCE in tiles: where the fog band fully
+/// occludes. 20 = the retail law (remc2 GRO:668-679 — fade 15..19
+/// tiles, geometry cutoff 20; the shaders scale that band as
+/// 0.75·D..0.95·D). Most monster sight radii are 15-20 tiles, so the
+/// retail distance is exactly what hides acquisition pop-in.
+const DEFAULT_FOG_TILES: f32 = 20.0;
 
 // Both maps are player-centered, yaw-rotated and toroidally wrapping
 // (player directive 2026-07-07). World spans derive from the original's
@@ -888,8 +910,32 @@ pub struct Renderer {
     queue: wgpu::Queue,
     target: Target,
     depth: wgpu::TextureView,
+    /// Color format of the render target (the mirror texture must
+    /// match it — the reflection pass reuses the terrain pipeline).
+    format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
+    /// The water-reflection MIRROR pass twin of `globals_buf`
+    /// (atlas.w = 2 — the shader's y-flip arm).
+    mirror_globals_buf: wgpu::Buffer,
+    /// Terrain bind group over the mirror globals; rebuilt with
+    /// `bind_group` at level load.
+    mirror_bind_group: Option<wgpu::BindGroup>,
+    /// Group-1 (mirror texture) machinery: layout + shared sampler +
+    /// the 1x1 dummy bound when no mirror image exists for a pass.
+    reflection_layout: wgpu::BindGroupLayout,
+    reflection_sampler: wgpu::Sampler,
+    reflection_dummy_bind_group: wgpu::BindGroup,
+    /// The mirror render target (recreated on resize) + its group-1
+    /// bind group for the main pass.
+    reflection_view: Option<wgpu::TextureView>,
+    reflection_bind_group: Option<wgpu::BindGroup>,
+    reflection_size: (u32, u32),
+    /// Water reflections on (config `render.preference.reflections`).
+    reflections: bool,
+    /// Live dynamic lights (already gated app-side to Night/Cave +
+    /// the option), capped at [`MAX_LIGHTS`].
+    lights: Vec<[f32; 4]>,
     /// The CEILING pass twin of `globals_buf` (`atlas.w = 1` — the
     /// shader's cave-ceiling arm selector); only written/drawn when
     /// the level carries a ceiling plane.
@@ -914,6 +960,9 @@ pub struct Renderer {
     /// Interpolate per-tile shade across tile centers (enhancement,
     /// off = the original's per-tile shade snap).
     smooth_shading: bool,
+    /// Fog view distance in tiles (full occlusion; 0 = fog off).
+    /// [`DEFAULT_FOG_TILES`] = the retail band.
+    fog_distance: f32,
     /// Sky/fog color (sRGB): [`SKY_SRGB`] default, overridden per MC2
     /// environment from the bundle (shade LUT row 0 — night = black).
     sky_srgb: [f32; 3],
@@ -938,12 +987,23 @@ pub struct Renderer {
     /// default matches the translucent panels, MC2/opaque = 1).
     minimap_alpha: f32,
     fill_pipeline: wgpu::RenderPipeline,
+    /// The textured parallax-sky pass; the bind groups exist only
+    /// while a level's sky bitmap is loaded (see `load_sky`). The
+    /// mirror twin binds the mirror globals (atlas.w = 2 — the
+    /// shader's reflected-ray arm) for the reflection pass.
+    sky_pipeline: wgpu::RenderPipeline,
+    sky_bind_group_layout: wgpu::BindGroupLayout,
+    sky_bind_group: Option<wgpu::BindGroup>,
+    sky_mirror_bind_group: Option<wgpu::BindGroup>,
     fill_bind_group: wgpu::BindGroup,
     // Billboard (world sprite) pass.
     billboard_pipeline: wgpu::RenderPipeline,
     billboard_blend_pipeline: wgpu::RenderPipeline,
     billboard_bind_group_layout: wgpu::BindGroupLayout,
     billboard_bind_group: Option<wgpu::BindGroup>,
+    /// Billboard bind group over the mirror globals — sprite
+    /// reflections in the water pass; rebuilt with its twin.
+    billboard_mirror_bind_group: Option<wgpu::BindGroup>,
     billboard_buf: Option<wgpu::Buffer>,
     billboard_capacity: usize,
     /// CPU copy of the sprite index for per-frame view selection.
@@ -1175,9 +1235,34 @@ impl Renderer {
             ],
         });
 
+        // Group 1: the water-reflection mirror texture (the previous
+        // mirror pass's output). Always bound — a 1x1 dummy when
+        // reflections are off or inside the mirror pass itself.
+        let reflection_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("reflection"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("terrain"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&bind_group_layout, &reflection_layout],
             push_constant_ranges: &[],
         });
 
@@ -1232,6 +1317,54 @@ impl Renderer {
             size: std::mem::size_of::<Globals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+        let mirror_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mirror globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // The always-bound group-1 resources: a linear clamping
+        // sampler and a 1x1 dummy mirror texture for passes that must
+        // not (mirror) or cannot (reflections off) sample one.
+        let reflection_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("reflection"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("reflection dummy"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let reflection_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("reflection dummy"),
+            layout: &reflection_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &dummy_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&reflection_sampler),
+                },
+            ],
         });
 
         // The map (book screen) pass: fullscreen-quad pipeline over the
@@ -1367,6 +1500,89 @@ impl Renderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fill_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Parallax sky pass: the baked 256x256 sky bitmap steered by
+        // the camera ray (see sky.wgsl). Same one-triangle/no-depth
+        // shape as the fill pass; the bind group is built by
+        // `load_sky` when a level has a sky texture and the option is
+        // on — absent, the flat fill/clear IS the sky (retail's
+        // sky-off keyColor fill).
+        let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sky"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("sky.wgsl").into()),
+        });
+        let sky_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("sky"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky"),
+            bind_group_layouts: &[&sky_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky"),
+            layout: Some(&sky_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -1720,6 +1936,7 @@ impl Renderer {
             plane_texs: None,
             map_tex: None,
             smooth_shading: false,
+            fog_distance: DEFAULT_FOG_TILES,
             sky_srgb: SKY_SRGB,
             map_view: false,
             map_layout: MapScreenLayout::default(),
@@ -1733,6 +1950,22 @@ impl Renderer {
             map_bind_group: None,
             fill_pipeline,
             fill_bind_group,
+            sky_pipeline,
+            sky_bind_group_layout,
+            sky_bind_group: None,
+            sky_mirror_bind_group: None,
+            billboard_mirror_bind_group: None,
+            format,
+            mirror_globals_buf,
+            mirror_bind_group: None,
+            reflection_layout,
+            reflection_sampler,
+            reflection_dummy_bind_group,
+            reflection_view: None,
+            reflection_bind_group: None,
+            reflection_size: (0, 0),
+            reflections: true,
+            lights: Vec::new(),
             billboard_pipeline,
             billboard_blend_pipeline,
             billboard_bind_group_layout,
@@ -1784,11 +2017,125 @@ impl Renderer {
         self.smooth_shading = on;
     }
 
+    /// Set the fog view distance in TILES: where the distance fog
+    /// fully occludes (the band fades in from 0.75·D, retail's
+    /// 15..19-tile ramp scaled). 0 disables fog entirely; the default
+    /// is the retail 20. Takes effect on the next frame.
+    pub fn set_fog_distance(&mut self, tiles: f32) {
+        self.fog_distance = tiles.max(0.0);
+    }
+
+    /// Enable/disable water reflections (the per-frame mirrored-
+    /// terrain pass sampled by sea fragments). On by default; the
+    /// pass self-gates off caves, the book screen and non-water
+    /// levels either way.
+    pub fn set_reflections(&mut self, on: bool) {
+        self.reflections = on;
+    }
+
+    /// Set this frame's dynamic point lights (`[x, alt, z,
+    /// intensity]`, tile units; intensity 1 = retail's 128 baseline).
+    /// The caller gates Night/Cave + the option; entries beyond
+    /// [`MAX_LIGHTS`] are dropped.
+    pub fn set_lights(&mut self, lights: &[[f32; 4]]) {
+        self.lights = lights[..lights.len().min(MAX_LIGHTS)].to_vec();
+    }
+
     /// Override the sky/fog color (sRGB) — the environment's fog far
     /// color (shade LUT row 0): what the clear, the book-screen sky
     /// fill and the distance fog all fade into.
     pub fn set_sky_color(&mut self, srgb: [f32; 3]) {
         self.sky_srgb = srgb;
+    }
+
+    /// Load the level's parallax sky: the 256x256 8bpp sky bitmap
+    /// (bundle `sky.bin`), resolved through the variant palette
+    /// (RGBA, index straight through — retail DrawSky writes the
+    /// palette index raw, no shade remap). Enables the textured sky
+    /// pass; without it the flat fog-color fill IS the sky (retail's
+    /// sky-off/cave keyColor fill).
+    pub fn load_sky(&mut self, indices: &[u8], palette: &[[u8; 4]; 256]) {
+        assert_eq!(indices.len(), 256 * 256, "sky.bin must be 256x256");
+        let mut rgba = Vec::with_capacity(256 * 256 * 4);
+        for &i in indices {
+            let p = palette[i as usize];
+            rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
+        }
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sky"),
+            size: wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            tex.as_image_copy(),
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+        );
+        // Repeat on both axes (retail's 16-bit wrapping index tiles
+        // the cloud plane infinitely); linear filtering — the bitmap
+        // was authored for ~1:1 at 320x200, so at modern resolutions
+        // it upscales, and chunky texels would read as noise.
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sky"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let view = tex.create_view(&Default::default());
+        let device = &self.device;
+        let layout = &self.sky_bind_group_layout;
+        let make = |globals: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("sky"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: globals.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        };
+        let main_bg = make(&self.globals_buf);
+        // The mirror twin: same texture, mirror globals (atlas.w = 2
+        // flips the ray's y — the sky reflecting in the water).
+        let mirror_bg = make(&self.mirror_globals_buf);
+        self.sky_bind_group = Some(main_bg);
+        self.sky_mirror_bind_group = Some(mirror_bg);
+    }
+
+    /// Drop the textured sky (back to the flat fog-color fill).
+    pub fn clear_sky(&mut self) {
+        self.sky_bind_group = None;
+        self.sky_mirror_bind_group = None;
     }
 
     fn sky_color_linear(&self) -> [f64; 3] {
@@ -2059,6 +2406,60 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: self.globals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &type_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        &shade_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(
+                        &colormap_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(
+                        &tile_colors_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(
+                        &atlas_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(
+                        &angle_tex.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(
+                        &height_tex.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        }));
+        // The water-reflection MIRROR pass twin: identical planes,
+        // mirror globals (atlas.w = 2 = the shader's y-flip arm).
+        self.mirror_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("terrain mirror"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.mirror_globals_buf.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -2492,14 +2893,16 @@ impl Renderer {
         let (Some(sprites), Some(colormap)) = (&self.sprite_tex, &self.colormap_tex) else {
             return;
         };
-        self.billboard_bind_group =
-            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let device = &self.device;
+        let layout = &self.billboard_bind_group_layout;
+        let make = |globals: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("billboard"),
-                layout: &self.billboard_bind_group_layout,
+                layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: self.globals_buf.as_entire_binding(),
+                        resource: globals.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -2514,7 +2917,14 @@ impl Renderer {
                         ),
                     },
                 ],
-            }));
+            })
+        };
+        let main_bg = make(&self.globals_buf);
+        // The mirror twin (atlas.w = 2 — the shader's y-flip arm):
+        // sprite reflections in the water pass.
+        let mirror_bg = make(&self.mirror_globals_buf);
+        self.billboard_bind_group = Some(main_bg);
+        self.billboard_mirror_bind_group = Some(mirror_bg);
     }
 
     /// Resolve each billboard against the camera (rotation view,
@@ -2691,9 +3101,22 @@ impl Renderer {
         // screen-aligned in the rolled view like retail's
         // SetBillboards_3B560(-roll)).
         let (right, up, _fwd) = camera_basis(cam);
+        // The basis w slots carry tan(fov/2) h/v — the sky shader's
+        // per-pixel ray reconstruction (billboards read .xyz only).
+        let tan_v = (cam.fov_y * 0.5).tan();
+        let tan_h = tan_v * aspect;
+        // The water-reflection mirror pass runs on the live view only
+        // (the book viewport's sub-rect would need its own transform)
+        // and never on caves (no open water; the ceiling pass would
+        // mirror nonsense). Only water levels animate (wave_mode!=0).
+        let mirror_active = self.reflections
+            && !self.map_view
+            && self.wave_mode != 0
+            && self.ceiling_bind_group.is_none()
+            && self.mirror_bind_group.is_some();
         let globals = Globals {
             view_proj,
-            camera: [cam.x, cam.y, cam.z, FOG_DENSITY],
+            camera: [cam.x, cam.y, cam.z, self.fog_distance],
             // The fog alpha slot carries the animation clock (turns).
             fog_color: [sky[0] as f32, sky[1] as f32, sky[2] as f32, self.anim_turn],
             atlas: [
@@ -2702,8 +3125,19 @@ impl Renderer {
                 self.wave_mode,
                 0,
             ],
-            cam_right: [right[0], right[1], right[2], 0.0],
-            cam_up: [up[0], up[1], up[2], 0.0],
+            cam_right: [right[0], right[1], right[2], tan_h],
+            cam_up: [up[0], up[1], up[2], tan_v],
+            viewport: [
+                w as f32,
+                hpx as f32,
+                mirror_active as u32 as f32,
+                self.lights.len() as f32,
+            ],
+            lights: {
+                let mut arr = [[0.0f32; 4]; MAX_LIGHTS];
+                arr[..self.lights.len()].copy_from_slice(&self.lights);
+                arr
+            },
         };
         self.queue
             .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
@@ -2724,6 +3158,65 @@ impl Renderer {
                 0,
                 bytemuck::bytes_of(&ceiling_globals),
             );
+        }
+        if mirror_active {
+            // The mirror pass globals: atlas.w = 2 flips terrain y in
+            // the vertex stage; viewport.z = 0 (a mirror never samples
+            // itself).
+            let mirror_globals = Globals {
+                atlas: [
+                    self.atlas_cells,
+                    self.smooth_shading as u32,
+                    self.wave_mode,
+                    2,
+                ],
+                // A mirror never samples itself (z = 0); the lights
+                // still apply (`..globals` keeps the array + count in
+                // w) so reflected terrain glows too.
+                viewport: [w as f32, hpx as f32, 0.0, self.lights.len() as f32],
+                ..globals
+            };
+            self.queue.write_buffer(
+                &self.mirror_globals_buf,
+                0,
+                bytemuck::bytes_of(&mirror_globals),
+            );
+            // (Re)create the mirror target at the framebuffer size.
+            if self.reflection_view.is_none() || self.reflection_size != (w, hpx) {
+                let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("reflection"),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: hpx,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = tex.create_view(&Default::default());
+                self.reflection_bind_group =
+                    Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("reflection"),
+                        layout: &self.reflection_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&self.reflection_sampler),
+                            },
+                        ],
+                    }));
+                self.reflection_view = Some(view);
+                self.reflection_size = (w, hpx);
+            }
         }
 
         // Billboard instances for this camera (empty when no sprites
@@ -2952,6 +3445,75 @@ impl Renderer {
         }
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        // The water-reflection MIRROR pass: the terrain grid y-flipped
+        // about the sea plane (atlas.w = 2), rendered into the mirror
+        // texture the main pass's water fragments sample. Terrain
+        // only, exactly retail's reflection block (GRO:1104-1431 —
+        // sprites are never reflected); cleared to the sky color so
+        // open water beyond the mirrored landscape reflects sky.
+        if mirror_active
+            && let (Some(rv), Some(bg), Some(vb), Some(ib)) = (
+                &self.reflection_view,
+                &self.mirror_bind_group,
+                &self.vertex_buf,
+                &self.index_buf,
+            )
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mirror"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: rv,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: sky[0],
+                            g: sky[1],
+                            b: sky[2],
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            // The mirrored SKY behind the mirrored world (no depth
+            // write): clouds reflect in open water past the mirrored
+            // landscape.
+            if let Some(sky_bg) = &self.sky_mirror_bind_group {
+                pass.set_pipeline(&self.sky_pipeline);
+                pass.set_bind_group(0, sky_bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, bg, &[]);
+            pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.index_count, 0, 0..9);
+            // Mirrored sprites (opaque range only — reflected smoke
+            // isn't worth a sorted blend pass). NOT retail (GRO
+            // reflects terrain only), but the presentation track's
+            // bar is "looks good" — a monster over water should show
+            // in the water (player 2026-07-16).
+            if let (1.., Some(bbg), Some(bbuf)) = (
+                opaque_count,
+                &self.billboard_mirror_bind_group,
+                &self.billboard_buf,
+            ) {
+                pass.set_pipeline(&self.billboard_pipeline);
+                pass.set_bind_group(0, bbg, &[]);
+                pass.set_vertex_buffer(0, bbuf.slice(..));
+                pass.draw(0..6, 0..opaque_count);
+            }
+        }
         {
             // The book screen: the world viewport fills the top-right,
             // the map pane the top-left, the spellbook the bottom-right;
@@ -2993,11 +3555,26 @@ impl Renderer {
                 ..Default::default()
             });
             let draw_world = |pass: &mut wgpu::RenderPass<'_>| {
+                // The textured parallax sky first (no depth write) —
+                // terrain and sprites paint over it, exactly retail's
+                // sky-then-world order. Absent, the flat clear/fill
+                // color underneath is the sky.
+                if let Some(sky_bg) = &self.sky_bind_group {
+                    pass.set_pipeline(&self.sky_pipeline);
+                    pass.set_bind_group(0, sky_bg, &[]);
+                    pass.draw(0..3, 0..1);
+                }
                 if let (Some(bg), Some(vb), Some(ib)) =
                     (&self.bind_group, &self.vertex_buf, &self.index_buf)
                 {
                     pass.set_pipeline(&self.pipeline);
                     pass.set_bind_group(0, bg, &[]);
+                    // Group 1 = the mirror texture for the water
+                    // fragments (a dummy when no mirror pass ran).
+                    match (&self.reflection_bind_group, mirror_active) {
+                        (Some(rbg), true) => pass.set_bind_group(1, rbg, &[]),
+                        _ => pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]),
+                    }
                     pass.set_vertex_buffer(0, vb.slice(..));
                     pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                     // 3x3 wrap copies; the vertex shader offsets by instance.

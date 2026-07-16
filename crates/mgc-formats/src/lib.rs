@@ -78,7 +78,15 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    the rest — losing e.g. level-000's kind-2 goat-graze anchors (the
 ///    2026-07-16 flocking-mystery root cause) and mis-slotting chained
 ///    triggers.
-pub const BAKE_EPOCH: u32 = 13;
+/// 14: every graphics bundle gains `etext.json` (DATA/ETEXT.DAT as a
+///    JSON string array, index = the engine's sentence id — the
+///    roadmap "Text" track: MC2 objective/briefing subtitles, MC1's
+///    win-message entries 60/61 retiring the mgc-app hardcode) and
+///    `sky.bin` (the 256x256 8bpp parallax sky bitmap: MC1 SKY.DAT /
+///    SKY1-0.DAT, MC2 SKY{D,N}0-0.DAT with night-fog sharing night's;
+///    cave has none — retail never loads SKYC, remc2
+///    ReadAndDecompress.cpp).
+pub const BAKE_EPOCH: u32 = 14;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.
