@@ -756,8 +756,23 @@ impl Gen {
                 let mut j = self.map_entity[tile(tx, ty)] as usize;
                 while j != 0 {
                     let c = &self.ent[j];
+                    // Class-14 map objects (MC2 XP scrolls, mouth/
+                    // checkpoint markers) are OBSERVABLE pass-through:
+                    // retail's probe admits them mechanically (the
+                    // (14,5) ctor keeps byte[0]&8, EF:37315/37365,
+                    // and a player bolt's xtype is the −1 wildcard)
+                    // but its ≈0-box, own-cell, endpoint-only probe
+                    // never reaches the scroll's 768/1280 PICKUP box
+                    // in practice (EF:63127-28 + Events.cpp:132 ring
+                    // 0). Our anti-tunneling ring + chord-march
+                    // (below/mc2 proj) WOULD reach it — the player's
+                    // "fireballs detonate on scrolls / scrolls steal
+                    // autoaim" report — so the guard restores the
+                    // retail observable (2026-07-16 scroll trace;
+                    // MC1 has no class-14, goldens untouched).
                     if c.id24 != id
                         && c.flags & 8 != 0
+                        && c.class64 != 14
                         && Self::filter_admits(f66, f67, c.class64, c.model65)
                         && self.ent_overlap(i, j)
                     {

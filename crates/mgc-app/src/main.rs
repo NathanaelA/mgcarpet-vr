@@ -918,6 +918,13 @@ struct App {
     misfits_reported: usize,
     /// Audio runtime (None in headless paths / when opening failed).
     audio: Option<mgc_audio::Audio>,
+    /// The end-of-game fadeout, armed when the sim reports the level
+    /// WON (`World::won`): alpha 0→1 over ~0.8 s, then the app exits
+    /// — the player-directed ending (2026-07-16): no stats screen,
+    /// no menu return, campaign stitching comes later. MC2's ending
+    /// already fades sim-side (`World::end_fade`); this rides on top
+    /// so both games leave through the same door.
+    quit_fade: Option<f32>,
 }
 
 impl App {
@@ -1038,6 +1045,7 @@ impl App {
             pool_dropped_total: 0,
             misfits_reported: 0,
             audio,
+            quit_fade: None,
         }
     }
 
@@ -2429,10 +2437,69 @@ impl ApplicationHandler for App {
                                 font_s,
                             ));
                         }
+                        // The MC1/HW WIN message (:26480-26505):
+                        // while the win flag holds, the two-line
+                        // black-ink message persists at the pane top
+                        // — ETEXT.DAT entries 60/61 (verified against
+                        // the pristine install; the full etext bake
+                        // is the banked Text track). Retail
+                        // colour-cycles the ink unless zoomed out —
+                        // the static black remap slot [1] is the
+                        // baseline.
+                        if !matches!(self.level.game, mgc_sim::ids::GameId::Mc2)
+                            && w.completed()
+                            && !w.player_dead()
+                        {
+                            let (ax, ay) = assets.hud_notification_anchor();
+                            let hud_s = size.0 / 640.0;
+                            let font_s = size.0 / 320.0;
+                            let black = [0.0, 0.0, 0.0, 1.0];
+                            // One string — the font's own line height
+                            // spaces the two lines (the manual offset
+                            // pass under-spaced and the lines
+                            // overlapped, playtest 2026-07-16). A
+                            // live toast owns the anchor row; the
+                            // win block steps one line below it.
+                            let msg = if w.notification().is_some() {
+                                "\nWorld restored.\nPress the space bar to continue."
+                            } else {
+                                "World restored.\nPress the space bar to continue."
+                            };
+                            quads.extend(assets.text_quads(
+                                msg,
+                                ax * hud_s,
+                                ay * hud_s,
+                                black,
+                                font_s,
+                            ));
+                        }
+                    }
+                    // The end-of-game fadeout: the MC2 ending's
+                    // sim-side fade (endGameSeq phase 11) under the
+                    // app's own post-victory fade; at full black the
+                    // game ends (player directive 2026-07-16 — quit,
+                    // no stats/menu; campaign stitching later).
+                    if w.won() && self.quit_fade.is_none() {
+                        // The victory breadcrumb (player request
+                        // 2026-07-16) — the campaign-stitching hook
+                        // will consume the same signal later.
+                        println!("{} completed", self.level.label);
+                        self.quit_fade = Some(0.0);
+                    }
+                    let fade = w.end_fade().max(self.quit_fade.unwrap_or(0.0));
+                    if fade > 0.0 {
+                        quads.push(ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, fade]));
                     }
                     self.hovered = hovered;
                     if let Some(r) = &mut self.renderer {
                         r.set_ui_quads(quads);
+                    }
+                }
+                if let Some(f) = &mut self.quit_fade {
+                    *f += 1.0 / 48.0;
+                    if *f >= 1.25 {
+                        // A beat of full black before leaving.
+                        event_loop.exit();
                     }
                 }
                 if let Some(r) = &mut self.renderer {

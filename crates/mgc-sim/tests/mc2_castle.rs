@@ -84,6 +84,142 @@ fn count(w: &World, class: u8, model: u8) -> usize {
         .count()
 }
 
+/// Playtest repro (2026-07-16, mc2:00): a tier-1 castle cast must
+/// grow FIRE turrets — the (10,79) ring with part-type 1 — via the
+/// cast-time research stamp; the dev-granted spell must behave
+/// exactly like a legitimately leveled one.
+#[test]
+fn mc2_castle_tier1_cast_grows_fire_turrets() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = clear_spot(&w);
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+
+    // Bind the castle spell at TIER 1 (fire) and build.
+    w.mc2_select_spell(2, 1, 0);
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..120 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let (_, _, lvl) = w.loadout().castle.expect("castle stands");
+    assert_eq!(lvl, 1, "level-1 castle built");
+    assert_eq!(
+        count(&w, 10, 79),
+        1,
+        "the tier-1 build grows the stage-1 turret"
+    );
+
+    // Recast = upgrade to level 2: the 4-corner ring.
+    w.tick(pose, PlayerCommand::default());
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..220 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let (_, _, lvl2) = w.loadout().castle.expect("castle survives");
+    assert_eq!(lvl2, 2, "upgraded to level 2");
+    assert_eq!(count(&w, 10, 79), 4, "level 2 grows the 4-turret ring");
+}
+
+/// Playtest repro (2026-07-16, mc2:00): the level's ending cluster
+/// is the CHECKPOINT variant — dis 4 spawns the (11,12) X-marker
+/// trigger at (75,218) and the (14,3) fly-to "X"/portal at (97,221)
+/// (there is NO (11,31)/(14,4) on level-000; retail routes this
+/// through the same endGameSeq under actionIndex 12). The marker
+/// must spawn HIDDEN, the trip must REVEAL it and seize the flyer,
+/// and the fly-in must end in WON — the playtest saw "trigger went
+/// by, nothing happened".
+#[test]
+fn mc2_level000_ending_end_to_end() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.debug_fire_disposition(4);
+    w.tick(
+        PlayerPose::from_tiles(10.0, 5.0, 10.0, 0.0, 0.0, 0.0),
+        PlayerCommand::default(),
+    );
+    let pool = w.debug_pool().1;
+    let trig = pool
+        .iter()
+        .find(|e| e.class == 11 && e.model == 12 && e.life >= 0)
+        .expect("dis 4 spawns the (11,12) ending trigger");
+    let marker = pool
+        .iter()
+        .find(|e| e.class == 14 && e.model == 3 && e.life >= 0)
+        .expect("dis 4 spawns the (14,3) fly-to marker");
+    assert!(
+        !w.live_poses().iter().any(|p| p.class == 14 && p.model == 3),
+        "the ending marker spawns HIDDEN (not drawable) until the trip"
+    );
+    eprintln!(
+        "trigger at ({},{}), marker at ({},{})",
+        trig.tx, trig.ty, marker.tx, marker.ty
+    );
+    // Park on the trigger; the 8-tick phase gate opens quickly.
+    let (tx, ty) = (trig.tx as f32 + 0.5, trig.ty as f32 + 0.5);
+    let alt = w.ground_height_tiles(tx, ty) + 1.0;
+    let pose = PlayerPose::from_tiles(tx, alt, ty, 0.0, 0.0, 0.0);
+    let mut seized_at = None;
+    for t in 0..40 {
+        w.tick(pose, PlayerCommand::default());
+        if w.mc2_end_pose().is_some() {
+            seized_at = Some(t);
+            break;
+        }
+    }
+    assert!(
+        seized_at.is_some(),
+        "the trigger trip seizes the flyer (endGameSeq installs)"
+    );
+    assert!(
+        w.live_poses().iter().any(|p| p.class == 14 && p.model == 3),
+        "the trip REVEALS the fly-to marker"
+    );
+    assert!(!w.won(), "the trip alone must not end the level");
+    let mut won_at = None;
+    for t in 0..2000 {
+        w.tick(pose, PlayerCommand::default());
+        if w.won() {
+            won_at = Some(t);
+            break;
+        }
+    }
+    assert!(won_at.is_some(), "the fly-in ends the level (won)");
+    let (ex, _, ez, _) = w.mc2_end_pose().expect("pose holds through the end");
+    let d = ((ex - (marker.tx as f32)).powi(2) + (ez - (marker.ty as f32)).powi(2)).sqrt();
+    assert!(
+        d < 4.0,
+        "the scripted carpet stopped at the marker (dist {d:.1} tiles)"
+    );
+}
+
 #[test]
 fn mc2_castle_builds_upgrades_and_demolishes() {
     let Some(root) = baked_root() else {

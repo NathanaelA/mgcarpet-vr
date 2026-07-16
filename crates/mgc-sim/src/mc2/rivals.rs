@@ -2449,6 +2449,13 @@ impl World {
             // skipped like the MC1 column).
             let own = self.mc2_rivals[ri].ent;
             self.g.ent[c].mail[5] = (10, own);
+            // Castle research for the stage this upgrade builds
+            // (the A.5 shortcut, same as the human's cast stamp):
+            // the rival's live castle-spell tier picks the tower
+            // type of the new stage.
+            let stage = (self.g.ent[c].f26 + 1).clamp(1, 7) as u8;
+            let tier = self.mc2_rival_castle_tier(ri);
+            self.g.mc2_research_stamp(own, stage, tier);
             self.mc2_rivals[ri].cooldown[2] = AI_RECAST[2].max(1);
             return true;
         }
@@ -2494,9 +2501,20 @@ impl World {
             };
         }
         self.g.snd(30, c);
+        // Stage-1 research for the fresh castle (A.5 shortcut).
+        let own = self.mc2_rivals[ri].ent;
+        let tier = self.mc2_rival_castle_tier(ri);
+        self.g.mc2_research_stamp(own, 1, tier);
         self.entities_dirty = true;
         let _ = i;
         true
+    }
+
+    /// The rival's live castle-spell tier — the book manifestation's
+    /// f71 (`byte_0x46_70`), 0 when spell 2 is unowned.
+    fn mc2_rival_castle_tier(&self, ri: usize) -> u8 {
+        let m = self.mc2_rivals[ri].book.ent[2] as usize;
+        if m != 0 { self.g.ent[m].f71 } else { 0 }
     }
 
     /// The per-spell emission through the shared MC2 class-9

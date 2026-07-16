@@ -675,7 +675,7 @@ fn snap(rect: [f32; 4]) -> [f32; 4] {
     [x0, y0, x1 - x0, y1 - y0]
 }
 
-fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
+pub(crate) fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
     UiQuad {
         rect: snap(rect),
         uv: [0.0; 4],

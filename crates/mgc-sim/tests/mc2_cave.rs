@@ -382,6 +382,17 @@ fn mc2_cave_behaviors_and_goldens() {
     // tag bytes. Verified by instrumenting the tag writes: only tags
     // 3 (spell_tokens) and 4 (aura_claim) fire here. mc2_slice and
     // all MC1 goldens unmoved (their tagged fields never fire).
+    // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the LEVEL-END
+    // marker law (checkpoint D only): dis-gated (14,3)/(14,4) ending
+    // fly-to markers now spawn HIDDEN (flags 0x20) until their
+    // (11,12)/(11,31) trigger trips and reveals them — player-
+    // verified retail shows the portal only on trip (mc2:00 ending,
+    // 2026-07-16). This level's exit cluster ((11,12) THING 465 +
+    // (14,3) THING 466, dis 11) materializes in checkpoint C's
+    // disposition storm, so D's hash gains the hidden bit; verified
+    // by instrument: the flag is the ONLY delta (no endseq installs
+    // — the parked pose never trips the (117,160) switch; won stays
+    // false). A/B/C and every other fixture unmoved.
     // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the FLOCKING
     // fix, two stacked corrections:
     //   (1) StageVar rows bake VERBATIM (epoch 13): the importer's
@@ -404,7 +415,7 @@ fn mc2_cave_behaviors_and_goldens() {
             0xbe8e98cc7e7e8646u64,
             0x992ea558917fd24b,
             0xda0122efc0451fb3,
-            0x28ee1084a6fdd590,
+            0x9ad252be7919aab0,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -422,7 +433,11 @@ fn mc2_cave_behaviors_and_goldens() {
         0x5fdfbe7cfbf8fc43,
         0x10cbd033029e9130,
         0x4c18438350ec3cb0,
-        0x36cb50b763124752,
+        // D re-pinned 2026-07-16 with the level-end marker law (see
+        // the hash ledger above): the dis-gated (14,3) exit marker
+        // leaves the drawable set until its trigger trips — the
+        // projection move IS the intended observable change.
+        0xf0247a52e46b3668,
     ];
     assert_eq!(
         obs, OBSERVABLE,

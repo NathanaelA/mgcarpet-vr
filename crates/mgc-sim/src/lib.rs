@@ -276,6 +276,17 @@ impl Simulation {
                 ..FlightInput::default()
             };
         }
+        // The MC2 ending sequence seizes the flyer (retail swaps the
+        // player's actionIndex to 11, sub_5E8C0 — every control
+        // input dies with it; the scripted pose lands after the
+        // world tick below).
+        let end_seized = self
+            .world
+            .as_ref()
+            .is_some_and(|w| w.mc2_end_pose().is_some());
+        if end_seized {
+            input = FlightInput::default();
+        }
         let input = &input;
 
         // The Accelerate cancel reads the tick's raw thrust input
@@ -426,6 +437,31 @@ impl Simulation {
                 self.carpet.x = (x.rem_euclid(256.0) * 256.0) as u16;
                 self.carpet.y = (z.rem_euclid(256.0) * 256.0) as u16;
                 self.carpet.z = (self.flyer.y * 256.0) as i16;
+            }
+            // The MC2 ending sequence: mirror the scripted pose onto
+            // the flyer (position + heading; the tail's roll/pitch
+            // auto-level EF:60577-87 decays the visual bank here).
+            if let Some((x, alt, z, yaw)) = w.mc2_end_pose() {
+                let f = &mut self.flyer;
+                f.x = x;
+                f.z = z;
+                f.y = alt;
+                f.yaw = yaw;
+                f.vx = 0.0;
+                f.vy = 0.0;
+                f.vz = 0.0;
+                // roll −= (roll − sign·7)>>3 / pitch −= (pitch −
+                // sign·3)>>2, in float space: geometric decay to 0.
+                f.roll -= f.roll * 0.125;
+                f.pitch -= f.pitch * 0.25;
+                self.carpet.x = (x.rem_euclid(256.0) * 256.0) as u16;
+                self.carpet.y = (z.rem_euclid(256.0) * 256.0) as u16;
+                self.carpet.z = (alt * 256.0) as i16;
+                self.carpet.yaw = ((yaw.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU
+                    * 2048.0) as u16)
+                    & 0x7FF;
+                self.carpet.act_speed = 0;
+                self.carpet.tgt_speed = 0;
             }
         }
     }

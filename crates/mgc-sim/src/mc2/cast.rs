@@ -358,7 +358,7 @@ impl World {
     /// `GetSpellManaCost_6D710` (L:1714): the tier's `manaCost_6`;
     /// the castle spell (2) rescales to the upgrade ladder at the
     /// OWN castle's current entity level (L:1729-55 — the verbatim
-    /// table, last rung 0x3E8). The `byte_0x1BE_446` +3000 arm
+    /// table, default rung 300M). The `byte_0x1BE_446` +3000 arm
     /// (castle-less surcharge, L:1723-26) is OPEN — field meaning
     /// untraced; omitted.
     pub(crate) fn mc2_spell_mana_cost(&self, spell: usize, tier: usize) -> i32 {

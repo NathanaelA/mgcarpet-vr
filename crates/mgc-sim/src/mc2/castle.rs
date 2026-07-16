@@ -1299,14 +1299,56 @@ impl Gen {
     }
 
     /// `array_0x24E_590[9 + stage]` — the researched PART-TYPE for
-    /// a stage (EF:62274). Filled one stage at a time by the castle
-    /// research/production child (`sub_69AB0` EF:56120-21, sourcing
-    /// `SPELLS[model].subspell[row].life_0x1A`) — the 4.2 cast/XP
-    /// machinery. Until that lands every stage is unresearched (0):
-    /// no pieces, HP factor identity — a fresh retail castle's
-    /// exact state.
-    fn mc2_castle_part_type(&self, _own: u16, _stage: u8) -> u8 {
-        0
+    /// a stage (EF:62274). Retail fills it one stage at a time via
+    /// the castle research/production child (`sub_69AB0` EF:56120-21,
+    /// sourcing `SPELLS[model].subspell[row].life_0x1A`); the port
+    /// stamps at cast/upgrade time from the castle-spell tier (the
+    /// A.5 shortcut). Unstamped stages read 0: no pieces, HP factor
+    /// identity — a fresh retail castle's exact state.
+    fn mc2_castle_part_type(&self, own: u16, stage: u8) -> u8 {
+        if !(1..=7).contains(&stage) {
+            return 0;
+        }
+        self.mc2_castle_research
+            .0
+            .iter()
+            .find(|(o, _, _)| *o == own)
+            .map_or(0, |(_, _, part)| part[stage as usize - 1])
+    }
+
+    /// The `sub_69AB0` research write (EF:56120-21), stamped by the
+    /// port at castle cast/upgrade time (A.5 shortcut): for `stage`
+    /// (retail `v4 = castleLevel+1`), record the castle spell tier's
+    /// `subSpellIndex_2` (HP factor — banked; the ladder still runs
+    /// identity) and `life_0x1A` (part-type → fire/lightning tower).
+    pub(crate) fn mc2_research_stamp(&mut self, own: u16, stage: u8, tier: u8) {
+        if own == 0 || !(1..=7).contains(&stage) {
+            return;
+        }
+        let Some(sub) = self
+            .assets
+            .spells
+            .get(2)
+            .map(|r| r.tiers[(tier as usize).min(2)])
+        else {
+            return;
+        };
+        let hp = sub.sub_spell.clamp(0, 255) as u8;
+        let part = sub.life.max(0) as u8;
+        let entry = match self
+            .mc2_castle_research
+            .0
+            .iter_mut()
+            .find(|(o, _, _)| *o == own)
+        {
+            Some(e) => e,
+            None => {
+                self.mc2_castle_research.0.push((own, [0; 7], [0; 7]));
+                self.mc2_castle_research.0.last_mut().unwrap()
+            }
+        };
+        entry.1[stage as usize - 1] = hp;
+        entry.2[stage as usize - 1] = part;
     }
 
     /// `sub_508E0_castle_defend_create` (EF:36987): the (10,79)
@@ -1332,6 +1374,12 @@ impl Gen {
             e.f26 = lvl as i16; // level tag → the height offset
             e.f67 = part; // byte_0x43_67: the defender kind roll's key
             e.f71 = 0; // byte_0x46_70: the defender state machine
+            // The brain repurposes two new_event-defaulted fields:
+            // f68 (recoil step, retail byte_0x44_68 — default 10
+            // would start mid-recoil out of table range) and f44
+            // (dwell counter, retail dword_0x10_16 — default 100).
+            e.f68 = 0;
+            e.f44 = 0;
         }
         let z = self.ground_z(x, y) as i16 + if lvl <= 1 { 384 } else { 224 };
         self.link(i, x, y, z);
@@ -1341,21 +1389,27 @@ impl Gen {
     }
 
     /// `sub_3AF00_castle_defend_event` (EF:30106) — the (10,79)
-    /// piece tick, the DWELL arms: latch home, seed a random 16..63
-    /// dwell, count it down, then hold armed. The target-scan +
-    /// `sub_6DCA0` defender launch (states 3..8) bank with the 4.2
-    /// cast machinery — until then the piece stands (the visible
-    /// castle walls/towers) and ground-clamps like retail's tail.
+    /// piece tick, the full defend brain. Field homes (the piece is
+    /// golden-invisible pre-turret, so the layout is fresh): state
+    /// `byte_0x46_70` → f71 · dwell/windup `dword_0x10_16` → f44 ·
+    /// fire mode `word_0x2C_44` → f30 · burst `fontTypeIndex_0x3D_61`
+    /// → f69 · recoil `byte_0x44_68` (signed −5..6) → f68 · windup
+    /// z-boost `word_0x36_54` → f54 · target `word_0x96_150` → f28 ·
+    /// firing yaw/pitch `0x1C/0x1E` → f34/f36 · home anchor
+    /// `axis_0x9A_154` → dest_x/dest_y/site_z · tick counter
+    /// `byte_0x3E_62` → f63. `player` = the human pose (retail scans
+    /// the pooled wizard; ours lives outside — None while dead).
     /// Dead or ownerless → despawn (retail's first two gates).
-    pub(crate) fn mc2_castle_piece_tick(&mut self, i: usize) {
+    pub(crate) fn mc2_castle_piece_tick(&mut self, i: usize, player: Option<(u16, u16, i16)>) {
         if self.ent[i].act_life < 0 || self.ent[i].id24 == 0 {
             self.ent[i].flags |= 0x400;
             return;
         }
+        let mut fire = false;
         match self.ent[i].f71 {
             0 => {
                 // Latch the axis-home (retail axis_0x9A_154,
-                // EF:30182) — the 4.2 launch arms return here (G9k).
+                // EF:30182) — the launch arms return here (G9k).
                 let e = &mut self.ent[i];
                 e.dest_x = e.x;
                 e.dest_y = e.y;
@@ -1377,16 +1431,298 @@ impl Gen {
                     self.ent[i].f71 = 3;
                 }
             }
-            // 3..: armed — the launch machinery banks with 4.2.
+            // SCAN (EF:30194-30203 + the LABEL_33 ring walk): every
+            // 64 ticks (`byte_0x3E_62 & 0x3F`), sweep rings 3..=12
+            // around the piece's tile (`AddE7EE0x_10080(3, 12)` —
+            // the sub-3 hole is the castle's own footprint) for the
+            // first hostile; latch it and wind up.
+            3 => {
+                if self.ent[i].f63 & 0x3F == 0
+                    && let Some(t) = self.mc2_piece_scan(i, player)
+                {
+                    self.ent[i].f71 = 4;
+                    self.ent[i].f28 = t;
+                }
+            }
+            // WINDUP (EF:30204-21): 4-tick rise, +160 z-boost per
+            // counted tick (case 4 falls into the first decrement).
+            4 | 5 => {
+                if self.ent[i].f71 == 4 {
+                    self.ent[i].f71 = 5;
+                    self.ent[i].f44 = 4;
+                }
+                self.ent[i].f44 = self.ent[i].f44.wrapping_sub(1);
+                if self.ent[i].f44 != 0 {
+                    self.ent[i].f54 = self.ent[i].f54.wrapping_add(160);
+                } else {
+                    self.ent[i].f71 = 6;
+                    self.ent[i].f54 = 0;
+                }
+            }
+            // PICK FIRE MODE (EF:30222-48), then fall through into
+            // the first shot the same tick (goto LABEL_48).
+            6 => {
+                self.ent[i].site_z = self.ent[i].z; // EF:30224
+                let r = self.mc2_rand(i) % 100;
+                let part = self.ent[i].f67;
+                let mode: u16 = if r == 0 {
+                    4
+                } else if r <= 5 {
+                    if part == 1 { 3 } else { 2 }
+                } else {
+                    u16::from(part != 1)
+                };
+                self.ent[i].f30 = mode;
+                // The burst count: 6 shots for the common modes,
+                // 1 for the rare high-tier shot (EF:30244-47).
+                self.ent[i].f69 = if mode <= 1 { 6 } else { 1 };
+                self.ent[i].f71 = 7;
+                fire = true;
+            }
+            7 | 8 => fire = true,
+            // Death arms (set by a future damage router; retail
+            // states 9/0xA, EF:30329-37): 0xA drops an owned mana
+            // ball, both free the piece.
+            9 => {
+                self.ent[i].flags |= 0x400;
+                return;
+            }
+            0xA => {
+                let (x, y, z, own) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z, e.id24)
+                };
+                if let Some(s) = self.spawn_mana_ball(x, y, z) {
+                    self.ent[s].id24 = own;
+                }
+                self.ent[i].flags |= 0x400;
+                return;
+            }
             _ => {}
         }
-        // The LABEL_74 tail: ride the ground at the level height.
+        if fire {
+            self.mc2_piece_fire(i, player);
+        }
+        // The LABEL_74 tail (EF:30396-30472). Recoil kick first: the
+        // piece is displaced back from its home anchor along the
+        // latched firing direction, stepping the offset arc
+        // 0/115/230/334/368/384 out (1..6) and back (−5..−1).
+        let rec = self.ent[i].f68 as i8;
+        if rec != 0 {
+            let off: i16 = match rec.unsigned_abs() {
+                1 => 0,
+                2 => 115,
+                3 => 230,
+                4 => 334,
+                5 => 368,
+                _ => 384,
+            };
+            let (mut pos, yaw, pitch) = {
+                let e = &self.ent[i];
+                ((e.dest_x, e.dest_y, e.site_z), e.f34, e.f36)
+            };
+            Gen::polar_step(&mut pos, yaw, pitch, -off);
+            self.move_relink(i, pos.0, pos.1, pos.2);
+            let next = rec.wrapping_add(1);
+            self.ent[i].f68 = if next > 6 { (-5i8) as u8 } else { next as u8 };
+        }
+        // Then the z law: clamp up to the level height, ride the
+        // windup boost, or bob idly (±16 correction beyond 32, ±6
+        // flicker off the tick counter's bit 3).
         let (x, y, lvl) = {
             let e = &self.ent[i];
             (e.x, e.y, e.f26)
         };
-        let z = self.ground_z(x, y) as i16 + if lvl <= 1 { 384 } else { 224 };
-        self.ent[i].z = z;
+        let want = self.ground_z(x, y) as i16 + if lvl <= 1 { 384 } else { 224 };
+        let z = self.ent[i].z;
+        if z < want {
+            self.ent[i].z = want;
+        } else if self.ent[i].f54 != 0 {
+            self.ent[i].z = want.wrapping_add(self.ent[i].f54 as i16);
+        } else if self.ent[i].f68 == 0 {
+            let d = z - want;
+            if d.abs() > 32 {
+                self.ent[i].z += if d <= 0 { 16 } else { -16 };
+            }
+            self.ent[i].z += if self.ent[i].f63 & 8 != 0 { 6 } else { -6 };
+        }
+    }
+
+    /// The state-3 ring scan (EF:30194-30394): first hostile at tile
+    /// ring distance 3..=12 from the piece. Retail walks the
+    /// per-ring cell-offset tables nearest-ring-first and takes the
+    /// FIRST hostile in walk order; we take the nearest by ring then
+    /// pool order (APPROX — same admission set, same 3-tile hole).
+    /// Hostile predicate (EF:30359-84): class 3 model {0,1,3} or
+    /// class 5 model ≠22, owner ≠ ours. No invisibility test —
+    /// retail turrets see through Invisibility (unlike the m15
+    /// guards' scan). The class-5 `StageVar2==14` own-parent
+    /// exemption (EF:30378-81) is APPROX-skipped (the stage binding
+    /// lives in side-vecs; only shields own summons at own walls).
+    fn mc2_piece_scan(&self, i: usize, player: Option<(u16, u16, i16)>) -> Option<u16> {
+        let (px, py, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.id24)
+        };
+        let tx = (px.wrapping_add(128) >> 8) as u8;
+        let ty = (py.wrapping_add(128) >> 8) as u8;
+        let ring = |ax: u8, ay: u8| -> u8 {
+            let dx = (ax.wrapping_sub(tx) as i8).unsigned_abs();
+            let dy = (ay.wrapping_sub(ty) as i8).unsigned_abs();
+            dx.max(dy)
+        };
+        let mut best: Option<(u16, u8)> = None;
+        if own != crate::mc1::mobs::PLAYER_TARGET
+            && let Some((hx, hy, _)) = player
+        {
+            let r = ring(
+                (hx.wrapping_add(128) >> 8) as u8,
+                (hy.wrapping_add(128) >> 8) as u8,
+            );
+            if (3..=12).contains(&r) {
+                best = Some((crate::mc1::mobs::PLAYER_TARGET, r));
+            }
+        }
+        for (j, e) in self.ent.iter().enumerate().skip(1) {
+            if j == i || e.flags & 0x400 != 0 || e.id24 == own {
+                continue;
+            }
+            let hostile = match e.class64 {
+                3 => e.model65 <= 1 || e.model65 == 3,
+                5 => e.model65 != 22,
+                _ => false,
+            };
+            if !hostile {
+                continue;
+            }
+            let r = ring(
+                (e.x.wrapping_add(128) >> 8) as u8,
+                (e.y.wrapping_add(128) >> 8) as u8,
+            );
+            if (3..=12).contains(&r) && best.is_none_or(|(_, br)| r < br) {
+                best = Some((j as u16, r));
+            }
+        }
+        best.map(|(t, _)| t)
+    }
+
+    /// The state-7/8 FIRE arm (LABEL_48, EF:30249-30328): validate
+    /// the latched target, map the mode to (spell, tier), launch via
+    /// the shared `sub_6DCA0` dispatch aimed dead-on (no lead), and
+    /// step the burst/recoil bookkeeping.
+    fn mc2_piece_fire(&mut self, i: usize, player: Option<(u16, u16, i16)>) {
+        let tgt = self.ent[i].f28;
+        // Target gone/dead (EF:30253-57) → re-dwell.
+        let tpos: Option<(u16, u16, i16)> = if tgt == 0 {
+            None
+        } else if tgt == crate::mc1::mobs::PLAYER_TARGET {
+            player
+        } else {
+            let e = &self.ent[tgt as usize];
+            (e.act_life >= 0 && e.flags & 0x400 == 0).then_some((e.x, e.y, e.z))
+        };
+        let Some((tx, ty, tz)) = tpos else {
+            self.ent[i].f28 = 0;
+            self.ent[i].f71 = 1;
+            return;
+        };
+        // Mode → (spell, tier) (EF:30258-82).
+        let (spell, tier): (usize, usize) = match self.ent[i].f30 {
+            0 => (0, 1),
+            1 => (7, 0),
+            2 => (7, 1),
+            3 => (0, 2),
+            _ => (9, 0),
+        };
+        let first = self.ent[i].f71 == 7;
+        let mut done = false;
+        let sub = self
+            .assets
+            .spells
+            .get(spell)
+            .map(|r| r.tiers[tier])
+            .unwrap_or_default();
+        let spawned = crate::mc1::world::World::mc2_dispatch_arm(spell, sub.life).and_then(|arm| {
+            // Muzzle: the piece's position + its sprite half-height
+            // (retail `pos.z += array_0x52_82.yaw`, EF:30296 —
+            // the shift-rot vertical; f78 is our derivation).
+            let (mx, my, mz) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z.wrapping_add(e.f78 as i16))
+            };
+            let p = self.mc2_spawn_cast_proj(arm.subtype, mx, my, mz)?;
+            let own = self.ent[i].id24;
+            // `sub_655C0` aim (EF:30292-99): absolute yaw/pitch at
+            // the target's current position — no lead.
+            let yaw = Gen::angle_between(mx, my, tx, ty);
+            let dh = Gen::isqrt(Gen::dist2_sq(mx, my, tx, ty) as u32) as i32;
+            let pitch = Gen::pitch_toward(mz, tz, dh);
+            {
+                let e = &mut self.ent[p];
+                e.id24 = own;
+                e.f68 = arm.impact.0;
+                e.f69 = arm.impact.1;
+                e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                if arm.charge {
+                    e.f71 = sub.life.max(0) as u8;
+                }
+                e.f30 = yaw;
+                e.f32 = pitch;
+                e.f34 = yaw;
+                e.f36 = pitch;
+                // a5 = 0: no caster speed boost, clamp only
+                // (EF:44226-31). NOTE: f40 stays 0 — retail sets no
+                // XP back-ref on turret shots (EF:30288-89 writes
+                // only id + target); turret kills award nothing.
+                e.f126 = e.f126.clamp(384, 0x2000);
+                e.f146 = tgt; // homing target (word_0x96_150)
+            }
+            // The local player's castle FIREBALL swaps to the
+            // star muzzle sprite 42 (EF:30290-91).
+            if own == crate::mc1::mobs::PLAYER_TARGET && spell == 0 {
+                let e = &mut self.ent[p];
+                e.type86 = 42;
+                e.frame88 = 0;
+            }
+            Some((yaw, pitch))
+        });
+        if let Some((yaw, pitch)) = spawned {
+            // First shot of the burst: the `sub_6DCA0` cast sound
+            // (a6 = state==7, EF:44232-33) — fireball 9, lightning
+            // t0 23 / t1 9, meteor 15; positioned at the piece
+            // (retail keys it to the castle entity).
+            if first {
+                let v6 = match (spell, tier) {
+                    (0, _) => 9u8,
+                    (7, 0) => 23,
+                    (7, _) => 9,
+                    _ => 15,
+                };
+                self.snd(v6, i);
+            }
+            // Latch the firing direction for the recoil kick
+            // (EF:30295-30302) and step the recoil counter
+            // (EF:30301-12; the tail steps it AGAIN — faithful).
+            let e = &mut self.ent[i];
+            e.f34 = yaw & 0x7FF;
+            e.f36 = pitch & 0x7FF;
+            let rec = e.f68 as i8;
+            e.f68 = if rec == 0 {
+                1
+            } else {
+                rec.wrapping_add(1).min(5)
+            } as u8;
+            e.f69 = e.f69.wrapping_sub(1);
+            if e.f69 == 0 {
+                done = true;
+            }
+        }
+        if done {
+            self.ent[i].f28 = 0;
+            self.ent[i].f71 = 1;
+        } else {
+            self.ent[i].f71 = 8;
+        }
     }
 }
 
@@ -1562,6 +1898,130 @@ mod tests {
             .map(|j| g.ent[j].f140)
             .sum();
         assert_eq!(spilled, 20_000, "the whole bank rides out as spheres");
+    }
+
+    /// A castle-gen with a spells table wired for the turret column:
+    /// row 2 (castle) carries the retail part-type law `life_0x1A =
+    /// {0,1,2}` by tier; rows 0/7 give the fire/lightning arms a
+    /// payload.
+    fn turret_gen() -> Gen {
+        let mut g = castle_gen();
+        let mut spells = vec![crate::mc2::spells::Mc2SpellRow::default(); 10];
+        spells[0].tiers[1].sub_spell = 555;
+        spells[0].tiers[1].life = 1;
+        spells[7].tiers[0].sub_spell = 777;
+        for t in 0..3 {
+            spells[2].tiers[t].life = t as i8; // the part-type source
+            spells[2].tiers[t].sub_spell = i32::from(t == 2); // HP factor
+        }
+        g.assets.spells = spells;
+        g
+    }
+
+    /// The turret column (2026-07-16): a stamped stage-1 research
+    /// makes the stage builder spawn the (10,79) ring (1 piece at
+    /// stage 1, part-type from the castle spell tier), and the piece
+    /// brain scans rings 3..=12, winds up, and fires the part's
+    /// projectile — fire tower (part 1) → spell 0 tier 1 fireball,
+    /// owner = the castle's wizard, homing the scanned hostile, NO
+    /// XP back-ref (sub_3AF00 EF:30284-89).
+    #[test]
+    fn fire_turret_spawns_and_shoots_the_hostile() {
+        let mut g = turret_gen();
+        // Unstamped: the walk-down finds nothing, no pieces.
+        let c0 = place_castle(&mut g, 50 << 8, 50 << 8, 1, 9);
+        g.mc2_castle_stages(c0);
+        assert!(
+            !(1..g.ent.len()).any(|j| g.ent[j].class64 == 10 && g.ent[j].model65 == 79),
+            "no research → no towers (a fresh retail castle)"
+        );
+        // Stamp tier 1 (fire) for stage 1 and rebuild.
+        g.mc2_research_stamp(9, 1, 1);
+        g.mc2_castle_stages(c0);
+        let p = (1..g.ent.len())
+            .find(|&j| {
+                g.ent[j].class64 == 10 && g.ent[j].model65 == 79 && g.ent[j].flags & 0x400 == 0
+            })
+            .expect("stage-1 spawns its one turret");
+        assert_eq!(g.ent[p].f67, 1, "part-type = the cast tier's life_0x1A");
+        assert_eq!(g.ent[p].f26, 1, "stage tag");
+        // A hostile 5 tiles out (ring 3..=12 admits it).
+        let h = g.new_event().expect("hostile slot");
+        {
+            let e = &mut g.ent[h];
+            e.class64 = 5;
+            e.model65 = 0;
+            e.act_life = 100;
+        }
+        let (hx, hy) = (((50 + 5) << 8) as u16, (50 << 8) as u16);
+        let hz = g.ground_z(hx, hy) as i16;
+        g.link(h, hx, hy, hz);
+        // Drive the piece brain (the world loop owns f63; pin the
+        // scan gate open here).
+        let mut shot = None;
+        for _ in 0..300 {
+            g.ent[p].f63 = 0;
+            g.mc2_castle_piece_tick(p, None);
+            shot = (1..g.ent.len()).find(|&j| g.ent[j].class64 == 9);
+            if shot.is_some() {
+                break;
+            }
+        }
+        let s = shot.expect("the turret fires within the dwell+windup budget");
+        let e = &g.ent[s];
+        assert_eq!(e.model65, 0, "fire tower common mode = fireball tier 1");
+        assert_eq!(e.id24, 9, "kills attribute to the castle's wizard");
+        assert_eq!(e.f146, h as u16, "homing the scanned hostile");
+        assert_eq!(e.f44, 555, "the tier payload rides f44");
+        assert_eq!(e.f40, 0, "no XP back-ref on turret shots");
+        assert_eq!(g.ent[p].f71, 8, "burst continues (6-shot common mode)");
+    }
+
+    /// Tier-2 research → part-type 2 → LIGHTNING tower: the common
+    /// mode fires spell 7 tier 0 (subtype 9). Also the walk-down law:
+    /// a level-3 castle with only stage-1 research shows the STAGE-1
+    /// ring (1 piece), not the level's.
+    #[test]
+    fn lightning_tower_and_the_walkdown_law() {
+        let mut g = turret_gen();
+        let c = place_castle(&mut g, 50 << 8, 50 << 8, 2, 9);
+        g.mc2_research_stamp(9, 1, 2);
+        g.mc2_castle_stages(c);
+        let pieces: Vec<usize> = (1..g.ent.len())
+            .filter(|&j| {
+                g.ent[j].class64 == 10 && g.ent[j].model65 == 79 && g.ent[j].flags & 0x400 == 0
+            })
+            .collect();
+        assert_eq!(pieces.len(), 1, "level 2, stage-1 research → stage-1 ring");
+        let p = pieces[0];
+        assert_eq!(g.ent[p].f67, 2, "lightning part-type");
+        let h = g.new_event().expect("hostile");
+        {
+            let e = &mut g.ent[h];
+            e.class64 = 5;
+            e.model65 = 0;
+            e.act_life = 100;
+        }
+        let (hx, hy) = (((50 + 4) << 8) as u16, (50 << 8) as u16);
+        let hz = g.ground_z(hx, hy) as i16;
+        g.link(h, hx, hy, hz);
+        let mut shot = None;
+        for _ in 0..300 {
+            g.ent[p].f63 = 0;
+            g.mc2_castle_piece_tick(p, None);
+            shot = (1..g.ent.len()).find(|&j| g.ent[j].class64 == 9);
+            if shot.is_some() {
+                break;
+            }
+        }
+        let s = shot.expect("the lightning tower fires");
+        // Common mode (94%) = spell 7 tier 0 → subtype 9; the rare
+        // modes are 12 (lightning t1) and 3 (meteor).
+        assert!(
+            matches!(g.ent[s].model65, 9 | 12 | 3),
+            "a lightning-tower arm, got subtype {}",
+            g.ent[s].model65
+        );
     }
 
     /// G5 (review 2026-07-15): the unstamp finalizer is the gated

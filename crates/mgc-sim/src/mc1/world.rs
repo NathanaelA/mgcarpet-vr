@@ -683,6 +683,56 @@ pub struct World {
     /// transient, HASH-EXCLUDED (the goldens never see it). See
     /// [`World::set_notification`] / [`World::notification`].
     notification: Option<Notification>,
+    /// The level is WON — the true terminator, distinct from
+    /// [`World::completed`] (retail: MC1's cmd-27 win-exit
+    /// `13325 = 10` :48804; MC2's endGameSeq phase 0xC
+    /// `byte[2] |= 0x10` EF:60543). The app consumes it: fade out
+    /// and end the game (player directive 2026-07-16 — no stats
+    /// screen / campaign stitching yet). Hash-transparent while
+    /// false.
+    won: bool,
+    /// The MC2 level-ending sequence (`sub_5E8C0_endGameSeq`
+    /// EF:60313-60589), installed by an ending-marker trip and
+    /// advanced once per tick — the scripted decelerate → aim →
+    /// launch → terrain-glued fly-in → fade. Drives the app's flyer
+    /// via [`World::mc2_end_pose`] (the human lives outside the
+    /// pool; retail swaps the player entity's actionIndex to 11/12).
+    /// Hash-gated on Some.
+    mc2_endseq: Option<Mc2EndSeq>,
+    /// The trip mailbox — the class-14 TARGET MODEL (4 = the demon
+    /// mouth, action 11; 3 = the checkpoint "X", action 12 — the
+    /// mc2:00 ending), installed into `mc2_endseq` the same tick
+    /// (the trip site has no PlayerPose in scope). Transient,
+    /// hash-excluded like the other mailboxes.
+    mc2_end_pending: Option<u8>,
+}
+
+/// The MC2 level-ending state machine (`sub_5E8C0_endGameSeq`,
+/// EF:60313-60589), phase-numbered like retail's `byte_0x46_70`
+/// (0, 1, 3..=12 — there is no phase 2). BOTH marker variants run
+/// this one machine (retail action 11 → the (14,4) demon mouth via
+/// `word_0x36DFC`; action 12 → the (14,3) checkpoint "X" via
+/// `word_0x36DFE`, EF:60367-80 — level-000 ends through the 12
+/// arm). The pose is the scripted carpet in engine units; the app
+/// mirrors it while active.
+#[derive(Clone, Copy, Debug, Hash)]
+struct Mc2EndSeq {
+    /// `byte_0x46_70`.
+    phase: u8,
+    /// `dword_0x10_16` — zoom steps (12), flight ticks (512/128),
+    /// fade ticks (32).
+    counter: i32,
+    /// `actSpeed_0x82_130`, engine units/tick.
+    speed: i16,
+    /// `word_0x96_150` — the fly-to marker's pool slot, 0 = none.
+    target: u16,
+    /// The class-14 model to fly to (4 = mouth, 3 = checkpoint X).
+    target_model: u8,
+    /// Scripted pose (engine 8.8 torus / z / 11-bit yaw).
+    x: u16,
+    y: u16,
+    z: i16,
+    yaw: u16,
 }
 
 /// A transient top-of-screen notification (retail `CurrentNotification
@@ -942,7 +992,12 @@ fn drawable(game: GameId, class: u16, model: u16) -> bool {
                 // magnet aura (retail AddAuxiliary_50500 sets no
                 // SetEntityIndex — the visual is the streaming mana).
                 // (10,13)/(10,14) are the MC2 smoke particles.
-                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77))))
+                // (10,79) is the castle defend turret (ctor sprite
+                // 66, sub_508E0 EF:37000) — absent here, the whole
+                // turret column fired INVISIBLY (player-reported
+                // 2026-07-16, "the castle attacks but the turret
+                // sprites are absent").
+                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77 | 79))))
 }
 
 impl World {
@@ -1070,6 +1125,9 @@ impl World {
             duel: None,
             mc2_book: Default::default(),
             notification: None,
+            won: false,
+            mc2_endseq: None,
+            mc2_end_pending: None,
         };
         // MC2 level init (remc2 EventsFunctions.cpp:39390-39425):
         // the GenerateEvents at-load passes over DisId == -1 records
@@ -1789,7 +1847,11 @@ impl World {
                     }
                 }
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 0x56 => {
-                    self.g.mc2_castle_piece_tick(i)
+                    // The human is a scan/fire candidate only while
+                    // alive (retail scans the pooled wizard, whose
+                    // corpse unlinks; ours lives outside the pool).
+                    let hp = (self.player.state == LifeState::Alive).then_some(self.human_pose);
+                    self.g.mc2_castle_piece_tick(i, hp)
                 }
                 // Live village buildings and their collapse.
                 10 if self.g.ent[i].tick70 == 52 => self.g.tick_building_live(i),
@@ -2058,6 +2120,27 @@ impl World {
             self.g.balloon_alert -= 1;
         }
 
+        // ---- the MC2 level ending (sub_5E8C0_endGameSeq) ----
+        // Installed by an ending-marker trip (models 12/31), advanced
+        // once per tick; the app mirrors the scripted pose and locks
+        // input while active.
+        if let Some(target_model) = self.mc2_end_pending.take()
+            && self.mc2_endseq.is_none()
+        {
+            self.mc2_endseq = Some(Mc2EndSeq {
+                phase: 0,
+                counter: 0,
+                speed: player.speed,
+                target: 0,
+                target_model,
+                x: player.x,
+                y: player.y,
+                z: player.z,
+                yaw: player.heading,
+            });
+        }
+        self.mc2_end_tick();
+
         // ---- the death fall and the wait for Space ----
         match self.player.state {
             LifeState::Falling => {
@@ -2079,7 +2162,19 @@ impl World {
                     self.player_respawn();
                 }
             }
-            LifeState::Alive => {}
+            // The MC1/HW win-exit (Space, command 27 :20910/:48804):
+            // only while ALIVE and the win flag holds — retail's
+            // handler issues cmd 15 BEFORE cmd 27, and a latched
+            // revive blocks the win command (:20911), so dead+won+
+            // Space revives first and a SECOND Space wins. That
+            // ordering falls out here: the Dead arm above consumes
+            // the same key. (MC2 ends via the demon-mouth sequence
+            // instead — its `completed` only gates the trigger.)
+            LifeState::Alive => {
+                if cmd.respawn && self.completed && !matches!(self.game, GameId::Mc2) {
+                    self.won = true;
+                }
+            }
         }
         // The village-aggro timer runs down once per wizard tick
         // (:55405-06) — ~200 ticks of militia hostility per offense.
@@ -2472,6 +2567,9 @@ impl World {
             pending_restart: _,
             invincible,
             notification: _,
+            won,
+            mc2_endseq,
+            mc2_end_pending: _,
         } = self;
         let mut h = Fnv(0xcbf2_9ce4_8422_2325);
         g.hash(&mut h);
@@ -2487,6 +2585,16 @@ impl World {
         )
             .hash(&mut h);
         (game, placeholders).hash(&mut h);
+        // The ending latches — hash-transparent until a level ending
+        // actually runs (field tags per the J2 aliasing discipline),
+        // so every pinned golden is unmoved.
+        if *won {
+            h.write_u8(0xE0);
+        }
+        if let Some(seq) = mc2_endseq {
+            h.write_u8(0xE1);
+            seq.hash(&mut h);
+        }
         // Hashed only when populated: MC1 worlds keep their goldens
         // across this MC2-only layout addition.
         if !mc2_stages.is_empty() {
@@ -3433,6 +3541,17 @@ impl World {
         } else {
             e.f68 = 3;
             e.f69 = 2;
+        }
+        // MC2: stamp the castle research for the stage this cast
+        // builds (the A.5 shortcut — retail's research child
+        // `sub_69AB0` writes `array_0x24E_590` for castleLevel+1
+        // from the researched tier; ours stamps the SELECTED
+        // castle-spell tier at cast time). Tier 1 → fire towers,
+        // tier 2 → lightning towers, tier 0 → plain walls.
+        if matches!(self.game, GameId::Mc2) {
+            let stage = castle.map_or(1, |c| (self.g.ent[c].f26 + 1).clamp(1, 7)) as u8;
+            let tier = self.mc2_book.sel[2];
+            self.g.mc2_research_stamp(PLAYER_TARGET, stage, tier);
         }
         self.entities_dirty = true;
     }
@@ -5166,7 +5285,23 @@ impl World {
                 (11, 0..=4 | 12..=44) => self.spawn_trigger(r.model, x, y, z),
                 // Class-14 special map objects (creator sub_514E0
                 // :37315 + the per-model sub-creators :37332-37418).
-                (14, 0..=5) => self.mc2_spawn_class14(r.model as u8, x, y, z),
+                // The ENDING fly-to markers (3 = the checkpoint X,
+                // 4 = the demon mouth) spawn HIDDEN when dis-gated:
+                // player-verified retail shows the portal only once
+                // the ending trigger is tripped (the trip reveals it
+                // — the entity must pre-exist as the endGameSeq
+                // fly-to target). Authored-at-load (dis 0) markers
+                // stay visible (mid-level guidance X's).
+                (14, 0..=5) => {
+                    let s = self.mc2_spawn_class14(r.model as u8, x, y, z);
+                    if let Some(s) = s
+                        && matches!(r.model, 3 | 4)
+                        && r.dis_id != 0
+                    {
+                        self.g.ent[s].flags |= 0x20;
+                    }
+                    s
+                }
                 // Class-15 spell tokens — THE SPELL JARS (one shared
                 // ctor for all 26 spells, mc2::tokens). The swi_id
                 // state bump lands in the post-init below.
@@ -5921,27 +6056,28 @@ impl World {
                     self.entities_dirty = true;
                 }
             }
-            // Model 12, `sub_6F2B0` (:54431): the X-MARKER — on
-            // player proximity (CompareAxisWithShift == 1, APPROX:
-            // the 2D box test), hide the linked class-14 model-3 "X"
-            // map graphic and despawn. (Retail also arms the touched
-            // player's checkpoint action — our stage machinery
-            // latches fly-tos by its own proximity law.)
-            12 => {
+            // Model 12, `sub_6F2B0` (:54431) and model 31, `sub_6F7E0`
+            // (:54690): the two ENDING X-marker trips. Both seize the
+            // flyer into the SAME endGameSeq (retail sets the touched
+            // player's actionIndex — 12 targets the (14,3) checkpoint
+            // "X" via word_0x36DFE, 31→11 targets the (14,4) demon
+            // mouth via word_0x36DFC; level-000 ends through the 12
+            // arm). The marker entity is REVEALED and persists as the
+            // fly-to target — retail clears only its map-icon draw
+            // bit (:54701; the old port arms despawned the target and
+            // the 12 arm never seized at all — the "trigger went by,
+            // nothing happened" playtest, 2026-07-16). The level ends
+            // at endGameSeq phase 0xC, after the fly-in + fade.
+            m @ (12 | 31) => {
                 if self.g.ent[i].f63 & 7 == 0 && self.mc2_switch_overlap(i) {
-                    self.mc2_hide_class14(3);
-                    self.g.ent[i].flags |= 0x400;
-                    self.entities_dirty = true;
-                }
-            }
-            // Model 31, `sub_6F7E0` (:54690): the level-end X-marker
-            // — on player proximity, latch the level-end (retail
-            // sets the player's actionIndex to 11) and hide the
-            // linked class-14 model-4 graphic.
-            31 => {
-                if self.g.ent[i].f63 & 7 == 0 && self.mc2_switch_overlap(i) {
-                    self.completed = true;
-                    self.mc2_hide_class14(4);
+                    let target = if m == 12 { 3 } else { 4 };
+                    self.mc2_end_pending = Some(target);
+                    for j in 1..self.g.ent.len() {
+                        let e = &self.g.ent[j];
+                        if e.class64 == 14 && e.model65 == target && e.flags & 0x400 == 0 {
+                            self.g.ent[j].flags &= !0x20;
+                        }
+                    }
                     self.g.ent[i].flags |= 0x400;
                     self.entities_dirty = true;
                 }
@@ -5997,16 +6133,208 @@ impl World {
         })
     }
 
-    /// Clear the linked class-14 marker (retail keeps a global
-    /// entity index, word_0x36DFE/word_0x36DFC — a scan is
-    /// behavior-identical for the one-per-level markers).
-    fn mc2_hide_class14(&mut self, model: u8) {
-        for i in 1..self.g.ent.len() {
-            let e = &self.g.ent[i];
-            if e.class64 == 14 && e.model65 == model && e.flags & 0x400 == 0 {
-                self.g.ent[i].flags |= 0x400;
+    /// Advance the MC2 ending sequence one tick (`sub_5E8C0`,
+    /// EF:60313-60589) — verbatim phases. APPROX register: the
+    /// retail moveTest (terrain-block abort) is skipped (the glue
+    /// keeps the scripted carpet above ground and the tick timeouts
+    /// stand); the fov dolly-zoom (phase 5) and motion blur (launch
+    /// tail) are presentation, skipped per the player directive;
+    /// the roll/pitch auto-level tail lives app-side on the flyer.
+    fn mc2_end_tick(&mut self) {
+        let Some(mut s) = self.mc2_endseq else { return };
+        let mut launch = false; // retail v28 — the launch tick
+        match s.phase {
+            // Seize control: sound 41, cancel an active Speed
+            // manifestation (EF:60360-62), resolve the fly-to marker
+            // — action 11 → the (14,4) mouth, action 12 → the (14,3)
+            // checkpoint X (word_0x36DFC/word_0x36DFE, class/model-
+            // validated EF:60367-87).
+            0 => {
+                self.g.snd_player(41);
+                let m = self.mc2_book.ent[3] as usize;
+                if m != 0 {
+                    self.g.ent[m].f26 = 0;
+                }
+                s.target = (1..self.g.ent.len())
+                    .find(|&j| {
+                        let e = &self.g.ent[j];
+                        e.class64 == 14 && e.model65 == s.target_model && e.flags & 0x400 == 0
+                    })
+                    .map_or(0, |j| j as u16);
+                s.phase = 1;
+            }
+            // Decelerate: coast on the current yaw, bleed 4/tick
+            // (EF:60390-411).
+            1 => {
+                let mut pos = (s.x, s.y, s.z);
+                Gen::polar_step(&mut pos, s.yaw, 0, s.speed);
+                (s.x, s.y, s.z) = pos;
+                if s.speed.abs() <= 4 {
+                    s.speed = 0;
+                } else {
+                    s.speed += if s.speed <= 0 { 4 } else { -4 };
+                }
+                if s.speed == 0 {
+                    s.phase = if s.target == 0 { 4 } else { 3 };
+                }
+            }
+            // Aim: turn toward the mouth at ≤11/tick; snap inside 11
+            // (EF:60413-25).
+            3 => {
+                let (tx, ty) = {
+                    let e = &self.g.ent[s.target as usize];
+                    (e.x, e.y)
+                };
+                let want = Gen::angle_between(s.x, s.y, tx, ty);
+                if Gen::angdist(s.yaw, want) <= 0xB {
+                    s.yaw = want;
+                    s.phase = 4;
+                } else {
+                    s.yaw =
+                        ((s.yaw as i32 + Gen::turn_step(s.yaw, want, 0xB) as i32) & 0x7FF) as u16;
+                }
+            }
+            // Zoom setup + countdown (EF:60426-56) → launch with a
+            // target (6) or without (8). Retail swaps in the ending
+            // data here (GTD2.DAT, EF:60449-54) — campaign material.
+            4 | 5 => {
+                if s.phase == 4 {
+                    s.phase = 5;
+                    s.counter = 12;
+                }
+                s.counter -= 1;
+                if s.counter == 0 {
+                    s.phase = if s.target == 0 { 8 } else { 6 };
+                }
+            }
+            // LAUNCH + FLY TO THE MOUTH (EF:60457-84): re-aim every
+            // tick, accelerate +8 to 200; arrive at 3D distance
+            // < 0x180 or on the 512-tick timeout.
+            6 | 7 => {
+                if s.phase == 6 {
+                    s.counter = 512;
+                    s.speed = 100;
+                    s.phase = 7;
+                    launch = true;
+                }
+                s.counter -= 1;
+                let mut arrived = s.counter <= 0;
+                if !arrived {
+                    let (tx, ty, tz) = {
+                        let e = &self.g.ent[s.target as usize];
+                        (e.x, e.y, e.z)
+                    };
+                    s.yaw = Gen::angle_between(s.x, s.y, tx, ty);
+                    let mut pos = (s.x, s.y, s.z);
+                    Gen::polar_step(&mut pos, s.yaw, 0, s.speed);
+                    (s.x, s.y, s.z) = pos;
+                    s.speed = (s.speed + 8).clamp(0, 200);
+                    let dx = (s.x.wrapping_sub(tx) as i16) as i64;
+                    let dy = (s.y.wrapping_sub(ty) as i16) as i64;
+                    let dz = s.z as i64 - tz as i64;
+                    arrived = dx * dx + dy * dy + dz * dz < 0x180 * 0x180;
+                }
+                if arrived {
+                    s.phase = 10;
+                }
+            }
+            // Targetless launch: straight ahead for 128 ticks
+            // (EF:60485-510).
+            8 | 9 => {
+                if s.phase == 8 {
+                    s.counter = 128;
+                    s.speed = 100;
+                    s.phase = 9;
+                    launch = true;
+                }
+                s.counter -= 1;
+                if s.counter <= 0 {
+                    s.phase = 10;
+                } else {
+                    let mut pos = (s.x, s.y, s.z);
+                    Gen::polar_step(&mut pos, s.yaw, 0, s.speed);
+                    (s.x, s.y, s.z) = pos;
+                    s.speed = (s.speed + 8).clamp(0, 200);
+                }
+            }
+            // Fade arm + creep (EF:60511-33): 32 fade ticks (retail
+            // waits on paletteSubMod-5 — ours models the 32-tick
+            // cap), creeping forward at speed 2 while it runs.
+            10 | 11 => {
+                if s.phase == 10 {
+                    s.phase = 11;
+                    s.counter = 32;
+                }
+                s.counter -= 1;
+                if s.counter > 0 {
+                    let mut pos = (s.x, s.y, s.z);
+                    Gen::polar_step(&mut pos, s.yaw, 0, 2);
+                    (s.x, s.y, s.z) = pos;
+                } else {
+                    s.phase = 12;
+                }
+            }
+            // LEVEL END (EF:60534-43): the victory flag.
+            _ => {
+                self.won = true;
             }
         }
+        if launch {
+            // The SpeedUp sample — the same id the Speed spell plays
+            // (19, EF:60552/56230), via the sequence's own call, NOT
+            // the speed machinery.
+            self.g.snd_player(19);
+        }
+        // The terrain glue (EF:60561-73), every tick: steady state =
+        // ground + 128, approached at ≤128/tick — elevation
+        // differences between trigger and mouth are absorbed here,
+        // so the carpet cannot vertically overshoot the mouth.
+        let g = self.g.ground_z(s.x, s.y) as i16;
+        if s.z <= g.saturating_add(256) {
+            if s.z >= g {
+                s.z = g.saturating_add(128);
+            } else {
+                s.z = s.z.saturating_add(128);
+            }
+        } else {
+            s.z -= 128;
+        }
+        self.mc2_endseq = Some(s);
+    }
+
+    /// The scripted ending pose for the app, in flyer space
+    /// (x tiles, altitude tiles, z tiles, yaw radians) — Some while
+    /// the demon-mouth sequence runs. The app mirrors it onto the
+    /// flyer and suppresses player input (the retail actionIndex-11
+    /// control seizure).
+    pub fn mc2_end_pose(&self) -> Option<(f32, f32, f32, f32)> {
+        const TAU: f32 = std::f32::consts::TAU;
+        self.mc2_endseq.map(|s| {
+            (
+                s.x as f32 / 256.0,
+                s.z as f32 / 256.0,
+                s.y as f32 / 256.0,
+                (s.yaw & 0x7FF) as f32 * (TAU / 2048.0),
+            )
+        })
+    }
+
+    /// Ending fade progress 0..=1 (the retail paletteSubMod-5 final
+    /// fade, the phase-10/11 32-tick window). 0 while no ending
+    /// fade runs.
+    pub fn end_fade(&self) -> f32 {
+        match self.mc2_endseq {
+            Some(s) if s.phase == 11 => 1.0 - s.counter.max(0) as f32 / 32.0,
+            Some(s) if s.phase >= 12 => 1.0,
+            _ => 0.0,
+        }
+    }
+
+    /// The level is WON — the true terminator, distinct from
+    /// [`World::completed`]: MC1's Space win-exit / MC2's endGameSeq
+    /// phase 0xC. The app consumes it: fade out and end the game.
+    pub fn won(&self) -> bool {
+        self.won
     }
 
     /// `InitSwitchChainZaxisAndSound_6F850` (:44523): the shared
@@ -10767,6 +11095,83 @@ mod tests {
             x_start,
             w.g.ent[ball].x
         );
+    }
+
+    /// The MC1/HW win-exit (Space = retail command 27, :20910/:48804):
+    /// gated on the ALIVE state and the latched win flag — a Space
+    /// without the flag does nothing, and the flag alone (retail
+    /// 13325&2) never ends the level by itself.
+    #[test]
+    fn mc1_space_wins_only_when_alive_and_completed() {
+        let mut w = flat_world();
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 1000, 0);
+        let space = PlayerCommand {
+            respawn: true,
+            ..PlayerCommand::default()
+        };
+        w.tick(pose, space);
+        assert!(!w.won(), "no win flag: Space is inert while alive");
+        w.completed = true;
+        w.tick(pose, PlayerCommand::default());
+        assert!(!w.won(), "the win flag alone never ends the level");
+        w.tick(pose, space);
+        assert!(w.won(), "alive + won + Space = the win-exit");
+    }
+
+    /// The demon-mouth ending (sub_5E8C0_endGameSeq): the (14,4)
+    /// mouth spawns HIDDEN; tripping the (11,31) marker does NOT end
+    /// the level — it reveals the mouth and seizes the flyer into
+    /// the scripted decelerate → aim → launch → terrain-glued fly-in
+    /// → 32-tick fade, and only phase 0xC reports WON. Regression
+    /// for the backwards port arm (portal pre-shown + despawned on
+    /// trip + instant end; player report 2026-07-16).
+    #[test]
+    fn mc2_demon_mouth_ending_runs_the_fly_in() {
+        let mut w = mc2_flat_world();
+        let (mx, my) = mc2_pos(110, 100);
+        let gz = w.g.ground_z(mx, my) as i16;
+        let mouth = w.mc2_spawn_class14(4, mx, my, gz).expect("mouth");
+        // The dis-gated spawn seam hides ending markers (models 3/4)
+        // until the trip; mirror it for the direct spawn.
+        w.g.ent[mouth].flags |= 0x20;
+        let (tx, ty) = mc2_pos(100, 100);
+        let tz = w.g.ground_z(tx, ty) as i16;
+        let trig = w.spawn_trigger(31, tx, ty, tz).expect("trigger");
+        w.g.ent[trig].f80 = 2 << 8;
+        w.g.ent[trig].f82 = 2 << 8;
+        // Park the player on the trigger; the phase gate (f63 & 7)
+        // opens within 8 ticks.
+        let pose = PlayerPose::from_tiles(100.0, 2.0, 100.0, 0.0, 0.0, 0.0);
+        for _ in 0..10 {
+            w.tick(pose, PlayerCommand::default());
+            if w.mc2_end_pose().is_some() {
+                break;
+            }
+        }
+        assert!(w.mc2_end_pose().is_some(), "the trip seizes the flyer");
+        assert_eq!(
+            w.g.ent[mouth].flags & (0x20 | 0x400),
+            0,
+            "the trip REVEALS the mouth — it persists as the target"
+        );
+        assert!(!w.won(), "the trip alone must not end the level");
+        // Run the sequence out: decelerate, aim east, launch, glue,
+        // arrive (< 0x180), fade 32 — well inside 1000 ticks.
+        let mut won_at = None;
+        for t in 0..1000 {
+            w.tick(pose, PlayerCommand::default());
+            if w.won() {
+                won_at = Some(t);
+                break;
+            }
+        }
+        assert!(won_at.is_some(), "the fly-in reaches the mouth and wins");
+        let (ex, _, _, _) = w.mc2_end_pose().expect("pose holds through the end");
+        assert!(
+            (ex - 110.0).abs() < 2.0,
+            "the scripted carpet stopped at the mouth (x = {ex})"
+        );
+        assert!(w.end_fade() >= 1.0, "faded to black");
     }
 
     /// The (10,22) whirlwind funnel and (10,76) fire-orb satellites

@@ -700,6 +700,37 @@ pub(crate) struct Gen {
     /// read by the archer Scan-A post-reject. Hash-quiet while
     /// empty (E12 2026-07-15).
     pub(crate) mc2_wanted: Mc2SlotMap<5>,
+    /// Per-wizard castle research (`array_0x24E_590`, player struct
+    /// +0x24E): `[stage-1]` in `.1` = the stage's HP factor
+    /// (`subSpellIndex_2`), `[stage-1]` in `.2` = the stage's
+    /// PART-TYPE (`life_0x1A` — 1 = fire tower, 2 = lightning),
+    /// keyed by owner id. Retail fills it via the research child
+    /// (`sub_69AB0` EF:56120-21) for stage `castleLevel+1`; the
+    /// port stamps at cast/upgrade time from the castle-spell tier
+    /// (the A.5 shortcut, castle-and-cost.md) until the research
+    /// production chain lands. Hash-quiet while empty.
+    pub(crate) mc2_castle_research: Mc2CastleResearch,
+}
+
+/// See [`Gen::mc2_castle_research`] — hashes to NOTHING while empty
+/// (the [`Mc2Ord`] pattern; tag 7 disambiguates adjacent quiet
+/// fields, review J2). Entries are `(owner, hp_factor[stage-1],
+/// part_type[stage-1])` for stages 1..=7 (retail slots 1..7 / 10..16
+/// of the 19-byte array — slots 0/8/9/17/18 are never addressed).
+#[derive(Default)]
+pub(crate) struct Mc2CastleResearch(pub Vec<(u16, [u8; 7], [u8; 7])>);
+
+impl std::hash::Hash for Mc2CastleResearch {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if !self.0.is_empty() {
+            state.write_u8(7);
+            for (own, hp, part) in &self.0 {
+                state.write_u16(*own);
+                state.write(hp);
+                state.write(part);
+            }
+        }
+    }
 }
 
 /// See [`Gen::mc2_cast_xp`] — hashes to NOTHING while empty (the
@@ -903,6 +934,7 @@ impl Gen {
             mc2_cast_xp: Mc2XpMail::default(),
             mc2_aura_claim: Mc2SlotMap::default(),
             mc2_wanted: Mc2SlotMap::default(),
+            mc2_castle_research: Mc2CastleResearch::default(),
         }
     }
 
