@@ -2531,6 +2531,21 @@ struct Args {
     /// None = the game's pristine chassis value (1000).
     pool_slots: Option<usize>,
     awake_range: Option<u32>,
+    /// Headless flocking probe: tick the real world and dump per-
+    /// creature AI state as CSV (the goat-cohesion diagnostic).
+    flock_probe: Option<PathBuf>,
+    probe_ticks: u32,
+    /// CSV row cadence (1 = every tick).
+    probe_every: u32,
+    /// Pose script: far|start|hover[:ALT]|approach[:ALT]|orbit[:ALT].
+    probe_pose: String,
+    /// Tracked (class, model); default (5,1) = the MC2 goat.
+    probe_species: (u8, u8),
+    /// Minimal environment: landscape + the tracked species only.
+    probe_strip: bool,
+    /// Dispositions fired at t=0 (materialize dis-gated spawns —
+    /// e.g. mc2:00's dis-6 quest fireflies).
+    probe_dis: Vec<u16>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -2560,6 +2575,13 @@ fn parse_args() -> Result<Args, String> {
     let mut terrain_features = true;
     let mut awake_range = None;
     let mut pool_slots = None;
+    let mut flock_probe = None;
+    let mut probe_ticks = 8000u32;
+    let mut probe_every = 1u32;
+    let mut probe_pose = String::from("start");
+    let mut probe_species = (5u8, 1u8);
+    let mut probe_strip = false;
+    let mut probe_dis = Vec::new();
 
     /// `--level` accepts a package path or the path-free shorthand
     /// `<game>:<index>` (`mc1:32`, `mc1hw:7`, `mc2:100`) resolving to
@@ -2604,6 +2626,50 @@ fn parse_args() -> Result<Args, String> {
             }
             "--screenshot" => {
                 screenshot = Some(PathBuf::from(it.next().ok_or("--screenshot needs a path")?));
+            }
+            "--flock-probe" => {
+                flock_probe = Some(PathBuf::from(
+                    it.next().ok_or("--flock-probe needs a csv path")?,
+                ));
+            }
+            "--probe-ticks" => {
+                probe_ticks = it
+                    .next()
+                    .ok_or("--probe-ticks needs a count")?
+                    .parse()
+                    .map_err(|e| format!("--probe-ticks: {e}"))?;
+            }
+            "--probe-every" => {
+                probe_every = it
+                    .next()
+                    .ok_or("--probe-every needs a tick interval")?
+                    .parse::<u32>()
+                    .map_err(|e| format!("--probe-every: {e}"))?
+                    .max(1);
+            }
+            "--probe-pose" => {
+                probe_pose = it
+                    .next()
+                    .ok_or("--probe-pose needs far|start|hover[:ALT]|approach[:ALT]|orbit[:ALT]")?;
+            }
+            "--probe-species" => {
+                let spec = it.next().ok_or("--probe-species needs class,model")?;
+                let (c, m) = spec
+                    .split_once(',')
+                    .ok_or_else(|| format!("--probe-species {spec}: expected class,model"))?;
+                probe_species = (
+                    c.parse().map_err(|e| format!("--probe-species: {e}"))?,
+                    m.parse().map_err(|e| format!("--probe-species: {e}"))?,
+                );
+            }
+            "--probe-strip" => probe_strip = true,
+            "--probe-dis" => {
+                let spec = it
+                    .next()
+                    .ok_or("--probe-dis needs dis ids (comma-separated)")?;
+                for part in spec.split(',') {
+                    probe_dis.push(part.parse().map_err(|e| format!("--probe-dis: {e}"))?);
+                }
             }
             "--camera" => {
                 let spec = it.next().ok_or("--camera needs x,y,z,yaw,pitch")?;
@@ -2731,7 +2797,10 @@ fn parse_args() -> Result<Args, String> {
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
-                     [--pool-slots N] [--awake-range TILES (0 = always awake)]\n\
+                     [--pool-slots N] [--awake-range TILES (0 = always awake)] \
+                     [--flock-probe out.csv [--probe-ticks N] [--probe-every N] \
+                     [--probe-pose far|start|hover[:ALT]|approach[:ALT]|orbit[:ALT]] \
+                     [--probe-species CLASS,MODEL] [--probe-strip] [--probe-dis N,N..]]\n\
                      enhancements persist in {} (see crates/mgc-app/src/config.rs)",
                     config::DEFAULT_PATH
                 ));
@@ -2766,6 +2835,13 @@ fn parse_args() -> Result<Args, String> {
         terrain_features,
         pool_slots,
         awake_range,
+        flock_probe,
+        probe_ticks,
+        probe_every,
+        probe_pose,
+        probe_species,
+        probe_strip,
+        probe_dis,
     })
 }
 
@@ -2807,6 +2883,396 @@ fn run_map(level: &LoadedLevel, out: &Path, scale: u32, map_triggers: bool) -> R
     }
     write_png(out, w as u32, h as u32, &rgba)?;
     println!("{} -> {} ({}x{})", level.label, out.display(), w, h);
+    Ok(())
+}
+
+/// Headless flocking probe (`--flock-probe`, the goat-cohesion
+/// mystery): tick the REAL app world (the same `WorldInit::build` the
+/// game plays on — not the sim-test fixture) and dump every tracked
+/// creature's full AI state per tick as CSV, plus a periodic summary.
+/// The pose script stands in for the player: `far` parks out of the
+/// awake radius, `start` parks at the authored level start, `hover`
+/// glues to the herd centroid, `approach` flies in at carpet cruise
+/// and then hovers, `orbit` circles the herd — the moving-wizard
+/// cases the old fixture harness never exercised.
+fn run_flock_probe(
+    level: &LoadedLevel,
+    out: &Path,
+    ticks: u32,
+    every: u32,
+    pose_spec: &str,
+    species: (u8, u8),
+    strip: bool,
+    dis: &[u16],
+) -> Result<(), String> {
+    use std::io::Write as _;
+
+    let Some(init) = &level.world_init else {
+        return Err(
+            "--flock-probe needs the living world (do not pass --no-terrain-features)".to_string(),
+        );
+    };
+
+    // Torus helpers (256-tile wrap), in TILE units.
+    const N: f32 = 256.0;
+    let wrap_d = |d: f32| (d + N / 2.0).rem_euclid(N) - N / 2.0;
+    let dist = |a: (f32, f32), b: (f32, f32)| wrap_d(a.0 - b.0).hypot(wrap_d(a.1 - b.1));
+    // Circular mean per axis — the herd centroid on the torus.
+    let centroid = |pts: &[(f32, f32)]| -> Option<(f32, f32)> {
+        if pts.is_empty() {
+            return None;
+        }
+        let axis = |sel: fn(&(f32, f32)) -> f32| {
+            let (mut s, mut c) = (0.0f32, 0.0f32);
+            for p in pts {
+                let a = sel(p) / N * std::f32::consts::TAU;
+                s += a.sin();
+                c += a.cos();
+            }
+            (s.atan2(c) / std::f32::consts::TAU * N).rem_euclid(N)
+        };
+        Some((axis(|p| p.0), axis(|p| p.1)))
+    };
+    // Connected components at LINK = 6 tiles; the pose scripts follow
+    // the LARGEST cluster (level-000 authors several herds — the
+    // global mean lands between them).
+    let components = |pts: &[(f32, f32)]| -> Vec<Vec<usize>> {
+        let n = pts.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(p: &mut [usize], x: usize) -> usize {
+            let mut r = x;
+            while p[r] != r {
+                r = p[r];
+            }
+            let mut c = x;
+            while p[c] != r {
+                let nx = p[c];
+                p[c] = r;
+                c = nx;
+            }
+            r
+        }
+        for a in 0..n {
+            for b in (a + 1)..n {
+                if dist(pts[a], pts[b]) <= 6.0 {
+                    let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                    parent[ra] = rb;
+                }
+            }
+        }
+        let mut groups: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+        for i in 0..n {
+            let r = find(&mut parent, i);
+            groups.entry(r).or_default().push(i);
+        }
+        let mut out: Vec<Vec<usize>> = groups.into_values().collect();
+        out.sort_by_key(|g| std::cmp::Reverse(g.len()));
+        out
+    };
+
+    // The minimal comparison environment: landscape + the tracked
+    // species only (player request 2026-07-16) — no buildings, no
+    // stage board, no rivals. The start marker survives so `start`
+    // pose scripts stay meaningful.
+    let world_init;
+    let init = if strip {
+        let i = WorldInit {
+            game: init.game,
+            planes: init.planes.clone(),
+            things: init
+                .things
+                .iter()
+                .filter(|t| {
+                    (t.class == species.0 as u16 && t.model == species.1 as u16)
+                        || (t.class == 10 && t.model == 0x52)
+                        || (t.class == 3 && t.model == 4)
+                })
+                .cloned()
+                .collect(),
+            seed: init.seed,
+            assets: init.assets.clone(),
+            win_pct: 0,
+            wizards: Default::default(),
+            mc2_wizards: Default::default(),
+            player_count: 1,
+            stages: Vec::new(),
+            stage_vars: Vec::new(),
+            night_shade: init.night_shade,
+            doom_level: init.doom_level,
+            placeholders: init.placeholders,
+            prune_owned_jars: false,
+            chassis: init.chassis.clone(),
+        };
+        world_init = i;
+        &world_init
+    } else {
+        init
+    };
+    // The level's raw StageVar rows — the herd-law bindings (graze
+    // anchors, walk-to points, spawn gates) the tracked species may
+    // attach to.
+    for (s, v) in init.stage_vars.iter().enumerate() {
+        if (v.0 as u8) & 0xF != 0 && v.0 as u8 != 0xFF {
+            println!(
+                "stagevar slot={s} index={:#04x} stage={} x={} y={} data={:#010x}",
+                v.0 as u8, v.1, v.2, v.3, v.4
+            );
+        }
+    }
+    let mut w = init.build();
+    for &d in dis {
+        w.debug_fire_disposition(d);
+        println!("fired disposition {d}");
+    }
+
+    // Pose script. Altitude args are TILES ABOVE THE HERD's mean
+    // ground; the carpet cruises at the faithful 80 units/tick.
+    const CRUISE: f32 = 80.0 / 256.0;
+    let (mode, alt) = match pose_spec.split_once(':') {
+        Some((m, a)) => (
+            m,
+            a.parse::<f32>()
+                .map_err(|e| format!("--probe-pose {pose_spec}: bad altitude: {e}"))?,
+        ),
+        None => (pose_spec, 2.0),
+    };
+    let start = level.start.unwrap_or_default();
+    let (mut px, mut py) = match mode {
+        "far" => (2.0f32, 2.0f32),
+        _ => (start.x, start.z),
+    };
+    let mut pz_alt = match mode {
+        "far" => 40.0f32,
+        _ => start.y,
+    };
+    let mut orbit_angle = 0.0f32;
+    let mut approaching = matches!(mode, "approach" | "orbit");
+    if !matches!(mode, "far" | "start" | "hover" | "approach" | "orbit") {
+        return Err(format!(
+            "--probe-pose {pose_spec}: unknown mode (far|start|hover[:ALT]|approach[:ALT]|orbit[:ALT])"
+        ));
+    }
+
+    let file = std::fs::File::create(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let mut csv = std::io::BufWriter::new(file);
+    writeln!(
+        csv,
+        "tick,slot,id,x,y,z,yaw,aim,speed,min_speed,max_speed,state,role,life,awake,leader,target,attacker,cadence,px,py,pdist,blocked"
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Cluster count (LINK = 6 tiles — the fixture harness's metric,
+    // retail reads ~1-2).
+    let clusters = |pts: &[(f32, f32)]| -> usize { components(pts).len() };
+
+    // Attribution accumulators: goat-ticks by role x speed bucket.
+    // Buckets: 0 = <=18 (walk), 1 = 19..=36 (catch-up), 2 = 37..=53,
+    // 3 = >=54 (flee/min-speed).
+    let bucket = |s: i16| -> usize {
+        match s.abs() {
+            0..=18 => 0,
+            19..=36 => 1,
+            37..=53 => 2,
+            _ => 3,
+        }
+    };
+    let mut attrib = [[0u64; 4]; 9]; // roles 0..7 + 8 = "other state"
+    // Terrain-fence telemetry: goat-ticks with the move-core block
+    // latch set (retail byte[2] & 4) vs total.
+    let (mut blocked_ticks, mut total_ticks) = (0u64, 0u64);
+    let n0 = w.debug_flock_probe(species.0, species.1).len();
+    // The species' whole-map walkability (slope fence + tile-type
+    // block), dumped once beside the CSV for the terrain-pocket
+    // analysis: <out>.blockmap (raw 256x256 bytes, bit0 rough / bit1
+    // type).
+    if let Some(map) = w.debug_block_map(species.0, species.1) {
+        let bm = out.with_extension("blockmap");
+        std::fs::write(&bm, &map).map_err(|e| format!("{}: {e}", bm.display()))?;
+        // The raw height plane beside it (the fence metric is height-
+        // difference-driven; the terrain-provenance check reads this).
+        let hp = out.with_extension("heights");
+        std::fs::write(&hp, &w.planes().height).map_err(|e| format!("{}: {e}", hp.display()))?;
+        let rough = map.iter().filter(|&&b| b & 1 != 0).count();
+        let typ = map.iter().filter(|&&b| b & 2 != 0).count();
+        println!(
+            "block map: {} rough / {} type-blocked of 65536 tiles -> {}",
+            rough,
+            typ,
+            bm.display()
+        );
+    }
+    let idle = mgc_sim::mc1::world::PlayerCommand::default();
+    println!(
+        "flock probe: ({},{}) n={} pose={} ticks={} strip={} -> {}",
+        species.0,
+        species.1,
+        n0,
+        pose_spec,
+        ticks,
+        strip,
+        out.display()
+    );
+
+    for t in 1..=ticks {
+        // Advance the pose script from LAST tick's herd view.
+        let rows = w.debug_flock_probe(species.0, species.1);
+        let live: Vec<(f32, f32)> = rows
+            .iter()
+            .filter(|r| r.life >= 0)
+            .map(|r| (r.x as f32 / 256.0, r.y as f32 / 256.0))
+            .collect();
+        // Follow the biggest herd, not the between-herds global mean.
+        let c = components(&live)
+            .first()
+            .map(|g| g.iter().map(|&i| live[i]).collect::<Vec<_>>())
+            .and_then(|pts| centroid(&pts));
+        let ground = {
+            let zs: Vec<f32> = rows
+                .iter()
+                .filter(|r| r.life >= 0)
+                .map(|r| r.z as f32 / 256.0)
+                .collect();
+            if zs.is_empty() {
+                pz_alt
+            } else {
+                zs.iter().sum::<f32>() / zs.len() as f32
+            }
+        };
+        match (mode, c) {
+            ("hover", Some(c)) => {
+                px = c.0;
+                py = c.1;
+                pz_alt = ground + alt;
+            }
+            ("approach" | "orbit", Some(c)) => {
+                if approaching {
+                    let d = dist((px, py), c);
+                    if d <= if mode == "orbit" { 4.0 } else { 1.0 } {
+                        approaching = false;
+                    } else {
+                        let (dx, dy) = (wrap_d(c.0 - px), wrap_d(c.1 - py));
+                        let step = CRUISE.min(d);
+                        px = (px + dx / d * step).rem_euclid(N);
+                        py = (py + dy / d * step).rem_euclid(N);
+                        // Descend toward hover altitude on the way in.
+                        pz_alt += ((ground + alt) - pz_alt).clamp(-0.1, 0.1);
+                    }
+                }
+                if !approaching {
+                    if mode == "orbit" {
+                        orbit_angle += 0.02;
+                        px = (c.0 + 4.0 * orbit_angle.cos()).rem_euclid(N);
+                        py = (c.1 + 4.0 * orbit_angle.sin()).rem_euclid(N);
+                    } else {
+                        px = c.0;
+                        py = c.1;
+                    }
+                    pz_alt = ground + alt;
+                }
+            }
+            _ => {}
+        }
+        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(px, pz_alt, py, 0.0, 0.0, 0.0);
+        w.tick(pose, idle);
+
+        let rows = w.debug_flock_probe(species.0, species.1);
+        for r in &rows {
+            if r.life >= 0 {
+                let role = r.state.wrapping_sub(8) as usize;
+                attrib[if role < 8 { role } else { 8 }][bucket(r.speed)] += 1;
+                total_ticks += 1;
+                if r.flags & (1 << 27) != 0 {
+                    blocked_ticks += 1;
+                }
+            }
+            if t % every == 0 {
+                let (gx, gy) = (r.x as f32 / 256.0, r.y as f32 / 256.0);
+                let pd = dist((gx, gy), (px, py));
+                writeln!(
+                    csv,
+                    "{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.1},{:.1},{pd:.2},{}",
+                    r.slot,
+                    r.id24,
+                    r.x,
+                    r.y,
+                    r.z,
+                    r.yaw,
+                    r.aim,
+                    r.speed,
+                    r.min_speed,
+                    r.max_speed,
+                    r.state,
+                    r.state.wrapping_sub(8),
+                    r.life,
+                    r.awake,
+                    r.leader,
+                    r.target,
+                    r.attacker,
+                    r.cadence,
+                    px * 256.0,
+                    py * 256.0,
+                    (r.flags >> 27) & 1,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        if t % 500 == 0 || t == ticks {
+            let live: Vec<(f32, f32)> = rows
+                .iter()
+                .filter(|r| r.life >= 0)
+                .map(|r| (r.x as f32 / 256.0, r.y as f32 / 256.0))
+                .collect();
+            let mut roles = [0usize; 9];
+            let mut speeds = [0usize; 4];
+            let mut fast = 0usize;
+            for r in rows.iter().filter(|r| r.life >= 0) {
+                let role = r.state.wrapping_sub(8) as usize;
+                roles[if role < 8 { role } else { 8 }] += 1;
+                speeds[bucket(r.speed)] += 1;
+                if r.speed.abs() > 18 {
+                    fast += 1;
+                }
+            }
+            println!(
+                "t={t}: alive={}/{n0} clusters={} roles[patrol={} wander={} chase={} FOLLOW={} flee={} other={}] speed[<=18:{} 19-36:{} 37-53:{} >=54:{}] fast={fast} player=({:.0},{:.0})",
+                live.len(),
+                clusters(&live),
+                roles[0],
+                roles[1],
+                roles[2],
+                roles[3],
+                roles[6],
+                roles[4] + roles[5] + roles[7] + roles[8],
+                speeds[0],
+                speeds[1],
+                speeds[2],
+                speeds[3],
+                px,
+                py
+            );
+        }
+    }
+
+    println!(
+        "\nterrain fence: {blocked_ticks}/{total_ticks} goat-ticks with the block latch set ({:.2}%)",
+        100.0 * blocked_ticks as f64 / total_ticks.max(1) as f64
+    );
+    println!("attribution (goat-ticks by role x speed bucket):");
+    println!("  role         <=18     19-36    37-53    >=54");
+    let names = [
+        "patrol", "wander", "chase", "FOLLOW", "prekill", "kill", "flee", "role7", "other",
+    ];
+    for (i, name) in names.iter().enumerate() {
+        let row = &attrib[i];
+        if row.iter().any(|&v| v != 0) {
+            println!(
+                "  {name:<10} {:>8} {:>8} {:>8} {:>8}",
+                row[0], row[1], row[2], row[3]
+            );
+        }
+    }
+    csv.flush().map_err(|e| e.to_string())?;
+    println!("wrote {}", out.display());
     Ok(())
 }
 
@@ -3126,6 +3592,25 @@ fn main() -> std::process::ExitCode {
             out,
             args.map_scale,
             cfg.render.debug.map_trigger_areas,
+        ) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Some(out) = &args.flock_probe {
+        return match run_flock_probe(
+            &level,
+            out,
+            args.probe_ticks,
+            args.probe_every,
+            &args.probe_pose,
+            args.probe_species,
+            args.probe_strip,
+            &args.probe_dis,
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {

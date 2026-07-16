@@ -36,16 +36,25 @@
 //! which stay on the mobs.rs path) — level kinds are 1..9 plus the
 //! runtime 10 (aggro-broken) and 15 (inert), so they never collide.
 //!
+//! MOVEMENT (2026-07-16 flocking fix): stage-held creatures are
+//! ACTIVE — retail's `sub_1D5D0` cases all MOVE. Kind 1 walks to the
+//! authored point (`sub_1DDA0`), kind 2 is the graze LEASH
+//! (`sub_1DBF0`: a 12-tile box around the anchor — outside walks
+//! home, inside circles at +142..254/16-ticks — plus the awake
+//! wizard watch that breaks to kind 10), kinds 3/4/5 shadow their
+//! watched entity (`sub_1D8C0`), kinds 6-9 graze while their gate
+//! runs. The earlier "held = frozen" reading came from the per-model
+//! wrappers, which indeed don't move — the movement lives in the
+//! `sub_1D5D0` legs those wrappers call. `byte_0x3E_62` DOES tick
+//! while held (the Events.cpp dispatch loop increments every
+//! processed entity, not the wrappers), so all cadences are
+//! time-keyed; the earlier static-ordinal note was wrong.
+//!
 //! APPROX register (held reductions, deliberate): the per-model
 //! phase-7 wrapper EXTRAS around retail's `sub_1D5D0` (ambient-sound
 //! draws and speed refresh, e.g. the goat's `AddGoat05_01_1F5B0`
-//! bleat; m18's ground re-snap), the idle FACING choreography (`roll`
-//! writes with the 64-tick LCG jitter) and the `sub_1B8C0`/`sub_1EEE0`
-//! physics settle are not run — a held creature keeps its spawn pose
-//! and draws no idle RNG. Gates reading `f63 & 7` see the STATIC
-//! spawn ordinal: retail never increments `byte_0x3E_62` while held
-//! (verified on the m0/goat/m16/m18 wrappers), so the guardian-arm
-//! cadence is ordinal-keyed, not time-keyed.
+//! bleat; m18's ground re-snap) and the `sub_1EEE0` settle on the
+//! walk leg's hit path are not run — no idle SOUND rng is drawn.
 
 use super::super::mc1::mobs::MobCtx;
 use super::super::mc1::world::World;
@@ -119,19 +128,24 @@ impl World {
         // SLOT 0 IS INERT — retail's fill loop runs `index = 1..count`
         // (EF:4641) and every consumer scans from 1, so an authored
         // slot 0 never loads (H7iii; no shipped level authors one).
+        // 0xFF rows are the level editor's UNUSED fill — not a kind-15
+        // row. (Retail's count scan would include a 0xFF tail and load
+        // it with a garbage out-of-table subtype read; no shipped row
+        // can bind through that deliberately, so the port treats the
+        // fill as empty. APPROX, documented.)
         let count = vars
             .iter()
             .enumerate()
             .take(11)
             .skip(1)
-            .filter(|(_, v)| (v.0 as u8) & 0xF != 0)
+            .filter(|(_, v)| (v.0 as u8) & 0xF != 0 && v.0 as u8 != 0xFF)
             .map(|(i, _)| i)
             .max();
         let Some(count) = count else { return };
         for (slot, &(index, stage, x, y, data)) in vars.iter().take(count + 1).enumerate() {
             let byte0 = index as u8;
             let kind = byte0 & 0xF;
-            if kind == 0 || slot == 0 {
+            if kind == 0 || slot == 0 || byte0 == 0xFF {
                 self.mc2_stagevars.push(Mc2StageVar::default());
                 continue;
             }
@@ -443,6 +457,19 @@ impl World {
             if (4..=5).contains(&phase) {
                 continue;
             }
+            // `sub_12500` case 0xA (EF:5054-57): an AGGRO-BROKEN
+            // (kind-10) creature RE-LEASHES the moment it is neither
+            // attacking (phase 2) nor fleeing (phase 6) — its
+            // chase/flee machine dropped it back to wander, and the
+            // stage bind reclaims it (`sub_12330`). This is how the
+            // retail herd calms down and walks back to the graze
+            // anchor after a scatter (2026-07-16 flocking fix).
+            if self.g.ent[ent].site_z == 10 {
+                if !matches!(phase, 2 | 6) {
+                    self.mc2_stagevar_arm(ent, slot);
+                }
+                continue;
+            }
             let (ex, ey) = (self.g.ent[ent].x, self.g.ent[ent].y);
             let release = match v.kind {
                 1 => abs16(v.point.0, ex) <= 2048 && abs16(v.point.1, ey) <= 2048,
@@ -577,10 +604,150 @@ impl World {
                 // held creatures are killable (EF:10242-45).
                 2 => self.g.ent[i].tick70 = base.wrapping_add(4),
                 1 => self.mc2_held_hit(i, base),
-                _ => self.mc2_held_watch(i, base),
+                _ => {
+                    // The per-kind MOVEMENT leg (2026-07-16 flocking
+                    // fix): stage-held creatures are ACTIVE in retail
+                    // — sub_1D5D0's cases walk/graze every tick, they
+                    // never freeze. Then the kind-3/4 guardian arm
+                    // and the kind-2 wizard watch.
+                    self.mc2_held_move(i, kind, ctx);
+                    self.mc2_held_watch(i, base);
+                    if self.g.ent[i].tick70 & 7 == 7 && self.g.ent[i].site_z == 2 {
+                        self.mc2_held_wizard_scan(i, base, ctx);
+                    }
+                }
             },
         }
+        // The per-model wrapper's SPEED TAIL (the goat's
+        // `AddGoat05_01_1F5B0` :11452 shape, shared by the townie
+        // wrapper): the flee state runs at minSpeed — applied the
+        // SAME tick an aggro raise above set `8m+6` — and every
+        // quiet held tick refreshes actSpeed to maxSpeed. Without
+        // this, a leashed goat that sights the wizard fled at 18
+        // instead of retail's 54. Scoped to the FLEE-flagged prey
+        // rows (goats/townsfolk), whose wrappers verifiably carry
+        // the tail; predator/guardian wrappers (m18/m19/m21...)
+        // keep their spawn speed while held, as before (APPROX —
+        // their tails differ per model and stay skipped with the
+        // sound rolls, module doc).
+        if BEHAVIOR[self.g.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0 {
+            let e = &mut self.g.ent[i];
+            if e.tick70 == base.wrapping_add(6) {
+                e.f126 = e.f128;
+            } else if e.tick70 & 7 == 7 {
+                e.f126 = e.f130;
+            }
+        }
         true
+    }
+
+    /// The `sub_1D5D0` per-kind MOVEMENT legs (quiet path only — the
+    /// inbox head ran upstream). Kind 1 (`sub_1DDA0`, EF:10171-10218)
+    /// walks toward the slot's authored POINT; kind 2 (`sub_1DBF0`,
+    /// EF:10246-70) is the graze LEASH — a 3072-unit (12-tile) box
+    /// around the point: outside walks home, inside grazes; kinds
+    /// 3/4/5 (`sub_1D8C0`, EF:10111-68) SHADOW the watched entity;
+    /// kinds 6/7/8/9 (`sub_1E000/1E020/1D880/1D8A0`) graze in place
+    /// while their gate runs.
+    fn mc2_held_move(&mut self, i: usize, kind: i16, _ctx: &MobCtx) {
+        let Some(hpos) = self.mc2_sv_held.iter().position(|h| h.ent as usize == i) else {
+            return;
+        };
+        let slot = self.mc2_sv_held[hpos].slot as usize;
+        let Some(v) = self.mc2_stagevars.get(slot).copied() else {
+            return;
+        };
+        match kind {
+            1 => self.mc2_sv_walk(i, Some(v.point)),
+            2 => {
+                let e = &self.g.ent[i];
+                // Retail's leash test is the wrapped 16-bit box
+                // (EF:10248-50).
+                let out = ((v.point.0.wrapping_sub(e.x)) as i16 as i32).abs() > 3072
+                    || ((v.point.1.wrapping_sub(e.y)) as i16 as i32).abs() > 3072;
+                if out {
+                    self.mc2_sv_walk(i, Some(v.point));
+                } else {
+                    self.mc2_sv_graze(i);
+                }
+            }
+            3..=5 => {
+                let w = self.mc2_watch_handle(i, hpos, &v);
+                let target = (w != 0).then(|| {
+                    let t = &self.g.ent[w];
+                    (t.x, t.y)
+                });
+                self.mc2_sv_walk(i, target);
+            }
+            6..=9 => self.mc2_sv_graze(i),
+            _ => {}
+        }
+    }
+
+    /// The shared WALK leg (`sub_1DDA0`/`sub_1D8C0` quiet path): move
+    /// core, then every 8th tick aim at the target (unless the move
+    /// just hit the terrain fence — the retry yaw stands), every 64th
+    /// tick a ±(85..340) wander jitter on top, and the same-model
+    /// separation override last (EF:10195-10218).
+    fn mc2_sv_walk(&mut self, i: usize, target: Option<(u16, u16)>) {
+        self.g.mc2_move_core(i);
+        if self.g.ent[i].f63 & 7 != 0 {
+            return;
+        }
+        if let Some((tx, ty)) = target
+            && self.g.ent[i].flags & super::mobs::F_BLOCKED == 0
+        {
+            let e = &self.g.ent[i];
+            let mut aim = super::super::mc1::features::Gen::angle_between(e.x, e.y, tx, ty);
+            if self.g.ent[i].f63 & 0x3F == 0 {
+                let v = self.g.mc2_rand(i);
+                let r = self.g.mc2_rand(i);
+                let sign = 2 * ((v % 0x9D) / 79) as i32 - 1;
+                aim = (aim as i32 + ((r & 0xFF) + 85) as i32 * sign) as u16 & 0x7FF;
+            }
+            self.g.ent[i].f34 = aim;
+        }
+        self.g.mc2_avoid_packmate(i);
+    }
+
+    /// The GRAZE leg (`sub_1E1C0` quiet path, EF:10520-45): move
+    /// core, then every 16th tick (fence-clear) turn by +(142..254) —
+    /// the constant-handedness drift that walks the retail herd in
+    /// ~3.5-tile circles, one lap per ~165 ticks (the player's
+    /// observed 6-7 s). HOLD_STILL rows idle in place.
+    fn mc2_sv_graze(&mut self, i: usize) {
+        if BEHAVIOR[self.g.ent[i].row156 as usize].flags & Mc2BehaviorRow::HOLD_STILL != 0 {
+            return;
+        }
+        self.g.mc2_move_core(i);
+        if self.g.ent[i].f63 & 0xF == 0 && self.g.ent[i].flags & super::mobs::F_BLOCKED == 0 {
+            let r = self.g.mc2_rand(i);
+            self.g.ent[i].f34 =
+                (self.g.ent[i].f34 as u32).wrapping_add(r % 0x71 + 142) as u16 & 0x7FF;
+        }
+    }
+
+    /// The kind-2 WIZARD WATCH (`sub_1DBF0` tail, EF:10275-10318):
+    /// while still held with kind 2, an AWAKE creature scans the
+    /// class-3 list (+ the human) on its row cadence — nearest in
+    /// `v_28` range and `v_30` cone, invisibles skipped — and on
+    /// sight targets it and breaks to kind 10 (`sub_1E040`'s
+    /// aggro/flee raise). This is retail's calm "notice the wizard"
+    /// path — the graze herd never panics from presence alone unless
+    /// a wanderer actually sees one up close.
+    fn mc2_held_wizard_scan(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        if self.g.ent[i].f58 == 0 {
+            return;
+        }
+        let period = BEHAVIOR[self.g.ent[i].row156 as usize].v_26.max(1) as u8;
+        if self.g.ent[i].f63 % period != 0 {
+            return;
+        }
+        if let Some(t) = self.g.mc2_class3_scan(i, ctx) {
+            self.g.ent[i].f146 = t;
+            self.g.ent[i].site_z = 10;
+            self.mc2_aggro_raise(i, base);
+        }
     }
 
     /// `sub_1E040` (EF:10459-71): leave the hold for the model's
@@ -632,21 +799,8 @@ impl World {
         // Resolve the watch: `&2` slots cache the handle in word74
         // (`sub_1E3E0`, resolved on first need — retail resolves it in
         // `sub_1D8C0`'s idle arm); else the bound entity.
-        let watch = if v.flags & 0x02 != 0 {
-            let mut w = self.mc2_sv_held[hpos].timer as u16;
-            if w == 0 {
-                w = self.mc2_resolve_watch(i, slot);
-                self.mc2_sv_held[hpos].timer = w as i16;
-            }
-            w
-        } else {
-            v.watch_ent
-        } as usize;
-        if watch == 0
-            || watch >= self.g.ent.len()
-            || self.g.ent[watch].class64 == 0
-            || self.g.ent[watch].act_life < 0
-        {
+        let watch = self.mc2_watch_handle(i, hpos, &v);
+        if watch == 0 {
             return;
         }
         let aggro_at = match kind {
@@ -673,6 +827,33 @@ impl World {
             self.g.ent[i].site_z = 10;
             self.mc2_aggro_raise(i, base);
         }
+    }
+
+    /// Resolve a held creature's WATCHED entity: `&2` (watch-model)
+    /// slots cache the handle in word74 (`sub_1E3E0`, resolved on
+    /// first need — retail resolves it in `sub_1D8C0`'s idle arm);
+    /// else the bound entity. 0 = none/dead. Shared by the kind-3/4
+    /// guardian arm and the kind-3/4/5 shadow movement.
+    fn mc2_watch_handle(&mut self, i: usize, hpos: usize, v: &Mc2StageVar) -> usize {
+        let slot = self.mc2_sv_held[hpos].slot as usize;
+        let watch = if v.flags & 0x02 != 0 {
+            let mut w = self.mc2_sv_held[hpos].timer as u16;
+            if w == 0 {
+                w = self.mc2_resolve_watch(i, slot);
+                self.mc2_sv_held[hpos].timer = w as i16;
+            }
+            w
+        } else {
+            v.watch_ent
+        } as usize;
+        if watch == 0
+            || watch >= self.g.ent.len()
+            || self.g.ent[watch].class64 == 0
+            || self.g.ent[watch].act_life < 0
+        {
+            return 0;
+        }
+        watch
     }
 
     /// `sub_1E3E0` (EF:10609-48): resolve a `&2` slot's watch handle —

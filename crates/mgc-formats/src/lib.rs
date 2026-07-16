@@ -72,7 +72,13 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    re-bake so installs that had no fluidsynth (FM-only) pick up the
 ///    GM upgrade. Render output differs (different synth); FM path
 ///    unchanged. See crates/mgc-import/src/synth.rs.
-pub const BAKE_EPOCH: u32 = 12;
+/// 13: MC2 StageVar rows bake VERBATIM, all 11 slots SLOT-ALIGNED. The
+///    old export read byte0 as signed and dropped every row with high
+///    flag bits (0x80 subtype-match / 0x40 watch-model), then compacted
+///    the rest — losing e.g. level-000's kind-2 goat-graze anchors (the
+///    2026-07-16 flocking-mystery root cause) and mis-slotting chained
+///    triggers.
+pub const BAKE_EPOCH: u32 = 13;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

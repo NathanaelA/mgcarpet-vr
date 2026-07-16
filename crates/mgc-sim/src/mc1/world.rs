@@ -788,6 +788,44 @@ pub struct DebugEvent {
     pub flags: u32,
 }
 
+/// One creature's full AI state for [`World::debug_flock_probe`]
+/// (the flocking diagnostic): everything needed to attribute a
+/// speed/state per tick — position (8.8 fixed), the speed triple
+/// (`f126` act / `f128` min / `f130` max), the state byte, and the
+/// awake/leader/target/attacker links.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct FlockProbeRow {
+    pub slot: usize,
+    pub id24: u16,
+    pub x: u16,
+    pub y: u16,
+    pub z: i16,
+    /// Facing (f30, 11-bit engine angle).
+    pub yaw: u16,
+    /// Target yaw (f34).
+    pub aim: u16,
+    pub speed: i16,
+    pub min_speed: i16,
+    pub max_speed: i16,
+    /// Raw tick-handler byte (goat roles = state − 8).
+    pub state: u8,
+    pub life: i32,
+    /// Awake countdown (f58; 0 = asleep, 0xFA = never-woken sentinel).
+    pub awake: i16,
+    /// Pack leader slot (f52; 0 = none).
+    pub leader: u16,
+    /// Chase/flee target slot (f146; 0xFFFF = the player).
+    pub target: u16,
+    /// Attacker latch (f40).
+    pub attacker: u16,
+    /// Per-tick cadence byte (f63).
+    pub cadence: u8,
+    /// Raw flag word — bit 27 = the move-core block latch (retail
+    /// `byte[2] & 4`: the last move hit the terrain fence).
+    pub flags: u32,
+}
+
 /// One tick's audio outputs: drained sound requests + the ambient
 /// rule inputs (see [`World::take_audio`]).
 #[derive(Debug, Clone)]
@@ -6722,6 +6760,54 @@ impl World {
             .filter(|e| e.class64 == class && e.model65 == model && e.act_life >= 0)
             .map(|e| e.f126)
             .collect()
+    }
+
+    /// Diagnostic (the flocking/goat mystery, 2026-07-16): the FULL
+    /// per-tick AI state of every live `(class, model)` creature —
+    /// full-resolution position, speed triple, state, awake/leader/
+    /// target links. Read-only (hash-neutral); consumed by the app's
+    /// `--flock-probe` headless CSV dump.
+    pub fn debug_flock_probe(&self, class: u8, model: u8) -> Vec<FlockProbeRow> {
+        self.g
+            .ent
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, e)| e.class64 == class && e.model65 == model && e.flags & 0x400 == 0)
+            .map(|(slot, e)| FlockProbeRow {
+                slot,
+                id24: e.id24,
+                x: e.x,
+                y: e.y,
+                z: e.z,
+                yaw: e.f30,
+                aim: e.f34,
+                speed: e.f126,
+                min_speed: e.f128,
+                max_speed: e.f130,
+                state: e.tick70,
+                life: e.act_life,
+                awake: e.f58,
+                leader: e.f52,
+                target: e.f146,
+                attacker: e.f40,
+                cadence: e.f63,
+                flags: e.flags,
+            })
+            .collect()
+    }
+
+    /// Diagnostic companion of [`Self::debug_flock_probe`]: the
+    /// 256x256 move-block map for the behavior row of the first live
+    /// `(class, model)` creature — bit 0 = roughness fence, bit 1 =
+    /// tile-type block. None when no such creature lives.
+    pub fn debug_block_map(&self, class: u8, model: u8) -> Option<Vec<u8>> {
+        let i = self
+            .g
+            .ent
+            .iter()
+            .position(|e| e.class64 == class && e.model65 == model && e.act_life >= 0)?;
+        Some(self.g.mc2_block_map(i))
     }
 
     pub fn debug_pool(&self) -> (usize, Vec<DebugEvent>) {

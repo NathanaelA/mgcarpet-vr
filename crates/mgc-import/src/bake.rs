@@ -354,10 +354,18 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
                     y: c.y,
                 })
                 .collect(),
+            // ALL 11 slots, VERBATIM and SLOT-ALIGNED. The old
+            // `filter(is_used)` read byte0 as i8 >= 0 — but byte0
+            // packs FLAG BITS in its high nibble (0x80 = match-by-
+            // subtype, 0x40 = watch-model), so every flagged row
+            // (e.g. level-000's 0x82 goat-graze anchors) vanished
+            // AND the survivors compacted, breaking the slot indices
+            // the sim's InitStageVars port aligns on. Found via the
+            // 2026-07-16 flocking probe (retail memimage shows 9 live
+            // rows where our bake had 3).
             variables: level
                 .stage_vars
                 .iter()
-                .filter(|v| v.is_used())
                 .map(|v| StageVar {
                     index: v.index,
                     stage: v.stage,

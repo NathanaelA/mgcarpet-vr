@@ -176,21 +176,29 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     hashes.push(w.state_hash());
     obs.push(w.observable_digest());
 
-    // StageVar hold-gate: level-014 authors two inert kind-1 vars
-    // (word=0, no matching THING) + one kind-9 that HOLDS the model-18
-    // creature (THING 334) until its referenced entity (template 6)
-    // dies. That trigger does not fire in this run, so the one model-18
-    // stays dormant at its phase-7 wait, running `sub_1D5D0`'s held
-    // head (killable; kind 9 has no guardian arm — Session H6). The
-    // golden move was the StageVar table + this one held binding
-    // joining the hash. (An older sibling comment claiming "NOTHING is
-    // held" pre-dated the landed subsystem and contradicted the
-    // assertion below — removed, Session H9.)
+    // StageVar hold-gate: with the row table baked VERBATIM (epoch
+    // 13 — the 2026-07-16 flocking fix; the old bake read byte0 as
+    // SIGNED and dropped every flagged row, then compacted the rest,
+    // so only the kind-9 var survived here), level-014's full table
+    // loads: the kind-9 model-18 (THING 334, gate = template-6 death
+    // — never fires in this run) PLUS the previously-lost flagged
+    // rows binding kind-1 walkers, kind-4 guardians and kind-6 timer
+    // spawns. Pin the census by kind and the original kind-9 anchor.
     let held = w.debug_mc2_held();
+    assert!(
+        held.contains(&(447, 18, 9)),
+        "level-014: the kind-9 model-18 hold survived the verbatim row bake"
+    );
+    let mut kinds = std::collections::BTreeMap::<u8, usize>::new();
+    for &(_, _, k) in &held {
+        *kinds.entry(k).or_insert(0) += 1;
+    }
     assert_eq!(
-        held,
-        vec![(447, 18, 9)],
-        "level-014: exactly the kind-9 model-18 is held (its gate never fired)"
+        kinds,
+        [(1u8, 7usize), (4, 26), (6, 26), (9, 1)]
+            .into_iter()
+            .collect(),
+        "level-014 held census by kind (verbatim StageVar rows)"
     );
 
     Some((hashes, obs))
@@ -374,13 +382,29 @@ fn mc2_cave_behaviors_and_goldens() {
     // tag bytes. Verified by instrumenting the tag writes: only tags
     // 3 (spell_tokens) and 4 (aura_claim) fire here. mc2_slice and
     // all MC1 goldens unmoved (their tagged fields never fire).
+    // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the FLOCKING
+    // fix, two stacked corrections:
+    //   (1) StageVar rows bake VERBATIM (epoch 13): the importer's
+    //       signed-byte filter had dropped every FLAGGED row (byte0
+    //       high bits 0x80/0x40) and compacted the rest, so most of
+    //       this level's authored holds never existed — the held
+    //       census above grows from 1 binding to 60;
+    //   (2) stage-held creatures now RUN retail's `sub_1D5D0`
+    //       movement legs (walk-to-point / graze-leash / shadow —
+    //       EF:10171/10246/10111) instead of freezing at their spawn
+    //       pose, and aggro-broken (kind-10) creatures re-leash via
+    //       `sub_12500` case 0xA (EF:5054). Creature trajectories
+    //       legitimately move from load. The OBSERVABLE projection
+    //       moves too — this is real behavior, verified against the
+    //       remc2 retail memimages (level-1 goat herd: all state 15,
+    //       speed 18, leashed mill — the port now reproduces it).
     assert_eq!(
         got,
         vec![
-            0x412400459003a46fu64,
-            0xb06c5dbab4269e6c,
-            0xf6d1f65428b61759,
-            0xbde1c85211d87fc3,
+            0xbe8e98cc7e7e8646u64,
+            0x992ea558917fd24b,
+            0xda0122efc0451fb3,
+            0x28ee1084a6fdd590,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -388,11 +412,17 @@ fn mc2_cave_behaviors_and_goldens() {
     // The layout-INDEPENDENT companion golden (review J3, pinned
     // 2026-07-16) — see state_hash.rs: survives hashed-layout
     // re-pins; moves ONLY with real behavior.
+    // Moved 2026-07-16 WITH the flocking fix (BEHAVIORAL — the
+    // stage-held cast now exists and MOVES): checkpoint 0 (load
+    // time) is UNCHANGED — the world composition is identical at
+    // t=0 — and the three ticked checkpoints move with the held
+    // creatures' walk/graze trajectories, exactly the projection's
+    // design (a layout-only change could not move it).
     const OBSERVABLE: [u64; 4] = [
         0x5fdfbe7cfbf8fc43,
-        0xa8e12e16527d90a5,
-        0xbdd186cdf9aa0e8b,
-        0xed754c9e194c0d11,
+        0x10cbd033029e9130,
+        0x4c18438350ec3cb0,
+        0x36cb50b763124752,
     ];
     assert_eq!(
         obs, OBSERVABLE,

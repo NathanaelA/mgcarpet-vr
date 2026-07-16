@@ -35,6 +35,10 @@ pub struct Mc2BehaviorRow {
 
 impl Mc2BehaviorRow {
     pub const DIE_ON_WATER: u8 = 1;
+    /// `byte_160_0x20_32 & 2`: the stage-command GRAZE leg
+    /// (`sub_1E1C0`, EF:10520) skips its move+turn — an immobile
+    /// species idles in place while stage-held.
+    pub const HOLD_STILL: u8 = 2;
     pub const PACK_DISABLE: u8 = 4;
     pub const FLEE: u8 = 8;
 }

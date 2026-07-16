@@ -282,41 +282,34 @@ fn mc2_slice_behaviors_and_goldens() {
         "the building's tile painted real building ground (got {ground})"
     );
 
-    // The herd condensed into follow-chains during the idle window
-    // (the walker trace's flock law: pack scans latch leaders, no
-    // tether exists — the corrected v_2 turn keeps the mill tight).
+    // The herd law (2026-07-16 flocking fix, retail-memimage
+    // verified): every level-000 goat spawns BOUND to the kind-2
+    // graze-leash StageVar (slot 3, anchor tile (53,32)) via
+    // `sub_12100`'s subtype pass — state 15 (8·model+7), speed 18,
+    // milling the anchor. They never free-wander or form
+    // follow-chains; the old assertion here pinned the pre-fix
+    // dynamics that only existed because the importer dropped the
+    // flagged row.
     assert!(
         w.debug_pool()
             .1
             .iter()
-            .any(|e| e.class == 5 && e.model == 1 && e.state == 11),
-        "goats formed follow-chains (state 11)"
+            .filter(|e| e.class == 5 && e.model == 1 && e.life >= 0)
+            .all(|e| e.state == 15),
+        "every goat is stage-held at the graze leash (state 15)"
     );
 
-    // Goat flee: ONLY wander/patrol run the wizard scan — followers
-    // flee by COPYING their leader (sub_1C560's leader-state switch)
-    // — so shadow a WANDERING chain head (state base+1 = 9),
-    // re-acquiring each tick: a single static parking spot gets one
-    // cone roll per cadence and can sit in the ±150° scan's blind
-    // spot (or lose the head to the pack fallback) indefinitely.
-    // Sampled DURING the hover — the goat drops back to idle once it
-    // escapes the row's range, exactly the retail loop.
+    // Goat flee: the kind-2 WIZARD WATCH (`sub_1DBF0` tail) — an
+    // AWAKE leashed goat that sees a class-3 (range v_28 = 6 tiles,
+    // cone-gated on ITS facing, one roll per v_26 = 32-tick cadence)
+    // breaks to kind 10 → the FLEE-flagged raise (state 14, speed
+    // 54). Park over the anchor: the mill sweeps every goat's cone
+    // across us within a lap or two.
+    let (gx, gz) = (53.5f32, 32.5f32);
     let mut fled = false;
-    for _ in 0..384 {
-        let Some((vx, vz)) = w
-            .debug_pool()
-            .1
-            .into_iter()
-            .find(|e| e.class == 5 && e.model == 1 && e.life >= 0 && e.state == 9)
-            .map(|e| (e.tx as f32 + 0.5, e.ty as f32 + 0.5))
-        else {
-            break; // whole herd chained; heads re-emerge next drop
-        };
-        let alt = w.ground_height_tiles(vx + 1.5, vz) + 2.0;
-        w.tick(
-            PlayerPose::from_tiles(vx + 1.5, alt, vz, 0.0, 0.0, 0.0),
-            idle,
-        );
+    for _ in 0..512 {
+        let alt = w.ground_height_tiles(gx, gz) + 1.0;
+        w.tick(PlayerPose::from_tiles(gx, alt, gz, 0.0, 0.0, 0.0), idle);
         if w.debug_pool()
             .1
             .iter()
@@ -326,7 +319,27 @@ fn mc2_slice_behaviors_and_goldens() {
             break;
         }
     }
-    assert!(fled, "a goat near the player entered FLEE (14)");
+    assert!(fled, "a goat that saw the player entered FLEE (14)");
+
+    // ...and the RE-LEASH (`sub_12500` case 0xA): once the flee
+    // drops (target ≥ v_28 away → the machine parks it back at
+    // wander), the stage bind reclaims it into state 15 — retail's
+    // calm-down-and-walk-home loop. Park far away and let it settle.
+    let mut releashed = false;
+    for _ in 0..600 {
+        let alt = w.ground_height_tiles(16.0, 16.0) + 2.0;
+        w.tick(PlayerPose::from_tiles(16.0, alt, 16.0, 0.0, 0.0, 0.0), idle);
+        if w.debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == 5 && e.model == 1 && e.life >= 0)
+            .all(|e| e.state == 15)
+        {
+            releashed = true;
+            break;
+        }
+    }
+    assert!(releashed, "the fled goat re-leashed (kind-10 -> re-hold)");
 
     // Materialize the kill-target archers via the AUTHORED
     // progression (no debug disposition fire): leave the start box —
@@ -646,12 +659,24 @@ fn mc2_slice_behaviors_and_goldens() {
         // load at bitmask 3 (the fireball+possess baseline), so every
         // checkpoint gains exactly one tag byte. MC1 goldens unmoved
         // (no tagged field ever fires on an MC1 world).
-        0xda20b93276d574ff, // post-init (GenerateEvents + dis 0)
-        0xe2cadc9f6ec10f44, // A: 64 idle ticks afield
-        0xbb4389b816e7746f, // B: the type-5 fly-to latched
-        0xc3cf5bec4c73f562, // C: goat awake/flee window
-        0xaa56ce1af33172ac, // D: fireball combat over the goat
-        0xd49af55e5b761f2f, // E: census + villager/archer provocation
+        // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the
+        // FLOCKING fix: (1) StageVar rows bake VERBATIM (epoch 13;
+        // the importer's signed-byte filter had dropped every
+        // FLAGGED row — level-000 recovers SEVEN lost rows incl. the
+        // two kind-2 graze anchors and its kind-6/7 spawn gates);
+        // (2) stage-held creatures RUN retail's `sub_1D5D0` movement
+        // legs (the goats now leash-mill the (53,32) anchor at speed
+        // 18, retail-memimage verified) and kind-10 aggro-breaks
+        // RE-LEASH (`sub_12500` case 0xA). The whole level's
+        // creature trajectory legitimately moves from load — the
+        // POST-INIT checkpoint moves too (the StageVar table content
+        // + bind state itself hashes).
+        0x3f29a575e74ed7ce, // post-init (GenerateEvents + dis 0)
+        0xac2894c19444ec6b, // A: 64 idle ticks afield
+        0x52c4a61b85ac224c, // B: the type-5 fly-to latched
+        0x5da0547d0f700eaf, // C: goat awake/flee window
+        0xf83f8f81b271eae7, // D: fireball combat over the goat
+        0xdf479f5593fca17e, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -662,13 +687,17 @@ fn mc2_slice_behaviors_and_goldens() {
     // The layout-INDEPENDENT companion golden (review J3, pinned
     // 2026-07-16) — see state_hash.rs: survives hashed-layout
     // re-pins; moves ONLY with real behavior.
+    // Moved 2026-07-16 WITH the flocking fix (BEHAVIORAL): the
+    // load-time checkpoint is UNCHANGED (same world composition at
+    // t=0) and every ticked checkpoint moves with the now-leashed
+    // herd's trajectories — the projection working as designed.
     const OBSERVABLE: [u64; 6] = [
         0x9a885593f099242c,
-        0x836e974d5671c993,
-        0x9b4b2bb045a13ad7,
-        0xc8609292536fb202,
-        0xd3c573ce941990e7,
-        0x578e99face09a467,
+        0xc8a0f078fd10afd7,
+        0xddc9ae4bc40fafc9,
+        0xd9ff6a0b332668d2,
+        0x2861dfece633f89a,
+        0xeb07ab1f52ff2990,
     ];
     assert_eq!(
         obs, OBSERVABLE,

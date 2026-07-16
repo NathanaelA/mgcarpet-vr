@@ -219,8 +219,12 @@ pub struct StageVar {
 }
 
 impl StageVar {
+    /// A row is live when it isn't the editor's 0xFF fill and its
+    /// KIND nibble is nonzero. (byte0's HIGH bits are flags — 0x80
+    /// subtype-match, 0x40 watch-model — so a signed `>= 0` test
+    /// wrongly discarded flagged rows; 2026-07-16 flocking fix.)
     pub fn is_used(&self) -> bool {
-        self.index >= 0
+        (self.index as u8) != 0xFF && (self.index as u8) & 0xF != 0
     }
 }
 

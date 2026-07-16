@@ -210,6 +210,29 @@ impl Gen {
         }
     }
 
+    /// Diagnostic (the flocking terrain-fence check): the whole-map
+    /// walkability of creature `i`'s behavior row, one byte per tile —
+    /// bit 0 = roughness >= v_16 (the slope fence), bit 1 = tile-type
+    /// blocked (`!v_20 & cap_bit`). Probes tile centers.
+    pub(crate) fn mc2_block_map(&self, i: usize) -> Vec<u8> {
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let mut out = vec![0u8; 256 * 256];
+        for ty in 0..256u16 {
+            for tx in 0..256u16 {
+                let (x, y) = (tx * 256 + 128, ty * 256 + 128);
+                let mut b = 0u8;
+                if self.roughness(x, y) >= row.v_16 as i32 {
+                    b |= 1;
+                }
+                if !row.v_20 & self.cap_bit(x, y) != 0 {
+                    b |= 2;
+                }
+                out[(ty as usize) << 8 | tx as usize] = b;
+            }
+        }
+        out
+    }
+
     /// One predicted candidate of the MC2 move core: altitude core +
     /// polar step at the CURRENT yaw, then the block test (crossing
     /// into a new tile only).
