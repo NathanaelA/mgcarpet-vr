@@ -134,6 +134,15 @@ pub struct Mc2BookView {
     /// Cast-in-progress (`word_0x2E_46` > 0) — the HUD hand-panel
     /// highlight (retail's burst-counter frame swap).
     pub armed: [bool; 26],
+    /// Retail's `canSummon`/`canSubSummon` PER TIER (the pane
+    /// grey-out, EF:22503-08 grid / EF:22602-08 flyout): the tier's
+    /// `maxManaLimit_A` castle-pool prerequisite is zero, or the own
+    /// castle's stored mana covers it. False = the dark box +
+    /// ghosted icon (SPELL_ICON_PANEL2 + transparent draw). Pool
+    /// affordability is deliberately NOT part of it — retail draws a
+    /// broke-but-eligible spell lit with an empty shot meter. The
+    /// grid keys on the SELECTED tier (`castable[s][sel[s]]`).
+    pub castable: [[bool; 3]; 26],
     pub left: i8,
     pub right: i8,
 }
@@ -574,17 +583,28 @@ impl World {
         let mut xpos = [[0i32; 3]; 26];
         let mut cost = [0u32; 26];
         let mut armed = [false; 26];
+        let mut castable = [[false; 3]; 26];
+        // Retail's canSummon castle-pool probe (EF:22504-05): the own
+        // castle's STORED mana, resolved once for the whole pane.
+        let castle_mana = self.player_castle().map_or(0, |c| self.g.ent[c].f140);
         for s in 0..26 {
             owned[s] = self.mc2_book.ent[s] != 0;
             xp[s] = self.mc2_book.xp_vol[s] + self.mc2_book.xp_bank[s];
+            let tier = (self.mc2_book.sel[s] as usize).min(2);
             if let Some(row) = self.g.assets.spells.get(s) {
                 for t in 0..3 {
                     xpos[s][t] = row.tiers[t].xpos1;
+                    // `canSummon`/`canSubSummon` (EF:22503-08 /
+                    // EF:22602-08): the tier's `maxManaLimit_A` is
+                    // zero, or the castle pool covers it (no castle ⇒
+                    // any nonzero requirement greys). Read from the
+                    // SPELLS table, not the manifestation — the dev
+                    // instrument zeroes the manifestation's copy.
+                    let mml = row.tiers[t].max_mana_limit;
+                    castable[s][t] = mml <= 0 || castle_mana as i64 >= mml as i64;
                 }
             }
-            cost[s] = self
-                .mc2_spell_mana_cost(s, self.mc2_book.sel[s] as usize)
-                .max(0) as u32;
+            cost[s] = self.mc2_spell_mana_cost(s, tier).max(0) as u32;
             let m = self.mc2_book.ent[s] as usize;
             armed[s] = m != 0 && self.g.ent[m].f26 > 0;
         }
@@ -596,6 +616,7 @@ impl World {
             xpos,
             cost,
             armed,
+            castable,
             left: self.mc2_book.left,
             right: self.mc2_book.right,
         }

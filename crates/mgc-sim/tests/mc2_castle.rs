@@ -536,3 +536,33 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
         "the cached gate cost re-synced on the downgrade (no re-select)"
     );
 }
+
+/// The pane grey-out law (`canSummon`/`canSubSummon`, EF:22503-08 /
+/// EF:22602-08; player regression report 2026-07-17 — "everything is
+/// lit up"): a tier whose `maxManaLimit_A` castle-pool prerequisite
+/// is nonzero must read NOT castable while no own castle exists;
+/// requirement-free tiers (fireball) always read castable.
+#[test]
+fn mc2_pane_castable_reflects_castle_gate() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    let bv = w.mc2_book_view();
+    // The CD table's own shape (discovered pinning this): the BASE
+    // fireball is requirement-free, but its tier 2 carries a nonzero
+    // `maxManaLimit_A` — even fireball's top tier greys castle-less.
+    assert_eq!(
+        bv.castable[0],
+        [true, true, false],
+        "fireball: base/repeat lit, tier 2 castle-gated (SPELLS.DAT)"
+    );
+    assert!(
+        bv.castable.iter().flatten().any(|c| !c),
+        "castle-less world: at least one castle-gated tier reads grey"
+    );
+}

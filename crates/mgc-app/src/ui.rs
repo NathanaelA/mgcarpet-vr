@@ -1646,9 +1646,15 @@ impl SelectorPane {
 pub struct SelectorView<'a> {
     /// Possessed (drawn full, selectable).
     pub owned: &'a [bool],
-    /// Affordable/enabled (bright box); owned && !castable = dark box
-    /// + ghost icon — the grey-not-disable rule (trace §7).
+    /// Affordable/enabled at the SELECTED tier (bright box);
+    /// owned && !castable = dark box + ghost icon — the
+    /// grey-not-disable rule (trace §7). Retail law = `canSummon`
+    /// (EF:22503-08): the tier's castle-pool prerequisite is met.
     pub castable: &'a [bool],
+    /// The same law PER TIER (`canSubSummon`, EF:22602-08) — the
+    /// flyout's per-level dark tiles. All-true under the dev
+    /// instrument and on MC1 (mirrors `castable`).
+    pub castable_tier: &'a [[bool; 3]],
     /// The persistent per-spell selected level (`array_0x437`,
     /// trace §4.3).
     pub selected_level: &'a [u8],
@@ -2004,7 +2010,6 @@ pub fn selector_quads(
     if let Some(slot) = anchor {
         let spell = pane.order[slot] as usize;
         let max = view.max_level[spell].min(pane.levels - 1);
-        let castable = view.castable[spell];
         // Level under the cursor, clamped to the unlocked max
         // (SelectSpell_6D4F0's clamp, trace §4.3).
         let row = g.sub_cell(slot, pane.cols, pane.levels as f32, 0);
@@ -2033,8 +2038,18 @@ pub fn selector_quads(
             }
             // One pre-composited flyout tile (box + number badge +
             // per-level icon; the dark variant's icon went through
-            // the blend LUT at bake time).
-            if let Some(uv) = assets.sub_tile(spell, l as usize, !castable) {
+            // the blend LUT at bake time). Dark = THIS tier's
+            // castle-pool prerequisite unmet (`canSubSummon`,
+            // EF:22602-08). Known approximation: retail also darkens
+            // the FRAME alone when no whole cast is affordable while
+            // the icon stays lit — the composited tile can't split
+            // frame from icon, so the tile keys on the prerequisite
+            // only.
+            let dark = !view
+                .castable_tier
+                .get(spell)
+                .is_none_or(|t| t[(l as usize).min(2)]);
+            if let Some(uv) = assets.sub_tile(spell, l as usize, dark) {
                 quads.push(UiQuad {
                     rect: snap(cell),
                     uv,

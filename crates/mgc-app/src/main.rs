@@ -2837,6 +2837,7 @@ impl ApplicationHandler for App {
                             let mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
                             let mut owned = [false; 26];
                             let mut castable = [false; 26];
+                            let mut castable_tier = [[true; 3]; 26];
                             let mut cost = [0u32; 26];
                             let mut max_level = [0u8; 26];
                             let mut sel = [0u8; 26];
@@ -2855,7 +2856,18 @@ impl ApplicationHandler for App {
                                     for s in 0..n {
                                         owned[s] =
                                             bv.owned[s] || self.cfg.gameplay.cheat.dev_spells;
-                                        castable[s] = owned[s];
+                                        // Retail's canSummon grey-out
+                                        // (EF:22503-08): the selected
+                                        // tier's castle-pool prereq.
+                                        // The G instrument bypasses
+                                        // the afford gate for real,
+                                        // so it stays lit under dev.
+                                        let dev = self.cfg.gameplay.cheat.dev_spells;
+                                        castable[s] = owned[s]
+                                            && (bv.castable[s][bv.sel[s].min(2) as usize] || dev);
+                                        if !dev {
+                                            castable_tier[s] = bv.castable[s];
+                                        }
                                         cost[s] = bv.cost[s];
                                         // The G instrument keeps all
                                         // tiers exercisable (player
@@ -2880,6 +2892,7 @@ impl ApplicationHandler for App {
                                 for s in 0..n {
                                     owned[s] = loadout.owned[s];
                                     castable[s] = loadout.bindable[s];
+                                    castable_tier[s] = [loadout.bindable[s]; 3];
                                     cost[s] = mgc_sim::mc1::spells::SPELLS[s].possess_mana;
                                     max_level[s] = pane.levels - 1;
                                     sel[s] = self.spell_levels[s];
@@ -2888,6 +2901,7 @@ impl ApplicationHandler for App {
                             let view = ui::SelectorView {
                                 owned: &owned[..n],
                                 castable: &castable[..n],
+                                castable_tier: &castable_tier[..n],
                                 selected_level: &sel[..n],
                                 max_level: &max_level[..n],
                                 bound,
