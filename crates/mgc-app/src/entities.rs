@@ -184,6 +184,67 @@ pub fn billboards(
     out
 }
 
+/// Any single-tick jump longer than this (tiles) is a teleport —
+/// portals, possession warps — and snaps instead of lerping. The
+/// fastest legitimate movers (projectiles, falling meteors) cover a
+/// few tiles per tick at most.
+const SNAP_TILES: f32 = 8.0;
+
+/// Blend two consecutive tick pose snapshots at `alpha` ∈ [0, 1] —
+/// the smooth-motion (render interpolation) pass. Presentation only:
+/// the sim never sees the blended poses.
+///
+/// Poses pair by (slot, generation): slot alone aliases across pool
+/// reuse — a projectile dying into a same-tick fresh spawn would
+/// streak across the map (the balloon stale-slot class) — the pair
+/// never does. Unpaired poses (fresh spawns) draw at their current
+/// tick position. Transforms lerp — x/z the short way around the
+/// 256-tile torus (the camera's `lerp_wrap` rule), yaw the short way
+/// around the circle; everything discrete (sprite frame, blend,
+/// life_frac, flags) rides the newer snapshot.
+pub fn lerp_poses(prev: &[LivePose], cur: &[LivePose], alpha: f32) -> Vec<LivePose> {
+    use std::f32::consts::{PI, TAU};
+    let by_slot: std::collections::HashMap<u16, &LivePose> =
+        prev.iter().map(|p| (p.slot, p)).collect();
+    let wrap_delta = |p: f32, q: f32| {
+        let mut d = q - p;
+        if d > 128.0 {
+            d -= 256.0;
+        }
+        if d < -128.0 {
+            d += 256.0;
+        }
+        d
+    };
+    cur.iter()
+        .map(|b| {
+            let mut out = *b;
+            let Some(a) = by_slot
+                .get(&b.slot)
+                .filter(|a| a.generation == b.generation)
+            else {
+                return out;
+            };
+            let (dx, dz, dalt) = (wrap_delta(a.x, b.x), wrap_delta(a.z, b.z), b.alt - a.alt);
+            if dx * dx + dz * dz + dalt * dalt > SNAP_TILES * SNAP_TILES {
+                return out; // teleport: snap, never streak
+            }
+            out.x = (a.x + dx * alpha).rem_euclid(256.0);
+            out.z = (a.z + dz * alpha).rem_euclid(256.0);
+            out.alt = a.alt + dalt * alpha;
+            let mut dyaw = b.yaw - a.yaw;
+            if dyaw > PI {
+                dyaw -= TAU;
+            }
+            if dyaw < -PI {
+                dyaw += TAU;
+            }
+            out.yaw = (a.yaw + dyaw * alpha).rem_euclid(TAU);
+            out
+        })
+        .collect()
+}
+
 /// The live-world path: billboards straight from the sim's pose
 /// snapshot — position, altitude, yaw, sprite type and animation frame
 /// are all sim-owned (the spawn handlers ran the original's per-event
@@ -866,6 +927,8 @@ mod tests {
 
     fn pose(class: u8, model: u8, owned: bool, type_index: u16) -> LivePose {
         LivePose {
+            slot: 1,
+            generation: 1,
             class,
             model,
             type_index,
@@ -881,6 +944,72 @@ mod tests {
             blend: 0,
             map_only: false,
         }
+    }
+
+    /// The smooth-motion lerp's edges: plain blend, the torus seam,
+    /// the (slot, generation) identity guard, the teleport snap, and
+    /// the yaw short-arc.
+    #[test]
+    fn lerp_poses_edges() {
+        use std::f32::consts::TAU;
+        let at = |slot: u16, generation: u32, x: f32, z: f32, alt: f32, yaw: f32| {
+            let mut p = pose(5, 0, false, 0);
+            p.slot = slot;
+            p.generation = generation;
+            p.x = x;
+            p.z = z;
+            p.alt = alt;
+            p.yaw = yaw;
+            p
+        };
+
+        // Plain midpoint blend.
+        let out = lerp_poses(
+            &[at(3, 1, 10.0, 20.0, 1.0, 0.0)],
+            &[at(3, 1, 12.0, 20.0, 2.0, 0.0)],
+            0.5,
+        );
+        assert!((out[0].x - 11.0).abs() < 1e-4 && (out[0].alt - 1.5).abs() < 1e-4);
+
+        // Torus seam: 255.5 → 0.5 goes the short way through 0.0.
+        let out = lerp_poses(
+            &[at(3, 1, 255.5, 10.0, 1.0, 0.0)],
+            &[at(3, 1, 0.5, 10.0, 1.0, 0.0)],
+            0.5,
+        );
+        assert!(out[0].x.abs() < 1e-4, "seam lerp landed at {}", out[0].x);
+
+        // Generation mismatch (slot reused): no lerp, draw at cur.
+        let out = lerp_poses(
+            &[at(3, 1, 10.0, 10.0, 1.0, 0.0)],
+            &[at(3, 2, 100.0, 100.0, 1.0, 0.0)],
+            0.5,
+        );
+        assert_eq!((out[0].x, out[0].z), (100.0, 100.0));
+
+        // Teleport (jump beyond SNAP_TILES): snap to cur, no streak.
+        let out = lerp_poses(
+            &[at(3, 1, 10.0, 10.0, 1.0, 0.0)],
+            &[at(3, 1, 40.0, 10.0, 1.0, 0.0)],
+            0.5,
+        );
+        assert_eq!(out[0].x, 40.0);
+
+        // Yaw crosses the 0/TAU seam the short way.
+        let out = lerp_poses(
+            &[at(3, 1, 10.0, 10.0, 1.0, TAU - 0.1)],
+            &[at(3, 1, 10.0, 10.0, 1.0, 0.1)],
+            0.5,
+        );
+        assert!(
+            out[0].yaw.abs() < 1e-4 || (out[0].yaw - TAU).abs() < 1e-4,
+            "yaw took the long way: {}",
+            out[0].yaw
+        );
+
+        // A pose absent from prev (fresh spawn) draws at cur.
+        let out = lerp_poses(&[], &[at(7, 1, 50.0, 50.0, 1.0, 0.0)], 0.25);
+        assert_eq!((out[0].x, out[0].z), (50.0, 50.0));
     }
 
     /// The verbatim sub_48710 color switch (:57184-:57292).

@@ -1007,6 +1007,13 @@ struct App {
     renderer: Option<Renderer>,
     sim: Simulation,
     prev_flyer: Flyer,
+    /// The last two sim-tick pose snapshots (smooth_motion): the
+    /// renderer draws entities lerped prev→cur at the frame's
+    /// accumulator fraction — the same one-tick-behind timeline the
+    /// camera has always run (`prev_flyer`). Empty while the toggle
+    /// is off or fewer than two ticks have run.
+    pose_prev: Vec<mgc_sim::mc1::world::LivePose>,
+    pose_cur: Vec<mgc_sim::mc1::world::LivePose>,
     keys: HeldKeys,
     mouse: MouseAccum,
     stick: VirtualStick,
@@ -1153,6 +1160,8 @@ impl App {
             renderer: None,
             sim,
             prev_flyer,
+            pose_prev: Vec::new(),
+            pose_cur: Vec::new(),
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
             stick: VirtualStick::default(),
@@ -1682,6 +1691,10 @@ impl App {
             self.sim.sync_carpet_from_flyer();
         }
         self.prev_flyer = self.sim.flyer;
+        // Fresh world, fresh generations — a stale snapshot could
+        // coincidentally pair (slot, generation) across the restart.
+        self.pose_prev = Vec::new();
+        self.pose_cur = Vec::new();
         self.castle_pos = None;
         self.sync_world();
         println!("level restarted (died without a castle)");
@@ -1778,6 +1791,51 @@ impl App {
     /// billboard set refreshes per tick from the sim's pose snapshot;
     /// the map texture recompose (dots baked into it) is throttled to
     /// every 8th tick unless terrain actually changed.
+    /// The smooth-motion pass (render.enhancement.smooth_motion):
+    /// re-set the renderer's world drawables from the tick-pair pose
+    /// lerp at this frame's accumulator fraction — entities join the
+    /// camera's interpolated timeline instead of stepping at tick
+    /// rate. Presentation only: runs after `sync_world` (which set
+    /// the tick-rate versions) and overrides billboards, health bars
+    /// and dynamic lights; the map layers stay per-tick (the map
+    /// recomposes at tick rate by design). Skipped while paused (no
+    /// live lerp window) or until two ticks have run since the
+    /// toggle/level armed it.
+    fn apply_smooth_motion(&mut self, alpha: f32) {
+        if !self.cfg.render.enhancement.smooth_motion
+            || self.paused
+            || self.pose_prev.is_empty()
+            || self.pose_cur.is_empty()
+        {
+            return;
+        }
+        let Some(r) = &mut self.renderer else { return };
+        let poses = entities::lerp_poses(&self.pose_prev, &self.pose_cur, alpha.clamp(0.0, 1.0));
+        let index = self.level.sprites.as_ref().map(|(i, _)| i);
+        let dims = |id: u16| {
+            index
+                .and_then(|i| i.sprites.get(id as usize))
+                .map(|s| (s.width, s.height, s.flags))
+        };
+        r.set_billboards(entities::billboards_from_poses(
+            self.level.game,
+            &poses,
+            dims,
+        ));
+        if self.cfg.render.debug.health_bars {
+            r.set_health_bars(entities::health_bars_from_poses(
+                self.level.game,
+                &poses,
+                dims,
+            ));
+        }
+        if self.cfg.render.preference.light_sources
+            && self.level.mc2_env != entities::Mc2MapEnv::Day
+        {
+            r.set_lights(&entities::lights_from_poses(&poses));
+        }
+    }
+
     fn sync_world(&mut self) {
         let Some(w) = &mut self.sim.world else { return };
         for slot in w.take_rival_deaths() {
@@ -2589,6 +2647,15 @@ impl ApplicationHandler for App {
                     self.prev_flyer = self.sim.flyer;
                     let input = self.tick_input();
                     self.sim.step(&input);
+                    // Smooth-motion snapshot rotation — the entity
+                    // analogue of prev_flyer above (entities render
+                    // lerped over the same one-tick window).
+                    if self.cfg.render.enhancement.smooth_motion {
+                        if let Some(w) = &self.sim.world {
+                            self.pose_prev = std::mem::take(&mut self.pose_cur);
+                            self.pose_cur = w.live_poses();
+                        }
+                    }
                     // The mixer flush is per-tick like the original's
                     // (fade ramps are tick-denominated).
                     self.audio_tick();
@@ -2658,6 +2725,14 @@ impl ApplicationHandler for App {
                 }
 
                 let alpha = self.accumulator / TICK_DT;
+                // Stale snapshots die with the toggle; the pass below
+                // re-sets the renderer's drawables at this frame's
+                // lerp fraction (sync_world set the tick-rate ones).
+                if !self.cfg.render.enhancement.smooth_motion && !self.pose_cur.is_empty() {
+                    self.pose_prev = Vec::new();
+                    self.pose_cur = Vec::new();
+                }
+                self.apply_smooth_motion(alpha);
                 let (a, b) = (&self.prev_flyer, &self.sim.flyer);
                 // Positions may wrap across the 256-tile seam; take the
                 // short way around for interpolation.

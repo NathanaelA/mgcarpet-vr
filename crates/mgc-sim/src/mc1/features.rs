@@ -538,6 +538,9 @@ pub(crate) struct Gen {
     /// Per-tile head of the event intrusive list (`mapEntityIndex`).
     pub(crate) map_entity: Vec<u16>,
     pub(crate) ent: Vec<Ent>,
+    /// Per-slot spawn generation (see [`SlotGens`]) — presentation
+    /// identity across snapshots, hash-silent always.
+    pub(crate) slot_gen: SlotGens,
     /// Free stack; built 999→1 so allocation pops 1, 2, 3, …
     pub(crate) free: Vec<u16>,
     /// Global LCG (`rand_4`), = the level seed at scan time.
@@ -836,6 +839,20 @@ impl std::hash::Hash for NightShade {
     }
 }
 
+/// Per-slot spawn generations ([`Gen::slot_gen`]) — bumped every time
+/// `new_event` hands the slot out, so presentation can tell two
+/// occupants of the same slot apart across tick snapshots (the render
+/// interpolation identity guard; the balloon stale-slot class).
+/// PRESENTATION-ONLY: never read by any sim rule, so the Hash is a
+/// no-op UNCONDITIONALLY — unlike the quiet counters above it stays
+/// silent even when populated.
+#[derive(Default)]
+pub(crate) struct SlotGens(pub Vec<u32>);
+
+impl std::hash::Hash for SlotGens {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
 /// One sound request: engine sound id (the SNDS bank-0 index), the
 /// emitter's position on the u16 torus, and its slot as the instance
 /// tag (the original's entity+24). `player` marks requests the
@@ -896,6 +913,7 @@ impl Gen {
             retile: corners::retile_table(),
             map_entity: vec![0; GRID],
             ent: vec![Ent::default(); chassis.pool_slots],
+            slot_gen: SlotGens(vec![0; chassis.pool_slots]),
             free: (1..chassis.pool_slots as u16).rev().collect(),
             rand: seed,
             pseudo,
@@ -1045,6 +1063,8 @@ impl Gen {
             return None;
         };
         let idx = idx as usize;
+        // New occupant → new presentation generation (hash-silent).
+        self.slot_gen.0[idx] = self.slot_gen.0[idx].wrapping_add(1);
         // The aura claim lives ON the entity in retail — slot reuse
         // resets it with every other field (no stale claim may greet
         // the slot's next occupant).

@@ -246,12 +246,22 @@ impl Default for RenderPreference {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderEnhancement {
     /// Interpolate terrain shade across tile centers instead of the
     /// original's one shade level per tile (toggle at runtime with T).
     pub smooth_shading: bool,
+    /// Entities render interpolated between the last two sim ticks —
+    /// the camera's one-tick lerp timeline extended to the world —
+    /// so movement is frame-smooth at any fps instead of stepping at
+    /// tick rate (rapid-fire streams stop looking stationary).
+    /// Presentation only: the sim is untouched, poses pair across
+    /// snapshots by (slot, generation), teleports snap. DEFAULTS ON
+    /// (player-directed 2026-07-16, the second default-on deviation
+    /// after prune_owned_jars) — toggle off in the menu for the
+    /// tick-stepped retail look.
+    pub smooth_motion: bool,
     /// HUD transparency (the top-strip panels + radar blend over the
     /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle
     /// (Shift+F6, "Panel Transparency") to make it opaque for
@@ -273,6 +283,18 @@ pub struct RenderEnhancement {
     /// through). Covers MC1's class-12 jars (red AND blue) and MC2's
     /// class-15 spell tokens.
     pub expose_jar_spells: bool,
+}
+
+impl Default for RenderEnhancement {
+    fn default() -> Self {
+        Self {
+            smooth_shading: false,
+            smooth_motion: true,
+            hud_transparency: HudTransparency::default(),
+            map_owned_buildings: false,
+            expose_jar_spells: false,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -583,9 +605,10 @@ pub struct GameplayEnhancement {
     /// so they become permanent, unidentifiable clutter. An INTENTIONAL
     /// deviation from retail (P-class unfaithful improvement, player-
     /// directed 2026-07-14): sweeps at level load AND the instant the
-    /// player gains a spell. Single-player entity removal. The lone
-    /// enhancement that defaults ON ("no one will ever complain") —
-    /// disable with `--no-prune-owned-jars` for a purist run. Covers
+    /// player gains a spell. Single-player entity removal. Defaults
+    /// ON ("no one will ever complain"; render smooth_motion is the
+    /// other default-on deviation) — disable with
+    /// `--no-prune-owned-jars` for a purist run. Covers
     /// MC1's class-12 jars and MC2's class-15 spell tokens. See
     /// docs/FIDELITY.md.
     pub prune_owned_jars: bool,
@@ -595,10 +618,9 @@ impl Default for GameplayEnhancement {
     fn default() -> Self {
         Self {
             spell_selector: SpellSelector::default(),
-            // The lone default-ON enhancement (player-directed
-            // 2026-07-14): removing jars you can never pick up is
-            // "one no one will ever complain about". Purists disable
-            // it with `--no-prune-owned-jars`.
+            // Default-ON (player-directed 2026-07-14): removing jars
+            // you can never pick up is "one no one will ever complain
+            // about". Purists disable it with `--no-prune-owned-jars`.
             prune_owned_jars: true,
         }
     }
@@ -781,8 +803,9 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge. (v2: 2026-07-16 — game_speed, fog 50, hud/
-/// subtitles/fly-assistant on-off, thrust/altitude classic naming.)
-const DEFAULTS_VERSION: u64 = 2;
+/// subtitles/fly-assistant on-off, thrust/altitude classic naming.
+/// v3: 2026-07-16 — smooth_motion, default ON.)
+const DEFAULTS_VERSION: u64 = 3;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

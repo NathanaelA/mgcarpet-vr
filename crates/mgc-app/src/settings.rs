@@ -531,6 +531,40 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · enhancement",
+            label: "smooth_motion",
+            // Purely visual smoothing (the sim is untouched, nothing
+            // interactable changes) — Preference, not a fidelity
+            // event, per the player ruling 2026-07-16 that cleanup/
+            // visual preferences never flag the run (prune_owned_jars,
+            // fog_distance). Lives in the enhancement group + cfg
+            // segment by placement directive.
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.smooth_motion",
+            // Faithful = OFF (retail steps everything at sim rate);
+            // ships ON as a default-on deviation (player-directed
+            // 2026-07-16, like prune_owned_jars).
+            read: |c| Val::Toggle {
+                on: c.render.enhancement.smooth_motion,
+                faithful: false,
+            },
+            desc: "Entities move frame-smooth: rendered interpolated between \
+                   the last two sim ticks (the camera always has been), so \
+                   movement glides at any fps instead of stepping at tick \
+                   rate. Presentation only — the simulation is untouched; \
+                   the displayed world runs one tick (~40 ms) behind.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.smooth_motion = v,
+                descs: [
+                    "Entities step at sim tick rate, as retail drew them.",
+                    "Entities glide — per-frame interpolation (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
             label: "map_owned_buildings",
             class: Enhancement,
             key: None,
@@ -1054,7 +1088,8 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--no-prune-owned-jars"),
             cfg_path: "gameplay.enhancement.prune_owned_jars",
             // Faithful = OFF (retail leaves owned jars forever); ships
-            // ON as the lone deliberate default-on deviation.
+            // ON as a deliberate default-on deviation (as does render
+            // smooth_motion).
             read: |c| Val::Toggle {
                 on: c.gameplay.enhancement.prune_owned_jars,
                 faithful: false,

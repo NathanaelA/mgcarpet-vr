@@ -760,6 +760,13 @@ pub struct Notification {
 /// backend would consume the same pose unquantized.
 #[derive(Debug, Clone, Copy)]
 pub struct LivePose {
+    /// Pool slot + spawn generation: a stable identity for matching
+    /// poses across tick snapshots (the render interpolation pairs
+    /// them). Slot alone aliases across reuse — a projectile dying
+    /// into a fresh spawn the same tick — the (slot, gen) pair never
+    /// does. `generation` is presentation-only, hash-silent in the sim.
+    pub slot: u16,
+    pub generation: u32,
     pub class: u8,
     pub model: u8,
     /// Row into [`crate::mc1::sprite_stats::SPRITE_STATS`].
@@ -1286,6 +1293,8 @@ impl World {
                     _ => e.tick70 == 120,
                 };
             out.push(LivePose {
+                slot: i as u16,
+                generation: self.g.slot_gen.0.get(i).copied().unwrap_or(0),
                 class: e.class64,
                 model: e.model65,
                 type_index: e.type86,
