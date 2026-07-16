@@ -840,6 +840,23 @@ impl Simulation {
                     f.y = from.2;
                 }
             }
+            // The cave narrow-space refusal (moveTest_5D0A0's
+            // sub_11E20 arm): retail never commits the carpet into
+            // an air band tighter than clearance+fov+384 — the
+            // funnel seams where floor meets ceiling are simply
+            // unreachable, which is what kept the retail eye clear
+            // of the pinch line (mc2:03 main-cavern head-through,
+            // player 2026-07-17). The deviation mover needs the same
+            // law; asymmetric (refuse ENTERING only) so a carpet
+            // already in a tight spot can always fly back out.
+            if w.player_cave_squeeze(f.x, f.z) && !w.player_cave_squeeze(from.0, from.1) {
+                f.x = from.0;
+                f.z = from.1;
+                // The dead-stop analog (retail zeroes speed on the
+                // cave refusal, EF:59602).
+                f.vx = 0.0;
+                f.vz = 0.0;
+            }
         }
 
         let ground = self.ground_height(self.flyer.x, self.flyer.z);
@@ -871,14 +888,16 @@ impl Simulation {
             f.vy = f.vy.min(0.0);
         }
         // The cave roof is a HARD clamp (retail clamps every tick,
-        // no altitude grandfathering under a rock ceiling) — but the
-        // FLOOR band wins in a low-headroom pinch: retail's mover
-        // only ceiling-clamps when z is above floor+clearance
-        // (sub_5D530's branch order), so the roof can never pin the
-        // carpet under the terrain (playtest-cave round 2: sinking
-        // "through the floor" on the door-edge slopes).
+        // no altitude grandfathering under a rock ceiling) — RAW,
+        // ceiling wins (sub_5D530 EF:59757-63). The old floor-wins
+        // pinch arm (playtest-cave round 2, "door slopes") treated
+        // the symptom of the missing narrow-space gate above: it
+        // hoisted the head THROUGH a diving ceiling exactly at the
+        // funnel seams. With the squeeze gate the pinch band is
+        // unreachable; if numerics ever brush it anyway, a brief
+        // under-floor frame now renders as solid rock (the terrain
+        // shader's backface arm), never the void.
         if let Some(c) = cave_ceiling {
-            let c = c.max(floor);
             if f.y > c {
                 f.y = c;
                 f.vy = f.vy.min(0.0);

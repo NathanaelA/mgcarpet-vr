@@ -6760,6 +6760,23 @@ impl World {
         ))
     }
 
+    /// The cave narrow-space law for the DEVIATION mover (the
+    /// faithful mover gets it inside `moveTest_5D0A0`): a point is a
+    /// squeeze when its tile is sealed or its air band is tighter
+    /// than clearance + fov + 384 (`sub_11E20` EF:4620-28 + the
+    /// sealed check EF:59592-97 — the same predicate that makes
+    /// retail refuse spaces "narrower than X", keeping the eye away
+    /// from the floor-meets-ceiling seams entirely). False off-cave.
+    pub fn player_cave_squeeze(&self, x: f32, z: f32) -> bool {
+        if !self.g.is_cave() {
+            return false;
+        }
+        let ex = (x.rem_euclid(256.0) * 256.0) as u16;
+        let ez = (z.rem_euclid(256.0) * 256.0) as u16;
+        let clr = self.mc2_carpet_row().clearance as i32;
+        self.g.mc2_sealed(ex, ez) || self.g.cave_collide(100, clr, ex, ez)
+    }
+
     /// This tick's forced knock displacement on the player (the
     /// kraken buffet; later, hit knockback): Type_160 v_22/v_24
     /// consumed like the human move does (:55204-218) — magnitude

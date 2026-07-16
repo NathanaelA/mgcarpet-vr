@@ -77,7 +77,7 @@ impl Gen {
         self.t.tile_type[tile((x >> 8) as u8, (y >> 8) as u8)] == 8
     }
 
-    fn mc2_sealed(&self, x: u16, y: u16) -> bool {
+    pub(crate) fn mc2_sealed(&self, x: u16, y: u16) -> bool {
         self.t.angle[tile((x >> 8) as u8, (y >> 8) as u8)] & 8 != 0
     }
 

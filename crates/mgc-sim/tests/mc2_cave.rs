@@ -445,3 +445,173 @@ fn mc2_cave_behaviors_and_goldens() {
          change, never a layout-only one"
     );
 }
+
+/// The wall-hug eye band (cave-peek diagnosis 2026-07-17): drive the
+/// faithful MC2 mover straight into a sealed cave wall and pin that
+/// the eye NEVER leaves the mover's clamp band — >= floor+256 and
+/// <= ceiling-384 against the INTERPOLATED surfaces the renderer
+/// draws (mesh == collision: same corner heights, same parity
+/// diagonals). This exonerates the vertical clamps for the wall-peek
+/// x-ray: the residual vector is the near plane cutting a hugged
+/// steep face LATERALLY, which the terrain shader's backface-black
+/// arm now paints as rock instead of x-raying the far chamber.
+#[test]
+fn mc2_cave_wall_hug_holds_the_clamp_band() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(w) = build_world(&root) else {
+        eprintln!("skipping: no ceiling plane");
+        return;
+    };
+    // A wall approach: sealed tile at (x, zw), 6 open roomy tiles
+    // straight south of it.
+    let (p, c) = (w.planes(), w.ceiling_plane().to_vec());
+    let mut approach = None;
+    'scan: for zw in 8..240usize {
+        for x in 8..240usize {
+            let sealed = p.angle[zw * 256 + x] & 8 != 0;
+            if !sealed {
+                continue;
+            }
+            let ok = (1..=6).all(|d| {
+                let t = (zw + d) * 256 + x;
+                p.angle[t] & 8 == 0 && c[t] as i32 - p.height[t] as i32 > 24
+            });
+            if ok {
+                approach = Some((x, zw));
+                break 'scan;
+            }
+        }
+    }
+    let Some((x, zw)) = approach else {
+        eprintln!("no wall approach found");
+        return;
+    };
+    eprintln!("approach: wall at ({x},{zw}), corridor south");
+
+    let mut sim = mgc_sim::Simulation::with_world(w);
+    let fx = x as f32 + 0.5;
+    let fz = zw as f32 + 5.5;
+    let g0 = sim.world.as_ref().unwrap().ground_height_tiles(fx, fz);
+    sim.flyer.x = fx;
+    sim.flyer.z = fz;
+    sim.flyer.y = g0 + 1.5;
+    sim.flyer.yaw = 0.0; // -Z: straight at the wall
+    sim.flyer.pitch = 0.0;
+    sim.sync_carpet_from_flyer();
+
+    let mut worst_floor = f32::MAX;
+    let mut worst_ceil = f32::MAX;
+    for _ in 0..140 {
+        sim.step(&mgc_sim::FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        });
+        let f = sim.flyer;
+        let ex = ((f.x.rem_euclid(256.0)) * 256.0) as u16;
+        let ez = ((f.z.rem_euclid(256.0)) * 256.0) as u16;
+        let eye = f.y * 256.0;
+        let w = sim.world.as_ref().unwrap();
+        let floor = w.ground_z_engine(ex, ez) as f32;
+        let ceil = w.player_cave_ceiling(ex, ez).unwrap() as f32 + 384.0;
+        let (df, dc) = (eye - floor, ceil - eye);
+        worst_floor = worst_floor.min(df);
+        worst_ceil = worst_ceil.min(dc);
+    }
+    // The retail clamps: floor+256 (EF:59768) / ceiling-384
+    // (EF:59758-63); 1.0 slop for the f32 round-trip.
+    assert!(
+        worst_floor >= 255.0,
+        "eye dipped under floor+256 while wall-hugging (worst {worst_floor:.1})"
+    );
+    assert!(
+        worst_ceil >= 383.0,
+        "eye rose over ceiling-384 while wall-hugging (worst {worst_ceil:.1})"
+    );
+}
+
+/// The ENHANCED-mover funnel squeeze (player repro 2026-07-17,
+/// mc2:03 main cavern): the deviation mover had no cave narrow-space
+/// law — nothing refused entry into the seam where floor meets
+/// ceiling, and the old floor-wins pinch clamp then hoisted the head
+/// THROUGH the diving ceiling ("squeezed further and further, and at
+/// the end push your head through"). With the squeeze gate (the
+/// faithful gate's sub_11E20 predicate) the eye must stay under the
+/// interpolated ceiling for the whole approach.
+#[test]
+fn mc2_cave_enhanced_funnel_never_breaches_ceiling() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(w) = build_world(&root) else {
+        eprintln!("skipping: no ceiling plane");
+        return;
+    };
+    let (p, c) = (w.planes(), w.ceiling_plane().to_vec());
+    // A FUNNEL: an OPEN (unsealed) pinch tile — air band a few height
+    // bytes, far under the mover's 0.75-tile floor clearance — with a
+    // roomy open corridor leading in. This is the mc2:03 shape: no
+    // sealed tile ever stops the approach, the band just narrows.
+    let mut approach = None;
+    'scan: for zw in 8..240usize {
+        for x in 8..240usize {
+            let t0 = zw * 256 + x;
+            let band0 = c[t0] as i32 - p.height[t0] as i32;
+            if p.angle[t0] & 8 != 0 || band0 <= 0 || band0 > 5 {
+                continue;
+            }
+            let ok = (1..=6).all(|d| {
+                let t = (zw + d) * 256 + x;
+                let band = c[t] as i32 - p.height[t] as i32;
+                p.angle[t] & 8 == 0 && band > if d >= 3 { 20 } else { 4 }
+            });
+            if ok {
+                approach = Some((x, zw));
+                break 'scan;
+            }
+        }
+    }
+    let Some((x, zw)) = approach else {
+        eprintln!("no funnel approach found on level-014");
+        return;
+    };
+    eprintln!("funnel: pinch at ({x},{zw}), corridor south");
+
+    let mut sim = mgc_sim::Simulation::with_world(w);
+    sim.thrust_model = mgc_sim::ThrustModel::Enhanced;
+    // Hug the pinch CORNER (the height/ceiling bytes live on tile
+    // corners): the tile-center line interpolates away from the
+    // narrowest point and misses the squeeze.
+    let fx = x as f32 + 0.05;
+    let fz = zw as f32 + 5.5;
+    let g0 = sim.world.as_ref().unwrap().ground_height_tiles(fx, fz);
+    sim.flyer.x = fx;
+    sim.flyer.z = fz;
+    sim.flyer.y = g0 + 1.5;
+    sim.flyer.yaw = 0.0; // -Z: straight into the wall
+    sim.flyer.pitch = 0.0;
+    sim.sync_carpet_from_flyer();
+
+    let mut worst: f32 = f32::MAX; // min (ceiling - eye), engine units
+    for _ in 0..250 {
+        sim.step(&mgc_sim::FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        });
+        let f = sim.flyer;
+        let ex = ((f.x.rem_euclid(256.0)) * 256.0) as u16;
+        let ez = ((f.z.rem_euclid(256.0)) * 256.0) as u16;
+        let w = sim.world.as_ref().unwrap();
+        // player_cave_ceiling = interpolated ceiling − 384.
+        let ceil = w.player_cave_ceiling(ex, ez).unwrap() as f32 + 384.0;
+        worst = worst.min(ceil - f.y * 256.0);
+    }
+    assert!(
+        worst > 0.0,
+        "the enhanced carpet's head breached the cave ceiling \
+         (worst ceiling-eye = {worst:.1} engine units)"
+    );
+}

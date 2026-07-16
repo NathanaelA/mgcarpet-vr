@@ -207,7 +207,28 @@ struct FsOut {
 };
 
 @fragment
-fn fs_main(in: VsOut) -> FsOut {
+fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
+    // A fragment seen from BEHIND its surface means the eye is inside
+    // rock, or the near plane cut a hugged cave wall open — the wall-
+    // peek x-ray (player report 2026-07-17). Paint it unlit black
+    // (fogged, so the fog wall stays seamless): the peek reads as
+    // shadowed rock instead of an inverted view of the far chamber.
+    // Facing is per pass arm: the floor pass (arm 0) fronts UP; the
+    // ceiling pass (arm 1) reuses the same index buffer viewed from
+    // BELOW — its legit view is back-wound. The MIRROR pass (arm 2)
+    // is EXEMPT: its whole world is deliberately viewed from the flip
+    // side, and caves never mirror (`mirror_active` requires no
+    // ceiling), so there is no wall to peek through — applying the
+    // law there fog-painted every legit reflection fragment and
+    // blanked the water mirror (player report 2026-07-17, round 2).
+    let peek = (globals.atlas.w == 0u && !front) || (globals.atlas.w == 1u && front);
+    if peek {
+        let d = distance(in.world, globals.camera.xyz);
+        var out: FsOut;
+        out.color = vec4<f32>(globals.fog_color.rgb * fog_amount(d), 1.0);
+        out.depth = plan_depth(in.world.xz);
+        return out;
+    }
     // Tile index from world position, wrapped to the 256x256 torus.
     let tile = vec2<i32>(
         (i32(floor(in.world.x)) % 256 + 256) % 256,

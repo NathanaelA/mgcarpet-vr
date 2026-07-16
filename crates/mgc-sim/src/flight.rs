@@ -597,13 +597,17 @@ pub fn mc2_move(
             }
             if z >= g + clr {
                 // Above the clearance band: the cave roof clamps (no
-                // bounce, no damage — EF:59757-63). The floor+
-                // clearance max is the PLAYTEST-CAVE round-2 guard:
-                // where headroom pinches below 384+clearance (door
-                // slopes) the raw retail clamp would pin the carpet
-                // under the terrain.
+                // bounce, no damage — EF:59757-63), RAW like retail:
+                // the commit gate guarantees every landed position
+                // has an air band >= clearance+fov+384, so the clamp
+                // interval never degenerates. (The old round-2
+                // `.max(g+clr)` pinch arm is retired 2026-07-17: its
+                // door-slope symptom belonged to the ENHANCED mover's
+                // then-missing narrow-space gate, and the arm itself
+                // hoisted the head through diving ceilings at funnel
+                // seams.)
                 if let Some(c) = ceiling(p.0, p.1) {
-                    z = z.min((c as i32).max(g + clr));
+                    z = z.min(c as i32);
                 }
             } else {
                 z = g + clr; // floor clamp to ground+256 (EF:59768)
@@ -1097,7 +1101,14 @@ mod tests {
             &never_stuck,
         );
         assert_eq!(st.z, 500, "clamped to the roof");
-        // A roof target below the clearance floor: the floor wins.
+        // A roof target below the clearance floor: RAW retail — the
+        // roof wins (EF:59757-63 clamps unconditionally once z sits
+        // above floor+clearance). Such a pinch is unreachable in play
+        // (the commit gate refuses air bands under clearance+fov+384);
+        // if numerics ever brush it, a brief under-floor frame renders
+        // as solid rock (the terrain shader's backface arm) — the old
+        // floor-wins arm instead hoisted the head THROUGH diving
+        // ceilings at funnel seams (retired 2026-07-17).
         let pinch = |_: u16, _: u16| -> Option<i16> { Some(100) };
         mc2_move(
             &mut st,
@@ -1110,6 +1121,6 @@ mod tests {
             &open_gate2,
             &never_stuck,
         );
-        assert_eq!(st.z, 256, "the clearance floor beats the roof");
+        assert_eq!(st.z, 100, "the roof clamps raw, floor notwithstanding");
     }
 }
