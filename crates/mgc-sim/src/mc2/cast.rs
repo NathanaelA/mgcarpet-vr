@@ -987,6 +987,22 @@ impl World {
         } else if was {
             self.g.ent[m].f26 = 0;
             self.mc2_cast_expire(2, m);
+            // `sub_60780` (EF:61670): every castle HP/CAP stamp also
+            // re-runs SetSpell on the manifestation's OWN tier
+            // (deferral suppressed — retail zeroes word_46 around the
+            // call), so the cached cast cost (`max_life`, the mana
+            // gate's word) tracks the castle level BOTH ways. The
+            // upgrade path was already fresh via the +1 XP award's
+            // spell-2 SetSpell branch (F3), but a DOWNGRADE awards
+            // nothing — demolish (Shift+L) or an enemy razing a level
+            // left the old rung cached, and an affordable rebuild
+            // dinged as unaffordable until the spell was re-selected
+            // (player repro 2026-07-16). Ported at the lock-release
+            // edge instead of retail's mid-transform stamp:
+            // observably equivalent, since the cast gate is
+            // armed-blocked for the whole transform.
+            let tier = self.g.ent[m].f71;
+            self.mc2_set_spell(m, tier);
         }
     }
 

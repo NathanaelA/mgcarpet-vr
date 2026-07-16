@@ -422,3 +422,117 @@ fn mc2_castle_builds_upgrades_and_demolishes() {
         }
     }
 }
+
+/// The stale castle-cost regression (player repro 2026-07-16): the
+/// mana gate reads the manifestation's CACHED cost (`max_life`,
+/// written by SetSpell_6D5E0), and retail refreshes that cache on
+/// EVERY castle stat stamp — `sub_60780` (EF:61670) re-runs SetSpell
+/// on the manifestation's own tier from both transform directions.
+/// The port's upgrade path stayed fresh via the +1 XP award's spell-2
+/// branch, but a DOWNGRADE (demolish / enemy razing) awarded nothing:
+/// after Shift+L the gate still compared against the higher rung, and
+/// an affordable rebuild dinged (sound 29) until the spell was
+/// re-selected. The fix re-syncs at the upgrade-lock release edge.
+///
+/// The assert surface is the CACHE (`debug_spell_gate_cost`) against
+/// the live law (`mc2_book_view().cost`) — the bug is exactly their
+/// divergence. (A full end-to-end cast can't be driven here: the
+/// per-tick mana census re-derives the pool ceiling from claimed
+/// world mana, and this harness world has none to claim.)
+#[test]
+fn mc2_castle_cost_refreshes_on_downgrade() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+
+    let (cx, cy) = clear_spot(&w);
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+
+    // Build to level 2 under the dev instrument (gate bypassed).
+    w.mc2_select_spell(2, 0, 0);
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..110 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    w.tick(pose, PlayerCommand::default());
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..220 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let (_, _, lvl) = w.loadout().castle.expect("castle stands");
+    assert_eq!(lvl, 2, "harness built to level 2");
+
+    // Real-mana mode; the re-select recomputes the honest level-2
+    // cache: the NEXT build (level 3) = ladder rung 20000.
+    w.set_dev_spells(false);
+    w.mc2_select_spell(2, 0, 0);
+    assert_eq!(
+        w.debug_spell_gate_cost(2),
+        Some(20_000),
+        "at level 2 the cached gate cost is the level-3 rung"
+    );
+
+    // A failed cast attempt (the ding), as in the player repro — it
+    // must not perturb the cache or wedge any state.
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(count(&w, 9, 10), 0, "unaffordable: no castle ball");
+    w.tick(pose, PlayerCommand::default()); // release the button
+
+    // Demolish one level; the downgrade transform raises and then
+    // releases the upgrade lock — the sub_60780 cost re-sync rides
+    // the release edge.
+    w.tick(
+        pose,
+        PlayerCommand {
+            demolish: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..90 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let (_, _, lvl) = w.loadout().castle.expect("castle survives the demolish");
+    assert_eq!(lvl, 1, "one demolish = one level down");
+
+    // THE REGRESSION: the cache must track the live law back DOWN
+    // to the level-2 rung with NO re-select in between. Pre-fix it
+    // held 20000 (the gate dinged an affordable rebuild) until the
+    // player re-selected the spell.
+    assert_eq!(
+        w.mc2_book_view().cost[2],
+        10_000,
+        "the live law prices the level-2 rebuild at the level-1 rung"
+    );
+    assert_eq!(
+        w.debug_spell_gate_cost(2),
+        Some(10_000),
+        "the cached gate cost re-synced on the downgrade (no re-select)"
+    );
+}

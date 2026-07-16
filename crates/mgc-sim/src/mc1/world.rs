@@ -4164,6 +4164,17 @@ impl World {
         }
     }
 
+    /// Test/debug hook: an MC2 manifestation's CACHED full-cast cost —
+    /// the arm gate's word (retail `maxMana_0x8C_140`, our `max_life`,
+    /// written by SetSpell). Distinct from the LIVE law
+    /// ([`World::mc2_spell_mana_cost`]): the stale-cache class (the
+    /// castle-downgrade ding) is exactly a divergence between the two.
+    #[doc(hidden)]
+    pub fn debug_spell_gate_cost(&self, spell: usize) -> Option<u32> {
+        let m = *self.mc2_book.ent.get(spell)? as usize;
+        (m != 0).then(|| self.g.ent[m].max_life)
+    }
+
     /// Test/debug hook: raise the player's mana ceiling (and clamp the
     /// pool into it). Lets tests observe large mana credits/debits that
     /// the default 1000 ceiling would otherwise cap.
