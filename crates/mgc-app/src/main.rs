@@ -13,6 +13,7 @@ mod bakecheck;
 mod campaign;
 mod config;
 mod entities;
+mod menu;
 mod settings;
 mod ui;
 
@@ -24,7 +25,9 @@ use mgc_formats::{Game, LevelPackage, mgcl};
 use mgc_render::{Billboard, CameraView, LevelView, Renderer};
 use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT};
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
@@ -869,6 +872,23 @@ fn mc2_narration_etext(lvl: u32, seg: u8) -> Option<usize> {
     }
 }
 
+/// The config→sim mappings for the flight-control tiers (the config
+/// enums are named for the user-facing tiers, the sim enums for the
+/// implementations).
+fn sim_thrust(t: config::ThrustModel) -> mgc_sim::ThrustModel {
+    match t {
+        config::ThrustModel::Classic => mgc_sim::ThrustModel::Mc1,
+        config::ThrustModel::Enhanced => mgc_sim::ThrustModel::Enhanced,
+    }
+}
+
+fn sim_altitude(a: config::AltitudeModel) -> mgc_sim::AltitudeModel {
+    match a {
+        config::AltitudeModel::Classic => mgc_sim::AltitudeModel::Faithful,
+        config::AltitudeModel::Enhanced => mgc_sim::AltitudeModel::ExtendedLift,
+    }
+}
+
 /// Currently-held key axes, sampled into a `FlightInput` per tick.
 #[derive(Default)]
 struct HeldKeys {
@@ -968,6 +988,18 @@ struct App {
     last_map_tick: Option<u64>,
     /// P-key pause: the sim clock freezes, rendering and UI stay live.
     paused: bool,
+    /// The in-game options menu, riding on pause (P opens both). None
+    /// = closed.
+    menu: Option<menu::MenuState>,
+    /// Whether the cursor was grabbed when the menu opened, so close
+    /// restores THAT state.
+    menu_grab_restore: bool,
+    /// The option registry, built once (the menu's row source; the
+    /// startup summary rebuilds its own).
+    specs: Vec<settings::Spec>,
+    /// The overlay config file the menu persists into
+    /// (`mgcarpet.json` or the `--config` path).
+    cfg_file: PathBuf,
     /// Own castle position in tile units (the guide-path target),
     /// refreshed from the pose set.
     castle_pos: Option<(f32, f32)>,
@@ -1023,7 +1055,7 @@ struct App {
 }
 
 impl App {
-    fn new(mut level: LoadedLevel, cfg: config::Config) -> Self {
+    fn new(mut level: LoadedLevel, cfg: config::Config, cfg_file: PathBuf) -> Self {
         let is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
         // Audio: open the device, load the game's audio bundle, start
         // the level music. Any failure degrades to silence, never to
@@ -1067,14 +1099,8 @@ impl App {
             Some(w) => Simulation::with_world(w),
             None => Simulation::with_terrain(level.height.clone()),
         };
-        sim.thrust_model = match cfg.controls.models.thrust {
-            config::ThrustModel::Mc1 => mgc_sim::ThrustModel::Mc1,
-            config::ThrustModel::Enhanced => mgc_sim::ThrustModel::Enhanced,
-        };
-        sim.altitude_model = match cfg.controls.models.altitude {
-            config::AltitudeModel::Faithful => mgc_sim::AltitudeModel::Faithful,
-            config::AltitudeModel::ExtendedLift => mgc_sim::AltitudeModel::ExtendedLift,
-        };
+        sim.thrust_model = sim_thrust(cfg.controls.models.thrust);
+        sim.altitude_model = sim_altitude(cfg.controls.models.altitude);
         if let Some(start) = level.start {
             sim.flyer = start;
             sim.sync_carpet_from_flyer();
@@ -1118,6 +1144,10 @@ impl App {
             spell_levels: [0; 26],
             last_map_tick: None,
             paused: false,
+            menu: None,
+            menu_grab_restore: false,
+            specs: settings::registry(),
+            cfg_file,
             castle_pos: None,
             window: None,
             renderer: None,
@@ -1145,14 +1175,391 @@ impl App {
         }
     }
 
-    /// The HUD blends over the sky (faithful MC1) vs opaque solid
-    /// panels (the MC2 readability toggle). Derived live from
+    /// The HUD blends over the sky (MC1's always-on look) vs opaque
+    /// solid panels (the readable default). Derived live from
     /// `render.enhancement.hud_transparency`.
     fn hud_transparent(&self) -> bool {
-        matches!(
-            self.cfg.render.enhancement.hud_transparency,
-            config::HudTransparency::Mc1
-        )
+        self.cfg.render.enhancement.hud_transparency.transparent()
+    }
+
+    /// The window's inner size in physical pixels (UI coordinate
+    /// space), with the default-viewport fallback.
+    fn view_size(&self) -> (f32, f32) {
+        self.window
+            .as_ref()
+            .map(|w| w.inner_size())
+            .map(|s| (s.width as f32, s.height as f32))
+            .unwrap_or((1280.0, 960.0))
+    }
+
+    /// Push the config's audio gains into the mixer (mute = gain 0).
+    fn apply_volumes(&mut self) {
+        if let Some(a) = &mut self.audio {
+            a.set_volumes(
+                if self.cfg.audio.sound {
+                    self.cfg.audio.sfx_volume
+                } else {
+                    0.0
+                },
+                if self.cfg.audio.music {
+                    self.cfg.audio.music_volume
+                } else {
+                    0.0
+                },
+            );
+        }
+    }
+
+    /// Re-apply one Live option after its config value changed — THE
+    /// single apply path shared by the runtime keys and the options
+    /// menu (keyed by the registry's `cfg_path`). Options read live
+    /// off `self.cfg` every frame/tick need no arm here.
+    fn apply_option(&mut self, cfg_path: &str) {
+        match cfg_path {
+            "audio.sound" | "audio.sfx_volume" | "audio.music_volume" => self.apply_volumes(),
+            "audio.music" => {
+                if let Some(a) = &mut self.audio {
+                    if self.cfg.audio.music {
+                        if let Some(track) = &self.level.music_track {
+                            let _ = a.play_music(track, true);
+                        }
+                    } else {
+                        a.stop_music();
+                    }
+                }
+                self.apply_volumes();
+            }
+            "render.enhancement.smooth_shading" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
+                }
+            }
+            "render.preference.fog_distance" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
+                }
+            }
+            "render.preference.sky" => {
+                if let Some(r) = &mut self.renderer {
+                    if self.cfg.render.preference.sky {
+                        if let Some(bitmap) = &self.level.sky {
+                            r.load_sky(bitmap, &self.level.palette_rgba);
+                        }
+                    } else {
+                        r.clear_sky();
+                    }
+                }
+            }
+            "render.preference.reflections" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_reflections(self.cfg.render.preference.reflections);
+                }
+            }
+            "render.enhancement.hud_transparency" => {
+                let transparent = self.hud_transparent();
+                if let Some(r) = &mut self.renderer {
+                    r.set_hud_transparent(transparent);
+                }
+            }
+            "render.debug.health_bars" => {
+                // Off clears immediately; on, bars appear with the next
+                // entity sync (every tick while creatures move).
+                if !self.cfg.render.debug.health_bars
+                    && let Some(r) = &mut self.renderer
+                {
+                    r.set_health_bars(Vec::new());
+                }
+            }
+            // The map texture recompose is tick-throttled and the menu
+            // opens paused — recompose explicitly so the toggle shows.
+            "render.debug.map_trigger_areas" | "render.enhancement.map_owned_buildings" => {
+                let overlay = self.map_overlay();
+                if let Some(r) = &mut self.renderer {
+                    r.update_map(&self.level.view, &overlay);
+                }
+            }
+            "controls.models.thrust" => {
+                self.sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
+            }
+            "controls.models.altitude" => {
+                self.sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
+            }
+            "gameplay.cheat.dev_spells" => {
+                if let Some(w) = &mut self.sim.world {
+                    w.set_dev_spells(self.cfg.gameplay.cheat.dev_spells);
+                }
+            }
+            "gameplay.cheat.invincible" => {
+                if let Some(w) = &mut self.sim.world {
+                    w.set_invincible(self.cfg.gameplay.cheat.invincible);
+                }
+            }
+            "gameplay.enhancement.prune_owned_jars" => {
+                if let Some(w) = &mut self.sim.world {
+                    w.set_prune_owned_jars(self.cfg.gameplay.enhancement.prune_owned_jars);
+                }
+            }
+            // Live selector-surface switch (player 2026-07-16): the
+            // pane/book resolve is cheap to redo mid-run. Quickselect
+            // digit binds survive a round trip — and enabling the map
+            // book mid-level replays the retail level-init pre-seed
+            // (the acquisition diff sees every owned spell at once).
+            "gameplay.enhancement.spell_selector" => {
+                let is_mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
+                let choice = self.cfg.gameplay.enhancement.spell_selector;
+                self.selector = choice.resolve(is_mc2);
+                if is_mc2
+                    && matches!(
+                        choice,
+                        config::SpellSelector::Mc1 | config::SpellSelector::Mc1Mc2
+                    )
+                {
+                    println!(
+                        "spell-selector: MC2 has no in-map spellbook — using the faithful CTRL pane"
+                    );
+                }
+                self.pane = self.selector.ctrl_pane.then(|| {
+                    if is_mc2 {
+                        ui::SelectorPane::mc2()
+                    } else {
+                        ui::SelectorPane::mc1()
+                    }
+                });
+                self.selector_drag = None;
+                self.selector_hover = ui::SelectorHover::default();
+                if let Some(r) = &mut self.renderer {
+                    r.set_map_layout(if self.selector.map_book {
+                        mgc_render::MapScreenLayout::Mc1Book
+                    } else {
+                        mgc_render::MapScreenLayout::Mc2Split
+                    });
+                }
+            }
+            // Everything else is read live off self.cfg (game_speed,
+            // crosshair, grace_meter, expose_jar_spells, sensitivity,
+            // invert_y, fly_assistant, bindings, speech, subtitles,
+            // dev_spells' pane view) or is Startup-mutability (greyed
+            // in the menu: arrangement, pool, awake, plausible book).
+            _ => {}
+        }
+    }
+
+    /// Persist one option's CURRENT value into the sparse overlay
+    /// config (`mgcarpet.json`): only that dotted path is touched, so
+    /// hand-written overrides and `gamedata` survive. Menu changes
+    /// persist; runtime-key toggles stay session-only.
+    fn persist_option(&self, spec: &settings::Spec) {
+        let full = match serde_json::to_value(&self.cfg) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("note: config save: {e}");
+                return;
+            }
+        };
+        let mut leaf = &full;
+        for seg in spec.cfg_path.split('.') {
+            leaf = &leaf[seg];
+        }
+        let mut root = std::fs::read_to_string(&self.cfg_file)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let segs: Vec<&str> = spec.cfg_path.split('.').collect();
+        let mut slot = &mut root;
+        for seg in &segs[..segs.len() - 1] {
+            if !slot.get(*seg).is_some_and(|v| v.is_object()) {
+                slot[*seg] = serde_json::json!({});
+            }
+            slot = &mut slot[*seg];
+        }
+        slot[*segs.last().unwrap()] = leaf.clone();
+        let text = serde_json::to_string_pretty(&root).expect("json serializes") + "\n";
+        if let Err(e) = std::fs::write(&self.cfg_file, text) {
+            eprintln!("note: config save {}: {e}", self.cfg_file.display());
+        }
+    }
+
+    /// Open/close the pause options menu: pause rides along (the sim
+    /// clock freezes, all sound suspends — the retail pause law), the
+    /// cursor is freed for the menu and restored on close. Without UI
+    /// assets (no baked font) this is a plain pause.
+    fn toggle_menu(&mut self) {
+        if !self.paused {
+            self.paused = true;
+            // Without a baked font there is no menu — plain pause.
+            if self.level.ui.is_some() {
+                self.menu = Some(menu::MenuState::new(&self.specs));
+                self.menu_grab_restore = self.grabbed;
+                self.set_grab(false);
+                self.fire_held = false;
+                self.fire_right_held = false;
+            }
+        } else {
+            self.paused = false;
+            if self.menu.take().is_some() && self.menu_grab_restore && !self.book_open() {
+                self.set_grab(true);
+            }
+        }
+        // Retail pause suspends ALL sound (playtest-8); resumed
+        // sounds pick up where they froze.
+        if let Some(a) = &mut self.audio {
+            a.set_paused(self.paused);
+        }
+        println!("{}", if self.paused { "paused" } else { "unpaused" });
+    }
+
+    /// The runtime option keys (session-only — never persisted; the
+    /// menu is the persisting path). Returns true when the key was
+    /// one of them. Live both in flight and inside the menu.
+    fn option_key(&mut self, code: KeyCode) -> bool {
+        // (cfg_path, mutate) pairs keep the apply path shared with the
+        // menu via apply_option.
+        let path = match code {
+            KeyCode::F1 => {
+                self.cfg.audio.sound = !self.cfg.audio.sound;
+                println!(
+                    "sound: {}{}",
+                    if self.cfg.audio.sound { "on" } else { "off" },
+                    if self.audio.is_none() {
+                        " (no audio device)"
+                    } else {
+                        ""
+                    }
+                );
+                "audio.sound"
+            }
+            KeyCode::F2 => {
+                self.cfg.audio.music = !self.cfg.audio.music;
+                println!(
+                    "music: {}{}",
+                    if self.cfg.audio.music { "on" } else { "off" },
+                    if self.audio.is_none() {
+                        " (no audio device)"
+                    } else {
+                        ""
+                    }
+                );
+                "audio.music"
+            }
+            // Game speed (retail F3; MC1 cycles its three levels —
+            // ours adds slow).
+            KeyCode::F3 => {
+                self.cfg.sim.options.game_speed = self.cfg.sim.options.game_speed.cycle();
+                println!("game speed: {}", self.cfg.sim.options.game_speed.label());
+                "sim.options.game_speed"
+            }
+            // F4 = retail soften (a screen-space smoothing filter) —
+            // not implemented; reserved.
+            KeyCode::F5 => {
+                self.cfg.render.preference.reflections = !self.cfg.render.preference.reflections;
+                println!(
+                    "reflections: {}",
+                    if self.cfg.render.preference.reflections {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                );
+                "render.preference.reflections"
+            }
+            KeyCode::F6 => {
+                self.cfg.render.preference.sky = !self.cfg.render.preference.sky;
+                println!(
+                    "sky: {}{}",
+                    if self.cfg.render.preference.sky {
+                        "on"
+                    } else {
+                        "off"
+                    },
+                    if self.level.sky.is_none() {
+                        " (this level has no sky bitmap)"
+                    } else {
+                        ""
+                    }
+                );
+                "render.preference.sky"
+            }
+            // F7 = retail shadows — no shadows option yet (banked for
+            // the proper-effects track).
+            KeyCode::KeyT => {
+                self.cfg.render.enhancement.smooth_shading =
+                    !self.cfg.render.enhancement.smooth_shading;
+                println!(
+                    "shading: {}",
+                    if self.cfg.render.enhancement.smooth_shading {
+                        "smooth (enhanced)"
+                    } else {
+                        "per-tile (original)"
+                    }
+                );
+                "render.enhancement.smooth_shading"
+            }
+            KeyCode::KeyV => {
+                self.cfg.render.debug.map_trigger_areas = !self.cfg.render.debug.map_trigger_areas;
+                println!(
+                    "map trigger overlay: {}",
+                    if self.cfg.render.debug.map_trigger_areas {
+                        "on (enhanced)"
+                    } else {
+                        "off (original)"
+                    }
+                );
+                "render.debug.map_trigger_areas"
+            }
+            KeyCode::KeyG => {
+                self.cfg.gameplay.cheat.dev_spells = !self.cfg.gameplay.cheat.dev_spells;
+                println!(
+                    "dev spells: {}",
+                    if self.cfg.gameplay.cheat.dev_spells {
+                        "on — all spells, infinite mana (playtest instrument)"
+                    } else {
+                        "off (authentic acquisition/mana)"
+                    }
+                );
+                "gameplay.cheat.dev_spells"
+            }
+            // H = invincibility (player directive 2026-07-16: "right
+            // next to G"); health bars moved to B.
+            KeyCode::KeyH => {
+                self.cfg.gameplay.cheat.invincible = !self.cfg.gameplay.cheat.invincible;
+                println!(
+                    "invincible: {}",
+                    if self.cfg.gameplay.cheat.invincible {
+                        "on (cheat — damage shown, never applied)"
+                    } else {
+                        "off (mortal)"
+                    }
+                );
+                "gameplay.cheat.invincible"
+            }
+            KeyCode::KeyB => {
+                self.cfg.render.debug.health_bars = !self.cfg.render.debug.health_bars;
+                println!(
+                    "monster health bars: {}",
+                    if self.cfg.render.debug.health_bars {
+                        "on (debug enhancement)"
+                    } else {
+                        "off (original)"
+                    }
+                );
+                "render.debug.health_bars"
+            }
+            KeyCode::KeyC => {
+                self.cfg.render.debug.crosshair = !self.cfg.render.debug.crosshair;
+                println!(
+                    "autoaim crosshair: {}",
+                    if self.cfg.render.debug.crosshair {
+                        "on (predictor instrument)"
+                    } else {
+                        "off (original)"
+                    }
+                );
+                "render.debug.crosshair"
+            }
+            _ => return false,
+        };
+        self.apply_option(path);
+        true
     }
 
     /// Per-sim-tick audio: drain the world's sound requests into the
@@ -1192,23 +1599,21 @@ impl App {
             // retail EF:41020-29, ported verbatim.
             if let Some(seg) = frame.speech {
                 let lvl = self.level.level_number;
-                let mut audible = false;
                 if self.cfg.audio.speech {
                     let (row, cseg) = if (30..=34).contains(&lvl) {
                         if seg == 9 { (10, 9) } else { (0, 4) }
                     } else {
                         (lvl, u32::from(seg))
                     };
-                    match audio.play_speech(row, cseg) {
-                        Ok(()) => audible = true,
-                        Err(e) => eprintln!("note: speech: {e}"),
+                    if let Err(e) = audio.play_speech(row, cseg) {
+                        eprintln!("note: speech: {e}");
                     }
                 }
                 // The narration subtitle: the same cue's ETEXT
-                // sentence (retail's objective textbox is this text —
-                // its speech-off fallback; `auto` mirrors that law,
-                // `on` overtitles the voiceover too).
-                if self.cfg.audio.subtitles.show(audible)
+                // sentence (retail's objective textbox shows this
+                // text as its speech-off fallback; our `on` overtitles
+                // the voiceover too).
+                if self.cfg.audio.subtitles.on()
                     && let Some(idx) = mc2_narration_etext(lvl, seg)
                     && let Some(text) = self.level.etext.get(idx).filter(|s| !s.is_empty())
                 {
@@ -1292,10 +1697,10 @@ impl App {
         // Keyboard turn rate: radians per tick (enhanced model only).
         let key_turn = 2.2 * TICK_DT;
         let book = self.book_open();
-        let mc1 = self.cfg.controls.models.thrust == config::ThrustModel::Mc1;
-        // Explicit float up/down is the extended-lift enhancement; the
-        // faithful altitude model has no vertical control at all.
-        let lift_keys = self.cfg.controls.models.altitude == config::AltitudeModel::ExtendedLift;
+        let mc1 = self.cfg.controls.models.thrust == config::ThrustModel::Classic;
+        // Explicit float up/down is the enhanced-altitude tier; the
+        // classic altitude model has no vertical control at all.
+        let lift_keys = self.cfg.controls.models.altitude == config::AltitudeModel::Enhanced;
         let mut input = FlightInput {
             thrust: axis(k.back, k.forward),
             strafe: axis(k.left, k.right),
@@ -1328,17 +1733,11 @@ impl App {
             // consecutive polls recenters the cursor — our virtual
             // stick. Retail gates on the raw position + pending
             // action bytes; ours on the motion-reset counter + held
-            // fire. Game-keyed default (player ruling 2026-07-16):
-            // MC2 = retail option on, MC1/HW = authentically absent
-            // (parked-cursor deflections persist, as retail MC1's
-            // visible-cursor scheme did) — `fly_assistant: on` opts
-            // the enhancement in everywhere.
-            let assist = self
-                .cfg
-                .controls
-                .preferences
-                .fly_assistant
-                .enabled(matches!(self.level.game, mgc_sim::ids::GameId::Mc2));
+            // fire. Plain on/off, default OFF (player ruling
+            // 2026-07-16: MC2's retail default, and MC1 never had
+            // the option — parked-cursor deflections persist, as
+            // retail MC1's visible-cursor scheme did).
+            let assist = self.cfg.controls.preferences.fly_assistant.on();
             if !assist || input.fire_left || input.fire_right {
                 self.stick_idle_ticks = 0;
             } else if self.stick.x != 0.0 || self.stick.y != 0.0 {
@@ -1735,6 +2134,59 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = state == ElementState::Pressed;
+                if self.menu.is_some() {
+                    // The options menu owns the pointer while open.
+                    if button == MouseButton::Left {
+                        let size = self.view_size();
+                        if down {
+                            if let Some(assets) = &self.level.ui {
+                                let st = self.menu.as_ref().unwrap();
+                                match menu::hit_test(
+                                    assets,
+                                    &self.specs,
+                                    st,
+                                    size.0,
+                                    size.1,
+                                    self.cursor,
+                                ) {
+                                    menu::Hit::Tab(t) => {
+                                        self.menu.as_mut().unwrap().set_tab(t);
+                                    }
+                                    menu::Hit::ScrollTo(row) => {
+                                        self.menu.as_mut().unwrap().scroll_to(row);
+                                    }
+                                    menu::Hit::Widget(i) => {
+                                        let changed = menu::pointer_apply(
+                                            assets,
+                                            &mut self.cfg,
+                                            &self.specs,
+                                            self.menu.as_mut().unwrap(),
+                                            size.0,
+                                            size.1,
+                                            self.cursor,
+                                            i,
+                                            true,
+                                        );
+                                        let path = self.specs[i].cfg_path;
+                                        if changed {
+                                            self.apply_option(path);
+                                        }
+                                        // Click widgets persist now;
+                                        // sliders persist on release
+                                        // (not per motion event).
+                                        if changed && self.menu.as_ref().unwrap().drag.is_none() {
+                                            self.persist_option(&self.specs[i]);
+                                        }
+                                    }
+                                    menu::Hit::None => {}
+                                }
+                            }
+                        } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
+                            self.persist_option(&self.specs[i]);
+                        }
+                    }
+                    return;
+                }
                 if self.pane_open() {
                     // The CTRL selector pane (over flight OR the map
                     // screen): press anchors the level flyout for the
@@ -1837,8 +2289,44 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // The options menu scrolls on the wheel (a tall tab at
+                // notification-size FONT1 overflows one page).
+                let rows = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y,
+                    MouseScrollDelta::PixelDelta(p) => -(p.y as f32) / 30.0,
+                };
+                let size = self.view_size();
+                if let (Some(st), Some(assets)) = (&mut self.menu, &self.level.ui) {
+                    menu::scroll_by(assets, &self.specs, st, size.0, size.1, rows);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32, position.y as f32);
+                // A live slider drag in the options menu tracks the
+                // pointer (apply live; persist on release).
+                if let Some(st) = &self.menu
+                    && let Some(i) = st.drag
+                {
+                    let size = self.view_size();
+                    if let Some(assets) = &self.level.ui {
+                        let changed = menu::pointer_apply(
+                            assets,
+                            &mut self.cfg,
+                            &self.specs,
+                            self.menu.as_mut().unwrap(),
+                            size.0,
+                            size.1,
+                            self.cursor,
+                            i,
+                            false,
+                        );
+                        if changed {
+                            let path = self.specs[i].cfg_path;
+                            self.apply_option(path);
+                        }
+                    }
+                }
             }
             WindowEvent::Focused(false) => {
                 self.set_grab(false);
@@ -1848,11 +2336,36 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 if down && event.logical_key == Key::Named(NamedKey::Escape) {
-                    if self.grabbed {
+                    if self.menu.is_some() {
+                        // Esc closes the options menu (and unpauses)
+                        // instead of ungrabbing/quitting.
+                        self.toggle_menu();
+                    } else if self.grabbed {
                         self.set_grab(false);
                     } else {
                         event_loop.exit();
                     }
+                    return;
+                }
+                // Pause (retail P, drawing PAUSED at 132,50): the sim
+                // clock freezes, the renderer/UI stay live — and the
+                // options menu rides on it (MC2 puts its options
+                // behind pause too).
+                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyP) {
+                    self.toggle_menu();
+                    return;
+                }
+                // The runtime option keys (F1/F2/F3/F5/F6, T/V/G/H/B/C)
+                // — live in flight and inside the menu alike.
+                if down
+                    && let PhysicalKey::Code(code) = event.physical_key
+                    && self.option_key(code)
+                {
+                    return;
+                }
+                // The menu swallows everything else (no quick-equips,
+                // no map toggle, no movement latching underneath it).
+                if self.menu.is_some() {
                     return;
                 }
                 if down && event.logical_key == Key::Named(NamedKey::Enter) {
@@ -1964,111 +2477,6 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::F1) {
-                    // The original's sound toggle (remc1 :20086).
-                    self.cfg.audio.sound = !self.cfg.audio.sound;
-                    if let Some(a) = &mut self.audio {
-                        a.set_volumes(
-                            if self.cfg.audio.sound {
-                                self.cfg.audio.sfx_volume
-                            } else {
-                                0.0
-                            },
-                            if self.cfg.audio.music {
-                                self.cfg.audio.music_volume
-                            } else {
-                                0.0
-                            },
-                        );
-                    }
-                    println!(
-                        "sound: {}{}",
-                        if self.cfg.audio.sound { "on" } else { "off" },
-                        if self.audio.is_none() {
-                            " (no audio device)"
-                        } else {
-                            ""
-                        }
-                    );
-                    return;
-                }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::F2) {
-                    // The original's music toggle (remc1 :20100).
-                    self.cfg.audio.music = !self.cfg.audio.music;
-                    if let Some(a) = &mut self.audio {
-                        if self.cfg.audio.music {
-                            if let Some(track) = &self.level.music_track {
-                                let _ = a.play_music(track, true);
-                            }
-                            a.set_volumes(
-                                if self.cfg.audio.sound {
-                                    self.cfg.audio.sfx_volume
-                                } else {
-                                    0.0
-                                },
-                                self.cfg.audio.music_volume,
-                            );
-                        } else {
-                            a.stop_music();
-                        }
-                    }
-                    println!(
-                        "music: {}{}",
-                        if self.cfg.audio.music { "on" } else { "off" },
-                        if self.audio.is_none() {
-                            " (no audio device)"
-                        } else {
-                            ""
-                        }
-                    );
-                    return;
-                }
-                // Pause (retail P, drawing PAUSED at 132,50): the sim
-                // clock freezes, the renderer/UI stay live — the quiet
-                // room for inspecting the HUD/book without mobs.
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyP) {
-                    self.paused = !self.paused;
-                    // Retail pause suspends ALL sound (playtest-8);
-                    // resumed sounds pick up where they froze.
-                    if let Some(a) = &mut self.audio {
-                        a.set_paused(self.paused);
-                    }
-                    println!("{}", if self.paused { "paused" } else { "unpaused" });
-                    return;
-                }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyT) {
-                    self.cfg.render.enhancement.smooth_shading =
-                        !self.cfg.render.enhancement.smooth_shading;
-                    if let Some(r) = &mut self.renderer {
-                        r.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
-                    }
-                    println!(
-                        "shading: {}",
-                        if self.cfg.render.enhancement.smooth_shading {
-                            "smooth (enhanced)"
-                        } else {
-                            "per-tile (original)"
-                        }
-                    );
-                    return;
-                }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyV) {
-                    self.cfg.render.debug.map_trigger_areas =
-                        !self.cfg.render.debug.map_trigger_areas;
-                    let overlay = self.map_overlay();
-                    if let Some(r) = &mut self.renderer {
-                        r.update_map(&self.level.view, &overlay);
-                    }
-                    println!(
-                        "map trigger overlay: {}",
-                        if self.cfg.render.debug.map_trigger_areas {
-                            "on (enhanced)"
-                        } else {
-                            "off (original)"
-                        }
-                    );
-                    return;
-                }
                 // Radar zoom (`+`/`-`, main row or numpad): tighten or
                 // widen the in-flight minimap's world span. Faithful to
                 // MC2's runtime radar zoom (likely MC1 too). The book
@@ -2094,52 +2502,6 @@ impl ApplicationHandler for App {
                 if down && self.shift_held && event.physical_key == PhysicalKey::Code(KeyCode::KeyL)
                 {
                     self.pending_demolish = true;
-                    return;
-                }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyG) {
-                    self.cfg.gameplay.cheat.dev_spells = !self.cfg.gameplay.cheat.dev_spells;
-                    if let Some(w) = &mut self.sim.world {
-                        w.set_dev_spells(self.cfg.gameplay.cheat.dev_spells);
-                    }
-                    println!(
-                        "dev spells: {}",
-                        if self.cfg.gameplay.cheat.dev_spells {
-                            "on — all spells, infinite mana (playtest instrument)"
-                        } else {
-                            "off (authentic acquisition/mana)"
-                        }
-                    );
-                    return;
-                }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyH) {
-                    self.cfg.render.debug.health_bars = !self.cfg.render.debug.health_bars;
-                    if !self.cfg.render.debug.health_bars {
-                        if let Some(r) = &mut self.renderer {
-                            r.set_health_bars(Vec::new());
-                        }
-                    }
-                    // On: bars appear with the next entity sync (every
-                    // tick while creatures move).
-                    println!(
-                        "monster health bars: {}",
-                        if self.cfg.render.debug.health_bars {
-                            "on (debug enhancement)"
-                        } else {
-                            "off (original)"
-                        }
-                    );
-                    return;
-                }
-                if down && event.physical_key == PhysicalKey::Code(KeyCode::KeyC) {
-                    self.cfg.render.debug.crosshair = !self.cfg.render.debug.crosshair;
-                    println!(
-                        "autoaim crosshair: {}",
-                        if self.cfg.render.debug.crosshair {
-                            "on (predictor instrument)"
-                        } else {
-                            "off (original)"
-                        }
-                    );
                     return;
                 }
                 let wasd = self.cfg.controls.preferences.bindings == config::Bindings::Wasd;
@@ -2197,7 +2559,18 @@ impl ApplicationHandler for App {
                 // from spiraling through hundreds of catch-up ticks.
                 let dt = (now - self.last_frame).as_secs_f32().min(0.25);
                 self.last_frame = now;
-                self.accumulator += dt;
+                // Game speed (retail F3): retail runs the sim step N
+                // times per rendered frame (remc1 :41672 / remc2
+                // EF:31800); our fixed-Hz accumulator expresses the
+                // same multiplier by scaling wall time. Every tick is
+                // bit-identical — only the pacing changes.
+                let speed = self
+                    .cfg
+                    .sim
+                    .options
+                    .game_speed
+                    .multiplier(matches!(self.level.game, mgc_sim::ids::GameId::Mc2));
+                self.accumulator += dt * speed;
                 if self.paused {
                     // Frozen sim clock: drain the accumulator so
                     // unpausing resumes cleanly instead of bursting
@@ -2205,6 +2578,12 @@ impl ApplicationHandler for App {
                     self.accumulator = 0.0;
                 }
 
+                // Per-frame tick burst cap: at high multipliers a slow
+                // frame must shed sim time instead of spiraling (retail
+                // effectively did the same — its N steps per frame
+                // stretched wall time when frames slowed).
+                let max_ticks = ((2.0 * speed).ceil() as u32).max(4);
+                let mut ran = 0u32;
                 while self.accumulator >= TICK_DT {
                     self.accumulator -= TICK_DT;
                     self.prev_flyer = self.sim.flyer;
@@ -2213,6 +2592,11 @@ impl ApplicationHandler for App {
                     // The mixer flush is per-tick like the original's
                     // (fade ramps are tick-denominated).
                     self.audio_tick();
+                    ran += 1;
+                    if ran >= max_ticks {
+                        self.accumulator = 0.0;
+                        break;
+                    }
                 }
                 // Limit-removing telemetry (ROADMAP "MULTI-GAME
                 // ARCHITECTURE"): the pool fails open like retail,
@@ -2305,7 +2689,7 @@ impl ApplicationHandler for App {
                 // turn cue). The enhanced mouse-look stays flat by
                 // player directive.
                 let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
-                    config::ThrustModel::Mc1 => (aim * 0.5, a.roll + (b.roll - a.roll) * alpha),
+                    config::ThrustModel::Classic => (aim * 0.5, a.roll + (b.roll - a.roll) * alpha),
                     config::ThrustModel::Enhanced => (aim, 0.0),
                 };
                 let cam = CameraView {
@@ -2463,6 +2847,20 @@ impl ApplicationHandler for App {
                         // Both views: the book screen is exactly where
                         // paused inspection happens.
                         quads.extend(ui::pause_quads(size.0, size.1));
+                    }
+                    // The options menu (over everything but the quit
+                    // fade; the pause bars above stay as the retail
+                    // nod).
+                    if let Some(st) = &self.menu {
+                        quads.extend(menu::draw(
+                            assets,
+                            &self.cfg,
+                            &self.specs,
+                            st,
+                            size.0,
+                            size.1,
+                            self.cursor,
+                        ));
                     }
                     // expose-jar-spells (debug): float each pickable
                     // jar's spell icon over it in the main view (the
@@ -2709,12 +3107,17 @@ impl ApplicationHandler for App {
             return;
         }
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-            let dy = if self.cfg.controls.preferences.invert_y {
-                -dy
-            } else {
-                dy
-            };
-            if self.cfg.controls.models.thrust == config::ThrustModel::Mc1 {
+            // invert_y = true (default) is the flight-stick polarity
+            // both originals ship: mouse up/forward = nose DOWN — in
+            // BOTH control models (standardized 2026-07-16; the flag
+            // used to mean opposite things per model). The two
+            // branches consume dy with opposite senses downstream, so
+            // each applies its own flip to land on the same polarity.
+            let inv = self.cfg.controls.preferences.invert_y;
+            if self.cfg.controls.models.thrust == config::ThrustModel::Classic {
+                // The classic stick's native sense IS the flight-stick
+                // polarity: pass dy through when inverted.
+                let dy = if inv { dy } else { -dy };
                 // Relative motion integrates into the virtual stick
                 // POSITION (the original reads the DOS cursor offset
                 // from screen center, clamped ±127 — on a 320-wide
@@ -2725,6 +3128,9 @@ impl ApplicationHandler for App {
                 self.stick.y = (self.stick.y - dy as f32 * s).clamp(-127.0, 127.0);
                 self.stick_idle_ticks = 0;
             } else {
+                // Mouse-look's native sense is the FPS convention:
+                // flip dy when inverted.
+                let dy = if inv { -dy } else { dy };
                 let s = MOUSE_SENSITIVITY * self.cfg.controls.preferences.mouse_sensitivity;
                 self.mouse.yaw += dx as f32 * s;
                 self.mouse.pitch -= dy as f32 * s;
@@ -2762,6 +3168,11 @@ struct Args {
     expose_jar_spells: Option<bool>,
     /// CLI override of `render.debug.grace_meter`.
     grace_meter: Option<bool>,
+    /// `--dev-mode`: pre-select the whole dev-instrument kit for one
+    /// run (expose_jar_spells, health_bars, crosshair,
+    /// map_trigger_areas, grace_meter); individual flags still
+    /// override.
+    dev_mode: bool,
     /// CLI overrides of the `flight` tier enums; None = use config.
     thrust: Option<config::ThrustModel>,
     altitude: Option<config::AltitudeModel>,
@@ -2827,6 +3238,7 @@ fn parse_args() -> Result<Args, String> {
     let mut invincible = None;
     let mut expose_jar_spells = None;
     let mut grace_meter = None;
+    let mut dev_mode = false;
     let mut thrust = None;
     let mut altitude = None;
     let mut bindings = None;
@@ -2974,6 +3386,7 @@ fn parse_args() -> Result<Args, String> {
             "--no-expose-jar-spells" => expose_jar_spells = Some(false),
             "--grace-meter" => grace_meter = Some(true),
             "--no-grace-meter" => grace_meter = Some(false),
+            "--dev-mode" => dev_mode = true,
             "--sky" => sky = Some(true),
             "--no-sky" => sky = Some(false),
             "--reflections" => reflections = Some(true),
@@ -2982,16 +3395,18 @@ fn parse_args() -> Result<Args, String> {
             "--no-light-sources" => light_sources = Some(false),
             "--thrust" => {
                 thrust = Some(match it.next().as_deref() {
-                    Some("mc1") => config::ThrustModel::Mc1,
+                    // "mc1" = the legacy name for classic.
+                    Some("classic") | Some("mc1") => config::ThrustModel::Classic,
                     Some("enhanced") => config::ThrustModel::Enhanced,
-                    _ => return Err("--thrust needs mc1|enhanced".into()),
+                    _ => return Err("--thrust needs classic|enhanced".into()),
                 });
             }
             "--altitude" => {
                 altitude = Some(match it.next().as_deref() {
-                    Some("faithful") => config::AltitudeModel::Faithful,
-                    Some("extended-lift") => config::AltitudeModel::ExtendedLift,
-                    _ => return Err("--altitude needs faithful|extended-lift".into()),
+                    // "faithful"/"extended-lift" = the legacy names.
+                    Some("classic") | Some("faithful") => config::AltitudeModel::Classic,
+                    Some("enhanced") | Some("extended-lift") => config::AltitudeModel::Enhanced,
+                    _ => return Err("--altitude needs classic|enhanced".into()),
                 });
             }
             "--bindings" => {
@@ -3037,10 +3452,10 @@ fn parse_args() -> Result<Args, String> {
             }
             "--subtitles" => {
                 subtitles = Some(match it.next().as_deref() {
-                    Some("auto") => config::Subtitles::Auto,
-                    Some("on") => config::Subtitles::On,
+                    // "auto" = the retired legacy mode, folded into on.
+                    Some("on") | Some("auto") => config::Subtitles::On,
                     Some("off") => config::Subtitles::Off,
-                    _ => return Err("--subtitles needs auto|on|off".into()),
+                    _ => return Err("--subtitles needs on|off".into()),
                 });
             }
             "--anim-turn" => {
@@ -3084,10 +3499,11 @@ fn parse_args() -> Result<Args, String> {
                      [--invincible|--no-invincible] \
                      [--expose-jar-spells|--no-expose-jar-spells] \
                      [--grace-meter|--no-grace-meter] \
-                     [--thrust mc1|enhanced] [--altitude faithful|extended-lift] \
+                     [--dev-mode] \
+                     [--thrust classic|enhanced] [--altitude classic|enhanced] \
                      [--bindings classic|wasd] \
                      [--spell-selector auto|mc1|mc2|mc1+mc2] \
-                     [--subtitles auto|on|off] [--fog-distance TILES (0 = no fog)] \
+                     [--subtitles on|off] [--fog-distance TILES (0 = no fog)] \
                      [--sky|--no-sky] [--reflections|--no-reflections] \
                      [--light-sources|--no-light-sources] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
@@ -3120,6 +3536,7 @@ fn parse_args() -> Result<Args, String> {
         invincible,
         expose_jar_spells,
         grace_meter,
+        dev_mode,
         thrust,
         altitude,
         bindings,
@@ -3815,7 +4232,21 @@ fn main() -> std::process::ExitCode {
     };
     // Fold the one-run CLI overrides into the resolved config, so `cfg`
     // is the single source of truth from here on (the App reads it live;
-    // the startup summary and a future menu are views over it).
+    // the startup summary and the options menu are views over it).
+    //
+    // --dev-mode first: the whole dev-instrument kit in one flag
+    // (individual flags after it still override).
+    if args.dev_mode {
+        cfg.render.enhancement.expose_jar_spells = true;
+        cfg.render.debug.health_bars = true;
+        cfg.render.debug.crosshair = true;
+        cfg.render.debug.map_trigger_areas = true;
+        cfg.render.debug.grace_meter = true;
+        println!(
+            "dev-mode: expose_jar_spells + health_bars + crosshair + map_trigger_areas + \
+             grace_meter on (one run)"
+        );
+    }
     let en = &mut cfg.render.enhancement;
     if let Some(v) = args.smooth_shading {
         en.smooth_shading = v;
@@ -3965,10 +4396,7 @@ fn main() -> std::process::ExitCode {
             args.anim_turn,
             cfg.render.debug.map_trigger_areas,
             cfg.gameplay.cheat.dev_spells,
-            matches!(
-                cfg.render.enhancement.hud_transparency,
-                config::HudTransparency::Mc1
-            ),
+            cfg.render.enhancement.hud_transparency.transparent(),
         ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
@@ -4000,16 +4428,16 @@ fn main() -> std::process::ExitCode {
         config::Bindings::Wasd => "W/S accel/decel, A/D strafe",
     };
     match cfg.controls.models.thrust {
-        config::ThrustModel::Mc1 => println!(
-            "controls: faithful MC1 — mouse = stick (offset steers, recenter to fly straight),\n\
+        config::ThrustModel::Classic => println!(
+            "controls: classic (faithful) — mouse = stick (offset steers, recenter to fly straight),\n\
              \x20         {move_keys} (impulses: speed persists until countered),"
         ),
         config::ThrustModel::Enhanced => {
             println!("controls: enhanced — mouse look, {move_keys} (hold-to-fly),")
         }
     }
-    if cfg.controls.models.altitude == config::AltitudeModel::ExtendedLift {
-        println!("          E/Q float up/down (extended lift, capped at the highest terrain),");
+    if cfg.controls.models.altitude == config::AltitudeModel::Enhanced {
+        println!("          E/Q float up/down (enhanced altitude, capped at the highest terrain),");
     }
     println!("          Backspace full-stops the carpet (speed + steering; MC2's stabilize key),");
     println!("          Space respawns after death (at your castle; no castle = level restart),");
@@ -4037,7 +4465,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level, cfg);
+    let mut app = App::new(level, cfg, config_path);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

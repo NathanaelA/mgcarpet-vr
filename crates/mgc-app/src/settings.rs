@@ -1,9 +1,10 @@
 //! The option registry: one declarative table describing every
-//! user-facing option — its domain, class, how to toggle it, and how to
-//! read its current value out of [`Config`]. It is the single source of
-//! truth for the startup summary (and, later, an in-game options menu):
-//! both are just *views* over this table, so a new option is added in
-//! exactly one place.
+//! user-facing option — its domain, class, how to toggle it, how to
+//! read its current value out of [`Config`], how to WRITE it back
+//! (the menu widget), and the hover text explaining it. It is the
+//! single source of truth for the startup summary and the in-game
+//! options menu: both are just *views* over this table, so a new
+//! option is added in exactly one place.
 //!
 //! Two orthogonal axes describe each option:
 //! - **domain** ([`Domain`]) — where it acts (mirrors the `Config`
@@ -25,6 +26,29 @@ pub enum Domain {
     Audio,
     Gameplay,
     Dev,
+}
+
+/// Menu tab order + labels.
+pub const DOMAINS: [Domain; 6] = [
+    Domain::Sim,
+    Domain::Render,
+    Domain::Controls,
+    Domain::Audio,
+    Domain::Gameplay,
+    Domain::Dev,
+];
+
+impl Domain {
+    pub fn title(self) -> &'static str {
+        match self {
+            Domain::Sim => "SIM",
+            Domain::Render => "RENDER",
+            Domain::Controls => "CONTROLS",
+            Domain::Audio => "AUDIO",
+            Domain::Gameplay => "GAMEPLAY",
+            Domain::Dev => "DEV",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,16 +75,15 @@ pub enum Fidelity {
     Modified,
 }
 
-/// Whether an option can meaningfully change during play.
+/// Whether an option can change during play.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mutability {
-    /// Takes effect immediately (has, or can trivially gain, a live
-    /// apply path).
+    /// Takes effect immediately (the menu / runtime keys re-apply it).
     Live,
     /// Read once at startup / level-load; changing it mid-run is
     /// meaningless or would need a restart (e.g. the entity pool can't
     /// resurrect events already dropped; a plausible spellbook is
-    /// seeded at level entry). A future menu greys these out in-game.
+    /// seeded at level entry). The menu shows these greyed out.
     Startup,
 }
 
@@ -112,7 +135,7 @@ impl Val {
     }
 
     /// The current value as displayed in the summary's value column.
-    fn current_text(&self) -> String {
+    pub fn current_text(&self) -> String {
         match self {
             Val::Toggle { on, .. } => (if *on { "on" } else { "off" }).into(),
             Val::Choice { cur, variants, .. } => {
@@ -161,11 +184,44 @@ impl Val {
     }
 }
 
-/// One option's metadata + how to read it from [`Config`].
+/// The menu widget + write path for one option. Descriptions are
+/// per-SELECTION hover text (the option-level text lives in
+/// [`Spec::desc`]); placeholder drafts today — player-authored text
+/// slots in here.
+pub enum Ctl {
+    /// Not adjustable from the menu (CLI/config only).
+    ReadOnly,
+    /// An on/off switch. `descs` = [off-text, on-text].
+    Toggle {
+        set: fn(&mut Config, bool),
+        descs: [&'static str; 2],
+    },
+    /// An enum choice; `set` receives the index into the read
+    /// `Val::Choice::variants`. `descs` aligns with the variants.
+    Choice {
+        set: fn(&mut Config, usize),
+        descs: &'static [&'static str],
+    },
+    /// A continuous numeric slider, stepped to `step` granularity.
+    Slider {
+        get: fn(&Config) -> f32,
+        set: fn(&mut Config, f32),
+        min: f32,
+        max: f32,
+        step: f32,
+    },
+    /// A slider with a fixed set of stops: (value, tag). Clicks snap
+    /// to the nearest stop.
+    Stops {
+        get: fn(&Config) -> u32,
+        set: fn(&mut Config, u32),
+        stops: &'static [(u32, &'static str)],
+    },
+}
+
+/// One option's metadata + how to read/write it from [`Config`].
 pub struct Spec {
-    /// The acting domain. Carried for a future options menu (filter /
-    /// group by system); the startup summary groups by [`Spec::group`].
-    #[allow(dead_code)]
+    /// The acting domain — the menu tab this option lives under.
     pub domain: Domain,
     /// The `domain · group` heading this option lists under.
     pub group: &'static str,
@@ -179,6 +235,11 @@ pub struct Spec {
     pub cfg_path: &'static str,
     /// Read the live value out of the resolved config.
     pub read: fn(&Config) -> Val,
+    /// The option-level hover explanation (the menu's info box; the
+    /// per-selection texts live in [`Ctl`]).
+    pub desc: &'static str,
+    /// The menu widget + write path.
+    pub ctl: Ctl,
 }
 
 impl Spec {
@@ -189,17 +250,9 @@ impl Spec {
             "sim.parameters.entity_pool_size"
             | "sim.parameters.awake_range"
             | "dev.plausible_spellbook" => Mutability::Startup,
-            // Consumers that snapshot at construction with no cheap
-            // re-apply path: the selector pane is built once from the
-            // resolved scheme, and switching the music arrangement
-            // means reloading the baked track set.
-            "gameplay.enhancement.spell_selector" | "audio.arrangement" => Mutability::Startup,
-            // NOTE for the future runtime menu: thrust/altitude,
-            // invincible and prune_owned_jars are Live by the "can
-            // trivially gain a live apply path" clause — the World
-            // setters exist (set_invincible, set_prune_owned_jars,
-            // sim.thrust_model/altitude_model) but nothing re-applies
-            // them mid-run yet. Wire those hooks when the menu lands.
+            // Switching the music arrangement means reloading the
+            // baked track set — no cheap re-apply path.
+            "audio.arrangement" => Mutability::Startup,
             _ => Mutability::Live,
         }
     }
@@ -224,7 +277,8 @@ macro_rules! toggle {
     };
 }
 
-/// The full registry. Order = summary order (grouped by heading).
+/// The full registry. Order = summary order (grouped by heading) =
+/// menu row order within each domain tab.
 pub fn registry() -> Vec<Spec> {
     use Class::*;
     use Domain::*;
@@ -242,6 +296,11 @@ pub fn registry() -> Vec<Spec> {
                 val: c.sim.parameters.entity_pool_size.map(|n| n.to_string()),
                 faithful: "per-game default 1000",
             },
+            desc: "Entity pool capacity. Retail caps the world at 1000 things and \
+                   silently drops spawns beyond it; enlarging the pool carries \
+                   rosters the original would have shed. Set from the command \
+                   line or config file; fixed for the run.",
+            ctl: Ctl::ReadOnly,
         },
         Spec {
             domain: Sim,
@@ -261,24 +320,59 @@ pub fn registry() -> Vec<Spec> {
                 }),
                 faithful: "24 tiles (both retail engines)",
             },
+            desc: "Creature wake radius in tiles. Retail sleeps creatures beyond \
+                   24 tiles (a period CPU optimization); 0 keeps everything \
+                   awake. Set from the command line or config file; fixed for \
+                   the run.",
+            ctl: Ctl::ReadOnly,
         },
-        // ---- render · enhancement ---------------------------------------
+        // ---- sim · options ----------------------------------------------
         Spec {
-            domain: Render,
-            group: "render · enhancement",
-            label: "smooth_shading",
-            class: Enhancement,
-            key: Some("T"),
-            cli: Some("--smooth-shading"),
-            cfg_path: "render.enhancement.smooth_shading",
-            read: toggle!(c => render.enhancement.smooth_shading),
+            domain: Sim,
+            group: "sim · options",
+            label: "game_speed",
+            class: Preference,
+            key: Some("F3"),
+            cli: None,
+            cfg_path: "sim.options.game_speed",
+            read: |c| Val::Choice {
+                cur: match c.sim.options.game_speed {
+                    crate::config::GameSpeed::Slow => 0,
+                    crate::config::GameSpeed::Normal => 1,
+                    crate::config::GameSpeed::Fast => 2,
+                    crate::config::GameSpeed::VeryFast => 3,
+                },
+                faithful: 1,
+                variants: &["slow", "normal", "fast", "very-fast"],
+            },
+            desc: "How fast the world runs. Retail's F3 option: the whole \
+                   simulation is paced up or down — everything moves, fights \
+                   and regenerates at the multiplied rate.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.sim.options.game_speed = match i {
+                        0 => crate::config::GameSpeed::Slow,
+                        1 => crate::config::GameSpeed::Normal,
+                        2 => crate::config::GameSpeed::Fast,
+                        _ => crate::config::GameSpeed::VeryFast,
+                    }
+                },
+                descs: &[
+                    "Half speed (0.5x). Our addition — no retail equivalent.",
+                    "The authentic pace: 24 simulation ticks per second.",
+                    "Retail Fast: 4x, both games.",
+                    "Retail's top speed, game-keyed: MC1 'Very Fast' = 16x, \
+                     MC2 'Super Fast' = 8x.",
+                ],
+            },
         },
+        // ---- render · preference ----------------------------------------
         Spec {
             domain: Render,
             group: "render · preference",
             label: "sky",
             class: Preference,
-            key: None,
+            key: Some("F6"),
             cli: Some("--no-sky"),
             cfg_path: "render.preference.sky",
             // Faithful = ON (retail ships the Sky option enabled).
@@ -286,13 +380,23 @@ pub fn registry() -> Vec<Spec> {
                 on: c.render.preference.sky,
                 faithful: true,
             },
+            desc: "The textured parallax cloud sky (retail's Sky option, F6). \
+                   Caves never have one, exactly like retail.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.sky = v,
+                descs: [
+                    "Flat horizon-color fill (retail's sky-off look).",
+                    "The per-environment cloud plane, scrolled by yaw and \
+                     slid by pitch (retail default).",
+                ],
+            },
         },
         Spec {
             domain: Render,
             group: "render · preference",
             label: "reflections",
             class: Preference,
-            key: None,
+            key: Some("F5"),
             cli: Some("--no-reflections"),
             cfg_path: "render.preference.reflections",
             // Faithful = ON (retail ships the Reflections option
@@ -300,6 +404,16 @@ pub fn registry() -> Vec<Spec> {
             read: |c| Val::Toggle {
                 on: c.render.preference.reflections,
                 faithful: true,
+            },
+            desc: "Water reflections (retail's Reflections option, F5): sea \
+                   tiles mirror the landscape about the water plane, wobbling \
+                   with the wave.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.reflections = v,
+                descs: [
+                    "Plain animated water.",
+                    "Terrain mirrored in the water (retail default).",
+                ],
             },
         },
         Spec {
@@ -316,6 +430,17 @@ pub fn registry() -> Vec<Spec> {
                 on: c.render.preference.light_sources,
                 faithful: true,
             },
+            desc: "Dynamic light sources (retail MC2's Dynamic Lighting): \
+                   fireballs, explosions and standing fire brighten the \
+                   terrain around them — night and cave levels only, exactly \
+                   retail's gate.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.light_sources = v,
+                descs: [
+                    "No dynamic terrain lighting.",
+                    "Fire lights up the night (retail default).",
+                ],
+            },
         },
         Spec {
             domain: Render,
@@ -331,15 +456,47 @@ pub fn registry() -> Vec<Spec> {
                     n => format!("{n} tiles"),
                 },
                 // Val::Scalar compares text == faithful for the
-                // deviation mark, so this is the exact default text
+                // deviation mark, so this is the exact faithful text
                 // (retail band 15..19, geometry cutoff 20).
                 faithful: "20 tiles",
+            },
+            desc: "How far you can see before the distance fog fully occludes, \
+                   in tiles. Retail drew 20 tiles for pure period-performance \
+                   reasons; note the monsters' sight radii (15-20 tiles) were \
+                   tuned so pop-in hides in that fog — long distances reveal \
+                   creatures acting before you could faithfully see them.",
+            ctl: Ctl::Stops {
+                get: |c| c.render.preference.fog_distance,
+                set: |c, v| c.render.preference.fog_distance = v,
+                stops: &crate::config::FOG_STOPS,
             },
         },
         Spec {
             domain: Render,
-            // A Preference (visual, fidelity-neutral) — its own
-            // heading; the cfg_path keeps the legacy "enhancement"
+            // A Preference (retail MC2 ships a shading toggle —
+            // Shift+F7 "Flat Shading"); the cfg_path keeps the legacy
+            // "enhancement" segment so saved configs stay valid.
+            group: "render · preference",
+            label: "smooth_shading",
+            class: Preference,
+            key: Some("T"),
+            cli: Some("--smooth-shading"),
+            cfg_path: "render.enhancement.smooth_shading",
+            read: toggle!(c => render.enhancement.smooth_shading),
+            desc: "Terrain shading style. Off = one shade level per tile (the \
+                   original look); on = shade interpolated across tile centers.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.smooth_shading = v,
+                descs: [
+                    "Per-tile shading — the faceted original look.",
+                    "Interpolated (gouraud-like) terrain shading.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            // A Preference (visual, fidelity-neutral, deliberately
+            // unscored) — the cfg_path keeps the legacy "enhancement"
             // segment so saved configs stay valid.
             group: "render · preference",
             label: "hud_transparency",
@@ -347,15 +504,30 @@ pub fn registry() -> Vec<Spec> {
             key: None,
             cli: None,
             cfg_path: "render.enhancement.hud_transparency",
-            read: |c| Val::Choice {
-                cur: match c.render.enhancement.hud_transparency {
-                    crate::config::HudTransparency::Mc1 => 0,
-                    crate::config::HudTransparency::Opaque => 1,
+            read: |c| Val::Toggle {
+                on: c.render.enhancement.hud_transparency.transparent(),
+                // Default off (opaque); fidelity deliberately unscored
+                // here (MC1 is always-transparent, MC2 has the toggle).
+                faithful: false,
+            },
+            desc: "HUD panel transparency. MC1 always blends the HUD over the \
+                   sky; MC2 offers the toggle (Panel Transparency). Opaque \
+                   reads best, especially the radar.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.render.enhancement.hud_transparency = if v {
+                        crate::config::HudTransparency::On
+                    } else {
+                        crate::config::HudTransparency::Off
+                    }
                 },
-                faithful: 0,
-                variants: &["mc1", "opaque"],
+                descs: [
+                    "Solid panels and radar — best readability (default).",
+                    "The HUD blends over the world, MC1-style.",
+                ],
             },
         },
+        // ---- render · enhancement ---------------------------------------
         Spec {
             domain: Render,
             group: "render · enhancement",
@@ -365,7 +537,18 @@ pub fn registry() -> Vec<Spec> {
             cli: None,
             cfg_path: "render.enhancement.map_owned_buildings",
             read: toggle!(c => render.enhancement.map_owned_buildings),
+            desc: "Highlight claimed/possessed dwellings on the overhead map in \
+                   the owner's color — MC2's map behavior brought to MC1 as an \
+                   opt-in (MC1 never marks houses).",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.map_owned_buildings = v,
+                descs: [
+                    "Unmarked dwellings, as retail MC1 draws them.",
+                    "Owned dwellings tinted in the owner's color.",
+                ],
+            },
         },
+        // ---- render · debug ---------------------------------------------
         Spec {
             domain: Render,
             // A level-scouting instrument that only lets you SEE more
@@ -379,17 +562,37 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--expose-jar-spells"),
             cfg_path: "render.enhancement.expose_jar_spells",
             read: toggle!(c => render.enhancement.expose_jar_spells),
+            desc: "Tag every pickable spell jar with its granted spell's icon — \
+                   on the overhead map and floating over the jar in the main \
+                   view. The original never labels jars; you learn by flying \
+                   through.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.expose_jar_spells = v,
+                descs: [
+                    "Anonymous jars, as retail.",
+                    "Every jar wears its spell icon.",
+                ],
+            },
         },
-        // ---- render · debug ---------------------------------------------
         Spec {
             domain: Render,
             group: "render · debug",
             label: "health_bars",
             class: Debug,
-            key: Some("H"),
+            key: Some("B"),
             cli: Some("--health-bars"),
             cfg_path: "render.debug.health_bars",
             read: toggle!(c => render.debug.health_bars),
+            desc: "Red-on-black health bars floating above monsters. The \
+                   original never shows creature life — the combat-system \
+                   debugging instrument.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.health_bars = v,
+                descs: [
+                    "No creature life shown, as retail.",
+                    "Every creature wears a life bar.",
+                ],
+            },
         },
         Spec {
             domain: Render,
@@ -400,6 +603,17 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--crosshair"),
             cfg_path: "render.debug.crosshair",
             read: toggle!(c => render.debug.crosshair),
+            desc: "The autoaim crosshair: a cross at the TRUE aim point plus \
+                   per-hand lock markers on the target each equipped spell \
+                   would acquire this instant. The original shows no aim UI \
+                   at all.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.crosshair = v,
+                descs: [
+                    "No aim UI, as retail.",
+                    "Aim cross + blinking per-hand lock markers.",
+                ],
+            },
         },
         Spec {
             domain: Render,
@@ -410,6 +624,16 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--map-triggers"),
             cfg_path: "render.debug.map_trigger_areas",
             read: toggle!(c => render.debug.map_trigger_areas),
+            desc: "Overlay live trigger volumes / portals on the overhead map \
+                   as tinted circles. The original never reveals trigger areas \
+                   — the event-system debugging instrument.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.map_trigger_areas = v,
+                descs: [
+                    "No trigger overlay, as retail.",
+                    "Trigger volumes tinted on the map.",
+                ],
+            },
         },
         Spec {
             domain: Render,
@@ -420,6 +644,16 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--grace-meter"),
             cfg_path: "render.debug.grace_meter",
             read: toggle!(c => render.debug.grace_meter),
+            desc: "A thin bottom-center strip draining with the respawn \
+                   invulnerability window. Retail shows nothing for spawn \
+                   grace.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.grace_meter = v,
+                descs: [
+                    "No grace indicator, as retail.",
+                    "The spawn-grace strip while invulnerable.",
+                ],
+            },
         },
         // ---- controls · preferences -------------------------------------
         Spec {
@@ -438,6 +672,22 @@ pub fn registry() -> Vec<Spec> {
                 faithful: 0,
                 variants: &["classic", "wasd"],
             },
+            desc: "Key-binding profile for movement.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.controls.preferences.bindings = if i == 0 {
+                        crate::config::Bindings::Classic
+                    } else {
+                        crate::config::Bindings::Wasd
+                    }
+                },
+                descs: &[
+                    "The original scheme: mouse aims, Up/Down arrows \
+                     accelerate/decelerate, Left/Right strafe.",
+                    "W/S thrust, A/D strafe, mouse aims (arrows keep \
+                     turn/pitch in the enhanced thrust model).",
+                ],
+            },
         },
         Spec {
             domain: Controls,
@@ -448,8 +698,16 @@ pub fn registry() -> Vec<Spec> {
             cli: None,
             cfg_path: "controls.preferences.mouse_sensitivity",
             read: |c| Val::Scalar {
-                text: format!("{:.2}", c.controls.preferences.mouse_sensitivity),
-                faithful: "1.00",
+                text: format!("{:.1}", c.controls.preferences.mouse_sensitivity),
+                faithful: "1.0",
+            },
+            desc: "Mouse-to-stick / mouse-look sensitivity multiplier.",
+            ctl: Ctl::Slider {
+                get: |c| c.controls.preferences.mouse_sensitivity,
+                set: |c, v| c.controls.preferences.mouse_sensitivity = v,
+                min: 0.1,
+                max: 3.0,
+                step: 0.1,
             },
         },
         Spec {
@@ -462,7 +720,19 @@ pub fn registry() -> Vec<Spec> {
             cfg_path: "controls.preferences.invert_y",
             read: |c| Val::Toggle {
                 on: c.controls.preferences.invert_y,
-                faithful: false,
+                // The flight-stick polarity both originals ship.
+                faithful: true,
+            },
+            desc: "Mouse Y polarity. On = mouse up/forward dives (nose down), \
+                   like a flight stick — the polarity both originals ship. \
+                   Off = mouse up climbs (the FPS convention).",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.controls.preferences.invert_y = v,
+                descs: [
+                    "Mouse up = nose up (FPS convention).",
+                    "Mouse up = nose down, flight-stick style (the \
+                     original polarity; default).",
+                ],
             },
         },
         Spec {
@@ -473,16 +743,27 @@ pub fn registry() -> Vec<Spec> {
             key: None,
             cli: None,
             cfg_path: "controls.preferences.fly_assistant",
-            read: |c| Val::Choice {
-                cur: match c.controls.preferences.fly_assistant {
-                    crate::config::FlyAssistant::Auto => 0,
-                    crate::config::FlyAssistant::On => 1,
-                    crate::config::FlyAssistant::Off => 2,
+            read: |c| Val::Toggle {
+                on: c.controls.preferences.fly_assistant.on(),
+                faithful: false,
+            },
+            desc: "The retail MC2 Flight Assistance option: leave the mouse \
+                   untouched for a couple of seconds and the steering stick \
+                   recenters itself (level flight holds). Off by default, \
+                   like retail MC2; MC1 never had it.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.controls.preferences.fly_assistant = if v {
+                        crate::config::FlyAssistant::On
+                    } else {
+                        crate::config::FlyAssistant::Off
+                    }
                 },
-                // auto = each game's retail arrangement (MC2 had the
-                // option, MC1 never did).
-                faithful: 0,
-                variants: &["auto", "on", "off"],
+                descs: [
+                    "No auto-center — you trim your own drift (retail \
+                     default).",
+                    "Idle mouse recenters the steering stick.",
+                ],
             },
         },
         // ---- controls · models ------------------------------------------
@@ -496,11 +777,30 @@ pub fn registry() -> Vec<Spec> {
             cfg_path: "controls.models.thrust",
             read: |c| Val::Choice {
                 cur: match c.controls.models.thrust {
-                    crate::config::ThrustModel::Mc1 => 0,
+                    crate::config::ThrustModel::Classic => 0,
                     crate::config::ThrustModel::Enhanced => 1,
                 },
                 faithful: 0,
-                variants: &["mc1", "enhanced"],
+                variants: &["classic", "enhanced"],
+            },
+            desc: "Thrust + steering model. Classic is the faithful law both \
+                   originals share; enhanced is the modern hold-to-fly \
+                   alternative.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.controls.models.thrust = if i == 0 {
+                        crate::config::ThrustModel::Classic
+                    } else {
+                        crate::config::ThrustModel::Enhanced
+                    }
+                },
+                descs: &[
+                    "The faithful model: mouse offset = turn rate (airplane \
+                     stick, recenter to fly straight); accelerate/decelerate \
+                     impulses persist until countered.",
+                    "Mouse look + hold-to-fly with automatic deceleration on \
+                     release.",
+                ],
             },
         },
         Spec {
@@ -513,11 +813,28 @@ pub fn registry() -> Vec<Spec> {
             cfg_path: "controls.models.altitude",
             read: |c| Val::Choice {
                 cur: match c.controls.models.altitude {
-                    crate::config::AltitudeModel::Faithful => 0,
-                    crate::config::AltitudeModel::ExtendedLift => 1,
+                    crate::config::AltitudeModel::Classic => 0,
+                    crate::config::AltitudeModel::Enhanced => 1,
                 },
                 faithful: 0,
-                variants: &["faithful", "extended-lift"],
+                variants: &["classic", "enhanced"],
+            },
+            desc: "Altitude model. Classic = terrain-follow only, as the \
+                   originals; enhanced adds explicit float keys.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.controls.models.altitude = if i == 0 {
+                        crate::config::AltitudeModel::Classic
+                    } else {
+                        crate::config::AltitudeModel::Enhanced
+                    }
+                },
+                descs: &[
+                    "Terrain-follow only: the carpet floats up along rising \
+                     ground and settles by itself; no fly-up control exists.",
+                    "Classic behavior plus E/Q float up/down, capped at the \
+                     level's highest terrain.",
+                ],
             },
         },
         // ---- audio ------------------------------------------------------
@@ -533,6 +850,11 @@ pub fn registry() -> Vec<Spec> {
                 on: c.audio.sound,
                 faithful: true,
             },
+            desc: "Sample playback (the original's F1 toggle).",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.audio.sound = v,
+                descs: ["Silence the sound effects.", "Sound effects play."],
+            },
         },
         Spec {
             domain: Audio,
@@ -546,6 +868,11 @@ pub fn registry() -> Vec<Spec> {
                 on: c.audio.music,
                 faithful: true,
             },
+            desc: "Music playback (the original's F2 toggle).",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.audio.music = v,
+                descs: ["No music.", "The level soundtrack plays."],
+            },
         },
         Spec {
             domain: Audio,
@@ -556,8 +883,16 @@ pub fn registry() -> Vec<Spec> {
             cli: None,
             cfg_path: "audio.sfx_volume",
             read: |c| Val::Scalar {
-                text: format!("{:.2}", c.audio.sfx_volume),
-                faithful: "1.00",
+                text: format!("{:.1}", c.audio.sfx_volume),
+                faithful: "1.0",
+            },
+            desc: "Sound-effect master gain.",
+            ctl: Ctl::Slider {
+                get: |c| c.audio.sfx_volume,
+                set: |c, v| c.audio.sfx_volume = v,
+                min: 0.0,
+                max: 1.0,
+                step: 0.1,
             },
         },
         Spec {
@@ -569,8 +904,16 @@ pub fn registry() -> Vec<Spec> {
             cli: None,
             cfg_path: "audio.music_volume",
             read: |c| Val::Scalar {
-                text: format!("{:.2}", c.audio.music_volume),
-                faithful: "1.00",
+                text: format!("{:.1}", c.audio.music_volume),
+                faithful: "1.0",
+            },
+            desc: "Music master gain.",
+            ctl: Ctl::Slider {
+                get: |c| c.audio.music_volume,
+                set: |c, v| c.audio.music_volume = v,
+                min: 0.0,
+                max: 1.0,
+                step: 0.1,
             },
         },
         Spec {
@@ -590,6 +933,24 @@ pub fn registry() -> Vec<Spec> {
                 faithful: 0,
                 variants: &["auto", "fm", "gm"],
             },
+            desc: "Which MC1 music arrangement plays — the CD shipped one per \
+                   sound-card family, so each is authentic. Applies at level \
+                   load.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.audio.arrangement = match i {
+                        0 => crate::config::MusicArrangement::Auto,
+                        1 => crate::config::MusicArrangement::Fm,
+                        _ => crate::config::MusicArrangement::Gm,
+                    }
+                },
+                descs: &[
+                    "The best-available render: General MIDI when baked, \
+                     else FM.",
+                    "The AdLib FM (OPL3) render.",
+                    "The General MIDI render.",
+                ],
+            },
         },
         Spec {
             domain: Audio,
@@ -603,6 +964,12 @@ pub fn registry() -> Vec<Spec> {
                 on: c.audio.speech,
                 faithful: true,
             },
+            desc: "MC2 objective voiceovers (the CD speech clips) — the \
+                   original's in-game Speech option.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.audio.speech = v,
+                descs: ["Objectives arrive silently.", "The narrator speaks."],
+            },
         },
         Spec {
             domain: Audio,
@@ -612,16 +979,25 @@ pub fn registry() -> Vec<Spec> {
             key: None,
             cli: Some("--subtitles"),
             cfg_path: "audio.subtitles",
-            read: |c| Val::Choice {
-                cur: match c.audio.subtitles {
-                    crate::config::Subtitles::Auto => 0,
-                    crate::config::Subtitles::On => 1,
-                    crate::config::Subtitles::Off => 2,
+            read: |c| Val::Toggle {
+                on: c.audio.subtitles.on(),
+                faithful: true,
+            },
+            desc: "Narration subtitles: the sentence behind each objective \
+                   voiceover, drawn as a top-of-screen overtitle when the cue \
+                   fires.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.audio.subtitles = if v {
+                        crate::config::Subtitles::On
+                    } else {
+                        crate::config::Subtitles::Off
+                    }
                 },
-                // auto = the retail objective-textbox law (text shows
-                // exactly when the voiceover doesn't play).
-                faithful: 0,
-                variants: &["auto", "on", "off"],
+                descs: [
+                    "No narration text.",
+                    "Every narration is subtitled (default).",
+                ],
             },
         },
         // ---- gameplay · enhancement -------------------------------------
@@ -643,20 +1019,55 @@ pub fn registry() -> Vec<Spec> {
                 faithful: 0,
                 variants: &["auto", "mc1", "mc2", "mc1+mc2"],
             },
+            desc: "Which spell-selection interface is live — interface only, \
+                   the spell economy underneath is untouched. Switchable \
+                   mid-run; quick-key digit binds survive the round trip \
+                   (MC2 always uses the CTRL pane).",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.gameplay.enhancement.spell_selector = match i {
+                        0 => crate::config::SpellSelector::Auto,
+                        1 => crate::config::SpellSelector::Mc1,
+                        2 => crate::config::SpellSelector::Mc2,
+                        _ => crate::config::SpellSelector::Mc1Mc2,
+                    }
+                },
+                descs: &[
+                    "Each game's own faithful surface: MC1 the map-screen \
+                     spellbook, MC2 the CTRL pane.",
+                    "Force the MC1 map-screen spellbook (MC1 only).",
+                    "Force the MC2 CTRL-hold selector pane.",
+                    "Both surfaces at once (MC1 only).",
+                ],
+            },
         },
         Spec {
             domain: Gameplay,
             group: "gameplay · enhancement",
             label: "prune_owned_jars",
-            class: Enhancement,
+            // A cleanup routine, not a fidelity event (player ruling
+            // 2026-07-16): removing jars you can never pick up changes
+            // nothing you could ever interact with, so it does not
+            // flag the run.
+            class: Preference,
             key: None,
             cli: Some("--no-prune-owned-jars"),
             cfg_path: "gameplay.enhancement.prune_owned_jars",
-            // Faithful = OFF (retail leaves owned jars forever); this is
-            // the lone enhancement that ships ON.
+            // Faithful = OFF (retail leaves owned jars forever); ships
+            // ON as the lone deliberate default-on deviation.
             read: |c| Val::Toggle {
                 on: c.gameplay.enhancement.prune_owned_jars,
                 faithful: false,
+            },
+            desc: "Remove any spell jar whose spell you already own — and \
+                   therefore can never pick up. Retail leaves such jars in \
+                   the world forever as permanent, unidentifiable clutter.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.enhancement.prune_owned_jars = v,
+                descs: [
+                    "Owned jars linger forever, as retail.",
+                    "Owned jars vanish — less clutter (default).",
+                ],
             },
         },
         // ---- gameplay · cheat -------------------------------------------
@@ -669,16 +1080,36 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--dev-spells"),
             cfg_path: "gameplay.cheat.dev_spells",
             read: toggle!(c => gameplay.cheat.dev_spells),
+            desc: "All spells granted + infinite mana — the spell-track \
+                   playtest instrument. The original ships the equivalent \
+                   debug commands.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.cheat.dev_spells = v,
+                descs: [
+                    "Authentic acquisition and mana.",
+                    "Every spell, bottomless mana (cheat).",
+                ],
+            },
         },
         Spec {
             domain: Gameplay,
             group: "gameplay · cheat",
             label: "invincible",
             class: Cheat,
-            key: None,
+            key: Some("H"),
             cli: Some("--invincible"),
             cfg_path: "gameplay.cheat.invincible",
             read: toggle!(c => gameplay.cheat.invincible),
+            desc: "Player invincibility: damage is totaled for display but \
+                   never applied; no death. Playtest/accessibility \
+                   instrument.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.cheat.invincible = v,
+                descs: [
+                    "Mortal, as the game intends.",
+                    "Nothing can kill you (cheat).",
+                ],
+            },
         },
         // ---- dev --------------------------------------------------------
         Spec {
@@ -690,6 +1121,16 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--plausible-spellbook"),
             cfg_path: "dev.plausible_spellbook",
             read: toggle!(c => dev.plausible_spellbook),
+            desc: "Seed the spellbook at level start with the spells a \
+                   diligent player COULD legitimately hold entering this \
+                   level (MC1 only). Applies at level load.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.dev.plausible_spellbook = v,
+                descs: [
+                    "Only what the level itself grants.",
+                    "The campaign-plausible spell set at entry.",
+                ],
+            },
         },
     ]
 }
@@ -764,7 +1205,7 @@ pub fn print_summary(cfg: &Config, game: GameId, level_label: &str) {
         let val = (spec.read)(cfg);
         let mark = if val.deviates() { "•" } else { " " };
         let offline = if spec.mutability() == Mutability::Startup {
-            "  (offline)"
+            "  (level load)"
         } else {
             ""
         };
@@ -785,13 +1226,15 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn stock_run_is_enhanced_from_default_on_prune() {
-        // `prune_owned_jars` is the lone enhancement that ships ON, so a
-        // stock run is honestly ENHANCED (one fair deviation, no cheats).
+    fn stock_run_is_faithful() {
+        // The deliberate default deviations (prune_owned_jars ON, fog
+        // 50, hud opaque) are all Preference-class now, so a stock run
+        // rolls up FAITHFUL (player ruling 2026-07-16: cleanup/visual
+        // preferences must not flag the run).
         let (verdict, enh, modi) = rollup(&Config::default());
         assert_eq!(modi, 0, "no cheats/instruments on by default");
-        assert!(enh >= 1, "prune_owned_jars deviates from faithful-off");
-        assert_eq!(verdict, Fidelity::Enhanced);
+        assert_eq!(enh, 0, "no enhancement-class deviation by default");
+        assert_eq!(verdict, Fidelity::Faithful);
     }
 
     #[test]
@@ -811,5 +1254,70 @@ mod tests {
             let _ = (spec.read)(&Config::default());
         }
         print_summary(&Config::default(), GameId::Mc2, "level-000 (smoke)");
+    }
+
+    #[test]
+    fn every_ctl_setter_round_trips() {
+        // Every widget setter lands where its reader looks: setting
+        // each selectable value and reading it back must agree (guards
+        // against a Spec whose `read` and `ctl` drift apart).
+        for (i, spec) in registry().into_iter().enumerate() {
+            let mut c = Config::default();
+            match spec.ctl {
+                Ctl::ReadOnly => {}
+                Ctl::Toggle { set, .. } => {
+                    for on in [true, false] {
+                        set(&mut c, on);
+                        match (spec.read)(&c) {
+                            Val::Toggle { on: got, .. } => {
+                                assert_eq!(got, on, "spec #{i} {} toggle", spec.label)
+                            }
+                            _ => panic!("spec #{i} {}: Toggle ctl but non-Toggle read", spec.label),
+                        }
+                    }
+                }
+                Ctl::Choice { set, descs } => {
+                    let variants = match (spec.read)(&c) {
+                        Val::Choice { variants, .. } => variants,
+                        _ => panic!("spec #{i} {}: Choice ctl but non-Choice read", spec.label),
+                    };
+                    assert_eq!(
+                        descs.len(),
+                        variants.len(),
+                        "spec #{i} {}: per-choice descs align with variants",
+                        spec.label
+                    );
+                    for want in 0..variants.len() {
+                        set(&mut c, want);
+                        match (spec.read)(&c) {
+                            Val::Choice { cur, .. } => {
+                                assert_eq!(cur, want, "spec #{i} {} choice", spec.label)
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                Ctl::Slider {
+                    get,
+                    set,
+                    min,
+                    max,
+                    step,
+                } => {
+                    assert!(min < max && step > 0.0, "spec #{i} {}", spec.label);
+                    set(&mut c, min);
+                    assert!((get(&c) - min).abs() < 1e-6, "spec #{i} {}", spec.label);
+                    set(&mut c, max);
+                    assert!((get(&c) - max).abs() < 1e-6, "spec #{i} {}", spec.label);
+                }
+                Ctl::Stops { get, set, stops } => {
+                    assert!(!stops.is_empty(), "spec #{i} {}", spec.label);
+                    for &(v, _) in stops {
+                        set(&mut c, v);
+                        assert_eq!(get(&c), v, "spec #{i} {} stop", spec.label);
+                    }
+                }
+            }
+        }
     }
 }
