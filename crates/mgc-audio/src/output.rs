@@ -538,7 +538,34 @@ impl Output {
                         speech_live_w
                             .store(renderer.speech_live(), std::sync::atomic::Ordering::Relaxed);
                     },
-                    |e| eprintln!("audio stream error: {e}"),
+                    {
+                        // ALSA warm-up chatter: cpal polls
+                        // `snd_pcm_avail_delay` before the PCM is
+                        // actually running, so startup emits a burst
+                        // of identical EIO errors (1..~30 depending
+                        // on init timing) that cpal recovers from by
+                        // itself. Print each DISTINCT error once;
+                        // swallow identical repeats, surfacing the
+                        // count only if a different error follows.
+                        let mut last = String::new();
+                        let mut repeats = 0u32;
+                        move |e| {
+                            let msg = e.to_string();
+                            if msg == last {
+                                repeats += 1;
+                                return;
+                            }
+                            if repeats > 0 {
+                                eprintln!(
+                                    "audio stream error: (previous error repeated \
+                                     {repeats} more time(s))"
+                                );
+                            }
+                            eprintln!("audio stream error: {msg}");
+                            last = msg;
+                            repeats = 0;
+                        }
+                    },
                     None,
                 )
                 .ok()?;
