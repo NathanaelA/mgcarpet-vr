@@ -3038,6 +3038,27 @@ impl Renderer {
         self.depth = create_depth(&self.device, width, height);
     }
 
+    /// Vertical sync: on = wait for the display (AutoVsync — FIFO
+    /// everywhere), off = present as fast as frames come (AutoNoVsync —
+    /// immediate/mailbox, whichever the surface supports), releasing
+    /// the frame rate for FPS measurement. The Auto modes are the two
+    /// present modes wgpu guarantees on every surface — a raw
+    /// `Immediate` would panic on backends without it. Offscreen
+    /// targets have no swapchain: no-op.
+    pub fn set_vsync(&mut self, on: bool) {
+        if let Target::Window { surface, config } = &mut self.target {
+            let mode = if on {
+                wgpu::PresentMode::AutoVsync
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            };
+            if config.present_mode != mode {
+                config.present_mode = mode;
+                surface.configure(&self.device, config);
+            }
+        }
+    }
+
     fn size(&self) -> (u32, u32) {
         match &self.target {
             Target::Window { config, .. } => (config.width, config.height),

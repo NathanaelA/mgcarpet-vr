@@ -1044,6 +1044,12 @@ struct App {
     shift_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
+    /// FPS-overlay accounting: frames and wall time since the last
+    /// readout refresh, plus the rendered text (recomputed every
+    /// half-second so the number is readable, not a blur).
+    fps_frames: u32,
+    fps_elapsed: f32,
+    fps_text: String,
     /// Running pool-exhaustion drop count for this level (the
     /// limit-removing telemetry's playthrough readout).
     pool_dropped_total: u32,
@@ -1178,6 +1184,9 @@ impl App {
             shift_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
+            fps_frames: 0,
+            fps_elapsed: 0.0,
+            fps_text: String::new(),
             pool_dropped_total: 0,
             misfits_reported: 0,
             audio,
@@ -1263,6 +1272,11 @@ impl App {
             "render.preference.reflections" => {
                 if let Some(r) = &mut self.renderer {
                     r.set_reflections(self.cfg.render.preference.reflections);
+                }
+            }
+            "render.preference.vsync" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_vsync(self.cfg.render.preference.vsync);
                 }
             }
             "render.enhancement.hud_transparency" => {
@@ -2184,6 +2198,7 @@ impl ApplicationHandler for App {
                     renderer.load_sky(bitmap, &self.level.palette_rgba);
                 }
                 renderer.set_reflections(self.cfg.render.preference.reflections);
+                renderer.set_vsync(self.cfg.render.preference.vsync);
                 // Map-screen topology follows the book surface: no
                 // map book (MC2, or MC1 with spell_selector=mc2) =
                 // the split layout with the stretched live view.
@@ -2638,8 +2653,31 @@ impl ApplicationHandler for App {
                 let now = std::time::Instant::now();
                 // Clamp huge pauses (debugger, suspend) to keep the sim
                 // from spiraling through hundreds of catch-up ticks.
-                let dt = (now - self.last_frame).as_secs_f32().min(0.25);
+                let raw_dt = (now - self.last_frame).as_secs_f32();
+                let dt = raw_dt.min(0.25);
                 self.last_frame = now;
+                // FPS-overlay accounting: true wall time (the clamp
+                // above is sim pacing, not measurement), readout
+                // refreshed every half-second. Counts while paused
+                // too — the menu is where you toggle effects to
+                // watch their cost.
+                if self.cfg.render.debug.fps {
+                    self.fps_frames += 1;
+                    self.fps_elapsed += raw_dt;
+                    if self.fps_elapsed >= 0.5 {
+                        let ms = 1000.0 * self.fps_elapsed / self.fps_frames as f32;
+                        self.fps_text = format!(
+                            "{:.0} fps  {ms:.1} ms",
+                            self.fps_frames as f32 / self.fps_elapsed
+                        );
+                        self.fps_frames = 0;
+                        self.fps_elapsed = 0.0;
+                    }
+                } else if !self.fps_text.is_empty() {
+                    self.fps_text.clear();
+                    self.fps_frames = 0;
+                    self.fps_elapsed = 0.0;
+                }
                 // Game speed (retail F3): retail runs the sim step N
                 // times per rendered frame (remc1 :41672 / remc2
                 // EF:31800); our fixed-Hz accumulator expresses the
@@ -3212,6 +3250,24 @@ impl ApplicationHandler for App {
                     if fade > 0.0 {
                         quads.push(ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, fade]));
                     }
+                    // The FPS overlay (render · debug): bottom-right
+                    // corner — clear of the top HUD strip, the
+                    // bottom-center grace meter and the left-anchored
+                    // toast rows; above the fade (a debug instrument
+                    // stays readable). White FONT1 ink.
+                    if !self.fps_text.is_empty() && assets.has_font() {
+                        let font_s = size.0 / 320.0;
+                        let pad = 4.0 * font_s;
+                        let w_px = assets.text_width(&self.fps_text) * font_s;
+                        let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
+                        quads.extend(assets.text_quads(
+                            &self.fps_text,
+                            size.0 - w_px - pad,
+                            y,
+                            [1.0, 1.0, 1.0, 1.0],
+                            font_s,
+                        ));
+                    }
                     self.hovered = hovered;
                     if let Some(r) = &mut self.renderer {
                         r.set_ui_quads(quads);
@@ -3335,6 +3391,10 @@ struct Args {
     reflections: Option<bool>,
     /// Dynamic-lights override (config `render.preference.light_sources`).
     light_sources: Option<bool>,
+    /// Vertical-sync override (config `render.preference.vsync`).
+    vsync: Option<bool>,
+    /// CLI override of `render.debug.fps` (the FPS overlay).
+    fps: Option<bool>,
     /// Animation clock for `--screenshot` (game turns; default 0).
     /// Water-wave phase repeats every 32 (MC1) / 64 (MC2) turns.
     anim_turn: f32,
@@ -3390,6 +3450,8 @@ fn parse_args() -> Result<Args, String> {
     let mut sky = None;
     let mut reflections = None;
     let mut light_sources = None;
+    let mut vsync = None;
+    let mut fps = None;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
     let mut awake_range = None;
@@ -3532,6 +3594,10 @@ fn parse_args() -> Result<Args, String> {
             "--no-reflections" => reflections = Some(false),
             "--light-sources" => light_sources = Some(true),
             "--no-light-sources" => light_sources = Some(false),
+            "--vsync" => vsync = Some(true),
+            "--no-vsync" => vsync = Some(false),
+            "--fps" => fps = Some(true),
+            "--no-fps" => fps = Some(false),
             "--thrust" => {
                 thrust = Some(match it.next().as_deref() {
                     // "mc1" = the legacy name for classic.
@@ -3645,6 +3711,7 @@ fn parse_args() -> Result<Args, String> {
                      [--subtitles on|off] [--fog-distance TILES (0 = no fog)] \
                      [--sky|--no-sky] [--reflections|--no-reflections] \
                      [--light-sources|--no-light-sources] \
+                     [--vsync|--no-vsync] [--fps|--no-fps] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
@@ -3688,6 +3755,8 @@ fn parse_args() -> Result<Args, String> {
         sky,
         reflections,
         light_sources,
+        vsync,
+        fps,
         anim_turn,
         terrain_features,
         pool_slots,
@@ -4381,9 +4450,10 @@ fn main() -> std::process::ExitCode {
         cfg.render.debug.crosshair = true;
         cfg.render.debug.map_trigger_areas = true;
         cfg.render.debug.grace_meter = true;
+        cfg.render.debug.fps = true;
         println!(
             "dev-mode: expose_jar_spells + health_bars + crosshair + map_trigger_areas + \
-             grace_meter on (one run)"
+             grace_meter + fps on (one run)"
         );
     }
     let en = &mut cfg.render.enhancement;
@@ -4432,6 +4502,12 @@ fn main() -> std::process::ExitCode {
     }
     if let Some(v) = args.light_sources {
         cfg.render.preference.light_sources = v;
+    }
+    if let Some(v) = args.vsync {
+        cfg.render.preference.vsync = v;
+    }
+    if let Some(v) = args.fps {
+        cfg.render.debug.fps = v;
     }
     if let Some(v) = args.prune_owned_jars {
         cfg.gameplay.enhancement.prune_owned_jars = v;

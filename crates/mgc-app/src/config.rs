@@ -235,6 +235,14 @@ pub struct RenderPreference {
     /// performance-only and is an "instant bummer"); the menu offers
     /// the stops 20 (faithful) / 50 (default) / 100 (high) / 255 (max).
     pub fog_distance: u32,
+    /// Vertical sync (on by default — off has no visual upside, only
+    /// tearing). Off releases the frame rate from the display's
+    /// refresh so the `fps` debug overlay can measure what the
+    /// machine actually renders — the effect-cost measuring rig
+    /// (player request 2026-07-17). A display device preference:
+    /// no retail analogue (DOS VGA page-flipped at whatever rate the
+    /// frame took), so fidelity-free by construction.
+    pub vsync: bool,
 }
 
 /// The fog-distance menu stops: (tiles, tag).
@@ -252,6 +260,7 @@ impl Default for RenderPreference {
             reflections: true,
             light_sources: true,
             fog_distance: 50,
+            vsync: true,
         }
     }
 }
@@ -335,6 +344,12 @@ pub struct RenderDebug {
     /// unconditionally; it is a debug cue and defaults OFF (faithful:
     /// no grace indicator at all).
     pub grace_meter: bool,
+    /// The FPS overlay: frame rate + frame time in the bottom-right
+    /// corner, refreshed twice a second. The performance measuring
+    /// instrument (player request 2026-07-17: gauge what each
+    /// non-faithful effect costs) — pair with `vsync` off to read
+    /// the machine's real headroom instead of the display refresh.
+    pub fps: bool,
 }
 
 // ===========================================================================
@@ -814,8 +829,9 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge. (v2: 2026-07-16 — game_speed, fog 50, hud/
 /// subtitles/fly-assistant on-off, thrust/altitude classic naming.
-/// v3: 2026-07-16 — smooth_motion, default ON.)
-const DEFAULTS_VERSION: u64 = 3;
+/// v3: 2026-07-16 — smooth_motion, default ON.
+/// v4: 2026-07-17 — vsync (default ON) + fps overlay.)
+const DEFAULTS_VERSION: u64 = 4;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

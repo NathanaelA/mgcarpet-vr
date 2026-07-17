@@ -473,6 +473,33 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
+            group: "render · preference",
+            label: "vsync",
+            class: Preference,
+            key: None,
+            cli: Some("--no-vsync"),
+            cfg_path: "render.preference.vsync",
+            // "Faithful" = ON only in the sense that on is the sane
+            // default; a display-device knob with no retail analogue,
+            // hence Preference (fidelity-free either way).
+            read: |c| Val::Toggle {
+                on: c.render.preference.vsync,
+                faithful: true,
+            },
+            desc: "Vertical sync: frames wait for the display refresh. Off \
+                   trades tearing for an uncapped frame rate — only useful \
+                   together with the fps overlay (render \u{b7} debug) to \
+                   measure what the machine can actually render.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.vsync = v,
+                descs: [
+                    "Uncapped frame rate, may tear. For fps measurement.",
+                    "Frames sync to the display refresh (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
             // A Preference (retail MC2 ships a shading toggle —
             // Shift+F7 "Flat Shading"); the cfg_path keeps the legacy
             // "enhancement" segment so saved configs stay valid.
@@ -686,6 +713,28 @@ pub fn registry() -> Vec<Spec> {
                 descs: [
                     "No grace indicator, as retail.",
                     "The spawn-grace strip while invulnerable.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · debug",
+            label: "fps",
+            class: Debug,
+            key: None,
+            cli: Some("--fps"),
+            cfg_path: "render.debug.fps",
+            read: toggle!(c => render.debug.fps),
+            desc: "Frame rate + frame time, bottom-right corner. The \
+                   performance instrument for weighing effect costs; with \
+                   vsync on it reads the display refresh, not the machine's \
+                   limit — turn vsync off (render \u{b7} preference) to \
+                   measure real headroom.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.fps = v,
+                descs: [
+                    "No frame-rate readout, as retail.",
+                    "Live fps + ms per frame, refreshed twice a second.",
                 ],
             },
         },
