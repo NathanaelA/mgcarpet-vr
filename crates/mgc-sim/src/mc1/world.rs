@@ -628,6 +628,12 @@ pub struct World {
     /// CASTER is pulled toward the victim until 1000 ticks, 5120
     /// distance, or the victim dies.
     duel: Option<(u16, u16, u32)>,
+    /// The MC2 duel LOCK (`dword_0xA4_164` fields 322/326/330, remc2
+    /// EF:60648-56): (opponent avatar entity, held tether distance
+    /// clamped [1024, 3072], tier 0..2). Set by the (10,26) tether
+    /// grip ([`World::mc2_duel_tether_tick`]); enforced per tick
+    /// beside the MC1 pull; hash-gated on Some (tag 0xE2).
+    pub(crate) mc2_duel: Option<(u16, i32, u8)>,
     /// The human wizard's MC2 spell book (`str_611` subset: learned
     /// manifestations, XP, levels, tiers, quick-slots) — the Phase
     /// 4.2 cast column ([`crate::mc2::cast`]). Hashed only once
@@ -1132,6 +1138,7 @@ impl World {
             human_pose: (0, 0, 0),
             rival_deaths: Vec::new(),
             duel: None,
+            mc2_duel: None,
             mc2_book: Default::default(),
             notification: None,
             won: false,
@@ -1449,6 +1456,11 @@ impl World {
                 self.duel = Some((victim, count + 1, hold));
             }
         }
+        // The MC2 duel enforcement (the lock's per-tick pass) —
+        // rides the same knock transport as the MC1 pull above.
+        if matches!(self.game, GameId::Mc2) {
+            self.mc2_duel_enforce(&player);
+        }
 
         // The per-tick mana census (sub_48230 :56839, called :52327
         // BEFORE all entity ticks).
@@ -1728,6 +1740,11 @@ impl World {
                         self.terrain_dirty = true;
                     }
                 }
+                // The MC2 (10,26) duel tether — the grip pass
+                // (shadowed from MC1's homing tether action).
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 26 => {
+                    self.mc2_duel_tether_tick(i);
+                }
                 // The tail-effect band (mc2::tail): blasts 0x19/0x17,
                 // meteor 17, fire trail 15, fire spray 19, aura 0x3B.
                 // The (10,52) anchor's 0x38 is retail's EMPTY case
@@ -1971,7 +1988,7 @@ impl World {
                 // MC2 class-14 special map objects (markers/scroll).
                 14 if matches!(self.game, GameId::Mc2) => self.mc2_class14_tick(i),
                 // MC2 class-15 spell tokens (the jar pickup states).
-                15 if matches!(self.game, GameId::Mc2) => self.mc2_spell_token_tick(i),
+                15 if matches!(self.game, GameId::Mc2) => self.mc2_spell_token_tick(i, player),
                 // Trees burn (states 0/1/2 + the standing fire).
                 2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
                 // Spell jars (pickup) and owned-spell manifestations
@@ -2014,6 +2031,15 @@ impl World {
             let mail = std::mem::take(&mut self.g.mc2_cast_xp.0);
             for (owner, spell, amount) in mail {
                 self.mc2_award_xp(owner, spell as usize, amount);
+            }
+        }
+        // Drain the m26 spell-steal mail the same tick (the wraith's
+        // roll is pool-side, the human book world-side); the jar's
+        // action-78 detach arc starts on its next class-15 tick.
+        if !self.g.mc2_steal_mail.0.is_empty() {
+            let mail = std::mem::take(&mut self.g.mc2_steal_mail.0);
+            for (wraith, hand) in mail {
+                self.mc2_spell_steal(wraith, hand);
             }
         }
 
@@ -2587,6 +2613,7 @@ impl World {
             won,
             mc2_endseq,
             mc2_end_pending: _,
+            mc2_duel,
         } = self;
         let mut h = Fnv(0xcbf2_9ce4_8422_2325);
         g.hash(&mut h);
@@ -2611,6 +2638,10 @@ impl World {
         if let Some(seq) = mc2_endseq {
             h.write_u8(0xE1);
             seq.hash(&mut h);
+        }
+        if let Some(d) = mc2_duel {
+            h.write_u8(0xE2);
+            d.hash(&mut h);
         }
         // Hashed only when populated: MC1 worlds keep their goldens
         // across this MC2-only layout addition.
@@ -3360,6 +3391,114 @@ impl World {
     pub(crate) fn set_duel_latch(&mut self, victim: u16, hold: u32) {
         if self.duel.is_none() {
             self.duel = Some((victim, 0, hold));
+        }
+    }
+
+    /// SPELLS row 14 (duel) tier params: `(subSpellIndex_2, life)` =
+    /// (enforcement RANGE in engine units, DRAIN MODE 0/1/2) —
+    /// shipped data 5170/0, 7720/1, 7720/2. Empty table (pre-import
+    /// bundle) → a 20-tile range, mode = tier (the data's shape).
+    fn mc2_duel_tier(&self, tier: usize) -> (i32, u8) {
+        self.g
+            .assets
+            .spells
+            .get(14)
+            .map_or((5120, tier.min(2) as u8), |row| {
+                let t = row.tiers[tier.min(2)];
+                (t.sub_spell, t.life.clamp(0, 2) as u8)
+            })
+    }
+
+    /// The MC2 (10,26) duel-tether grip pass — the victim-side
+    /// resolve (`sub_5EFA0` EF:60643-63) collapsed onto the tether
+    /// tick: while the 8-tick tether lives, a rival WIZARD avatar in
+    /// tier range is gripped — the caster's LOCK is (re)stamped
+    /// {opponent, dist(caster, victim) clamped [1024, 3072]
+    /// (EF:60649-56), tier}, +1 duel XP per grip (EF:60657), victim
+    /// recoil `word_0x36_54 = 100` (`sub_5EF70` EF:60598). APPROX
+    /// (audit note): the retail tether's own grip-write instruction
+    /// is not isolable in the symbolic decompile; the grip range
+    /// used is the tier's ENFORCEMENT range — a farther grip would
+    /// dissolve on the next enforcement pass anyway. Gripping only
+    /// WIZARDS is exact (a gripped creature takes the yank path,
+    /// never a duel — EF:26097/26369).
+    fn mc2_duel_tether_tick(&mut self, i: usize) {
+        let life = self.g.ent[i].act_life - 1;
+        self.g.ent[i].act_life = life;
+        if life < 0 {
+            self.g.ent[i].flags |= 0x400;
+            self.entities_dirty = true;
+            return;
+        }
+        let tier = self.g.ent[i].f71.min(2);
+        let (range, _) = self.mc2_duel_tier(tier as usize);
+        let (tx, ty) = (self.g.ent[i].x, self.g.ent[i].y);
+        let mut best: Option<(u16, u32)> = None;
+        for r in &self.mc2_rivals {
+            if r.eliminated || r.ent == 0 {
+                continue;
+            }
+            let a = r.ent as usize;
+            let Some(e) = self.g.ent.get(a) else { continue };
+            if e.class64 != 3 || e.flags & 0x400 != 0 || e.act_life < 0 {
+                continue;
+            }
+            let d = Gen::isqrt(Gen::dist2_sq(tx, ty, e.x, e.y) as u32);
+            if (d as i32) < range && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((r.ent, d));
+            }
+        }
+        if let Some((opp, _)) = best {
+            let (px, py, _) = self.human_pose;
+            let oe = &self.g.ent[opp as usize];
+            let dist = Gen::isqrt(Gen::dist2_sq(px, py, oe.x, oe.y) as u32) as i32;
+            self.mc2_duel = Some((opp, dist.clamp(1024, 3072), tier));
+            self.g
+                .mc2_cast_xp
+                .0
+                .push((crate::mc1::mobs::PLAYER_TARGET, 14, 1));
+            self.g.ent[opp as usize].f54 = 100;
+        }
+    }
+
+    /// The MC2 duel ENFORCEMENT (`sub_5DE30` EF:59889-59947), run
+    /// per tick while the lock holds: liveness = the duel
+    /// manifestation's charge (EF:59912-16), the opponent alive, and
+    /// dist < the tier's `subSpellIndex_2` range — else the duel
+    /// ends (`word_0x146_326 = 0`, EF:59947). While held: force-fly
+    /// the caster toward the opponent to hold the tether distance,
+    /// speed cap 3·minSpeed/2 (EF:59918-29; transport = the knock
+    /// channel, the MC1-pull precedent), and DRAIN per the tier's
+    /// `life` mode (EF:59930-43): >=1 mana (regen + 8), ==2 also
+    /// life (regen + 2, via [`World::mc2_duel_drain`]).
+    fn mc2_duel_enforce(&mut self, player: &PlayerPose) {
+        let Some((opp, hold, tier)) = self.mc2_duel else {
+            return;
+        };
+        let m = self.mc2_book.ent[14] as usize;
+        let live = m != 0 && self.g.ent[m].f26 > 0;
+        let (opp_dead, vx, vy) = match self.g.ent.get(opp as usize) {
+            None => (true, 0, 0),
+            Some(e) => (
+                e.class64 != 3 || e.flags & 0x400 != 0 || e.act_life < 0,
+                e.x,
+                e.y,
+            ),
+        };
+        let eliminated = self.mc2_rivals.iter().any(|r| r.ent == opp && r.eliminated);
+        let dist = Gen::isqrt(Gen::dist2_sq(player.x, player.y, vx, vy) as u32) as i32;
+        let (range, mode) = self.mc2_duel_tier(tier as usize);
+        if !live || opp_dead || eliminated || dist >= range {
+            self.mc2_duel = None;
+            return;
+        }
+        let speed = (player.speed.max(16)) as i32;
+        let cap = 3 * speed / 2;
+        let pull = ((dist - hold) / (1024 / cap).max(1)).clamp(0, cap);
+        let yaw = Gen::angle_between(player.x, player.y, vx, vy);
+        self.g.player_knock = (yaw, pull.clamp(0, 80) as i16);
+        if mode >= 1 {
+            self.mc2_duel_drain(opp, mode);
         }
     }
 
@@ -5744,9 +5883,15 @@ impl World {
     /// byte[0] re-mark (EF:55706) is presentation-side (token tint)
     /// and unmodeled; [`Gen::mc2_spell_tokens`] stays in sync as
     /// the grant mask.
-    fn mc2_spell_token_tick(&mut self, i: usize) {
+    fn mc2_spell_token_tick(&mut self, i: usize, player: PlayerPose) {
         let t = self.g.ent[i].tick70;
         let model = self.g.ent[i].model65;
+        // Action 78 — the shared class-15 slot past the 3M+2 states
+        // (26·3 = 78): the STOLEN jar's detach/homing arc.
+        if t == 78 {
+            self.mc2_stolen_jar_tick(i, player);
+            return;
+        }
         if t == 253 || t == model.wrapping_mul(3) {
             return;
         }
@@ -5816,6 +5961,75 @@ impl World {
             }
             self.mc2_adopt_manifestation(i, model as usize);
         }
+    }
+
+    /// `sub_692C0` (EF:55774-89) — the action-78 wrapper: run the
+    /// detach/homing arc; when it reports done, flip to the ordinary
+    /// ground-jar pickup state `3M+1` and drop the wraith ref.
+    /// Retail also stamps `byte[3] |= 2` (the "dropped by a steal"
+    /// marker) — write-only in the whole engine (its only consumer
+    /// is the pickup's clear), unmodeled.
+    fn mc2_stolen_jar_tick(&mut self, i: usize, player: PlayerPose) {
+        if self.mc2_stolen_arc(i, player) {
+            let model = self.g.ent[i].model65;
+            self.g.ent[i].tick70 = model.wrapping_mul(3).wrapping_add(1);
+            self.g.ent[i].f38 = 0;
+        }
+        self.entities_dirty = true;
+    }
+
+    /// `sub_59DC0` (EF:41199-252) — the stolen jar's flight, true =
+    /// done. Counter (`dword_0x10_16` → f26) 0..=5: DETACH — the jar
+    /// rides 384 units ahead of the PLAYER's aim, pitch sweeping off
+    /// it by 16/tick (`playerPitch − 16·n`). Counter ≥ 6: HOMING —
+    /// step from the jar's own position toward a point 384 ahead of
+    /// the WRAITH (f38) along its heading at pitch 0, at speed
+    /// `32·(n−5)`; once below `terrainAlt + 64`, snap to the terrain
+    /// and finish. Owner dead/gone at entry, or wraith dead
+    /// mid-flight → finish where it is.
+    fn mc2_stolen_arc(&mut self, i: usize, player: PlayerPose) -> bool {
+        if self.player.state != LifeState::Alive {
+            return true;
+        }
+        let n = self.g.ent[i].f26;
+        if n <= 5 {
+            let mut pos = (player.x, player.y, player.z);
+            Gen::polar_step(
+                &mut pos,
+                player.heading,
+                player.pitch.wrapping_sub(16 * n as u16),
+                384,
+            );
+            self.g.move_relink(i, pos.0, pos.1, pos.2);
+            self.g.ent[i].f26 = n + 1;
+            return false;
+        }
+        self.g.ent[i].f26 = n + 1;
+        let w = self.g.ent[i].f38 as usize;
+        if w == 0
+            || w >= self.g.ent.len()
+            || self.g.ent[w].act_life < 0
+            || self.g.ent[w].flags & 0x400 != 0
+        {
+            return true; // wraith dead → drop in place
+        }
+        let mut tgt = (self.g.ent[w].x, self.g.ent[w].y, self.g.ent[w].z);
+        Gen::polar_step(&mut tgt, self.g.ent[w].f30, 0, 384);
+        let jar = {
+            let e = &self.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let yaw = Gen::angle_between(jar.0, jar.1, tgt.0, tgt.1);
+        let pitch = Gen::mc2_radix_tan(jar, tgt);
+        let mut pos = jar;
+        Gen::polar_step(&mut pos, yaw, pitch, 32 * (n - 5));
+        let alt = self.g.ground_z(pos.0, pos.1) as i16;
+        if pos.2 >= alt + 64 {
+            self.g.move_relink(i, pos.0, pos.1, pos.2);
+            return false;
+        }
+        self.g.move_relink(i, pos.0, pos.1, alt);
+        true
     }
 
     /// `RemoveCastleStage_385C0` (remc2 EF:28065) — the MC2 building
@@ -6319,10 +6533,12 @@ impl World {
                     Gen::polar_step(&mut pos, s.yaw, 0, s.speed);
                     (s.x, s.y, s.z) = pos;
                     s.speed = (s.speed + 8).clamp(0, 200);
+                    // 2-D (EF:60482 — `EuclideanDistXYZ` never
+                    // reads z; 2026-07-18 distance audit).
                     let dx = (s.x.wrapping_sub(tx) as i16) as i64;
                     let dy = (s.y.wrapping_sub(ty) as i16) as i64;
-                    let dz = s.z as i64 - tz as i64;
-                    arrived = dx * dx + dy * dy + dz * dz < 0x180 * 0x180;
+                    let _ = tz;
+                    arrived = dx * dx + dy * dy < 0x180 * 0x180;
                 }
                 if arrived {
                     s.phase = 10;
@@ -7023,6 +7239,13 @@ impl World {
         }
     }
 
+    /// The MC2 duel lock (opponent slot, held distance, tier) — the
+    /// duel-machinery test oracle.
+    #[doc(hidden)]
+    pub fn debug_mc2_duel(&self) -> Option<(u16, i32, u8)> {
+        self.mc2_duel
+    }
+
     /// Deliver a raw melee-mailbox hit `(amount, source)` to an
     /// entity — the held-creature damage-path oracle (Session H6).
     #[doc(hidden)]
@@ -7142,7 +7365,14 @@ impl World {
     /// `yaw` — as an enemy shooter's launch would. Returns the slot,
     /// or 0 on a full pool.
     #[doc(hidden)]
-    pub fn debug_mc2_hostile_bolt(&mut self, x: u16, y: u16, z: i16, yaw: u16, owner: u16) -> usize {
+    pub fn debug_mc2_hostile_bolt(
+        &mut self,
+        x: u16,
+        y: u16,
+        z: i16,
+        yaw: u16,
+        owner: u16,
+    ) -> usize {
         let Some(i) = self.g.mc2_spawn_cast_proj(0, x, y, z) else {
             return 0;
         };
@@ -10789,6 +11019,212 @@ mod tests {
             "the 25-tile ball is pulled by the 40-tile magnet: {d0} -> {}",
             hdist(&w)
         );
+    }
+
+    /// A stage-HELD devil (phase-7 wait) still runs the jump cycle
+    /// (`sub_26470` EF:16938-61 — 1D5D0 legs then `sub_265A0` for
+    /// hold kinds 1-10): it SETTLES to the terrain instead of
+    /// floating at whatever altitude the held walk last lifted it
+    /// to (the 2026-07-18 "floating devil" report), and it keeps
+    /// hopping ambient without ever aggroing (the mc2:08
+    /// quiet-basin report).
+    #[test]
+    fn mc2_held_devil_settles_and_hops() {
+        let mut w = mc2_flat_world();
+        let (dx, dy) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(dx, dy) as i16;
+        // Spawn 800 units up — the float a high plateau leaves behind.
+        let d = w.g.mc2_spawn_m21(dx, dy, gz + 800).expect("devil");
+        {
+            let e = &mut w.g.ent[d];
+            e.tick70 = 175; // 8·21 + 7 — the phase-7 stage wait
+            e.site_z = 6; // a timer-gate hold kind (jump-eligible 1-10)
+        }
+        let pose = PlayerPose::from_tiles(102.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let (mut touched, mut hopped) = (false, false);
+        for _ in 0..200 {
+            w.tick(pose, PlayerCommand::default());
+            let (ex, ey, ez) = {
+                let e = &w.g.ent[d];
+                (e.x, e.y, e.z)
+            };
+            let g = w.g.ground_z(ex, ey) as i16;
+            if ez <= g {
+                touched = true;
+            }
+            if touched && ez > g + 100 {
+                hopped = true;
+            }
+            assert_eq!(w.g.ent[d].tick70, 175, "stays held — no aggro");
+        }
+        assert!(touched, "the held devil settled out of the float");
+        assert!(hopped, "the held devil keeps hopping while held");
+    }
+
+    /// A stage-HELD dragon (m0, phase-7 wait) still runs the
+    /// vertical bob (`sub_1F300`'s phase-7 wrapper calls `sub_1F040`
+    /// for hold kinds 1-10): the floor bounce (+150 below
+    /// terrain+256) launches the ballistic arc straight from a
+    /// ground-level spawn. Without it the held dragon hugged the
+    /// terrain and flew flat like a ground worm (the 2026-07-18
+    /// "crippled dragons" report, mc2:08).
+    #[test]
+    fn mc2_held_dragon_bobs_from_the_ground() {
+        let mut w = mc2_flat_world();
+        let (dx, dy) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(dx, dy) as i16;
+        let d = w.g.mc2_spawn_m0(dx, dy, gz).expect("dragon");
+        {
+            let e = &mut w.g.ent[d];
+            e.tick70 = 7; // 8·0 + 7 — the phase-7 stage wait
+            e.site_z = 6; // a timer-gate hold kind (bob-eligible 1-10)
+            e.f58 = 64;
+        }
+        let pose = PlayerPose::from_tiles(102.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let mut apex = 0i32;
+        for _ in 0..120 {
+            w.tick(pose, PlayerCommand::default());
+            let (ex, ey, ez) = {
+                let e = &w.g.ent[d];
+                (e.x, e.y, e.z)
+            };
+            let g = w.g.ground_z(ex, ey) as i16;
+            apex = apex.max(ez as i32 - g as i32);
+            assert_eq!(w.g.ent[d].tick70, 7, "stays held — no aggro");
+        }
+        assert!(
+            apex > 1000,
+            "the held dragon arcs high off the spawn ({apex})"
+        );
+    }
+
+    /// The m22 mana-worm CASTLE DEPOSIT chain (`sub_26AA0` EF:17313
+    /// → `sub_26BD0`): a designated worm banks to the owner's
+    /// castle, arms the 128-tick deposit inside 256 units, shrinks,
+    /// and dumps its mana capped at the castle's maximum. The
+    /// proximity gate is retail's `EuclideanDistXYZ_58490` — 2-D
+    /// DESPITE THE NAME (Maths:738-42 never reads z): the head
+    /// cruises at chain-ground +384, so the old 3-D translation
+    /// could never pass and the worm hovered at the flag forever
+    /// (player-reported 2026-07-18).
+    #[test]
+    fn mc2_worm_deposits_into_the_castle() {
+        let mut w = mc2_flat_world();
+        let (cx, cy) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(cx, cy) as i16;
+        let castle = w.g.new_event().expect("castle");
+        {
+            let e = &mut w.g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.f136 = 10_000; // maxMana
+            e.f140 = 0; // stored mana
+        }
+        w.g.link(castle, cx, cy, gz);
+        let worm = w.g.mc2_spawn_m22(cx, cy, gz, 6).expect("worm");
+        let mana = w.g.ent[worm].f140;
+        assert!(mana > 0, "the worm carries mana");
+        w.g.ent[worm].dest_x = PLAYER_TARGET; // designated at the human
+        w.g.ent[worm].tick70 = 178; // 0xB2 castle acquire
+        // Parked in awake range, away from the flag.
+        let pose = PlayerPose::from_tiles(104.5, 105.0 / 8.0, 104.5, 0.0, 0.0, 0.0);
+        let (mut armed, mut consumed) = (false, false);
+        for _ in 0..1000 {
+            w.tick(pose, PlayerCommand::default());
+            let e = &w.g.ent[worm];
+            if e.tick70 == 179 {
+                armed = true; // the 2-D gate passed → deposit state
+            }
+            if e.flags & 0x400 != 0 || e.class64 != 5 {
+                consumed = true;
+                break;
+            }
+        }
+        assert!(armed, "the worm armed the deposit at the flag");
+        assert!(consumed, "the head consumed itself after the dump");
+        assert_eq!(
+            w.g.ent[castle].f140, mana,
+            "the castle absorbed the worm's mana"
+        );
+    }
+
+    /// The m26 wraith SPELL-STEAL round trip (`sub_69300` EF:55792 +
+    /// `sub_59DC0` EF:41199 + the `sub_68FF0` hand-hint re-pickup):
+    /// the equipped jar is yanked (book unlearned, hand emptied,
+    /// hint = the robbed hand), detaches off the player, homes to
+    /// the wraith, drops to the ground-pickup state, and re-pickup
+    /// restores the SAME jar to the SAME hand with the 64-tick
+    /// re-steal lock re-armed. The lock also blocks a fresh steal
+    /// (retail checks it INSIDE the effect, after the %63 roll).
+    #[test]
+    fn mc2_wraith_spell_steal_round_trip() {
+        let mut w = mc2_flat_world();
+        // Learn spell 0 via the dev grant, bound to the RIGHT hand
+        // only (the grant's quick-slot law also takes the free LEFT
+        // — unbind it, or the steal exercises the both-hands edge
+        // where the left-hand hint wins).
+        w.set_dev_spells(true);
+        w.mc2_select_spell(0, 0, 1);
+        w.mc2_select_spell(26, 0, 0);
+        let jar = w.mc2_book.ent[0] as usize;
+        assert_ne!(jar, 0, "dev grant learned spell 0");
+        assert_eq!(w.mc2_book.right, 0, "bound to the right hand");
+        assert_eq!(w.mc2_book.left, -1, "left hand unbound");
+        let pose = PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let (wx, wy) = mc2_pos(104, 100);
+        let gz = w.g.ground_z(wx, wy) as i16;
+        let m26 = w.g.mc2_spawn_m26(wx, wy, gz).expect("wraith");
+
+        // The fresh adopt armed the 64-tick lock — a steal no-ops.
+        assert_eq!(w.g.ent[jar].f54, 64, "adopt armed the re-steal lock");
+        w.mc2_spell_steal(m26 as u16, 1);
+        assert_eq!(w.mc2_book.right, 0, "locked jar is not stolen");
+
+        // Lock expired → the steal lands, via the pool-side mail.
+        w.g.ent[jar].f54 = 0;
+        w.g.mc2_steal_mail.0.push((m26 as u16, 1));
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(w.mc2_book.right, -1, "right hand emptied");
+        assert_eq!(w.mc2_book.ent[0], 0, "spell unlearned while stolen");
+        assert_eq!(w.g.ent[jar].tick70, 78, "jar in the detach action");
+        assert_eq!(w.g.ent[jar].f36, 1, "hand hint = right");
+        assert_eq!(w.g.mc2_spell_tokens.0 & 1, 0, "grant mask cleared");
+
+        // Detach off the player, home to the wraith, drop.
+        let mut landed = false;
+        for _ in 0..48 {
+            w.tick(pose, PlayerCommand::default());
+            if w.g.ent[jar].tick70 == 1 {
+                landed = true;
+                break;
+            }
+        }
+        assert!(landed, "the jar dropped into the ground-pickup state");
+        assert_eq!(w.g.ent[jar].f38, 0, "wraith ref dropped on landing");
+
+        // Park ON the jar: re-pickup restores the SAME jar to the
+        // SAME hand and re-arms the lock.
+        let (jx, jy) = (w.g.ent[jar].x, w.g.ent[jar].y);
+        let jpose = PlayerPose::from_tiles(
+            jx as f32 / 256.0,
+            105.0 / 8.0,
+            jy as f32 / 256.0,
+            0.0,
+            0.0,
+            0.0,
+        );
+        for _ in 0..8 {
+            w.tick(jpose, PlayerCommand::default());
+            if w.mc2_book.ent[0] != 0 {
+                break;
+            }
+        }
+        assert_eq!(w.mc2_book.ent[0] as usize, jar, "re-learned the SAME jar");
+        assert_eq!(w.mc2_book.right, 0, "the hint re-equipped the RIGHT hand");
+        assert_eq!(w.mc2_book.left, -1, "the left hand untouched");
+        assert_eq!(w.g.ent[jar].f36, 0, "hint consumed");
+        assert_eq!(w.g.ent[jar].f54, 64, "re-steal lock re-armed");
     }
 
     /// The MC2 rival carpet carries `byte_0x38_56 = 29` (the wizard

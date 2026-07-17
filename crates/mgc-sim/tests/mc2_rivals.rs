@@ -1059,3 +1059,66 @@ fn mc2_stage0_typed_rows_register() {
         "level-038: the full 7-row board registered (stage0 type-1 row 6 kept)"
     );
 }
+
+/// The DUEL spell effect (2026-07-17, docs/spell-audit/duel.md;
+/// player report "duel does nothing" — the effect body was a misfit
+/// stub). Cast next to a rival: the (10,26) tether grips the rival
+/// wizard → the LOCK forms {opponent, held dist ∈ [1024,3072],
+/// tier}, +duel XP; tier 1's drain mode 1 bleeds the rival's mana
+/// (regen + 8 per tick — net-negative against regen); flying out of
+/// the tier's range (7720 ≈ 30 tiles) breaks the lock (EF:59916).
+#[test]
+fn mc2_duel_locks_drains_and_breaks() {
+    let Some((mut w, _pkg)) = load("level-004") else {
+        eprintln!("skipping: no baked mc2 gamedata");
+        return;
+    };
+    w.set_dev_spells(true);
+    let idle = PlayerCommand::default();
+    let views = w.rival_views();
+    assert!(!views.is_empty(), "level-004 spawns rivals");
+    let (rx, rz) = (views[0].x, views[0].z);
+    // Park 3 tiles from the rival (inside every tier range).
+    let near = PlayerPose::from_tiles(rx + 3.0, 20.0, rz, 0.0, 0.0, 0.0);
+    // Select duel tier 1 (drain mode 1), then fire.
+    w.tick(
+        near,
+        PlayerCommand {
+            mc2_select: Some((14, 1, 0)),
+            ..Default::default()
+        },
+    );
+    w.tick(
+        near,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    // The 8-tick tether grips within its life.
+    for _ in 0..6 {
+        w.tick(near, idle);
+    }
+    let lock = w.debug_mc2_duel();
+    assert!(lock.is_some(), "the tether gripped the rival wizard");
+    let (_, hold, tier) = lock.unwrap();
+    assert_eq!(tier, 1);
+    assert!((1024..=3072).contains(&hold), "held dist clamped: {hold}");
+    // Tier-1 drain: the rival's mana goes NET NEGATIVE against its
+    // own regen while the lock holds.
+    let m0 = w.rival_views()[0].mana;
+    for _ in 0..30 {
+        w.tick(near, idle);
+    }
+    let m1 = w.rival_views()[0].mana;
+    assert!(m1 < m0, "duel drains through the rival regen: {m0} -> {m1}");
+    // Fly far beyond the tier range → the lock breaks.
+    let far = PlayerPose::from_tiles(rx + 60.0, 20.0, rz, 0.0, 0.0, 0.0);
+    for _ in 0..3 {
+        w.tick(far, idle);
+    }
+    assert!(
+        w.debug_mc2_duel().is_none(),
+        "out of range ends the duel (EF:59947)"
+    );
+}

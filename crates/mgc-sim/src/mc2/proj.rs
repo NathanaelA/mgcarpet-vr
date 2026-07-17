@@ -1134,8 +1134,14 @@ impl Gen {
         if pitch_err > pitch_cone {
             return None;
         }
-        let dz = (tz as i64) - (probe.z as i64);
-        let dist = Self::isqrt((d2 + dz * dz).min(u32::MAX as i64) as u32) as i64;
+        // 2-D: retail's `v8 = EuclideanDistXYZ_58490` (EF:55125 /
+        // castle twin EF:55181) never reads z — both the 5120 gate
+        // and the score's projection terms ride the HORIZONTAL
+        // distance; the 3-D translation double-weighted altitude and
+        // rejected high/low targets early (2026-07-18 distance
+        // audit). The candidate prefilters stay genuinely 3-D
+        // (sub_583F0, below).
+        let dist = dh as i64;
         if dist > 5120 {
             return None;
         }

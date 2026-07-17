@@ -426,13 +426,43 @@ fn mc2_cave_behaviors_and_goldens() {
     // terrain (and everything downstream, checkpoint A on) moves.
     // Player-reported as the mc2:23 spawn-embedded-in-rock bug
     // (2026-07-17; that level's start chamber authors (58,42,9)).
+    // Re-pinned 2026-07-17 (DELIBERATE, BEHAVIORAL) — the m21 devil
+    // frog-jump port (checkpoint C only): the verbatim ctor zeroes
+    // the jump impulse `word_0x2C_44` (f44); the old spawn misfiled
+    // retail's `subSpellIndex_0x2A_42 = 400` into f44 (the bolt
+    // thunk hard-sets 500, so the 400 was never read — pure spawn
+    // state). This level's m21s materialize in C's disposition storm
+    // STAGE-HELD, so the ctor field is their ONLY hash contribution —
+    // verified by bisect: f44 400→0 alone reproduces the move; the
+    // whole jump-cycle rewrite (sub_265A0 verbatim, replacing the
+    // hover APPROX) and the m17 verbatim dive-step move NOTHING here
+    // (held creatures never run their model tick; no manticore dives
+    // in this window). A/B/load and every other fixture unmoved.
+    // Re-pinned 2026-07-18 (DELIBERATE, BEHAVIORAL) — held devils
+    // RUN the jump cycle (checkpoint C again): retail's m21 phase-7
+    // wrapper (`sub_26470` EF:16938-61) calls `sub_265A0` after the
+    // 1D5D0 legs for hold kinds 1-10, so this level's storm-
+    // materialized held m21s now hop/settle/cackle (entity-LCG
+    // draws + z motion + speed writes join the hash). Fixes the
+    // player-reported floating devil (the held walk only ever
+    // lifted z — nothing settled it back down) and the silent
+    // mc2:08 basin. Unit-pinned by mc2_held_devil_settles_and_hops
+    // (red-proven against the disabled call).
+    // Re-pinned 2026-07-18 (DELIBERATE, BEHAVIORAL) — held DRAGONS
+    // bob (checkpoint C again, the same held-seam family): retail's
+    // m0 phase-7 wrapper (`sub_1F300`, m0-m3-gaps trace §2) runs the
+    // vertical bob `sub_1F040` for hold kinds 1-10, so this level's
+    // held m0s now arc off the terrain (f26 velocity + z motion join
+    // the hash). Fixes the player-reported flat-flying "crippled
+    // dragons" (mc2:08). Unit-pinned by
+    // mc2_held_dragon_bobs_from_the_ground (red-proven).
     assert_eq!(
         got,
         vec![
             0xb9ef2aab49926cbcu64,
             0x7a89b38d106e4b85,
             0xda67b7efcb54c962,
-            0x853a6185a18997ff,
+            0x638e8fb0b8dc2512,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -451,11 +481,18 @@ fn mc2_cave_behaviors_and_goldens() {
     // (52,95) opens to the authored sizes, which moves the drawable
     // terrain, the parked open_spot AND the creature trajectories —
     // the projection move IS the intended observable change.
+    // Re-pinned 2026-07-18 with the held-devil jump cycle (see the
+    // hash ledger above): held m21s now visibly hop and settle —
+    // checkpoint D's projection moves WITH the state hash, proving
+    // the change is behavioral (z motion + sprite phases), exactly
+    // what the fix intends.
+    // Re-pinned 2026-07-18 again with the held-dragon bob (same
+    // family, same checkpoint): held m0s visibly arc.
     const OBSERVABLE: [u64; 4] = [
         0xb0299049353c6c29,
         0x2d60a54a359da557,
         0x1ada7615a38d2848,
-        0xa43a421e0c5f2c76,
+        0xc05c627a6f66b3ba,
     ];
     assert_eq!(
         obs, OBSERVABLE,

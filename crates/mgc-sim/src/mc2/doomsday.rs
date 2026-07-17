@@ -448,9 +448,9 @@ impl World {
     /// Rebound would reflect the pyramid's shots, so it switches to
     /// the un-reboundable beam.
     fn mc2_pyramid_devour(&mut self, i: usize) -> bool {
-        let (ex, ey, ez, own) = {
+        let (ex, ey, own) = {
             let e = &self.g.ent[i];
-            (e.x, e.y, e.z, e.id24)
+            (e.x, e.y, e.id24)
         };
         let mut devoured = false;
         for j in 1..self.g.ent.len() {
@@ -462,10 +462,14 @@ impl World {
                 (e.model65, e.x, e.y, e.z)
             };
             let eat = if DEVOUR_SUBTYPES.contains(&sub) {
+                // 2-D: retail's `EuclideanDistXYZ_58490` (EF:13567)
+                // never reads z — the absorb bubble is a CYLINDER,
+                // not a sphere; the 3-D translation leaked
+                // vertically-offset projectiles through (2026-07-18
+                // distance audit).
                 let dx = (x.wrapping_sub(ex) as i16) as i64;
                 let dy = (y.wrapping_sub(ey) as i16) as i64;
-                let dz = (z as i64) - (ez as i64);
-                dx * dx + dy * dy + dz * dz <= 0xC00 * 0xC00
+                dx * dx + dy * dy <= 0xC00 * 0xC00
             } else if sub == 10 {
                 // The castle-build projectile: bbox overlap between
                 // the pyramid's (5120,5120) box and the player's

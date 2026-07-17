@@ -618,6 +618,30 @@ impl World {
                 }
             },
         }
+        // Retail's per-model phase-7 wrappers run the model's AMBIENT
+        // PHYSICS after the 1D5D0 legs — the held seam mirrors every
+        // one with a RECOVERED retail body:
+        // - m21 (`sub_26470` EF:16938-61, kinds 1-10; 13/14/16 zero
+        //   the rest base — outside the port's held set): the JUMP
+        //   CYCLE. Without it a held devil kept the last high
+        //   ground's altitude forever (the walker's alt law only
+        //   ever lifts — the 2026-07-18 "floating devil" report) and
+        //   the mc2:08 basin sat silent instead of hopping/cackling.
+        // - m0 (`sub_1F300`, m0-m3-gaps trace §2: kinds 1-0xA +
+        //   0xD/0xE/0x10 tether+bob, 0x11 bob-only — the tether
+        //   stays authentically dormant): the VERTICAL BOB. Without
+        //   it a held dragon hugged the terrain and flew flat like a
+        //   ground worm, bouncing only after release (the 2026-07-18
+        //   "crippled dragons" report) — retail's floor bounce
+        //   (+150 below ground+256) launches the arc from the spawn.
+        // Other models' +7 tails stay skipped (APPROX, module doc).
+        if matches!(kind, 1..=10) && self.g.ent[i].tick70 & 7 == 7 {
+            match self.g.ent[i].model65 {
+                21 => self.g.m21_jump(i),
+                0 => self.g.m0_bob(i),
+                _ => {}
+            }
+        }
         // The per-model wrapper's SPEED TAIL (the goat's
         // `AddGoat05_01_1F5B0` :11452 shape, shared by the townie
         // wrapper): the flee state runs at minSpeed — applied the

@@ -29,16 +29,11 @@
 //!   m9, m16, m17, m18, m19, m20 nominal, m21, m23, m25, m26, m28 —
 //!   the dispatch would crash in remc2) holds inert; retail can
 //!   never reach them (their rows' flee bit is clear).
-//! - m17's dive z-curve (EF:15730-44, "192>>n up then down, clamp
-//!   −192") is reconstructed from the trace's shape description.
 //! - m18's `sub_253B0` duration table is partially pinned (the trace
 //!   lists the formulas, not the (state,sub)→formula map).
-//! - m21's hover physics (`sub_265A0`) is ported to the trace's
-//!   summary (rise by word_0x2C_44 decaying 42/tick, terrain clamp,
-//!   the case-9 sound roll) — not line-verbatim.
-//! - m26's %63 spell-hijack rolls consume their RNG draw but the
-//!   effect needs the class-15 spell column (pending); the human
-//!   drain uses +14 flat (the human's manaRegen isn't modeled yet).
+//! - m26's human drain uses +14 flat (the human's manaRegen isn't
+//!   modeled yet). The %63 spell-hijack is LIVE (2026-07-17): the
+//!   roll mails [`crate::mc1::world::World::mc2_spell_steal`].
 //! - m12's site-jitter/footprint-clear scans (EF:13991-14093) are
 //!   shaped, not verbatim (the overlap helpers are untraced).
 
@@ -1566,14 +1561,15 @@ impl Gen {
         }
     }
 
-    /// The dive z-curve (:15730-44): climbs, then plunges, clamped to
-    /// −192 (module-doc APPROX — reconstructed shape).
+    /// The dive z-curve (:15726-44, VERBATIM): 5 rising ticks
+    /// (+192,+96,+48,+24,+12) then a sharp fall (−24,−48,−96,−192,
+    /// held at −192).
     fn m17_dive_step(n: i16) -> i16 {
-        let k = n.clamp(0, 15);
-        if k < 8 {
-            192 >> k
+        if n <= 4 {
+            192 >> n
         } else {
-            (-(192i32 >> (15 - k)) as i16).max(-192)
+            let s = (4 - (n - 4)).max(0);
+            (-(192 >> s)).max(-192)
         }
     }
 
@@ -1806,9 +1802,13 @@ impl Gen {
                     return;
                 }
                 if self.ent[i].f71 != 0 {
-                    if let Some((tx, ty, tz)) = self.mc2_target(self.ent[i].f146, ctx) {
+                    if let Some((tx, ty, _tz)) = self.mc2_target(self.ent[i].f146, ctx) {
                         let e = &self.ent[i];
-                        let d = Self::mc2_dist3((e.x, e.y, e.z), (tx, ty, tz));
+                        // 2-D: retail's `EuclideanDistXYZ_58490`
+                        // (EF:15872) never reads z — the 3-D
+                        // translation dropped elevated targets early
+                        // (2026-07-18 distance audit).
+                        let d = crate::mc2::morph::dist2d(e.x, e.y, tx as i32, ty as i32) as u32;
                         if d < BEHAVIOR[e.row156 as usize].v_28 as u32 {
                             self.m18_face(i, ctx, 22); // (4<<11)/360 (EF:15875, E4)
                             let d2 = self.mc2_rand(i);
@@ -2292,9 +2292,10 @@ impl Gen {
     }
 
     // =========================================================================
-    // MODEL 21 — the floating caster (ctor sub_4C8F0 EF:34340,
-    // states 0xA8-AF; hover-bob physics + (9,0) bolts; the third
-    // most-authored creature)
+    // MODEL 21 — the DEVIL, a frog-jumping caster (ctor sub_4C8F0
+    // EF:34340, states 0xA8-AF; the sub_265A0 jump cycle + (9,0)
+    // bolts; the third most-authored creature; trace
+    // docs/traces/mc2-m21-jump-m26-steal.md §A)
     // =========================================================================
 
     pub(crate) fn mc2_spawn_m21(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
@@ -2316,13 +2317,17 @@ impl Gen {
         self.mc2_ctor_facing(i);
         {
             let e = &mut self.ent[i];
-            e.f44 = 400; // subSpell (the bolt thunk hard-sets 500)
+            // Retail's `subSpellIndex_0x2A_42 = 400` has no port home
+            // (the bolt thunk hard-sets 500); f44 is the jump impulse
+            // `word_0x2C_44`, ctor'd 0 (:34367).
+            e.f44 = 0;
             e.f56 = 1;
             e.row156 = 96;
             e.f58 = 64;
             e.f66 = 3;
-            e.f71 = 0;
-            e.f68 = 64; // byte_0x43_67 — the idle "can-turn" counter
+            e.f71 = 0; // byte_0x46_70 — jump state: landed rest
+            e.f26 = 0; // byte_0x44_68 — rest countdown (:34368)
+            e.f68 = 64; // byte_0x43_67 — rest base (sub_268F0(1) post-ctor)
         }
         self.ent[i].f63 = self.mc2_ord(21);
         self.link(i, x, y, z);
@@ -2332,7 +2337,7 @@ impl Gen {
         Some(i)
     }
 
-    /// `sub_26500` (:16970): sprite by hover sub-state.
+    /// `sub_26500` (:16970): sprite by jump-cycle state.
     fn m21_pose(&mut self, i: usize) {
         let sprite = match self.ent[i].f71 {
             0 => 311,
@@ -2362,60 +2367,153 @@ impl Gen {
         self.ent[i].tick70 = M21_BASE + mode;
     }
 
-    /// `sub_265A0` (:17010) — the hover-bob physics (module-doc
-    /// APPROX: ported to the trace's summary): climb by the decaying
-    /// f44 charge, sink at 42, re-roll the altitude on the row's
-    /// case-4, occasional croak (sound 42), water splash sub-state.
-    fn m21_hover(&mut self, i: usize) {
+    /// `sub_26930` (:17234-44): yaw may commit only at the landing
+    /// tick (state 9), or — for a wading devil — on its aligned
+    /// ticks (`!(f63 & 7)`). Direction commits at landing.
+    fn m21_can_turn(&self, i: usize) -> bool {
+        let s = self.ent[i].f71;
+        s == 9 || (s == 10 && self.ent[i].f63 & 7 == 0)
+    }
+
+    /// `sub_265A0` (:17010-151) — the frog-jump cycle, VERBATIM (the
+    /// old hover-bob APPROX is retired; trace §A + the 2026-07-17
+    /// re-extraction). Field homes: f71 = `byte_0x46_70` jump state,
+    /// f44 = `word_0x2C_44` SIGNED impulse, f26 = `byte_0x44_68`
+    /// rest countdown, f68 = `byte_0x43_67` rest base (64 idle / 0
+    /// attack via [`Self::m21_mode`]). All draws on the ENTITY LCG;
+    /// state 9 draws the cackle roll always, the rest roll only when
+    /// the base is nonzero (the div-by-zero special case — attack
+    /// rests 1 tick on a single draw). The XY veto (`v13` clear →
+    /// retail `byte[1] |= 8`) is F_STOP, consumed by the NEXT tick's
+    /// walker — both handlers call the walker first; the one-tick
+    /// lag is authentic. Also the stage-HELD devil's ambient physics
+    /// (`sub_26470` EF:16938-61 runs this after the 1D5D0 legs —
+    /// the stagevars held seam).
+    pub(crate) fn m21_jump(&mut self, i: usize) {
+        let mut v12 = false; // settle: z -= 42 this tick
+        let mut v13 = true; // moved: XY allowed this tick
+        match self.ent[i].f71 {
+            // Landed rest: countdown, then crouch.
+            0 | 1 => {
+                let n = self.ent[i].f26;
+                if n != 0 {
+                    self.ent[i].f26 = n - 1;
+                } else {
+                    self.ent[i].f71 = 2;
+                }
+                v12 = true;
+                v13 = false;
+            }
+            2 => {
+                v12 = true;
+                self.ent[i].f71 = 3;
+                v13 = false;
+            }
+            // Launch: airborne — XY moves, z rides the (spent)
+            // impulse through the integrator, floored at terrain.
+            3 => self.ent[i].f71 = 4,
+            // Impulse seed: rand%100 + 140.
+            4 => {
+                let d = self.mc2_rand(i);
+                self.ent[i].f44 = (d % 0x64 + 140) as u16;
+                self.ent[i].f71 = 5;
+            }
+            // Rise → apex (the integrator decays the impulse).
+            5 => {
+                if (self.ent[i].f44 as i16) < 0 {
+                    self.ent[i].f71 = 6;
+                }
+            }
+            // Fall until 230 above the terrain.
+            6 => {
+                let e = &self.ent[i];
+                let ground = self.ground_z(e.x, e.y) as i16;
+                if (self.ent[i].z as i32) - (ground as i32) < 230 {
+                    self.ent[i].f71 = 7;
+                }
+            }
+            // Pre-land: STILL FALLING (v12 stays 0 — the re-extract's
+            // correction to the trace table), XY frozen.
+            7 => {
+                self.ent[i].f71 = 8;
+                v13 = false;
+            }
+            8 => {
+                v12 = true;
+                self.ent[i].f71 = 9;
+                v13 = false;
+            }
+            // Landing: cackle roll (always), rest roll (base != 0),
+            // land state by rest parity (even → 1, odd → 0).
+            9 => {
+                let d = self.mc2_rand(i);
+                if d % 0xB == 0 {
+                    self.snd(42, i);
+                }
+                let base = self.ent[i].f68;
+                if base != 0 {
+                    let d = self.mc2_rand(i);
+                    let r = (d % base as u32) as i16;
+                    self.ent[i].f26 = r;
+                    self.ent[i].f71 = (r & 1 == 0) as u8;
+                } else {
+                    self.ent[i].f26 = 1;
+                    self.ent[i].f71 = 0;
+                }
+                v12 = true;
+                v13 = false;
+            }
+            // 0xA WATER WADE: settle z, XY keeps walking.
+            _ => v12 = true,
+        }
+        // Shared tail (:17098-151): integrator → floor clamp → cave
+        // ceiling clamp → water enter/exit → speed → sprite → veto.
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let ground = self.ground_z(x, y) as i16;
-        let on_water = self.cap_bit(x, y) == 1;
-        if on_water && self.ent[i].f71 != 10 {
-            self.ent[i].f71 = 10;
-            let (x, y, z) = {
-                let e = &self.ent[i];
-                (e.x, e.y, e.z)
-            };
-            self.mc2_spawn_splash(x, y, z);
-        }
-        if self.ent[i].f44 > 42 {
-            self.ent[i].z = self.ent[i].z.wrapping_add(42);
-            self.ent[i].f44 -= 42;
-        } else if self.ent[i].z > ground + 140 {
-            self.ent[i].z -= 42;
+        if v12 {
+            self.ent[i].z = self.ent[i].z.wrapping_sub(42);
         } else {
-            let d = self.mc2_rand(i);
-            self.ent[i].f44 = (d % 0x64 + 140) as u16; // case 4 re-roll
-            if self.ent[i].f71 == 10 && !on_water {
-                self.ent[i].f71 = 0;
-            }
+            let imp = self.ent[i].f44 as i16;
+            self.ent[i].z = self.ent[i].z.wrapping_add(imp);
+            self.ent[i].f44 = imp.wrapping_sub(42) as u16;
         }
         if self.ent[i].z < ground {
             self.ent[i].z = ground;
         }
-        // Cave ceiling clamp + charge reset (EF:17111-20).
         if self.is_cave() {
-            let (x, y) = (self.ent[i].x, self.ent[i].y);
+            // Ceiling − the params fov (EF:17111-20); impulse zeroed.
             let c = (self.ceiling_z(x, y) as i16 as i32 - self.ent[i].f84 as i32) as i16;
             if self.ent[i].z > c {
                 self.ent[i].f44 = 0;
                 self.ent[i].z = c;
             }
         }
-        if self.ent[i].f63 & 0x1F == 0 {
-            let d = self.mc2_rand(i);
-            if d % 0xB == 0 {
-                self.snd(42, i);
+        let attack = self.ent[i].tick70 == M21_BASE + 2;
+        let speed = if self.cap_bit(x, y) == 1 {
+            if self.ent[i].f71 == 10 {
+                if self.ent[i].z > ground {
+                    self.ent[i].f71 = 0; // lifted off the surface
+                }
+            } else if self.ent[i].z == ground {
+                // Grounded on a water tile → wade + (10,5) splash
+                // (retail spawns it at the walker's predicted axis —
+                // the committed position here, one step apart at most).
+                self.ent[i].f71 = 10;
+                let z = self.ent[i].z;
+                self.mc2_spawn_splash(x, y, z);
             }
-        }
-        self.ent[i].f126 = if on_water {
-            40
-        } else if self.ent[i].tick70 == M21_BASE + 2 {
-            66
+            if attack { 66 } else { 40 }
         } else {
-            96
+            if self.ent[i].f71 == 10 {
+                self.ent[i].f71 = 0;
+            }
+            if attack { 96 } else { 60 }
         };
+        self.ent[i].f126 = speed;
         self.m21_pose(i);
+        if !v13 {
+            self.ent[i].flags |= super::mobs::F_STOP;
+        }
     }
 
     pub(crate) fn m21_tick(&mut self, i: usize, ctx: &MobCtx) {
@@ -2431,8 +2529,11 @@ impl Gen {
                     2 => self.ent[i].tick70 = M21_BASE + 4,
                     _ => {
                         self.mc2_move_core(i);
-                        self.m21_hover(i);
-                        if self.ent[i].f68 != 0 {
+                        self.m21_jump(i);
+                        // Wander (:16781-91): both draws gated on the
+                        // can-turn primitive — heading commits only
+                        // at landing (or aligned wade ticks).
+                        if self.m21_can_turn(i) {
                             self.mc2_wander_turn(i);
                             self.ent[i].f30 = self.ent[i].f34;
                         }
@@ -2459,11 +2560,23 @@ impl Gen {
                 let slot = self.ent[i].f146;
                 let Some((tx, ty, _)) = self.mc2_target(slot, ctx) else {
                     self.mc2_move_core(i);
-                    self.m21_hover(i);
+                    self.m21_jump(i);
                     self.m21_mode(i, 1);
                     return;
                 };
-                self.mc2_aim_avoid(i, tx, ty);
+                // Target facing (:16869-85): the OUTER gate is the
+                // can-turn primitive; the packmate override runs on
+                // the inner 1-in-4 partition. f34 kept in lockstep
+                // with the snapped f30 so the walker's commit turn
+                // doesn't fight the facing between landings.
+                if self.m21_can_turn(i) {
+                    let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                    self.ent[i].f34 = Self::angle_between(ex, ey, tx, ty);
+                    if self.ent[i].f63 & 3 == 0 {
+                        self.mc2_avoid_packmate(i);
+                    }
+                    self.ent[i].f30 = self.ent[i].f34;
+                }
                 let mut out_of_range = false;
                 if self.ent[i].f63 & 0x1F == 0 {
                     let e = &self.ent[i];
@@ -2476,7 +2589,7 @@ impl Gen {
                     }
                 }
                 self.mc2_move_core(i);
-                self.m21_hover(i);
+                self.m21_jump(i);
                 if out_of_range {
                     self.m21_mode(i, 1);
                 }
@@ -2486,8 +2599,8 @@ impl Gen {
             6 => {} // sub_26420 MISSING from the decompile — unreachable
             _ => {
                 // +7 (:16925): 1D5D0 is a no-op for our StageVar2==0
-                // spawns; hover keeps the float alive.
-                self.m21_hover(i);
+                // spawns; the jump cycle keeps the devil alive.
+                self.m21_jump(i);
             }
         }
     }
@@ -2628,7 +2741,14 @@ impl Gen {
                                 ((e.x, e.y, e.z), (s.x, s.y, s.z))
                             };
                             self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
-                            if Self::mc2_dist3(sp, tp) < 768 {
+                            // 2-D (EF:18144 — `EuclideanDistXYZ`
+                            // never reads z): the leviathan flies
+                            // far above its node, so the 3-D read
+                            // stalled the descend transition
+                            // (2026-07-18 distance audit).
+                            if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32)
+                                < 768
+                            {
                                 self.m23_mode(i, M23_BASE + 1, 0, 500);
                             }
                         } else {
@@ -2768,7 +2888,11 @@ impl Gen {
                                 let s = &self.ent[t];
                                 ((e.x, e.y, e.z), (s.x, s.y, s.z))
                             };
-                            if Self::mc2_dist3(sp, tp) <= 3584 {
+                            // 2-D (EF:18250 — `EuclideanDistXYZ`
+                            // never reads z; 2026-07-18 audit).
+                            if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32)
+                                <= 3584
+                            {
                                 self.ent[i].f146 = n;
                                 self.m23_mode(i, M23_BASE + 1, 0, 500);
                             } else {
@@ -2967,7 +3091,7 @@ impl Gen {
 
     /// The castle of a wizard slot (class 3 model 2 keyed on id24;
     /// the human's is id24 == PLAYER_TARGET).
-    fn mc2_castle_of(&self, wiz: u16) -> Option<usize> {
+    pub(crate) fn mc2_castle_of(&self, wiz: u16) -> Option<usize> {
         let want = if wiz == PLAYER_TARGET {
             PLAYER_TARGET
         } else if (wiz as usize) < self.ent.len() {
@@ -3366,13 +3490,22 @@ impl Gen {
                             // old exits here were the inverted-leech
                             // bug (E1).
                             if !(v10 >= 2048 || !target_is_avatar) {
-                                // The %63 spell-hijack roll — draw
-                                // consumed (RNG parity); the
-                                // discharge needs the class-15
-                                // column (module-doc APPROX). No
-                                // roll value changes state.
+                                // The %63 spell-hijack roll
+                                // (EF:19346-47, ONE global-LCG draw):
+                                // 4 = steal the RIGHT hand, 5 = the
+                                // LEFT, all else nothing. The
+                                // empty-hand/slot-0/re-steal-lock
+                                // aborts run AFTER the draw
+                                // (world-side, sub_69300) — the roll
+                                // is spent either way. Only the
+                                // human's book exists port-side, so
+                                // the mail is PLAYER_TARGET-gated
+                                // (retail model-0 targets only).
                                 self.rand = self.rand.wrapping_mul(9377).wrapping_add(9439);
-                                let _roll = self.rand % 63;
+                                let roll = self.rand % 63;
+                                if slot == PLAYER_TARGET && (roll == 4 || roll == 5) {
+                                    self.mc2_steal_mail.0.push((i as u16, (roll - 3) as u8));
+                                }
                             }
                         } else {
                             self.ent[i].tick70 = M26_BASE + 1;

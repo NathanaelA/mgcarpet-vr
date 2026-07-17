@@ -1049,9 +1049,13 @@ impl Gen {
             };
             let yaw = Self::angle_between(nx, ny, px, py);
             self.ent[n].f30 = yaw;
+            // 2-D: retail's `EuclideanDistXYZ_58490` (EF:24213)
+            // never reads z — with the permanent per-node z offset
+            // the 3-D read always overshot the gap and bunched the
+            // tail (2026-07-18 distance audit).
             let dh2 = Self::dist2_sq(nx, ny, px, py);
-            let dz = (nz as i32 - pz as i32).unsigned_abs();
-            let d = Self::isqrt((dh2 as u32).wrapping_add(dz * dz)) as i32;
+            let _ = pz;
+            let d = Self::isqrt(dh2 as u32) as i32;
             let gap = 72 - 4 * (12 - self.ent[n].f44 as i32);
             let mut pos = (nx, ny, nz);
             if d > gap {

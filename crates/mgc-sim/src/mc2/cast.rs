@@ -736,15 +736,83 @@ impl World {
             e.f44 = 0;
         }
         self.mc2_book.ent[spell] = m as u16;
-        // Quick-slot: left if free (or both taken), else right
-        // (EF:55743-49 — the v12 law).
-        if self.mc2_book.left == -1 || self.mc2_book.right != -1 {
+        // The stolen-jar hand hint (`word_0x4A_74` → f36, sub_68FF0
+        // EF:55728-40): 1 = re-equip the RIGHT hand, 2 = the LEFT —
+        // the hand the wraith yanked it from; cleared after use.
+        // Without a hint (fresh jars, dev grants) the quick-slot v12
+        // law applies: left if free (or both taken), else right
+        // (EF:55735-49).
+        let hint = self.g.ent[m].f36;
+        self.g.ent[m].f36 = 0;
+        if hint == 2 {
+            self.mc2_book.left = spell as i8;
+        } else if hint == 1 {
+            self.mc2_book.right = spell as i8;
+        } else if self.mc2_book.left == -1 || self.mc2_book.right != -1 {
             self.mc2_book.left = spell as i8;
         } else {
             self.mc2_book.right = spell as i8;
         }
         self.mc2_relevel(spell, false, false);
         self.mc2_set_spell(m, self.mc2_book.sel[spell]);
+    }
+
+    /// `sub_69300` (EF:55792-826) — the m26 wraith SPELL-STEAL: yank
+    /// the equipped jar out of the given hand (1 = right, 2 = left,
+    /// the roll's 4/5 in [`Gen::m26_tick`]). The empty-hand and
+    /// slot-0 aborts (EF:19354-58/19366-70) and the `word_0x36_54`
+    /// re-steal lock (EF:55800) all run AFTER the %63 draw — a
+    /// locked or empty-handed roll is simply spent. Jar-entity field
+    /// homes: f38 = the wraith (`word_0x26_38`), f26 = the arc
+    /// counter (`dword_0x10_16`), f36 = the hand hint
+    /// (`word_0x4A_74`), tick70 = 78 (the shared class-15 detach
+    /// action). The per-spell tier (`array_0x437` → sel) is NOT
+    /// touched — XP survives the theft. Retail's `byte[0] &= ~1`
+    /// in-hand bit is write-only in the port (its lone retail reader
+    /// is the presentation-side owned-jar tint, unmodeled).
+    pub(crate) fn mc2_spell_steal(&mut self, wraith: u16, hand: u8) {
+        let spell = if hand == 1 {
+            self.mc2_book.right
+        } else {
+            self.mc2_book.left
+        };
+        if spell < 0 {
+            return;
+        }
+        let s = spell as usize;
+        let m = self.mc2_book.ent[s] as usize;
+        if m == 0 {
+            return;
+        }
+        if self.g.ent[m].f54 != 0 {
+            return; // the 64-tick re-steal lock
+        }
+        {
+            let e = &mut self.g.ent[m];
+            e.f38 = wraith;
+            e.tick70 = 78;
+            e.f26 = 0;
+        }
+        // Snap the jar onto the player (CopyEntityPosition, EF:55810).
+        let (px, py, pz) = self.human_pose;
+        self.g.move_relink(m, px, py, pz);
+        // Unlearn (`SpellEnabled[model] = 0`, EF:55811) — the pane
+        // greys out and the ground jar becomes collectible again.
+        self.mc2_book.ent[s] = 0;
+        self.g.mc2_spell_tokens.0 &= !(1 << s);
+        // Unequip every hand holding the model; the hint remembers
+        // the LAST cleared hand (left wins on the both-hands edge,
+        // EF:55814-24 — independent ifs, verbatim).
+        self.g.ent[m].f36 = 0;
+        if self.mc2_book.right == spell {
+            self.mc2_book.right = -1;
+            self.g.ent[m].f36 = 1;
+        }
+        if self.mc2_book.left == spell {
+            self.mc2_book.left = -1;
+            self.g.ent[m].f36 = 2;
+        }
+        self.entities_dirty = true;
     }
 
     // ---- the cast gate ----------------------------------------------------
@@ -960,6 +1028,21 @@ impl World {
                 if !first {
                     self.suppress_regen();
                 }
+                // The duel no-grip fizzle (`sub_6B610` abort arm,
+                // EF:57280): 28 ticks into the window with NO duel
+                // lock formed → collapse the charge to 1 (expires
+                // next tick). With a lock the window runs full.
+                if spell == 14
+                    && self.mc2_duel.is_none()
+                    && self.g.ent[m].f26 > 1
+                    && self.g.ent[m]
+                        .f28
+                        .max(1)
+                        .saturating_sub(self.g.ent[m].f26 as u16)
+                        >= 28
+                {
+                    self.g.ent[m].f26 = 1;
+                }
                 self.g.ent[m].f26 -= 1;
                 if self.g.ent[m].f26 == 0 {
                     self.mc2_cast_expire(spell, m);
@@ -1068,6 +1151,11 @@ impl World {
                 self.player.rebound = false;
                 self.g.mc2_rebound_precise.0 = 0;
             }
+            // Duel window over → the lock dissolves (the EF:59916
+            // enforcement liveness term reads the charge; a dead
+            // charge ends the duel on its next pass — collapsed to
+            // the expiry edge here).
+            14 => self.mc2_duel = None,
             // Metamorph teardown (`sub_6A030` expiry EF:56394): despawn
             // the pose-puppet, un-hide the carpet, sound 60.
             4 => {
@@ -1215,18 +1303,19 @@ impl World {
                     1 => (10, 54),
                     _ => (10, 69),
                 };
-                if self.mc2_launch(
-                    spell,
-                    m,
-                    &DispatchArm {
-                        subtype: 17,
-                        impact,
-                        charge: false,
-                    },
-                    sub,
-                    p,
-                )
-                .is_some()
+                if self
+                    .mc2_launch(
+                        spell,
+                        m,
+                        &DispatchArm {
+                            subtype: 17,
+                            impact,
+                            charge: false,
+                        },
+                        sub,
+                        p,
+                    )
+                    .is_some()
                 {
                     // Sound 40 only on a successful spawn (F7).
                     self.g.snd_player(40);
@@ -1301,18 +1390,19 @@ impl World {
             // creature MODEL (life = 19/2/25/16) in f71 (the ring's army
             // size + model). Sound 9 (docs/spell-audit/summon-creatures.md).
             0x13 => {
-                if self.mc2_launch(
-                    spell,
-                    m,
-                    &DispatchArm {
-                        subtype: 24,
-                        impact: (10, 72),
-                        charge: true,
-                    },
-                    sub,
-                    p,
-                )
-                .is_some()
+                if self
+                    .mc2_launch(
+                        spell,
+                        m,
+                        &DispatchArm {
+                            subtype: 24,
+                            impact: (10, 72),
+                            charge: true,
+                        },
+                        sub,
+                        p,
+                    )
+                    .is_some()
                 {
                     self.g.snd_player(9);
                 }
@@ -1338,18 +1428,19 @@ impl World {
             // the tier lifespan (subSpell). Sound 15
             // (docs/spell-audit/magic-mine.md).
             0x17 => {
-                if self.mc2_launch(
-                    spell,
-                    m,
-                    &DispatchArm {
-                        subtype: 29,
-                        impact: (10, 78),
-                        charge: true,
-                    },
-                    sub,
-                    p,
-                )
-                .is_some()
+                if self
+                    .mc2_launch(
+                        spell,
+                        m,
+                        &DispatchArm {
+                            subtype: 29,
+                            impact: (10, 78),
+                            charge: true,
+                        },
+                        sub,
+                        p,
+                    )
+                    .is_some()
                 {
                     self.g.snd_player(15);
                 }
@@ -1363,18 +1454,19 @@ impl World {
             // subSpell (610/1100/2710) = the charm DURATION, not
             // damage.
             0x18 => {
-                if self.mc2_launch(
-                    spell,
-                    m,
-                    &DispatchArm {
-                        subtype: 25,
-                        impact: (10, 74),
-                        charge: true,
-                    },
-                    sub,
-                    p,
-                )
-                .is_some()
+                if self
+                    .mc2_launch(
+                        spell,
+                        m,
+                        &DispatchArm {
+                            subtype: 25,
+                            impact: (10, 74),
+                            charge: true,
+                        },
+                        sub,
+                        p,
+                    )
+                    .is_some()
                 {
                     self.g.snd_player(9);
                 }
@@ -1382,11 +1474,12 @@ impl World {
             // metamorph (`sub_6A030` EF:56294): transform the caster
             // into a pooled class-5 creature (pose-puppet), carpet hidden.
             4 => self.mc2_cast_metamorph(m, sub, p),
-            // duel: gate + mana traced, effect deferred to the rival
-            // track (subtype-7 tether) — visible in the ledger.
-            0xE => {
-                self.g.note_misfit(15, spell as u16);
-            }
+            // duel (`sub_6B610` EF:57258): spawn the (10,26) DUEL
+            // TETHER at the caster carrying the tier + owner, cast
+            // sound 9 (EF:57316). The grip → lock → enforcement
+            // machinery lives in world.rs (`mc2_duel_tether_tick` /
+            // `mc2_duel_enforce`); docs/spell-audit/duel.md.
+            0xE => self.mc2_cast_duel(sub, p),
             _ => {}
         }
         let _ = ctx;
@@ -1445,6 +1538,35 @@ impl World {
     /// (mc2_cast_expire). Sound 60; XP on the fire tick. No control
     /// rebinding is needed — the creature is slaved to the live player
     /// pose (docs/spell-audit/summon-creatures.md Part A).
+    /// `sub_6B610` first-tick body (EF:57297-57316): the (10,26)
+    /// duel tether — class 10, model/action 26, life 8, sprite row
+    /// 284, +44 = 200 (the ch4 grip amount), stamped with the
+    /// caster (`byte_0x46_70` → owner, ours `id24`) and the TIER
+    /// (`subSpellIndex_0x2A_42` copy, ours `f71`), spawned at the
+    /// caster's position; `PrepareEventSound(…, -1, 9)`.
+    fn mc2_cast_duel(&mut self, sub: Mc2SubSpell, p: PlayerPose) {
+        let tier = self.mc2_book.sel[14];
+        let z = self.g.ground_z(p.x, p.y) as i16;
+        if let Some(t) = self.g.new_event() {
+            {
+                let e = &mut self.g.ent[t];
+                e.class64 = 10;
+                e.model65 = 26;
+                e.tick70 = 26;
+                e.max_life = 8;
+                e.f44 = 200;
+                e.f71 = tier;
+                e.id24 = PLAYER_TARGET;
+                e.flags &= !8;
+            }
+            self.g.link(t, p.x, p.y, z);
+            self.g.refill_life(t);
+            self.g.mc2_set_sprite(t, 284);
+        }
+        let _ = sub;
+        self.g.snd_player(9);
+    }
+
     fn mc2_cast_metamorph(&mut self, m: usize, sub: Mc2SubSpell, p: PlayerPose) {
         let model = sub.life.max(0) as u8;
         let z = self.g.ground_z(p.x, p.y) as i16;

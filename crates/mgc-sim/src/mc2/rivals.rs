@@ -1041,6 +1041,28 @@ impl World {
     /// like retail instead of locking for the rival's whole life
     /// (review 2026-07-15 P0-2). Buff flags read the post-decrement
     /// window; Heal (5) heals while armed.
+    /// The duel enforcement's opponent DRAIN (`sub_5DE30`
+    /// EF:59930-43): mode >= 1 drains mana by the opponent's regen
+    /// rate plus 8 per tick; mode == 2 also drains life by the
+    /// regen plus 2. Our `mana_delta` holds the recomputed per-tick
+    /// rate (world.rs's regen law) — `max(0)` guards the mid-debit
+    /// window. APPROX: the life-regen term uses the afield /500
+    /// rate; retail reads the stored `lifeRegen_0x163_355`, which
+    /// only differs while the rival sits at its own castle.
+    pub(crate) fn mc2_duel_drain(&mut self, opp: u16, mode: u8) {
+        let Some(ri) = self.mc2_rivals.iter().position(|r| r.ent == opp) else {
+            return;
+        };
+        let r = &mut self.mc2_rivals[ri];
+        let d = r.mana_delta.max(0) + 8;
+        r.mana = r.mana.saturating_sub(d as u32);
+        if mode == 2 {
+            let a = opp as usize;
+            let max = self.g.ent[a].max_life as i32;
+            self.g.ent[a].act_life -= max / 500 + 2;
+        }
+    }
+
     fn mc2_rival_buffs(&mut self, ri: usize) {
         let book = self.mc2_rivals[ri].book.ent;
         // Heal fires on the pre-decrement window (including the 1→0

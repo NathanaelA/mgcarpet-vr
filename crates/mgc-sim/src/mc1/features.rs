@@ -690,6 +690,11 @@ pub(crate) struct Gen {
     /// (and hash-transparent when empty, so every pinned stream
     /// holds across the field addition).
     pub(crate) mc2_cast_xp: Mc2XpMail,
+    /// m26 spell-steal requests (`sub_28FF0` EF:19348-71 → the
+    /// `sub_69300` effect): the wraith's roll lands pool-side but the
+    /// human book is world-side — the world tick drains this the
+    /// same turn. Hash-transparent while empty.
+    pub(crate) mc2_steal_mail: Mc2StealMail,
     /// The mana-magnet aura CLAIM handshake (`word_0x7A_122` on the
     /// ball, EF:28364/28383): ball slot → claiming aura slot. An aura
     /// claims an unclaimed ball for one pull; the ball's own tick
@@ -762,6 +767,23 @@ pub(crate) struct Mc2XpMail(pub Vec<(u16, u16, i32)>);
 impl std::hash::Hash for Mc2XpMail {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         if !self.0.is_empty() {
+            self.0.hash(state);
+        }
+    }
+}
+
+/// See [`Gen::mc2_steal_mail`] — (wraith slot, hand: 1 = right,
+/// 2 = left) requests from the m26 steal roll, drained by the world
+/// tick the same turn (the book lives world-side). Empty at hash
+/// time like a read mailbox; tagged against adjacent-mail aliasing
+/// (review J2).
+#[derive(Default)]
+pub(crate) struct Mc2StealMail(pub Vec<(u16, u8)>);
+
+impl std::hash::Hash for Mc2StealMail {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if !self.0.is_empty() {
+            state.write_u8(5);
             self.0.hash(state);
         }
     }
@@ -965,6 +987,7 @@ impl Gen {
             mc2_scrolls: Mc2Quiet::default(),
             mc2_spell_tokens: Mc2Quiet::default(),
             mc2_cast_xp: Mc2XpMail::default(),
+            mc2_steal_mail: Mc2StealMail::default(),
             mc2_aura_claim: Mc2SlotMap::default(),
             mc2_wanted: Mc2SlotMap::default(),
             mc2_allied: Mc2SlotMap::default(),

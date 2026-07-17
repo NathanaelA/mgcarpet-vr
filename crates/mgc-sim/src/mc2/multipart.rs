@@ -397,8 +397,10 @@ impl Gen {
     /// f26 (`dword_0x10_16`), gravity −5/tick, floor bounce +150 at
     /// terrain+256; on caves, ceiling BOUNCE −150 above ceiling−256
     /// (EF:11244-48) — open levels have no upper clamp, exactly
-    /// retail.
-    fn m0_bob(&mut self, i: usize) {
+    /// retail. Also the stage-HELD dragon's ambient physics
+    /// (`sub_1F300` phase-7 wrapper, kinds 1-10 — the stagevars
+    /// held seam).
+    pub(crate) fn m0_bob(&mut self, i: usize) {
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let z = self.ent[i].z.wrapping_add(self.ent[i].f26);
         self.move_relink(i, x, y, z);
@@ -1053,11 +1055,9 @@ impl Gen {
     }
 
     /// The m22 castle resolver: the target player's
-    /// `CastleEntityIndex_0x3A_58`. No MC2 level spawns a castle
-    /// today → None (retail's own castle-less arm serves — module
-    /// doc APPROX register).
-    fn m22_target_castle(&self, _target: u16) -> Option<usize> {
-        None
+    /// `CastleEntityIndex_0x3A_58`.
+    fn m22_target_castle(&self, target: u16) -> Option<usize> {
+        self.mc2_castle_of(target)
     }
 
     /// m22 states 0xB0-0xB7 (docs/traces/mc2-m22-worm-helpers.md).
@@ -1116,18 +1116,33 @@ impl Gen {
                     match self.m22_target_castle(target) {
                         None => revert = true,
                         Some(c) => {
-                            let (cx, cy, cz) = {
+                            let (cx, cy) = {
                                 let e = &self.ent[c];
-                                (e.x, e.y, e.z)
+                                (e.x, e.y)
                             };
-                            let (ex, ey, ez) = {
+                            let (ex, ey) = {
                                 let e = &self.ent[i];
-                                (e.x, e.y, e.z)
+                                (e.x, e.y)
                             };
-                            self.ent[i].f34 = Self::angle_between(ex, ey, cx, cy);
-                            if self.ent[i].f63 & 3 == 0
-                                && Self::mc2_dist3((ex, ey, ez), (cx, cy, cz)) <= 0x100
-                            {
+                            // Retail SNAPS the live heading
+                            // (`roll_0x20_32 = tan2`, EF:17337) —
+                            // f34 rides along so the move core's
+                            // commit turn doesn't pull it back off
+                            // the castle between aligned frames.
+                            let aim = Self::angle_between(ex, ey, cx, cy);
+                            self.ent[i].f34 = aim;
+                            self.ent[i].f30 = aim;
+                            // `EuclideanDistXYZ_58490` is 2-D despite
+                            // the name (Maths:738-42 never reads z —
+                            // the morph::dist2d law). The old 3-D
+                            // check was unsatisfiable: the head
+                            // cruises at chain-ground +384, the
+                            // castle entity sits at ground, so the
+                            // player-reported worm hovered at the
+                            // flag forever, never absorbed
+                            // (2026-07-18).
+                            let d2 = crate::mc2::morph::dist2d(ex, ey, cx as i32, cy as i32);
+                            if self.ent[i].f63 & 3 == 0 && d2 <= 0x100 {
                                 let room = (self.ent[i].f140 + self.ent[c].f140) < self.ent[c].f136;
                                 if room {
                                     self.ent[i].f26 = 128;
