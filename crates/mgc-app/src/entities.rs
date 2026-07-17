@@ -872,28 +872,24 @@ fn nearest_palette_index(palette: &[[u8; 4]; 256], rgb: [u8; 3]) -> u8 {
     best.0 as u8
 }
 
-/// The single-player start. MC1/HW: the class-3 model-4 marker
+/// The single-player start: the class-3 model-4 marker in BOTH games
 /// (player start #0 of 8; the original's marker spawner copies its
-/// position into the per-player start table, sub_37720 :44068). MC2:
-/// the (10, 0x52) wizard-start record — GenerateEvents spawns the
-/// class-3 m0 wizard from it FIRST, `parent` = the player number
-/// (remc2 Events.cpp:162-170, AddPlayer_4A920) — with the MC1-shaped
-/// (3, 4) marker as the fallback: campaign level-000 authors THAT
-/// and no (10, 0x52) at all. Returns tile-center coordinates.
-/// Neither game stores an orientation (both wizards spawn at engine
-/// yaw 0 = our north); altitude re-derives at spawn from ground
-/// height (MC2 places at terrain alt exactly — hover is flight
+/// position into the per-player start table, sub_37720 :44068 — every
+/// shipped MC2 single-player level authors exactly one). An earlier
+/// reading took MC2's (10, 0x52) records for wizard starts; they are
+/// the cave ROOM CARVERS (GenerateEvents pass 1, remc2 Events.cpp:162-
+/// 170 → PrepareEvents case 0x52 = authored box extents), and none in
+/// the shipped data ever matched the old `parent == 0` filter, so the
+/// (3, 4) marker was always the live path. Returns tile-center
+/// coordinates. Neither game stores an orientation (both wizards spawn
+/// at engine yaw 0 = our north); altitude re-derives at spawn from
+/// ground height (MC2 places at terrain alt exactly — hover is flight
 /// physics, not spawn state).
-pub fn player_start(game: GameId, things: &[Thing]) -> Option<(f32, f32)> {
-    let mc1_marker = |t: &&Thing| t.kind == ThingKind::Entity && t.class == 3 && t.model == 4;
-    match game {
-        GameId::Mc1 | GameId::Mc1Hw => things.iter().find(mc1_marker),
-        GameId::Mc2 => things
-            .iter()
-            .find(|t| t.class == 10 && t.model == 0x52 && t.parent == 0)
-            .or_else(|| things.iter().find(mc1_marker)),
-    }
-    .map(|t| (t.x as f32 + 0.5, t.y as f32 + 0.5))
+pub fn player_start(_game: GameId, things: &[Thing]) -> Option<(f32, f32)> {
+    things
+        .iter()
+        .find(|t| t.kind == ThingKind::Entity && t.class == 3 && t.model == 4)
+        .map(|t| (t.x as f32 + 0.5, t.y as f32 + 0.5))
 }
 
 /// Spawn altitude above ground (the original's `sub_11F50 + 1` hover;

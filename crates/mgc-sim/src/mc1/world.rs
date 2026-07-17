@@ -4467,11 +4467,20 @@ impl World {
             }
             cur = p;
         }
-        // Walk forward via par2 links, stamping each leg.
+        // Walk forward via par2 links, stamping each leg. NO per-node
+        // class/model check: retail's guard at EV:5316-19 tests the
+        // loop-INVARIANT seed record (`entity`, not the walked
+        // `tempEntity`) — trivially true, so the walk crosses nodes
+        // of any class, including the passive class-0 rows chains
+        // link through (2026-07-17 THING-pars audit F4; the old
+        // per-node break truncated level-151's two (10,9)-headed
+        // path chains). Termination is par2 == 0, plus our bounds.
+        let mut hops = 0;
         loop {
             let node = self.table[cur];
-            if node.class != 10 || node.model != model {
-                break; // chain type check (EV:5316-19)
+            hops += 1;
+            if hops > self.table.len() {
+                break; // cycle guard (retail would spin; ours exits)
             }
             self.table[cur].swi_id = 0; // stageTag = 0 (EV:5320)
             if node.child == 0 {
@@ -5420,6 +5429,34 @@ impl World {
                     }
                 }
             }
+            // The dis-fired METEOR (0x11) / FISSURE (0x47) tier
+            // overrides (2026-07-17 THING-pars audit, F1/F2): the
+            // sub_4A310 SPELLS block (EF:33148-78) consumes par1 for
+            // 0x11/0x16/0x43/0x47 too — 0x11 writes maxLife AND life
+            // (EF:33154/33178/33167), 0x47 life only (EF:33165-67).
+            // NEITHER is in the LOAD list (EV:387 = 9/0xB/0xF), and
+            // every shipped record is dis-gated. Before this arm the
+            // 69 authored meteors / 21 fissures (par1 = tier 1..2)
+            // all ran at ctor-default tier.
+            (10, 17) if matches!(self.game, GameId::Mc2) && r.dis_id != 0xFFFF => {
+                let row = crate::mc2::spells::spell_index(17);
+                if let Some(row) = self.g.assets.spells.get(row) {
+                    let tier = row.tiers[(r.parent as usize).min(2)];
+                    let e = &mut self.g.ent[s];
+                    e.f140 = tier.sub_spell;
+                    e.max_life = tier.life as u32;
+                    e.act_life = tier.life as i32;
+                }
+            }
+            (10, 71) if matches!(self.game, GameId::Mc2) && r.dis_id != 0xFFFF => {
+                let row = crate::mc2::spells::spell_index(71);
+                if let Some(row) = self.g.assets.spells.get(row) {
+                    let tier = row.tiers[(r.parent as usize).min(2)];
+                    let e = &mut self.g.ent[s];
+                    e.f140 = tier.sub_spell;
+                    e.act_life = tier.life as i32;
+                }
+            }
             // The disposition-spawned WHIRLWIND (arm tornado) scaled
             // to its tier, like the cast path (`sub_678E0` →
             // life = 8 × row-21 tier.life). remc2's generate switch
@@ -5437,6 +5474,9 @@ impl World {
                     let tier = row.tiers[(r.parent as usize).min(2)];
                     let ml = 8 * tier.life.max(0) as u32;
                     let e = &mut self.g.ent[s];
+                    // Retail's 0x16 arm also stamps the tier's
+                    // subspell (EF:33176-78) — audit F3 2026-07-17.
+                    e.f140 = tier.sub_spell;
                     e.max_life = ml;
                     e.act_life = ml as i32;
                 }
@@ -5463,7 +5503,24 @@ impl World {
             // EF:33118-46, high-band trace §4): dome radius =
             // word_10; pit/hill radius = word_10, depth/height seed
             // = par3 (via the z sentinel), recentred onto the tile
-            // corner (−128,−128). (10,80)/(10,82) consume nothing.
+            // corner (−128,−128). (10,80) consumes nothing.
+            //
+            // The (10,82) room carve is LOAD-TIME-ONLY par
+            // consumption, and on the OTHER path: PrepareEvents'
+            // generate case 0x52 (EV:373-379) writes par1/par2 →
+            // the box half-extents and par3 → the depth multiplier,
+            // while sub_4A310 gives a dis-fired 0x52 only the
+            // stage-bind (the ctor's 3/3/2 defaults stand). Without
+            // this a cave's authored entry caverns carve as 6×6
+            // closets — level-023's start chamber (par 58/42/9 at
+            // (127,47)) stayed sealed rock around the (3,4) wizard
+            // start.
+            (10, 82) if matches!(self.game, GameId::Mc2) && r.dis_id == 0xFFFF => {
+                let e = &mut self.g.ent[s];
+                e.f67 = (r.parent & 0xFF) as u8;
+                e.f68 = (r.child & 0xFF) as u8;
+                e.f71 = (r.par3 & 0xFF) as u8;
+            }
             (10, 83) if matches!(self.game, GameId::Mc2) => {
                 self.g.ent[s].dest_x = r.swi_sz;
             }
@@ -5480,7 +5537,12 @@ impl World {
             // the load-time generate pass (EV:387's case list is
             // 9/0xB/0xF only) leaves the ctor defaults — the
             // flood-helpers trace's correction #3.
-            (10, 67) if matches!(self.game, GameId::Mc2) && r.dis_id != 0 => {
+            // Gate = "reached via the DIS path" (anything but the
+            // 0xFFFF load sentinel — dis 0 fires at init through
+            // sub_4A1E0(0) and takes the same sub_4A310 arm; audit
+            // 2026-07-17, shipped-data neutral: no load-time flood
+            // authors par1).
+            (10, 67) if matches!(self.game, GameId::Mc2) && r.dis_id != 0xFFFF => {
                 let row = crate::mc2::spells::spell_index(67);
                 if let Some(row) = self.g.assets.spells.get(row) {
                     let tier = row.tiers[(r.parent as usize).min(2)];
@@ -11799,11 +11861,13 @@ mod tests {
         );
     }
 
-    /// The (10,67) par1 seam is TRIGGER-ONLY (the flood-helpers
-    /// trace correction #3): a dis-0 authored flood keeps the ctor
-    /// defaults (EV:387's override list is 9/0xB/0xF), while a
-    /// dis-fired one consumes par1 → SPELLS row 20 life + subSpell
-    /// (sub_4A310 case 0xA, EF:33148/:33165).
+    /// The (10,67) par1 seam is DIS-PATH-ONLY (flood-helpers trace
+    /// correction #3 + the 2026-07-17 THING-pars audit): only a
+    /// DisId == -1 record would keep the ctor defaults (EV:387's
+    /// override list is 9/0xB/0xF — and retail never generate-passes
+    /// 0x43 at all), while EVERY fired record — dis 0 at init via
+    /// sub_4A1E0(0) included — consumes par1 → SPELLS row 20 life +
+    /// subSpell (sub_4A310 case 0xA, EF:33148/:33165).
     #[test]
     fn mc2_flood_par1_trigger_seam() {
         // Synthetic SPELLS.DAT: row 20 tier 2 = subSpell 5555, life 77.
@@ -11844,10 +11908,15 @@ mod tests {
                 .expect("flood spawned")
         };
         let a0 = at(&w, 60);
+        // dis 0 is NOT the load path (that is DisId == -1, which
+        // retail never generate-passes for 0x43): dis-0 records fire
+        // at init via sub_4A1E0(0) → sub_4A310 and consume par1 like
+        // any triggered spawn (2026-07-17 THING-pars audit — the old
+        // pin expected ctor defaults here on a wrong sentinel).
         assert_eq!(
             (w.g.ent[a0].act_life, w.g.ent[a0].f140),
-            (120, 20000),
-            "dis-0 (the generate pass) keeps the ctor defaults"
+            (77, 5555),
+            "the init-fired dis-0 spawn consumed par1 via SPELLS row 20"
         );
         w.fire_disposition(7, true);
         let a1 = at(&w, 200);
@@ -11855,6 +11924,75 @@ mod tests {
             (w.g.ent[a1].act_life, w.g.ent[a1].f140),
             (77, 5555),
             "the triggered spawn consumed par1 via SPELLS row 20"
+        );
+    }
+
+    /// Audit F1/F2 (2026-07-17): dis-fired (10,17) meteors and
+    /// (10,71) fissures consume par1 as their SPELLS tier (sub_4A310
+    /// EF:33148-78 — 0x11 writes maxLife AND life, 0x47 life only).
+    /// All 69/21 shipped records are dis-gated with par1 = tier 1..2;
+    /// they ran at ctor-default tier before the arms landed.
+    #[test]
+    fn mc2_meteor_and_fissure_consume_dis_par1_tier() {
+        // Synthetic SPELLS.DAT: row 9 (meteor) tier 1 = subSpell 4444,
+        // life 55; row 15 (fissure) tier 2 = subSpell 3333, life 66.
+        let mut bytes = vec![0u8; 26 * 80];
+        let m = 9 * 80 + 2 + 26;
+        bytes[m..m + 4].copy_from_slice(&4444i32.to_le_bytes());
+        bytes[m + 24] = 55;
+        let f = 15 * 80 + 2 + 26 * 2;
+        bytes[f..f + 4].copy_from_slice(&3333i32.to_le_bytes());
+        bytes[f + 24] = 66;
+        let mut a = assets();
+        a.spells = crate::mc2::spells::parse(&bytes).unwrap();
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let rec = |slot, model, x, par1| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class: 10,
+            model,
+            x,
+            y: 60,
+            dis_id: 7,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: par1,
+            child: 0,
+            par3: None,
+        };
+        let things = [rec(1, 17, 60, 1), rec(2, 71, 200, 2)];
+        let mut w = World::new_for_game(planes, &things, 1, a, GameId::Mc2);
+        w.fire_disposition(7, true);
+        let at = |w: &World, model: u16, tx: u16| {
+            (1..w.g.ent.len())
+                .find(|&i| {
+                    w.g.ent[i].class64 == 10
+                        && w.g.ent[i].model65 == model as u8
+                        && w.g.ent[i].x >> 8 == tx
+                })
+                .expect("spawned")
+        };
+        let meteor = at(&w, 17, 60);
+        assert_eq!(
+            (
+                w.g.ent[meteor].max_life,
+                w.g.ent[meteor].act_life,
+                w.g.ent[meteor].f140
+            ),
+            (55, 55, 4444),
+            "meteor tier-1: maxLife AND life + subspell (0x11 arm)"
+        );
+        let fissure = at(&w, 71, 200);
+        assert_eq!(
+            (w.g.ent[fissure].act_life, w.g.ent[fissure].f140),
+            (66, 3333),
+            "fissure tier-2: life + subspell (0x47 arm)"
         );
     }
 

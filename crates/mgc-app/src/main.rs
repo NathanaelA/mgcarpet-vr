@@ -609,9 +609,9 @@ fn load_level(
         );
     }
 
-    // The original's spawn: the start marker's position (MC1 class-3
-    // m4 / MC2 (10,0x52)), hovering over the (post-feature) terrain,
-    // facing north.
+    // The original's spawn: the class-3 m4 start marker's position
+    // (both games), hovering over the (post-feature) terrain, facing
+    // north.
     let start = entities::player_start(game_id, &package.things.things).map(|(x, z)| Flyer {
         x,
         y: entities::ground_at(&height, x, z) + entities::START_HOVER,

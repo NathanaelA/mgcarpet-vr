@@ -29,7 +29,14 @@ fn baked_root() -> Option<PathBuf> {
 }
 
 fn build_world(root: &std::path::Path) -> Option<World> {
-    let file = std::fs::File::open(root.join("mc2/level-014.mgcl")).unwrap();
+    build_world_level(root, "mc2/level-014.mgcl").map(|(w, _)| w)
+}
+
+fn build_world_level(
+    root: &std::path::Path,
+    level: &str,
+) -> Option<(World, mgc_formats::LevelPackage)> {
+    let file = std::fs::File::open(root.join(level)).unwrap();
     let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(file).unwrap();
     let terrain = pkg.terrain.as_ref()?;
     let ceiling = terrain.ceiling.clone().unwrap_or_default();
@@ -79,7 +86,7 @@ fn build_world(root: &std::path::Path) -> Option<World> {
             .collect();
         w.set_mc2_stagevars(&vars);
     }
-    Some(w)
+    Some((w, pkg))
 }
 
 fn hover(w: &mut World, x: f32, z: f32, ticks: usize, cmd: PlayerCommand) {
@@ -409,13 +416,23 @@ fn mc2_cave_behaviors_and_goldens() {
     //       moves too — this is real behavior, verified against the
     //       remc2 retail memimages (level-1 goat herd: all state 15,
     //       speed 18, leashed mill — the port now reproduces it).
+    // Re-pinned 2026-07-17 (DELIBERATE, BEHAVIORAL) — the (10,82)
+    // room carve now consumes its authored THING pars on the load
+    // path (PrepareEvents case 0x52, EV:373-379: par1/par2 = box
+    // half-extents, par3 = depth multiplier); the port had left the
+    // ctor's 3/3/2 defaults on every authored record, so entry
+    // caverns carved as 6×6 closets. Level-014 authors two records
+    // at (52,95) — pars (16,10,3) and (9,6,7) — so the load-settle
+    // terrain (and everything downstream, checkpoint A on) moves.
+    // Player-reported as the mc2:23 spawn-embedded-in-rock bug
+    // (2026-07-17; that level's start chamber authors (58,42,9)).
     assert_eq!(
         got,
         vec![
-            0xbe8e98cc7e7e8646u64,
-            0x992ea558917fd24b,
-            0xda0122efc0451fb3,
-            0x9ad252be7919aab0,
+            0xb9ef2aab49926cbcu64,
+            0x7a89b38d106e4b85,
+            0xda67b7efcb54c962,
+            0x853a6185a18997ff,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -429,15 +446,16 @@ fn mc2_cave_behaviors_and_goldens() {
     // t=0 — and the three ticked checkpoints move with the held
     // creatures' walk/graze trajectories, exactly the projection's
     // design (a layout-only change could not move it).
+    // Re-pinned 2026-07-17 with the (10,82) authored-extents carve
+    // (see the hash ledger above): the load-settle terrain around
+    // (52,95) opens to the authored sizes, which moves the drawable
+    // terrain, the parked open_spot AND the creature trajectories —
+    // the projection move IS the intended observable change.
     const OBSERVABLE: [u64; 4] = [
-        0x5fdfbe7cfbf8fc43,
-        0x10cbd033029e9130,
-        0x4c18438350ec3cb0,
-        // D re-pinned 2026-07-16 with the level-end marker law (see
-        // the hash ledger above): the dis-gated (14,3) exit marker
-        // leaves the drawable set until its trigger trips — the
-        // projection move IS the intended observable change.
-        0xf0247a52e46b3668,
+        0xb0299049353c6c29,
+        0x2d60a54a359da557,
+        0x1ada7615a38d2848,
+        0xa43a421e0c5f2c76,
     ];
     assert_eq!(
         obs, OBSERVABLE,
@@ -614,4 +632,53 @@ fn mc2_cave_enhanced_funnel_never_breaches_ceiling() {
         "the enhanced carpet's head breached the cave ceiling \
          (worst ceiling-eye = {worst:.1} engine units)"
     );
+}
+
+/// The mc2:23 spawn-embedded-in-rock report (player, 2026-07-17):
+/// level-023's (3,4) wizard start at (134,47) lies in baked-sealed
+/// rock — the entry cavern is carved at LOAD by an authored (10,82)
+/// room at (127,47) with par extents (58,42) and depth par3 = 9
+/// (PrepareEvents case 0x52, EV:373-379). Pin that the load settle
+/// leaves the start tile (and a 3×3 ring around it) open cave with
+/// real headroom, so the port never regresses to the ctor-default
+/// 6×6 carve that left the player inside the wall.
+#[test]
+fn mc2_level_023_start_chamber_is_carved_open() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked mc2 data");
+        return;
+    };
+    if !root.join("mc2/level-023.mgcl").exists() {
+        eprintln!("skipping: no baked level-023");
+        return;
+    }
+    let (w, pkg) = build_world_level(&root, "mc2/level-023.mgcl").unwrap();
+    let start = pkg
+        .things
+        .things
+        .iter()
+        .find(|t| t.kind == mgc_formats::ThingKind::Entity && t.class == 3 && t.model == 4)
+        .expect("level-023 authors the (3,4) start marker");
+    let (sx, sy) = (start.x as usize, start.y as usize);
+    let p = w.planes();
+    let c = w.ceiling_plane();
+    for dy in 0..3 {
+        for dx in 0..3 {
+            let t = (sy + dy - 1) * 256 + (sx + dx - 1);
+            assert!(
+                p.angle[t] & 8 == 0,
+                "start ring tile ({},{}) still sealed",
+                sx + dx - 1,
+                sy + dy - 1
+            );
+            assert!(
+                c[t] as i32 - p.height[t] as i32 > 20,
+                "start ring tile ({},{}) has no headroom (floor {} ceiling {})",
+                sx + dx - 1,
+                sy + dy - 1,
+                p.height[t],
+                c[t]
+            );
+        }
+    }
 }
