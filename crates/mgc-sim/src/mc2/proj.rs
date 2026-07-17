@@ -387,8 +387,10 @@ impl Gen {
     /// `flight::Mc2Ext`; the kick rides `player_knock` (backward =
     /// pyaw + half turn — the retail `moveBoost = −80`, EF:28411/
     /// 28437, both variants). The `SetPaletteModification_5C830`
-    /// red tint stays presentation-banked (the app can read the
-    /// slow level off the ext). Rival bodies take the mail + grunt
+    /// GREEN tint (subMod 3, EF:31935-32002: R and B darkened by
+    /// `56*count>>8`, green untouched — NOT the subMod-2 red damage
+    /// flash) is presentation — the app reads the slow level off
+    /// the ext. Rival bodies take the mail + grunt
     /// (their brain owns their movement — no positional kick
     /// channel).
     pub(crate) fn mc2_debuff_stamp_tick(&mut self, i: usize, ctx: &MobCtx) {

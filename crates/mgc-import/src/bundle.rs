@@ -126,6 +126,15 @@ struct VariantSpec {
     /// and cave loading NONE (`SKYC0-0.DAT` exists on the CD but no
     /// code path reads it).
     sky: Option<&'static str>,
+    /// MC2 only: the fullscreen SPIDER-WEB overlay bank
+    /// (`DATA/HWEB{D,N,C}0-0` .DAT/.TAB — the hi-res set; `MWEB*` is
+    /// the VGA one). Same self-describing HSPR format as `ui`: a 6×4
+    /// grid of 24 equal 8bpp tiles (transparent index 0, sprite ids
+    /// 1..=24) covering the 640×480 viewport. Retail loads one per
+    /// map-type (remc2 Level.cpp:1426-1502) and tiles it over the
+    /// view while the paralyze web (`mobilizeCounter`) is live
+    /// (EventsFunctions.cpp:21668-710).
+    web: Option<&'static str>,
 }
 
 const MC1_VARIANTS: [VariantSpec; 2] = [
@@ -145,6 +154,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         font: Some("DATA/FONT1"),
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKY.DAT"),
+        web: None,
     },
     VariantSpec {
         variant: "mc1-arctic",
@@ -162,6 +172,7 @@ const MC1_VARIANTS: [VariantSpec; 2] = [
         font: Some("DATA/FONT1"),
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKY1-0.DAT"),
+        web: None,
     },
 ];
 
@@ -187,6 +198,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         font: Some("DATA/FONT1"),
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKYD0-0.DAT"),
+        web: Some("DATA/HWEBD0-0"),
     },
     VariantSpec {
         variant: "mc2-night",
@@ -204,6 +216,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         font: Some("DATA/FONT1"),
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKYN0-0.DAT"),
+        web: Some("DATA/HWEBN0-0"),
     },
     VariantSpec {
         variant: "mc2-night-fog",
@@ -221,6 +234,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         font: Some("DATA/FONT1"),
         etext: Some("DATA/ETEXT.DAT"),
         sky: Some("DATA/SKYN0-0.DAT"),
+        web: Some("DATA/HWEBN0-0"),
     },
     VariantSpec {
         variant: "mc2-cave",
@@ -238,6 +252,7 @@ const MC2_VARIANTS: [VariantSpec; 4] = [
         font: Some("DATA/FONT1"),
         etext: Some("DATA/ETEXT.DAT"),
         sky: None,
+        web: Some("DATA/HWEBC0-0"),
     },
 ];
 
@@ -1057,6 +1072,27 @@ fn bake_variant(
         emit(
             "font.json",
             &serde_json::to_vec_pretty(&packed.index).expect("font index serializes"),
+        )?;
+    }
+
+    // The fullscreen WEB overlay bank (HWEB{D,N,C}0-0): the same HSPR
+    // TAB/DAT format as the UI sprites — 8bpp indexed tiles
+    // (transparent 0), a 6×4 grid of 24 equal tiles covering the
+    // 640×480 viewport (sprite ids 1..=24). Retail tiles it over the
+    // view while the paralyze web is live (remc2 EF:21668-710).
+    // Palette-resolved app-side like the base UI sprites (NOT the
+    // font's white-mask path).
+    if let Some(web) = spec.web {
+        let dat_file = format!("{web}.DAT");
+        let dat = source(&dat_file, &mut sources)?;
+        let tab = source(&format!("{web}.TAB"), &mut sources)?;
+        let decoded = crate::hspr::decode(&dat, &tab)
+            .map_err(|e| BakeError::Level(Path::new(&dat_file).to_path_buf(), 0, e.to_string()))?;
+        let packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
+        emit("web-sprites.bin", &packed.atlas)?;
+        emit(
+            "web-sprites.json",
+            &serde_json::to_vec_pretty(&packed.index).expect("web sprite index serializes"),
         )?;
     }
 

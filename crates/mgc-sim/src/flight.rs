@@ -328,9 +328,11 @@ impl Default for Mc2Row {
 /// the renderer/camera derivation is model-agnostic.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Mc2Ext {
-    /// `moveSpeed_0x14C_332` (0..3): the spider-web SLOW — scales the
-    /// pose delta, forward and strafe speed by (4−n)/4. Drives the
-    /// red screen tint (presentation reads it).
+    /// `moveSpeed_0x14C_332` (0..3): the stagger/web SLOW — scales
+    /// the pose delta, forward and strafe speed by (4−n)/4. Drives
+    /// the GREEN screen tint (`SetPaletteModification_5C830` subMod
+    /// 3: R/B darkened `56*count>>8`, count = `171*n/3+85` — the
+    /// manticore-spit poison cast; presentation reads it).
     pub move_speed: u8,
     /// `moveSpeedCounter_0x14D_333`: 8-tick decay counter per level.
     pub move_speed_ctr: u8,

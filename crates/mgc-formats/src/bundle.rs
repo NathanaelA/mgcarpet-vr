@@ -246,6 +246,13 @@ pub struct Bundle {
     /// (every ink pixel = index 1). Sprite id for ASCII char `c` is
     /// `c + 1` (id 0 null, id 33 = space).
     pub font: Option<(SpriteIndex, Vec<u8>)>,
+    /// MC2's fullscreen spider-web overlay bank (HWEB{D,N,C}0-0) —
+    /// same index schema as `ui_sprites`: a 6×4 grid of 24 equal
+    /// 8bpp tiles (transparent 0, sprite ids 1..=24) covering the
+    /// 640×480 viewport, tiled over the view while the paralyze web
+    /// is live (remc2 EF:21668-710). Palette-resolved like the base
+    /// UI sprites.
+    pub web_sprites: Option<(SpriteIndex, Vec<u8>)>,
     /// 256 RGBA entries: the book screen's own palette (DATA/BOOK.PAL).
     pub book_palette: Option<[[u8; 4]; 256]>,
     /// 64KB UI blend LUT (TABLES +0x4000): 2D blits resolve
@@ -399,6 +406,21 @@ impl Bundle {
             None => None,
         };
 
+        let web_sprites = match read_opt("web-sprites.bin") {
+            Some(data) => {
+                let index_path = dir.join("web-sprites.json");
+                let index: SpriteIndex = serde_json::from_slice(&read("web-sprites.json")?)
+                    .map_err(|e| BundleError::Json(index_path, e))?;
+                expect(
+                    "web-sprites.bin",
+                    &data,
+                    index.atlas_width as usize * index.atlas_height as usize,
+                )?;
+                Some((index, data))
+            }
+            None => None,
+        };
+
         let book_palette = match read_opt("book-palette.bin") {
             Some(data) => {
                 expect("book-palette.bin", &data, 256 * 4)?;
@@ -444,6 +466,7 @@ impl Bundle {
             sprites,
             ui_sprites,
             font,
+            web_sprites,
             book_palette,
             blend_lut,
             search: read_opt("search.bin"),

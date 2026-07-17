@@ -86,7 +86,11 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    SKY1-0.DAT, MC2 SKY{D,N}0-0.DAT with night-fog sharing night's;
 ///    cave has none — retail never loads SKYC, remc2
 ///    ReadAndDecompress.cpp).
-pub const BAKE_EPOCH: u32 = 14;
+/// 15: MC2 bundles gain `web-sprites.bin`/`.json` (DATA/HWEB{D,N,C}0-0
+///    — the fullscreen spider-web/paralyze viewport overlay, a 6×4
+///    grid of 24 8bpp HSPR tiles covering 640×480; drawn while
+///    `mobilizeCounter` is live, remc2 EF:21668-710).
+pub const BAKE_EPOCH: u32 = 15;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

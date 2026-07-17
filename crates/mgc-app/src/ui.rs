@@ -59,6 +59,11 @@ pub struct UiAssets {
     glyph_uv: Vec<Option<[f32; 4]>>,
     /// The font's line height (tallest glyph cell), source pixels.
     line_height: f32,
+    /// Spider-web overlay tile UV rects (texels), indexed by HSPR
+    /// sprite id — ids 1..=24 are the 6×4 grid covering the 640×480
+    /// viewport (remc2 EF:21671-709). Empty when the bundle carries
+    /// no web bank (MC1 / pre-epoch-15 bakes).
+    web_uv: Vec<Option<[f32; 4]>>,
 }
 
 /// Inter-glyph advance added to each glyph's own width, source pixels.
@@ -157,6 +162,7 @@ impl UiAssets {
         blend_lut: Option<&[u8]>,
         book_tiles: bool,
         font: Option<(&SpriteIndex, &[u8])>,
+        web: Option<(&SpriteIndex, &[u8])>,
     ) -> Self {
         let resolve = |src: u8, dest: u8| -> u8 {
             match blend_lut {
@@ -222,7 +228,12 @@ impl UiAssets {
         // the composited tiles (its glyphs are tinted at draw time).
         let font_y0 = sub_y0 + sub_rows * sh;
         let font_h = font.map_or(0, |(fi, _)| fi.atlas_height as usize);
-        let total_h = font_y0 + font_h;
+        // The spider-web overlay bank rides below the font — plain
+        // palette-resolved tiles like the base atlas (index 0
+        // transparent), NOT white masks.
+        let web_y0 = font_y0 + font_h;
+        let web_h = web.map_or(0, |(wi, _)| wi.atlas_height as usize);
+        let total_h = web_y0 + web_h;
         let mut rgba = vec![0u8; base_w * total_h * 4];
 
         // Base atlas = RAW palette colors, no blend. The original draws
@@ -403,6 +414,42 @@ impl UiAssets {
             line_height = fi.sprites.iter().map(|e| e.height).max().unwrap_or(0) as f32;
         }
 
+        // The web overlay tiles: palette-resolved copy below the font
+        // block, uv per HSPR sprite id (1..=24 = the viewport grid).
+        let mut web_uv = Vec::new();
+        if let Some((wi, wpx)) = web {
+            let ww = (wi.atlas_width as usize).min(base_w);
+            for y in 0..wi.atlas_height as usize {
+                for x in 0..ww {
+                    let src = wpx[y * wi.atlas_width as usize + x];
+                    if src == 0 {
+                        continue; // transparent
+                    }
+                    let c = palette[src as usize];
+                    let o = ((web_y0 + y) * base_w + x) * 4;
+                    rgba[o..o + 3].copy_from_slice(&c[..3]);
+                    rgba[o + 3] = 255;
+                }
+            }
+            web_uv = wi
+                .sprites
+                .iter()
+                .map(|e| {
+                    e.frames
+                        .first()
+                        .filter(|_| e.width > 0 && e.height > 0)
+                        .map(|f| {
+                            [
+                                f.x as f32,
+                                (web_y0 as u32 + f.y as u32) as f32,
+                                e.width as f32,
+                                e.height as f32,
+                            ]
+                        })
+                })
+                .collect();
+        }
+
         // Frame rects per sprite id in the base atlas region (the
         // map's icon markers crop from here).
         let sprite_rects = index
@@ -425,7 +472,46 @@ impl UiAssets {
             sub_uv,
             glyph_uv,
             line_height,
+            web_uv,
         }
+    }
+
+    /// Whether the bundle carried the spider-web overlay bank.
+    pub fn has_web(&self) -> bool {
+        !self.web_uv.is_empty()
+    }
+
+    /// The fullscreen SPIDER-WEB overlay (remc2 EF:21668-710): tile
+    /// the 6×4 grid of bank sprites 1..=24 across the viewport —
+    /// retail walks `x += tile.width` per tile and `y += row height`
+    /// per row over the 640×480 view, hard on/off with no fade;
+    /// drawn while the paralyze web (`mobilizeCounter`) is live. The
+    /// grid is authored for 640×480, so placement scales by
+    /// (w/640, h/480) to cover any window.
+    pub fn web_quads(&self, w: f32, h: f32) -> Vec<UiQuad> {
+        let (sx, sy) = (w / 640.0, h / 480.0);
+        let mut quads = Vec::with_capacity(24);
+        let mut id = 1usize; // actPlayerIndex starts at 1 (EF:21680)
+        let mut y = 0.0f32;
+        for _row in 0..4 {
+            let mut x = 0.0f32;
+            let mut row_h = 0.0f32;
+            for _col in 0..6 {
+                let Some(uv) = self.web_uv.get(id).copied().flatten() else {
+                    return quads; // short bank — draw what exists
+                };
+                quads.push(UiQuad {
+                    rect: snap([x * sx, y * sy, uv[2] * sx, uv[3] * sy]),
+                    uv,
+                    tint: WHITE,
+                });
+                x += uv[2];
+                row_h = uv[3];
+                id += 1;
+            }
+            y += row_h;
+        }
+        quads
     }
 
     /// The messaging-font line height in source pixels (tallest glyph

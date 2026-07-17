@@ -631,6 +631,7 @@ fn load_level(
             // to the selector pane instead (drawn directly).
             !is_mc2,
             bundle.font.as_ref().map(|(i, p)| (i, p.as_slice())),
+            bundle.web_sprites.as_ref().map(|(i, p)| (i, p.as_slice())),
         )
     });
 
@@ -2946,6 +2947,33 @@ impl ApplicationHandler for App {
                         }
                     }
                     if !self.book_open() {
+                        // The paralyze WEB overlay (remc2 EF:21668-
+                        // 710): the HWEB bank tiled over the view
+                        // while the web counter is live — spider
+                        // webs + the (9,21) spit. Hard on/off, no
+                        // fade, exactly retail (player 2026-07-17:
+                        // the sim drag was in, the texture missing).
+                        if self.sim.carpet_mc2.mobilize > 0 && assets.has_web() {
+                            quads.extend(assets.web_quads(size.0, size.1));
+                        }
+                        // The stagger GREEN tint (`SetPalette
+                        // Modification_5C830` subMod 3, EF:31935-
+                        // 32002: R and B darkened by 56*count>>8,
+                        // count = 171*ms/3+85, green untouched — the
+                        // manticore-spit poison cast, distinct from
+                        // the subMod-2 red damage flash). An alpha-
+                        // blended green quad at the retail
+                        // subtraction magnitude (≈12/17/22%) is the
+                        // RGBA approximation of the palette edit.
+                        let ms = self.sim.carpet_mc2.move_speed;
+                        if ms > 0 {
+                            let count = (171.0 * ms as f32 / 3.0 + 85.0).min(256.0);
+                            let a = count * 56.0 / 65536.0;
+                            quads.push(ui::solid(
+                                [0.0, 0.0, size.0, size.1],
+                                [0.05, 0.42, 0.08, a],
+                            ));
+                        }
                         quads.extend(ui::vitals_quads(
                             &vitals,
                             size.0,

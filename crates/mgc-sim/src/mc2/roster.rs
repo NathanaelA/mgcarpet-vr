@@ -1659,13 +1659,24 @@ impl Gen {
                         }
                         let _ = tz;
                     }
+                    // Leap recovery (EF:15771-88): retail reads the
+                    // OLD counter, decrements, then compares the OLD
+                    // value — the ground row 85 (v_14=-128) restores
+                    // on the FIRST recover tick. The port's early
+                    // decrement made the `== 18` unreachable, so the
+                    // leaper stayed on the free-flight dive row 87
+                    // (v_14=0) forever and ran on air at whatever
+                    // altitude the chase reached (player 2026-07-17:
+                    // "they continue running at the same altitude").
                     4 => {
-                        self.ent[i].f26 -= 1;
-                        if self.ent[i].f26 == 18 {
-                            self.ent[i].row156 = 85;
-                            self.ent[i].f126 = self.ent[i].f130;
-                        }
-                        if self.ent[i].f26 <= 0 {
+                        let v = self.ent[i].f26;
+                        self.ent[i].f26 = v - 1;
+                        if v != 0 {
+                            if v == 18 {
+                                self.ent[i].row156 = 85;
+                                self.ent[i].f126 = self.ent[i].f130;
+                            }
+                        } else {
                             self.ent[i].f71 = 0;
                             self.ent[i].f126 = self.ent[i].f128;
                         }
