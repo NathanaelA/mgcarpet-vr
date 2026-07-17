@@ -274,6 +274,7 @@ fn mc2_rivals_spawn_brain_objective() {
     // dead rival with a castle RESPAWNS, so keep the castles smitten
     // too; a castle-less dead rival is BANISHED, which the two
     // kill-player stages read.
+    let mut saw_banish = false;
     for t in 0..8000 {
         if w.completed() {
             break;
@@ -284,11 +285,21 @@ fn mc2_rivals_spawn_brain_objective() {
             w.debug_smite(3, 2);
         }
         w.tick(pose, idle);
+        // The FINAL-death broadcast (retail lang 283, fired once on
+        // the elimination edge — player 2026-07-17: ours said "has
+        // died." for final and non-final deaths alike).
+        saw_banish |= w
+            .notification()
+            .is_some_and(|(t, _)| t.contains("has been banished from the realm"));
     }
     let views = w.rival_views();
     assert!(
         views.iter().all(|v| v.eliminated),
         "castle-less dead rivals are banished"
+    );
+    assert!(
+        saw_banish,
+        "an elimination broadcasts the banished-from-the-realm line"
     );
     assert!(
         w.completed(),

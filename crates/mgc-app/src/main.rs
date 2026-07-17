@@ -1872,7 +1872,7 @@ impl App {
             .get(slot as usize)
             .copied()
             .unwrap_or("?");
-            eprintln!("{name} is dead");
+            eprintln!("{name} has died");
         }
         let terrain = w.terrain_dirty;
         let entities = w.entities_dirty;

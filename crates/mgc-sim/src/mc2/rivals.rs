@@ -2766,6 +2766,20 @@ impl World {
     /// converts to elimination).
     fn mc2_rival_dead_wait(&mut self, ri: usize, i: usize) {
         if self.rival_castle(self.mc2_rivals[ri].ent).is_none() {
+            // The FINAL-death broadcast (retail lang 283, sub_5E7C0
+            // EF:60282-97: printed once on the elimination edge —
+            // the byte_0x006 guard — with toast countdown 200; the
+            // per-death "has died." already fired at corpse-fall).
+            // Player 2026-07-17: ours said "has died." for both.
+            if !self.mc2_rivals[ri].eliminated {
+                let slot = self.mc2_rivals[ri].slot;
+                let name = MC2_RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
+                self.set_notification(
+                    format!("{name} has been banished from the realm."),
+                    200,
+                    [0xFF, 0, 0],
+                );
+            }
             self.mc2_rivals[ri].eliminated = true;
             return;
         }

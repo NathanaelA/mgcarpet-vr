@@ -1796,12 +1796,14 @@ impl World {
                 self.g.kills = self.g.kills.saturating_add(1);
             }
         }
-        // Death message for the app ticker + toast (retail lang 54
-        // "%name% is dead", :55499-517).
+        // Death message for the app ticker + toast (retail etext 54
+        // = "has died." rendered "<Name> has died.", periods=100 —
+        // :55499-517 + the drawType-0 sprintf :26518-33; the old
+        // "is dead" wording was etext 56, the wrong neighbor).
         let slot = self.rivals[ri].slot;
         self.rival_deaths.push(slot);
         let name = RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
-        self.set_notification(format!("{name} is dead"), 120, [0xFF, 0, 0]);
+        self.set_notification(format!("{name} has died."), 100, [0xFF, 0, 0]);
         // JAR SCATTER (:55519-49): every owned manifestation detaches
         // into a decaying ground jar around the corpse.
         let (cx, cy) = (self.g.ent[i].x, self.g.ent[i].y);
@@ -1856,6 +1858,21 @@ impl World {
     /// counts, :55622).
     fn rival_dead_wait(&mut self, ri: usize, i: usize) {
         if self.rival_castle(self.rivals[ri].ent).is_none() {
+            // The FINAL-death broadcast (retail etext 62 via the
+            // opcode-0x1D elimination arm, :48812-25: "<Name> has
+            // been eliminated from the realm.", periods=100 — MC1
+            // says "eliminated" where MC2 says "banished"). Once,
+            // on the elimination edge (player 2026-07-17: ours was
+            // silent here).
+            if !self.rivals[ri].eliminated {
+                let slot = self.rivals[ri].slot;
+                let name = RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
+                self.set_notification(
+                    format!("{name} has been eliminated from the realm."),
+                    100,
+                    [0xFF, 0, 0],
+                );
+            }
             self.rivals[ri].eliminated = true;
             // The husk stays hidden; property persists (:55622).
             return;
