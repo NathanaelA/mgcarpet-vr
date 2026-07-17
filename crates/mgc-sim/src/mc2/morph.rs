@@ -429,7 +429,7 @@ impl Gen {
                     self.plume = col as u16;
                 }
             }
-            if let Some(tw) = self.mc2_spawn_tornado16(x, y, gz) {
+            if let Some(tw) = self.mc2_spawn_boulder16(x, y, gz) {
                 self.ent[tw].id24 = id;
                 let seed = self.ent_rand(i);
                 self.ent[tw].rand = seed;

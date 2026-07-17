@@ -870,6 +870,8 @@ pub struct FlockProbeRow {
     pub life: i32,
     /// Awake countdown (f58; 0 = asleep, 0xFA = never-woken sentinel).
     pub awake: i16,
+    /// StageVar2 / controlled-slot kind (site_z; 0 = free).
+    pub hold: i16,
     /// Pack leader slot (f52; 0 = none).
     pub leader: u16,
     /// Chase/flee target slot (f146; 0xFFFF = the player).
@@ -1762,14 +1764,20 @@ impl World {
                 }
                 // The (10,22) whirlwind head; its model-75 tail
                 // nodes (action 82) are EV no-ops the head drags.
-                // Action 16 = the (10,16) summit TORNADO — retail's
-                // SAME driver sub_33110 under its own action row
-                // (mc2-class10-m18-m91-summit.md §4.1); shadows
-                // MC1's state 16 like the meteor's 17.
-                10 if matches!(self.game, GameId::Mc2)
-                    && matches!(self.g.ent[i].tick70, 16 | 22) =>
-                {
+                // ONLY action 0x16 = 22 runs the whirlwind driver
+                // `sub_33110` (0x214110, strA0 row 0x0016 EF:1624).
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 22 => {
                     self.g.mc2_whirlwind_tick(i, &ctx)
+                }
+                // Action 16 DECIMAL = the (10,16) volcano BOULDER,
+                // `sub_32600` (0x213600, row 0x0010 EF:1618) — a
+                // separate ballistic machine. The old trace's
+                // dec/hex mixup routed it onto the whirlwind driver:
+                // sway + cyclone sound + Whirlwind XP from volcano
+                // rocks (player 2026-07-17). Shadows MC1's state 16
+                // like the meteor's 17.
+                10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 16 => {
+                    self.g.mc2_boulder16_tick(i)
                 }
                 // The dome's summit children (mc2::morph): 18 = the
                 // ground-vortex eruption controller (shadows MC1's
@@ -6609,9 +6617,10 @@ impl World {
     /// from the terrain under the carpet, fire and market loops from
     /// emitter proximity. The original refreshes per-player countdown
     /// fields from the emitters' own handlers; the INTERIM probe here
-    /// is a direct radius scan (8 tiles) over live fires (class 10
-    /// m0/m6) and village houses (m45) — same audible result, exact
-    /// hysteresis owed with the emitter trace.
+    /// is a direct radius scan (8 tiles) over live BIG fires (class
+    /// 10 m6 — the only model whose handler latches the retail fire
+    /// countdown) and village houses (m45) — same audible result,
+    /// exact hysteresis owed with the emitter trace.
     pub fn take_audio(&mut self, player: PlayerPose) -> AudioFrame {
         let over_water = self.g.on_water_pub(player.x, player.y);
         const AMBIENT_RANGE: i32 = 8 * 256;
@@ -6620,7 +6629,16 @@ impl World {
             if e.flags & 1 == 0 || e.flags & 0x400 != 0 || e.class64 != 10 {
                 continue;
             }
-            let is_fire = matches!(e.model65, 0 | 6);
+            // Fire-ambient loop: retail latches the per-player fire
+            // countdown ONLY from the persistent (10,6) big fire
+            // (MC2 `sub_31760`/`sub_5C870` EF:43602-14; MC1
+            // `sub_252D0` remc1:28215). The (10,0) SMALL fire never
+            // latches it — with model 0 admitted here, a meteor's
+            // per-tick spark trail dragged the fire-crackle loop
+            // along the whole flight (player 2026-07-17: "flying
+            // meteor crackles"). Same over-broad-proximity-key class
+            // as the volcano-boulder cyclone bug.
+            let is_fire = e.model65 == 6;
             let is_house = e.model65 == 45 && e.act_life >= 0;
             if !is_fire && !is_house {
                 continue;
@@ -7047,6 +7065,29 @@ impl World {
         0
     }
 
+    /// Test hook (Rebound): spawn a HOSTILE class-9 subtype-0 bolt
+    /// (impact (10,0), the whitelisted fireball pair) owned by the
+    /// fake enemy id `owner`, at 8.8 position (x, y, z) flying
+    /// `yaw` — as an enemy shooter's launch would. Returns the slot,
+    /// or 0 on a full pool.
+    #[doc(hidden)]
+    pub fn debug_mc2_hostile_bolt(&mut self, x: u16, y: u16, z: i16, yaw: u16, owner: u16) -> usize {
+        let Some(i) = self.g.mc2_spawn_cast_proj(0, x, y, z) else {
+            return 0;
+        };
+        let e = &mut self.g.ent[i];
+        e.id24 = owner;
+        e.f68 = 10;
+        e.f69 = 0;
+        e.f30 = yaw;
+        e.f34 = yaw;
+        e.f32 = 0;
+        e.f36 = 0;
+        e.f44 = 300;
+        e.flags |= crate::mc2::proj::F_AIMED; // fly straight, no autoaim
+        i
+    }
+
     /// The class-5 model the human is currently transformed into
     /// (Metamorph, spell 4), or 0 when not transformed. The app HIDES the
     /// carpet while this is nonzero (the pooled creature draws in its
@@ -7153,6 +7194,7 @@ impl World {
                 state: e.tick70,
                 life: e.act_life,
                 awake: e.f58,
+                hold: e.site_z,
                 leader: e.f52,
                 target: e.f146,
                 attacker: e.f40,

@@ -1064,7 +1064,10 @@ impl World {
         // EF:57068-tail, and the sight/rebound analogues).
         match spell {
             6 => self.player.shield = false,
-            8 => self.player.rebound = false,
+            8 => {
+                self.player.rebound = false;
+                self.g.mc2_rebound_precise.0 = 0;
+            }
             // Metamorph teardown (`sub_6A030` expiry EF:56394): despawn
             // the pose-puppet, un-hide the carpet, sound 60.
             4 => {
@@ -1160,7 +1163,37 @@ impl World {
                 7 => 23,
                 _ => 15,
             };
-            if self.mc2_launch(spell, m, &arm, sub, p) {
+            // Lightning T3 (`life_0x1A == 2`): the cast site
+            // `sub_6A5C0` loops `(life != 1) + 1` spawns, fanning
+            // the pair's yaw ±113 (≈±19.9°) off the aim heading
+            // (EF:56599-56656) — "two L2 bolts side by side". The
+            // twins cross-link via f52 (word_0x34_52, EF:56651-56);
+            // retail's only consumer is the beacon drone-lock
+            // despawn arm (sub_66FD0 EF:58727-33, unported) — the
+            // link keeps the state shape for when that lands. The
+            // cast sound rides EACH spawn (sub_6DCA0 tail,
+            // EF:44224-33), and the loop tolerates a full pool.
+            let fan: &[u16] = if spell == 7 && sub.life == 2 {
+                &[113, 113u16.wrapping_neg()]
+            } else {
+                &[0]
+            };
+            let mut twin: Option<usize> = None;
+            for &off in fan {
+                let Some(i) = self.mc2_launch(spell, m, &arm, sub, p) else {
+                    continue;
+                };
+                if off != 0 {
+                    let yaw = p.heading.wrapping_add(off) & 0x7FF;
+                    let e = &mut self.g.ent[i];
+                    e.f30 = yaw;
+                    e.f34 = yaw;
+                }
+                if let Some(t) = twin {
+                    self.g.ent[i].f52 = t as u16;
+                    self.g.ent[t].f52 = i as u16;
+                }
+                twin = Some(i);
                 self.g.snd_player(v6);
             }
             return;
@@ -1192,7 +1225,9 @@ impl World {
                     },
                     sub,
                     p,
-                ) {
+                )
+                .is_some()
+                {
                     // Sound 40 only on a successful spawn (F7).
                     self.g.snd_player(40);
                 }
@@ -1226,9 +1261,16 @@ impl World {
                 self.player.shield = true;
                 self.mc2_award_xp(PLAYER_TARGET, 6, 1);
             }
-            // rebound (EF:56721).
+            // rebound (`sub_6AA00` EF:56721-51): armed-window flag +
+            // the tier's LAW bit — `life==1` (T3) stamps PRECISE
+            // (byte0xc[0]|=0x10: exact return down the reverse ray,
+            // doubled payload), `life==0` scatter (byte[1]|=0x80).
+            // Durations ride the table (125/251/125); the deflection
+            // itself lives in `mc2_rebound_deflect` at the movers'
+            // victim-hit gates.
             8 => {
                 self.player.rebound = true;
+                self.g.mc2_rebound_precise.0 = (sub.life == 1) as i32;
                 self.mc2_award_xp(PLAYER_TARGET, 8, 1);
             }
             // teleport (`sub_6AD60` EF:56860): the real per-tier
@@ -1269,7 +1311,9 @@ impl World {
                     },
                     sub,
                     p,
-                ) {
+                )
+                .is_some()
+                {
                     self.g.snd_player(9);
                 }
             }
@@ -1304,24 +1348,34 @@ impl World {
                     },
                     sub,
                     p,
-                ) {
+                )
+                .is_some()
+                {
                     self.g.snd_player(15);
                 }
             }
-            // alliance: class-9 subtype 25 direct (EF:58039),
-            // sound 9.
+            // alliance: class-9 subtype 25 direct (`sub_6CD20`
+            // EF:58039), sound 9. Impact = the (10,74) CONVERSION
+            // executor — NOT a fire (the old (10,0) tag burned the
+            // target instead of allying it, player 2026-07-17).
+            // charge=true carries the tier's area radius in f71
+            // (life = 16/26/32 tiles); f44 already rides the tier's
+            // subSpell (610/1100/2710) = the charm DURATION, not
+            // damage.
             0x18 => {
                 if self.mc2_launch(
                     spell,
                     m,
                     &DispatchArm {
                         subtype: 25,
-                        impact: (10, 0),
-                        charge: false,
+                        impact: (10, 74),
+                        charge: true,
                     },
                     sub,
                     p,
-                ) {
+                )
+                .is_some()
+                {
                     self.g.snd_player(9);
                 }
             }
@@ -1410,6 +1464,7 @@ impl World {
         self.g.snd_player(60);
     }
 
+    /// Returns the spawned projectile's slot (None = pool full).
     fn mc2_launch(
         &mut self,
         spell: usize,
@@ -1417,7 +1472,7 @@ impl World {
         arm: &DispatchArm,
         sub: Mc2SubSpell,
         p: PlayerPose,
-    ) -> bool {
+    ) -> Option<usize> {
         // Hand muzzle: launch from the firing hand's side (recorded
         // at arm time; the MC1 lateral-step law stands in until the
         // retail hand-offset trace lands — the certified bridge
@@ -1425,7 +1480,7 @@ impl World {
         let right = self.g.ent[m].f50 == 512;
         let (mx, my, mz) = self.muzzle(p, right);
         let Some(i) = self.g.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
-            return false; // pool full: no projectile, NO cast sound
+            return None; // pool full: no projectile, NO cast sound
             // (retail gates the sound on the spawn, EF:44224-39 — F7)
         };
         {
@@ -1464,7 +1519,7 @@ impl World {
             e.type86 = 42;
             e.frame88 = 0;
         }
-        true
+        Some(i)
     }
 
     /// The crosshair instrument's MC2 arm (P-class; `aim_preview`

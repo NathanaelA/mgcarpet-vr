@@ -11,10 +11,12 @@
 //! carried damage→f44 · `mana_0x90_144`→f140.
 //!
 //! DELIBERATE APPROXIMATIONS (cited, all counted where observable):
-//! - The shielded-target ricochet `sub_68740` (EF:55220) and the
-//!   friendly-shield homing/detonate pair `sub_68940`/`sub_68AC0`
-//!   need the (10,78) shield entity — unported (MC2 spell column).
-//!   No shields exist, so the gates are never live; skipped.
+//! - The shielded-target ricochet `sub_68740` is PORTED
+//!   (2026-07-17, [`Gen::mc2_rebound_deflect`] — the Rebound spell
+//!   landed and the skip had gone stale; player: "does not
+//!   rebound"). Still open: the friendly-shield homing/detonate
+//!   pair `sub_68940`/`sub_68AC0` (needs the (10,78) beacon column)
+//!   and the rival-window mirror onto pool entities (rival track).
 //! - The no-target acquisition `sub_67CB0` (EF:54710, model-keyed
 //!   bucket sweeps) serves PLAYER-CAST spells; creature launches
 //!   pre-lock `word_0x96_150`. Until the spell column lands, a
@@ -41,7 +43,7 @@ use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 /// can tell the columns apart without guessing at state numbers.
 pub(crate) const F_MC2PROJ: u32 = 1 << 29;
 /// byte[0] bit 1 — the flyer's "aim acquired" latch (EF:62904).
-const F_AIMED: u32 = 2;
+pub(crate) const F_AIMED: u32 = 2;
 
 /// The virtual projectile the acquisition scan scores from — either
 /// a live flyer on its first tick (`mc2_autoaim`) or the crosshair
@@ -226,6 +228,97 @@ impl Gen {
     }
 
     // ---- the shared flyer flight (sub_65820, EF:62882) ----------------------
+
+    /// `sub_68740` (EF:55221-310) — the REBOUND deflection engine,
+    /// gated at every projectile mover's victim-hit site (EF:62939
+    /// generic flyer, 58892 archer arrow, 58770 lightning carrier,
+    /// 63484/63162 variants). A victim with a live Rebound window
+    /// throws the projectile back at its shooter. Cost gate first
+    /// (`proj.mana/4 > victim.mana` → it hits normally); then the
+    /// impact-pair whitelist: class 10 with subtype ∈ {0,1,9,11,15,
+    /// 17,22,67,71,89} (the 0x44-0x46 range FAILS, EF:55247-53 —
+    /// corrects the audit table), OR model-13 arrows unconditionally.
+    /// On deflect: sound 28, Rebound XP to the deflector
+    /// (`sub_6D8B0(victim, 8, 1)` EF:55283), victim mana −quarter,
+    /// heading reversed (`f34 = f30 + 0x400`, pitch negated). The
+    /// PRECISE tier (T3, `mc2_rebound_precise`) returns it EXACTLY
+    /// down the reverse ray with a DOUBLED payload; scatter fans
+    /// `rand % 0x2D − 22` (MC2's own window — NOT MC1's 0x5B/45).
+    /// The bolt re-owns to the victim, re-homes on the old shooter
+    /// (f146), refills life, relinks at the victim, and flies on.
+    ///
+    /// APPROX register: the human's mana debit is skipped (the MC1
+    /// player-arm INTERIM — the wizard ledger is world-side); the
+    /// returned bolt's xtype/xsubtype re-key (EF:55299) is ported
+    /// for the human shooter only (3,0 — a pool shooter id has no
+    /// O(1) slot resolve); pool victims deflect on the authored
+    /// 0x8000 shield bit and always scatter — RIVAL windows are not
+    /// yet mirrored onto their entities (the rival-track "Rebound
+    /// tiering" item).
+    pub(crate) fn mc2_rebound_deflect(&mut self, i: usize, hit: MailTarget, ctx: &MobCtx) -> bool {
+        // The victim's live-window test (retail `word[0] & 0x8010`).
+        let (active, precise) = match hit {
+            MailTarget::Player => (self.player_rebound, self.mc2_rebound_precise.0 != 0),
+            MailTarget::Pool(j) => (self.ent[j].flags & 0x8000 != 0, false),
+        };
+        if !active {
+            return false;
+        }
+        // Whitelist (EF:55232-53).
+        let (fc, fm, model) = {
+            let e = &self.ent[i];
+            (e.f68, e.f69, e.model65)
+        };
+        if !(model == 13
+            || (fc == 10 && matches!(fm, 0 | 1 | 9 | 11 | 15 | 17 | 22 | 67 | 71 | 89)))
+        {
+            return false;
+        }
+        // Cost gate + debit (pool victims; the human INTERIM-skips).
+        let quarter = (self.ent[i].f140 / 4).max(0);
+        if let MailTarget::Pool(j) = hit {
+            if quarter > self.ent[j].f140 {
+                return false;
+            }
+            self.ent[j].f140 -= quarter;
+        }
+        self.snd(28, i); // the deflection twang
+        let deflector = match hit {
+            MailTarget::Player => PLAYER_TARGET,
+            MailTarget::Pool(j) => self.ent[j].id24,
+        };
+        if deflector == PLAYER_TARGET {
+            self.mc2_cast_xp.0.push((PLAYER_TARGET, 8, 1));
+        }
+        let shooter = self.ent[i].id24;
+        let d = self.ent_rand(i);
+        {
+            let e = &mut self.ent[i];
+            e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
+            e.f32 = e.f32.wrapping_neg() & 0x7FF;
+            if precise {
+                e.f30 = e.f34;
+                e.f44 = e.f44.saturating_mul(2);
+            } else {
+                e.f30 = (e.f34 as i32 + (d % 0x2D) as i32 - 22) as u16 & 0x7FF;
+            }
+            e.f146 = shooter; // re-home on the old shooter
+            e.id24 = deflector;
+            e.act_life = e.max_life as i32;
+            if shooter == PLAYER_TARGET {
+                e.f66 = 3; // the returned bolt collides with the
+                e.f67 = 0; // human wizard's kind (EF:55299)
+            }
+        }
+        match hit {
+            MailTarget::Pool(j) => {
+                let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+                self.move_relink(i, jx, jy, jz);
+            }
+            MailTarget::Player => self.move_relink(i, ctx.px, ctx.py, ctx.pz),
+        }
+        true
+    }
 
     /// Class filter of the victim probe `sub_10780` (EF:3766-69):
     /// `xtype == -1` admits anything, else class must match and
@@ -574,6 +667,20 @@ impl Gen {
                 self.mc2_spawn_summon_ring(x, y, model, id);
                 None
             }
+            // Alliance (spell 24): the (10,74) conversion executor
+            // (`sub_50800` → class-10 action 0x51 = `sub_3A650`,
+            // EF:36945/29637) — a SAME-SPECIES AREA CHARM centered on
+            // the struck creature. Radius = the tier charge f71
+            // (16/26/32 tiles), duration = f44 (subSpell 610/1100/
+            // 2710 ticks), owner = the caster. ZERO damage anywhere —
+            // neither the flyer path nor the handler hurts anything.
+            // A victimless detonation (terrain hit) fizzles, like
+            // retail's executor with no `word_0x96_150`.
+            (10, 74) => {
+                let radius = self.ent[i].f71 as i32;
+                self.mc2_alliance_convert(victim, id, radius, dmg as i32);
+                None
+            }
             (10, 23) => self.mc2_spawn_blast23(x, y, z),
             // Lightning L1/L2 storm burst (`sub_66FD0`'s hard-coded
             // `(10,38)` spawn, EF:58813). Full retail internals (the
@@ -879,6 +986,13 @@ impl Gen {
             }
         }
         let hit = self.mc2_proj_filter(i, scanned);
+        // The Rebound gate (EF:62939): a shielded victim throws the
+        // bolt back at its shooter — no impact, it flies on reversed.
+        if let Some(h) = hit
+            && self.mc2_rebound_deflect(i, h, ctx)
+        {
+            return;
+        }
         if hit.is_none() {
             let ground = self.ground_z(pos.0, pos.1) as i16;
             // Terrain CONTACT — floor, or on caves the CEILING at

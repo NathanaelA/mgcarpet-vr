@@ -1433,9 +1433,17 @@ impl Gen {
                 return;
             }
         }
-        // Impact (LABEL_10 / the entity branch minus the shielded
-        // sub_68740 ricochet — no shielded targets in the slice):
-        // move to the victim, area-write ch0 with f44, despawn.
+        // The Rebound gate (`sub_68740` at EF:58892): a shielded
+        // victim throws the arrow back (model 13 passes the engine's
+        // whitelist unconditionally). The old "no shielded targets
+        // in the slice" skip predates the Rebound spell landing.
+        if let Some(h) = hit
+            && self.mc2_rebound_deflect(i, h, ctx)
+        {
+            return;
+        }
+        // Impact (LABEL_10 / the entity branch): move to the victim,
+        // area-write ch0 with f44, despawn.
         match hit {
             Some(crate::mc1::combat::MailTarget::Pool(v)) => {
                 let (vx, vy, vz) = (self.ent[v].x, self.ent[v].y, self.ent[v].z);
@@ -2236,6 +2244,14 @@ impl Gen {
     /// actions disable the entity like retail's invalid-row path
     /// (:40177) and count a misfit.
     pub(crate) fn mc2_creature_tick(&mut self, i: usize, ctx: &MobCtx) {
+        // The ALLIANCE clock (`sub_1E9C0` head EF:10873 + expiry
+        // EF:11003-10): the charm counts down in EVERY state (the
+        // tier's lever IS the duration) and reverts through the
+        // kind-10 resume shim on expiry or parent death; it also
+        // re-enters the controlled slot after a combat resolves.
+        if self.ent[i].site_z == 14 {
+            self.mc2_alliance_clock(i);
+        }
         let action = self.ent[i].tick70;
         // The shared class-5 `8*M+7` slot (`sub_1D5D0`, EF:9977) — a
         // CONTROLLED creature. StageVar2 (port field: site_z, free on
@@ -2250,6 +2266,7 @@ impl Gen {
             match self.ent[i].site_z {
                 12 => self.mc2_metamorph_creature_tick(i, ctx),
                 13 => self.mc2_summon_creature_tick(i, ctx),
+                14 => self.mc2_alliance_creature_tick(i, ctx),
                 _ => {}
             }
             return;
@@ -2398,6 +2415,175 @@ impl Gen {
                 self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
                 self.ent[i].site_z = 0;
             }
+        }
+    }
+
+    /// `sub_3A650` (EF:29637; the (10,74) executor's class-10 action
+    /// 0x51) — the ALLIANCE conversion: a SAME-SPECIES area charm.
+    /// Sweep a square of tile-radius `radius` (the tier's 16/26/32)
+    /// around the struck creature; every living creature of the
+    /// victim's MODEL passing the `sub_3A7F0` eligibility filter
+    /// (EF:29701) converts: sound 6, StageVar2 = 14, owner → the
+    /// caster (the `mc2_allied` side table — `id24` stays the
+    /// authored disposition), duration → f26, and either its target
+    /// clears (mid-attack, `action & 7 == 2`) or it enters the
+    /// model's controlled slot `8m+7` (EF:29660-90). Zero damage.
+    /// APPROX: retail also converts stage-HELD creatures (StageVar1
+    /// saved to `word_0x4A_74`, restored on expiry) — the port skips
+    /// creatures under a live hold or another charm.
+    pub(crate) fn mc2_alliance_convert(
+        &mut self,
+        victim: u16,
+        parent: u16,
+        radius: i32,
+        duration: i32,
+    ) {
+        let v = victim as usize;
+        if victim == 0
+            || victim == PLAYER_TARGET
+            || v >= self.ent.len()
+            || self.ent[v].class64 != 5
+        {
+            return;
+        }
+        let model = self.ent[v].model65;
+        // `sub_3A7F0`'s model bar: 12-15, 22, 23, 26, 27 are never
+        // charmable — a victim of a barred species converts nothing.
+        if matches!(model, 12..=15 | 22 | 23 | 26 | 27) {
+            return;
+        }
+        let (vx, vy) = (self.ent[v].x as i32 >> 8, self.ent[v].y as i32 >> 8);
+        let dur = duration.clamp(1, i16::MAX as i32) as i16;
+        for j in 1..self.ent.len() {
+            let e = &self.ent[j];
+            if e.class64 != 5
+                || e.model65 != model
+                || e.flags & 0x400 != 0
+                || e.act_life < 0
+                || ((e.x as i32 >> 8) - vx).abs() > radius
+                || ((e.y as i32 >> 8) - vy).abs() > radius
+                // Charmed (13/14/16/17) or stage-held (port APPROX,
+                // doc above) — only free-roaming creatures convert.
+                || !matches!(e.site_z, 0 | 10)
+                // The child-follow state (232) and the flagged m25
+                // are ineligible (EF:29701-29726).
+                || e.tick70 == 232
+                || (model == 25 && e.f71 != 0)
+            {
+                continue;
+            }
+            self.snd(6, j);
+            let e = &mut self.ent[j];
+            e.site_z = 14;
+            e.f26 = dur;
+            if e.tick70 & 7 == 2 {
+                e.f146 = 0;
+            } else {
+                e.tick70 = model.wrapping_mul(8).wrapping_add(7);
+            }
+            self.mc2_allied.0.insert(j as u16, parent);
+        }
+    }
+
+    /// The per-tick half of the alliance law (`sub_1E9C0` head
+    /// EF:10873 + expiry EF:11003-10), run from the class-5 dispatch
+    /// head in EVERY state: count the charm down, revert on expiry /
+    /// parent death through the kind-10 resume shim (`id24` was never
+    /// touched, so the authored disposition simply resumes), and
+    /// re-enter the controlled slot once a combat resolves (retail
+    /// returns controlled creatures to `8m+7`; our model machines
+    /// drop to their wander phases 0/1 instead).
+    fn mc2_alliance_clock(&mut self, i: usize) {
+        if self.ent[i].flags & 0x400 != 0 || self.ent[i].act_life < 0 {
+            self.mc2_allied.0.remove(&(i as u16));
+            return;
+        }
+        let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
+        // Parent-death probe on the 8-tick cadence (pool wizards by
+        // owner id; the human parent's death restarts the level, so
+        // it counts as alive here).
+        let mut parent_dead = parent == 0;
+        if parent != 0 && parent != PLAYER_TARGET && self.ent[i].f63 & 7 == 0 {
+            parent_dead = !(1..self.ent.len()).any(|j| {
+                let e = &self.ent[j];
+                e.class64 == 3
+                    && e.model65 <= 1
+                    && e.id24 == parent
+                    && e.flags & 0x400 == 0
+                    && e.act_life >= 0
+            });
+        }
+        self.ent[i].f26 -= 1;
+        if self.ent[i].f26 <= 0 || parent_dead {
+            self.ent[i].site_z = 10;
+            self.ent[i].f146 = 0;
+            self.mc2_allied.0.remove(&(i as u16));
+            return;
+        }
+        if self.ent[i].tick70 & 7 < 2 {
+            self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(7);
+        }
+    }
+
+    /// `sub_1E9C0` (EF:10873), StageVar2 == 14 — the ALLIANCE-charmed
+    /// creature's controlled slot: fight the caster's fight. Retail
+    /// adopts the parent wizard's target/attacker words; the port's
+    /// out-of-pool human keeps neither, so the observable equivalent
+    /// serves: the nearest pool entity currently TARGETING the parent
+    /// (its attacker), else the nearest enemy wizard. Never a fellow
+    /// ally of the same parent (EF:10984). Engage hands to the
+    /// model's `8m+2` attack KEEPING StageVar2 = 14 (the clock keeps
+    /// counting and re-arms the slot after combat) and awards the
+    /// caster Alliance XP (`sub_6D8B0(parentId, 0x18, 1)`, EF:10998).
+    fn mc2_alliance_creature_tick(&mut self, i: usize, _ctx: &MobCtx) {
+        let parent = self.mc2_allied.0.get(&(i as u16)).copied().unwrap_or(0);
+        let (mx, my) = (self.ent[i].x, self.ent[i].y);
+        let mut target = self.ent[i].f146;
+        let stale = target == 0
+            || target == PLAYER_TARGET
+            || (target as usize) >= self.ent.len()
+            || self.ent[target as usize].flags & 0x400 != 0
+            || self.ent[target as usize].act_life < 0;
+        if stale {
+            target = 0;
+            self.ent[i].f146 = 0;
+        }
+        if target == 0 && self.ent[i].f63 & 7 == 0 {
+            let mut best = i32::MAX;
+            for j in 1..self.ent.len() {
+                let e = &self.ent[j];
+                if j == i || e.flags & 0x400 != 0 || e.act_life < 0 {
+                    continue;
+                }
+                if self.mc2_allied.0.get(&(j as u16)) == Some(&parent) {
+                    continue;
+                }
+                let attacks_parent = parent == PLAYER_TARGET
+                    && matches!(e.class64, 3 | 5)
+                    && e.f146 == PLAYER_TARGET;
+                let enemy_wizard = e.class64 == 3 && e.model65 <= 1 && e.id24 != parent;
+                if !(attacks_parent || enemy_wizard) {
+                    continue;
+                }
+                let d = Self::dist2_sq(mx, my, e.x, e.y);
+                if d < best {
+                    best = d;
+                    target = j as u16;
+                }
+            }
+            self.ent[i].f146 = target;
+        }
+        if target == 0 {
+            return; // no fight to join — stand by (retail idles too)
+        }
+        let (tx, ty) = (self.ent[target as usize].x, self.ent[target as usize].y);
+        let yaw = Self::angle_between(mx, my, tx, ty);
+        self.ent[i].f34 = yaw;
+        self.mc2_move_core(i);
+        let d = Self::isqrt(Self::dist2_sq(mx, my, tx, ty) as u32);
+        if d < 1536 {
+            self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
+            self.mc2_cast_xp.0.push((parent, 24, 1));
         }
     }
 

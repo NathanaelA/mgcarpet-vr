@@ -334,9 +334,13 @@ impl Gen {
         let _ = ez;
         // The human player arm (module doc APPROX): the pull rides
         // the knock channel, the close band rolls the 1-in-7 kill.
+        // Same-owner gate (`sub_39FA0` EF:29261 — the pool filter
+        // `flood_shovable` already ports it; the special-cased human
+        // arm was missing it): your OWN Gravity Well never pulls
+        // you in, and can never roll the 32000 kill on your cast.
         let pd = dist2d(ex, ey, ctx.px as i32, ctx.py as i32);
         let pv5 = ctx.pz as i32 - refz;
-        if pd < 3328 && pv5 < 4096 {
+        if pd < 3328 && pv5 < 4096 && id != crate::mc1::mobs::PLAYER_TARGET {
             if pd <= 32 || pv5 <= 96 {
                 if self.ent_rand(i) % 7 == 0 {
                     self.mail_write(MailTarget::Player, 0, 32000, id);

@@ -518,11 +518,251 @@ fn mc2_lightning_storm_rains_beams() {
             saw_rain,
             "L{tier} storm rains (9,9) beams → (10,23) strikes"
         );
+        // T3 (`life == 2`) fires TWO bolts → two storm clouds
+        // (sub_6A5C0's ±113 fan), so its budget doubles.
+        let slack = if tier == 2 { 500 } else { 250 };
         assert!(
-            peak <= ambient_peak + 250,
+            peak <= ambient_peak + slack,
             "L{tier} storm stays pool-bounded (ambient {ambient_peak}, peak {peak})"
         );
     }
+}
+
+#[test]
+fn mc2_lightning_t3_fans_two_bolts() {
+    // Lightning T3 (`life_0x1A == 2`): the cast site `sub_6A5C0` spawns
+    // TWO (9,12) charged bolts fanned yaw ±113 off the aim heading and
+    // cross-links the pair via f52 (EF:56599-56656) — "two L2 bolts
+    // side by side" (player 2026-07-17: T3 looked identical to T2).
+    // T2 (`life == 1`) stays a single bolt.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    let pose = pose_at(&w, cx, cy);
+
+    w.mc2_select_spell(7, 1, 0); // T2 first: a single bolt
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(count(&w, 9, 12), 1, "tier 2 launches a single bolt");
+
+    let mut w = build_world(&root).unwrap();
+    w.set_dev_spells(true);
+    w.mc2_select_spell(7, 2, 0); // T3: the ±113 pair
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    let bolts = w.debug_flock_probe(9, 12);
+    assert_eq!(bolts.len(), 2, "tier 3 launches two bolts");
+    let mut aims: Vec<u16> = bolts.iter().map(|b| b.aim).collect();
+    aims.sort_unstable();
+    let mut expect = vec![
+        pose.heading.wrapping_add(113) & 0x7FF,
+        pose.heading.wrapping_sub(113) & 0x7FF,
+    ];
+    expect.sort_unstable();
+    assert_eq!(aims, expect, "the pair fans yaw ±113 off the aim heading");
+    assert_eq!(
+        (bolts[0].leader as usize, bolts[1].leader as usize),
+        (bolts[1].slot, bolts[0].slot),
+        "the twins cross-link via f52 (word_0x34_52)"
+    );
+}
+
+#[test]
+fn mc2_alliance_charms_instead_of_burning() {
+    // Alliance (spell 24): the (9,25) bolt's impact is the (10,74)
+    // SAME-SPECIES AREA CHARM (`sub_50800` → `sub_3A650`,
+    // EF:36945/29637) — creatures convert to the caster's side (the
+    // controlled slot `8m+7`, StageVar2 = 14) and take ZERO damage.
+    // The old (10,0) impact tag burned the target for 400 instead
+    // (player 2026-07-17: "damages monsters instead of allying").
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        return;
+    };
+    w.set_dev_spells(true);
+
+    // A grounded, charm-eligible species (the sub_3A7F0 bar excludes
+    // 12-15/22/23/25/26/27; skip the known flyers — the (9,25) bolt
+    // acquires grounded creatures only).
+    let victim = w
+        .debug_pool()
+        .1
+        .iter()
+        .find(|e| {
+            e.class == 5
+                && e.life > 0
+                && !matches!(e.model, 2 | 3 | 12..=16 | 19 | 22 | 23 | 25..=27)
+        })
+        .map(|e| (e.model, e.tx, e.ty))
+        .expect("level-000 has an eligible grounded creature");
+    let (model, tx, ty) = victim;
+
+    let life_sum = |w: &World| -> i64 {
+        w.debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == 5 && e.model == model)
+            .map(|e| e.life.max(0) as i64)
+            .sum()
+    };
+    let before = life_sum(&w);
+
+    // Point-blank pursuit: every volley re-reads the (wandering)
+    // creature's live position and fires from 2 tiles south of it
+    // (heading 0 flies -y) at its own height — the bolt's ≤128-unit
+    // sub-step victim probe crosses the creature's map cell on the
+    // first flight tick, no autoaim geometry to get lucky with.
+    w.mc2_select_spell(24, 2, 0);
+    let mut charmed = false;
+    'volley: for _ in 0..10 {
+        let Some(c) = w
+            .debug_flock_probe(5, model)
+            .into_iter()
+            .find(|r| r.life > 0)
+        else {
+            break;
+        };
+        let (cx, cy) = (c.x as f32 / 256.0, c.y as f32 / 256.0);
+        let alt = w.ground_height_tiles(cx, cy) + 0.5;
+        let pose = PlayerPose::from_tiles(cx, alt, cy + 2.0, 0.0, 0.0, 0.0);
+        w.tick(
+            pose,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..12 {
+            w.tick(pose, PlayerCommand::default());
+            charmed = w.debug_flock_probe(5, model).iter().any(|r| r.hold == 14);
+            if charmed {
+                break 'volley;
+            }
+        }
+    }
+    assert!(charmed, "an alliance hit charms the species into 8m+7");
+    assert!(
+        life_sum(&w) >= before,
+        "the charm deals no damage (the old (10,0) fire tag burned 400)"
+    );
+}
+
+#[test]
+fn mc2_volcano_boulders_are_not_cyclones() {
+    // (10,16) volcano eruption boulders run `sub_32600` — a ballistic
+    // rolling rock that bounces and lights (10,6) standing fires —
+    // NOT the whirlwind driver `sub_33110` (the old trace's action
+    // 16-vs-0x16 dec/hex mixup). Symptoms fixed (player 2026-07-17):
+    // cyclone sound 49 + sway + Whirlwind XP from volcano rocks.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    let pose = pose_at(&w, cx, cy);
+    let xp21 = w.mc2_book_view().xp[21];
+
+    w.mc2_select_spell(18, 2, 0); // Volcano T3
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    let (mut boulders_seen, mut boulder_fire) = (false, false);
+    for _ in 0..3000 {
+        w.tick(pose, PlayerCommand::default());
+        if count(&w, 10, 16) > 0 {
+            boulders_seen = true;
+            // A boulder-lit (10,6) fire runs on the short 30-tick
+            // life (the ctor's own is 240).
+            boulder_fire |= w
+                .debug_pool()
+                .1
+                .iter()
+                .any(|e| e.class == 10 && e.model == 6 && e.life > 0 && e.life <= 30);
+        }
+        assert_eq!(count(&w, 10, 22), 0, "no whirlwind head exists here");
+        let frame = w.take_audio(pose);
+        assert!(
+            !frame.events.iter().any(|e| e.id == 49),
+            "a boulder must not run the cyclone loop (sound 49)"
+        );
+        if boulders_seen && boulder_fire {
+            break;
+        }
+    }
+    assert!(boulders_seen, "the volcano actually erupted boulders");
+    assert!(boulder_fire, "a landing boulder lights a 30-tick (10,6) fire");
+    assert_eq!(
+        w.mc2_book_view().xp[21] - xp21,
+        0,
+        "volcano rocks award no Whirlwind XP"
+    );
+}
+
+#[test]
+fn mc2_meteor_flight_does_not_drag_the_fire_loop() {
+    // The (9,3) meteor shot lays a decorative (10,0) fire spark EVERY
+    // flight tick. Retail's fire-ambient loop latches only from the
+    // persistent (10,6) BIG fire (`sub_31760` → `sub_5C870`,
+    // EF:43602-14) — the small-fire trail must NOT arm `fire_near`
+    // and drag the fire-crackle loop along the flight (player
+    // 2026-07-17: "flying meteor crackles"; the over-broad
+    // proximity-key class).
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    let pose = pose_at(&w, cx, cy);
+    w.mc2_select_spell(9, 0, 0); // Meteor T1
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    let mut saw_spark = false;
+    for _ in 0..30 {
+        w.tick(pose, PlayerCommand::default());
+        saw_spark |= count(&w, 10, 0) > 0;
+        let frame = w.take_audio(pose);
+        assert!(
+            !frame.fire_near,
+            "the meteor's (10,0) spark trail must not arm the fire-ambient loop"
+        );
+    }
+    assert!(saw_spark, "the flight actually laid (10,0) sparks");
 }
 
 #[test]
@@ -1099,4 +1339,120 @@ fn mc2_spell_select_raises_notification_toast() {
         w.notification().is_none(),
         "toast cleared after its 20-tick life"
     );
+}
+
+#[test]
+fn mc2_rebound_deflects_and_reowns() {
+    // Rebound (spell 8, `sub_68740` EF:55221-310): a hostile bolt
+    // striking the shielded player is thrown BACK — re-owned to the
+    // player, heading reversed, life refilled — instead of hitting
+    // (player 2026-07-17: "does not rebound, any of the three
+    // levels" — the engine was never gated into the MC2 movers).
+    // T1/T2 scatter ±22 around the reverse ray; T3 (PRECISE) returns
+    // it EXACTLY reversed.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    for (tier, precise) in [(0u8, false), (2u8, true)] {
+        let Some(mut w) = build_world(&root) else {
+            return;
+        };
+        w.set_dev_spells(true);
+        let (cx, cy) = open_spot(&w);
+        let pose = pose_at(&w, cx, cy);
+        let xp8 = w.mc2_book_view().xp[8];
+
+        w.mc2_select_spell(8, tier, 0);
+        w.tick(
+            pose,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        assert!(w.mc2_book_view().armed[8], "the Rebound window is live");
+
+        // A hostile bolt from 3 tiles north, flying south (0x400)
+        // straight at the player.
+        let (bx, by) = (pose.x, pose.y.wrapping_sub(3 * 256));
+        let slot = w.debug_mc2_hostile_bolt(bx, by, pose.z, 0x400, 900);
+        assert!(slot != 0, "the hostile bolt spawned");
+
+        let mut row = None;
+        for _ in 0..12 {
+            w.tick(pose, PlayerCommand::default());
+            let Some(r) = w.debug_flock_probe(9, 0).into_iter().find(|r| r.slot == slot) else {
+                break; // detonated/expired — no deflection happened
+            };
+            if r.id24 == 0xFFFF {
+                row = Some(r); // re-owned to the player = deflected
+                break;
+            }
+        }
+        let row = row.unwrap_or_else(|| panic!("T{} bolt re-owns to the player", tier + 1));
+        // Reverse ray = 0x400 + 0x400 = 0 (north). f34 carries it.
+        assert_eq!(row.aim, 0, "the reverse ray points back at the shooter side");
+        if precise {
+            assert_eq!(row.yaw, 0, "T3 PRECISE returns exactly down the reverse ray");
+        } else {
+            let dev = (row.yaw as i32 + 22) & 0x7FF;
+            assert!(dev <= 44, "T1 scatter stays within ±22 of the reverse ray");
+        }
+        assert_eq!(
+            w.mc2_book_view().xp[8] - xp8,
+            2, // +1 the cast itself, +1 the deflection (EF:55283)
+            "the deflection awards Rebound XP"
+        );
+    }
+}
+
+#[test]
+fn mc2_whirlwind_duration_law_8x_tier_life() {
+    // Whirlwind/Tornado (spell 21) head lifetime = 8 × the tier's
+    // `life_0x1A` (`sub_678E0` EF:59202-16), with SPELLS.DAT row 21
+    // lives {5, 10, 10} — so retail T3 lasts exactly as long as T2
+    // BY DESIGN (verified byte-for-byte in the CD image; the T3
+    // lever is per-tick damage 240/10, not duration). Pins the law
+    // so the player's "T3 feels short" report stays answered:
+    // 40 / 80 / 80 ticks.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    for (tier, expect) in [(0u8, 40i32), (1, 80), (2, 80)] {
+        let Some(mut w) = build_world(&root) else {
+            return;
+        };
+        w.set_dev_spells(true);
+        let (cx, cy) = open_spot(&w);
+        let pose = pose_at(&w, cx, cy);
+        w.mc2_select_spell(21, tier, 0);
+        w.tick(
+            pose,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        // Let the (9,26) seed land and hatch the (10,22) head.
+        let mut head_life = 0;
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+            if let Some(h) = w
+                .debug_pool()
+                .1
+                .iter()
+                .find(|e| e.class == 10 && e.model == 22 && e.life >= 0)
+            {
+                head_life = head_life.max(h.life);
+            }
+        }
+        assert_eq!(
+            head_life,
+            expect - 1, // observed after its first countdown tick
+            "T{} whirlwind head runs 8×life = {expect} ticks",
+            tier + 1
+        );
+    }
 }

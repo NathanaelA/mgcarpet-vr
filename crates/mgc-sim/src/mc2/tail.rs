@@ -493,14 +493,19 @@ impl Gen {
 
     /// `sub_4EDC0` (EF:35749) — the (10,16) TORNADO-DRAG the summit
     /// vortex (mc2::morph model 18) emits each pulse: subSpell 200,
-    /// life 100..199 (RNG 1), wander speed 52..101 (RNG 2), random
-    /// heading (RNG 3), radius param 256, sprite 210, hover 64 above
-    /// ground, reclaimable (byte[2] bit 1), untargetable. Its ACTION
-    /// is `sub_33110` — THE SAME driver as the (10,22) whirlwind
-    /// head (docs/traces/mc2-class10-m18-m91-summit.md §4.1): the
-    /// dispatch routes action 16 onto [`Gen::mc2_whirlwind_tick`]
-    /// (single node — no tail chain to drag).
-    pub(crate) fn mc2_spawn_tornado16(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+    /// life 100..199 (RNG 1), launch speed 52..101 (RNG 2), random
+    /// heading (RNG 3), vertical impulse 256 (f44 = `word_0x2C_44`),
+    /// sprite 210, hover 64 above ground, reclaimable (byte[2] bit
+    /// 1), untargetable. Its ACTION is 16 decimal → `sub_32600`, the
+    /// ballistic rolling/burning BOULDER — NOT the whirlwind driver:
+    /// the old trace read `0x214110 = sub_33110` for this row, but
+    /// that address belongs to action 0x16 = 22 (dec/hex mixup; the
+    /// class-10 `strA0` row 0x0010 is `0x213600 = sub_32600`,
+    /// EF:1618). The launch impulse is a VELOCITY DELTA in
+    /// dest_x/dest_y (`MoveEntity_57FA0` onto the zeroed
+    /// `axis_0x9A`, EF:35764-69 — the ball-machinery home), not an
+    /// absolute eye point.
+    pub(crate) fn mc2_spawn_boulder16(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
             let e = &mut self.ent[i];
@@ -521,13 +526,113 @@ impl Gen {
         self.link(i, x, y, z);
         let gz = (self.ground_z(x, y) + 64) as i16;
         self.ent[i].z = gz;
-        let mut eye = (x, y, gz);
-        Self::polar_step(&mut eye, yaw, 0, self.ent[i].f126);
-        self.ent[i].dest_x = eye.0;
-        self.ent[i].dest_y = eye.1;
+        let mut d = (0u16, 0u16, 0i16);
+        Self::polar_step(&mut d, yaw, 0, self.ent[i].f126);
+        self.ent[i].dest_x = d.0;
+        self.ent[i].dest_y = d.1;
         self.refill_life(i);
         self.mc2_set_sprite(i, 210);
         Some(i)
+    }
+
+    /// `sub_32600` (0x213600, EF:23729-828) — the (10,16) volcano
+    /// BOULDER: a ballistic rolling/burning rock. Velocity deltas
+    /// ride dest_x/dest_y (clamped ±80/tick), vertical velocity in
+    /// f44 (`word_0x2C_44`, gravity −28 clamped [−384, 256]). On
+    /// terrain contact it rebounds `vz = −(vz/4)` (trunc), splashes
+    /// out on water ((10,5), despawn), lights a `(10,6)` standing
+    /// fire (life 30, subSpell ×3 = 150) where none burns, and
+    /// settles when vz ≤ 28; resting, it takes the `sub_58030`
+    /// terrain-slope push + 250/256 friction (the mana-ball roll
+    /// law). NO sound, NO player sway, NO XP — the old routing onto
+    /// the whirlwind driver produced all three (player 2026-07-17:
+    /// boulders acted as a cyclone and levelled Whirlwind).
+    pub(crate) fn mc2_boulder16_tick(&mut self, i: usize) {
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        // byte[0] |= 2 (EF:23749-51).
+        self.ent[i].flags |= 2;
+        let vx = (self.ent[i].dest_x as i16).clamp(-80, 80);
+        let vy = (self.ent[i].dest_y as i16).clamp(-80, 80);
+        let (x, y, z, vz) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.f44 as i16)
+        };
+        let (px, py) = (x.wrapping_add(vx as u16), y.wrapping_add(vy as u16));
+        let mut pz = z.wrapping_add(vz);
+        // Gravity AFTER the step used the old vz (EF:23765-70).
+        self.ent[i].f44 = (vz - 28).clamp(-384, 256) as u16;
+        let ground = self.ground_z(px, py) as i16;
+        if ground > pz {
+            pz = ground;
+            // Rebound −(vz/4), truncated toward zero (EF:23778).
+            let v8 = self.ent[i].f44 as i16 as i32;
+            self.ent[i].f44 = (-(v8 / 4)) as i16 as u16;
+            // Water (tested at the CURRENT position, EF:23779):
+            // (10,5) splash, id inherited, gone — despawn only if
+            // the splash actually spawned (pool-full keeps rolling).
+            if self.cap_bit(x, y) == 1 {
+                let own = self.ent[i].id24;
+                if let Some(s) = self.mc2_spawn_splash(px, py, pz) {
+                    self.ent[s].id24 = own;
+                    self.ent[i].flags |= 0x400;
+                    return;
+                }
+            } else {
+                // Light a (10,6) standing fire where none burns
+                // (`sub_10B70` cell probe, EF:23790-801): life 30
+                // (act only — max stays the ctor's), subSpell ×3.
+                let t = crate::mc1::features::tile((px >> 8) as u8, (py >> 8) as u8);
+                let mut j = self.map_entity[t] as usize;
+                let mut burning = false;
+                while j != 0 {
+                    let e = &self.ent[j];
+                    if e.class64 == 10 && e.model65 == 6 && e.flags & 0x400 == 0 {
+                        burning = true;
+                        break;
+                    }
+                    j = e.next20 as usize;
+                }
+                if !burning {
+                    let own = self.ent[i].id24;
+                    if let Some(f) = self.mc2_spawn_fire6(px, py, pz) {
+                        let e = &mut self.ent[f];
+                        e.id24 = own;
+                        e.act_life = 30;
+                        e.f140 *= 3;
+                        self.ent[i].f26 = 0; // dword_0x10_16 reset
+                    }
+                }
+                // Settle (EF:23802-03).
+                if (self.ent[i].f44 as i16) <= 28 {
+                    self.ent[i].f44 = 0;
+                }
+            }
+        }
+        self.ent[i].f26 = self.ent[i].f26.wrapping_add(1); // dword_0x10_16++
+        self.move_relink(i, px, py, pz);
+        // Resting on ground: slope push + 250/256 friction (the
+        // mana-ball `sub_58030` law, EF:23809-20; trunc division).
+        if ground == pz {
+            let (tx, ty) = ((px >> 8) as u8, (py >> 8) as u8);
+            let h = |dx: u8, dy: u8| {
+                self.t.height[crate::mc1::features::tile(tx.wrapping_add(dx), ty.wrapping_add(dy))]
+                    as i32
+            };
+            let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
+            let sy = h(0, 0) + h(1, 0) - h(0, 1) - h(1, 1);
+            let vx = ((vx as i32 + sx) * 250 / 256) as i16;
+            let vy = ((vy as i32 + sy) * 250 / 256) as i16;
+            self.ent[i].dest_x = vx as u16;
+            self.ent[i].dest_y = vy as u16;
+        } else {
+            self.ent[i].dest_x = vx as u16;
+            self.ent[i].dest_y = vy as u16;
+        }
     }
 
     /// `sub_51790` (EF:37439) — the (10,71) expanding FISSURE:
@@ -1100,8 +1205,10 @@ impl Gen {
         // player on eye overlap, which is why the outer tornadoes felt
         // inert (player-reported 2026-07-13: "no violent attraction");
         // retail's whirlwind sways the wizard, it does not chip HP.
+        // Same-owner gate (`sub_33810` case 1, EF:24473: `a2x->id ==
+        // a1x->id → return 0`) — your OWN whirlwind never sways you.
         let pd = Self::isqrt(Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32) as i32;
-        if pd < 3328 {
+        if pd < 3328 && id != crate::mc1::mobs::PLAYER_TARGET {
             let toward = Self::angle_between(ctx.px, ctx.py, ex, ey);
             let dir = (toward as i32 + 256) as u16 & 0x7FF; // +45° spiral bias
             // Stronger closer (0..128 across the funnel), clamped to

@@ -703,6 +703,21 @@ pub(crate) struct Gen {
     /// read by the archer Scan-A post-reject. Hash-quiet while
     /// empty (E12 2026-07-15).
     pub(crate) mc2_wanted: Mc2SlotMap<5>,
+    /// The human's REBOUND tier bit (`sub_6AA00` EF:56721-51: tier
+    /// `life==1` stamps PRECISE — byte0xc[0]|=0x10, exact return +
+    /// doubled payload; `life==0` scatter — byte[1]|=0x80). Rides
+    /// beside the [`Gen::player_rebound`] mirror; 0 = scatter.
+    /// Hash-transparent at zero.
+    pub(crate) mc2_rebound_precise: Mc2Quiet<6>,
+    /// ALLIANCE charms (spell 24): charmed creature slot → the
+    /// caster's owner id (retail keeps `parentId` ON the entity,
+    /// EF:29688; the port's creatures never modeled parentId — the
+    /// charm must NOT clobber `id24`, the authored disposition the
+    /// stage census keys on). The tier duration counts down in the
+    /// creature's `f26` (`word_0x2E_46`; its `word_0x30_48` companion
+    /// has no port home — f28 is the MC2 damage-contract flag).
+    /// Hash-quiet while empty.
+    pub(crate) mc2_allied: Mc2SlotMap<8>,
     /// Per-wizard castle research (`array_0x24E_590`, player struct
     /// +0x24E): `[stage-1]` in `.1` = the stage's HP factor
     /// (`subSpellIndex_2`), `[stage-1]` in `.2` = the stage's
@@ -952,6 +967,8 @@ impl Gen {
             mc2_cast_xp: Mc2XpMail::default(),
             mc2_aura_claim: Mc2SlotMap::default(),
             mc2_wanted: Mc2SlotMap::default(),
+            mc2_allied: Mc2SlotMap::default(),
+            mc2_rebound_precise: Mc2Quiet::default(),
             mc2_castle_research: Mc2CastleResearch::default(),
         }
     }
