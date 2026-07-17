@@ -6604,6 +6604,15 @@ impl World {
         });
     }
 
+    /// App-side OPTION toast (game speed cycling, the live F-key /
+    /// letter toggles — player 2026-07-17: retail echoes these on
+    /// screen): the same top-of-screen line the spell toasts ride,
+    /// ~2.5s, white ink to stay apart from the red spell/event line.
+    /// Hash-excluded like every notification.
+    pub fn notify_option(&mut self, text: impl Into<String>) {
+        self.set_notification(text, 60, [255, 255, 255]);
+    }
+
     /// The active notification (text, ink RGB) for the app to draw, or
     /// None when the line is idle/expired.
     pub fn notification(&self) -> Option<(&str, [u8; 3])> {

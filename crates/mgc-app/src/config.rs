@@ -172,6 +172,16 @@ impl GameSpeed {
             GameSpeed::VeryFast => "very fast (MC1 16x / MC2 8x)",
         }
     }
+
+    /// The in-game toast form — no parentheticals (the F3 echo line).
+    pub fn toast_label(self) -> &'static str {
+        match self {
+            GameSpeed::Slow => "slow",
+            GameSpeed::Normal => "normal",
+            GameSpeed::Fast => "fast",
+            GameSpeed::VeryFast => "very fast",
+        }
+    }
 }
 
 // ===========================================================================

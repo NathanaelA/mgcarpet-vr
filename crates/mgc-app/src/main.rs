@@ -1422,152 +1422,174 @@ impl App {
     /// one of them. Live both in flight and inside the menu.
     fn option_key(&mut self, code: KeyCode) -> bool {
         // (cfg_path, mutate) pairs keep the apply path shared with the
-        // menu via apply_option.
-        let path = match code {
+        // menu via apply_option; the second element is the concise
+        // in-game toast ("<Name> on/off" / "Game speed <label>" —
+        // player 2026-07-17: retail echoes live toggles on screen).
+        let onoff = |v: bool| if v { "on" } else { "off" };
+        let (path, toast) = match code {
             KeyCode::F1 => {
                 self.cfg.audio.sound = !self.cfg.audio.sound;
+                let v = self.cfg.audio.sound;
                 println!(
                     "sound: {}{}",
-                    if self.cfg.audio.sound { "on" } else { "off" },
+                    onoff(v),
                     if self.audio.is_none() {
                         " (no audio device)"
                     } else {
                         ""
                     }
                 );
-                "audio.sound"
+                ("audio.sound", format!("Sound {}", onoff(v)))
             }
             KeyCode::F2 => {
                 self.cfg.audio.music = !self.cfg.audio.music;
+                let v = self.cfg.audio.music;
                 println!(
                     "music: {}{}",
-                    if self.cfg.audio.music { "on" } else { "off" },
+                    onoff(v),
                     if self.audio.is_none() {
                         " (no audio device)"
                     } else {
                         ""
                     }
                 );
-                "audio.music"
+                ("audio.music", format!("Music {}", onoff(v)))
             }
             // Game speed (retail F3; MC1 cycles its three levels —
             // ours adds slow).
             KeyCode::F3 => {
                 self.cfg.sim.options.game_speed = self.cfg.sim.options.game_speed.cycle();
-                println!("game speed: {}", self.cfg.sim.options.game_speed.label());
-                "sim.options.game_speed"
+                let speed = self.cfg.sim.options.game_speed;
+                println!("game speed: {}", speed.label());
+                (
+                    "sim.options.game_speed",
+                    format!("Game speed {}", speed.toast_label()),
+                )
             }
             // F4 = retail soften (a screen-space smoothing filter) —
             // not implemented; reserved.
             KeyCode::F5 => {
                 self.cfg.render.preference.reflections = !self.cfg.render.preference.reflections;
-                println!(
-                    "reflections: {}",
-                    if self.cfg.render.preference.reflections {
-                        "on"
-                    } else {
-                        "off"
-                    }
-                );
-                "render.preference.reflections"
+                let v = self.cfg.render.preference.reflections;
+                println!("reflections: {}", onoff(v));
+                (
+                    "render.preference.reflections",
+                    format!("Reflections {}", onoff(v)),
+                )
             }
             KeyCode::F6 => {
                 self.cfg.render.preference.sky = !self.cfg.render.preference.sky;
+                let v = self.cfg.render.preference.sky;
                 println!(
                     "sky: {}{}",
-                    if self.cfg.render.preference.sky {
-                        "on"
-                    } else {
-                        "off"
-                    },
+                    onoff(v),
                     if self.level.sky.is_none() {
                         " (this level has no sky bitmap)"
                     } else {
                         ""
                     }
                 );
-                "render.preference.sky"
+                ("render.preference.sky", format!("Sky {}", onoff(v)))
             }
             // F7 = retail shadows — no shadows option yet (banked for
             // the proper-effects track).
             KeyCode::KeyT => {
                 self.cfg.render.enhancement.smooth_shading =
                     !self.cfg.render.enhancement.smooth_shading;
+                let v = self.cfg.render.enhancement.smooth_shading;
                 println!(
                     "shading: {}",
-                    if self.cfg.render.enhancement.smooth_shading {
+                    if v {
                         "smooth (enhanced)"
                     } else {
                         "per-tile (original)"
                     }
                 );
-                "render.enhancement.smooth_shading"
+                (
+                    "render.enhancement.smooth_shading",
+                    format!("Shading {}", if v { "smooth" } else { "per-tile" }),
+                )
             }
             KeyCode::KeyV => {
                 self.cfg.render.debug.map_trigger_areas = !self.cfg.render.debug.map_trigger_areas;
+                let v = self.cfg.render.debug.map_trigger_areas;
                 println!(
                     "map trigger overlay: {}",
-                    if self.cfg.render.debug.map_trigger_areas {
-                        "on (enhanced)"
-                    } else {
-                        "off (original)"
-                    }
+                    if v { "on (enhanced)" } else { "off (original)" }
                 );
-                "render.debug.map_trigger_areas"
+                (
+                    "render.debug.map_trigger_areas",
+                    format!("Trigger overlay {}", onoff(v)),
+                )
             }
             KeyCode::KeyG => {
                 self.cfg.gameplay.cheat.dev_spells = !self.cfg.gameplay.cheat.dev_spells;
+                let v = self.cfg.gameplay.cheat.dev_spells;
                 println!(
                     "dev spells: {}",
-                    if self.cfg.gameplay.cheat.dev_spells {
+                    if v {
                         "on — all spells, infinite mana (playtest instrument)"
                     } else {
                         "off (authentic acquisition/mana)"
                     }
                 );
-                "gameplay.cheat.dev_spells"
+                (
+                    "gameplay.cheat.dev_spells",
+                    format!("Dev spells {}", onoff(v)),
+                )
             }
             // H = invincibility (player directive 2026-07-16: "right
             // next to G"); health bars moved to B.
             KeyCode::KeyH => {
                 self.cfg.gameplay.cheat.invincible = !self.cfg.gameplay.cheat.invincible;
+                let v = self.cfg.gameplay.cheat.invincible;
                 println!(
                     "invincible: {}",
-                    if self.cfg.gameplay.cheat.invincible {
+                    if v {
                         "on (cheat — damage shown, never applied)"
                     } else {
                         "off (mortal)"
                     }
                 );
-                "gameplay.cheat.invincible"
+                (
+                    "gameplay.cheat.invincible",
+                    format!("Invincibility {}", onoff(v)),
+                )
             }
             KeyCode::KeyB => {
                 self.cfg.render.debug.health_bars = !self.cfg.render.debug.health_bars;
+                let v = self.cfg.render.debug.health_bars;
                 println!(
                     "monster health bars: {}",
-                    if self.cfg.render.debug.health_bars {
-                        "on (debug enhancement)"
-                    } else {
-                        "off (original)"
-                    }
+                    if v { "on (debug enhancement)" } else { "off (original)" }
                 );
-                "render.debug.health_bars"
+                (
+                    "render.debug.health_bars",
+                    format!("Health bars {}", onoff(v)),
+                )
             }
             KeyCode::KeyC => {
                 self.cfg.render.debug.crosshair = !self.cfg.render.debug.crosshair;
+                let v = self.cfg.render.debug.crosshair;
                 println!(
                     "autoaim crosshair: {}",
-                    if self.cfg.render.debug.crosshair {
+                    if v {
                         "on (predictor instrument)"
                     } else {
                         "off (original)"
                     }
                 );
-                "render.debug.crosshair"
+                ("render.debug.crosshair", format!("Crosshair {}", onoff(v)))
             }
             _ => return false,
         };
         self.apply_option(path);
+        // The in-game echo (the retail F3-style live feedback): ride
+        // the sim's notification line when a world is up. Set while
+        // paused it simply shows once the clock resumes.
+        if let Some(w) = &mut self.sim.world {
+            w.notify_option(toast);
+        }
         true
     }
 
