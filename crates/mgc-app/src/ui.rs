@@ -1426,6 +1426,19 @@ pub fn hud_quads(
             let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
             quads.push(solid([mx, my, partial * s, 4.0 * s], METER_GREY));
             meter_dots(&mut quads, mx, my, s, s, (mana / cost).min(54) as usize);
+            // Locked equipped spell (retail `DrawSpellIcon_2E260`
+            // UI:398-405): the manifestation's +136 — the SELECTED
+            // tier's `maxManaLimit` castle prerequisite — is nonzero
+            // and unmet (no castle, or its STORED mana below it) →
+            // the WHOLE box is colour-washed (`DrawSquareByColor`,
+            // palette 16 non-Day / 48 Day). That condition is
+            // exactly the pane grey-out's `castable[s][sel]`
+            // canSummon law; LOCKED_WASH stands in for the palette
+            // square, the same approximation the MC1 arm uses.
+            if !bv.castable[sp as usize][level] {
+                let (fw, fh) = assets.sprite_dims(frame).unwrap_or((64.0, 44.0));
+                quads.push(solid([px * s, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
+            }
             continue;
         }
         if let Some(sp) = spell {
