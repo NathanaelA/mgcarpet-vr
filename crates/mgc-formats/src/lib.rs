@@ -90,7 +90,24 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    — the fullscreen spider-web/paralyze viewport overlay, a 6×4
 ///    grid of 24 8bpp HSPR tiles covering 640×480; drawn while
 ///    `mobilizeCounter` is live, remc2 EF:21668-710).
-pub const BAKE_EPOCH: u32 = 15;
+/// 16: new `assets/mc2-ui/` world-map bundle (campaign screen):
+///    `worldmap-bg.bin` (1280×960 8bpp), `worldmap-pal.bin` (768 B,
+///    6-bit VGA), `worldmap-sprites.bin`/`.json` (the 313-sprite
+///    frontend portal bank) — HSCREEN0.DAT case-6 chunks (remc2
+///    `sub_7A110_load_hscreen` EF:46108-180; docs/traces/
+///    mc2-campaign-save-menu.md).
+/// 17: MC2 speech clips silence the pre-voice mastering junk (the
+///    retail narration crackle — data-as-PCM garbage pressed into
+///    the CD's voice tracks; player-verified against GOG retail).
+///    Durations preserved (`redbook::mute_leading_junk`).
+/// 18: `assets/mc2-ui` gains the frontend-menus set: `menu-bg.bin` /
+///    `menu-pal.bin` / `menu-sprites.bin`/`.json` (the HSCREEN0
+///    case-4 temple main menu), `worldmap-border.bin` (640×480 map
+///    frame, quadrant-RLE decoded from 0x141E85), `font.bin`/`.json`
+///    (DATA/FONT1 glyph masks for frontend text) and `strings.json`
+///    (LANGUAGE/L1.TXT, 471 entries — level descriptions at
+///    23+level).
+pub const BAKE_EPOCH: u32 = 18;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

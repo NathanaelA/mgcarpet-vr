@@ -1479,6 +1479,102 @@ pub fn hud_quads(
 /// (banked with the DrawText path — ROADMAP Tier 3); until the font
 /// lands, a ‖ pause glyph at the same spot marks the frozen sim so a
 /// still screen doesn't read as a hang.
+/// The retail OK / Cancel button sprites of the in-game MSPR bank
+/// (`GameBitmapIndexes.h` SPELL_BUTTON_OK1/CANCEL1) — present in the
+/// MC2 UI bank, absent from MC1's (which never had the dialog).
+const OK_SPRITE: usize = 257;
+const CANCEL_SPRITE: usize = 258;
+
+/// The in-level abandon-confirm button rects in window pixels — the
+/// retail geometry (`GetOkayCancelButtonPositions_30BE0`, GameUI.cpp:
+/// 4578): a contiguous horizontal pair centered on screen, each half
+/// 50×32 native (the sprite size). One geometry shared by the draw
+/// and the click hit test.
+pub fn exit_confirm_rects(w: f32, h: f32) -> ([f32; 4], [f32; 4]) {
+    let s = (w / 640.0).max(1.0);
+    let (bw, bh) = (50.0 * s, 32.0 * s);
+    let ok = [w / 2.0 - bw, h / 2.0 - bh / 2.0, bw, bh];
+    let cancel = [w / 2.0, h / 2.0 - bh / 2.0, bw, bh];
+    (ok, cancel)
+}
+
+/// The in-level abandon-confirmation dialog — the retail MC2 law
+/// (`DrawOkCancelMenu_30A60`, GameUI.cpp:4591-4636): the prompt in
+/// the in-game font over the LIVE view (no panel — the world shows
+/// through) above the centered OK/Cancel sprite pair (MSPR 257/258,
+/// the in-level HUD bank). Everything draws from IN-LEVEL assets, so
+/// MC1/HW and single-level mode reuse it verbatim — MC1's bank has
+/// no OK/Cancel art (retail MC1 had no dialog), so it falls back to
+/// labeled slab buttons in the same geometry. The mild hover tint is
+/// presentational (retail's feedback was the cursor itself).
+pub fn exit_confirm_quads(
+    assets: &UiAssets,
+    text: &str,
+    w: f32,
+    h: f32,
+    cursor: (f32, f32),
+) -> Vec<UiQuad> {
+    const INK: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    const SLAB_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
+    const EDGE: [f32; 4] = [0.75, 0.75, 0.75, 0.35];
+    const HOVER: [f32; 4] = [1.0, 1.0, 1.0, 0.10];
+    let fs = w / 320.0;
+    let (ok, cancel) = exit_confirm_rects(w, h);
+    let mut quads = Vec::new();
+    // The prompt, centered above the button pair, on a soft slab for
+    // readability over bright terrain (jar-marker idiom; retail's
+    // palette font carried its own contrast).
+    let tw = assets.text_width(text) * fs;
+    let lh = assets.font_line_height() * fs;
+    let ty = ok[1] - 2.0 * lh;
+    let pad = 0.4 * lh;
+    quads.push(solid(
+        [
+            (w - tw) / 2.0 - pad,
+            ty - pad,
+            tw + 2.0 * pad,
+            lh + 2.0 * pad,
+        ],
+        SLAB_BG,
+    ));
+    quads.extend(assets.text_quads(text, (w - tw) / 2.0, ty, INK, fs));
+    for (r, id, label) in [(ok, OK_SPRITE, "OK"), (cancel, CANCEL_SPRITE, "Cancel")] {
+        match assets.map_stamp(id) {
+            // The retail sprite fills its half exactly (50×32).
+            Some(st) => quads.push(UiQuad {
+                rect: r,
+                uv: st.uv,
+                tint: [1.0, 1.0, 1.0, 1.0],
+            }),
+            // MC1 fallback: a labeled slab in the same geometry.
+            None => {
+                quads.push(solid(r, SLAB_BG));
+                let s = (w / 640.0).max(1.0);
+                for e in [
+                    [r[0], r[1], r[2], s],
+                    [r[0], r[1] + r[3] - s, r[2], s],
+                    [r[0], r[1], s, r[3]],
+                    [r[0] + r[2] - s, r[1], s, r[3]],
+                ] {
+                    quads.push(solid(e, EDGE));
+                }
+                let lw = assets.text_width(label) * fs;
+                quads.extend(assets.text_quads(
+                    label,
+                    r[0] + (r[2] - lw) / 2.0,
+                    r[1] + (r[3] - lh) / 2.0,
+                    INK,
+                    fs,
+                ));
+            }
+        }
+        if rect_hit(r, cursor) {
+            quads.push(solid(r, HOVER));
+        }
+    }
+    quads
+}
+
 pub fn pause_quads(w: f32, _h: f32) -> Vec<UiQuad> {
     let s = (w / 640.0).max(1.0);
     let (x, y) = (132.0 * s, 50.0 * s);
@@ -1868,7 +1964,7 @@ impl PaneGeom {
     }
 }
 
-fn rect_hit(r: [f32; 4], c: (f32, f32)) -> bool {
+pub fn rect_hit(r: [f32; 4], c: (f32, f32)) -> bool {
     c.0 >= r[0] && c.0 < r[0] + r[2] && c.1 >= r[1] && c.1 < r[1] + r[3]
 }
 

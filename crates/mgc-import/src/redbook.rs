@@ -121,9 +121,171 @@ pub fn read_track(image: &Path, track: AudioTrack) -> std::io::Result<Vec<i16>> 
         .collect())
 }
 
+/// One CD sector of interleaved stereo samples — the junk scan's
+/// granularity.
+const JUNK_SECTOR: usize = 588 * 2;
+
+/// Silence the mastering junk ahead of a speech clip's voice.
+///
+/// The MC2 voiceover tracks carry digital garbage from the studio
+/// mastering ahead of (and between) the voice takes — high-entropy
+/// bytes pressed into the audio, heard as a loud crackle at each
+/// narration start in retail too (player-verified against GOG
+/// 2026-07-18; waveform shows sharply-bounded full-band blocks with
+/// UNCORRELATED stereo channels — data-as-PCM, not sound; the bytes
+/// self-match inside the audio track, not the CD's data track).
+///
+/// Law (tightened 2026-07-18 after the player caught the broad
+/// version clipping clean in-level hints): in the clip's head
+/// (before the first sustained voice run — RMS ≥ 1500 with low ZCR
+/// or stereo correlation ≥ 0.60), find runs of ≥4 consecutive
+/// junk-CERTAIN sectors — RMS ≥ 5000, ZCR ≥ 0.38 AND |stereo
+/// correlation| < 0.25 (confirmed junk measures 0.04-0.17; voice
+/// and music never shed channel correlation). ZERO from the clip
+/// start through the END of the last such run only — never up to
+/// the detected onset — with a short fade after the cut. Durations
+/// are preserved (the narration keeps its authored timing). The
+/// caller additionally gates this to SEGMENT 0 (track heads): the
+/// corruption lives at the start of the map narratives; hint
+/// segments were never affected. Returns muted milliseconds,
+/// None = untouched.
+pub fn mute_leading_junk(pcm: &mut [i16]) -> Option<u32> {
+    let stats: Vec<(f32, f32, f32)> = pcm
+        .chunks_exact(JUNK_SECTOR)
+        .take(300)
+        .map(|seg| {
+            let rms = (seg.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>()
+                / seg.len() as f64)
+                .sqrt() as f32;
+            let zc = seg.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count() as f32
+                / seg.len() as f32;
+            // Stereo correlation: the junk's channels are unrelated
+            // (r≈0, σ≈0.04 at sector length), voice correlates hard
+            // (~0.87 measured) — a detector ZCR can't fake, catching
+            // syllable onsets still buried under fading junk (the
+            // level-1 "Be[fore]", sector-38 r=+0.69).
+            let (l, r): (Vec<i16>, Vec<i16>) = {
+                let l: Vec<i16> = seg.iter().copied().step_by(2).collect();
+                let r: Vec<i16> = seg.iter().copied().skip(1).step_by(2).collect();
+                (l, r)
+            };
+            let n = l.len().min(r.len()) as f64;
+            let (ml, mr) = (
+                l.iter().map(|&x| f64::from(x)).sum::<f64>() / n,
+                r.iter().map(|&x| f64::from(x)).sum::<f64>() / n,
+            );
+            let cov: f64 = (0..n as usize)
+                .map(|i| (f64::from(l[i]) - ml) * (f64::from(r[i]) - mr))
+                .sum();
+            let (vl, vr): (f64, f64) = (
+                l.iter().map(|&x| (f64::from(x) - ml).powi(2)).sum(),
+                r.iter().map(|&x| (f64::from(x) - mr).powi(2)).sum(),
+            );
+            let corr = if vl * vr > 0.0 {
+                (cov / (vl * vr).sqrt()) as f32
+            } else {
+                0.0
+            };
+            (rms, zc, corr)
+        })
+        .collect();
+    let voicey = |i: usize| {
+        stats
+            .get(i)
+            .is_some_and(|&(r, z, c)| r >= 1500.0 && (z < 0.30 || c >= 0.60))
+    };
+    let onset = (0..stats.len())
+        .find(|&i| voicey(i) && (voicey(i + 1) as u8 + voicey(i + 2) as u8) >= 1)?;
+    // Junk-CERTAIN sectors only: loud, white AND stereo-uncorrelated
+    // (voice/music can reach the first two in bursts; it can never
+    // shed its channel correlation — the 2026-07-18 library audit:
+    // confirmed crackle heads sit at |corr| 0.04-0.17, clips the
+    // looser law wrongly ate at 0.3-0.6). Mute only through the END
+    // of the last junk run — never up to the detected onset, so
+    // late-detected voice can't be zeroed.
+    let mut run = 0usize;
+    let mut last_run_end = None;
+    for (i, s) in stats[..onset].iter().enumerate() {
+        if s.0 >= 5000.0 && s.1 >= 0.38 && s.2.abs() < 0.25 {
+            run += 1;
+            if run >= 4 {
+                last_run_end = Some(i + 1);
+            }
+        } else {
+            run = 0;
+        }
+    }
+    let cut = last_run_end? * JUNK_SECTOR;
+    for x in &mut pcm[..cut] {
+        *x = 0;
+    }
+    // ~3 ms linear fade into the onset sector: kills any residual
+    // boundary click without touching audible voice.
+    let fade = 256.min(pcm.len() - cut);
+    for i in 0..fade {
+        let g = i as f32 / fade as f32;
+        pcm[cut + i] = (f32::from(pcm[cut + i]) * g) as i16;
+    }
+    Some((cut as u64 / 2 * 1000 / u64::from(RATE)) as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deterministic white noise (an LCG) at data-burst amplitude.
+    fn noise(len: usize, seed: &mut u32) -> Vec<i16> {
+        (0..len)
+            .map(|_| {
+                *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (*seed >> 16) as i16 / 2
+            })
+            .collect()
+    }
+
+    /// A voicey signal: a low-frequency wave at speaking level
+    /// (ZCR well under 0.30, RMS well over 1500).
+    fn voice(len: usize) -> Vec<i16> {
+        (0..len)
+            .map(|i| (8000.0 * (i as f32 * 0.02).sin()) as i16)
+            .collect()
+    }
+
+    #[test]
+    fn junk_head_is_muted_voice_kept() {
+        let mut seed = 1u32;
+        let mut pcm = Vec::new();
+        pcm.extend(vec![0i16; 4 * JUNK_SECTOR]); // lead silence
+        pcm.extend(noise(12 * JUNK_SECTOR, &mut seed)); // the burst
+        pcm.extend(vec![0i16; 2 * JUNK_SECTOR]); // gap
+        pcm.extend(voice(30 * JUNK_SECTOR));
+        let ms = mute_leading_junk(&mut pcm).expect("burst detected");
+        assert!(ms > 0);
+        // Everything before the voice is silent now.
+        let onset = 18 * JUNK_SECTOR;
+        assert!(pcm[..onset].iter().all(|&x| x == 0), "head muted");
+        // The voice body survives untouched (past the 3 ms fade).
+        assert!(pcm[onset + 512..].iter().any(|&x| x > 6000), "voice kept");
+    }
+
+    #[test]
+    fn clean_clips_and_sibilant_onsets_stay_untouched() {
+        // Silence + voice, no burst.
+        let mut clean = vec![0i16; 6 * JUNK_SECTOR];
+        clean.extend(voice(30 * JUNK_SECTOR));
+        let before = clean.clone();
+        assert_eq!(mute_leading_junk(&mut clean), None);
+        assert_eq!(clean, before, "clean clip untouched");
+        // A SHORT high-ZCR island (a sibilant "S", under 4 sectors)
+        // right before voice must not trigger.
+        let mut seed = 7u32;
+        let mut sib = vec![0i16; 6 * JUNK_SECTOR];
+        sib.extend(noise(2 * JUNK_SECTOR, &mut seed));
+        sib.extend(voice(30 * JUNK_SECTOR));
+        let before = sib.clone();
+        assert_eq!(mute_leading_junk(&mut sib), None);
+        assert_eq!(sib, before, "sibilant onset untouched");
+    }
 
     #[test]
     fn parses_the_mc2_cue_shape() {

@@ -6643,6 +6643,40 @@ impl World {
         self.won
     }
 
+    /// Which MC2 ending marker the endseq is flying to — the class-14
+    /// TARGET MODEL: 3 = the (14,3) checkpoint "X" (retail action 12),
+    /// 4 = the (14,4) demon mouth (action 11). None while no ending
+    /// sequence runs. The campaign driver's exit-taken record: the
+    /// demon mouth routes into the attached secret level
+    /// (EF:60534-44 / EF:31510-48).
+    pub fn mc2_exit_model(&self) -> Option<u8> {
+        self.mc2_endseq.map(|s| s.target_model)
+    }
+
+    /// The MC2 level-exit map markers' `(x, z, model)` in tile units
+    /// — the (11,12)/(11,31) ENDING TRIP SWITCHES (model 12 = the
+    /// checkpoint-X trigger, 31 = the demon-mouth/secret trigger),
+    /// NOT the (14,3)/(14,4) fly-to portals: retail's minimap plots
+    /// sprites 83/84 at the TRIGGER's location (GameUI.cpp:2049-53,
+    /// runtime class 0x0B models 0x0C/0x1F — player-confirmed
+    /// 2026-07-18), unconditionally from level start, and the trip
+    /// clears only the map-icon bit (:54701) — mirrored here by
+    /// excluding tripped (0x400) switches.
+    pub fn mc2_exit_marker_poses(&self) -> Vec<(f32, f32, u8)> {
+        if !matches!(self.game, GameId::Mc2) {
+            return Vec::new();
+        }
+        self.g
+            .ent
+            .iter()
+            .skip(1)
+            .filter(|e| {
+                e.class64 == 11 && matches!(e.model65, 12 | 31) && e.flags & 0x400 == 0
+            })
+            .map(|e| (e.x as f32 / 256.0, e.y as f32 / 256.0, e.model65))
+            .collect()
+    }
+
     /// `InitSwitchChainZaxisAndSound_6F850` (:44523): the shared
     /// arming primitive — every-8th-tick phase gate (byte 62 & 7),
     /// then the PLAYER proximity sense (class-3 model-0 chain walk;

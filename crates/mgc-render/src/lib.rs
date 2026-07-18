@@ -2179,6 +2179,23 @@ impl Renderer {
 
     /// Upload a level: build the terrain mesh, the color/type LUTs, and
     /// the overhead map (terrain + entity dots).
+    /// Drop the loaded level's world drawables — the session-teardown
+    /// counterpart of `load_level` (the frontend owns the frame with
+    /// no level beneath: nothing of the torn-down world may render).
+    /// The world pass is buffer-guarded, so rendering level-less is
+    /// safe; textures and bind groups are simply orphaned until the
+    /// next `load_level` replaces them.
+    pub fn clear_level(&mut self) {
+        self.vertex_buf = None;
+        self.index_buf = None;
+        self.index_count = 0;
+        self.set_billboards(Vec::new());
+        self.set_health_bars(Vec::new());
+        self.set_lights(&[]);
+        self.clear_sky();
+        self.wave_mode = 0;
+    }
+
     pub fn load_level(&mut self, level: &LevelView, overlay: &MapOverlay) {
         let n = MAP_TILES;
         assert_eq!(level.height.len(), n * n);

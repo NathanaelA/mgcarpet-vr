@@ -13,9 +13,13 @@ mod bakecheck;
 mod campaign;
 mod config;
 mod entities;
+mod frontend;
+mod frontend_mc1;
 mod menu;
+mod saves;
 mod settings;
 mod ui;
+mod worldmap;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -121,6 +125,207 @@ impl WorldInit {
         }
         w
     }
+}
+
+/// The parameters the initial `load_level` ran with, kept so a
+/// campaign level switch rebuilds through the exact same path.
+struct LaunchParams {
+    tileset: Option<u8>,
+    terrain_features: bool,
+    pool_slots: Option<usize>,
+    awake_range: Option<u32>,
+}
+
+/// A running campaign (`--campaign <mc1|mc1hw|mc2>`): the level-order
+/// law + the slot's durable retail-format record + the cross-level
+/// carry. The record IS the state — completing a level updates it and
+/// writes the slot file, so quitting anywhere resumes correctly.
+struct CampaignRun {
+    id: campaign::CampaignId,
+    /// 0-based save slot (`--slot`, default slot 1).
+    slot: usize,
+    /// The level being played right now.
+    current: u32,
+    /// MC1/HW slot record (None on MC2). `level` = the level to play.
+    mc1: Option<saves::Mc1Save>,
+    /// MC2 slot record (None on MC1/HW).
+    mc2: Option<saves::Mc2Save>,
+    /// What follows the current fade-out (set at the won edge).
+    next: Option<campaign::NextStep>,
+}
+
+impl CampaignRun {
+    /// Open (or start) a campaign: load the slot's retail-format save
+    /// unless `new_game`, and resolve the level to launch. Errors are
+    /// user-facing (bad save file, finished campaign).
+    fn start(id: campaign::CampaignId, slot: usize, new_game: bool) -> Result<Self, String> {
+        use campaign::CampaignId;
+        let hw = id == CampaignId::Mc1Hw;
+        match id {
+            CampaignId::Mc1 | CampaignId::Mc1Hw => {
+                let path = saves::mc1_path(id.tag(), slot);
+                let save = if !new_game && path.exists() {
+                    let s = saves::Mc1Save::decode(
+                        &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+                    )
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                    println!(
+                        "campaign {}: slot {} \"{}\" at level {}",
+                        id.tag(),
+                        slot + 1,
+                        s.name,
+                        s.level
+                    );
+                    s
+                } else {
+                    println!("campaign {}: new game (slot {})", id.tag(), slot + 1);
+                    saves::Mc1Save {
+                        name: format!("CARPET{}", slot + 1),
+                        ..Default::default()
+                    }
+                };
+                let current =
+                    campaign::mc1_start_level(save.level as u32, hw).ok_or_else(|| {
+                        format!(
+                            "campaign {}: slot {} is a completed campaign — relaunch with \
+                             --new-game to start over",
+                            id.tag(),
+                            slot + 1
+                        )
+                    })?;
+                Ok(Self {
+                    id,
+                    slot,
+                    current,
+                    mc1: Some(save),
+                    mc2: None,
+                    next: None,
+                })
+            }
+            CampaignId::Mc2 => {
+                let path = saves::mc2_path(slot);
+                let save = if !new_game && path.exists() {
+                    let s = saves::Mc2Save::decode(
+                        &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+                    )
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                    println!(
+                        "campaign mc2: slot {} \"{}\" — {} level(s) completed",
+                        slot + 1,
+                        s.label,
+                        s.levels_completed
+                    );
+                    s
+                } else {
+                    println!("campaign mc2: new game (slot {})", slot + 1);
+                    saves::Mc2Save {
+                        label: format!("SLOT {}", slot + 1),
+                        ..Default::default()
+                    }
+                };
+                if save.levels_completed >= 25 {
+                    return Err(
+                        "campaign mc2: slot holds a completed campaign — relaunch with \
+                         --new-game to start over"
+                            .into(),
+                    );
+                }
+                // A revealed-but-uncompleted secret level takes
+                // precedence on resume (the player was mid-branch).
+                let pending_secret = save
+                    .secrets
+                    .iter()
+                    .find(|p| p.activated == 2)
+                    .map(|p| p.level as u32);
+                let current = pending_secret.unwrap_or(save.levels_completed);
+                Ok(Self {
+                    id,
+                    slot,
+                    current,
+                    mc1: None,
+                    mc2: Some(save),
+                    next: None,
+                })
+            }
+        }
+    }
+
+    /// The baked package path for a level of this campaign.
+    fn level_path(&self, level: u32) -> PathBuf {
+        PathBuf::from(format!("baked/{}/level-{level:03}.mgcl", self.id.tag()))
+    }
+
+    /// Write the slot file (creating `saves/<game>/`). IO failure is
+    /// reported, never fatal — losing a save must not kill the run.
+    fn persist(&self) {
+        let (path, bytes) = match self.id {
+            campaign::CampaignId::Mc2 => {
+                let Some(s) = &self.mc2 else { return };
+                (saves::mc2_path(self.slot), s.encode())
+            }
+            _ => {
+                let Some(s) = &self.mc1 else { return };
+                (saves::mc1_path(self.id.tag(), self.slot), s.encode())
+            }
+        };
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&path, bytes)
+        };
+        match write() {
+            Ok(()) => println!("campaign saved: {}", path.display()),
+            Err(e) => eprintln!("error: campaign save {}: {e}", path.display()),
+        }
+    }
+}
+
+/// Scan the 8 MC2 save slots for the frontend pickers: (label,
+/// occupied) per slot — "Empty" for vacant/foreign files, exactly
+/// retail's probe (signature + 20-byte label, MI:1461-79).
+/// Scan the 6 MC1/HW save slots: (label, occupied); "--" = empty,
+/// exactly the retail slot list (`sub_51A10`, :61982).
+fn scan_mc1_slots(tag: &str) -> Vec<(String, bool)> {
+    (0..saves::MC1_SLOTS)
+        .map(|i| {
+            match std::fs::read(saves::mc1_path(tag, i))
+                .ok()
+                .and_then(|b| saves::Mc1Save::decode(&b).ok())
+            {
+                Some(s) => {
+                    let label = if s.name.is_empty() {
+                        format!("CARPET{}", i + 1)
+                    } else {
+                        s.name
+                    };
+                    (label, true)
+                }
+                None => ("--".to_string(), false),
+            }
+        })
+        .collect()
+}
+
+fn scan_mc2_slots() -> Vec<(String, bool)> {
+    (0..saves::MC2_SLOTS)
+        .map(|i| {
+            match std::fs::read(saves::mc2_path(i))
+                .ok()
+                .and_then(|b| saves::Mc2Save::decode(&b).ok())
+            {
+                Some(s) => {
+                    let label = if s.label.is_empty() {
+                        format!("SLOT {}", i + 1)
+                    } else {
+                        s.label
+                    };
+                    (label, true)
+                }
+                None => ("Empty".to_string(), false),
+            }
+        })
+        .collect()
 }
 
 /// Resolve the package's wizards.json into per-slot rival configs
@@ -270,6 +475,10 @@ struct LoadedLevel {
     /// learned spell (MC2's book is XP-driven). Empty off-MC2 or when
     /// the instrument is off. Installed via `mc2_grant_plausible`.
     plausible_book_mc2: Vec<(u8, i32)>,
+    /// The level's human spell-availability mask (wizards slot 0,
+    /// 0/1 per spell) — the campaign grant law is collected ∩ mask
+    /// (remc1 :49229/:49233). None when the package has none.
+    allowed_spells: Option<Vec<u8>>,
 }
 
 /// Resolve the world's live volumes into map overlay circles: amber =
@@ -294,6 +503,26 @@ fn map_areas(world: &mgc_sim::mc1::world::World) -> Vec<mgc_render::MapArea> {
             },
         })
         .collect()
+}
+
+/// The in-level abandon-confirmation prompt: retail MC2's language-
+/// table entry 2 with the code-appended "?" (`DrawOkCancelMenu_30A60`,
+/// GameUI.cpp:4603 — `sprintf("%s?", langindexbuffer[2])`; English
+/// from the decompiler's comment, byte-verification against the
+/// packed language DAT still open).
+const EXIT_CONFIRM_TEXT: &str = "Abandon level?";
+
+/// The map-texture overlay (entity dots + the optional trigger-area
+/// circles) for a level, per the live config.
+fn map_overlay(level: &LoadedLevel, cfg: &config::Config) -> mgc_render::MapOverlay {
+    mgc_render::MapOverlay {
+        dots: level.map_dots.clone(),
+        areas: if cfg.render.debug.map_trigger_areas {
+            level.map_areas.clone()
+        } else {
+            Vec::new()
+        },
+    }
 }
 
 /// Resolve the package plus its asset bundle into what the renderer and
@@ -780,6 +1009,23 @@ fn load_level(
                     Some(st)
                 })
                 .collect(),
+            // The MC2 exit markers (HUD-bank sprites 83 = red X /
+            // 84 = O), CENTERED like retail's minimap blit
+            // (GameUI.cpp:2166-72). MC2-only by construction.
+            exit_x: (game_id == mgc_sim::ids::GameId::Mc2)
+                .then(|| {
+                    let mut st = ui_assets.as_ref().and_then(|u| u.map_stamp(83))?;
+                    st.anchor = [0.5, 0.5];
+                    Some(st)
+                })
+                .flatten(),
+            exit_o: (game_id == mgc_sim::ids::GameId::Mc2)
+                .then(|| {
+                    let mut st = ui_assets.as_ref().and_then(|u| u.map_stamp(84))?;
+                    st.anchor = [0.5, 0.5];
+                    Some(st)
+                })
+                .flatten(),
         },
         map_stamps: Vec::new(),
         objective_marks: Vec::new(),
@@ -791,6 +1037,11 @@ fn load_level(
         etext: bundle.etext.unwrap_or_default(),
         sky: bundle.sky,
         plausible_spells,
+        allowed_spells: package
+            .wizards
+            .as_ref()
+            .and_then(|w| w.wizards.first())
+            .and_then(|h| h.allowed_spells.clone()),
     })
 }
 
@@ -923,8 +1174,90 @@ struct VirtualStick {
     y: f32,
 }
 
-struct App {
+/// One running gameplay instance: the loaded level plus its living
+/// sim. The frontend (main menu / world map) is a LOADER of these
+/// (player-directed architecture, 2026-07-18): a session is
+/// constructed when a level launches and dropped when play returns to
+/// the hub — nothing of the level survives underneath the frontend
+/// (no frozen sim, no ambient audio, no stale renderer world).
+struct Session {
     level: LoadedLevel,
+    sim: Simulation,
+    prev_flyer: Flyer,
+    /// The last two sim-tick pose snapshots (smooth_motion): the
+    /// renderer draws entities lerped prev→cur at the frame's
+    /// accumulator fraction — the same one-tick-behind timeline the
+    /// camera has always run (`prev_flyer`). Empty while the toggle
+    /// is off or fewer than two ticks have run.
+    pose_prev: Vec<mgc_sim::mc1::world::LivePose>,
+    pose_cur: Vec<mgc_sim::mc1::world::LivePose>,
+}
+
+/// Which surface owns the frame: a running level, or one of the
+/// frontend screens. The frontend states hold NO session — the level
+/// is torn down on the way out and rebuilt on the next launch.
+#[derive(Clone, Copy, PartialEq)]
+enum Screen {
+    /// Gameplay (`session` is Some).
+    Level,
+    /// The campaign main menu (MC2 temple / MC1 globe).
+    Menu,
+    /// The MC2 world-map hub.
+    Map,
+}
+
+/// Which atlas currently occupies the renderer's single UI-atlas
+/// slot. Every uploader stamps it; every screen re-uploads only when
+/// it isn't the owner — this replaces the old per-screen
+/// `*_atlas_live` juggling flags.
+#[derive(Clone, Copy, PartialEq)]
+enum UiAtlas {
+    /// Nothing uploaded yet.
+    None,
+    /// The session level's HSPR UI atlas.
+    Level,
+    /// The MC2 world-map screen's atlas.
+    MapScreen,
+    /// The MC2 temple main menu's atlas.
+    MenuMc2,
+    /// The MC1 menu's CPU-composed frame (re-uploaded every frame —
+    /// the animations live in the pixels).
+    MenuMc1,
+    /// The frontend-owned level-UI atlas (the P options menu over a
+    /// frontend screen — fonts + panel art without a session).
+    FrontendUi,
+}
+
+/// The running session, mutably — the gameplay paths' accessor.
+/// A macro (not a method) so field borrows stay disjoint: the borrow
+/// is rooted at `self.session`, leaving `self.cfg`, `self.audio`,
+/// `self.renderer`… free.
+macro_rules! sess {
+    ($s:expr) => {
+        $s.session.as_deref_mut().expect("gameplay path without a session")
+    };
+}
+/// Immutable counterpart of [`sess!`].
+macro_rules! sess_ref {
+    ($s:expr) => {
+        $s.session.as_deref().expect("gameplay path without a session")
+    };
+}
+/// The level-UI asset bank visible from the current mode: the
+/// session's, or the frontend-owned copy (P menu without a session).
+macro_rules! ui_assets {
+    ($s:expr) => {
+        match &$s.session {
+            Some(sess) => sess.level.ui.as_ref(),
+            None => $s.frontend_ui.as_ref(),
+        }
+    };
+}
+
+struct App {
+    /// The running gameplay instance; None while a frontend screen
+    /// owns the app (campaign boot, between levels).
+    session: Option<Box<Session>>,
     /// The single resolved options source of truth (defaults + config
     /// file + CLI overrides, merged in `main`). Every option is read
     /// live off this struct; runtime keys mutate it and re-apply, so a
@@ -1006,15 +1339,6 @@ struct App {
     castle_pos: Option<(f32, f32)>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-    sim: Simulation,
-    prev_flyer: Flyer,
-    /// The last two sim-tick pose snapshots (smooth_motion): the
-    /// renderer draws entities lerped prev→cur at the frame's
-    /// accumulator fraction — the same one-tick-behind timeline the
-    /// camera has always run (`prev_flyer`). Empty while the toggle
-    /// is off or fewer than two ticks have run.
-    pose_prev: Vec<mgc_sim::mc1::world::LivePose>,
-    pose_cur: Vec<mgc_sim::mc1::world::LivePose>,
     keys: HeldKeys,
     mouse: MouseAccum,
     stick: VirtualStick,
@@ -1064,16 +1388,76 @@ struct App {
     /// — the player-directed ending (2026-07-16): no stats screen,
     /// no menu return, campaign stitching comes later. MC2's ending
     /// already fades sim-side (`World::end_fade`); this rides on top
-    /// so both games leave through the same door.
+    /// so both games leave through the same door. In campaign mode
+    /// the full-black beat routes to the next level instead of
+    /// exiting (`CampaignRun::next`).
     quit_fade: Option<f32>,
+    /// The running campaign (`--campaign`); None = single-level mode
+    /// (the fade exits as before).
+    campaign: Option<CampaignRun>,
+    /// The initial `load_level` parameters, for campaign switches.
+    launch: LaunchParams,
+    /// The MC2 world-map screen assets (lazy-loaded on first entry;
+    /// stays None when the mc2-ui bundle is absent).
+    worldmap: Option<worldmap::WorldMap>,
+    /// The MC2 main menu (temple screen) — owns the frame while
+    /// `screen == Screen::Menu` on an MC2 campaign.
+    mainmenu: Option<frontend::MainMenu>,
+    /// The MC1/HW frontend (the 320×200 globe menu).
+    mc1menu: Option<frontend_mc1::Mc1Menu>,
+    /// Which surface owns the frame (see [`Screen`]). Frontend
+    /// screens hold no session — the level is constructed on launch
+    /// and torn down on exit.
+    screen: Screen,
+    /// Owner of the renderer's single UI-atlas slot (see [`UiAtlas`]).
+    ui_atlas: UiAtlas,
+    /// The frontend's 24 Hz mixer-pump accumulator: with no sim
+    /// ticking, `Audio::tick` (the flush that actually PLAYS
+    /// requested samples, runs fades and recovers the narration
+    /// duck) is driven from wall time instead. Without it the map's
+    /// ambient bursts and the menu clicks sit requested-but-silent —
+    /// the "map ambience gone" regression (player, 2026-07-18).
+    frontend_audio_accum: f32,
+    /// Frontend-owned level-UI assets (fonts + panel art) for the P
+    /// options menu while no session exists. Populated from a torn-
+    /// down session's assets, or lazily from the game's variant
+    /// bundle.
+    frontend_ui: Option<ui::UiAssets>,
+    /// The won-edge latch: the completion bookkeeping ran for this
+    /// level. Without it the old level's `won()` refires every frame
+    /// once the fade is consumed (the map screen clears it) — the
+    /// "aggressively saving in a loop" bug (player, 2026-07-18).
+    won_handled: bool,
+    /// The in-level abandon-confirmation dialog is up (player
+    /// directive 2026-07-18: an accidental Esc must never toss an
+    /// hour of progress — the retail MC2 "Abandon level?" OK/Cancel
+    /// dialog, reused for MC1/single-level which retail left
+    /// unguarded). Retail-faithful modality: the world KEEPS RUNNING
+    /// beneath it, the dialog only owns the input. Esc/Cancel stays,
+    /// Enter/OK abandons to the hub (or exits, single-level).
+    exit_confirm: bool,
 }
 
 impl App {
-    fn new(mut level: LoadedLevel, cfg: config::Config, cfg_file: PathBuf) -> Self {
-        let is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
-        // Audio: open the device, load the game's audio bundle, start
-        // the level music. Any failure degrades to silence, never to
-        // an unplayable game.
+    fn new(
+        level: Option<LoadedLevel>,
+        cfg: config::Config,
+        cfg_file: PathBuf,
+        campaign: Option<CampaignRun>,
+        launch: LaunchParams,
+    ) -> Self {
+        // The running game's identity is known without a level: the
+        // campaign id (a campaign boots to its frontend, level-less).
+        let is_mc2 = match (&level, &campaign) {
+            (Some(l), _) => matches!(l.game, mgc_sim::ids::GameId::Mc2),
+            (None, Some(run)) => run.id == campaign::CampaignId::Mc2,
+            (None, None) => false,
+        };
+        // Audio: open the device and load the GAME's audio bundle —
+        // the bundle is per-game, owned by the app across sessions
+        // (the frontend needs music + click samples with no level
+        // alive). Any failure degrades to silence, never to an
+        // unplayable game.
         let mut audio = None;
         if cfg.audio.sound || cfg.audio.music {
             let mut a = mgc_audio::Audio::open();
@@ -1081,7 +1465,15 @@ impl App {
             if is_mc2 {
                 a.set_mc2_danger_ramp();
             }
-            if let Some(dir) = &level.audio_dir {
+            let audio_dir = match &level {
+                Some(l) => l.audio_dir.clone(),
+                None => {
+                    let d = PathBuf::from("baked/assets")
+                        .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+                    d.is_dir().then_some(d)
+                }
+            };
+            if let Some(dir) = &audio_dir {
                 if let Err(e) = a.load_bundle(dir, 0) {
                     eprintln!("note: audio bundle: {e}");
                 }
@@ -1100,36 +1492,10 @@ impl App {
                     0.0
                 },
             );
-            if cfg.audio.music {
-                if let Some(track) = &level.music_track {
-                    if let Err(e) = a.play_music(track, true) {
-                        eprintln!("note: music: {e}");
-                    }
-                }
-            }
             audio = Some(a);
         }
-        let mut sim = match level.world.take() {
-            Some(w) => Simulation::with_world(w),
-            None => Simulation::with_terrain(level.height.clone()),
-        };
-        sim.thrust_model = sim_thrust(cfg.controls.models.thrust);
-        sim.altitude_model = sim_altitude(cfg.controls.models.altitude);
-        if let Some(start) = level.start {
-            sim.flyer = start;
-            sim.sync_carpet_from_flyer();
-        }
-        if let Some(w) = &mut sim.world {
-            apply_instruments(
-                w,
-                cfg.gameplay.cheat.dev_spells,
-                &level.plausible_spells,
-                &level.plausible_book_mc2,
-                cfg.gameplay.cheat.invincible,
-            );
-        }
-        // Which spell-selection surfaces are live, resolved against the
-        // running game (MC2 owns exactly the CTRL pane).
+        // Which spell-selection surfaces are live, resolved against
+        // the running game (re-resolved on every session install).
         let selector = cfg.gameplay.enhancement.spell_selector.resolve(is_mc2);
         let pane = selector.ctrl_pane.then(|| {
             if is_mc2 {
@@ -1138,9 +1504,8 @@ impl App {
                 ui::SelectorPane::mc1()
             }
         });
-        let prev_flyer = sim.flyer;
-        Self {
-            level,
+        let mut app = Self {
+            session: None,
             cfg,
             jar_markers: Vec::new(),
             stick_idle_ticks: 0,
@@ -1165,10 +1530,6 @@ impl App {
             castle_pos: None,
             window: None,
             renderer: None,
-            sim,
-            prev_flyer,
-            pose_prev: Vec::new(),
-            pose_cur: Vec::new(),
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
             stick: VirtualStick::default(),
@@ -1191,7 +1552,34 @@ impl App {
             misfits_reported: 0,
             audio,
             quit_fade: None,
+            // Every campaign boots to its retail MAIN MENU (MC2: the
+            // temple; MC1/HW: the globe menu) with NO level loaded —
+            // the frontend is the loader; a session is constructed
+            // when the player launches one.
+            screen: if campaign.is_some() {
+                Screen::Menu
+            } else {
+                Screen::Level
+            },
+            campaign,
+            launch,
+            worldmap: None,
+            mainmenu: None,
+            mc1menu: None,
+            ui_atlas: UiAtlas::None,
+            frontend_audio_accum: 0.0,
+            frontend_ui: None,
+            won_handled: false,
+            exit_confirm: false,
+        };
+        match level {
+            // Single-level mode boots straight into its session.
+            Some(l) => app.install_level(l),
+            // Campaign boot: frontend only — its dedicated menu music
+            // starts now (MC1 `csetup`, MC2 the SETUP render).
+            None => app.frontend_music(),
         }
+        app
     }
 
     /// The HUD blends over the sky (MC1's always-on look) vs opaque
@@ -1199,6 +1587,124 @@ impl App {
     /// `render.enhancement.hud_transparency`.
     fn hud_transparent(&self) -> bool {
         self.cfg.render.enhancement.hud_transparency.transparent()
+    }
+
+    /// The running game's identity, session or not (the campaign id
+    /// carries it while the frontend is level-less).
+    fn is_mc2(&self) -> bool {
+        match (&self.session, &self.campaign) {
+            (Some(sess), _) => matches!(sess.level.game, mgc_sim::ids::GameId::Mc2),
+            (None, Some(run)) => run.id == campaign::CampaignId::Mc2,
+            (None, None) => false,
+        }
+    }
+
+    /// The frontend's dedicated menu track: MC1 `csetup.hmp` (music
+    /// bank 0, song 4 — remc1 :58992 `sub_5D290_5D7A0(4)`; the same
+    /// SETUP law as MC2), MC2 the `mc2-menu` SETUP render (retail
+    /// `StartMusic_8E160(4)`).
+    fn frontend_track(&self) -> &'static str {
+        if self.is_mc2() { "mc2-menu" } else { "csetup" }
+    }
+
+    /// Start the frontend's menu music (menu and map share the set —
+    /// retail keeps it playing across both).
+    fn frontend_music(&mut self) {
+        if !self.cfg.audio.music {
+            return;
+        }
+        let track = self.frontend_track();
+        if let Some(a) = &mut self.audio
+            && let Err(e) = a.play_music(track, true)
+        {
+            eprintln!("note: menu music: {e}");
+        }
+    }
+
+    /// Tear the running gameplay session down on the way into a
+    /// frontend screen: drop the sim + level, cut every level sound
+    /// (ambient loops, sfx channels, narration — the level's audio
+    /// dies at its boundary), clear the renderer's world, and keep
+    /// the level-UI assets for the frontend's options menu. The
+    /// frontend menu music takes over.
+    fn teardown_session(&mut self) {
+        let Some(sess) = self.session.take() else {
+            return;
+        };
+        // The per-game UI bank survives the session (fonts/panels for
+        // the P menu — identical across a game's levels).
+        if sess.level.ui.is_some() {
+            self.frontend_ui = sess.level.ui;
+        }
+        drop(sess.sim);
+        if let Some(a) = &mut self.audio {
+            a.stop_sounds();
+            a.stop_speech();
+            // The danger-music wish dies with the sim that raised it
+            // (the frontend pump would otherwise keep the ramp armed).
+            a.set_danger(false);
+            // A P-pause riding across the boundary (won-fade with the
+            // options menu open) must not leave the output suspended
+            // under the frontend — `paused` is cleared below and the
+            // audio suspend state has to follow it.
+            if self.paused {
+                a.set_paused(false);
+            }
+        }
+        // The options menu dies with its level (it would otherwise
+        // reappear over the frontend with pause/audio desynced).
+        self.menu = None;
+        if let Some(r) = &mut self.renderer {
+            r.clear_level();
+            r.set_map_stamps(Vec::new());
+            r.set_map_path(None);
+            r.set_objective_marks(Vec::new(), 0);
+            r.set_map_view(false);
+        }
+        // Per-level transients die with the session.
+        self.paused = false;
+        self.quit_fade = None;
+        self.won_handled = false;
+        self.exit_confirm = false;
+        self.subtitle = None;
+        self.jar_markers = Vec::new();
+        self.castle_pos = None;
+        self.last_map_tick = None;
+        self.accumulator = 0.0;
+        self.frontend_music();
+    }
+
+    /// Lazily materialize the frontend-owned level-UI assets when no
+    /// session ever ran (campaign boot straight into P): built from
+    /// the game's canonical variant bundle — the same source
+    /// `load_level` uses.
+    fn ensure_frontend_ui(&mut self) {
+        if self.frontend_ui.is_some() || self.session.is_some() {
+            return;
+        }
+        let variant = if self.is_mc2() {
+            "mc2-day"
+        } else if self.campaign.as_ref().is_some_and(|c| c.id == campaign::CampaignId::Mc1Hw) {
+            "mc1-arctic"
+        } else {
+            "mc1-temperate"
+        };
+        match Bundle::load(&PathBuf::from("baked/assets").join(variant)) {
+            Ok(bundle) => {
+                self.frontend_ui = bundle.ui_sprites.as_ref().map(|(idx, px)| {
+                    ui::UiAssets::build(
+                        idx.clone(),
+                        px,
+                        &bundle.palette,
+                        bundle.blend_lut.as_deref(),
+                        !self.is_mc2(),
+                        bundle.font.as_ref().map(|(i, p)| (i, p.as_slice())),
+                        bundle.web_sprites.as_ref().map(|(i, p)| (i, p.as_slice())),
+                    )
+                });
+            }
+            Err(e) => eprintln!("note: frontend UI assets: {e}"),
+        }
     }
 
     /// The window's inner size in physical pixels (UI coordinate
@@ -1237,14 +1743,18 @@ impl App {
         match cfg_path {
             "audio.sound" | "audio.sfx_volume" | "audio.music_volume" => self.apply_volumes(),
             "audio.music" => {
-                if let Some(a) = &mut self.audio {
-                    if self.cfg.audio.music {
-                        if let Some(track) = &self.level.music_track {
-                            let _ = a.play_music(track, true);
-                        }
-                    } else {
-                        a.stop_music();
+                if self.cfg.audio.music {
+                    // Restart whichever mode's track applies: the
+                    // session level's, or the frontend menu set.
+                    let track = match &self.session {
+                        Some(sess) => sess.level.music_track.clone(),
+                        None => Some(self.frontend_track().to_string()),
+                    };
+                    if let (Some(a), Some(track)) = (&mut self.audio, track) {
+                        let _ = a.play_music(&track, true);
                     }
+                } else if let Some(a) = &mut self.audio {
+                    a.stop_music();
                 }
                 self.apply_volumes();
             }
@@ -1261,8 +1771,10 @@ impl App {
             "render.preference.sky" => {
                 if let Some(r) = &mut self.renderer {
                     if self.cfg.render.preference.sky {
-                        if let Some(bitmap) = &self.level.sky {
-                            r.load_sky(bitmap, &self.level.palette_rgba);
+                        if let Some(sess) = self.session.as_deref()
+                            && let Some(bitmap) = &sess.level.sky
+                        {
+                            r.load_sky(bitmap, &sess.level.palette_rgba);
                         }
                     } else {
                         r.clear_sky();
@@ -1297,29 +1809,35 @@ impl App {
             // The map texture recompose is tick-throttled and the menu
             // opens paused — recompose explicitly so the toggle shows.
             "render.debug.map_trigger_areas" | "render.enhancement.map_owned_buildings" => {
-                let overlay = self.map_overlay();
-                if let Some(r) = &mut self.renderer {
-                    r.update_map(&self.level.view, &overlay);
+                if let Some(sess) = self.session.as_deref() {
+                    let overlay = map_overlay(&sess.level, &self.cfg);
+                    if let Some(r) = &mut self.renderer {
+                        r.update_map(&sess.level.view, &overlay);
+                    }
                 }
             }
             "controls.models.thrust" => {
-                self.sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
+                if let Some(sess) = self.session.as_deref_mut() {
+                    sess.sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
+                }
             }
             "controls.models.altitude" => {
-                self.sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
+                if let Some(sess) = self.session.as_deref_mut() {
+                    sess.sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
+                }
             }
             "gameplay.cheat.dev_spells" => {
-                if let Some(w) = &mut self.sim.world {
+                if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
                     w.set_dev_spells(self.cfg.gameplay.cheat.dev_spells);
                 }
             }
             "gameplay.cheat.invincible" => {
-                if let Some(w) = &mut self.sim.world {
+                if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
                     w.set_invincible(self.cfg.gameplay.cheat.invincible);
                 }
             }
             "gameplay.enhancement.prune_owned_jars" => {
-                if let Some(w) = &mut self.sim.world {
+                if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
                     w.set_prune_owned_jars(self.cfg.gameplay.enhancement.prune_owned_jars);
                 }
             }
@@ -1329,7 +1847,7 @@ impl App {
             // book mid-level replays the retail level-init pre-seed
             // (the acquisition diff sees every owned spell at once).
             "gameplay.enhancement.spell_selector" => {
-                let is_mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
+                let is_mc2 = self.is_mc2();
                 let choice = self.cfg.gameplay.enhancement.spell_selector;
                 self.selector = choice.resolve(is_mc2);
                 if is_mc2
@@ -1410,8 +1928,11 @@ impl App {
     fn toggle_menu(&mut self) {
         if !self.paused {
             self.paused = true;
+            // Frontend screens need the frontend-owned UI bank for
+            // the menu's fonts/panels (no session to borrow from).
+            self.ensure_frontend_ui();
             // Without a baked font there is no menu — plain pause.
-            if self.level.ui.is_some() {
+            if ui_assets!(self).is_some() {
                 self.menu = Some(menu::MenuState::new(&self.specs));
                 self.menu_grab_restore = self.grabbed;
                 self.set_grab(false);
@@ -1420,8 +1941,23 @@ impl App {
             }
         } else {
             self.paused = false;
-            if self.menu.take().is_some() && self.menu_grab_restore && !self.book_open() {
-                self.set_grab(true);
+            let closed = self.menu.take().is_some();
+            match self.screen {
+                // In-level: unpause re-locks the pointer if flight
+                // held it when the menu opened.
+                Screen::Level => {
+                    if closed && self.menu_grab_restore && !self.book_open() {
+                        self.set_grab(true);
+                    }
+                }
+                // Frontend screens re-assert their own pointer state
+                // (the menu freed + showed the OS cursor).
+                Screen::Map => self.confine_map_pointer(),
+                Screen::Menu => {
+                    if self.is_mc2() {
+                        self.free_menu_pointer();
+                    }
+                }
             }
         }
         // Retail pause suspends ALL sound (playtest-8); resumed
@@ -1498,7 +2034,7 @@ impl App {
                 println!(
                     "sky: {}{}",
                     onoff(v),
-                    if self.level.sky.is_none() {
+                    if self.session.as_deref().is_none_or(|s| s.level.sky.is_none()) {
                         " (this level has no sky bitmap)"
                     } else {
                         ""
@@ -1576,7 +2112,11 @@ impl App {
                 let v = self.cfg.render.debug.health_bars;
                 println!(
                     "monster health bars: {}",
-                    if v { "on (debug enhancement)" } else { "off (original)" }
+                    if v {
+                        "on (debug enhancement)"
+                    } else {
+                        "off (original)"
+                    }
                 );
                 (
                     "render.debug.health_bars",
@@ -1602,7 +2142,7 @@ impl App {
         // The in-game echo (the retail F3-style live feedback): ride
         // the sim's notification line when a world is up. Set while
         // paused it simply shows once the clock resumes.
-        if let Some(w) = &mut self.sim.world {
+        if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
             w.notify_option(toast);
         }
         true
@@ -1612,13 +2152,16 @@ impl App {
     /// faithful mixer, feed the ambient rule, run the flush.
     fn audio_tick(&mut self) {
         let Some(audio) = &mut self.audio else { return };
-        let f = &self.sim.flyer;
+        let Some(sess) = self.session.as_deref_mut() else {
+            return;
+        };
+        let f = &sess.sim.flyer;
         let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
         let listener = mgc_audio::Listener {
             pos: (pose.x, pose.y, pose.z),
             yaw: pose.heading,
         };
-        if let Some(w) = &mut self.sim.world {
+        if let Some(w) = &mut sess.sim.world {
             let frame = w.take_audio(pose);
             if self.cfg.audio.sound {
                 for e in frame.events {
@@ -1644,7 +2187,7 @@ impl App {
             // levels 30-34 address row 0 (seg 4) / row 10 (seg 9) —
             // retail EF:41020-29, ported verbatim.
             if let Some(seg) = frame.speech {
-                let lvl = self.level.level_number;
+                let lvl = sess.level.level_number;
                 if self.cfg.audio.speech {
                     let (row, cseg) = if (30..=34).contains(&lvl) {
                         if seg == 9 { (10, 9) } else { (0, 4) }
@@ -1661,7 +2204,7 @@ impl App {
                 // the voiceover too).
                 if self.cfg.audio.subtitles.on()
                     && let Some(idx) = mc2_narration_etext(lvl, seg)
-                    && let Some(text) = self.level.etext.get(idx).filter(|s| !s.is_empty())
+                    && let Some(text) = sess.level.etext.get(idx).filter(|s| !s.is_empty())
                 {
                     self.subtitle = Some((text.clone(), SUBTITLE_TICKS));
                 }
@@ -1687,11 +2230,23 @@ impl App {
         if !self.cfg.audio.sound {
             return;
         }
-        let f = &self.sim.flyer;
-        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
-        let listener = mgc_audio::Listener {
-            pos: (pose.x, pose.y, pose.z),
-            yaw: pose.heading,
+        let listener = match self.session.as_deref() {
+            Some(sess) => {
+                let f = &sess.sim.flyer;
+                let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(
+                    f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
+                );
+                mgc_audio::Listener {
+                    pos: (pose.x, pose.y, pose.z),
+                    yaw: pose.heading,
+                }
+            }
+            // Frontend screens: player-sourced samples ignore the
+            // position — a centered listener serves.
+            None => mgc_audio::Listener {
+                pos: (0, 0, 0),
+                yaw: 0,
+            },
         };
         audio.event(14, mgc_audio::Source::Player, &listener);
     }
@@ -1699,42 +2254,210 @@ impl App {
     /// Castle-less death: rebuild the pristine world (the original
     /// restarts the level) and reset the flyer to the level start.
     fn restart_level(&mut self) {
-        let Some(init) = &self.level.world_init else {
-            return;
-        };
-        let mut w = init.build();
-        self.pool_dropped_total = 0;
-        self.misfits_reported = 0;
-        // Retail wipes + reseeds the quick keys at level init
-        // (:49216-59) — the acquisition diff below re-seeds the
-        // starting spells in canonical order on the first tick.
-        self.quick_binds = [None; 10];
-        self.prev_owned = [false; 24];
-        apply_instruments(
-            &mut w,
-            self.cfg.gameplay.cheat.dev_spells,
-            &self.level.plausible_spells,
-            &self.level.plausible_book_mc2,
-            self.cfg.gameplay.cheat.invincible,
-        );
-        w.terrain_dirty = true;
-        w.entities_dirty = true;
-        let (thrust, altitude) = (self.sim.thrust_model, self.sim.altitude_model);
-        self.sim = Simulation::with_world(w);
-        self.sim.thrust_model = thrust;
-        self.sim.altitude_model = altitude;
-        if let Some(start) = self.level.start {
-            self.sim.flyer = start;
-            self.sim.sync_carpet_from_flyer();
+        {
+            let Some(sess) = self.session.as_deref_mut() else {
+                return;
+            };
+            let Some(init) = &sess.level.world_init else {
+                return;
+            };
+            let mut w = init.build();
+            self.pool_dropped_total = 0;
+            self.misfits_reported = 0;
+            // Retail wipes + reseeds the quick keys at level init
+            // (:49216-59) — the acquisition diff below re-seeds the
+            // starting spells in canonical order on the first tick.
+            self.quick_binds = [None; 10];
+            self.prev_owned = [false; 24];
+            apply_instruments(
+                &mut w,
+                self.cfg.gameplay.cheat.dev_spells,
+                &sess.level.plausible_spells,
+                &sess.level.plausible_book_mc2,
+                self.cfg.gameplay.cheat.invincible,
+            );
+            if let Some(run) = &self.campaign {
+                // The restart is a fresh world — the campaign carry
+                // re-grants like any level entry.
+                apply_campaign_book(&mut w, run, &sess.level);
+            }
+            w.terrain_dirty = true;
+            w.entities_dirty = true;
+            let (thrust, altitude) = (sess.sim.thrust_model, sess.sim.altitude_model);
+            sess.sim = Simulation::with_world(w);
+            sess.sim.thrust_model = thrust;
+            sess.sim.altitude_model = altitude;
+            if let Some(start) = sess.level.start {
+                sess.sim.flyer = start;
+                sess.sim.sync_carpet_from_flyer();
+            }
+            sess.prev_flyer = sess.sim.flyer;
+            // Fresh world, fresh generations — a stale snapshot could
+            // coincidentally pair (slot, generation) across the restart.
+            sess.pose_prev = Vec::new();
+            sess.pose_cur = Vec::new();
+            self.castle_pos = None;
+            self.won_handled = false;
         }
-        self.prev_flyer = self.sim.flyer;
-        // Fresh world, fresh generations — a stale snapshot could
-        // coincidentally pair (slot, generation) across the restart.
-        self.pose_prev = Vec::new();
-        self.pose_cur = Vec::new();
-        self.castle_pos = None;
         self.sync_world();
         println!("level restarted (died without a castle)");
+    }
+
+    /// Load and install the campaign's next level in-place — the
+    /// mid-run counterpart of `App::new` + `resumed`'s upload block.
+    /// A load failure is fatal (a campaign with a hole is not
+    /// continuable): report and exit.
+    fn campaign_switch(&mut self, n: u32, event_loop: &ActiveEventLoop) {
+        let Some(run) = &mut self.campaign else {
+            return;
+        };
+        run.current = n;
+        let path = run.level_path(n);
+        println!("campaign: launching level {n}");
+        let level = match load_level(
+            &path,
+            self.launch.tileset,
+            self.launch.terrain_features,
+            false, // the plausible instrument is off in campaign mode
+            self.cfg.gameplay.enhancement.prune_owned_jars,
+            self.launch.pool_slots,
+            self.launch.awake_range,
+        ) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("error: campaign level {n}: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        self.install_level(level);
+    }
+
+    /// Construct a fresh gameplay session from a loaded level — THE
+    /// loader seam (boot, the frontend's launches, mid-chain level
+    /// switches): build the sim, apply instruments + campaign carry,
+    /// upload the renderer's level assets, switch the music, reset
+    /// the per-level transients. Any previous session's remains
+    /// (sounds included) are cut first.
+    fn install_level(&mut self, mut level: LoadedLevel) {
+        // A direct level→level switch (the demon-mouth chain) never
+        // passes through a frontend teardown — cut the old level's
+        // sounds here so they die at its boundary (retail stops sfx +
+        // music before every launch, remc1 :59992-94).
+        if self.session.is_some()
+            && let Some(a) = &mut self.audio
+        {
+            a.stop_sounds();
+            a.stop_speech();
+            // A P-pause held across a direct level→level chain (the
+            // demon-mouth dive fade) must not boot the next level
+            // suspended/pre-paused.
+            if self.paused {
+                a.set_paused(false);
+            }
+        }
+        self.paused = false;
+        self.menu = None;
+        let mut sim = match level.world.take() {
+            Some(mut w) => {
+                w.terrain_dirty = true;
+                w.entities_dirty = true;
+                apply_instruments(
+                    &mut w,
+                    self.cfg.gameplay.cheat.dev_spells,
+                    &level.plausible_spells,
+                    &level.plausible_book_mc2,
+                    self.cfg.gameplay.cheat.invincible,
+                );
+                if let Some(run) = &self.campaign {
+                    apply_campaign_book(&mut w, run, &level);
+                }
+                Simulation::with_world(w)
+            }
+            None => Simulation::with_terrain(level.height.clone()),
+        };
+        sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
+        sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
+        if let Some(start) = level.start {
+            sim.flyer = start;
+            sim.sync_carpet_from_flyer();
+        }
+        let prev_flyer = sim.flyer;
+        self.session = Some(Box::new(Session {
+            level,
+            sim,
+            prev_flyer,
+            pose_prev: Vec::new(),
+            pose_cur: Vec::new(),
+        }));
+        self.screen = Screen::Level;
+        // The selection surfaces follow the running game.
+        let is_mc2 = self.is_mc2();
+        self.selector = self.cfg.gameplay.enhancement.spell_selector.resolve(is_mc2);
+        self.pane = self.selector.ctrl_pane.then(|| {
+            if is_mc2 {
+                ui::SelectorPane::mc2()
+            } else {
+                ui::SelectorPane::mc1()
+            }
+        });
+        // The restart_level transient-reset list, plus the fade and
+        // the per-level UI state.
+        self.pool_dropped_total = 0;
+        self.misfits_reported = 0;
+        self.quick_binds = [None; 10];
+        self.prev_owned = [false; 24];
+        self.castle_pos = None;
+        self.subtitle = None;
+        self.jar_markers = Vec::new();
+        self.last_map_tick = None;
+        self.quit_fade = None;
+        self.pane_bound = [None; 2];
+        self.spell_levels = [0; 26];
+        self.won_handled = false;
+        self.exit_confirm = false;
+        self.accumulator = 0.0;
+        // Renderer: the same upload block `resumed` runs at startup.
+        let sess = sess_ref!(self);
+        let overlay = map_overlay(&sess.level, &self.cfg);
+        if let Some(r) = &mut self.renderer {
+            r.load_level(&sess.level.view, &overlay);
+            if let Some((index, atlas)) = &sess.level.sprites {
+                r.load_sprites(index.clone(), atlas);
+            }
+            if let Some(assets) = &sess.level.ui {
+                r.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
+                self.ui_atlas = UiAtlas::Level;
+            }
+            r.set_billboards(sess.level.billboards.clone());
+            if let Some(sky) = mc2_sky_srgb(&sess.level) {
+                r.set_sky_color(sky);
+            }
+            r.clear_sky();
+            if self.cfg.render.preference.sky
+                && let Some(bitmap) = &sess.level.sky
+            {
+                r.load_sky(bitmap, &sess.level.palette_rgba);
+            }
+        }
+        let label = sess_ref!(self).level.label.clone();
+        if let Some(win) = &self.window {
+            win.set_title(&format!("Magic Carpet — {label}"));
+        }
+        let track = sess_ref!(self).level.music_track.clone();
+        if let Some(a) = &mut self.audio
+            && self.cfg.audio.music
+        {
+            match &track {
+                Some(track) => {
+                    if let Err(e) = a.play_music(track, true) {
+                        eprintln!("note: music: {e}");
+                    }
+                }
+                None => a.stop_music(),
+            }
+        }
+        self.sync_world();
     }
 
     fn book_open(&self) -> bool {
@@ -1746,7 +2469,11 @@ impl App {
         let k = &self.keys;
         // Keyboard turn rate: radians per tick (enhanced model only).
         let key_turn = 2.2 * TICK_DT;
-        let book = self.book_open();
+        // The abandon-confirm dialog owns input exactly like the map/
+        // book modes (retail replaces the movement read with the
+        // OkCancel event read, PlayerInput.cpp:2356 — steering decays,
+        // speed persists, the world keeps running).
+        let book = self.book_open() || self.exit_confirm;
         let mc1 = self.cfg.controls.models.thrust == config::ThrustModel::Classic;
         // Explicit float up/down is the enhanced-altitude tier; the
         // classic altitude model has no vertical control at all.
@@ -1839,48 +2566,55 @@ impl App {
     /// live lerp window) or until two ticks have run since the
     /// toggle/level armed it.
     fn apply_smooth_motion(&mut self, alpha: f32) {
+        let Some(sess) = self.session.as_deref() else {
+            return;
+        };
         if !self.cfg.render.enhancement.smooth_motion
             || self.paused
-            || self.pose_prev.is_empty()
-            || self.pose_cur.is_empty()
+            || sess.pose_prev.is_empty()
+            || sess.pose_cur.is_empty()
         {
             return;
         }
         let Some(r) = &mut self.renderer else { return };
-        let poses = entities::lerp_poses(&self.pose_prev, &self.pose_cur, alpha.clamp(0.0, 1.0));
-        let index = self.level.sprites.as_ref().map(|(i, _)| i);
+        let poses = entities::lerp_poses(&sess.pose_prev, &sess.pose_cur, alpha.clamp(0.0, 1.0));
+        let index = sess.level.sprites.as_ref().map(|(i, _)| i);
         let dims = |id: u16| {
             index
                 .and_then(|i| i.sprites.get(id as usize))
                 .map(|s| (s.width, s.height, s.flags))
         };
         r.set_billboards(entities::billboards_from_poses(
-            self.level.game,
+            sess.level.game,
             &poses,
             dims,
         ));
         if self.cfg.render.debug.health_bars {
             r.set_health_bars(entities::health_bars_from_poses(
-                self.level.game,
+                sess.level.game,
                 &poses,
                 dims,
             ));
         }
         if self.cfg.render.preference.light_sources
-            && self.level.mc2_env != entities::Mc2MapEnv::Day
+            && sess.level.mc2_env != entities::Mc2MapEnv::Day
         {
             r.set_lights(&entities::lights_from_poses(&poses));
         }
     }
 
     fn sync_world(&mut self) {
-        let Some(w) = &mut self.sim.world else { return };
+        let Some(sess) = self.session.as_deref_mut() else {
+            return;
+        };
+        let Session { sim, level, .. } = sess;
+        let Some(w) = &mut sim.world else { return };
         for slot in w.take_rival_deaths() {
             // The retail death broadcast ("%name% <str 54>",
             // :55499-517) — the sim raises the on-screen toast at the
             // moment of death (game-aware name table); this console
             // line is a dev-log echo, so pick the matching table too.
-            let name = match self.level.game {
+            let name = match level.game {
                 mgc_sim::ids::GameId::Mc2 => mgc_sim::mc2::rivals::MC2_RIVAL_NAMES,
                 _ => mgc_sim::mc1::rivals::RIVAL_NAMES,
             }
@@ -1892,20 +2626,19 @@ impl App {
         let terrain = w.terrain_dirty;
         let entities = w.entities_dirty;
         if terrain {
-            let (Some(shading), Some(angle)) = (
-                self.level.view.shading.as_mut(),
-                self.level.view.angle.as_mut(),
-            ) else {
+            let (Some(shading), Some(angle)) =
+                (level.view.shading.as_mut(), level.view.angle.as_mut())
+            else {
                 return;
             };
             w.copy_planes_into(mgc_sim::mc1::features::TerrainPlanes {
-                height: &mut self.level.view.height,
-                tile_type: &mut self.level.view.tile_type,
+                height: &mut level.view.height,
+                tile_type: &mut level.view.tile_type,
                 shading,
                 angle,
             });
             // The live cave ceiling (pillars, Cave-In, the eases).
-            if let Some(c) = self.level.view.ceiling.as_mut() {
+            if let Some(c) = level.view.ceiling.as_mut() {
                 let live = w.ceiling_plane();
                 if live.len() == c.len() {
                     c.copy_from_slice(live);
@@ -1921,36 +2654,42 @@ impl App {
             // the terrain, Night/Cave only (retail's MapType gate —
             // the day tables invert, added rows would darken).
             if self.cfg.render.preference.light_sources
-                && self.level.mc2_env != entities::Mc2MapEnv::Day
+                && level.mc2_env != entities::Mc2MapEnv::Day
             {
                 lights = entities::lights_from_poses(&poses);
             }
-            let index = self.level.sprites.as_ref().map(|(i, _)| i);
+            let index = level.sprites.as_ref().map(|(i, _)| i);
             let dims = |id: u16| {
                 index
                     .and_then(|i| i.sprites.get(id as usize))
                     .map(|s| (s.width, s.height, s.flags))
             };
-            self.level.billboards = entities::billboards_from_poses(self.level.game, &poses, dims);
+            level.billboards = entities::billboards_from_poses(level.game, &poses, dims);
             if self.cfg.render.debug.health_bars {
-                bars = entities::health_bars_from_poses(self.level.game, &poses, dims);
+                bars = entities::health_bars_from_poses(level.game, &poses, dims);
             }
-            self.level.map_dots = entities::map_dots_from_poses(
-                self.level.game,
+            level.map_dots = entities::map_dots_from_poses(
+                level.game,
                 &poses,
-                &self.level.palette_rgba,
+                &level.palette_rgba,
                 self.cfg.render.enhancement.map_owned_buildings,
-                self.level.mc2_env,
+                level.mc2_env,
                 // MC1 derives its ~4 Hz claimed-ball blink from the
                 // tick; MC2's colorIndex_121 phases divide it.
-                self.sim.tick as u32,
+                sim.tick as u32,
             );
-            self.level.map_stamps = entities::map_stamps_from_poses(
+            level.map_stamps = entities::map_stamps_from_poses(
                 &poses,
-                &self.level.map_icons,
+                &level.map_icons,
                 w.beyond_sight(),
                 self.cfg.render.enhancement.expose_jar_spells,
             );
+            // The MC2 exit X/O: unconditional (hidden markers plot
+            // too — the map shows where the exit WILL be).
+            level.map_stamps.extend(entities::exit_marker_stamps(
+                &w.mc2_exit_marker_poses(),
+                &level.map_icons,
+            ));
             self.jar_markers = if self.cfg.render.enhancement.expose_jar_spells {
                 entities::jar_markers_from_poses(&poses)
             } else {
@@ -1958,20 +2697,19 @@ impl App {
             };
             // Beyond-Sight rival position markers (interim for the
             // retail name labels — DrawText track).
-            self.level.map_dots.extend(entities::rival_markers(
-                &w.rival_views(),
-                w.beyond_sight_tier(),
-            ));
+            level
+                .map_dots
+                .extend(entities::rival_markers(&w.rival_views(), w.beyond_sight_tier()));
             self.castle_pos = poses
                 .iter()
                 .find(|p| p.class == 3 && p.model == 2 && p.player_owned)
                 .map(|p| (p.x, p.z));
-            self.level.map_areas = map_areas(w);
+            level.map_areas = map_areas(w);
             // MC2 objective-guide targets (non-optional): the current
             // objective's live world targets → blinking marks + a steer
             // arrow. Empty off-MC2 (mc2_stages empty), so MC1/HW draw
             // nothing.
-            self.level.objective_marks = w
+            level.objective_marks = w
                 .mc2_objective_targets()
                 .into_iter()
                 .map(|t| mgc_render::ObjectiveMark {
@@ -1984,31 +2722,33 @@ impl App {
         }
         w.terrain_dirty = false;
         w.entities_dirty = false;
-        let overlay = self.map_overlay();
+        let overlay = map_overlay(level, &self.cfg);
         if let Some(r) = &mut self.renderer {
             if entities {
-                r.set_billboards(self.level.billboards.clone());
+                r.set_billboards(level.billboards.clone());
                 r.set_health_bars(bars);
                 r.set_lights(&lights);
             }
-            // Upright map icons + the guide path are drawn screen-space
-            // by the renderer (never baked into the rotated map
-            // texture: icons stay upright, ant spacing stays 4 surface
-            // px under rotation/zoom).
-            r.set_map_stamps(self.level.map_stamps.clone());
+            // Upright map icons + the guide path are drawn screen-
+            // space by the renderer (never baked into the rotated map
+            // texture: icons stay upright, ant spacing stays 4
+            // surface px under rotation/zoom). Frontend screens never
+            // reach here — the teardown clears these layers, so the
+            // old stage-goal-marker leak has no path back.
+            r.set_map_stamps(level.map_stamps.clone());
             r.set_map_path(self.castle_pos.map(|(cx, cz)| mgc_render::MapPath {
-                from: (self.sim.flyer.x, self.sim.flyer.z),
+                from: (sim.flyer.x, sim.flyer.z),
                 to: (cx, cz),
-                phase: (self.sim.tick & 3) as u8,
+                phase: (sim.tick & 3) as u8,
             }));
-            // The objective-guide blink is tick-driven (retail gates:
-            // outline 1-in-4, arrow 5-then-pause) — see
+            // The objective-guide blink is tick-driven (retail
+            // gates: outline 1-in-4, arrow 5-then-pause) — see
             // project_objective_marks.
-            r.set_objective_marks(self.level.objective_marks.clone(), self.sim.tick as u32);
+            r.set_objective_marks(level.objective_marks.clone(), sim.tick as u32);
             if terrain {
-                r.update_terrain(&self.level.view, &overlay);
-                self.last_map_tick = Some(self.sim.tick);
-            } else if self.last_map_tick != Some(self.sim.tick) {
+                r.update_terrain(&level.view, &overlay);
+                self.last_map_tick = Some(sim.tick);
+            } else if self.last_map_tick != Some(sim.tick) {
                 // The map recomposes once per SIM TICK — everything
                 // baked in it (dots, blink phase tick>>3) changes at
                 // tick rate, so per-frame recompose (a 256×256 LUT
@@ -2017,23 +2757,9 @@ impl App {
                 // screen-space now. The old every-8th-tick throttle
                 // was the player-reported low refresh; per-tick is
                 // the content rate.)
-                r.update_map(&self.level.view, &overlay);
-                self.last_map_tick = Some(self.sim.tick);
+                r.update_map(&level.view, &overlay);
+                self.last_map_tick = Some(sim.tick);
             }
-        }
-    }
-
-    /// Assemble the current baked map overlay: dots + the opt-in
-    /// trigger circles. (Icon stamps and the guide path draw
-    /// screen-space via `set_map_stamps`/`set_map_path`.)
-    fn map_overlay(&self) -> mgc_render::MapOverlay {
-        mgc_render::MapOverlay {
-            dots: self.level.map_dots.clone(),
-            areas: if self.cfg.render.debug.map_trigger_areas {
-                self.level.map_areas.clone()
-            } else {
-                Vec::new()
-            },
         }
     }
 
@@ -2045,7 +2771,7 @@ impl App {
         if !self.paused {
             return;
         }
-        if let Some(w) = &mut self.sim.world {
+        if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
             let l = self
                 .pending_equip
                 .0
@@ -2066,20 +2792,22 @@ impl App {
     /// The CTRL selector pane is up (hold-to-show; needs the pane
     /// surface enabled and UI sprites baked).
     fn pane_open(&self) -> bool {
-        self.ctrl_held && self.pane.is_some() && self.level.ui.is_some()
+        self.ctrl_held
+            && self.pane.is_some()
+            && self.session.as_deref().is_some_and(|s| s.level.ui.is_some())
     }
 
     fn pane_spell_name(&self, spell: u8) -> &'static str {
-        if matches!(self.level.game, mgc_sim::ids::GameId::Mc2) {
+        if self.is_mc2() {
             // The retail per-TIER hint name (docs/spell-audit/
             // spell-names.md): "Possession" / "Mana Magnet" / "Mana Lock"
             // by level, not one generic label. Resolves the live
             // hint_text so the Day/non-Day Morph/Army names come through.
             let tier = self.spell_levels[spell as usize] as usize;
             let name = self
-                .sim
-                .world
-                .as_ref()
+                .session
+                .as_deref()
+                .and_then(|s| s.sim.world.as_ref())
                 .map(|w| w.mc2_spell_name(spell as usize, tier))
                 .unwrap_or("");
             if name.is_empty() {
@@ -2102,7 +2830,7 @@ impl App {
         self.spell_levels[spell as usize] = level;
         self.pane_bound[hand as usize] = Some(spell);
         let hand_name = if hand == 0 { "left" } else { "right" };
-        if matches!(self.level.game, mgc_sim::ids::GameId::Mc2) {
+        if self.is_mc2() {
             // The native MC2 spell column (Phase 4.2): the pane
             // commit IS retail's "Change Spell" action — tier +
             // quick-slot bind through the sim's class-15 machinery.
@@ -2135,6 +2863,637 @@ impl App {
         );
     }
 
+    /// Enter the MC2 world-map screen (the between-levels hub). The
+    /// running session (if any) is torn down — the frontend owns the
+    /// app from here; a portal click constructs the next one. Falls
+    /// back to a direct next-level launch when the mc2-ui bundle is
+    /// missing (pre-epoch-16 bake).
+    fn open_map_screen(&mut self, event_loop: &ActiveEventLoop) {
+        // Remember which level was just played before the teardown —
+        // the carpet parks there.
+        let current = self.campaign.as_ref().map(|c| c.current);
+        self.teardown_session();
+        if self.worldmap.is_none()
+            && let Err(e) = self.load_worldmap()
+        {
+            eprintln!("note: world-map screen unavailable: {e}");
+            let n = self
+                .campaign
+                .as_ref()
+                .and_then(|c| c.mc2.as_ref())
+                .map_or(0, |s| s.levels_completed);
+            if n >= 25 {
+                println!("campaign complete!");
+                event_loop.exit();
+            } else {
+                self.campaign_switch(n, event_loop);
+            }
+            return;
+        }
+        self.screen = Screen::Map;
+        self.confine_map_pointer();
+        // Map entry: the carpet parks on the level just played
+        // (completed, failed or replayed), the camera anchors, the
+        // narrative latch re-arms; the new portal pops on sight.
+        if let (Some(wm), Some(save), Some(cur)) = (
+            &mut self.worldmap,
+            self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+            current,
+        ) {
+            wm.enter_visit(save);
+            wm.anchor_to(save);
+            wm.set_parked(cur);
+        }
+        self.frontend_music();
+    }
+
+    /// Confine the OS pointer for the world-map screen (retail
+    /// captures the mouse: the cursor cannot leave the screen and
+    /// edge contact scrolls the map). The flight grab is released —
+    /// map mouse input is absolute, not relative. Hidden cursor: the
+    /// screen draws the retail cursor sprite itself.
+    fn confine_map_pointer(&mut self) {
+        self.grabbed = false;
+        if let Some(w) = &self.window {
+            w.set_cursor_grab(CursorGrabMode::Confined).ok();
+            w.set_cursor_visible(false);
+        }
+    }
+
+    /// The MC2 main-menu pointer: FREE (player directive 2026-07-18 —
+    /// only the map needs the confinement for edge scrolling, and the
+    /// game the flight lock; the menu needs neither). The OS cursor
+    /// stays hidden over the window because the temple screen draws
+    /// the retail cursor sprite itself.
+    fn free_menu_pointer(&mut self) {
+        self.grabbed = false;
+        if let Some(w) = &self.window {
+            w.set_cursor_grab(CursorGrabMode::None).ok();
+            w.set_cursor_visible(false);
+        }
+    }
+
+    /// Load the world-map assets and park the scroll on the next
+    /// portal.
+    fn load_worldmap(&mut self) -> Result<(), String> {
+        let mut wm = worldmap::WorldMap::load(Path::new("baked/assets/mc2-ui"))?;
+        if let Some(run) = &self.campaign {
+            if let Some(save) = &run.mc2 {
+                wm.enter_visit(save);
+                wm.anchor_to(save);
+            }
+            // On RESUME `current` is the pending level — retail
+            // parks the carpet on the last activated flag instead
+            // (its load law); mid-session entries pass the level
+            // actually just played via `open_map_screen`.
+            let parked = match self.campaign.as_ref().and_then(|c| c.mc2.as_ref()) {
+                Some(s) if run.current == s.levels_completed && run.current > 0 => run.current - 1,
+                _ => run.current,
+            };
+            wm.set_parked(parked);
+        }
+        self.worldmap = Some(wm);
+        self.confine_map_pointer();
+        self.frontend_music();
+        Ok(())
+    }
+
+    /// One world-map frame: lazy first entry (the MC2 campaign boots
+    /// with the flag already set), pan + animate + travel, swap the
+    /// map atlas in, and replace this frame's UI quads with the
+    /// screen. An arrived click-travel launches its level.
+    fn map_screen_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self.worldmap.is_none()
+            && let Err(e) = self.load_worldmap()
+        {
+            eprintln!("note: world-map screen unavailable: {e} — launching directly");
+            let n = self.campaign.as_ref().map_or(0, |c| c.current);
+            self.campaign_switch(n, event_loop);
+            return;
+        }
+        // The options menu (P) rides OVER the map screen — the
+        // frontend frame draws it; this frame pauses.
+        if self.menu.is_some() {
+            return;
+        }
+        let size = self.view_size();
+        let cursor = self.cursor;
+        let pan = 420.0 * dt;
+        let pan_x = (self.keys.right as i32 - self.keys.left as i32) as f32 * pan;
+        let pan_y = (self.keys.back as i32 - self.keys.forward as i32) as f32 * pan;
+        // Retail pointer scroll (MI:3138-60): the confined cursor
+        // sitting ON the boundary pixel scrolls — x==0 / x>=638 /
+        // y==0 / y>=478 in the 640×480 screen space (the CursorMoved
+        // clamp guarantees the edge is reachable). Sub-pixel window
+        // scales widen the test to one native pixel.
+        let edge_dir = {
+            let scale = (size.0 / 640.0).min(size.1 / 480.0);
+            let (mx, my) = (cursor.0 / scale, cursor.1 / scale);
+            let dx = if mx < 1.0 {
+                -1.0
+            } else if mx >= 638.0 {
+                1.0
+            } else {
+                0.0
+            };
+            let dy = if my < 1.0 {
+                -1.0
+            } else if my >= 478.0 {
+                1.0
+            } else {
+                0.0
+            };
+            (dx, dy)
+        };
+        let Some(save) = self.campaign.as_ref().and_then(|c| c.mc2.as_ref()) else {
+            // No MC2 campaign behind the map — nothing to show.
+            self.enter_main_menu();
+            return;
+        };
+        let Some(wm) = &mut self.worldmap else { return };
+        wm.tick(dt, save);
+        wm.pan(pan_x, pan_y);
+        wm.edge_scroll(edge_dir, dt);
+        let sounds = wm.take_sounds();
+        let launch = wm.take_launch();
+        let narrative = wm.take_narrative();
+        // Letterbox black under the 4:3 screen, then the map quads
+        // (skipped when this frame closes the screen).
+        let quads = (launch.is_none()).then(|| {
+            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            q.extend(wm.quads(save, size, cursor));
+            q
+        });
+        // Map-screen UI samples (portal-open 41, travel 19) through
+        // the normal mixer path.
+        if !sounds.is_empty()
+            && self.cfg.audio.sound
+            && let Some(a) = &mut self.audio
+        {
+            // Frontend samples are player-sourced — the listener
+            // position is moot; centered serves.
+            let listener = mgc_audio::Listener {
+                pos: (0, 0, 0),
+                yaw: 0,
+            };
+            for id in sounds {
+                a.event(id, mgc_audio::Source::Player, &listener);
+            }
+        }
+        // The pending level's briefing narrative (retail
+        // `PresentLevelDescription`: speech row = level, segment 0;
+        // the description TEXT rides the deferred map text/overlay
+        // work — the map bank's own font glyphs).
+        if let Some(lvl) = narrative
+            && self.cfg.audio.speech
+            && let Some(a) = &mut self.audio
+            && let Err(e) = a.play_speech(lvl, 0)
+        {
+            eprintln!("note: map narrative: {e}");
+        }
+        if let Some(r) = &mut self.renderer {
+            if self.ui_atlas != UiAtlas::MapScreen {
+                let (w, h, px) = wm.atlas();
+                r.load_ui_atlas(w, h, px);
+                self.ui_atlas = UiAtlas::MapScreen;
+            }
+            if let Some(q) = quads {
+                r.set_ui_quads(q);
+            }
+        }
+        // Corner-button + dialog outcomes (retail mapMenuButtons).
+        let button = self.worldmap.as_mut().and_then(|wm| wm.take_button());
+        if let Some(btn) = button {
+            use worldmap::{DialogKind, MapButton};
+            match btn {
+                MapButton::Save => {
+                    let slots = scan_mc2_slots();
+                    if let Some(wm) = &mut self.worldmap {
+                        wm.open_dialog(DialogKind::Save, slots);
+                    }
+                }
+                MapButton::Load => {
+                    let slots = scan_mc2_slots();
+                    if let Some(wm) = &mut self.worldmap {
+                        wm.open_dialog(DialogKind::Load, slots);
+                    }
+                }
+                MapButton::NewGame => {
+                    if let Some(wm) = &mut self.worldmap {
+                        wm.open_dialog(DialogKind::NewGame, Vec::new());
+                    }
+                }
+                MapButton::Exit => self.enter_main_menu(),
+            }
+        }
+        let action = self.worldmap.as_mut().and_then(|wm| wm.take_action());
+        if let Some(a) = action {
+            self.apply_map_action(a);
+        }
+        if let Some(n) = launch {
+            // Release the map confinement (flight re-grabs on click).
+            self.set_grab(false);
+            self.campaign_switch(n, event_loop);
+        }
+    }
+
+    /// A committed world-map frontend action (corner buttons').
+    fn apply_map_action(&mut self, action: worldmap::MapAction) {
+        use worldmap::MapAction;
+        match action {
+            MapAction::SaveTo { slot, label } => {
+                if let Some(run) = &mut self.campaign {
+                    run.slot = slot;
+                    if let Some(s) = &mut run.mc2 {
+                        s.label = label;
+                    }
+                    run.persist();
+                }
+            }
+            MapAction::LoadFrom(slot) => {
+                match CampaignRun::start(campaign::CampaignId::Mc2, slot, false) {
+                    Ok(run) => {
+                        let parked = match run.mc2.as_ref() {
+                            Some(s) if run.current == s.levels_completed && run.current > 0 => {
+                                run.current - 1
+                            }
+                            _ => run.current,
+                        };
+                        self.campaign = Some(run);
+                        if let (Some(wm), Some(save)) = (
+                            &mut self.worldmap,
+                            self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+                        ) {
+                            wm.session_reset();
+                            wm.enter_visit(save);
+                            wm.anchor_to(save);
+                            wm.set_parked(parked);
+                        }
+                    }
+                    Err(e) => eprintln!("error: load: {e}"),
+                }
+            }
+            MapAction::NewGame => {
+                // Retail sub_7E640: full campaign reset, in memory
+                // only (the file is written when the player saves) —
+                // the map stays up with everything re-hidden.
+                if let Some(run) = &mut self.campaign {
+                    run.current = 0;
+                    run.next = None;
+                    if let Some(s) = &mut run.mc2 {
+                        let label = s.label.clone();
+                        let player_name = s.player_name.clone();
+                        *s = saves::Mc2Save {
+                            label,
+                            player_name,
+                            ..Default::default()
+                        };
+                    }
+                }
+                if let (Some(wm), Some(save)) = (
+                    &mut self.worldmap,
+                    self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+                ) {
+                    wm.session_reset();
+                    wm.enter_visit(save);
+                    wm.anchor_to(save);
+                }
+                println!("campaign restarted (unsaved until you save)");
+            }
+            MapAction::ExitToMenu => self.enter_main_menu(),
+        }
+    }
+
+    /// Enter the campaign's main menu (boot state; the MC2 map's
+    /// Exit target; MC1's between-level beat). Any running session is
+    /// torn down — the frontend owns the app from here.
+    fn enter_main_menu(&mut self) {
+        self.teardown_session();
+        // The map's sounds die with it too (player directive): cut
+        // the narration mid-clip; the burst one-shots are short
+        // enough to ring out.
+        if let Some(a) = &mut self.audio {
+            a.stop_speech();
+        }
+        // Commit the mode BEFORE the fallible asset loads: a load
+        // failure then lands in the menu frame's own fallback
+        // (direct-launch / map hub) instead of a dead Level screen
+        // with no session.
+        self.screen = Screen::Menu;
+        self.ui_atlas = UiAtlas::None; // entry refresh (slots, timer)
+        self.frontend_music();
+        if self.is_mc2() {
+            if self.mainmenu.is_none() {
+                match frontend::MainMenu::load(Path::new("baked/assets/mc2-ui")) {
+                    Ok(m) => self.mainmenu = Some(m),
+                    Err(e) => {
+                        eprintln!("note: main menu unavailable: {e}");
+                        return;
+                    }
+                }
+            }
+            self.free_menu_pointer();
+        } else {
+            if self.mc1menu.is_none() {
+                match frontend_mc1::Mc1Menu::load(Path::new("baked/assets/mc1-ui")) {
+                    Ok(m) => self.mc1menu = Some(m),
+                    Err(e) => {
+                        eprintln!("note: main menu unavailable: {e}");
+                        return;
+                    }
+                }
+            }
+            // MC1 menu: free OS cursor (retail's own pointer art is
+            // the SPTRS bank — not baked; the OS pointer stands in).
+            self.set_grab(false);
+        }
+    }
+
+    /// One frontend frame (`screen != Level`): the P options menu
+    /// over a frozen screen, or the live menu/map frame.
+    fn frontend_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        // The mixer flush is tick-denominated (24 Hz fade ramps +
+        // the voiceover-duck recovery); with no sim ticking, pump it
+        // from wall time so the map's ambient bursts (screams,
+        // volcano whooshes, the falling-star loops) and the menu
+        // clicks actually reach the output, and menu music recovers
+        // from the narration duck. (While P-paused the output is
+        // suspended — requests queue and flush on resume, the retail
+        // deferred-ding quirk, same as in-level.)
+        self.frontend_audio_accum += dt;
+        while self.frontend_audio_accum >= TICK_DT {
+            self.frontend_audio_accum -= TICK_DT;
+            if let Some(a) = &mut self.audio {
+                a.tick();
+            }
+        }
+        // The options menu rides OVER the frontend: the screen
+        // beneath freezes and the menu draws on black with the
+        // frontend-owned level-UI bank (fonts/panels).
+        if self.menu.is_some() {
+            self.ensure_frontend_ui();
+            let size = self.view_size();
+            let mut quads = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            let assets = match &self.session {
+                Some(sess) => sess.level.ui.as_ref(),
+                None => self.frontend_ui.as_ref(),
+            };
+            if let (Some(assets), Some(st)) = (assets, &self.menu) {
+                quads.extend(menu::draw(
+                    assets,
+                    &self.cfg,
+                    &self.specs,
+                    st,
+                    size.0,
+                    size.1,
+                    self.cursor,
+                ));
+            }
+            if let Some(r) = &mut self.renderer {
+                if self.ui_atlas != UiAtlas::FrontendUi
+                    && let Some(a) = &self.frontend_ui
+                {
+                    r.load_ui_atlas(a.atlas_w, a.atlas_h, &a.atlas_rgba);
+                    self.ui_atlas = UiAtlas::FrontendUi;
+                }
+                r.set_ui_quads(quads);
+            }
+            return;
+        }
+        match self.screen {
+            Screen::Menu => self.menu_screen_frame(dt, event_loop),
+            Screen::Map => self.map_screen_frame(dt, event_loop),
+            // Level with no session (a failed campaign launch mid-
+            // exit): nothing to draw.
+            Screen::Level => {}
+        }
+    }
+
+    /// One main-menu frame, dispatched per campaign.
+    fn menu_screen_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self
+            .campaign
+            .as_ref()
+            .is_some_and(|c| c.id != campaign::CampaignId::Mc2)
+        {
+            self.menu_screen_frame_mc1(dt, event_loop);
+        } else {
+            self.menu_screen_frame_mc2(dt, event_loop);
+        }
+    }
+
+    /// One MC1/HW menu frame: CPU-composed 320×200 screen (globe +
+    /// timer + brighten highlight), re-uploaded as the UI atlas.
+    fn menu_screen_frame_mc1(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self.mc1menu.is_none() {
+            match frontend_mc1::Mc1Menu::load(Path::new("baked/assets/mc1-ui")) {
+                Ok(m) => {
+                    self.mc1menu = Some(m);
+                    self.set_grab(false);
+                }
+                Err(e) => {
+                    // Pre-epoch-18 bake: launch the pending level
+                    // directly (the previous direct-chain behavior).
+                    eprintln!("note: main menu unavailable: {e} — launching directly");
+                    let n = self.campaign.as_ref().map_or(0, |c| c.current);
+                    self.campaign_switch(n, event_loop);
+                    return;
+                }
+            }
+        }
+        let size = self.view_size();
+        let cursor = self.cursor;
+        // Entry refresh: slot labels + the timer's game-underway
+        // state (retail `!byte_9687C`).
+        if self.ui_atlas != UiAtlas::MenuMc1 {
+            let (tag, active) = self
+                .campaign
+                .as_ref()
+                .map(|c| (c.id.tag(), c.current > 0))
+                .unwrap_or(("mc1", false));
+            let slots = scan_mc1_slots(tag);
+            let name = self
+                .campaign
+                .as_ref()
+                .and_then(|c| c.mc1.as_ref())
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+            if let Some(m) = &mut self.mc1menu {
+                m.set_slots(slots);
+                m.game_active = active;
+                m.player_name = name;
+            }
+        }
+        let Some(menu) = &mut self.mc1menu else {
+            return;
+        };
+        menu.tick(dt);
+        let action = menu.take_action();
+        let (rgba, quads) = menu.frame(size, cursor);
+        if let Some(r) = &mut self.renderer {
+            // The composed screen IS the atlas — re-uploaded per
+            // frame (320×200, the animations live in it).
+            r.load_ui_atlas(320, 200, &rgba);
+            self.ui_atlas = UiAtlas::MenuMc1;
+            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            q.extend(quads);
+            r.set_ui_quads(q);
+        }
+        if let Some(a) = action {
+            use frontend_mc1::Mc1Action;
+            match a {
+                Mc1Action::Continue => {
+                    let n = self.campaign.as_ref().map_or(0, |c| c.current);
+                    self.campaign_switch(n, event_loop);
+                }
+                Mc1Action::NewGame => {
+                    if let Some(run) = &mut self.campaign {
+                        run.current = 0;
+                        run.next = None;
+                        if let Some(s) = &mut run.mc1 {
+                            s.level = 0;
+                            s.blob24 = [0; 24];
+                        }
+                    }
+                    self.campaign_switch(0, event_loop);
+                }
+                Mc1Action::SaveTo { slot, label } => {
+                    if let Some(run) = &mut self.campaign {
+                        run.slot = slot;
+                        if let Some(s) = &mut run.mc1 {
+                            if !label.is_empty() {
+                                s.name = label;
+                            }
+                            s.level = run.current as u16;
+                        }
+                        run.persist();
+                        self.ui_atlas = UiAtlas::None; // refresh slots
+                    }
+                }
+                Mc1Action::LoadFrom(slot) => {
+                    let id = self.campaign.as_ref().map(|c| c.id);
+                    if let Some(id) = id {
+                        match CampaignRun::start(id, slot, false) {
+                            Ok(run) => {
+                                self.campaign = Some(run);
+                                self.ui_atlas = UiAtlas::None;
+                            }
+                            Err(e) => eprintln!("error: load: {e}"),
+                        }
+                    }
+                }
+                Mc1Action::SetName(name) => {
+                    if let Some(s) = self.campaign.as_mut().and_then(|c| c.mc1.as_mut()) {
+                        if !name.is_empty() {
+                            println!("save name: {name}");
+                            s.name = name;
+                        }
+                    }
+                    // Re-run the entry refresh so the next rename
+                    // pre-fills the NEW name.
+                    self.ui_atlas = UiAtlas::None;
+                }
+                Mc1Action::Quit => event_loop.exit(),
+            }
+        }
+    }
+
+    /// One MC2 main-menu frame: swap the temple atlas in, tick the
+    /// idle dressing, drain clicks/actions.
+    fn menu_screen_frame_mc2(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self.mainmenu.is_none() {
+            match frontend::MainMenu::load(Path::new("baked/assets/mc2-ui")) {
+                Ok(m) => {
+                    self.mainmenu = Some(m);
+                    self.free_menu_pointer();
+                    self.frontend_music();
+                }
+                Err(e) => {
+                    // Pre-epoch-18 bake: fall through to the map hub.
+                    eprintln!("note: main menu unavailable: {e} — opening the world map");
+                    self.open_map_screen(event_loop);
+                    return;
+                }
+            }
+        }
+        let size = self.view_size();
+        let cursor = self.cursor;
+        let Some(menu) = &mut self.mainmenu else {
+            return;
+        };
+        menu.tick(dt);
+        let sounds = menu.take_sounds();
+        let action = menu.take_action();
+        let quads = {
+            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            q.extend(menu.quads(size, cursor));
+            q
+        };
+        if !sounds.is_empty()
+            && self.cfg.audio.sound
+            && let Some(a) = &mut self.audio
+        {
+            let listener = mgc_audio::Listener {
+                pos: (0, 0, 0),
+                yaw: 0,
+            };
+            for id in sounds {
+                a.event(id, mgc_audio::Source::Player, &listener);
+            }
+        }
+        if let Some(r) = &mut self.renderer {
+            if self.ui_atlas != UiAtlas::MenuMc2 {
+                let (w, h, px) = self.mainmenu.as_ref().unwrap().atlas();
+                r.load_ui_atlas(w, h, px);
+                self.ui_atlas = UiAtlas::MenuMc2;
+            }
+            r.set_ui_quads(quads);
+        }
+        if let Some(a) = action {
+            use frontend::MenuAction;
+            match a {
+                MenuAction::EnterMap => {
+                    self.open_map_screen(event_loop);
+                }
+                MenuAction::SaveTo { slot, label } => {
+                    self.apply_map_action(worldmap::MapAction::SaveTo { slot, label });
+                }
+                MenuAction::LoadFrom(slot) => {
+                    self.apply_map_action(worldmap::MapAction::LoadFrom(slot));
+                    // Retail: a successful menu load lands on the map.
+                    self.open_map_screen(event_loop);
+                }
+                MenuAction::SetName(name) => {
+                    if let Some(s) = self.campaign.as_mut().and_then(|c| c.mc2.as_mut()) {
+                        println!("player name: {name}");
+                        s.player_name = name;
+                    }
+                }
+                MenuAction::Quit => event_loop.exit(),
+            }
+        }
+    }
+
+    /// The confirmed in-level exit: abandon to the campaign hub
+    /// (retail MC2 → the world map, nothing recorded; MC1/HW → the
+    /// main menu), or leave the app in single-level mode.
+    fn confirm_exit(&mut self, event_loop: &ActiveEventLoop) {
+        self.exit_confirm = false;
+        if self
+            .campaign
+            .as_ref()
+            .is_some_and(|c| c.id == campaign::CampaignId::Mc2)
+        {
+            println!("returning to the world map");
+            self.open_map_screen(event_loop);
+        } else if self.campaign.is_some() {
+            println!("returning to the main menu");
+            self.enter_main_menu();
+        } else {
+            event_loop.exit();
+        }
+    }
+
     fn set_grab(&mut self, grab: bool) {
         let Some(window) = &self.window else { return };
         if grab {
@@ -2164,8 +3523,15 @@ impl ApplicationHandler for App {
         // (125% etc.) can't reintroduce a fractional multiple. The
         // window stays resizable; fullscreen/non-4:3 presentation is
         // the banked ui-native-layer work.
+        let title = match self.session.as_deref() {
+            Some(sess) => format!("Magic Carpet — {}", sess.level.label),
+            None => match self.campaign.as_ref() {
+                Some(run) => format!("Magic Carpet — {} campaign", run.id.tag()),
+                None => "Magic Carpet".to_string(),
+            },
+        };
         let attrs = Window::default_attributes()
-            .with_title(format!("Magic Carpet — {}", self.level.label))
+            .with_title(title)
             .with_inner_size(winit::dpi::PhysicalSize::new(1280u32, 960u32));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -2177,26 +3543,33 @@ impl ApplicationHandler for App {
         };
         match Renderer::for_window(window.clone()) {
             Ok(mut renderer) => {
-                let overlay = self.map_overlay();
-                renderer.load_level(&self.level.view, &overlay);
-                if let Some((index, atlas)) = &self.level.sprites {
-                    renderer.load_sprites(index.clone(), atlas);
+                // Level assets upload only when a session booted with
+                // the app (single-level mode); a campaign boots into
+                // the frontend, which brings its own atlas — the
+                // first launch's `install_level` uploads the rest.
+                if let Some(sess) = self.session.as_deref() {
+                    let overlay = map_overlay(&sess.level, &self.cfg);
+                    renderer.load_level(&sess.level.view, &overlay);
+                    if let Some((index, atlas)) = &sess.level.sprites {
+                        renderer.load_sprites(index.clone(), atlas);
+                    }
+                    if let Some(assets) = &sess.level.ui {
+                        renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
+                        self.ui_atlas = UiAtlas::Level;
+                    }
+                    renderer.set_billboards(sess.level.billboards.clone());
+                    if let Some(sky) = mc2_sky_srgb(&sess.level) {
+                        renderer.set_sky_color(sky);
+                    }
+                    if self.cfg.render.preference.sky
+                        && let Some(bitmap) = &sess.level.sky
+                    {
+                        renderer.load_sky(bitmap, &sess.level.palette_rgba);
+                    }
                 }
-                if let Some(assets) = &self.level.ui {
-                    renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
-                }
-                renderer.set_billboards(self.level.billboards.clone());
                 renderer.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
                 renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
                 renderer.set_hud_transparent(self.hud_transparent());
-                if let Some(sky) = mc2_sky_srgb(&self.level) {
-                    renderer.set_sky_color(sky);
-                }
-                if self.cfg.render.preference.sky
-                    && let Some(bitmap) = &self.level.sky
-                {
-                    renderer.load_sky(bitmap, &self.level.palette_rgba);
-                }
                 renderer.set_reflections(self.cfg.render.preference.reflections);
                 renderer.set_vsync(self.cfg.render.preference.vsync);
                 // Map-screen topology follows the book surface: no
@@ -2230,12 +3603,27 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = state == ElementState::Pressed;
+                // The exit-confirm dialog owns the pointer: OK
+                // confirms, Cancel dismisses, everything else (and
+                // any fire-through) is swallowed.
+                if self.exit_confirm {
+                    if down && button == MouseButton::Left {
+                        let size = self.view_size();
+                        let (ok, cancel) = ui::exit_confirm_rects(size.0, size.1);
+                        if ui::rect_hit(ok, self.cursor) {
+                            self.confirm_exit(event_loop);
+                        } else if ui::rect_hit(cancel, self.cursor) {
+                            self.exit_confirm = false;
+                        }
+                    }
+                    return;
+                }
                 if self.menu.is_some() {
                     // The options menu owns the pointer while open.
                     if button == MouseButton::Left {
                         let size = self.view_size();
                         if down {
-                            if let Some(assets) = &self.level.ui {
+                            if let Some(assets) = ui_assets!(self) {
                                 let st = self.menu.as_ref().unwrap();
                                 match menu::hit_test(
                                     assets,
@@ -2283,6 +3671,69 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                if self.screen == Screen::Menu {
+                    // The main menu owns the pointer. Save/Load
+                    // clicks need the slot scan before their dialog
+                    // opens.
+                    if down && button == MouseButton::Left {
+                        let size = self.view_size();
+                        let cursor = self.cursor;
+                        if self
+                            .campaign
+                            .as_ref()
+                            .is_some_and(|c| c.id != campaign::CampaignId::Mc2)
+                        {
+                            if let Some(m) = &mut self.mc1menu {
+                                m.click(size, cursor);
+                            }
+                            return;
+                        }
+                        let request = self.mainmenu.as_mut().and_then(|m| m.click(size, cursor));
+                        match request {
+                            Some("save") => {
+                                let slots = scan_mc2_slots();
+                                if let Some(m) = &mut self.mainmenu {
+                                    m.open_slots(true, slots);
+                                }
+                            }
+                            Some("load") => {
+                                let slots = scan_mc2_slots();
+                                if let Some(m) = &mut self.mainmenu {
+                                    m.open_slots(false, slots);
+                                }
+                            }
+                            Some("name") => {
+                                let current = self
+                                    .campaign
+                                    .as_ref()
+                                    .and_then(|c| c.mc2.as_ref())
+                                    .map(|s| s.player_name.clone())
+                                    .unwrap_or_default();
+                                if let Some(m) = &mut self.mainmenu {
+                                    m.open_name(&current);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+                if self.screen == Screen::Map {
+                    // The world-map screen owns the pointer: a click
+                    // on a portal starts the carpet leg there; the
+                    // level launches when it arrives.
+                    if down && matches!(button, MouseButton::Left | MouseButton::Right) {
+                        let size = self.view_size();
+                        let cursor = self.cursor;
+                        if let (Some(wm), Some(save)) = (
+                            &mut self.worldmap,
+                            self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+                        ) {
+                            wm.click(save, size, cursor);
+                        }
+                    }
+                    return;
+                }
                 if self.pane_open() {
                     // The CTRL selector pane (over flight OR the map
                     // screen): press anchors the level flyout for the
@@ -2302,11 +3753,15 @@ impl ApplicationHandler for App {
                             // (MC2) / loadout ownership (MC1), or
                             // everything under the G instrument in
                             // MC2 (mirrors the pane view's grant).
-                            let mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
+                            let mc2 = self.is_mc2();
                             let owned = (self.cfg.gameplay.cheat.dev_spells && mc2)
                                 || spell
                                     .map(|c| {
-                                        self.sim.world.as_ref().is_some_and(|w| {
+                                        let world = self
+                                            .session
+                                            .as_deref()
+                                            .and_then(|s| s.sim.world.as_ref());
+                                        world.is_some_and(|w| {
                                             if mc2 {
                                                 w.mc2_book_view().owned[c as usize]
                                             } else {
@@ -2351,9 +3806,9 @@ impl ApplicationHandler for App {
                     // clicks; the CTRL pane above is the selector.)
                     if down && self.selector.map_book {
                         let owned = self
-                            .sim
-                            .world
-                            .as_ref()
+                            .session
+                            .as_deref()
+                            .and_then(|s| s.sim.world.as_ref())
                             .map(|w| w.loadout().owned)
                             .unwrap_or([false; 24]);
                         if let Some(spell) = self.hovered {
@@ -2393,19 +3848,51 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => -(p.y as f32) / 30.0,
                 };
                 let size = self.view_size();
-                if let (Some(st), Some(assets)) = (&mut self.menu, &self.level.ui) {
+                let assets = match &self.session {
+                    Some(sess) => sess.level.ui.as_ref(),
+                    None => self.frontend_ui.as_ref(),
+                };
+                if let (Some(st), Some(assets)) = (&mut self.menu, assets) {
                     menu::scroll_by(assets, &self.specs, st, size.0, size.1, rows);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32, position.y as f32);
+                // The world-map screen owns a confined pointer
+                // (retail captures the mouse to the 640×480 screen;
+                // edge contact scrolls the map). The grab confines to
+                // the WINDOW — clamp the rest of the way to the 4:3
+                // map area and warp the OS cursor back when it
+                // strays (also covers platforms where the Confined
+                // grab is unsupported).
+                // Only the MAP confines/clamps (edge scrolling needs
+                // the boundary pixel); the menus run a free pointer
+                // (player directive 2026-07-18).
+                if self.screen == Screen::Map && self.menu.is_none() {
+                    let size = self.view_size();
+                    let scale = (size.0 / 640.0).min(size.1 / 480.0);
+                    let area = (640.0 * scale, 480.0 * scale);
+                    let cl = (
+                        self.cursor.0.clamp(0.0, area.0 - 1.0),
+                        self.cursor.1.clamp(0.0, area.1 - 1.0),
+                    );
+                    if cl != self.cursor {
+                        self.cursor = cl;
+                        if let Some(w) = &self.window {
+                            let _ = w.set_cursor_position(winit::dpi::PhysicalPosition::new(
+                                cl.0 as f64,
+                                cl.1 as f64,
+                            ));
+                        }
+                    }
+                }
                 // A live slider drag in the options menu tracks the
                 // pointer (apply live; persist on release).
                 if let Some(st) = &self.menu
                     && let Some(i) = st.drag
                 {
                     let size = self.view_size();
-                    if let Some(assets) = &self.level.ui {
+                    if let Some(assets) = ui_assets!(self) {
                         let changed = menu::pointer_apply(
                             assets,
                             &mut self.cfg,
@@ -2436,10 +3923,152 @@ impl ApplicationHandler for App {
                         // Esc closes the options menu (and unpauses)
                         // instead of ungrabbing/quitting.
                         self.toggle_menu();
+                    } else if self.screen == Screen::Menu {
+                        // Main menu: close the modal, else the exit
+                        // confirm (retail Esc = the Exit button).
+                        let mc1 = self
+                            .campaign
+                            .as_ref()
+                            .is_some_and(|c| c.id != campaign::CampaignId::Mc2);
+                        if mc1 {
+                            if let Some(m) = &mut self.mc1menu {
+                                m.escape();
+                            } else {
+                                event_loop.exit();
+                            }
+                        } else if let Some(m) = &mut self.mainmenu {
+                            m.escape();
+                        } else {
+                            event_loop.exit();
+                        }
+                    } else if self.screen == Screen::Map {
+                        // Map screen: close the dialog, else back to
+                        // the main menu (retail endAction=2).
+                        if let Some(wm) = &mut self.worldmap {
+                            wm.escape();
+                        }
+                    } else if self.exit_confirm {
+                        // Esc on the confirm dialog = cancel, stay
+                        // in the level (the retail dialog's No).
+                        self.exit_confirm = false;
                     } else if self.grabbed {
+                        // First Esc releases the pointer; abandoning
+                        // the level takes a second press.
+                        self.set_grab(false);
+                    } else if self.quit_fade.is_none() {
+                        // The retail MC2 "Abandon level?" confirm
+                        // (sub_18B30 → MenuState 13), reused by MC1/
+                        // single-level — player directive 2026-07-18:
+                        // an accidental Esc must never toss an hour
+                        // of progress. The world keeps running
+                        // beneath it (retail modality); confirming
+                        // abandons to the hub (or exits the app in
+                        // single-level mode).
+                        self.exit_confirm = true;
                         self.set_grab(false);
                     } else {
                         event_loop.exit();
+                    }
+                    return;
+                }
+                // Frontend edit fields (save-slot labels, the player
+                // name) swallow the keyboard while active.
+                if down && self.screen != Screen::Level {
+                    // Which frontend surface eats the keystroke.
+                    #[derive(PartialEq)]
+                    enum Edit {
+                        Mc2Menu,
+                        Mc1Menu,
+                        Map,
+                        None,
+                    }
+                    let mc1 = self
+                        .campaign
+                        .as_ref()
+                        .is_some_and(|c| c.id != campaign::CampaignId::Mc2);
+                    let target = if self.screen == Screen::Menu && mc1 {
+                        if self.mc1menu.as_ref().is_some_and(|m| m.editing()) {
+                            Edit::Mc1Menu
+                        } else {
+                            Edit::None
+                        }
+                    } else if self.screen == Screen::Menu {
+                        if self.mainmenu.as_ref().is_some_and(|m| m.editing()) {
+                            Edit::Mc2Menu
+                        } else {
+                            Edit::None
+                        }
+                    } else if self.worldmap.as_ref().is_some_and(|w| w.dialog_editing()) {
+                        Edit::Map
+                    } else {
+                        Edit::None
+                    };
+                    if target != Edit::None {
+                        let mut chars: Vec<char> = Vec::new();
+                        let mut backspace = false;
+                        let mut enter = false;
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Backspace) => backspace = true,
+                            Key::Named(NamedKey::Enter) => enter = true,
+                            Key::Named(NamedKey::Space) => chars.push(' '),
+                            Key::Character(s) => chars.extend(s.chars()),
+                            _ => {}
+                        }
+                        match target {
+                            Edit::Mc2Menu => {
+                                if let Some(m) = &mut self.mainmenu {
+                                    if backspace {
+                                        m.key_backspace();
+                                    } else if enter {
+                                        m.key_enter();
+                                    }
+                                    for c in chars {
+                                        m.key_char(c);
+                                    }
+                                }
+                            }
+                            Edit::Mc1Menu => {
+                                if let Some(m) = &mut self.mc1menu {
+                                    if backspace {
+                                        m.key_backspace();
+                                    } else if enter {
+                                        m.key_enter();
+                                    }
+                                    for c in chars {
+                                        m.key_char(c);
+                                    }
+                                }
+                            }
+                            Edit::Map => {
+                                if let Some(w) = &mut self.worldmap {
+                                    if backspace {
+                                        w.dialog_backspace();
+                                    } else if enter {
+                                        w.dialog_enter();
+                                    }
+                                    for c in chars {
+                                        w.dialog_char(c);
+                                    }
+                                }
+                            }
+                            Edit::None => {}
+                        }
+                        return;
+                    }
+                    // The main menu swallows the rest of the
+                    // keyboard; the map keeps its pan keys + P
+                    // (preferences).
+                    if self.screen == Screen::Menu {
+                        return;
+                    }
+                }
+                // The exit-confirm dialog owns the keyboard: Enter =
+                // confirm (Esc = cancel, handled above); everything
+                // else is swallowed — no pause, no option keys, no
+                // movement latching under a modal.
+                if self.exit_confirm {
+                    if down && event.logical_key == Key::Named(NamedKey::Enter) {
+                        self.confirm_exit(event_loop);
                     }
                     return;
                 }
@@ -2510,7 +4139,7 @@ impl ApplicationHandler for App {
                     if down && !self.ctrl_held {
                         self.ctrl_held = true;
                         self.ctrl_grab_restore = self.grabbed;
-                        if self.level.ui.is_some() {
+                        if self.session.as_deref().is_some_and(|s| s.level.ui.is_some()) {
                             self.set_grab(false);
                             self.fire_held = false;
                             self.fire_right_held = false;
@@ -2678,22 +4307,46 @@ impl ApplicationHandler for App {
                     self.fps_frames = 0;
                     self.fps_elapsed = 0.0;
                 }
+                // A frontend screen owns the frame: no session, no
+                // sim, no HUD — its own tick + quads, rendered over
+                // the void (the renderer holds no level).
+                if self.screen != Screen::Level || self.session.is_none() {
+                    self.frontend_frame(dt, event_loop);
+                    if let Some(r) = &mut self.renderer {
+                        let cam = CameraView {
+                            x: 0.0,
+                            y: 4.0,
+                            z: 0.0,
+                            yaw: 0.0,
+                            pitch: 0.0,
+                            roll: 0.0,
+                            fov_y: FOV_Y,
+                        };
+                        match r.render(&cam) {
+                            Ok(())
+                            | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                            Err(e) => eprintln!("render: {e}"),
+                        }
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 // Game speed (retail F3): retail runs the sim step N
                 // times per rendered frame (remc1 :41672 / remc2
                 // EF:31800); our fixed-Hz accumulator expresses the
                 // same multiplier by scaling wall time. Every tick is
                 // bit-identical — only the pacing changes.
-                let speed = self
-                    .cfg
-                    .sim
-                    .options
-                    .game_speed
-                    .multiplier(matches!(self.level.game, mgc_sim::ids::GameId::Mc2));
+                let speed = self.cfg.sim.options.game_speed.multiplier(self.is_mc2());
                 self.accumulator += dt * speed;
                 if self.paused {
                     // Frozen sim clock: drain the accumulator so
-                    // unpausing resumes cleanly instead of bursting
-                    // through the missed ticks.
+                    // resuming is clean instead of bursting through
+                    // missed ticks. (The abandon-confirm dialog does
+                    // NOT freeze — retail keeps the world simulating
+                    // under it, EventsFunctions.cpp:31796; the dialog
+                    // only owns the input. P still pauses if wanted.)
                     self.accumulator = 0.0;
                 }
 
@@ -2705,16 +4358,20 @@ impl ApplicationHandler for App {
                 let mut ran = 0u32;
                 while self.accumulator >= TICK_DT {
                     self.accumulator -= TICK_DT;
-                    self.prev_flyer = self.sim.flyer;
+                    {
+                        let sess = sess!(self);
+                        sess.prev_flyer = sess.sim.flyer;
+                    }
                     let input = self.tick_input();
-                    self.sim.step(&input);
+                    sess!(self).sim.step(&input);
                     // Smooth-motion snapshot rotation — the entity
                     // analogue of prev_flyer above (entities render
                     // lerped over the same one-tick window).
                     if self.cfg.render.enhancement.smooth_motion {
-                        if let Some(w) = &self.sim.world {
-                            self.pose_prev = std::mem::take(&mut self.pose_cur);
-                            self.pose_cur = w.live_poses();
+                        let sess = sess!(self);
+                        if let Some(w) = &sess.sim.world {
+                            sess.pose_prev = std::mem::take(&mut sess.pose_cur);
+                            sess.pose_cur = w.live_poses();
                         }
                     }
                     // The mixer flush is per-tick like the original's
@@ -2731,7 +4388,7 @@ impl ApplicationHandler for App {
                 // but every dropped spawn is worth a report — this
                 // is how the catalogue of ceiling-hitting levels
                 // (032's starved trigger, 039's walls) gets built.
-                if let Some(w) = self.sim.world.as_mut() {
+                if let Some(w) = sess!(self).sim.world.as_mut() {
                     // Retail quickselect auto-assign (:64858-67): a
                     // newly acquired spell takes the FIRST FREE quick
                     // key (scan 1→9→0, cap 10, silent when full;
@@ -2781,7 +4438,7 @@ impl ApplicationHandler for App {
                 self.sync_world();
                 // Castle-less death confirmed → the level restarts
                 // (the original's lost + level-over flow).
-                if self.sim.world.as_mut().is_some_and(|w| w.take_restart()) {
+                if sess!(self).sim.world.as_mut().is_some_and(|w| w.take_restart()) {
                     self.restart_level();
                 }
 
@@ -2789,12 +4446,16 @@ impl ApplicationHandler for App {
                 // Stale snapshots die with the toggle; the pass below
                 // re-sets the renderer's drawables at this frame's
                 // lerp fraction (sync_world set the tick-rate ones).
-                if !self.cfg.render.enhancement.smooth_motion && !self.pose_cur.is_empty() {
-                    self.pose_prev = Vec::new();
-                    self.pose_cur = Vec::new();
+                if !self.cfg.render.enhancement.smooth_motion {
+                    let sess = sess!(self);
+                    if !sess.pose_cur.is_empty() {
+                        sess.pose_prev = Vec::new();
+                        sess.pose_cur = Vec::new();
+                    }
                 }
                 self.apply_smooth_motion(alpha);
-                let (a, b) = (&self.prev_flyer, &self.sim.flyer);
+                let sess = sess_ref!(self);
+                let (a, b) = (&sess.prev_flyer, &sess.sim.flyer);
                 // Positions may wrap across the 256-tile seam; take the
                 // short way around for interpolation.
                 let lerp_wrap = |p: f32, q: f32| {
@@ -2810,7 +4471,7 @@ impl ApplicationHandler for App {
                 // The knock camera kick (remc1 :52433-37): the view
                 // pitches down ~v_22/8 engine-angle units while a
                 // buffet/knock is live (the kraken drag feedback).
-                let kick = self
+                let kick = sess
                     .sim
                     .world
                     .as_ref()
@@ -2842,7 +4503,7 @@ impl ApplicationHandler for App {
                 // world-anchored overlays cut there (`fog_cut`).
                 let fog_wall = 0.95 * self.cfg.render.preference.fog_distance as f32;
                 // Spell UI quads (book grid or in-flight HUD).
-                if let (Some(assets), Some(w)) = (&self.level.ui, &self.sim.world) {
+                if let (Some(assets), Some(w)) = (&sess.level.ui, &sess.sim.world) {
                     let size = self
                         .window
                         .as_ref()
@@ -2851,11 +4512,11 @@ impl ApplicationHandler for App {
                         .unwrap_or((1280.0, 960.0));
                     let loadout = w.loadout();
                     let vitals = w.vitals();
-                    let mc2_book = matches!(self.level.game, mgc_sim::ids::GameId::Mc2)
-                        .then(|| w.mc2_book_view());
+                    let is_mc2 = matches!(sess.level.game, mgc_sim::ids::GameId::Mc2);
+                    let mc2_book = is_mc2.then(|| w.mc2_book_view());
                     // The alert-marble flicker approximates retail's
                     // per-frame [55]/[41] alternation at tick parity.
-                    let alert_blink = self.sim.tick % 2 == 0;
+                    let alert_blink = sess.sim.tick % 2 == 0;
                     let (mut quads, hovered) = if self.book_open() {
                         if self.selector.map_book {
                             ui::book_quads(
@@ -2881,7 +4542,7 @@ impl ApplicationHandler for App {
                                 &vitals,
                                 self.hud_transparent(),
                                 alert_blink,
-                                matches!(self.level.game, mgc_sim::ids::GameId::Mc2),
+                                is_mc2,
                                 mc2_book.as_ref(),
                                 size.0,
                                 size.1,
@@ -2895,7 +4556,7 @@ impl ApplicationHandler for App {
                     if self.pane_open() {
                         if let Some(pane) = &self.pane {
                             let n = pane.spell_count();
-                            let mc2 = matches!(self.level.game, mgc_sim::ids::GameId::Mc2);
+                            let mc2 = is_mc2;
                             let mut owned = [false; 26];
                             let mut castable = [false; 26];
                             let mut castable_tier = [[true; 3]; 26];
@@ -2912,7 +4573,7 @@ impl ApplicationHandler for App {
                                 // tiers, real GetSpellManaCost costs
                                 // and the quick-slot binds all come
                                 // from the sim's class-15 machinery.
-                                let bv = self.sim.world.as_ref().map(|w| w.mc2_book_view());
+                                let bv = Some(w.mc2_book_view());
                                 if let Some(bv) = bv {
                                     for s in 0..n {
                                         owned[s] =
@@ -2991,7 +4652,7 @@ impl ApplicationHandler for App {
                         // webs + the (9,21) spit. Hard on/off, no
                         // fade, exactly retail (player 2026-07-17:
                         // the sim drag was in, the texture missing).
-                        if self.sim.carpet_mc2.mobilize > 0 && assets.has_web() {
+                        if sess.sim.carpet_mc2.mobilize > 0 && assets.has_web() {
                             quads.extend(assets.web_quads(size.0, size.1));
                         }
                         // The stagger GREEN tint (`SetPalette
@@ -3003,20 +4664,18 @@ impl ApplicationHandler for App {
                         // blended green quad at the retail
                         // subtraction magnitude (≈12/17/22%) is the
                         // RGBA approximation of the palette edit.
-                        let ms = self.sim.carpet_mc2.move_speed;
+                        let ms = sess.sim.carpet_mc2.move_speed;
                         if ms > 0 {
                             let count = (171.0 * ms as f32 / 3.0 + 85.0).min(256.0);
                             let a = count * 56.0 / 65536.0;
-                            quads.push(ui::solid(
-                                [0.0, 0.0, size.0, size.1],
-                                [0.05, 0.42, 0.08, a],
-                            ));
+                            quads
+                                .push(ui::solid([0.0, 0.0, size.0, size.1], [0.05, 0.42, 0.08, a]));
                         }
                         quads.extend(ui::vitals_quads(
                             &vitals,
                             size.0,
                             size.1,
-                            (self.sim.tick / 8) % 2 == 0,
+                            (sess.sim.tick / 8) % 2 == 0,
                             self.cfg.render.debug.grace_meter,
                         ));
                     }
@@ -3039,12 +4698,24 @@ impl ApplicationHandler for App {
                             self.cursor,
                         ));
                     }
+                    // The exit-confirm modal (mutually exclusive
+                    // with the options menu — P is swallowed while
+                    // it is up; under the quit fade).
+                    if self.exit_confirm {
+                        quads.extend(ui::exit_confirm_quads(
+                            assets,
+                            EXIT_CONFIRM_TEXT,
+                            size.0,
+                            size.1,
+                            self.cursor,
+                        ));
+                    }
                     // expose-jar-spells (debug): float each pickable
                     // jar's spell icon over it in the main view (the
                     // map stamps are the other half). No fancy UI —
                     // the raw icon on a dark slab, health-bar style.
                     if self.cfg.render.enhancement.expose_jar_spells && !self.book_open() {
-                        if let Some(u) = &self.level.ui {
+                        if let Some(u) = &sess.level.ui {
                             for &(x, alt, z, spell) in &self.jar_markers {
                                 // The fog-wall cut (player directive
                                 // 2026-07-16): overlays must not
@@ -3055,7 +4726,7 @@ impl ApplicationHandler for App {
                                 if fog_cut(&cam, x, alt, z, fog_wall) {
                                     continue;
                                 }
-                                let Some(id) = ui::spell_icon_sprite(self.level.game, spell) else {
+                                let Some(id) = ui::spell_icon_sprite(sess.level.game, spell) else {
                                     continue;
                                 };
                                 let Some(st) = u.map_stamp(id) else { continue };
@@ -3104,7 +4775,7 @@ impl ApplicationHandler for App {
                         && !self.book_open()
                         && vitals.state == mgc_sim::mc1::world::LifeState::Alive
                     {
-                        let f = &self.sim.flyer;
+                        let f = &sess.sim.flyer;
                         let (sy, cyaw) = cam.yaw.sin_cos();
                         let (sp, cp) = aim.sin_cos();
                         // The acquire range: 5120 units = 20 tiles.
@@ -3132,7 +4803,7 @@ impl ApplicationHandler for App {
                             })
                         });
                         let blink =
-                            0.5 + 0.5 * (((self.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
+                            0.5 + 0.5 * (((sess.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
                         ui::crosshair_quads(&mut quads, size.0, neutral, locks, blink);
                     }
                     // The top-of-screen notification line (retail
@@ -3174,7 +4845,7 @@ impl ApplicationHandler for App {
                         // colour-cycles the ink unless zoomed out —
                         // the static black remap slot [1] is the
                         // baseline.
-                        if !matches!(self.level.game, mgc_sim::ids::GameId::Mc2)
+                        if !is_mc2
                             && w.completed()
                             && !w.player_dead()
                         {
@@ -3192,7 +4863,7 @@ impl ApplicationHandler for App {
                             // live toast owns the anchor row; the
                             // win block steps one line below it.
                             let line = |idx: usize, fallback: &str| -> String {
-                                match self.level.etext.get(idx) {
+                                match sess.level.etext.get(idx) {
                                     Some(s) if !s.is_empty() => s.clone(),
                                     _ => fallback.to_string(),
                                 }
@@ -3239,11 +4910,19 @@ impl ApplicationHandler for App {
                     // app's own post-victory fade; at full black the
                     // game ends (player directive 2026-07-16 — quit,
                     // no stats/menu; campaign stitching later).
-                    if w.won() && self.quit_fade.is_none() {
+                    if w.won() && !self.won_handled {
                         // The victory breadcrumb (player request
-                        // 2026-07-16) — the campaign-stitching hook
-                        // will consume the same signal later.
-                        println!("{} completed", self.level.label);
+                        // 2026-07-16) — and the campaign-stitching
+                        // hook consuming the same signal: record the
+                        // completion, pick the next step, persist the
+                        // slot. Single-level mode still just fades
+                        // out. Latched — the fade being consumed (the
+                        // map screen) must not refire it.
+                        self.won_handled = true;
+                        println!("{} completed", sess.level.label);
+                        if let Some(run) = &mut self.campaign {
+                            campaign_complete(run, sess.level.level_number, w);
+                        }
                         self.quit_fade = Some(0.0);
                     }
                     let fade = w.end_fade().max(self.quit_fade.unwrap_or(0.0));
@@ -3276,14 +4955,55 @@ impl ApplicationHandler for App {
                 if let Some(f) = &mut self.quit_fade {
                     *f += 1.0 / 48.0;
                     if *f >= 1.25 {
-                        // A beat of full black before leaving.
-                        event_loop.exit();
+                        // A beat of full black; then the campaign
+                        // routes onward, or the game leaves.
+                        match self.campaign.as_mut().and_then(|c| c.next.take()) {
+                            Some(campaign::NextStep::Level(n)) => {
+                                let mc1 = self
+                                    .campaign
+                                    .as_ref()
+                                    .is_some_and(|c| c.id != campaign::CampaignId::Mc2);
+                                if mc1 {
+                                    // The retail transition beat:
+                                    // a win returns to the MAIN
+                                    // MENU (FMV + score screen
+                                    // deferred); Continue launches
+                                    // the next level.
+                                    if let Some(run) = &mut self.campaign {
+                                        run.current = n;
+                                    }
+                                    self.quit_fade = None;
+                                    self.enter_main_menu();
+                                } else {
+                                    // MC2's direct level chain (the
+                                    // demon-mouth secret dive).
+                                    self.campaign_switch(n, event_loop);
+                                }
+                            }
+                            Some(campaign::NextStep::MapScreen) => {
+                                self.quit_fade = None;
+                                self.open_map_screen(event_loop);
+                            }
+                            Some(campaign::NextStep::Outro) => {
+                                // The outro FMV slot (deferred with
+                                // the intro track).
+                                println!("campaign complete!");
+                                event_loop.exit();
+                            }
+                            None => event_loop.exit(),
+                        }
                     }
                 }
+                // The fade routing above may have torn the session
+                // down (won → menu/map) — the tick clock must come
+                // from whatever session remains, if any.
+                let anim_tick = self.session.as_deref().map(|s| s.sim.tick % 4096);
                 if let Some(r) = &mut self.renderer {
                     // Animation clock: sim ticks are the original's game
                     // turns; wrapped so f32 stays exact (see set_anim_turn).
-                    r.set_anim_turn((self.sim.tick % 4096) as f32 + alpha);
+                    if let Some(t) = anim_tick {
+                        r.set_anim_turn(t as f32 + alpha);
+                    }
                     match r.render(&cam) {
                         Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
                         Err(e) => eprintln!("render: {e}"),
@@ -3336,6 +5056,16 @@ impl ApplicationHandler for App {
 
 struct Args {
     level: PathBuf,
+    /// `--campaign <mc1|mc1hw|mc2>`: run the game's campaign — level
+    /// order, exit routing, cross-level spell carry, retail-format
+    /// saves under `saves/<game>/`. Overrides `--level`.
+    campaign: Option<campaign::CampaignId>,
+    /// `--slot N` (1-based): the campaign save slot (MC1/HW: 1-6,
+    /// MC2: 1-8). Stored 0-based. Default slot 1.
+    slot: usize,
+    /// `--new-game`: start the campaign fresh even if the slot holds
+    /// a save (the slot is only overwritten at the first completion).
+    new_game: bool,
     screenshot: Option<PathBuf>,
     /// Camera override for screenshots: x, y, z, yaw°, pitch°.
     camera: Option<[f32; 5]>,
@@ -3423,6 +5153,9 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut level = PathBuf::from("baked/mc1/level-000.mgcl");
+    let mut campaign_id = None;
+    let mut slot = 0usize;
+    let mut new_game = false;
     let mut screenshot = None;
     let mut camera = None;
     let mut tileset = None;
@@ -3494,6 +5227,24 @@ fn parse_args() -> Result<Args, String> {
             "--level" => {
                 level = resolve_level_arg(&it.next().ok_or("--level needs a path or game:index")?)?;
             }
+            "--campaign" => {
+                let v = it.next().ok_or("--campaign needs mc1, mc1hw or mc2")?;
+                campaign_id = Some(campaign::CampaignId::parse(&v).ok_or_else(|| {
+                    format!("--campaign {v}: unknown campaign (mc1, mc1hw or mc2)")
+                })?);
+            }
+            "--slot" => {
+                let n: usize = it
+                    .next()
+                    .ok_or("--slot needs a number")?
+                    .parse()
+                    .map_err(|e| format!("--slot: {e}"))?;
+                if !(1..=8).contains(&n) {
+                    return Err("--slot must be 1-6 (mc1/mc1hw) or 1-8 (mc2)".into());
+                }
+                slot = n - 1;
+            }
+            "--new-game" => new_game = true,
             "--tileset" => {
                 let set: u8 = it
                     .next()
@@ -3728,6 +5479,9 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         level,
+        campaign: campaign_id,
+        slot,
+        new_game,
         screenshot,
         camera,
         tileset,
@@ -4252,6 +6006,147 @@ fn apply_instruments(
     }
 }
 
+/// Install the campaign's cross-level carry into a fresh world.
+/// MC1/HW: grant collected-flags ∩ the level's availability mask
+/// (the retail human-branch grant law, :49226-33). MC2: learn the
+/// carried book with its banked XP — `mc2_grant_plausible` is the
+/// same grant+bank+re-derive path retail's `sub_549A0` carry feeds.
+fn apply_campaign_book(w: &mut mgc_sim::mc1::world::World, run: &CampaignRun, level: &LoadedLevel) {
+    match run.id {
+        campaign::CampaignId::Mc2 => {
+            let Some(save) = &run.mc2 else { return };
+            let book = save.book();
+            let grants: Vec<(u8, i32)> = (0..26)
+                .filter(|&s| book.owned[s])
+                .map(|s| (s as u8, book.xp[s]))
+                .collect();
+            if !grants.is_empty() {
+                w.mc2_grant_plausible(&grants);
+            }
+        }
+        _ => {
+            let Some(save) = &run.mc1 else { return };
+            let mut spells: Vec<u8> = (0..24)
+                .filter(|&s| save.blob24[s] != 0)
+                .map(|s| s as u8)
+                .collect();
+            if let Some(mask) = &level.allowed_spells {
+                spells.retain(|&s| mask.get(s as usize).is_none_or(|&v| v == 1));
+            }
+            if !spells.is_empty() {
+                w.grant_spells(&spells);
+            }
+        }
+    }
+}
+
+/// The won-edge bookkeeping: fold the finished level into the
+/// campaign record, decide what follows (`CampaignRun::next`), and
+/// persist the slot file. A free function because it runs inside the
+/// redraw's `&mut sim.world` borrow (field-disjoint from
+/// `self.campaign`).
+fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::mc1::world::World) {
+    use campaign::{CampaignId, NextStep};
+    match run.id {
+        CampaignId::Mc2 => {
+            let Some(save) = &mut run.mc2 else { return };
+            // Book carry: serialize the live book into str_611 (all
+            // XP banked — the between-levels shape).
+            let v = w.mc2_book_view();
+            save.set_book(&saves::Mc2Book {
+                owned: v.owned,
+                xp: v.xp,
+                levels: v.levels,
+                sel: v.sel,
+                left: v.left,
+                right: v.right,
+            });
+            let exit = w.mc2_exit_model();
+            if campaign::mc2_is_secret(level) {
+                // A completed secret: portal → completed (sprite
+                // 305) AND the parent main is only NOW promoted —
+                // the mouth exit skipped the map, so the parent's
+                // completion rides the secret's (PortalsUpdate's
+                // secret arm force-activates the parent,
+                // MenusAndIntros.cpp:2226-45). A failed secret thus
+                // leaves the parent pending with its portal revealed
+                // — the retry loop the X-exit routing arm serves.
+                for p in save.secrets.iter_mut() {
+                    if p.level as u32 == level {
+                        p.activated = 1;
+                        p.sprite = 305;
+                        save.levels_completed = save.levels_completed.max(p.parent as u32 + 1);
+                    }
+                }
+            } else if exit == Some(4) {
+                // The demon-mouth exit: reveal the attached secret
+                // (hidden 3 → revealed 2, sprite 270) and jump in
+                // WITHOUT promoting this level — no map visit runs
+                // PortalsUpdate, so the parent completes only when
+                // the secret does.
+                for p in save.secrets.iter_mut() {
+                    if p.parent as u32 == level && p.activated == 3 {
+                        p.activated = 2;
+                        p.sprite = 270;
+                    }
+                }
+            } else if save
+                .secrets
+                .iter()
+                .any(|p| p.parent as u32 == level && p.activated == 2)
+            {
+                // The checkpoint X with this level's secret still
+                // revealed-uncompleted: routed back into the secret
+                // (EF:60534-44) — the level stays pending like the
+                // mouth path.
+            } else {
+                // The plain checkpoint X: open the linear prefix
+                // through L (numLevelsCompleted counts opened
+                // portals; replays never regress it).
+                save.levels_completed = save.levels_completed.max(level + 1);
+            }
+            let secret_pending = save
+                .secrets
+                .iter()
+                .any(|p| p.parent as u32 == level && p.activated == 2);
+            run.next = Some(campaign::mc2_next_step(
+                level,
+                exit.unwrap_or(3),
+                secret_pending,
+            ));
+            run.persist();
+        }
+        CampaignId::Mc1 | CampaignId::Mc1Hw => {
+            let hw = run.id == CampaignId::Mc1Hw;
+            let Some(save) = &mut run.mc1 else { return };
+            // Commit collected spells to the persistent flags (the
+            // retail level-completion commit into var_15318).
+            let owned = w.loadout().owned;
+            for s in 0..24 {
+                if owned[s] {
+                    save.blob24[s] = 1;
+                }
+            }
+            let next = campaign::mc1_next_level(level, hw);
+            // `level` in the save = the level to PLAY on resume
+            // (retail's post-increment var_u16_17 semantic; the end
+            // value marks a finished campaign).
+            save.level = match next {
+                NextStep::Level(n) => n as u16,
+                _ => {
+                    if hw {
+                        25
+                    } else {
+                        50
+                    }
+                }
+            };
+            run.next = Some(next);
+            run.persist();
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_screenshot(
     mut level: LoadedLevel,
@@ -4540,36 +6435,77 @@ fn main() -> std::process::ExitCode {
     let awake_range = args.awake_range.or(cfg.sim.parameters.awake_range);
     cfg.sim.parameters.awake_range = awake_range;
 
+    // Campaign mode: open (or start) the slot's retail-format save
+    // and route the launch to the campaign's current level. The
+    // plausible-spellbook instrument yields to the real carry.
+    let mut level_path = args.level.clone();
+    let mut campaign_run = None;
+    if let Some(id) = args.campaign {
+        let max_slots = match id {
+            campaign::CampaignId::Mc2 => saves::MC2_SLOTS,
+            _ => saves::MC1_SLOTS,
+        };
+        if args.slot >= max_slots {
+            eprintln!(
+                "error: --slot {} out of range for {} ({} slots)",
+                args.slot + 1,
+                id.tag(),
+                max_slots
+            );
+            return std::process::ExitCode::from(2);
+        }
+        match CampaignRun::start(id, args.slot, args.new_game) {
+            Ok(run) => {
+                level_path = run.level_path(run.current);
+                campaign_run = Some(run);
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        }
+        if cfg.dev.plausible_spellbook {
+            println!("campaign: plausible_spellbook off — the real campaign carry replaces it");
+            cfg.dev.plausible_spellbook = false;
+        }
+    }
+
     // First-run / stale-epoch auto-bake: regenerate the baked tree
     // from the original game data before touching it.
-    if let Err(e) = bakecheck::ensure_baked(&args.level, cfg.gamedata.as_deref()) {
+    if let Err(e) = bakecheck::ensure_baked(&level_path, cfg.gamedata.as_deref()) {
         eprintln!("error: {e}");
         return std::process::ExitCode::FAILURE;
     }
 
-    let level = match load_level(
-        &args.level,
-        args.tileset,
-        args.terrain_features,
-        cfg.dev.plausible_spellbook,
-        cfg.gameplay.enhancement.prune_owned_jars,
-        pool_slots,
-        awake_range,
-    ) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return std::process::ExitCode::FAILURE;
+    // Campaign boots are LEVEL-LESS: the frontend (main menu / world
+    // map) is the loader, constructing a gameplay session when the
+    // player launches one. Only the headless instruments and single-
+    // level mode load a level up front.
+    let headless =
+        args.screenshot.is_some() || args.map.is_some() || args.flock_probe.is_some();
+    let boot_level = if campaign_run.is_some() && !headless {
+        None
+    } else {
+        match load_level(
+            &level_path,
+            args.tileset,
+            args.terrain_features,
+            cfg.dev.plausible_spellbook,
+            cfg.gameplay.enhancement.prune_owned_jars,
+            pool_slots,
+            awake_range,
+        ) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
         }
     };
 
     if let Some(out) = &args.map {
-        return match run_map(
-            &level,
-            out,
-            args.map_scale,
-            cfg.render.debug.map_trigger_areas,
-        ) {
+        let level = boot_level.as_ref().expect("headless paths load a level");
+        return match run_map(level, out, args.map_scale, cfg.render.debug.map_trigger_areas) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -4579,8 +6515,9 @@ fn main() -> std::process::ExitCode {
     }
 
     if let Some(out) = &args.flock_probe {
+        let level = boot_level.as_ref().expect("headless paths load a level");
         return match run_flock_probe(
-            &level,
+            level,
             out,
             args.probe_ticks,
             args.probe_every,
@@ -4598,6 +6535,7 @@ fn main() -> std::process::ExitCode {
     }
 
     if let Some(out) = &args.screenshot {
+        let level = boot_level.expect("headless paths load a level");
         return match run_screenshot(
             level,
             out,
@@ -4626,7 +6564,16 @@ fn main() -> std::process::ExitCode {
     // request there coerces with a note rather than inventing a
     // 26-spell in-map grid.
     let selector_choice = cfg.gameplay.enhancement.spell_selector;
-    let level_is_mc2 = matches!(level.game, mgc_sim::ids::GameId::Mc2);
+    // The running game's identity: the boot level's, or (level-less
+    // campaign boot) the campaign's.
+    let boot_game = boot_level.as_ref().map(|l| l.game).unwrap_or_else(|| {
+        match campaign_run.as_ref().map(|c| c.id) {
+            Some(campaign::CampaignId::Mc2) => mgc_sim::ids::GameId::Mc2,
+            Some(campaign::CampaignId::Mc1Hw) => mgc_sim::ids::GameId::Mc1Hw,
+            _ => mgc_sim::ids::GameId::Mc1,
+        }
+    });
+    let level_is_mc2 = matches!(boot_game, mgc_sim::ids::GameId::Mc2);
     let selector = selector_choice.resolve(level_is_mc2);
     if level_is_mc2
         && matches!(
@@ -4671,7 +6618,12 @@ fn main() -> std::process::ExitCode {
 
     // The structured options summary: every toggle, its current value,
     // the alternatives (faithful `*`-marked), and how to change it.
-    settings::print_summary(&cfg, level.game, &level.label);
+    let boot_label = match (&boot_level, &campaign_run) {
+        (Some(l), _) => l.label.clone(),
+        (None, Some(run)) => format!("{} campaign", run.id.tag()),
+        (None, None) => String::new(),
+    };
+    settings::print_summary(&cfg, boot_game, &boot_label);
 
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
@@ -4680,7 +6632,18 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(level, cfg, config_path);
+    let mut app = App::new(
+        boot_level,
+        cfg,
+        config_path,
+        campaign_run,
+        LaunchParams {
+            tileset: args.tileset,
+            terrain_features: args.terrain_features,
+            pool_slots,
+            awake_range,
+        },
+    );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;

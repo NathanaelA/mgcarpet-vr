@@ -286,6 +286,27 @@ impl FaithfulMixer {
         self.mc2 = on;
     }
 
+    /// Hard reset: stop every channel and forget all requests, fades
+    /// and ambient wishes. The level-boundary teardown (retail stops
+    /// the whole SFX system before a frontend transition, remc1
+    /// `sub_5D010_5D520`): ambient loops and lingering one-shots die
+    /// here instead of surviving under the menus.
+    pub fn reset(&mut self, tx: &Sender<Cmd>) {
+        for (i, ch) in self.channels.iter_mut().enumerate() {
+            if ch.key.is_some() {
+                let _ = tx.send(Cmd::Stop { ch: i });
+            }
+            *ch = Channel {
+                key: None,
+                looped: false,
+                vol: 0,
+                fade: Fade::None,
+            };
+        }
+        self.slots = [Slot::default(); SLOT_COUNT];
+        self.ambient = [false; 4];
+    }
+
     /// The request phase: one sim sound event.
     pub fn request(&mut self, id: u8, source: Source, listener: &Listener) {
         if id as usize >= SLOT_COUNT {

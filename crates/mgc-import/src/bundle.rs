@@ -757,6 +757,8 @@ pub fn bake_mc2_audio(
     // Voiceover: slice each rip track by its CdTracks_DB080 row —
     // only with a cue sheet; an empty speech index otherwise.
     let mut speech = SpeechIndex { clips: Vec::new() };
+    let mut dejunked = 0u32;
+    let mut dejunked_ms = 0u64;
     if let Some(cue) = &cue {
         let image_len = std::fs::metadata(&image)
             .map_err(|e| BakeError::Io(image.clone(), e))?
@@ -788,10 +790,23 @@ pub fn bake_mc2_audio(
                     println!("note: mc2 speech: row {row} seg {seg} out of track — skipped");
                     continue;
                 }
-                let flac =
-                    crate::flac::encode(&pcm[a..b], 2, crate::redbook::RATE).map_err(|e| {
-                        BakeError::Level(image.clone(), 0, format!("row {row} seg {seg}: {e}"))
-                    })?;
+                // Silence the pre-voice mastering junk (the retail
+                // narration crackle — see redbook::mute_leading_junk;
+                // durations preserved, the pristine rip stays in
+                // gamedata). SEGMENT 0 ONLY: the corruption lives at
+                // the track heads (the map narratives) — the in-level
+                // hint segments were never affected (player-verified
+                // 2026-07-18; the broader sweep clipped them).
+                let mut clip = pcm[a..b].to_vec();
+                if seg == 0
+                    && let Some(ms) = crate::redbook::mute_leading_junk(&mut clip)
+                {
+                    dejunked += 1;
+                    dejunked_ms += u64::from(ms);
+                }
+                let flac = crate::flac::encode(&clip, 2, crate::redbook::RATE).map_err(|e| {
+                    BakeError::Level(image.clone(), 0, format!("row {row} seg {seg}: {e}"))
+                })?;
                 let member = format!("speech/level-{row:02}-seg-{seg}.flac");
                 emit(&member, &flac)?;
                 speech.clips.push(SpeechClip {
@@ -805,6 +820,13 @@ pub fn bake_mc2_audio(
                     ),
                 });
             }
+        }
+        if dejunked > 0 {
+            println!(
+                "mc2 speech: muted mastering junk ahead of the voice in {dejunked} clip(s) \
+                 ({:.1} s total; the retail narration crackle)",
+                dejunked_ms as f64 / 1000.0
+            );
         }
     }
     emit(
@@ -852,6 +874,487 @@ pub fn bake_mc2_audio(
     Ok(outputs
         .into_iter()
         .map(|(name, sha)| (format!("assets/mc2-audio/{name}"), sha))
+        .collect())
+}
+
+/// The MC1/HW frontend bundle → `assets/mc1-ui/`: the 320×200 main
+/// menu (bg + palette + MMMASK hotspot bitmap + MMSPR button/dialog
+/// sprites), the GLOBE/TIMER menu animations (Bullfrog FMV deltas,
+/// cropped to their animated regions), and the FONT1 glyph masks.
+/// Shared by BOTH campaigns — the retail CD serves one
+/// `DATA/SCREENS` set to CARPET.EXE and HIDDEN.EXE alike (only the
+/// title art differs, docs/traces/mc1-campaign-save-menu.md).
+pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, String)>, BakeError> {
+    if !src.exists("DATA/SCREENS/MAINMENU.DAT") {
+        eprintln!("note: mc1: no DATA/SCREENS/MAINMENU.DAT — skipping frontend bundle");
+        return Ok(Vec::new());
+    }
+    let get = |rel: &str| -> Result<Vec<u8>, BakeError> {
+        let raw = src
+            .read(rel)
+            .map_err(|e| BakeError::Io(Path::new(rel).to_path_buf(), e))?;
+        if crate::rnc::is_rnc(&raw) {
+            crate::rnc::decompress(&raw).map_err(|e| {
+                BakeError::Level(Path::new(rel).to_path_buf(), 0, format!("RNC: {e:?}"))
+            })
+        } else {
+            Ok(raw)
+        }
+    };
+    let dir = out_dir.join("assets").join("mc1-ui");
+    std::fs::create_dir_all(&dir).map_err(|e| BakeError::Io(dir.clone(), e))?;
+    let mut outputs = Vec::new();
+    let mut sources = Vec::new();
+    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path, e))?;
+        outputs.push((name.to_string(), hex(&Sha256::digest(bytes))));
+        Ok(())
+    };
+
+    let bg = get("DATA/SCREENS/MAINMENU.DAT")?;
+    let pal = get("DATA/SCREENS/MAINMENU.PAL")?;
+    let mask = get("DATA/SCREENS/MMMASK.DAT")?;
+    if bg.len() != 64_000 || mask.len() != 64_000 || pal.len() != 768 {
+        return Err(BakeError::Level(
+            Path::new("DATA/SCREENS/MAINMENU.DAT").to_path_buf(),
+            0,
+            format!(
+                "unexpected sizes: bg {} mask {} pal {}",
+                bg.len(),
+                mask.len(),
+                pal.len()
+            ),
+        ));
+    }
+    emit("menu-pal.bin", &pal)?;
+    emit("menu-mask.bin", &mask)?;
+    for f in ["MAINMENU.DAT", "MAINMENU.PAL", "MMMASK.DAT"] {
+        sources.push(BundleSource {
+            file: f.into(),
+            sha256: hex(&Sha256::digest(&get(&format!("DATA/SCREENS/{f}"))?)),
+        });
+    }
+
+    // MMSPR: the menu's label/button sprites (HSPR TAB/DAT, 8
+    // entries — LOAD/SAVE labels, OK, Cancel, quit prompt).
+    let dat = get("DATA/SCREENS/MMSPR.DAT")?;
+    let tab = get("DATA/SCREENS/MMSPR.TAB")?;
+    let decoded = crate::hspr::decode(&dat, &tab).map_err(|e| {
+        BakeError::Level(
+            Path::new("DATA/SCREENS/MMSPR.DAT").to_path_buf(),
+            0,
+            e.to_string(),
+        )
+    })?;
+    let packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
+    emit("menu-sprites.bin", &packed.atlas)?;
+    emit(
+        "menu-sprites.json",
+        &serde_json::to_vec_pretty(&packed.index).expect("mmspr index serializes"),
+    )?;
+
+    emit("menu-bg.bin", &bg)?;
+
+    // GLOBE/TIMER: menu mini-movies. Retail steps ONLY the delta
+    // frames over the live screen — the full-canvas keyframe never
+    // draws (it differs from MAINMENU.DAT on 58k pixels incl. a
+    // black globe surround; the menu art already contains globe and
+    // hourglass at rest). The animation therefore = the pixels the
+    // INTER-FRAME deltas touch (globe: 3024 px, the spinning
+    // circle). Baked as bbox crops of every frame PLUS a touched-
+    // pixel mask; the app blits only masked pixels over the art.
+    let crop_movie = |movie: &crate::fmv::Fmv,
+                      file: &str|
+     -> Result<(Vec<u8>, Vec<u8>, serde_json::Value), BakeError> {
+        let (w, h) = (movie.width, movie.height);
+        let mut touched = vec![false; w * h];
+        for pair in movie.frames.windows(2) {
+            for i in 0..w * h {
+                if pair[0][i] != pair[1][i] {
+                    touched[i] = true;
+                }
+            }
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+        for y in 0..h {
+            for x in 0..w {
+                if touched[y * w + x] {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        if x0 > x1 {
+            return Err(BakeError::Level(
+                Path::new(file).to_path_buf(),
+                0,
+                "movie has no animated pixels".into(),
+            ));
+        }
+        let (cw, ch) = (x1 + 1 - x0, y1 + 1 - y0);
+        let mut bin = Vec::with_capacity(movie.frames.len() * cw * ch);
+        for fr in &movie.frames {
+            for y in y0..=y1 {
+                bin.extend_from_slice(&fr[y * w + x0..y * w + x1 + 1]);
+            }
+        }
+        let mut mask = Vec::with_capacity(cw * ch);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                mask.push(touched[y * w + x] as u8);
+            }
+        }
+        let meta = serde_json::json!({
+            "x": x0, "y": y0, "w": cw, "h": ch,
+            "frames": movie.frames.len(),
+        });
+        Ok((bin, mask, meta))
+    };
+    // The menu movies' embedded palettes differ from MAINMENU.PAL in
+    // a handful of entries (TIMER: 18, SCROLL: ~19; GLOBE none) —
+    // indices blitted raw under the menu palette land on the wrong
+    // colors there (the player-reported black hourglass-outline
+    // specks). Remap every movie frame through the nearest-color LUT
+    // into the MENU palette before anything else consumes it.
+    let remap_frames = |movie: &mut crate::fmv::Fmv| {
+        let Some(mpal) = movie.palette else { return };
+        if mpal[..] == pal[..] {
+            return;
+        }
+        let rgb = |p: &[u8], i: usize| {
+            [p[i * 3] as i32, p[i * 3 + 1] as i32, p[i * 3 + 2] as i32]
+        };
+        let lut: Vec<u8> = (0..256)
+            .map(|i| {
+                // Index 0 is the engine-wide transparent index —
+                // it must survive the remap untouched.
+                if i == 0 {
+                    return 0;
+                }
+                let want = rgb(&mpal, i);
+                let mut best = (0usize, i32::MAX);
+                for j in 0..256 {
+                    let c = rgb(&pal, j);
+                    let d = (0..3).map(|k| (c[k] - want[k]).pow(2)).sum();
+                    if d < best.1 {
+                        best = (j, d);
+                    }
+                }
+                best.0 as u8
+            })
+            .collect();
+        for f in &mut movie.frames {
+            for p in f.iter_mut() {
+                *p = lut[*p as usize];
+            }
+        }
+    };
+
+    // The globe animation = its inter-frame touched set alone (the
+    // spinning circle; the arch around it is MAINMENU art).
+    {
+        let raw = get("DATA/SCREENS/GLOBE.DAT")?;
+        let mut movie = crate::fmv::decode(&raw, Some(&bg))
+            .map_err(|e| BakeError::Level(Path::new("GLOBE.DAT").to_path_buf(), 0, e))?;
+        remap_frames(&mut movie);
+        let (fbin, gmask, meta) = crop_movie(&movie, "GLOBE.DAT")?;
+        emit("globe.bin", &fbin)?;
+        emit("globe-mask.bin", &gmask)?;
+        emit(
+            "globe.json",
+            &serde_json::to_vec_pretty(&meta).expect("globe meta serializes"),
+        )?;
+        sources.push(BundleSource {
+            file: "GLOBE.DAT".into(),
+            sha256: hex(&Sha256::digest(&raw)),
+        });
+    }
+
+    // The TIMER is different: the hourglass exists ONLY while a game
+    // is underway — MAINMENU.DAT has bare wall in the MMMASK id-11
+    // (Continue) region, and the movie's keyframe carries the whole
+    // hourglass on its stand (player report round 3). Its visible
+    // set = the inter-frame sand pixels PLUS every keyframe pixel
+    // inside the id-11 hotspot that VISUALLY differs from the wall
+    // art (RGB compare through the menu palette — the streams'
+    // palettes are near-identical, so a small threshold splits real
+    // art from palette-index noise).
+    {
+        let raw = get("DATA/SCREENS/TIMER.DAT")?;
+        let mut movie = crate::fmv::decode(&raw, Some(&bg))
+            .map_err(|e| BakeError::Level(Path::new("TIMER.DAT").to_path_buf(), 0, e))?;
+        remap_frames(&mut movie);
+        let (w, h) = (movie.width, movie.height);
+        let mut visible = vec![false; w * h];
+        for pair in movie.frames.windows(2) {
+            for i in 0..w * h {
+                if pair[0][i] != pair[1][i] {
+                    visible[i] = true;
+                }
+            }
+        }
+        let rgb = |i: usize| {
+            [
+                pal[i * 3] as i32,
+                pal[i * 3 + 1] as i32,
+                pal[i * 3 + 2] as i32,
+            ]
+        };
+        let key = &movie.frames[0];
+        for i in 0..w * h {
+            // Keyframe index 0 = transparent (unpainted holes in
+            // the hourglass art — retail never shows them; the
+            // player-reported black outline specks).
+            if mask[i] != 11 || visible[i] || key[i] == 0 {
+                continue;
+            }
+            let a = rgb(key[i] as usize);
+            let b = rgb(bg[i] as usize);
+            let d: i32 = (0..3).map(|k| (a[k] - b[k]).abs()).sum();
+            if d > 15 {
+                visible[i] = true;
+            }
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+        for y in 0..h {
+            for x in 0..w {
+                if visible[y * w + x] {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        let (cw, ch) = (x1 + 1 - x0, y1 + 1 - y0);
+        let mut bin = Vec::with_capacity(movie.frames.len() * cw * ch);
+        for fr in &movie.frames {
+            for y in y0..=y1 {
+                bin.extend_from_slice(&fr[y * w + x0..y * w + x1 + 1]);
+            }
+        }
+        let mut mbin = Vec::with_capacity(cw * ch);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                mbin.push(visible[y * w + x] as u8);
+            }
+        }
+        emit("timer.bin", &bin)?;
+        emit("timer-mask.bin", &mbin)?;
+        emit(
+            "timer.json",
+            &serde_json::to_vec_pretty(&serde_json::json!({
+                "x": x0, "y": y0, "w": cw, "h": ch,
+                "frames": movie.frames.len(),
+            }))
+            .expect("timer meta serializes"),
+        )?;
+        sources.push(BundleSource {
+            file: "TIMER.DAT".into(),
+            sha256: hex(&Sha256::digest(&raw)),
+        });
+    }
+
+    // SCROLL.DAT: the save/load dialog's parchment screen — the
+    // fully-unrolled LAST frame over BLACK (retail plays the unroll
+    // movie on a cleared screen — the dialog is NOT an overlay on
+    // the menu, player report round 3).
+    let scroll_raw = get("DATA/SCREENS/SCROLL.DAT")?;
+    let mut scroll = crate::fmv::decode(&scroll_raw, None)
+        .map_err(|e| BakeError::Level(Path::new("SCROLL.DAT").to_path_buf(), 0, e))?;
+    remap_frames(&mut scroll);
+    let last = scroll
+        .frames
+        .last()
+        .ok_or_else(|| {
+            BakeError::Level(
+                Path::new("SCROLL.DAT").to_path_buf(),
+                0,
+                "scroll movie has no frames".into(),
+            )
+        })?
+        .clone();
+    emit("scroll-bg.bin", &last)?;
+    sources.push(BundleSource {
+        file: "SCROLL.DAT".into(),
+        sha256: hex(&Sha256::digest(&scroll_raw)),
+    });
+
+    // FONT1 glyph masks (slot labels, dialog text).
+    let dat = get("DATA/FONT1.DAT")?;
+    let tab = get("DATA/FONT1.TAB")?;
+    let glyphs = crate::hspr::decode(&dat, &tab).map_err(|e| {
+        BakeError::Level(Path::new("DATA/FONT1.DAT").to_path_buf(), 0, e.to_string())
+    })?;
+    let fpacked = sprites::pack(&glyphs, UI_ATLAS_WIDTH);
+    emit("font.bin", &fpacked.atlas)?;
+    emit(
+        "font.json",
+        &serde_json::to_vec_pretty(&fpacked.index).expect("font index serializes"),
+    )?;
+
+    let manifest = BundleManifest {
+        format_version: BUNDLE_VERSION,
+        bake_epoch: mgc_formats::BAKE_EPOCH,
+        variant: "mc1-ui".to_string(),
+        game: Game::MagicCarpet1,
+        importer: Importer {
+            name: "mgc-import".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        sources,
+    };
+    emit(
+        "bundle.json",
+        &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )?;
+    Ok(outputs
+        .into_iter()
+        .map(|(name, sha)| (format!("assets/mc1-ui/{name}"), sha))
+        .collect())
+}
+
+/// The MC2 world-map (campaign) screen bundle → `assets/mc2-ui/`:
+/// the 1280×960 map background, its 6-bit palette, and the packed
+/// frontend sprite bank (portals/flags/cursor) out of HSCREEN0.DAT
+/// (`hscreen::worldmap` — remc2 `sub_7A110_load_hscreen` case 6).
+/// One per game, not per environment. Skips quietly on legacy
+/// installs without the SCREENS catalog.
+pub fn bake_mc2_worldmap(
+    src: &GameSource,
+    out_dir: &Path,
+) -> Result<Vec<(String, String)>, BakeError> {
+    let rel = "DATA/SCREENS/HSCREEN0.DAT";
+    if !src.exists(rel) {
+        eprintln!("note: mc2: no {rel} — skipping world-map bundle");
+        return Ok(Vec::new());
+    }
+    let file = src
+        .read(rel)
+        .map_err(|e| BakeError::Io(Path::new(rel).to_path_buf(), e))?;
+    let wm = crate::hscreen::worldmap(&file)
+        .map_err(|e| BakeError::Level(Path::new(rel).to_path_buf(), 0, e))?;
+
+    let dir = out_dir.join("assets").join("mc2-ui");
+    std::fs::create_dir_all(&dir).map_err(|e| BakeError::Io(dir.clone(), e))?;
+    let mut outputs = Vec::new();
+    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path, e))?;
+        outputs.push((name.to_string(), hex(&Sha256::digest(bytes))));
+        Ok(())
+    };
+
+    emit("worldmap-bg.bin", &wm.bg)?;
+    emit("worldmap-pal.bin", &wm.palette)?;
+    let packed = sprites::pack(&wm.sprites, UI_ATLAS_WIDTH);
+    emit("worldmap-sprites.bin", &packed.atlas)?;
+    emit(
+        "worldmap-sprites.json",
+        &serde_json::to_vec_pretty(&packed.index).expect("world-map sprite index serializes"),
+    )?;
+
+    // The map screen's ornate border frame (drawn over the map every
+    // frame, retail sub_85CC3): 640×480 8bpp, 0 = transparent.
+    let border = crate::hscreen::border_frame(&file)
+        .map_err(|e| BakeError::Level(Path::new(rel).to_path_buf(), 0, e))?;
+    emit("worldmap-border.bin", &border)?;
+
+    // The main-menu (temple) screen — HSCREEN0 case 4: its own
+    // 640×480 background + palette + 111-sprite bank (buttons,
+    // fires/incense anims, cursor 39, parchment dialog parts).
+    let menu = crate::hscreen::mainmenu(&file)
+        .map_err(|e| BakeError::Level(Path::new(rel).to_path_buf(), 0, e))?;
+    emit("menu-bg.bin", &menu.bg)?;
+    emit("menu-pal.bin", &menu.palette)?;
+    let mpacked = sprites::pack(&menu.sprites, UI_ATLAS_WIDTH);
+    emit("menu-sprites.bin", &mpacked.atlas)?;
+    emit(
+        "menu-sprites.json",
+        &serde_json::to_vec_pretty(&mpacked.index).expect("menu sprite index serializes"),
+    )?;
+
+    // FONT1 glyph masks (GetFont(1) — the frontend text font: level
+    // descriptions, dialog titles, slot labels). Same shape as the
+    // per-variant font.bin: 1-bit coverage masks, glyph id = char+1,
+    // tinted app-side.
+    let mut extra_sources = Vec::new();
+    for f in ["DATA/FONT1.DAT", "DATA/FONT1.TAB"] {
+        if !src.exists(f) {
+            eprintln!("note: mc2: no {f} — world-map bundle ships without a frontend font");
+        }
+    }
+    if src.exists("DATA/FONT1.DAT") && src.exists("DATA/FONT1.TAB") {
+        let dat = src
+            .read("DATA/FONT1.DAT")
+            .map_err(|e| BakeError::Io(Path::new("DATA/FONT1.DAT").to_path_buf(), e))?;
+        let tab = src
+            .read("DATA/FONT1.TAB")
+            .map_err(|e| BakeError::Io(Path::new("DATA/FONT1.TAB").to_path_buf(), e))?;
+        let glyphs = crate::hspr::decode(&dat, &tab).map_err(|e| {
+            BakeError::Level(Path::new("DATA/FONT1.DAT").to_path_buf(), 0, e.to_string())
+        })?;
+        let fpacked = sprites::pack(&glyphs, UI_ATLAS_WIDTH);
+        emit("font.bin", &fpacked.atlas)?;
+        emit(
+            "font.json",
+            &serde_json::to_vec_pretty(&fpacked.index).expect("font index serializes"),
+        )?;
+        extra_sources.push(BundleSource {
+            file: "FONT1.DAT".into(),
+            sha256: hex(&Sha256::digest(&dat)),
+        });
+    }
+
+    // The frontend language strings (LANGUAGE/L2.TXT = English): a
+    // 4785-byte header, then NUL-separated strings, 471 entries
+    // (retail sub_5B870). Level descriptions = entries 23+level;
+    // "Empty" = 414; dialog titles 421/422/467.
+    if src.exists("LANGUAGE/L2.TXT") {
+        let raw = src
+            .read("LANGUAGE/L2.TXT")
+            .map_err(|e| BakeError::Io(Path::new("LANGUAGE/L2.TXT").to_path_buf(), e))?;
+        let strings = crate::hscreen::language_strings(&raw);
+        emit(
+            "strings.json",
+            &serde_json::to_vec_pretty(&strings).expect("strings serialize"),
+        )?;
+        extra_sources.push(BundleSource {
+            file: "L2.TXT".into(),
+            sha256: hex(&Sha256::digest(&raw)),
+        });
+    } else {
+        eprintln!("note: mc2: no LANGUAGE/L2.TXT — world-map bundle ships without strings");
+    }
+
+    let manifest = BundleManifest {
+        format_version: BUNDLE_VERSION,
+        bake_epoch: mgc_formats::BAKE_EPOCH,
+        variant: "mc2-ui".to_string(),
+        game: Game::MagicCarpet2,
+        importer: Importer {
+            name: "mgc-import".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        sources: {
+            let mut s = vec![BundleSource {
+                file: "HSCREEN0.DAT".into(),
+                sha256: hex(&Sha256::digest(&file)),
+            }];
+            s.extend(extra_sources);
+            s
+        },
+    };
+    emit(
+        "bundle.json",
+        &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )?;
+    Ok(outputs
+        .into_iter()
+        .map(|(name, sha)| (format!("assets/mc2-ui/{name}"), sha))
         .collect())
 }
 

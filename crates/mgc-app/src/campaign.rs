@@ -281,6 +281,216 @@ pub fn plausible_spellbook_mc2(level_dir: &Path, package: &LevelPackage) -> Plau
     }
 }
 
+// ===================================================================
+// The campaign LAW — level order, exit routing, progression state.
+// (Everything above is the plausible-spellbook playtest instrument;
+// everything below is the real campaign driver's rulebook. Traces:
+// docs/traces/mc1-campaign-save-menu.md, mc2-campaign-save-menu.md.)
+// ===================================================================
+
+use crate::saves::SecretPortal;
+
+/// Which campaign is running — the `--campaign <mc1|mc1hw|mc2>` pick.
+/// Doubles as the baked-tree tag and the saves-directory name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CampaignId {
+    Mc1,
+    Mc1Hw,
+    Mc2,
+}
+
+impl CampaignId {
+    pub fn tag(self) -> &'static str {
+        match self {
+            CampaignId::Mc1 => "mc1",
+            CampaignId::Mc1Hw => "mc1hw",
+            CampaignId::Mc2 => "mc2",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "mc1" => Some(CampaignId::Mc1),
+            "mc1hw" => Some(CampaignId::Mc1Hw),
+            "mc2" => Some(CampaignId::Mc2),
+            _ => None,
+        }
+    }
+}
+
+/// What follows a completed level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NextStep {
+    /// Load this level next (MC1's linear march; MC2's secret-exit
+    /// direct jump).
+    Level(u32),
+    /// MC2: return to the world map (the between-levels hub).
+    MapScreen,
+    /// The campaign is complete — the outro slot.
+    Outro,
+}
+
+/// MC1/HW: the strictly linear advance. Retail bumps `var_u16_17`
+/// on the win bit (remc1 :41601) and then, at the NEXT level's start,
+/// bumps again past the skip table (`sub_34070` :41456-73, exact
+/// match, MC1 only — HW plays every index). Campaign ends at 50
+/// (MC1) / 25 (HW) (`:59939-41`, `:60147`).
+pub fn mc1_next_level(completed: u32, hw: bool) -> NextStep {
+    let end = if hw { 25 } else { 50 };
+    let mut next = completed + 1;
+    if !hw && MC1_BLACKLIST.contains(&next) {
+        next += 1; // retail's single ++: the table has no adjacent entries
+    }
+    if next >= end {
+        NextStep::Outro
+    } else {
+        NextStep::Level(next)
+    }
+}
+
+/// Normalize a saved/starting MC1 level into the first PLAYABLE
+/// campaign level at or after it (retail's `sub_34070` runs at level
+/// START, so a save sitting on a skipped index bumps forward exactly
+/// like retail). None = the campaign is already complete.
+pub fn mc1_start_level(saved: u32, hw: bool) -> Option<u32> {
+    let end = if hw { 25 } else { 50 };
+    let mut level = saved;
+    if !hw && MC1_BLACKLIST.contains(&level) {
+        level += 1;
+    }
+    (level < end).then_some(level)
+}
+
+/// One MC2 world-map main portal: the map-scroll anchor, the portal
+/// sprite position, and the hit-box size — verbatim
+/// `mapScreenPortals_E17CC` init (Type_MapScreenPortals_E17CC.cpp:3;
+/// portal index == level number). All 25 start hidden (activated 2),
+/// sprite 0x21 = 33, hit-box 0x28×0x28.
+#[derive(Clone, Copy, Debug)]
+pub struct Mc2MainPortal {
+    pub viewport: (i16, i16),
+    pub pos: (i16, i16),
+}
+
+/// The 25 main-campaign portals, index = level number; index 24 is
+/// the finale (its completion triggers the ending, EF:31505-06).
+pub const MC2_MAIN_PORTALS: [Mc2MainPortal; 25] = {
+    const fn p(vx: i16, vy: i16, x: i16, y: i16) -> Mc2MainPortal {
+        Mc2MainPortal {
+            viewport: (vx, vy),
+            pos: (x, y),
+        }
+    }
+    [
+        p(116, 478, 420, 820),
+        p(368, 478, 666, 805),
+        p(576, 478, 881, 734),
+        p(260, 402, 549, 626),
+        p(260, 402, 450, 652),
+        p(304, 402, 610, 666),
+        p(304, 402, 763, 652),
+        p(304, 402, 732, 558),
+        p(304, 402, 644, 554),
+        p(304, 402, 536, 540),
+        p(512, 306, 822, 450),
+        p(638, 190, 1009, 412),
+        p(638, 92, 1058, 268),
+        p(478, 92, 901, 304),
+        p(478, 92, 817, 202),
+        p(478, 92, 684, 262),
+        p(122, 96, 530, 316),
+        p(122, 96, 427, 206),
+        p(122, 96, 322, 254),
+        p(306, 196, 627, 416),
+        p(1, 68, 180, 278),
+        p(296, 68, 609, 218),
+        p(480, 0, 838, 96),
+        p(308, 0, 679, 126),
+        p(308, 0, 605, 120),
+    ]
+};
+
+/// The portal hit-box size (`word_8/10` = 0x28 both axes).
+pub const MC2_PORTAL_HIT: i16 = 0x28;
+
+/// The five MC2 secret levels `(parent main level, secret level,
+/// map pos)` — verbatim `secretMapScreenPortals_E2970` init
+/// (Type_SecretMapScreenPortals_E2970.cpp:3).
+pub const MC2_SECRETS: [(u16, u16, (u16, u16)); 5] = [
+    (4, 30, (287, 656)),
+    (7, 31, (879, 614)),
+    (11, 32, (854, 400)),
+    (17, 33, (395, 114)),
+    (19, 34, (365, 504)),
+];
+
+/// The pristine (new-game) secret-portal table in its on-disk shape:
+/// all hidden (activated 3, sprite 270 as initialized — the reset arm
+/// re-stamps sprite 70), terminator entry zeroed. This is both the
+/// new-game state and the default `.GAM` block.
+pub fn mc2_secret_portals_pristine() -> [SecretPortal; 6] {
+    let mut out = [SecretPortal {
+        time: 0,
+        parent: 0,
+        level: 0,
+        pos: (0, 0),
+        activated: 0,
+        sprite: 0,
+        byte16: 0,
+    }; 6];
+    for (i, &(parent, level, pos)) in MC2_SECRETS.iter().enumerate() {
+        out[i] = SecretPortal {
+            time: 0,
+            parent,
+            level,
+            pos,
+            activated: 3,
+            sprite: 270,
+            byte16: 0,
+        };
+    }
+    out
+}
+
+/// The secret level attached to a main level, if any
+/// (`GetSecretAndActivedPortal_824B0` EF:46992 matches `index_4`).
+pub fn mc2_secret_for(main_level: u32) -> Option<u32> {
+    MC2_SECRETS
+        .iter()
+        .find(|&&(parent, _, _)| parent as u32 == main_level)
+        .map(|&(_, level, _)| level as u32)
+}
+
+/// Is this MC2 level number a secret level (EF:31407)?
+pub fn mc2_is_secret(level: u32) -> bool {
+    (25..50).contains(&level) // retail: > 24 && < 50; only 30-34 exist
+}
+
+/// MC2 exit routing: what follows a completed level, given WHICH
+/// ending marker ran (the endseq target model: 3 = the (14,3)
+/// checkpoint X / action 12, 4 = the (14,4) demon mouth / action 11)
+/// and whether this level's secret portal is revealed-uncompleted.
+///
+/// Retail law (EF:60534-44 sets `byte[2]`, EF:31510-48 consumes):
+/// the demon-mouth exit ALWAYS routes into the attached secret level;
+/// the checkpoint exit routes there only when the secret portal was
+/// already revealed but not completed (`setting_38545 & 0x10`) —
+/// otherwise back to the map for the linear advance. Completing the
+/// finale (24) or a secret level returns to the map (the finale's
+/// ending runs first; a secret level has no onward jump of its own).
+pub fn mc2_next_step(level: u32, exit_model: u8, secret_pending: bool) -> NextStep {
+    if level < 24 && !mc2_is_secret(level) {
+        let into_secret = exit_model == 4 || secret_pending;
+        if into_secret && let Some(s) = mc2_secret_for(level) {
+            return NextStep::Level(s);
+        }
+    }
+    if level == 24 {
+        return NextStep::Outro;
+    }
+    NextStep::MapScreen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +608,48 @@ mod tests {
         jars.sort_unstable();
         assert_eq!(jars, vec![4, 9], "class-15 jars deduped by spell model");
         assert_eq!(scrolls, 2, "only class-14 model-5 counts as an XP scroll");
+    }
+
+    #[test]
+    fn mc1_linear_order_applies_skips_and_ends() {
+        // 7 → skip 8 → 9 (the retail sub_34070 exact-match bump).
+        assert_eq!(mc1_next_level(7, false), NextStep::Level(9));
+        assert_eq!(mc1_next_level(16, false), NextStep::Level(18));
+        assert_eq!(mc1_next_level(38, false), NextStep::Level(40));
+        // Plain advance elsewhere.
+        assert_eq!(mc1_next_level(0, false), NextStep::Level(1));
+        // Ends at 50; 49 is the last played level.
+        assert_eq!(mc1_next_level(49, false), NextStep::Outro);
+        // HW: no skips, ends at 25.
+        assert_eq!(mc1_next_level(7, true), NextStep::Level(8));
+        assert_eq!(mc1_next_level(24, true), NextStep::Outro);
+    }
+
+    #[test]
+    fn mc2_routing_demon_mouth_jumps_into_secret() {
+        // Level 4's demon mouth (model 4) → secret 30, always.
+        assert_eq!(mc2_next_step(4, 4, false), NextStep::Level(30));
+        // The checkpoint X (model 3) → map, unless the secret portal
+        // was already revealed-uncompleted (the traced 38545&0x10 arm).
+        assert_eq!(mc2_next_step(4, 3, false), NextStep::MapScreen);
+        assert_eq!(mc2_next_step(4, 3, true), NextStep::Level(30));
+        // A level with no attached secret never jumps.
+        assert_eq!(mc2_next_step(5, 4, false), NextStep::MapScreen);
+        // Secret levels and the finale return to map / outro.
+        assert_eq!(mc2_next_step(30, 3, false), NextStep::MapScreen);
+        assert_eq!(mc2_next_step(24, 3, false), NextStep::Outro);
+    }
+
+    #[test]
+    fn mc2_secret_table_matches_retail_init() {
+        assert_eq!(mc2_secret_for(4), Some(30));
+        assert_eq!(mc2_secret_for(19), Some(34));
+        assert_eq!(mc2_secret_for(0), None);
+        let p = mc2_secret_portals_pristine();
+        assert_eq!(p[2].level, 32);
+        assert_eq!(p[2].parent, 11);
+        assert_eq!(p[2].activated, 3, "pristine = hidden");
+        assert_eq!(p[5].level, 0, "terminator entry zeroed");
     }
 
     #[test]

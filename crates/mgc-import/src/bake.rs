@@ -549,6 +549,11 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
         } else {
             eprintln!("note: mc1 DATA/SNDS0-1.DAT not found — skipping audio bundle");
         }
+        let outputs = crate::bundle::bake_mc1_menu(src, out_dir).map_err(|e| e.to_string())?;
+        if !outputs.is_empty() {
+            println!("mc1: baked frontend bundle mc1-ui ({} members)", outputs.len());
+            manifest.extend(outputs);
+        }
     }
 
     if let Some(src) = &found.mc2 {
@@ -582,6 +587,14 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
         if !outputs.is_empty() {
             println!(
                 "mc2: baked audio bundle mc2-audio ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        }
+        let outputs = crate::bundle::bake_mc2_worldmap(src, out_dir).map_err(|e| e.to_string())?;
+        if !outputs.is_empty() {
+            println!(
+                "mc2: baked world-map bundle mc2-ui ({} members)",
                 outputs.len()
             );
             manifest.extend(outputs);

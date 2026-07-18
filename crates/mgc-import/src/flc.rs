@@ -129,7 +129,7 @@ pub fn decode_frames(
 /// last pixel (odd widths); 00 -> packet count, followed by packets of
 /// `{u8 column_skip, i8 count}` — positive count copies `count` literal
 /// words, negative replicates one word `-count` times.
-fn delta_flc(canvas: &mut [u8], w: usize, h: usize, data: &[u8]) -> Result<(), FlcError> {
+pub(crate) fn delta_flc(canvas: &mut [u8], w: usize, h: usize, data: &[u8]) -> Result<(), FlcError> {
     let mut off = 0usize;
     let next = |n: usize, off: &mut usize| -> Result<usize, FlcError> {
         let at = *off;

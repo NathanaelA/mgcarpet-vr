@@ -212,6 +212,23 @@ impl Audio {
         self.bundle.as_ref().is_some_and(|b| b.speech.is_some())
     }
 
+    /// Cut every live sound effect and ambient loop — the level-
+    /// boundary teardown (per-mode audio ownership: a torn-down
+    /// session's wind/waves/fire must not survive under the
+    /// frontend). Music and speech have their own stops.
+    pub fn stop_sounds(&mut self) {
+        self.mixer.reset(&self.out.tx);
+    }
+
+    /// Cut any playing voiceover mid-clip (frontend transitions —
+    /// leaving the map screen must silence its narration) and
+    /// restore the duck.
+    pub fn stop_speech(&mut self) {
+        let _ = self.out.tx.send(output::Cmd::StopSpeech);
+        self.duck_gain = 1.0;
+        let _ = self.out.tx.send(output::Cmd::Duck { gain: 1.0 });
+    }
+
     /// Play a bundle music track by name (`cgame1`, `track-02`),
     /// looped. No-op if it is already the one playing.
     pub fn play_music(&mut self, name: &str, looped: bool) -> Result<(), String> {

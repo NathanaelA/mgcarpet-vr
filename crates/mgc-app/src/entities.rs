@@ -340,6 +340,12 @@ pub struct MapIcons {
     /// expose-jar-spells debug stamps, consumed only when that
     /// option is on.
     pub spell: Vec<Option<mgc_render::MapStamp>>,
+    /// MC2 level-exit map markers: the (14,3) checkpoint red X =
+    /// HUD-bank sprite 83, the (14,4) demon-mouth O = sprite 84
+    /// (remc2 GameUI.cpp:2049-53, drawn centered, colour baked into
+    /// the sprite). None off-MC2.
+    pub exit_x: Option<mgc_render::MapStamp>,
+    pub exit_o: Option<mgc_render::MapStamp>,
 }
 
 /// The MC2 map environment — selects the minimap's team-colour table
@@ -675,6 +681,8 @@ pub fn map_stamps_from_poses(
             (12 | 15, m) if expose_jar_spells => {
                 icons.spell.get(m as usize).and_then(Option::as_ref)
             }
+            // (MC2 exit X/O markers are NOT pose-driven — hidden
+            // markers must plot too; see `exit_marker_stamps`.)
             _ => None,
         };
         if let Some(i) = icon {
@@ -685,6 +693,32 @@ pub fn map_stamps_from_poses(
         }
     }
     out
+}
+
+/// The MC2 level-exit map markers from the sim's trigger census
+/// (`mc2_exit_marker_poses` — the (11,12)/(11,31) ending trip
+/// SWITCHES, plotted from level start, gone once tripped): model 12
+/// = checkpoint X trigger → sprite 83, model 31 = secret trigger →
+/// sprite 84. Iteration order puts the O over a co-located X like
+/// retail's entity walk.
+pub fn exit_marker_stamps(
+    markers: &[(f32, f32, u8)],
+    icons: &MapIcons,
+) -> Vec<mgc_render::MapStamp> {
+    markers
+        .iter()
+        .filter_map(|&(x, z, model)| {
+            let icon = match model {
+                12 => icons.exit_x.as_ref(),
+                31 => icons.exit_o.as_ref(),
+                _ => None,
+            }?;
+            let mut s = *icon;
+            s.x = x;
+            s.z = z;
+            Some(s)
+        })
+        .collect()
 }
 
 /// The expose-jar-spells world markers: every pickable spell jar's
