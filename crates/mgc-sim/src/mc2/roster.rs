@@ -1399,8 +1399,13 @@ impl Gen {
         self.link(i, x, y, z);
         self.refill_life(i);
         self.mc2_set_sprite(i, 207);
-        // :34192-94 scales array.yaw off a HUD global — the
-        // sprite-derived f78 stands in (APPROX).
+        // :34192-94: array.yaw = 5·word(D9F50+294)/8. D9F50 row 21's
+        // word_0 = 0x5DC (1500), and offset 294 is never written at
+        // runtime (the table's only writers hit 0x87A/0x5B6/0x126) —
+        // so the wyvern's z-box center is the CONSTANT 937 (closes
+        // the old "HUD global" APPROX; the sprite-derived 750 sat a
+        // tile low and skewed homing/contact/burst geometry).
+        self.ent[i].f78 = 937;
         self.mc2_shift_rot(i, 128, 128);
         Some(i)
     }

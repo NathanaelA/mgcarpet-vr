@@ -3334,7 +3334,16 @@ impl Gen {
             self.move_relink(i, x, y, z);
         }
         // Merge with an overlapping ball: absorb, despawn the other.
+        // A DECAYING ball (the apocalypse-rain channel below) never
+        // INITIATES a merge (EF:26268 gates `sub_36D50` on
+        // `!(byte[1] & 0x20)`) — but a live ball may still absorb
+        // it, which is retail's own mana-retention loophole (magnet/
+        // balloon consolidation into a permanent sphere).
+        let decaying = self.ent[i].flags & 0x2000 != 0;
         for j in 1..self.ent.len() {
+            if decaying {
+                break;
+            }
             // Fool's-Mana traps never merge — the six decoys stay
             // distinct, and a real ball must not absorb one (the merge
             // copies only mana/owner, dropping the trap fields).
@@ -3381,6 +3390,27 @@ impl Gen {
         // Size re-derivation every tick (:29569) — merged/claimed
         // balls visibly grow/recolor in the original.
         self.ball_resize(i);
+        // The apocalypse-rain DECAY channel (`byte[1] |= 0x20` — port
+        // flag bit 13; the MC2 sphere mover's tail, EF:26289-307):
+        // the timed sphere counts its life down — at 12 the 67%
+        // death-fade bit (24) arms, at 6 it swaps to the bit-23
+        // ghost, at 0 it expires. Only the doomsday mana rain sets
+        // the bit (mc2::morph summit91), so MC1 and ordinary spheres
+        // never enter; a balloon tether returns before this tail,
+        // reproducing retail's pickup-retains-the-ball behavior.
+        if decaying {
+            self.ent[i].act_life -= 1;
+            let l = self.ent[i].act_life;
+            if l < 6 {
+                if l == 0 {
+                    self.ent[i].flags |= 0x400;
+                }
+            } else if l == 6 {
+                self.ent[i].flags = (self.ent[i].flags | 1 << 23) & !(1 << 24);
+            } else if l == 12 {
+                self.ent[i].flags |= 1 << 24;
+            }
+        }
         false
     }
 

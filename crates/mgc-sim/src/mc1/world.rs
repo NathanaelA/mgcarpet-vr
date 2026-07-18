@@ -1321,10 +1321,17 @@ impl World {
                 // (10,52), castle stage pieces (10,79).
                 life_frac: ((e.class64 == 5 && !segment)
                     || (e.class64 == 3 && e.model65 <= 3)
-                    // MC2 buildings only — MC1's (10,45) is unrelated.
                     || (matches!(self.game, GameId::Mc2)
                         && e.class64 == 10
-                        && matches!(e.model65, 45 | 52 | 79)))
+                        && matches!(e.model65, 45 | 52 | 79))
+                    // MC1's (10,45) dwellings (playtest 2026-07-18):
+                    // LIVE state 52 only — 51 is the build countdown
+                    // (act_life counts 30→0 and would read as a
+                    // dying bar), 53 the collapse.
+                    || (!matches!(self.game, GameId::Mc2)
+                        && e.class64 == 10
+                        && e.model65 == 45
+                        && e.tick70 == 52))
                 .then(|| {
                     // A parked MC2 dwelling's act_life IS its
                     // production countdown (mc2_building_tick parks
@@ -1340,6 +1347,16 @@ impl World {
                         && e.f140 > 0
                     {
                         (1000 * e.f140) as f32
+                    } else if !matches!(self.game, GameId::Mc2)
+                        && e.class64 == 10
+                        && e.model65 == 45
+                        && e.f44 > 0
+                    {
+                        // MC1's live dwelling parks act_life at f44
+                        // (tick_building_live's build finish) and the
+                        // damage mail drains it; max_life (30) is the
+                        // BUILD countdown length, not health.
+                        e.f44 as f32
                     } else {
                         e.max_life as f32
                     };
@@ -1369,9 +1386,16 @@ impl World {
                 // the state, GRO:3779-3805/EF:19436) and bit 24 →
                 // mode 3 (byte 0xF mask 0x01, the 67% death fades).
                 // MC1's engine has the same modes but no world
-                // content sets them.
+                // content sets them. The bit-23 override is read ONLY
+                // by the DrawSprites_3E360 billboard arm; the doomsday
+                // pyramid (5,10) — whose faithful ctor flag 0x48800001
+                // carries bit 23 — draws through the sub_3FD60 →
+                // DrawSprite_41BD3(2) big-sprite pass (GRO:2205-12,
+                // LABEL_70), which takes raster mode from the static
+                // descriptor alone, so it stays opaque in retail.
                 blend: if matches!(self.game, GameId::Mc2) {
-                    if e.flags & (1 << 23) != 0 || (e.class64 == 10 && matches!(e.model65, 13 | 14))
+                    if (e.flags & (1 << 23) != 0 && !(e.class64 == 5 && e.model65 == 10))
+                        || (e.class64 == 10 && matches!(e.model65, 13 | 14))
                     {
                         2
                     } else if e.flags & (1 << 24) != 0 {
@@ -5923,12 +5947,18 @@ impl World {
         // The wizard scan — the human, alive, not yet holding this
         // spell (the SpellEnabled[model] gate, EF:55713).
         let owned = self.g.mc2_spell_tokens.0 & (1 << model) != 0;
-        if owned && self.prune_owned_jars {
+        if self.prune_owned_jars && self.mc2_book.ent.get(model as usize).is_some_and(|&e| e != 0)
+        {
             // Unfaithful improvement (RIVALS-POLISH #3): an owned-spell
             // jar can never be collected — remove it instead of leaving
             // permanent clutter. Self-culling here covers both the
             // level-load sweep and the tick after the player gains the
             // spell (every jar of it despawns on its next tick).
+            // The predicate keys on the XP BOOK, not the SpellEnabled
+            // mask above: the central grant (`mc2_adopt_manifestation`)
+            // sets only the book, so campaign-carried spells leave the
+            // mask at the fireball+possess seed and the mask reads
+            // "unowned" for everything actually carried.
             self.g.ent[i].flags |= 0x400;
             self.entities_dirty = true;
             return;
@@ -6392,12 +6422,19 @@ impl World {
             // switch chain-fires (sound 41, sub_4A1E0(id, 1)) and
             // despawns. Model→slot: 13..=29 → 0..=16, 33..=44 →
             // 0x11..=0x1C (docs/traces/mc2-class11-switches-
-            // class14.md §3); model 30 = the ANY-slot variant
-            // (slots 0..=0xB and 0x10..=0x1C all empty).
+            // class14.md §3); model 30 = the ANY-slot variant.
+            // ANY scans slots 0..=0xB and 0x10 ONLY: the retail scan
+            // loop's bound is `<= 16` (binary-verified 2026-07-18,
+            // NETHERW.EXE @0x93BA6 `cmp eax,0x10; jng` — the body's
+            // `<= 0x1C` arm is dead past the bound), so high models
+            // 0x11..=0x1C never gate it. Same law as MC1's -1
+            // variant. Load-bearing on level 024: the wandering
+            // (5,27) hydra must NOT block the gauntlet's (11,30)
+            // wall gates (playtest 2026-07-18).
             m @ (13..=30 | 33..=44) => {
                 let occupied = if m == 30 {
                     (0..=0x0Bu8)
-                        .chain(0x10..=0x1C)
+                        .chain([0x10])
                         .any(|s| self.mc2_slot_occupied(s))
                 } else {
                     let slot = if m <= 29 { m - 13 } else { m - 16 };
@@ -8940,31 +8977,46 @@ mod tests {
         w.set_mc2_doom_level(true);
         w.tick(away(), PlayerCommand::default());
         let p = find_slot(&w, 5, 10);
-        // Jump the machine into the 2..0xB attack cycle (the mail
-        // read only runs there; the flatten bit-chain's convergence
-        // is terrain-blend dependent — the integration test's
-        // scope), then pound it: the read caps 300/tick and pins
-        // life to 8 — never a kill by damage alone, but 8 < 10 IS
-        // state 3's death trigger.
-        w.g.ent[p].f44 = 0;
-        w.g.ent[p].f71 = 2;
+        // NATURAL escalation (binary-verified 2026-07-18): the player
+        // parked INSIDE the 0xA00 proximity gate stands in for
+        // retail's detailed-render pass arming `f44 |= 0x40` each
+        // frame, so the machine walks its whole opening — flatten →
+        // kill-all → wind-down → doom-meter — into the 2..0xB attack
+        // cycle on its own. (The old test jumped f71=2 artificially
+        // and masked the missing arm.)
+        let near = PlayerPose::level((104 << 8) | 128, (100 << 8) | 128, 3260, 0);
+        let mut reached = false;
+        for _ in 0..2000 {
+            w.tick(near, PlayerCommand::default());
+            if (2..=0xB).contains(&w.g.ent[p].f71) {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "the armed machine escalates out of state 1");
+        // Pound it (life shortened only so the 300/tick intake cap
+        // floors it inside the loop): the read pins life to 8 —
+        // never a kill by damage alone, but 8 < 10 IS state 3's
+        // death trigger.
         w.g.ent[p].act_life = 9000;
         for _ in 0..40 {
             w.g.mail_write(MailTarget::Pool(p), 0, 60000, PLAYER_TARGET);
-            w.tick(away(), PlayerCommand::default());
+            w.tick(near, PlayerCommand::default());
         }
         assert!(
             w.g.ent[p].act_life >= 8 || count(&w, 5, 10) == 0,
             "the immortal clamp held under fire: {}",
             w.g.ent[p].act_life
         );
-        // Run the script out: 3 (life 8) → 12 → 13(32) → 14(32)
-        // → 15(60) → the apocalypse.
-        for _ in 0..400 {
+        // Run the script out: the summon cycle comes back around to
+        // the state-2/3 charge volley on its own clock, and state 3
+        // at life 8 (< 10) is the death trigger: 3 → 12 → 13(32) →
+        // 14(32) → 15(60) → the apocalypse.
+        for _ in 0..3000 {
             if count(&w, 5, 10) == 0 {
                 break;
             }
-            w.tick(away(), PlayerCommand::default());
+            w.tick(near, PlayerCommand::default());
         }
         assert_eq!(count(&w, 5, 10), 0, "the pyramid removed itself");
         assert_eq!(count(&w, 5, 1), 0, "the extinction killed the goat");
@@ -8973,6 +9025,108 @@ mod tests {
             "the apocalypse dome spawned with the latch"
         );
         assert!(w.mc2_apocalypse, "the extinction latch is set");
+    }
+
+    /// Playtest 2026-07-18 item 11: the pyramid's summons spawn into
+    /// StageVar2 17 (`sub_1E320` spin-up) → 16 (`sub_1E580` home) —
+    /// the two `sub_1D5D0` cases the port was missing, which left
+    /// them frozen, unkillable, piled into a "barrier". The chain:
+    /// spin-up decelerates 320 → the per-model cruise (m21 = 96) and
+    /// drops to slot 16; slot 16 MOVES the creature and takes damage
+    /// (a kill leaves the corpse standing at f46 = 1, EF:10864-67);
+    /// the pyramid's death expires every summon with a fire puff.
+    #[test]
+    fn mc2_pyramid_summons_release_fight_and_expire() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let th = |slot, class, model, x, y| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x,
+            y,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = vec![th(1, 5, 10, 100, 100)];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        w.set_mc2_doom_level(true);
+        w.tick(away(), PlayerCommand::default());
+        let p = find_slot(&w, 5, 10);
+        // Hand-plant a summoned devil exactly as the case-3..6 exec
+        // stamps it (doomsday.rs summon block).
+        let (sx, sy) = mc2_pos(104, 100);
+        let gz = w.g.ground_z(sx, sy) as i16;
+        let s = w.g.mc2_spawn_m21(sx, sy, gz + 768).expect("summon");
+        {
+            let own = w.g.ent[p].id24;
+            let e = &mut w.g.ent[s];
+            e.f146 = PLAYER_TARGET;
+            e.id24 = own;
+            e.site_z = 17;
+            e.f46 = 250;
+            e.f126 = 320;
+            e.tick70 = 175;
+        }
+        // Spin-up: ~38 ticks of deceleration, then the m21 cruise 96
+        // and the drop to the StageVar2-16 homing slot.
+        let mut released = false;
+        for _ in 0..60 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[s].site_z == 16 {
+                released = true;
+                break;
+            }
+        }
+        assert!(released, "the spin-up drops to the homing slot");
+        assert_eq!(w.g.ent[s].f126, 96, "the m21 cruise speed took");
+        // The homing slot MOVES the devil toward its target (the
+        // far-away player) — the frozen-barrier regression guard.
+        let (x0, y0) = (w.g.ent[s].x, w.g.ent[s].y);
+        for _ in 0..30 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            (w.g.ent[s].x, w.g.ent[s].y) != (x0, y0) || w.g.ent[s].tick70 != 175,
+            "the released summon moves (not parked)"
+        );
+        // Killable: the mailbox drains through the slot's intake; the
+        // kill leaves the corpse standing at f46 = 1 until the
+        // pyramid dies (retail's EF:10864-67 law).
+        w.g.mail_write(MailTarget::Pool(s), 0, 60000, PLAYER_TARGET);
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        if w.g.ent[s].site_z == 16 && w.g.ent[s].tick70 == 175 {
+            assert!(w.g.ent[s].act_life < 0, "the summon took the kill");
+            assert_eq!(w.g.ent[s].f46, 1, "the corpse stands at f46 = 1");
+            // The pyramid's death expires it with a fire puff.
+            w.g.ent[p].flags |= 0x400;
+            for _ in 0..3 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            assert!(
+                w.g.ent[s].flags & 0x400 != 0,
+                "the parent's death expired the summon"
+            );
+        } else {
+            // The devil had already handed off to its model machine
+            // (+2/+6) — the normal death path owns it there.
+            assert!(
+                w.g.ent[s].act_life < 0 || w.g.ent[s].flags & 0x400 != 0,
+                "the summon died through its model machine"
+            );
+        }
     }
 
     /// The doomsday checkpoints act on `dword_38523` — the SPHERE
@@ -12500,6 +12654,26 @@ mod tests {
         assert!(w.g.ent[v].f26 > 30, "the pulse clock advances");
     }
 
+    /// Playtest 2026-07-18 item 14: the self-latched vortex idles
+    /// forever post-win (its restart roll is gated on the latch it
+    /// holds) and retail's i32 clock just keeps counting — our i16
+    /// home must saturate, not panic, at 32767 (~30 min real time).
+    #[test]
+    fn mc2_summit_vortex_clock_saturates() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(140, 200);
+        let gz = w.g.ground_z(x, y) as i16;
+        let v = w.g.mc2_spawn_summit18(x, y, gz).expect("vortex");
+        let player = away();
+        w.g.erupting = v as u16; // the self-latch that pins the roll shut
+        w.g.ent[v].f26 = i16::MAX - 2;
+        for _ in 0..8 {
+            w.tick(player, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[v].f26, i16::MAX, "clock saturates at the rim");
+        assert_eq!(w.g.ent[v].flags & 0x400, 0, "the idle vortex stays live");
+    }
+
     /// The (10,91) apocalypse mana rain (sub_32CF0, mc2::morph):
     /// three thrown (10,39) spheres per tick, mana 1..=2560 (the
     /// 5-draw arming order), riding the ball machinery.
@@ -12538,6 +12712,65 @@ mod tests {
         assert!(
             balls.iter().filter(|&&m| (1..=2560).contains(&m)).count() >= 9,
             "mana in the 1..=2560 roll band: {balls:?}"
+        );
+    }
+
+    /// The apocalypse-rain DECAY channel (playtest 2026-07-19):
+    /// retail's rain spheres carry `byte[1] |= 0x20` + life 140 and
+    /// fade out of existence — at life 12 the 67% death-fade bit
+    /// (24) arms, at 6 the bit-23 ghost, at 0 the sphere expires
+    /// (EF:26289-307). Decaying spheres never INITIATE a merge. The
+    /// rain must be timed window dressing, never a permanent mana
+    /// mine; ordinary (unflagged) spheres are untouched.
+    #[test]
+    fn mc2_rain_spheres_decay_and_expire() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(60, 200);
+        let gz = w.g.ground_z(x, y) as i16;
+        // One rain-flagged sphere and one ordinary control, far
+        // apart (no merge interference).
+        let r = w.g.spawn_mana_ball(x, y, gz).expect("rain ball");
+        {
+            let e = &mut w.g.ent[r];
+            e.max_life = 140;
+            e.act_life = 140;
+            e.flags |= 0x2000;
+            e.f140 = 500;
+        }
+        let (cx, cy) = mc2_pos(80, 200);
+        let cgz = w.g.ground_z(cx, cy) as i16;
+        let c = w.g.spawn_mana_ball(cx, cy, cgz).expect("control ball");
+        w.g.ent[c].f140 = 500;
+        let player = away();
+        let mut saw_fade = false;
+        let mut saw_ghost = false;
+        for _ in 0..150 {
+            w.tick(player, PlayerCommand::default());
+            let e = &w.g.ent[r];
+            if e.flags & 0x400 != 0 {
+                break;
+            }
+            if e.act_life <= 12 && e.act_life > 6 {
+                saw_fade = e.flags & (1 << 24) != 0;
+            }
+            if e.act_life <= 6 && e.act_life > 0 {
+                saw_ghost = e.flags & (1 << 23) != 0 && e.flags & (1 << 24) == 0;
+            }
+        }
+        assert!(saw_fade, "the 67% fade bit armed at life 12");
+        assert!(saw_ghost, "the ghost bit took over at life 6");
+        assert!(
+            w.g.ent[r].flags & 0x400 != 0,
+            "the rain sphere expired at the end of its life"
+        );
+        assert_eq!(
+            w.g.ent[c].flags & 0x400,
+            0,
+            "the ordinary sphere persists untouched"
+        );
+        assert_eq!(
+            w.g.ent[c].act_life, w.g.ent[c].max_life as i32,
+            "no stray decay"
         );
     }
 
@@ -12666,6 +12899,70 @@ mod tests {
             w.tick(player, PlayerCommand::default());
         }
         assert!(stone_live(&w), "the empty slot chain-fired the switch");
+    }
+
+    /// The ANY-slot variant (model 30, `sub_6F300` a2 == -1) watches
+    /// slots 0..=0xB and 0x10 ONLY — the retail scan loop's bound is
+    /// `<= 16` (NETHERW.EXE @0x93BA6, `cmp eax,0x10; jng`), so high
+    /// models 0x11..=0x1C never gate it. Level 024's opening gauntlet
+    /// depends on this: the authored wandering hydra (5,27) must not
+    /// block the (11,30) wall-expansion gates (playtest 2026-07-18).
+    #[test]
+    fn mc2_any_slot_switch_ignores_high_models() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let th = |slot, class, model, x, y, dis_id, swi_sz, swi_id| Thing {
+            slot,
+            kind: ThingKind::Entity,
+            class,
+            model,
+            x,
+            y,
+            dis_id,
+            swi_sz,
+            swi_id,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = vec![
+            // The ANY-slot watcher, firing disposition 1.
+            th(1, 11, 30, 100, 100, 0, 3, 1),
+            // A live HIGH-model creature (the level-024 hydra shape):
+            // slot 0x1B is outside the retail scan bound.
+            th(2, 5, 27, 200, 200, 0, 0, 0),
+            // A standing stone behind disposition 1.
+            th(3, 2, 1, 110, 110, 1, 0, 0),
+        ];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        let stone_live = |w: &World| {
+            w.g.ent
+                .iter()
+                .any(|e| e.class64 == 2 && e.model65 == 1 && e.flags & 0x400 == 0)
+        };
+        let hydra_live = |w: &World| {
+            w.g.ent.iter().any(|e| {
+                e.class64 == 5
+                    && e.model65 == 27
+                    && e.act_life >= 0
+                    && e.flags & 0x400 == 0
+                    && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
+            })
+        };
+        assert!(!stone_live(&w), "disposition 1 is gated at start");
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(hydra_live(&w), "the high-model blocker is still live");
+        assert!(
+            stone_live(&w),
+            "the ANY-slot switch fired despite the live high model"
+        );
     }
 
     // ---- Phase-4.3 MC2 terrain riser probes ----------------------------
@@ -12955,33 +13252,265 @@ mod tests {
             child: 0,
             par3: None,
         };
+        // Count live spell-4 JARS only — the dev-grant/carry route
+        // spawns a hidden MANIFESTATION (state 3M) that is not a jar.
         let live_tokens = |w: &World| {
             w.g.ent
                 .iter()
-                .filter(|e| e.class64 == 15 && e.model65 == 4 && e.flags & 0x400 == 0)
+                .filter(|e| {
+                    e.class64 == 15 && e.model65 == 4 && e.flags & 0x400 == 0 && e.tick70 != 4 * 3
+                })
                 .count()
         };
 
-        // A spell-4 token, carpet parked far away; pretend the player
-        // already banked spell 4 (the SpellEnabled bit set).
+        // A spell-4 token, carpet parked far away.
         let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
 
-        // Faithful default: the uncollectable token stays put.
+        // Faithful default: the uncollectable token stays put even
+        // with the spell owned both ways (mask + book).
         let mut keep = World::new_for_game(planes.clone(), &[th(4, 2)], 1, assets(), GameId::Mc2);
         keep.g.mc2_spell_tokens.0 |= 1 << 4;
+        keep.mc2_grant_plausible(&[(4, 0)]);
         for _ in 0..8 {
             keep.tick(away, PlayerCommand::default());
         }
         assert_eq!(live_tokens(&keep), 1, "off by default: token remains");
 
         // With the improvement on, the owned-spell token is removed.
+        // Ownership arrives via the campaign-carry route
+        // (`mc2_grant_plausible` → adopt): the XP BOOK is set but the
+        // SpellEnabled mask stays at the level-start seed — the exact
+        // desync that made a mask-keyed prune a silent no-op.
         let mut prune = World::new_for_game(planes, &[th(4, 2)], 1, assets(), GameId::Mc2);
         prune.set_prune_owned_jars(true);
-        prune.g.mc2_spell_tokens.0 |= 1 << 4;
+        prune.mc2_grant_plausible(&[(4, 0)]);
+        assert_eq!(
+            prune.g.mc2_spell_tokens.0 & (1 << 4),
+            0,
+            "campaign carry leaves the SpellEnabled mask clear"
+        );
         for _ in 0..8 {
             prune.tick(away, PlayerCommand::default());
         }
-        assert_eq!(live_tokens(&prune), 0, "the owned-spell token self-culls");
+        assert_eq!(live_tokens(&prune), 0, "the carried-spell jar self-culls");
+    }
+
+    /// `sub_65610`'s per-tick homing steers at the victim RAISED to
+    /// its z-box CENTER (`sub_65580` EF:62750: z += f78 unless class
+    /// 2), exactly like the acquisition sites — aiming at the origin
+    /// z instead grazes under small high-altitude flyers (playtest
+    /// 2026-07-18, wyverns on level 024). Also guards the FAITHFUL
+    /// 3-D contact law end-to-end: a locked meteor must land ON the
+    /// flyer, not fall through to terrain (retail's `sub_10630` box
+    /// overlap — do NOT widen it; the homing z is the knob).
+    #[test]
+    fn mc2_meteor_homing_aims_at_target_box_center() {
+        use crate::mc1::features::Gen;
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        let (tx, ty) = mc2_pos(110, 100);
+        let ground = w.g.ground_z(tx, ty) as i16;
+        // A wyvern-shaped stand-in: class-5 flyer 16 tiles up, awake,
+        // target-eligible, with a tall-offset z-box (f78 = 200 makes
+        // the origin-vs-center aim divergence visible past rounding).
+        let t = w.g.new_event().unwrap();
+        let tz = ground + 16 * 256;
+        {
+            let e = &mut w.g.ent[t];
+            e.class64 = 5;
+            e.model65 = 16;
+            e.act_life = 60000;
+            e.max_life = 60000;
+            e.f58 = 64;
+            e.flags |= 8;
+            e.f28 = 1; // damage-channel mask (retail byte_0x38_56)
+            e.f80 = 128;
+            e.f82 = 128;
+            e.f78 = 200;
+            e.f84 = 300;
+        }
+        w.g.link(t, tx, ty, tz);
+        // The meteor, LOCKED on the flyer (acquisition is faithful and
+        // cone-gated — tested elsewhere), launched 10 tiles out at
+        // carpet height, aimed dead-on at the box center.
+        let (mx, my) = mc2_pos(100, 100);
+        let mz = ground + 512;
+        let m = w.g.mc2_spawn_meteor_shot(mx, my, mz).unwrap();
+        let dh = Gen::isqrt(Gen::dist2_sq(mx, my, tx, ty) as u32) as i32;
+        {
+            let e = &mut w.g.ent[m];
+            e.id24 = PLAYER_TARGET;
+            e.f146 = t as u16;
+            // The launcher's impact arm + tier fuse (spell 9 →
+            // (10,17), charge).
+            e.f68 = 10;
+            e.f69 = 17;
+            e.f44 = 6000;
+            e.f71 = 2;
+            e.f30 = Gen::angle_between(mx, my, tx, ty);
+            e.f32 = Gen::pitch_toward(mz, tz + 200, dh);
+        }
+        let ctx = MobCtx {
+            px: mx,
+            py: my,
+            pz: mz,
+            pyaw: 0,
+            pmana: 0,
+        };
+        // First homing tick: the steer target is the BOX CENTER.
+        w.g.mc2_flyer_tick(m, &ctx);
+        let center_aim = Gen::pitch_toward(mz, tz + 200, dh);
+        let origin_aim = Gen::pitch_toward(mz, tz, dh);
+        assert_ne!(center_aim, origin_aim, "geometry must discriminate");
+        assert_eq!(w.g.ent[m].f36, center_aim, "homing aims at z + f78");
+        // Fly it out: the meteor must die ON the flyer — at its z-box
+        // CENTER (the sub_65580 raise-copy-restore at the victim-hit
+        // relink), never on the ground below. The centered landing is
+        // what puts the impact burst inside the victim's own area-
+        // damage window.
+        let mut landed = None;
+        for _ in 0..60 {
+            if w.g.ent[m].flags & 0x400 != 0 || w.g.ent[m].class64 != 9 {
+                break;
+            }
+            w.g.mc2_flyer_tick(m, &ctx);
+            let e = &w.g.ent[m];
+            if (e.x, e.y, e.z) == (tx, ty, tz + 200) {
+                landed = Some(true);
+                break;
+            }
+            if e.z <= ground {
+                landed = Some(false);
+                break;
+            }
+        }
+        assert_eq!(
+            landed,
+            Some(true),
+            "locked meteor lands on the high flyer's box center"
+        );
+        // The impact burst must actually reach the flyer: tick the
+        // spawned (10,17) burst and watch the damage mail drain life.
+        let burst = (1..w.g.ent.len()).find(|&j| {
+            let e = &w.g.ent[j];
+            e.class64 == 10 && e.model65 == 17 && e.flags & 0x400 == 0
+        });
+        assert!(burst.is_some(), "the meteor impact spawned its burst");
+        for _ in 0..6 {
+            w.tick(
+                PlayerPose::level(mx, my, mz, 0),
+                PlayerCommand::default(),
+            );
+        }
+        assert!(
+            w.g.ent[t].act_life < 60000 || w.g.ent[t].mail[0].0 > 0,
+            "the burst's area write reached the high flyer: life {} mail {:?}",
+            w.g.ent[t].act_life,
+            w.g.ent[t].mail[0]
+        );
+    }
+
+    /// The player is a RAISED victim too (playtest 2026-07-18 item
+    /// 13): retail's local player is a boxed pool wizard and
+    /// `sub_65580` lifts it like any other victim at both the homing
+    /// aim and the victim-hit relink. The pose-only player's box
+    /// center is pz + PLAYER_HH; aiming/landing at the raw pose z
+    /// put every pyramid attack at the player's FEET — undershooting
+    /// the flying player into the terrain below ("his attacks deal
+    /// no damage to me").
+    #[test]
+    fn mc2_hostile_bolt_lands_at_the_player_box_center() {
+        use crate::mc1::combat::PLAYER_HH;
+        use crate::mc1::features::Gen;
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        let (px, py) = mc2_pos(110, 100);
+        let ground = w.g.ground_z(px, py) as i16;
+        let pz = ground + 16 * 256; // the player rides high
+        // A pyramid-armed (9,0) bolt, 10 tiles out at launch height —
+        // the doomsday case-1 payload (f44 800, impact (10,0), row
+        // 62), locked on the player.
+        let (bx, by) = mc2_pos(100, 100);
+        let bz = ground + 768;
+        let b = w.g.mc2_spawn_bolt(bx, by, bz).unwrap();
+        let dh = Gen::isqrt(Gen::dist2_sq(bx, by, px, py) as u32) as i32;
+        let center = Gen::pitch_toward(bz, pz + PLAYER_HH as i16, dh);
+        {
+            let e = &mut w.g.ent[b];
+            e.f146 = PLAYER_TARGET;
+            e.f44 = 800;
+            e.f68 = 10;
+            e.f69 = 0;
+            e.row156 = 62;
+            e.f66 = 3;
+            e.f67 = 0;
+            e.f30 = Gen::angle_between(bx, by, px, py);
+            e.f32 = center;
+            e.f36 = center;
+        }
+        let ctx = MobCtx {
+            px,
+            py,
+            pz,
+            pyaw: 0,
+            pmana: 0,
+        };
+        // First homing tick: the steer target is the player's BOX
+        // CENTER, not the pose z.
+        w.g.mc2_flyer_tick(b, &ctx);
+        let origin = Gen::pitch_toward(bz, pz, dh);
+        assert_ne!(center, origin, "geometry must discriminate");
+        assert_eq!(
+            w.g.ent[b].f36, center,
+            "homing aims at the player's box center"
+        );
+        // Fly it out: the bolt must die ON the player — relinked to
+        // (px, py, pz + PLAYER_HH) — never on the ground below.
+        let mut landed = None;
+        for _ in 0..60 {
+            if w.g.ent[b].flags & 0x400 != 0 || w.g.ent[b].class64 != 9 {
+                break;
+            }
+            w.g.mc2_flyer_tick(b, &ctx);
+            let e = &w.g.ent[b];
+            if (e.x, e.y, e.z) == (px, py, pz + PLAYER_HH as i16) {
+                landed = Some(true);
+                break;
+            }
+            if e.z <= ground {
+                landed = Some(false);
+                break;
+            }
+        }
+        assert_eq!(
+            landed,
+            Some(true),
+            "the locked bolt lands at the player's box center"
+        );
+        // And the landing actually HURTS: the (10,0) burst's area
+        // write drains the player's life through the world tick.
+        // (Spawn grace wipes all player damage mail for the first
+        // ~100 ticks — faithful :55367-71 — burn it off first.)
+        assert!(
+            (1..w.g.ent.len()).any(|j| {
+                let e = &w.g.ent[j];
+                e.class64 == 10 && e.model65 == 0 && e.flags & 0x400 == 0
+            }),
+            "the impact spawned its (10,0) fire burst"
+        );
+        w.player.grace = 0;
+        let life0 = w.player.life;
+        for _ in 0..8 {
+            w.tick(PlayerPose::level(px, py, pz, 0), PlayerCommand::default());
+        }
+        assert!(
+            w.player.life < life0,
+            "the pyramid bolt damages the player: {} -> {}",
+            life0,
+            w.player.life
+        );
     }
 
     /// The Phase-4.2 CAST COLUMN laws on a synthetic SPELLS table:

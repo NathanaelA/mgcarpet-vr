@@ -459,7 +459,13 @@ impl Gen {
                 return;
             }
         }
-        self.ent[i].f26 += 1;
+        // Retail's counter is the i32 `dword_0x10_16` and simply keeps
+        // counting past 32767 (the self-latched controller never
+        // restarts — the 1-in-100 roll is gated on the vortex register
+        // it holds — so it idles until the endgame teardown, OPEN-1).
+        // Our i16 home would panic there; saturating is behaviorally
+        // identical since every gate reads > 2500, < 128, or == 0.
+        self.ent[i].f26 = self.ent[i].f26.saturating_add(1);
     }
 
     /// `sub_32CF0` (EF:24007, action 98) — the apocalypse MANA RAIN:
@@ -476,11 +482,13 @@ impl Gen {
     /// same delta on `axis_0x9A`; the ±64/tick clamp and the apex
     /// term `word_0x2C_44` are the shared-ball-machinery APPROX of
     /// mobs.rs); the color-variant sprite roll keeps its draw but
-    /// the neutral ball family renders (ball_resize); the rain is
-    /// GATED on a 200-slot free cushion — retail expires its spheres
-    /// via `byte[1] |= 0x20` + life 140, a decay channel the shared
-    /// ball APPROX lacks, and an ungated eternal 3/tick rain would
-    /// exhaust the pool; the every-other-tick 26-row spell-XP flood
+    /// the neutral ball family renders (ball_resize); retail expires
+    /// its spheres via `byte[1] |= 0x20` + life 140 — the decay
+    /// channel is PORTED (2026-07-19: ball_tick's decay tail, flag
+    /// bit 13 — fade bits 24→23, expire at 0, no merge-initiate),
+    /// bounding the rain at ~420 live spheres like retail; the
+    /// 200-slot free cushion stays as a pool-exhaustion belt (retail
+    /// has none); the every-other-tick 26-row spell-XP flood
     /// (`sub_6D8B0`, xp = tier-2 xpos1/512) banks with Phase 4.2
     /// like every XP intake.
     pub(crate) fn mc2_summit91_tick(&mut self, i: usize) {
@@ -508,6 +516,12 @@ impl Gen {
                 let e = &mut self.ent[s];
                 e.max_life = 140;
                 e.act_life = 140;
+                // The retail decay channel `byte[1] |= 0x20` (port
+                // flag bit 13): the sphere fades out over its 140-
+                // tick life (ball_tick's decay tail) — the rain is
+                // TIMED window dressing, not a permanent mana mine
+                // (playtest 2026-07-19).
+                e.flags |= 0x2000;
                 e.f140 = mana;
                 e.f144 = 0;
                 e.dest_x = lp.0.wrapping_sub(x); // the throw velocity delta

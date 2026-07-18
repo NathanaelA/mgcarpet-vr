@@ -76,6 +76,14 @@ impl Gen {
             e.max_life = 300_000;
             e.f28 = 1; // cross-column damage contract
             e.f44 = 0; // subSpellIndex = the PHASE BITFIELD here
+            // The ctor's `|= 0x48800001` (EF:33980). byte[3] & 0x40
+            // (bit 30) is LOAD-BEARING: it is the render gate for the
+            // detailed-draw pass's `subSpellIndex |= 0x40` arming
+            // writer (GameRenderOriginal.cpp:4915-19) — the ONLY
+            // setter of the wind-down escape bit in the whole engine
+            // (binary-verified 2026-07-18, NETHERW.EXE @0x45f11:
+            // the machine itself only ever ANDs it off).
+            e.flags |= 0x4880_0001;
             e.f56 = 1;
             e.row156 = 107;
             e.f58 = 64; // byte_0x39_57 awake
@@ -236,6 +244,27 @@ impl World {
             return;
         }
         let mut death_sound = false;
+        // The RENDERER's arming writer (GameRenderOriginal.cpp:4915-19,
+        // mirrored NG/HD): each frame the pyramid is drawn in the
+        // DETAILED (near) pass, retail sets `subSpellIndex |= 0x40` on
+        // it — gated on flags byte[3] & 0x40 (the ctor's 0x48800001).
+        // That bit is the wind-down phase's ONLY escape: armed + player
+        // within 0xA00 → the doom-meter ramp → the attack cycle →
+        // states 2/3 where damage is read → killable (binary-verified
+        // 2026-07-18; the machine's own writes only ever CLEAR it).
+        // The headless sim can't couple to a render pass, so the arm
+        // is reproduced as the deterministic proximity analog: any
+        // radius ≥ the machine's own 0xA00 far-gate is behaviorally
+        // identical (far ticks just re-clear the bit), so the gate
+        // distance itself is the faithful choice.
+        if self.g.ent[i].flags & 0x4000_0000 != 0 {
+            let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
+            let dx = (ctx.px as i32 - ex as i32) as i16 as i32;
+            let dy = (ctx.py as i32 - ey as i32) as i16 as i32;
+            if dx * dx + dy * dy < 0xA00i32.pow(2) {
+                self.g.ent[i].f44 |= 0x40;
+            }
+        }
         // Prologue: the projectile-devour pass trips phase bit0.
         if self.mc2_pyramid_devour(i) {
             self.g.ent[i].f44 |= 1;
@@ -386,6 +415,9 @@ impl World {
                         self.g.ent[i].f71 = 15;
                         self.g.ent[i].f26 = 60;
                         self.g.ent[i].act_life = -1;
+                        // `byte[0] |= 1` (EF:12846): the death re-sets
+                        // the hidden bit the kill-all exit dropped.
+                        self.g.ent[i].flags |= 1;
                         self.mc2_kill_all_creatures();
                         // The life reset walks `dword_38523` — the SPHERE
                         // family (10, 39/40/57) — not the whole pool
@@ -568,6 +600,15 @@ impl World {
             } else if v7 <= 0 {
                 self.g.ent[i].f44 = (self.g.ent[i].f44 | 0x10) & !4;
                 self.g.ent[i].f26 = 1;
+                // `byte[0] &= 0xFE` (EF:12983): the kill-all exit
+                // drops the ctor's hidden bit (0x48800001 & 1) — from
+                // here the STANDARD proximity self-wake (sub_68C70)
+                // applies, so a player closing in re-arms f58 and the
+                // damage intake (`mc2_pyramid_mail`, f58-gated) goes
+                // live. The boss is dormant-invulnerable only through
+                // its opening ritual — this bit clear is what makes
+                // him ultimately killable.
+                self.g.ent[i].flags &= !1;
             }
         } else if bits & 0x10 != 0 {
             if self.g.ent[i].f26 == 1 {
@@ -765,14 +806,26 @@ impl World {
         match self.g.ent[i].f68 {
             1 => {
                 if let Some(p) = self.g.mc2_spawn_bolt(lp.0, lp.1, lp.2) {
+                    // Retail arming (EF:13315-18): impact (10,0)
+                    // fire, behavior row 62 (the ctor's 64 is the
+                    // generic bolt row — wrong turn caps), f44 800.
                     self.g.ent[p].f44 = 800;
+                    self.g.ent[p].f68 = 10;
+                    self.g.ent[p].f69 = 0;
+                    self.g.ent[p].row156 = 62;
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
                     self.g.snd(15, i);
                 }
             }
             2 => {
                 if let Some(p) = self.g.mc2_spawn_bolt9(lp.0, lp.1, lp.2) {
+                    // Retail arming (EF:13327-30): impact = the
+                    // (10,23) BLAST (the ctor default spawned plain
+                    // fire), row 62.
                     self.g.ent[p].f44 = 800;
+                    self.g.ent[p].f68 = 10;
+                    self.g.ent[p].f69 = 23;
+                    self.g.ent[p].row156 = 62;
                     self.g.mc2_arm_proj(p, i, PLAYER_TARGET, tpos);
                     self.g.snd(23, i);
                 }
@@ -810,8 +863,10 @@ impl World {
                     e.f126 = 320;
                     // `parentId_0x28_40 = pyramid` is unmodeled: the
                     // port has no creature parent-link home (f40 is
-                    // the roster's attacker word) and no consumer
-                    // reads it yet — APPROX. The dword_0x364D2 tally
+                    // the roster's attacker word) — the consumers
+                    // (the StageVar2 16/17 release chain, mobs.rs
+                    // mc2_doom_summon_*) scan-resolve the level's
+                    // single (5,10) instead. The dword_0x364D2 tally
                     // question is CLOSED (E23 census): it is the
                     // total-creatures-spawned DENOMINATOR of the
                     // level-complete "creatures killed %" stat
@@ -849,7 +904,12 @@ impl World {
                     self.g.snd(19, i);
                     self.g.ent[i].f44 &= !2;
                 }
-                let f = (self.g.ent[i].f52 - 80).clamp(10, 1024);
+                // Widened: retail's −80 runs on int before the word
+                // store, so an un-re-armed entry (f52 below 80) floors
+                // to 10 instead of wrapping the u16 (debug-panic /
+                // release full-blast 1024 — exposed by the natural
+                // escalation path 2026-07-18).
+                let f = (self.g.ent[i].f52 as i32 - 80).clamp(10, 1024) as u16;
                 self.g.ent[i].f52 = f;
                 let away = Gen::angle_between(ex, ey, ctx.px, ctx.py);
                 self.g.player_knock = (away, f as i16);

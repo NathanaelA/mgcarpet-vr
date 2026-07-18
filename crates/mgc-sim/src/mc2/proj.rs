@@ -867,6 +867,27 @@ impl Gen {
         // Homing / acquisition (EF:62902-21).
         match self.mc2_target(self.ent[i].f146, ctx) {
             Some((tx, ty, tz)) => {
+                // `sub_65610` steers at the target RAISED to its z-box
+                // CENTER (`sub_65580` EF:62750: z += f78 unless the
+                // entity is class 2 — the struct's `model_0x40_64` is
+                // the CLASS byte; restored by `sub_655A0` after). The
+                // acquisition sites already apply the same raise.
+                // Without it the meteor aims a half-box low every
+                // homing tick and grazes under small high-altitude
+                // flyers (playtest 2026-07-18, wyverns on level 024).
+                // The PLAYER is a raised victim too — retail's player
+                // is a boxed pool wizard and `sub_65580` lifts it like
+                // any other; the pose-only player's box center is
+                // pz + PLAYER_HH (playtest item 13: every pyramid
+                // attack homed on the player's FEET and dealt nothing).
+                let target = self.ent[i].f146;
+                let tz = if target == PLAYER_TARGET {
+                    tz + crate::mc1::combat::PLAYER_HH as i16
+                } else if self.ent[target as usize].class64 != 2 {
+                    tz + self.ent[target as usize].f78 as i16
+                } else {
+                    tz
+                };
                 let e = &self.ent[i];
                 let (yaw, pitch) = (e.f30, e.f32);
                 let f34 = Self::angle_between(e.x, e.y, tx, ty);
@@ -1048,12 +1069,35 @@ impl Gen {
         // Impact / expiry: land on the victim, spawn the effect.
         let victim = match hit {
             Some(MailTarget::Pool(v)) => {
-                let (vx, vy, vz) = (self.ent[v].x, self.ent[v].y, self.ent[v].z);
+                // Land at the victim's z-box CENTER, not its origin
+                // (`sub_65580` raise → CopyEntityPosition → `sub_655A0`
+                // restore, EF:62941-43): the impact effect spawns
+                // where the box actually is, so its area write
+                // (`sub_10C80`'s 3-D window) reaches the victim. At
+                // the raw origin a tall-offset flyer (wyvern f78 ≈
+                // 937 retail-derived) sat entirely above its own
+                // burst — "meteors barely hurt them" (playtest
+                // 2026-07-18 round 2). Class-2 exempt like every
+                // sub_65580 site.
+                let (vx, vy, vz) = {
+                    let t = &self.ent[v];
+                    let lift = if t.class64 != 2 { t.f78 as i16 } else { 0 };
+                    (t.x, t.y, t.z.wrapping_add(lift))
+                };
                 self.move_relink(i, vx, vy, vz);
                 v as u16
             }
             Some(MailTarget::Player) => {
-                self.move_relink(i, ctx.px, ctx.py, ctx.pz);
+                // The player is a raised victim too (see the Pool arm:
+                // retail's player wizard gets the same `sub_65580`
+                // lift) — land at the box center so the burst's area
+                // window brackets the player (playtest item 13).
+                self.move_relink(
+                    i,
+                    ctx.px,
+                    ctx.py,
+                    ctx.pz.wrapping_add(crate::mc1::combat::PLAYER_HH as i16),
+                );
                 PLAYER_TARGET
             }
             None => {

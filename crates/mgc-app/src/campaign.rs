@@ -168,15 +168,13 @@ fn apply_level_mask(spells: &mut Vec<u8>, package: &LevelPackage) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 // MC2 arm — a plausible spellbook that carries spell EXPERIENCE, not just a
 // learned set (MC2's book is XP-driven: each spell has a per-tier `xpos1`
-// ladder). Unlike MC1 there is NO campaign-progression / secret-branch table
-// anywhere in the game data — levels are addressed purely by archive index and
-// the only hint that any level is "secret" is a speech-row comment. So a
-// plausible passthrough for MC2 is, unavoidably, ARCHIVE-INDEX ORDER
-// (`0..target`), the same assumption MC1 makes — flagged in the log so the
-// estimate is never mistaken for a verified route. It is an UPPER BOUND: the
-// learned set unions every collectable spell jar, and the XP assumes the
-// player owned every spell when every scroll was collected (the "found every
-// secret, maxed everything" ceiling the playtest wants).
+// ladder). The scan order is the CAMPAIGN order the stitching established
+// (player directive 2026-07-18): mains 0-24 with each secret level (30-34)
+// interleaved right after its parent main (`MC2_SECRETS`); a non-campaign
+// target (dev filler, e.g. 027) assumes the WHOLE campaign completed. It is
+// an UPPER BOUND: the learned set unions every collectable spell jar, and the
+// XP assumes the player owned every spell when every scroll was collected
+// (the "found every secret, maxed everything" ceiling the playtest wants).
 
 /// The MC2 spell jar class (class-15 token; `model` = spell id 0..25).
 const JAR_CLASS_MC2: u16 = 15;
@@ -228,9 +226,25 @@ fn mc2_jars_and_scrolls(things: &Things) -> (Vec<u8>, u32) {
     (jars, scrolls)
 }
 
-/// Compute the plausible MC2 spellbook for `target_level` by scanning sibling
-/// `level-NNN.mgcl` files in archive-index order `0..target` (see the module
-/// note on the missing ordering data). Non-MC2 packages return empty.
+/// The MC2 campaign in PLAY order: mains 0-24 with each secret level
+/// interleaved right after its parent main (the `MC2_SECRETS` routing —
+/// a secret is entered from its parent's demon-mouth/checkpoint exit,
+/// so its jars/scrolls precede the next main).
+pub fn mc2_campaign_order() -> Vec<u32> {
+    let mut out = Vec::with_capacity(30);
+    for main in 0..=24u32 {
+        out.push(main);
+        if let Some(s) = mc2_secret_for(main) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// Compute the plausible MC2 spellbook for the package's level by scanning
+/// sibling `level-NNN.mgcl` files over the campaign-order prefix before it
+/// ([`mc2_campaign_order`]); a target that is not a campaign level (dev
+/// filler) scans the whole campaign. Non-MC2 packages return empty.
 pub fn plausible_spellbook_mc2(level_dir: &Path, package: &LevelPackage) -> PlausibleMc2 {
     let mut learned: Vec<u8> = MC2_SEED_SPELLS.to_vec();
     let mut scroll_count = 0u32;
@@ -246,7 +260,13 @@ pub fn plausible_spellbook_mc2(level_dir: &Path, package: &LevelPackage) -> Plau
         };
     }
 
-    for n in 0..package.meta.level {
+    let order = mc2_campaign_order();
+    let prefix = match order.iter().position(|&l| l == package.meta.level) {
+        Some(pos) => &order[..pos],
+        // Not a campaign level: assume the full campaign is done.
+        None => &order[..],
+    };
+    for &n in prefix {
         let path = level_dir.join(format!("level-{n:03}.mgcl"));
         let Ok(file) = std::fs::File::open(&path) else {
             skipped.push(n);
@@ -638,6 +658,25 @@ mod tests {
         // Secret levels and the finale return to map / outro.
         assert_eq!(mc2_next_step(30, 3, false), NextStep::MapScreen);
         assert_eq!(mc2_next_step(24, 3, false), NextStep::Outro);
+    }
+
+    #[test]
+    fn mc2_campaign_order_interleaves_secrets_after_parents() {
+        let order = mc2_campaign_order();
+        assert_eq!(order.len(), 30, "25 mains + 5 secrets");
+        // Each secret sits directly after its parent main.
+        for &(parent, secret, _) in &MC2_SECRETS {
+            let p = order.iter().position(|&l| l == parent as u32).unwrap();
+            assert_eq!(order[p + 1], secret as u32, "secret follows its parent");
+        }
+        // Spot-check the head: 0..4, then secret 30, then main 5.
+        assert_eq!(&order[..7], &[0, 1, 2, 3, 4, 30, 5]);
+        assert_eq!(*order.last().unwrap(), 24, "the finale closes the order");
+        // The plausible-book prefix laws ride on position():
+        // secret 31's prefix = mains 0-7 + secret 30 (9 levels);
+        // a non-campaign target (dev filler 27) is absent → full scan.
+        assert_eq!(order.iter().position(|&l| l == 31), Some(9));
+        assert_eq!(order.iter().position(|&l| l == 27), None);
     }
 
     #[test]

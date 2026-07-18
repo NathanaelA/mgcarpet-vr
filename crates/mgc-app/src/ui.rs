@@ -1130,6 +1130,7 @@ pub fn hud_quads(
     alert_blink: bool,
     mc2: bool,
     mc2_book: Option<&Mc2BookView>,
+    dev_spells: bool,
     w: f32,
     _h: f32,
 ) -> Vec<UiQuad> {
@@ -1435,7 +1436,9 @@ pub fn hud_quads(
             // exactly the pane grey-out's `castable[s][sel]`
             // canSummon law; LOCKED_WASH stands in for the palette
             // square, the same approximation the MC1 arm uses.
-            if !bv.castable[sp as usize][level] {
+            // dev_spells bypasses the afford gate for real (the CTRL
+            // pane's `|| dev` arm) — don't wash what casts fine.
+            if !dev_spells && !bv.castable[sp as usize][level] {
                 let (fw, fh) = assets.sprite_dims(frame).unwrap_or((64.0, 44.0));
                 quads.push(solid([px * s, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
             }

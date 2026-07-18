@@ -2267,6 +2267,11 @@ impl Gen {
                 12 => self.mc2_metamorph_creature_tick(i, ctx),
                 13 => self.mc2_summon_creature_tick(i, ctx),
                 14 => self.mc2_alliance_creature_tick(i, ctx),
+                // 16/17 = the pyramid-summon release chain (playtest
+                // 2026-07-18 item 11: these two `sub_1D5D0` cases were
+                // unported and the summons froze unkillable).
+                16 => self.mc2_doom_summon_home_tick(i, ctx),
+                17 => self.mc2_doom_summon_spinup_tick(i, ctx),
                 _ => {}
             }
             return;
@@ -2414,6 +2419,197 @@ impl Gen {
             if d < 1536 {
                 self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
                 self.ent[i].site_z = 0;
+            }
+        }
+    }
+
+    /// A pyramid-summon target's position: PLAYER_TARGET is the
+    /// out-of-pool human (never invalid — its death restarts the
+    /// level), pool slots validate like retail's `Entities[t] >
+    /// Entities[0] && life >= 0 && !(byte[1] & 4)` probe.
+    fn mc2_doom_target_pos(&self, t: u16, ctx: &MobCtx) -> Option<(u16, u16, i16)> {
+        if t == PLAYER_TARGET {
+            return Some((ctx.px, ctx.py, ctx.pz));
+        }
+        let j = t as usize;
+        if j == 0 || j >= self.ent.len() {
+            return None;
+        }
+        let e = &self.ent[j];
+        if e.flags & 0x400 != 0 || e.act_life < 0 {
+            return None;
+        }
+        Some((e.x, e.y, e.z))
+    }
+
+    /// `sub_1E320` (EF:10566), StageVar2 == 17 — the pyramid-summon
+    /// SPIN-UP: the hurled creature keeps flying at the summon's 320
+    /// while decelerating `f126 -= 8`/tick and turning onto its
+    /// target; at ≤ 16 it takes the per-model cruise (m0 → 30,
+    /// m19 → 76, m21 → 96, m25 unchanged, EF:10588-601) and drops to
+    /// the StageVar2-16 homing slot. Damage is live from the first
+    /// tick (`sub_1B8C0` intake; life < 0 despawns outright, no
+    /// puff); an invalid target skips straight to slot 16 with the
+    /// speed untouched (the `goto LABEL_14`).
+    fn mc2_doom_summon_spinup_tick(&mut self, i: usize, ctx: &MobCtx) {
+        if self.mc2_state_head(i) == 2 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        self.mc2_move_core(i);
+        let target = self.ent[i].f146;
+        if let Some((tx, ty, _)) = self.mc2_doom_target_pos(target, ctx) {
+            let (mx, my) = (self.ent[i].x, self.ent[i].y);
+            self.ent[i].f34 = Self::angle_between(mx, my, tx, ty);
+            self.ent[i].f126 -= 8;
+            if self.ent[i].f126 > 16 {
+                return;
+            }
+            match self.ent[i].model65 {
+                0 => self.ent[i].f126 = 30,
+                19 => self.ent[i].f126 = 76,
+                21 => self.ent[i].f126 = 96,
+                _ => {}
+            }
+        }
+        self.ent[i].site_z = 16;
+    }
+
+    /// `sub_1E580` (EF:10689), StageVar2 == 16 — the pyramid-summon
+    /// HOME slot: case 13's Summon-Army twin WITHOUT the per-tick
+    /// life decrement (EF:10703-06 — pyramid summons persist while
+    /// the pyramid lives; the life home is the spawn block's `f46`).
+    /// Parent death zeroes the life → expire with a fire puff.
+    /// Otherwise the `sub_1E700` core runs: mailbox intake (a KILL
+    /// leaves the corpse standing at f46 = 1 until the pyramid's
+    /// death expires it, EF:10864-67 verbatim), a hit re-targets the
+    /// attacker — never the parent or a same-species peer; flee rows
+    /// hand to +6, others +2 (the retail parent-XP `sub_6D8B0` award
+    /// is a wizard-only no-op for the pyramid) — and the quiet path
+    /// aims at the target on the 8-tick throttle with the 64-tick
+    /// wander jink and the same-model crowd steer-away (EF:10814-40).
+    /// Both live paths end in the engage check: 3-D reach inside the
+    /// row's `v_28` hands to the model's +2 attack (site_z stays 16,
+    /// as retail leaves StageVar2). Parent link: the level authors
+    /// exactly ONE (5,10), scan-resolved (`parentId_0x28_40` has no
+    /// entity home — the spawn-block APPROX).
+    fn mc2_doom_summon_home_tick(&mut self, i: usize, ctx: &MobCtx) {
+        let parent = (1..self.ent.len()).find(|&j| {
+            let e = &self.ent[j];
+            e.class64 == 5 && e.model65 == 10 && e.flags & 0x400 == 0 && e.act_life >= 0
+        });
+        if parent.is_none() {
+            self.ent[i].f46 = 0;
+        }
+        if self.ent[i].f46 <= 0 {
+            let (x, y, z) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z)
+            };
+            self.mc2_spawn_fire(x, y, z);
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        // Stale pool locks clear; the 8-tick re-acquire resolves the
+        // pyramid's standing enemy (`sub_16FC0(parent)`) — the
+        // out-of-pool player.
+        let mut target = self.ent[i].f146;
+        if target != 0 && self.mc2_doom_target_pos(target, ctx).is_none() {
+            self.ent[i].f146 = 0;
+            target = 0;
+        }
+        if target == 0 && self.ent[i].f63 & 7 == 0 {
+            target = PLAYER_TARGET;
+            self.ent[i].f146 = target;
+        }
+        if target == 0 {
+            // Parentward drift + fast decay while unlocked
+            // (EF:10725-31: aim the move at the parent, f46 -= 4).
+            if let Some(p) = parent {
+                let (mx, my) = (self.ent[i].x, self.ent[i].y);
+                let (px, py) = (self.ent[p].x, self.ent[p].y);
+                self.ent[i].f34 = Self::angle_between(mx, my, px, py);
+            }
+            if self.mc2_state_head(i) != 2 {
+                self.mc2_move_core(i);
+            }
+            self.ent[i].f46 -= 4;
+            return;
+        }
+        // The `sub_1E700` core.
+        match self.mc2_state_head(i) {
+            2 => {
+                self.ent[i].f46 = 1;
+                return;
+            }
+            1 => {
+                self.mc2_move_core(i);
+                let atk = self.ent[i].f40;
+                let same_species = atk != 0
+                    && atk != PLAYER_TARGET
+                    && (atk as usize) < self.ent.len()
+                    && self.ent[atk as usize].class64 == self.ent[i].class64
+                    && self.ent[atk as usize].model65 == self.ent[i].model65;
+                let is_parent = atk != PLAYER_TARGET && parent.is_some_and(|p| p == atk as usize);
+                if atk != 0 && !same_species && !is_parent {
+                    self.ent[i].f146 = atk;
+                    target = atk;
+                    let flee =
+                        BEHAVIOR[self.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0;
+                    self.ent[i].tick70 = self.ent[i]
+                        .model65
+                        .wrapping_mul(8)
+                        .wrapping_add(if flee { 6 } else { 2 });
+                }
+            }
+            _ => {
+                self.mc2_move_core(i);
+                if self.ent[i].f63 & 7 == 0 {
+                    if let Some((tx, ty, _)) = self.mc2_doom_target_pos(target, ctx) {
+                        let (mx, my) = (self.ent[i].x, self.ent[i].y);
+                        if self.ent[i].flags & (1 << 18) == 0 {
+                            self.ent[i].f34 = Self::angle_between(mx, my, tx, ty);
+                            if self.ent[i].f63 & 0x3F == 0 {
+                                self.mc2_wander_turn(i);
+                            }
+                        }
+                        // Same-model crowd steer-away (EF:10829-38):
+                        // the first DIFFERENT-owner same-species
+                        // neighbour inside the f80 footprint box
+                        // turns the heading straight away from it.
+                        let pitch = self.ent[i].f80 as i32;
+                        for j in 1..self.ent.len() {
+                            if j == i {
+                                continue;
+                            }
+                            let e = &self.ent[j];
+                            if e.class64 != 5
+                                || e.model65 != self.ent[i].model65
+                                || e.flags & 0x400 != 0
+                                || e.id24 == self.ent[i].id24
+                            {
+                                continue;
+                            }
+                            if (mx as i32 - e.x as i32).abs() < pitch
+                                && (my as i32 - e.y as i32).abs() < pitch
+                            {
+                                self.ent[i].f34 = Self::angle_between(e.x, e.y, mx, my);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // The engage handoff (EF:10735-40): 8-tick throttle, 3-D
+        // reach inside the row's `v_28` → the model's +2 attack.
+        if self.ent[i].f63 & 7 == 0
+            && let Some(tp) = self.mc2_doom_target_pos(target, ctx)
+        {
+            let me = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            let reach = BEHAVIOR[self.ent[i].row156 as usize].v_28.max(0) as u32;
+            if Self::mc2_dist3(me, tp) < reach {
+                self.ent[i].tick70 = self.ent[i].model65.wrapping_mul(8).wrapping_add(2);
             }
         }
     }

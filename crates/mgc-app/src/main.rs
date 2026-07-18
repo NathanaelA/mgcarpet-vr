@@ -895,15 +895,15 @@ fn load_level(
     // the toggle is on — it reads the sibling `level-NNN.mgcl` files.
     // MC2 arm: the XP-driven book. Reads the same sibling files, but
     // unions class-15 jars → learned set and counts class-14 scrolls →
-    // banked XP (see campaign::plausible_spellbook_mc2). Archive-index
-    // order — MC2 has no campaign-progression data (logged honestly).
+    // banked XP (see campaign::plausible_spellbook_mc2). Campaign-order
+    // prefix (mains + secrets after their parents); a non-campaign
+    // level assumes the whole campaign done.
     let plausible_book_mc2 = if plausible_spellbook && package.meta.game == Game::MagicCarpet2 {
         let dir = level_path.parent().unwrap_or(Path::new("."));
         let p = campaign::plausible_spellbook_mc2(dir, &package);
         println!(
             "plausible-spellbook (MC2): {} spell(s) at ~{} XP each from {} scroll(s) across {} \
-             level(s) before level {} (archive-index order — MC2 has no verified campaign \
-             route){}",
+             campaign level(s) before level {}{}",
             p.grants.len(),
             p.grants.first().map_or(0, |g| g.1),
             p.scroll_count,
@@ -4544,6 +4544,7 @@ impl ApplicationHandler for App {
                                 alert_blink,
                                 is_mc2,
                                 mc2_book.as_ref(),
+                                self.cfg.gameplay.cheat.dev_spells,
                                 size.0,
                                 size.1,
                             ),
@@ -6279,6 +6280,7 @@ fn run_screenshot(
                 true,
                 shot_is_mc2,
                 mc2_book.as_ref(),
+                dev_spells,
                 1280.0,
                 960.0,
             )
