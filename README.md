@@ -1,9 +1,9 @@
 # mgcarpet
 
-A modern, cross-platform engine for Bullfrog's **Magic Carpet** (1994) and
-**Magic Carpet 2: The Netherworlds** (1995).
+A modern, cross-platform engine for Bullfrog's **Magic Carpet** (1994), its
+**Hidden Worlds** expansion, and **Magic Carpet 2: The Netherworlds** (1995).
 
-Built with heavy use of Claude Fable 5 (primarily) / Claude Opus 4.8
+Built with heavy use of Claude Code (Fable/ Opus) as well as other AI tools.
 
 This is an engine-only reimplementation: it ships no game content and
 requires original game data from a legally owned copy (both games are sold
@@ -54,7 +54,11 @@ SHA-256 hashes are committed as pins.
 
    ```sh
    ./mgcarpet                 # MC1 campaign level 1
+
    ./mgcarpet --level mc1:9   # a specific level (mc1 | mc1hw | mc2)
+
+   # a full campaign (mc1 | mc1hw | mc2) running in save N slot
+   ./mgcarpet --campaign <game> [--slot N]
    ```
 
    On first run the game finds no baked data and **bakes it from your
@@ -63,11 +67,20 @@ SHA-256 hashes are committed as pins.
    To point elsewhere than `gamedata/`, set `MGC_GAMEDATA` or
    `"gamedata"` in `mgcarpet.json`.
 
-Options live in `mgcarpet.json` (sparse overrides) next to the
-generated `mgcarpet.json.defaults`, which documents every option with
-its faithful-authentic default. `--help` lists the CLI flags. To
-bootstrap `mgcarpet.json.defaults`, simply run the game once. Then copy
-the file to `mgcarpet.json` and make your desired tweaks.
+   Most tweakable options are available in several ways:
+   * Runtime menu (displayed when game is paused)
+   * Key mappings for runtime toggles
+   * CLI flags
+   * json config file entries
+
+   Notably, options that affect the sim as a whole can only be changed
+   on startup, ie. NOT at runtime.
+
+   Config lives in `mgcarpet.json` (sparse overrides) next to the
+   generated `mgcarpet.json.defaults`, which documents every option with
+   its faithful-authentic default. `--help` lists the CLI flags. To
+   bootstrap `mgcarpet.json.defaults`, simply run the game once. Then copy
+   the file to `mgcarpet.json` and make your desired tweaks.
 
 ## Building
 
@@ -104,10 +117,8 @@ from the copyrighted game data, which stay on your machine).
 
 ## Status
 
-MC1 is playable at near-parity and player-certified faithful across
-the core game: flight model, terrain and villages, monster AI, combat,
-the full 24-spell repertoire, mana economy, castles, player mortality,
-and rival (AI) wizards — with sound effects and the original music.
+MC1 is playable at a state slowly approaching near-parity, while being
+tested and player-certified as faithful across the core games.
 The porting record — what each subsystem does, how it was verified,
 and where it deliberately deviates — is being assembled in
 docs/FIDELITY.md; docs/ROADMAP.md is the working log. MC2 levels parse
