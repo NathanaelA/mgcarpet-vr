@@ -1,8 +1,9 @@
-//! The MC1 (Magic Carpet 1 / Hidden Worlds) simulation — a verbatim
-//! port of remc1 machinery (tier-2 tables, tier-3/4 dispatch +
-//! handlers, tier-5 engine verbs). The game-agnostic pieces live
-//! OUTSIDE this namespace: [`crate::chassis`] (shared-engine parameter
-//! sets) and [`crate::flight`] (the flight-model seam, MC1 + enhanced).
+//! The MC1 (Magic Carpet 1 / Hidden Worlds) game columns — the
+//! MC1-specific tables, spawn dispatch, spells and rosters that plug
+//! into the shared chassis. The game-agnostic runtime lives OUTSIDE
+//! this namespace: [`crate::engine`] (the shared world/features
+//! chassis), [`crate::chassis`] (shared-engine parameter sets) and
+//! [`crate::flight`] (the flight-model seam, MC1 + enhanced).
 //!
 //! Hidden Worlds is NOT a separate namespace: retail ships it as a
 //! sibling binary of the same engine, consuming this module with its
@@ -17,8 +18,9 @@ pub(crate) mod combat;
 /// class-3 start markers), which are known non-entities, not misfits.
 /// Derived from the spawn guards in `mobs.rs` (`spawn_scenery`
 /// model ≤ 5, `spawn_class3` model ≤ 11, `spawn_creature` model ≤ 16),
-/// `features.rs` (`spawn_creator` model ≤ 61) and `world.rs`
-/// (`spawn_from_thing`'s class dispatch, `spawn_trigger` states).
+/// `engine/features.rs` (`spawn_creator` model ≤ 61) and
+/// `engine/world.rs` (`spawn_from_thing`'s class dispatch,
+/// `spawn_trigger` states).
 pub(crate) fn known_thing(class: u16, model: u16) -> bool {
     match class {
         2 => model <= 5,
@@ -36,10 +38,8 @@ pub(crate) fn known_thing(class: u16, model: u16) -> bool {
 }
 pub mod corners;
 pub mod entities;
-pub mod features;
 pub(crate) mod mobs;
 pub mod rivals;
 pub mod spells;
 pub mod sprite_stats;
 pub(crate) mod tables;
-pub mod world;

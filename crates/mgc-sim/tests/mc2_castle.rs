@@ -11,8 +11,8 @@
 //! Self-skips without baked mc2 data (game data is optional).
 
 use mgc_sim::ids::GameId;
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
 fn baked_root() -> Option<PathBuf> {

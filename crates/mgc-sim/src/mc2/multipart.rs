@@ -88,7 +88,7 @@
 
 use super::behavior::BEHAVIOR;
 use super::sprite_params::SPRITE_PARAMS;
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
 pub(crate) const M0_BASE: u8 = 0;

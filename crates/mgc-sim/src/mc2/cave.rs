@@ -21,7 +21,7 @@
 //! `byte_0x43_67`/`byte_0x44_68` → f67/f68 (mesa half-extents),
 //! `axis_0x9A_154x` → dest_x/dest_y/site_z (radius x / — / peak z).
 
-use crate::mc1::features::{Gen, lcg32, tile};
+use crate::engine::features::{Gen, lcg32, tile};
 
 use super::morph::isqrt;
 use super::sin_lut::SIN_DB750;
@@ -1242,7 +1242,7 @@ impl Gen {
 #[cfg(test)]
 mod tests {
     use crate::chassis::ChassisParams;
-    use crate::mc1::features::{FeatureAssets, Gen, Planes, tile};
+    use crate::engine::features::{FeatureAssets, Gen, Planes, tile};
     use crate::verbs::VerbSet;
 
     /// Flat 100-floor / 120-ceiling cave world.

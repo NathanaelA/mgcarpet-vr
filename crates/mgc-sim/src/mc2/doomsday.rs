@@ -50,9 +50,9 @@
 //! - `word_0x36548` (set case 0, cleared case 0xF) has NO reader in
 //!   retail (savegame/debug only) — not carried.
 
-use crate::mc1::features::{Gen, tile};
+use crate::engine::features::{Gen, tile};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
-use crate::mc1::world::World;
+use crate::engine::world::World;
 
 /// The devourable class-9 projectile SUBTYPES (EF:13545-63) — the
 /// pyramid is an anti-magic zone eating incoming spell projectiles;

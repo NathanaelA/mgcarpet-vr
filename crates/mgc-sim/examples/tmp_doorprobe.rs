@@ -2,8 +2,8 @@
 //! (pillar open/close) trigger? Enumerate the (14,2)/(10,63)/(10,64)
 //! records + switches, then fly into a switch box and watch.
 use mgc_sim::ids::GameId;
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 
 fn main() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");

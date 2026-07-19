@@ -40,9 +40,9 @@
 //! presentation-side unported — the state machine, tier pick,
 //! shadowing and speed law are faithful (sub_15FC0/sub_161A0).
 
-use crate::mc1::features::{Gen, tile};
+use crate::engine::features::{Gen, tile};
 use crate::mc1::mobs::PLAYER_TARGET;
-use crate::mc1::world::{LifeState, World};
+use crate::engine::world::{LifeState, World};
 use crate::mc2::behavior::BEHAVIOR;
 use crate::mc2::cast::Mc2Spellbook;
 

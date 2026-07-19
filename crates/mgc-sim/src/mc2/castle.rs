@@ -29,7 +29,7 @@
 //! arrays (`array_0x3C_60`/`array_0x5C_92`) are scan-collected (same
 //! membership, no per-slot indices).
 
-use crate::mc1::features::{Gen, tile};
+use crate::engine::features::{Gen, tile};
 
 /// `sub_60810` (EF:61695): capacity by level. Differs from MC1 at
 /// every level >= 1; the level-7 sentinel is 300M (MC1: 30M).
@@ -872,7 +872,7 @@ impl Gen {
                 // transition behind a 32-tick cooldown (byte_0x46_70
                 // → f71); then the same row servo, and a ceiling−fov
                 // clamp while FLYING only.
-                let t = crate::mc1::features::tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
+                let t = crate::engine::features::tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
                 let roof = self.t.angle[t] & 8 != 0
                     || self.cave_poke(self.ent[i].f84 as i32, row.v_12 as i32, pos.0, pos.1);
                 let walking = self.ent[i].flags & 1 != 0;
@@ -1622,7 +1622,7 @@ impl Gen {
             .get(spell)
             .map(|r| r.tiers[tier])
             .unwrap_or_default();
-        let spawned = crate::mc1::world::World::mc2_dispatch_arm(spell, sub.life).and_then(|arm| {
+        let spawned = crate::engine::world::World::mc2_dispatch_arm(spell, sub.life).and_then(|arm| {
             // Muzzle: the piece's position + its sprite half-height
             // (retail `pos.z += array_0x52_82.yaw`, EF:30296 —
             // the shift-rot vertical; f78 is our derivation).
@@ -1748,7 +1748,7 @@ fn mc2_stage_parts(lvl: u8) -> &'static [(u8, u8)] {
 #[cfg(test)]
 mod tests {
     use crate::chassis::ChassisParams;
-    use crate::mc1::features::{BuildDef, FeatureAssets, Gen, Planes, tile};
+    use crate::engine::features::{BuildDef, FeatureAssets, Gen, Planes, tile};
     use crate::verbs::VerbSet;
 
     fn flat_gen() -> Gen {

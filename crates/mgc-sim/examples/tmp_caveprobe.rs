@@ -2,8 +2,8 @@
 //! band carved (planes differ from the baked foundation) and the
 //! floor↔ceiling invariant holds post-settle (0 violations expected
 //! since the Phase-4.5 session-2 load-time arms).
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::world::World;
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::World;
 
 fn main() {
     let root = std::path::Path::new("baked");

@@ -11,7 +11,7 @@
 //! - Model 6 (cave bee) is cave-gated: off-cave the ctor returns None
 //!   (retail's own off-cave arm).
 
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 
 impl Gen {
     // ---- ctors (models 3-8) --------------------------------------------------

@@ -21,7 +21,7 @@
 //! strip, >=2 counters-only) -> `f71` (the (11,32) precedent for
 //! byte-70 data; our `tick70` holds the dispatch index).
 
-use crate::mc1::features::{Gen, tile};
+use crate::engine::features::{Gen, tile};
 
 /// 16-bit cell-index step — the original's `uaxis_2d.word`
 /// arithmetic: x carries/borrows into y at the byte boundary;

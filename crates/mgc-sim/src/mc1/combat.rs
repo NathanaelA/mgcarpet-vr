@@ -24,7 +24,7 @@
 //!   flag yet (OPEN: wizard shields are the spell track).
 
 use crate::mc1::behavior::BEHAVIOR;
-use crate::mc1::features::{Gen, lcg32, tile};
+use crate::engine::features::{Gen, lcg32, tile};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::sprite_stats::SPRITE_STATS;
 use crate::verbs::{CorpseVerb, TargetingVerb, VerbKind};

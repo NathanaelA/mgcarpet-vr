@@ -37,9 +37,9 @@
 //!   `sub_69AB0` build-queue variant is OPEN; the MC2 mana ladder
 //!   (L:1729-55) applies either way.
 
-use crate::mc1::features::{Gen, lcg32};
+use crate::engine::features::{Gen, lcg32};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
-use crate::mc1::world::{AimLock, LifeState, PlayerPose, World};
+use crate::engine::world::{AimLock, LifeState, PlayerPose, World};
 use crate::mc2::spells::Mc2SubSpell;
 
 /// Notification lives, in ticks (retail message-life `a3`): the

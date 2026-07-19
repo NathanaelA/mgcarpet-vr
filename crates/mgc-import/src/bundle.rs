@@ -313,6 +313,33 @@ const MUSIC_RATE: u32 = 44100;
 /// MC1 ships sample banks 0..=13 (bank = per-level/screen sound set).
 const MC1_SOUND_BANKS: std::ops::RangeInclusive<u32> = 0..=13;
 
+// One shared normalization factor per song — the
+// overlay SUM is what must not clip (MC1 GM contract).
+fn normalize_gm_pair(mut base: Vec<f32>, mut stem: Option<Vec<f32>>) -> (Vec<i16>, Option<Vec<i16>>) {
+    let frames = base.len().max(stem.as_ref().map_or(0, Vec::len));
+    base.resize(frames, 0.0);
+    let mut peak = 0f32;
+    if let Some(stem) = &mut stem {
+        stem.resize(frames, 0.0);
+        for (b, s) in base.iter().zip(stem.iter()) {
+            peak = peak.max((b + s).abs());
+        }
+    } else {
+        for b in &base {
+            peak = peak.max(b.abs());
+        }
+    }
+    let scale = if peak > 0.0 { 30000.0 / peak } else { 1.0 };
+    let quantize = |pcm: &[f32]| -> Vec<i16> {
+        pcm.iter()
+            .map(|s| (s * scale).clamp(-32767.0, 32767.0) as i16)
+            .collect()
+    };
+    let base = quantize(&base);
+    let stem = stem.as_ref().map(|s| quantize(s));
+    (base, stem)
+}
+
 /// Bake MC1's audio bundle (`baked/assets/mc1-audio/`): every SNDS
 /// sample bank at the highest quality tier, deduplicated into one PCM
 /// blob. Sounds and music are tileset-independent (the bank digit is a
@@ -483,42 +510,24 @@ pub fn bake_mc1_audio(
                 } else {
                     crate::adlib::MixSpec::full()
                 };
-                let mut base = render(&base_mix).map_err(err)?;
-                let mut stem = if layered {
+                let base = render(&base_mix).map_err(err)?;
+                let stem = if layered {
                     Some(render(&crate::adlib::MixSpec::danger_stem()).map_err(err)?)
                 } else {
                     None
                 };
-                let frames = base.len().max(stem.as_ref().map_or(0, Vec::len));
-                base.resize(frames, 0.0);
-                let mut peak = 0f32;
-                if let Some(stem) = &mut stem {
-                    stem.resize(frames, 0.0);
-                    for (b, s) in base.iter().zip(stem.iter()) {
-                        peak = peak.max((b + s).abs());
-                    }
-                } else {
-                    for b in &base {
-                        peak = peak.max(b.abs());
-                    }
-                }
-                let scale = if peak > 0.0 { 30000.0 / peak } else { 1.0 };
-                let quantize = |pcm: &[f32]| -> Vec<i16> {
-                    pcm.iter()
-                        .map(|s| (s * scale).clamp(-32767.0, 32767.0) as i16)
-                        .collect()
-                };
+                let (base, stem) = normalize_gm_pair(base, stem);
                 let member = format!("music/{bank}-{name}-gm.flac");
                 emit(
                     &member,
-                    &crate::flac::encode(&quantize(&base), 2, MUSIC_RATE).map_err(err)?,
+                    &crate::flac::encode(&base, 2, MUSIC_RATE).map_err(err)?,
                 )?;
                 gm_file = Some(member);
                 if let Some(stem) = &stem {
                     let member = format!("music/{bank}-{name}-gm-danger.flac");
                     emit(
                         &member,
-                        &crate::flac::encode(&quantize(stem), 2, MUSIC_RATE).map_err(err)?,
+                        &crate::flac::encode(stem, 2, MUSIC_RATE).map_err(err)?,
                     )?;
                     gm_danger_file = Some(member);
                 }
@@ -692,44 +701,24 @@ pub fn bake_mc2_audio(
                     let midi = crate::xmi::encode_smf(&sub.song, mix);
                     renderer.render(&midi, MUSIC_RATE)
                 };
-                let mut base = render(base_mix).map_err(err)?;
-                let mut stem = if layered {
+                let base = render(base_mix).map_err(err)?;
+                let stem = if layered {
                     Some(render(crate::xmi::Mix::WarStem).map_err(err)?)
                 } else {
                     None
                 };
-                // One shared normalization factor per song — the
-                // overlay SUM is what must not clip (MC1 GM contract).
-                let frames = base.len().max(stem.as_ref().map_or(0, Vec::len));
-                base.resize(frames, 0.0);
-                let mut peak = 0f32;
-                if let Some(stem) = &mut stem {
-                    stem.resize(frames, 0.0);
-                    for (b, s) in base.iter().zip(stem.iter()) {
-                        peak = peak.max((b + s).abs());
-                    }
-                } else {
-                    for b in &base {
-                        peak = peak.max(b.abs());
-                    }
-                }
-                let scale = if peak > 0.0 { 30000.0 / peak } else { 1.0 };
-                let quantize = |pcm: &[f32]| -> Vec<i16> {
-                    pcm.iter()
-                        .map(|s| (s * scale).clamp(-32767.0, 32767.0) as i16)
-                        .collect()
-                };
+                let (base, stem) = normalize_gm_pair(base, stem);
                 let member = format!("music/{role}.flac");
                 emit(
                     &member,
-                    &crate::flac::encode(&quantize(&base), 2, MUSIC_RATE).map_err(err)?,
+                    &crate::flac::encode(&base, 2, MUSIC_RATE).map_err(err)?,
                 )?;
                 let danger_file = match &stem {
                     Some(stem) => {
                         let member = format!("music/{role}-danger.flac");
                         emit(
                             &member,
-                            &crate::flac::encode(&quantize(stem), 2, MUSIC_RATE).map_err(err)?,
+                            &crate::flac::encode(stem, 2, MUSIC_RATE).map_err(err)?,
                         )?;
                         Some(member)
                     }

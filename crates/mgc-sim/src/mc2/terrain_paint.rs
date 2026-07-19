@@ -38,7 +38,7 @@
 //! re-asserts the floor↔ceiling invariant ([`Gen::cave_seal_fixup`])
 //! where retail's non-cave arm blind-clears bit3.
 
-use crate::mc1::features::{Gen, tile};
+use crate::engine::features::{Gen, tile};
 
 pub const CORNER_CLASSES_MC2: [[u8; 4]; 148] = [
     [0x00, 0x00, 0x00, 0x00], // 0

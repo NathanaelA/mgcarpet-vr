@@ -50,17 +50,17 @@ const SPELL_CANON: [u8; 24] = [
     0, 3, 2, 16, 1, 14, 4, 12, 6, 9, 7, 8, 15, 18, 17, 19, 13, 5, 11, 10, 20, 21, 22, 23,
 ];
 
-/// Pristine inputs to rebuild the [`mgc_sim::mc1::world::World`] for a
+/// Pristine inputs to rebuild the [`mgc_sim::engine::world::World`] for a
 /// LEVEL RESTART — the original's castle-less-death "lost + level
 /// over" flow ends in exactly this (respawn at the start of a fresh
 /// level).
 struct WorldInit {
     /// The sim-side game profile (chassis + verb column selector).
     game: mgc_sim::ids::GameId,
-    planes: mgc_sim::mc1::features::Planes,
+    planes: mgc_sim::engine::features::Planes,
     things: Vec<mgc_formats::Thing>,
     seed: u32,
-    assets: mgc_sim::mc1::features::FeatureAssets,
+    assets: mgc_sim::engine::features::FeatureAssets,
     win_pct: u16,
     /// Rival wizard configs by player slot (wizards.json) + the
     /// level's active-slot count. MC1 column only.
@@ -95,8 +95,8 @@ struct WorldInit {
 }
 
 impl WorldInit {
-    fn build(&self) -> mgc_sim::mc1::world::World {
-        let mut w = mgc_sim::mc1::world::World::new_full(
+    fn build(&self) -> mgc_sim::engine::world::World {
+        let mut w = mgc_sim::engine::world::World::new_full(
             self.planes.clone(),
             &self.things,
             self.seed,
@@ -136,6 +136,41 @@ struct LaunchParams {
     awake_range: Option<u32>,
 }
 
+/// The slot's durable retail-format record, tagged by game — MC1/HW
+/// and MC2 have distinct on-disk formats, so the run carries exactly
+/// one. `level` on the MC1 record = the level to play.
+enum CampaignSave {
+    Mc1(saves::Mc1Save),
+    Mc2(saves::Mc2Save),
+}
+
+impl CampaignSave {
+    fn mc1(&self) -> Option<&saves::Mc1Save> {
+        match self {
+            CampaignSave::Mc1(s) => Some(s),
+            CampaignSave::Mc2(_) => None,
+        }
+    }
+    fn mc1_mut(&mut self) -> Option<&mut saves::Mc1Save> {
+        match self {
+            CampaignSave::Mc1(s) => Some(s),
+            CampaignSave::Mc2(_) => None,
+        }
+    }
+    fn mc2(&self) -> Option<&saves::Mc2Save> {
+        match self {
+            CampaignSave::Mc2(s) => Some(s),
+            CampaignSave::Mc1(_) => None,
+        }
+    }
+    fn mc2_mut(&mut self) -> Option<&mut saves::Mc2Save> {
+        match self {
+            CampaignSave::Mc2(s) => Some(s),
+            CampaignSave::Mc1(_) => None,
+        }
+    }
+}
+
 /// A running campaign (`--campaign <mc1|mc1hw|mc2>`): the level-order
 /// law + the slot's durable retail-format record + the cross-level
 /// carry. The record IS the state — completing a level updates it and
@@ -146,10 +181,8 @@ struct CampaignRun {
     slot: usize,
     /// The level being played right now.
     current: u32,
-    /// MC1/HW slot record (None on MC2). `level` = the level to play.
-    mc1: Option<saves::Mc1Save>,
-    /// MC2 slot record (None on MC1/HW).
-    mc2: Option<saves::Mc2Save>,
+    /// The slot's durable record (MC1/HW or MC2, matching `id`).
+    save: CampaignSave,
     /// What follows the current fade-out (set at the won edge).
     next: Option<campaign::NextStep>,
 }
@@ -197,8 +230,7 @@ impl CampaignRun {
                     id,
                     slot,
                     current,
-                    mc1: Some(save),
-                    mc2: None,
+                    save: CampaignSave::Mc1(save),
                     next: None,
                 })
             }
@@ -242,8 +274,7 @@ impl CampaignRun {
                     id,
                     slot,
                     current,
-                    mc1: None,
-                    mc2: Some(save),
+                    save: CampaignSave::Mc2(save),
                     next: None,
                 })
             }
@@ -258,15 +289,9 @@ impl CampaignRun {
     /// Write the slot file (creating `saves/<game>/`). IO failure is
     /// reported, never fatal — losing a save must not kill the run.
     fn persist(&self) {
-        let (path, bytes) = match self.id {
-            campaign::CampaignId::Mc2 => {
-                let Some(s) = &self.mc2 else { return };
-                (saves::mc2_path(self.slot), s.encode())
-            }
-            _ => {
-                let Some(s) = &self.mc1 else { return };
-                (saves::mc1_path(self.id.tag(), self.slot), s.encode())
-            }
+        let (path, bytes) = match &self.save {
+            CampaignSave::Mc2(s) => (saves::mc2_path(self.slot), s.encode()),
+            CampaignSave::Mc1(s) => (saves::mc1_path(self.id.tag(), self.slot), s.encode()),
         };
         let write = || -> std::io::Result<()> {
             if let Some(dir) = path.parent() {
@@ -428,7 +453,7 @@ struct LoadedLevel {
     /// The living MC1/HW world (triggers, dispositions, runtime
     /// terrain events); moved into the Simulation by App::new. None =
     /// static terrain (MC2, or --no-terrain-features).
-    world: Option<mgc_sim::mc1::world::World>,
+    world: Option<mgc_sim::engine::world::World>,
     /// Rebuild inputs for the castle-less-death level restart.
     world_init: Option<WorldInit>,
     /// Bundle palette, kept for runtime map-dot rebuilds.
@@ -485,8 +510,8 @@ struct LoadedLevel {
 /// fly-into triggers, red = kill-watchers, cyan = collected-item
 /// triggers, violet = portals, green = MC2 stage checkpoints (the
 /// authored route, for troubleshooting).
-fn map_areas(world: &mgc_sim::mc1::world::World) -> Vec<mgc_render::MapArea> {
-    use mgc_sim::mc1::world::VolumeKind;
+fn map_areas(world: &mgc_sim::engine::world::World) -> Vec<mgc_render::MapArea> {
+    use mgc_sim::engine::world::VolumeKind;
     world
         .active_volumes()
         .into_iter()
@@ -533,7 +558,7 @@ fn map_overlay(level: &LoadedLevel, cfg: &config::Config) -> mgc_render::MapOver
 ///
 /// `terrain_features` applies the original's load-time entity-driven
 /// terrain pass (craters, canyons, walls, building flattening/painting
-/// — mgc_sim::mc1::features) to the pristine baked terrain, as the engine
+/// — mgc_sim::engine::features) to the pristine baked terrain, as the engine
 /// does. Off = the raw generator output, for comparison renders.
 fn load_level(
     level_path: &Path,
@@ -648,7 +673,7 @@ fn load_level(
         match (&shading, &angle, feature_src) {
             (Some(sh), Some(an), (Some(search), Some(build_tab), Some(build_dat))) => {
                 let mut assets =
-                    mgc_sim::mc1::features::FeatureAssets::parse(&search, &build_tab, &build_dat)?;
+                    mgc_sim::engine::features::FeatureAssets::parse(&search, &build_tab, &build_dat)?;
                 if let Some(prm) = bundle.bldgprm.as_deref() {
                     assets = assets.with_bldgprm(prm);
                 }
@@ -728,7 +753,7 @@ fn load_level(
                 }
                 let init = WorldInit {
                     game: game_id,
-                    planes: mgc_sim::mc1::features::Planes {
+                    planes: mgc_sim::engine::features::Planes {
                         height: height.clone(),
                         tile_type: tile_type.clone(),
                         shading: sh.clone(),
@@ -1188,8 +1213,8 @@ struct Session {
     /// accumulator fraction — the same one-tick-behind timeline the
     /// camera has always run (`prev_flyer`). Empty while the toggle
     /// is off or fewer than two ticks have run.
-    pose_prev: Vec<mgc_sim::mc1::world::LivePose>,
-    pose_cur: Vec<mgc_sim::mc1::world::LivePose>,
+    pose_prev: Vec<mgc_sim::engine::world::LivePose>,
+    pose_cur: Vec<mgc_sim::engine::world::LivePose>,
 }
 
 /// Which surface owns the frame: a running level, or one of the
@@ -2148,7 +2173,7 @@ impl App {
             return;
         };
         let f = &sess.sim.flyer;
-        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        let pose = mgc_sim::engine::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
         let listener = mgc_audio::Listener {
             pos: (pose.x, pose.y, pose.z),
             yaw: pose.heading,
@@ -2225,7 +2250,7 @@ impl App {
         let listener = match self.session.as_deref() {
             Some(sess) => {
                 let f = &sess.sim.flyer;
-                let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(
+                let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
                     f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
                 );
                 mgc_audio::Listener {
@@ -2623,7 +2648,7 @@ impl App {
             else {
                 return;
             };
-            w.copy_planes_into(mgc_sim::mc1::features::TerrainPlanes {
+            w.copy_planes_into(mgc_sim::engine::features::TerrainPlanes {
                 height: &mut level.view.height,
                 tile_type: &mut level.view.tile_type,
                 shading,
@@ -2869,7 +2894,7 @@ impl App {
             let n = self
                 .campaign
                 .as_ref()
-                .and_then(|c| c.mc2.as_ref())
+                .and_then(|c| c.save.mc2())
                 .map_or(0, |s| s.levels_completed);
             if n >= 25 {
                 println!("campaign complete!");
@@ -2886,7 +2911,7 @@ impl App {
         // narrative latch re-arms; the new portal pops on sight.
         if let (Some(wm), Some(save), Some(cur)) = (
             &mut self.worldmap,
-            self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+            self.campaign.as_ref().and_then(|c| c.save.mc2()),
             current,
         ) {
             wm.enter_visit(save);
@@ -2927,7 +2952,7 @@ impl App {
     fn load_worldmap(&mut self) -> Result<(), String> {
         let mut wm = worldmap::WorldMap::load(Path::new("baked/assets/mc2-ui"))?;
         if let Some(run) = &self.campaign {
-            if let Some(save) = &run.mc2 {
+            if let Some(save) = run.save.mc2() {
                 wm.enter_visit(save);
                 wm.anchor_to(save);
             }
@@ -2935,7 +2960,7 @@ impl App {
             // parks the carpet on the last activated flag instead
             // (its load law); mid-session entries pass the level
             // actually just played via `open_map_screen`.
-            let parked = match self.campaign.as_ref().and_then(|c| c.mc2.as_ref()) {
+            let parked = match self.campaign.as_ref().and_then(|c| c.save.mc2()) {
                 Some(s) if run.current == s.levels_completed && run.current > 0 => run.current - 1,
                 _ => run.current,
             };
@@ -2994,7 +3019,7 @@ impl App {
             };
             (dx, dy)
         };
-        let Some(save) = self.campaign.as_ref().and_then(|c| c.mc2.as_ref()) else {
+        let Some(save) = self.campaign.as_ref().and_then(|c| c.save.mc2()) else {
             // No MC2 campaign behind the map — nothing to show.
             self.enter_main_menu();
             return;
@@ -3093,7 +3118,7 @@ impl App {
             MapAction::SaveTo { slot, label } => {
                 if let Some(run) = &mut self.campaign {
                     run.slot = slot;
-                    if let Some(s) = &mut run.mc2 {
+                    if let Some(s) = run.save.mc2_mut() {
                         s.label = label;
                     }
                     run.persist();
@@ -3102,7 +3127,7 @@ impl App {
             MapAction::LoadFrom(slot) => {
                 match CampaignRun::start(campaign::CampaignId::Mc2, slot, false) {
                     Ok(run) => {
-                        let parked = match run.mc2.as_ref() {
+                        let parked = match run.save.mc2() {
                             Some(s) if run.current == s.levels_completed && run.current > 0 => {
                                 run.current - 1
                             }
@@ -3111,7 +3136,7 @@ impl App {
                         self.campaign = Some(run);
                         if let (Some(wm), Some(save)) = (
                             &mut self.worldmap,
-                            self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+                            self.campaign.as_ref().and_then(|c| c.save.mc2()),
                         ) {
                             wm.session_reset();
                             wm.enter_visit(save);
@@ -3129,7 +3154,7 @@ impl App {
                 if let Some(run) = &mut self.campaign {
                     run.current = 0;
                     run.next = None;
-                    if let Some(s) = &mut run.mc2 {
+                    if let Some(s) = run.save.mc2_mut() {
                         let label = s.label.clone();
                         let player_name = s.player_name.clone();
                         *s = saves::Mc2Save {
@@ -3141,7 +3166,7 @@ impl App {
                 }
                 if let (Some(wm), Some(save)) = (
                     &mut self.worldmap,
-                    self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+                    self.campaign.as_ref().and_then(|c| c.save.mc2()),
                 ) {
                     wm.session_reset();
                     wm.enter_visit(save);
@@ -3303,7 +3328,7 @@ impl App {
             let name = self
                 .campaign
                 .as_ref()
-                .and_then(|c| c.mc1.as_ref())
+                .and_then(|c| c.save.mc1())
                 .map(|s| s.name.clone())
                 .unwrap_or_default();
             if let Some(m) = &mut self.mc1menu {
@@ -3338,7 +3363,7 @@ impl App {
                     if let Some(run) = &mut self.campaign {
                         run.current = 0;
                         run.next = None;
-                        if let Some(s) = &mut run.mc1 {
+                        if let Some(s) = run.save.mc1_mut() {
                             s.level = 0;
                             s.blob24 = [0; 24];
                         }
@@ -3348,7 +3373,7 @@ impl App {
                 Mc1Action::SaveTo { slot, label } => {
                     if let Some(run) = &mut self.campaign {
                         run.slot = slot;
-                        if let Some(s) = &mut run.mc1 {
+                        if let Some(s) = run.save.mc1_mut() {
                             if !label.is_empty() {
                                 s.name = label;
                             }
@@ -3371,7 +3396,7 @@ impl App {
                     }
                 }
                 Mc1Action::SetName(name) => {
-                    if let Some(s) = self.campaign.as_mut().and_then(|c| c.mc1.as_mut()) {
+                    if let Some(s) = self.campaign.as_mut().and_then(|c| c.save.mc1_mut()) {
                         if !name.is_empty() {
                             println!("save name: {name}");
                             s.name = name;
@@ -3453,7 +3478,7 @@ impl App {
                     self.open_map_screen(event_loop);
                 }
                 MenuAction::SetName(name) => {
-                    if let Some(s) = self.campaign.as_mut().and_then(|c| c.mc2.as_mut()) {
+                    if let Some(s) = self.campaign.as_mut().and_then(|c| c.save.mc2_mut()) {
                         println!("player name: {name}");
                         s.player_name = name;
                     }
@@ -3696,7 +3721,7 @@ impl ApplicationHandler for App {
                                 let current = self
                                     .campaign
                                     .as_ref()
-                                    .and_then(|c| c.mc2.as_ref())
+                                    .and_then(|c| c.save.mc2())
                                     .map(|s| s.player_name.clone())
                                     .unwrap_or_default();
                                 if let Some(m) = &mut self.mainmenu {
@@ -3717,7 +3742,7 @@ impl ApplicationHandler for App {
                         let cursor = self.cursor;
                         if let (Some(wm), Some(save)) = (
                             &mut self.worldmap,
-                            self.campaign.as_ref().and_then(|c| c.mc2.as_ref()),
+                            self.campaign.as_ref().and_then(|c| c.save.mc2()),
                         ) {
                             wm.click(save, size, cursor);
                         }
@@ -4759,7 +4784,7 @@ impl ApplicationHandler for App {
                     // (World::aim_preview — the pure scan twin).
                     if self.cfg.render.debug.crosshair
                         && !self.book_open()
-                        && vitals.state == mgc_sim::mc1::world::LifeState::Alive
+                        && vitals.state == mgc_sim::engine::world::LifeState::Alive
                     {
                         let f = &sess.sim.flyer;
                         let (sy, cyaw) = cam.yaw.sin_cos();
@@ -4774,7 +4799,7 @@ impl ApplicationHandler for App {
                             cam.y + sp * AIM_D,
                             cam.z - cyaw * cp * AIM_D,
                         );
-                        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(
+                        let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
                             f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
                         );
                         let locks = w.aim_preview(pose).map(|l| {
@@ -5761,7 +5786,7 @@ fn run_flock_probe(
             bm.display()
         );
     }
-    let idle = mgc_sim::mc1::world::PlayerCommand::default();
+    let idle = mgc_sim::engine::world::PlayerCommand::default();
     println!(
         "flock probe: ({},{}) n={} pose={} ticks={} strip={} -> {}",
         species.0,
@@ -5832,7 +5857,7 @@ fn run_flock_probe(
             }
             _ => {}
         }
-        let pose = mgc_sim::mc1::world::PlayerPose::from_tiles(px, pz_alt, py, 0.0, 0.0, 0.0);
+        let pose = mgc_sim::engine::world::PlayerPose::from_tiles(px, pz_alt, py, 0.0, 0.0, 0.0);
         w.tick(pose, idle);
 
         let rows = w.debug_flock_probe(species.0, species.1);
@@ -5966,7 +5991,7 @@ fn mc2_sky_srgb(level: &LoadedLevel) -> Option<[f32; 3]> {
 /// `App::new`, `restart_level`, and the headless screenshot path all
 /// go through here).
 fn apply_instruments(
-    w: &mut mgc_sim::mc1::world::World,
+    w: &mut mgc_sim::engine::world::World,
     dev_spells: bool,
     plausible_spells: &[u8],
     plausible_book_mc2: &[(u8, i32)],
@@ -5991,10 +6016,10 @@ fn apply_instruments(
 /// (the retail human-branch grant law, :49226-33). MC2: learn the
 /// carried book with its banked XP — `mc2_grant_plausible` is the
 /// same grant+bank+re-derive path retail's `sub_549A0` carry feeds.
-fn apply_campaign_book(w: &mut mgc_sim::mc1::world::World, run: &CampaignRun, level: &LoadedLevel) {
+fn apply_campaign_book(w: &mut mgc_sim::engine::world::World, run: &CampaignRun, level: &LoadedLevel) {
     match run.id {
         campaign::CampaignId::Mc2 => {
-            let Some(save) = &run.mc2 else { return };
+            let Some(save) = run.save.mc2() else { return };
             let book = save.book();
             let grants: Vec<(u8, i32)> = (0..26)
                 .filter(|&s| book.owned[s])
@@ -6005,7 +6030,7 @@ fn apply_campaign_book(w: &mut mgc_sim::mc1::world::World, run: &CampaignRun, le
             }
         }
         _ => {
-            let Some(save) = &run.mc1 else { return };
+            let Some(save) = run.save.mc1() else { return };
             let mut spells: Vec<u8> = (0..24)
                 .filter(|&s| save.blob24[s] != 0)
                 .map(|s| s as u8)
@@ -6025,11 +6050,11 @@ fn apply_campaign_book(w: &mut mgc_sim::mc1::world::World, run: &CampaignRun, le
 /// persist the slot file. A free function because it runs inside the
 /// redraw's `&mut sim.world` borrow (field-disjoint from
 /// `self.campaign`).
-fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::mc1::world::World) {
+fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::world::World) {
     use campaign::{CampaignId, NextStep};
     match run.id {
         CampaignId::Mc2 => {
-            let Some(save) = &mut run.mc2 else { return };
+            let Some(save) = run.save.mc2_mut() else { return };
             // Book carry: serialize the live book into str_611 (all
             // XP banked — the between-levels shape).
             let v = w.mc2_book_view();
@@ -6098,7 +6123,7 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::mc1::world:
         }
         CampaignId::Mc1 | CampaignId::Mc1Hw => {
             let hw = run.id == CampaignId::Mc1Hw;
-            let Some(save) = &mut run.mc1 else { return };
+            let Some(save) = run.save.mc1_mut() else { return };
             // Commit collected spells to the persistent flags (the
             // retail level-completion commit into var_15318).
             let owned = w.loadout().owned;

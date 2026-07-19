@@ -2,7 +2,7 @@
 //! primitives, the slice creatures (Goat m1, Archers m4, Villager
 //! m13) and the (9,13) archer arrow, ported from remc2
 //! EventsFunctions.cpp (`:N` cites; trace bank docs/archive/PHASE3-RESEARCH.md).
-//! Runs on the SHARED chassis ([`crate::mc1::features::Gen`]) — same
+//! Runs on the SHARED chassis ([`crate::engine::features::Gen`]) — same
 //! pool, mailboxes, LCG, terrain samplers. MC2's NewEvent defaults
 //! match MC1's field-for-field (life 300, flags dword 8, speed 16,
 //! strength 100, id = slot, filter bytes -1; Events.cpp:582-599).
@@ -71,7 +71,7 @@
 
 use super::behavior::{BEHAVIOR, Mc2BehaviorRow};
 use super::sprite_params::SPRITE_PARAMS;
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
 /// MC2-only flag bits on [`Ent::flags`] (high bits; MC1 owns the low
@@ -195,7 +195,7 @@ impl Gen {
                 return true;
             }
             if self.is_cave() {
-                let t = crate::mc1::features::tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
+                let t = crate::engine::features::tile((pos.0 >> 8) as u8, (pos.1 >> 8) as u8);
                 if self.t.angle[t] & 8 != 0
                     || self.cave_poke(e.f84 as i32, row.v_12 as i32, pos.0, pos.1)
                 {
@@ -1740,7 +1740,7 @@ impl Gen {
                 ((x.wrapping_add(128)) >> 8) as u8,
                 ((y.wrapping_add(128)) >> 8) as u8,
             );
-            let t = crate::mc1::features::tile(cx, cy);
+            let t = crate::engine::features::tile(cx, cy);
             let ty = self.t.tile_type[t];
             if ty != 0 {
                 match ty {
@@ -1758,7 +1758,7 @@ impl Gen {
                     }
                     _ => {
                         // sub_104A0 (:2052) reads the UNROUNDED cell.
-                        let raw = crate::mc1::features::tile((x >> 8) as u8, (y >> 8) as u8);
+                        let raw = crate::engine::features::tile((x >> 8) as u8, (y >> 8) as u8);
                         if !(6..=0x22).contains(&ty)
                             && self.t.angle[t] & 7 != 1
                             && (z as i32 - ground as i32) <= 128
@@ -2043,7 +2043,7 @@ impl Gen {
         if self.ent[i].max_life as i32 - 1 == life {
             for dy in 0..h {
                 for dx in 0..w {
-                    let t = crate::mc1::features::tile(
+                    let t = crate::engine::features::tile(
                         tlx.wrapping_add(dx as u8),
                         tly.wrapping_add(dy as u8),
                     );
@@ -2060,7 +2060,7 @@ impl Gen {
             for dx in 0..w {
                 let cell = dy * w + dx;
                 let pad = cells[2 * cell + 1];
-                let t = crate::mc1::features::tile(
+                let t = crate::engine::features::tile(
                     tlx.wrapping_add(dx as u8),
                     tly.wrapping_add(dy as u8),
                 );
@@ -2097,7 +2097,7 @@ impl Gen {
                     if cells[2 * (dy * w + dx)] == 0xff {
                         continue;
                     }
-                    let t = crate::mc1::features::tile(
+                    let t = crate::engine::features::tile(
                         tlx.wrapping_add(dx as u8),
                         tly.wrapping_add(dy as u8),
                     );

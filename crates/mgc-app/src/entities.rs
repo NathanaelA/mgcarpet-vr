@@ -1,6 +1,6 @@
 //! Level entities -> billboards.
 //!
-//! Two paths: with a live [`mgc_sim::mc1::world::World`] (all games
+//! Two paths: with a live [`mgc_sim::engine::world::World`] (all games
 //! since Phase 3.5), [`billboards_from_poses`] consumes the sim's
 //! pose snapshot — sprite types, spawn facing and jitter come from
 //! the ported spawn handlers' per-event LCG (byte-faithful), and
@@ -16,7 +16,7 @@ use mgc_render::{Billboard, HealthBar};
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
 use mgc_sim::mc1::sprite_stats::SPRITE_STATS;
-use mgc_sim::mc1::world::LivePose;
+use mgc_sim::engine::world::LivePose;
 use mgc_sim::{HEIGHT_SCALE, MAP_TILES};
 
 /// Engine fixed-point units per tile.
@@ -758,7 +758,7 @@ pub fn lights_from_poses(poses: &[LivePose]) -> Vec<[f32; 4]> {
 /// name labels, :57413-48): a 2x2 dot in the rival's team color at
 /// each live, non-cloaked rival wizard.
 pub fn rival_markers(
-    rivals: &[mgc_sim::mc1::world::RivalView],
+    rivals: &[mgc_sim::engine::world::RivalView],
     beyond_sight: Option<u8>,
 ) -> Vec<mgc_render::MapDot> {
     let Some(tier) = beyond_sight else {

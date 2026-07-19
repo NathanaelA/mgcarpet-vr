@@ -11,8 +11,8 @@
 //! Self-skips without baked mc2 data.
 
 use mgc_sim::ids::GameId;
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
 #[path = "common/mod.rs"]
@@ -218,7 +218,7 @@ fn mc2_slice_behaviors_and_goldens() {
     assert!(
         w.active_volumes()
             .iter()
-            .filter(|v| matches!(v.kind, mgc_sim::mc1::world::VolumeKind::Proximity))
+            .filter(|v| matches!(v.kind, mgc_sim::engine::world::VolumeKind::Proximity))
             .count()
             >= 20,
         "switch boxes feed the map-triggers overlay"
@@ -226,7 +226,7 @@ fn mc2_slice_behaviors_and_goldens() {
     assert!(
         w.active_volumes()
             .iter()
-            .any(|v| matches!(v.kind, mgc_sim::mc1::world::VolumeKind::Objective)),
+            .any(|v| matches!(v.kind, mgc_sim::engine::world::VolumeKind::Objective)),
         "stage checkpoints plot on the overlay"
     );
 

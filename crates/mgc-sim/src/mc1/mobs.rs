@@ -21,7 +21,7 @@
 
 use crate::mc1::behavior::{BEHAVIOR, BehaviorRow};
 use crate::mc1::combat::{Inbox, MailTarget};
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 use crate::mc1::sprite_stats::SPRITE_STATS;
 use crate::mc1::tables::{COS, SIN};
 
@@ -700,7 +700,7 @@ impl Gen {
         let blocked = |x: u16, y: u16| {
             self.cap_bit(x, y) == 0x100
                 || (self.is_cave()
-                    && self.t.angle[crate::mc1::features::tile((x >> 8) as u8, (y >> 8) as u8)] & 8
+                    && self.t.angle[crate::engine::features::tile((x >> 8) as u8, (y >> 8) as u8)] & 8
                         != 0)
         };
         if !blocked(prop.0, prop.1) {
@@ -1758,7 +1758,7 @@ impl Gen {
         if (v4 as u16 + v5 as u16) % 2 == 1 {
             v4 = v4.wrapping_add(1);
         }
-        let h = |cx: u8, cy: u8| self.t.height[crate::mc1::features::tile(cx, cy)] as i32;
+        let h = |cx: u8, cy: u8| self.t.height[crate::engine::features::tile(cx, cy)] as i32;
         let c = [
             h(v4, v5),
             h(v4.wrapping_add(w_tiles), v5),

@@ -33,7 +33,7 @@ pub enum Mc1TypePick {
 /// Type-index selection for one (class, model); `None` = the model
 /// creates no drawable world entity at load (markers, spawner volumes,
 /// logic-only), or is out of scope for load-time placement (class 10
-/// terrain features — consumed by `crate::mc1::features`; its model 45
+/// terrain features — consumed by `crate::engine::features`; its model 45
 /// building/castle entities are the entity track's multi-tile
 /// structure case, not a billboard).
 pub fn mc1_entity_type(class: u16, model: u16) -> Option<Mc1TypePick> {

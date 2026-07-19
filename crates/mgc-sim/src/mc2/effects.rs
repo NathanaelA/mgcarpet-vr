@@ -13,7 +13,7 @@
 //! sounds; the standing fire is the band's damage dealer (per-tick
 //! ch0 area heat).
 
-use crate::mc1::features::{Gen, lcg32};
+use crate::engine::features::{Gen, lcg32};
 use crate::mc1::mobs::MobCtx;
 
 impl Gen {
@@ -394,7 +394,7 @@ impl Gen {
         let life = self.ent[i].act_life;
         self.ent[i].act_life -= 1;
         let (x, y) = (self.ent[i].x, self.ent[i].y);
-        let raw = crate::mc1::features::tile((x >> 8) as u8, (y >> 8) as u8);
+        let raw = crate::engine::features::tile((x >> 8) as u8, (y >> 8) as u8);
         if life < 0 || self.t.angle[raw] & 0xF == 0 {
             self.ent[i].flags |= 0x400;
             return false;

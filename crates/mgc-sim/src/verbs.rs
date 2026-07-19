@@ -24,7 +24,7 @@
 //! - **LOS / height sampling** — the algorithm is IDENTICAL; MC2's
 //!   delta is DATA, not code: cave levels carry a second (ceiling)
 //!   heightmap, landing as an optional plane on
-//!   [`crate::mc1::features::Planes`], widening the sampler to a
+//!   [`crate::engine::features::Planes`], widening the sampler to a
 //!   floor/ceiling pair.
 
 /// Creature awake / sight-aggro (shared two-scan; MC2 keys the scan
@@ -41,7 +41,7 @@
 pub enum AwakeVerb {
     Mc1,
     /// The MC2 two-scan with the type-flag byte policy (dispatched in
-    /// `mc1::world`'s awake pass).
+    /// `engine::world`'s awake pass).
     Mc2,
 }
 

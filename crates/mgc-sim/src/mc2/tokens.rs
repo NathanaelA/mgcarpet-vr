@@ -13,7 +13,7 @@
 //! stageTag`, >= 3 -> junk state 253 — the shared class-12/15 spawn
 //! case, EF:33209-33217).
 
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 
 impl Gen {
     /// `AddSpellXX_XX_51120` (EF:54124) — the shared token ctor:

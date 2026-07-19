@@ -32,10 +32,10 @@
 //! channel (magnitude from the traced formula).
 
 use crate::mc1::behavior::BEHAVIOR;
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 use crate::mc1::mobs::PLAYER_TARGET;
 use crate::mc1::spells::{SPELL_COUNT, SPELLS};
-use crate::mc1::world::{LifeState, World};
+use crate::engine::world::{LifeState, World};
 
 /// Per-slot config from the level record (wizards.json), resolved by
 /// the app: personality params, starting castle, and the two spell
@@ -291,7 +291,7 @@ impl World {
             let e = &mut self.g.ent[m];
             e.class64 = 12;
             e.model65 = spell as u8;
-            e.tick70 = crate::mc1::world::MANIFEST_BASE + spell as u8;
+            e.tick70 = crate::engine::world::MANIFEST_BASE + spell as u8;
             e.flags &= !8;
             e.f26 = 0;
             e.f44 = f44;
@@ -700,7 +700,7 @@ impl World {
                 let e = &self.g.ent[j];
                 e.class64 == 12
                     && e.model65 as usize == s
-                    && e.tick70 < crate::mc1::world::MANIFEST_BASE
+                    && e.tick70 < crate::engine::world::MANIFEST_BASE
                     && e.flags & 0x400 == 0
             });
             if exists {
@@ -1821,7 +1821,7 @@ impl World {
             let life = (self.g.ent_rand(m) % 90 + 200) as i16;
             {
                 let e = &mut self.g.ent[m];
-                e.tick70 = crate::mc1::world::DROPPED_JAR; // pickup-able, decaying
+                e.tick70 = crate::engine::world::DROPPED_JAR; // pickup-able, decaying
                 e.f144 = 0; // no owner — a free copy
                 e.f26 = life; // the decay countdown
             }

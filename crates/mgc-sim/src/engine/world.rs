@@ -1,5 +1,8 @@
-//! MC1 runtime world: the living level — trigger volumes, dispositions,
-//! spawned entities, and runtime terrain-mutating events.
+//! The shared chassis runtime world: the living level — trigger
+//! volumes, dispositions, spawned entities, and runtime
+//! terrain-mutating events. A verbatim remc1 port that runs all three
+//! games (MC1, Hidden Worlds, MC2); the game-specific columns plug in
+//! from [`crate::mc1`] and [`crate::mc2`].
 //!
 //! This is the runtime face of the same event machinery the load-time
 //! feature pass uses (`features::Gen`): in the original, one 1000-slot
@@ -57,8 +60,8 @@
 use crate::chassis::ChassisParams;
 use crate::ids::GameId;
 use crate::mc1::combat::MailTarget;
-use crate::mc1::features::{
-    self, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
+use crate::engine::features::{
+    self, Ent, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
 };
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::spells::{SPELL_COUNT, SPELLS, SpellDef, SpellId};
@@ -893,7 +896,7 @@ pub struct FlockProbeRow {
 /// rule inputs (see [`World::take_audio`]).
 #[derive(Debug, Clone)]
 pub struct AudioFrame {
-    pub events: Vec<crate::mc1::features::SoundEvent>,
+    pub events: Vec<crate::engine::features::SoundEvent>,
     /// The carpet is over a water tile (waves vs wind, :55254-65).
     pub over_water: bool,
     pub fire_near: bool,
@@ -1002,6 +1005,19 @@ fn drawable(game: GameId, class: u16, model: u16) -> bool {
                 // (10,79) is the castle defend turret (ctor sprite 66,
                 // sub_508E0 EF:37000).
                 || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77 | 79))))
+}
+
+/// The game-keyed per-entity presentation decisions for
+/// [`World::live_poses`] — the MC1/MC2 split (S3 code motion). All
+/// fields are hash-excluded presentation.
+struct PoseGameBits {
+    /// MC1 skips unclaimed dwellings entirely (`continue`); MC2 keeps
+    /// them and exports the pose as map-only.
+    skip: bool,
+    segment: bool,
+    life_frac: Option<f32>,
+    blend: u8,
+    map_only: bool,
 }
 
 impl World {
@@ -1257,32 +1273,16 @@ impl World {
             if e.flags & 0x20 != 0 {
                 continue;
             }
-            // Houses (m45), BOTH games: the visible building is
-            // painted terrain; the entity billboard is the OWNER
-            // FLAG (sprite 177 + color row) — drawn only once
-            // CLAIMED. MC2's protocol is explicit in the decompile:
-            // the claim clears byte[0] bit 0 and re-sets sprite 177
-            // + the claimer's color row (AddHouse0A_2D_38330
-            // EF:28035-40), build completion sets the bit for
-            // unowned buildings (EF:27292-97). Flags fly on claimed
-            // dwellings only. MC1 keeps the full skip; MC2 exports the
-            // pose as map-only — retail's MAP pass never skips on the
-            // claim bit (0xF0F unpossessed dot, GameUI.cpp:1276-95).
-            let unclaimed_house = e.class64 == 10 && e.model65 == 45 && e.f144 == 0;
-            if unclaimed_house && !matches!(self.game, GameId::Mc2) {
+            // The game-keyed presentation split (unclaimed-dwelling
+            // skip/map-only, segment-hide states, life-bar
+            // denominators, MC2 translucency): per-game bodies below.
+            let bits = match self.game {
+                GameId::Mc2 => self.live_poses_mc2(e),
+                _ => self.live_poses_mc1(e),
+            };
+            if bits.skip {
                 continue;
             }
-            // Body segments hide from map dots + health bars (the
-            // heads carry both) — game-keyed states: MC1's 120 vs
-            // MC2's chain children 0xE8/m27 branches 0xE9-0xEA
-            // (retail's own map plot skips exactly 0xB4 + 0xE8..0xEA,
-            // GameUI.cpp:1220) and the m22 tail 0xB4. Must be
-            // game-keyed: MC1's 120 is MC2's (5,15) guard brain state.
-            let segment = e.class64 == 5
-                && match self.game {
-                    GameId::Mc2 => matches!(e.tick70, 0xB4 | 0xE8..=0xEA),
-                    _ => e.tick70 == 120,
-                };
             out.push(LivePose {
                 slot: i as u16,
                 generation: self.g.slot_gen.0.get(i).copied().unwrap_or(0),
@@ -1294,56 +1294,8 @@ impl World {
                 z: e.y as f32 / 256.0,
                 alt: e.z as f32 / 256.0,
                 yaw: (e.f30 & 0x7FF) as f32 * (TAU / 2048.0),
-                segment,
-                // Class-5 heads + the wizard-family: rival carpets,
-                // castles, balloons — all consumed by the opt-in debug
-                // bar overlay only. Destructible STRUCTURES join —
-                // dwellings (10,45), building anchors (10,52), castle
-                // stage pieces (10,79).
-                life_frac: ((e.class64 == 5 && !segment)
-                    || (e.class64 == 3 && e.model65 <= 3)
-                    || (matches!(self.game, GameId::Mc2)
-                        && e.class64 == 10
-                        && matches!(e.model65, 45 | 52 | 79))
-                    // MC1's (10,45) dwellings: LIVE state 52 only — 51
-                    // is the build countdown (act_life counts 30→0 and
-                    // would read as a dying bar), 53 the collapse.
-                    || (!matches!(self.game, GameId::Mc2)
-                        && e.class64 == 10
-                        && e.model65 == 45
-                        && e.tick70 == 52))
-                .then(|| {
-                    // A parked MC2 dwelling's act_life IS its
-                    // production countdown (mc2_building_tick parks
-                    // with 1000 x rate; retail CompareEvent08 drains
-                    // the SAME field on damage): the bar denominates
-                    // against the parked value, so damage visibly eats
-                    // it.
-                    let denom = if matches!(self.game, GameId::Mc2)
-                        && e.class64 == 10
-                        && e.model65 == 45
-                        && e.tick70 == 52
-                        && e.f140 > 0
-                    {
-                        (1000 * e.f140) as f32
-                    } else if !matches!(self.game, GameId::Mc2)
-                        && e.class64 == 10
-                        && e.model65 == 45
-                        && e.f44 > 0
-                    {
-                        // MC1's live dwelling parks act_life at f44
-                        // (tick_building_live's build finish) and the
-                        // damage mail drains it; max_life (30) is the
-                        // BUILD countdown length, not health.
-                        e.f44 as f32
-                    } else {
-                        e.max_life as f32
-                    };
-                    if denom <= 0.0 {
-                        return 0.0;
-                    }
-                    (e.act_life.max(0) as f32 / denom).min(1.0)
-                }),
+                segment: bits.segment,
+                life_frac: bits.life_frac,
                 player_owned: e.id24 == PLAYER_TARGET
                     || (e.class64 == 10 && e.f144 == PLAYER_TARGET),
                 team: {
@@ -1355,40 +1307,138 @@ impl World {
                     // A rival wizard's own billboard is its own team.
                     self.owner_slot(owner)
                 },
-                // MC2 translucency (docs/traces/mc2-transparency-
-                // drawlist.md): smoke clouds (10,13)/(10,14) carry
-                // raster mode 2 from their static particle descriptor
-                // (particlesParameters_D951C rows 67/9, byte_10=2);
-                // per-entity overrides are flags bit 23 → mode 2
-                // (byte 0xE mask 0x80 — DUAL-PURPOSE: also the m26
-                // wraith's full-speed wake marker, the ghost look IS
-                // the state, GRO:3779-3805/EF:19436) and bit 24 →
-                // mode 3 (byte 0xF mask 0x01, the 67% death fades).
-                // MC1's engine has the same modes but no world
-                // content sets them. The bit-23 override is read ONLY
-                // by the DrawSprites_3E360 billboard arm; the doomsday
-                // pyramid (5,10) — whose faithful ctor flag 0x48800001
-                // carries bit 23 — draws through the sub_3FD60 →
-                // DrawSprite_41BD3(2) big-sprite pass (GRO:2205-12,
-                // LABEL_70), which takes raster mode from the static
-                // descriptor alone, so it stays opaque in retail.
-                blend: if matches!(self.game, GameId::Mc2) {
-                    if (e.flags & (1 << 23) != 0 && !(e.class64 == 5 && e.model65 == 10))
-                        || (e.class64 == 10 && matches!(e.model65, 13 | 14))
-                    {
-                        2
-                    } else if e.flags & (1 << 24) != 0 {
-                        3
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                },
-                map_only: unclaimed_house,
+                blend: bits.blend,
+                map_only: bits.map_only,
             });
         }
         out
+    }
+
+    /// The MC1 (and Hidden Worlds) per-entity presentation rules for
+    /// [`World::live_poses`]: unclaimed dwellings are skipped
+    /// entirely; body segments are state 120; the (10,45) dwelling
+    /// life bar denominates against the parked build value (f44).
+    fn live_poses_mc1(&self, e: &Ent) -> PoseGameBits {
+        // Houses (m45): the visible building is painted terrain; the
+        // entity billboard is the OWNER FLAG (sprite 177 + color row)
+        // — drawn only once CLAIMED. MC1 keeps the full skip.
+        let unclaimed_house = e.class64 == 10 && e.model65 == 45 && e.f144 == 0;
+        if unclaimed_house {
+            return PoseGameBits {
+                skip: true,
+                segment: false,
+                life_frac: None,
+                blend: 0,
+                map_only: false,
+            };
+        }
+        // Body segments hide from map dots + health bars (the heads
+        // carry both) — MC1's state 120.
+        let segment = e.class64 == 5 && e.tick70 == 120;
+        // Class-5 heads + the wizard-family: rival carpets, castles,
+        // balloons — all consumed by the opt-in debug bar overlay
+        // only. Destructible STRUCTURES join — dwellings (10,45).
+        let life_frac = ((e.class64 == 5 && !segment)
+            || (e.class64 == 3 && e.model65 <= 3)
+            // MC1's (10,45) dwellings: LIVE state 52 only — 51 is the
+            // build countdown (act_life counts 30→0 and would read as
+            // a dying bar), 53 the collapse.
+            || (e.class64 == 10 && e.model65 == 45 && e.tick70 == 52))
+        .then(|| {
+            // MC1's live dwelling parks act_life at f44
+            // (tick_building_live's build finish) and the damage mail
+            // drains it; max_life (30) is the BUILD countdown length,
+            // not health.
+            let denom = if e.class64 == 10 && e.model65 == 45 && e.f44 > 0 {
+                e.f44 as f32
+            } else {
+                e.max_life as f32
+            };
+            if denom <= 0.0 {
+                return 0.0;
+            }
+            (e.act_life.max(0) as f32 / denom).min(1.0)
+        });
+        PoseGameBits {
+            skip: false,
+            segment,
+            life_frac,
+            blend: 0,
+            map_only: false,
+        }
+    }
+
+    /// The MC2 per-entity presentation rules for [`World::live_poses`]:
+    /// unclaimed dwellings export as map-only (never skipped);
+    /// segment-hide states 0xB4/0xE8..0xEA; the parked-dwelling life
+    /// bar denominates against 1000×rate; translucency blend modes.
+    fn live_poses_mc2(&self, e: &Ent) -> PoseGameBits {
+        // Houses (m45): MC2 exports the pose as map-only — retail's
+        // MAP pass never skips on the claim bit (0xF0F unpossessed
+        // dot, GameUI.cpp:1276-95); the claim protocol re-sets sprite
+        // 177 + the claimer's color row (AddHouse0A_2D_38330
+        // EF:28035-40).
+        let unclaimed_house = e.class64 == 10 && e.model65 == 45 && e.f144 == 0;
+        // Body segments hide from map dots + health bars — MC2's
+        // chain children 0xE8/m27 branches 0xE9-0xEA (retail's own
+        // map plot skips exactly 0xB4 + 0xE8..0xEA, GameUI.cpp:1220)
+        // and the m22 tail 0xB4. Game-keyed: MC1's 120 is MC2's
+        // (5,15) guard brain state.
+        let segment = e.class64 == 5 && matches!(e.tick70, 0xB4 | 0xE8..=0xEA);
+        // Class-5 heads + the wizard-family + destructible STRUCTURES
+        // — dwellings (10,45), building anchors (10,52), castle stage
+        // pieces (10,79).
+        let life_frac = ((e.class64 == 5 && !segment)
+            || (e.class64 == 3 && e.model65 <= 3)
+            || (e.class64 == 10 && matches!(e.model65, 45 | 52 | 79)))
+        .then(|| {
+            // A parked MC2 dwelling's act_life IS its production
+            // countdown (mc2_building_tick parks with 1000 x rate;
+            // retail CompareEvent08 drains the SAME field on damage):
+            // the bar denominates against the parked value, so damage
+            // visibly eats it.
+            let denom =
+                if e.class64 == 10 && e.model65 == 45 && e.tick70 == 52 && e.f140 > 0 {
+                    (1000 * e.f140) as f32
+                } else {
+                    e.max_life as f32
+                };
+            if denom <= 0.0 {
+                return 0.0;
+            }
+            (e.act_life.max(0) as f32 / denom).min(1.0)
+        });
+        // MC2 translucency (docs/traces/mc2-transparency-
+        // drawlist.md): smoke clouds (10,13)/(10,14) carry raster
+        // mode 2 from their static particle descriptor
+        // (particlesParameters_D951C rows 67/9, byte_10=2); per-entity
+        // overrides are flags bit 23 → mode 2 (byte 0xE mask 0x80 —
+        // DUAL-PURPOSE: also the m26 wraith's full-speed wake marker,
+        // the ghost look IS the state, GRO:3779-3805/EF:19436) and
+        // bit 24 → mode 3 (byte 0xF mask 0x01, the 67% death fades).
+        // MC1's engine has the same modes but no world content sets
+        // them. The bit-23 override is read ONLY by the
+        // DrawSprites_3E360 billboard arm; the doomsday pyramid (5,10)
+        // — whose faithful ctor flag 0x48800001 carries bit 23 —
+        // draws through the sub_3FD60 → DrawSprite_41BD3(2) big-sprite
+        // pass (GRO:2205-12, LABEL_70), which takes raster mode from
+        // the static descriptor alone, so it stays opaque in retail.
+        let blend = if (e.flags & (1 << 23) != 0 && !(e.class64 == 5 && e.model65 == 10))
+            || (e.class64 == 10 && matches!(e.model65, 13 | 14))
+        {
+            2
+        } else if e.flags & (1 << 24) != 0 {
+            3
+        } else {
+            0
+        };
+        PoseGameBits {
+            skip: false,
+            segment,
+            life_frac,
+            blend,
+            map_only: unclaimed_house,
+        }
     }
 
     /// One game turn (`sub_41780_41AC0`, :52197). `player` feeds the
@@ -1638,30 +1688,11 @@ impl World {
                 {
                     self.mc2_doomsday_tick(i, &ctx)
                 }
-                5 => match self.g.verbs.movement {
-                    MovementVerb::Mc1 => self.g.creature_tick(i, &ctx),
-                    // A stage-HELD creature (phase 7, site_z 1..=10 or
-                    // 15) runs `sub_1D5D0`'s held action on World —
-                    // it needs the StageVar table (mc2::stagevars);
-                    // metamorph/summon (12/13) and everything else fall
-                    // through to the per-model machines.
-                    MovementVerb::Mc2 => {
-                        if !self.mc2_held_tick(i, &ctx) {
-                            self.g.mc2_creature_tick(i, &ctx);
-                        }
-                    }
-                },
+                5 => self.tick_arm_creature(i, &ctx),
                 // The projectile family rides the TargetingVerb
                 // column (acquire/homing live inside the per-game
                 // flight handlers).
-                9 => match self.g.verbs.targeting {
-                    TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => {
-                        if self.g.proj_tick(i, &ctx) {
-                            self.terrain_dirty = true;
-                        }
-                    }
-                    TargetingVerb::Mc2 => self.g.mc2_proj_tick(i, &ctx),
-                },
+                9 => self.tick_arm_projectile(i, &ctx),
                 // The MC2 teleporter pad shadows MC1's vortex state
                 // (both are 36 — retail action 0x24 vs sub_26A60).
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 36 => {
@@ -1688,10 +1719,7 @@ impl World {
                 // like the spawn column (tier-3 wiring) so MC1's own
                 // village states below keep their handlers.
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 51 => {
-                    if self.g.mc2_building_tick(i) {
-                        self.terrain_dirty = true;
-                        self.entities_dirty = true;
-                    }
+                    self.tick_arm_mc2_building(i)
                 }
                 // Parked MC2 building: damage/militia/claim intake
                 // (AddHouse0A_2D_38330; the claim = the flag set) and
@@ -1932,26 +1960,7 @@ impl World {
                 10 if matches!(self.game, GameId::Mc2)
                     && matches!(self.g.ent[i].tick70, 0x57..=0x5D) =>
                 {
-                    match self.g.ent[i].tick70 {
-                        0x57 => self.g.ent[i].flags |= 0x400,
-                        0x58 => {
-                            self.g.mc2_tube_carve_tick(i);
-                            self.terrain_dirty = true;
-                        }
-                        0x59 => {
-                            self.g.mc2_cave_mesa_tick(i);
-                            self.terrain_dirty = true;
-                        }
-                        0x5A => {
-                            self.g.mc2_cave_dome_tick(i);
-                            self.terrain_dirty = true;
-                        }
-                        0x5B | 0x5C => {
-                            self.g.mc2_cave_pit_hill_tick(i);
-                            self.terrain_dirty = true;
-                        }
-                        _ => self.g.mc2_cave_drip_tick(i),
-                    }
+                    self.tick_arm_mc2_cave_sculptor(i)
                 }
                 10 => {
                     // The load-time handlers ARE the runtime handlers.
@@ -2245,6 +2254,73 @@ impl World {
         };
         self.player.accel_held = false;
         self.accel_veto = (false, false);
+    }
+
+    // ---- tick() per-class dispatch arm bodies (S1a code motion) ----
+
+    /// Class-5 creature brain/movement (the MovementVerb seam): MC1
+    /// `creature_tick` vs the MC2 held-gate + `mc2_creature_tick`.
+    fn tick_arm_creature(&mut self, i: usize, ctx: &MobCtx) {
+        match self.g.verbs.movement {
+            MovementVerb::Mc1 => self.g.creature_tick(i, ctx),
+            // A stage-HELD creature (phase 7, site_z 1..=10 or
+            // 15) runs `sub_1D5D0`'s held action on World —
+            // it needs the StageVar table (mc2::stagevars);
+            // metamorph/summon (12/13) and everything else fall
+            // through to the per-model machines.
+            MovementVerb::Mc2 => {
+                if !self.mc2_held_tick(i, ctx) {
+                    self.g.mc2_creature_tick(i, ctx);
+                }
+            }
+        }
+    }
+
+    /// Class-9 projectile flight (the TargetingVerb seam): MC1/MC1HW
+    /// `proj_tick` (terrain-dirtying) vs MC2 `mc2_proj_tick`.
+    fn tick_arm_projectile(&mut self, i: usize, ctx: &MobCtx) {
+        match self.g.verbs.targeting {
+            TargetingVerb::Mc1 | TargetingVerb::Mc1Hw => {
+                if self.g.proj_tick(i, ctx) {
+                    self.terrain_dirty = true;
+                }
+            }
+            TargetingVerb::Mc2 => self.g.mc2_proj_tick(i, ctx),
+        }
+    }
+
+    /// The MC2 (10,51) 30-tick building action; a completed build
+    /// re-paints terrain and the entity list.
+    fn tick_arm_mc2_building(&mut self, i: usize) {
+        if self.g.mc2_building_tick(i) {
+            self.terrain_dirty = true;
+            self.entities_dirty = true;
+        }
+    }
+
+    /// The MC2 cave sculptor band (0x57..=0x5D): disposition-fired
+    /// tube/mesa/dome/pit-hill carves + the runtime drip fallback.
+    fn tick_arm_mc2_cave_sculptor(&mut self, i: usize) {
+        match self.g.ent[i].tick70 {
+            0x57 => self.g.ent[i].flags |= 0x400,
+            0x58 => {
+                self.g.mc2_tube_carve_tick(i);
+                self.terrain_dirty = true;
+            }
+            0x59 => {
+                self.g.mc2_cave_mesa_tick(i);
+                self.terrain_dirty = true;
+            }
+            0x5A => {
+                self.g.mc2_cave_dome_tick(i);
+                self.terrain_dirty = true;
+            }
+            0x5B | 0x5C => {
+                self.g.mc2_cave_pit_hill_tick(i);
+                self.terrain_dirty = true;
+            }
+            _ => self.g.mc2_cave_drip_tick(i),
+        }
     }
 
     /// The MC1 objective arm (sub_415C0 :52100-40): a wizard WITH a
@@ -2717,7 +2793,7 @@ impl World {
     /// ([`crate::mc2::spells::level_init_patch`]; empty table = MC1 or
     /// pre-spells bundle → no-op, hash-transparent).
     pub fn set_mc2_night_shade(&mut self, on: bool) {
-        self.g.mc2_night_shade = crate::mc1::features::NightShade(on);
+        self.g.mc2_night_shade = crate::engine::features::NightShade(on);
         crate::mc2::spells::level_init_patch(&mut self.g.assets.spells, !on);
     }
 
@@ -3977,7 +4053,7 @@ impl World {
     /// Per-hand crosshair preview (the P-class `crosshair`
     /// instrument): the target each hand's EQUIPPED spell would
     /// acquire if cast this instant, through the pure read-only twin
-    /// of the acquire scans ([`crate::mc1::features::Gen`]'s
+    /// of the acquire scans ([`crate::engine::features::Gen`]'s
     /// `aim_preview_scan` — no writes, no RNG). Runs from the same
     /// muzzle pose and pitch bias the real cast uses. `None` = the
     /// hand holds no spell, the spell never acquires (quake, crater,
@@ -4712,7 +4788,7 @@ impl World {
     /// that order per cell.
     fn mc2_stamp_path_run(&mut self, mut cx: u8, mut cy: u8, sx: i32, sy: i32, mut len: i32) {
         while len > 0 {
-            let t = crate::mc1::features::tile(cx, cy);
+            let t = crate::engine::features::tile(cx, cy);
             self.g.t.angle[t] = (self.g.t.angle[t] & 0xF0) | 1;
             len -= 1;
             self.g.mc2_retile_region(cx, cy, cx, cy);
@@ -5441,16 +5517,7 @@ impl World {
                 // — the entity must pre-exist as the endGameSeq
                 // fly-to target). Authored-at-load (dis 0) markers
                 // stay visible (mid-level guidance X's).
-                (14, 0..=5) => {
-                    let s = self.mc2_spawn_class14(r.model as u8, x, y, z);
-                    if let Some(s) = s
-                        && matches!(r.model, 3 | 4)
-                        && r.dis_id != 0
-                    {
-                        self.g.ent[s].flags |= 0x20;
-                    }
-                    s
-                }
+                (14, 0..=5) => self.spawn_mc2_class14_gated(r, x, y, z),
                 // Class-15 spell tokens — THE SPELL JARS (one shared
                 // ctor for all 26 spells, mc2::tokens). The swi_id
                 // state bump lands in the post-init below.
@@ -5484,19 +5551,7 @@ impl World {
         // (spawner volume), 34 (portal) and 45 (building); exactly
         // class 11 gets id24/extents; class 12 the state bump.
         match (r.class, r.model) {
-            (12, _) => {
-                // byte70 += swi_id; >= 3 = the BLUE jar variant
-                // (-3 recovers the same 0..=2 sub-state; sprite 280
-                // straight to +86; the unrestricted-grant marker —
-                // see [`BLUE_SPELL`]).
-                let e = &mut self.g.ent[s];
-                e.tick70 = e.tick70.wrapping_add((r.swi_id & 0xFF) as u8);
-                if r.swi_id >= 3 {
-                    e.tick70 = e.tick70.wrapping_sub(3);
-                    e.type86 = 280;
-                    e.flags |= BLUE_SPELL; // +18 |= 4
-                }
-            }
+            (12, _) => self.spawn_postinit_class12_jar(s, r),
             (10, 4) => {
                 self.g.ent[s].id24 = r.swi_id;
                 self.g.extents(s, r.swi_sz << 8, r.swi_sz << 8);
@@ -5529,17 +5584,7 @@ impl World {
             // 11/15 write life. Empty table = pre-import bundle →
             // the ctor-default approximation stands.
             (10, 9 | 11 | 15) if matches!(self.game, GameId::Mc2) => {
-                let row = crate::mc2::spells::spell_index(r.model as u8);
-                if let Some(row) = self.g.assets.spells.get(row) {
-                    let tier = row.tiers[(r.parent as usize).min(2)];
-                    let e = &mut self.g.ent[s];
-                    e.f140 = tier.sub_spell;
-                    if r.model == 9 {
-                        e.max_life = tier.life as u32;
-                    } else {
-                        e.act_life = tier.life as i32;
-                    }
-                }
+                self.spawn_postinit_mc2_subspell_9_11_15(s, r)
             }
             // The dis-fired METEOR (0x11) / FISSURE (0x47) tier
             // overrides: the sub_4A310 SPELLS block (EF:33148-78)
@@ -5548,23 +5593,10 @@ impl World {
             // (EF:33165-67). NEITHER is in the LOAD list (EV:387 =
             // 9/0xB/0xF), and every shipped record is dis-gated.
             (10, 17) if matches!(self.game, GameId::Mc2) && r.dis_id != 0xFFFF => {
-                let row = crate::mc2::spells::spell_index(17);
-                if let Some(row) = self.g.assets.spells.get(row) {
-                    let tier = row.tiers[(r.parent as usize).min(2)];
-                    let e = &mut self.g.ent[s];
-                    e.f140 = tier.sub_spell;
-                    e.max_life = tier.life as u32;
-                    e.act_life = tier.life as i32;
-                }
+                self.spawn_postinit_mc2_meteor_tier(s, r)
             }
             (10, 71) if matches!(self.game, GameId::Mc2) && r.dis_id != 0xFFFF => {
-                let row = crate::mc2::spells::spell_index(71);
-                if let Some(row) = self.g.assets.spells.get(row) {
-                    let tier = row.tiers[(r.parent as usize).min(2)];
-                    let e = &mut self.g.ent[s];
-                    e.f140 = tier.sub_spell;
-                    e.act_life = tier.life as i32;
-                }
+                self.spawn_postinit_mc2_fissure_tier(s, r)
             }
             // The disposition-spawned WHIRLWIND (arm tornado) scaled
             // to its tier, like the cast path (`sub_678E0` →
@@ -5577,17 +5609,7 @@ impl World {
             // Deliberate: both spawn paths unified under the 8×charge
             // law over the trace.
             (10, 22) if matches!(self.game, GameId::Mc2) => {
-                let row = crate::mc2::spells::spell_index(22);
-                if let Some(row) = self.g.assets.spells.get(row) {
-                    let tier = row.tiers[(r.parent as usize).min(2)];
-                    let ml = 8 * tier.life.max(0) as u32;
-                    let e = &mut self.g.ent[s];
-                    // Retail's 0x16 arm also stamps the tier's
-                    // subspell (EF:33176-78).
-                    e.f140 = tier.sub_spell;
-                    e.max_life = ml;
-                    e.act_life = ml as i32;
-                }
+                self.spawn_postinit_mc2_whirlwind_tier(s, r)
             }
             // The disposition-spawned mana-magnet aura reads its RANGE
             // and LIFE from the THING's stageTag (`sub_4A310`
@@ -5599,13 +5621,7 @@ impl World {
             // stageTag 33/45/64/31 → 33/45/64/31-tile reach (they pull
             // the arm balls 20-44 tiles out; the 14-tile default left
             // them stranded). Our `swi_id` is the `stageTag_12` field.
-            (10, 54) if matches!(self.game, GameId::Mc2) => {
-                let tag = r.swi_id as u32;
-                let e = &mut self.g.ent[s];
-                e.f26 = r.swi_id as i16;
-                e.max_life = (8 * tag + 16).max(128);
-                e.act_life = e.max_life as i32;
-            }
+            (10, 54) if matches!(self.game, GameId::Mc2) => self.spawn_postinit_mc2_aura(s, r),
             // The cave sculptors' THING wiring (sub_4A310
             // EF:33118-46, high-band trace §4): dome radius =
             // word_10; pit/hill radius = word_10, depth/height seed
@@ -5621,20 +5637,13 @@ impl World {
             // this a cave's authored entry caverns carve as 6×6
             // closets.
             (10, 82) if matches!(self.game, GameId::Mc2) && r.dis_id == 0xFFFF => {
-                let e = &mut self.g.ent[s];
-                e.f67 = (r.parent & 0xFF) as u8;
-                e.f68 = (r.child & 0xFF) as u8;
-                e.f71 = (r.par3 & 0xFF) as u8;
+                self.spawn_postinit_mc2_cave_room_carve(s, r)
             }
             (10, 83) if matches!(self.game, GameId::Mc2) => {
                 self.g.ent[s].dest_x = r.swi_sz;
             }
             (10, 84 | 85) if matches!(self.game, GameId::Mc2) => {
-                let e = &mut self.g.ent[s];
-                e.x = e.x.wrapping_sub(128);
-                e.y = e.y.wrapping_sub(128);
-                e.dest_x = r.swi_sz;
-                e.z = r.par3 as i16;
+                self.spawn_postinit_mc2_cave_pit_hill(s, r)
             }
             // The (10,67) flood's par1 seam is TRIGGER-ONLY: the
             // sub_4A310 case-0xA path (EF:33148/:33165 → SPELLS row
@@ -5646,24 +5655,14 @@ impl World {
             // sub_4A1E0(0) and takes the same sub_4A310 arm;
             // shipped-data neutral: no load-time flood authors par1).
             (10, 67) if matches!(self.game, GameId::Mc2) && r.dis_id != 0xFFFF => {
-                let row = crate::mc2::spells::spell_index(67);
-                if let Some(row) = self.g.assets.spells.get(row) {
-                    let tier = row.tiers[(r.parent as usize).min(2)];
-                    let e = &mut self.g.ent[s];
-                    e.f140 = tier.sub_spell;
-                    e.act_life = tier.life as i32;
-                }
+                self.spawn_postinit_mc2_flood_tier(s, r)
             }
             // The MC2 class-15 token state bump (the shared class-
             // 12/15 spawn case, remc2 EF:33209-17): actionIndex +=
             // stageTag (0 = inert cast-slot, 1 = pickup, 2 = self-
             // replenishing pickup); >= 3 = the junk state 253.
             (15, _) if matches!(self.game, GameId::Mc2) => {
-                let e = &mut self.g.ent[s];
-                e.tick70 = e.tick70.wrapping_add((r.swi_id & 0xFF) as u8);
-                if r.swi_id >= 3 {
-                    e.tick70 = 253;
-                }
+                self.spawn_postinit_mc2_spell_token(s, r)
             }
             // The (14,1) riser's THING wiring (sub_4A310 case 0xE
             // LABEL_49, remc2 EF:33228-31): par1 → orientation
@@ -5687,23 +5686,172 @@ impl World {
             // instead of extents (remc2 :33200-01; its tick never
             // probes proximity).
             (11, 32) if matches!(self.game, GameId::Mc2) => {
-                self.g.ent[s].id24 = r.swi_id;
-                self.g.ent[s].f71 = (r.parent & 0xFF) as u8;
-                self.g.refill_life(s);
-                self.g.ent[s].flags |= 1;
+                self.spawn_postinit_mc2_stage_switch(s, r)
             }
-            (11, _) => {
-                self.g.ent[s].id24 = r.swi_id;
-                self.g.extents(s, r.swi_sz << 8, 4096);
-                self.g.refill_life(s);
-                self.g.ent[s].flags |= 1;
-            }
+            (11, _) => self.spawn_postinit_trigger_volume(s, r),
             _ => {}
         }
 
         if drawable(self.game, r.class, r.model) {
             self.entities_dirty = true;
         }
+    }
+
+    // ---- spawn_from_thing dispatch/post-init arm bodies (S1b) ----
+
+    /// The MC2 class-14 map objects (0..=5); the ending fly-to
+    /// markers (3/4) spawn hidden when disposition-gated.
+    fn spawn_mc2_class14_gated(&mut self, r: Rec, x: u16, y: u16, z: i16) -> Option<usize> {
+        let s = self.mc2_spawn_class14(r.model as u8, x, y, z);
+        if let Some(s) = s
+            && matches!(r.model, 3 | 4)
+            && r.dis_id != 0
+        {
+            self.g.ent[s].flags |= 0x20;
+        }
+        s
+    }
+
+    /// Class-12 spell-jar post-init (shared 12/15 spawn case): the
+    /// swi_id state bump + the BLUE unrestricted-grant jar variant.
+    fn spawn_postinit_class12_jar(&mut self, s: usize, r: Rec) {
+        // byte70 += swi_id; >= 3 = the BLUE jar variant
+        // (-3 recovers the same 0..=2 sub-state; sprite 280
+        // straight to +86; the unrestricted-grant marker —
+        // see [`BLUE_SPELL`]).
+        let e = &mut self.g.ent[s];
+        e.tick70 = e.tick70.wrapping_add((r.swi_id & 0xFF) as u8);
+        if r.swi_id >= 3 {
+            e.tick70 = e.tick70.wrapping_sub(3);
+            e.type86 = 280;
+            e.flags |= BLUE_SPELL; // +18 |= 4
+        }
+    }
+
+    /// The MC2 (10,9)/(10,11)/(10,15) par1 SPELLS.DAT subspell
+    /// overrides: model 9 writes maxLife (dome radius), 11/15 life.
+    fn spawn_postinit_mc2_subspell_9_11_15(&mut self, s: usize, r: Rec) {
+        let row = crate::mc2::spells::spell_index(r.model as u8);
+        if let Some(row) = self.g.assets.spells.get(row) {
+            let tier = row.tiers[(r.parent as usize).min(2)];
+            let e = &mut self.g.ent[s];
+            e.f140 = tier.sub_spell;
+            if r.model == 9 {
+                e.max_life = tier.life as u32;
+            } else {
+                e.act_life = tier.life as i32;
+            }
+        }
+    }
+
+    /// The dis-fired MC2 (10,17) meteor tier override (par1 → row-17
+    /// tier: subspell + maxLife + life).
+    fn spawn_postinit_mc2_meteor_tier(&mut self, s: usize, r: Rec) {
+        let row = crate::mc2::spells::spell_index(17);
+        if let Some(row) = self.g.assets.spells.get(row) {
+            let tier = row.tiers[(r.parent as usize).min(2)];
+            let e = &mut self.g.ent[s];
+            e.f140 = tier.sub_spell;
+            e.max_life = tier.life as u32;
+            e.act_life = tier.life as i32;
+        }
+    }
+
+    /// The dis-fired MC2 (10,71) fissure tier override (par1 → row-71
+    /// tier: subspell + life).
+    fn spawn_postinit_mc2_fissure_tier(&mut self, s: usize, r: Rec) {
+        let row = crate::mc2::spells::spell_index(71);
+        if let Some(row) = self.g.assets.spells.get(row) {
+            let tier = row.tiers[(r.parent as usize).min(2)];
+            let e = &mut self.g.ent[s];
+            e.f140 = tier.sub_spell;
+            e.act_life = tier.life as i32;
+        }
+    }
+
+    /// The dis-spawned MC2 (10,22) whirlwind scaled to its tier
+    /// (life = 8 × row-21 tier.life), unified with the cast path.
+    fn spawn_postinit_mc2_whirlwind_tier(&mut self, s: usize, r: Rec) {
+        let row = crate::mc2::spells::spell_index(22);
+        if let Some(row) = self.g.assets.spells.get(row) {
+            let tier = row.tiers[(r.parent as usize).min(2)];
+            let ml = 8 * tier.life.max(0) as u32;
+            let e = &mut self.g.ent[s];
+            // Retail's 0x16 arm also stamps the tier's
+            // subspell (EF:33176-78).
+            e.f140 = tier.sub_spell;
+            e.max_life = ml;
+            e.act_life = ml as i32;
+        }
+    }
+
+    /// The dis-spawned MC2 (10,54) mana-magnet aura: range/life from
+    /// the THING stageTag (range = swi_id tiles, life = 8*tag+16).
+    fn spawn_postinit_mc2_aura(&mut self, s: usize, r: Rec) {
+        let tag = r.swi_id as u32;
+        let e = &mut self.g.ent[s];
+        e.f26 = r.swi_id as i16;
+        e.max_life = (8 * tag + 16).max(128);
+        e.act_life = e.max_life as i32;
+    }
+
+    /// The MC2 (10,82) cave room-carve THING wiring (load-time-only):
+    /// box half-extents (par1/par2) + depth multiplier (par3).
+    fn spawn_postinit_mc2_cave_room_carve(&mut self, s: usize, r: Rec) {
+        let e = &mut self.g.ent[s];
+        e.f67 = (r.parent & 0xFF) as u8;
+        e.f68 = (r.child & 0xFF) as u8;
+        e.f71 = (r.par3 & 0xFF) as u8;
+    }
+
+    /// The MC2 (10,84)/(10,85) cave pit/hill THING wiring: recentred
+    /// onto the tile corner, radius (swi_sz) + depth/height seed (par3).
+    fn spawn_postinit_mc2_cave_pit_hill(&mut self, s: usize, r: Rec) {
+        let e = &mut self.g.ent[s];
+        e.x = e.x.wrapping_sub(128);
+        e.y = e.y.wrapping_sub(128);
+        e.dest_x = r.swi_sz;
+        e.z = r.par3 as i16;
+    }
+
+    /// The dis-fired MC2 (10,67) flood tier override (par1 → row-67
+    /// tier: subspell + life).
+    fn spawn_postinit_mc2_flood_tier(&mut self, s: usize, r: Rec) {
+        let row = crate::mc2::spells::spell_index(67);
+        if let Some(row) = self.g.assets.spells.get(row) {
+            let tier = row.tiers[(r.parent as usize).min(2)];
+            let e = &mut self.g.ent[s];
+            e.f140 = tier.sub_spell;
+            e.act_life = tier.life as i32;
+        }
+    }
+
+    /// The MC2 class-15 spell-token state bump (actionIndex += stageTag;
+    /// >= 3 = the junk state 253).
+    fn spawn_postinit_mc2_spell_token(&mut self, s: usize, r: Rec) {
+        let e = &mut self.g.ent[s];
+        e.tick70 = e.tick70.wrapping_add((r.swi_id & 0xFF) as u8);
+        if r.swi_id >= 3 {
+            e.tick70 = 253;
+        }
+    }
+
+    /// The MC2 stage-gated switch (11,32): stores par1 = the stage row
+    /// instead of extents (its tick never probes proximity).
+    fn spawn_postinit_mc2_stage_switch(&mut self, s: usize, r: Rec) {
+        self.g.ent[s].id24 = r.swi_id;
+        self.g.ent[s].f71 = (r.parent & 0xFF) as u8;
+        self.g.refill_life(s);
+        self.g.ent[s].flags |= 1;
+    }
+
+    /// Trigger-volume post-init (class 11): id24/extents + the volume
+    /// flag (the original's :44017-50 class-11 branch).
+    fn spawn_postinit_trigger_volume(&mut self, s: usize, r: Rec) {
+        self.g.ent[s].id24 = r.swi_id;
+        self.g.extents(s, r.swi_sz << 8, 4096);
+        self.g.refill_life(s);
+        self.g.ent[s].flags |= 1;
     }
 
     /// `sub_514E0` (remc2 EF:37315) + the per-model sub-creators —
@@ -6063,7 +6211,7 @@ impl World {
             // The footprint dirty-bit clear (:28225-33).
             for dy in 0..h {
                 for dx in 0..w {
-                    let t = crate::mc1::features::tile(
+                    let t = crate::engine::features::tile(
                         tlx.wrapping_add(dx as u8),
                         tly.wrapping_add(dy as u8),
                     );
@@ -6138,10 +6286,10 @@ impl World {
                 // Terrain restore (:28143-28169): angle nibble → 1,
                 // the AddBuildingToTerrain 2x2 type-1 rubble stamp,
                 // pad-height removal with the verbatim RNG.
-                let t = crate::mc1::features::tile(cx, cy);
+                let t = crate::engine::features::tile(cx, cy);
                 self.g.t.angle[t] = (self.g.t.angle[t] & 0x70) | 1;
                 for (ddx, ddy) in [(0i32, 0i32), (-1, 0), (-1, -1), (0, -1)] {
-                    let rt = crate::mc1::features::tile(
+                    let rt = crate::engine::features::tile(
                         cx.wrapping_add(ddx as u8),
                         cy.wrapping_add(ddy as u8),
                     );
@@ -7564,7 +7712,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mc1::features::tile;
+    use crate::engine::features::tile;
 
     /// Level-005-shaped micro-world: a proximity trigger that fires a
     /// disposition spawning an expanding crater + a creature.
@@ -8820,7 +8968,7 @@ mod tests {
             w.tick(firing_line(), PlayerCommand::default());
             let e = &w.g.ent[g];
             if e.class64 == 5 {
-                let jump = crate::mc1::features::Gen::dist2_sq(px, py, e.x, e.y);
+                let jump = crate::engine::features::Gen::dist2_sq(px, py, e.x, e.y);
                 // One-tick displacement far beyond move speed = a blink.
                 if jump > 1024 * 1024 {
                     blinked = true;
@@ -9250,9 +9398,9 @@ mod tests {
             .expect("the fleet balloon lives");
         assert_eq!(w.g.ent[bal].f146, c as u16, "homes the castle when idle");
         let (cx, cy) = (w.g.ent[c].x, w.g.ent[c].y);
-        let d = crate::mc1::features::Gen::dist2_sq(w.g.ent[bal].x, w.g.ent[bal].y, cx, cy);
+        let d = crate::engine::features::Gen::dist2_sq(w.g.ent[bal].x, w.g.ent[bal].y, cx, cy);
         assert!(
-            crate::mc1::features::Gen::isqrt(d as u32) < 4 * 256,
+            crate::engine::features::Gen::isqrt(d as u32) < 4 * 256,
             "hovers the castle neighborhood, not the pickup spot"
         );
     }
@@ -10126,7 +10274,7 @@ mod tests {
             }
         }
         let f = field.expect("the fuse raised the (10,55) death field");
-        let d = crate::mc1::features::Gen::isqrt(crate::mc1::features::Gen::dist2_sq(
+        let d = crate::engine::features::Gen::isqrt(crate::engine::features::Gen::dist2_sq(
             w.g.ent[f].x,
             w.g.ent[f].y,
             p.x,
@@ -10814,7 +10962,7 @@ mod tests {
     #[test]
     fn mc2_possession_claim_probe_whitelists_targets() {
         use crate::mc1::combat::MailTarget;
-        use crate::mc1::features::BldgParam;
+        use crate::engine::features::BldgParam;
 
         // Build a world with a possession projectile at tile (100,100)
         // and ONE candidate overlapping it; return the claim-probe hit.
@@ -10996,7 +11144,7 @@ mod tests {
         // exactly 2048 (the 2048 - lut(1,300)=2048-0 branch).
         let (bx, by) = (ax.wrapping_add(1), ay.wrapping_add(300));
         assert_eq!(
-            crate::mc1::features::Gen::angle_between(bx, by, ax, ay),
+            crate::engine::features::Gen::angle_between(bx, by, ax, ay),
             2048,
             "the crafted bearing hits the wrap value"
         );
@@ -12906,7 +13054,7 @@ mod tests {
         let things = riser_things(100, 100, 0, 8, false);
         let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
         w.tick(away(), PlayerCommand::default());
-        let t = crate::mc1::features::tile;
+        let t = crate::engine::features::tile;
         let r = &w.g.ent[1];
         assert_eq!((r.class64, r.model65), (14, 1));
         assert_eq!(r.act_life, 3, "idle-built");
@@ -12943,7 +13091,7 @@ mod tests {
         let things = riser_things(150, 150, 1, 8, false);
         let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
         w.tick(away(), PlayerCommand::default());
-        let t = crate::mc1::features::tile;
+        let t = crate::engine::features::tile;
         assert_eq!(w.g.ent[1].act_life, 3);
         assert_eq!(w.g.t.height[t(151, 154)], 148);
         assert_eq!(w.g.t.height[t(150, 154)], 148);
@@ -12971,7 +13119,7 @@ mod tests {
         };
         let things = riser_things(100, 100, 0, 8, true);
         let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
-        let t = crate::mc1::features::tile;
+        let t = crate::engine::features::tile;
         // Tick 1: the riser instant-builds, then the trigger (later
         // slot) pokes life 2 and despawns — retail's ordering (§6).
         w.tick(away(), PlayerCommand::default());
@@ -13202,7 +13350,7 @@ mod tests {
     /// overlap — do NOT widen it; the homing z is the knob).
     #[test]
     fn mc2_meteor_homing_aims_at_target_box_center() {
-        use crate::mc1::features::Gen;
+        use crate::engine::features::Gen;
         use crate::mc1::mobs::MobCtx;
 
         let mut w = mc2_flat_world();
@@ -13317,7 +13465,7 @@ mod tests {
     #[test]
     fn mc2_hostile_bolt_lands_at_the_player_box_center() {
         use crate::mc1::combat::PLAYER_HH;
-        use crate::mc1::features::Gen;
+        use crate::engine::features::Gen;
         use crate::mc1::mobs::MobCtx;
 
         let mut w = mc2_flat_world();

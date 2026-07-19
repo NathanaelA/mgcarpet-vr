@@ -25,7 +25,7 @@
 
 use super::sprite_params::SPRITE_PARAMS;
 use crate::mc1::combat::MailTarget;
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 use crate::mc1::mobs::MobCtx;
 
 /// The whirlwind's victim GRAB latch (retail byte[3] & 0x10, dword
@@ -315,7 +315,7 @@ impl Gen {
         let life = self.ent[i].act_life;
         self.ent[i].act_life -= 1;
         let raw =
-            crate::mc1::features::tile((self.ent[i].x >> 8) as u8, (self.ent[i].y >> 8) as u8);
+            crate::engine::features::tile((self.ent[i].x >> 8) as u8, (self.ent[i].y >> 8) as u8);
         if life < 0 || (1u32 << (self.t.angle[raw] & 0xF)) & 1 != 0 {
             self.ent[i].flags |= 0x400;
             return false;
@@ -579,7 +579,7 @@ impl Gen {
                 // Light a (10,6) standing fire where none burns
                 // (`sub_10B70` cell probe, EF:23790-801): life 30
                 // (act only — max stays the ctor's), subSpell ×3.
-                let t = crate::mc1::features::tile((px >> 8) as u8, (py >> 8) as u8);
+                let t = crate::engine::features::tile((px >> 8) as u8, (py >> 8) as u8);
                 let mut j = self.map_entity[t] as usize;
                 let mut burning = false;
                 while j != 0 {
@@ -613,7 +613,7 @@ impl Gen {
         if ground == pz {
             let (tx, ty) = ((px >> 8) as u8, (py >> 8) as u8);
             let h = |dx: u8, dy: u8| {
-                self.t.height[crate::mc1::features::tile(tx.wrapping_add(dx), ty.wrapping_add(dy))]
+                self.t.height[crate::engine::features::tile(tx.wrapping_add(dx), ty.wrapping_add(dy))]
                     as i32
             };
             let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
@@ -949,7 +949,7 @@ impl Gen {
                     .flatten()
                 {
                     for (dx, dy) in self.ring_cells(0, r) {
-                        let t = crate::mc1::features::tile(
+                        let t = crate::engine::features::tile(
                             (cx.wrapping_add((dx as i8) as i16)) as u8,
                             (cy.wrapping_add((dy as i8) as i16)) as u8,
                         );
@@ -1099,7 +1099,7 @@ impl Gen {
         for (dx, dy) in self.ring_cells(0, 12) {
             let tx = (cx.wrapping_add((dx as i8) as i16)) as u8;
             let ty = (cy.wrapping_add((dy as i8) as i16)) as u8;
-            let mut j = self.map_entity[crate::mc1::features::tile(tx, ty)] as usize;
+            let mut j = self.map_entity[crate::engine::features::tile(tx, ty)] as usize;
             while j != 0 {
                 let next = self.ent[j].next20 as usize;
                 let c = &self.ent[j];
@@ -1273,7 +1273,7 @@ impl Gen {
         for (dx, dy) in self.ring_cells(0, 12) {
             let tx = (cx.wrapping_add((dx as i8) as i16)) as u8;
             let ty = (cy.wrapping_add((dy as i8) as i16)) as u8;
-            let mut j = self.map_entity[crate::mc1::features::tile(tx, ty)] as usize;
+            let mut j = self.map_entity[crate::engine::features::tile(tx, ty)] as usize;
             while j != 0 {
                 let next = self.ent[j].next20 as usize;
                 self.ent[j].flags &= !(F_GRABBED | super::mobs::F_STOP);

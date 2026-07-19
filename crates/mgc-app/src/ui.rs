@@ -16,7 +16,7 @@
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
 use mgc_sim::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SpellId};
-use mgc_sim::mc1::world::{LifeState, LoadoutView, PlayerVitals};
+use mgc_sim::engine::world::{LifeState, LoadoutView, PlayerVitals};
 use mgc_sim::mc2::cast::Mc2BookView;
 
 /// UI sprite ids (remc1 begSprTab layout).

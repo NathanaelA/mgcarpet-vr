@@ -30,12 +30,12 @@
 //!   lists the formulas, not the (state,sub)→formula map).
 //! - m26's human drain uses +14 flat (the human's manaRegen isn't
 //!   modeled yet). The %63 spell-hijack is live: the roll mails
-//!   [`crate::mc1::world::World::mc2_spell_steal`].
+//!   [`crate::engine::world::World::mc2_spell_steal`].
 //! - m12's site-jitter/footprint-clear scans (EF:13991-14093) are
 //!   shaped, not verbatim (the overlap helpers are untraced).
 
 use super::behavior::BEHAVIOR;
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
 const M2_BASE: u8 = 16;
@@ -834,7 +834,7 @@ impl Gen {
         let tly = ((cy >> 8) as u8).wrapping_sub((h / 2) as u8);
         for dy in 0..h {
             for dx in 0..w {
-                let cell = crate::mc1::features::tile(
+                let cell = crate::engine::features::tile(
                     tlx.wrapping_add(dx as u8),
                     tly.wrapping_add(dy as u8),
                 );

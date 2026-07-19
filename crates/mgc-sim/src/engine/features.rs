@@ -1,4 +1,7 @@
-//! MC1 load-time terrain features ("GenerateFeatures").
+//! The shared chassis engine state and load-time terrain features
+//! ("GenerateFeatures"). A verbatim remc1 port of the low-level engine
+//! state — the shared entity pool ([`Gen`]) and the load-time feature
+//! pass — used by all three games (MC1, Hidden Worlds, MC2).
 //!
 //! Port of remc1's `GenerateFeatures_36430_367F0` (sub_main.cpp:43043):
 //! the entity-driven post-generation phase that carves craters and

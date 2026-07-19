@@ -74,7 +74,7 @@
 //! LCG is replaced by that sound block; the draw is carpet-private
 //! state, so omitting it moves no world golden).
 
-use crate::mc1::features::Gen;
+use crate::engine::features::Gen;
 
 /// Faithful carpet state (the human entity + Type_160 fields we use).
 #[derive(Debug, Clone, Copy, Default)]
@@ -431,7 +431,7 @@ pub struct Mc2Moved {
 /// followed by `sub_5D530` in the original's statement order (trace
 /// docs/traces/mc2-flight-model.md). `ground` is `getTerrainAlt`;
 /// `ceiling` returns the cave clamp target `ceiling − 384` (None
-/// off-cave — [`crate::mc1::world::World::player_cave_ceiling`]);
+/// off-cave — [`crate::engine::world::World::player_cave_ceiling`]);
 /// `gate` is `moveTest_5D0A0` (water slide + cave steer, world-side);
 /// `stuck` is `sub_5DD50`'s wedged test at the CURRENT position
 /// (water / sealed / latched-and-colliding). `accel_over` and `knock`

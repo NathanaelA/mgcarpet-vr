@@ -157,13 +157,14 @@ and lists what remains; history lives in the archive and git.
   animation; legible map markers; MC2 XMI/AIL no-CD faithful-alternate
   arrangement.
 
-### Refactors (agreed shortlist — see retrospective §4)
-- S1 split `World::tick()` / `spawn_from_thing()` per class (pure code
-  motion, goldens must not move); S2 rename shared engine out of `mc1::`;
-  S3 split `live_poses()` per game; A1 `CampaignRun` enum; A2 GM-normalize
-  dedupe. Deferred: per-model dispatch table (after S1); `WizardConfig`
-  enum (with next FORMAT_VERSION bump). LATE: game-manual naming
-  reconciliation sweep.
+### Refactors (see retrospective §4)
+- LANDED 2026-07-19 (goldens unmoved): S1 tick()/spawn_from_thing() arm
+  extraction, S2 shared engine → `mgc_sim::engine::{world, features}`,
+  S3 live_poses() per-game split, A1 `CampaignSave` enum, A2
+  GM-normalize dedupe.
+- Deferred: declared per-model dispatch table (only if provably
+  order-equivalent); `WizardConfig` enum (with next FORMAT_VERSION
+  bump). LATE: game-manual naming reconciliation sweep.
 
 ### Later tracks
 - FMV/cutscenes (decoders located): intros, MC1 win/lose + outro, MC2

@@ -3,8 +3,8 @@
 //! that climbs to the 1999 cap and stays? Orbit the player to keep the
 //! roaming mobs aggroed; log live occupancy, peak, drops, and the pool
 //! composition at the busiest tick.
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

@@ -31,7 +31,7 @@
 //!   zeroes the latch, EF:35527).
 
 use super::sin_lut::SIN_DB750;
-use crate::mc1::features::{Gen, tile};
+use crate::engine::features::{Gen, tile};
 use crate::mc1::mobs::MobCtx;
 
 /// `x_WORD_727B0` (Maths:647-676), the Heron-sqrt seed table: entry n

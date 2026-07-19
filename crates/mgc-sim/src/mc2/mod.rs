@@ -1,7 +1,7 @@
 //! The MC2 (Magic Carpet 2: The Netherworlds) simulation column —
 //! tier-2 tables, tier-4 handlers, and tier-5 verb arms behind
 //! [`crate::verbs`]. Everything here is a verbatim port of remc2
-//! machinery; shared chassis stays in [`crate::mc1::features::Gen`]
+//! machinery; shared chassis stays in [`crate::engine::features::Gen`]
 //! (same pool, LCG, mailboxes, tile chains).
 //!
 //! Data provenance: `behavior.rs` + `sprite_params.rs` are generated

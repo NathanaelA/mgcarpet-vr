@@ -52,7 +52,7 @@
 //! are not run — no idle SOUND rng is drawn.
 
 use super::super::mc1::mobs::MobCtx;
-use super::super::mc1::world::World;
+use super::super::engine::world::World;
 use super::behavior::{BEHAVIOR, Mc2BehaviorRow};
 use super::multipart::BRANCH_STATE;
 
@@ -711,7 +711,7 @@ impl World {
             && self.g.ent[i].flags & super::mobs::F_BLOCKED == 0
         {
             let e = &self.g.ent[i];
-            let mut aim = super::super::mc1::features::Gen::angle_between(e.x, e.y, tx, ty);
+            let mut aim = super::super::engine::features::Gen::angle_between(e.x, e.y, tx, ty);
             if self.g.ent[i].f63 & 0x3F == 0 {
                 let v = self.g.mc2_rand(i);
                 let r = self.g.mc2_rand(i);
@@ -835,7 +835,7 @@ impl World {
             (e.x, e.y, e.z)
         };
         let reach = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as u32;
-        if super::super::mc1::features::Gen::mc2_dist3(me, tp) <= reach {
+        if super::super::engine::features::Gen::mc2_dist3(me, tp) <= reach {
             self.g.ent[i].f146 = aggro_at as u16;
             self.g.ent[i].site_z = 10;
             self.mc2_aggro_raise(i, base);

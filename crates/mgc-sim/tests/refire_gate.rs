@@ -20,9 +20,9 @@
 //! (`debug_bless_owned_spells` zeroes the castle ladder) with the
 //! pool refilled to its 1000 ceiling between ticks.
 
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
+use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::spells::SpellId;
-use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 
 /// Synthetic diamond-ring SEARCH.DAT + a 4x4 building row (the same
 /// shape as the sim's unit-test assets — no baked data needed).

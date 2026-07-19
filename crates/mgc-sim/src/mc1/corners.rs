@@ -1,6 +1,6 @@
 //! MC1's texture corner-class machinery, shared between the terrain
 //! generator (`mgc-import::mc1_terrain`, texture-selection pass) and
-//! the load-time feature pass ([`crate::mc1::features`], terrain repaints
+//! the load-time feature pass ([`crate::engine::features`], terrain repaints
 //! after digging).
 //!
 //! Reference: remc1 `sub_32560` (sub_main.cpp:39947): candidate buckets

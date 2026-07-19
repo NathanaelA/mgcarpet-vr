@@ -2,8 +2,8 @@
 //! dbg032chain, then park and report per-model altitude above ground
 //! and dispersal — identifying which entities fly/spread.
 
-use mgc_sim::mc1::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
