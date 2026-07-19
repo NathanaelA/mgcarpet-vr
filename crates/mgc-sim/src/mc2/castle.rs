@@ -361,6 +361,19 @@ impl Gen {
         self.ent[i].f136 = MC2_CASTLE_CAP[lvl];
     }
 
+    /// The MC2 castle build datum (ctor `sub_4AA40` EF:33390-99):
+    /// 32 × the corner-mean ground over the BUILD00 row-1 footprint
+    /// centered on the (even-parity-snapped) anchor tile. Feeds
+    /// `site_z` — the painter/leveler datum — for EVERY (3,2) spawn
+    /// path: the human cast, the rival direct build, the authored
+    /// starting castle.
+    pub(crate) fn mc2_castle_site_z(&self, cx: u8, cy: u8) -> i16 {
+        let def = self.assets.build_tab[1 % self.assets.build_tab.len()];
+        let tlx = cx.wrapping_sub(def.w / 2);
+        let tly = cy.wrapping_sub(def.h / 2);
+        (32 * self.avg4(tlx, tly, def.h, def.w)) as i16
+    }
+
     /// `SetShiftByCastle_49EC0` (EF:32882): AABB half-extents from
     /// the BUILD00 row for the level — `((dim<<8)+1280)>>1`. The
     /// tick's follow-up yaw/fov writes land as the sprite fov home.

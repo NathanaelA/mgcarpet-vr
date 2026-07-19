@@ -184,10 +184,19 @@ impl Gen {
 
     /// `GetManaSphereColorIndexFromEntityId_369F0` (EF:26782): the
     /// owner's mana-sphere particle-row base — 52 wild, 105+8·team
-    /// for wizards (the human = team 0). MC2 rivals are pending; a
-    /// pool class-3 target would resolve when they land.
+    /// for ANY wizard (the human = team 0, rivals by slot).
     fn mc2_ball_color(&self, target: u16) -> u16 {
-        if target == PLAYER_TARGET { 105 } else { 52 }
+        if target == PLAYER_TARGET {
+            return 105;
+        }
+        match self
+            .rival_ents
+            .iter()
+            .position(|&e| e != 0 && e == target)
+        {
+            Some(slot) => 105 + 8 * slot as u16,
+            None => 52,
+        }
     }
 
     /// `sub_49D50` (EF:32847): the "color index" is a

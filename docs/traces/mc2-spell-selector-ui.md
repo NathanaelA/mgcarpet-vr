@@ -523,8 +523,8 @@ else {
     locMinimapHeight  = min(screenHeight_180624, 400);
     if (scale > 1) { locViewportPosx *= scale; locViewportWidth = screenWidth - locViewportPosx; ... }
 }
-DrawMinimap_63600(0,0, ..., locViewportPosx-2, locMinimapHeight, ...);          // minimap = left strip
-DrawMinimapEntites_61880(...);
+DrawMinimap_63600(0,0, player.x, player.y, locViewportPosx-2, locMinimapHeight, yaw, 204/scale, 1); // minimap = left strip
+DrawMinimapEntites_61880(...);   // same 204/scale (EF:21851-60)
 viewPort.SetRenderViewPortSize_40BF0(locViewportPosx, 0, locViewportWidth, locViewportHeight);  // EF:21862
 m_ptrGameRender->DrawWorld_411A0(playerX, playerY, yaw, z+128, pitch, roll, fov);               // EF:21864
 ```
@@ -540,6 +540,17 @@ case 6: case 7: case SHOW_MAP_BOTTOM_MENU: case SHOW_MAP_GAME_OPTIONS: ...:
 So on the classic 640×480 map screen: **destination rect = x∈[384,640), y∈[0,400)** (256×400) for
 the live world; on wide screens **x∈[384·scale, screenW), y∈[0, screenH−80)**. The minimap occupies
 `x∈[0, ~384)`.
+
+**Minimap zoom law** (traced 2026-07-19, GameUI.cpp:2256-2411): `DrawMinimap_63600(x, y, posX,
+posY, width, height, yaw, scaling, fillMode)` — `scaling` = **world-units per pixel** (204 on the
+map screen, 256 on the flight radar; 256 units = 1 tile). The terrain blit draws a SQUARE region of
+side `height·scaling` units centered on the player, yaw-rotated, wrapping at 256 tiles via byte
+truncation → **map screen = 400·204/256 = 318.75 tiles vertically** (the whole world + ~25% wrap
+repeat), flight radar = 128·256/256 = 128 tiles, circular. Quirk: the terrain blit's horizontal
+span is width-independent (`height·scaling` squished into the 382px strip) while
+`DrawMinimapEntities` (GameUI.cpp:1074-94) is isotropic (`width·scaling` = 304.4 tiles) — a ~4.6%
+terrain/entity horizontal misalignment in retail. Our port uses the isotropic entity law for both
+layers (see DEVIATIONS mgc-render `MC2_MAP_VIEW_SPAN_TILES`).
 
 **Non-aspect "stretch":** there is no explicit source-cutout blit. The world is rendered *directly*
 into the 256-wide (vs the flight-screen's wider) viewport by `DrawWorld_411A0` with the SAME

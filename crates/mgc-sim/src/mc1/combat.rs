@@ -1381,12 +1381,7 @@ impl Gen {
         // (sub_4AA40 EF:33390-99) = 32 x the corner-mean over the
         // BUILD00 row-1 footprint.
         let z = match self.verbs.movement {
-            crate::verbs::MovementVerb::Mc2 => {
-                let def = self.assets.build_tab[1 % self.assets.build_tab.len()];
-                let tlx = cx.wrapping_sub(def.w / 2);
-                let tly = cy.wrapping_sub(def.h / 2);
-                (32 * self.avg4(tlx, tly, def.h, def.w)) as i16
-            }
+            crate::verbs::MovementVerb::Mc2 => self.mc2_castle_site_z(cx, cy),
             _ => self.ground_z(px, py) as i16,
         };
         let s = self.new_event()?;

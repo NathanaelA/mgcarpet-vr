@@ -1837,7 +1837,10 @@ impl App {
             }
             "controls.models.thrust" => {
                 if let Some(sess) = self.session.as_deref_mut() {
-                    sess.sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
+                    // The hand-off setter, not a bare assign — the
+                    // inactive mover's state is stale and reads back
+                    // as a phantom warp/velocity.
+                    sess.sim.set_thrust_model(sim_thrust(self.cfg.controls.models.thrust));
                 }
             }
             "controls.models.altitude" => {

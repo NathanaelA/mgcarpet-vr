@@ -458,7 +458,6 @@ impl World {
             let e = &self.g.ent[r.ent as usize];
             (e.x, e.y)
         };
-        let gz = self.g.ground_z(wx, wy) as i16;
         let Some(c) = self.g.new_event() else { return };
         {
             let e = &mut self.g.ent[c];
@@ -478,7 +477,11 @@ impl World {
             e.dest_y = ty << 8;
         }
         let (sx, sy) = (self.g.ent[c].dest_x, self.g.ent[c].dest_y);
-        self.g.link(c, sx, sy, gz);
+        // The ctor's corner-mean build datum (sub_4AA40 EF:33399) —
+        // the painter/leveler read site_z, not the live ground.
+        let z = self.g.mc2_castle_site_z((sx >> 8) as u8, (sy >> 8) as u8);
+        self.g.ent[c].site_z = z;
+        self.g.link(c, sx, sy, z);
         self.g.refill_life(c);
         // The team flag (sprite 177 + color — the MC1-column pattern;
         // the MC2 stage pieces carry the visible castle).
@@ -2472,7 +2475,6 @@ impl World {
         if sx == 0 && sy == 0 {
             return false;
         }
-        let gz = self.g.ground_z(sx, sy) as i16;
         let Some(c) = self.g.new_event() else {
             return false;
         };
@@ -2494,7 +2496,12 @@ impl World {
             e.dest_y = ty << 8;
         }
         let (ax, ay) = (self.g.ent[c].dest_x, self.g.ent[c].dest_y);
-        self.g.link(c, ax, ay, gz);
+        // The build datum (sub_4AA40 EF:33399): corner-mean site z.
+        // Without it the painter datum reads 0 and the footprint
+        // excavates to sea level — the "sunken rival castle".
+        let z = self.g.mc2_castle_site_z((ax >> 8) as u8, (ay >> 8) as u8);
+        self.g.ent[c].site_z = z;
+        self.g.link(c, ax, ay, z);
         self.g.refill_life(c);
         self.g
             .mc2_set_sprite(c, 177 + self.mc2_rivals[ri].slot as u16);

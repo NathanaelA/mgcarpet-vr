@@ -862,6 +862,16 @@ pub enum MapScreenLayout {
 /// MC2 map screen: the live-view/minimap bottom edge (native px;
 /// remc2 `locViewportHeight/locMinimapHeight = 400`, EF:21804).
 const MC2_MAP_VIEW_H: f32 = 400.0;
+/// MC2 map-screen zoom (EF:21840-49): retail `DrawMinimap_63600`
+/// scaling = 204 world-units/px over the 400-native-px pane height →
+/// 400·204/256 = 318.75 tiles vertically — the whole 256-tile world
+/// plus ~25% toroidal repeat, player-centered and yaw-rotated. Retail
+/// blits the terrain as a SQUARE 318.75-tile region squished into the
+/// 382-wide pane while its entity layer runs isotropic at 204 — a
+/// ~4.6% horizontal terrain/entity misalignment we deliberately do
+/// NOT reproduce: both our layers use the isotropic (entity) law,
+/// 382·204/256 = 304.4 tiles across the native width.
+const MC2_MAP_VIEW_SPAN_TILES: f32 = MC2_MAP_VIEW_H * 204.0 / 256.0;
 // The HUD top strip is six tiles packed left-to-right from x=2 with 0px
 // gaps (pixel-measured, matched to native sprite widths at scale
 // 1.668): [40] radar frame (124) | three [41] sub-panels
@@ -2008,6 +2018,29 @@ impl Renderer {
     /// once at level load from the game + `spell_selector` resolution.
     pub fn set_map_layout(&mut self, layout: MapScreenLayout) {
         self.map_layout = layout;
+    }
+
+    /// The fullscreen map pane's zoom, in the map shader's convention
+    /// (tiles across the pane's SHORTER pixel axis; `aspect` = pane
+    /// w/h in px). MC1 book: the full world (deliberate — see
+    /// [`BOOK_MAP_ZOOM`]). MC2 split: the faithful retail span — the
+    /// VERTICAL axis always shows [`MC2_MAP_VIEW_SPAN_TILES`]
+    /// (318.75, EF:21840-49) whichever axis is currently shorter, so
+    /// window aspect only widens the horizontal wrap.
+    fn map_pane_zoom(&self, aspect: f32) -> f32 {
+        match self.map_layout {
+            MapScreenLayout::Mc1Book => BOOK_MAP_ZOOM,
+            MapScreenLayout::Mc2Split => {
+                if aspect >= 1.0 {
+                    // Wide pane: the shorter axis IS the vertical.
+                    MC2_MAP_VIEW_SPAN_TILES
+                } else {
+                    // Tall pane: shorter = width; the shader derives
+                    // vertical = zoom/aspect.
+                    MC2_MAP_VIEW_SPAN_TILES * aspect
+                }
+            }
+        }
     }
 
     /// Toggle smooth (tile-interpolated) shading; off is the original's
@@ -3336,7 +3369,7 @@ impl Renderer {
                     cy,
                     pw * 0.5,
                     ph * 0.5,
-                    BOOK_MAP_ZOOM,
+                    self.map_pane_zoom(pw / ph),
                     false,
                     pw / ph,
                     res_x,
@@ -3445,7 +3478,7 @@ impl Renderer {
                 cam.x,
                 cam.z,
                 cam.yaw,
-                BOOK_MAP_ZOOM,
+                self.map_pane_zoom(pw / ph),
                 0.0,              // rectangular (no round mask)
                 pw / ph,          // sampler aspect = pane w/h
                 1.0,              // opaque (the map pane sits over the world)

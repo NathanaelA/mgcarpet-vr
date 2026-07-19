@@ -57,7 +57,8 @@ pub enum ThrustModel {
     /// Hold-to-fly with automatic deceleration on release — a
     /// deliberate deviation, generalizing the original's own
     /// hold-to-move strafe to the forward axis. Keeps the authentic
-    /// level-plane thrust rule (aim pitch never steals mobility).
+    /// level-plane thrust rule (aim pitch never steals horizontal
+    /// mobility; vertical belongs to the altitude model's law).
     Enhanced,
 }
 
@@ -256,6 +257,54 @@ impl Simulation {
     pub fn sync_carpet_from_flyer(&mut self) {
         let f = &self.flyer;
         self.carpet = flight::Mc1State::from_tiles(f.x, f.z, f.y, f.yaw);
+    }
+
+    /// Switch the thrust model mid-run WITH the mover-state hand-off
+    /// (the options-menu path). A bare field assign leaks the inactive
+    /// mover's stale state: the integer carpet resumes at its spawn
+    /// seed (a phantom warp + inverted velocity), and the float flyer
+    /// keeps velocities the faithful mover never writes.
+    pub fn set_thrust_model(&mut self, model: ThrustModel) {
+        if model == self.thrust_model {
+            return;
+        }
+        const RAD: f32 = std::f32::consts::TAU / 2048.0;
+        match model {
+            ThrustModel::Mc1 => {
+                // Enhanced → faithful: re-seed the integer carpet at
+                // the live flyer pose, then carry momentum and aim
+                // over — forward/strafe speed = the velocity projected
+                // on the heading basis (engine units/tick, the ±80
+                // cruise clamp), aim pitch seeded through the stick
+                // filter so the published aim starts where the
+                // enhanced camera was pointing.
+                self.sync_carpet_from_flyer();
+                let f = &self.flyer;
+                let (sy, cy) = f.yaw.sin_cos();
+                let fwd = f.vx * sy - f.vz * cy;
+                let side = f.vx * cy + f.vz * sy;
+                let sp = (fwd * TICK_DT * 256.0).clamp(-80.0, 80.0) as i16;
+                self.carpet.act_speed = sp;
+                self.carpet.tgt_speed = sp;
+                self.carpet.strafe = (side * TICK_DT * 256.0).clamp(-80.0, 80.0) as i16;
+                self.carpet.pitch_f = (-f.pitch / RAD).clamp(-254.0, 254.0) as i16;
+                self.carpet.aim_pitch = (self.carpet.pitch_f as u16) & 0x7FF;
+            }
+            ThrustModel::Enhanced => {
+                // Faithful → enhanced: the flyer pose is derived
+                // fresh every tick; hand the carpet speeds over as
+                // the float velocity (forward + strafe, tiles/sec).
+                let c = self.carpet;
+                let f = &mut self.flyer;
+                let (sy, cy) = f.yaw.sin_cos();
+                let fwd_v = c.act_speed as f32 / 256.0 / TICK_DT;
+                let side_v = c.strafe as f32 / 256.0 / TICK_DT;
+                f.vx = sy * fwd_v + cy * side_v;
+                f.vz = -cy * fwd_v + sy * side_v;
+                f.vy = 0.0;
+            }
+        }
+        self.thrust_model = model;
     }
 
     /// Advance exactly one fixed tick.
@@ -720,8 +769,11 @@ impl Simulation {
     /// a deliberate deviation from the original (see [`ThrustModel`]).
     /// Obeys the level-plane thrust rule: thrust and the Accelerate
     /// override act in the yaw ground plane at full magnitude however
-    /// far you aim up or down (aim pitch must never bleed dodge
-    /// mobility into vertical motion).
+    /// far you aim up or down (aim pitch must never steal horizontal
+    /// mobility). Vertical motion belongs to the ALTITUDE axis:
+    /// under [`AltitudeModel::Faithful`] the faithful vertical law
+    /// runs (authority-banded pitch climb/dive + the game-keyed
+    /// passive decline); under ExtendedLift the lift keys.
     fn move_enhanced(&mut self, input: &FlightInput) {
         // The MC2 debuff webs are gameplay, so the deviation mover
         // services their channels too: drain the stamp hits, tick
@@ -757,7 +809,8 @@ impl Simulation {
         let right = [cy, 0.0, sy];
 
         // Explicit float up/down = the extended-lift enhancement only
-        // (the faithful altitude model has no vertical control).
+        // (the faithful altitude model has no lift keys — its
+        // vertical is the pitch/buoyancy law after the move).
         let lift = match self.altitude_model {
             AltitudeModel::ExtendedLift => input.lift,
             AltitudeModel::Faithful => 0.0,
@@ -855,6 +908,64 @@ impl Simulation {
             }
         }
 
+        // Faithful altitude: the vertical law lives on the ALTITUDE
+        // axis (the 2026-07-19 ruling amendment) — the same law the
+        // faithful movers bundle natively, adapted to the float
+        // state, so this thrust×altitude cell flies like the retail
+        // carpet vertically. Pitch drives vertical: a dive passes
+        // the raw aim, a climb scales by the authority band (full at
+        // ground level, zero at the ground+band soft ceiling,
+        // INVERTED above — the wall-climb law). The passive decline
+        // is game-keyed and any-speed: MC2's always-on row buoyancy
+        // above the clearance band, MC1's at-rest 8/tick sink above
+        // the band — flying ahead declines exactly like the
+        // faithful mover does.
+        if self.altitude_model == AltitudeModel::Faithful {
+            let mc2 = self
+                .world
+                .as_ref()
+                .is_some_and(|w| w.verbs().flight == verbs::FlightVerb::Mc2);
+            if mc2 && let Some(w) = &self.world {
+                self.carpet_mc2.row = w.mc2_carpet_row();
+            }
+            let g = self.ground_height(self.flyer.x, self.flyer.z);
+            let row = self.carpet_mc2.row;
+            let f = &mut self.flyer;
+            // Signed forward speed in tiles/tick (the retail polar
+            // step's `s`; strafe carries no pitch, verbatim).
+            let s = (f.vx * fwd[0] + f.vz * fwd[2]) * TICK_DT;
+            if s != 0.0 && f.pitch != 0.0 {
+                let band = if mc2 { row.band as f32 / 256.0 } else { 4.0 };
+                let dive = (s > 0.0 && f.pitch < 0.0) || (s < 0.0 && f.pitch > 0.0);
+                let eff = if dive {
+                    f.pitch
+                } else {
+                    // v5 in tiles, clamped ±1: authority −v5 —
+                    // 1 = full climb, 0 at the soft ceiling,
+                    // −1 = fully inverted (:55176-95 shape).
+                    let v5 = (f.y - g - band).clamp(-1.0, 1.0);
+                    f.pitch * -v5
+                };
+                f.y += s * eff.sin();
+            }
+            if mc2 {
+                // The always-on row-0xe buoyancy above the
+                // clearance band (EF:59755): the gradual decline
+                // when flying ahead.
+                let clear = g + row.clearance as f32 / 256.0;
+                if f.y > clear {
+                    f.y = (f.y + row.buoyancy as f32 / 256.0).max(clear);
+                }
+            } else {
+                // MC1's only passive drift: the speed-0 sink above
+                // the soft ceiling (:55171-72).
+                let speed = (f.vx * f.vx + f.vz * f.vz).sqrt();
+                if speed < 0.05 && f.y > g + 4.0 {
+                    f.y -= 8.0 / 256.0;
+                }
+            }
+        }
+
         let ground = self.ground_height(self.flyer.x, self.flyer.z);
         // The death fall must reach the ground+128 touchdown — the
         // living hover clearance sits ABOVE it and would hold the
@@ -893,15 +1004,6 @@ impl Simulation {
                 f.y = c;
                 f.vy = f.vy.min(0.0);
             }
-        }
-        // The faithful passive settle, inherited: at rest above the
-        // soft-ceiling band, sink 8 engine units/tick (the original's
-        // only downward drift) — without it, enhanced thrust under
-        // the faithful altitude model would trap altitude forever
-        // (level-plane thrust has no dive path).
-        let speed = (f.vx * f.vx + f.vz * f.vz).sqrt();
-        if speed < 0.05 && input.lift == 0.0 && f.y > ground + 4.0 {
-            f.y -= 8.0 / 256.0;
         }
         // Extended lift with the hover keys idle: settle toward the
         // floor at any speed (deliberate — ground-contact pickups
@@ -1234,14 +1336,18 @@ mod tests {
         assert!(sim.flyer.y <= 14.01, "no god view, y={}", sim.flyer.y);
     }
 
+    /// The 2026-07-19 ruling amendment: under Faithful altitude the
+    /// enhanced mover runs the faithful vertical law — raw-aim dive,
+    /// authority-banded climb — while aim pitch still never steals
+    /// HORIZONTAL mobility (the level-plane thrust rule).
     #[test]
-    fn enhanced_thrust_stays_in_the_ground_plane() {
+    fn faithful_altitude_dives_and_climbs_under_enhanced_thrust() {
         let mut sim = Simulation::new();
         sim.thrust_model = ThrustModel::Enhanced;
-        sim.flyer.y = 2.0; // inside the hover band (no passive settle)
-        let y0 = sim.flyer.y;
-        // Aim hard down, then thrust: motion must stay horizontal
-        // (aim pitch is for shooting; it never steals mobility).
+        sim.flyer.y = 2.0;
+        let z0 = sim.flyer.z;
+        // Aim hard down, then thrust: the raw-aim dive rides down to
+        // the hover floor — at FULL horizontal speed.
         let dive = FlightInput {
             pitch_delta: -1.4,
             ..Default::default()
@@ -1254,15 +1360,30 @@ mod tests {
         for _ in 0..60 {
             sim.step(&fwd);
         }
+        assert!(sim.flyer.y < 0.76, "dives to the floor, y={}", sim.flyer.y);
         assert!(
-            (sim.flyer.y - y0).abs() < 1e-3,
-            "no vertical bleed, y={}",
-            sim.flyer.y
+            z0 - sim.flyer.z > 8.0,
+            "no horizontal mobility loss, z={} from {}",
+            sim.flyer.z,
+            z0
         );
+
+        // Aim up: climbs, but climb authority zeroes at the
+        // ground+band soft ceiling (4 tiles) — bounded, never free
+        // vertical.
+        let up = FlightInput {
+            pitch_delta: 2.8, // clamps to +MAX_PITCH
+            ..Default::default()
+        };
+        sim.step(&up);
+        for _ in 0..300 {
+            sim.step(&fwd);
+        }
+        assert!(sim.flyer.y > 2.0, "climbs, y={}", sim.flyer.y);
         assert!(
-            sim.flyer.z < 160.0,
-            "full horizontal speed, z={}",
-            sim.flyer.z
+            sim.flyer.y <= 4.05,
+            "authority caps at the soft ceiling, y={}",
+            sim.flyer.y
         );
     }
 
