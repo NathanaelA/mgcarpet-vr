@@ -4483,6 +4483,106 @@ mod tests {
         assert_eq!(run(i32::MAX), 16, "always-awake override arms f58");
     }
 
+    /// The m9 mound's state-55 wizard scan (sub_1D060 :23796-23833):
+    /// an awake surfaced mound with no castle chase targets the
+    /// player and pops up into CHASE; an asleep one never scans (the
+    /// +58 gate) — the level-04 trigger-spawned skeletons idled
+    /// because the scan was missing entirely.
+    #[test]
+    fn m9_mound_scans_the_wizard_when_awake() {
+        let run = |f58: i16| {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                crate::verbs::VerbSet::MC1,
+            );
+            let i = g.spawn_creature(9, 0x4000, 0x4000, 0).unwrap();
+            let ctx = ctx_at(0x4200, 0x4000, 0); // 2 tiles east, in v_28
+            g.ent[i].tick70 = 55; // surfaced mound (state 55)
+            g.ent[i].f26 = 200; // burrow timer armed, no bury edge
+            g.ent[i].f63 = 0; // on the v_26 scan tick
+            g.ent[i].f58 = f58;
+            g.ent[i].f30 = Gen::angle_between(0x4000, 0x4000, ctx.px, ctx.py);
+            g.creature_tick(i, &ctx);
+            (g.ent[i].tick70, g.ent[i].f146)
+        };
+        assert_eq!(
+            run(16),
+            (56, crate::mc1::mobs::PLAYER_TARGET),
+            "awake mound chases the wizard"
+        );
+        assert_eq!(run(0).0, 55, "asleep mound never scans (+58 gate)");
+    }
+
+    /// The buried mound's unbury law (sub_1D6D0 :24016-28 +
+    /// sub_1DDB0 :24273): asleep it stays buried forever; the wizard
+    /// entering the 24-tile wake gate (an armed f58) starts the −50
+    /// countdown and the mound rises ~1 s later — the level-04
+    /// trigger army buried itself before the player arrived and our
+    /// old stub never let it back up.
+    #[test]
+    fn m9_buried_mound_rises_near_the_wizard() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let i = g.spawn_creature(9, 0x4000, 0x4000, 0).unwrap();
+        let ctx = ctx_at(0x4200, 0x4000, 0);
+        g.ent[i].tick70 = 55;
+        g.ent[i].f71 = 1; // buried
+        g.ent[i].f26 = 0;
+        g.ent[i].f58 = 0; // asleep
+        for _ in 0..100 {
+            g.creature_tick(i, &ctx);
+        }
+        assert_eq!(g.ent[i].f71, 1, "asleep mound stays buried");
+        g.ent[i].f58 = 16; // the wizard flies into the wake gate
+        g.creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].f26, -50, "awake trigger arms the countdown");
+        for _ in 0..50 {
+            g.creature_tick(i, &ctx);
+        }
+        assert_eq!(g.ent[i].f71, 0, "the mound rises");
+        assert_eq!(g.ent[i].f26, 400, "fresh burrow timer");
+        assert_eq!(g.ent[i].type86, 201, "back to the mound disguise");
+    }
+
+    /// The multipart families (m0 dragon / m3 worm / m6 kraken) spawn
+    /// straight into WANDER and run the shared awake-gated wizard
+    /// scan — an in-range, in-cone player is chased on the first scan
+    /// tick (regression guard for the m9-style missing-scan class).
+    #[test]
+    fn multipart_wanderers_scan_the_wizard() {
+        for (model, wander, chase) in [(0u16, 1u8, 2u8), (3, 19, 20), (6, 37, 38)] {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                crate::verbs::VerbSet::MC1,
+            );
+            let i = g.spawn_creature(model, 0x4000, 0x4000, 0).unwrap();
+            let ctx = ctx_at(0x4200, 0x4000, 0); // 2 tiles east, in v_28
+            assert_eq!(g.ent[i].tick70, wander, "m{model} spawns wandering");
+            assert!(g.ent[i].f58 != 0, "m{model} spawns awake");
+            g.ent[i].f63 = 0; // on the v_26 scan tick
+            let facing = Gen::angle_between(0x4000, 0x4000, ctx.px, ctx.py);
+            g.ent[i].f30 = facing;
+            g.ent[i].f34 = facing; // no turn-away before the scan
+            g.creature_tick(i, &ctx);
+            assert_eq!(
+                (g.ent[i].tick70, g.ent[i].f146),
+                (chase, crate::mc1::mobs::PLAYER_TARGET),
+                "m{model} chases the wizard"
+            );
+        }
+    }
+
     /// Only the %-forms of the m18 timer table draw the per-entity
     /// LCG; the flat forms are draw-free (an unconditional pre-draw
     /// would desync the tank's rand stream), and (0,1)/(2,1) carry the

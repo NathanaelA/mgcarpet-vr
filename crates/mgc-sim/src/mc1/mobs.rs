@@ -2143,10 +2143,14 @@ impl Gen {
     /// Hidden state 55, sub_1D060 (:23627): the mound lurks — burrow
     /// timer (bury as type 245 when the countdown runs out and the
     /// player is away), burrow-walk + every v_26 a CASTLE hunt
-    /// (nearest class-3 model-2; within its extent + v_28 → chase) or
-    /// the standard yaw jitter. The buried mode's villager hunting
-    /// (sub_1D6D0) is the AI track — buried mounds sit still here.
-    fn m9_hidden(&mut self, i: usize, base: u8) {
+    /// (nearest class-3 model-2; within its extent + v_28 → chase),
+    /// the standard yaw jitter when no castle exists, then — whenever
+    /// no castle chase was taken — the awake-gated WIZARD scan
+    /// (:23796-23833). Buried mode (sub_1D6D0): the wizard entering
+    /// the 24-tile wake gate arms a −50 countdown and the mound rises
+    /// again (sub_1DDB0); only its roam/convert self-spawn — like the
+    /// surfaced tail (:23834-23920) — is the AI track.
+    fn m9_hidden(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         if self.ent[i].type86 == 202 {
             // Back from a chase: sub_1DA60's exit path restores the
             // mound (sub_1DD50).
@@ -2163,7 +2167,28 @@ impl Gen {
             }
         }
         if self.ent[i].f71 != 0 {
-            return; // buried (sub_1D6D0 — AI track)
+            // Buried, sub_1D6D0 (:23926). Damage pops it into CHASE
+            // via the shared prologue (retail's own inbox arm). Core
+            // machinery: a running unbury countdown advances FIRST
+            // (:24016-22), else an awake trigger — the wizard inside
+            // the 24-tile wake gate — arms it at −50 (:24024-28), so
+            // a buried mound rises ~1 s after the player flies near.
+            // The asleep roam/convert scan (:24030-118, the
+            // underground undead-army growth) is the AI track — still
+            // open in ROADMAP.
+            let v8 = self.ent[i].f26;
+            if v8 < 0 {
+                self.ent[i].f26 = v8 + 1;
+                if v8 == -1 {
+                    // sub_1DDB0 (:24273): rise back to the mound.
+                    self.ent[i].f71 = 0;
+                    self.ent[i].f26 = 400;
+                    self.set_sprite(i, 201);
+                }
+            } else if self.ent[i].f58 != 0 {
+                self.ent[i].f26 = -50;
+            }
+            return;
         }
         if self.ent[i].f58 != 0 {
             self.ent[i].f26 = 400; // player near: stay surfaced
@@ -2191,6 +2216,7 @@ impl Gen {
                 best = Some((j, d2));
             }
         }
+        let mut chased = false;
         if let Some((j, _)) = best {
             let (cx, cy, cz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
             self.ent[i].f34 = Self::angle_between(ex, ey, cx, cy);
@@ -2200,6 +2226,7 @@ impl Gen {
             if Self::isqrt(sq as u32) <= range {
                 self.ent[i].f146 = j as u16;
                 self.ent[i].tick70 = base + 2;
+                chased = true;
             }
         } else {
             let d1 = self.ent_rand(i);
@@ -2207,6 +2234,14 @@ impl Gen {
             let mag = ((d2 & 0xFF) + 85) as i32;
             let sign = if d1 % 157 >= 79 { 1 } else { -1 };
             self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
+        }
+        // The `if (!v46)` wizard scan (:23796-23833): a castle found
+        // but out of range falls through here too (no jitter, like
+        // the original). Same range/cone/invisibility gates as the
+        // shared wander scan.
+        if !chased && self.ent[i].f58 != 0 && self.player_in_aggro_range(i, ctx) {
+            self.ent[i].f146 = PLAYER_TARGET;
+            self.ent[i].tick70 = base + 2;
         }
     }
 
@@ -2519,7 +2554,7 @@ impl Gen {
                 self.mob_chase(i, base, ctx);
                 self.m5_regen(i);
             }
-            (9, 1) => self.m9_hidden(i, base),
+            (9, 1) => self.m9_hidden(i, base, ctx),
             (11, 1) => self.genie_wander(i, base, ctx),
             (15, 1) => self.grid_walk(i, base),
             // The villager families' custom hunts.

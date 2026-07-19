@@ -270,6 +270,8 @@ impl Default for RenderPreference {
 pub struct RenderEnhancement {
     /// Interpolate terrain shade across tile centers instead of the
     /// original's one shade level per tile (toggle at runtime with T).
+    /// DEFAULTS ON (deliberate default-on deviation) — toggle off for
+    /// the per-tile retail look.
     pub smooth_shading: bool,
     /// Entities render interpolated between the last two sim ticks —
     /// the camera's one-tick lerp timeline extended to the world —
@@ -304,7 +306,7 @@ pub struct RenderEnhancement {
 impl Default for RenderEnhancement {
     fn default() -> Self {
         Self {
-            smooth_shading: false,
+            smooth_shading: true,
             smooth_motion: true,
             hud_transparency: HudTransparency::default(),
             map_owned_buildings: false,
@@ -812,7 +814,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 4;
+const DEFAULTS_VERSION: u64 = 5;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp
