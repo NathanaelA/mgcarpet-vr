@@ -1,7 +1,6 @@
 //! MC2 multipart/segment-chain subsystem — class-5 models 0 (worm/
 //! hydra), 3 (multipart flyer), 22 (segmented worm / castle-mana
-//! thief) and 27 (3-tier tree kraken), ported from the Phase-4.3
-//! trace bank:
+//! thief) and 27 (3-tier tree kraken), ported from the trace bank:
 //! - docs/traces/mc2-multipart-chains.md (ctors, segment tick,
 //!   topology, collision/list skips)
 //! - docs/traces/mc2-m0-m3-gaps.md (dispatch table, tether, bob,
@@ -65,11 +64,10 @@
 //!   show/hide of segments (byte[0] bit 0) writes flags bit 0
 //!   VERBATIM (the awake pass's hidden-skip and retail's 0x21 draw
 //!   law read it) PLUS the port's 0x20 draw alias (the renderer's
-//!   certified billboard skip — widening it to 0x21 globally would
-//!   break the MC2 map-only house pose and the cave balloon), and
-//!   the burrow ops carry the bit-3 targetable toggle (flags 0x08,
-//!   E9 2026-07-15) —
-//!   the billboard-suppress bit live_poses already honors.
+//!   billboard skip — widening it to 0x21 globally would break the
+//!   MC2 map-only house pose and the cave balloon), and the burrow
+//!   ops carry the bit-3 targetable toggle (flags 0x08) — the
+//!   billboard-suppress bit live_poses already honors.
 //! - `byte_0x5D_93` (palette-shade byte of `sub_49D50`) is
 //!   renderer-side and unmodeled; the particle-row recolor lands in
 //!   type86 + the f78 spin only.
@@ -338,13 +336,12 @@ impl Gen {
                 self.mc2_set_sprite(seg, 19 + ci);
                 self.ent[seg].f56 = self.ent[seg].f80; // word_0x36_54 = array.pitch
             }
-            // PROVENANCE CLOSED (playtest-12): the table's zero
-            // speed_6 was never the runtime value — retail DERIVES
-            // it at load from the sprite bitmap's aspect
-            // (EF:44870-44910, speed_6 = w·rotSpeed/h), which the
-            // dims-fed assets now reproduce. The 96 floor stays
-            // only for dims-less callers (unit fixtures) where the
-            // derivation can't run — the PLAYTEST-11 stand-in.
+            // The table's zero speed_6 is never the runtime value:
+            // retail DERIVES it at load from the sprite bitmap's
+            // aspect (EF:44870-44910, speed_6 = w·rotSpeed/h), which
+            // the dims-fed assets reproduce. The 96 floor stays only
+            // for dims-less callers (unit fixtures) where the
+            // derivation can't run.
             if self.ent[seg].f56 == 0 {
                 self.ent[seg].f56 = 96;
             }
@@ -486,8 +483,8 @@ impl Gen {
             e.tick70 = M22_BASE; // 176
             // byte_0x38_56 = 3 (EF:34400) — bit 1 ADMITS the ch1
             // designation mail (the mc1/combat.rs:180 gate is
-            // faithful); f28=1 dropped every tag, deadening the
-            // whole retarget→colorize machine (E5).
+            // faithful). Needs f28=3 not 1: f28=1 drops every tag,
+            // deadening the whole retarget→colorize machine.
             e.f28 = 3;
             e.f128 = 128;
             e.f130 = 16;
@@ -693,7 +690,7 @@ impl Gen {
             if let Some((ax, ay, _)) = self.mc2_raw_pos(src, ctx) {
                 // Surge AWAY: yaw = tan2(attacker → hit SEGMENT)
                 // (EF:17472-74) — anchored at the SEGMENT, not the
-                // head, and away from the attacker (E6).
+                // head, and away from the attacker.
                 let (sx, sy) = (self.ent[i].x, self.ent[i].y);
                 let yaw = Self::angle_between(ax, ay, sx, sy);
                 self.ent[head].f30 = yaw;
@@ -902,7 +899,7 @@ impl Gen {
     /// `sub_26F10` (EF:17542): head damage-turn (accelerate by
     /// dmg/4, turn AWAY from the attacker) + ch1 retarget + the
     /// life<0 → chain-kill transition. The head's own life NEVER
-    /// drops here — trace §3 CRITICAL FINDING (melee only enrages).
+    /// drops here — melee only enrages.
     fn m22_dmg(&mut self, i: usize, ctx: &MobCtx) {
         if self.ent[i].f58 != 0 {
             if self.ent[i].mail[0].1 != 0 {
@@ -1134,13 +1131,11 @@ impl Gen {
                             self.ent[i].f30 = aim;
                             // `EuclideanDistXYZ_58490` is 2-D despite
                             // the name (Maths:738-42 never reads z —
-                            // the morph::dist2d law). The old 3-D
-                            // check was unsatisfiable: the head
-                            // cruises at chain-ground +384, the
-                            // castle entity sits at ground, so the
-                            // player-reported worm hovered at the
-                            // flag forever, never absorbed
-                            // (2026-07-18).
+                            // the morph::dist2d law). A 3-D check here
+                            // is unsatisfiable: the head cruises at
+                            // chain-ground +384, the castle entity
+                            // sits at ground, so the worm would hover
+                            // at the flag forever, never absorbed.
                             let d2 = crate::mc2::morph::dist2d(ex, ey, cx as i32, cy as i32);
                             if self.ent[i].f63 & 3 == 0 && d2 <= 0x100 {
                                 let room = (self.ent[i].f140 + self.ent[c].f140) < self.ent[c].f136;
@@ -1195,9 +1190,9 @@ impl Gen {
     }
 
     // =========================================================================
-    // MODEL 27 — the HYDRA ("tree/kraken" in older notes): 5 bolt-
-    // spitting HEADS (branches) that retract and re-grow when killed;
-    // the body is attackable only while the f50 head gauge is 0.
+    // MODEL 27 — the HYDRA: 5 bolt-spitting HEADS (branches) that
+    // retract and re-grow when killed; the body is attackable only
+    // while the f50 head gauge is 0.
     // (ctor sub_4D000 EF:34591 + finalizers; body brains EF:19443-
     // 19736; the branch machine docs/traces/mc2-m27-branch-machine.md)
     // =========================================================================
@@ -1292,8 +1287,8 @@ impl Gen {
     /// RNG draws each (roll then fov), life ladder 460*v2+920 where
     /// v2 counts every chain NODE (the increment sits OUTSIDE the
     /// branch guard, EF:20798-99): branches sit at positions
-    /// 1/11/21/31/41 → 1380/5980/10580/15180/19780. Counting only
-    /// branches made 2-5 up to 6× too weak (E7).
+    /// 1/11/21/31/41 → 1380/5980/10580/15180/19780. NOT
+    /// branch-only counting, which makes 2-5 up to 6× too weak.
     fn m27_branch_init(&mut self, body: usize) {
         let mut v2 = 1i32;
         let mut j = self.ent[body].f54 as usize;
@@ -1326,7 +1321,7 @@ impl Gen {
     /// walks the wizard list with STRICT `<` on both dist² and the
     /// nearest compare and NO invisibility/hidden filter — unlike
     /// the shared `mc2_wizard_scan` (a different retail sub), which
-    /// must keep its filters for its other callers (E14).
+    /// must keep its filters for its other callers.
     fn m27_wizard_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -1899,8 +1894,7 @@ impl Gen {
                             // Progressively HIDE the chain from the
                             // far end — retail `(byte[0]|1) & 0xF7`
                             // per node (EF:20055/20069-70): hidden +
-                            // UNTARGETABLE while burrowing. The old
-                            // "re-show" op was inverted (E9).
+                            // UNTARGETABLE while burrowing.
                             let hide: usize = if v18 != 0 {
                                 let mut s = self.ent[br].f54 as usize;
                                 let mut k = 0;
@@ -1955,7 +1949,7 @@ impl Gen {
                     e.f26 = 7;
                     e.f146 = first_seg;
                     // Case 0xA re-show: `(byte[0] & 0xF6) | 8` —
-                    // shown AND re-targetable (EF:20113-17, E9).
+                    // shown AND re-targetable (EF:20113-17).
                     e.flags = (e.flags & !0x21) | 0x08;
                     e.f34 = row[D404C_W12] as u16;
                     e.f126 = 156;
@@ -1979,7 +1973,7 @@ impl Gen {
                     }
                     if s != 0 {
                         // Case 0xC: `byte[0] &= 0xFE` — show only,
-                        // bit 3 untouched (EF:20144, E9).
+                        // bit 3 untouched (EF:20144).
                         self.ent[s].flags &= !0x21;
                         self.ent[br].f146 = self.ent[s].f54;
                     }
@@ -2009,7 +2003,7 @@ impl Gen {
                 self.ent[br].f71 = 8;
                 let mut m = br;
                 for _ in 0..10 {
-                    // `(byte[0]|1) & 0xF7` on all 10 (EF:20177, E9).
+                    // `(byte[0]|1) & 0xF7` on all 10 (EF:20177).
                     self.ent[m].flags = (self.ent[m].flags | 0x21) & !0x08;
                     m = self.ent[m].f54 as usize;
                     if m == 0 {
@@ -2115,7 +2109,7 @@ impl Gen {
         if turned {
             // The live clamp is sub_58350's LAST arg = row v_2 = 22
             // (EF:20967-72); v_4 (=5) is the dead third arg — the
-            // same trap mobs.rs:238-244 documents (E8).
+            // same trap the mc2 move core documents.
             let cap = BEHAVIOR[self.ent[body].row156 as usize].v_2;
             let e = &self.ent[body];
             let step = Self::turn_step(e.f30, e.f34, cap);
@@ -2319,7 +2313,7 @@ impl Gen {
             // dispatch — the world loop routes it through
             // `World::mc2_m27_held_tick` (stagevars.rs), the full
             // sub_29930 port with the 0xDA mass-attack broadcast and
-            // the 0xD8→StageVar2=15 arm (Session E16).
+            // the 0xD8→StageVar2=15 arm.
             _ => {
                 self.m27_pose(i, 315);
                 self.ent[i].act_life = 1_000_000;

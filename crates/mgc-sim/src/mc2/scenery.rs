@@ -1,18 +1,15 @@
-//! MC2 class-2 scenery, Phase 4.3 — models 3..=8 and the tree
-//! (2,0) lifespan/burn ticks that close the "class-2 tick column
-//! inert" APPROX from Phase 3. Trace bank:
+//! MC2 class-2 scenery — models 3..=8 and the tree (2,0)
+//! lifespan/burn ticks. Trace bank:
 //! docs/traces/mc2-class5-m25-26-28-class2-treeburn.md (`EF:` =
 //! remc2 EventsFunctions.cpp).
 //!
-//! DELIBERATE APPROXIMATIONS:
-//! - (10,5) water splash, (10,13) debris smoke and the (10,6) tree
-//!   flame all ride their real ported creators (the (10,0) stand-in
-//!   APPROX for the flame is CLOSED — effects.rs `mc2_spawn_fire6`,
+//! - (10,5) splash, (10,13) debris smoke and the (10,6) tree flame
+//!   ride their real ported creators (effects.rs `mc2_spawn_fire6`,
 //!   docs/traces/mc2-class10-m6-m9-m11-m28-m31.md §1).
-//! - Models 7/8's terminal behavior is despawn (the trace CLOSED the
-//!   "states 19/27" question — those were goto labels).
-//! - Model 6 (cave bee) is cave-gated like m24: no cave levels boot
-//!   yet, the ctor returns None (retail's own off-cave arm).
+//! - Models 7/8's terminal behavior is despawn (states 19/27 are goto
+//!   labels).
+//! - Model 6 (cave bee) is cave-gated: off-cave the ctor returns None
+//!   (retail's own off-cave arm).
 
 use crate::mc1::features::Gen;
 
@@ -303,7 +300,7 @@ impl Gen {
         }
         if self.ent[i].act_life < 0 {
             // The settled-debris smoke poof (EF:62688-91) — (10,13)
-            // is the smoke puff, not a gib (trace headline 3).
+            // is the smoke puff, not a gib.
             let (x, y, z) = {
                 let e = &self.ent[i];
                 (e.x, e.y, e.z)
@@ -317,9 +314,9 @@ impl Gen {
         }
     }
 
-    /// The MC2 class-2 tick column (replaces the Phase-3 inert
-    /// hold): trees run the burn ladder, statics snap, falling props
-    /// fall. Unknown states hold (authentic for the no-op slots).
+    /// The MC2 class-2 tick column: trees run the burn ladder, statics
+    /// snap, falling props fall. Unknown states hold (authentic for the
+    /// no-op slots).
     pub(crate) fn mc2_scenery_tick(&mut self, i: usize) {
         match (self.ent[i].model65, self.ent[i].tick70) {
             (0, 0) => self.mc2_tree_tick(i),

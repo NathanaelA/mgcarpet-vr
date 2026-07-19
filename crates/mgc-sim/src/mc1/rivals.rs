@@ -2,7 +2,7 @@
 //! per-tick brain, casting arm, mortality and respawn. Direct port of
 //! the remc1 AI wizard machinery; all citations remc1 sub_main.cpp.
 //! The full trace record lives in docs/ROADMAP.md "HOSTILE WIZARDS
-//! (RIVAL AI) — TRACE BANK (2026-07-09)".
+//! (RIVAL AI) — TRACE BANK".
 //!
 //! Architecture mirrors the original: the AI is a DECISION LAYER over
 //! the shared engines — rivals cast through the same class-12
@@ -13,23 +13,23 @@
 //! riding the regen delta), and die into the same jar-scatter + grave
 //! sequence as the human.
 //!
-//! Deliberate original asymmetries, ported as traced (retail-check
-//! register in the ROADMAP bank): AI heals 4x the human's afield rate
-//! (:18013 vs :55418); AI at its castle DISCARDS damage instead of
-//! forwarding it to the castle (:17975-79); the AI's first castle is
-//! spawned directly, free and instant (:19200-08); the AI carpet
-//! ignores walls, drag and knockback (sub_14EB0 runs neither the wall
-//! gate nor the knock fields); AI target scans are omniscient; the AI
-//! learns spells on a 200-tick timer from any jar existing in the
-//! world instead of picking jars up (:64805-14, :19381-443).
+//! Retail AI-vs-human asymmetries, ported faithfully: AI heals 4x the
+//! human's afield rate (:18013 vs :55418); AI at its castle DISCARDS
+//! damage instead of forwarding it to the castle (:17975-79); the
+//! AI's first castle is spawned directly, free and instant
+//! (:19200-08); the AI carpet ignores walls, drag and knockback
+//! (sub_14EB0 runs neither the wall gate nor the knock fields); AI
+//! target scans are omniscient; the AI learns spells on a 200-tick
+//! timer from any jar existing in the world instead of picking jars
+//! up (:64805-14, :19381-443).
 //!
-//! Known interim deviations (ours, flagged inline): the hate feed
-//! runs at damage-intake and homing-acquisition time instead of the
+//! Interim deviations (ours, flagged inline): the hate feed runs at
+//! damage-intake and homing-acquisition time instead of the
 //! original's per-projectile one-shot ledger scan (sub_16540 —
 //! equivalent inputs, slightly later timing); creatures still target
-//! only the human (widening the mob scans to the full wizard list is
-//! a follow-up); the duel pull on the CASTER is applied through the
-//! knock channel (magnitude from the traced formula).
+//! only the human (OPEN: widen the mob scans to the full wizard
+//! list); the duel pull on the CASTER is applied through the knock
+//! channel (magnitude from the traced formula).
 
 use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::features::Gen;
@@ -1798,8 +1798,8 @@ impl World {
         }
         // Death message for the app ticker + toast (retail etext 54
         // = "has died." rendered "<Name> has died.", periods=100 —
-        // :55499-517 + the drawType-0 sprintf :26518-33; the old
-        // "is dead" wording was etext 56, the wrong neighbor).
+        // :55499-517 + the drawType-0 sprintf :26518-33; NOT etext 56
+        // "is dead", the wrong neighbor).
         let slot = self.rivals[ri].slot;
         self.rival_deaths.push(slot);
         let name = RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
@@ -1861,9 +1861,8 @@ impl World {
             // The FINAL-death broadcast (retail etext 62 via the
             // opcode-0x1D elimination arm, :48812-25: "<Name> has
             // been eliminated from the realm.", periods=100 — MC1
-            // says "eliminated" where MC2 says "banished"). Once,
-            // on the elimination edge (player 2026-07-17: ours was
-            // silent here).
+            // says "eliminated" where MC2 says "banished"). Once, on
+            // the elimination edge.
             if !self.rivals[ri].eliminated {
                 let slot = self.rivals[ri].slot;
                 let name = RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");

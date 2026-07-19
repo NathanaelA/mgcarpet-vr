@@ -1,4 +1,4 @@
-//! Shared golden-guard for the baked-data self-skips (review J1).
+//! Shared golden-guard for the baked-data self-skips.
 //! Include from a test file with `#[path = "common/mod.rs"] mod common;`.
 
 /// Report a baked-data skip. Under `MGC_REQUIRE_GOLDENS=1` a skip is

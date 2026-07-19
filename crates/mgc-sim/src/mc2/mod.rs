@@ -1,9 +1,8 @@
 //! The MC2 (Magic Carpet 2: The Netherworlds) simulation column —
-//! tier-2 tables and (as Phase 3 lands them) the tier-4 handlers and
-//! tier-5 verb arms behind [`crate::verbs`]. Everything here is a
-//! verbatim port of remc2 machinery; shared chassis stays in
-//! [`crate::mc1::features::Gen`] per the Phase-0 survey (same pool,
-//! LCG, mailboxes, tile chains).
+//! tier-2 tables, tier-4 handlers, and tier-5 verb arms behind
+//! [`crate::verbs`]. Everything here is a verbatim port of remc2
+//! machinery; shared chassis stays in [`crate::mc1::features::Gen`]
+//! (same pool, LCG, mailboxes, tile chains).
 //!
 //! Data provenance: `behavior.rs` + `sprite_params.rs` are generated
 //! by `tools/extract-remc2-tables.py` from the vendored remc2
@@ -39,10 +38,10 @@ pub(crate) mod tokens;
 /// only ONE of the (speed_6, rotSpeed_8) pair per row — at load the
 /// engine decompresses each row's sprite and derives the other from
 /// the bitmap aspect: `speed_6 = width·rotSpeed_8/height` (or the
-/// transpose). THIS is why the static table's speed_6 column is
-/// zero almost everywhere (the PLAYTEST-11 worm-spacing "provenance
-/// OPEN" — closed) and why zero-box projectiles could never collide.
-/// `dims[sprite_id]` = (width, height) from the baked sprite index;
+/// transpose). This is why the static table's speed_6 column is zero
+/// almost everywhere, and why zero-box projectiles could never
+/// collide. `dims[sprite_id]` = (width, height) from the baked sprite
+/// index;
 /// missing/zero dims take retail's 255×255 fallback. Returns the
 /// per-row derived (speed_6, rot_speed_8).
 pub fn derive_sprite_extents(dims: &[(u16, u16)]) -> Vec<(u16, u16)> {
@@ -73,9 +72,8 @@ pub fn derive_sprite_extents(dims: &[(u16, u16)]) -> Vec<(u16, u16)> {
 mod tests {
     use super::behavior::{BEHAVIOR, Mc2BehaviorRow, ROW_BASE};
 
-    /// The Phase-0 survey's cross-engine anchor: MC2's model-0 row
-    /// (array index 59, the engine's base pointer) is byte-identical
-    /// to MC1's BEHAVIOR[0] — proven here against both extractions.
+    /// Cross-engine anchor: MC2's model-0 row (array index 59, the
+    /// engine's base pointer) is byte-identical to MC1's BEHAVIOR[0].
     #[test]
     fn mc2_model0_row_matches_mc1_row0() {
         let m2 = &BEHAVIOR[ROW_BASE];

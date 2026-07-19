@@ -151,7 +151,7 @@ pub struct FeatureAssets {
     /// particle-param row ([`crate::mc2::derive_sprite_extents`] —
     /// retail computes these at load from the sprite bitmaps,
     /// EF:44870-44910). Empty = pre-dims caller → the static table's
-    /// raw values stand (the old zero-box behavior).
+    /// raw zero-box values stand.
     pub mc2_sprite_ext: Vec<(u16, u16)>,
 }
 
@@ -341,8 +341,8 @@ pub(crate) struct Rec {
 impl std::hash::Hash for Rec {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // par3 is STATIC level input (never mutated at runtime, unlike
-        // class/swi_id) — excluded so plumbing it into Rec left every
-        // pinned MC2 state-hash golden untouched.
+        // class/swi_id) — excluded from the hash (hash-transparent, so
+        // MC2 state-hash goldens hold).
         let Rec {
             class,
             model,
@@ -505,8 +505,8 @@ pub(crate) struct Ent {
 
 /// Pending MC2 player debuff-stamp hits (slow webs, paralyze webs).
 /// Manual Hash: contributes to the state hash ONLY while hits are
-/// pending, so goldens pinned before the channel existed are
-/// untouched (the Planes ceiling / Rec par3 discipline).
+/// pending — hash-transparent when idle (the Planes ceiling / Rec par3
+/// discipline).
 #[derive(Default)]
 pub(crate) struct Mc2PlayerDebuffs {
     pub(crate) slow: u8,
@@ -517,7 +517,7 @@ impl std::hash::Hash for Mc2PlayerDebuffs {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         if self.slow != 0 || self.stun != 0 {
             // Field tag: keeps this pair from aliasing a neighboring
-            // conditional contribution of the same width (review J2).
+            // conditional contribution of the same width.
             state.write_u8(6);
             (self.slow, self.stun).hash(state);
         }
@@ -575,9 +575,8 @@ pub(crate) struct Gen {
     /// web / (10,66) paralyze web (`sub_38E70`/`sub_38F70`
     /// EF:28407/28442) — drained into the flight `Mc2Ext` channels
     /// by the sim boundary each tick (docs/traces/mc2-flight-model.md
-    /// §5c/5d). Hash-only-when-pending (the Planes pattern): the
-    /// zero state contributes nothing, so every golden pinned before
-    /// the channel existed stands.
+    /// §5c/5d). Hash-only-when-pending (the Planes pattern): the zero
+    /// state contributes nothing.
     pub(crate) mc2_debuffs: Mc2PlayerDebuffs,
     /// Rival wizard entity by player slot (0 = none; slot 0 = the
     /// human, unused) — the sprite-family team resolver for owner
@@ -654,8 +653,6 @@ pub(crate) struct Gen {
     /// Terrain changed inside a Gen-internal path with no dirty-
     /// returning dispatch arm (the castle downgrade's synchronous
     /// un-stamp collapse); World::tick merges + clears per turn.
-    /// Playtest-8: the final destruction left the tower ON SCREEN —
-    /// the sim flattened it but nothing re-uploaded the terrain.
     pub(crate) terrain_dirty: bool,
     /// MC2 non-day shading: `sub_462A0` inverts the relief shade on
     /// Night/Cave maps (remc2 Terrain.cpp:2030-2033). Per-LEVEL, set
@@ -687,8 +684,7 @@ pub(crate) struct Gen {
     /// award from inside the pool tick (`sub_6D8B0` call sites,
     /// EF:63189 etc.); the world tick drains it into the wizard's
     /// book the same turn — empty at hash time like a read mailbox
-    /// (and hash-transparent when empty, so every pinned stream
-    /// holds across the field addition).
+    /// (and hash-transparent when empty).
     pub(crate) mc2_cast_xp: Mc2XpMail,
     /// m26 spell-steal requests (`sub_28FF0` EF:19348-71 → the
     /// `sub_69300` effect): the wraith's roll lands pool-side but the
@@ -699,14 +695,13 @@ pub(crate) struct Gen {
     /// ball, EF:28364/28383): ball slot → claiming aura slot. An aura
     /// claims an unclaimed ball for one pull; the ball's own tick
     /// consumes and clears the claim — first-in-list keeps the ball
-    /// when auras overlap. Hash-quiet while empty (E25 2026-07-15).
+    /// when auras overlap. Hash-quiet while empty.
     pub(crate) mc2_aura_claim: Mc2SlotMap<4>,
     /// Pool wizards' WANTED timers (`word_0x248_584`): wizard slot →
     /// remaining hostility ticks. The human's lives in
     /// [`Gen::player_aggro`]; rivals had no `Ent` home. Armed by
     /// [`Gen::mc2_arm_wanted`], run down with the aggro cadence,
-    /// read by the archer Scan-A post-reject. Hash-quiet while
-    /// empty (E12 2026-07-15).
+    /// read by the archer Scan-A post-reject. Hash-quiet while empty.
     pub(crate) mc2_wanted: Mc2SlotMap<5>,
     /// The human's REBOUND tier bit (`sub_6AA00` EF:56721-51: tier
     /// `life==1` stamps PRECISE — byte0xc[0]|=0x10, exact return +
@@ -737,7 +732,7 @@ pub(crate) struct Gen {
 
 /// See [`Gen::mc2_castle_research`] — hashes to NOTHING while empty
 /// (the [`Mc2Ord`] pattern; tag 7 disambiguates adjacent quiet
-/// fields, review J2). Entries are `(owner, hp_factor[stage-1],
+/// fields). Entries are `(owner, hp_factor[stage-1],
 /// part_type[stage-1])` for stages 1..=7 (retail slots 1..7 / 10..16
 /// of the 19-byte array — slots 0/8/9/17/18 are never addressed).
 #[derive(Default)]
@@ -760,7 +755,7 @@ impl std::hash::Hash for Mc2CastleResearch {
 /// [`Mc2Ord`] pattern). Entries are `(owner, spell, amount)`: the
 /// area-spell effect ticks award BATCH counts (retail's single
 /// `sub_6D8B0(id, spell, hits)` call per pass — one award, one
-/// level-up notification), so the mail carries the amount (F3).
+/// level-up notification), so the mail carries the amount.
 #[derive(Default)]
 pub(crate) struct Mc2XpMail(pub Vec<(u16, u16, i32)>);
 
@@ -775,8 +770,7 @@ impl std::hash::Hash for Mc2XpMail {
 /// See [`Gen::mc2_steal_mail`] — (wraith slot, hand: 1 = right,
 /// 2 = left) requests from the m26 steal roll, drained by the world
 /// tick the same turn (the book lives world-side). Empty at hash
-/// time like a read mailbox; tagged against adjacent-mail aliasing
-/// (review J2).
+/// time like a read mailbox; tagged against adjacent-mail aliasing.
 #[derive(Default)]
 pub(crate) struct Mc2StealMail(pub Vec<(u16, u8)>);
 
@@ -790,7 +784,7 @@ impl std::hash::Hash for Mc2StealMail {
 }
 
 /// See [`Gen::mc2_spawn_ord`] — hashes to NOTHING while all-zero
-/// (golden-stream compatibility across the field addition).
+/// (hash-transparent).
 #[derive(Default)]
 pub(crate) struct Mc2Ord(pub [u8; 32]);
 
@@ -805,7 +799,7 @@ impl std::hash::Hash for Mc2Ord {
 /// Per-color MC2 Life scalar (`word_0x24A_586` — the wizard-HP AND
 /// castle-HP factor, EF:43768/61695). Default 256 = 1.0x for every
 /// color; hashes to NOTHING while all-default (the [`Mc2Ord`]
-/// pattern — goldens pinned before the field existed stand).
+/// pattern).
 pub(crate) struct Mc2LifeScale(pub [u16; 8]);
 
 impl Default for Mc2LifeScale {
@@ -824,10 +818,9 @@ impl std::hash::Hash for Mc2LifeScale {
 
 /// A counter that hashes to NOTHING at zero (see [`Mc2Ord`]). The
 /// const TAG (unique per field) disambiguates ADJACENT quiet fields:
-/// without it, (drain=5, scrolls=0) and (drain=0, scrolls=5) fed
-/// identical byte streams (the conditional-hash aliasing class,
-/// review J2). Written INSIDE the condition, so zero fields — every
-/// pinned golden — contribute nothing, exactly as before.
+/// without it, (drain=5, scrolls=0) and (drain=0, scrolls=5) feed
+/// identical byte streams (the conditional-hash aliasing class).
+/// Written INSIDE the condition, so zero fields contribute nothing.
 #[derive(Default)]
 pub(crate) struct Mc2Quiet<const TAG: u8>(pub i32);
 
@@ -841,13 +834,13 @@ impl<const TAG: u8> std::hash::Hash for Mc2Quiet<TAG> {
 }
 
 /// A slot-keyed side-channel that hashes to NOTHING while empty
-/// (golden-stream compatibility across the field addition) and
-/// contributes deterministically (BTreeMap order) once entries
-/// exist. Carries per-entity words that have no `Ent` field home —
-/// adding a field to `Ent` would move EVERY golden's hash stream.
-/// The const TAG (unique per field) keeps adjacent slot-maps from
-/// aliasing (aura_claim={a} + wanted={} vs its mirror — review J2);
-/// written only when non-empty, so empty maps stay transparent.
+/// (hash-transparent) and contributes deterministically (BTreeMap
+/// order) once entries exist. Carries per-entity words that have no
+/// `Ent` field home — adding a field to `Ent` would move EVERY
+/// golden's hash stream. The const TAG (unique per field) keeps
+/// adjacent slot-maps from aliasing (aura_claim={a} + wanted={} vs
+/// its mirror); written only when non-empty, so empty maps stay
+/// transparent.
 #[derive(Default)]
 pub(crate) struct Mc2SlotMap<const TAG: u8>(pub std::collections::BTreeMap<u16, u16>);
 
@@ -864,7 +857,7 @@ impl<const TAG: u8> std::hash::Hash for Mc2SlotMap<TAG> {
 }
 
 /// See [`Gen::mc2_night_shade`] — a bool that hashes to NOTHING when
-/// false (golden-stream compatibility across the field addition).
+/// false (hash-transparent).
 #[derive(Default)]
 pub(crate) struct NightShade(pub bool);
 
@@ -903,7 +896,6 @@ pub struct SoundEvent {
     pub player: bool,
 }
 
-/// Rebuild the original 1-based record table from level things.
 /// Build the 1-based runtime THING table. `base` maps the package's
 /// 0-based `slot` export into engine slots: MC1's 1999-record file
 /// is engine slots 1..=1999 (base 1); MC2's 1200-record file IS the
@@ -2207,8 +2199,8 @@ impl Gen {
     /// context at RUNTIME (None during the load fixpoint): the
     /// terrain deformers broadcast ch0 damage + the loop-10 rumble,
     /// which only matter — and only have a listener — once the world
-    /// runs (deviation: the original's load pass broadcasts into the
-    /// half-built pool too; nothing observable survives it).
+    /// runs (deliberate: the original's load pass broadcasts into the
+    /// half-built pool too, but nothing observable survives it).
     pub(crate) fn tick(&mut self, i: usize, ctx: Option<&crate::mc1::mobs::MobCtx>) {
         match self.ent[i].tick70 {
             9 => self.tick_hill(i, ctx),
@@ -3048,16 +3040,14 @@ impl Gen {
             e.f136 = 10000;
             e.f140 = 0;
             // The ch0 vulnerability bit (+28 = 1, :44283) — without
-            // it area writes skip the balloon entirely (the
-            // playtest-9 "balloons are invulnerable" report; the
-            // authored-placement ctor had it, this spawner didn't).
+            // it area writes skip the balloon entirely.
             e.f28 = 1;
             e.row156 = 9;
             e.id24 = own;
             e.f144 = own;
         }
         // Linked at spawn like the ctor (sub_41CF0 :44284) — an
-        // unlinked balloon hovering its home tile was also invisible
+        // unlinked balloon hovering its home tile would be invisible
         // to the direct-hit cell scans.
         self.link(i, x, y, z);
         self.refill_life(i);
@@ -3079,9 +3069,8 @@ impl Gen {
     /// on, ONLY when the balloon still has cargo room and the castle
     /// census (house tally + stored) is below capacity. No free ball
     /// → the castle stays the target: balloons come home and wait
-    /// there (playtest-8 fix — the old none→idle parked them at the
-    /// last pickup). Untraced nicety: retail staggers retargeting by
-    /// castle+63 % fleet, keeping a stale ball target between slots'
+    /// there. Untraced nicety (deliberate): retail staggers retargeting
+    /// by castle+63 % fleet, keeping a stale ball target between slots'
     /// turns; we re-pick every pass.
     fn castle_balloons(&mut self, i: usize) {
         const FLEET: [(usize, usize); 8] = [
@@ -3219,12 +3208,12 @@ impl Gen {
         if t == 0 || self.ent[t].flags & 0x400 != 0 {
             return; // idle (:56814)
         }
-        // Stale-slot guard (2026-07-15): the claim ticket is a RAW
-        // slot index. A collected ball's slot LIFO-recycled by
-        // another class-10 (a dwelling) passed the class check and
-        // got "absorbed" — the instant-death bug. Retail sub_47F90
-        // (:56742-73) has the same latent bug; the dispatcher only
-        // ever assigns (10,39), so this blocks nothing legitimate.
+        // Stale-slot guard: the claim ticket is a RAW slot index. A
+        // collected ball's slot LIFO-recycled by another class-10 (a
+        // dwelling) passes the class check and gets "absorbed" — an
+        // instant-death bug. Retail sub_47F90 (:56742-73) has the same
+        // latent bug; the dispatcher only ever assigns (10,39), so this
+        // blocks nothing legitimate.
         if self.ent[t].class64 == 10 && self.ent[t].model65 != 39 {
             self.ent[i].f146 = 0; // ball is gone: back to idle
             return;
@@ -3294,8 +3283,7 @@ impl Gen {
 
     /// sub_47C60 (:56572): castle max health by level (level 0 = 0 =
     /// keep the ctor's 40000). Levels 6/7 use the decompiler-mangled
-    /// const `loc_13880` = 0x13880 = 80000 (decoded 2026-07-07 —
-    /// corrects the earlier 60000 carry). The carry-over rule on any
+    /// const `loc_13880` = 0x13880 = 80000. The carry-over rule on any
     /// level change (sub_47BD0 :56552-60): a NEGATIVE old life
     /// (overkill) is re-deducted from the new max, capped at half of
     /// it; positive life just resets to full.
@@ -3336,9 +3324,8 @@ impl Gen {
                 // inside sub_47960's `if (v1)` on this spawn
                 // (:56471-93): a pool-full failure changes nothing
                 // and case 0 retries next tick. Committing (or
-                // advancing to the wait) without a painter was the
-                // stuck-castle deadlock under meteor pool exhaustion
-                // (fixed 2026-07-15).
+                // advancing to the wait) without a painter deadlocks
+                // the castle under meteor pool exhaustion.
                 let Some(p) = self.spawn_creator(42, x, y, site_z) else {
                     return;
                 };
@@ -3368,11 +3355,11 @@ impl Gen {
                 // mail accrue untouched until the leveler hands back
                 // state 4: the original's standing tick is the ONLY
                 // damage processor (sub_47EC0 runs from +70=4 alone).
-                // Processing lethals mid-transformation was the
-                // playtest-6 orphaned-tower bug (a downgrade collapse
-                // under a still-running painter), and it erased the
-                // authentic between-transformations upgrade window
-                // (the dragon-squat survival trick).
+                // Processing lethals mid-transformation orphans the
+                // tower (a downgrade collapse under a still-running
+                // painter) and erases the authentic between-
+                // transformations upgrade window (the dragon-squat
+                // survival trick).
                 self.ent[i].f59 = 1;
             }
             // Painter done → the m41 ground leveler (case 5,
@@ -3738,8 +3725,8 @@ impl Gen {
     /// with capacity > 5 has a ~1/16 chance to emit a villager.
     /// The ch1 possession re-owner (:30801-14): claim the sender,
     /// chime 4, clear the active bit, swap to the claimed sprite
-    /// (177). Deviation: the immediate mana credit off the claimer's
-    /// +48 is the mana-economy track.
+    /// (177). The immediate mana credit off the claimer's +48 is
+    /// omitted here (deliberate: it belongs to the mana-economy track).
     pub(crate) fn tick_building_live(&mut self, i: usize) {
         if self.ent[i].act_life < 0 {
             // Killed directly (castle crush life = -1, :17638).
@@ -3764,9 +3751,9 @@ impl Gen {
             let (amt, src) = self.ent[i].mail[0];
             self.ent[i].mail[0].1 = 0;
             // Captured buildings are immune to their OWNER's damage
-            // ("as if they were your castle" — PLAYER GROUND TRUTH;
-            // no substrate found in the decompile's ch0 writer or
-            // intake, sub_120B0/:31070 — DOSBox verification owed).
+            // ("as if they were your castle"); no substrate found in
+            // the decompile's ch0 writer or intake (sub_120B0/:31070)
+            // — verification owed.
             if src != 0 && src == self.ent[i].f144 {
                 return;
             }
@@ -3794,13 +3781,12 @@ impl Gen {
         if self.ent[i].f63 % 40 == 0 {
             self.ent[i].f140 = (self.ent[i].f26 as i32) << 8;
             let cap = self.ent[i].f128;
-            // EXACT equality (:30819) — occupancy only rises (militia
-            // walk-ins have no cap check, emission never decrements),
-            // so retail's gate self-extinguishes once a house
-            // overshoots. `>=` here was the level-001 runaway: every
-            // full house emitted forever, flooding the level with
-            // villagers + loose mana until the pool saturated
-            // (traced + runtime-reproduced 2026-07-16).
+            // EXACT equality (:30819), NOT `>=` — occupancy only rises
+            // (militia walk-ins have no cap check, emission never
+            // decrements), so retail's gate self-extinguishes once a
+            // house overshoots. `>=` makes every full house emit
+            // forever, flooding the level with villagers + loose mana
+            // until the pool saturates.
             if cap > 5 && self.ent[i].f26 == cap {
                 let d = self.ent_rand(i) % cap as u32;
                 if d > (cap - cap / 16 - 2) as u32 {
@@ -4324,12 +4310,12 @@ mod tests {
         );
     }
 
-    /// Stuck-castle regression (2026-07-15): the transform must RETRY
-    /// a failed painter/leveler spawn — retail keeps each commit
-    /// inside the spawn-success arm (sub_47960 :56471, sub_47020
-    /// :56107, sub_47080 :56126). Advancing to a pure-wait state with
-    /// no helper spawned froze the castle forever (neither upgradable
-    /// nor destroyable) under meteor pool exhaustion.
+    /// The transform must RETRY a failed painter/leveler spawn —
+    /// retail keeps each commit inside the spawn-success arm (sub_47960
+    /// :56471, sub_47020 :56107, sub_47080 :56126). Advancing to a
+    /// pure-wait state with no helper spawned freezes the castle
+    /// forever (neither upgradable nor destroyable) under meteor pool
+    /// exhaustion.
     #[test]
     fn castle_transform_retries_failed_spawns() {
         let mut g = Gen::new(
@@ -4391,12 +4377,12 @@ mod tests {
         assert_eq!(g.ent[i].f59, 1, "freed slot: the repaint painter wait");
     }
 
-    /// Instant-death regression (2026-07-15): the balloon claim
-    /// ticket is a RAW slot index — a collected ball's slot recycled
-    /// by another class-10 entity (a dwelling) must not be devoured
-    /// as if it were still the claimed (10,39) ball. Retail sub_47F90
-    /// (:56742-73) shares the latent bug; the dispatcher only ever
-    /// assigns (10,39), so the guard blocks nothing legitimate.
+    /// The balloon claim ticket is a RAW slot index — a collected
+    /// ball's slot recycled by another class-10 entity (a dwelling)
+    /// must not be devoured as if it were still the claimed (10,39)
+    /// ball. Retail sub_47F90 (:56742-73) shares the latent bug; the
+    /// dispatcher only ever assigns (10,39), so the guard blocks
+    /// nothing legitimate.
     #[test]
     fn balloon_ignores_recycled_claim_slots() {
         let mut g = Gen::new(
@@ -4494,10 +4480,10 @@ mod tests {
         assert_eq!(run(i32::MAX), 16, "always-awake override arms f58");
     }
 
-    /// E3: only the %-forms of the m18 timer table draw the
-    /// per-entity LCG; the flat forms are draw-free (the old
-    /// unconditional pre-draw desynced the tank's rand stream) and
-    /// (0,1)/(2,1) carry the pinned retail values.
+    /// Only the %-forms of the m18 timer table draw the per-entity
+    /// LCG; the flat forms are draw-free (an unconditional pre-draw
+    /// would desync the tank's rand stream), and (0,1)/(2,1) carry the
+    /// pinned retail values.
     #[test]
     fn m18_timer_values_and_rng_parity() {
         let mut g = mc2_gen();
@@ -4518,7 +4504,7 @@ mod tests {
         assert_ne!(g.ent[i].rand, r0, "(0,1) draws exactly its one roll");
     }
 
-    /// E1: every in-range drain path STAYS in state 210 — only a
+    /// Every in-range drain path STAYS in state 210 — only a
     /// target beyond the row range exits to 209.
     #[test]
     fn m26_leech_stays_draining_in_range() {
@@ -4539,9 +4525,9 @@ mod tests {
         assert_eq!(g.ent[i].tick70, 209, "out of range: back to approach");
     }
 
-    /// E25: the aura claim handshake — the first aura in slot order
-    /// keeps an overlapped ball; the second must not overwrite the
-    /// pull (the old unconditional write was last-writer-wins).
+    /// The aura claim handshake — the first aura in slot order keeps
+    /// an overlapped ball; the second must not overwrite the pull
+    /// (first-writer-wins, NOT last-writer-wins).
     #[test]
     fn mc2_aura_first_claim_wins() {
         let mut g = mc2_gen();
@@ -4579,18 +4565,16 @@ mod tests {
         );
     }
 
-    /// E19: the m12 template walk falls back to 17 on exhaustion
-    /// (empty bldgprm) — the old walk returned a failure and wrapped
-    /// at the wrong boundary.
+    /// The m12 template walk falls back to 17 on exhaustion
+    /// (empty bldgprm).
     #[test]
     fn m12_template_pick_falls_back_to_17() {
         let mut g = mc2_gen();
         assert_eq!(g.m12_pick_template(), 17, "exhaustion returns 17");
     }
 
-    /// E23: the m25 death split under pool exhaustion still FALLS
-    /// THROUGH to the (10,1) burst + the state advance — the old
-    /// early return skipped both.
+    /// The m25 death split under pool exhaustion still FALLS THROUGH
+    /// to the (10,1) burst + the state advance.
     #[test]
     fn m25_split_exhausted_pool_still_bursts() {
         let mut g = mc2_gen();
@@ -4612,7 +4596,7 @@ mod tests {
         );
     }
 
-    /// F8: the Summon Army ring — a firefly (model 19) cast raises
+    /// The Summon Army ring — a firefly (model 19) cast raises
     /// EIGHT allied nodes (weak-swarm size), every one carrying the
     /// caster's id24, the allied StageVar2=13 marker, the 8·M+7
     /// action and the 250-tick lifespan.
@@ -4634,7 +4618,7 @@ mod tests {
         }
     }
 
-    /// E21: falling-prop gravity is position-THEN-decrement — the
+    /// Falling-prop gravity is position-THEN-decrement — the
     /// position takes the OLD velocity before the −24 applies.
     #[test]
     fn falling_prop_position_takes_old_velocity() {

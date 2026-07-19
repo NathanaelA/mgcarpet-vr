@@ -130,7 +130,7 @@ pub struct MainMenu {
 
 impl MainMenu {
     /// Load the case-4 members out of the baked `assets/mc2-ui`
-    /// bundle (epoch 18).
+    /// bundle.
     pub fn load(dir: &Path) -> Result<Self, String> {
         let read = |name: &str| -> Result<Vec<u8>, String> {
             std::fs::read(dir.join(name)).map_err(|e| {
@@ -255,10 +255,9 @@ impl MainMenu {
     }
 
     /// Esc: close the modal only. Retail auto-selects the Exit
-    /// button (MI:5842-43), but with Esc also serving as the
-    /// pointer-release/abandon key in play, that made stray Escapes
-    /// land on "exit game" (player report 2026-07-18) — quitting is
-    /// the Exit button's job.
+    /// button (MI:5842-43), but Esc also serves as the
+    /// pointer-release/abandon key in play, so here it never quits
+    /// (deliberate) — quitting is the Exit button's job.
     pub fn escape(&mut self) {
         self.modal = None;
     }

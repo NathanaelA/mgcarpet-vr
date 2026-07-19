@@ -1,15 +1,12 @@
-//! The MC1 (Magic Carpet 1 / Hidden Worlds) simulation — every
-//! module here is a verbatim port of remc1 machinery (ROADMAP
-//! "MULTI-GAME ARCHITECTURE": tier-2 tables, tier-3/4 dispatch +
-//! handlers, and the tier-5 engine verbs, pending their Phase-2
-//! seam). The game-agnostic pieces live OUTSIDE this namespace:
-//! [`crate::chassis`] (the shared-engine parameter sets) and
-//! [`crate::flight`] (the flight-model seam, MC1 + enhanced tiers).
+//! The MC1 (Magic Carpet 1 / Hidden Worlds) simulation — a verbatim
+//! port of remc1 machinery (tier-2 tables, tier-3/4 dispatch +
+//! handlers, tier-5 engine verbs). The game-agnostic pieces live
+//! OUTSIDE this namespace: [`crate::chassis`] (shared-engine parameter
+//! sets) and [`crate::flight`] (the flight-model seam, MC1 + enhanced).
 //!
 //! Hidden Worlds is NOT a separate namespace: retail ships it as a
-//! sibling binary of the same engine, and it consumes this module
-//! with its own asset bundles (a small behavior-delta set may join
-//! later — none identified yet).
+//! sibling binary of the same engine, consuming this module with its
+//! own asset bundles.
 
 pub mod behavior;
 pub(crate) mod combat;

@@ -1,4 +1,4 @@
-//! Hidden-Worlds reachability census (docs/SURVEY-MC1HW.md §7). Scan the
+//! Hidden-Worlds reachability census (docs/archive/SURVEY-MC1HW.md §7). Scan the
 //! 73 baked `mc1hw` levels to separate REAL delta work from theoretical:
 //!   1. spell 20 availability  — wizard `starting_spells[20]`/`allowed_spells[20]`
 //!   2. `(10,53)` THING         — the HW mana-drain entity (§4 content gap)

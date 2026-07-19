@@ -1,21 +1,20 @@
 //! Chassis parameters — the per-game constant set of the SHARED sim
-//! chassis (ROADMAP "MULTI-GAME ARCHITECTURE" tier 1; the full diff:
-//! docs/SURVEY-MC2.md "Proposed ChassisParams").
+//! chassis (the full diff: docs/archive/SURVEY-MC2.md "Proposed
+//! ChassisParams").
 //!
-//! The Phase-0 survey established that MC1 and MC2 run the SAME
-//! chassis — pool/allocator (two-stack, 999→1 build, LIFO, fail-open
-//! exhaustion), LCG constants 9377/9439 with slot+global per-entity
-//! seeding, tile chains, the 6-channel damage-mailbox protocol, the
-//! 4-phase tick skeleton — and these values are the only chassis-
-//! level differences. Each game defines its PRISTINE set; the sim
-//! takes one at construction and never branches on "which game"
-//! elsewhere.
+//! MC1 and MC2 run the SAME chassis — pool/allocator (two-stack,
+//! 999→1 build, LIFO, fail-open exhaustion), LCG constants 9377/9439
+//! with slot+global per-entity seeding, tile chains, the 6-channel
+//! damage-mailbox protocol, the 4-phase tick skeleton — and these
+//! values are the only chassis-level differences. Each game defines
+//! its PRISTINE set; the sim takes one at construction and never
+//! branches on "which game" elsewhere.
 //!
-//! Deviating from a pristine set is the LIMIT-REMOVING option class
-//! (G-class): e.g. a bumped `pool_slots` un-drops the spawns retail
-//! silently discarded — bit-identical to retail up to the first
-//! exhaustion event, divergent after (and the win goal moves, since
-//! dropped spawns carry mana). Replays must record the set.
+//! Deviating from a pristine set is the LIMIT-REMOVING option class:
+//! e.g. a bumped `pool_slots` un-drops the spawns retail silently
+//! discarded — bit-identical to retail up to the first exhaustion
+//! event, divergent after (and the win goal moves, since dropped
+//! spawns carry mana). Replays must record the set.
 
 /// Per-entity LCG state width. Same constants either way; MC2 keeps
 /// the seed as u16 (entity offset 20 vs MC1's u32 at offset 4), so
@@ -55,8 +54,7 @@ pub struct ChassisParams {
     /// literal). A raised gate is the limit-removing class like
     /// `pool_slots` (sleep was a period CPU optimization: asleep
     /// creatures still MOVE but don't scan, take mail damage, or
-    /// re-derive segment spacing — see the 2026-07-16 wake-death and
-    /// dragon-dilution traces); `i32::MAX` = always awake.
+    /// re-derive segment spacing); `i32::MAX` = always awake.
     pub awake_gate_sq: i32,
 }
 
@@ -72,8 +70,7 @@ impl ChassisParams {
         awake_gate_sq: 0x240_0000,
     };
 
-    /// The pristine MC2 set (remc2; survey values — the MC2 sim
-    /// itself is pending, this records what the survey established).
+    /// The pristine MC2 set (remc2 survey values).
     pub const MC2: ChassisParams = ChassisParams {
         level_table_slots: 1200,
         pool_slots: 1000,
@@ -91,13 +88,12 @@ impl Default for ChassisParams {
     }
 }
 
-/// Manual (was a derive) since `awake_gate_sq` landed: the chassis is
-/// hashed inside `Gen`, so a NEW field must be hash-transparent at
-/// its pristine value or every golden moves for a layout-only reason
-/// (the J2 tag discipline; the `Player` destructure precedent — a
-/// future field addition is a compile error here, extend
-/// deliberately). A deviating gate (`--awake-range`) hashes with a
-/// tag byte: deviated runs are hash-visible, as replays require.
+/// Manual Hash (not derived): the chassis is hashed inside `Gen`, so a
+/// NEW field must be hash-transparent at its pristine value or every
+/// golden moves for a layout-only reason (a future field addition is a
+/// compile error in the destructure below — extend deliberately). A
+/// deviating gate (`--awake-range`) hashes with a tag byte: deviated
+/// runs are hash-visible, as replays require.
 impl std::hash::Hash for ChassisParams {
     fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
         let ChassisParams {

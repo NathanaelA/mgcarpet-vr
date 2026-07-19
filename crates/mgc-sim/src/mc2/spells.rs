@@ -15,11 +15,11 @@
 //!
 //! Consumers: the par1-authored class-10 effect overrides (the
 //! sub_4A310 case-0xA bottom block, EF:33148-33195, and the
-//! GenerateEvents pass EV:367-371) and — with Phase 4.2 — the
-//! class-15 cast costs / GetSpellManaCost. LevelInit.cpp:12-21
-//! patches rows 4 and 19 at level init, keyed to MapType (Day vs
-//! non-Day; tier-0 life + hintText only — the open-closure trace §4);
-//! not yet ported, noted where the table loads.
+//! GenerateEvents pass EV:367-371) and the class-15 cast costs /
+//! GetSpellManaCost. LevelInit.cpp:12-21 patches rows 4 and 19 at
+//! level init, keyed to MapType (Day vs non-Day; tier-0 life +
+//! hintText only — the open-closure trace §4) — see
+//! [`level_init_patch`].
 
 /// One subspell tier (26 bytes on disk).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

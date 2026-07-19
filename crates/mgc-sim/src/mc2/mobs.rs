@@ -1,13 +1,11 @@
-//! MC2 creature machinery — the Phase-3 slice (ROADMAP "Phase 3"):
-//! the class-5 dispatch, shared state primitives, the three slice
-//! creatures (Goat m1, Archers m4, Villager m13) and the (9,13)
-//! archer arrow, ported verbatim from remc2 EventsFunctions.cpp
-//! (`:N` cites; the full trace bank: docs/PHASE3-RESEARCH.md). Runs
-//! on the SHARED chassis ([`crate::mc1::features::Gen`]) — same
-//! pool, mailboxes, LCG, terrain samplers, per the Phase-0 survey.
-//! MC2's NewEvent defaults match MC1's field-for-field (life 300,
-//! flags dword 8, speed 16, strength 100, id = slot, filter bytes
-//! -1; Events.cpp:582-599) — the chassis holds.
+//! MC2 creature machinery: the class-5 dispatch, shared state
+//! primitives, the slice creatures (Goat m1, Archers m4, Villager
+//! m13) and the (9,13) archer arrow, ported from remc2
+//! EventsFunctions.cpp (`:N` cites; trace bank docs/archive/PHASE3-RESEARCH.md).
+//! Runs on the SHARED chassis ([`crate::mc1::features::Gen`]) — same
+//! pool, mailboxes, LCG, terrain samplers. MC2's NewEvent defaults
+//! match MC1's field-for-field (life 300, flags dword 8, speed 16,
+//! strength 100, id = slot, filter bytes -1; Events.cpp:582-599).
 //!
 //! Entity-field mapping (MC2 name → our [`Ent`] field):
 //! `actionIndex_0x45_69`→tick70 · `byte_0x3E_62` phase→f63 (both
@@ -186,10 +184,9 @@ impl Gen {
         let mut walked = 0i32;
         // Retail loop shape `while (walked <= reach) { probe; step }`
         // (:3659-3686): for walker extents <= 255 that is exactly ONE
-        // probe at the predicted point. Probing after the bound check
-        // tested one extra 256-step point and false-blocked a tile
-        // early (the PLAYTEST-3 brownian settlers on the 1-tile
-        // causeway — docs/traces/mc2-walker-wander-ai.md D2).
+        // probe at the predicted point. Order matters — testing after
+        // the step probes an extra 256-step point and false-blocks a
+        // tile early (1-tile causeways).
         loop {
             if walked > reach {
                 return false;
@@ -239,7 +236,7 @@ impl Gen {
     /// `always_test`: the retry predictions run the block/roughness
     /// test UNCONDITIONALLY (EF:8826/8840/8852) — only the FIRST
     /// prediction gates it on the tile change (EF:8806). A rotated
-    /// retry that stays in-tile must still be terrain-tested (E13).
+    /// retry that stays in-tile must still be terrain-tested.
     fn mc2_move_candidate(&self, i: usize, always_test: bool) -> ((u16, u16, i16), bool) {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -265,10 +262,8 @@ impl Gen {
         // The commit turn is clamped by row v_2 (goat 45, villager 22
         // per tick): sub_58350's v_4 arg is DEAD in retail, the real
         // clamp is subtype_160_0x2_2 (EF:8868-75 + 40391-405; MC1's
-        // creature_move already uses its v_2 twin). Clamping with v_4
-        // (=5) made yaw 4-9x too slow to catch the wander heading —
-        // ballistic walks = the PLAYTEST-3 herd dispersal
-        // (docs/traces/mc2-walker-wander-ai.md D1).
+        // creature_move already uses its v_2 twin). NOT v_4 (=5),
+        // which under-turns 4-9x and can't catch the wander heading.
         let turn_cap = BEHAVIOR[self.ent[i].row156 as usize].v_2;
         fn commit(g: &mut Gen, i: usize, pos: (u16, u16, i16), cap: i16) {
             g.move_relink(i, pos.0, pos.1, pos.2);
@@ -372,7 +367,7 @@ impl Gen {
     /// Arm the wizard "wanted" timer (`word_0x248_584 = 200`) on a
     /// hit/kill source when it is a wizard — the human maps to the
     /// shared aggro register, pool wizards to the hash-quiet
-    /// `mc2_wanted` side channel (E12; the rival column is live).
+    /// `mc2_wanted` side channel.
     pub(crate) fn mc2_arm_wanted(&mut self, src: u16) {
         if src == PLAYER_TARGET {
             self.player_aggro = 200;
@@ -482,7 +477,7 @@ impl Gen {
     /// patrol quirk (:9038): its cone test uses the REVERSED bearing
     /// `tan2(candidate → self)`, unlike wander's `tan2(self →
     /// candidate)` (:9194) — vestigial for goats/townies (they never
-    /// occupy +0) but kept verbatim (walker trace D4).
+    /// occupy +0) but kept verbatim.
     pub(crate) fn mc2_pack_scan(&self, i: usize, reversed_cone: bool) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -536,7 +531,7 @@ impl Gen {
                 && c.id24 != id
                 // Retail iterates the LIVE per-model bucket — the
                 // dying never appear (EF:9641-50); the full-array
-                // walk needs the explicit life gate (E27).
+                // walk needs the explicit life gate.
                 && c.act_life >= 0
                 && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
                 && c.flags & 0x400 == 0
@@ -726,9 +721,7 @@ impl Gen {
                                     }
                                 }
                                 // Catch-up: leader max + act (:9482) —
-                                // retail MC1's line, RE-CONFIRMED by
-                                // the survey; both operands from the
-                                // LEADER.
+                                // both operands from the LEADER.
                                 self.ent[i].f126 = self.ent[l].f130 + self.ent[l].f126;
                             }
                         }
@@ -852,7 +845,7 @@ impl Gen {
         // PreKillEntity_1C890 (EF:9543-51): credit gates on killer
         // class-3 MODEL-0 (the human avatar only — rivals are (3,1)
         // and never score creature kills) AND the SELF-ID check:
-        // killing your own creature earns nothing (E27).
+        // killing your own creature earns nothing.
         if killer == PLAYER_TARGET
             && self.ent[i].id24 != PLAYER_TARGET
             && !matches!(model, 9 | 12 | 13 | 14 | 15)
@@ -870,8 +863,7 @@ impl Gen {
         }
         self.mc2_mana_spheres(i, false);
         if self.ent[i].flags & F_NO_CORPSE == 0 {
-            // The (10,1) corpse burst — Phase 4.3 closes the misfit:
-            // the explosion creator is native now.
+            // The (10,1) corpse burst.
             self.mc2_corpse_burst(i);
         }
         self.ent[i].flags |= 0x400;
@@ -919,10 +911,9 @@ impl Gen {
             let speed = (d2 % 0x30 + 16) as i16;
             // Velocity into the MC1 ball's dest fields (the shared
             // ball tick consumes them), fall arc into f46 — signed
-            // TRUNCATING /8 like the C idiom at EF:26909 (div_euclid
-            // floored: off by one for deaths > 1024 above terrain;
-            // castle.rs:530 was already right), NO clamp (MC1 clamps
-            // ≥ 0; MC2 does not).
+            // TRUNCATING /8 like the C idiom at EF:26909 (NOT
+            // div_euclid, which floors: off by one for deaths > 1024
+            // above terrain), NO clamp (MC1 clamps ≥ 0; MC2 does not).
             let mut v = (0u16, 0u16, 0i16);
             Self::polar_step(&mut v, yaw, 0, speed);
             self.ent[b].dest_x = v.0;
@@ -965,8 +956,8 @@ impl Gen {
             e.row156 = 98; // ABSOLUTE row index (:33739)
         }
         self.ent[i].f58 = BEHAVIOR[98].v_26 + 1;
-        // Per-model spawn ordinal → f63 (:33740) — the herd cadence
-        // de-sync (E10; every `f63 & N` gate ran in lockstep at 0).
+        // Per-model spawn ordinal → f63 (:33740) — de-syncs the herd
+        // cadence (else every `f63 & N` gate runs in lockstep at 0).
         self.ent[i].f63 = self.mc2_ord(1);
         self.link(i, x, y, z);
         self.refill_life(i);
@@ -1006,8 +997,8 @@ impl Gen {
             e.row156 = 75; // ABSOLUTE row index (:33899)
         }
         // Ordinal FIRST (:33900) — it feeds the wake stagger on the
-        // very next line; unset f63 collapsed f58 to the constant
-        // period+4 (no stagger — the degenerate archer wake, E10).
+        // very next line; unset f63 collapses f58 to the constant
+        // period+4 (no stagger, degenerate archer wake).
         self.ent[i].f63 = self.mc2_ord(4);
         let period = BEHAVIOR[75].v_26.max(1);
         self.ent[i].f58 = (period - (self.ent[i].f63 as i16 % period)) + 4; // :33902
@@ -1052,7 +1043,7 @@ impl Gen {
             e.f58 = 64;
             e.f26 = 2;
         }
-        // Per-model spawn ordinal → f63 (:34062) — herd cadence (E10).
+        // Per-model spawn ordinal → f63 (:34062) — herd cadence.
         self.ent[i].f63 = self.mc2_ord(13);
         self.link(i, x, y, z);
         self.refill_life(i);
@@ -1274,7 +1265,7 @@ impl Gen {
                     // then POST-REJECT the single winner unless it is
                     // a wizard (model ≤ 1) with a live wanted timer —
                     // a nearer castle/balloon/non-wanted wizard voids
-                    // the whole scan (falls to Scan B). E12.
+                    // the whole scan (falls to Scan B).
                     let mut target = self.mc2_class3_scan(i, ctx).filter(|&s| {
                         let wizard = s == PLAYER_TARGET || self.ent[s as usize].model65 <= 1;
                         wizard && self.mc2_wanted_live(s)
@@ -1393,7 +1384,7 @@ impl Gen {
             self.player_danger = 100; // sub_5EF70 (:60598)
         }
         // No shots++: a creature volley never bumps the player's
-        // accuracy stat in retail (E27 sibling of roster's m15).
+        // accuracy stat in retail.
         true
     }
 
@@ -1435,8 +1426,7 @@ impl Gen {
         }
         // The Rebound gate (`sub_68740` at EF:58892): a shielded
         // victim throws the arrow back (model 13 passes the engine's
-        // whitelist unconditionally). The old "no shielded targets
-        // in the slice" skip predates the Rebound spell landing.
+        // whitelist unconditionally).
         if let Some(h) = hit
             && self.mc2_rebound_deflect(i, h, ctx)
         {
@@ -1557,9 +1547,7 @@ impl Gen {
                         // whose bldgprm row has byte_2 & 1 (:14619),
                         // no range limit: townies are NEVER in free
                         // wander, they permanently march at the
-                        // nearest dwelling (the causeway files in
-                        // retail are this scan + water flanks +
-                        // slope refusal — trace §6).
+                        // nearest dwelling.
                         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
                         let mut best: Option<(u16, i32)> = None;
                         for (j, c) in self.ent.iter().enumerate().skip(1) {
@@ -1571,8 +1559,7 @@ impl Gen {
                                 // (:14619): dwellings attract townies;
                                 // stone/route templates (the dis-13
                                 // causeway obelisks, flags 0x08/0x18)
-                                // must not capture them — the walker
-                                // trace's D3.
+                                // must not capture them.
                                 && self
                                     .assets
                                     .bldgprm
@@ -1605,8 +1592,7 @@ impl Gen {
     /// `AddTree_4AC40` (:33433) — the MC2 tree (2,0). FOUR per-entity
     /// LCG draws (lifespan, x/y jitter, sprite pick), byte-faithful.
     /// APPROX register: the class-2 tick column is unported (trees
-    /// hold inert — the natural-lifespan decay and burn states join
-    /// the Phase-4 roster).
+    /// hold inert — natural-lifespan decay and burn states OPEN).
     pub(crate) fn mc2_spawn_tree(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
@@ -2157,14 +2143,14 @@ impl Gen {
     /// `AddHouse0A_2D_38330` (:27959), the parked building (state
     /// 52): the CompareEvent08_38B00 damage core (death → state 53),
     /// the militia pop on a non-lethal hit, the possess-claim intake
-    /// (the PLAYTEST-2 flag report — claimed buildings fly the flag),
-    /// and the per-tick terrain z-snap.
+    /// (claimed buildings fly the flag), and the per-tick terrain
+    /// z-snap.
     ///
     /// APPROX register: the mana-sphere production roll (:28040-58,
-    /// full enterable houses) and SetMaxDistance_5C8D0 are the
-    /// Phase-4.6 economy track; the byte[2]&0x20 strong-claim lock
-    /// waits for the MC2 spell column (all claims run the weak
-    /// possess variant :28035-40); the claimed sprite-row colorize
+    /// full enterable houses) and SetMaxDistance_5C8D0 are OPEN
+    /// (economy track); the byte[2]&0x20 strong-claim lock waits
+    /// for the MC2 spell column (all claims run the weak possess
+    /// variant :28035-40); the claimed sprite-row colorize
     /// (`word_0x5A_90 += color`, :28039) rides our renderer's team
     /// tint instead of the pre-colored row band.
     pub(crate) fn mc2_house_tick(&mut self, i: usize) {
@@ -2258,7 +2244,7 @@ impl Gen {
         // creatures) selects the body: 12 = Metamorph pose-puppet, 13 =
         // Summon-Army allied AI. Stage-HELD kinds (1..=10, 15) never
         // reach here — the world dispatch seam routes them through
-        // `World::mc2_held_tick` (stagevars.rs, Session H6/E16).
+        // `World::mc2_held_tick` (stagevars.rs).
         // StageVar2 == 0 (every ordinary spawn) is a no-op, so those
         // fall through to the per-model dispatch
         // (docs/spell-audit/summon-creatures.md).
@@ -2267,9 +2253,7 @@ impl Gen {
                 12 => self.mc2_metamorph_creature_tick(i, ctx),
                 13 => self.mc2_summon_creature_tick(i, ctx),
                 14 => self.mc2_alliance_creature_tick(i, ctx),
-                // 16/17 = the pyramid-summon release chain (playtest
-                // 2026-07-18 item 11: these two `sub_1D5D0` cases were
-                // unported and the summons froze unkillable).
+                // 16/17 = the pyramid-summon release chain.
                 16 => self.mc2_doom_summon_home_tick(i, ctx),
                 17 => self.mc2_doom_summon_spinup_tick(i, ctx),
                 _ => {}
@@ -2332,11 +2316,11 @@ impl Gen {
         self.move_relink(i, ctx.px, ctx.py, z);
         self.ent[i].f30 = ctx.pyaw;
         self.ent[i].f34 = ctx.pyaw;
-        // The creature's cry LOOPS while morphed — the player-confirmed
-        // (2026-07-14) FP effect: no visible sprite from first person,
-        // just the monster's scream on a loop (plus the distinct Morph
-        // cast sound 60). Play the model's characteristic cry on a
-        // ~24-tick loop, anchored at the creature (= the player pose).
+        // The creature's cry LOOPS while morphed — the FP effect: no
+        // visible sprite from first person, just the monster's scream
+        // on a loop (plus the distinct Morph cast sound 60). Play the
+        // model's characteristic cry on a ~24-tick loop, anchored at
+        // the creature (= the player pose).
         if self.ent[i].f26 <= 0 {
             let cry = match self.ent[i].model65 {
                 16 => 39, // Wyvern
@@ -2807,8 +2791,7 @@ impl Gen {
                 // hitscan BEAM, not a traveling ball. Resolve it whole
                 // this tick (docs/spell-audit/lightning.md §5.A) so it
                 // flashes to its impact and is gone — under RAPID
-                // re-fire that reads as the authentic crackle, vs the
-                // old slow-bolt "stream of projectiles".
+                // re-fire that reads as the authentic crackle.
                 self.mc2_lightning_beam_tick(i, ctx);
             } else if self.ent[i].model65 == 9 && self.ent[i].tick70 == 14 {
                 // The beam's cosmetic sprite-216 trail billboards
@@ -2855,7 +2838,7 @@ impl Gen {
         // sub_68BF0's SECOND loop (EF:55489-90): dword_38523 = the
         // mana-sphere family (10, 39/40) awake-ticks too — spheres
         // near the player arm their f58 like creatures do. No dead
-        // reset here (retail's sphere loop is unconditional). E15.
+        // reset here (retail's sphere loop is unconditional).
         for i in 1..self.ent.len() {
             let e = &self.ent[i];
             if e.class64 == 10 && matches!(e.model65, 39 | 40) && e.flags & 0x400 == 0 {
@@ -2881,7 +2864,7 @@ impl Gen {
         // (burrowed m27 etc.) never proximity-wakes. Registry: flags
         // bit 0 = hidden, bit 5 (0x20) = scan-invisible — both are
         // verbatim byte[0] mappings, distinct from the synthesized
-        // high bits (F_STOP &c). E15.
+        // high bits (F_STOP &c).
         if self.ent[i].flags & 1 != 0 {
             return;
         }

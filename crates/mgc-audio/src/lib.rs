@@ -24,8 +24,7 @@ pub use mixer::{FaithfulMixer, Listener, Sounds, Source};
 
 /// Sim ticks per second the per-tick ramps are calibrated against
 /// (mirrors `mgc_sim::TICK_RATE_HZ` — this crate deliberately has no
-/// sim dependency; review 2026-07-15 D7 replaced the three bare 24.0
-/// literals).
+/// sim dependency).
 const TICK_RATE: f32 = 24.0;
 
 pub struct Audio {
@@ -153,8 +152,7 @@ impl Audio {
             // cc11 expression → amplitude follows the GM square law
             // (L = 40·log10(v/127) dB ⇒ amp ≈ (v/127)²). The baked
             // stem is the war channels at FULL expression, so the
-            // overlay gain must ride the same curve — the old linear
-            // PCM gain ran the mid-fade hot (review 2026-07-15 D5).
+            // overlay gain must ride the same curve.
             let lvl = self.danger_level / 126.0;
             let _ = self
                 .out
@@ -163,10 +161,10 @@ impl Audio {
         }
         // Voiceover duck recovery: once the line ends, ramp music+sfx
         // back up (retail's 120 Hz FadeUpSoundVolume ≈ 0.7 s full
-        // traverse — APPROX, the exact per-callback step is a
-        // volume-scale detail). Step = the 1/3→1 span over 0.7 s of
-        // 24 Hz sim ticks (`0.7·24` = 16.8 ticks) so the recovery time
-        // is tick-rate-independent.
+        // traverse — deliberate approximation, the exact per-callback
+        // step is a volume-scale detail). Step = the 1/3→1 span over
+        // 0.7 s of 24 Hz sim ticks (`0.7·24` = 16.8 ticks) so the
+        // recovery time is tick-rate-independent.
         if self.duck_gain < 1.0 && !self.out.speech_live() {
             self.duck_gain = (self.duck_gain + (2.0 / 3.0) / (0.7 * TICK_RATE)).min(1.0);
             let _ = self.out.tx.send(output::Cmd::Duck {

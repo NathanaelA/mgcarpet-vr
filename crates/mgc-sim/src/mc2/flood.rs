@@ -1,14 +1,12 @@
-//! MC2 (10,67)=0x43 FLOOD/QUAKE, Phase 4.3 — the three-action
-//! terrain-morph quake: action 72 (`sub_39040`) raises a sin-profile
-//! dome ring with a sinking crater center and converts the footprint
-//! to lava, action 73 (`sub_396A0`) holds the entity-shove while life
-//! runs out, action 74 (`sub_396D0`) settles the terrain back and
-//! despawns. Trace bank:
+//! MC2 (10,67)=0x43 FLOOD/QUAKE — the three-action terrain-morph
+//! quake: action 72 (`sub_39040`) raises a sin-profile dome ring with a
+//! sinking crater center and converts the footprint to lava, action 73
+//! (`sub_396A0`) holds the entity-shove while life runs out, action 74
+//! (`sub_396D0`) settles the terrain back and despawns. Trace bank:
 //! docs/traces/mc2-class10-tail-helper-closure.md §1 (the phase
-//! machine) + mc2-class10-m67-flood-helpers.md (every helper
-//! VERBATIM; its three corrections to the parent doc are followed
-//! here) (`EF:` = remc2 EventsFunctions.cpp, `Terrain:` =
-//! engine/Terrain.cpp, `Maths:` = utilities/Maths.cpp).
+//! machine) + mc2-class10-m67-flood-helpers.md (every helper VERBATIM)
+//! (`EF:` = remc2 EventsFunctions.cpp, `Terrain:` = engine/Terrain.cpp,
+//! `Maths:` = utilities/Maths.cpp).
 //!
 //! Entity-field homes follow the class-10 effect column: subSpell →
 //! f140, `dword_0x10_16` countdown → f26, `byte_0x46_70` phase → f71,
@@ -30,10 +28,9 @@
 //! the authentic alias (quake victims leave no corpse).
 //!
 //! DELIBERATE APPROXIMATIONS (cited):
-//! - `sub_6D8B0(id, 0x14, n)` spell-XP reports (EF:29367/:29436) land
-//!   with Phase 4.2; counts computed and dropped, and the global
-//!   objects-hit counter `x_DWORD_E9B90` (EF:28527) has no ported
-//!   reader.
+//! - `sub_6D8B0(id, 0x14, n)` spell-XP reports (EF:29367/:29436):
+//!   counts computed and dropped, and the global objects-hit counter
+//!   `x_DWORD_E9B90` (EF:28527) has no ported reader.
 //! - The HUMAN player rides the whirlwind precedent: retail shoves
 //!   the class-3 model-0 body toward the center with a z pull-down
 //!   and pitch-512 spin (EF:29108/:29421) — our player lives outside
@@ -52,8 +49,8 @@
 //! - The deep-sink skip (`word_160_0xe_14 < -64`, EF:29106 — the
 //!   victim's Type_160 z-velocity) has no ported home; the z pull
 //!   always applies before the ground clamp.
-//! - Cave arms (second-heightmap easing + the mapAngle bit-3 seal)
-//!   defer to Phase 4.5 like every module before this one.
+//! - Cave arms (second-heightmap easing + the mapAngle bit-3 seal) are
+//!   not yet ported (TODO).
 //! - `mana_0x90_144 = 0` in phase 1 (EF:28548) has no ported reader
 //!   on this column and is skipped.
 
@@ -255,11 +252,11 @@ impl Gen {
         if rolled && !suppressed && self.ent[j].f28 & 1 != 0 {
             // Retail adds life+1 with NO floor (EF:29435); the u32
             // mail clamps the never-in-practice life < -1 arm to 0
-            // (G9m — the old .max(1) was invented).
+            // (NOT .max(1)).
             let amt = (self.ent[j].act_life + 1).max(0) as u32;
             let id = self.ent[i].id24;
             self.mail_write(MailTarget::Pool(j), 0, amt, id);
-            // +1 per near-guaranteed kill (EF:29437) — F3.
+            // +1 per near-guaranteed kill (EF:29437).
             if id == crate::mc1::mobs::PLAYER_TARGET {
                 self.mc2_cast_xp.0.push((id, 20, 1));
             }
@@ -377,8 +374,9 @@ impl Gen {
     /// shake home) + owner = self slot + the subSpell (20000) damage
     /// mail — NO owner immunity: the caster's own castle takes it
     /// too (EF:29339-29348 has no id gate); then the 30×30
-    /// `0x7F0000`-family terrain sweep to lava. The
-    /// `sub_6D8B0(id, 0x14, 2n)` report banks with 4.2.
+    /// `0x7F0000`-family terrain sweep to lava. Of the
+    /// `sub_6D8B0(id, 0x14, 2n)` XP report only the player push below
+    /// is ported (module doc APPROX).
     fn flood_damage_pass(&mut self, i: usize) {
         let (id, amt) = (self.ent[i].id24, self.ent[i].f140 as u32);
         let mut buildings: Vec<usize> = Vec::new();
@@ -410,7 +408,7 @@ impl Gen {
             self.mail_write(MailTarget::Pool(j), 0, amt, id);
         }
         // +2 per grabbed CASTLE (EF:29374 `v8 += 2`; buildings do
-        // NOT count) — F3.
+        // NOT count).
         if castles_hit != 0 && id == crate::mc1::mobs::PLAYER_TARGET {
             self.mc2_cast_xp.0.push((id, 20, 2 * castles_hit));
         }

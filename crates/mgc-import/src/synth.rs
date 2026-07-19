@@ -1,8 +1,7 @@
 //! Pure-Rust General-MIDI renderer: [`oxisynth`] (a SoundFont synth
-//! with no C dependency) + a GM soundfont. Replaces the old external
-//! `fluidsynth` CLI shell-out, so the GM music arrangement renders on
-//! any host — Windows/macOS/bare-Linux — with no system binary, only a
-//! soundfont file.
+//! with no C dependency) + a GM soundfont. The GM music arrangement
+//! renders on any host — Windows/macOS/bare-Linux — with no system
+//! binary, only a soundfont file.
 //!
 //! The GM bake is still OPTIONAL: it upgrades the bundle when a GM
 //! soundfont is found and is skipped (FM render only) when none is.
@@ -14,9 +13,9 @@
 //! already produce (`crate::smf` / `crate::xmi`): the SMF is parsed with
 //! [`midly`], its events are streamed into the synth on a tempo-aware
 //! sample clock, and the interleaved-stereo f32 result is handed back
-//! to the caller for the same peak-normalize + quantize + FLAC step the
-//! fluidsynth path used (loudness normalization must scale a base/
-//! danger-stem pair by ONE factor to keep the overlay mix valid).
+//! to the caller for the peak-normalize + quantize + FLAC step
+//! (loudness normalization must scale a base/danger-stem pair by ONE
+//! factor to keep the overlay mix valid).
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -50,7 +49,7 @@ pub struct GmRenderer {
 impl GmRenderer {
     /// Find and validate a GM soundfont; `Err` (with the reason) when
     /// the host has none — the caller then bakes the FM arrangement
-    /// only, exactly as before.
+    /// only.
     pub fn locate() -> Result<GmRenderer, String> {
         let soundfont = match std::env::var_os("MGC_SOUNDFONT") {
             Some(p) => PathBuf::from(p),

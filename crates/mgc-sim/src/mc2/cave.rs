@@ -1,5 +1,5 @@
-//! MC2 cave terrain machinery (Phase 4.5): the (10,80..86) sculptor
-//! band + the (10,81) tube carver — the load-time cave generator that
+//! MC2 cave terrain machinery: the (10,80..86) sculptor band + the
+//! (10,81) tube carver — the load-time cave generator that
 //! carves caverns into the baked foundation ceiling, plus the shared
 //! floor↔ceiling invariant every cave terrain writer re-runs.
 //!
@@ -11,9 +11,9 @@
 //! The foundation ceiling (mirror about `MapBasicHeight` + the
 //! fixed-seed ±3 jitter, retail `sub_43B40`/`sub_43BB0`) is BAKED —
 //! the mc2-genlevel oracle runs the original code and the package
-//! carries `terrain/ceiling.bin` (BAKE_EPOCH 8). The sim starts from
-//! that plane and runs the THING-authored sculptors here, in the
-//! generate-pass settle loop, exactly like retail's `ApplyEvents`.
+//! carries `terrain/ceiling.bin`. The sim starts from that plane and
+//! runs the THING-authored sculptors here, in the generate-pass settle
+//! loop, exactly like retail's `ApplyEvents`.
 //!
 //! Cave `mapAngle` bit3 = SEALED rock (ceiling pinned to floor−1) —
 //! the OPPOSITE of its non-cave open-sea meaning. Field map: retail
@@ -28,8 +28,8 @@ use super::sin_lut::SIN_DB750;
 
 impl Gen {
     /// The level is a cave iff the package carried a ceiling plane
-    /// (retail `isCaveLevel_D41B6`; the enum-less DATA variance the
-    /// verbs survey planned — non-cave worlds keep the field empty).
+    /// (retail `isCaveLevel_D41B6`; non-cave worlds keep the field
+    /// empty).
     pub(crate) fn is_cave(&self) -> bool {
         !self.t.ceiling.is_empty()
     }
@@ -63,8 +63,7 @@ impl Gen {
     /// `sub_11E20` (EF:4620) — the ceiling COLLISION test, margin
     /// 384 (i16-truncated samples, verbatim). Its retail callers are
     /// the MC2 player commit gate's steer-search + stuck-nudge
-    /// (moveTest_5D0A0/sub_5DD50 — the Phase-4.4 FlightVerb::Mc2
-    /// arm below).
+    /// (moveTest_5D0A0/sub_5DD50 — the FlightVerb::Mc2 arm below).
     pub(crate) fn cave_collide(&self, fov: i32, hover: i32, x: u16, y: u16) -> bool {
         let v = self.ground_z(x, y) as i16 as i32 + hover + fov;
         v > self.ceiling_z(x, y) as i16 as i32 - 384
@@ -265,7 +264,7 @@ impl Gen {
     /// (`angle & 8` — the cavern wall where the carve meets rock),
     /// stamp `tile_type = 1` (wall material), force the walkable
     /// class nibble, and retile/reshade the cell (`sub_462A0`).
-    /// `sub_34B00` (EF:25353-412) VERBATIM (G9f): rows run x∈[0,w),
+    /// `sub_34B00` (EF:25353-412) VERBATIM: rows run x∈[0,w),
     /// columns y∈[0,h) — the SE corner (ox+w, oy+h) is structurally
     /// NEVER visited and the NW corner is visited twice (top row +
     /// left column). The top row and LEFT column stamp angle +
@@ -315,7 +314,7 @@ impl Gen {
     /// (the right column starts at the walk's final x, like retail's
     /// running byte coordinate).
     /// The `sub_48F20`-family walk shape, TRANSPOSED like retail
-    /// (G9g, see [`Gen::mc2_perimeter_min`]): rows = `h` samples,
+    /// (see [`Gen::mc2_perimeter_min`]): rows = `h` samples,
     /// bottom row at `oy + w`; columns = `w` samples at `ox + h` /
     /// `ox`. Square-only callers today.
     fn cave_perimeter(&self, ox: u8, oy: u8, w: u16, h: u16, min: bool, ceiling: bool) -> i32 {
@@ -478,7 +477,7 @@ impl Gen {
         }
         let z = self.ground_z(x, y) as i16;
         self.link(i, x, y, z);
-        // u16 entity draw (EF:37025-26), not raw lcg32 (G7).
+        // u16 entity draw (EF:37025-26), not raw lcg32.
         let r = self.ent_rand(i);
         self.mc2_set_sprite(i, (r % 3 + 332) as u16);
         let raw = tile((x >> 8) as u8, (y >> 8) as u8);
@@ -524,7 +523,7 @@ impl Gen {
     /// sub_570F0), ceiling DROPPED, both on a `sin_DB750` profile
     /// scaled by the wave phase; class-3 MODEL-0 entities (wizards)
     /// get a spherical survival POCKET carved around them (floor
-    /// down / ceiling up — the trace's "burial" reading inverted);
+    /// down / ceiling up — a pocket, NOT a burial);
     /// every box cell then runs the invariant WITH the ceiling
     /// pinned to the FLOOR (not floor−1 — this variant's quirk).
     /// Once past wave 455: one ring of ~74 (10,13) rocks flung
@@ -646,7 +645,7 @@ impl Gen {
                 // Retail's running index runs ONE PAST the box in
                 // both axes when the walk ends (EF:22975-23052) —
                 // the debris z below reads that stale NEIGHBOR
-                // cell, not the last carved cell (G9h).
+                // cell, not the last carved cell.
                 last_t = Some(tile(
                     ox.wrapping_add(side as u8),
                     oy.wrapping_add(side as u8),
@@ -758,7 +757,7 @@ impl Gen {
                     for _ in 0..side {
                         let t = tile(x, y);
                         // Retail measures to the tile CORNER (i<<8,
-                        // EF:25496-98) — no +128 (G8a).
+                        // EF:25496-98) — no +128.
                         let d = super::morph::dist2d(cx, cy, (x as i32) << 8, (y as i32) << 8);
                         if d < rw {
                             let s = SIN_DB750[0x200 + ((d << 10) / rw) as usize] as i64;
@@ -778,7 +777,7 @@ impl Gen {
                             // branch only (EF:25490-25510), and the
                             // dome's sync is SYNC-ONLY — no
                             // ceiling=floor-1 pin (EF:25522-25); the
-                            // pit/hill/mesa/tube arms DO pin (G8b).
+                            // pit/hill/mesa/tube arms DO pin.
                             if self.t.ceiling[t] > self.t.height[t] {
                                 self.t.angle[t] &= !8;
                             } else {
@@ -836,7 +835,7 @@ impl Gen {
                         51 * self.ent[i].z as i32 * a2 / 256
                     } else {
                         // u16 entity draw (EF:25639-40), not raw
-                        // lcg32 (G7).
+                        // lcg32.
                         let d = self.ent_rand(i);
                         (d % a2 as u32) as i32
                     };
@@ -862,7 +861,7 @@ impl Gen {
                     let mut x = ox;
                     for _ in 0..side {
                         let t = tile(x, y);
-                        // Tile CORNER, not center (EF:25666-68; G8a).
+                        // Tile CORNER, not center (EF:25666-68).
                         let d = super::morph::dist2d(cx, cy, (x as i32) << 8, (y as i32) << 8);
                         if d < rw {
                             let s = SIN_DB750[0x200 + ((d << 10) / rw) as usize] as i64;
@@ -972,7 +971,7 @@ impl Gen {
             }
             // Retail: sub_34B00(ox-1, oy-1, side+1, side+1)
             // (EF:25243) — the +1 dims cover the far row/column of
-            // the wall ring (G8c).
+            // the wall ring.
             self.cave_wall_ring(ox.wrapping_sub(1), oy.wrapping_sub(1), side + 1, side + 1);
             Self::polar_step(&mut walk, yaw, 0, 85);
             buf.copy_within(1.., 0);
@@ -1221,7 +1220,7 @@ impl Gen {
     /// clear is then UNCONDITIONAL (EF:39660 `goto LABEL_32`), and
     /// the per-cell retile always fires: `sub_570F0` keys it on a4
     /// (protectAngle), not a6 — a4=0 ⇒ `AddBuildingToTerrain_46570`
-    /// every call (EF:39702-08). (G3, review 2026-07-15 P1-26.)
+    /// every call (EF:39702-08).
     fn cave_write_floor(&mut self, x: u8, y: u8, h: i32, force_flat: bool, edge: bool) {
         if edge {
             self.mc2_dome_write_height(x, y, h, force_flat);
@@ -1266,8 +1265,8 @@ mod tests {
         Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
     }
 
-    /// G3 (review 2026-07-15 P1-26): the a6=0 floor write (the mesa's
-    /// form of `sub_570F0`) always retiles the cell (a4=0 ⇒
+    /// The a6=0 floor write (the mesa's form of `sub_570F0`) always
+    /// retiles the cell (a4=0 ⇒
     /// `AddBuildingToTerrain_46570`, EF:39702-08) and clears the whole
     /// low nibble on a floor carved to 0 (EF:39660).
     #[test]
@@ -1281,8 +1280,8 @@ mod tests {
         assert_eq!(g.t.angle[t] & 0x0F, 0, "h==0 clears the low nibble");
     }
 
-    /// G8b: the dome's per-cell seal sync is bit3-ONLY (EF:25522-25)
-    /// — unlike pit/hill/mesa/tube it never pins ceiling = floor−1.
+    /// The dome's per-cell seal sync is bit3-ONLY (EF:25522-25) —
+    /// unlike pit/hill/mesa/tube it never pins ceiling = floor−1.
     #[test]
     fn dome_sync_never_pins_the_ceiling() {
         let mut g = cave_gen();
@@ -1314,7 +1313,7 @@ mod tests {
         assert_ne!(g.t.angle[t] & 8, 0, "sealed cell flagged");
     }
 
-    /// G8c: the tube's wall ring is `sub_34B00(ox-1, oy-1, side+1,
+    /// The tube's wall ring is `sub_34B00(ox-1, oy-1, side+1,
     /// side+1)` (EF:25243) — the +1 dims reach the far row/column.
     #[test]
     fn tube_wall_ring_covers_the_far_corner() {
@@ -1334,9 +1333,9 @@ mod tests {
         }
         g.mc2_tube_carve_tick(i);
         // Ring box (47,47,5,5): the right column x=52 — outside the
-        // old (47,47,4,4) box — is wall-stamped (thin stamp, G8c)…
+        // (47,47,4,4) box — is wall-stamped (thin stamp)…
         assert_eq!(g.t.angle[tile(52, 47)] & 7, 1, "far column stamped");
-        // …but the SE corner is structurally NEVER visited (G9f).
+        // …but the SE corner is structurally NEVER visited.
         assert_eq!(g.t.angle[tile(52, 52)] & 7, 5, "SE corner untouched");
     }
 }

@@ -8,9 +8,9 @@
 //! bake as the `mc1-temperate` and `mc1-arctic` variants. MC2 ships
 //! four environment graphics sets from its CD catalogs — `mc2-day`,
 //! `mc2-night`, `mc2-night-fog` (night levels with gfx_type bit 1),
-//! `mc2-cave` — same schema; since Phase 3 they carry `search.bin`
-//! (same format as MC1) and `bldgprm.bin` (MC2's building-parameter
-//! table) instead of MC1's BUILD members.
+//! `mc2-cave` — same schema; they carry `search.bin` (same format as
+//! MC1) and `bldgprm.bin` (MC2's building-parameter table) instead of
+//! MC1's BUILD members.
 
 use std::path::Path;
 
@@ -62,9 +62,9 @@ struct VariantSpec {
     /// in BOTH games (row 32 ≈ identity, row 0 = the fog/sky color,
     /// row 63 = black). +0x4000 is the 256x256 sprite BLEND matrix
     /// (`T[0x4000 + (src<<8)|dst]`, remc2 GameRenderObjects
-    /// DrawSprite_41BD3) — see docs/traces/mc2-transparency-drawlist.md,
-    /// which corrected the earlier "+0x4000 shade" misread. The
-    /// tile-type→map-color table is at +0x14000 in both games.
+    /// DrawSprite_41BD3) — see docs/traces/mc2-transparency-drawlist.md.
+    /// NOT a shade table. The tile-type→map-color table is at +0x14000
+    /// in both games.
     shade_offset: usize,
     /// Terrain atlas, 256px wide, 152 cells of 32x32; the terrain-type
     /// byte is the cell index in both games (identity mapping, remc2
@@ -294,8 +294,8 @@ pub fn bake_mc1_bundles(
 }
 
 /// Bake MC2's four environment bundles (`mc2-day`, `mc2-night`,
-/// `mc2-night-fog`, `mc2-cave`) from the CD catalogs. No search/build
-/// members yet — MC2's terrain-feature pass is a separate port.
+/// `mc2-night-fog`, `mc2-cave`) from the CD catalogs, including the
+/// search/build members (SEARCH.DAT + BUILD*-0 + BLDGPRM.DAT).
 pub fn bake_mc2_bundles(
     src: &GameSource,
     out_dir: &Path,
@@ -587,9 +587,7 @@ pub fn bake_mc2_audio(
     let image = image.to_path_buf();
     let cue_path = image.with_extension("ins");
     // A missing cue sheet loses ONLY the redbook voiceover rip —
-    // sounds.bin and the music renders still bake (review 2026-07-15
-    // D3: this used to drop the whole mc2-audio bundle while printing
-    // "skipping redbook rip").
+    // sounds.bin and the music renders still bake.
     let cue = match std::fs::read_to_string(&cue_path) {
         Ok(c) => Some(c),
         Err(_) => {
@@ -641,11 +639,11 @@ pub fn bake_mc2_audio(
     // Bank 1 (the "C1" = Magic Carpet 1 set) loads ONLY under the
     // hidden `-music2` command-line flag (EF:39191/43023 guarded by
     // `setting_byte4_25 & 0x40`, default clear) — the classic-MC1-
-    // soundtrack alternate, a future opt-in (authenticity matrix), NOT
-    // the default. (Baking bank 1 was the "wrong/unfamiliar gameplay
-    // tracks, aggressive cave" bug — docs/traces/mc2-music-law.md.)
-    // Requires the GM renderer — MC2 has no pure-Rust FM fallback yet
-    // (the F section is a future faithful-alternate).
+    // soundtrack alternate, an opt-in (authenticity matrix), NOT the
+    // default; baking bank 1 yields wrong/unfamiliar gameplay tracks
+    // (docs/traces/mc2-music-law.md). Requires the GM renderer — MC2
+    // has no pure-Rust FM fallback yet (the F section is a future
+    // faithful-alternate).
     let mut music = MusicIndex { tracks: Vec::new() };
     let music_dat = src
         .read("SOUND/MUSIC.DAT")
@@ -794,9 +792,8 @@ pub fn bake_mc2_audio(
                 // narration crackle — see redbook::mute_leading_junk;
                 // durations preserved, the pristine rip stays in
                 // gamedata). SEGMENT 0 ONLY: the corruption lives at
-                // the track heads (the map narratives) — the in-level
-                // hint segments were never affected (player-verified
-                // 2026-07-18; the broader sweep clipped them).
+                // the track heads (the map narratives); the in-level
+                // hint segments are unaffected and must not be swept.
                 let mut clip = pcm[a..b].to_vec();
                 if seg == 0
                     && let Some(ms) = crate::redbook::mute_leading_junk(&mut clip)
@@ -1016,9 +1013,9 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
     // The menu movies' embedded palettes differ from MAINMENU.PAL in
     // a handful of entries (TIMER: 18, SCROLL: ~19; GLOBE none) —
     // indices blitted raw under the menu palette land on the wrong
-    // colors there (the player-reported black hourglass-outline
-    // specks). Remap every movie frame through the nearest-color LUT
-    // into the MENU palette before anything else consumes it.
+    // colors there (black hourglass-outline specks). Remap every movie
+    // frame through the nearest-color LUT into the MENU palette before
+    // anything else consumes it.
     let remap_frames = |movie: &mut crate::fmv::Fmv| {
         let Some(mpal) = movie.palette else { return };
         if mpal[..] == pal[..] {
@@ -1076,8 +1073,8 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
     // The TIMER is different: the hourglass exists ONLY while a game
     // is underway — MAINMENU.DAT has bare wall in the MMMASK id-11
     // (Continue) region, and the movie's keyframe carries the whole
-    // hourglass on its stand (player report round 3). Its visible
-    // set = the inter-frame sand pixels PLUS every keyframe pixel
+    // hourglass on its stand. Its visible set = the inter-frame sand
+    // pixels PLUS every keyframe pixel
     // inside the id-11 hotspot that VISUALLY differs from the wall
     // art (RGB compare through the menu palette — the streams'
     // palettes are near-identical, so a small threshold splits real
@@ -1106,8 +1103,8 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
         let key = &movie.frames[0];
         for i in 0..w * h {
             // Keyframe index 0 = transparent (unpainted holes in
-            // the hourglass art — retail never shows them; the
-            // player-reported black outline specks).
+            // the hourglass art — retail never shows them; the black
+            // outline specks).
             if mask[i] != 11 || visible[i] || key[i] == 0 {
                 continue;
             }
@@ -1161,7 +1158,7 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
     // SCROLL.DAT: the save/load dialog's parchment screen — the
     // fully-unrolled LAST frame over BLACK (retail plays the unroll
     // movie on a cleared screen — the dialog is NOT an overlay on
-    // the menu, player report round 3).
+    // the menu).
     let scroll_raw = get("DATA/SCREENS/SCROLL.DAT")?;
     let mut scroll = crate::fmv::decode(&scroll_raw, None)
         .map_err(|e| BakeError::Level(Path::new("SCROLL.DAT").to_path_buf(), 0, e))?;

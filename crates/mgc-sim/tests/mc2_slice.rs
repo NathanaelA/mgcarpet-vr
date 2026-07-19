@@ -1,16 +1,14 @@
-//! The Phase-3 EXIT FIXTURE (ROADMAP "Phase 3", item 3.6): the MC2
-//! vertical slice on real level-000 data under the full MC2 profile.
-//! Every criterion is POSITIVELY exercised (the spec review's
-//! anti-vacuous rule): creatures are found via the pool debug view,
-//! the player is parked next to them, and the observable is asserted
-//! per model — Goat wakes/flees/dies (mana sphere + kill credit),
-//! Archers stand and FIRE (arrow entity + danger music), Villager
-//! wanders and never attacks, the type-5 fly-to objective latches at
-//! its authored point.
+//! The MC2 vertical slice on real level-000 data under the full MC2
+//! profile. Every criterion is POSITIVELY exercised: creatures are
+//! found via the pool debug view, the player is parked next to them,
+//! and the observable is asserted per model — Goat wakes/flees/dies
+//! (mana sphere + kill credit), Archers stand and FIRE (arrow entity +
+//! danger music), Villager wanders and never attacks, the type-5
+//! fly-to objective latches at its authored point.
 //!
 //! Golden hashes pin the slice (the MC1 goldens in state_hash.rs are
-//! untouched by all of this — the columns share the chassis, not the
-//! fixtures). Self-skips without baked mc2 data.
+//! untouched — the columns share the chassis, not the fixtures).
+//! Self-skips without baked mc2 data.
 
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
@@ -120,11 +118,11 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     hashes.push(w.state_hash());
     obs.push(w.observable_digest());
 
-    // D: NATIVE fireballs at the nearest goat (playtest-13: the MC1
-    // equip bridge no longer casts on the MC2 column — the seeded
-    // book's LEFT fireball is the cast path now). RIGHT unbinds so
-    // possession pulses don't spray claims over the script; tier-0
-    // fireball is CLICK cadence, so the volley pulses the edge.
+    // D: NATIVE fireballs at the nearest goat (the MC1 equip bridge
+    // does NOT cast on the MC2 column — the seeded book's LEFT
+    // fireball is the cast path). RIGHT unbinds so possession pulses
+    // don't spray claims over the script; tier-0 fireball is CLICK
+    // cadence, so the volley pulses the edge.
     w.set_dev_spells(true);
     if let Some((vx, vz)) = find_creature(&w, 5, 1) {
         let unbind_r = PlayerCommand {
@@ -233,11 +231,10 @@ fn mc2_slice_behaviors_and_goldens() {
     );
 
     // Villager wanders (and never attacks). The building creators'
-    // walkable village paint FREES the townsfolk (the Phase-3
-    // terrain-imprisonment gap closed) — free walkers can now also
-    // die authentically (die-on-water row flag on a boxed-in
-    // wander), so survival is not asserted; kill CREDIT staying
-    // zero is (townsfolk/construction deaths never credit).
+    // walkable village paint FREES the townsfolk — free walkers can
+    // also die authentically (die-on-water row flag on a boxed-in
+    // wander), so survival is not asserted; kill CREDIT staying zero
+    // is (townsfolk/construction deaths never credit).
     let yaw0: Vec<f32> = w
         .live_poses()
         .iter()
@@ -268,7 +265,7 @@ fn mc2_slice_behaviors_and_goldens() {
     // ground — either a texture-band paint (sub_45DC0, types 8..=0x22)
     // or a blend-transition tile (sub_462A0 through the generated
     // building_F2CD0x; type 50 = the [3,1,1,1] corner row under this
-    // pad). The bare type-1 village stand-in is gone.
+    // pad).
     let parked = w
         .debug_pool()
         .1
@@ -282,14 +279,10 @@ fn mc2_slice_behaviors_and_goldens() {
         "the building's tile painted real building ground (got {ground})"
     );
 
-    // The herd law (2026-07-16 flocking fix, retail-memimage
-    // verified): every level-000 goat spawns BOUND to the kind-2
+    // The herd law: every level-000 goat spawns BOUND to the kind-2
     // graze-leash StageVar (slot 3, anchor tile (53,32)) via
     // `sub_12100`'s subtype pass — state 15 (8·model+7), speed 18,
-    // milling the anchor. They never free-wander or form
-    // follow-chains; the old assertion here pinned the pre-fix
-    // dynamics that only existed because the importer dropped the
-    // flagged row.
+    // milling the anchor. They never free-wander or form follow-chains.
     assert!(
         w.debug_pool()
             .1
@@ -360,10 +353,10 @@ fn mc2_slice_behaviors_and_goldens() {
     );
 
     // Kill an ARCHER with the fireball: model 4 earns kill credit;
-    // mana 500 drops a sphere. NATIVE cast (playtest-13: the MC1
-    // equip bridge no longer casts on the MC2 column): rebind the
-    // seeded fireball onto LEFT, keep RIGHT unbound (no possession
-    // claims over the kill loop).
+    // mana 500 drops a sphere. NATIVE cast (the MC1 equip bridge does
+    // NOT cast on the MC2 column): rebind the seeded fireball onto
+    // LEFT, keep RIGHT unbound (no possession claims over the kill
+    // loop).
     let bind_l = PlayerCommand {
         mc2_select: Some((0, 0, 0)),
         ..Default::default()
@@ -443,8 +436,8 @@ fn mc2_slice_behaviors_and_goldens() {
     // archer's side (each processed hit re-arms 200; :14561),
     // TRACKING the archer (with buildings live, the archer brain's
     // building/shrine walk states move them between shots). The
-    // arrows can't wipe the pack anymore — the (9,13) probe honors
-    // the class-3 target filter now.
+    // (9,13) arrow probe honors the class-3 target filter, so arrows
+    // don't wipe the pack.
     let mut arrow_seen = false;
     let (mut ax, mut az) = find_creature(&w, 5, 4).expect("archers materialized");
     let mut ayaw = 0.0f32;
@@ -491,194 +484,9 @@ fn mc2_slice_behaviors_and_goldens() {
     assert!(cur > 1, "the cursor advanced past the completed fly-tos");
     assert!(!w.completed(), "three stages remain — no premature win");
 
-    // Pinned goldens (first pinned 2026-07-09, the Phase-3 landing;
-    // re-pinned same day, DELIBERATE: the (10,45) building creator
-    // landed — 47 at-load buildings raise/paint terrain at init, the
-    // fixture feeds the mc2-night bundle's own SEARCH/BUILD/BLDGPRM,
-    // and the (9,13) arrow probe honors the class-3 target filter.
-    // Regenerate with --nocapture on DELIBERATE behavior change and
-    // say so in the commit.
+    // Pinned goldens: regenerate with --nocapture on a DELIBERATE
+    // behavior change and say so in the commit.
     const GOLDEN: [u64; 6] = [
-        // Re-pinned 2026-07-09 (DELIBERATE), four landings in one
-        // session: (1) the (10,45) texture-band pass
-        // (sub_45DC0/sub_462A0 — real building ground + MC2-native
-        // retile/shade, night inversion per the level header, fixture
-        // sets set_mc2_night_shade like the app); (2) class-11
-        // SWITCHES live ((11,0..=3) known + ticking) — the scripted
-        // sweep genuinely crosses switch boxes and fires their
-        // disposition chains; (3) the ROUTE-CHAIN entities native:
-        // (2,0..=2) tree/stone/dolmen, (10,0) ground fire, (10,1)
-        // big-explosion seeder — and the MC1-fallback spell chain's
-        // spawn_effect resolves models 0/1 into the native MC2 ctors;
-        // (4) the PROGRESSION GATES: (11,32) stage-gated + (11,4)
-        // level-end switches (Mc2Stage carries its authored row —
-        // the par1 key), and the behavior probes now unlock the
-        // archers through the authored checkpoint chain.
-        // Re-pinned 2026-07-10 (DELIBERATE), the Phase-4.3 FULL
-        // ROSTER landing: the wave-A class-5 creatures (14 models),
-        // the class-9 flyer core + creature attack thunks, the
-        // class-2 band + tree burn ladder, the class-11 slot-switch
-        // band + X-markers, class-14 map objects, and the (10,1)
-        // corpse burst replacing its misfit note. The at-load hash
-        // is UNCHANGED (level-000's initial population authored none
-        // of the new models); the run diverges when the disposition
-        // chain releases the previously-misfit (5,19) flyer wave and
-        // the tree-burn/corpse handlers act.
-        // Re-pinned 2026-07-10 (DELIBERATE), the MULTIPART landing:
-        // class-5 models 0/3/22/27 leave the misfit ledger — ONLY
-        // checkpoint E moved (level-000's dis chain releases its
-        // four (5,3) flyers late in the census window; each now
-        // spawns a live 17-entity chain instead of a misfit note).
-        // Post-init through D are UNCHANGED.
-        // Re-pinned 2026-07-10 (DELIBERATE), the PLAYTEST-2 batch:
-        // (1) the (10,45) TEMPLATE FIX — disposition-authored MC2
-        // buildings no longer run MC1's building_fixup(par1+16); the
-        // id stays the ctor's raw par1 (remc2 EF:33089), par2 lands
-        // in xtype/f66; (2) the building claim/damage column — f56 =
-        // 33 (+2 productive), occupancy 2, the state-52 house tick
-        // (claim + militia + death) and the state-53 teardown;
-        // (3) the smoke-column family (10,59)/(10,60) emitters +
-        // (10,13)/(10,14) particles live; (4) the (10,29)
-        // waypoint-chain PATH STAMP at generate time (the causeway —
-        // terrain changes from tick 0) + the one-tick stage marker;
-        // (5) the real (10,5) splash replacing every misfit note.
-        // Re-pinned 2026-07-10 (DELIBERATE), the class-15 TOKEN
-        // landing: the stage chain's runtime (15,2) spell jar now
-        // spawns live (sprite 77, pickup states) instead of a
-        // misfit note — post-init through B are UNCHANGED (level-000
-        // authors no load-time class-15/(10,39|58)/(14,1)/(10,63|64)
-        // records); C/D/E move from the jar's spawn tick onward.
-        // Re-pinned 2026-07-10 (DELIBERATE), the possession-delivery
-        // fix: mc2_spawn_building now mirrors the intake bits into
-        // f28 (=1, |=2 productive) — the shared writer gate
-        // (area_write tests f28) finally sees MC2 buildings, so the
-        // possess pulse's ch1 claim mail and ch0 area damage reach
-        // the house tick (docs/traces/mc2-possession-delivery.md).
-        // Every checkpoint moves: 47 at-load buildings hash the new
-        // field from post-init on.
-        // Re-pinned 2026-07-10 (DELIBERATE), the level-000 mission-
-        // chain batch: MC2 census world seed 1 (retail sub_61F50 —
-        // was MC1's intrinsic 1000), the type-7 kill objective's
-        // current-cursor gate + the m32 ObjectiveDone_2 pause
-        // (:40724/:54371 — rows no longer latch vacuously before
-        // their targets spawn), the Mc2Stage force-complete flag in
-        // the hash, and the (3,4..=11) start markers leaving the
-        // misfit ledger. Every checkpoint moves (the census seed
-        // shifts world_mana from post-init on).
-        // Re-pinned 2026-07-10 (DELIBERATE), the SPELLS.DAT import:
-        // FeatureAssets now carries the parsed spells.bin table
-        // (hash-when-present, like bldgprm) — every checkpoint moves
-        // by the asset hash alone; no behavior consumed it yet at
-        // pin time.
-        // Re-pinned 2026-07-11 (DELIBERATE), the worm link-length
-        // floor (multipart.rs): zero-spacing chain children keep the
-        // head's authored 96 — the PLAYTEST-11 "the whole worm is a
-        // blob" fix. Only checkpoint E moved (the chain spawned in
-        // its window carries the new f56).
-        // Re-pinned 2026-07-11 (DELIBERATE), the objective-chime
-        // correction (stage-engine trace): the advance chime is
-        // retail's 61 (Success2), fired only when the CURRENT row
-        // completes or the level ends and suppressed at cursor 0 —
-        // was a 41 stand-in played on every completion. B onward
-        // move (the fly-to latch tick emits the new sound event).
-        // Re-pinned 2026-07-11 (DELIBERATE), the Phase-4.2 SPELL
-        // COLUMN landing: (1) SetDefaultSpells_5C0A0 — every MC2
-        // world seeds fireball + possess manifestations at init
-        // (2 pool slots + the spell book hash from post-init on);
-        // (2) the jar pickup KEEPS the collected entity as the
-        // manifestation (retail's slot economy — the bank-and-
-        // despawn interim is closed); (3) the D/E windows unbind
-        // the native MC2 hands (MC1 dev methodology stays the
-        // script's subject). Every checkpoint moves.
-        // Re-pinned 2026-07-11 (DELIBERATE), the playtest-12 spell
-        // fixes: the SetSpell cadence flag (`byte_0x3B_59` → f59 on
-        // the seeded manifestations — post-init moves) and the
-        // sub_67CB0 one-shot auto-aim (lock-less projectiles
-        // acquire targets instead of flying straight — D/E move).
-        // Re-pinned 2026-07-11 (DELIBERATE), the derived sprite
-        // extents (the retail load-time pass EF:44870-44910 —
-        // speed_6 from the bitmap aspect): every entity's collision
-        // box changes from spawn on (the zero-box fireball/goat
-        // tunneling fix + the PLAYTEST-11 worm-spacing provenance
-        // closure).
-        // Re-pinned 2026-07-11 (DELIBERATE), the playtest-13 ghost-
-        // cast gate: the MC1 equip bridge no longer casts on the
-        // MC2 column (grant_spell no-ops, the MC1 hand arm is
-        // column-gated) — the D/E combat legs now fire the NATIVE
-        // book's fireball (click-cadence edge pulses; payload 250
-        // per docs/traces/mc2-fireball-damage.md). D/E move,
-        // post-init through C are unchanged.
-        // Re-pinned 2026-07-11 (DELIBERATE), the Phase-4.5 session-2
-        // load-time cave arms: the shared chassis retile_and_shade
-        // (dig_cell's tail recompute) gained MC2's twin arms — the
-        // non-Day shade INVERSION (Terrain.cpp:2030-2033; retail's
-        // sub_56F10 digs resolve through sub_462A0/46570, which
-        // invert on night/cave maps — ours didn't) and the cave
-        // floor↔ceiling invariant. Level-000 is a night level, so
-        // every dig after load now writes inverted shades: A onward
-        // move, post-init is unchanged (no dig in settle). MC1
-        // goldens untouched (both arms are data-variant no-ops
-        // there); cave levels get their first correct dig shading.
-        // Re-pinned 2026-07-12 (DELIBERATE), the audio column: the
-        // objective-message trigger ramp (`byte_0x36E02`,
-        // docs/traces/mc2-voiceover-triggers.md §3) is new retail
-        // sim state hashed with the stage board — set_mc2_stages
-        // arms the briefing voiceover at load, so every checkpoint
-        // including post-init moved. MC1 goldens untouched (the
-        // ramp only ever arms through the MC2 stage machinery).
-        // Re-pinned 2026-07-14 (objective types 1/2 bind field): the
-        // `Mc2Stage` struct gained a `bound: Option<u16>` slot for the
-        // named-target entity binding. level-000 authors no type-1/2
-        // objective, so no binding occurs and no behavior changed — the
-        // move is purely the extra `None` joining each stage's hash
-        // (present from load, so every checkpoint moved uniformly).
-        // Re-pinned 2026-07-14 (StageVar subsystem): the level's StageVar
-        // table now loads + hashes. level-000's three kind-1 vars are
-        // INERT (word=0, no matching THING), so nothing is held and no
-        // behaviour changed — the move is purely the StageVar table
-        // joining the hash (present from load → every checkpoint moved).
-        // Re-pinned 2026-07-16 (DELIBERATE), Session E creature
-        // batch: spawn ordinals now land in f63 for goats/archers/
-        // villagers (E10 — archer wake stagger de-degenerates, herd
-        // cadences de-sync), the move-core retries terrain-test
-        // unconditionally (E13), the awake pass hidden-skips and
-        // runs the sphere family (E15), m18 tank timers/turn caps
-        // are the pinned retail values incl. the RNG-draw pattern
-        // (E3/E4), m19 firebug rolls every 4th tick with cascading
-        // overrides (E2), plus the E27 nit batch (xtype=3 ctors,
-        // packmate life gate, kill-credit self-id, disc-center
-        // rounding). Every checkpoint moved (ordinals + mover from
-        // load). The file's behavioral asserts all still pass —
-        // certified flows (archer wanted fire, wander cadence, kill
-        // exclusions) verified unchanged. MC1 goldens untouched.
-        // Re-pinned 2026-07-16 (DELIBERATE), Session J2 hash field
-        // tags — LAYOUT-ONLY, zero behavior change: conditional
-        // hash-quiet fields now write a distinct tag byte when they
-        // contribute (the adjacent-field aliasing fix). Instrumented:
-        // the ONLY tag firing here is 3 — mc2_spell_tokens, live from
-        // load at bitmask 3 (the fireball+possess baseline), so every
-        // checkpoint gains exactly one tag byte. MC1 goldens unmoved
-        // (no tagged field ever fires on an MC1 world).
-        // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the
-        // FLOCKING fix: (1) StageVar rows bake VERBATIM (epoch 13;
-        // the importer's signed-byte filter had dropped every
-        // FLAGGED row — level-000 recovers SEVEN lost rows incl. the
-        // two kind-2 graze anchors and its kind-6/7 spawn gates);
-        // (2) stage-held creatures RUN retail's `sub_1D5D0` movement
-        // legs (the goats now leash-mill the (53,32) anchor at speed
-        // 18, retail-memimage verified) and kind-10 aggro-breaks
-        // RE-LEASH (`sub_12500` case 0xA). The whole level's
-        // creature trajectory legitimately moves from load — the
-        // POST-INIT checkpoint moves too (the StageVar table content
-        // + bind state itself hashes).
-        // Re-pinned 2026-07-16 (DELIBERATE, inherited from commit
-        // 0cf699e "mc1/2 level completion sequence, mc2 castle
-        // turrets" — that session re-pinned mc2_cave but missed this
-        // file): ONLY checkpoint E moved; post-init through D are
-        // byte-identical, so the level data/assets/load path are
-        // unchanged and the divergence is that commit's endgame/
-        // castle-tick behavior first exercised in the E window.
-        // Verified deterministic across runs before re-pinning.
         0x3f29a575e74ed7ce, // post-init (GenerateEvents + dis 0)
         0xac2894c19444ec6b, // A: 64 idle ticks afield
         0x52c4a61b85ac224c, // B: the type-5 fly-to latched
@@ -692,16 +500,8 @@ fn mc2_slice_behaviors_and_goldens() {
          re-pin (--nocapture) and say so in the commit"
     );
 
-    // The layout-INDEPENDENT companion golden (review J3, pinned
-    // 2026-07-16) — see state_hash.rs: survives hashed-layout
-    // re-pins; moves ONLY with real behavior.
-    // Moved 2026-07-16 WITH the flocking fix (BEHAVIORAL): the
-    // load-time checkpoint is UNCHANGED (same world composition at
-    // t=0) and every ticked checkpoint moves with the now-leashed
-    // herd's trajectories — the projection working as designed.
-    // Moved 2026-07-16 at E ONLY (with the 0cf699e inherited re-pin
-    // above): the observables confirm the endgame/castle-tick change
-    // is real behavior in the final window, not layout.
+    // The layout-INDEPENDENT companion golden — see state_hash.rs:
+    // survives hashed-layout re-pins; moves ONLY with real behavior.
     const OBSERVABLE: [u64; 6] = [
         0x9a885593f099242c,
         0xc8a0f078fd10afd7,
@@ -717,14 +517,12 @@ fn mc2_slice_behaviors_and_goldens() {
     );
 }
 
-/// Level-000's authored mission chain, end to end (the 2026-07-10
-/// player report: the game stalled after the spell jar — the
-/// castle-build stage never armed and the FIREFLY wave never came):
-/// fly-to rows 0/1 → archers (dis 3) → kill them → row 2 latches
-/// (only while CURRENT — the type-7 cursor gate) and the m17 kill
-/// switch drops the (15,3) spell jar → row 3 (type 0: castle + 15%
-/// banked share; forced here — the banked economy is the Phase-4.6
-/// track) → the m32 row-3 watcher fires dis 6 = FIVE (5,19)
+/// Level-000's authored mission chain, end to end: fly-to rows 0/1 →
+/// archers (dis 3) → kill them → row 2 latches (only while CURRENT —
+/// the type-7 cursor gate) and the m17 kill switch drops the (15,3)
+/// spell jar → row 3 (type 0: castle + 15% banked share; forced here
+/// — the banked economy is pending) → the m32 row-3 watcher fires
+/// dis 6 = FIVE (5,19)
 /// fireflies while row 4 arms → killing the wave completes the
 /// level. The m32 ObjectiveDone_2 pause keeps rows 2/4 from
 /// latching vacuously in the one-tick gap before their targets
@@ -771,19 +569,12 @@ fn mc2_level000_mission_chain() {
     );
     assert_eq!(count(&w, 5, 4), 4, "dis 3 released the archer wave");
 
-    // Kill the archers (dev fireballs, LEFT hand only — the
-    // firehose sprays strays that kill villagers, and a village
-    // offense floods model-4 MILITIA into the type-7 extinction
-    // predicate; authentic, but not this test's subject). The
-    // native MC2 hands are unbound (the default fireball/possess
-    // book), and the runner is invincible — arrows aren't the
-    // subject either.
-    // Extinguish the wave with the smite instrument — this test's
-    // subject is the OBJECTIVE CHAIN reacting to model-4 extinction,
-    // not marksmanship (the old firehose loop was a marginal fight:
-    // strays kill villagers → village offense → model-4 MILITIA
-    // flood the extinction predicate; authentic, separately owned
-    // by the combat fixtures).
+    // Extinguish the archer wave with the smite instrument — this
+    // test's subject is the OBJECTIVE CHAIN reacting to model-4
+    // extinction, not marksmanship (a stray-fireball fight floods
+    // model-4 MILITIA into the type-7 extinction predicate; authentic,
+    // but separately owned by the combat fixtures). The native MC2
+    // hands are unbound and the runner is invincible.
     assert!(w.debug_smite(5, 4) >= 4, "the wave was live to smite");
     hover(&mut w, 194.5, 213.5, 48, idle);
     assert_eq!(count(&w, 5, 4), 0, "the archer wave died");
@@ -868,9 +659,8 @@ fn mc2_par1_spells_overrides() {
     let things = [thing(1, 11, 100, 1), thing(2, 15, 120, 2)];
     let w = World::new_for_game(planes, &things, 1, assets, GameId::Mc2);
     let (_, pool) = w.debug_pool();
-    // (10,11) = the SCORCH RING (NewAdd0A0B_4E840 — the playtest-
-    // cave round-2 trace correction; the old "remaps to model 19"
-    // reading was the m6-doc numbering trap).
+    // (10,11) = the SCORCH RING (NewAdd0A0B_4E840) — NOT a remap to
+    // model 19.
     let ring = pool
         .iter()
         .find(|e| e.class == 10 && e.model == 11)
@@ -961,12 +751,12 @@ fn mc2_dome_raises_and_finalizes() {
     assert_eq!(h(102, 101), 140, "plateau east of the cap");
     // Far outside the 7-tile disc: untouched flat ground.
     assert_eq!(h(120, 100), 50, "ground beyond the footprint");
-    // The (10,18) summit child is REAL since the 2026-07-11 misfit
-    // sweep (mc2::morph summit vortex): the ledger is clean and the
-    // eruption family (the vortex or what it emitted before its
-    // ground-shift teardown) actually ran — the finalize pass moves
-    // the terrain under the vortex, so by now it may have despawned;
-    // the (10,19) fire column it raised on tick 0 persists.
+    // The (10,18) summit child is REAL (mc2::morph summit vortex):
+    // the ledger is clean and the eruption family (the vortex or what
+    // it emitted before its ground-shift teardown) actually ran — the
+    // finalize pass moves the terrain under the vortex, so by now it
+    // may have despawned; the (10,19) fire column it raised on tick 0
+    // persists.
     assert!(
         !w.misfits().iter().any(|&(c, m, _)| (c, m) == (10, 18)),
         "no (10,18) misfit anymore: {:?}",

@@ -1,5 +1,5 @@
 //! MC2 class-14 model-1 terrain riser (`sub_59F60`) + its class-10
-//! (10,63)/(10,64) lower/raise triggers — Phase 4.3. Trace bank:
+//! (10,63)/(10,64) lower/raise triggers. Trace bank:
 //! docs/traces/mc2-class14-m1-riser.md (`EF:` = remc2
 //! EventsFunctions.cpp, `EV:` = Events.cpp; section cites below).
 //!
@@ -10,9 +10,9 @@
 //! It rewrites height, tile type (8 = ridge/wall), angle (class
 //! nibble 1 — clears the deep-water bit), shading and the renderer
 //! dirty bit itself — no retile. On caves every bit-3 clear becomes
-//! the full floor↔ceiling invariant ([`Gen::cave_seal_fixup`],
-//! Phase 4.5) — this is what makes a riser a solid pillar in a cave
-//! (ceiling-sim trace §5a).
+//! the full floor↔ceiling invariant ([`Gen::cave_seal_fixup`]) —
+//! this is what makes a riser a solid pillar in a cave (ceiling-sim
+//! trace §5a).
 //!
 //! Field map (remc2 -> ours): `life_0x8` -> `act_life`,
 //! `dword_0x10_16` (length, THING par2) -> `f26`,
@@ -157,11 +157,11 @@ impl Gen {
                 }
                 cell = b(cell, 0, 1);
             }
-            // G9i: the CAVE loop steps the column byte-wise
-            // (EF:41560); the NON-CAVE loop decrements the packed
-            // WORD (EF:41579) — at x==0 the borrow crosses into
-            // y−1. (The build-X mirror is word-stepped in BOTH
-            // branches, EF:41711/41731 — no split there.)
+            // The CAVE loop steps the column byte-wise (EF:41560);
+            // the NON-CAVE loop decrements the packed WORD (EF:41579)
+            // — at x==0 the borrow crosses into y−1. (The build-X
+            // mirror is word-stepped in BOTH branches, EF:41711/41731
+            // — no split there.)
             col = if self.is_cave() {
                 b(col, -1, 0)
             } else {
@@ -240,8 +240,9 @@ impl Gen {
 
     /// The orientation-1 dirty block — 9 cols bx-3..bx+5 (word++) x
     /// (L+6) rows by-3..by+L+2 ascending (EF:41623-41639, 41858-41874;
-    /// the life-2 restore uses this SYMMETRIC form too — the trace's
-    /// OPEN-1 remc2-transcription fix, EF:42326-42344).
+    /// the life-2 restore uses this SYMMETRIC form too — remc2's
+    /// restore transcription is asymmetric there, treated as a
+    /// transcription artifact, EF:42326-42344).
     fn riser_dirty_y(&mut self, bb: usize, l: i32) {
         let mut col = w(bb, -3);
         for _ in 0..9 {
@@ -520,9 +521,9 @@ impl Gen {
                 self.t.angle[b(bb, d, 3)] &= 0xF7;
             }
         }
-        // DIRTY — the SYMMETRIC word++ form (trace OPEN-1: remc2's
-        // transcription steps y here, asymmetric vs every other dirty
-        // block; EF:42326-42344).
+        // DIRTY — the SYMMETRIC word++ form (remc2's transcription
+        // steps y here, asymmetric vs every other dirty block —
+        // treated as a transcription artifact; EF:42326-42344).
         self.riser_dirty_y(bb, l);
     }
 

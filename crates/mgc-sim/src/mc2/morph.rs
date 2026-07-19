@@ -1,5 +1,5 @@
-//! MC2 class-10 TERRAIN MORPH band, Phase 4.3 — (10,9) the
-//! raise-land / apocalypse dome. Trace bank:
+//! MC2 class-10 TERRAIN MORPH band — (10,9) the raise-land /
+//! apocalypse dome. Trace bank:
 //! docs/traces/mc2-class10-m9-dome-geometry.md (the three-phase
 //! machine, verbatim) + mc2-class10-m9-dome-open-closure.md (the
 //! 2-D distance form, the shading recompute, the spell-XP
@@ -12,21 +12,18 @@
 //! shift/rot home, [`Gen::mc2_shift_rot`]); the dome BASE z rides the
 //! entity z (`position_0x4C_76.z` — retail reuses the position).
 //!
-//! DELIBERATE APPROXIMATIONS (cited):
+//! APPROXIMATIONS:
 //! - `sub_6D8B0(id, 0x12, hits)` = wizard spell-XP credit for row 18
 //!   (EF:58228 — NOT an earthquake event, the open-closure trace §1);
-//!   the spell-XP intake lands with Phase 4.2, hits computed and
-//!   dropped like the rest of the tail band.
-//! - The `life==3` children LANDED 2026-07-11 (the misfit-sweep
-//!   session): (10,18) = the ground-vortex eruption controller
-//!   (`sub_32A70` — emits (10,16) tornadoes riding the whirlwind
-//!   driver, the (10,19) column + a (9,0) bolt on tick 0, the
-//!   vortex/plume singletons on the MC1 volcano registers) and
+//!   the spell-XP intake is deferred, hits computed and dropped like
+//!   the rest of the tail band.
+//! - The `life==3` children: (10,18) = the ground-vortex eruption
+//!   controller (`sub_32A70` — emits (10,16) tornadoes riding the
+//!   whirlwind driver, the (10,19) column + a (9,0) bolt on tick 0,
+//!   the vortex/plume singletons on the MC1 volcano registers) and
 //!   (10,91) = the apocalypse mana rain (`sub_32CF0`) — trace
 //!   docs/traces/mc2-class10-m18-m91-summit.md; both runtime-only
 //!   (never authored). Their own APPROXes sit on the methods.
-//! - Cave arms (the second-heightmap ceiling ease + the mapAngle
-//!   bit-3 sync, EF:23366-23387) LANDED with Phase 4.5.
 //! - The apocalypse latch (`D41A0_0.byte_0x36E03`) lives on `World`
 //!   (`mc2_apocalypse`); its only setter — the endgame state machine
 //!   `sub_21030` case 0xF (EF:12864) — is unported, so the authored
@@ -108,7 +105,7 @@ impl Gen {
 
     /// `sub_48E60` → `sub_48F20` (EF:32623/32647) — MIN terrain
     /// height over the PERIMETER of the tile box at (ox, oy), with
-    /// retail's TRANSPOSED walk kept verbatim (G9g): the row loop
+    /// retail's TRANSPOSED walk kept verbatim: the row loop
     /// runs `h` samples in +x with the bottom row at `y = oy + w`;
     /// the column loop runs `w` samples in +y at `x = ox + h`
     /// (right) and `ox` (left). Square boxes — every caller today —
@@ -295,7 +292,7 @@ impl Gen {
             }
         }
         // Combat + audio pulse: type-0 area beat (sub_116A0) unless
-        // apocalypse, with the row-18 batch XP (EF:23388-95) — F3.
+        // apocalypse, with the row-18 batch XP (EF:23388-95).
         // Rumble sound 10 every tick; the apocalypse adds 63 on the
         // byte_0x3E_62 (f63) 4-tick cadence.
         if !apocalypse {
@@ -462,7 +459,7 @@ impl Gen {
         // Retail's counter is the i32 `dword_0x10_16` and simply keeps
         // counting past 32767 (the self-latched controller never
         // restarts — the 1-in-100 roll is gated on the vortex register
-        // it holds — so it idles until the endgame teardown, OPEN-1).
+        // it holds — so it idles until the endgame teardown, OPEN).
         // Our i16 home would panic there; saturating is behaviorally
         // identical since every gate reads > 2500, < 128, or == 0.
         self.ent[i].f26 = self.ent[i].f26.saturating_add(1);
@@ -474,23 +471,21 @@ impl Gen {
     /// [64,768]; apex (r&0x7F)+128; color roll % 9 − 1; mana
     /// % 0xA00 + 1; yaw r & 0x7FF), life 140, scattered one launch
     /// step from the summit and dropped at ground + 96. Never
-    /// despawns itself (retail relies on the endgame teardown —
-    /// trace OPEN-1).
+    /// despawns itself (retail relies on the endgame teardown, OPEN).
     ///
-    /// APPROX register (cited): the launch velocity rides the ball
-    /// tick's native `dest_x/dest_y` throw deltas (retail stores the
-    /// same delta on `axis_0x9A`; the ±64/tick clamp and the apex
-    /// term `word_0x2C_44` are the shared-ball-machinery APPROX of
+    /// APPROX register: the launch velocity rides the ball tick's
+    /// native `dest_x/dest_y` throw deltas (retail stores the same
+    /// delta on `axis_0x9A`; the ±64/tick clamp and the apex term
+    /// `word_0x2C_44` are the shared-ball-machinery APPROX of
     /// mobs.rs); the color-variant sprite roll keeps its draw but
     /// the neutral ball family renders (ball_resize); retail expires
     /// its spheres via `byte[1] |= 0x20` + life 140 — the decay
-    /// channel is PORTED (2026-07-19: ball_tick's decay tail, flag
-    /// bit 13 — fade bits 24→23, expire at 0, no merge-initiate),
-    /// bounding the rain at ~420 live spheres like retail; the
-    /// 200-slot free cushion stays as a pool-exhaustion belt (retail
-    /// has none); the every-other-tick 26-row spell-XP flood
-    /// (`sub_6D8B0`, xp = tier-2 xpos1/512) banks with Phase 4.2
-    /// like every XP intake.
+    /// channel (ball_tick's decay tail, flag bit 13 — fade bits
+    /// 24→23, expire at 0, no merge-initiate) bounds the rain at ~420
+    /// live spheres like retail; the 200-slot free cushion is a
+    /// pool-exhaustion belt (deliberate: retail has none); the
+    /// every-other-tick 26-row spell-XP flood (`sub_6D8B0`, xp =
+    /// tier-2 xpos1/512) is deferred like every XP intake.
     pub(crate) fn mc2_summit91_tick(&mut self, i: usize) {
         for _ in 0..3 {
             let (x, y, z) = {
@@ -503,7 +498,7 @@ impl Gen {
             let mana = (self.ent_rand(i) % 0xA00) as i32 + 1;
             let yaw = (self.ent_rand(i) & 0x7FF) as u16;
             if self.free.len() <= 200 {
-                continue; // the pool cushion (module-doc APPROX)
+                continue; // the pool cushion (deliberate: retail has none)
             }
             // Spawn one launch step out (retail's first flight tick
             // — our ±64/tick ball clamp would otherwise hold the
@@ -519,8 +514,7 @@ impl Gen {
                 // The retail decay channel `byte[1] |= 0x20` (port
                 // flag bit 13): the sphere fades out over its 140-
                 // tick life (ball_tick's decay tail) — the rain is
-                // TIMED window dressing, not a permanent mana mine
-                // (playtest 2026-07-19).
+                // TIMED window dressing, not a permanent mana mine.
                 e.flags |= 0x2000;
                 e.f140 = mana;
                 e.f144 = 0;
@@ -529,7 +523,7 @@ impl Gen {
                 self.ball_resize(s);
             }
         }
-        // (the 26-row XP flood — 4.2, module-doc APPROX)
+        // (the 26-row XP flood — deferred, module-doc APPROX)
     }
 }
 

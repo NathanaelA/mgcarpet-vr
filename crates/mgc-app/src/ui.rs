@@ -8,11 +8,10 @@
 //! an RGBA atlas, which reproduces the authentic icon colors (the
 //! red heal heart) without palette machinery in the shader.
 //!
-//! Layout is functional-first (player-sanctioned): the book screen's
-//! bottom-right rect gets the 24-slot grid in the original's display
-//! order (`byte_99B88`); the in-game HUD gets the two equipped slots
-//! bottom-left/right. Polish/reshuffle comes later with the real
-//! book page art.
+//! Layout is functional-first: the book screen's bottom-right rect
+//! gets the 24-slot grid in the original's display order
+//! (`byte_99B88`); the in-game HUD gets the two equipped slots
+//! bottom-left/right.
 
 use mgc_formats::bundle::SpriteIndex;
 use mgc_render::UiQuad;
@@ -20,7 +19,7 @@ use mgc_sim::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SpellId};
 use mgc_sim::mc1::world::{LifeState, LoadoutView, PlayerVitals};
 use mgc_sim::mc2::cast::Mc2BookView;
 
-/// UI sprite ids (remc1 begSprTab layout; ROADMAP "Spell repertoire").
+/// UI sprite ids (remc1 begSprTab layout).
 const SPR_HILITE_LEFT: u32 = 1;
 const SPR_HILITE_RIGHT: u32 = 2;
 const SPR_SLOT_BG: u32 = 3;
@@ -240,11 +239,11 @@ impl UiAssets {
         // the panel BACKGROUNDS (sub_23940) blended over the live
         // framebuffer (the bright sky) — NOT over black — and the icons/
         // glyphs (DrawBitmap_60CE0) raw with no blend at all. Compositing
-        // the base atlas through `blend[src|0]` (over black) was
-        // darkening every panel sprite (~30%: [41] (109,109,117) →
-        // (81,73,69)); raw palette restores their true brightness. The
-        // luminous spell-icon ramps that genuinely need the blend read
-        // over the stone slab in the slot tiles below, not here.
+        // the base atlas through `blend[src|0]` (over black) darkens
+        // every panel sprite ~30% ([41] (109,109,117) → (81,73,69)); raw
+        // palette keeps their true brightness. The luminous spell-icon
+        // ramps that genuinely need the blend read over the stone slab in
+        // the slot tiles below, not here.
         for (i, &src) in pixels.iter().enumerate() {
             if src == 0 {
                 continue; // transparent
@@ -338,8 +337,8 @@ impl UiAssets {
                         // At the BOX ORIGIN, not centred — retail's
                         // `DrawBitmap(posX + posIconsX, posIconsY,
                         // icon)` (EF:22543); the 41×23 art carries its
-                        // own margins (player 2026-07-10: centring
-                        // read as misaligned vs retail).
+                        // own margins (centring reads as misaligned vs
+                        // retail).
                         overlay8(&mut tile, (gw, gh), ic, (0, 0), *ink, &resolve);
                     }
                     emit8(&mut rgba, base_w, palette, (tx, ty), (gw, gh), &tile);
@@ -631,9 +630,9 @@ impl UiAssets {
     /// The pre-composited icon-on-slab tile for a spell; `variant`
     /// 0 = plain, 1 = left-equipped, 2 = right-equipped highlight. Kept
     /// for the composited luminous-ramp look (the icon blended over the
-    /// slab); the book now draws slab + native-uniform icon separately to
-    /// avoid the non-4:3 stretch, and the equipped-hand variants are the
-    /// parked unfaithful binding indicator.
+    /// slab); the book draws slab + native-uniform icon separately to
+    /// avoid the non-4:3 stretch. The equipped-hand variants are a parked
+    /// binding indicator.
     #[allow(dead_code)]
     fn slot_quad(&self, spell: SpellId, variant: usize, rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
         UiQuad {
@@ -653,11 +652,11 @@ impl UiAssets {
     /// The top-of-screen notification anchor in 640-native HUD coords:
     /// the LEFT edge of the wizard info-boxes (just right of the radar
     /// cap [40]) and just BELOW the panel strip [41] — where the toast
-    /// belongs relative to OUR 640-native HSPR HUD. (Retail's 320-native
+    /// belongs relative to OUR 640-native HSPR HUD. Retail's 320-native
     /// `132,50` literal was authored against the half-size MSPR strip and
-    /// doesn't map onto the bigger HSPR panels; anchoring to the live
-    /// sprite geometry keeps it below the castle/balloon boxes at any
-    /// resolution.) Left-aligned from this x.
+    /// doesn't map onto the bigger HSPR panels, so we anchor to the live
+    /// sprite geometry instead (deliberate), keeping it below the castle/
+    /// balloon boxes at any resolution. Left-aligned from this x.
     pub fn hud_notification_anchor(&self) -> (f32, f32) {
         let radar_w = self.sprite_dims(SPR_PANEL_BG).map_or(124.0, |(w, _)| w);
         let panel_h = self
@@ -667,8 +666,8 @@ impl UiAssets {
         // x: 2px inset + radar width = the sub-panel origin (v22 in
         // hud_quads), plus a small gap so the first glyph clears the
         // radar's right edge instead of kissing it (retail leaves a
-        // little air there — player 2026-07-14). y: 2px top inset +
-        // panel height + a 2px gap below the info-boxes.
+        // little air there). y: 2px top inset + panel height + a 2px gap
+        // below the info-boxes.
         (2.0 + radar_w + 6.0, 2.0 + panel_h + 2.0)
     }
 
@@ -721,7 +720,7 @@ impl UiAssets {
     /// tint so the destination beneath (the slab) shows through DARKENED —
     /// the dark-relief look of UNOWNED spellbook icons cut into the stone
     /// texture (the original's sub_23AE0 blend[0xA6 | dest]). A NEGATIVE
-    /// uv width is the mode flag. player 2026-07-07.
+    /// uv width is the mode flag.
     fn sprite_quad_rect_mask(&self, id: usize, rect: [f32; 4], tint: [f32; 4]) -> Option<UiQuad> {
         let (sx, sy, w, h) = self.sprite_rects.get(id).copied().flatten()?;
         if w == 0 || h == 0 {
@@ -747,10 +746,9 @@ fn push_opt(quads: &mut Vec<UiQuad>, q: Option<UiQuad>) {
 /// an edge in native coordinates still share it after snapping (no
 /// gaps, no overlaps). Without this, fractional scale factors (e.g.
 /// 1.5 at 720p) rasterize identical native sources into visibly
-/// different rows/columns — the jagged icons and the meter-dot rows
-/// that didn't match (player 2026-07-08). The structural fix for the
-/// remaining in-sprite aliasing at fractional scales is a native
-/// 640×480 UI layer upscaled once with a real filter — banked.
+/// different rows/columns. BANKED: the remaining in-sprite aliasing at
+/// fractional scales wants a native 640×480 UI layer upscaled once with
+/// a real filter.
 fn snap(rect: [f32; 4]) -> [f32; 4] {
     let x0 = rect[0].round();
     let y0 = rect[1].round();
@@ -768,21 +766,17 @@ pub(crate) fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
 }
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// Unowned spells: icon ghosted way down (the original greys via the
-/// blend table's dim row; a tint is our stand-in).
 /// Unowned spell icons: the icon's outer SHAPE used as a mask, filled
 /// with a dark TRANSLUCENT ink so the stone-slab texture shows through,
-/// DARKENED — a dark relief cut into the tile (player 2026-07-07: "a
-/// silhouette … it follows the outer shape of the sprite, but the
-/// texture of the tile exactly"). The original's sub_23AE0 writes
-/// blend[0xA6 | dest]; rgb = the dark ink, a = darkening strength.
+/// DARKENED — a dark relief cut into the tile. The original's sub_23AE0
+/// writes blend[0xA6 | dest]; rgb = the dark ink, a = darkening
+/// strength.
 const UNOWNED_MASK: [f32; 4] = [0.05, 0.04, 0.03, 0.74];
 /// The book slab tint. Our raw [3] sprite is a cool blue-grey
 /// (~158,165,198); retail's slab reads a WARM DARK BROWN (the original
 /// blends [3] through the LUT over the book background, warming +
-/// darkening it). A neutral darkening kept it blue-grey, so this tint
-/// warms toward brown (boosts red-relative, cuts blue) AND darkens.
-/// player 2026-07-07 side-by-side.
+/// darkening it). This tint warms toward brown (boosts red-relative,
+/// cuts blue) AND darkens to match.
 const SLAB_DIM: [f32; 4] = [0.58, 0.46, 0.32, 1.0];
 /// Quick-select digit ink: the original blends the glyph toward
 /// `byte_AD167_AD157[1]` (black); a black multiplicative tint blackens
@@ -792,11 +786,10 @@ const DIGIT_INK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 // The spellbook grid (remc1 :26915-70), native 640×480 scaled by w/640,
 // h/480. 24 spells iterate in DISPLAY_ORDER packed with NO gaps: cell =
 // the slot-slab sprite [3] = 64×37, 4 cols × 6 rows from (384,194). The
-// origin was measured from the player's hi-res retail screenshot
-// (2026-07-07) and lives in mgc-render (which places the world
-// viewport against the same edges) — consumed here so the two crates
-// cannot drift; the grid bottom (194 + 6·37 = 416) is the map-pane
-// base and the black-bar top.
+// origin lives in mgc-render (which places the world viewport against
+// the same edges) — consumed here so the two crates cannot drift; the
+// grid bottom (194 + 6·37 = 416) is the map-pane base and the black-bar
+// top.
 const BOOK_GRID_X: f32 = mgc_render::BOOK_SPELL_X;
 const BOOK_GRID_Y: f32 = mgc_render::BOOK_SPELL_Y;
 const BOOK_CELL_W: f32 = 64.0;
@@ -847,12 +840,10 @@ pub fn book_quads(
         //             dimming the icon.
         //   NOT owned → sub_23CF0: slab + the icon as a coverage mask
         //             DIM-TINTED toward color 0xA6 (sub_23AE0) — the full
-        //             icon SHAPE stays visible, just darkened (player
-        //             2026-07-07: "unowned drawn in full, not silhouettes").
+        //             icon SHAPE stays visible, just darkened.
         // The slab itself is drawn via sub_23940 = a BLEND over the book's
-        // black background, so it reads DARKER than the raw sprite (player:
-        // "background should be the darker sprite"). We approximate the
-        // blend-over-black with a darkening tint.
+        // black background, so it reads DARKER than the raw sprite. We
+        // approximate the blend-over-black with a darkening tint.
         let owned = loadout.owned[spell as usize];
         // The :26926 BIND gate: the spell's castle_req (+132, the
         // castle-stored unlock ladder) vs the castle's stored mana —
@@ -863,13 +854,11 @@ pub fn book_quads(
             && cursor.1 >= cell[1]
             && cursor.1 < cell[1] + cell[3];
         // Every OWNED hovered spell becomes the bind target — the
-        // castle-req gate does NOT block assignment (player retail
-        // memory, 2026-07-09: quickselect keys were campaign state
-        // routinely bound to not-yet-castable spells; the equip
-        // command :48717-31 checks ownership only). The :26926
-        // castle gate stays purely visual (the LOCKED wash + the
-        // equipped-panel wash) and the CAST keeps fizzling sim-side
-        // until the castle stores enough.
+        // castle-req gate does NOT block assignment (quickselect keys
+        // can be bound to not-yet-castable spells; the equip command
+        // :48717-31 checks ownership only). The :26926 castle gate stays
+        // purely visual (the LOCKED wash + the equipped-panel wash) and
+        // the CAST keeps fizzling sim-side until the castle stores enough.
         if over && owned {
             hovered = Some(spell_id);
         }
@@ -878,8 +867,7 @@ pub fn book_quads(
         // sub_23940 blends it over the black book background) —
         // stretching the slab texture is invisible. While the spell's
         // burst counter runs, retail swaps the slab to the ACTIVE
-        // variant [4] (sub_24230 :27810; no cooldown veil exists —
-        // ours was an invention).
+        // variant [4] (sub_24230 :27810); there is no cooldown veil.
         let slab = if owned && loadout.cooldown[spell as usize] > 0.0 {
             SPR_SLOT_BG_ACTIVE
         } else {
@@ -894,9 +882,9 @@ pub fn book_quads(
         // The ICON at native 62×34 × the UNIFORM art scale, anchored at
         // the CELL ORIGIN — retail's sub_24230 draws it with
         // `DrawBitmap(a1, a2, icon)`: top-left at the cell corner, so
-        // the 62×34 art leaves 2px right + 3px bottom slack (player
-        // 2026-07-08: centering + fit-to-cell sat it too low and made
-        // e.g. the castle icon touch the cell bottom). Uniform scale =
+        // the 62×34 art leaves 2px right + 3px bottom slack (NOT centred/
+        // fit-to-cell — that sits it too low, e.g. the castle icon
+        // touching the cell bottom). Uniform scale =
         // min(w/640, h/480) so the art never stretches at non-4:3.
         // OWNED = full colour (raw). NOT owned = the icon's SHAPE cut
         // into the slab as a dark relief (the original's
@@ -920,11 +908,10 @@ pub fn book_quads(
             // at the CELL ORIGIN (retail `sub_23AE0(a1, a2, ...)` —
             // the glyph's own margins do the placement), blended
             // toward `byte_AD167[1]` = BLACK ink (a coverage-mask
-            // blend). Retail actually gates this on a per-spell
-            // countdown (+844, decremented per draw — the badge
-            // FLASHES after assignment) or a book-wide flag (+14421);
-            // we keep it always-on in the book as the readable
-            // interpretation.
+            // blend). Retail gates this on a per-spell countdown (+844,
+            // decremented per draw — the badge FLASHES after assignment)
+            // or a book-wide flag (+14421); we keep it always-on in the
+            // book (deliberate: readable interpretation).
             if let Some(slot) = quick_binds.iter().position(|&b| b == Some(spell)) {
                 push_opt(
                     &mut quads,
@@ -1005,8 +992,7 @@ pub fn book_quads(
         meter_dots(&mut quads, mx, my, sx, sy, (mana / cost).min(54) as usize);
         // Retail's sub_23D40 re-stamps the quickselect digit inside
         // the redraw (:27749-67) — without it the badge vanishes
-        // exactly while hovering the cell you're assigning (player
-        // 2026-07-08).
+        // exactly while hovering the cell you're assigning.
         if let Some(slot) = quick_binds.iter().position(|&b| b == Some(sp)) {
             push_opt(
                 &mut quads,
@@ -1022,9 +1008,8 @@ pub fn book_quads(
     (quads, hovered)
 }
 
-// Panel sprite ids (remc1 begSprTab; ROADMAP "HUD parity"). The panel
-// strip is laid out at the original's 640-wide coordinates, scaled to
-// the live resolution.
+// Panel sprite ids (remc1 begSprTab). The panel strip is laid out at
+// the original's 640-wide coordinates, scaled to the live resolution.
 const SPR_SLOT_IDLE: usize = 1; // equipped-spell frame, idle
 const SPR_SLOT_HELD: usize = 2; // equipped-spell frame, active/held
 const SPR_PANEL_BG: usize = 40; // wizard-strip left cap
@@ -1036,18 +1021,18 @@ const SPR_WIZ_EMPTY: usize = 54; // no-wizard slot
 const SPR_WIZ_ALERT: usize = 55; // castle-under-attack flash
 const SPR_SPELL_ICON: usize = 6; // spell icon base: [spell + 6]
 /// HUD panel background translucency — the original's panels blend over
-/// the framebuffer (transparency is ALWAYS on, not a toggle; player
-/// 2026-07-07). We approximate with an alpha over the sky; the icons/
-/// glyphs/bars stay opaque (drawn raw in retail).
+/// the framebuffer (transparency is ALWAYS on, not a toggle). We
+/// approximate with an alpha over the sky; the icons/glyphs/bars stay
+/// opaque (drawn raw in retail).
 const PANEL_TINT: [f32; 4] = [1.0, 1.0, 1.0, mgc_render::HUD_PANEL_ALPHA];
 /// Life-bar color (remc1 uses palette index 0x7B, a team red).
 const LIFE_RED: [f32; 4] = [0.85, 0.15, 0.12, 1.0];
 /// Collected/banked mana bar (sub_22E50 :27377, color v29 =
-/// byte_99B58[2*owner]) — WHITE, not blue (player 2026-07-07).
+/// byte_99B58[2*owner]) — WHITE, not blue.
 const MANA_WHITE: [f32; 4] = [0.95, 0.95, 0.95, 1.0];
 /// Spell availability progress bar (sub_23D40 :27705, color v26 =
-/// byte_99B58[1+2*owner]) — GREY, not blue (player 2026-07-07); the
-/// partial mana toward the next cast, under the equipped-spell icon.
+/// byte_99B58[1+2*owner]) — GREY, not blue; the partial mana toward
+/// the next cast, under the equipped-spell icon.
 const METER_GREY: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
 /// The flyout XP bar (EF:22668-70): background = CLRD code 0,
 /// fill = CLRD 3840 (0xF00 — pure red).
@@ -1057,10 +1042,9 @@ const XP_BAR_RED: [f32; 4] = [0.85, 0.1, 0.05, 1.0];
 /// spell's castle_req (+132) exceeds the linked castle's STORED mana
 /// (+140) — or no castle stands — retail remaps the whole cell/panel
 /// rect through fog row 0x30 (sub_247C0), a uniform wash over
-/// everything beneath. DARKENS, per the player's retail book
-/// screenshot (2026-07-08) — which also means the fog rows run
-/// dark-high (flagging the map marker cross's white fade for a
-/// polarity re-check); exact shade lands with the LUT bake.
+/// everything beneath. DARKENS — which means the fog rows run dark-high
+/// (WATCH: the map marker cross's white fade may need a polarity
+/// re-check); exact shade lands with the LUT bake.
 const LOCKED_WASH: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 /// Bar geometry (sub_22810 draws a 64-wide fill; sub_22E50 offsets).
 const BAR_W: f32 = 64.0;
@@ -1072,9 +1056,7 @@ const HUD_SECTION: f32 = 128.0;
 /// original's `sub_22810(x,y,64,h,(val<<6)/max,color)`: `fill` is the
 /// value/max fraction of the 64-px ruler. Faithful sub_22810 (:26991)
 /// draws ONLY the clamped colored fill, straight on the panel marble —
-/// no background track — and skips fills under 2px. (The track we used
-/// to draw also covered the amber capacity fill wherever a white
-/// stored-mana bar overlaid it.)
+/// no background track — and skips fills under 2px.
 fn bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, h: f32, frac: f32, color: [f32; 4]) {
     let fill = (BAR_W * frac.clamp(0.0, 1.0)).max(0.0);
     if fill >= 2.0 {
@@ -1098,9 +1080,8 @@ fn thin_bar(quads: &mut Vec<UiQuad>, s: f32, x: f32, y: f32, frac: f32, color: [
 /// at +4,+6,…). Each dot is EXACTLY ONE native pixel — both screen
 /// writers (sub_615D4 hi-res 640w, sub_61594 lo-res 320w) plot a
 /// single byte; the "shaded 2×2" look in DOSBox captures is its
-/// upscaler smearing that pixel across the 2-px spacing grid
-/// (decompile-verified vs player screenshot, 2026-07-08). `mx/my` in
-/// screen px; `sx/sy` = native→screen scale (snap() keeps every dot
+/// upscaler smearing that pixel across the 2-px spacing grid. `mx/my`
+/// in screen px; `sx/sy` = native→screen scale (snap() keeps every dot
 /// rasterizing alike).
 fn meter_dots(quads: &mut Vec<UiQuad>, mx: f32, my: f32, sx: f32, sy: f32, casts: usize) {
     for d in 0..casts {
@@ -1120,8 +1101,8 @@ fn meter_dots(quads: &mut Vec<UiQuad>, mx: f32, my: f32, sx: f32, sy: f32, casts
 /// their icon/meter/wash — the MC1 sprite ids `[6+spell]` mean other
 /// art there, and MC2's real top tile (the big icon `123+spell` + the
 /// Roman-numeral level + mana pool, DrawSpellIcon_2E260) waits on the
-/// Phase-4.2 level machinery + DrawText (player 2026-07-10: leave
-/// aside until then). The whole MC2 HUD layout is the parity track.
+/// level machinery + DrawText. The whole MC2 HUD layout is the parity
+/// track.
 pub fn hud_quads(
     assets: &UiAssets,
     loadout: &LoadoutView,
@@ -1143,7 +1124,7 @@ pub fn hud_quads(
     // --- Wizard stat strip (sub_22E50): three 128-wide sub-panels. ---
     // Tiles pack from x=2: [40] radar frame (124w), then sub-panels at
     // v22 = 2 + [40].w, then +128 each. The three panels are, in order
-    // (player retail ground truth + the trace :27214/:27334/:27374):
+    // (the trace :27214/:27334/:27374):
     //   A (v22, `var_50`)  = the player's LINKED CASTLE — castle HP +
     //                        castle mana capacity/banked, level glyph.
     //   B (v23, `var_52[]`)= the player's MANA BALLOONS — 1..3 by castle
@@ -1165,8 +1146,8 @@ pub fn hud_quads(
     // of its 64px width (`v20 + (pct<<6)/100`), colour alternating
     // between the two team-ramp entries per blink frame (v28 =
     // byte_99B58[2·owner + phase]; white/grey stand-ins until the LUT
-    // bake). The green completed state is our labeled helper — retail
-    // has no completion recolour here.
+    // bake). The green completed state is our addition (deliberate:
+    // retail has no completion recolour here).
     let win_tick = |quads: &mut Vec<UiQuad>, ox: f32| {
         if loadout.win_pct > 0 {
             let tx = (ox + BAR_X) * s + BAR_W * s * (loadout.win_pct as f32 / 100.0).min(1.0);
@@ -1223,10 +1204,9 @@ pub fn hud_quads(
         // Mana capacity + banked, world-relative (y=28), overlaid
         // (:27240-66 verbatim): capacity (castle +136) in v27 =
         // byte_99B58[1+2·team] — the GREY family, same index as the
-        // spell meter (player-certified; our amber was an invention)
-        // — then the BANKED total (houses u32_308 + castle stored
-        // +140 = loadout.banked; adding `stored` again was the
-        // double-count that pinned the bar full). banked == capacity
+        // spell meter — then the BANKED total (houses u32_308 + castle
+        // stored +140 = loadout.banked; do NOT add `stored` again — that
+        // double-counts and pins the bar full). banked == capacity
         // blinks the single full bar between the pair (:27242-53).
         if loadout.banked >= capacity && capacity > 0 {
             let c = if alert_blink { METER_GREY } else { MANA_WHITE };
@@ -1369,7 +1349,7 @@ pub fn hud_quads(
     for (hand, px) in [(0usize, 510.0), (1usize, 574.0)] {
         // The bound spell + cast-in-progress state per column: MC1
         // reads the loadout; MC2 reads the native spell book (the
-        // Phase-4.2 quick-slots + the armed cast window).
+        // quick-slots + the armed cast window).
         let (spell, active) = if let Some(bv) = mc2_book.filter(|_| mc2) {
             let b = if hand == 0 { bv.left } else { bv.right };
             let sp = u8::try_from(b).ok();
@@ -1397,10 +1377,9 @@ pub fn hud_quads(
             // retail's `DrawSpellIcon_2E260` draws
             // `posistruct[model + SPELL_FIREBALL_BIG]` = sprite
             // 123 + spell (GameUI.cpp:374; the CTRL grid's small
-            // run at 97+ is DIFFERENT art — playtest-12 round 2,
-            // "weird artefact"). Same MSPR/HSPR bank, icon at the
-            // frame origin like the MC1 panel; the meter below is
-            // retail's DrawLine primitives
+            // run at 97+ is DIFFERENT art). Same MSPR/HSPR bank, icon
+            // at the frame origin like the MC1 panel; the meter below
+            // is retail's DrawLine primitives
             // (docs/traces/mc2-hud-hand-icons.md).
             let Some(bv) = mc2_book else { continue };
             let Some(sp) = spell else { continue };
@@ -1479,9 +1458,9 @@ pub fn hud_quads(
 }
 
 /// Pause indicator. Retail draws the text "PAUSED" at native (132,50)
-/// (banked with the DrawText path — ROADMAP Tier 3); until the font
-/// lands, a ‖ pause glyph at the same spot marks the frozen sim so a
-/// still screen doesn't read as a hang.
+/// (banked, waiting on the DrawText path); until the font lands, a ‖
+/// pause glyph at the same spot marks the frozen sim so a still screen
+/// doesn't read as a hang.
 /// The retail OK / Cancel button sprites of the in-game MSPR bank
 /// (`GameBitmapIndexes.h` SPELL_BUTTON_OK1/CANCEL1) — present in the
 /// MC2 UI bank, absent from MC1's (which never had the dialog).
@@ -1509,7 +1488,7 @@ pub fn exit_confirm_rects(w: f32, h: f32) -> ([f32; 4], [f32; 4]) {
 /// MC1/HW and single-level mode reuse it verbatim — MC1's bank has
 /// no OK/Cancel art (retail MC1 had no dialog), so it falls back to
 /// labeled slab buttons in the same geometry. The mild hover tint is
-/// presentational (retail's feedback was the cursor itself).
+/// presentational (deliberate; retail's feedback was the cursor itself).
 pub fn exit_confirm_quads(
     assets: &UiAssets,
     text: &str,
@@ -1601,15 +1580,12 @@ pub fn vitals_quads(
 ) -> Vec<UiQuad> {
     let mut quads = Vec::new();
     let scale = (w / 640.0).max(1.0);
-    // (The old bottom-center life bar is GONE — player health lives in
-    // the wizard strip's slot C now, where retail draws it; the bar
-    // was redundant, player 2026-07-08.)
     let bw = w * 0.25;
     let y = h - 26.0 * scale;
     // Spawn-grace shimmer: a thin white strip draining bottom-center
-    // (no faithful equivalent — retail shows nothing for grace).
-    // Behind `render.debug.grace_meter` since 2026-07-11 (player:
-    // debug cue, not a default overlay).
+    // (deliberate: no faithful equivalent — retail shows nothing for
+    // grace; behind `render.debug.grace_meter`, a debug cue not a
+    // default overlay).
     if grace_meter && v.grace > 0 && v.state == LifeState::Alive {
         quads.push(solid(
             [
@@ -1622,9 +1598,7 @@ pub fn vitals_quads(
         ));
     }
     // Castle under attack: the faithful cue is the wizard strip's
-    // alert marble [55] (hud_quads slot A) — the amber strip that used
-    // to flash here anchored to the old bottom-right castle panel,
-    // which moved to the top strip.
+    // alert marble [55] (hud_quads slot A), not anything drawn here.
     // The red hit flash (sub_44BE0(2) — palette row 2 in retail).
     if v.hit_flash > 0 && v.state == LifeState::Alive {
         let a = 0.08 * v.hit_flash as f32;
@@ -2030,8 +2004,7 @@ pub fn selector_quads(
             // (EF:22557: SPELL_ICON_PANEL only; the grey 0xA6 relief
             // is retail's "learnable/present" hint, gated on the
             // learn flags 0x3E9/0x403 we don't model yet). The relief
-            // tile stays baked (variant 3) for a future opt-in —
-            // player 2026-07-10: shadows off for faithful replication.
+            // tile stays baked (variant 3) for a future opt-in.
             if !owned {
                 push_opt(
                     &mut quads,
@@ -2304,8 +2277,8 @@ mod tests {
     #[test]
     fn spellbook_grid_is_tightly_packed_at_native_coords() {
         // At native 640×480 the 24 cells sit at (384,194)+(col·64,row·37),
-        // 4 cols × 6 rows, with NO gaps — the faithful spellbook packing
-        // (measured from the player's hi-res retail shot). Anchors + step.
+        // 4 cols × 6 rows, with NO gaps — the faithful spellbook packing.
+        // Anchors + step.
         let (w, h) = (640.0, 480.0);
         // First cell at the grid origin.
         assert_eq!(book_cell(w, h, 0), [384.0, 194.0, 64.0, 37.0]);

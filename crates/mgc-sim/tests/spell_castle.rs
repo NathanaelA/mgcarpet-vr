@@ -2,11 +2,9 @@
 //! known-clear spot must launch the class-9 m10 castle ball, land it,
 //! raise the class-3 m2 castle entity, and visibly run the m42
 //! painter + m41 leveler (terrain planes change within a bounded
-//! number of ticks). The traced chain replaced the old m45 house
-//! approximation (playtest 3 — the castle never became visible).
+//! number of ticks).
 //!
-//! Self-skips when the baked tree is absent (game data is optional,
-//! per the project rule).
+//! Self-skips when the baked tree is absent (game data is optional).
 
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::spells::SpellId;
@@ -144,8 +142,7 @@ fn create_castle_builds_on_clear_ground() {
 
     // The leveler is a uniform TRANSLATION of the footprint
     // (sub_28200 adds the same per-tick step to every tile) — the
-    // painted tower must survive it (playtest-4 flatten regression:
-    // the old flatten-to-perimeter-mean APPROX erased the castle).
+    // painted tower must survive it (not flattened to perimeter mean).
     let castle = w
         .debug_pool()
         .1
@@ -195,11 +192,10 @@ fn create_castle_builds_on_clear_ground() {
 }
 
 /// The castle-spell UPGRADE LOCK (`f26`) tracks the castle TRANSFORM,
-/// not a fixed `count` (101-tick) timer — the same fix as MC2
-/// (`mc2_castle_spell_tick`). The old MC1 path armed `f26 = count` and
-/// counted it down, so the lock (and its regen suppression) lasted ~2×
-/// the build. Here the lock must engage during the build and clear the
-/// moment the castle is ESTABLISHED (`f59 == 4`), well before 101 ticks.
+/// not a fixed `count` (101-tick) timer — the same law as MC2
+/// (`mc2_castle_spell_tick`). The lock must engage during the build and
+/// clear the moment the castle is ESTABLISHED (`f59 == 4`), well before
+/// 101 ticks.
 #[test]
 fn mc1_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
     let Some(root) = baked_root() else {
@@ -257,8 +253,8 @@ fn mc1_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
     );
 }
 
-/// Playtest-8: the FINAL destruction (level 1 → 0) must leave a
-/// barren square — the un-stamp collapse reverses the painted tower
+/// The FINAL destruction (level 1 → 0) must leave a barren square —
+/// the un-stamp collapse reverses the painted tower
 /// and walls; no stump may survive (and the renderer is told via
 /// terrain_dirty, asserted in the unit suite).
 #[test]

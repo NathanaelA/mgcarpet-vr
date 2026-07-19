@@ -93,8 +93,8 @@ struct Travel {
     launch: Option<u32>,
     /// This leg flies the canonical frontier segment (departing the
     /// last completed portal for the pending one) — the only flight
-    /// that draws route dots (player-described law 2026-07-18:
-    /// off-route trips never generate the line).
+    /// that draws route dots (off-route trips never generate the
+    /// line).
     on_route: bool,
 }
 
@@ -388,7 +388,7 @@ pub struct WorldMap {
     /// Where the carpet rests between legs — the portal of the
     /// level just played (`set_parked`).
     parked: (f32, f32),
-    /// The dotted route (player-described law): the trail is the
+    /// The dotted route: the trail is the
     /// FIXED main-line path, identical on every load — the only
     /// question per segment is drawn-or-not. Segments up to the
     /// frontier stamp on map entry; the frontier segment (into a
@@ -440,9 +440,9 @@ impl WorldMap {
         let rgb =
             |i: usize| -> [u8; 3] { [pal[i * 3] << 2, pal[i * 3 + 1] << 2, pal[i * 3 + 2] << 2] };
 
-        // The epoch-18 frontend members. Optional: a pre-epoch-18
-        // bake still gets the map, just without the border overlay /
-        // dialogs / description text.
+        // The frontend overlay members. Optional: an older bake still
+        // gets the map, just without the border overlay / dialogs /
+        // description text.
         let border = std::fs::read(dir.join("worldmap-border.bin")).ok();
         let font_px = std::fs::read(dir.join("font.bin")).ok();
         let font_index: Option<mgc_formats::bundle::SpriteIndex> = font_px
@@ -640,8 +640,8 @@ impl WorldMap {
     }
 
     /// Park the carpet on the level just played (completed, failed
-    /// or replayed — the player's map position; player-confirmed
-    /// 2026-07-18). Across save/load retail itself resets to the
+    /// or replayed — the player's map position). Across save/load
+    /// retail itself resets to the
     /// last activated portal (the `.GAM` stores no position), which
     /// is what `run.current` resolves to on resume.
     pub fn set_parked(&mut self, level: u32) {
@@ -1420,8 +1420,8 @@ impl WorldMap {
                 );
                 // The travel sample plays with the click, but only
                 // when the flyer actually goes somewhere (retail
-                // gates it on leg length, MI:3786 — player ruling
-                // 2026-07-18: immediate, not retail's late start).
+                // gates it on leg length, MI:3786; deliberate:
+                // immediate, not retail's late start).
                 if (target.0 - from.0).abs() > 8.0 || (target.1 - from.1).abs() > 8.0 {
                     self.sounds.push(SND_TRAVEL);
                 }

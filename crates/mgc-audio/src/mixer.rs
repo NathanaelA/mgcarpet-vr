@@ -12,19 +12,16 @@
 //!   12288² squared XY distance, drop below 512. Pan engages only
 //!   beyond 320 units; the yaw re-folds to 0..512 (directly BEHIND =
 //!   0 = center) with swing `folded << 6` — full deflection at 90°
-//!   (both laws decompile-verified identical in remc1 AND remc2,
-//!   Sound.cpp:6284-6329 / remc1:64474-64511; review 2026-07-15 D1
-//!   fixed the port's z-inclusive distance, halved rear attenuation
-//!   and half-swing pan).
+//!   (both laws identical in remc1 AND remc2, Sound.cpp:6284-6329 /
+//!   remc1:64474-64511).
 //! - Flush phase `sub_55100_55630` (:64459): once per tick the 47
 //!   slots issue channel operations. Mode 1 (`sub_483C0`) = restart:
 //!   an already-running instance with the same (owner, id) is stopped
 //!   first. Mode 3 (`sub_48470`) = don't-interrupt: the request is
 //!   dropped while an (owner, id) instance still runs — the channel
-//!   key is the PAIR (`word_12CD26` owner word + id; review
-//!   2026-07-15 D2). 32 driver channels (`word_CBFF0`), free-channel
-//!   allocation, no stealing (`sub_48570` silently drops when all 32
-//!   are busy).
+//!   key is the PAIR (`word_12CD26` owner word + id). 32 driver
+//!   channels (`word_CBFF0`), free-channel allocation, no stealing
+//!   (`sub_48570` silently drops when all 32 are busy).
 //! - Ambient loops `sub_520F0`/`sub_52120`/`sub_52400` + fade pumps
 //!   `sub_51FC0`/`sub_522E0`: waves (1) XOR wind (2) switched by the
 //!   terrain under the player, fire (5) and market (31) by proximity;
@@ -92,12 +89,9 @@ enum Policy {
     /// emitter every tick — volume rides each request; a starved
     /// tick fades it out (retail's emitters call EndLoop_6EAB0 on
     /// death = fade at ~30 Hz; a missing feed is the same signal,
-    /// and the sim must not grow new stop events — they hash).
-    /// ADJUDICATED against the loop-count ambiguity: the loop +
-    /// per-request volume reading is the only one where retail's
-    /// stop machinery (512 sentinel + EndLoop fade) is coherent
-    /// (remc1's identical dead-code arm loops -1 and re-sets volume
-    /// per flush).
+    /// and the sim must not grow new stop events — they hash). The
+    /// loop + per-request-volume reading is the one where retail's
+    /// stop machinery (512 sentinel + EndLoop fade) stays coherent.
     Feed,
     /// Everything else: the original's default case drops it.
     Drop,
@@ -120,11 +114,7 @@ fn policy_mc1(id: u8) -> Policy {
 /// over `EntitySounds_F4FE0[70]`): playType 1 → restart, playType 3 →
 /// keep-running; Ocean/Crickets/Fire/Market are the ambient loops with
 /// the same fade targets as MC1's. Ids the dispatch doesn't name fall
-/// to its `default: return` — dropped. Previously every id ≥ 47 was
-/// silently dropped and ids < 47 ran MC1's switch (review 2026-07-15
-/// P0-5); still banked for D1: the playType-4 flush law (DoorC2 47
-/// / Tornado 49 — keep-running stand-in) and the Select/CantUse/Hit
-/// level-index gating.
+/// to its `default: return` — dropped.
 fn policy_mc2(id: u8) -> Policy {
     match id {
         1 | 2 => Policy::Loop(70),
@@ -181,8 +171,8 @@ pub enum Source {
     /// `word_12CD26` is the emitter's OWNER word and `sub_483C0`
     /// matches both words — so a different owner's same-id sound gets
     /// its own channel while one owner's many emitters (the meteor
-    /// case) still group (review 2026-07-15 D2; the sim resolves the
-    /// emitter index to its owner tag at `take_audio` drain time).
+    /// case) still group (the sim resolves the emitter index to its
+    /// owner tag at `take_audio` drain time).
     World { pos: (u16, u16, i16), owner: u16 },
 }
 
@@ -561,8 +551,9 @@ impl FaithfulMixer {
             };
             // MC2 pitch jitter (Sound.cpp:6331-45): devil calls 42-44
             // roll ±15% and the gloop 46 ±10% per play (the emitter-
-            // action +10..+30 variant of 46 is unmodeled — APPROX;
-            // the mixer's own LCG, audio is outside the sim hash).
+            // action +10..+30 variant of 46 is unmodeled — deliberate
+            // approximation; the mixer's own LCG, audio is outside the
+            // sim hash).
             let mut rate = sounds.sample_rate;
             if self.mc2 && matches!(id, 42..=44 | 46) {
                 self.jitter = self.jitter.wrapping_mul(9377).wrapping_add(9439);
@@ -770,11 +761,11 @@ mod tests {
         );
     }
 
-    /// The channel key is the (OWNER, id) PAIR (review 2026-07-15
-    /// D2): a different owner's same-id sound gets its OWN channel
-    /// (rival casts no longer suppress/restart player-owned sounds),
-    /// while one owner's repeats still hit the keep-running/restart
-    /// law on its own channel.
+    /// The channel key is the (OWNER, id) PAIR: a different owner's
+    /// same-id sound gets its OWN channel (a rival's cast does not
+    /// suppress/restart player-owned sounds), while one owner's
+    /// repeats still hit the keep-running/restart law on its own
+    /// channel.
     #[test]
     fn channel_key_is_the_owner_id_pair() {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -798,7 +789,7 @@ mod tests {
             1
         );
         // Owner 2, same id, while owner 1 still runs: a SECOND
-        // channel plays (the old constant-0 tag dropped this).
+        // channel plays.
         m.request(
             37,
             Source::World {
@@ -905,8 +896,7 @@ mod tests {
     /// MC2 playType 4 (47/49): the emitter-fed loop — starts looped
     /// at CENTER pan on the shared owner-0 channel, volume rides
     /// each feed without a restart, and a starved tick (dead
-    /// emitter) fades it out — the EndLoop_6EAB0 net effect (review
-    /// 2026-07-15 D1).
+    /// emitter) fades it out — the EndLoop_6EAB0 net effect.
     #[test]
     fn mc2_feed_loop_follows_the_emitter() {
         let (tx, rx) = std::sync::mpsc::channel();

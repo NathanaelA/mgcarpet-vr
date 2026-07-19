@@ -147,7 +147,7 @@ impl Gen {
     /// gnarl argument in a reconstructed stack frame (`savedregs[5]`,
     /// frozen to 0); remc2's byte-identical fractal
     /// (`sub_B5E70_decompress_terrain_map_level`) names it explicitly,
-    /// and our earlier oracle validation proved MC1 heights depend on it.
+    /// and MC1 heights depend on it (oracle-validated).
     fn fractal(&mut self, seed: u16, origin: u16, raise: i16, gnarl: u16) {
         // The engine passes its global PRNG by value: the fractal
         // advances this private copy, leaving the global stream at the

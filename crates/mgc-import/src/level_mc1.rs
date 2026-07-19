@@ -1,10 +1,10 @@
 //! Magic Carpet 1 level format (LEV*.DAT, decompressed).
 //!
-//! Layout originally per michaelhoward's MagicCarpetFileFormat spec
-//! (2025 update), CORRECTED 2026-07-09 against the remc1 decompile's
-//! own accessors (the engine copies the whole record to str_193795 and
-//! address-arithmetic names every field): the spec's "2095-slot entity
-//! table + 12-byte footer" actually ends at offset 37072 — the last 96
+//! Layout follows the remc1 decompile's own field accessors (the
+//! engine copies the whole record to str_193795 and address-arithmetic
+//! names every field), which correct michaelhoward's
+//! MagicCarpetFileFormat spec: the spec's "2095-slot entity table +
+//! 12-byte footer" actually ends at offset 37072 — the last 96
 //! pseudo-slots are the 8 x 216-byte per-player WIZARD records
 //! (str_230867_37072, remc1 :49222/:54965-67), and the "footer" is the
 //! decoded tail (u16 map-coord word :27268, u16 player count :51537,
@@ -190,9 +190,9 @@ pub struct Mc1Level {
     /// Per-player starting castle level: 0 = none, N = a castle at
     /// level N-1 spawns with the wizard (:54972-94).
     pub castle_levels: [u8; 8],
-    /// The raw 12-byte tail as 6 u16s (the historically-named
-    /// "footer", = tail_38800/player_count/castle_levels verbatim) —
-    /// kept for the shipped GenParams member.
+    /// The raw 12-byte tail as 6 u16s (the spec-named "footer", =
+    /// tail_38800/player_count/castle_levels verbatim) — kept for the
+    /// shipped GenParams member.
     pub footer: [u16; 6],
     /// True when the reserved block deviates from the all-zeros norm.
     pub reserved_nonzero: bool,

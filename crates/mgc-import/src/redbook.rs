@@ -49,9 +49,9 @@ pub fn parse_cue(cue: &str, image_sectors: u64) -> Result<Vec<AudioTrack>, Strin
                 if idx == "00" {
                     // A pregap start: the PREVIOUS track's audio ends
                     // HERE, not at the next INDEX 01 — otherwise the
-                    // ~2 s pregap leaks into its tail (review
-                    // 2026-07-15 D7; the GOG sheet uses PREGAP
-                    // directives so this is insurance for other rips).
+                    // ~2 s pregap leaks into its tail. The GOG sheet
+                    // uses PREGAP directives, so this is insurance for
+                    // other rips.
                     let sector = msf_to_sector(msf)?;
                     if let Some(prev) = tracks.last_mut() {
                         if prev.end_sector == 0 {
@@ -130,14 +130,13 @@ const JUNK_SECTOR: usize = 588 * 2;
 /// The MC2 voiceover tracks carry digital garbage from the studio
 /// mastering ahead of (and between) the voice takes — high-entropy
 /// bytes pressed into the audio, heard as a loud crackle at each
-/// narration start in retail too (player-verified against GOG
-/// 2026-07-18; waveform shows sharply-bounded full-band blocks with
-/// UNCORRELATED stereo channels — data-as-PCM, not sound; the bytes
-/// self-match inside the audio track, not the CD's data track).
+/// narration start in retail too. The waveform shows sharply-bounded
+/// full-band blocks with UNCORRELATED stereo channels — data-as-PCM,
+/// not sound; the bytes self-match inside the audio track, not the
+/// CD's data track.
 ///
-/// Law (tightened 2026-07-18 after the player caught the broad
-/// version clipping clean in-level hints): in the clip's head
-/// (before the first sustained voice run — RMS ≥ 1500 with low ZCR
+/// Law: in the clip's head (before the first sustained voice run —
+/// RMS ≥ 1500 with low ZCR
 /// or stereo correlation ≥ 0.60), find runs of ≥4 consecutive
 /// junk-CERTAIN sectors — RMS ≥ 5000, ZCR ≥ 0.38 AND |stereo
 /// correlation| < 0.25 (confirmed junk measures 0.04-0.17; voice
@@ -198,11 +197,10 @@ pub fn mute_leading_junk(pcm: &mut [i16]) -> Option<u32> {
         .find(|&i| voicey(i) && (voicey(i + 1) as u8 + voicey(i + 2) as u8) >= 1)?;
     // Junk-CERTAIN sectors only: loud, white AND stereo-uncorrelated
     // (voice/music can reach the first two in bursts; it can never
-    // shed its channel correlation — the 2026-07-18 library audit:
-    // confirmed crackle heads sit at |corr| 0.04-0.17, clips the
-    // looser law wrongly ate at 0.3-0.6). Mute only through the END
-    // of the last junk run — never up to the detected onset, so
-    // late-detected voice can't be zeroed.
+    // shed its channel correlation — confirmed crackle heads sit at
+    // |corr| 0.04-0.17). Mute only through the END of the last junk
+    // run — never up to the detected onset, so late-detected voice
+    // can't be zeroed.
     let mut run = 0usize;
     let mut last_run_end = None;
     for (i, s) in stats[..onset].iter().enumerate() {

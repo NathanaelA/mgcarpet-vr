@@ -1,8 +1,8 @@
 //! The MC2-NATIVE CASTLE COLUMN over real baked level-000 data
-//! (mc2::castle — the Phase-4 port of retail actions 4/5/6): the
-//! NATIVE Create-Castle cast (the 4.2 book, spell 2) must raise a
-//! class-3 m2 castle that runs the MC2 machinery — the 19-tick
-//! (10,42) painter stamps the tower, the MC2 capacity ladder rungs
+//! (mc2::castle — retail actions 4/5/6): the NATIVE Create-Castle cast
+//! (spell 2) must raise a class-3 m2 castle that runs the MC2
+//! machinery — the 19-tick (10,42) painter stamps the tower, the MC2
+//! capacity ladder rungs
 //! (8500/18000 — NOT MC1's 10000/20000) prove the game-keyed swap,
 //! the (10,43) token recast upgrades one level, the (3,3) balloon
 //! fleet spawns to quota, and demolish walks the level back down to
@@ -84,10 +84,9 @@ fn count(w: &World, class: u8, model: u8) -> usize {
         .count()
 }
 
-/// Playtest repro (2026-07-16, mc2:00): a tier-1 castle cast must
-/// grow FIRE turrets — the (10,79) ring with part-type 1 — via the
-/// cast-time research stamp; the dev-granted spell must behave
-/// exactly like a legitimately leveled one.
+/// A tier-1 castle cast must grow FIRE turrets — the (10,79) ring with
+/// part-type 1 — via the cast-time research stamp; the dev-granted
+/// spell must behave exactly like a legitimately leveled one.
 #[test]
 fn mc2_castle_tier1_cast_grows_fire_turrets() {
     let Some(root) = baked_root() else {
@@ -142,14 +141,12 @@ fn mc2_castle_tier1_cast_grows_fire_turrets() {
     assert_eq!(count(&w, 10, 79), 4, "level 2 grows the 4-turret ring");
 }
 
-/// Playtest repro (2026-07-16, mc2:00): the level's ending cluster
-/// is the CHECKPOINT variant — dis 4 spawns the (11,12) X-marker
-/// trigger at (75,218) and the (14,3) fly-to "X"/portal at (97,221)
-/// (there is NO (11,31)/(14,4) on level-000; retail routes this
-/// through the same endGameSeq under actionIndex 12). The marker
-/// must spawn HIDDEN, the trip must REVEAL it and seize the flyer,
-/// and the fly-in must end in WON — the playtest saw "trigger went
-/// by, nothing happened".
+/// The level's ending cluster is the CHECKPOINT variant — dis 4 spawns
+/// the (11,12) X-marker trigger at (75,218) and the (14,3) fly-to
+/// "X"/portal at (97,221) (there is NO (11,31)/(14,4) on level-000;
+/// retail routes this through the same endGameSeq under actionIndex
+/// 12). The marker must spawn HIDDEN, the trip must REVEAL it and
+/// seize the flyer, and the fly-in must end in WON.
 #[test]
 fn mc2_level000_ending_end_to_end() {
     let Some(root) = baked_root() else {
@@ -257,10 +254,9 @@ fn mc2_castle_builds_upgrades_and_demolishes() {
         })
         .collect();
 
-    // The NATIVE castle cast (4.2): bind the MC2 castle spell
-    // (index 2, dev-granted above) — the retired MC1 equip bridge
-    // no longer casts on the MC2 column (the playtest-13
-    // ghost-fireball gate).
+    // The NATIVE castle cast: bind the MC2 castle spell (index 2,
+    // dev-granted above) — the MC1 equip bridge does NOT cast on the
+    // MC2 column (else ghost fireballs).
     w.mc2_select_spell(2, 0, 0);
     w.tick(
         pose,
@@ -325,12 +321,11 @@ fn mc2_castle_builds_upgrades_and_demolishes() {
     );
 
     // Climb to level 6 (the 48x48 stage) — four more recasts. The
-    // even-frame/odd-row origin math is the PLAYTEST-11 round-3
-    // regression (retail: origin = D/2 - d/2, EF:27798): the old
-    // (D-d)/2 read shifted every interior ring one tile toward
-    // -x/-y — offset walkways, a squashed center tower, and castle
-    // guards spawning inside wall cells where the all-four-blocked
-    // walker law killed them in a respawn loop.
+    // even-frame/odd-row origin math: retail origin = D/2 - d/2
+    // (EF:27798), NOT (D-d)/2 — the wrong read shifts every interior
+    // ring one tile toward -x/-y (offset walkways, a squashed center
+    // tower, and castle guards spawning inside wall cells where the
+    // all-four-blocked walker law kills them in a respawn loop).
     for expect in 3..=6i16 {
         w.tick(pose, PlayerCommand::default());
         w.tick(
@@ -348,21 +343,19 @@ fn mc2_castle_builds_upgrades_and_demolishes() {
     }
     let (_, cap6, _) = w.loadout().castle.expect("castle at level 6");
     assert_eq!(cap6, 317_400, "the MC2 level-6 capacity rung");
-    // F3: each upgrade awards +1 castle XP (`sub_6D8B0(owner,2,1)`
+    // Each upgrade awards +1 castle XP (`sub_6D8B0(owner,2,1)`
     // EF:61596) — five upgrades landed above (2..=6), so the ladder
-    // that unlocks Fire/Lightning Tower tiers has climbed, and the
-    // XP drain's spell-2 branch keeps the pane cost synced (the old
-    // cast-gate re-sync hack is retired; this is its regression
-    // guard).
+    // that unlocks Fire/Lightning Tower tiers has climbed, and the XP
+    // drain's spell-2 branch keeps the pane cost synced.
     let book = w.mc2_book_view();
     assert!(
         book.xp[2] >= 5,
         "castle upgrades awarded spell-2 XP (got {})",
         book.xp[2]
     );
-    // The guard roster survives on the (correctly aligned) walkways
-    // — with the one-tile ring offset they died as fast as they
-    // spawned (blocked on all four sides).
+    // The guard roster survives on the (correctly aligned) walkways —
+    // a one-tile ring offset would block them on all four sides and
+    // kill them as fast as they spawn.
     for _ in 0..200 {
         w.tick(pose, PlayerCommand::default());
     }
@@ -423,16 +416,15 @@ fn mc2_castle_builds_upgrades_and_demolishes() {
     }
 }
 
-/// The stale castle-cost regression (player repro 2026-07-16): the
-/// mana gate reads the manifestation's CACHED cost (`max_life`,
+/// The mana gate reads the manifestation's CACHED cost (`max_life`,
 /// written by SetSpell_6D5E0), and retail refreshes that cache on
 /// EVERY castle stat stamp — `sub_60780` (EF:61670) re-runs SetSpell
 /// on the manifestation's own tier from both transform directions.
-/// The port's upgrade path stayed fresh via the +1 XP award's spell-2
-/// branch, but a DOWNGRADE (demolish / enemy razing) awarded nothing:
-/// after Shift+L the gate still compared against the higher rung, and
-/// an affordable rebuild dinged (sound 29) until the spell was
-/// re-selected. The fix re-syncs at the upgrade-lock release edge.
+/// The upgrade path stays fresh via the +1 XP award's spell-2 branch,
+/// but a DOWNGRADE (demolish / enemy razing) awards nothing, so the
+/// cost cache must re-sync at the upgrade-lock release edge — else an
+/// affordable rebuild dings (sound 29) against the stale higher rung
+/// until the spell is re-selected.
 ///
 /// The assert surface is the CACHE (`debug_spell_gate_cost`) against
 /// the live law (`mc2_book_view().cost`) — the bug is exactly their
@@ -493,8 +485,8 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
         "at level 2 the cached gate cost is the level-3 rung"
     );
 
-    // A failed cast attempt (the ding), as in the player repro — it
-    // must not perturb the cache or wedge any state.
+    // A failed cast attempt (the ding) — it must not perturb the cache
+    // or wedge any state.
     w.tick(
         pose,
         PlayerCommand {
@@ -521,10 +513,9 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
     let (_, _, lvl) = w.loadout().castle.expect("castle survives the demolish");
     assert_eq!(lvl, 1, "one demolish = one level down");
 
-    // THE REGRESSION: the cache must track the live law back DOWN
-    // to the level-2 rung with NO re-select in between. Pre-fix it
-    // held 20000 (the gate dinged an affordable rebuild) until the
-    // player re-selected the spell.
+    // The cache must track the live law back DOWN to the level-2 rung
+    // with NO re-select in between (a stale higher rung would ding an
+    // affordable rebuild).
     assert_eq!(
         w.mc2_book_view().cost[2],
         10_000,
@@ -538,10 +529,9 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
 }
 
 /// The pane grey-out law (`canSummon`/`canSubSummon`, EF:22503-08 /
-/// EF:22602-08; player regression report 2026-07-17 — "everything is
-/// lit up"): a tier whose `maxManaLimit_A` castle-pool prerequisite
-/// is nonzero must read NOT castable while no own castle exists;
-/// requirement-free tiers (fireball) always read castable.
+/// EF:22602-08): a tier whose `maxManaLimit_A` castle-pool
+/// prerequisite is nonzero must read NOT castable while no own castle
+/// exists; requirement-free tiers (fireball) always read castable.
 #[test]
 fn mc2_pane_castable_reflects_castle_gate() {
     let Some(root) = baked_root() else {
@@ -553,9 +543,9 @@ fn mc2_pane_castable_reflects_castle_gate() {
         return;
     };
     let bv = w.mc2_book_view();
-    // The CD table's own shape (discovered pinning this): the BASE
-    // fireball is requirement-free, but its tier 2 carries a nonzero
-    // `maxManaLimit_A` — even fireball's top tier greys castle-less.
+    // The CD table's own shape: the BASE fireball is requirement-free,
+    // but its tier 2 carries a nonzero `maxManaLimit_A` — even
+    // fireball's top tier greys castle-less.
     assert_eq!(
         bv.castable[0],
         [true, true, false],

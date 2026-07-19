@@ -26,7 +26,7 @@ pub const FORMAT_VERSION: u32 = 2;
 /// tree is stale and must be regenerated from game data. Artifacts
 /// baked before the field existed deserialize as epoch 0 — always
 /// stale.
-/// 1: first stamped epoch (2026-07-09).
+/// 1: first stamped epoch.
 /// 2: mc2 bundles gain search.bin + bldgprm.bin (Phase 3).
 /// 3: mc2 bundles gain build.tab.bin + build.dat.bin (BUILD0-0 —
 ///    the building footprint bank; Phase 3.5 building creator).
@@ -76,8 +76,7 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    old export read byte0 as signed and dropped every row with high
 ///    flag bits (0x80 subtype-match / 0x40 watch-model), then compacted
 ///    the rest — losing e.g. level-000's kind-2 goat-graze anchors (the
-///    2026-07-16 flocking-mystery root cause) and mis-slotting chained
-///    triggers.
+///    flocking-mystery root cause) and mis-slotting chained triggers.
 /// 14: every graphics bundle gains `etext.json` (DATA/ETEXT.DAT as a
 ///    JSON string array, index = the engine's sentence id — the
 ///    roadmap "Text" track: MC2 objective/briefing subtitles, MC1's
@@ -227,14 +226,13 @@ pub struct LevelHeader {
     /// `player_0x2FED9[8]` — authored starting-castle LEVEL per
     /// wizard color (0 = none, N = a castle at level N-1 built at
     /// the wizard's spawn; consumers EF:43777/43789,
-    /// docs/traces/mc2-castle-data-tables.md §3). Mis-documented as
-    /// "activation flags" before the castle-column trace.
+    /// docs/traces/mc2-castle-data-tables.md §3).
     pub players: [i8; 8],
     /// Cave basic height (header byte 0x05 = `byte_0x2FED3`): the
     /// ceiling mirror pivot on cave levels (`MapBasicHeight_D41B7`,
     /// LevelInit.cpp:36; docs/traces/mc2-cave-terrain-foundation.md
-    /// §4.1). Meaningless off-cave (retail keeps the default 44).
-    /// Named `unk05` before the field was identified.
+    /// §4.1). Meaningless off-cave (retail keeps the default 44). The
+    /// `unk05` serde alias = the pre-identification field name.
     #[serde(alias = "unk05")]
     pub basic_height: u8,
     /// `word_0x2FED5`, preserved verbatim (retail repurposes the
@@ -242,8 +240,8 @@ pub struct LevelHeader {
     pub unk07: i16,
     /// `word_0x2FED7` = NumberOfPlayers: colors 0..n-1 spawn wizard
     /// carpets (0 = the human in single player, 1..n-1 = AI rivals
-    /// — docs/traces/mc2-rivals-spawn-mortality.md §1). Named
-    /// `unk09` before the field was identified (renamed at EPOCH 9).
+    /// — docs/traces/mc2-rivals-spawn-mortality.md §1). The `unk09`
+    /// serde alias = the pre-identification field name.
     #[serde(alias = "unk09")]
     pub number_of_players: i16,
 }
@@ -301,11 +299,11 @@ pub struct WizardConfig {
     /// Per-spell starting grant flags, indexed by the game's spell
     /// ID (MC2: 26 flags; MC1: 24 flags).
     pub starting_spells: Vec<u8>,
-    /// MC2 only: per-spell STARTING XP LEVEL 0..2 (`byte_0x360FBx` —
-    /// identified 2026-07-12, docs/traces/mc2-rivals-spawn-mortality
-    /// .md §3: an AI's `SpellLevels[spell]` seeds from this, clamped
-    /// ≤2). Named `unknown_spells` before identification (renamed at
-    /// EPOCH 9).
+    /// MC2 only: per-spell STARTING XP LEVEL 0..2 (`byte_0x360FBx`,
+    /// docs/traces/mc2-rivals-spawn-mortality.md §3: an AI's
+    /// `SpellLevels[spell]` seeds from this, clamped ≤2). The
+    /// `unknown_spells` serde alias = the pre-identification field
+    /// name.
     #[serde(
         default,
         alias = "unknown_spells",

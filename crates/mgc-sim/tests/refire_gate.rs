@@ -1,10 +1,8 @@
-//! Regression coverage for the cast refire gate (review J4; the
-//! c44021a law landed with zero tests). The trigger classes, per the
-//! decompile latch (+60 field, :20601/:20621) and the I1/I2 session
-//! rulings (2026-07-16):
+//! Regression coverage for the cast refire gate. The trigger classes,
+//! per the decompile latch (+60 field, :20601/:20621):
 //! - EDGE spells (fireball 0 and the 1/4/5/12/14 channels): one cast
-//!   per press; a fresh press refires even mid-burst (c44021a — no
-//!   `armed` cadence gate), but HOLDING never re-casts.
+//!   per press; a fresh press refires even mid-burst (no `armed`
+//!   cadence gate), but HOLDING never re-casts.
 //! - 15 Lightning: streams while held, per-shot debit; a dry stream
 //!   (pool empty) dies SILENTLY and does NOT auto-resume when mana
 //!   returns — only a fresh click restarts it.
@@ -101,8 +99,8 @@ fn projectiles(w: &World) -> usize {
     w.live_poses().iter().filter(|p| p.class == 9).count()
 }
 
-/// c44021a: a fresh press refires immediately, even while the prior
-/// burst counter is still live — no `armed` cadence gate.
+/// A fresh press refires immediately, even while the prior burst
+/// counter is still live — no `armed` cadence gate.
 #[test]
 fn edge_spell_refires_on_every_fresh_press() {
     let (mut w, pose) = armed_world();
@@ -133,8 +131,8 @@ fn edge_spell_does_not_refire_while_held() {
     assert_eq!(projectiles(&w), 1, "10 held ticks = one cast");
 }
 
-/// I2 ruling (player, 2026-07-16): the 1/4/5/12/14 channels are
-/// EDGE-only (+60==1) — holding must not keep the channel armed.
+/// The 1/4/5/12/14 channels are EDGE-only (+60==1) — holding must not
+/// keep the channel armed.
 #[test]
 fn shield_channel_is_edge_only() {
     let (mut w, pose) = armed_world();
@@ -187,8 +185,8 @@ fn firehose_fires_every_held_tick() {
     );
 }
 
-/// I1 (Held Lightning), stream half: while held with the pool
-/// covering the re-arm, every tick re-emits (dev-spells bypasses the
+/// Held Lightning, stream half: while held with the pool covering the
+/// re-arm, every tick re-emits (dev-spells bypasses the
 /// mana check; the re-arm/emit logic is the same code path). The
 /// zigzag is a one-tick multi-segment transient, so seeing segments
 /// alive AFTER four held ticks proves a fresh per-tick emission.
@@ -202,7 +200,7 @@ fn lightning_streams_while_held() {
     }
 }
 
-/// I1 (Held Lightning), mana half — REAL mana: the re-arm check is
+/// Held Lightning, mana half — REAL mana: the re-arm check is
 /// SILENT on an empty pool, the dry stream does NOT auto-resume when
 /// mana returns while held, and only a fresh click restarts it. With
 /// the synthetic 1000 ceiling the edge debit (-1000) empties the pool

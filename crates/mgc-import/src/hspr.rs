@@ -1,9 +1,9 @@
 //! HSPR/MSPR UI-sprite libraries (2D screen-space sprites: spell
 //! icons, HUD panel, mana-bar frames, level pips, map markers).
 //!
-//! Format (decoded 2026-07-06 from retail data; no remc1 reader needed
-//! — the TAB/DAT pair is self-describing): both files are whole-file
-//! RNC (decompressed by the caller); TAB = 6-byte entries
+//! Format (TAB/DAT pair is self-describing, no remc1 reader needed):
+//! both files are whole-file RNC (decompressed by the caller); TAB =
+//! 6-byte entries
 //! `{u32 offset, u8 width, u8 height}` into the DAT; pixel payload is
 //! signed-RLE per row — `n > 0` copy `n` palette-index bytes, `n < 0`
 //! skip `-n` transparent pixels, `n == 0` end of row. Index 0 =

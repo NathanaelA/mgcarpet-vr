@@ -1,18 +1,16 @@
-//! The Phase-4.5 CAVE FIXTURE (ROADMAP "4.5 Cave levels", step (g)):
-//! real level-014 data — the roster-richest cave (32 pillars, 61
-//! brutes, 92 bees, 25 switches) — under the full MC2 profile.
-//! Positively exercised: the load settle (sculptors, pillar MEASURE
-//! and the load-time arms) holds the floor↔ceiling invariant over the
-//! whole map, the cave-only roster spawns ((14,2)/(5,24)/(2,6)), the
-//! cave-EXCLUDED ctors spawn NOTHING, the (10,86) drip spawner fires
-//! on its 8-turn cadence, and a NATIVE Cave-In cast (spell 25, the
-//! one cave-only spell) flies, impacts and collapses terrain through
-//! the (9,30) → (10,89) chain.
+//! CAVE FIXTURE over real level-014 data — the roster-richest cave (32
+//! pillars, 61 brutes, 92 bees, 25 switches) — under the full MC2
+//! profile. Positively exercised: the load settle (sculptors, pillar
+//! MEASURE and the load-time arms) holds the floor↔ceiling invariant
+//! over the whole map, the cave-only roster spawns
+//! ((14,2)/(5,24)/(2,6)), the cave-EXCLUDED ctors spawn NOTHING, the
+//! (10,86) drip spawner fires on its 8-turn cadence, and a NATIVE
+//! Cave-In cast (spell 25, the one cave-only spell) flies, impacts and
+//! collapses terrain through the (9,30) → (10,89) chain.
 //!
-//! Golden hashes pin the trajectory (the MC1 goldens in
-//! state_hash.rs and the mc2_slice level-000 goldens are untouched —
-//! shared chassis, separate fixtures). Self-skips without baked mc2
-//! data.
+//! Golden hashes pin the trajectory (the MC1 goldens in state_hash.rs
+//! and the mc2_slice level-000 goldens are untouched — shared chassis,
+//! separate fixtures). Self-skips without baked mc2 data.
 
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
@@ -41,7 +39,7 @@ fn build_world_level(
     let terrain = pkg.terrain.as_ref()?;
     let ceiling = terrain.ceiling.clone().unwrap_or_default();
     if ceiling.is_empty() {
-        // A pre-EPOCH-8 bake has no ceiling plane — nothing to pin.
+        // A bake without a ceiling plane — nothing to pin.
         return None;
     }
     let planes = Planes {
@@ -127,8 +125,7 @@ fn count(w: &World, class: u8, model: u8) -> usize {
         .count()
 }
 
-/// THE invariant over the whole map (the tmp_caveprobe check):
-/// ceiling > floor ⇔ bit3 clear.
+/// THE invariant over the whole map: ceiling > floor ⇔ bit3 clear.
 fn invariant_violations(w: &World) -> usize {
     let p = w.planes();
     let c = w.ceiling_plane();
@@ -183,14 +180,12 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     hashes.push(w.state_hash());
     obs.push(w.observable_digest());
 
-    // StageVar hold-gate: with the row table baked VERBATIM (epoch
-    // 13 — the 2026-07-16 flocking fix; the old bake read byte0 as
-    // SIGNED and dropped every flagged row, then compacted the rest,
-    // so only the kind-9 var survived here), level-014's full table
-    // loads: the kind-9 model-18 (THING 334, gate = template-6 death
-    // — never fires in this run) PLUS the previously-lost flagged
-    // rows binding kind-1 walkers, kind-4 guardians and kind-6 timer
-    // spawns. Pin the census by kind and the original kind-9 anchor.
+    // StageVar hold-gate: with the row table baked VERBATIM (byte0 is
+    // a FLAG byte, not signed — reading it signed drops every flagged
+    // row), level-014's full table loads: the kind-9 model-18 (THING
+    // 334, gate = template-6 death — never fires in this run) PLUS the
+    // flagged rows binding kind-1 walkers, kind-4 guardians and kind-6
+    // timer spawns. Pin the census by kind and the kind-9 anchor.
     let held = w.debug_mc2_held();
     assert!(
         held.contains(&(447, 18, 9)),
@@ -302,160 +297,6 @@ fn mc2_cave_behaviors_and_goldens() {
 
     // GOLDEN: pin the checkpoint hashes. Re-pin deliberately when a
     // cave system lands a fidelity fix (document the move in git).
-    // Re-pinned 2026-07-11 (playtest-cave round 2): the (10,11)
-    // scorch-ring trace correction — authored (10,11)s were riding
-    // the (10,19) spray ctor (the m6-doc §0 numbering trap) and
-    // flooding the pool; level-014 authors them, so the whole
-    // trajectory legitimately moved.
-    // Re-pinned 2026-07-12 (audio column): the objective-message
-    // trigger ramp (`byte_0x36E02`, docs/traces/mc2-voiceover-
-    // triggers.md §3) is new retail sim state hashed alongside the
-    // stage board — every staged MC2 level's trajectory legitimately
-    // moved with the level-load briefing arm.
-    // Re-pinned 2026-07-13 (mana-magnet fidelity fix): the (10,54)
-    // aura `sub_38D80` now DRAGS mana balls toward its eye (the retail
-    // magnet) instead of the mis-ported creature grip. level-014 has
-    // one aura + 30 balls, so the post-load checkpoints move as the
-    // balls stream inward (the load-time checkpoint 0 is unchanged).
-    // Re-pinned 2026-07-13 (mana downhill-roll): the ball tick now
-    // applies the retail terrain gradient (`sub_58030`) to a grounded
-    // ball's velocity, so balls roll downhill toward the low basin
-    // (the level-001 transport the aura alone couldn't do). The 30
-    // level-014 balls settle on real cave terrain, so the ticked
-    // checkpoints (1 and 3) legitimately move; the load-time (0) and
-    // pre-tick (2) checkpoints are unchanged.
-    // Re-pinned 2026-07-13 (aura range/life from stageTag): the
-    // disposition-spawned (10,54) aura now reads its RANGE and LIFE
-    // from the THING's stageTag (`sub_4A310` EF:33095-33104) instead of
-    // the ctor's fixed 14-tile/128 default. level-014's aura carries
-    // stageTag 9 → a 9-tile reach (not 14), so the ball trajectory
-    // (checkpoints 1 and 2) legitimately moves; the aura's f26 field
-    // value also joins the hash.
-    // Re-pinned 2026-07-14 (objective types 1/2 bind field): the
-    // `Mc2Stage` struct gained a `bound: Option<u16>` slot for the
-    // named-target entity binding. level-014 authors no type-1/2
-    // objective, so no binding occurs and no behavior changed — the move
-    // is purely the extra `None` joining each stage's hash.
-    // Re-pinned 2026-07-14 (StageVar subsystem): the level's StageVar
-    // table (`crate::mc2::stagevars`) now loads + hashes. level-014's
-    // kind-9 var HOLDS the one model-18 (THING 334) at its phase-7
-    // wait — its gate (template-6 death) never fires in this run, and
-    // the two kind-1 vars (word=0) match nothing — so the move was
-    // the StageVar table PLUS that one held binding joining the hash
-    // (this note originally claimed "no creature held"; corrected
-    // Session H9 to match the assertion above).
-    // Re-pinned 2026-07-16 (DELIBERATE), Session E creature batch:
-    // level-014's two (5,22) worms now carry the retail ctor
-    // `f28 = 3` (E5 — the ch1 designation-mail admit; the whole
-    // retarget→colorize machine was dead code behind f28=1), plus
-    // the shared-mover/awake changes (E13 unconditional retry
-    // terrain test, E15 hidden-skip + sphere pass) that shift any
-    // creature trajectory from load. The file's behavioral asserts
-    // (incl. count(5,27)==0) still pass. MC1 goldens untouched.
-    // Re-pinned 2026-07-16 (DELIBERATE), Session G castle/cave
-    // geometry — the review-fix batch (docs/REVIEW-FIX-PLAN-
-    // 2026-07-15.md Session G) absorbed in ONE pin:
-    //   G3  mesa floor writes now always retile (sub_570F0 keys the
-    //       retile on a4, EF:39702-08) + clear the low nibble on
-    //       h==0 (EF:39660) — tile_type/shading/angle move over
-    //       mesa footprints;
-    //   G7  the drip sprite roll (EF:37025) and pit/hill depth roll
-    //       (EF:25639) draw the u16 entity rand, not raw lcg32 —
-    //       the load-time cave-gen RNG stream shifts from the first
-    //       draw;
-    //   G8a dome/pit/hill measure to the tile CORNER (i<<8,
-    //       EF:25496/25666 — no +128): every bowl/mound shifts half
-    //       a tile;
-    //   G8b the dome seal sync is bit3-only (EF:25522-25 — the old
-    //       ceiling=floor−1 pin was the pit/hill law leaking in);
-    //   G8c the tube wall ring covers side+1 dims (EF:25243);
-    //   G9f cave_wall_ring is sub_34B00 VERBATIM: the SE corner is
-    //       never stamped, the bottom row/right column stamp
-    //       angle+retile without the type write;
-    //   G9h the cave-in debris z reads retail's stale one-past-the-
-    //       box neighbor cell (EF:23052-77) — this fixture's
-    //       Cave-In cast moves with it.
-    // All behavioral asserts above still pass; MC1 goldens and every
-    // other fixture untouched (verified this session).
-    // Re-pinned 2026-07-16 (DELIBERATE), Session J2 hash field tags —
-    // LAYOUT-ONLY, zero behavior change: conditional hash-quiet fields
-    // now write a distinct tag byte when (and only when) they
-    // contribute, closing the adjacent-field aliasing class
-    // (drain/scrolls/tokens, aura_claim/wanted, debuffs,
-    // apocalypse/doom). This fixture legitimately exercises two of
-    // them — mc2_spell_tokens is live from load (the fireball+possess
-    // baseline, bitmask 3, moves checkpoint 0 too) and mc2_aura_claim
-    // carries 10 live claims once ticked — so every checkpoint gains
-    // tag bytes. Verified by instrumenting the tag writes: only tags
-    // 3 (spell_tokens) and 4 (aura_claim) fire here. mc2_slice and
-    // all MC1 goldens unmoved (their tagged fields never fire).
-    // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the LEVEL-END
-    // marker law (checkpoint D only): dis-gated (14,3)/(14,4) ending
-    // fly-to markers now spawn HIDDEN (flags 0x20) until their
-    // (11,12)/(11,31) trigger trips and reveals them — player-
-    // verified retail shows the portal only on trip (mc2:00 ending,
-    // 2026-07-16). This level's exit cluster ((11,12) THING 465 +
-    // (14,3) THING 466, dis 11) materializes in checkpoint C's
-    // disposition storm, so D's hash gains the hidden bit; verified
-    // by instrument: the flag is the ONLY delta (no endseq installs
-    // — the parked pose never trips the (117,160) switch; won stays
-    // false). A/B/C and every other fixture unmoved.
-    // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL) — the FLOCKING
-    // fix, two stacked corrections:
-    //   (1) StageVar rows bake VERBATIM (epoch 13): the importer's
-    //       signed-byte filter had dropped every FLAGGED row (byte0
-    //       high bits 0x80/0x40) and compacted the rest, so most of
-    //       this level's authored holds never existed — the held
-    //       census above grows from 1 binding to 60;
-    //   (2) stage-held creatures now RUN retail's `sub_1D5D0`
-    //       movement legs (walk-to-point / graze-leash / shadow —
-    //       EF:10171/10246/10111) instead of freezing at their spawn
-    //       pose, and aggro-broken (kind-10) creatures re-leash via
-    //       `sub_12500` case 0xA (EF:5054). Creature trajectories
-    //       legitimately move from load. The OBSERVABLE projection
-    //       moves too — this is real behavior, verified against the
-    //       remc2 retail memimages (level-1 goat herd: all state 15,
-    //       speed 18, leashed mill — the port now reproduces it).
-    // Re-pinned 2026-07-17 (DELIBERATE, BEHAVIORAL) — the (10,82)
-    // room carve now consumes its authored THING pars on the load
-    // path (PrepareEvents case 0x52, EV:373-379: par1/par2 = box
-    // half-extents, par3 = depth multiplier); the port had left the
-    // ctor's 3/3/2 defaults on every authored record, so entry
-    // caverns carved as 6×6 closets. Level-014 authors two records
-    // at (52,95) — pars (16,10,3) and (9,6,7) — so the load-settle
-    // terrain (and everything downstream, checkpoint A on) moves.
-    // Player-reported as the mc2:23 spawn-embedded-in-rock bug
-    // (2026-07-17; that level's start chamber authors (58,42,9)).
-    // Re-pinned 2026-07-17 (DELIBERATE, BEHAVIORAL) — the m21 devil
-    // frog-jump port (checkpoint C only): the verbatim ctor zeroes
-    // the jump impulse `word_0x2C_44` (f44); the old spawn misfiled
-    // retail's `subSpellIndex_0x2A_42 = 400` into f44 (the bolt
-    // thunk hard-sets 500, so the 400 was never read — pure spawn
-    // state). This level's m21s materialize in C's disposition storm
-    // STAGE-HELD, so the ctor field is their ONLY hash contribution —
-    // verified by bisect: f44 400→0 alone reproduces the move; the
-    // whole jump-cycle rewrite (sub_265A0 verbatim, replacing the
-    // hover APPROX) and the m17 verbatim dive-step move NOTHING here
-    // (held creatures never run their model tick; no manticore dives
-    // in this window). A/B/load and every other fixture unmoved.
-    // Re-pinned 2026-07-18 (DELIBERATE, BEHAVIORAL) — held devils
-    // RUN the jump cycle (checkpoint C again): retail's m21 phase-7
-    // wrapper (`sub_26470` EF:16938-61) calls `sub_265A0` after the
-    // 1D5D0 legs for hold kinds 1-10, so this level's storm-
-    // materialized held m21s now hop/settle/cackle (entity-LCG
-    // draws + z motion + speed writes join the hash). Fixes the
-    // player-reported floating devil (the held walk only ever
-    // lifted z — nothing settled it back down) and the silent
-    // mc2:08 basin. Unit-pinned by mc2_held_devil_settles_and_hops
-    // (red-proven against the disabled call).
-    // Re-pinned 2026-07-18 (DELIBERATE, BEHAVIORAL) — held DRAGONS
-    // bob (checkpoint C again, the same held-seam family): retail's
-    // m0 phase-7 wrapper (`sub_1F300`, m0-m3-gaps trace §2) runs the
-    // vertical bob `sub_1F040` for hold kinds 1-10, so this level's
-    // held m0s now arc off the terrain (f26 velocity + z motion join
-    // the hash). Fixes the player-reported flat-flying "crippled
-    // dragons" (mc2:08). Unit-pinned by
-    // mc2_held_dragon_bobs_from_the_ground (red-proven).
     assert_eq!(
         got,
         vec![
@@ -467,27 +308,8 @@ fn mc2_cave_behaviors_and_goldens() {
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
 
-    // The layout-INDEPENDENT companion golden (review J3, pinned
-    // 2026-07-16) — see state_hash.rs: survives hashed-layout
-    // re-pins; moves ONLY with real behavior.
-    // Moved 2026-07-16 WITH the flocking fix (BEHAVIORAL — the
-    // stage-held cast now exists and MOVES): checkpoint 0 (load
-    // time) is UNCHANGED — the world composition is identical at
-    // t=0 — and the three ticked checkpoints move with the held
-    // creatures' walk/graze trajectories, exactly the projection's
-    // design (a layout-only change could not move it).
-    // Re-pinned 2026-07-17 with the (10,82) authored-extents carve
-    // (see the hash ledger above): the load-settle terrain around
-    // (52,95) opens to the authored sizes, which moves the drawable
-    // terrain, the parked open_spot AND the creature trajectories —
-    // the projection move IS the intended observable change.
-    // Re-pinned 2026-07-18 with the held-devil jump cycle (see the
-    // hash ledger above): held m21s now visibly hop and settle —
-    // checkpoint D's projection moves WITH the state hash, proving
-    // the change is behavioral (z motion + sprite phases), exactly
-    // what the fix intends.
-    // Re-pinned 2026-07-18 again with the held-dragon bob (same
-    // family, same checkpoint): held m0s visibly arc.
+    // The layout-INDEPENDENT companion golden — see state_hash.rs:
+    // survives hashed-layout re-pins; moves ONLY with real behavior.
     const OBSERVABLE: [u64; 4] = [
         0xb0299049353c6c29,
         0x2d60a54a359da557,
@@ -501,15 +323,15 @@ fn mc2_cave_behaviors_and_goldens() {
     );
 }
 
-/// The wall-hug eye band (cave-peek diagnosis 2026-07-17): drive the
-/// faithful MC2 mover straight into a sealed cave wall and pin that
-/// the eye NEVER leaves the mover's clamp band — >= floor+256 and
-/// <= ceiling-384 against the INTERPOLATED surfaces the renderer
-/// draws (mesh == collision: same corner heights, same parity
-/// diagonals). This exonerates the vertical clamps for the wall-peek
-/// x-ray: the residual vector is the near plane cutting a hugged
-/// steep face LATERALLY, which the terrain shader's backface-black
-/// arm now paints as rock instead of x-raying the far chamber.
+/// The wall-hug eye band: drive the faithful MC2 mover straight into a
+/// sealed cave wall and pin that the eye NEVER leaves the mover's
+/// clamp band — >= floor+256 and <= ceiling-384 against the
+/// INTERPOLATED surfaces the renderer draws (mesh == collision: same
+/// corner heights, same parity diagonals). This exonerates the
+/// vertical clamps for the wall-peek x-ray: the residual vector is the
+/// near plane cutting a hugged steep face LATERALLY, which the terrain
+/// shader's backface-black arm paints as rock instead of x-raying the
+/// far chamber.
 #[test]
 fn mc2_cave_wall_hug_holds_the_clamp_band() {
     let Some(root) = baked_root() else {
@@ -587,12 +409,10 @@ fn mc2_cave_wall_hug_holds_the_clamp_band() {
     );
 }
 
-/// The ENHANCED-mover funnel squeeze (player repro 2026-07-17,
-/// mc2:03 main cavern): the deviation mover had no cave narrow-space
-/// law — nothing refused entry into the seam where floor meets
-/// ceiling, and the old floor-wins pinch clamp then hoisted the head
-/// THROUGH the diving ceiling ("squeezed further and further, and at
-/// the end push your head through"). With the squeeze gate (the
+/// The ENHANCED-mover funnel squeeze: the deviation mover needs a cave
+/// narrow-space law — without one, nothing refuses entry into the seam
+/// where floor meets ceiling and a floor-wins pinch clamp hoists the
+/// head THROUGH the diving ceiling. With the squeeze gate (the
 /// faithful gate's sub_11E20 predicate) the eye must stay under the
 /// interpolated ceiling for the whole approach.
 #[test]
@@ -671,8 +491,8 @@ fn mc2_cave_enhanced_funnel_never_breaches_ceiling() {
     );
 }
 
-/// The mc2:23 spawn-embedded-in-rock report (player, 2026-07-17):
-/// level-023's (3,4) wizard start at (134,47) lies in baked-sealed
+/// The mc2:23 spawn-embedded-in-rock case: level-023's (3,4) wizard
+/// start at (134,47) lies in baked-sealed
 /// rock — the entry cavern is carved at LOAD by an authored (10,82)
 /// room at (127,47) with par extents (58,42) and depth par3 = 9
 /// (PrepareEvents case 0x52, EV:373-379). Pin that the load settle

@@ -1,18 +1,14 @@
-//! MC2 class-15 CAST MACHINERY + SPELL-XP — Phase 4.2, the flagship
-//! spell column. Verbatim port of the remc2 cast chain (trace bank:
-//! docs/traces/mc2-player-cast-path.md, mc2-spell-xp.md,
-//! mc2-class15-spell-tokens.md, mc2-class9-low-band-creators.md,
-//! mc2-class9-flyers.md; `EF:` = EventsFunctions.cpp, `L:` =
-//! Level.cpp cites).
+//! MC2 class-15 CAST MACHINERY + SPELL-XP — the spell column.
+//! Ported from the remc2 cast chain (`EF:` = EventsFunctions.cpp,
+//! `L:` = Level.cpp cites).
 //!
-//! The shape (cast-path trace §0): a learned spell IS a class-15
-//! pool entity (the collected jar, re-purposed — token trace §3).
-//! Casting is multi-tick: the gate (`sub_5F660`) arms the
-//! manifestation's cast timer; the manifestation's EFFECT state
-//! (strF0[3·model]) then fires every tick while armed — first tick
-//! spawns (the `sub_6DCA0` projectile dispatch or the direct-effect
-//! arm) and commits the mana; the timer counts down; expiry applies
-//! a pending tier change.
+//! Shape: a learned spell IS a class-15 pool entity (the collected
+//! jar, re-purposed). Casting is multi-tick: the gate (`sub_5F660`)
+//! arms the manifestation's cast timer; the manifestation's EFFECT
+//! state (strF0[3·model]) then fires every tick while armed — first
+//! tick spawns (the `sub_6DCA0` projectile dispatch or the direct-
+//! effect arm) and commits the mana; the timer counts down; expiry
+//! applies a pending tier change.
 //!
 //! Manifestation entity field map (class-15, this module):
 //! `word_0x2E_46` armed cast timer → f26 · `word_0x30_48` duration &
@@ -22,42 +18,33 @@
 //! full cost → max_life · `mana_0x90_144` per-tick mana → f140 ·
 //! `word_0x36_54` cooldown → f54 · `parentId_0x28_40` owner → id24.
 //!
-//! The per-player `str_611` block (spell-XP trace §0) lives on
-//! [`Mc2Spellbook`] — the human wizard is out-of-pool (chassis
-//! convention), so the arrays hang off `World` instead of a
-//! `dword_0xA4_164x` record. Single-player laws only: the MP
-//! `xpos2` ladder and `sub_6DAD0` are out of scope until rivals
-//! cast MC2-natively.
+//! The per-player `str_611` block lives on [`Mc2Spellbook`] — the
+//! human wizard is out-of-pool (chassis convention), so the arrays
+//! hang off `World` instead of a `dword_0xA4_164x` record. Single-
+//! player laws only: the MP `xpos2` ladder and `sub_6DAD0` are out
+//! of scope until rivals cast MC2-natively.
 //!
-//! DELIBERATE APPROXIMATIONS / OPEN (all flagged inline):
+//! Notes:
 //! - The mana commit (`sub_68DE0` EF:55569) stamps the full cost as
-//!   a negative caster manaRegen; our [`World::mana_debit`] is the
-//!   exact same mechanism (MC1's :64936 negative-delta stamp) — the
-//!   regen tick applies it next turn, clamped at 0.
+//!   a negative caster manaRegen; [`World::mana_debit`] is the same
+//!   mechanism (MC1's :64936 negative-delta stamp) — the regen tick
+//!   applies it next turn, clamped at 0.
 //! - Direct-effect spells map onto the existing Player channels
 //!   (shield/invisible/rebound/beyond-sight/heal/accelerate/
-//!   teleport) — armed-window semantics traced; per-spell numeric
-//!   payloads (heal rate, boost factor) reuse the MC1 channel
-//!   plumbing pending their own deep trace.
-//! - metamorph (4), steal_mana (13) and duel (14) cast-gate + drain
-//!   mana but their effects are unported this round — counted via
-//!   the misfit ledger so the gap is visible.
-//! - The castle spell (2) routes to the existing castle-ball cast
-//!   ([`World::cast_castle`]) — retail's `sub_69AB0` build-queue
-//!   variant is the castle column's banked follow-up; the MC2
-//!   mana ladder (L:1729-55) applies either way.
-//! - Auto-aim (`sub_67CB0` scoring) — LANDED (playtest-12 round 1,
-//!   mgc_sim::mc2::proj); the crosshair instrument feeds off its
-//!   pure scan twin ([`World::mc2_aim_preview`]).
+//!   teleport); per-spell numeric payloads (heal rate, boost factor)
+//!   reuse the MC1 channel plumbing pending their own deep trace.
+//! - The castle spell (2) routes to [`World::cast_castle`]; retail's
+//!   `sub_69AB0` build-queue variant is OPEN; the MC2 mana ladder
+//!   (L:1729-55) applies either way.
 
 use crate::mc1::features::{Gen, lcg32};
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::world::{AimLock, LifeState, PlayerPose, World};
 use crate::mc2::spells::Mc2SubSpell;
 
-/// Notification lives, in ticks (retail message-life `a3`): the spell
+/// Notification lives, in ticks (retail message-life `a3`): the
 /// level-up path sets 200 (EF:44012), the change-spell toast 20
-/// (EF:37926 — docs/traces the render loop decrements per HUD frame).
+/// (EF:37926).
 const NOTIFY_TICKS_LEVELUP: u16 = 200;
 const NOTIFY_TICKS_SELECT: u16 = 20;
 /// The plain-toast ink: retail draws it in the CLRD-0 code `0xF00` =
@@ -151,9 +138,7 @@ pub struct Mc2BookView {
 /// subtype to spawn, the impact (class, model), whether the tier's
 /// `life_0x1A` charge byte rides along. The tier's `subSpellIndex_2`
 /// payload ALWAYS rides — every effect-state skeleton copies it onto
-/// the projectile (fireball EF:55864; the playtest-13 damage fix —
-/// docs/traces/mc2-fireball-damage.md: the fireball carried the
-/// new_event default 100 instead of the tier's 250).
+/// the projectile (fireball EF:55864).
 pub(crate) struct DispatchArm {
     pub(crate) subtype: u8,
     pub(crate) impact: (u8, u8),
@@ -162,7 +147,7 @@ pub(crate) struct DispatchArm {
 
 /// Class-9 creator parameters (low-band trace + flyers trace Part 1):
 /// (subtype, action, speed, maxLife, behavior row (always a real
-/// str_D7BD6 index — a 255 would panic the BEHAVIOR lookup, F7),
+/// str_D7BD6 index — a 255 would panic the BEHAVIOR lookup),
 /// sprite). model = subtype throughout except 0x1C (model 28 rides
 /// the fireball body). All creators: mana 50, no RNG.
 const CREATORS: [(u8, u8, i16, u32, u8, u16); 18] = [
@@ -234,7 +219,7 @@ impl Gen {
             0 => {
                 self.mc2_fools_bolt(i, 0, (10, 0), claimer);
                 // XP lands when the trap SPRINGS (EF:26636), not on
-                // the cast (F6 — the cast-side award was inverted).
+                // the cast.
                 self.mc2_fools_award(i);
                 true
             }
@@ -246,8 +231,7 @@ impl Gen {
                     return true;
                 }
                 // The fireball fires when the POST-increment counter
-                // is even = old counter ODD (EF:26648 `!(++c & 1)`) —
-                // the port's even-phase was inverted (F6).
+                // is even = old counter ODD (EF:26648 `!(++c & 1)`).
                 if c & 1 != 0 {
                     self.mc2_fools_bolt(i, 0, (10, 0), claimer);
                 }
@@ -260,8 +244,7 @@ impl Gen {
                     self.mc2_fools_bolt(i, 9, (10, 23), claimer);
                     return false;
                 }
-                // Despawn at old counter 2 (`v3+1 > 2`, EF:26661) —
-                // `c > 2` ran one tick late (F6).
+                // Despawn at old counter 2 (`v3+1 > 2`, EF:26661).
                 let done = c > 1;
                 if done {
                     self.mc2_fools_award(i); // on despawn (EF:26663)
@@ -291,13 +274,13 @@ impl Gen {
     fn mc2_fools_bolt(&mut self, i: usize, subtype: u8, impact: (u8, u8), claimer: u16) {
         let (x, y, z, owner, payload, heading) = {
             let e = &self.ent[i];
-            // DEFERRED (F6): retail lifts the launch z by the box
-            // fov (`position.z += array_0x52_82.fov`, EF:26688/
-            // 26718) — centering the bolt on the sphere. Applying it
-            // verbatim self-detonates the trap here: OUR generic
-            // victim probe (victim_scan_at) admits the launcher
-            // sphere, retail's sub_10780 evidently does not. Needs
-            // the sphere-admission trace before the lift can land.
+            // DEFERRED: retail lifts the launch z by the box fov
+            // (`position.z += array_0x52_82.fov`, EF:26688/26718) —
+            // centering the bolt on the sphere. Applying it verbatim
+            // self-detonates the trap here: OUR generic victim probe
+            // (victim_scan_at) admits the launcher sphere, retail's
+            // sub_10780 evidently does not. Needs the sphere-
+            // admission trace before the lift can land.
             (e.x, e.y, e.z, e.f52, e.f136, e.f30)
         };
         let Some(pr) = self.mc2_spawn_cast_proj(subtype, x, y, z) else {
@@ -305,7 +288,7 @@ impl Gen {
         };
         // The fireball's water-spawn splash (EF:26690-95, inside the
         // spawn-success arm): a (10,5) splash + sound 27 when the
-        // sphere sits on water — F6.
+        // sphere sits on water.
         if subtype == 0 && self.cap_bit(x, y) == 1 {
             if let Some(s) = self.mc2_spawn_splash(x, y, z) {
                 self.ent[s].id24 = owner;
@@ -338,7 +321,7 @@ impl Gen {
         }
         // The LIGHTNING bolt re-rows to the homing row 64 and stamps
         // the claimer's class/model as its xtype/xsubtype filter
-        // (sub_36850 EF:26701-20); the fireball stamps none — F6.
+        // (sub_36850 EF:26701-20); the fireball stamps none.
         if subtype == 9 {
             let (tc, tm) = if claimer == PLAYER_TARGET || claimer as usize >= self.ent.len() {
                 (3, 0)
@@ -355,7 +338,7 @@ impl Gen {
         }
         if subtype == 0 {
             // Sound 9 rides the NEW fireball (EF:26689), not the
-            // sphere — F6.
+            // sphere.
             self.snd(9, pr);
         }
     }
@@ -501,7 +484,7 @@ impl World {
         // unifies grant + manifestation into `ent` (the OR collapses;
         // no path sets one without the other), so v5 = owned + the
         // CAVE gate: Cave-In (25) never notifies or banks on a
-        // surface level. The LEVEL derive stays unconditional (F5).
+        // surface level. The LEVEL derive stays unconditional.
         let v5 = owned && (self.g.is_cave() || spell != 25);
         // Castle XP clamp (EF:43885-86; `setting_byte2_23` guard OPEN
         // — single-player campaign always clamps).
@@ -548,7 +531,7 @@ impl World {
     /// `sub_6D8B0` (EF:58228) — the XP award: `amount` onto the
     /// volatile XP of the owner's spell. Retail's own guard is
     /// `class == 3 && model == 0` — the HUMAN wizard ONLY
-    /// (EF:58240-41, decompile-verified 2026-07-15). Rival owners
+    /// (EF:58240-41). Rival owners
     /// are a structural no-op: retail rivals have NO spell-XP
     /// progression — their tiers are the authored map levels for
     /// life, and the tier-down walk supplies the dynamics. The
@@ -651,9 +634,8 @@ impl World {
         // Normally the selectable tier is capped at the XP-earned
         // level; the all-spells (G) instrument keeps EVERY tier
         // exercisable, matching the app's pane (main.rs:2035). Without
-        // the dev arm the sim silently cast tier 0 while the selector
-        // showed tier N — the "can't select higher spell levels"
-        // regression (player-reported 2026-07-13).
+        // the dev arm the sim casts tier 0 while the selector shows
+        // tier N.
         let cap = if self.dev_spells {
             self.g
                 .assets
@@ -872,9 +854,8 @@ impl World {
             // Possess: an active cast is not re-armed/re-charged,
             // but the re-press STILL records the firing hand and
             // runs the invis-break law before bailing (EF:60900-07
-            // calls sub_5F7E0 before LABEL_23; the old early return
-            // skipped it — F7). The `byte_0x3C_60 = 1` release
-            // signal stays a banked nuance.
+            // calls sub_5F7E0 before LABEL_23). The `byte_0x3C_60 =
+            // 1` release signal stays a banked nuance.
             1 if armed > 0 => {
                 self.g.ent[m].f50 = if right { 512 } else { 256 };
                 self.mc2_arm_invis_break(spell);
@@ -901,10 +882,6 @@ impl World {
             9 | 0xA | 0xD | 0xF | 0x10..=0x18 if armed > 0 => return,
             _ => {}
         }
-        // (The old castle-cost re-sync hack here is RETIRED — F3's
-        // upgrade award (`sub_6D8B0(owner,2,1)` → the XP drain's
-        // spell-2 SetSpell branch) now keeps `max_life` fresh the
-        // faithful way, within the tick of the upgrade.)
         // THE MANA GATE (EF:60953): caster mana vs the tier's full
         // cost. Insufficient → UI flash + sound 29 (EF:60964-67).
         let cost = self.g.ent[m].max_life;
@@ -932,8 +909,8 @@ impl World {
     /// self-break — strength is still 0 here (set on the invis
     /// effect's first tick). On break we also zero the invis
     /// window's `f26` so the mana-regen block lifts with the cloak
-    /// (player 2026-07-13: functional termination must clear the
-    /// burst). docs/spell-audit/rival-spells.md §2.
+    /// (functional termination must clear the burst).
+    /// docs/spell-audit/rival-spells.md §2.
     fn mc2_arm_invis_break(&mut self, spell: usize) {
         let s = self.player.invis_strength;
         if s != 0 && (s < 2 || (s <= 2 && spell != 1)) {
@@ -965,8 +942,8 @@ impl World {
             }
         }
         // `.max(1)` mirrors the arm/first-tick sites — a zero-
-        // duration row arms f26=1, and comparing against the raw 0
-        // silently skipped the first-tick full-cost re-check (F7).
+        // duration row arms f26=1; comparing against a raw 0 would
+        // skip the first-tick full-cost re-check.
         if e.f26 as u16 == e.f28.max(1) {
             return self.dev_spells || self.player.mana as u64 >= e.max_life as u64;
         }
@@ -1095,16 +1072,14 @@ impl World {
             // re-runs SetSpell on the manifestation's OWN tier
             // (deferral suppressed — retail zeroes word_46 around the
             // call), so the cached cast cost (`max_life`, the mana
-            // gate's word) tracks the castle level BOTH ways. The
-            // upgrade path was already fresh via the +1 XP award's
-            // spell-2 SetSpell branch (F3), but a DOWNGRADE awards
-            // nothing — demolish (Shift+L) or an enemy razing a level
-            // left the old rung cached, and an affordable rebuild
-            // dinged as unaffordable until the spell was re-selected
-            // (player repro 2026-07-16). Ported at the lock-release
-            // edge instead of retail's mid-transform stamp:
-            // observably equivalent, since the cast gate is
-            // armed-blocked for the whole transform.
+            // gate's word) tracks the castle level BOTH ways —
+            // including a DOWNGRADE, which awards no XP (demolish or
+            // an enemy razing a level would otherwise leave the old
+            // rung cached and ding an affordable rebuild as
+            // unaffordable). Ported at the lock-release edge instead
+            // of retail's mid-transform stamp: observably equivalent,
+            // since the cast gate is armed-blocked for the whole
+            // transform.
             let tier = self.g.ent[m].f71;
             self.mc2_set_spell(m, tier);
         }
@@ -1201,11 +1176,10 @@ impl World {
             // Lightning L1/L2 (subtype 12): retail's `sub_66FD0` HARD-
             // CODES the detonation to spawn the `(10,38)` lightning
             // burst (NOT the bolt's own `(9,9)`, which retail keeps only
-            // to chain a second-order beam FROM the burst). The old
-            // `(9,9)` impact had no handler → `WARN misfit (9,9)` and no
-            // visible storm (docs/spell-audit/lightning.md §5.B). Route
-            // straight to `(10,38)`; the second-order `(9,9)` chain off
-            // the burst is deferred (its `(10,38)` internals untraced).
+            // to chain a second-order beam FROM the burst;
+            // docs/spell-audit/lightning.md §5.B). Route straight to
+            // `(10,38)`; the second-order `(9,9)` chain off the burst
+            // is deferred (its `(10,38)` internals untraced).
             7 if matches!(life, 1 | 2) => arm(12, (10, 38), false),
             7 => arm(9, (10, 23), false),
             9 => arm(3, (10, 17), true),
@@ -1317,7 +1291,7 @@ impl World {
                     )
                     .is_some()
                 {
-                    // Sound 40 only on a successful spawn (F7).
+                    // Sound 40 only on a successful spawn.
                     self.g.snd_player(40);
                 }
             }
@@ -1385,8 +1359,7 @@ impl World {
             }
             // summon_army (`sub_6C170` EF:57638): the (9,24) carrier
             // flies forward and LANDS to spawn a ring of allied class-5
-            // creatures — NOT a puff on first contact (the old (10,0)
-            // bug). Impact (10,72); charge=true carries the tier's
+            // creatures. Impact (10,72); charge=true carries the tier's
             // creature MODEL (life = 19/2/25/16) in f71 (the ring's army
             // size + model). Sound 9 (docs/spell-audit/summon-creatures.md).
             0x13 => {
@@ -1408,25 +1381,22 @@ impl World {
                 }
             }
             // fools_mana (`sub_6C870` EF:57868): a SHOTGUN of six
-            // neutral fake-mana decoys (not one real sphere — the old
-            // port cast the inverse of the spell), each a trap that
-            // detonates on an enemy's possession claim. Cast sound 11
-            // once after the burst (docs/spell-audit/fools-mana.md).
+            // neutral fake-mana decoys, each a trap that detonates on
+            // an enemy's possession claim. Cast sound 11 once after
+            // the burst (docs/spell-audit/fools-mana.md).
             0x16 => {
-                // XP moved to the trap's SPEND points (F6 — retail's
-                // sub_6C870 cast awards nothing; sub_36680 does);
-                // sound 11 gates on the burst spawning (EF:57924).
+                // Retail's sub_6C870 cast awards no XP (the trap's
+                // SPEND points in sub_36680 do); sound 11 gates on the
+                // burst spawning (EF:57924).
                 if self.mc2_cast_fools_mana(m, p, sub) {
                     self.g.snd_player(11);
                 }
             }
             // magic_mine (`sub_6CAC0` EF:57960): the (9,29) carrier flies
             // forward and LANDS to place a persistent (10,78) proximity
-            // mine — NOT a fireball on first contact (the old port's
-            // (10,0)/contact-detonate bug). Impact (10,78); charge=true
-            // so the tier rides f71 (blast intensity) while f44 carries
-            // the tier lifespan (subSpell). Sound 15
-            // (docs/spell-audit/magic-mine.md).
+            // mine. Impact (10,78); charge=true so the tier rides f71
+            // (blast intensity) while f44 carries the tier lifespan
+            // (subSpell). Sound 15 (docs/spell-audit/magic-mine.md).
             0x17 => {
                 if self
                     .mc2_launch(
@@ -1447,12 +1417,11 @@ impl World {
             }
             // alliance: class-9 subtype 25 direct (`sub_6CD20`
             // EF:58039), sound 9. Impact = the (10,74) CONVERSION
-            // executor — NOT a fire (the old (10,0) tag burned the
-            // target instead of allying it, player 2026-07-17).
-            // charge=true carries the tier's area radius in f71
-            // (life = 16/26/32 tiles); f44 already rides the tier's
-            // subSpell (610/1100/2710) = the charm DURATION, not
-            // damage.
+            // executor (NOT a fire — it allies the target rather than
+            // burning it). charge=true carries the tier's area radius
+            // in f71 (life = 16/26/32 tiles); f44 already rides the
+            // tier's subSpell (610/1100/2710) = the charm DURATION,
+            // not damage.
             0x18 => {
                 if self
                     .mc2_launch(
@@ -1597,13 +1566,12 @@ impl World {
     ) -> Option<usize> {
         // Hand muzzle: launch from the firing hand's side (recorded
         // at arm time; the MC1 lateral-step law stands in until the
-        // retail hand-offset trace lands — the certified bridge
-        // feel).
+        // retail hand-offset trace lands).
         let right = self.g.ent[m].f50 == 512;
         let (mx, my, mz) = self.muzzle(p, right);
         let Some(i) = self.g.mc2_spawn_cast_proj(arm.subtype, mx, my, mz) else {
             return None; // pool full: no projectile, NO cast sound
-            // (retail gates the sound on the spawn, EF:44224-39 — F7)
+            // (retail gates the sound on the spawn, EF:44224-39)
         };
         {
             let e = &mut self.g.ent[i];
@@ -1650,8 +1618,9 @@ impl World {
     /// this instant — the pure [`Gen::mc2_aim_scan`] twin under the
     /// launch pose. Retail MC2 draws NO reticle (the aim feedback IS
     /// the sprite-42 projectile curving, docs/traces/mc2-autoaim.md
-    /// §4/mc2-mouse-aim.md §4) — this is an opt-in predictor, not a
-    /// faithful surface. None = non-acquiring spell or empty cone.
+    /// §4/mc2-mouse-aim.md §4); this is an opt-in predictor
+    /// (deliberate), not a faithful surface. None = non-acquiring
+    /// spell or empty cone.
     pub(crate) fn mc2_aim_preview(
         &self,
         p: PlayerPose,
@@ -1703,9 +1672,8 @@ impl World {
 
     /// `SetDefaultSpells_5C0A0` (the tail of `LevelInit_56C00`,
     /// LevelInit.cpp:41): the campaign baseline — MC2 starts every
-    /// level with FIREBALL and POSSESS granted at 0 XP
-    /// (player-retail note 2026-07-11; MC1 by contrast inits
-    /// spell-less). The adopt order binds fireball → left,
+    /// level with FIREBALL and POSSESS granted at 0 XP (MC1 by
+    /// contrast inits spell-less). The adopt order binds fireball → left,
     /// possess → right via the pickup's own v12 quick-slot law.
     pub(crate) fn mc2_seed_default_spells(&mut self) {
         for s in [0usize, 1] {
@@ -1723,8 +1691,8 @@ impl World {
     /// Wizard-death token scatter (`sub_5E310` EF:60137-62): every
     /// owned manifestation becomes a collectible jar again — state
     /// 3M+1, scattered ±256, life 200..289 (the wizard's LCG).
-    /// The 4.6 corpse/economy pass wires this into the human death
-    /// path (dead until then — the machinery is trace-complete).
+    /// Not yet wired into the human death path (OPEN — the machinery
+    /// is trace-complete).
     #[allow(dead_code)]
     pub(crate) fn mc2_scatter_spells(&mut self) {
         let (px, py, pz) = self.human_pose;

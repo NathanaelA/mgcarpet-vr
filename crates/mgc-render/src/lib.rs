@@ -796,17 +796,17 @@ const SKY_SRGB: [f32; 3] = [0.42, 0.55, 0.75];
 /// retail distance is exactly what hides acquisition pop-in.
 const DEFAULT_FOG_TILES: f32 = 20.0;
 
-// Both maps are player-centered, yaw-rotated and toroidally wrapping
-// (player directive 2026-07-07). World spans derive from the original's
-// DrawMinimap_49300 params: span_tiles = a6 * a8 / a5 / 256 (BYTE1 tile
-// step; hi-res halves a5/a6 and doubles a8, cancelling).
+// Both maps are player-centered, yaw-rotated and toroidally wrapping.
+// World spans derive from the original's DrawMinimap_49300 params:
+// span_tiles = a6 * a8 / a5 / 256 (BYTE1 tile step; hi-res halves
+// a5/a6 and doubles a8, cancelling).
 //
 /// Book-screen (Enter) map zoom. The original passes 382/378/a8=170 →
 /// ~251 tiles, JUST short of the 256-tile world, which is why its edges
-/// clip ("questionable things at the edges"). Our deliberate
-/// improvement: span the FULL world so nothing is cut. Toroidal wrap
-/// makes it appear infinite (the original's rounding-error void-mobs
-/// live at that wrap; we don't reproduce those).
+/// clip ("questionable things at the edges"). This spans the FULL world
+/// so nothing is cut (deliberate). Toroidal wrap makes it appear
+/// infinite (the original's rounding-error void-mobs live at that wrap;
+/// not reproduced).
 const BOOK_MAP_ZOOM: f32 = MAP_TILES as f32;
 // The book/map screen topology (sub_20E60 case 4 + the spellbook grid
 // at :26915), in the original's hi-res 640×480 native coordinates,
@@ -817,14 +817,13 @@ const BOOK_MAP_ZOOM: f32 = MAP_TILES as f32;
 /// corner (native px).
 const BOOK_MAP_X: f32 = 0.0;
 const BOOK_MAP_Y: f32 = 0.0;
-// Book/map screen native geometry, MEASURED from the player's hi-res
-// retail screenshot (2026-07-07), which is senior over the decompile's
-// raw DrawMinimap args (382×378 was the sample size, not the on-screen
-// pane). Layout: map pane top-left, world viewport top-right, spellbook
-// bottom-right, ~64px black bar along the bottom. There is a 2px BLACK
-// GAP forming a "T" between the three panes — taken out of the MAP and
-// the LIVE VIEW, NOT the spellbook (which is 1:1 to retail). player
-// 2026-07-07.
+// Book/map screen native geometry, MEASURED from a hi-res retail
+// screenshot, which is senior over the decompile's raw DrawMinimap args
+// (382×378 was the sample size, not the on-screen pane). Layout: map
+// pane top-left, world viewport top-right, spellbook bottom-right,
+// ~64px black bar along the bottom. There is a 2px BLACK GAP forming a
+// "T" between the three panes — taken out of the MAP and the LIVE VIEW,
+// NOT the spellbook (which is 1:1 to retail).
 //   spellbook:  x 384..640, y 194..416 (4 cols × 6 rows of 64×37) — FIXED
 //   map:        (0,0) (384−GAP) × 416   [right edge recedes for the gap]
 //   viewport:   x 384..640, y 0..(194−GAP)   [bottom recedes for the gap]
@@ -864,8 +863,8 @@ pub enum MapScreenLayout {
 /// remc2 `locViewportHeight/locMinimapHeight = 400`, EF:21804).
 const MC2_MAP_VIEW_H: f32 = 400.0;
 // The HUD top strip is six tiles packed left-to-right from x=2 with 0px
-// gaps (player pixel-measurements 2026-07-07, matched to native sprite
-// widths at scale 1.668): [40] radar frame (124) | three [41] sub-panels
+// gaps (pixel-measured, matched to native sprite widths at scale
+// 1.668): [40] radar frame (124) | three [41] sub-panels
 // (128 each) | two spell frames [1]/[2] (64 each). Native tile origins:
 // 2, 126, 254, 382, 510, 574.
 /// In-flight radar: the disc is anchored at the screen CORNER (0,0) and
@@ -3106,8 +3105,8 @@ impl Renderer {
         // The world viewport = the top-right rectangle. Its LEFT edge is
         // the SPELLBOOK's left (384); its BOTTOM recedes by BOOK_GAP above
         // the spellbook top (194−2) so a 2px black gap separates them —
-        // the horizontal bar of the "T" demarcation (player 2026-07-07;
-        // the gap comes out of the live view, not the spellbook).
+        // the horizontal bar of the "T" demarcation (the gap comes out
+        // of the live view, not the spellbook).
         let view_rect = (
             (BOOK_SPELL_X * res_x) as u32,
             0u32,
@@ -3124,10 +3123,9 @@ impl Renderer {
             // Aspect-true to the viewport rect in BOTH layouts: same
             // fov_y as flight, so the narrow rect shows the MIDDLE
             // SLICE of the normal view — horizontal FOV shrinks in
-            // proportion to the width. Retail-certified by the player
-            // (2026-07-10, senior over the earlier EF:21864
-            // "squeeze" reading, which stretched the full-FOV frame
-            // into the narrow rect and read squashed).
+            // proportion to the width. Senior over the EF:21864
+            // "squeeze" reading (which stretched the full-FOV frame into
+            // the narrow rect and read squashed).
             view_rect.2 as f32 / view_rect.3.max(1) as f32
         } else {
             w as f32 / hpx as f32
@@ -3537,10 +3535,9 @@ impl Renderer {
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..self.index_count, 0, 0..9);
             // Mirrored sprites (opaque range only — reflected smoke
-            // isn't worth a sorted blend pass). NOT retail (GRO
-            // reflects terrain only), but the presentation track's
-            // bar is "looks good" — a monster over water should show
-            // in the water (player 2026-07-16).
+            // isn't worth a sorted blend pass). NOT retail (GRO reflects
+            // terrain only); a monster over water should show in the
+            // water (deliberate).
             if let (1.., Some(bbg), Some(bbuf)) = (
                 opaque_count,
                 &self.billboard_mirror_bind_group,
@@ -3956,8 +3953,8 @@ mod tests {
         // The pane's y-span (256/aspect ≈ 279 tiles) exceeds the world
         // period, so tiles near the top/bottom edge appear TWICE — the
         // shader's fract() shows both, and the projection must emit
-        // both quads (the old shortest-wrap code drew only one, so the
-        // second copy's icon was missing at the opposite edge).
+        // both quads (a shortest-wrap image would miss the second copy
+        // at the opposite edge).
         let stamps = [stamp_at(50.0, 128.0 + 139.0)]; // near the +y limit
         let (pw, ph) = (382.0, 416.0);
         let quads = project_map_stamps(

@@ -1,6 +1,6 @@
 //! Magic Carpet 2 level format (LEVELS.DAT entries, decompressed).
 //!
-//! Layout per michaelhoward's MC2 spec (2025-2026), cross-verified against
+//! Layout per michaelhoward's MC2 spec, cross-verified against
 //! remc2's `Type_Level_2FECE` / `Type_CompressedLevel_2FECE`
 //! (BasicTerrain.h, #pragma pack 1) and all 165 standard retail levels:
 //!
@@ -94,7 +94,7 @@ pub struct Mc2Header {
     pub level_id: u16,
     pub gfx_type: u8,
     /// Cave basic height (byte_0x2FED3 — the ceiling mirror pivot on
-    /// cave levels; was `unk05` before identification).
+    /// cave levels).
     pub basic_height: u8,
     pub map_type: MapType,
     /// `word_0x2FED5` — authored initial value of a field retail
@@ -108,13 +108,12 @@ pub struct Mc2Header {
     /// it — docs/traces/mc2-rivals-spawn-mortality.md §1). Color 0 =
     /// the human in single player (`LevelIndex_0xc = 0`, EF:43127);
     /// 1..n-1 = AI rivals. Retail name pending a field rename (the
-    /// serde key rides the next BAKE_EPOCH bump).
+    /// serde key rides a BAKE_EPOCH bump).
     pub unk09: i16,
     /// `player_0x2FED9[8]` — authored starting-castle LEVEL per wizard
     /// color (0 = none, N = a castle at level N-1 built at the
     /// wizard's spawn; consumers EF:43777/43789, docs/traces/
-    /// mc2-castle-data-tables.md §3). Mis-documented as "activation
-    /// flags" before the castle-column trace.
+    /// mc2-castle-data-tables.md §3). NOT "activation flags".
     pub players: [i8; 8],
 }
 
@@ -180,11 +179,10 @@ pub struct WizardSettings {
     /// spell ID (0=Fireball .. 25=Cave In). Consumed by
     /// `InitialiseSpells_54A50` (EF:38650).
     pub starting_spells: [u8; SPELL_COUNT],
-    /// `byte_0x360FBx` — per-spell STARTING XP LEVEL 0..2 (was
-    /// "unknown" before the rivals trace): for an AI wizard,
-    /// `SpellLevels[spell] = min(this, 2)` at book init (EF:38693;
-    /// docs/traces/mc2-rivals-spawn-mortality.md §3). Field rename
-    /// rides the next BAKE_EPOCH bump (serde key compat).
+    /// `byte_0x360FBx` — per-spell STARTING XP LEVEL 0..2: for an AI
+    /// wizard, `SpellLevels[spell] = min(this, 2)` at book init
+    /// (EF:38693; docs/traces/mc2-rivals-spawn-mortality.md §3). Field
+    /// rename rides a BAKE_EPOCH bump (serde key compat).
     pub unknown_spells: [u8; SPELL_COUNT],
     /// `BlockedSpells_0x36115x` — per-spell DENY flag.
     pub blocked_spells: [u8; SPELL_COUNT],
@@ -220,9 +218,9 @@ pub struct StageVar {
 
 impl StageVar {
     /// A row is live when it isn't the editor's 0xFF fill and its
-    /// KIND nibble is nonzero. (byte0's HIGH bits are flags — 0x80
-    /// subtype-match, 0x40 watch-model — so a signed `>= 0` test
-    /// wrongly discarded flagged rows; 2026-07-16 flocking fix.)
+    /// KIND nibble is nonzero. byte0's HIGH bits are flags (0x80
+    /// subtype-match, 0x40 watch-model), so a signed `>= 0` test
+    /// wrongly discards flagged rows — test the nibble, not the sign.
     pub fn is_used(&self) -> bool {
         (self.index as u8) != 0xFF && (self.index as u8) & 0xF != 0
     }

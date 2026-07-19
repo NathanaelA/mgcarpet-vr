@@ -624,9 +624,8 @@ impl Gen {
         // unconditionally (:21252/:21274/:21291). This is what kills
         // a BEACHED KRAKEN (row 18's v_20 = water-only): terrain
         // raised under it → the next boundary crossing fails all
-        // four candidates → life = -1 (player-reported retail rule,
-        // 2026-07-09; our old every-candidate shortcut let it bounce
-        // forever inside the land tile).
+        // four candidates → life = -1. Extending the shortcut to
+        // every candidate lets it bounce forever inside the land tile.
         if first && e.x >> 8 == tmp.0 >> 8 && e.y >> 8 == tmp.1 >> 8 {
             return Some(tmp);
         }
@@ -811,8 +810,8 @@ impl Gen {
     /// awake creature runs both scans — the engine has no per-model
     /// aggro list; `aggro` exists only for m8's wanted-timer CHASE
     /// gate (sub_1CA50 :23500). Asleep creatures never scan (getting
-    /// this backwards is what let whole distant crowds pack up and
-    /// ride the unbounded pack accel — the playtest-1 runaway).
+    /// this backwards packs whole distant crowds up onto the unbounded
+    /// pack accel).
     fn mob_wander(&mut self, i: usize, base: u8, ctx: &MobCtx, aggro: bool) {
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
@@ -958,8 +957,7 @@ impl Gen {
     /// stays the counter), then the shared chase with the 4000-damage
     /// beam thunk, plus the screech throttle (sound 38) every v_26
     /// (:23563-65). The provoking hit lands BEFORE the first chase
-    /// tick sets the bit — the player-remembered "first meteor
-    /// connects".
+    /// tick sets the bit (the first meteor connects).
     fn griffon_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         if self.ent[i].f26 != 0 {
             self.ent[i].f126 = self.ent[i].f128;
@@ -2053,10 +2051,8 @@ impl Gen {
         // computed the leader sum; the += is a maintainer mis-fix
         // whose unbounded accumulation is exactly the runaway (IDLE's
         // pack scan is NOT awake-gated, so distant idle crowds pack
-        // up and would ratchet forever — re-verified 2026-07-08 when
-        // a trace re-read flipped this line and the asleep-crowd
-        // regression test caught the runaway again). The bee's retail
-        // "no escape" is the 3x lunge in bee_chase, not this line.
+        // up and would ratchet forever). The bee's retail "no escape"
+        // is the 3x lunge in bee_chase, not this line.
         self.ent[i].f126 = self.ent[l].f126.wrapping_add(self.ent[l].f130);
     }
 
@@ -2341,11 +2337,9 @@ impl Gen {
     /// awake creatures count down (+58, mirrored into their body
     /// segments); asleep ones re-arm to 16 (segments 18) when the
     /// player is within 24 tiles (2D dist² < 0x2400000 — sub_42410
-    /// :52748 reads only x/y; altitude never gates waking. The port
-    /// shipped a 3D test until 2026-07-09, mis-reading :64353 as a
-    /// 3D variant; the MC2 survey caught it — remc2's sub_68C70
-    /// uses the same 2D distance, and the SYNCHRONIZED remc1 body
-    /// settles it).
+    /// :52748 reads only x/y; altitude never gates waking. remc2's
+    /// sub_68C70 uses the same 2D distance, corroborated by the
+    /// synchronized remc1 body).
     pub(crate) fn mob_awake_pass(&mut self, ctx: &MobCtx) {
         for i in 1..self.ent.len() {
             let e = &self.ent[i];

@@ -1,18 +1,17 @@
-//! MC2 (5,10) — THE DOOMSDAY PYRAMID, Phase 4.3. The campaign's
+//! MC2 (5,10) — THE DOOMSDAY PYRAMID. The campaign's
 //! spell-of-extinction endgame device: a ground-clamped, unkillable
 //! boss structure running a 16-state script that flattens terrain in
 //! an expanding crater, summons creatures/projectiles, devours the
 //! battlefield, and at climax kills everything and spawns the
-//! (10,17) + (10,9) apocalypse spheres. Trace (all-helpers-closed,
-//! port-ready): docs/traces/mc2-class5-m10-doomsday.md (`EF:` =
+//! (10,17) + (10,9) apocalypse spheres. Trace:
+//! docs/traces/mc2-class5-m10-doomsday.md (`EF:` =
 //! remc2 EventsFunctions.cpp).
 //!
 //! The tick lives on [`World`] (not `Gen`): the machine drives world
 //! globals — the apocalypse latch `byte_0x36E03`
 //! (`World::mc2_apocalypse` — the (10,9) dome's variant selector),
 //! the doomsday-active flag `word_0x36548`, and the HUD doom meter
-//! `x_BYTE_D9F50[0x87a]` (`World::mc2_doom_meter`, banked for the
-//! 4.9 HUD track).
+//! `x_BYTE_D9F50[0x87a]` (`World::mc2_doom_meter`).
 //!
 //! Entity-field homes (creature column + this machine's own):
 //! state `byte_0x46_70`→f71 · phase bitfield `subSpellIndex_0x2A_42`
@@ -32,11 +31,10 @@
 //! - `sub_5C800` palette flashes (case-7 beam flash 6) are
 //!   presentation (docs/traces/mc2-class10-tail-helper-closure.md
 //!   §4) — skipped like every flash before.
-//! - The (9,3)/(9,26) projectile bursts (selector 9/8) LANDED
-//!   2026-07-11 (mc2::proj meteor shot / whirlwind seed —
-//!   docs/traces/mc2-class9-m3-m26.md): pre-locked at the avatar
-//!   via mc2_arm_proj (retail self-acquires on tick 1 — the proj
-//!   module's acquisition APPROX).
+//! - The (9,3)/(9,26) projectile bursts (selector 9/8; mc2::proj
+//!   meteor shot / whirlwind seed — docs/traces/mc2-class9-m3-m26.md)
+//!   are pre-locked at the avatar via mc2_arm_proj (retail
+//!   self-acquires on tick 1 — the proj module's acquisition APPROX).
 //! - The case-0xE global wipe writes byte[1]|=0x20 on every entity —
 //!   an unmapped render-side bit (name-inferred); we apply the
 //!   life/maxLife=140 reset and skip the bit.
@@ -81,8 +79,8 @@ impl Gen {
             // detailed-draw pass's `subSpellIndex |= 0x40` arming
             // writer (GameRenderOriginal.cpp:4915-19) — the ONLY
             // setter of the wind-down escape bit in the whole engine
-            // (binary-verified 2026-07-18, NETHERW.EXE @0x45f11:
-            // the machine itself only ever ANDs it off).
+            // (NETHERW.EXE @0x45f11; the machine itself only ever ANDs
+            // it off).
             e.flags |= 0x4880_0001;
             e.f56 = 1;
             e.row156 = 107;
@@ -125,8 +123,8 @@ impl Gen {
         let t = tile(x, y);
         let h = (self.t.height[t] as i16 - 1).clamp(0, 200);
         self.t.height[t] = h as u8;
-        // The sub_56F10 cave arm (EF:39534-43, review 2026-07-15
-        // C10): on a cave the ceiling counter-shifts by the raw
+        // The sub_56F10 cave arm (EF:39534-43): on a cave the
+        // ceiling counter-shifts by the raw
         // delta (dig down = roof up), saturating at 255 with
         // retail's char truncation below zero — the same arm the
         // shared dig_cell chassis carries.
@@ -216,8 +214,8 @@ impl Gen {
                 self.ent[i].mail[0].1 = 0;
             } else {
                 // No pending hit: the attacker memory clears
-                // (`else word_0x26_38 = 0`, EF:13648-51 — review C9;
-                // the field is f40, NOT the ring-angle f42 home).
+                // (`else word_0x26_38 = 0`, EF:13648-51; the field is
+                // f40, NOT the ring-angle f42 home).
                 self.ent[i].f40 = 0;
             }
         }
@@ -250,8 +248,8 @@ impl World {
         // it — gated on flags byte[3] & 0x40 (the ctor's 0x48800001).
         // That bit is the wind-down phase's ONLY escape: armed + player
         // within 0xA00 → the doom-meter ramp → the attack cycle →
-        // states 2/3 where damage is read → killable (binary-verified
-        // 2026-07-18; the machine's own writes only ever CLEAR it).
+        // states 2/3 where damage is read → killable (the machine's
+        // own writes only ever CLEAR it).
         // The headless sim can't couple to a render pass, so the arm
         // is reproduced as the deterministic proximity analog: any
         // radius ≥ the machine's own 0xA00 far-gate is behaviorally
@@ -276,9 +274,8 @@ impl World {
         let cx = ((self.g.ent[i].x.wrapping_add(128)) >> 8) as u8;
         let cy = ((self.g.ent[i].y.wrapping_add(128)) >> 8) as u8;
         // Retail's setup cases fall THROUGH to their successor's body
-        // in the same tick (goto, no break — EF §5; review 2026-07-15
-        // C4: every phase used to run a tick long, the first summon
-        // fired a tick late).
+        // in the same tick (goto, no break — EF §5); without it every
+        // phase runs a tick long and the first summon fires late.
         let mut fall = true;
         while std::mem::take(&mut fall) {
             match self.g.ent[i].f71 {
@@ -421,8 +418,8 @@ impl World {
                         self.mc2_kill_all_creatures();
                         // The life reset walks `dword_38523` — the SPHERE
                         // family (10, 39/40/57) — not the whole pool
-                        // (EF:12847-54; review 2026-07-15 P0-4). The
-                        // byte[1]|=0x20 render bit is skipped — module doc.
+                        // (EF:12847-54). The byte[1]|=0x20 render bit is
+                        // skipped — see module doc.
                         for e in self.g.ent.iter_mut().skip(1) {
                             if e.class64 == 10 && matches!(e.model65, 39 | 40 | 57) {
                                 e.max_life = 140;
@@ -452,7 +449,7 @@ impl World {
                             self.mc2_apocalypse = true;
                         }
                         // Retail leaves the doom meter AT 1200 here — no
-                        // zero write in case 0xF (review 2026-07-15 C9).
+                        // zero write in case 0xF.
                         self.g.ent[i].flags |= 0x400;
                     }
                 }
@@ -468,8 +465,8 @@ impl World {
 
     /// `sub_21F60` (EF:13519-13620) — the DEVOUR pass: the pyramid
     /// eats incoming class-9 spell PROJECTILES (an anti-magic zone —
-    /// review 2026-07-15 P1-24/C1: the old creature walk + the
-    /// player-proximity trip were misreads). Eligible subtypes within
+    /// it scans projectiles, NOT creatures, and there is no
+    /// player-proximity trip). Eligible subtypes within
     /// 0xC00 (3-D) are absorbed: a (10,0) mana-absorb spawns at the
     /// projectile (owner = the pyramid) and it despawns. Subtype 10
     /// (the castle-build projectile) instead tests the pyramid's
@@ -496,9 +493,8 @@ impl World {
             let eat = if DEVOUR_SUBTYPES.contains(&sub) {
                 // 2-D: retail's `EuclideanDistXYZ_58490` (EF:13567)
                 // never reads z — the absorb bubble is a CYLINDER,
-                // not a sphere; the 3-D translation leaked
-                // vertically-offset projectiles through (2026-07-18
-                // distance audit).
+                // not a sphere. A 3-D test leaks vertically-offset
+                // projectiles through.
                 let dx = (x.wrapping_sub(ex) as i16) as i64;
                 let dy = (y.wrapping_sub(ey) as i16) as i64;
                 dx * dx + dy * dy <= 0xC00 * 0xC00
@@ -581,15 +577,15 @@ impl World {
                 // First tick of the kill-all phase: retail zeroes
                 // `countStageVars_0x36E00` — the whole hold-gate/
                 // objective StageVar subsystem dies with the world
-                // (EF:12996-98; review 2026-07-15 C5). Clearing the
-                // vec is the port's registration-count zero.
+                // (EF:12996-98). Clearing the vec is the port's
+                // registration-count zero.
                 self.mc2_stagevars.clear();
             }
             if v7 == 1 {
                 // Checkpoint 1 despawns `dword_38523` — the sphere
                 // family (10, 39/40/57) — NOT the world: retail's
                 // v29==3 arm runs DisableEntityDrawing over that list
-                // only (EF:13048-66; review 2026-07-15 P0-4). Castles,
+                // only (EF:13048-66). Castles,
                 // wizards and effects survive the activation crater.
                 for e in self.g.ent.iter_mut().skip(1) {
                     if e.class64 == 10 && matches!(e.model65, 39 | 40 | 57) {
@@ -653,8 +649,8 @@ impl World {
                 Gen::polar_step(&mut p, ang, 0, 192);
                 if let Some(r) = self.g.mc2_spawn_smoke_particle_for(14, p.0, p.1, p.2) {
                     // Each successful spawn draws the PYRAMID's own
-                    // LCG once for the rock's life (EF:13086-87;
-                    // review C9 — was rolled on the rock's stream).
+                    // LCG once for the rock's life (EF:13086-87 — on
+                    // the pyramid's stream, NOT the rock's).
                     let d = self.g.ent_rand(i);
                     self.g.ent[r].act_life = ((d & 7) + 8) as i32;
                 }
@@ -665,15 +661,15 @@ impl World {
 
     /// `sub_21850` (EF:13101-13265) — pick the summon: a weighted
     /// roll over creatures (population-capped), projectile bursts,
-    /// or the player beam. Reworked per review 2026-07-15 C2/C8/C9:
-    /// the f26/f38/f50 writes PRECEDE the cap test (a cap-failed
-    /// roll still mutates them — retail quirk); the caps for picks
-    /// 4/6 are evaluated against the MODEL-0 population (verbatim —
-    /// sub_223E0's three identical bucket-0 loops; only picks 3 and
-    /// 5 count their own kind, 5 excluding action 200); roll-2
-    /// picks 8/9 fire ONE shot (f38=1, f26=5); the bit7 escalation
-    /// forces roll 1 to 0; a trip while asleep writes NO pick
-    /// fields; the trip-laser re-arms the beam ramp (bit1 — C8).
+    /// or the player beam. Retail quirks: the f26/f38/f50 writes
+    /// PRECEDE the cap test (a cap-failed roll still mutates them);
+    /// the caps for picks 4/6 are evaluated against the MODEL-0
+    /// population (verbatim — sub_223E0's three identical bucket-0
+    /// loops; only picks 3 and 5 count their own kind, 5 excluding
+    /// action 200); roll-2 picks 8/9 fire ONE shot (f38=1, f26=5);
+    /// the bit7 escalation forces roll 1 to 0; a trip while asleep
+    /// writes NO pick fields; the trip-laser re-arms the beam ramp
+    /// (bit1).
     fn mc2_pyramid_pick_summon(&mut self, i: usize) {
         // sub_223E0's population counts over the class-5 buckets
         // (live + bucketed: life >= 0, action not a corpse state).
@@ -787,8 +783,7 @@ impl World {
     /// state-9 tick while the repeat count lasts. Every launch
     /// shares the preamble (EF:13317-25): pyramid pos stepped 640
     /// along the pyramid yaw at z+768; creatures step 1792 further
-    /// at the stride bearing (review 2026-07-15 C6 — projectiles
-    /// used to fire from the raw center).
+    /// at the stride bearing (NOT from the raw center).
     fn mc2_pyramid_do_summon(&mut self, i: usize, ctx: &MobCtx) {
         if self.g.ent[i].f38 == 0 {
             return;
@@ -850,8 +845,8 @@ impl World {
                     _ => self.g.mc2_spawn_m19(p.0, p.1, p.2),
                 };
                 if let Some(s) = spawned {
-                    // The summoned-creature writes (EF:13388-13425,
-                    // review C7): stage tag 17, parent = the pyramid,
+                    // The summoned-creature writes (EF:13388-13425):
+                    // stage tag 17, parent = the pyramid,
                     // and the ACTION OVERRIDES over the creators'
                     // defaults — written LAST (m0 1→7, m21 169→175,
                     // m25 201→207, m19 153→159).
@@ -866,13 +861,12 @@ impl World {
                     // the roster's attacker word) — the consumers
                     // (the StageVar2 16/17 release chain, mobs.rs
                     // mc2_doom_summon_*) scan-resolve the level's
-                    // single (5,10) instead. The dword_0x364D2 tally
-                    // question is CLOSED (E23 census): it is the
-                    // total-creatures-spawned DENOMINATOR of the
+                    // single (5,10) instead. The dword_0x364D2 tally is
+                    // the total-creatures-spawned DENOMINATOR of the
                     // level-complete "creatures killed %" stat
                     // (EF:43498-505; ++ at EF:13390/32988, boxed-in
-                    // walkers decrement, EF:8860). Wire it when the
-                    // stats screen is ported — no sim consumer today.
+                    // walkers decrement, EF:8860). TODO: wire it when
+                    // the stats screen is ported — no sim consumer today.
                     e.f30 = ang;
                     e.f34 = ang;
                     e.tick70 = match sel {
@@ -893,7 +887,7 @@ impl World {
                 }
             }
             7 => {
-                // THE HURL-AWAY BEAM (EF:13427-56, review C3): ramp
+                // THE HURL-AWAY BEAM (EF:13427-56): ramp
                 // 1024 → −80/tick → floor 10, applied OUTWARD along
                 // pyramid→player. The pose displacement rides the
                 // shared knock channel at the FULL ramp magnitude
@@ -904,11 +898,10 @@ impl World {
                     self.g.snd(19, i);
                     self.g.ent[i].f44 &= !2;
                 }
-                // Widened: retail's −80 runs on int before the word
-                // store, so an un-re-armed entry (f52 below 80) floors
-                // to 10 instead of wrapping the u16 (debug-panic /
-                // release full-blast 1024 — exposed by the natural
-                // escalation path 2026-07-18).
+                // Retail's −80 runs on int before the word store, so
+                // an un-re-armed entry (f52 below 80) must floor to 10,
+                // NOT wrap the u16 (else debug-panic / release
+                // full-blast 1024).
                 let f = (self.g.ent[i].f52 as i32 - 80).clamp(10, 1024) as u16;
                 self.g.ent[i].f52 = f;
                 let away = Gen::angle_between(ex, ey, ctx.px, ctx.py);

@@ -11,50 +11,45 @@
 //! Port of `InitStageVars_11EE0` (loader), `sub_12100`/`sub_12330`
 //! (attach-at-spawn), `sub_12780` (per-tick global scan), `sub_12500`
 //! (per-entity reaction), `sub_12410`/`sub_12470` (release/clear),
-//! `sub_122C0`/`sub_12870` (disposition arm / re-arm). Verified against
-//! the decompile in `docs/traces/mc2-stage-engine-completion.md` §2 +
-//! the port-spec corrections banked 2026-07-14. All EF citations are
-//! `reference/remc2/remc2/engine/EventsFunctions.cpp`.
+//! `sub_122C0`/`sub_12870` (disposition arm / re-arm). All EF citations
+//! are `reference/remc2/remc2/engine/EventsFunctions.cpp`.
 //!
 //! Hash discipline: the whole subsystem lives in two `World` vecs
 //! (`mc2_stagevars`, `mc2_sv_held`) that hash ONLY when populated — MC1
-//! and any MC2 level with no StageVars are byte-identical to before.
+//! and any MC2 level with no StageVars are byte-identical.
 //!
-//! HELD ≠ frozen (Session H6/E16): a phase-7 class-5 entity with
-//! `site_z` in 1..=10/15 is intercepted at the world dispatch seam and
-//! runs [`World::mc2_held_tick`] — the port of `sub_1D5D0`'s per-kind
-//! held action (EF:9977). Every held tick drains the damage inbox
-//! (held creatures are KILLABLE — a lethal hit routes to the model's
-//! prekill, `actionIndex = 8m+4`), a hit from a foreign class/model
-//! breaks the hold into aggro (`StageVar2 = 10` + `sub_1E040`'s
-//! `8m+2`/`8m+6` FLEE split), and the kind-3/4 guardian arm aggros on
-//! the watched entity (kind 3, the ambush law) or its target (kind 4)
-//! when it nears `v_28`. The m27 kraken body instead runs its full
-//! 0xDF stage-command state ([`World::mc2_m27_held_tick`] =
-//! `sub_29930`). `site_z` carries the KIND (retail's
-//! `StageVar2_0x49_73`), the same field metamorph/summon use (12/13,
-//! which stay on the mobs.rs path) — level kinds are 1..9 plus the
-//! runtime 10 (aggro-broken) and 15 (inert), so they never collide.
+//! HELD ≠ frozen: a phase-7 class-5 entity with `site_z` in 1..=10/15 is
+//! intercepted at the world dispatch seam and runs
+//! [`World::mc2_held_tick`] — the port of `sub_1D5D0`'s per-kind held
+//! action (EF:9977). Every held tick drains the damage inbox (held
+//! creatures are KILLABLE — a lethal hit routes to the model's prekill,
+//! `actionIndex = 8m+4`), a hit from a foreign class/model breaks the
+//! hold into aggro (`StageVar2 = 10` + `sub_1E040`'s `8m+2`/`8m+6` FLEE
+//! split), and the kind-3/4 guardian arm aggros on the watched entity
+//! (kind 3, the ambush law) or its target (kind 4) when it nears `v_28`.
+//! The m27 kraken body instead runs its full 0xDF stage-command state
+//! ([`World::mc2_m27_held_tick`] = `sub_29930`). `site_z` carries the
+//! KIND (retail's `StageVar2_0x49_73`), the same field metamorph/summon
+//! use (12/13, which stay on the mobs.rs path) — level kinds are 1..9
+//! plus the runtime 10 (aggro-broken) and 15 (inert), so they never
+//! collide.
 //!
-//! MOVEMENT (2026-07-16 flocking fix): stage-held creatures are
-//! ACTIVE — retail's `sub_1D5D0` cases all MOVE. Kind 1 walks to the
-//! authored point (`sub_1DDA0`), kind 2 is the graze LEASH
-//! (`sub_1DBF0`: a 12-tile box around the anchor — outside walks
-//! home, inside circles at +142..254/16-ticks — plus the awake
-//! wizard watch that breaks to kind 10), kinds 3/4/5 shadow their
-//! watched entity (`sub_1D8C0`), kinds 6-9 graze while their gate
-//! runs. The earlier "held = frozen" reading came from the per-model
-//! wrappers, which indeed don't move — the movement lives in the
-//! `sub_1D5D0` legs those wrappers call. `byte_0x3E_62` DOES tick
-//! while held (the Events.cpp dispatch loop increments every
-//! processed entity, not the wrappers), so all cadences are
-//! time-keyed; the earlier static-ordinal note was wrong.
+//! MOVEMENT: stage-held creatures are ACTIVE — retail's `sub_1D5D0`
+//! cases all MOVE. Kind 1 walks to the authored point (`sub_1DDA0`),
+//! kind 2 is the graze LEASH (`sub_1DBF0`: a 12-tile box around the
+//! anchor — outside walks home, inside circles at +142..254/16-ticks —
+//! plus the awake wizard watch that breaks to kind 10), kinds 3/4/5
+//! shadow their watched entity (`sub_1D8C0`), kinds 6-9 graze while
+//! their gate runs. Movement lives in the `sub_1D5D0` legs the per-model
+//! wrappers call, not the wrappers themselves. `byte_0x3E_62` DOES tick
+//! while held (the Events.cpp dispatch loop increments every processed
+//! entity), so all cadences are time-keyed.
 //!
-//! APPROX register (held reductions, deliberate): the per-model
-//! phase-7 wrapper EXTRAS around retail's `sub_1D5D0` (ambient-sound
-//! draws and speed refresh, e.g. the goat's `AddGoat05_01_1F5B0`
-//! bleat; m18's ground re-snap) and the `sub_1EEE0` settle on the
-//! walk leg's hit path are not run — no idle SOUND rng is drawn.
+//! APPROX register (held reductions, deliberate): the per-model phase-7
+//! wrapper EXTRAS around retail's `sub_1D5D0` (ambient-sound draws and
+//! speed refresh, e.g. the goat's `AddGoat05_01_1F5B0` bleat; m18's
+//! ground re-snap) and the `sub_1EEE0` settle on the walk leg's hit path
+//! are not run — no idle SOUND rng is drawn.
 
 use super::super::mc1::mobs::MobCtx;
 use super::super::mc1::world::World;
@@ -127,12 +122,11 @@ impl World {
         // Count = highest slot 1..10 whose byte0 low nibble is nonzero;
         // SLOT 0 IS INERT — retail's fill loop runs `index = 1..count`
         // (EF:4641) and every consumer scans from 1, so an authored
-        // slot 0 never loads (H7iii; no shipped level authors one).
-        // 0xFF rows are the level editor's UNUSED fill — not a kind-15
-        // row. (Retail's count scan would include a 0xFF tail and load
-        // it with a garbage out-of-table subtype read; no shipped row
-        // can bind through that deliberately, so the port treats the
-        // fill as empty. APPROX, documented.)
+        // slot 0 never loads (no shipped level authors one). 0xFF rows
+        // are the level editor's UNUSED fill — not a kind-15 row. Retail
+        // would include a 0xFF tail and load it with a garbage
+        // out-of-table subtype read; the port treats the fill as empty
+        // (deliberate: no shipped row can bind through that).
         let count = vars
             .iter()
             .enumerate()
@@ -241,7 +235,7 @@ impl World {
             // m9 (hive imp) DEFERS the hold (retail's third arg
             // `model == 0x9` at EF:33030 → park the slot in word74,
             // EF:4716-22): the imp finishes its 16-tick materialize
-            // first, then `sub_122A0` arms the parked slot (H3).
+            // first, then `sub_122A0` arms the parked slot.
             if self.g.ent[ent].model65 == 9 {
                 self.mc2_sv_deferred.retain(|d| d.0 as usize != ent);
                 self.mc2_sv_deferred.push((ent as u16, slot as u8));
@@ -366,8 +360,8 @@ impl World {
     /// `sub_12780` (EF:5135-5211) global scan + `sub_12500` (EF:5045-
     /// 5131) per-entity reaction, run once per tick FIRST among the
     /// pre-passes — retail's UpdateEntities order is stagevar → awake
-    /// → drip → entity loop (EF:40093-40116, H8i) — so a released
-    /// creature is awake-passed and acts the same tick.
+    /// → drip → entity loop (EF:40093-40116) — so a released creature
+    /// is awake-passed and acts the same tick.
     pub(crate) fn mc2_stagevar_tick(&mut self) {
         if self.mc2_stagevars.is_empty() {
             return;
@@ -375,8 +369,8 @@ impl World {
         // ---- deferred m9 arms (`sub_122A0`): an imp that finished
         // its materialize (left state 72) picks up its parked hold.
         // Retail arms inside the completion tick itself (EF:11984-95);
-        // this pre-loop pass arms one boundary later — same observable
-        // sequence, and no shipped level authors a held m9 (census).
+        // this pre-loop pass arms one boundary later (deliberate: same
+        // observable sequence, and no shipped level authors a held m9).
         // A deferred imp that died/despawned just drops its entry.
         if !self.mc2_sv_deferred.is_empty() {
             let pending: Vec<(u16, u8)> = self
@@ -463,7 +457,7 @@ impl World {
             // chase/flee machine dropped it back to wander, and the
             // stage bind reclaims it (`sub_12330`). This is how the
             // retail herd calms down and walks back to the graze
-            // anchor after a scatter (2026-07-16 flocking fix).
+            // anchor after a scatter.
             if self.g.ent[ent].site_z == 10 {
                 if !matches!(phase, 2 | 6) {
                     self.mc2_stagevar_arm(ent, slot);
@@ -496,7 +490,7 @@ impl World {
                 // "coordinates" are pointer bytes whose high half can
                 // never sit within 3072 of a world position: the
                 // branch is unreachable garbage in retail and is NOT
-                // reproduced (H7i; 3 shipped kind-9 levels, all
+                // reproduced (deliberate; 3 shipped kind-9 levels, all
                 // death-watch-released).
                 4 | 5 | 8 | 9 => v.flags & 0x04 != 0,
                 6 => {
@@ -504,8 +498,8 @@ impl World {
                     // `word_0x4A_74` is an UNSIGNED word released at
                     // exactly 0 (EF:5116-18): an authored-zero timer
                     // wraps 0→0xFFFF and holds ~65536 ticks — never
-                    // release-on-negative (H7ii; no shipped level
-                    // authors a zero, but the wrap is the law).
+                    // release-on-negative (the wrap is the law; no
+                    // shipped level authors a zero).
                     let t = self
                         .mc2_sv_held
                         .iter_mut()
@@ -558,7 +552,7 @@ impl World {
     }
 
     /// A bound live entity slot reads dead / being-removed. Anchored
-    /// on the `thing_slot` identity like `mc2_bound_gone` (H8ii): our
+    /// on the `thing_slot` identity like `mc2_bound_gone`: our
     /// pool recycles through a LIFO free list, so a raw read of the
     /// bound slot could observe a REUSED entity as "alive" and the
     /// gate would never fire; a slot whose occupant no longer carries
@@ -569,7 +563,7 @@ impl World {
         })
     }
 
-    // ---- Session H6/E16: the HELD action (`sub_1D5D0`, EF:9977) ----
+    // ---- the HELD action (`sub_1D5D0`, EF:9977) ----
 
     /// The per-kind held head, run at the entity's own turn in the
     /// tick loop (the world dispatch seam calls this before the
@@ -605,11 +599,11 @@ impl World {
                 2 => self.g.ent[i].tick70 = base.wrapping_add(4),
                 1 => self.mc2_held_hit(i, base),
                 _ => {
-                    // The per-kind MOVEMENT leg (2026-07-16 flocking
-                    // fix): stage-held creatures are ACTIVE in retail
-                    // — sub_1D5D0's cases walk/graze every tick, they
-                    // never freeze. Then the kind-3/4 guardian arm
-                    // and the kind-2 wizard watch.
+                    // The per-kind MOVEMENT leg: stage-held creatures
+                    // are ACTIVE in retail — sub_1D5D0's cases
+                    // walk/graze every tick, they never freeze. Then
+                    // the kind-3/4 guardian arm and the kind-2 wizard
+                    // watch.
                     self.mc2_held_move(i, kind, ctx);
                     self.mc2_held_watch(i, base);
                     if self.g.ent[i].tick70 & 7 == 7 && self.g.ent[i].site_z == 2 {
@@ -619,21 +613,18 @@ impl World {
             },
         }
         // Retail's per-model phase-7 wrappers run the model's AMBIENT
-        // PHYSICS after the 1D5D0 legs — the held seam mirrors every
-        // one with a RECOVERED retail body:
+        // PHYSICS after the 1D5D0 legs — the held seam mirrors two:
         // - m21 (`sub_26470` EF:16938-61, kinds 1-10; 13/14/16 zero
         //   the rest base — outside the port's held set): the JUMP
-        //   CYCLE. Without it a held devil kept the last high
-        //   ground's altitude forever (the walker's alt law only
-        //   ever lifts — the 2026-07-18 "floating devil" report) and
-        //   the mc2:08 basin sat silent instead of hopping/cackling.
-        // - m0 (`sub_1F300`, m0-m3-gaps trace §2: kinds 1-0xA +
-        //   0xD/0xE/0x10 tether+bob, 0x11 bob-only — the tether
-        //   stays authentically dormant): the VERTICAL BOB. Without
-        //   it a held dragon hugged the terrain and flew flat like a
-        //   ground worm, bouncing only after release (the 2026-07-18
-        //   "crippled dragons" report) — retail's floor bounce
-        //   (+150 below ground+256) launches the arc from the spawn.
+        //   CYCLE. Required — the walker's alt law only ever lifts, so
+        //   without it a held devil keeps the last high ground's
+        //   altitude forever and never hops/cackles.
+        // - m0 (`sub_1F300`: kinds 1-0xA + 0xD/0xE/0x10 tether+bob,
+        //   0x11 bob-only — the tether stays dormant): the VERTICAL
+        //   BOB. Required — retail's floor bounce (+150 below
+        //   ground+256) launches the arc from spawn; without it a held
+        //   dragon hugs the terrain and flies flat, bouncing only after
+        //   release.
         // Other models' +7 tails stay skipped (APPROX, module doc).
         if matches!(kind, 1..=10) && self.g.ent[i].tick70 & 7 == 7 {
             match self.g.ent[i].model65 {
@@ -645,15 +636,13 @@ impl World {
         // The per-model wrapper's SPEED TAIL (the goat's
         // `AddGoat05_01_1F5B0` :11452 shape, shared by the townie
         // wrapper): the flee state runs at minSpeed — applied the
-        // SAME tick an aggro raise above set `8m+6` — and every
-        // quiet held tick refreshes actSpeed to maxSpeed. Without
-        // this, a leashed goat that sights the wizard fled at 18
-        // instead of retail's 54. Scoped to the FLEE-flagged prey
-        // rows (goats/townsfolk), whose wrappers verifiably carry
-        // the tail; predator/guardian wrappers (m18/m19/m21...)
-        // keep their spawn speed while held, as before (APPROX —
-        // their tails differ per model and stay skipped with the
-        // sound rolls, module doc).
+        // SAME tick an aggro raise above set `8m+6` — and every quiet
+        // held tick refreshes actSpeed to maxSpeed. Scoped to the
+        // FLEE-flagged prey rows (goats/townsfolk), whose wrappers
+        // carry the tail; predator/guardian wrappers (m18/m19/m21...)
+        // keep their spawn speed while held (APPROX — their tails
+        // differ per model and stay skipped with the sound rolls,
+        // module doc).
         if BEHAVIOR[self.g.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0 {
             let e = &mut self.g.ent[i];
             if e.tick70 == base.wrapping_add(6) {
@@ -917,7 +906,7 @@ impl World {
     }
 
     /// `sub_29930` (EF:19696-733) — the m27 body's 0xDF stage-command
-    /// state (Session E16). Order is retail-verbatim: the `sub_1D5D0`
+    /// state. Order is retail-verbatim: the `sub_1D5D0`
     /// head first (which may re-raise `tick70`), then the pose select
     /// on the possibly-updated kind, the life refresh, the command
     /// arms on the possibly-updated `tick70`, and the branch drive

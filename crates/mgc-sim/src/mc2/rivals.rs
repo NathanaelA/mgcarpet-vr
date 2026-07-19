@@ -1,21 +1,20 @@
 //! MC2 rival wizards — the class-3 model-1 AI carpets on the MC2
 //! column: lifecycle (spawn/records/authored castles), the per-tick
-//! brain, the casting arm, mortality and respawn. Direct port of the
-//! remc2 machinery over the MC1 rival chassis; trace bank:
+//! brain, the casting arm, mortality and respawn. Port of the remc2
+//! machinery over the MC1 rival chassis; trace bank:
 //! docs/traces/mc2-rivals-brain.md, mc2-rivals-spawn-mortality.md and
 //! mc2-rivals-open-closure.md (`EF:` = remc2 EventsFunctions.cpp).
 //!
 //! The MC2 brain is the MC1 brain function-for-function (the
 //! sub_12910 housekeeping/selector/handlers sandwich, the 0x601F hate
-//! ledger, the burst gun, the poverty latch). What this module keys
-//! differently, per the trace bank:
+//! ledger, the burst gun, the poverty latch). What MC2 keys
+//! differently:
 //! - the SPELL IDS (heal 5, speed-up 3, possess 1, cloak 0xB,
 //!   castle 2) and the recast/attack-priority tables (§7.2/7.3);
 //! - the book is the class-15 manifestation entity per spell
 //!   ([`Mc2Spellbook`] per rival), granted ONLY at load from the
-//!   level's `WizardMapSettings` masks with authored starting tiers —
-//!   MC2 has NO runtime spell learning (open-closure §3 retracts the
-//!   old learn-timer/pickup reading);
+//!   level's `WizardMapSettings` masks with authored starting tiers;
+//!   MC2 has NO runtime spell learning (open-closure §3);
 //! - the water/obstacle steer `sub_16580` runs after every state
 //!   handler (open-closure §1 — MC1's AI flew over everything);
 //! - death scatters the class-15 SPELL TOKENS (re-collectible), the
@@ -27,20 +26,19 @@
 //!   authored map levels, and the per-cast TIER-DOWN walk
 //!   (sub_15F20) supplies the tier dynamics.
 //!
-//! Deliberate original asymmetries, ported as traced: the AI at its
-//! own castle DISCARDS damage (grace pinned 2, mailbox memset —
-//! EF:5400-5414; the at-castle FORWARD is human-only, EF:59961); AI
-//! life regen /200 home /500 afield (4x the human afield); the AI
-//! carpet ignores walls and knockback but — new in MC2 — steers
-//! around WATER; target scans are omniscient.
+//! Original asymmetries, ported as traced: the AI at its own castle
+//! DISCARDS damage (grace pinned 2, mailbox memset — EF:5400-5414;
+//! the at-castle FORWARD is human-only, EF:59961); AI life regen /200
+//! home /500 afield (4x the human afield); the AI carpet ignores
+//! walls and knockback but — new in MC2 — steers around WATER; target
+//! scans are omniscient.
 //!
-//! Known interim deviations (ours, flagged inline): the hate feed
+//! Open interim deviations (ours, flagged inline): the hate feed
 //! rides damage intake instead of the per-projectile scan sub_159E0
 //! (the MC1-column position); the DEFENSE state's disguise VISUAL
-//! (retail draws the metamorph creature in place of the AI carpet)
-//! is presentation-side unported — the state machine, tier pick,
-//! shadowing and speed law are faithful (sub_15FC0/sub_161A0,
-//! reworked per review 2026-07-15 P1-6).
+//! (retail draws the metamorph creature in place of the AI carpet) is
+//! presentation-side unported — the state machine, tier pick,
+//! shadowing and speed law are faithful (sub_15FC0/sub_161A0).
 
 use crate::mc1::features::{Gen, tile};
 use crate::mc1::mobs::PLAYER_TARGET;
@@ -71,9 +69,8 @@ const ATTACK_CASTLE: [u8; 7] = [0x10, 0x12, 0x07, 0x09, 0x11, 0x14, 0x00];
 /// the class-5 creature models Metamorph's tiers turn a wizard into
 /// (2 = tier-0 Day bird, 0x13 = tier-0 non-Day, 0x19 = tier 1,
 /// 0x10 = tier 2), walked in scan-priority order by `sub_15FC0`
-/// (EF:7664-79). NOT a cast list — the old reading cast these as
-/// spell ids, so a rival "dodged" by casting Create Castle (review
-/// 2026-07-15 P1-6).
+/// (EF:7664-79). These are creature MODELS, not spell ids — do not
+/// feed them to the cast path.
 const DISGUISE_MODELS: [u8; 4] = [0x02, 0x13, 0x19, 0x10];
 
 /// Metamorph tier for a disguise model (`SetSpell` switch,
@@ -113,11 +110,10 @@ pub const MC2_RIVAL_NAMES: [&str; 8] = [
 ];
 
 /// The AI wizard's tuning row: the rival ctor PINS `str_D7BD6[67]`
-/// (sub_4A9C0 EF:33351 — decompile-verified 2026-07-15), overriding
-/// the spawn law 59+model=60. Row 67 carries the retail AI band
-/// (ceiling ground+768, floor ground+128), turn caps (v_4 5, v_2
-/// 256), climb -4 and the 8192 engagement range v_28 — row 60's
-/// 1792/0/22/4096 were all wrong for the brain's consumers.
+/// (sub_4A9C0 EF:33351), overriding the spawn law 59+model=60. Row 67
+/// carries the retail AI band (ceiling ground+768, floor ground+128),
+/// turn caps (v_4 5, v_2 256), climb -4 and the 8192 engagement range
+/// v_28; row 60's 1792/0/22/4096 are wrong for the brain's consumers.
 const WIZARD_ROW: u8 = 67;
 
 /// Per-color config from the level record (the 110-byte
@@ -343,10 +339,9 @@ impl World {
             // ctors write (AddPlayer_4A920 / sub_4A9C0, EF:33326/33352)
             // — ch0 damage + ch2/ch3/ch4 (claim/steal/grip). Without
             // it f28 stays 0 and `area_write`'s per-channel gate drops
-            // EVERY hit at the mailbox, so a fireball detonates ON the
-            // rival but deals nothing — the "unkillable Nyphur" bug
-            // (player-reported 2026-07-12; debug_kill injects mail
-            // directly so the mortality tests never exercised it).
+            // EVERY hit at the mailbox: a fireball detonates ON the
+            // rival but deals nothing (unkillable). debug_kill injects
+            // mail directly, so mortality tests do NOT exercise this.
             e.f28 = 29;
         }
         self.g.link(i, x, y, z);
@@ -696,12 +691,12 @@ impl World {
         if dmg <= 0 {
             return;
         }
-        // Shield: the two-stage absorb (EF:60676-93, review B11): an
-        // ARMED shield NULLS the hit outright and promotes to
-        // CHARGED; a CHARGED shield quarters the hit, pays the
-        // quarter from mana and is spent. (Retail calls the shield-XP
-        // award here too — a structural no-op for rivals through
-        // sub_6D8B0's model-0 guard.)
+        // Shield: the two-stage absorb (EF:60676-93): an ARMED shield
+        // NULLS the hit outright and promotes to CHARGED; a CHARGED
+        // shield quarters the hit, pays the quarter from mana and is
+        // spent. (Retail calls the shield-XP award here too — a
+        // structural no-op for rivals through sub_6D8B0's model-0
+        // guard.)
         if self.mc2_rivals[ri].shield {
             match self.mc2_rivals[ri].shield_state {
                 1 => {
@@ -719,8 +714,7 @@ impl World {
         }
         self.g.ent[i].act_life -= dmg;
         self.g.ent[i].f38 = src; // killer latch (word_0x24_36)
-        // Wizard hit sound rand 54..57 on the entity LCG
-        // (EF:60712-13; was a flat 17 — review B11).
+        // Wizard hit sound rand 54..57 on the entity LCG (EF:60712-13).
         let hs = 54 + (self.g.ent_rand(i) & 3) as u8;
         self.g.snd(hs, i);
         // Hate feed (+3000 heavy / +500 base folded to the heavy
@@ -1038,9 +1032,9 @@ impl World {
     /// as a live countdown on EVERY spell's manifestation — the
     /// readiness gates (EF:6997/7014/7065) rely on it expiring, so the
     /// homing set {1,9,0x10,0x12,0x13,0x15} re-arms after `f28` ticks
-    /// like retail instead of locking for the rival's whole life
-    /// (review 2026-07-15 P0-2). Buff flags read the post-decrement
-    /// window; Heal (5) heals while armed.
+    /// like retail instead of locking for the rival's whole life. Buff
+    /// flags read the post-decrement window; Heal (5) heals while
+    /// armed.
     /// The duel enforcement's opponent DRAIN (`sub_5DE30`
     /// EF:59930-43): mode >= 1 drains mana by the opponent's regen
     /// rate plus 8 per tick; mode == 2 also drains life by the
@@ -1100,7 +1094,7 @@ impl World {
         // (3 = the approach boost window, read by the movers.)
         // Heal channel (5): heal while the window is live (the shared
         // effect-state law; rate APPROX maxLife/20 per armed tick —
-        // the MC1-column certified rate, MC2 numeric trace banked).
+        // the MC1-column rate, MC2 numeric trace not yet pinned).
         if heal_live {
             let i = self.mc2_rivals[ri].ent as usize;
             let max = self.g.ent[i].max_life as i32;
@@ -1193,7 +1187,7 @@ impl World {
         }
         // 2. Flee home hurt (sub_13DC0 EF:6163) — every tick. The
         // steer target = the OWN castle (EF:6174-75 — the water
-        // detour scanner walks toward it; review 2026-07-15 B10).
+        // detour scanner walks toward it).
         if let Some(c) = castle {
             if self.g.ent[i].act_life < (self.g.ent[i].max_life / 2) as i32 {
                 self.mc2_set_rival_state(ri, Mc2AiState::Home, c as u16);
@@ -1212,7 +1206,7 @@ impl World {
                 && self.mc2_rival_afford_castle(ri)
                 && self.g.mc2_castle_space_ok(c)
             {
-                // Steer target = the own castle (EF:6114-15, B10).
+                // Steer target = the own castle (EF:6114-15).
                 self.mc2_set_rival_state(ri, Mc2AiState::Upgrade, c as u16);
                 return;
             }
@@ -1321,9 +1315,8 @@ impl World {
     /// castle is over 12288 away in CHEBYSHEV max(|dx|,|dy|)
     /// (`sub_583B0`). The FIRST qualifying corner wins — no
     /// nearest-ranking, no water veto, no +128 centre offset, no
-    /// second candidate (review 2026-07-15 B13: all three were
-    /// invented; the duplicated check in the decompile is a
-    /// loop-unroll artifact).
+    /// second candidate (the duplicated check in the decompile is a
+    /// loop-unroll artifact, not a second candidate).
     fn mc2_rival_scout_site(&mut self, ri: usize, i: usize) -> bool {
         let me = self.mc2_rivals[ri].ent;
         let (sx, sy) = (self.g.ent[i].x >> 14, self.g.ent[i].y >> 14);
@@ -1570,8 +1563,7 @@ impl World {
     /// targets the CREATURE (the disguise anchor). A live disguise
     /// window with a valid target signature holds the state without
     /// rescanning (EF:7639/7717). No hostility filter — any foreign
-    /// wizard nearby triggers the mimicry (review 2026-07-15 P1-6:
-    /// the cast-the-bucket-table body + invented war gate deleted).
+    /// wizard nearby triggers the mimicry (no war gate here).
     pub(crate) fn mc2_rival_pick_defense(&mut self, ri: usize, i: usize) -> bool {
         let m4 = self.mc2_rivals[ri].book.ent[4] as usize;
         if m4 == 0 {
@@ -1627,8 +1619,8 @@ impl World {
         true
     }
 
-    /// Mana-ball pick (sub_148E0 EF:6518-6609, review 2026-07-15
-    /// B8): walk the class-10 sphere chain — the (10,39)/(10,40)
+    /// Mana-ball pick (sub_148E0 EF:6518-6609): walk the class-10
+    /// sphere chain — the (10,39)/(10,40)
     /// spheres in pool order, then the (10,57) randoms (retail's
     /// list is built in that order). A model-57 sphere BREAKS the
     /// whole walk on a Perception roll, keeping the best so far (a
@@ -1847,8 +1839,7 @@ impl World {
             // guarantee; the projectile's stamp delivery remains the
             // general law). A whiffed cast hovers at ball z+512. No
             // internal "claimed → done" exit — the selector
-            // re-arbitrates and the ball pick skips own claims
-            // (review 2026-07-15 P1-7/B2).
+            // re-arbitrates and the ball pick skips own claims.
             Mc2AiState::Possess => {
                 let t = self.mc2_rivals[ri].target as usize;
                 let (tx, ty, tz) = {
@@ -1875,8 +1866,7 @@ impl World {
             // 2048/3584): INSIDE the cast ring the castle-walk pick
             // fires ON CADENCE; a whiffed or unavailable cast hovers
             // at castle z+512. NO ownership write — retail never
-            // claims the raided castle (review 2026-07-15 P1-7: the
-            // steal deleted).
+            // claims the raided castle.
             Mc2AiState::RaidCastle => {
                 let t = self.mc2_rivals[ri].target as usize;
                 let (tx, ty, tz) = {
@@ -1900,9 +1890,8 @@ impl World {
             // EF:5937-6050; approach 3328/4608): the pick + cast run
             // only INSIDE the ring with burst budget; a landed cast
             // de-latches the war toward ANY wizard target
-            // (EF:5966-68, review B4); the whiff path stops, weaves
-            // (wizard targets only, review B5) and z-tracks the
-            // target + 512.
+            // (EF:5966-68); the whiff path stops, weaves (wizard
+            // targets only) and z-tracks the target + 512.
             Mc2AiState::AttackWizard | Mc2AiState::RaidBalloon | Mc2AiState::HuntMana => {
                 let (tx, ty, tz) = match self.mc2_rivals[ri].target {
                     PLAYER_TARGET => self.human_pose,
@@ -1961,8 +1950,7 @@ impl World {
             // quirk — a single probe at the CASTLE spell's level,
             // EF:5698/5705); else keep the speed-up boost topped
             // (readiness has no cooldown for 3 — the live window is
-            // the only re-cast gate); else plain cruise at minSpeed
-            // (review 2026-07-15 B6).
+            // the only re-cast gate); else plain cruise at minSpeed.
             Mc2AiState::Cruise => {
                 let me = self.mc2_rivals[ri].ent;
                 if ((self.g.ent_rand(i) % 255) as u16) < self.mc2_rivals[ri].per {
@@ -2079,8 +2067,6 @@ impl World {
     /// entity LCG and snaps the ACTUAL yaw ±512; ticks 1-2 jink the
     /// setpoint ±512 and pulse the actual speed to
     /// 3·minSpeed·Reflexes/255; ticks 3..19 coast; 20 restarts.
-    /// (The old strafe-channel weave with invented magnitude was
-    /// deleted — review 2026-07-15 B5.)
     fn mc2_rival_weave(&mut self, ri: usize, i: usize) {
         let cnt = self.mc2_rivals[ri].weave;
         match cnt {
@@ -2169,13 +2155,12 @@ impl World {
     /// probed at every tier and a refused/unaffordable tier just
     /// keeps walking. The winning probe leaves the manifestation
     /// retuned to the passing tier; the caller's cast fires at it.
-    /// The old "affordable by ceiling → save up and WAIT" hold was
-    /// an invention (review 2026-07-15 P1-8).
+    /// There is no "affordable by ceiling → save up and WAIT" hold.
     pub(crate) fn mc2_rival_attack_pick(&mut self, ri: usize, vs_wizard: bool) -> Option<usize> {
         // The poverty latch (EF:7190-7205): enter under maxMana/4;
         // release at maxMana/4 + 6000, clamped to maxMana/2 ONLY
-        // when the sum overshoots the ceiling (review 2026-07-15 B7
-        // — the old unconditional min() was wrong for mid wealth).
+        // when the sum overshoots the ceiling (NOT an unconditional
+        // min — that would be wrong for mid wealth).
         {
             let r = &mut self.mc2_rivals[ri];
             if r.mana < r.mana_max / 4 {
@@ -2251,10 +2236,9 @@ impl World {
     // ---- sub_14E10 EF:6759) -----------------------------------------------
 
     /// Readiness `sub_15170` (EF:6888-7095) — the per-spell-CLASS
-    /// gate table, re-keyed per retail (review 2026-07-15 B12).
-    /// Common to every class: owned + the tier's ceiling unlock
-    /// (maxMana >= maxManaLimit) + affordable now (the castle reads
-    /// the ladder fresh, B15). Per class:
+    /// gate table. Common to every class: owned + the tier's ceiling
+    /// unlock (maxMana >= maxManaLimit) + affordable now (the castle
+    /// reads the ladder fresh). Per class:
     /// - {0,7,0xD,0xE,0x16}: cooldown + the Perception cone;
     /// - {1,9,0x10,0x12,0x13,0x15}: + the armed-window refusal;
     /// - 2 with a castle: armed + cooldown + cone + the space check
@@ -2444,9 +2428,9 @@ impl World {
     /// castles build the real thing (no MC1 free-plant).
     fn mc2_rival_cast_castle(&mut self, ri: usize, i: usize) -> bool {
         // Affordability re-check FIRST — a whiffed attempt must not
-        // burn the recast cooldown (review 2026-07-15 B15; the cost
-        // is re-read fresh off the ladder, not the manifestation's
-        // stale stamp). The cooldown arms ONLY after a successful
+        // burn the recast cooldown (the cost is re-read fresh off the
+        // ladder, not the manifestation's stale stamp). The cooldown
+        // arms ONLY after a successful
         // upgrade fire (EF:6828); the first-castle direct spawn
         // never arms it at all (EF:6831-40).
         let cost = self.mc2_castle_ladder_cost(ri);
@@ -2629,18 +2613,17 @@ impl World {
         self.entities_dirty = true;
     }
 
-    // NOTE (decompile-verified 2026-07-15): retail rivals have NO
-    // spell-XP progression — `sub_6D8B0`'s guard is class-3 model-0,
-    // the human only (EF:58240-41). A rival's spell tiers are its
-    // authored map levels for life; the per-cast TIER-DOWN walk
-    // (`mc2_rival_tier_probe`) supplies all tier dynamics. The old
-    // `mc2_rival_relevel` XP ladder was deleted as unfaithful (the
-    // review's B17 "award any wizard owner" claim is refuted).
+    // NOTE: retail rivals have NO spell-XP progression —
+    // `sub_6D8B0`'s guard is class-3 model-0, the human only
+    // (EF:58240-41). A rival's spell tiers are its authored map
+    // levels for life; the per-cast TIER-DOWN walk
+    // (`mc2_rival_tier_probe`) supplies all tier dynamics. Do NOT add
+    // an XP relevel ladder for rivals.
 
     /// Test hook: the rival's book as (owned, level) rows plus its
     /// castle's (stored, cap) mana — `None` castle-less. The lifecycle
     /// tests pin the authored grant/tier law and the spawns-full
-    /// castle bank with this (review 2026-07-15 B18).
+    /// castle bank with this.
     #[doc(hidden)]
     pub fn debug_mc2_rival_economy(
         &self,
@@ -2675,8 +2658,8 @@ impl World {
     /// -256, positive (upward) velocity zeroed immediately; floor =
     /// ground + the tuning row's v_12 (row 67 = 128, row-driven);
     /// the (10,1) owner-flagged death puff each tick; EXACT floor
-    /// contact runs the payout. The old polar_step drift displaced
-    /// graves/tokens (review 2026-07-15 B9).
+    /// contact runs the payout. Z-only, no polar drift — any lateral
+    /// drift here displaces the graves/tokens.
     fn mc2_rival_death_fall(&mut self, ri: usize, i: usize) {
         let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
         let ground = self.g.ground_z(x, y) as i16;
@@ -2728,8 +2711,7 @@ impl World {
         // The death broadcast (retail lang 374 "has died.") — the MC2
         // wizard name table (WizardsNames_D93A0), NOT the MC1 one.
         let name = MC2_RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
-        // Notification life 100 (retail's toast countdown — review
-        // 2026-07-15 B16; was 120).
+        // Notification life 100 (retail's toast countdown).
         self.set_notification(format!("{name} has died."), 100, [0xFF, 0, 0]);
         // The SPELL-TOKEN scatter (EF:60137-62): every owned
         // manifestation detaches into a loose pickup token (state
@@ -2792,7 +2774,6 @@ impl World {
             // EF:60282-97: printed once on the elimination edge —
             // the byte_0x006 guard — with toast countdown 200; the
             // per-death "has died." already fired at corpse-fall).
-            // Player 2026-07-17: ours said "has died." for both.
             if !self.mc2_rivals[ri].eliminated {
                 let slot = self.mc2_rivals[ri].slot;
                 let name = MC2_RIVAL_NAMES.get(slot as usize).copied().unwrap_or("?");
@@ -2857,7 +2838,7 @@ impl World {
         {
             let r = &mut self.mc2_rivals[ri];
             // maxMana wiped to the base 1000 — the mana progression
-            // does NOT survive death (EF:43722, review B14).
+            // does NOT survive death (EF:43722).
             r.mana = 1000;
             r.mana_max = 1000;
             r.mana_delta = 0;
@@ -2872,12 +2853,11 @@ impl World {
             r.avoid = 0;
             r.avoid_exit = 0;
             // Own hate ledger back to neutral (EF:43848-50); the WAR
-            // latches survive death — retail never clears them here
-            // (review B14: the old full reset was invented).
+            // latches survive death — retail never clears them here.
             r.hate = [HATE_NEUTRAL; 8];
             // Cooldowns are KEPT except the castle slot, staggered
-            // by color: SpellEnabled[2] = 4·color (EF:43851) — the
-            // old zero-all reset let every respawn rebuild at once.
+            // by color: SpellEnabled[2] = 4·color (EF:43851) — else
+            // every respawn rebuilds its castle at once.
             r.cooldown[2] = 4 * r.slot as u16;
         }
         // The post-respawn truce toward this color.

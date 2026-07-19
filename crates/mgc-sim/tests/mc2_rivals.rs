@@ -1,9 +1,9 @@
-//! MC2 rival column regression (Phase 4.3b, docs/traces/
-//! mc2-rivals-brain.md + mc2-rivals-spawn-mortality.md +
-//! mc2-rivals-open-closure.md): rivals spawn from the level record
-//! under the NumberOfPlayers bound, carry their authored books and
-//! castles, run the brain deterministically, and elimination feeds
-//! the staged objective engine's kill-player cases.
+//! MC2 rival column regression (docs/traces/mc2-rivals-brain.md +
+//! mc2-rivals-spawn-mortality.md + mc2-rivals-open-closure.md):
+//! rivals spawn from the level record under the NumberOfPlayers
+//! bound, carry their authored books and castles, run the brain
+//! deterministically, and elimination feeds the staged objective
+//! engine's kill-player cases.
 //!
 //! Runs against the real bakes (`baked/mc2`); skips silently when the
 //! player's gamedata bake is absent (CI without game assets).
@@ -174,7 +174,7 @@ fn herd_spread(w: &World, class: u8, model: u8) -> (f32, (f32, f32), usize) {
 /// with `--ignored --nocapture`): quantify goat-herd fragmentation on
 /// level-000. The `(5,1)` goats start as ~4 clusters (LINK=6 tiles).
 ///
-/// 2026-07-14 from-binary verification (NETHERW.EXE, the real DOS/4GW LE
+/// From-binary verification (NETHERW.EXE, the real DOS/4GW LE
 /// disassembled at remc2's addresses): the three cohesion routines —
 /// `sub_1BF90` wander/scan (awake-gates BOTH aggro AND the pack scan),
 /// `sub_68C70` awake pass (wake within 24 tiles of the player, propagate
@@ -286,8 +286,7 @@ fn mc2_rivals_spawn_brain_objective() {
         }
         w.tick(pose, idle);
         // The FINAL-death broadcast (retail lang 283, fired once on
-        // the elimination edge — player 2026-07-17: ours said "has
-        // died." for final and non-final deaths alike).
+        // the elimination edge — distinct from non-final deaths).
         saw_banish |= w
             .notification()
             .is_some_and(|(t, _)| t.contains("has been banished from the realm"));
@@ -307,13 +306,11 @@ fn mc2_rivals_spawn_brain_objective() {
     );
 }
 
-/// RIVALS-POLISH #2: a dead MC2 wizard leaves a POSSESSABLE grave.
-/// The bug was an inert grave (targetable bit 8 cleared, no ch1 claim
-/// channel, a no-op dispatch arm), so the corpse could never be hit or
-/// claimed and its re-pointed mana was lost forever. After the fix the
-/// grave mirrors MC1 `spawn_grave` (action 42 `grave_tick`, `f28 = 2`,
-/// bit 8 kept): a wizard's possession claim inherits everything the
-/// grave owns, then it despawns.
+/// A dead MC2 wizard leaves a POSSESSABLE grave: it mirrors MC1
+/// `spawn_grave` (action 42 `grave_tick`, `f28 = 2`, targetable bit 8
+/// kept) — a wizard's possession claim inherits everything the grave
+/// owns, then it despawns. Without bit 8 and the ch1 claim channel the
+/// corpse can never be hit or claimed and its re-pointed mana is lost.
 #[test]
 fn mc2_dead_wizard_grave_is_possessable() {
     let Some((mut w, _pkg)) = load("level-004") else {
@@ -340,8 +337,8 @@ fn mc2_dead_wizard_grave_is_possessable() {
     assert!(grave, "the dead wizard leaves a (10,40) grave");
 
     // The human (PLAYER_TARGET) possesses the grave: it must respond to
-    // the ch1 claim (the fix) and despawn, transferring every entity it
-    // owned. The hook's debug_asserts also pin bit 8 + f28 == 2.
+    // the ch1 claim and despawn, transferring every entity it owned.
+    // The hook's debug_asserts also pin bit 8 + f28 == 2.
     let (before, after, freed) = w
         .debug_mc2_possess_grave(0xFFFF)
         .expect("a live grave to possess");
@@ -352,9 +349,8 @@ fn mc2_dead_wizard_grave_is_possessable() {
     );
 }
 
-/// RIVALS-POLISH: level-001's FIFTH objective (`index=9 stage=153`) is
-/// a type-9 "destroy building" — razing the two vaults by Pyahandra's
-/// tower. It was unported (`_ => false`), so the level could never end.
+/// Level-001's FIFTH objective (`index=9 stage=153`) is a type-9
+/// "destroy building" — razing the two vaults by Pyahandra's tower.
 /// This drives the real level: force-complete rows 0-3 (which fires the
 /// m32 stage-gated switch → disposition 8 → the two `par1=21` vaults),
 /// confirm the level does NOT complete vacuously while the vaults live,
@@ -440,8 +436,8 @@ fn mc2_level001_destroy_building_objective_completes() {
     );
 }
 
-/// OBJECTIVE-GUIDE: `mc2_objective_targets` must resolve the CURRENT
-/// objective's live world targets so the app can highlight them + point
+/// `mc2_objective_targets` must resolve the CURRENT objective's live
+/// world targets so the app can highlight them + point
 /// the arrow. Reuse level-001's type-9 vault fixture: once the two
 /// `par1=21` vaults exist and the destroy-building row is current, the
 /// getter must yield exactly those two buildings, flag one nearest, and
@@ -514,8 +510,8 @@ fn mc2_objective_targets_tracks_current_stage() {
     );
 }
 
-/// PLAUSIBLE-SPELLBOOK (MC2 arm): `mc2_grant_plausible` learns each
-/// listed spell (a hidden manifestation like the dev grant) and installs
+/// `mc2_grant_plausible` learns each listed spell (a hidden
+/// manifestation like the dev grant) and installs
 /// its banked XP, deriving the tier from the per-spell `xpos1` ladder.
 /// A big XP install must push owned spells to their max tier; a zero-XP
 /// install must leave them learned at tier 0. Off-MC2 it is a no-op.
@@ -545,11 +541,10 @@ fn mc2_grant_plausible_learns_spells_and_levels_them() {
     assert_eq!(book.xp[0], 100_000, "banked XP is the installed value");
 }
 
-/// MC2-STAGE-ENGINE-GAPS §A: objective type 1 (kill a NAMED creature)
-/// was unported (`_ => false`), so any of its 21 levels could soft-lock.
-/// The port binds the row to the live entity its authored THING index
-/// spawns (`sub_58DA0`, EF:40650-90) and completes when that bound
-/// creature is gone. Level-008 row 1 names THING 111 = a class-5 model-17
+/// Objective type 1 (kill a NAMED creature): the port binds the row to
+/// the live entity its authored THING index spawns (`sub_58DA0`,
+/// EF:40650-90) and completes when that bound creature is gone.
+/// Level-008 row 1 names THING 111 = a class-5 model-17
 /// diver spawned at dis 0 (i.e. at load, BEFORE the app registers the
 /// stages — so this also exercises the retroactive bind in
 /// `set_mc2_stages`). Type 1 is a background row (not current-gated): it
@@ -593,10 +588,10 @@ fn mc2_level008_kill_named_creature_objective_completes() {
     );
 }
 
-/// MC2-STAGE-ENGINE-GAPS §A: objective type 2 (kill NAMED target "for
-/// real") shares type 1's bind seam PLUS the degradation-chain
-/// succession (Session H1): razing an intermediate building spawns its
-/// `bldgprm.chain` successor and the bound row FOLLOWS it
+/// Objective type 2 (kill NAMED target "for real") shares type 1's
+/// bind seam PLUS the degradation-chain succession: razing an
+/// intermediate building spawns its `bldgprm.chain` successor and the
+/// bound row FOLLOWS it
 /// (`sub_59760`, EF:40921-54), so the row completes only when the
 /// FINAL stage of the chain dies (retail's `!fontTypeIndex` term,
 /// EF:40771-79). EVERY shipped type-2 target is a NAMED BUILDING
@@ -676,9 +671,9 @@ fn mc2_level008_kill_named_building_type2_completes() {
     );
 }
 
-/// MC2-STAGE-ENGINE-GAPS §B: the StageVar hold-gate layer
-/// (`crate::mc2::stagevars`). A gated creature spawns HELD (frozen at its
-/// phase-7 wait) until its trigger fires; then it drops to its active
+/// The StageVar hold-gate layer (`crate::mc2::stagevars`). A gated
+/// creature spawns HELD (frozen at its phase-7 wait) until its trigger
+/// fires; then it drops to its active
 /// action. Level-019 holds four model-16 creatures on a KIND-3 gate
 /// (release when a bound entity dies): they must stay dormant while it
 /// lives and all release when it dies. This exercises the load-time
@@ -727,8 +722,8 @@ fn mc2_level019_stagevar_holds_until_bound_death() {
     );
 }
 
-/// MC2-STAGE-ENGINE-GAPS §B: the KIND-6 (timer) gate — a held creature
-/// releases after a fixed countdown, with no external trigger. Level-104
+/// The KIND-6 (timer) gate — a held creature releases after a fixed
+/// countdown, with no external trigger. Level-104
 /// holds two model-16 creatures whose timers are 2020/2040 ticks; both
 /// must still be held well before then and both released after.
 #[test]
@@ -785,8 +780,7 @@ fn mc2_rivals_authored_castles() {
     // The authored BOOK law (InitialiseSpells_54A50: grant = start &&
     // !blocked, level = authored tier clamped <= 2) and the authored
     // castle bank (spawns FULL, clamped 320000 — EF:43812-17), pinned
-    // at load before the brain spends anything (review 2026-07-15 B18
-    // — the old test claimed these, asserted neither).
+    // at load before the brain spends anything.
     let (configs, _) = rival_configs(&pkg);
     for slot in 1..8u8 {
         let Some(cfg) = &configs[slot as usize] else {
@@ -831,9 +825,8 @@ fn mc2_rivals_authored_castles() {
 
 #[test]
 fn mc2_steal_mana_casts_a_projectile_not_a_stub() {
-    // Steal Mana (13) used to be a `note_misfit` stub that charged mana
-    // for zero effect. It is now a class-9 subtype-8 homing bolt whose
-    // (10,25) impact stamps the struck wizard's ch3 "steal" inbox (the
+    // Steal Mana (13) is a class-9 subtype-8 homing bolt whose (10,25)
+    // impact stamps the struck wizard's ch3 "steal" inbox (the
     // rival/human ch3 consumers already drain + credit). Deterministic
     // lock: casting it spawns a real (9,8) bolt. (The full drain is
     // exercised by the pre-existing ch3 consumers + manual playtest;
@@ -863,8 +856,8 @@ fn mc2_steal_mana_casts_a_projectile_not_a_stub() {
     );
 }
 
-/// Session E16/H6: the m27 kraken's 0xDF stage-command state
-/// (`sub_29930`). Level-058 authors a kind-3 StageVar (byte0 0x43,
+/// The m27 kraken's 0xDF stage-command state (`sub_29930`). Level-058
+/// authors a kind-3 StageVar (byte0 0x43,
 /// watch-by-model) holding its m27 (THING 165) — the AMBUSH kraken:
 /// the guardian arm aggros on the WATCHED subtype's nearest instance
 /// when it comes within the row's v_28 (4608 units = 18 tiles). On
@@ -905,8 +898,8 @@ fn mc2_level058_kind3_ambush_kraken_mass_attacks() {
     );
 }
 
-/// Session E16/H6 counterpart: a SYNTHETIC kind-6 (timer) hold on the
-/// same level-058 kraken. Kind 6 routes through the generic handler
+/// A SYNTHETIC kind-6 (timer) hold on the same level-058 kraken. Kind
+/// 6 routes through the generic handler
 /// (`sub_1E1C0`) — no guardian arm, physics gated OFF by the m27
 /// type-row `&2` flag — so the body must STAY at its 0xDF wait while
 /// the tentacle machine keeps animating (retail never hard-freezes a
@@ -960,8 +953,8 @@ fn mc2_held_kraken_animates_and_breaks_hold_on_hit() {
     );
 }
 
-/// H8(iv): the coverage storms fire dispositions 1..=64, but shipped
-/// levels author REAL creature/scroll dispositions up to 110
+/// The coverage storms fire dispositions 1..=64, but shipped levels
+/// author REAL creature/scroll dispositions up to 110
 /// (level-020's staggered m24 waves; class-0 rows additionally carry
 /// garbage ids up to 30720 — excluded, they spawn nothing).
 /// Pin the true bound so a future re-bake that moves it fails loudly,
@@ -1002,8 +995,8 @@ fn mc2_disposition_id_census_bound() {
     );
 }
 
-/// H8(iv) companion: a NON-GOLDEN wide storm on level-020 (the deepest
-/// disposition ladder, m24 waves to dis 110+). Fires every authored
+/// A NON-GOLDEN wide storm on level-020 (the deepest disposition
+/// ladder, m24 waves to dis 110+). Fires every authored
 /// id and ticks — asserts the misfit census stays empty (every spawn
 /// materialized into a ported machine) without touching the pinned
 /// 1..=64 golden fixtures.
@@ -1028,11 +1021,10 @@ fn mc2_level020_wide_disposition_storm_no_misfits() {
     );
 }
 
-/// H4 (LE-binary verified): retail's InitStages "drop typed rows with
-/// stage==0" guard is dead code — it reads the zeroed DESTINATION row,
-/// so every `index != -1` row registers, active. The port used to take
-/// the guard literally and dropped such rows on 13 levels, severing
-/// level-198's m32 chain (its par1=1 switch gates on a stage0 type-7
+/// Retail's InitStages "drop typed rows with stage==0" guard is dead
+/// code — it reads the zeroed DESTINATION row, so every `index != -1`
+/// row registers, active (taking the guard literally severs
+/// level-198's m32 chain: its par1=1 switch gates on a stage0 type-7
 /// row that retail completes vacuously). Pin the un-drop: level-198
 /// registers all four type-7 rows (rows 1/2 are the stage0 pair) and
 /// level-038 registers its full 7-row board including the stage0
@@ -1060,13 +1052,12 @@ fn mc2_stage0_typed_rows_register() {
     );
 }
 
-/// The DUEL spell effect (2026-07-17, docs/spell-audit/duel.md;
-/// player report "duel does nothing" — the effect body was a misfit
-/// stub). Cast next to a rival: the (10,26) tether grips the rival
-/// wizard → the LOCK forms {opponent, held dist ∈ [1024,3072],
-/// tier}, +duel XP; tier 1's drain mode 1 bleeds the rival's mana
-/// (regen + 8 per tick — net-negative against regen); flying out of
-/// the tier's range (7720 ≈ 30 tiles) breaks the lock (EF:59916).
+/// The DUEL spell effect (docs/spell-audit/duel.md). Cast next to a
+/// rival: the (10,26) tether grips the rival wizard → the LOCK forms
+/// {opponent, held dist ∈ [1024,3072], tier}, +duel XP; tier 1's drain
+/// mode 1 bleeds the rival's mana (regen + 8 per tick — net-negative
+/// against regen); flying out of the tier's range (7720 ≈ 30 tiles)
+/// breaks the lock (EF:59916).
 #[test]
 fn mc2_duel_locks_drains_and_breaks() {
     let Some((mut w, _pkg)) = load("level-004") else {

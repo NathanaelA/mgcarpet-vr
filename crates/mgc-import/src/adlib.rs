@@ -20,12 +20,13 @@
 //! The renderer plays a parsed [`crate::hmp::Song`] through the
 //! nuked-opl3 emulator the way the era's HMI AdLib driver did:
 //! 2-op patches on the 18 OPL3 channels, note pitch from the MIDI
-//! note, drums as ordinary patches keyed by note. INTERIM (fidelity
-//! pass owed, playtest is the oracle): note velocity and CC7 volume
-//! are IGNORED — retail songs carry CC7=0 and velocities 1..9 on
-//! busy melodic channels in *every* arrangement, which only renders
-//! sensibly if the driver used raw patch levels; pitch-bend range is
-//! assumed ±2 semitones.
+//! note, drums as ordinary patches keyed by note. Note velocity is
+//! IGNORED (deliberate): retail songs carry velocities 1..9 on busy
+//! melodic channels in *every* arrangement, which only renders
+//! sensibly if the driver used raw patch levels. CC7 is honored at
+//! note-on only (live ramps on sounding notes are not re-applied;
+//! retail songs only set CC7 up front). Pitch-bend range is assumed
+//! ±2 semitones. WATCH: fidelity pass owed, playtest is the oracle.
 
 use crate::hmp::{EventKind, Song};
 
@@ -186,9 +187,9 @@ pub fn has_danger_layer(song: &Song) -> bool {
 
 /// Renders `song` to mono i16 PCM at `sample_rate` Hz. Pure function
 /// of its inputs — the OPL chip is fresh per call. CC7 is honored as
-/// channel volume, applied at note-on (INTERIM: live CC7 ramps on
-/// sounding notes are not re-applied; retail songs only set CC7 up
-/// front). Velocity stays ignored (see module doc).
+/// channel volume, applied at note-on (live CC7 ramps on sounding
+/// notes are not re-applied; retail songs only set CC7 up front).
+/// Velocity stays ignored (see module doc).
 pub fn render(
     song: &Song,
     inst: &Bank,

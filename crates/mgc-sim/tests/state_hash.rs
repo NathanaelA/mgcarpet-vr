@@ -1,18 +1,17 @@
-//! The Phase-1 refactor guard (ROADMAP "MULTI-GAME ARCHITECTURE"):
-//! golden state-hash fixtures over real baked data. The scripted run
-//! exercises triggers, dispositions, crater digging, creature spawns
-//! and movement, rival wizards, spell grants, projectile combat and
-//! the economy loop; [`World::state_hash`] digests the FULL persistent
-//! state (pool internals, LCG streams, mailboxes), so ANY behavioral
-//! divergence — however internal — trips the fixture.
+//! Refactor guard: golden state-hash fixtures over real baked data.
+//! The scripted run exercises triggers, dispositions, crater digging,
+//! creature spawns and movement, rival wizards, spell grants,
+//! projectile combat and the economy loop; [`World::state_hash`]
+//! digests the FULL persistent state (pool internals, LCG streams,
+//! mailboxes), so ANY behavioral divergence — however internal — trips
+//! the fixture.
 //!
 //! The goldens pin the CURRENT port's behavior, not retail's: they are
 //! a refactoring invariant, not a fidelity oracle. Regenerate (run
 //! with `--nocapture` and copy the printed array) only when a
 //! DELIBERATE behavior change lands, and say so in the commit.
 //!
-//! Self-skips when the baked tree is absent (game data is optional,
-//! per the project rule).
+//! Self-skips when the baked tree is absent (game data is optional).
 
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::rivals::RivalConfig;
@@ -147,12 +146,11 @@ fn run(root: &std::path::Path) -> (Vec<u64>, Vec<u64>) {
     (hashes, obs)
 }
 
-/// The limit-removing property (ROADMAP "MULTI-GAME ARCHITECTURE"):
-/// a bumped pool is bit-identical to pristine MC1 up to the first
-/// exhaustion event. Level 005's scripted run never exhausts, so the
-/// OBSERVABLE state (terrain, population, poses) must match exactly
-/// — the raw state hash legitimately differs (pool length + chassis
-/// are hashed).
+/// The limit-removing property: a bumped pool is bit-identical to
+/// pristine MC1 up to the first exhaustion event. Level 005's scripted
+/// run never exhausts, so the OBSERVABLE state (terrain, population,
+/// poses) must match exactly — the raw state hash legitimately differs
+/// (pool length + chassis are hashed).
 #[test]
 fn bumped_pool_is_transparent_without_exhaustion() {
     let Some(root) = baked_root() else {
@@ -211,16 +209,14 @@ fn level_005_golden_state_hashes() {
     );
     println!("state hashes: {got:#018x?}");
 
-    // Re-pinned 2026-07-16 (DELIBERATE, BEHAVIORAL — the first MC1
-    // re-pin for a behavior fix): the house-emit gate is retail's
-    // EXACT equality `f26 == f128` (:30819), not the `>=` that let
-    // every over-full house emit villagers forever (the level-001
-    // runaway ecology: unbounded peasants + loose mana until pool
-    // saturation; traced + runtime-reproduced). Checkpoints D/E move
-    // (the fixture's first house fills during the combat window);
-    // A-C hold. The OBSERVABLE projection below moves at the same
-    // checkpoints — expected and REQUIRED for a behavior fix.
-    // Previous pin 2026-07-09 (Phase 2 layout-only).
+    // These goldens encode retail's house-emit gate: the EXACT
+    // equality `f26 == f128` (:30819), not a `>=` (which would let
+    // every over-full house emit villagers forever — the runaway-
+    // ecology trap: unbounded peasants + loose mana until pool
+    // saturation). The house-emit law affects checkpoints D/E (the
+    // fixture's first house fills during the combat window); A-C hold.
+    // Any behavioral re-pin here moves the OBSERVABLE projection below
+    // at the same checkpoints — expected and REQUIRED.
     const GOLDEN: [u64; 6] = [
         0x795499327cc36b28, // post-init (feature pass + disposition 0)
         0xe37dd14011ee7d15, // A: 32 idle ticks far afield
@@ -236,16 +232,12 @@ fn level_005_golden_state_hashes() {
          say so in the commit"
     );
 
-    // The layout-INDEPENDENT companion golden (review J3, pinned
-    // 2026-07-16): the observable projection (poses + terrain +
-    // population) at the same checkpoints. It must SURVIVE
-    // hashed-layout re-pins — when GOLDEN moves but OBSERVABLE holds,
-    // the re-pin is layout-only by construction; if OBSERVABLE moves
-    // too, behavior moved and the claim must say so.
-    // D/E re-pinned 2026-07-16 with GOLDEN above (the house-emit
-    // equality fix) — the population genuinely changes, so the
-    // observable moves WITH the hash: a behavioral re-pin, correctly
-    // self-declared.
+    // The layout-INDEPENDENT companion golden: the observable
+    // projection (poses + terrain + population) at the same
+    // checkpoints. It must SURVIVE hashed-layout re-pins — when GOLDEN
+    // moves but OBSERVABLE holds, the re-pin is layout-only by
+    // construction; if OBSERVABLE moves too, behavior moved and the
+    // claim must say so.
     const OBSERVABLE: [u64; 6] = [
         0x09a4bbee6ed601d4,
         0x797dd4817a1d1f11,

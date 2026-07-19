@@ -22,9 +22,9 @@
 //! the brighten LUT), then resolves through the menu palette into
 //! one RGBA quad.
 //!
-//! Button wiring (player-requested functions; retail's Play button
-//! doubles as new-game-when-idle/resume-when-active — here the two
-//! roles are explicit): 1 = START NEW GAME (confirm), 11 = CONTINUE
+//! Button wiring (retail's Play button doubles as
+//! new-game-when-idle/resume-when-active — here the two roles are
+//! explicit): 1 = START NEW GAME (confirm), 11 = CONTINUE
 //! (the next campaign level — the retail between-level beat),
 //! 5/6 = LOAD/SAVE submodes, 2 = change the save name, 4 = quit
 //! (confirm), 3 = multiplayer (not in this remake).
@@ -239,7 +239,7 @@ enum Sub {
 pub struct Mc1Menu {
     bg: Vec<u8>,
     /// The fully-unrolled SCROLL.DAT screen — the retail save/load
-    /// dialog backdrop (None on a pre-epoch-18 bake: dark panel).
+    /// dialog backdrop (None on an older bake: dark panel).
     scroll_bg: Option<Vec<u8>>,
     pal: [u8; 768],
     mask: Vec<u8>,
@@ -262,9 +262,9 @@ pub struct Mc1Menu {
     /// `!byte_9687C`).
     pub game_active: bool,
     /// The campaign's current save name — pre-fills the rename
-    /// dialog (player directive 2026-07-18: editing beats retyping;
-    /// MC2's name dialog already pre-fills). Refreshed by the app on
-    /// entry alongside the slots.
+    /// dialog (deliberate: editing beats retyping, matching MC2's
+    /// name dialog). Refreshed by the app on entry alongside the
+    /// slots.
     pub player_name: String,
     pending: Option<Mc1Action>,
     /// Composed screen is dirty (anything changed since last
@@ -373,9 +373,8 @@ impl Mc1Menu {
     }
 
     /// Esc: close the modal / leave the submode. Never arms the quit
-    /// confirm (Esc doubles as the in-game release/abandon key —
-    /// player report 2026-07-18; quitting is the Quit hotspot's
-    /// job).
+    /// confirm (Esc doubles as the in-game release/abandon key;
+    /// quitting is the Quit hotspot's job).
     pub fn escape(&mut self) {
         if self.modal.is_some() {
             self.modal = None;
@@ -515,7 +514,7 @@ impl Mc1Menu {
             }
             // New Game asks only when there IS progress to lose
             // (retail confirms via the byte_9687C gate; a fresh
-            // profile starts straight away — player round 3).
+            // profile starts straight away).
             (1, _) => {
                 if self.game_active {
                     self.modal = Some(Modal::ConfirmNew);
@@ -577,7 +576,7 @@ impl Mc1Menu {
         // 1 = Load on the top book, 2 = Save on the second — retail
         // :59043-47, 640-buffer (358,10)/(336,86) halved). They
         // vanish while a submode lists the slots and return with
-        // the base menu (player round 4).
+        // the base menu.
         if self.sub == Sub::None {
             self.sprites.blit(1, 179, 5, &mut buf);
             self.sprites.blit(2, 168, 43, &mut buf);
@@ -607,7 +606,7 @@ impl Mc1Menu {
             if let Some(scroll) = &self.scroll_bg {
                 buf.copy_from_slice(scroll);
             } else {
-                // Pre-epoch-18 bake: brightened panel stand-in.
+                // Older bake (no scroll art): brightened panel stand-in.
                 for y in 70..125 {
                     for x in 60..260 {
                         let i = y * W + x;
@@ -621,8 +620,8 @@ impl Mc1Menu {
                 Modal::EditName { buf: edit } => {
                     // Retail asks "Enter your name:" AND "Enter your
                     // call-name:" (etext 34/35) with only the
-                    // call-name ever used — collapsed to ONE name,
-                    // MC2-style (player directive 2026-07-18).
+                    // call-name ever used — collapsed to ONE name
+                    // (deliberate, MC2-style).
                     let prompt = "What is your name";
                     texts.push((prompt.into(), centered(self, prompt), 78));
                     let mut shown = edit.clone();

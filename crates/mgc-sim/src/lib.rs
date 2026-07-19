@@ -105,8 +105,8 @@ pub struct FlightInput {
     /// zero the actual AND target speed, kill an active Speed/
     /// Accelerate channel, recenter the steering (the app resets the
     /// virtual stick — retail's SetCenterScreenForFlyAssistant).
-    /// Enhancement-class in MC1/HW (retail MC1's Backspace is
-    /// text-entry only) — player directive 2026-07-16.
+    /// Enhancement-class in MC1/HW (deliberate: retail MC1's Backspace
+    /// is text-entry only).
     pub full_stop: bool,
     /// The respawn key (Space; the original's command 15) — consumed
     /// only while dead.
@@ -134,7 +134,7 @@ pub struct Flyer {
     /// FULL value — retail's render pose takes `u16_327` unhalved
     /// (:52432) while pitch is halved (:52433); MC2 identical
     /// (`rotation.roll = roll_0x155_341`, EF:40258). The enhanced
-    /// mover leaves it 0 (player directive: no tilt in mouse-look).
+    /// mover leaves it 0 (deliberate: no tilt in mouse-look).
     pub roll: f32,
 }
 
@@ -161,10 +161,10 @@ const DRAG_PER_TICK: f32 = 0.90; // velocity retained per tick
 /// "how fast" for BOTH movers. `Mc1State` cruises at 80 engine
 /// units/tick = 80/256 tiles/tick. The Enhanced deviation changes only
 /// the CONTROL response (hold-to-fly vs. accelerate-buildup), never the
-/// speed ceiling (player directive 2026-07-15), so its terminal is
-/// PINNED to this rather than tuned independently — otherwise a fixed-
-/// size hazard (the kraken buffet, 80/tick) is proportionally weak
-/// under the faster deviation and you slip a tether you shouldn't.
+/// speed ceiling (deliberate), so its terminal is PINNED to this rather
+/// than tuned independently — otherwise a fixed-size hazard (the kraken
+/// buffet, 80/tick) is proportionally weak under the faster deviation
+/// and you slip a tether you shouldn't.
 const FAITHFUL_CRUISE_TPS: f32 = 80.0 / 256.0 * TICK_RATE_HZ as f32; // 7.5 @ 24 Hz
 /// Enhanced float acceleration, DERIVED so the DRAG-governed terminal
 /// (`ACCEL·dt·drag/(1−drag)`) equals [`FAITHFUL_CRUISE_TPS`]. DRAG alone
@@ -296,9 +296,8 @@ impl Simulation {
         // v_12 (±160/240) sits outside the ±80 input clamp, so the
         // aligned press is inert and only the RESISTING press bites
         // (manual: "press the down cursor to cancel"). Both thrust
-        // models share the directional law; the old both-directions
-        // MC1 arm (1012805) misread v_14 as any-press and killed
-        // hold + re-cast (PR-2, fixed 2026-07-15).
+        // models share the directional law: v_14 is the resisting-press
+        // edge, NOT any-press (hold + re-cast must survive).
         if let Some(w) = &mut self.world {
             w.thrust_cancel(input.thrust);
         }
@@ -349,9 +348,8 @@ impl Simulation {
         // the world tick below at that exact altitude. Integrated in
         // FLYER space at the FLYER's position: the integer carpet's
         // x/y are stale under the enhanced mover (never synced after
-        // spawn), and clamping against ground THERE suspended the
-        // corpse mid-air wherever the local ground sat lower — the
-        // playtest-7 never-landing deadlock.
+        // spawn), so clamping against ground THERE would suspend the
+        // corpse mid-air wherever the local ground sits lower.
         if falling && let Some(w) = &mut self.world {
             let dz = w.death_fall_step() as f32 / 256.0;
             let g = w.ground_height_tiles(self.flyer.x, self.flyer.z);
@@ -558,11 +556,10 @@ impl Simulation {
                 };
             } else if self.carpet.z > floor {
                 // Hover keys idle: the carpet settles gently toward
-                // the terrain-follow floor (player directive,
-                // playtest-6 — gameplay assumes ground-contact
-                // pickups like spell jars; holding altitude forever
-                // made you overfly them). Rate = the faithful 8/tick
-                // passive sink.
+                // the terrain-follow floor (deliberate — gameplay
+                // assumes ground-contact pickups like spell jars;
+                // holding altitude forever made you overfly them).
+                // Rate = the faithful 8/tick passive sink.
                 self.carpet.z = (self.carpet.z - 8).max(floor);
             }
         }
@@ -684,9 +681,7 @@ impl Simulation {
             // Retail's cave-wall cancel zeroes the same guarded
             // counter as Backspace (EF:59603) — the spell dies with
             // NO minSpeed restore, so the expiry edge must not fire
-            // +80 next tick over the dead stop (it did until
-            // 2026-07-16 — a latent divergence found tracing the
-            // full-stop key).
+            // +80 next tick over the dead stop.
             self.accel_was_active = false;
         }
 
@@ -723,8 +718,8 @@ impl Simulation {
     /// a deliberate deviation from the original (see [`ThrustModel`]).
     /// Obeys the level-plane thrust rule: thrust and the Accelerate
     /// override act in the yaw ground plane at full magnitude however
-    /// far you aim up or down (player ground truth, 2026-07-07 — aim
-    /// pitch must never bleed dodge mobility into vertical motion).
+    /// far you aim up or down (aim pitch must never bleed dodge
+    /// mobility into vertical motion).
     fn move_enhanced(&mut self, input: &FlightInput) {
         // The MC2 debuff webs are gameplay, so the deviation mover
         // services their channels too: drain the stamp hits, tick
@@ -844,9 +839,8 @@ impl Simulation {
             // sub_11E20 arm): retail never commits the carpet into
             // an air band tighter than clearance+fov+384 — the
             // funnel seams where floor meets ceiling are simply
-            // unreachable, which is what kept the retail eye clear
-            // of the pinch line (mc2:03 main-cavern head-through,
-            // player 2026-07-17). The deviation mover needs the same
+            // unreachable, which is what keeps the retail eye clear
+            // of the pinch line. The deviation mover needs the same
             // law; asymmetric (refuse ENTERING only) so a carpet
             // already in a tight spot can always fly back out.
             if w.player_cave_squeeze(f.x, f.z) && !w.player_cave_squeeze(from.0, from.1) {
@@ -868,8 +862,7 @@ impl Simulation {
         let ceiling = self.lift_ceiling();
         // MC2 cave roof (sub_5D530 EF:59758-63): hard clamp at
         // ceiling − 384 on THIS model too — the enhanced thrust
-        // must not fly through the cave ceiling either (playtest,
-        // level 003: "watch the entire level from above").
+        // must not fly through the cave ceiling either.
         let cave_ceiling = self.world.as_ref().and_then(|w| {
             let ex = (self.flyer.x.rem_euclid(256.0) * 256.0) as u16;
             let ez = (self.flyer.z.rem_euclid(256.0) * 256.0) as u16;
@@ -889,14 +882,10 @@ impl Simulation {
         }
         // The cave roof is a HARD clamp (retail clamps every tick,
         // no altitude grandfathering under a rock ceiling) — RAW,
-        // ceiling wins (sub_5D530 EF:59757-63). The old floor-wins
-        // pinch arm (playtest-cave round 2, "door slopes") treated
-        // the symptom of the missing narrow-space gate above: it
-        // hoisted the head THROUGH a diving ceiling exactly at the
-        // funnel seams. With the squeeze gate the pinch band is
-        // unreachable; if numerics ever brush it anyway, a brief
-        // under-floor frame now renders as solid rock (the terrain
-        // shader's backface arm), never the void.
+        // ceiling wins (sub_5D530 EF:59757-63). The squeeze gate
+        // above keeps the pinch band unreachable; if numerics ever
+        // brush it anyway, a brief under-floor frame renders as solid
+        // rock (the terrain shader's backface arm), never the void.
         if let Some(c) = cave_ceiling {
             if f.y > c {
                 f.y = c;
@@ -913,8 +902,8 @@ impl Simulation {
             f.y -= 8.0 / 256.0;
         }
         // Extended lift with the hover keys idle: settle toward the
-        // floor at any speed (player directive, playtest-6 — ground-
-        // contact pickups assume the carpet comes down by itself).
+        // floor at any speed (deliberate — ground-contact pickups
+        // assume the carpet comes down by itself).
         if self.altitude_model == AltitudeModel::ExtendedLift && input.lift == 0.0 && f.y > floor {
             f.y = (f.y - 8.0 / 256.0).max(floor);
         }
@@ -923,8 +912,8 @@ impl Simulation {
     /// The altitude ceiling: the level's highest terrain tile plus the
     /// original's soft-ceiling band (ground+1024 = 4 tiles). Caps the
     /// extended-lift float-up so it never reaches a god's-eye view
-    /// (player directive, 2026-07-07); the faithful model can't climb
-    /// past it anyway (climb authority inverts above the band).
+    /// (deliberate); the faithful model can't climb past it anyway
+    /// (climb authority inverts above the band).
     fn lift_ceiling(&self) -> f32 {
         let max_ground = match &self.world {
             Some(w) => w.max_ground_tiles(),
@@ -993,10 +982,10 @@ mod tests {
         panic!("the corpse never landed (mc1)");
     }
 
-    /// Playtest-7 deadlock regression: under the ENHANCED mover the
-    /// integer carpet's x/y are stale (spawn position) — the fall
-    /// must integrate at the FLYER's position or the corpse suspends
-    /// mid-air wherever the local ground is lower than the spawn's.
+    /// Under the ENHANCED mover the integer carpet's x/y are stale
+    /// (spawn position) — the fall must integrate at the FLYER's
+    /// position or the corpse suspends mid-air wherever the local
+    /// ground is lower than the spawn's.
     #[test]
     fn death_fall_lands_under_enhanced_far_from_spawn() {
         // Spawn plateau high (200), death site low (40).

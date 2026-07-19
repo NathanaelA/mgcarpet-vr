@@ -1,5 +1,5 @@
-//! MC2 class-9 projectile family — the Phase-4.3 flyer core and the
-//! creature attack thunks, ported verbatim from remc2 (trace bank:
+//! MC2 class-9 projectile family — the flyer core and the creature
+//! attack thunks, ported from remc2 (trace bank:
 //! docs/traces/mc2-class9-flyers.md; `EF:` = EventsFunctions.cpp,
 //! `EV:` = Events.cpp cites).
 //!
@@ -10,25 +10,22 @@
 //! (as everywhere in the MC2 column) · `subSpellIndex_0x2A_42`
 //! carried damage→f44 · `mana_0x90_144`→f140.
 //!
-//! DELIBERATE APPROXIMATIONS (cited, all counted where observable):
-//! - The shielded-target ricochet `sub_68740` is PORTED
-//!   (2026-07-17, [`Gen::mc2_rebound_deflect`] — the Rebound spell
-//!   landed and the skip had gone stale; player: "does not
-//!   rebound"). Still open: the friendly-shield homing/detonate
-//!   pair `sub_68940`/`sub_68AC0` (needs the (10,78) beacon column)
-//!   and the rival-window mirror onto pool entities (rival track).
+//! Deliberate approximations and open items (cited, counted where
+//! observable):
+//! - The shielded-target ricochet `sub_68740` is ported
+//!   ([`Gen::mc2_rebound_deflect`]). OPEN: the friendly-shield
+//!   homing/detonate pair `sub_68940`/`sub_68AC0` (needs the (10,78)
+//!   beacon column) and the rival-window mirror onto pool entities.
 //! - The no-target acquisition `sub_67CB0` (EF:54710, model-keyed
 //!   bucket sweeps) serves PLAYER-CAST spells; creature launches
-//!   pre-lock `word_0x96_150`. Until the spell column lands, a
-//!   target-less flyer snapshots its aim once (the retail else-arm,
-//!   EF:62914-16) and flies straight.
-//! - Water splash: retail spawns (10,5) (EF:62957-63) — ported
-//!   (`mc2_spawn_splash`), gated inside the terrain-contact branch
-//!   per docs/traces/mc2-projectile-terrain-water.md §3.
+//!   pre-lock `word_0x96_150`. A target-less flyer snapshots its aim
+//!   once (the retail else-arm, EF:62914-16) and flies straight.
+//! - Water splash spawns (10,5) (EF:62957-63, `mc2_spawn_splash`),
+//!   gated inside the terrain-contact branch
+//!   (docs/traces/mc2-projectile-terrain-water.md §3).
 //! - An impact whose (f68, f69) effect is unported applies its f44
 //!   as channel-0 area damage at the impact point (the effect IS the
-//!   damage carrier in retail) and counts the misfit — damage lands,
-//!   the visual gap stays visible in the ledger.
+//!   damage carrier in retail) and counts the misfit (deliberate).
 //! - `(9,9)` creator body pending (the subtype 0-0x0C trace); interim
 //!   fields marked OPEN below.
 
@@ -118,9 +115,8 @@ impl Gen {
     /// projectile; the pyramid's case-8 summon): the meteor-shot
     /// numbers under action 27 with sprite 320. Its impact
     /// owner-lock-clear (`sub_67890` EF:59181 — a player-avatar
-    /// homing-lock release) only fires on the 4.2 cast path; for the
-    /// pyramid owner it is retail's own no-op, so it banks with the
-    /// spell column (same doc §3.2).
+    /// homing-lock release) only fires on the player-cast path; for
+    /// the pyramid owner it is retail's own no-op (same doc §3.2).
     pub(crate) fn mc2_spawn_whirlwind_seed(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.mc2_spawn_meteor_shot(x, y, z)?;
         self.ent[i].model65 = 26;
@@ -133,14 +129,12 @@ impl Gen {
     /// around the flyer core: every tick lay one damage-suppressed
     /// (10,0) spark (dword |= 0x10080) at a ±64-box jitter centered
     /// 96 units toward −x/−y of the shot (`rand%0x81 + pos − 160`
-    /// per axis, EF:63356-59 — the code is byte-faithful; the old
-    /// "around the shot" gloss was wrong, F7) (2 draws of its own
-    /// stream), life 4, frame 3, yaw
-    /// inherited. Retail lays it even on the impact tick (the class
-    /// stays set until the removal pass). The fuse stamp onto the
-    /// impact entity (`v1x->maxLife/life = byte_0x46_70`) is IDENTITY
-    /// for the pyramid values (fuse 10 = the meteor ctor's maxLife
-    /// 10) — the charge-tiered player-cast fuse lands with 4.2.
+    /// per axis, EF:63356-59; 2 draws of its own stream), life 4,
+    /// frame 3, yaw inherited. Retail lays it even on the impact tick
+    /// (the class stays set until the removal pass). The fuse stamp
+    /// onto the impact entity (`v1x->maxLife/life = byte_0x46_70`) is
+    /// IDENTITY for the pyramid values (fuse 10 = the meteor ctor's
+    /// maxLife 10); the charge-tiered player-cast fuse is separate.
     pub(crate) fn mc2_meteor_shot_tick(&mut self, i: usize, ctx: &MobCtx) {
         self.mc2_flyer_tick(i, ctx);
         let (x, y, z, id, yaw) = {
@@ -236,8 +230,8 @@ impl Gen {
     /// throws the projectile back at its shooter. Cost gate first
     /// (`proj.mana/4 > victim.mana` → it hits normally); then the
     /// impact-pair whitelist: class 10 with subtype ∈ {0,1,9,11,15,
-    /// 17,22,67,71,89} (the 0x44-0x46 range FAILS, EF:55247-53 —
-    /// corrects the audit table), OR model-13 arrows unconditionally.
+    /// 17,22,67,71,89} (the 0x44-0x46 range FAILS, EF:55247-53), OR
+    /// model-13 arrows unconditionally.
     /// On deflect: sound 28, Rebound XP to the deflector
     /// (`sub_6D8B0(victim, 8, 1)` EF:55283), victim mana −quarter,
     /// heading reversed (`f34 = f30 + 0x400`, pitch negated). The
@@ -247,14 +241,13 @@ impl Gen {
     /// The bolt re-owns to the victim, re-homes on the old shooter
     /// (f146), refills life, relinks at the victim, and flies on.
     ///
-    /// APPROX register: the human's mana debit is skipped (the MC1
-    /// player-arm INTERIM — the wizard ledger is world-side); the
-    /// returned bolt's xtype/xsubtype re-key (EF:55299) is ported
-    /// for the human shooter only (3,0 — a pool shooter id has no
-    /// O(1) slot resolve); pool victims deflect on the authored
-    /// 0x8000 shield bit and always scatter — RIVAL windows are not
-    /// yet mirrored onto their entities (the rival-track "Rebound
-    /// tiering" item).
+    /// Deliberate approximations: the human's mana debit is skipped
+    /// (the wizard ledger is world-side); the returned bolt's
+    /// xtype/xsubtype re-key (EF:55299) is ported for the human
+    /// shooter only (3,0 — a pool shooter id has no O(1) slot
+    /// resolve). OPEN: pool victims deflect on the authored 0x8000
+    /// shield bit and always scatter — RIVAL windows are not yet
+    /// mirrored onto their entities.
     pub(crate) fn mc2_rebound_deflect(&mut self, i: usize, hit: MailTarget, ctx: &MobCtx) -> bool {
         // The victim's live-window test (retail `word[0] & 0x8010`).
         let (active, precise) = match hit {
@@ -274,7 +267,8 @@ impl Gen {
         {
             return false;
         }
-        // Cost gate + debit (pool victims; the human INTERIM-skips).
+        // Cost gate + debit (pool victims; the human skips,
+        // deliberate).
         let quarter = (self.ent[i].f140 / 4).max(0);
         if let MailTarget::Pool(j) = hit {
             if quarter > self.ent[j].f140 {
@@ -380,8 +374,8 @@ impl Gen {
     /// variant additionally mails its subSpell (200, `sub_11900`)
     /// and arms the mobilize stun. Then self-despawn.
     ///
-    /// The flight-struct channels have ported homes since the 4.4
-    /// flight arm: `moveSpeed_0x14C_332` 0..3 stagger ramp (65) and
+    /// The flight-struct channels have ported homes:
+    /// `moveSpeed_0x14C_332` 0..3 stagger ramp (65) and
     /// the `mobilizeCounter_0x14E_334` stun latch (66) queue through
     /// `Gen::mc2_debuffs` into the boundary's
     /// `flight::Mc2Ext`; the kick rides `player_knock` (backward =
@@ -432,8 +426,8 @@ impl Gen {
     /// heading, victim and carried damage. Routed: fire, big
     /// explosion, meteor, whirlwind, blast23, and the (10,65)/(10,66)
     /// debuff stamps (the (9,20)/(9,21) lobs' payloads). Unported
-    /// effects apply the damage directly (module-doc APPROX) and
-    /// count the misfit.
+    /// effects apply the damage directly (deliberate) and count the
+    /// misfit.
     fn mc2_proj_impact(&mut self, i: usize, victim: u16, ctx: &MobCtx) {
         let (fc, fm, x, y, z, id, yaw, dmg) = {
             let e = &self.ent[i];
@@ -461,16 +455,13 @@ impl Gen {
             //
             // The magnet manifests ONLY when the possession actually
             // CLAIMS A MANA SPHERE — retail's magnet rides the claimed
-            // ball. A possession bolt that misses mana "evaporates
-            // without trace" and must NOT drop a free-floating magnet
-            // at its empty-space / terrain detonation (player-confirmed
-            // 2026-07-13: the old unconditional spawn made a redundant
-            // magnet wherever the bolt happened to expire). Building /
-            // worm possession does NOT magnet either — the player
-            // suspects buildings never attracted mana; gate to spheres
-            // pending a retail trace. (T2's building-lock bit — forced
-            // claim + `byte[2]&0x20` — and the deferred building-attract
-            // question are both the rival track's.)
+            // ball; a bolt that misses mana must NOT drop a
+            // free-floating magnet at its empty-space / terrain
+            // detonation. Building / worm possession does NOT magnet
+            // either — gate to spheres (deliberate, pending a retail
+            // trace). OPEN (rival track): T2's building-lock bit
+            // (forced claim + `byte[2]&0x20`) and the building-attract
+            // question.
             (10, 54) | (10, 69) => {
                 self.area_write(i, 1, dmg as u32, ctx, false, false);
                 let claimed_mana = victim != PLAYER_TARGET
@@ -494,9 +485,7 @@ impl Gen {
             // Crater (spell 16): the action wrapper `sub_66280`
             // (EF:63400-02) overrides the scorch ring's LIFE with the
             // tier charge (6/12/24) — the carve radius grows every
-            // 3rd frame, so life IS the tier scaling. The audit's
-            // "tier-independent" verdict missed this wrapper (F2;
-            // the player's "all 3 levels same" was a real bug).
+            // 3rd frame, so life IS the tier scaling.
             (10, 11) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_scorch_ring(x, y, z);
@@ -508,9 +497,7 @@ impl Gen {
             // Meteor (spell 9): the action wrapper `sub_66180`
             // (EF:63372-73) overrides the impact's maxLife with the
             // tier charge `byte_0x46_70` (life_0x1A = 2/5/10) — the
-            // per-tier fuse. Without it every tier ran the ctor
-            // default 10 ticks/rings identically (T0 too wide, T2
-            // "not powerful enough" — docs/spell-audit/meteor.md).
+            // per-tier fuse (docs/spell-audit/meteor.md).
             (10, 17) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_meteor(x, y, z);
@@ -524,15 +511,12 @@ impl Gen {
             // The ground/quake family (docs/spell-audit/quake-family
             // .md + gravity-cavein.md): each spell's projectile impact
             // routes to a terrain effect whose handler is already
-            // ported — they were only missing this dispatch arm and
-            // fell to the misfit branch below ("effect absent"). The
-            // impact tail propagates the tier's subSpell→f140 (damage)
-            // and leaves f71 as the ctor's phase seed.
+            // ported. The impact tail propagates the tier's
+            // subSpell→f140 (damage) and leaves f71 as the ctor's
+            // phase seed.
             // Tremor (spell 15): `sub_677D0` (EF:59128-32) sets BOTH
             // lives to `charge & 0xF0` (60/80/120 → 48/80/112) and
-            // zeroes the phase seed — resolving the audit's open
-            // question (the wrapper DOES zero byte_0x46_70; the ctor's
-            // flat 120 life was the divergence). F2.
+            // zeroes the phase seed (byte_0x46_70).
             (10, 71) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_fissure(x, y, z);
@@ -547,10 +531,7 @@ impl Gen {
             // Earthquake (spell 17): the action wrapper `sub_66160`
             // (EF:63333-35) sets the trail's LIFE = 1× charge
             // (16/32/64), life ONLY — the 8× law belongs to
-            // whirlwind's sub_678E0 alone and had been copied here
-            // (F1; the tier ×2 relative scaling the player confirmed
-            // holds under both laws — absolute reach is now 8×
-            // shorter, re-check at playtest).
+            // whirlwind's sub_678E0 alone.
             (10, 15) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_fire_trail(x, y, z);
@@ -562,7 +543,7 @@ impl Gen {
             // Volcano (spell 18): `sub_66250` (EF:63388-90) overrides
             // the dome's MAX life (the radius law R = maxLife|1 →
             // 7/9/11 per tier) and zeroes the phase seed; act_life
-            // (the raise duration 17) stays the ctor's. F2.
+            // (the raise duration 17) stays the ctor's.
             (10, 9) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_dome(x, y, z);
@@ -573,8 +554,7 @@ impl Gen {
                 s
             }
             // Gravity Well (spell 20): `sub_677A0` (EF:59112-14) sets
-            // the flood's LIFE = charge (16/26/40) + phase 0; the
-            // ctor's flat 120 was the divergence. F2.
+            // the flood's LIFE = charge (16/26/40) + phase 0.
             (10, 67) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_flood(x, y, z);
@@ -588,9 +568,8 @@ impl Gen {
             // action 27, EF:59109-22) overrides `AddWind`'s ctor life
             // with `8 * byte_0x46_70` (the tier charge) — THIS is what
             // scales Tornado I/II/III (row-21 tier lives 5/10/10 →
-            // 40/80/80 ticks). Without it every tier cast at the ctor
-            // default 500 and roamed identically (player-reported
-            // 2026-07-13 "Tornado I/II/III nearly identical").
+            // 40/80/80 ticks). Without it every tier casts at the ctor
+            // default 500 and roams identically.
             (10, 22) => {
                 let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_whirlwind(x, y, z);
@@ -606,9 +585,7 @@ impl Gen {
             // (EF:246b50) spawns the (10,76) fire orb via `sub_65C20`,
             // then overrides the head's maxLife to 30 — a brief burst
             // vs the level's 80-life authored firestorm; the chain
-            // despawns with the head. Missing here → the (10,76) impact
-            // fell to the misfit arm and degraded to a bare damage
-            // write (player-reported "misfit (10,76) x1" 2026-07-13).
+            // despawns with the head.
             (10, 76) => {
                 let s = self.mc2_spawn_fire_orb(x, y, z);
                 if let Some(s) = s {
@@ -662,8 +639,8 @@ impl Gen {
             // node ring, collapsed to a direct ring here). The creature
             // MODEL rides f71 (19/2 firefly-or-bee, 25 Cymmerian, 16
             // wyvern), which also sets the army size. NOT a quake — the
-            // "byte_0x44_68 = 72" is a MODEL, re-traced (player-confirmed;
-            // docs/spell-audit/summon-creatures.md Part B).
+            // `byte_0x44_68 = 72` is a MODEL
+            // (docs/spell-audit/summon-creatures.md Part B).
             (10, 72) => {
                 let model = self.ent[i].f71;
                 self.mc2_spawn_summon_ring(x, y, model, id);
@@ -725,9 +702,7 @@ impl Gen {
         // world tick drains the mail into the book. Rival and
         // creature owners never award — sub_6D8B0's own guard is
         // `class == 3 && model == 0`, the HUMAN wizard only
-        // (EF:58240-41, decompile-verified 2026-07-15: the review's
-        // B17 "award any wizard owner" claim is REFUTED — retail
-        // rivals have no spell-XP progression at all).
+        // (EF:58240-41); retail rivals have no spell-XP progression.
         if victim != 0 && id == PLAYER_TARGET && self.ent[i].flags & F_MC2PROJ != 0 {
             let spell = self.ent[i].f40;
             if spell < 26 {
@@ -740,12 +715,11 @@ impl Gen {
     /// `sub_66750` (EF:58268) — the tier-0 LIGHTNING BEAM: a ONE-TICK
     /// hitscan, not a traveling ball. Retail walks the aim ray to the
     /// first blocker and detonates the `(10,23)` blast there the same
-    /// tick. The tested flyer core already marches, probes, applies the
+    /// tick. The flyer core already marches, probes, applies the
     /// terrain/victim law, and detonates the `(10,23)` impact with XP —
     /// so run it to COMPLETION here (until it despawns or its ~9-step
     /// reach expires) rather than one step per tick. Net: fire → instant
-    /// flash → gone, re-laid every RAPID tick (the authentic crackle),
-    /// instead of the old crawling slow-bolt stream
+    /// flash → gone, re-laid every RAPID tick (the authentic crackle)
     /// (docs/spell-audit/lightning.md §5.A). The jagged cosmetic trail
     /// nodes are presentation, omitted (keeps the sim RNG-order stable).
     pub(crate) fn mc2_lightning_beam_tick(&mut self, i: usize, ctx: &MobCtx) {
@@ -765,9 +739,8 @@ impl Gen {
         }
         // Lay the VISIBLE jagged flash: `sub_66750`'s cosmetic sprite-216
         // trail (EF:58320) from the muzzle to the impact. Without it the
-        // one-tick beam despawns before it can render (player-reported
-        // 2026-07-13: "the visual projectile flash is completely
-        // absent"). `i` is despawned here but its fields are still live.
+        // one-tick beam despawns before it can render. `i` is despawned
+        // here but its fields are still live.
         let end = {
             let e = &self.ent[i];
             (e.x, e.y, e.z)
@@ -854,9 +827,9 @@ impl Gen {
     /// terrain law, the water splash, life expiry, and the
     /// (f68, f69) impact spawn.
     ///
-    /// TERRAIN LAW (docs/traces/mc2-projectile-terrain-water.md —
-    /// corrects the round-2 "shared skim" reading): every ballistic
-    /// state DETONATES on terrain contact (`getTerrainAlt > z`,
+    /// TERRAIN LAW (docs/traces/mc2-projectile-terrain-water.md):
+    /// every ballistic state DETONATES on terrain contact
+    /// (`getTerrainAlt > z`,
     /// EF:62950/63135 — the contact clamp only places the burst);
     /// POSSESSION (action 18) alone runs a PRE-move ground-raise
     /// (EF:63262-64) and therefore skims — and has NO water arm.
@@ -874,12 +847,10 @@ impl Gen {
                 // acquisition sites already apply the same raise.
                 // Without it the meteor aims a half-box low every
                 // homing tick and grazes under small high-altitude
-                // flyers (playtest 2026-07-18, wyverns on level 024).
-                // The PLAYER is a raised victim too — retail's player
-                // is a boxed pool wizard and `sub_65580` lifts it like
-                // any other; the pose-only player's box center is
-                // pz + PLAYER_HH (playtest item 13: every pyramid
-                // attack homed on the player's FEET and dealt nothing).
+                // flyers. The PLAYER is a raised victim too — retail's
+                // player is a boxed pool wizard and `sub_65580` lifts
+                // it like any other; the pose-only player's box center
+                // is pz + PLAYER_HH.
                 let target = self.ent[i].f146;
                 let tz = if target == PLAYER_TARGET {
                     tz + crate::mc1::combat::PLAYER_HH as i16
@@ -909,11 +880,10 @@ impl Gen {
                     // lock and snap pitch (EF:63106-19, the
                     // "assisted not locked" launch feel —
                     // docs/traces/mc2-mouse-aim.md §5; action 29 =
-                    // the charged body, same law APPROX, provenance
-                    // OPEN); every other state snaps both axes (the
-                    // generic init law, EF:62907-13). No target =
-                    // snapshot and fly straight (the retail
-                    // else-arm).
+                    // the charged body, same law, provenance OPEN);
+                    // every other state snaps both axes (the generic
+                    // init law, EF:62907-13). No target = snapshot and
+                    // fly straight (the retail else-arm).
                     if self.mc2_autoaim(i, ctx) {
                         let (yaw, dy, dp, act) = {
                             let e = &self.ent[i];
@@ -949,10 +919,9 @@ impl Gen {
         // end-point-only test TUNNELS at cast speeds (the boost
         // clamp allows up to 0x2000/tick, and several projectile
         // sprites carry a zero-width box, e.g. the fireball's row
-        // 340 speed_6 = 0 — playtest-12 round 2, "fireball flies
-        // through its target"). March the chord in ≤128-unit
-        // sub-steps and probe each; the movement itself stays the
-        // single polar step (trajectory unchanged).
+        // 340 speed_6 = 0). March the chord in ≤128-unit sub-steps
+        // and probe each; the movement itself stays the single polar
+        // step (trajectory unchanged).
         // Possession (action 18) rides the CLAIM probe `sub_108B0`
         // (`claim_victim_scan`) instead of the generic `sub_10780` —
         // it detonates only on claimable targets (mana spheres,
@@ -1076,9 +1045,7 @@ impl Gen {
                 // (`sub_10C80`'s 3-D window) reaches the victim. At
                 // the raw origin a tall-offset flyer (wyvern f78 ≈
                 // 937 retail-derived) sat entirely above its own
-                // burst — "meteors barely hurt them" (playtest
-                // 2026-07-18 round 2). Class-2 exempt like every
-                // sub_65580 site.
+                // burst. Class-2 exempt like every sub_65580 site.
                 let (vx, vy, vz) = {
                     let t = &self.ent[v];
                     let lift = if t.class64 != 2 { t.f78 as i16 } else { 0 };
@@ -1091,7 +1058,7 @@ impl Gen {
                 // The player is a raised victim too (see the Pool arm:
                 // retail's player wizard gets the same `sub_65580`
                 // lift) — land at the box center so the burst's area
-                // window brackets the player (playtest item 13).
+                // window brackets the player.
                 self.move_relink(
                     i,
                     ctx.px,
@@ -1181,10 +1148,9 @@ impl Gen {
         // 2-D: retail's `v8 = EuclideanDistXYZ_58490` (EF:55125 /
         // castle twin EF:55181) never reads z — both the 5120 gate
         // and the score's projection terms ride the HORIZONTAL
-        // distance; the 3-D translation double-weighted altitude and
-        // rejected high/low targets early (2026-07-18 distance
-        // audit). The candidate prefilters stay genuinely 3-D
-        // (sub_583F0, below).
+        // distance; reading z here double-weights altitude and
+        // rejects high/low targets early. The candidate prefilters
+        // stay genuinely 3-D (sub_583F0, below).
         let dist = dh as i64;
         if dist > 5120 {
             return None;
@@ -1201,8 +1167,8 @@ impl Gen {
     // `sub_67CB0` (EF:54710) — the auto-target acquisition, split
     // into the pure scan (`mc2_aim_scan`, shared with the crosshair
     // instrument) + the mutating first-tick lock (`mc2_autoaim`).
-    // Best scorer result wins, first-scanned breaks ties. APPROX
-    // register (cited):
+    // Best scorer result wins, first-scanned breaks ties.
+    // Deliberate approximations (cited):
     // - the owner's lock range rides the wizard row 59's v_28
     //   (4096 — every class-9 row carries the same value; the
     //   out-of-pool human has no row156);
@@ -1268,7 +1234,7 @@ impl Gen {
             // LIGHTNING's wizard scan runs a TIGHT pitch cone
             // (sub_67CB0 case 9: 0x71/0x71 for the wizard list vs
             // 0x71/0x200 for creatures, EF:54889-933 — the only
-            // model where the two differ; F4). The table pc stays
+            // model where the two differ). The table pc stays
             // 0x200 for the creature/sphere branches below.
             let wiz_pc = if probe.model == 9 { 0x71 } else { pc };
             for v in 1..self.ent.len() {

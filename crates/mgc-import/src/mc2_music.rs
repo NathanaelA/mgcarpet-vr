@@ -15,14 +15,12 @@
 //! GAME1, GAME2, GAME3, SETUP, INTRO, CUTS.
 //!
 //! Gameplay music = driver G, **bank 0** (the "C2" = Magic Carpet 2
-//! set — `musicChannel_E3814 = 0`, Sound.cpp:49, never reassigned;
-//! player-ear-confirmed 2026-07-12). Bank 1 is the "C1" MC1-set
-//! alternate behind the hidden `-music2` flag (EF:39191/43023 gated
-//! by `setting_byte4_25 & 0x40`) — a future opt-in, NOT the default;
-//! baking bank 1 was the wrong-gameplay-tracks bug (review
-//! 2026-07-15 D4 fixed this header's stale claim). MapType picks
-//! GAMEn (Night=1, Day=2, Cave=3 → sub-song n-1), the menu plays
-//! SETUP (track 4 → sub-song 3).
+//! set — `musicChannel_E3814 = 0`, Sound.cpp:49, never reassigned).
+//! Bank 1 is the "C1" MC1-set alternate behind the hidden `-music2`
+//! flag (EF:39191/43023 gated by `setting_byte4_25 & 0x40`) — an
+//! opt-in, NOT the default. MapType picks GAMEn (Night=1, Day=2,
+//! Cave=3 → sub-song n-1), the menu plays SETUP (track 4 → sub-song
+//! 3).
 
 /// One named sub-song: (`C2GAME1.GEN`, parsed XMI).
 pub struct SubSong {
@@ -64,7 +62,7 @@ pub fn parse_gm_bank(data: &[u8], bank: usize) -> Result<Vec<SubSong>, String> {
             .unwrap(),
     );
     // A corrupt/negative count must not wrap huge through the usize
-    // cast (review 2026-07-15 D7).
+    // cast.
     if banks < 0 || bank >= banks as usize {
         return Err(format!("GM section has {banks} banks, wanted {bank}"));
     }
@@ -80,8 +78,8 @@ pub fn parse_gm_bank(data: &[u8], bank: usize) -> Result<Vec<SubSong>, String> {
     )?;
     // 8-byte prefix + 10-byte stub, then 6 × 32-byte slots in the
     // in-memory field order: {u32 dataOff, u32 stub, u32 size,
-    // u16 word12, u8 filename[18]} (byte-verified — the decompile's
-    // "shadow" struct does NOT match the retail file).
+    // u16 word12, u8 filename[18]} — the decompile's "shadow" struct
+    // does NOT match the retail file.
     let mut names = Vec::new();
     for t in 0..6 {
         let at = 8 + 10 + t * 32 + 14;
@@ -107,8 +105,8 @@ pub fn parse_gm_bank(data: &[u8], bank: usize) -> Result<Vec<SubSong>, String> {
     // The header's per-slot data offsets are shifted one slot (slot
     // 0 doubles as a whole-region aggregate) — the retail ±1
     // load/play skew — so split on the `FORM…XDIR` magics instead:
-    // container order = name order (byte-verified: container 0 opens
-    // at 120 BPM = GAME1).
+    // container order = name order (container 0 opens at 120 BPM =
+    // GAME1).
     let mut starts = Vec::new();
     for at in 0..blob.len().saturating_sub(12) {
         if &blob[at..at + 4] == b"FORM" && &blob[at + 8..at + 12] == b"XDIR" {

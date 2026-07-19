@@ -1,15 +1,15 @@
-//! PR-2 regression (2026-07-15): MC1 Accelerate must survive ALIGNED
-//! thrust under the faithful thrust model. Retail cancels on the v_14
-//! speed-TOUCHED flag (:65144-51), and v_14 arms only when the press
-//! actually moves v_12 (:55766-80) — while boosted, v_12 (±160/240)
-//! sits outside the ±80 input clamp, so the aligned press is inert
-//! and only the RESISTING press cancels. The old `Simulation::step`
-//! MC1 arm (1012805) fired both cancel directions on ANY thrust,
-//! killing hold + re-cast the moment the player flew forward.
+//! MC1 Accelerate must survive ALIGNED thrust under the faithful
+//! thrust model. Retail cancels on the v_14 speed-TOUCHED flag
+//! (:65144-51), and v_14 arms only when the press actually moves v_12
+//! (:55766-80) — while boosted, v_12 (±160/240) sits outside the ±80
+//! input clamp, so the aligned press is inert and only the RESISTING
+//! press cancels. Trap: do NOT fire both cancel directions on ANY
+//! thrust — that kills hold + re-cast the moment the player flies
+//! forward.
 //!
 //! This is the `Simulation`-level companion to the World-level law
-//! test (`accelerate_directions_are_mutually_exclusive`): the bug
-//! lived in the lib.rs input plumbing, which only these steps drive.
+//! test (`accelerate_directions_are_mutually_exclusive`): the input
+//! plumbing under test lives in lib.rs, which only these steps drive.
 
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::spells::SpellId;

@@ -99,8 +99,8 @@ pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result
     // Same root rule as load_level: <baked>/<game>/level-NNN.mgcl —
     // but only trust the inference when the path actually follows the
     // convention (parent dir named after a game). Guessing a root for
-    // an arbitrary path once sprayed a full bake into the working
-    // directory (a bare `mc3:5` inferred root `.`).
+    // an arbitrary path can spray a full bake into the working
+    // directory (a bare `mc3:5` would infer root `.`).
     let parent_is_game = level_path
         .parent()
         .and_then(Path::file_name)

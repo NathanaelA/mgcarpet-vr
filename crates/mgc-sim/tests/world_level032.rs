@@ -56,11 +56,10 @@ fn level_032_entry_portal_spawns_and_teleports() {
     assert_eq!(portals.len(), 1, "the entry portal spawns at init");
     assert_eq!((portals[0].x, portals[0].y), (11, 253));
 
-    // Player-reported regression: the portal spawns 640 units up and
-    // its first tick must both drop it to the ground AND flag the
-    // entity set dirty so the pose consumer redraws it there — even
-    // with zero creatures ticking (032's population is disposition-
-    // gated).
+    // The portal spawns 640 units up and its first tick must both
+    // drop it to the ground AND flag the entity set dirty so the pose
+    // consumer redraws it there — even with zero creatures ticking
+    // (032's population is disposition-gated).
     let far = PlayerPose::from_tiles(100.0, 20.0, 100.0, 0.0, 0.0, 0.0);
     w.entities_dirty = false;
     w.tick(far, PlayerCommand::default());

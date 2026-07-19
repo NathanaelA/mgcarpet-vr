@@ -1,4 +1,4 @@
-//! MC2 class-10 TAIL EFFECTS, Phase 4.3 — the small-count effect
+//! MC2 class-10 TAIL EFFECTS — the small-count effect
 //! band: (10,52) castle anchor, (10,25)/(10,23) one-shot blasts,
 //! (10,17) meteor, (10,15) fire trail + its (10,11→19) ground-fire
 //! spray, (10,54) proximity aura. Trace bank:
@@ -12,16 +12,16 @@
 //!
 //! DELIBERATE APPROXIMATIONS (cited):
 //! - `sub_6D8B0(id, kind, hits)` spellbook reports ((10,17) kind 9,
-//!   (10,23) kind 7, (10,15)'s spray kind — the spell-XP intake)
-//!   land with Phase 4.2; the hit counts are computed and dropped.
+//!   (10,23) kind 7, (10,15)'s spray kind — the spell-XP intake):
+//!   the hit counts are computed and dropped.
 //! - The (10,19) spray's `word_0x33` singleton latch (EF:23962
 //!   registers a new spray and disables the previous one from a
 //!   DIFFERENT action's context) has no ported writer; the release
-//!   write on death is a no-op without it (trace OPEN-6).
+//!   write on death is a no-op without it (OPEN).
 //! - `AddEvent2_847D0` attached lights/children ((10,23)'s
 //!   (128,9,0)) are presentation, unported (the (10,1) note).
 //! - The (10,54) aura scans retail's `dword_38523` creature list —
-//!   our pool slot-order scan is the mobs.rs list APPROX.
+//!   our pool slot-order scan over the mobs.rs list stands in.
 
 use super::sprite_params::SPRITE_PARAMS;
 use crate::mc1::combat::MailTarget;
@@ -32,10 +32,9 @@ use crate::mc1::mobs::MobCtx;
 /// 0x1000_0000) — a free high bit next to the mobs.rs MC2 band.
 // NB: NOT 1 << 29 — that is [`super::proj::F_MC2PROJ`]'s bit, and the
 // whirlwind teardown clears this flag over a radius-12 disc on EVERY
-// entity class (tail of `sub_338D0`), which stripped the MC2-column
-// marker off any projectile caught in the sweep (found by the 4.3b
-// rival sweep: a rival fan-bolt fell to the MC1 handler with an MC2
-// behavior row and crashed the MC1 homing).
+// entity class (tail of `sub_338D0`); reusing 1 << 29 would strip the
+// MC2-column marker off any projectile caught in the sweep, dropping
+// it to the MC1 handler with an MC2 behavior row.
 pub(crate) const F_GRABBED: u32 = 1 << 22;
 
 impl Gen {
@@ -157,8 +156,8 @@ impl Gen {
             return;
         }
         // PRE-decrement life test (`v3 = life; life = v3-1; if (v3
-        // >= 0)`, EF:25905-07) — the post-test cut the storm one
-        // tick short (E27).
+        // >= 0)`, EF:25905-07; a post-test cuts the storm one tick
+        // short).
         let old_life = self.ent[i].act_life;
         self.ent[i].act_life = old_life - 1;
         if old_life < 0 {
@@ -186,12 +185,11 @@ impl Gen {
                     e.f69 = 23; // each beam impacts into (10,23)
                     e.f44 = dmg.clamp(0, u16::MAX as i32) as u16;
                     // `life /= 3` on act_life ONLY, no max_life
-                    // touch, no floor (EF:25928, E27).
+                    // touch, no floor (EF:25928).
                     e.act_life /= 3;
                 }
                 // The thunder is SPAWN-GATED, first pair-iteration
-                // only, keyed on the BEAM (EF:25935-36) — it was an
-                // unconditional storm-owned clap.
+                // only, keyed on the BEAM (EF:25935-36).
                 if k == 0 {
                     self.snd(23, b);
                 }
@@ -251,13 +249,10 @@ impl Gen {
     /// bit0 set / bit3 clear, no RNG) — spawned by the dome summit
     /// and the (10,16) vortex machinery.
     ///
-    /// TRACE CORRECTION (playtest-cave round 2, decompile-verified):
-    /// the m6-doc §0 claim that "a (10,11) THING IS a (10,19)
-    /// entity" is WRONG — retail's creator-table row 0xB is
-    /// `NewAdd0A0B_4E840` (EF:1715 → :35553), the (10,11) SCORCH
-    /// RING below, a 40-tick one-shot. Routing authored (10,11)s
-    /// here gave level 003 thirty-four permanent smoke fountains
-    /// and exhausted the pool.
+    /// A (10,11) THING is NOT a (10,19) entity — retail's
+    /// creator-table row 0xB is `NewAdd0A0B_4E840` (EF:1715 →
+    /// :35553), the (10,11) SCORCH RING below, a 40-tick one-shot.
+    /// (Routing authored (10,11)s here exhausts the pool.)
     pub(crate) fn mc2_spawn_fire_spray(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
@@ -498,10 +493,9 @@ impl Gen {
     /// sprite 210, hover 64 above ground, reclaimable (byte[2] bit
     /// 1), untargetable. Its ACTION is 16 decimal → `sub_32600`, the
     /// ballistic rolling/burning BOULDER — NOT the whirlwind driver:
-    /// the old trace read `0x214110 = sub_33110` for this row, but
-    /// that address belongs to action 0x16 = 22 (dec/hex mixup; the
-    /// class-10 `strA0` row 0x0010 is `0x213600 = sub_32600`,
-    /// EF:1618). The launch impulse is a VELOCITY DELTA in
+    /// `0x214110 = sub_33110` belongs to action 0x16 = 22 (dec/hex
+    /// trap); the class-10 `strA0` row 0x0010 is `0x213600 =
+    /// sub_32600`, EF:1618. The launch impulse is a VELOCITY DELTA in
     /// dest_x/dest_y (`MoveEntity_57FA0` onto the zeroed
     /// `axis_0x9A`, EF:35764-69 — the ball-machinery home), not an
     /// absolute eye point.
@@ -544,9 +538,8 @@ impl Gen {
     /// fire (life 30, subSpell ×3 = 150) where none burns, and
     /// settles when vz ≤ 28; resting, it takes the `sub_58030`
     /// terrain-slope push + 250/256 friction (the mana-ball roll
-    /// law). NO sound, NO player sway, NO XP — the old routing onto
-    /// the whirlwind driver produced all three (player 2026-07-17:
-    /// boulders acted as a cyclone and levelled Whirlwind).
+    /// law). NO sound, NO player sway, NO XP (unlike the whirlwind
+    /// driver).
     pub(crate) fn mc2_boulder16_tick(&mut self, i: usize) {
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
@@ -564,7 +557,7 @@ impl Gen {
         };
         let (px, py) = (x.wrapping_add(vx as u16), y.wrapping_add(vy as u16));
         let mut pz = z.wrapping_add(vz);
-        // Gravity AFTER the step used the old vz (EF:23765-70).
+        // Gravity AFTER the step, on the old vz (EF:23765-70).
         self.ent[i].f44 = (vz - 28).clamp(-384, 256) as u16;
         let ground = self.ground_z(px, py) as i16;
         if ground > pz {
@@ -850,7 +843,7 @@ impl Gen {
         self.mc2_orb_tumble(i);
         // sub_33C00 — the slot-0 damage pass. The hit sound fires
         // PER CARRIER inside the loop (EF:24710-14), not once for
-        // the volley (E27).
+        // the volley.
         let amt = self.ent[i].f140 as u32;
         let mut n = self.ent[i].f54 as usize;
         while n != 0 {
@@ -910,7 +903,7 @@ impl Gen {
     /// adds a half-radius inner pass; `byte > 3` = the terminal
     /// tail-off (life only). Every 4th tick: sprite quad grows to
     /// the radius, sound 10, the type-0 area beat (the id-0xF
-    /// spellbook report banks with 4.2).
+    /// spellbook report is emitted by the spell-XP column).
     pub(crate) fn mc2_fissure_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         if self.ent[i].f71 == 0 {
             let maxl = self.ent[i].max_life as i32;
@@ -945,7 +938,7 @@ impl Gen {
                 self.ent[i].f71 -= 1;
             }
             if v6 > 0 {
-                // Cell center rounds `(pos + 128) >> 8` (EF:29527-28, E27).
+                // Cell center rounds `(pos + 128) >> 8` (EF:29527-28).
                 let (cx, cy) = (
                     (self.ent[i].x.wrapping_add(128) >> 8) as i16,
                     (self.ent[i].y.wrapping_add(128) >> 8) as i16,
@@ -970,7 +963,7 @@ impl Gen {
                     self.snd(10, i);
                     let amt = self.ent[i].f140 as u32;
                     let hits = self.area_write(i, 0, amt, ctx, false, false);
-                    // Tremor batch XP (sub_3A2D0 EF:29580) — F3.
+                    // Tremor batch XP (sub_3A2D0 EF:29580).
                     if hits != 0 && self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                         self.mc2_cast_xp.0.push((self.ent[i].id24, 15, hits as i32));
                     }
@@ -1051,8 +1044,7 @@ impl Gen {
             self.ent[n].f30 = yaw;
             // 2-D: retail's `EuclideanDistXYZ_58490` (EF:24213)
             // never reads z — with the permanent per-node z offset
-            // the 3-D read always overshot the gap and bunched the
-            // tail (2026-07-18 distance audit).
+            // a 3-D read overshoots the gap and bunches the tail.
             let dh2 = Self::dist2_sq(nx, ny, px, py);
             let _ = pz;
             let d = Self::isqrt(dh2 as u32) as i32;
@@ -1076,9 +1068,9 @@ impl Gen {
     /// threshold), spin at yaw-step 204 while grabbed, release past
     /// the far ring (d² >= 5308416), and take the head's 1000
     /// mailbox damage every airborne tick (`sub_11900`). The
-    /// spellbook report (id 0x15) banks with 4.2.
+    /// spellbook report (id 0x15) is emitted by the spell-XP column.
     ///
-    /// APPROX register (cited, the 4.3b grind refines):
+    /// Deliberate approximations (cited):
     /// - the HUMAN player arm (yaw-step 56, threshold 384, camera
     ///   roll crank, actSpeed 80) needs the FlightVerb takeover seam
     ///   (the level-end cinematic's seam) — until then the player is
@@ -1087,20 +1079,18 @@ impl Gen {
     ///   the computed lift z (the row hover clamp needs the behavior
     ///   rows' word_0xa/0xc homes).
     ///
-    /// The victim filter is `sub_33810` VERBATIM (EF:24452-515) as of
-    /// E26: class-2 m7/8; class-3 non-castle, non-own (the ONLY owner
+    /// The victim filter is `sub_33810` VERBATIM (EF:24452-515):
+    /// class-2 m7/8; class-3 non-castle, non-own (the ONLY owner
     /// check retail makes); class-5 minus actions {232,180} and
-    /// models {10,15,18,27,28}; class-10 {13,14,39,57}. The old
-    /// flags&8 + f28-bit0 "superset" gloss was wrong on both counts —
-    /// a subset (class 5 only) AND over-gated.
+    /// models {10,15,18,27,28}; class-10 {13,14,39,57}.
     fn mc2_whirlwind_lift(&mut self, i: usize, ctx: &MobCtx) {
         let (ex, ey, eye_z, id, amt) = {
             let e = &self.ent[i];
             (e.dest_x, e.dest_y, e.f50, e.id24, e.f140 as u32)
         };
         // Cell center rounds: `(pos + 128) >> 8` (EF:29527-28 fissure,
-        // :24273-74 lift, :24531-32 teardown) — truncation shifted the
-        // disc half a tile on the high side (E27).
+        // :24273-74 lift, :24531-32 teardown; truncation would shift
+        // the disc half a tile on the high side).
         let (cx, cy) = (
             (self.ent[i].x.wrapping_add(128) >> 8) as i16,
             (self.ent[i].y.wrapping_add(128) >> 8) as i16,
@@ -1123,8 +1113,8 @@ impl Gen {
                     10 => matches!(c.model65, 13 | 14 | 39 | 57),
                     _ => false,
                 };
-                // The 0x400 reap-skip is port hygiene (not in the
-                // retail gate — avoids acting on reaped slots).
+                // The 0x400 reap-skip is a guard not in the retail
+                // gate (deliberate: avoids acting on reaped slots).
                 if !victim || c.flags & 0x400 != 0 {
                     j = next;
                     continue;
@@ -1205,10 +1195,8 @@ impl Gen {
         // seam; the observable "the funnel drags you in" rides the
         // `player_knock` channel like the flood shove — a pull toward
         // the eye bent ~45° tangentially so it spirals inward rather
-        // than sucking straight through. The old arm only DAMAGED the
-        // player on eye overlap, which is why the outer tornadoes felt
-        // inert (player-reported 2026-07-13: "no violent attraction");
-        // retail's whirlwind sways the wizard, it does not chip HP.
+        // than sucking straight through (deliberate approximation).
+        // Retail's whirlwind sways the wizard, it does not chip HP.
         // Same-owner gate (`sub_33810` case 1, EF:24473: `a2x->id ==
         // a1x->id → return 0`) — your OWN whirlwind never sways you.
         let pd = Self::isqrt(Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32) as i32;
@@ -1220,15 +1208,15 @@ impl Gen {
             let mag = ((((3328 - pd) << 8) / 3328) << 7 >> 8).clamp(8, 80).min(pd);
             self.player_knock = (dir, mag as i16);
         }
-        // The grab-pass batch XP (sub_33340 EF:24407) — F3.
+        // The grab-pass batch XP (sub_33340 EF:24407).
         if hits != 0 && id == crate::mc1::mobs::PLAYER_TARGET {
             self.mc2_cast_xp.0.push((id, 21, hits as i32));
         }
     }
 
-    /// `sub_33710` (EF:24416) — the every-8th-tick CONTACT pass,
-    /// re-traced 2026-07-11 against the list builder (EF:39964-40075,
-    /// the flood-port correction): `dword_38527` is the class-10
+    /// `sub_33710` (EF:24416) — the every-8th-tick CONTACT pass
+    /// against the list builder (EF:39964-40075): `dword_38527` is
+    /// the class-10
     /// MODEL-45 list ⇒ pass 1 mails overlapping village BUILDINGS
     /// (sub_11900 ch0, EF:24428-24430 — no owner gate); pass 2 =
     /// CASTLES (the class-3 list, model 2): the 30-tick shake
@@ -1236,7 +1224,7 @@ impl Gen {
     /// the subSpell mail — also ungated (your own castle takes it).
     /// Overlap = CompareAxisWithShift_10750 (XY-only — the shared
     /// [`Gen::mc2_overlap_xy`]). The `sub_6D8B0(id, 0x15, 2n)`
-    /// report banks with 4.2.
+    /// report is emitted by the spell-XP column.
     fn mc2_whirlwind_contact(&mut self, i: usize) {
         if self.ent[i].f63 & 7 != 0 {
             return;
@@ -1264,7 +1252,7 @@ impl Gen {
             self.mail_write(MailTarget::Pool(j), 0, amt, id);
         }
         // The contact-pass batch XP: +2 per CASTLE struck
-        // (sub_33710 EF:24444, `v1 += 2` per castle) — F3.
+        // (sub_33710 EF:24444, `v1 += 2` per castle).
         if castles_hit != 0 && id == crate::mc1::mobs::PLAYER_TARGET {
             self.mc2_cast_xp.0.push((id, 21, 2 * castles_hit));
         }
@@ -1276,8 +1264,8 @@ impl Gen {
     /// and all 11 nodes down the f54 chain.
     fn mc2_whirlwind_teardown(&mut self, i: usize) {
         // Cell center rounds: `(pos + 128) >> 8` (EF:29527-28 fissure,
-        // :24273-74 lift, :24531-32 teardown) — truncation shifted the
-        // disc half a tile on the high side (E27).
+        // :24273-74 lift, :24531-32 teardown; truncation would shift
+        // the disc half a tile on the high side).
         let (cx, cy) = (
             (self.ent[i].x.wrapping_add(128) >> 8) as i16,
             (self.ent[i].y.wrapping_add(128) >> 8) as i16,
@@ -1327,11 +1315,11 @@ impl Gen {
     /// `sub_33D80` (EF:24787) — the (10,23) tick: ONE latched
     /// `sub_10C80(type 0, 25)` burst + sound 24, then life pinned to
     /// 1 (one more visible tick). The `sub_6D8B0(id, 7, hits)`
-    /// spellbook report banks with 4.2.
+    /// spellbook report is emitted by the spell-XP column.
     pub(crate) fn mc2_blast23_tick(&mut self, i: usize, ctx: &MobCtx) {
         // `v1 = life; dword_0x10_16++; life = v1-1; if (v1 >= 0)` —
         // the OLD life gates, and f26 counts up EVERY tick
-        // (EF:24789-94; the post-test ran one tick short, E27).
+        // (EF:24789-94; a post-test runs one tick short).
         let old_life = self.ent[i].act_life;
         self.ent[i].f26 += 1;
         self.ent[i].act_life = old_life - 1;
@@ -1339,7 +1327,7 @@ impl Gen {
             if self.ent[i].flags & 2 == 0 {
                 let amt = self.ent[i].f140 as u32;
                 let hits = self.area_write(i, 0, amt, ctx, false, false);
-                // Lightning burst batch XP (EF:24802) — F3.
+                // Lightning burst batch XP (EF:24802).
                 if hits != 0 && self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                     self.mc2_cast_xp.0.push((self.ent[i].id24, 7, hits as i32));
                 }
@@ -1356,7 +1344,8 @@ impl Gen {
     /// the once-latch (dword |= 0x10002) on the first tick; the quad
     /// grows with the ring counter (`ShiftRot((768*f26 - 5*sign)>>2,
     /// 512)`); `sub_10C80(type 0, subSpell/maxLife)` = 300/tick (the
-    /// kind-9 spellbook report banks with 4.2); then ONE RING of
+    /// kind-9 spellbook report is emitted by the spell-XP column);
+    /// then ONE RING of
     /// (10,0) fire children at ring f26 — jittered (2 RNG each, cell
     /// pitch 160), id+yaw inherited, `dword |= 0x10080` (byte[0]
     /// bit7 + byte[2] bit0 — the children are DAMAGE-SUPPRESSED
@@ -1379,7 +1368,7 @@ impl Gen {
         self.mc2_shift_rot(i, shift as u16, 512);
         let amt = (self.ent[i].f140 / self.ent[i].max_life as i32) as u32;
         let hits = self.area_write(i, 0, amt, ctx, false, false);
-        // Meteor batch XP (sub_32880 EF:23871) — F3.
+        // Meteor batch XP (sub_32880 EF:23871).
         if hits != 0 && self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
             self.mc2_cast_xp.0.push((self.ent[i].id24, 9, hits as i32));
         }
@@ -1440,20 +1429,17 @@ impl Gen {
         };
         // The trail lays a child SCORCH RING (10,11) — the earth-CARVE
         // (`sub_31FB0` digs the disc −3), NOT the (10,19) ground-fire
-        // SPRAY it was mis-spawning. The spray is a fire effect that
-        // itself spews (10,14) smoke puffs every odd tick, so a trail
-        // dropping one per tick over its 128-life detonated the pool
-        // (player-reported entity-pool exhaustion 2026-07-13) AND
-        // rendered as explosions instead of a travelling crater. Same
-        // (10,11)-vs-(10,19) confusion the cave column already hit
-        // (docs/spell-audit/quake-family.md §Earthquake; the m6-doc §0
-        // numbering trap). f40=15 keys the ring's Earthquake-XP branch.
+        // SPRAY. The spray is a fire effect that itself spews (10,14)
+        // smoke puffs every odd tick, so a trail dropping one per tick
+        // over its 128-life would exhaust the pool. Same
+        // (10,11)-vs-(10,19) confusion as the cave column
+        // (docs/spell-audit/quake-family.md §Earthquake). f40=15 keys
+        // the ring's Earthquake-XP branch.
         if let Some(s) = self.mc2_spawn_scorch_ring(pos.0, pos.1, pos.2) {
             let e = &mut self.ent[s];
             // All THREE pose fields copy (EF:23719-21) — the ring
-            // tick reads f80 (pitch>>8) for its carve radius; f84
-            // alone left the child digging the default disc instead
-            // of the trail's radius 3.
+            // tick reads f80 (pitch>>8) for its carve radius (f84
+            // alone digs the default disc, not the trail's radius 3).
             e.f80 = pitch;
             e.f82 = roll;
             e.f84 = fov;
@@ -1469,7 +1455,7 @@ impl Gen {
     /// ticks a 4-puff ring of (10,14) smoke (yaw start
     /// `(life/2 & 1) << 8`, step 0x200 to 0x800, id inherited);
     /// z snaps to terrain. On death, release the word_0x33 singleton
-    /// (no ported latch — module-doc APPROX). `sub_10C80(ch0, 200)`
+    /// (no ported latch — deliberate; see module doc). `sub_10C80(ch0, 200)`
     /// EVERY tick including the despawn tick.
     pub(crate) fn mc2_fire_spray_tick(&mut self, i: usize, ctx: &MobCtx) {
         let life = self.ent[i].act_life;
@@ -1520,11 +1506,8 @@ impl Gen {
     /// already consumes `dest_x/dest_y` as a decaying drift AND merges
     /// overlapping balls, so the aura writes the pull velocity onto
     /// each ball's dest exactly like [`Self::magnet_tick`] — the
-    /// homing triplet collapses to the same observable motion. The
-    /// original port read this as a CREATURE grip (`mail[4]` over
-    /// class 5), which never touched the balls, so the level-001
-    /// centre magnet did nothing and its mana never consolidated
-    /// (player-reported 2026-07-13).
+    /// homing triplet collapses to the same observable motion
+    /// (deliberate).
     pub(crate) fn mc2_aura_tick(&mut self, i: usize) {
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
@@ -1534,10 +1517,7 @@ impl Gen {
         }
         // dword_0x10_16 = (tile range << 8)² — f26 holds the tile
         // range (ctor default 14; disposition spawn overrides it from
-        // the THING's stageTag, sub_4A310). level-001's staged magnets
-        // carry 33/45/64/31-tile reach, which is how they pull the arm
-        // balls sitting 20-44 tiles out (the 14-tile default never
-        // could — player-reported 2026-07-13).
+        // the THING's stageTag, sub_4A310).
         let r = (self.ent[i].f26 as i32) << 8;
         let range_sq = r * r;
         let (ax, ay) = (self.ent[i].x, self.ent[i].y);
@@ -1548,8 +1528,7 @@ impl Gen {
             }
             // The claim handshake (EF:28364): only an UNCLAIMED ball
             // takes the pull; the ball's tick clears the claim after
-            // consuming it. First aura in slot order keeps the ball —
-            // the old unconditional write was last-writer-wins.
+            // consuming it. First aura in slot order keeps the ball.
             if self.mc2_aura_claim.0.contains_key(&(j as u16)) {
                 continue;
             }
@@ -1563,8 +1542,7 @@ impl Gen {
             let speed = (Self::isqrt(d2 as u32).min(42)) as i32;
             // `angle_of` returns 0..=2048 (2048 = the full-turn wrap);
             // mask to the table's 0..2047 like `advance` does, or a
-            // ball at the exact diagonal panics SIN[2048] (len 2048) —
-            // player crash 2026-07-13 with the magnet pulling a ball.
+            // ball at the exact diagonal panics SIN[2048] (len 2048).
             let dir = (Self::angle_between(c.x, c.y, ax, ay) & 0x7FF) as usize;
             let vx = ((speed * crate::mc1::tables::SIN[dir]) >> 16) as i16;
             let vy = (-((speed * crate::mc1::tables::COS[dir]) >> 16)) as i16;

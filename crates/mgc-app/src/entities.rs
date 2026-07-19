@@ -404,7 +404,7 @@ fn mc2_clrd(palette: &[[u8; 4]; 256], code: u16) -> u8 {
 /// The MC2 minimap entity law — `DrawMinimapEntities_B_61A00` (remc2
 /// GameUI.cpp:951, entity switch :1134-1411), the dot/colour rules on
 /// our full-map view (the rotating-radar projection stays MC1-shaped;
-/// the player asked for the COLORS — MC2 playtest-1).
+/// only the colours follow MC2).
 ///
 /// INTERIM stand-ins (banked): the MSPRD bitmap stamps — class-11
 /// models 0x0C/0x1F (map X-markers 83/84), the class-3 castle flag
@@ -577,16 +577,12 @@ pub fn map_dots_from_poses(
     // (byte_AD167_AD157, BLUE-major per the retail map's blue-violet
     // village dots): [1] = near-black (wild creatures), [16] = dark
     // green (villagers), [3856] = the vivid blue-violet (wild
-    // class-9/10 things — houses, projectiles). The earlier "settlers
-    // are purple" report resolves as these HOUSE dots (2026-07-07,
-    // player screenshot).
+    // class-9/10 things — houses, projectiles).
     let near_black = nearest_palette_index(palette, vga(7, 3, 3));
     // Villager green: retail's LUT[16] decodes to (r0, g1, b0) — a
-    // green so dark the nearest-palette match lands on black (the
-    // playtest-6 "humans show black" report). The player's ground
-    // truth is VISIBLY green dots and the map is gameplay-critical,
-    // so aim at a legible mid-green instead of the literal cube
-    // color (map-marker legibility ruling, 2026-07-05).
+    // green so dark the nearest-palette match lands on black. The map
+    // is gameplay-critical, so aim at a legible mid-green instead of
+    // the literal cube color (deliberate: map-marker legibility).
     let dark_green = nearest_palette_index(palette, vga(8, 32, 8));
     let wild_blue = nearest_palette_index(palette, vga(3, 7, 63));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
@@ -839,9 +835,9 @@ fn push_billboard(
 /// - Castle markers are team-colored UI-SPRITE ICONS in the original
 ///   (begSprTab 58+team / 66+team; balloons 83/84) — pending the
 ///   HSPR/UI-sprite bake; until then castles get a team-blue dot.
-/// - Runtime loose mana balls (the orange / blinking claimed dots the
-///   player reports) are live-class-2 models 1/3 entities spawned at
-///   runtime, not level records — they land with mana mechanics.
+/// - Runtime loose mana balls (the orange / blinking claimed dots)
+///   are live-class-2 models 1/3 entities spawned at runtime, not
+///   level records — they land with mana mechanics.
 /// - Dot blinking, the 2x2 grown dot of one creature sub-case, rival
 ///   name labels (runtime state, not placement).
 pub fn map_dots(things: &[Thing], palette: &[[u8; 4]; 256]) -> Vec<mgc_render::MapDot> {
@@ -909,12 +905,11 @@ fn nearest_palette_index(palette: &[[u8; 4]; 256], rgb: [u8; 3]) -> u8 {
 /// The single-player start: the class-3 model-4 marker in BOTH games
 /// (player start #0 of 8; the original's marker spawner copies its
 /// position into the per-player start table, sub_37720 :44068 — every
-/// shipped MC2 single-player level authors exactly one). An earlier
-/// reading took MC2's (10, 0x52) records for wizard starts; they are
-/// the cave ROOM CARVERS (GenerateEvents pass 1, remc2 Events.cpp:162-
-/// 170 → PrepareEvents case 0x52 = authored box extents), and none in
-/// the shipped data ever matched the old `parent == 0` filter, so the
-/// (3, 4) marker was always the live path. Returns tile-center
+/// shipped MC2 single-player level authors exactly one). MC2's
+/// (10, 0x52) records are cave ROOM CARVERS (GenerateEvents pass 1,
+/// remc2 Events.cpp:162-170 → PrepareEvents case 0x52 = authored box
+/// extents), NOT wizard starts — the (3, 4) marker is the only start
+/// path. Returns tile-center
 /// coordinates. Neither game stores an orientation (both wizards spawn
 /// at engine yaw 0 = our north); altitude re-derives at spawn from
 /// ground height (MC2 places at terrain alt exactly — hover is flight

@@ -142,8 +142,8 @@ impl Val {
                 variants.get(*cur).copied().unwrap_or("?").to_string()
             }
             Val::Scalar { text, .. } => text.clone(),
-            // The hint column already spells out the faithful default;
-            // repeating it here printed it twice on one line.
+            // The hint column already spells out the faithful default,
+            // so don't repeat it here.
             Val::Override { val, .. } => match val {
                 Some(v) => v.clone(),
                 None => "default".into(),
@@ -561,17 +561,15 @@ pub fn registry() -> Vec<Spec> {
             label: "smooth_motion",
             // Purely visual smoothing (the sim is untouched, nothing
             // interactable changes) — Preference, not a fidelity
-            // event, per the player ruling 2026-07-16 that cleanup/
-            // visual preferences never flag the run (prune_owned_jars,
-            // fog_distance). Lives in the enhancement group + cfg
-            // segment by placement directive.
+            // event: cleanup/visual preferences never flag the run
+            // (prune_owned_jars, fog_distance). Lives in the
+            // enhancement group + cfg segment (legacy placement).
             class: Preference,
             key: None,
             cli: None,
             cfg_path: "render.enhancement.smooth_motion",
             // Faithful = OFF (retail steps everything at sim rate);
-            // ships ON as a default-on deviation (player-directed
-            // 2026-07-16, like prune_owned_jars).
+            // ships ON as a deliberate default-on deviation.
             read: |c| Val::Toggle {
                 on: c.render.enhancement.smooth_motion,
                 faithful: false,
@@ -1128,10 +1126,9 @@ pub fn registry() -> Vec<Spec> {
             domain: Gameplay,
             group: "gameplay · enhancement",
             label: "prune_owned_jars",
-            // A cleanup routine, not a fidelity event (player ruling
-            // 2026-07-16): removing jars you can never pick up changes
-            // nothing you could ever interact with, so it does not
-            // flag the run.
+            // A cleanup routine, not a fidelity event: removing jars
+            // you can never pick up changes nothing you could ever
+            // interact with, so it does not flag the run.
             class: Preference,
             key: None,
             cli: Some("--no-prune-owned-jars"),
@@ -1312,9 +1309,9 @@ mod tests {
     #[test]
     fn stock_run_is_faithful() {
         // The deliberate default deviations (prune_owned_jars ON, fog
-        // 50, hud opaque) are all Preference-class now, so a stock run
-        // rolls up FAITHFUL (player ruling 2026-07-16: cleanup/visual
-        // preferences must not flag the run).
+        // 50, hud opaque) are all Preference-class, so a stock run
+        // rolls up FAITHFUL (cleanup/visual preferences must not flag
+        // the run).
         let (verdict, enh, modi) = rollup(&Config::default());
         assert_eq!(modi, 0, "no cheats/instruments on by default");
         assert_eq!(enh, 0, "no enhancement-class deviation by default");

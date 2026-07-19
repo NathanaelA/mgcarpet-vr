@@ -97,9 +97,7 @@ pub fn decode_tmaps(
             // byte-perfect duplicate of the PREVIOUS entry's pixels
             // (152's 90x65 / 155's 40x39) — an authoring bug in the
             // shipped data; the original engine read the same garbage
-            // header, so frame-less is already generous. Verified
-            // against the temperate set (153/156 normal there),
-            // 2026-07-11.
+            // header, so frame-less is already generous.
             warnings.push(format!(
                 "sprite {}: {}x{} with {}-byte payload (flags {:#06x}) — corrupt entry, baked frame-less",
                 entry.index,

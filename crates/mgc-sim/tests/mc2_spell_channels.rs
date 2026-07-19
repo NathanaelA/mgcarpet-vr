@@ -1,5 +1,4 @@
-//! MC2 armed-window channel behaviors (the spell-verification track,
-//! playtest follow-ups 2026-07-13):
+//! MC2 armed-window channel behaviors:
 //!
 //! - **Invisibility (11) break-on-self-cast law** (`sub_5F7E0`
 //!   EF:60987): T0 (any cast) breaks the cloak, T2 (nothing) survives.
@@ -7,10 +6,10 @@
 //!   mana-regen block lifts with the cloak — observable here as
 //!   `mc2_book_view().armed[11]` flipping false.
 //! - **Speed (3) interruptible window** (`GetScroll_69DB0`,
-//!   docs/spell-audit/speed.md): a BRAKE input cancels the window early
-//!   (player 2026-07-14: Speed flies far past where you need). The
-//!   interrupt zeroes the burst timer `f26` too, so the mana-regen
-//!   suppression lifts with the boost — a forward press does not cancel.
+//!   docs/spell-audit/speed.md): a BRAKE input cancels the window
+//!   early. The interrupt zeroes the burst timer `f26` too, so the
+//!   mana-regen suppression lifts with the boost — a forward press
+//!   does not cancel.
 //!
 //! Self-skips without baked mc2 data (game data is optional).
 
@@ -92,9 +91,9 @@ fn mc2_possession_magnet_needs_a_mana_claim() {
     // Mana Magnet (Possession T1) must NOT drop a free-floating magnet
     // where the bolt happens to detonate in empty space — the magnet
     // rides a CLAIMED mana sphere, and a bolt that misses mana
-    // "evaporates without trace" (player-confirmed 2026-07-13). Cast
-    // over open terrain with no mana in the flight path → zero (10,54)
-    // magnet auras exist after the bolt resolves.
+    // "evaporates without trace". Cast over open terrain with no mana
+    // in the flight path → zero (10,54) magnet auras exist after the
+    // bolt resolves.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -207,10 +206,10 @@ fn mc2_invisibility_break_law_per_tier() {
 fn mc2_castle_cost_gate_tracks_live_level() {
     // The castle cast GATE must charge the OWN castle level's live
     // tier-scaled cost — not the stale SetSpell-time `max_life`. The
-    // castle level rises via build with no re-select, so before the fix
-    // the gate kept the level-0 base (1000) and you could recast below
-    // the shown cost (player 2026-07-13). Retail re-syncs via the +1
-    // castle XP on each upgrade; we re-sync at the gate.
+    // castle level rises via build with no re-select, so the gate must
+    // track it (else you could recast below the shown cost). Retail
+    // re-syncs via the +1 castle XP on each upgrade; we re-sync at the
+    // gate.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -319,13 +318,11 @@ fn mc2_castle_cost_gate_tracks_live_level() {
 }
 
 /// The CASTLE spell (2) "active" window is an UPGRADE LOCK that tracks
-/// the tower build, NOT a fixed 101-tick timer (the old bug: the port
-/// armed `f26 = word_0x18 = 101` and counted it down, so the spell stayed
-/// "active" ~2× the build animation, blocking the next upgrade — playtest
-/// 2026-07-14). Retail (`sub_69AB0`/`sub_5F890`) never counts the timer
-/// down; the castle build/upgrade entity holds it and clears it on
-/// completion. Here: casting must raise the lock, and it must drop the
-/// moment the build settles — well before 101 ticks.
+/// the tower build, NOT a fixed 101-tick timer. Retail
+/// (`sub_69AB0`/`sub_5F890`) never counts the timer down; the castle
+/// build/upgrade entity holds it and clears it on completion. Here:
+/// casting must raise the lock, and it must drop the moment the build
+/// settles — well before 101 ticks.
 #[test]
 fn mc2_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
     let Some(root) = baked_root() else {
@@ -394,8 +391,8 @@ fn mc2_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
     assert_eq!(lvl, 1, "the build finished");
     // The lock was engaged during the build...
     assert!(active_ticks > 0, "the castle spell locked during the build");
-    // ...and CLEARED when the build settled, strictly before the old
-    // fixed 101-tick window (the whole point of the fix).
+    // ...and CLEARED when the build settled, strictly before the
+    // 101-tick bound.
     let cleared = cleared_at.expect("the lock cleared after the build");
     assert!(
         cleared < 101,
@@ -407,7 +404,7 @@ fn mc2_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
     // never on the held ticks — unlike a generic channelled spell whose
     // `sub_693F0` suppresses every tick. The port matches: the castle
     // spell is handled outside the generic effect loop and never calls
-    // `suppress_regen` (the old fixed-101 path did, wrongly).
+    // `suppress_regen`.
     // Once cleared, the lock stays clear (no phantom re-arm) while idle.
     for _ in 0..30 {
         w.tick(pose, PlayerCommand::default());
@@ -423,8 +420,8 @@ fn mc2_castle_spell_lock_tracks_the_build_not_a_fixed_timer() {
 fn mc2_lightning_l0_is_a_one_tick_beam() {
     // Lightning L0 (subtype 9) is a one-tick hitscan beam, not a
     // traveling ball — it must flash to its (10,23) blast and be gone,
-    // NOT persist as a slow class-9 bolt (the old "stream of
-    // projectiles"). docs/spell-audit/lightning.md §5.A.
+    // NOT persist as a slow class-9 bolt. docs/spell-audit/lightning.md
+    // §5.A.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -446,9 +443,9 @@ fn mc2_lightning_l0_is_a_one_tick_beam() {
         },
     );
     // The VISIBLE flash: `sub_66750` lays a line of sprite-216 (9,9)
-    // billboards from the muzzle to the impact THIS frame (the crackle).
-    // Without them the one-tick beam despawned before it could render
-    // (player 2026-07-13: "the visual flash is completely absent").
+    // billboards from the muzzle to the impact THIS frame (the
+    // crackle). Without them the one-tick beam despawns before it can
+    // render.
     let flash = count(&w, 9, 9);
     assert!(
         flash > 1,
@@ -473,9 +470,8 @@ fn mc2_lightning_l0_is_a_one_tick_beam() {
 fn mc2_lightning_storm_rains_beams() {
     // Lightning L1/L2 (subtype 12) detonates into the (10,38) STORM
     // cloud (`sub_4FFB0`), which hovers then RAINS (9,9) beams that
-    // strike the ground as (10,23) impacts — NOT the old inert
-    // stand-in that "did nothing" (player 2026-07-13). It must stay
-    // pool-bounded. docs/spell-audit/lightning.md §5.C.
+    // strike the ground as (10,23) impacts. It must stay pool-bounded.
+    // docs/spell-audit/lightning.md §5.C.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -533,8 +529,7 @@ fn mc2_lightning_t3_fans_two_bolts() {
     // Lightning T3 (`life_0x1A == 2`): the cast site `sub_6A5C0` spawns
     // TWO (9,12) charged bolts fanned yaw ±113 off the aim heading and
     // cross-links the pair via f52 (EF:56599-56656) — "two L2 bolts
-    // side by side" (player 2026-07-17: T3 looked identical to T2).
-    // T2 (`life == 1`) stays a single bolt.
+    // side by side". T2 (`life == 1`) stays a single bolt.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -589,8 +584,6 @@ fn mc2_alliance_charms_instead_of_burning() {
     // SAME-SPECIES AREA CHARM (`sub_50800` → `sub_3A650`,
     // EF:36945/29637) — creatures convert to the caster's side (the
     // controlled slot `8m+7`, StageVar2 = 14) and take ZERO damage.
-    // The old (10,0) impact tag burned the target for 400 instead
-    // (player 2026-07-17: "damages monsters instead of allying").
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -670,9 +663,9 @@ fn mc2_alliance_charms_instead_of_burning() {
 fn mc2_volcano_boulders_are_not_cyclones() {
     // (10,16) volcano eruption boulders run `sub_32600` — a ballistic
     // rolling rock that bounces and lights (10,6) standing fires —
-    // NOT the whirlwind driver `sub_33110` (the old trace's action
-    // 16-vs-0x16 dec/hex mixup). Symptoms fixed (player 2026-07-17):
-    // cyclone sound 49 + sway + Whirlwind XP from volcano rocks.
+    // NOT the whirlwind driver `sub_33110` (trap: the boulder is
+    // action 16 DECIMAL, not 0x16). The whirlwind path would add
+    // cyclone sound 49 + sway + Whirlwind XP.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -730,10 +723,8 @@ fn mc2_meteor_flight_does_not_drag_the_fire_loop() {
     // The (9,3) meteor shot lays a decorative (10,0) fire spark EVERY
     // flight tick. Retail's fire-ambient loop latches only from the
     // persistent (10,6) BIG fire (`sub_31760` → `sub_5C870`,
-    // EF:43602-14) — the small-fire trail must NOT arm `fire_near`
-    // and drag the fire-crackle loop along the flight (player
-    // 2026-07-17: "flying meteor crackles"; the over-broad
-    // proximity-key class).
+    // EF:43602-14) — the small-fire trail must NOT arm `fire_near` and
+    // drag the fire-crackle loop along the flight.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -803,10 +794,9 @@ fn mc2_speed_window_interrupts_on_brake() {
         "a forward thrust leaves the Speed window running"
     );
 
-    // Braking INTERRUPTS the window (player 2026-07-14: Speed must be
-    // stoppable — it flies far past where you need). The window clears,
-    // the boost drops, and because the burst timer `f26` is zeroed the
-    // mana-regen suppression lifts with it (armed==false ⇒ f26==0).
+    // Braking INTERRUPTS the window. The window clears, the boost
+    // drops, and because the burst timer `f26` is zeroed the mana-regen
+    // suppression lifts with it (armed==false ⇒ f26==0).
     w.thrust_cancel(-1.0);
     w.tick(pose, PlayerCommand::default());
     assert!(
@@ -825,10 +815,9 @@ fn mc2_earthquake_carves_without_flooding_the_pool() {
     // (the earth-carve, like a moving Crater) — NOT (10,19) ground-fire
     // sprays. The spray is a fire effect that spews (10,14) smoke every
     // odd tick, so a trail dropping one per tick over its 128-life
-    // FLOODED the entity pool (player-reported exhaustion 2026-07-13)
-    // and rendered as explosions. Regression: the spell's entity
-    // footprint stays near the ambient baseline, it lays scorch rings,
-    // and it spawns NO fire spray.
+    // would FLOOD the entity pool and render as explosions. This pins
+    // that the spell's entity footprint stays near the ambient
+    // baseline, it lays scorch rings, and it spawns NO fire spray.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -880,10 +869,9 @@ fn mc2_earthquake_carves_without_flooding_the_pool() {
 #[test]
 fn mc2_fools_mana_throws_six_decoys_that_trap_the_possessor() {
     // Fool's Mana (22) is a SHOTGUN of six neutral fake-mana decoys,
-    // not one real collectible sphere (the old port cast the inverse).
-    // A non-owner possession claim springs the tier retaliation: tier 0
-    // fires ONE fireball at the possessor and the decoy vanishes
-    // (docs/spell-audit/fools-mana.md).
+    // not one real collectible sphere. A non-owner possession claim
+    // springs the tier retaliation: tier 0 fires ONE fireball at the
+    // possessor and the decoy vanishes (docs/spell-audit/fools-mana.md).
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -968,9 +956,9 @@ fn mc2_fools_mana_tier2_retaliates_with_lightning() {
 
 #[test]
 fn mc2_magic_mine_places_a_persistent_mine_not_a_fireball() {
-    // Magic Mine (23) lands a persistent (10,78) proximity mine ahead of
-    // the caster — not a fireball that bursts on first contact (the old
-    // port's bug). With no enemy in range it arms and just sits there
+    // Magic Mine (23) lands a persistent (10,78) proximity mine ahead
+    // of the caster — not a fireball that bursts on first contact. With
+    // no enemy in range it arms and just sits there
     // (docs/spell-audit/magic-mine.md).
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
@@ -1052,8 +1040,8 @@ fn mc2_fools_mana_decoys_do_not_count_toward_world_mana() {
     // The fake decoys carry a random mana value for the disguise, but you
     // can never trip your OWN trap to reclaim them — so they must NOT
     // inflate the world-mana denominator, or their uncollectable share
-    // would dilute the castle-share goal below reachability (player
-    // 2026-07-13; docs/spell-audit/fools-mana.md).
+    // would dilute the castle-share goal below reachability
+    // (docs/spell-audit/fools-mana.md).
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -1171,13 +1159,11 @@ fn mc2_summon_army_spawns_an_allied_ring() {
 
 #[test]
 fn mc2_earthquake_travel_scales_with_tier() {
-    // The earthquake trail's travel distance scales with the spell level
-    // (~2× per tier): life_0x1A {16,32,64} = the trail life 1× (F1,
-    // sub_66160 EF:63333-35 — the 8× law is whirlwind's alone; the
-    // 2026-07-14 player confirmation was of the RELATIVE scaling,
-    // which holds under both laws). The (10,15) trail persists for
-    // its life as it travels, so its total presence is a proxy for
-    // reach.
+    // The earthquake trail's travel distance scales with the spell
+    // level (~2× per tier): life_0x1A {16,32,64} = the trail life 1×
+    // (sub_66160 EF:63333-35 — the 8× law is whirlwind's alone). The
+    // (10,15) trail persists for its life as it travels, so its total
+    // presence is a proxy for reach.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -1221,11 +1207,10 @@ fn mc2_earthquake_travel_scales_with_tier() {
 
 #[test]
 fn mc2_quake_family_lifetimes_scale_with_tier() {
-    // F2 (P1-22): the action wrappers stamp per-tier LIVES onto the
-    // ground effects — Crater `sub_66280` life = charge {6,12,24};
-    // Gravity Well `sub_677A0` life = charge {16,26,40}; Tremor
-    // `sub_677D0` BOTH lives = charge & 0xF0 {48,80,112}. Before the
-    // fix every tier ran the ctor default (40/120/120).
+    // The action wrappers stamp per-tier LIVES onto the ground
+    // effects — Crater `sub_66280` life = charge {6,12,24}; Gravity
+    // Well `sub_677A0` life = charge {16,26,40}; Tremor `sub_677D0`
+    // BOTH lives = charge & 0xF0 {48,80,112}.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;
@@ -1345,9 +1330,7 @@ fn mc2_spell_select_raises_notification_toast() {
 fn mc2_rebound_deflects_and_reowns() {
     // Rebound (spell 8, `sub_68740` EF:55221-310): a hostile bolt
     // striking the shielded player is thrown BACK — re-owned to the
-    // player, heading reversed, life refilled — instead of hitting
-    // (player 2026-07-17: "does not rebound, any of the three
-    // levels" — the engine was never gated into the MC2 movers).
+    // player, heading reversed, life refilled — instead of hitting.
     // T1/T2 scatter ±22 around the reverse ray; T3 (PRECISE) returns
     // it EXACTLY reversed.
     let Some(root) = baked_root() else {
@@ -1411,11 +1394,9 @@ fn mc2_rebound_deflects_and_reowns() {
 fn mc2_whirlwind_duration_law_8x_tier_life() {
     // Whirlwind/Tornado (spell 21) head lifetime = 8 × the tier's
     // `life_0x1A` (`sub_678E0` EF:59202-16), with SPELLS.DAT row 21
-    // lives {5, 10, 10} — so retail T3 lasts exactly as long as T2
-    // BY DESIGN (verified byte-for-byte in the CD image; the T3
-    // lever is per-tick damage 240/10, not duration). Pins the law
-    // so the player's "T3 feels short" report stays answered:
-    // 40 / 80 / 80 ticks.
+    // lives {5, 10, 10} — so retail T3 lasts exactly as long as T2 BY
+    // DESIGN (the T3 lever is per-tick damage 240/10, not duration).
+    // The law: 40 / 80 / 80 ticks.
     let Some(root) = baked_root() else {
         eprintln!("skipping: no baked data");
         return;

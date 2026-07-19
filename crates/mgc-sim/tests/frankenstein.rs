@@ -1,18 +1,14 @@
-//! Born as the Phase-2 EXIT CHECKPOINT (ROADMAP "MULTI-GAME
-//! ARCHITECTURE"): the FRANKENSTEIN smoke test — real MC2 level data
-//! pushed through the superset seam under the MC2 profile (MC2
-//! chassis: 1200-slot THING table, u16 entity LCG, 29 buckets,
-//! instant win latch; MC2 verb column).
+//! FRANKENSTEIN smoke test: real MC2 level data pushed through the
+//! superset seam under the MC2 profile (MC2 chassis: 1200-slot THING
+//! table, u16 entity LCG, 29 buckets, instant win latch; MC2 verb
+//! column). The world builds against the real mc2-night bundle
+//! (search/build/bldgprm + sprites — see `build_world` below).
 //!
-//! At HEAD the MC2 verb columns are LIVE and the world builds against
-//! the real mc2-night bundle (search/build/bldgprm + sprites — see
-//! `build_world` below), so the original "placeholders + MISFIT
-//! spawns over mc1-temperate stand-ins" expectation is history. What
-//! the test still guards: level-000 loads through the seam, ticks
-//! with NO crash, produces a deterministic state stream, and the
-//! fallback ledger stays exactly as pinned at the bottom (damage
-//! still notes the shared player-intake fallback; awake/movement/
-//! objective serve MC2 natively).
+//! Guards: level-000 loads through the seam, ticks with NO crash,
+//! produces a deterministic state stream, and the fallback ledger
+//! stays exactly as pinned at the bottom (damage still notes the
+//! shared player-intake fallback; awake/movement/objective serve MC2
+//! natively).
 
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
@@ -112,12 +108,11 @@ fn mc2_level_through_the_seam_no_crash_deterministic() {
     // things cross the spawn seam (the sweep only trips whatever
     // trigger volumes it happens to overlap), then run the world on.
     //
-    // KNOWN COLLISION, banked for the Phase-3 registry: MC2's
-    // class-0 (Conditional Spawn) collides with the MC1 table's
-    // class-0 EMPTY-SLOT SENTINEL — the disposition scan skips those
-    // records entirely, so they can never reach the misfit ledger
-    // through this arm. The MC2 spawn column must key emptiness
-    // differently.
+    // KNOWN COLLISION: MC2's class-0 (Conditional Spawn) collides with
+    // the MC1 table's class-0 EMPTY-SLOT SENTINEL — the disposition
+    // scan skips those records entirely, so they can never reach the
+    // misfit ledger through this arm. OPEN: the MC2 spawn column must
+    // key emptiness differently.
     let mut w = build_world(&root).unwrap();
     let idle = PlayerCommand::default();
     for dis in 1..=64 {
@@ -136,20 +131,18 @@ fn mc2_level_through_the_seam_no_crash_deterministic() {
     println!("misfits (class, model, count): {:?}", w.misfits());
     println!("live things after census: {}", w.live_things().len());
 
-    // Phase-4.3 state of the seam: the MC2 registry admits the full
-    // creature roster including the MULTIPART subsystem (0/3/22/27)
-    // — the honest misfits left are (5,10)/(5,15), the class-10
-    // effect middle band and class-15 spell tokens. The SLICE
-    // creatures spawn as live MC2 class-5 entities, and BUILDINGS
-    // spawn live (never ledgered).
+    // The MC2 registry admits the full creature roster including the
+    // MULTIPART subsystem (0/3/22/27) — the honest misfits left are
+    // (5,10)/(5,15), the class-10 effect middle band and class-15
+    // spell tokens. The SLICE creatures spawn as live MC2 class-5
+    // entities, and BUILDINGS spawn live (never ledgered).
     assert!(
         !w.misfits().iter().any(|&(c, m, _)| c == 10 && m == 45),
         "buildings are ported — the ledger must not contain (10,45): {:?}",
         w.misfits()
     );
     // Pool view, not live_poses: the building billboard is the owner
-    // FLAG, drawn only once claimed (the PLAYTEST-2 flag fix) — the
-    // entities exist regardless.
+    // FLAG, drawn only once claimed — the entities exist regardless.
     assert!(
         w.debug_pool()
             .1
@@ -179,8 +172,7 @@ fn mc2_level_through_the_seam_no_crash_deterministic() {
         "the (5,3) multipart flyer spawns live"
     );
 
-    // The fallback ledger SHRINKS as Phase 3 lands arms (the file
-    // doc's contract): awake/movement/objective now serve MC2 —
+    // The fallback ledger: awake/movement/objective serve MC2 —
     // damage still falls back, and targeting only for the player's
     // MC1 spells (none cast in this run).
     let fallbacks = w.verb_fallbacks();

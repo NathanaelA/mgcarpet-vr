@@ -21,7 +21,8 @@ pub const CHANNELS: usize = 32;
 /// FLAC rate (44100/22050) rarely matches the device rate, and reading
 /// the nearest source frame (zero-order hold) stair-steps the waveform
 /// into a harsh high-overtone buzz that reads as "grainy, low-bit-depth"
-/// audio; interpolating removes it (same treatment the SFX lane gets).
+/// audio; interpolating removes it (deliberate; same treatment the SFX
+/// lane gets).
 #[inline]
 fn lerp_i16(a: i16, b: i16, t: f32) -> f32 {
     let a = f32::from(a);
@@ -102,9 +103,9 @@ struct Channel {
     /// after a `Stop` (remaining gain `g`, 1.0 → 0.0), then it clears.
     /// A hard `pcm = None` cut mid-waveform steps the output to zero in
     /// one sample — an audible click; the meteor's fire trail restarts
-    /// the same voice ~24×/s, so those clicks stack into the reported
-    /// crackle. A ~2.5 ms fade removes them without touching the
-    /// (faithful) retrigger cadence. `None` = playing normally.
+    /// the same voice ~24×/s, so those clicks stack into a crackle. A
+    /// ~2.5 ms fade removes them without touching the (faithful)
+    /// retrigger cadence (deliberate). `None` = playing normally.
     release: Option<f32>,
 }
 
@@ -118,9 +119,8 @@ struct MusicState {
     looped: bool,
     /// Declick release for StopMusic / track replacement: `Some(g)` =
     /// ramping out; at 0 the stream clears (and `pending` installs).
-    /// Same artifact class the ~2.5 ms SFX release fixed — a hard
-    /// `pcm = None` mid-waveform is an audible click/thump (review
-    /// 2026-07-15 D6).
+    /// A hard `pcm = None` mid-waveform is an audible click/thump —
+    /// the same ~2.5 ms ramp the SFX lane uses (deliberate).
     release: Option<f32>,
     /// The next track, installed once the release ramp completes.
     #[allow(clippy::type_complexity)]
@@ -143,7 +143,8 @@ pub struct Renderer {
     release_step: f32,
     /// Game pause: stream silence, hold every play position.
     suspended: bool,
-    /// The pause edge ease (D6): 1 = running, 0 = fully muted.
+    /// The pause edge ease (deliberate: retail mutes instantly): 1 =
+    /// running, 0 = fully muted.
     suspend_gain: f32,
 }
 
@@ -251,7 +252,7 @@ impl Renderer {
                 let step = ((f64::from(sample_rate) / self.out_rate) * (1u64 << 32) as f64) as u64;
                 if self.music.pcm.is_some() {
                     // Replace: ramp the playing track out first, then
-                    // install (declick, review 2026-07-15 D6).
+                    // install (declick).
                     self.music.pending = Some((pcm, overlay, channels.max(1), step, looped));
                     if self.music.release.is_none() {
                         self.music.release = Some(1.0);
@@ -269,7 +270,7 @@ impl Renderer {
             }
             Cmd::MusicOverlayGain { gain } => self.music.overlay_gain = gain,
             Cmd::StopMusic => {
-                // Ramp out instead of the hard cut (D6).
+                // Ramp out instead of the hard cut.
                 self.music.pending = None;
                 if self.music.pcm.is_some() && self.music.release.is_none() {
                     self.music.release = Some(1.0);
@@ -302,8 +303,7 @@ impl Renderer {
         if self.suspended && self.suspend_gain <= 0.0 {
             // Game pause: silence, positions held (retail suspends
             // ALL sound and resumes where it left off). The edge in
-            // and out is eased by `suspend_gain` below — the old
-            // instant mute/unmute stepped mid-waveform (D6).
+            // and out is eased by `suspend_gain` below.
             out.fill(0.0);
             return;
         }
@@ -366,7 +366,7 @@ impl Renderer {
                 }
                 if !music_done {
                     // Interpolate between the current and next frame
-                    // (wrapping when looped) — nearest-neighbor here was
+                    // (wrapping when looped) — nearest-neighbor here is
                     // the "grainy" music artifact ([`lerp_i16`]).
                     let frac = (self.music.pos & 0xFFFF_FFFF) as f32 / 4294967296.0;
                     let next = if idx + 1 < frames {
@@ -410,7 +410,7 @@ impl Renderer {
                     r += mr / 32768.0 * self.music_gain * self.duck_gain * rel;
                     self.music.pos += self.music.step;
                     // Advance the release; at silence, clear (and
-                    // install the pending replacement — D6 declick).
+                    // install the pending replacement — declick).
                     if let Some(g) = self.music.release.as_mut() {
                         *g -= self.release_step;
                         if *g <= 0.0 {

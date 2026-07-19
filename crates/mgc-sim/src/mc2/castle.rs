@@ -1,45 +1,33 @@
-//! The MC2-NATIVE CASTLE COLUMN — class-3 model-2 and its court:
-//! the THREE castle actionIndices (4 = standing tick, 5 = build
-//! state machine, 6 = destroy-one-level), the MC2 HP/CAP ladder,
-//! the straight-subtract intake, the sphere-absorb + overflow-eject
-//! mana economy, the (3,3) balloon fleet, the (5,15) guard slots,
-//! the (10,42) build painter and the (10,79) defender stage pieces.
-//!
-//! Traces: docs/traces/mc2-castle-builder.md +
-//! mc2-castle-runtime.md + mc2-castle-open-items.md (the correction
-//! pass) + mc2-castle-data-tables.md. Citations are `EF:line` into
-//! the vendored remc2 `engine/EventsFunctions.cpp`.
+//! The MC2-native castle column — class-3 model-2 and its court: the
+//! three castle actionIndices (4 = standing tick, 5 = build state
+//! machine, 6 = destroy-one-level), the MC2 HP/CAP ladder, the
+//! straight-subtract intake, the sphere-absorb + overflow-eject mana
+//! economy, the (3,3) balloon fleet, the (5,15) guard slots, the
+//! (10,42) build painter and the (10,79) defender stage pieces.
+//! Citations are `EF:line` into vendored remc2
+//! `engine/EventsFunctions.cpp`; traces in docs/traces/mc2-castle-*.md.
 //!
 //! Structural key: MC1 keeps ONE castle action (5) with `f59`
 //! sub-states; MC2 moves the phase to the actionIndex itself —
 //! `tick70` 4/5/6 — and `f59` (retail `word_0x2E_46`) is the
 //! within-action-5 build sub-state. The quake/whirlwind grab's
-//! `f50 = 30` write (mc2::flood) is CONSUMED here as the settle
-//! timer (EF:61057-61078): intake pauses while it runs — the same
-//! "mailbox accrues during the shake" shape as MC1.
+//! `f50 = 30` write (mc2::flood) is consumed here as the settle timer
+//! (EF:61057-61078): intake pauses while it runs.
 //!
-//! Trace corrections banked during this port (verified against the
-//! decompile, see ROADMAP): `word_0x80_128` is the UPGRADE-request
-//! channel (written by the delivered castle cast `sub_389F0`
-//! EF:28240 with the companion `word_0x7C_124 = 10` — the exact
-//! MC1 ch5 `(10, owner)` token protocol, so the MC1 (10,43) token
-//! serves both columns verbatim); `dword_38519` is the CLASS-3 live
-//! list, so the flood grab DOES target castles (the flood port
-//! stands as-is); `sub_60400` returns (balloons, guards) — the
-//! same quota table as MC1's fleet dispatcher.
+//! Retail-law anchors: `word_0x80_128` is the UPGRADE-request channel
+//! (written by the delivered castle cast `sub_389F0` EF:28240 with
+//! `word_0x7C_124 = 10` — the MC1 ch5 (10, owner) token protocol, so
+//! the MC1 (10,43) token serves both columns); `dword_38519` is the
+//! class-3 live list (the flood grab targets castles); `sub_60400`
+//! returns (balloons, guards), the same quota table as MC1's
+//! sub_47400 :56264.
 //!
-//! APPROX register (all cited inline): the owner "colored" palette
-//! shift (`word_0x5A_90 += TransformPlayerColorIndex`, EF:61139)
-//! rides the renderer's team tint; `sub_5F890` (the Create-Castle
-//! HUD spell-widget ghost sync, EF:61029) has no ported widget —
-//! the calls are no-ops; `sub_6D8B0(owner, 2, 1)` +1 castle XP
-//! (EF:61596) banks with Phase 4.2; the balloon/guard slot arrays
-//! (`array_0x3C_60`/`array_0x5C_92`) are scan-collected like the
-//! MC1 port (same membership, no per-slot indices); cave-level
-//! balloon walking (`sub_60D50`) and the cave ceiling arm wait for
-//! Phase 4.5; the (10,79) defender's target-scan + `sub_6DCA0`
-//! spell launch (EF:30195-30284) bank with the 4.2 cast machinery —
-//! pieces stand, dwell and ground-clamp, but do not fire yet.
+//! Deliberate approximations: the owner palette shift
+//! (`word_0x5A_90 += TransformPlayerColorIndex`, EF:61139) rides the
+//! renderer team tint; `sub_5F890` (Create-Castle HUD widget sync,
+//! EF:61029) is a no-op (no ported widget); the balloon/guard slot
+//! arrays (`array_0x3C_60`/`array_0x5C_92`) are scan-collected (same
+//! membership, no per-slot indices).
 
 use crate::mc1::features::{Gen, tile};
 
@@ -103,8 +91,8 @@ impl Gen {
                 }
             } else {
                 self.ent[i].f50 -= 1;
-                // sub_5F890(a1x, 1): HUD build-ghost sync (APPROX
-                // no-op — no ported widget).
+                // sub_5F890(a1x, 1): HUD build-ghost sync (no-op: no
+                // ported widget).
                 let (x, y) = (self.ent[i].x, self.ent[i].y);
                 self.ent[i].z = self.ground_z(x, y) as i16;
             }
@@ -147,7 +135,7 @@ impl Gen {
                 self.mc2_castle_preclear(i);
                 if self.ent[i].f26 == 0 || self.mc2_castle_space_ok(i) {
                     // Owner palette shift (EF:61137-41): renderer
-                    // team tint (APPROX).
+                    // team tint (deliberate).
                     self.mc2_castle_upgrade(i);
                 } else {
                     self.ent[i].f59 = 2;
@@ -163,7 +151,7 @@ impl Gen {
             // ── abort/pass-done → steady ──
             2 => {
                 self.ent[i].tick70 = 4;
-                // sub_5F890(a1x, 0): ghost reset (APPROX no-op).
+                // sub_5F890(a1x, 0): ghost reset (no-op).
                 self.ent[i].f59 = 0;
             }
             // ── spawn a repaint painter ──
@@ -190,8 +178,7 @@ impl Gen {
                 }
             }
             // ── the (10,41) leveler arm (EF:61162-67): dead code
-            // at runtime — nothing in MC2 ever writes state 5
-            // (verified by a full write-site sweep) ──
+            // at runtime — nothing in MC2 writes state 5 ──
             _ => {}
         }
     }
@@ -204,11 +191,11 @@ impl Gen {
     /// death inside the downgrade still spills the whole bank as
     /// owned (10,39) spheres (the eject's f26==0 arm); roster at
     /// level 0 is a no-op and the state writes are inert on a dead
-    /// entity, matching retail's straight-line body (G2, review
-    /// 2026-07-15 P1-20). Ordering nuance vs retail: our downgrade
-    /// death arm front-loads the balloon conversion where retail
-    /// leaves it to the roster call, so balloon-spheres draw before
-    /// the bank-spheres (same mana, different LCG interleave).
+    /// entity, matching retail's straight-line body. Ordering nuance
+    /// (deliberate): our downgrade death arm front-loads the balloon
+    /// conversion where retail leaves it to the roster call, so
+    /// balloon-spheres draw before the bank-spheres (same mana,
+    /// different LCG interleave).
     fn mc2_castle_destroy(&mut self, i: usize) {
         if !self.free.is_empty() {
             self.mc2_castle_downgrade(i);
@@ -242,10 +229,9 @@ impl Gen {
             self.ent[i].mail[0] = (0, 0);
             result = 1;
             // Owner "castle under attack" HUD flag (byte_0x195_405
-            // = 4). APPROX (G9c): retail latches it for ANY owner
-            // (EF:61752); ours is a single player-side HUD latch —
-            // per-owner records land with a rival defense-AI
-            // consumer.
+            // = 4): retail latches it for ANY owner (EF:61752); ours
+            // is a single player-side HUD latch (deliberate; per-owner
+            // records await a rival defense-AI consumer).
             if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                 self.castle_alert = 4;
             }
@@ -256,7 +242,7 @@ impl Gen {
         // EF:28240 writes word_0x7C_124 = 10 + word_0x80_128 = id).
         // Retail clears the channel only INSIDE the id match
         // (EF:61754-58) — a non-matching value sticks forever
-        // (faithful quirk, G9b; never authored in practice).
+        // (faithful quirk; never authored in practice).
         if self.ent[i].mail[5].1 == self.ent[i].id24 && self.ent[i].mail[5].1 != 0 {
             self.ent[i].mail[5] = (0, 0);
             if self.ent[i].f26 < 7 {
@@ -271,7 +257,7 @@ impl Gen {
     /// stage-piece rebuild, +1 castle XP (`sub_6D8B0(owner,2,1)`
     /// EF:61596 — the ladder that makes Fire/Lightning Tower tiers
     /// selectable; the XP drain's spell-2 branch also re-syncs the
-    /// manifestation tier, retiring the cast-gate hack. F3).
+    /// manifestation tier).
     fn mc2_castle_upgrade(&mut self, i: usize) {
         let lvl = (self.ent[i].f26 + 1).clamp(1, 7);
         // The painter first — retail aborts the whole level-up if
@@ -299,16 +285,13 @@ impl Gen {
     /// unbind = the id24 link simply despawns with the entity).
     fn mc2_castle_downgrade(&mut self, i: usize) {
         if self.ent[i].f26 > 0 {
-            // 10% capacity haircut. Widen to i64 for the multiply: a
-            // castle over-filled past the normal cap ladder (the
-            // level-0 mana-availability bug) can carry an f136 large
-            // enough that `10 * f136` overflows i32 — player crash on
-            // shift+L downgrade 2026-07-13. DOCUMENTED IDEALIZATION
-            // (G9n, FIDELITY.md): retail's i32 `10 * x / 100`
-            // overflows at the always-overflowing level-7 rung
-            // (10 × 300M) into a NEGATIVE cut — a maxed level-7
-            // castle downgrade *raises* its cap and scatters nothing.
-            // We keep the sane 10%.
+            // 10% capacity haircut, computed in i64 (deliberate
+            // idealization): a castle over-filled past the normal cap
+            // ladder can carry an f136 large enough that `10 * f136`
+            // overflows i32. Retail's i32 `10 * x / 100` overflows at
+            // the always-overflowing level-7 rung (10 × 300M) into a
+            // NEGATIVE cut — a maxed level-7 castle downgrade *raises*
+            // its cap and scatters nothing. We keep the sane 10%.
             let cut = (10i64 * self.ent[i].f136 as i64 / 100) as i32;
             self.ent[i].f136 -= cut;
             self.mc2_castle_eject(i);
@@ -430,10 +413,10 @@ impl Gen {
     }
 
     /// `sub_11A10` (EF:4421) — the space check: (a) any OTHER CASTLE
-    /// (dword_38519 = the class-3 list, model-2 filter — EF:4449-51;
-    /// G1, review 2026-07-15 P1-19) overlapping the next-level box →
-    /// no room (z-term omitted: castle fov is pinned 0x4000 both
-    /// sides, so retail's |Δz+Δyaw| < 0x8000 is tautological);
+    /// (dword_38519 = the class-3 list, model-2 filter — EF:4449-51)
+    /// overlapping the next-level box → no room (z-term omitted:
+    /// castle fov is pinned 0x4000 both sides, so retail's
+    /// |Δz+Δyaw| < 0x8000 is tautological);
     /// (b) walk retail's QUIRKY partial ring of border cells between
     /// the current and next footprints — a cell with `mapAngle` bit7
     /// (built/blocked), or on caves bit3 (SEALED), fails
@@ -477,8 +460,8 @@ impl Gen {
             let a = self.t.angle[tile(gx, gy)];
             a & 0x80 != 0 || (self.is_cave() && a & 8 != 0)
         };
-        // Retail's QUIRKY partial band walk, kept VERBATIM
-        // (EF:4464-4535; faithful-quirk ruling, G1): EVERY band —
+        // Retail's QUIRKY partial band walk, kept verbatim
+        // (EF:4464-4535; faithful quirk): EVERY band —
         // the two side slivers included — iterates `my` rows, so
         // the side rows below oy+my and the whole EAST border
         // column are never tested (my==0 ⇒ no ring cells at all).
@@ -545,8 +528,8 @@ impl Gen {
         // Retail caps the count by the free-pool HEADROOM and splits
         // the FULL spill across the clamped count (EF:61272-96) —
         // fewer-but-bigger spheres on a short pool, never an
-        // under-eject (G9a). (Retail's zero-headroom arm spawns
-        // nothing after a failed GC pass; our free list is exact.)
+        // under-eject. (Retail's zero-headroom arm spawns nothing
+        // after a failed GC pass; our free list is exact.)
         let headroom = self.free.len() as i32;
         if headroom == 0 {
             return;
@@ -572,7 +555,7 @@ impl Gen {
             // home is f46 (the MC1 column's shared machinery).
             self.ent[b].f46 = ((1024 - (cz.wrapping_sub(ground)) as i32) / 8) as i16;
             // The castle's rand_0x14_20 is a u16 (EF:61312-16) — the
-            // chassis u16 draw, not the raw 32-bit LCG (G7).
+            // chassis u16 draw, not the raw 32-bit LCG.
             let dist = (self.ent_rand(i) % 0x1400 + 3840) as i16;
             let yaw = (self.ent_rand(i) & 0x7FF) as u16;
             let mut pos = (cx, cy, cz);
@@ -629,7 +612,7 @@ impl Gen {
     // ---- the court: balloons + guards (sub_5FF50, EF:61342) -----------------
 
     /// `sub_5FF50` (EF:61342): the balloon fleet + guard slots.
-    /// Slot arrays scan-collected (module-doc APPROX); dead members
+    /// Slot arrays scan-collected (deliberate); dead members
     /// dissolve into mana spheres carrying their cargo
     /// (`TransformEntityToManaSphere`), over-quota members too (a
     /// downgraded castle sheds fleet). Guard respawn: one per pass,
@@ -680,7 +663,7 @@ impl Gen {
         let full = bank.saturating_add(self.ent[i].f140.max(0)) >= self.ent[i].f136;
         // Retail's stagger modulus is the QUOTA (sub_60400,
         // EF:61405), not the live-fleet size — they differ only on
-        // a pool-starved shortfall (G9l).
+        // a pool-starved shortfall.
         let stagger = bq != 0 && self.ent[i].f63 as usize % bq == 0;
         for k in 0..alive.len() {
             let b = alive[k];
@@ -807,9 +790,9 @@ impl Gen {
         use super::behavior::{BEHAVIOR, ROW_BASE};
         let t = self.ent[i].f146 as usize;
         let row = &BEHAVIOR[ROW_BASE + self.ent[i].row156 as usize];
-        // Stale-slot guard (2026-07-15): same latent retail bug as
-        // MC1 balloon_move — a recycled ball slot must not be
-        // "absorbed" as if it were still the claimed (10,39) ball.
+        // Stale-slot guard: same latent retail bug as MC1
+        // balloon_move — a recycled ball slot must not be "absorbed"
+        // as if it were still the claimed (10,39) ball.
         if t != 0 && self.ent[t].class64 == 10 && self.ent[t].model65 != 39 {
             self.ent[i].f146 = 0;
             return;
@@ -931,8 +914,8 @@ impl Gen {
         if self.ent[i].act_life >= 0 && self.ent[i].mail[0].1 != 0 {
             let (amt, src) = self.ent[i].mail[0];
             self.ent[i].act_life -= amt as i32;
-            // APPROX (G9c): retail sets byte_0x197_407 for ANY
-            // owner (EF:61947); ours is the player-side HUD latch.
+            // Retail sets byte_0x197_407 for ANY owner (EF:61947);
+            // ours is the player-side HUD latch (deliberate).
             if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                 self.balloon_alert = 4;
             }
@@ -1008,12 +991,10 @@ impl Gen {
             return false;
         };
         // The working frame = the level row's footprint, widened to
-        // the largest accumulated row. G9j correction (BUILD00 tab
-        // dumped 2026-07-16): rows 1-7 are 8/21/21/35/35/48/48 —
-        // monotone non-decreasing, row 7 = 48×48 like row 6; the
-        // 1×1 rows are 8-16 and are never a castle level. The old
-        // "row-7 degenerate 1×1 / retail memory stomp" story was
-        // FALSE, and this widening loop is a proven no-op for every
+        // the largest accumulated row. BUILD00 rows 1-7 are
+        // 8/21/21/35/35/48/48 — monotone non-decreasing, row 7 =
+        // 48×48 like row 6; the 1×1 rows are 8-16 and are never a
+        // castle level. So this widening loop is a no-op for every
         // reachable level (kept as belt-and-braces for modded tabs).
         let (mut w, mut h) = (def.w as usize, def.h as usize);
         for r in 1..=row {
@@ -1033,7 +1014,7 @@ impl Gen {
             if self.ent[i].f26 == 0 {
                 // bit3 → bit7 over the footprint (EF:27737-45) —
                 // NON-CAVE only (EF:27729): on caves bit3 is the
-                // seal, owned by the ceiling-rise arm (G4).
+                // seal, owned by the ceiling-rise arm.
                 if !self.is_cave() {
                     for dy in 0..h {
                         for dx in 0..w {
@@ -1083,10 +1064,8 @@ impl Gen {
             // Retail's per-row origin is center - (dim >> 1), i.e.
             // the frame offset is D/2 - d/2 — NOT (D - d)/2, which
             // loses a tile whenever D is even and d odd (EF:27798:
-            // v33 = (v36>>1) - v8). That one tile was the playtest
-            // "offset walkways / squashed tower / archers dying in
-            // the wall" report on the 48x48 stage: every interior
-            // ring sat one tile toward -x/-y of the outer ring.
+            // v33 = (v36>>1) - v8), sitting every interior ring one
+            // tile toward -x/-y of the outer ring.
             let offx = w / 2 - rw / 2;
             let offy = h / 2 - rh / 2;
             for dy in 0..rh {
@@ -1108,7 +1087,7 @@ impl Gen {
         // (2) apply 1/countdown of each delta (EF:27846-70). The
         // cave ceiling-rise arm (EF:27871-94) and the non-cave
         // countdown==2 bit3 sweep (EF:27895) sit OUTSIDE the
-        // active-delta gate — they run for every frame cell (G4).
+        // active-delta gate — they run for every frame cell.
         for dy in 0..h {
             for dx in 0..w {
                 let d = delta[dy * w + dx];
@@ -1212,7 +1191,7 @@ impl Gen {
         }
         // Retail's finalizer is the gated 3×3 height smoother over
         // exactly the footprint (SetHeightmapByBuildingArea_48B50,
-        // EF:28171) — NOT a retile (G5, review 2026-07-15).
+        // EF:28171) — NOT a retile.
         self.mc2_smooth_heights_region(tlx, tly, h as u8, w as u8);
     }
 
@@ -1302,8 +1281,8 @@ impl Gen {
     /// a stage (EF:62274). Retail fills it one stage at a time via
     /// the castle research/production child (`sub_69AB0` EF:56120-21,
     /// sourcing `SPELLS[model].subspell[row].life_0x1A`); the port
-    /// stamps at cast/upgrade time from the castle-spell tier (the
-    /// A.5 shortcut). Unstamped stages read 0: no pieces, HP factor
+    /// stamps at cast/upgrade time from the castle-spell tier
+    /// (deliberate). Unstamped stages read 0: no pieces, HP factor
     /// identity — a fresh retail castle's exact state.
     fn mc2_castle_part_type(&self, own: u16, stage: u8) -> u8 {
         if !(1..=7).contains(&stage) {
@@ -1317,10 +1296,10 @@ impl Gen {
     }
 
     /// The `sub_69AB0` research write (EF:56120-21), stamped by the
-    /// port at castle cast/upgrade time (A.5 shortcut): for `stage`
+    /// port at castle cast/upgrade time (deliberate): for `stage`
     /// (retail `v4 = castleLevel+1`), record the castle spell tier's
-    /// `subSpellIndex_2` (HP factor — banked; the ladder still runs
-    /// identity) and `life_0x1A` (part-type → fire/lightning tower).
+    /// `subSpellIndex_2` (HP factor — the ladder still runs identity)
+    /// and `life_0x1A` (part-type → fire/lightning tower).
     pub(crate) fn mc2_research_stamp(&mut self, own: u16, stage: u8, tier: u8) {
         if own == 0 || !(1..=7).contains(&stage) {
             return;
@@ -1389,8 +1368,8 @@ impl Gen {
     }
 
     /// `sub_3AF00_castle_defend_event` (EF:30106) — the (10,79)
-    /// piece tick, the full defend brain. Field homes (the piece is
-    /// golden-invisible pre-turret, so the layout is fresh): state
+    /// piece tick, the full defend brain. Field homes (the piece has
+    /// no prior field layout, so these homes are fresh): state
     /// `byte_0x46_70` → f71 · dwell/windup `dword_0x10_16` → f44 ·
     /// fire mode `word_0x2C_44` → f30 · burst `fontTypeIndex_0x3D_61`
     /// → f69 · recoil `byte_0x44_68` (signed −5..6) → f68 · windup
@@ -1409,7 +1388,7 @@ impl Gen {
         match self.ent[i].f71 {
             0 => {
                 // Latch the axis-home (retail axis_0x9A_154,
-                // EF:30182) — the launch arms return here (G9k).
+                // EF:30182) — the launch arms return here.
                 let e = &mut self.ent[i];
                 e.dest_x = e.x;
                 e.dest_y = e.y;
@@ -1422,7 +1401,7 @@ impl Gen {
                 self.ent[i].f71 = 2;
                 // Retail falls through into the first decrement the
                 // same tick (LABEL_9, EF:30190-96) — the dwell is
-                // seed−1 ticks long, not seed (G9k).
+                // seed−1 ticks long, not seed.
                 self.ent[i].f44 -= 1;
             }
             2 => {
@@ -1552,13 +1531,14 @@ impl Gen {
     /// ring distance 3..=12 from the piece. Retail walks the
     /// per-ring cell-offset tables nearest-ring-first and takes the
     /// FIRST hostile in walk order; we take the nearest by ring then
-    /// pool order (APPROX — same admission set, same 3-tile hole).
+    /// pool order (deliberate — same admission set, same 3-tile hole).
     /// Hostile predicate (EF:30359-84): class 3 model {0,1,3} or
     /// class 5 model ≠22, owner ≠ ours. No invisibility test —
     /// retail turrets see through Invisibility (unlike the m15
     /// guards' scan). The class-5 `StageVar2==14` own-parent
-    /// exemption (EF:30378-81) is APPROX-skipped (the stage binding
-    /// lives in side-vecs; only shields own summons at own walls).
+    /// exemption (EF:30378-81) is skipped (deliberate: the stage
+    /// binding lives in side-vecs; only shields own summons at own
+    /// walls).
     fn mc2_piece_scan(&self, i: usize, player: Option<(u16, u16, i16)>) -> Option<u16> {
         let (px, py, own) = {
             let e = &self.ent[i];
@@ -1730,9 +1710,8 @@ impl Gen {
 /// decoded (mc2-castle-data-tables.md §1.3): count at `[2*lvl]`,
 /// pair-slot index at `[1+2*lvl]`, pairs at `[18..]`. Tile offsets
 /// from the footprint's NW corner. L2/3, L4/5 and L6/7 share lists —
-/// consistently: BUILD00 row 7 is 48×48 like row 6 (G9j correction;
-/// the 1×1 rows are 8-16, never a castle level — the old
-/// "degenerate row 7" story was false).
+/// BUILD00 row 7 is 48×48 like row 6 (the 1×1 rows are 8-16, never a
+/// castle level).
 const MC2_STAGE_PARTS: [&[(u8, u8)]; 8] = [
     &[],
     &[(4, 4)],
@@ -1793,8 +1772,7 @@ mod tests {
 
     /// Downgrading a castle whose capacity `f136` was pumped past the
     /// normal ladder (the level-0 over-level bug) must not overflow the
-    /// 10% haircut `10 * f136`. Regression for the shift+L panic
-    /// "attempt to multiply with overflow" (player-reported 2026-07-13).
+    /// 10% haircut `10 * f136` ("attempt to multiply with overflow").
     #[test]
     fn mc2_castle_downgrade_survives_oversized_capacity() {
         let mut g = flat_gen();
@@ -1859,10 +1837,10 @@ mod tests {
         i
     }
 
-    /// G1 (review 2026-07-15 P1-19): the "no room" scan reads the
-    /// class-3 castle list (retail dword_38519 + model-2 filter,
-    /// EF:4449-51) — another CASTLE in the next-level box blocks;
-    /// a (10,2) prop at the same spot must NOT.
+    /// The "no room" scan reads the class-3 castle list (retail
+    /// dword_38519 + model-2 filter, EF:4449-51) — another CASTLE in
+    /// the next-level box blocks; a (10,2) prop at the same spot must
+    /// NOT.
     #[test]
     fn space_check_blocks_on_castles_not_props() {
         let mut g = castle_gen();
@@ -1875,10 +1853,10 @@ mod tests {
         assert!(g.mc2_castle_space_ok(a), "a (10,2) prop does not block");
     }
 
-    /// G2 (review 2026-07-15 P1-20): a castle driven to death spills
-    /// its ENTIRE stored bank as owner-tagged (10,39) spheres — the
-    /// eject runs unconditionally after the downgrade (EF:61228),
-    /// even when the level-0 death happened inside it.
+    /// A castle driven to death spills its ENTIRE stored bank as
+    /// owner-tagged (10,39) spheres — the eject runs unconditionally
+    /// after the downgrade (EF:61228), even when the level-0 death
+    /// happened inside it.
     #[test]
     fn castle_death_spills_the_whole_bank() {
         let mut g = castle_gen();
@@ -1918,8 +1896,8 @@ mod tests {
         g
     }
 
-    /// The turret column (2026-07-16): a stamped stage-1 research
-    /// makes the stage builder spawn the (10,79) ring (1 piece at
+    /// The turret column: a stamped stage-1 research makes the stage
+    /// builder spawn the (10,79) ring (1 piece at
     /// stage 1, part-type from the castle spell tier), and the piece
     /// brain scans rings 3..=12, winds up, and fires the part's
     /// projectile — fire tower (part 1) → spell 0 tier 1 fireball,
@@ -2024,9 +2002,9 @@ mod tests {
         );
     }
 
-    /// G5 (review 2026-07-15): the unstamp finalizer is the gated
-    /// 3×3 floor smoother (`SetHeightmapByBuilding_48B90`,
-    /// EF:32475), not a retile: floor = integer average of the
+    /// The unstamp finalizer is the gated 3×3 floor smoother
+    /// (`SetHeightmapByBuilding_48B90`, EF:32475), not a retile:
+    /// floor = integer average of the
     /// natural 3×3 neighbours; any building-material corner sample
     /// (terrain type 6..=0x22) vetoes the cell.
     #[test]
@@ -2043,8 +2021,8 @@ mod tests {
         assert_eq!(g.t.height[t2], 200, "corner sample gate vetoes");
     }
 
-    /// G4 (review 2026-07-15): a castle painted on a CAVE level
-    /// carves the headroom bubble — ceiling eases to
+    /// A castle painted on a CAVE level carves the headroom bubble —
+    /// ceiling eases to
     /// max(floor, datum)+100 (EF:27871-94) — and the cave seal
     /// invariant `(ceiling > floor) ⟺ bit3 clear` holds over the
     /// footprint; the non-cave bit3 blind-set / bit3→bit7 phase-B

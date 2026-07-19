@@ -6,15 +6,15 @@
 //! texts and write paths all come from the Specs; the menu adds only
 //! geometry and ink.
 //!
-//! Ink rule (player directive, revised): option labels are always
+//! Ink rule: option labels are always
 //! white; the default/non-default distinction lives on the WIDGET —
 //! a value at its default draws quiet grey, a changed value draws
 //! bright green. Group headings are dim, drop the redundant domain
 //! prefix (the tab already says RENDER), and their rows indent under
 //! them. Startup-mutability options are greyed darker and locked
 //! (they apply at level load). The messaging FONT1 is the typeface at
-//! notification size (double the compact draft), so tall tabs scroll:
-//! mouse wheel, or click the side bar.
+//! notification size, so tall tabs scroll: mouse wheel, or click the
+//! side bar.
 
 use crate::config::Config;
 use crate::settings::{self, Ctl, Mutability, Spec, Val};

@@ -80,12 +80,12 @@ struct WorldInit {
     /// relief shading (remc2 Terrain.cpp:2030-2033).
     night_shade: bool,
     doom_level: bool,
-    /// Draw stand-in art for unported models (MC2 default until its
-    /// roster closes; the ledger stays truthful either way).
+    /// Draw stand-in art for unported models (deliberate: MC2 default
+    /// until its roster closes; the ledger stays truthful either way).
     placeholders: bool,
-    /// Remove spell jars the local player already owns (P-class
-    /// unfaithful improvement; both games). Applied at every level
-    /// load — the sim self-culls owned jars on their next tick.
+    /// Remove spell jars the local player already owns (deliberate:
+    /// P-class improvement, both games). Applied at every level load —
+    /// the sim self-culls owned jars on their next tick.
     prune_owned_jars: bool,
     /// The chassis constant set: the game's pristine profile, or a
     /// deliberately deviating one (the limit-removing `--pool-slots`
@@ -448,12 +448,12 @@ struct LoadedLevel {
     /// (docs/traces/mc2-voiceover-triggers.md §4).
     level_number: u32,
     /// The bundle's sentence bank (ETEXT.DAT, index = sentence id);
-    /// empty on pre-epoch-14 bakes. Feeds the narration subtitles and
+    /// empty on older bakes. Feeds the narration subtitles and
     /// the MC1 win message (entries 60/61).
     etext: Vec<String>,
     /// The bundle's 256x256 8bpp parallax-sky bitmap (`sky.bin`);
-    /// None on caves (retail loads no cave sky) and pre-epoch-14
-    /// bakes. Resolved through `palette_rgba` at renderer load.
+    /// None on caves (retail loads no cave sky) and older bakes.
+    /// Resolved through `palette_rgba` at renderer load.
     sky: Option<Vec<u8>>,
     /// HSPR UI sprites composited to RGBA (spellbook/HUD); None when
     /// the bundle has no UI members (MC2 until its UI track).
@@ -484,7 +484,7 @@ struct LoadedLevel {
 /// Resolve the world's live volumes into map overlay circles: amber =
 /// fly-into triggers, red = kill-watchers, cyan = collected-item
 /// triggers, violet = portals, green = MC2 stage checkpoints (the
-/// authored route, for troubleshooting — player request).
+/// authored route, for troubleshooting).
 fn map_areas(world: &mgc_sim::mc1::world::World) -> Vec<mgc_render::MapArea> {
     use mgc_sim::mc1::world::VolumeKind;
     world
@@ -631,9 +631,9 @@ fn load_level(
     if terrain_features {
         // Feature-pass assets: every game reads them from its own
         // bundle (mc2 bundles carry SEARCH + the BUILD0-0 footprint
-        // bank since epoch 3, plus BLDGPRM for the building creator);
-        // an old mc2 bake falls back to the mc1-temperate stand-in so
-        // the world still lives.
+        // bank, plus BLDGPRM for the building creator); an old mc2
+        // bake falls back to the mc1-temperate stand-in so the world
+        // still lives.
         let mut feature_src = (
             bundle.search.clone(),
             bundle.build_tab.clone(),
@@ -794,8 +794,8 @@ fn load_level(
     // facing and jitter come from the ported spawn handlers), resolved
     // through the game's own sprite table; without one
     // (--no-terrain-features), every drawable record resolves
-    // statically — the old behavior, kept as the comparison mode
-    // (MC1/HW only; MC2 has no static resolver).
+    // statically — the comparison mode (MC1/HW only; MC2 has no
+    // static resolver).
     let (billboards, map_dots) = {
         let index = bundle.sprites.as_ref().map(|(i, _)| i);
         let dims = |id: u16| {
@@ -1045,10 +1045,9 @@ fn load_level(
     })
 }
 
-/// The fog-wall overlay cut (player directive 2026-07-16): world-
-/// anchored debug overlays (jar icons, crosshair lock markers — the
-/// health bars cut in their own shader) must not reveal what the
-/// distance fog hides. `wall` = the full-occlusion distance in tiles
+/// The fog-wall overlay cut: world-anchored debug overlays (jar
+/// icons, crosshair lock markers — the health bars cut in their own
+/// shader) must not reveal what the distance fog hides. `wall` = the full-occlusion distance in tiles
 /// (0.95·fog_distance; 0 = fog off, never cut). Torus-wrapped 3D
 /// distance like the shaders' wrap-adjusted geometry.
 fn fog_cut(cam: &mgc_render::CameraView, x: f32, alt: f32, z: f32, wall: f32) -> bool {
@@ -1175,11 +1174,11 @@ struct VirtualStick {
 }
 
 /// One running gameplay instance: the loaded level plus its living
-/// sim. The frontend (main menu / world map) is a LOADER of these
-/// (player-directed architecture, 2026-07-18): a session is
-/// constructed when a level launches and dropped when play returns to
-/// the hub — nothing of the level survives underneath the frontend
-/// (no frozen sim, no ambient audio, no stale renderer world).
+/// sim. The frontend (main menu / world map) is a LOADER of these: a
+/// session is constructed when a level launches and dropped when play
+/// returns to the hub — nothing of the level survives underneath the
+/// frontend (no frozen sim, no ambient audio, no stale renderer
+/// world).
 struct Session {
     level: LoadedLevel,
     sim: Simulation,
@@ -1208,8 +1207,7 @@ enum Screen {
 
 /// Which atlas currently occupies the renderer's single UI-atlas
 /// slot. Every uploader stamps it; every screen re-uploads only when
-/// it isn't the owner — this replaces the old per-screen
-/// `*_atlas_live` juggling flags.
+/// it isn't the owner.
 #[derive(Clone, Copy, PartialEq)]
 enum UiAtlas {
     /// Nothing uploaded yet.
@@ -1272,8 +1270,7 @@ struct App {
     /// assistant" (PlayerInput.cpp:2001-09): 0x30 idle polls with no
     /// action pending recenter the cursor, i.e. our virtual stick.
     /// Without it the grabbed stick rests wherever the last flick
-    /// left it — a permanent invisible deflection (the player's
-    /// "level flight declines to the very ground": a parked stick_y
+    /// left it — a permanent invisible deflection (a parked stick_y
     /// of 5+ units defeats the sine-LUT truncation that makes true
     /// near-level flight hold altitude). Faithful for MC2;
     /// enhancement-class in MC1/HW like Backspace.
@@ -1315,7 +1312,7 @@ struct App {
     /// original: one persistent level per spell, reused by every
     /// selection route). Indexed by pane spell id; MC1 spells are
     /// single-level so it stays all-zero there. App-side until the
-    /// MC2 spell column lands sim-side (Phase 4.2).
+    /// MC2 spell column lands sim-side.
     spell_levels: [u8; 26],
     /// Sim tick of the last map-texture recompose (dots/blink are
     /// tick-derived, so update_map runs per tick, not per frame).
@@ -1385,11 +1382,10 @@ struct App {
     audio: Option<mgc_audio::Audio>,
     /// The end-of-game fadeout, armed when the sim reports the level
     /// WON (`World::won`): alpha 0→1 over ~0.8 s, then the app exits
-    /// — the player-directed ending (2026-07-16): no stats screen,
-    /// no menu return, campaign stitching comes later. MC2's ending
-    /// already fades sim-side (`World::end_fade`); this rides on top
-    /// so both games leave through the same door. In campaign mode
-    /// the full-black beat routes to the next level instead of
+    /// (deliberate ending: no stats screen, no menu return). MC2's
+    /// ending already fades sim-side (`World::end_fade`); this rides
+    /// on top so both games leave through the same door. In campaign
+    /// mode the full-black beat routes to the next level instead of
     /// exiting (`CampaignRun::next`).
     quit_fade: Option<f32>,
     /// The running campaign (`--campaign`); None = single-level mode
@@ -1415,8 +1411,7 @@ struct App {
     /// ticking, `Audio::tick` (the flush that actually PLAYS
     /// requested samples, runs fades and recovers the narration
     /// duck) is driven from wall time instead. Without it the map's
-    /// ambient bursts and the menu clicks sit requested-but-silent —
-    /// the "map ambience gone" regression (player, 2026-07-18).
+    /// ambient bursts and the menu clicks sit requested-but-silent.
     frontend_audio_accum: f32,
     /// Frontend-owned level-UI assets (fonts + panel art) for the P
     /// options menu while no session exists. Populated from a torn-
@@ -1424,17 +1419,16 @@ struct App {
     /// bundle.
     frontend_ui: Option<ui::UiAssets>,
     /// The won-edge latch: the completion bookkeeping ran for this
-    /// level. Without it the old level's `won()` refires every frame
-    /// once the fade is consumed (the map screen clears it) — the
-    /// "aggressively saving in a loop" bug (player, 2026-07-18).
+    /// level. Without it a completed level's `won()` refires every
+    /// frame once the fade is consumed (the map screen clears it),
+    /// re-running the save.
     won_handled: bool,
-    /// The in-level abandon-confirmation dialog is up (player
-    /// directive 2026-07-18: an accidental Esc must never toss an
-    /// hour of progress — the retail MC2 "Abandon level?" OK/Cancel
-    /// dialog, reused for MC1/single-level which retail left
-    /// unguarded). Retail-faithful modality: the world KEEPS RUNNING
-    /// beneath it, the dialog only owns the input. Esc/Cancel stays,
-    /// Enter/OK abandons to the hub (or exits, single-level).
+    /// The in-level abandon-confirmation dialog is up: the retail MC2
+    /// "Abandon level?" OK/Cancel dialog, reused for MC1/single-level
+    /// which retail left unguarded (deliberate). Retail-faithful
+    /// modality: the world KEEPS RUNNING beneath it, the dialog only
+    /// owns the input. Esc/Cancel stays, Enter/OK abandons to the hub
+    /// (or exits, single-level).
     exit_confirm: bool,
 }
 
@@ -1841,8 +1835,8 @@ impl App {
                     w.set_prune_owned_jars(self.cfg.gameplay.enhancement.prune_owned_jars);
                 }
             }
-            // Live selector-surface switch (player 2026-07-16): the
-            // pane/book resolve is cheap to redo mid-run. Quickselect
+            // Live selector-surface switch: the pane/book resolve is
+            // cheap to redo mid-run. Quickselect
             // digit binds survive a round trip — and enabling the map
             // book mid-level replays the retail level-init pre-seed
             // (the acquisition diff sees every owned spell at once).
@@ -1960,8 +1954,8 @@ impl App {
                 }
             }
         }
-        // Retail pause suspends ALL sound (playtest-8); resumed
-        // sounds pick up where they froze.
+        // Retail pause suspends ALL sound; resumed sounds pick up
+        // where they froze.
         if let Some(a) = &mut self.audio {
             a.set_paused(self.paused);
         }
@@ -1975,7 +1969,7 @@ impl App {
         // (cfg_path, mutate) pairs keep the apply path shared with the
         // menu via apply_option; the second element is the concise
         // in-game toast ("<Name> on/off" / "Game speed <label>" —
-        // player 2026-07-17: retail echoes live toggles on screen).
+        // retail echoes live toggles on screen).
         let onoff = |v: bool| if v { "on" } else { "off" };
         let (path, toast) = match code {
             KeyCode::F1 => {
@@ -2042,8 +2036,7 @@ impl App {
                 );
                 ("render.preference.sky", format!("Sky {}", onoff(v)))
             }
-            // F7 = retail shadows — no shadows option yet (banked for
-            // the proper-effects track).
+            // F7 = retail shadows — no shadows option yet.
             KeyCode::KeyT => {
                 self.cfg.render.enhancement.smooth_shading =
                     !self.cfg.render.enhancement.smooth_shading;
@@ -2089,8 +2082,7 @@ impl App {
                     format!("Dev spells {}", onoff(v)),
                 )
             }
-            // H = invincibility (player directive 2026-07-16: "right
-            // next to G"); health bars moved to B.
+            // H = invincibility (a cheat, keyed next to G).
             KeyCode::KeyH => {
                 self.cfg.gameplay.cheat.invincible = !self.cfg.gameplay.cheat.invincible;
                 let v = self.cfg.gameplay.cheat.invincible;
@@ -2510,10 +2502,10 @@ impl App {
             // consecutive polls recenters the cursor — our virtual
             // stick. Retail gates on the raw position + pending
             // action bytes; ours on the motion-reset counter + held
-            // fire. Plain on/off, default OFF (player ruling
-            // 2026-07-16: MC2's retail default, and MC1 never had
-            // the option — parked-cursor deflections persist, as
-            // retail MC1's visible-cursor scheme did).
+            // fire. Plain on/off, default OFF (deliberate: MC2's
+            // retail default, and MC1 never had the option —
+            // parked-cursor deflections persist, as retail MC1's
+            // visible-cursor scheme did).
             let assist = self.cfg.controls.preferences.fly_assistant.on();
             if !assist || input.fire_left || input.fire_right {
                 self.stick_idle_ticks = 0;
@@ -2551,7 +2543,7 @@ impl App {
     }
 
     /// Push runtime world changes (dug terrain, moving/spawned/removed
-    /// entities) to the renderer. Entities move every tick now, so the
+    /// entities) to the renderer. Entities move every tick, so the
     /// billboard set refreshes per tick from the sim's pose snapshot;
     /// the map texture recompose (dots baked into it) is throttled to
     /// every 8th tick unless terrain actually changed.
@@ -2733,8 +2725,7 @@ impl App {
             // space by the renderer (never baked into the rotated map
             // texture: icons stay upright, ant spacing stays 4
             // surface px under rotation/zoom). Frontend screens never
-            // reach here — the teardown clears these layers, so the
-            // old stage-goal-marker leak has no path back.
+            // reach here — the teardown clears these layers.
             r.set_map_stamps(level.map_stamps.clone());
             r.set_map_path(self.castle_pos.map(|(cx, cz)| mgc_render::MapPath {
                 from: (sim.flyer.x, sim.flyer.z),
@@ -2752,11 +2743,9 @@ impl App {
                 // The map recomposes once per SIM TICK — everything
                 // baked in it (dots, blink phase tick>>3) changes at
                 // tick rate, so per-frame recompose (a 256×256 LUT
-                // walk + full texture upload) bought nothing. (The
+                // walk + full texture upload) buys nothing. The
                 // marching ants march per frame regardless — they're
-                // screen-space now. The old every-8th-tick throttle
-                // was the player-reported low refresh; per-tick is
-                // the content rate.)
+                // screen-space.
                 r.update_map(&level.view, &overlay);
                 self.last_map_tick = Some(sim.tick);
             }
@@ -2831,8 +2820,8 @@ impl App {
         self.pane_bound[hand as usize] = Some(spell);
         let hand_name = if hand == 0 { "left" } else { "right" };
         if self.is_mc2() {
-            // The native MC2 spell column (Phase 4.2): the pane
-            // commit IS retail's "Change Spell" action — tier +
+            // The native MC2 spell column: the pane commit IS
+            // retail's "Change Spell" action — tier +
             // quick-slot bind through the sim's class-15 machinery.
             self.pending_mc2_select = Some((spell, level, hand));
             self.flush_equip_if_paused();
@@ -2867,7 +2856,7 @@ impl App {
     /// running session (if any) is torn down — the frontend owns the
     /// app from here; a portal click constructs the next one. Falls
     /// back to a direct next-level launch when the mc2-ui bundle is
-    /// missing (pre-epoch-16 bake).
+    /// missing (older bake).
     fn open_map_screen(&mut self, event_loop: &ActiveEventLoop) {
         // Remember which level was just played before the teardown —
         // the carpet parks there.
@@ -2920,9 +2909,9 @@ impl App {
         }
     }
 
-    /// The MC2 main-menu pointer: FREE (player directive 2026-07-18 —
-    /// only the map needs the confinement for edge scrolling, and the
-    /// game the flight lock; the menu needs neither). The OS cursor
+    /// The MC2 main-menu pointer: FREE — only the map needs the
+    /// confinement for edge scrolling, and the game the flight lock;
+    /// the menu needs neither. The OS cursor
     /// stays hidden over the window because the temple screen draws
     /// the retail cursor sprite itself.
     fn free_menu_pointer(&mut self) {
@@ -3169,9 +3158,8 @@ impl App {
     /// torn down — the frontend owns the app from here.
     fn enter_main_menu(&mut self) {
         self.teardown_session();
-        // The map's sounds die with it too (player directive): cut
-        // the narration mid-clip; the burst one-shots are short
-        // enough to ring out.
+        // The map's sounds die with it too: cut the narration
+        // mid-clip; the burst one-shots are short enough to ring out.
         if let Some(a) = &mut self.audio {
             a.stop_speech();
         }
@@ -3292,8 +3280,8 @@ impl App {
                     self.set_grab(false);
                 }
                 Err(e) => {
-                    // Pre-epoch-18 bake: launch the pending level
-                    // directly (the previous direct-chain behavior).
+                    // Menu asset unavailable: launch the pending
+                    // level directly.
                     eprintln!("note: main menu unavailable: {e} — launching directly");
                     let n = self.campaign.as_ref().map_or(0, |c| c.current);
                     self.campaign_switch(n, event_loop);
@@ -3409,7 +3397,8 @@ impl App {
                     self.frontend_music();
                 }
                 Err(e) => {
-                    // Pre-epoch-18 bake: fall through to the map hub.
+                    // Menu asset unavailable: fall through to the map
+                    // hub.
                     eprintln!("note: main menu unavailable: {e} — opening the world map");
                     self.open_map_screen(event_loop);
                     return;
@@ -3655,9 +3644,10 @@ impl ApplicationHandler for App {
                                         if changed {
                                             self.apply_option(path);
                                         }
-                                        // Click widgets persist now;
-                                        // sliders persist on release
-                                        // (not per motion event).
+                                        // Click widgets persist
+                                        // immediately; sliders persist
+                                        // on release (not per motion
+                                        // event).
                                         if changed && self.menu.as_ref().unwrap().drag.is_none() {
                                             self.persist_option(&self.specs[i]);
                                         }
@@ -3799,8 +3789,8 @@ impl ApplicationHandler for App {
                 if self.book_open() {
                     // Book screen: clicking an owned spell binds it to
                     // that hand (the original's commands 0x15/0x16)
-                    // AND closes the book back into flight (player-
-                    // confirmed original UX). Clicks on unowned slots
+                    // AND closes the book back into flight (original
+                    // UX). Clicks on unowned slots
                     // or empty page do nothing. (Without the map book
                     // — the MC2 layout — the map screen ignores
                     // clicks; the CTRL pane above is the selector.)
@@ -3866,8 +3856,7 @@ impl ApplicationHandler for App {
                 // strays (also covers platforms where the Confined
                 // grab is unsupported).
                 // Only the MAP confines/clamps (edge scrolling needs
-                // the boundary pixel); the menus run a free pointer
-                // (player directive 2026-07-18).
+                // the boundary pixel); the menus run a free pointer.
                 if self.screen == Screen::Map && self.menu.is_none() {
                     let size = self.view_size();
                     let scale = (size.0 / 640.0).min(size.1 / 480.0);
@@ -3958,12 +3947,10 @@ impl ApplicationHandler for App {
                     } else if self.quit_fade.is_none() {
                         // The retail MC2 "Abandon level?" confirm
                         // (sub_18B30 → MenuState 13), reused by MC1/
-                        // single-level — player directive 2026-07-18:
-                        // an accidental Esc must never toss an hour
-                        // of progress. The world keeps running
-                        // beneath it (retail modality); confirming
-                        // abandons to the hub (or exits the app in
-                        // single-level mode).
+                        // single-level (deliberate). The world keeps
+                        // running beneath it (retail modality);
+                        // confirming abandons to the hub (or exits the
+                        // app in single-level mode).
                         self.exit_confirm = true;
                         self.set_grab(false);
                     } else {
@@ -4249,10 +4236,10 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::ArrowRight) => k.turn_right = down,
                     PhysicalKey::Code(KeyCode::ArrowUp) => k.pitch_up = down,
                     PhysicalKey::Code(KeyCode::ArrowDown) => k.pitch_down = down,
-                    // Extended-lift float moved to E/Q (2026-07-07,
-                    // player directive): Space is the original's
-                    // respawn/continue key and Shift now composes
-                    // freely (Shift+L demolish, Shift+digit equips).
+                    // Extended-lift float on E/Q: Space is the
+                    // original's respawn/continue key and Shift
+                    // composes freely (Shift+L demolish, Shift+digit
+                    // equips).
                     PhysicalKey::Code(KeyCode::KeyE) => k.up = down,
                     PhysicalKey::Code(KeyCode::KeyQ) => k.down = down,
                     PhysicalKey::Code(KeyCode::Space) => {
@@ -4262,10 +4249,10 @@ impl ApplicationHandler for App {
                     }
                     // Backspace = the retail MC2 full stop (action
                     // 0x27): speeds zero, Speed spell dies, steering
-                    // recenters. Enhancement-class in MC1/HW (player
-                    // directive 2026-07-16). The stick reset is
-                    // retail's SetCenterScreenForFlyAssistant mouse
-                    // recenter (EF:37965 → EF:44387).
+                    // recenters. Enhancement-class in MC1/HW. The
+                    // stick reset is retail's
+                    // SetCenterScreenForFlyAssistant mouse recenter
+                    // (EF:37965 → EF:44387).
                     PhysicalKey::Code(KeyCode::Backspace) => {
                         if down {
                             self.pending_full_stop = true;
@@ -4483,8 +4470,8 @@ impl ApplicationHandler for App {
                 let aim = a.pitch + (b.pitch - a.pitch) * alpha;
                 // Faithful only: the horizon bank from the filtered
                 // roll stick, full value (remc1 :52432 — the missing
-                // turn cue). The enhanced mouse-look stays flat by
-                // player directive.
+                // turn cue). The enhanced mouse-look stays flat
+                // (deliberate).
                 let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
                     config::ThrustModel::Classic => (aim * 0.5, a.roll + (b.roll - a.roll) * alpha),
                     config::ThrustModel::Enhanced => (aim, 0.0),
@@ -4568,8 +4555,8 @@ impl ApplicationHandler for App {
                             let mut xpos = [[0i32; 3]; 26];
                             let mut bound = [loadout.left, loadout.right];
                             if mc2 {
-                                // The native spell book (Phase 4.2):
-                                // ownership, per-spell LEVEL (the
+                                // The native spell book: ownership,
+                                // per-spell LEVEL (the
                                 // SpellLevels tier ceiling), selected
                                 // tiers, real GetSpellManaCost costs
                                 // and the quick-slot binds all come
@@ -4593,9 +4580,9 @@ impl ApplicationHandler for App {
                                         }
                                         cost[s] = bv.cost[s];
                                         // The G instrument keeps all
-                                        // tiers exercisable (player
-                                        // 2026-07-10); the earned
-                                        // ceiling is the XP level.
+                                        // tiers exercisable; the
+                                        // earned ceiling is the XP
+                                        // level.
                                         max_level[s] = if self.cfg.gameplay.cheat.dev_spells {
                                             pane.levels - 1
                                         } else {
@@ -4651,8 +4638,7 @@ impl ApplicationHandler for App {
                         // 710): the HWEB bank tiled over the view
                         // while the web counter is live — spider
                         // webs + the (9,21) spit. Hard on/off, no
-                        // fade, exactly retail (player 2026-07-17:
-                        // the sim drag was in, the texture missing).
+                        // fade, exactly retail.
                         if sess.sim.carpet_mc2.mobilize > 0 && assets.has_web() {
                             quads.extend(assets.web_quads(size.0, size.1));
                         }
@@ -4718,8 +4704,7 @@ impl ApplicationHandler for App {
                     if self.cfg.render.enhancement.expose_jar_spells && !self.book_open() {
                         if let Some(u) = &sess.level.ui {
                             for &(x, alt, z, spell) in &self.jar_markers {
-                                // The fog-wall cut (player directive
-                                // 2026-07-16): overlays must not
+                                // The fog-wall cut: overlays must not
                                 // reveal jars the fog hides. Torus-
                                 // wrapped distance vs the fog's
                                 // full-occlusion point (0.95·D;
@@ -4840,9 +4825,7 @@ impl ApplicationHandler for App {
                         // The MC1/HW WIN message (:26480-26505):
                         // while the win flag holds, the two-line
                         // black-ink message persists at the pane top
-                        // — ETEXT.DAT entries 60/61 (verified against
-                        // the pristine install; the full etext bake
-                        // is the banked Text track). Retail
+                        // — ETEXT.DAT entries 60/61. Retail
                         // colour-cycles the ink unless zoomed out —
                         // the static black remap slot [1] is the
                         // baseline.
@@ -4856,13 +4839,12 @@ impl ApplicationHandler for App {
                             let black = [0.0, 0.0, 0.0, 1.0];
                             // The two sentences are ETEXT 60/61, read
                             // from the bundle's baked bank (literal
-                            // fallback for pre-epoch-14 bakes). One
+                            // fallback when the bank is absent). One
                             // string — the font's own line height
-                            // spaces the two lines (the manual offset
-                            // pass under-spaced and the lines
-                            // overlapped, playtest 2026-07-16). A
-                            // live toast owns the anchor row; the
-                            // win block steps one line below it.
+                            // spaces the two lines (a manual offset
+                            // overlaps them). A live toast owns the
+                            // anchor row; the win block steps one line
+                            // below it.
                             let line = |idx: usize, fallback: &str| -> String {
                                 match sess.level.etext.get(idx) {
                                     Some(s) if !s.is_empty() => s.clone(),
@@ -4909,16 +4891,15 @@ impl ApplicationHandler for App {
                     // The end-of-game fadeout: the MC2 ending's
                     // sim-side fade (endGameSeq phase 11) under the
                     // app's own post-victory fade; at full black the
-                    // game ends (player directive 2026-07-16 — quit,
-                    // no stats/menu; campaign stitching later).
+                    // game ends (quit, no stats/menu — deliberate).
                     if w.won() && !self.won_handled {
-                        // The victory breadcrumb (player request
-                        // 2026-07-16) — and the campaign-stitching
-                        // hook consuming the same signal: record the
-                        // completion, pick the next step, persist the
-                        // slot. Single-level mode still just fades
-                        // out. Latched — the fade being consumed (the
-                        // map screen) must not refire it.
+                        // The victory breadcrumb — and the campaign-
+                        // stitching hook consuming the same signal:
+                        // record the completion, pick the next step,
+                        // persist the slot. Single-level mode still
+                        // just fades out. Latched — the fade being
+                        // consumed (the map screen) must not refire
+                        // it.
                         self.won_handled = true;
                         println!("{} completed", sess.level.label);
                         if let Some(run) = &mut self.campaign {
@@ -5025,10 +5006,9 @@ impl ApplicationHandler for App {
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
             // invert_y = true (default) is the flight-stick polarity
             // both originals ship: mouse up/forward = nose DOWN — in
-            // BOTH control models (standardized 2026-07-16; the flag
-            // used to mean opposite things per model). The two
-            // branches consume dy with opposite senses downstream, so
-            // each applies its own flip to land on the same polarity.
+            // BOTH control models. The two branches consume dy with
+            // opposite senses downstream, so each applies its own flip
+            // to land on the same polarity.
             let inv = self.cfg.controls.preferences.invert_y;
             if self.cfg.controls.models.thrust == config::ThrustModel::Classic {
                 // The classic stick's native sense IS the flight-stick
@@ -5409,7 +5389,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--subtitles" => {
                 subtitles = Some(match it.next().as_deref() {
-                    // "auto" = the retired legacy mode, folded into on.
+                    // "auto" = a legacy alias, folded into on.
                     Some("on") | Some("auto") => config::Subtitles::On,
                     Some("off") => config::Subtitles::Off,
                     _ => return Err("--subtitles needs on|off".into()),
@@ -5652,9 +5632,8 @@ fn run_flock_probe(
     };
 
     // The minimal comparison environment: landscape + the tracked
-    // species only (player request 2026-07-16) — no buildings, no
-    // stage board, no rivals. The start marker survives so `start`
-    // pose scripts stay meaningful.
+    // species only — no buildings, no stage board, no rivals. The
+    // start marker survives so `start` pose scripts stay meaningful.
     let world_init;
     let init = if strip {
         let i = WorldInit {

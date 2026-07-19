@@ -1,5 +1,4 @@
-//! Game identity + the minimal unified ID registries (ROADMAP
-//! "MULTI-GAME ARCHITECTURE", Phase 2).
+//! Game identity + the minimal unified ID registries.
 //!
 //! **The keying rule**: local ID spaces are PER GAME — MC1 spell 5
 //! is not MC2 spell 5, MC1 creature model 7 is not MC2 model 7. Any
@@ -50,27 +49,26 @@ impl GameId {
     /// The THING registry: does this game's SERVING spawn column know
     /// `(class, model)`? Unknown things degrade gracefully at the
     /// seam — a misfit note plus (optionally) a placeholder billboard,
-    /// never a crash. The MC2 set is the PORTED creator set (Phase-3
-    /// slice) and grows entry by entry; everything MC2-authored
-    /// outside it is a visible misfit, by design.
+    /// never a crash. The MC2 set is the ported creator set and grows
+    /// entry by entry; everything MC2-authored outside it is a visible
+    /// misfit, by design.
     ///
-    /// MENTAL MODEL (Phase-3 review): the key is a known CREATOR
-    /// ENTRY, not a known creature — a creator may produce an entity
-    /// of a DIFFERENT class than authored (MC2's (5,19) ctor spawns a
-    /// class-9 flyer, remc2 :34882), so the ledger describes disk
-    /// records, not runtime entities. HW currently shares the MC1
-    /// column unconditionally; its delta pass (Phase 4) will need a
-    /// per-game override point here.
+    /// MENTAL MODEL: the key is a known CREATOR ENTRY, not a known
+    /// creature — a creator may produce an entity of a DIFFERENT class
+    /// than authored (MC2's (5,19) ctor spawns a class-9 flyer, remc2
+    /// :34882), so the ledger describes disk records, not runtime
+    /// entities. HW currently shares the MC1 column unconditionally;
+    /// its delta pass will need a per-game override point here.
     pub fn known_thing(self, class: u16, model: u16) -> bool {
         match self {
             GameId::Mc1 | GameId::Mc1Hw => crate::mc1::known_thing(class, model),
             GameId::Mc2 => matches!(
                 (class, model),
                 // Class-5 wave A + the multipart subsystem + the
-                // (5,10) doomsday pyramid (Phase 4.3, docs/traces/):
-                // every creature except 5..=8 | 11 (non-spawnable
-                // stubs). 15 is never authored but IS runtime-
-                // spawned: the castle guard respawn (EF:61488).
+                // (5,10) doomsday pyramid (docs/traces/): every
+                // creature except 5..=8 | 11 (non-spawnable stubs). 15
+                // is never authored but IS runtime-spawned: the castle
+                // guard respawn (EF:61488).
                 (5, 0..=4 | 9 | 10 | 12..=28)
                 | (9, 13)
                 // Class-3 models 4..=11 are the 8 wizard start-
@@ -87,8 +85,8 @@ impl GameId {
                 // stage-gated release. Models 5..=11 stay misfits
                 // (handlers OPEN in the trace).
                 | (11, 0..=4 | 12..=44)
-                // Scenery: tree/stone/dolmen + the Phase-4.3 band
-                // (statics 3-5, cave bee 6, falling props 7/8).
+                // Scenery: tree/stone/dolmen + statics 3-5, cave bee
+                // 6, falling props 7/8.
                 | (2, 0..=8)
                 // Ground fire + the "Big explosion" route marker
                 // (NewAdd0A00_4E320 / NewAdd0A01_4E3B0, :35332-73)
@@ -134,7 +132,7 @@ impl GameId {
                 // docs/traces/mc2-class14-m1-riser.md §6).
                 | (10, 63 | 64)
                 // The class-10 high band = the CAVE TERRAIN
-                // GENERATOR (mc2::cave, PORTED Phase 4.5): the
+                // GENERATOR (mc2::cave): the
                 // (10,80)→(10,81) tunnel chains + the settle-band
                 // sculptors (mesa/dome/pit/hill) + the (10,86)
                 // drips (docs/traces/mc2-class10-high-band.md +

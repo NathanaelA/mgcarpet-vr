@@ -22,8 +22,8 @@
 //!   EF:38061) IS plain trunc-toward-zero `/4` — `my_sign32` returns
 //!   −1 for negative and 0 otherwise (engine_support.cpp:2962,
 //!   Basic.cpp:3), a negative-indicator, NOT a signum. Reading it as
-//!   a true ±1 signum invents a phantom asymmetric rounding law
-//!   (refuted 2026-07-16); same for the `−7·sign >> 3` yaw feed.
+//!   a true ±1 signum invents a phantom asymmetric rounding law;
+//!   same for the `−7·sign >> 3` yaw feed.
 //! - Speed is command-driven: Up/Down step the TARGET ±16/tick held,
 //!   clamp ±80, and the target HOLDS on release (no stop key, no
 //!   decay — the authentic quantum-hunting standstill); actual speed
@@ -52,9 +52,9 @@
 //!   state, so it is replicated for fidelity.
 //!
 //! The enhanced mover (hold-to-fly) stays float-based in `lib.rs` as a
-//! deliberate deviation; both obey the player-directed rule that aim
-//! pitch never steals meaningful mobility (the faithful model's cos
-//! shrink maxes at ~29%, and thrust stays fully live while aiming).
+//! deliberate deviation; both obey the rule that aim pitch never steals
+//! meaningful mobility (the faithful model's cos shrink maxes at ~29%,
+//! and thrust stays fully live while aiming).
 //!
 //! [`Mc2Ext`] + [`mc2_move`] are the Phase-4.4 `FlightVerb::Mc2` arm —
 //! remc2's `sub_5D530` (EF:59610) with its `sub_5F380` command
@@ -152,7 +152,7 @@ pub struct Mc1Input {
 /// What the move reports back to the sim boundary.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Mc1Moved {
-    /// The wind-gust flutter roll fired (sound 46, player-anchored).
+    /// The wind-gust flutter roll fired (sound 46).
     pub flutter: bool,
 }
 
@@ -602,12 +602,7 @@ pub fn mc2_move(
                 // bounce, no damage — EF:59757-63), RAW like retail:
                 // the commit gate guarantees every landed position
                 // has an air band >= clearance+fov+384, so the clamp
-                // interval never degenerates. (The old round-2
-                // `.max(g+clr)` pinch arm is retired 2026-07-17: its
-                // door-slope symptom belonged to the ENHANCED mover's
-                // then-missing narrow-space gate, and the arm itself
-                // hoisted the head through diving ceilings at funnel
-                // seams.)
+                // interval never degenerates.
                 if let Some(c) = ceiling(p.0, p.1) {
                     z = z.min(c as i32);
                 }
@@ -855,8 +850,8 @@ mod tests {
     #[test]
     fn aim_pitch_costs_bounded_mobility() {
         // Full dive aim: horizontal speed shrinks by cos(±44.6°) ≈
-        // 0.71, never worse (the player's "flat plane" holds within
-        // 29% — load-bearing for combat dodging).
+        // 0.71, never worse (the flat-plane rule holds within 29% —
+        // load-bearing for combat dodging).
         let mut st = Mc1State {
             z: 20000,
             act_speed: 80,
@@ -1108,9 +1103,7 @@ mod tests {
         // above floor+clearance). Such a pinch is unreachable in play
         // (the commit gate refuses air bands under clearance+fov+384);
         // if numerics ever brush it, a brief under-floor frame renders
-        // as solid rock (the terrain shader's backface arm) — the old
-        // floor-wins arm instead hoisted the head THROUGH diving
-        // ceilings at funnel seams (retired 2026-07-17).
+        // as solid rock (the terrain shader's backface arm).
         let pinch = |_: u16, _: u16| -> Option<i16> { Some(100) };
         mc2_move(
             &mut st,

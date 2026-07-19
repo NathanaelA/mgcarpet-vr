@@ -217,15 +217,10 @@ pub fn parse_evnt(data: &[u8]) -> Result<Song, String> {
                 match ctrl {
                     119 => war_channels |= 1 << ch,
                     // A FOR-loop start deep into a song is a real
-                    // mid-song loop this strip FLATTENS (plays
-                    // through once). The 2026-07-15 D7 guard made
-                    // that a hard error on the premise no bank-0
-                    // song has one — the first full rebake to
-                    // exercise it (2026-07-16) found two (C2GAME3
-                    // tick 1, C2INTRO tick 11876), and the shipped
-                    // pre-guard bake had flattened them silently
-                    // with the result ear-confirmed. Keep the
-                    // shipped behavior, audibly noted.
+                    // mid-song loop this strip FLATTENS (deliberate:
+                    // plays through once, then the baked FLAC loops
+                    // whole). Two bank-0 songs have one (C2GAME3 tick
+                    // 1, C2INTRO tick 11876); note it audibly.
                     116 if tick > 1 => {
                         eprintln!(
                             "note: cc116 FOR-loop start at tick {tick} — \

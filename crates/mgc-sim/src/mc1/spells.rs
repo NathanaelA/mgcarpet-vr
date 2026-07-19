@@ -13,12 +13,11 @@
 //! mana pool (`+140` current / `+136` max), per-tick recharge
 //! (`+132`), spell level (`+26`), and burst counter (`+48`).
 //!
-//! Spell identities were established 2026-07-06 from the player's
-//! book-order naming pushed through the display permutation
-//! [`DISPLAY_ORDER`] (`byte_99B88`, :5752) — see ROADMAP "Spell
-//! repertoire". MC1 shows no spell names in-game; [`SpellId::name`]
-//! labels are ours (MC2's data names spells explicitly — reconcile
-//! when its track lands).
+//! Spell identities derive from book-order naming pushed through the
+//! display permutation [`DISPLAY_ORDER`] (`byte_99B88`, :5752). MC1
+//! shows no spell names in-game; [`SpellId::name`] labels are ours
+//! (MC2's data names spells explicitly — reconcile when its track
+//! lands).
 
 /// Internal spell type (entity `+65` on a manifestation; 0..24). The
 /// spellbook DISPLAYS spells permuted by [`DISPLAY_ORDER`].
@@ -33,10 +32,9 @@ impl SpellId {
     }
 }
 
-/// Official manual names (player-supplied 2026-07-06). Notables: 11
-/// "Duel to the Death" = the tether; 20 "Wall of Fire" (player calls
-/// it fire storm); 22 "Global Death" = the player's "magic bomb" —
-/// the manual name oversells the sub-tile blast radius, but the
+/// Official manual names. Notables: 11 "Duel to the Death" = the
+/// tether; 20 "Wall of Fire" = fire storm; 22 "Global Death" = magic
+/// bomb — the manual name oversells the sub-tile blast radius, but the
 /// "shockwave fatal to anything within its influence" bit is real.
 const NAMES: [&str; SPELL_COUNT] = [
     "Fireball",             // 0
@@ -91,8 +89,7 @@ pub struct SpellDef {
     /// artifact (retail value needs the binary) — kept verbatim.
     pub castle_req: u32,
     /// a9 → `+44`: damage/potency. Utility rows carry a vestigial 100
-    /// here (shared-constructor filler; the player: "not sure what
-    /// damage means there").
+    /// here (shared-constructor filler; meaning unclear on those rows).
     pub damage: u32,
 }
 
@@ -100,9 +97,8 @@ pub struct SpellDef {
 /// preserved verbatim pending the emission-behavior port:
 /// - Magic Bomb's a8 decompiles as `(int)&loc_30D40` (= 199488), a
 ///   code address frozen into a literal; treated as the constant.
-/// - Fire Storm's damage 24464 is anomalously large (the player calls
-///   the spell "pretty useless" — whatever it does, it isn't a plain
-///   24464-damage hit).
+/// - Fire Storm's damage 24464 is anomalously large — whatever it
+///   does, it isn't a plain 24464-damage hit.
 pub const SPELLS: [SpellDef; SPELL_COUNT] = [
     // 0 Fireball (sub_3C090 :48032)
     def(200, 5, true, false, 0, 125),
@@ -160,7 +156,7 @@ pub const SPELLS: [SpellDef; SPELL_COUNT] = [
 /// `sub_3BF70(a1,20,60,5000,51,1,0,12000,24464)` (remc1 :48142) — burst
 /// count 51→26, castle_req 12000→60000, damage 24464→5000. Total mana
 /// (5000) and the fire/charge flags are unchanged. See
-/// docs/SURVEY-MC1HW.md §3b. The homing targeting is a separate seam
+/// docs/archive/SURVEY-MC1HW.md §3b. The homing targeting is a separate seam
 /// (§3a, `proj_firewall_tick`), not a stat.
 pub const SPELLS_HW: [SpellDef; SPELL_COUNT] = {
     let mut t = SPELLS;
@@ -200,7 +196,7 @@ const fn def(
 
 /// Spellbook display order: page position -> internal spell id
 /// (`byte_99B88`, sub_main.cpp:5752; iterated by the book draw at
-/// :26918-26962). Player-verified against the retail book layout.
+/// :26918-26962). Matches the retail book layout.
 pub const DISPLAY_ORDER: [u8; SPELL_COUNT] = [
     0, 3, 2, 16, 1, 14, 4, 12, 6, 9, 7, 8, 15, 18, 17, 19, 13, 5, 11, 10, 20, 21, 22, 23,
 ];

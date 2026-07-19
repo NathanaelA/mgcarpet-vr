@@ -39,8 +39,8 @@ use mgc_sim::mc1::spells::SPELL_COUNT;
 ///
 /// The five pre-49 skips are `{8, 17, 28, 33, 39}` — the single-player
 /// campaign hardcodes bumping its level counter past them (remc1
-/// `sub_34070`, sub_main.cpp:41456; player-verified for 008/017, see
-/// docs/ROADMAP.md "MC1 CAMPAIGN SKIP TABLE"). 008/017/028/033 are
+/// `sub_34070`, sub_main.cpp:41456; see docs/ROADMAP.md "MC1 CAMPAIGN
+/// SKIP TABLE"). 008/017/028/033 are
 /// complete worlds parked in the campaign index range (multiplayer maps);
 /// 039 is the authentically-broken flat-plateau level. Campaign = indices
 /// 0-49 minus these five = 45 played levels; 50-69 are the multiplayer
@@ -168,8 +168,8 @@ fn apply_level_mask(spells: &mut Vec<u8>, package: &LevelPackage) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 // MC2 arm — a plausible spellbook that carries spell EXPERIENCE, not just a
 // learned set (MC2's book is XP-driven: each spell has a per-tier `xpos1`
-// ladder). The scan order is the CAMPAIGN order the stitching established
-// (player directive 2026-07-18): mains 0-24 with each secret level (30-34)
+// ladder). The scan order is the CAMPAIGN play order: mains 0-24 with each
+// secret level (30-34)
 // interleaved right after its parent main (`MC2_SECRETS`); a non-campaign
 // target (dev filler, e.g. 027) assumes the WHOLE campaign completed. It is
 // an UPPER BOUND: the learned set unions every collectable spell jar, and the
@@ -288,8 +288,8 @@ pub fn plausible_spellbook_mc2(level_dir: &Path, package: &LevelPackage) -> Plau
     learned.sort_unstable();
     // Each scroll grants MC2_SCROLL_XP to every owned spell. As a DEBUG
     // heuristic we count 2× the collectable scrolls: usage-based XP (which
-    // we can't simulate) is a real second source, and testing later levels
-    // showed the scroll-only floor lands too low. The sim's `mc2_relevel`
+    // we can't simulate) is a real second source, and the scroll-only floor
+    // lands too low. The sim's `mc2_relevel`
     // still clamps to each spell's tier ladder, so over-shooting is safe.
     let xp = MC2_SCROLL_XP * (2 * scroll_count) as i32;
     let grants = learned.into_iter().map(|s| (s, xp)).collect();

@@ -1,7 +1,7 @@
 //! The authenticity-matrix config, in two layers.
 //!
-//! Project stance (README/ROADMAP): the authentic original behavior is
-//! always the default, and every modern enhancement is an opt-in flip.
+//! Project stance: the authentic original behavior is always the
+//! default, and every modern enhancement is an opt-in flip.
 //! Until a real in-game options screen exists, the flips live in:
 //!
 //! - **`mgcarpet.json.defaults`** — the default baseline, EVERY option
@@ -118,8 +118,8 @@ pub struct SimOptions {
 
 /// The game-speed levels. Retail ships THREE (MC1 :20123 `%= 3`,
 /// Normal/Fast/Very Fast at 1×/4×/16× sim steps per frame — remc1
-/// :41672; MC2 tops out at 8×, EF:31800); `slow` is our addition (no
-/// retail equivalent).
+/// :41672; MC2 tops out at 8×, EF:31800); `slow` is our addition
+/// (deliberate: no retail equivalent).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GameSpeed {
@@ -231,17 +231,17 @@ pub struct RenderPreference {
     /// creatures acting before you can see them and, past ~128, the
     /// torus wrap. 0 = fog off. Max useful ≈ 255 (the map is 256
     /// tiles around — you'd see the back of your own carpet one tile
-    /// short). DEFAULT 50 (player ruling 2026-07-16: retail's 20 was
-    /// performance-only and is an "instant bummer"); the menu offers
-    /// the stops 20 (faithful) / 50 (default) / 100 (high) / 255 (max).
+    /// short). DEFAULT 50 (deliberate: retail's 20 was performance-only);
+    /// the menu offers the stops 20 (faithful) / 50 (default) / 100
+    /// (high) / 255 (max).
     pub fog_distance: u32,
     /// Vertical sync (on by default — off has no visual upside, only
     /// tearing). Off releases the frame rate from the display's
     /// refresh so the `fps` debug overlay can measure what the
-    /// machine actually renders — the effect-cost measuring rig
-    /// (player request 2026-07-17). A display device preference:
-    /// no retail analogue (DOS VGA page-flipped at whatever rate the
-    /// frame took), so fidelity-free by construction.
+    /// machine actually renders — the effect-cost measuring rig. A
+    /// display device preference: no retail analogue (DOS VGA
+    /// page-flipped at whatever rate the frame took), so fidelity-free
+    /// by construction.
     pub vsync: bool,
 }
 
@@ -277,23 +277,20 @@ pub struct RenderEnhancement {
     /// tick rate (rapid-fire streams stop looking stationary).
     /// Presentation only: the sim is untouched, poses pair across
     /// snapshots by (slot, generation), teleports snap. DEFAULTS ON
-    /// (player-directed 2026-07-16, the second default-on deviation
-    /// after prune_owned_jars) — toggle off in the menu for the
-    /// tick-stepped retail look.
+    /// (deliberate default-on deviation) — toggle off in the menu for
+    /// the tick-stepped retail look.
     pub smooth_motion: bool,
     /// HUD transparency (the top-strip panels + radar blend over the
     /// sky). MC1 always draws the HUD translucent; MC2 adds a toggle
     /// (Shift+F6, "Panel Transparency") to make it opaque for
     /// readability (the radar especially). A plain on/off preference —
-    /// faithfulness is deliberately not scored here (player ruling
-    /// 2026-07-16: "irrelevant"); DEFAULT OFF (opaque, the readable
-    /// choice — player 2026-07-07: transparency "makes the radar map
-    /// less useful"). Legacy config strings `mc1`/`opaque` still parse.
+    /// faithfulness is deliberately not scored here; DEFAULT OFF (opaque,
+    /// the readable choice — transparency makes the radar map less
+    /// useful). Legacy config strings `mc1`/`opaque` still parse.
     pub hud_transparency: HudTransparency,
     /// Highlight claimed/possessed dwellings on the overhead map in
     /// the owner's color — MC2's map behavior brought to MC1 as an
-    /// opt-in (P-class; MC1 never marks houses). Player proposal
-    /// 2026-07-07: "helps visibility".
+    /// opt-in (deliberate; P-class; MC1 never marks houses).
     pub map_owned_buildings: bool,
     /// Tag every pickable spell jar with its granted spell's icon —
     /// on the overhead map (a small icon stamp over the jar dot) and
@@ -340,15 +337,14 @@ pub struct RenderDebug {
     pub map_trigger_areas: bool,
     /// The spawn-grace shimmer: a thin bottom-center strip draining
     /// with the respawn invulnerability window. Retail shows NOTHING
-    /// for grace — the strip was a readability aid that used to draw
-    /// unconditionally; it is a debug cue and defaults OFF (faithful:
-    /// no grace indicator at all).
+    /// for grace, so this is a debug cue and defaults OFF (faithful: no
+    /// grace indicator at all).
     pub grace_meter: bool,
     /// The FPS overlay: frame rate + frame time in the bottom-right
     /// corner, refreshed twice a second. The performance measuring
-    /// instrument (player request 2026-07-17: gauge what each
-    /// non-faithful effect costs) — pair with `vsync` off to read
-    /// the machine's real headroom instead of the display refresh.
+    /// instrument (gauge what each non-faithful effect costs) — pair
+    /// with `vsync` off to read the machine's real headroom instead of
+    /// the display refresh.
     pub fps: bool,
 }
 
@@ -374,20 +370,18 @@ pub struct ControlPreferences {
     /// Mouse-to-stick / mouse-look sensitivity multiplier (P-class
     /// preference, 1.0 = default).
     pub mouse_sensitivity: f32,
-    /// Invert the mouse Y axis. STANDARDIZED 2026-07-16 (player
-    /// ruling): `invert_y = true` means mouse-up/forward = nose DOWN
-    /// (dive), like a flight stick — the polarity BOTH originals ship
-    /// — and it is the DEFAULT. `false` = mouse-up = nose up (the FPS
-    /// convention). Pure preference; before this the flag's meaning
-    /// differed between the faithful and enhanced models.
+    /// Invert the mouse Y axis. `invert_y = true` means mouse-up/forward
+    /// = nose DOWN (dive), like a flight stick — the polarity BOTH
+    /// originals ship — and it is the DEFAULT. `false` = mouse-up = nose
+    /// up (the FPS convention). Pure preference.
     pub invert_y: bool,
     /// The retail MC2 "Flight Assistance" option (options-menu case
     /// 5 flips `byte_0x36DEA_fly_asistant`; the idle auto-center in
     /// `sub_1A7A0` is gated on it, PI:1988): with the mouse untouched
     /// and no action for 0x30 polls the stick recenters. Applies to
-    /// the faithful control model only. DEFAULT OFF (player ruling
-    /// 2026-07-16: off is MC2's retail default and MC1 never had it).
-    /// Legacy config strings `auto`/`off` both parse as off.
+    /// the faithful control model only. DEFAULT OFF (off is MC2's retail
+    /// default; MC1 never had it). Legacy config strings `auto`/`off`
+    /// both parse as off.
     pub fly_assistant: FlyAssistant,
 }
 
@@ -402,9 +396,9 @@ impl Default for ControlPreferences {
     }
 }
 
-/// The fly-assistant idle auto-center (player ruling 2026-07-16:
-/// plain on/off, default off — MC2's retail default, and MC1 never
-/// had the option; the old game-keyed `auto` mode is retired).
+/// The fly-assistant idle auto-center: plain on/off, default off —
+/// MC2's retail default, and MC1 never had the option (legacy
+/// game-keyed `auto` configs parse as off).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlyAssistant {
@@ -427,10 +421,9 @@ impl FlyAssistant {
     }
 }
 
-/// The flight-control tiers (ROADMAP "Flight-control tiers"): two
-/// ORTHOGONAL enums, freely combinable, authentic values as defaults.
-/// Enums rather than booleans by design (authenticity-matrix rule 3 —
-/// room for named alternates like `mc2` or `torso-aim` later).
+/// The flight-control tiers: two ORTHOGONAL enums, freely combinable,
+/// authentic values as defaults. Enums rather than booleans by design
+/// (room for named alternates like `mc2` or `torso-aim` later).
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlModels {
@@ -446,9 +439,8 @@ pub struct ControlModels {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThrustModel {
-    /// The faithful thrust law (renamed from `mc1` 2026-07-16 —
-    /// decompile-verified byte-identical in BOTH games: throttle step
-    /// 16 clamped ±80 with no release decay, strafe ±16/clamp 80/
+    /// The faithful thrust law (byte-identical in BOTH games: throttle
+    /// step 16 clamped ±80 with no release decay, strafe ±16/clamp 80/
     /// decay −4, rate-based mouse steering (offset = turn RATE, like
     /// an airplane stick), thrust always in the level ground plane
     /// regardless of aim pitch; remc1 sub_main.cpp:55110-835 ≡ remc2
@@ -468,15 +460,13 @@ pub enum ThrustModel {
 pub enum AltitudeModel {
     /// Terrain-follow only: the carpet floats up along rising ground
     /// (hard floor ground+128) and settles by itself; no fly-up
-    /// control exists (remc1 sub_455D0 vertical rules). Renamed from
-    /// `faithful` 2026-07-16 to pair with the thrust tier names.
+    /// control exists (remc1 sub_455D0 vertical rules).
     #[default]
     #[serde(alias = "faithful")]
     Classic,
     /// Classic behavior PLUS explicit float up/down keys (E/Q), with
     /// float-up capped at the level's highest terrain tile (never a
-    /// god's-eye view) and wall blocking fully intact. Renamed from
-    /// `extended-lift`.
+    /// god's-eye view) and wall blocking fully intact.
     #[serde(alias = "extended-lift")]
     Enhanced,
 }
@@ -543,9 +533,7 @@ impl Default for AudioConfig {
 }
 
 /// When narration subtitles show (see [`AudioConfig::subtitles`]).
-/// Plain on/off since 2026-07-16 (player ruling — the game-keyed
-/// `auto` mode, retail's show-only-when-speech-doesn't-play law, is
-/// retired; legacy `auto` configs parse as `on`).
+/// Plain on/off (legacy `auto` configs parse as `on`).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Subtitles {
@@ -628,14 +616,11 @@ pub struct GameplayEnhancement {
     /// and therefore can never pick up. Retail (BOTH MC1 and MC2)
     /// leaves such jars in the world forever (placed jars never decay),
     /// so they become permanent, unidentifiable clutter. An INTENTIONAL
-    /// deviation from retail (P-class unfaithful improvement, player-
-    /// directed 2026-07-14): sweeps at level load AND the instant the
-    /// player gains a spell. Single-player entity removal. Defaults
-    /// ON ("no one will ever complain"; render smooth_motion is the
-    /// other default-on deviation) — disable with
-    /// `--no-prune-owned-jars` for a purist run. Covers
-    /// MC1's class-12 jars and MC2's class-15 spell tokens. See
-    /// docs/FIDELITY.md.
+    /// deviation from retail (deliberate; P-class): sweeps at level load
+    /// AND the instant the player gains a spell. Single-player entity
+    /// removal. Defaults ON — disable with `--no-prune-owned-jars` for a
+    /// purist run. Covers MC1's class-12 jars and MC2's class-15 spell
+    /// tokens. See docs/FIDELITY.md.
     pub prune_owned_jars: bool,
 }
 
@@ -643,9 +628,8 @@ impl Default for GameplayEnhancement {
     fn default() -> Self {
         Self {
             spell_selector: SpellSelector::default(),
-            // Default-ON (player-directed 2026-07-14): removing jars
-            // you can never pick up is "one no one will ever complain
-            // about". Purists disable it with `--no-prune-owned-jars`.
+            // Default-ON: removing jars you can never pick up. Purists
+            // disable it with `--no-prune-owned-jars`.
             prune_owned_jars: true,
         }
     }
@@ -827,10 +811,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// The defaults-file schema stamp: bump whenever an option is added,
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
-/// into the merge. (v2: 2026-07-16 — game_speed, fog 50, hud/
-/// subtitles/fly-assistant on-off, thrust/altitude classic naming.
-/// v3: 2026-07-16 — smooth_motion, default ON.
-/// v4: 2026-07-17 — vsync (default ON) + fps overlay.)
+/// into the merge.
 const DEFAULTS_VERSION: u64 = 4;
 
 /// Generate the defaults baseline so every option is spelled out and
@@ -882,8 +863,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("mgcarpet.json");
         let dpath = defaults_path(&path);
-        // An unversioned (pre-v2) baseline with a retired enum value
-        // would poison the merge — it must regenerate, not parse.
+        // An unversioned baseline with a legacy enum value would poison
+        // the merge — it must regenerate, not parse.
         std::fs::write(
             &dpath,
             "{\"controls\": {\"preferences\": {\"fly_assistant\": \"auto\"}}}\n",
@@ -916,7 +897,7 @@ mod tests {
 
     #[test]
     fn defaults_carry_the_documented_deviations() {
-        // The 2026-07-16 player rulings, pinned.
+        // The documented default deviations, pinned.
         let c = Config::default();
         assert_eq!(c.render.preference.fog_distance, 50, "fog default 50");
         assert!(

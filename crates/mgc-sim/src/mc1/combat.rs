@@ -1,29 +1,27 @@
 //! MC1 combat: damage mailboxes, class-9 projectiles, class-10
 //! combat effects (fire/explosion, fire-spreader, splash, blast ring,
 //! hit-flash, mana-steal flash, mana ball) and the corpse pipeline —
-//! direct ports of remc1. All citations sub_main.cpp; the full banked
-//! specs live in docs/ROADMAP.md ("Combat, damage, death & corpses"
-//! and "Fireball / repeat fireball").
+//! ports of remc1 sub_main.cpp. Full specs in docs/ROADMAP.md
+//! ("Combat, damage, death & corpses", "Fireball / repeat fireball").
 //!
-//! Fidelity notes (deliberate deviations, all flagged in ROADMAP):
-//! - `sub_12B50`'s inverted accumulate/overwrite is NOT ported — the
-//!   direct write uses the area writers' protocol (:17301-05), the
-//!   transcription swap being a maintainer-suspect like :21814.
-//! - The m9 ranged thunk aims at the TARGET; the transcription's
-//!   atan2(0,0) self-aim (:21947-48) is a decompile casualty.
+//! Deviations from the decompile:
+//! - `sub_12B50`'s inverted accumulate/overwrite is NOT ported; the
+//!   direct write uses the area writers' protocol (:17301-05)
+//!   (deliberate: suspect transcription swap, like :21814).
+//! - The m9 ranged thunk aims at the TARGET, not the atan2(0,0)
+//!   self-aim (:21947-48) (deliberate: decompile casualty).
 //! - Aim assist scores candidates by angular miss (Δyaw² + Δpitch²)
-//!   with a distance tiebreak; the original's `sub_54A90` squared-
-//!   miss-distance metric awaits an exact port.
-//! - The m9 lightning BEAM (sub_535E0 :63272) is a full port: one-
-//!   tick hitscan walk + the state-14 segment chain (the two-random-
-//!   walk structure with the draw-only phantom walk confirmed against
-//!   remc2's sub_66750). Remaining deviation: the explosion's +146
-//!   stamps hit-or-0 where the original writes garbage on a miss.
+//!   with a distance tiebreak (deliberate approximation of sub_54A90's
+//!   squared-miss-distance metric; exact port OPEN).
+//! - The m9 lightning BEAM (sub_535E0 :63272) is a full port (one-tick
+//!   hitscan walk + state-14 segment chain, confirmed vs remc2
+//!   sub_66750); the explosion's +146 stamps hit-or-0 where the
+//!   original writes garbage on a miss (deliberate).
 //! - Class-9 model 14 (m7's bolt) has NO handler in remc1's truncated
-//!   state table — interim: m13-style straight bolt at its slow
-//!   init speed until the retail table is extracted.
-//! - Mana-shield reflection (+17 bit 7) is ported but nothing sets
-//!   the flag yet (wizard shields are the spell track).
+//!   state table; interim m13-style straight bolt at its slow init
+//!   speed (OPEN: retail table).
+//! - Mana-shield reflection (+17 bit 7) is ported but nothing sets the
+//!   flag yet (OPEN: wizard shields are the spell track).
 
 use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::features::{Gen, lcg32, tile};
@@ -321,30 +319,25 @@ impl Gen {
         self.spawn_projectile(13, 13, x, y, z, 384, 13, 0, 195)
     }
 
-    /// sub_3A390 (:46392): the m18 GLOBAL DEATH fuse. The ctor is
-    /// fireball-shaped boilerplate (speed 384, life 0x2000/384 = 21,
-    /// row [5], sprite 42) but state 19 sits past remc1's transcribed
-    /// class-9 table, and the PLAYER GROUND TRUTH (playtest-3 AND the
-    /// playtest-8 follow-up) is that it NEVER acts like a bolt: fire
-    /// once, wait, the blast lands AROUND THE CASTER. Reconstructed
-    /// as a caster-anchored fuse: 21 ticks tracking the caster, then
-    /// the GENERIC +44-copying detonation into the (10,55) field at
-    /// the caster's position. The ctor's speed/aim/+150 target point
-    /// are carried but unused (dead weight until a retail trace says
-    /// otherwise); the +26 charge byte stays unmodeled (the spawner
-    /// does move the wizard's accumulated charge into it — role
-    /// unknown; the player recalls NO hold-to-charge in play).
-    /// RETAIL CHECK OWED: the player recalls MULTIPLE overlapping
-    /// charges, each detonating on its own delay — our cast gate
-    /// (the row's 101-tick burst counter, decompile-consistent)
-    /// currently blocks a recast for ~4s.
+    /// sub_3A390 (:46392): the m18 GLOBAL DEATH fuse. Fireball-shaped
+    /// ctor (speed 384, life 0x2000/384 = 21, row [5], sprite 42) but
+    /// state 19 sits past remc1's transcribed class-9 table. Observed
+    /// retail behavior: never a bolt — fire once, wait, the blast lands
+    /// AROUND THE CASTER. Reconstructed as a caster-anchored fuse: 21
+    /// ticks tracking the caster, then the generic +44-copying
+    /// detonation into the (10,55) field at the caster's position
+    /// (deliberate reconstruction). The ctor's speed/aim/+150 target
+    /// are carried but unused; the +26 charge byte (spawner moves the
+    /// wizard's accumulated charge into it) stays unmodeled — role
+    /// unknown. OPEN: retail may allow MULTIPLE overlapping charges,
+    /// each detonating on its own delay; our cast gate (the row's
+    /// 101-tick burst counter, decompile-consistent) blocks recast ~4s.
     pub(crate) fn spawn_bomb_fuse(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         self.spawn_projectile(18, 19, x, y, z, 384, 21, 5, 42)
     }
 
     /// State 19: the Global Death fuse tick — ride the caster, burn
-    /// the 21-tick life, detonate in place (player-validated shape;
-    /// see spawn_bomb_fuse).
+    /// the 21-tick life, detonate in place (see spawn_bomb_fuse).
     fn bomb_fuse_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         if self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
             self.move_relink(i, ctx.px, ctx.py, ctx.pz);
@@ -799,11 +792,10 @@ impl Gen {
     /// (10,57) when its parent tag differs from the caster; and
     /// buildings (10,45) ONLY when POSSESSABLE — `bldgprm.flags & 8
     /// == 0`. The un-possessable factory / terrain-modification
-    /// buildings (the level-001 cross sinks, the level-000 spires) and
-    /// every wizard / marker keep the bit set or fall off the list, so
-    /// possession passes through them (player-validated against retail
-    /// 2026-07-13; the port used to reuse the generic probe and wrongly
-    /// consumed the shot on those sinks). The `+148` claim-owner
+    /// buildings (level-001 cross sinks, level-000 spires) and every
+    /// wizard / marker keep the bit set or fall off the list, so
+    /// possession passes through them (NOT the generic probe, which
+    /// would consume the shot on those sinks). The `+148` claim-owner
     /// half of retail's self-check has no ported field — the `+24`
     /// (`id24`) half stands (APPROX).
     fn claim_admits(&self, j: usize, own: u16) -> bool {
@@ -913,9 +905,9 @@ impl Gen {
         match self.ent[i].tick70 {
             0 => self.proj_m0_tick(i, ctx),
             1 => self.proj_m1_tick(i, ctx),
-            // Global Death's m18 fuse (state 19, player-validated
-            // reconstruction — see spawn_bomb_fuse): rides the
-            // caster, detonates the (10,55) field in place.
+            // Global Death's m18 fuse (state 19, reconstruction — see
+            // spawn_bomb_fuse): rides the caster, detonates the
+            // (10,55) field in place.
             19 => self.bomb_fuse_tick(i, ctx),
             3 => self.proj_generic_tick(i, ctx, true),
             8 => self.proj_m8_tick(i, ctx),
@@ -1270,9 +1262,9 @@ impl Gen {
         let tz = self.ground_z(dx, dy) as i16;
         // EASED steering (sub_53B50 :63548-65 via sub_422A0 with the
         // behavior-row caps): the ball leaves along the wizard's aim
-        // and turns toward the ground target at row-0 rates — the
-        // aim pitch shapes the early arc (snap-steer was the
-        // playtest-6 "aim ignored" report).
+        // and turns toward the ground target at row-0 rates — the aim
+        // pitch shapes the early arc (NOT snap-steer, which ignores
+        // the aim).
         let tgt_yaw = Self::angle_between(px, py, dx, dy);
         let dh = Self::isqrt(Self::dist2_sq(px, py, dx, dy) as u32) as i32;
         let tgt_pitch = Self::pitch_toward(pz, tz, dh);
@@ -1881,9 +1873,8 @@ impl Gen {
     }
 
     /// sub_25EC0 (:28731): the volcano eruption driver (m18, state
-    /// 18). Direct import replacing the old every-60-ticks
-    /// approximation. Counter +26 runs the machine; maxLife (10000)
-    /// never counts down:
+    /// 18). Counter +26 runs the machine; maxLife (10000) never
+    /// counts down:
     /// - counter 0: eruption start — always activates, registers as
     ///   THE erupting volcano (kicking any previous one to counter
     ///   250), swaps the global (10,19) plume, and fires the
@@ -2331,9 +2322,9 @@ impl Gen {
         // damage 400, sprite 7/41, extents 128) but tick through the
         // per-game arms (MC2: sub_30D50 worn-path repaints + ring
         // cluster). Without this, an MC1-fallback fireball on an MC2
-        // world spawned an MC1-shaped fire that the game-keyed
-        // dispatch fed to the MC2 handler (damage field mismatch —
-        // the silent-fire regression this comment guards).
+        // world spawns an MC1-shaped fire that the game-keyed dispatch
+        // feeds to the MC2 handler (damage field mismatch → silent
+        // fire).
         if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
             match model {
                 0 => return self.mc2_spawn_fire(x, y, z),
@@ -2683,26 +2674,22 @@ impl Gen {
     }
 
     /// sub_299D0 (:31263), class-10 STATE 60 — the real GLOBAL DEATH
-    /// field (the first port keyed the class-10 table by MODEL and
-    /// landed on state 55's terrain-raising volcano riser — the
-    /// playtest-8 "it does a volcano" report; the table is by STATE,
-    /// cross-checked against the napalm cloud's state 58 →
+    /// field. LAW: the class-10 table is keyed by STATE, not MODEL
+    /// (model-keying lands on state 55's terrain-raising volcano
+    /// riser; cross-check against the napalm cloud's state 58 →
     /// sub_29780). Verbatim: while +26 (32 from the ctor) runs, tick
     /// it down with sound 43 (the audible priming tick-tock); then
     /// ONE full-pool sweep — every enemy entity within 0xA00 (10
-    /// tiles) by PURE 2D DISTANCE (sub_423D0 is x/y only: the
-    /// infinite vertical kill cylinder, the player's "shoots very
-    /// well up and down"): class 2/5 die instantly (life = -1, no
-    /// kill credit, no explosion effect — "the monsters simply
-    /// explode"), class 3 take the +44 (7000) on ch0, own-team
-    /// skipped, and an in-range class-9/10 re-arms the field's OWN
-    /// life to 0 (verbatim quirk, inconsequential — it frees this
-    /// tick regardless). Finish: sound 44 at the field AND at the
-    /// owner, the sub_44BE0(owner, 3) SCREEN FLASH (the general
-    /// flash mechanism is unported — banked; player: "flashes on
-    /// many occasions, yet to look into"), free. NO terrain change,
-    /// NO drift, NO visual — the ctor's speed/heading/extents are
-    /// dead weight.
+    /// tiles) by PURE 2D DISTANCE (sub_423D0 is x/y only: an infinite
+    /// vertical kill cylinder): class 2/5 die instantly (life = -1,
+    /// no kill credit, no explosion effect), class 3 take the +44
+    /// (7000) on ch0, own-team skipped, and an in-range class-9/10
+    /// re-arms the field's OWN life to 0 (verbatim quirk,
+    /// inconsequential — it frees this tick regardless). Finish:
+    /// sound 44 at the field AND at the owner, the sub_44BE0(owner, 3)
+    /// SCREEN FLASH (OPEN: general flash mechanism unported), free. NO
+    /// terrain change, NO drift, NO visual — the ctor's
+    /// speed/heading/extents are dead weight.
     fn death_field_tick(&mut self, i: usize, _ctx: &MobCtx) -> bool {
         if self.ent[i].f26 > 0 {
             self.ent[i].f26 -= 1;
@@ -2756,9 +2743,8 @@ impl Gen {
     /// - Hidden Worlds ([`Self::napalm_tick_hw`]): a different geometry —
     ///   one EXPANDING (10,0) ring per tick (160-unit pitch), stepped
     ///   `(var26+2)%7`, until `actLife` runs out; sound 30 once. The
-    ///   `IsHiddenWord=true` else-branch (remc1hw :29740). The prior
-    ///   "multiplayer branch" note here was a MISLABEL — it is the HW
-    ///   path (SURVEY-MC1HW §2).
+    ///   `IsHiddenWord=true` else-branch (remc1hw :29740; the HW path,
+    ///   NOT a multiplayer branch — SURVEY-MC1HW §2).
     fn napalm_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         if self.is_hidden_worlds() {
             return self.napalm_tick_hw(i, ctx);
@@ -3014,10 +3000,10 @@ impl Gen {
             };
             if let Some(c) = conv {
                 // The real sub_33800 paint call (:28086-92) — the
-                // damage-stage TYPES come from PAINT_BC (10/11/12);
-                // writing the paint CODE as the type was the
-                // wrong-texture bug. a1/a2 are leftover registers in
-                // the original; they only seed corner_orient ties.
+                // damage-stage TYPES come from PAINT_BC (10/11/12), NOT
+                // the paint code (writing the code as the type =
+                // wrong texture). a1/a2 are leftover registers in the
+                // original; they only seed corner_orient ties.
                 self.paint(0, 0, t, c);
                 dirty = true;
             } else if !(6..=0x22).contains(&ty)
@@ -3281,8 +3267,8 @@ impl Gen {
         let y = y0.wrapping_add(vy as u16);
         let ground = self.ground_z(x, y) as i16;
         // Vertical: gravity only while airborne or launched — a ball
-        // at rest stays at rest (the perpetual-jiggle fix: applying
-        // gravity at rest made settled balls oscillate 16 units).
+        // at rest stays at rest (applying gravity at rest makes
+        // settled balls oscillate 16 units).
         let mut z = z0;
         let mut grounded = false;
         if z > ground || self.ent[i].f46 > 0 {
@@ -3301,13 +3287,12 @@ impl Gen {
             // branch): a resting ball takes the terrain gradient onto
             // its velocity, so balls stream down the island's slopes
             // into the low basin where the 14-tile magnet aura finishes
-            // the merge. THIS is the level-001 "something else pulls
-            // the balls to centre" the aura alone cannot (arm balls
-            // spawn 22–44 tiles out; the aura reaches only 14) —
-            // player-reported 2026-07-13. `sub_58030` is a RAW-heightmap
-            // forward difference over the ball's 2×2 tile quad, added
-            // un-divided (a height byte ≈ 32 world units), then the
-            // 250/256 friction. Airborne balls keep their velocity.
+            // the merge (on level-001 the aura alone cannot pull them:
+            // arm balls spawn 22–44 tiles out, the aura reaches only
+            // 14). `sub_58030` is a RAW-heightmap forward difference
+            // over the ball's 2×2 tile quad, added un-divided (a height
+            // byte ≈ 32 world units), then the 250/256 friction.
+            // Airborne balls keep their velocity.
             if grounded {
                 let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
                 let h = |dx: u8, dy: u8| {
@@ -3319,8 +3304,8 @@ impl Gen {
                 vy = ((vy as i32 + sy) * 250 / 256) as i16;
             }
         } else {
-            // MC1 (certified; goldens never re-pinned): unconditional
-            // friction, no slope roll — the original ball physics.
+            // MC1: unconditional friction, no slope roll — the
+            // original ball physics (goldens locked).
             vx = (vx as i32 * 250 / 256) as i16;
             vy = (vy as i32 * 250 / 256) as i16;
         }
@@ -3361,14 +3346,13 @@ impl Gen {
                 // MC2 owner rule (retail `sub_36D50` EF:26919): the
                 // surviving ball takes the OWNER (colour) of the larger
                 // contributor — an unowned ball defers to an owned
-                // partner, two owned balls resolve to the bigger. The
-                // port kept the survivor's own owner, so a merged ball's
-                // colour looked like "the last ball merged" rather than
-                // the dominant one (player-reported 2026-07-13). (Retail
-                // breaks the owned-vs-owned tie on the owner wizards'
-                // maxMana; ball mana is the observable proxy and is what
-                // the single-owner economy levels turn on.) MC1 keeps
-                // its certified merge (survivor's owner, goldens locked).
+                // partner, two owned balls resolve to the bigger (NOT
+                // the survivor's own owner, which colours a merged ball
+                // as "the last ball merged"). (Retail breaks the
+                // owned-vs-owned tie on the owner wizards' maxMana; ball
+                // mana is the observable proxy and is what the
+                // single-owner economy levels turn on.) MC1 keeps its
+                // merge (survivor's owner, goldens locked).
                 if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
                     let (oi, oj) = (self.ent[i].f144, self.ent[j].f144);
                     let winner = if oi == 0 {
@@ -3480,10 +3464,10 @@ impl Gen {
     /// Ring cell offsets for radius lo..=hi — the real SEARCH.DAT
     /// ring table (the original's precomputed rings, row-major
     /// emission order + the dropped-last-cell quirk, features.rs
-    /// `ring_cells`), sign-extended for unit-space scaling. The
-    /// earlier Chebyshev box placeholder here was the square meteor
-    /// blast of playtest 3 (the retail rings are round); tile-space
-    /// callers (dig_disc) keep the raw u8 deltas and wrap mod 256.
+    /// `ring_cells`), sign-extended for unit-space scaling. The retail
+    /// rings are ROUND (not a Chebyshev box = a square blast);
+    /// tile-space callers (dig_disc) keep the raw u8 deltas and wrap
+    /// mod 256.
     fn ring_cells_pub(&self, lo: i32, hi: i32) -> Vec<(i8, i8)> {
         self.ring_cells(lo, hi)
             .into_iter()

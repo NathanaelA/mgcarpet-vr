@@ -19,8 +19,8 @@
 //! by that ms alone — `TrackOffsets_180084` (drive TOC) applies only
 //! to the dead MSCDEX path, so per-track rips need NO correction.
 //! The port applies the conversion uniformly, including the secret
-//! rows (retail's secret path skips it — a latent bug that would cut
-//! those clips 13× short; trace §1b).
+//! rows (deliberate: retail's secret path skips it — a latent bug
+//! that would cut those clips 13× short; trace §1b).
 
 pub struct CdTrack {
     /// Physical CD track number (1-based; rip member `track-NN`).

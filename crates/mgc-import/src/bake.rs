@@ -214,8 +214,7 @@ pub fn find_genlevel() -> Option<PathBuf> {
     default.exists().then(|| default.to_path_buf())
 }
 
-// MC1 asset baking lives in `crate::bundle` (unified asset bundles;
-// the flat `mc1/assets` layout it replaced was removed 2026-07-05).
+// MC1 asset baking lives in `crate::bundle` (unified asset bundles).
 
 /// Run the oracle over one decompressed MC2 level, returning the
 /// pristine generated terrain. The tool emits the engine's 0x70000
@@ -354,15 +353,13 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
                     y: c.y,
                 })
                 .collect(),
-            // ALL 11 slots, VERBATIM and SLOT-ALIGNED. The old
-            // `filter(is_used)` read byte0 as i8 >= 0 — but byte0
-            // packs FLAG BITS in its high nibble (0x80 = match-by-
-            // subtype, 0x40 = watch-model), so every flagged row
-            // (e.g. level-000's 0x82 goat-graze anchors) vanished
-            // AND the survivors compacted, breaking the slot indices
-            // the sim's InitStageVars port aligns on. Found via the
-            // 2026-07-16 flocking probe (retail memimage shows 9 live
-            // rows where our bake had 3).
+            // ALL 11 slots, VERBATIM and SLOT-ALIGNED — never filter.
+            // The sim's InitStageVars port aligns on slot index, and
+            // byte0 packs FLAG BITS in its high nibble (0x80 = match-
+            // by-subtype, 0x40 = watch-model), so a signed `>= 0`
+            // is_used filter both drops flagged rows (e.g.
+            // level-000's 0x82 goat-graze anchors) and compacts the
+            // survivors, misaligning the indices.
             variables: level
                 .stage_vars
                 .iter()

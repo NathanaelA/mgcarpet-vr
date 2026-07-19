@@ -34,10 +34,9 @@
 //!
 //! The cave second-heightmap maintenance inside sub_45DC0
 //! (:1875-1913), sub_462A0/46570 (:2034-2042), sub_46180
-//! (EF:31061-31071) and 48B90 (EF:32531-32542) is live (Phase 4.5
-//! session 2) — each write re-asserts the floor↔ceiling invariant
-//! ([`Gen::cave_seal_fixup`]) where retail's non-cave arm blind-clears
-//! bit3.
+//! (EF:31061-31071) and 48B90 (EF:32531-32542) is live — each write
+//! re-asserts the floor↔ceiling invariant ([`Gen::cave_seal_fixup`])
+//! where retail's non-cave arm blind-clears bit3.
 
 use crate::mc1::features::{Gen, tile};
 
@@ -405,7 +404,7 @@ impl Gen {
     /// the generated `building_F2CD0x` (= `Gen::retile` on MC2
     /// worlds), then shading over the rect grown once more, with the
     /// night/cave inversion (`shade = 64 - shade` when MapType != Day,
-    /// :2030-2033). Cave second-heightmap arm APPROX-skipped.
+    /// :2030-2033) and the cave arm's seal/open invariant (:2034-2042).
     pub(crate) fn mc2_retile_region(&mut self, ax: u8, ay: u8, bx: u8, by: u8) {
         let w = bx.wrapping_sub(ax).wrapping_add(1);
         let h = by.wrapping_sub(ay).wrapping_add(1);
@@ -617,8 +616,8 @@ impl Gen {
     /// (no RNG anywhere in the family).
     fn mc2_road_strip_y(&mut self, tx: u8, ty: u8, step: i32, rem: i32) {
         const W: u8 = 2; // (10,27) ctor life = strip width (EF:36156)
-        // G9e: retail picks the walker family from the STEP sign
-        // alone (EV:5423-33 / 5468-77, v20/v12 — never the combined
+        // Retail picks the walker family from the STEP sign alone
+        // (EV:5423-33 / 5468-77, v20/v12 — never the combined
         // advance); the first-step remainder folds into the SIGNED
         // row count. A degenerate step==0 && rem<0 leg stays in the
         // +Y snap family with FEWER rows — it does not flip to the
@@ -743,8 +742,8 @@ impl Gen {
     /// nonzero height, and none of its quad-corner cells are
     /// building-textured. On caves the write re-asserts the invariant
     /// (EF:32531-32542; no off-cave else arm in retail).
-    /// Shared by the pad-edge ring and the castle-unstamp finalizer
-    /// (G5). Neighbour indexing is retail's PACKED-WORD arithmetic
+    /// Shared by the pad-edge ring and the castle-unstamp finalizer.
+    /// Neighbour indexing is retail's PACKED-WORD arithmetic
     /// (`word − 0x101` borrows across the y byte at x==0; the
     /// kernel's `uint16 i` wraps) — reproduced with wrapping u16
     /// index math, torus like the rest of the port. (Retail's GATE

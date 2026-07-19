@@ -1,5 +1,5 @@
-//! MC2 class-10 effects band, Phase 4.3 (PLAYTEST-2 worklist): the
-//! smoke-column emitters (10,59)/(10,60) and their (10,13)/(10,14)
+//! MC2 class-10 effects band: the smoke-column emitters
+//! (10,59)/(10,60) and their (10,13)/(10,14)
 //! smoke particles, plus the (10,6) standing ground fire. Trace
 //! bank: docs/traces/mc2-class10-m59-m60.md +
 //! mc2-class10-m6-m9-m11-m28-m31.md (`EF:` = remc2
@@ -176,9 +176,8 @@ impl Gen {
     }
 
     /// `NewAdd0A06_4E5F0` (EF:35458) — the (10,6) STANDING GROUND
-    /// FIRE, the real damaging self-sustaining flame (the former
-    /// scenery.rs (10,0) stand-in APPROX, now closed): 240-tick
-    /// life, per-tick ch0 area heat of 50 (subSpell home = f140,
+    /// FIRE, the real damaging self-sustaining flame: 240-tick life,
+    /// per-tick ch0 area heat of 50 (subSpell home = f140,
     /// the class-10 effect column's amount field like the (10,0)
     /// fire), sprite 228 with ShiftRot(272, 1536), z snapped to
     /// terrain + the `word_0x2C_44` lift (f44 — runtime spawners
@@ -356,9 +355,9 @@ impl Gen {
     /// (docs/traces/mc2-class10-m50-chains-and-tail.md §1.4). Not
     /// map-linked, no sprite (invisible), extents 768, actSpeed
     /// 1024/tick, life = the chain stamper's dist/1024. The damage
-    /// amount stays NewEvent's subSpell default 100 (trace OPEN-1 —
-    /// neither the ctor nor sub_48880 overrides it), homed in f140
-    /// like the rest of the class-10 effect column.
+    /// amount stays NewEvent's subSpell default 100 (neither the ctor
+    /// nor sub_48880 overrides it), homed in f140 like the rest of the
+    /// class-10 effect column.
     pub(crate) fn mc2_spawn_load_beam(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {
@@ -434,9 +433,8 @@ impl Gen {
     /// INVISIBLE (no sprite), life 0, lives exactly one tick
     /// (action 0x1F = DisableEntityDrawing). Its whole job is
     /// donating position/identity to the stage binder at spawn —
-    /// our stage engine reads the authored checkpoint rows directly
-    /// (the trace's OPEN-2 recommendation), so the entity is pure
-    /// churn, exactly like retail.
+    /// our stage engine reads the authored checkpoint rows directly,
+    /// so the entity is pure churn, exactly like retail.
     pub(crate) fn mc2_spawn_stage_marker(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         self.mc2_spawn_stage_marker_for(29, 0x1F, x, y, z)
     }

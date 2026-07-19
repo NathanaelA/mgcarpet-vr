@@ -4,8 +4,7 @@
 //! follow-up trigger), whose trigger fires disposition 2 (an 8-creature
 //! ambush around the crater).
 //!
-//! Self-skips when the baked tree is absent (game data is optional,
-//! per the project rule).
+//! Self-skips when the baked tree is absent (game data is optional).
 
 use mgc_sim::mc1::features::{FeatureAssets, Planes};
 use mgc_sim::mc1::world::{PlayerCommand, PlayerPose, World};
