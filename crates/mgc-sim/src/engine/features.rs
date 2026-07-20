@@ -527,6 +527,49 @@ impl std::hash::Hash for Mc2PlayerDebuffs {
     }
 }
 
+/// The full-screen palette flash (`sub_44BE0_44F20` → `Type_160+152`,
+/// the row code read by the frame tail at :41813). The original writes
+/// the row ONLY when the arming entity's owner is the local player,
+/// paints the whole 256-entry palette once, then hands back to the
+/// case-1 `FadeInOut(pal, 4, 1)` ramp — one tinted frame plus a short
+/// fade home. We keep the retail row plus a tick countdown for the
+/// app-side overlay to shape that fade.
+///
+/// Rows in use: 2 = red (a processed hit on the player, :55722 — the
+/// long-standing [`crate::engine::world::Player::hit_flash`]), 3 =
+/// R+48/B saturated over the untouched green, i.e. the violet wash of
+/// Global Death's detonation (:31311), 6 = the warm R+48/G+32/B+32
+/// wash of a creature landing a charge (:29215, unported), 7 = the
+/// greyscale death-out (:55465/:55628, drawn by `LifeState::Dead`).
+///
+/// Presentation-only: hash-silent ALWAYS, like [`SlotGens`] — an
+/// overlay tint can never feed simulation state.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PalFlash {
+    /// The retail row code; 0 = no flash armed.
+    pub(crate) row: u8,
+    /// Ticks left in the app-side fade home.
+    pub(crate) ticks: u8,
+}
+
+impl PalFlash {
+    /// Arm `row` for the app overlay. Later arms overwrite earlier
+    /// ones — retail's +152 is a single byte, last writer wins.
+    pub(crate) fn arm(&mut self, row: u8) {
+        self.row = row;
+        self.ticks = Self::LIFE;
+    }
+
+    /// The overlay fade length. Retail paints one frame and fades back
+    /// over the case-1 4-step ramp; 6 sim ticks reads the same at our
+    /// tick rate.
+    pub(crate) const LIFE: u8 = 6;
+}
+
+impl std::hash::Hash for PalFlash {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
 /// The event-pool engine: terrain planes + the original's 1000-slot
 /// event pool and PRNG streams. Serves both the load-time feature pass
 /// (fixpoint loop, this module) and the runtime world tick
@@ -629,6 +672,9 @@ pub(crate) struct Gen {
     /// armed by a processed hit on an own balloon, decremented per
     /// tick. The balloon sub-panel's alert.
     pub(crate) balloon_alert: u8,
+    /// The full-screen palette flash armed by `sub_44BE0` — see
+    /// [`PalFlash`]. Hash-silent (presentation).
+    pub(crate) pal_flash: PalFlash,
     /// Allocations dropped on pool exhaustion (the limit-removing
     /// register's telemetry; the app logs increases). The original
     /// keeps no such count — it is observability, not behavior.
@@ -971,6 +1017,7 @@ impl Gen {
             castle_alert: 0,
             player_alert: 0,
             balloon_alert: 0,
+            pal_flash: PalFlash::default(),
             exhausted: 0,
             sounds: Vec::new(),
             terrain_dirty: false,

@@ -2739,8 +2739,10 @@ impl Gen {
     /// re-arms the field's OWN life to 0 (verbatim quirk,
     /// inconsequential — it frees this tick regardless). Finish:
     /// sound 44 at the field AND at the owner, the sub_44BE0(owner, 3)
-    /// SCREEN FLASH (OPEN: general flash mechanism unported), free. NO
-    /// terrain change, NO drift, NO visual — the ctor's
+    /// full-screen PALETTE FLASH — the violet wash, armed only when the
+    /// field's owner is the local player ([`crate::engine::features::PalFlash`])
+    /// — then free. NO terrain change, NO drift, NO entity visual: the
+    /// screen flash IS the spell's only sighting, and the ctor's
     /// speed/heading/extents are dead weight.
     fn death_field_tick(&mut self, i: usize, _ctx: &MobCtx) -> bool {
         if self.ent[i].f26 > 0 {
@@ -2777,6 +2779,11 @@ impl Gen {
             self.snd(44, i);
             if own == crate::mc1::mobs::PLAYER_TARGET {
                 self.snd_player(44);
+                // sub_44BE0(owner, 3): row 3 = red +48 / blue
+                // saturated over the untouched green — the violet
+                // flash. Gated on the owner being the local player,
+                // exactly as sub_44BE0's slot compare is.
+                self.pal_flash.arm(3);
             }
         }
         self.ent[i].flags |= 0x400;

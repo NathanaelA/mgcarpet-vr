@@ -337,6 +337,10 @@ pub struct PlayerVitals {
     pub grace: u16,
     /// Red hit-flash ticks remaining (sub_44BE0(2)).
     pub hit_flash: u8,
+    /// The full-screen palette flash: the retail row code (0 = none)
+    /// and the ticks left in its fade home. Row 3 is Global Death's
+    /// violet wash — see `PalFlash`.
+    pub pal_flash: (u8, u8),
     /// Died castle-less — the level is lost (restarting).
     pub lost: bool,
     /// The own castle took a processed hit recently (+391 flash —
@@ -2168,6 +2172,12 @@ impl World {
         }
         if self.player.hit_flash > 0 {
             self.player.hit_flash -= 1;
+        }
+        if self.g.pal_flash.ticks > 0 {
+            self.g.pal_flash.ticks -= 1;
+            if self.g.pal_flash.ticks == 0 {
+                self.g.pal_flash.row = 0;
+            }
         }
         if self.g.castle_alert > 0 {
             self.g.castle_alert -= 1;
@@ -4338,6 +4348,7 @@ impl World {
             state: self.player.state,
             grace: self.player.grace,
             hit_flash: self.player.hit_flash,
+            pal_flash: (self.g.pal_flash.row, self.g.pal_flash.ticks),
             lost: self.player.lost,
             castle_alert: self.g.castle_alert > 0,
             player_alert: self.g.player_alert > 0,
@@ -10565,9 +10576,14 @@ mod tests {
             g.ground_z(fx, fy)
         };
         // Ride out the 32-tick priming tick-tock + the sweep.
+        let mut flashed = false;
         for _ in 0..40 {
             w.tick(p, PlayerCommand::default());
+            // The detonation's only sighting: sub_44BE0(owner, 3), the
+            // violet full-screen wash (the player owns this field).
+            flashed |= w.vitals().pal_flash.0 == 3;
         }
+        assert!(flashed, "the detonation armed the row-3 palette flash");
         assert!(
             w.g.ent[above].class64 != 5 || w.g.ent[above].act_life < 0,
             "the vertical kill cylinder reached the creature far above"

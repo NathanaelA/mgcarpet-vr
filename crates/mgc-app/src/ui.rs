@@ -1604,6 +1604,15 @@ pub fn vitals_quads(
         let a = 0.08 * v.hit_flash as f32;
         quads.push(solid([0.0, 0.0, w, h], [0.8, 0.05, 0.05, a]));
     }
+    // The palette-row flash (sub_44BE0 → +152). Row 3 = Global Death's
+    // detonation: retail pushes red +48 and saturates blue while
+    // leaving green alone, so the whole frame washes violet for one
+    // frame and fades home. Row 2 is the hit flash above; rows 6/7 are
+    // drawn elsewhere or unported.
+    if v.pal_flash.0 == 3 && v.state == LifeState::Alive {
+        let a = 0.09 * v.pal_flash.1 as f32;
+        quads.push(solid([0.0, 0.0, w, h], [0.55, 0.12, 0.95, a]));
+    }
     match v.state {
         // The death fall: a deepening red-out.
         LifeState::Falling => {
