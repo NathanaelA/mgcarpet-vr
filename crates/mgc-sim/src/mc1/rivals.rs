@@ -1558,10 +1558,8 @@ impl World {
                 }
             }
             // Aimed group (:19158-77): the wider cone.
-            3 | 7 | 8 | 11 | 13 | 17 | 20 => {
-                if Gen::angdist(yaw, want) > 0xE3 {
-                    return false;
-                }
+            3 | 7 | 8 | 11 | 13 | 17 | 20 if Gen::angdist(yaw, want) > 0xE3 => {
+                return false;
             }
             _ => {}
         }

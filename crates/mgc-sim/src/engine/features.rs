@@ -4150,8 +4150,8 @@ impl Gen {
             }
             idx = (idx + 253) & 0xFFFF;
         }
-        if n != 0 {
-            self.t.height[t] = (sum / n) as u8;
+        if let Some(h) = sum.checked_div(n) {
+            self.t.height[t] = h as u8;
         }
     }
 }

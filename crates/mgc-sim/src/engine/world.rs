@@ -6493,19 +6493,17 @@ impl World {
             // fly-to target — retail clears only its map-icon draw
             // bit (:54701). The level ends at endGameSeq phase 0xC,
             // after the fly-in + fade.
-            m @ (12 | 31) => {
-                if self.g.ent[i].f63 & 7 == 0 && self.mc2_switch_overlap(i) {
-                    let target = if m == 12 { 3 } else { 4 };
-                    self.mc2_end_pending = Some(target);
-                    for j in 1..self.g.ent.len() {
-                        let e = &self.g.ent[j];
-                        if e.class64 == 14 && e.model65 == target && e.flags & 0x400 == 0 {
-                            self.g.ent[j].flags &= !0x20;
-                        }
+            m @ (12 | 31) if self.g.ent[i].f63 & 7 == 0 && self.mc2_switch_overlap(i) => {
+                let target = if m == 12 { 3 } else { 4 };
+                self.mc2_end_pending = Some(target);
+                for j in 1..self.g.ent.len() {
+                    let e = &self.g.ent[j];
+                    if e.class64 == 14 && e.model65 == target && e.flags & 0x400 == 0 {
+                        self.g.ent[j].flags &= !0x20;
                     }
-                    self.g.ent[i].flags |= 0x400;
-                    self.entities_dirty = true;
                 }
+                self.g.ent[i].flags |= 0x400;
+                self.entities_dirty = true;
             }
             // The slot-condition band, `sub_6F300` (:54457): the
             // switch watches the per-class-5-model live list; when

@@ -605,9 +605,9 @@ fn mc2_alliance_charms_instead_of_burning() {
                 && e.life > 0
                 && !matches!(e.model, 2 | 3 | 12..=16 | 19 | 22 | 23 | 25..=27)
         })
-        .map(|e| (e.model, e.tx, e.ty))
+        .map(|e| e.model)
         .expect("level-000 has an eligible grounded creature");
-    let (model, tx, ty) = victim;
+    let model = victim;
 
     let life_sum = |w: &World| -> i64 {
         w.debug_pool()

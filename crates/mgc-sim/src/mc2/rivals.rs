@@ -2387,10 +2387,8 @@ impl World {
             }
             // Homing-aimed {4,9,0xD,0xE,0x12,0x13,0x15} (EF:6841):
             // the wider 0xE3 cone.
-            4 | 9 | 0xD | 0xE | 0x12 | 0x13 | 0x15 => {
-                if Gen::angdist(yaw, want) > 0xE3 {
-                    return false;
-                }
+            4 | 9 | 0xD | 0xE | 0x12 | 0x13 | 0x15 if Gen::angdist(yaw, want) > 0xE3 => {
+                return false;
             }
             _ => {}
         }

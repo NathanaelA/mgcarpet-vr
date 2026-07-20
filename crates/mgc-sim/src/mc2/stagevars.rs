@@ -511,13 +511,9 @@ impl World {
                         .unwrap_or(0);
                     t == 0
                 }
-                7 => {
-                    if v.flags & 0x18 != 0 {
-                        self.mc2_stagevar_rearm_watchers();
-                        true
-                    } else {
-                        false
-                    }
+                7 if v.flags & 0x18 != 0 => {
+                    self.mc2_stagevar_rearm_watchers();
+                    true
                 }
                 _ => false,
             };

@@ -777,8 +777,8 @@ impl Gen {
             }
             idx = idx.wrapping_add(0xFD);
         }
-        if count != 0 {
-            self.t.height[t as usize] = (sum / count) as u8;
+        if let Some(h) = sum.checked_div(count) {
+            self.t.height[t as usize] = h as u8;
             self.cave_seal_fixup(t as usize);
         }
     }
