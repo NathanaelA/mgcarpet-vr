@@ -950,7 +950,13 @@ fn load_level(
         Vec::new()
     };
 
-    let plausible_spells = if plausible_spellbook && package.meta.game == Game::MagicCarpet1 {
+    // MC1 arm — and HW, which shares the spellbook system wholesale
+    // (same jar class, same per-level availability mask); only the
+    // campaign SHAPE differs (25 levels, no skip table), which
+    // `campaign::plausible_spellbook` resolves per game.
+    let plausible_spells = if plausible_spellbook
+        && matches!(package.meta.game, Game::MagicCarpet1 | Game::HiddenWorlds)
+    {
         let dir = level_path.parent().unwrap_or(Path::new("."));
         let p = campaign::plausible_spellbook(dir, &package);
         let names: Vec<&str> = p

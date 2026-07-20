@@ -1,7 +1,9 @@
 //! Campaign-derived spell inference for the `plausible_spellbook`
 //! playtest instrument.
 //!
-//! MC1's spellbook is cross-level state: you begin with nothing and
+//! MC1's spellbook — and Hidden Worlds', which shares the system
+//! wholesale; only the campaign SHAPE differs (25 levels, no skip
+//! table) — is cross-level state: you begin with nothing and
 //! collect spells one red jar at a time; a spell you never picked up you
 //! simply don't have (disassembly-verified — see docs/ROADMAP.md "Campaign
 //! spell progression"). That makes an individual level un-playtestable in
@@ -47,15 +49,33 @@ use mgc_sim::mc1::spells::SPELL_COUNT;
 /// pool, excluded by the `< 50` gate in [`is_campaign_level`].
 const MC1_BLACKLIST: &[u32] = &[8, 17, 28, 33, 39];
 
+/// MC1 campaign length: indices 0-49 (45 played, after the blacklist).
+const MC1_CAMPAIGN_LEN: u32 = 50;
+
+/// Hidden Worlds campaign length: indices 0-24. HW ships 73 levels
+/// (0-69 contiguous plus the 102/198/199 dev leftovers), but its world
+/// map has only 25 cells (remc1hw `:59940`, docs/archive/SURVEY-MC1HW.md
+/// §"world-map cells 50→25"), so 25+ is off the campaign path exactly
+/// like MC1's lost levels.
+const HW_CAMPAIGN_LEN: u32 = 25;
+
 /// The class-12 jar placement class (a spell pickup). Its `model` is the
 /// granted spell id (0..24).
 const JAR_CLASS: u16 = 12;
 
-/// Is `level` a reachable MC1 campaign level (not blacklisted, not a lost
-/// level)? Lost levels 50+ are excluded so that launching the instrument on
-/// one never treats other lost levels as collectable sources.
-fn is_campaign_level(level: u32) -> bool {
-    level < 50 && !MC1_BLACKLIST.contains(&level)
+/// Is `level` a reachable campaign level for `game` (not blacklisted, not
+/// a lost level)? Lost levels are excluded so that launching the
+/// instrument on one never treats other lost levels as collectable
+/// sources.
+///
+/// **HW has NO skip table** — its `sub_34070` is an empty body
+/// (`remc1hw/sub_main.cpp:38030`) and the only call site is gated
+/// `if (!IsHiddenWord)` (`:38088`). The blacklist is MC1's alone.
+fn is_campaign_level(game: Game, level: u32) -> bool {
+    match game {
+        Game::HiddenWorlds => level < HW_CAMPAIGN_LEN,
+        _ => level < MC1_CAMPAIGN_LEN && !MC1_BLACKLIST.contains(&level),
+    }
 }
 
 /// The spell ids of every jar placed in one level's records. Counts jars
@@ -89,14 +109,15 @@ pub struct Plausible {
 /// Compute the plausible spellbook for `target_level`, reading sibling
 /// `level-NNN.mgcl` files from `level_dir` (the directory the running level
 /// was loaded from). Unions the jars of every campaign level in `0..N`
-/// (excluding N). Non-MC1 packages return an empty set (the instrument is
-/// MC1-only — MC2 spell handling is a separate system).
+/// (excluding N), per that game's campaign shape. MC2 packages return an
+/// empty set — its XP-driven book has its own arm below.
 pub fn plausible_spellbook(level_dir: &Path, package: &LevelPackage) -> Plausible {
     let mut spells: Vec<u8> = Vec::new();
     let mut scanned = Vec::new();
     let mut skipped = Vec::new();
 
-    if package.meta.game != Game::MagicCarpet1 {
+    let game = package.meta.game;
+    if !matches!(game, Game::MagicCarpet1 | Game::HiddenWorlds) {
         return Plausible {
             spells,
             scanned_levels: scanned,
@@ -105,9 +126,13 @@ pub fn plausible_spellbook(level_dir: &Path, package: &LevelPackage) -> Plausibl
         };
     }
 
+    // The prefix rule needs no special case for a NON-campaign target
+    // (an MC1 lost level, or HW's 25+): `is_campaign_level` filters the
+    // range, so `0..target` collapses to the whole campaign on its own —
+    // which is exactly "what a player arriving here would have finished".
     let target = package.meta.level;
     for n in 0..target {
-        if !is_campaign_level(n) {
+        if !is_campaign_level(game, n) {
             continue;
         }
         let path = level_dir.join(format!("level-{n:03}.mgcl"));
@@ -693,12 +718,94 @@ mod tests {
 
     #[test]
     fn campaign_membership_excludes_blacklist_and_lost_levels() {
-        assert!(is_campaign_level(0));
-        assert!(is_campaign_level(49));
-        assert!(!is_campaign_level(50), "lost levels 50+ are not campaign");
-        assert!(!is_campaign_level(120));
+        let mc1 = Game::MagicCarpet1;
+        assert!(is_campaign_level(mc1, 0));
+        assert!(is_campaign_level(mc1, 49));
+        assert!(
+            !is_campaign_level(mc1, 50),
+            "lost levels 50+ are not campaign"
+        );
+        assert!(!is_campaign_level(mc1, 120));
         for &b in MC1_BLACKLIST {
-            assert!(!is_campaign_level(b), "blacklisted {b} is not campaign");
+            assert!(
+                !is_campaign_level(mc1, b),
+                "blacklisted {b} is not campaign"
+            );
         }
+    }
+
+    /// HW's campaign is 25 levels with NO skip table — its `sub_34070`
+    /// is an empty body (`remc1hw/sub_main.cpp:38030`) and its only
+    /// call site is gated `if (!IsHiddenWord)` (`:38088`). Applying
+    /// MC1's blacklist here would silently drop four reachable HW
+    /// levels from the jar union.
+    #[test]
+    fn hidden_worlds_campaign_is_25_levels_with_no_skips() {
+        let hw = Game::HiddenWorlds;
+        assert!(is_campaign_level(hw, 0));
+        assert!(
+            is_campaign_level(hw, 24),
+            "24 is the last HW campaign level"
+        );
+        assert!(!is_campaign_level(hw, 25), "25+ is off the HW campaign");
+        // The 102/198/199 dev leftovers HW ships.
+        assert!(!is_campaign_level(hw, 102));
+        assert!(!is_campaign_level(hw, 199));
+        for &b in MC1_BLACKLIST {
+            if b < HW_CAMPAIGN_LEN {
+                assert!(
+                    is_campaign_level(hw, b),
+                    "MC1's blacklist must not apply to HW ({b})"
+                );
+            }
+        }
+    }
+
+    /// The regression this fixes: HW packages fell through the
+    /// `== MagicCarpet1` gate and got an EMPTY book, so an HW level
+    /// launched outside a campaign run started with no spells at all —
+    /// not even the fireball/possess pair its own mask allows.
+    #[test]
+    fn hidden_worlds_packages_are_not_rejected_outright() {
+        let dir = std::path::Path::new("this-directory-does-not-exist");
+        let pkg = |game: Game, level: u32| LevelPackage {
+            meta: Meta {
+                format_version: FORMAT_VERSION,
+                bake_epoch: BAKE_EPOCH,
+                game,
+                level,
+                source: None,
+                importer: Importer {
+                    name: "test".into(),
+                    version: "0".into(),
+                },
+            },
+            things: Things { things: Vec::new() },
+            gen_params: None,
+            header: None,
+            wizards: None,
+            stages: None,
+            terrain: None,
+        };
+        // With no readable siblings every scan is a SKIP, not a silent
+        // empty: an HW target must report the campaign prefix it tried,
+        // exactly as MC1 does. A rejected game reports nothing at all.
+        let hw = plausible_spellbook(dir, &pkg(Game::HiddenWorlds, 39));
+        assert_eq!(
+            hw.skipped_levels.len(),
+            HW_CAMPAIGN_LEN as usize,
+            "an HW non-campaign target scans the whole 25-level campaign"
+        );
+        let mc1 = plausible_spellbook(dir, &pkg(Game::MagicCarpet1, 39));
+        assert_eq!(
+            mc1.skipped_levels.len(),
+            39 - MC1_BLACKLIST.iter().filter(|&&b| b < 39).count(),
+            "MC1 keeps its prefix rule and its blacklist"
+        );
+        let mc2 = plausible_spellbook(dir, &pkg(Game::MagicCarpet2, 39));
+        assert!(
+            mc2.skipped_levels.is_empty(),
+            "MC2 is still rejected outright — it has its own arm"
+        );
     }
 }
