@@ -122,8 +122,9 @@ tested and player-certified as faithful across the core games.
 The porting record — what each subsystem does, how it was verified,
 and where it deliberately deviates — is being assembled in
 docs/FIDELITY.md; docs/ROADMAP.md is the working log. MC2 levels parse
-and render (environment bundles, terrain via the remc2-carved oracle);
-its gameplay port comes after MC1.
+and render (environment bundles, terrain generated natively by the
+importer's port of the original algorithm); its gameplay port comes
+after MC1.
 
 ## Credits and prior art
 

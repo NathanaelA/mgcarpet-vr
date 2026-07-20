@@ -201,71 +201,24 @@ pub fn bake_mc1_archive(
     Ok(outputs)
 }
 
-/// Locate the terrain-generation oracle (`mc2-genlevel`, the original
-/// algorithm carved out of remc2 — see tools/mc2-genlevel/): the
-/// `MGC_GENLEVEL` environment variable, or the default in-repo build
-/// location relative to the working directory.
-pub fn find_genlevel() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("MGC_GENLEVEL") {
-        let p = PathBuf::from(p);
-        return p.exists().then_some(p);
-    }
-    let default = Path::new("tools/mc2-genlevel/mc2-genlevel");
-    default.exists().then(|| default.to_path_buf())
-}
-
 // MC1 asset baking lives in `crate::bundle` (unified asset bundles).
 
-/// Run the oracle over one decompressed MC2 level, returning the
-/// pristine generated terrain. The tool emits the engine's 0x70000
-/// terrain block; we keep tile type (+0x00000), heightmap (+0x10000),
-/// shading (+0x20000), and the angle/flags plane (+0x30000, texture UV
-/// orientation in bits 4-6).
-fn generate_terrain(
-    tool: &Path,
-    payload: &[u8],
-    scratch_dir: &Path,
-    index: u32,
-) -> Result<Terrain, BakeError> {
-    let io_err = |e: std::io::Error| BakeError::Io(tool.to_path_buf(), e);
-    let level_path = scratch_dir.join(format!("genlevel-in-{index}.bin"));
-    let out_path = scratch_dir.join(format!("genlevel-out-{index}.bin"));
-    std::fs::write(&level_path, payload).map_err(io_err)?;
-
-    let status = std::process::Command::new(tool)
-        .arg(&level_path)
-        .arg(&out_path)
-        .status()
-        .map_err(io_err)?;
-    if !status.success() {
-        return Err(BakeError::Level(
-            tool.to_path_buf(),
-            index,
-            format!("mc2-genlevel exited with {status}"),
-        ));
-    }
-    let block = std::fs::read(&out_path).map_err(io_err)?;
-    std::fs::remove_file(&level_path).ok();
-    std::fs::remove_file(&out_path).ok();
-    if block.len() != 0x70000 {
-        return Err(BakeError::Level(
-            tool.to_path_buf(),
-            index,
-            format!("oracle output {} bytes, expected 0x70000", block.len()),
-        ));
-    }
-    // +0x40000 = the second heightmap (cave ceiling). The oracle only
-    // writes it on cave levels (sub_43B40; sub_43D50 leaves it zeroed),
-    // so an all-zero plane = not a cave — omit it from the package.
-    let ceiling = &block[4 * TERRAIN_GRID_BYTES..5 * TERRAIN_GRID_BYTES];
-    let ceiling = ceiling.iter().any(|&b| b != 0).then(|| ceiling.to_vec());
-    Ok(Terrain {
-        tile_type: block[..TERRAIN_GRID_BYTES].to_vec(),
-        height: block[TERRAIN_GRID_BYTES..2 * TERRAIN_GRID_BYTES].to_vec(),
-        shading: Some(block[2 * TERRAIN_GRID_BYTES..3 * TERRAIN_GRID_BYTES].to_vec()),
-        angle: Some(block[3 * TERRAIN_GRID_BYTES..4 * TERRAIN_GRID_BYTES].to_vec()),
+/// Generate one MC2 level's terrain natively ([`crate::mc2_terrain`], a
+/// byte-exact port of the original algorithm; the retired external
+/// `mc2-genlevel` oracle lives in git history). The ceiling plane is
+/// all-zero off cave levels (the generator's `sub_43D50` never writes
+/// it), so an all-zero plane is dropped from the package.
+fn native_mc2_terrain(level: &Mc2Level) -> Terrain {
+    let t = crate::mc2_terrain::generate(level);
+    debug_assert_eq!(t.ceiling.len(), TERRAIN_GRID_BYTES);
+    let ceiling = t.ceiling.iter().any(|&b| b != 0).then_some(t.ceiling);
+    Terrain {
+        tile_type: t.tile_type,
+        height: t.height,
+        shading: Some(t.shading),
+        angle: Some(t.angle),
         ceiling,
-    })
+    }
 }
 
 /// Convert one parsed MC2 level into a package.
@@ -398,7 +351,6 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
 pub fn bake_mc2_archive(
     src: &GameSource,
     out_dir: &Path,
-    genlevel: Option<&Path>,
 ) -> Result<(Vec<(String, String)>, Vec<u32>), BakeError> {
     let dat_path = PathBuf::from("LEVELS/LEVELS.DAT");
     let read = |rel: &str| {
@@ -449,14 +401,7 @@ pub fn bake_mc2_archive(
                 entry_sha256,
             },
         );
-        if let Some(tool) = genlevel {
-            package.terrain = Some(generate_terrain(
-                tool,
-                &payload,
-                &game_dir,
-                entry.index as u32,
-            )?);
-        }
+        package.terrain = Some(native_mc2_terrain(&level));
 
         let name = format!("level-{:03}.mgcl", entry.index);
         let path = game_dir.join(&name);
@@ -499,15 +444,8 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
         None => eprintln!("note: no MC2 data under {} — skipping", gamedata.display()),
     }
 
-    // MC1 terrain is generated natively (mc1_terrain); only MC2 needs
-    // the remc2-carved oracle tool.
-    let genlevel = find_genlevel();
-    match &genlevel {
-        Some(tool) => println!("mc2 terrain oracle: {}", tool.display()),
-        None => println!(
-            "mc2 terrain oracle not found (build tools/mc2-genlevel or set MGC_GENLEVEL) — baking mc2 without terrain"
-        ),
-    }
+    // MC1 and MC2 terrain are both generated natively (mc1_terrain /
+    // mc2_terrain) — no external tool required.
 
     let mut manifest = Vec::new();
     if let Some(src) = &found.mc1 {
@@ -555,7 +493,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
 
     if let Some(src) = &found.mc2 {
         let (outputs, skipped) =
-            bake_mc2_archive(src, out_dir, genlevel.as_deref()).map_err(|e| e.to_string())?;
+            bake_mc2_archive(src, out_dir).map_err(|e| e.to_string())?;
         println!("mc2: baked {} levels", outputs.len());
         if !skipped.is_empty() {
             println!(

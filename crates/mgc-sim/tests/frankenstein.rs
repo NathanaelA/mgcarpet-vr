@@ -26,8 +26,8 @@ fn baked_root() -> Option<PathBuf> {
 fn build_world(root: &std::path::Path) -> Option<World> {
     let file = std::fs::File::open(root.join("mc2/level-000.mgcl")).unwrap();
     let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(file).unwrap();
-    // MC2 terrain planes exist only when the mc2-genlevel oracle ran
-    // at bake time; without them there is nothing to smoke.
+    // MC2 terrain planes are generated natively at bake time; a bundle
+    // predating that has none, and there is nothing to smoke.
     let terrain = pkg.terrain.as_ref()?;
     let planes = Planes {
         height: terrain.height.clone(),

@@ -43,7 +43,7 @@ so when retail play contradicts it, retail wins.
    reconstruction; not yet exercised against the original.
 2. **oracle-diffed** — output compared byte-/stream-exactly against
    original-engine output (reference dumps, instrumented DOSBox,
-   the mc2-genlevel oracle).
+   memory-image regression fixtures).
 3. **player-validated** — a targeted in-game check by the player
    confirmed the specific behavior.
 4. **player-certified** — the player has played the subsystem at

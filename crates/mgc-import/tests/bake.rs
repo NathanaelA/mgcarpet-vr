@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mgc_import::bake::{bake_mc2_archive, find_genlevel};
+use mgc_import::bake::bake_mc2_archive;
 
 use mgc_formats::{Game, ThingKind, mgcl};
 use mgc_import::bake::bake_mc1_archive;
@@ -147,19 +147,14 @@ fn mc1_terrain_generation_is_coherent() {
 /// Oracle cross-check: bake MC2 with terrain and verify the heightmap of
 /// entry 10 byte-matches remc2's DOSBox-verified regression fixture
 /// (memimages level11 — one of the levels whose post-load state equals
-/// pristine generation). Skips without game data, the oracle tool, or a
-/// remc2 checkout (override location with MGC_REMC2).
+/// pristine generation). The terrain is now generated natively
+/// ([`mgc_import::mc2_terrain`]); this test independently anchors it
+/// against the DOSBox-verified memory image. Skips without game data or
+/// a remc2 checkout (override location with MGC_REMC2).
 #[test]
 fn baked_terrain_matches_remc2_fixture() {
     let Some(src) = gamedata().mc2 else {
         eprintln!("note: MC2 level data not present — skipping");
-        return;
-    };
-    let Some(tool) = find_genlevel().or_else(|| {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/mc2-genlevel/mc2-genlevel");
-        p.exists().then_some(p)
-    }) else {
-        eprintln!("note: mc2-genlevel not built — skipping");
         return;
     };
     let remc2 = std::env::var_os("MGC_REMC2")
@@ -173,7 +168,7 @@ fn baked_terrain_matches_remc2_fixture() {
     }
 
     let out = std::env::temp_dir().join(format!("mgc-oracle-test-{}", std::process::id()));
-    let (outputs, _) = bake_mc2_archive(&src, &out, Some(&tool)).unwrap();
+    let (outputs, _) = bake_mc2_archive(&src, &out).unwrap();
     assert_eq!(outputs.len(), 165);
 
     let package = mgcl::read(std::fs::File::open(out.join("mc2/level-010.mgcl")).unwrap()).unwrap();
@@ -189,7 +184,7 @@ fn baked_terrain_matches_remc2_fixture() {
         &reference[0x10000..0x20000],
         "heightmap diverges from reference"
     );
-    eprintln!("oracle terrain byte-matches remc2 fixture for entry 10");
+    eprintln!("native terrain byte-matches remc2 fixture for entry 10");
 
     std::fs::remove_dir_all(&out).ok();
 }

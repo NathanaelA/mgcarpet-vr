@@ -26,6 +26,7 @@ pub mod level_mc1;
 pub mod level_mc2;
 pub mod mc1_terrain;
 pub mod mc2_music;
+pub mod mc2_terrain;
 pub mod redbook;
 pub mod rnc;
 pub mod smf;

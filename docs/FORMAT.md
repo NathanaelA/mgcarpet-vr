@@ -277,14 +277,15 @@ water — MC1 — or cave ceiling — MC2 — in bit 3, visibility in bit 7)
 and are preserved verbatim.
 
 The content is the **pristine output of the original generation
-algorithm**. MC2: the algorithm carved verbatim out of remc2 into
-`tools/mc2-genlevel`, run over the level's seed parameters and
-validated byte-for-byte against remc2's DOSBox-derived regression
-fixtures. MC1/Hidden Worlds: the importer's native Rust port of MC1's
-own generator (`mc1_terrain.rs`, from the remc1 decompilation —
-docs/ROADMAP.md "MC1 reference generator found"), whose heightmap
-reproduces the previously-validated oracle output near-byte-exactly
-and whose type layer is MC1's real classifier. Entity-driven terrain
+algorithm**, generated natively by the importer for both games. MC2:
+`mc2_terrain.rs`, a port of the remc2-carved algorithm, byte-for-byte
+identical to the retired `mc2-genlevel` oracle across all 165 levels ×
+5 planes (which was itself validated against remc2's DOSBox-derived
+regression fixtures; the C++ lives in git history). MC1/Hidden Worlds:
+`mc1_terrain.rs`, a port of MC1's own generator (from the remc1
+decompilation — docs/ROADMAP.md "MC1 reference generator found"), whose
+heightmap reproduces the previously-validated oracle output
+near-byte-exactly and whose type layer is MC1's real classifier. Entity-driven terrain
 modification (walls, canyons, building flattening) is deliberately NOT
 baked in: engines apply those at load time from `things.json`, exactly
 as the original engine does after generation (implemented for MC1/HW

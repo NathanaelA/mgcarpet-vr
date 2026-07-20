@@ -10,8 +10,8 @@
 //!
 //! The foundation ceiling (mirror about `MapBasicHeight` + the
 //! fixed-seed ±3 jitter, retail `sub_43B40`/`sub_43BB0`) is BAKED —
-//! the mc2-genlevel oracle runs the original code and the package
-//! carries `terrain/ceiling.bin`. The sim starts from that plane and
+//! the native `mc2_terrain` port runs the original algorithm and the
+//! package carries `terrain/ceiling.bin`. The sim starts from that plane and
 //! runs the THING-authored sculptors here, in the generate-pass settle
 //! loop, exactly like retail's `ApplyEvents`.
 //!
