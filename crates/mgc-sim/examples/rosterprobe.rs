@@ -2,10 +2,10 @@
 //! disposition, tick with the player amid the population, and report
 //! per-model class-5 counts, class-9 launches and the misfit ledger.
 use mgc_formats::LevelPackage;
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::FeatureAssets;
 use mgc_sim::engine::features::Planes;
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 
 fn main() {
     let root = std::path::Path::new("baked");

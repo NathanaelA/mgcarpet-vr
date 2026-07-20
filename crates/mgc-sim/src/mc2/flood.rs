@@ -56,8 +56,8 @@
 
 use super::morph::{auto_flat, dist2d};
 use super::sin_lut::SIN_DB750;
-use crate::mc1::combat::MailTarget;
 use crate::engine::features::{Gen, tile};
+use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::MobCtx;
 
 /// Retail byte[0] bit0 in the quake band — the tossed/handled latch

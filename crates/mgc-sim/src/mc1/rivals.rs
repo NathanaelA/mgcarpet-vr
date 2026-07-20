@@ -31,11 +31,11 @@
 //! list); the duel pull on the CASTER is applied through the knock
 //! channel (magnitude from the traced formula).
 
-use crate::mc1::behavior::BEHAVIOR;
 use crate::engine::features::Gen;
+use crate::engine::world::{LifeState, World};
+use crate::mc1::behavior::BEHAVIOR;
 use crate::mc1::mobs::PLAYER_TARGET;
 use crate::mc1::spells::{SPELL_COUNT, SPELLS};
-use crate::engine::world::{LifeState, World};
 
 /// Per-slot config from the level record (wizards.json), resolved by
 /// the app: personality params, starting castle, and the two spell

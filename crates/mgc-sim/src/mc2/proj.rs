@@ -30,8 +30,8 @@
 //!   fields marked OPEN below.
 
 use super::behavior::BEHAVIOR;
-use crate::mc1::combat::MailTarget;
 use crate::engine::features::Gen;
+use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
 /// MC2-native projectile marker on [`Ent::flags`] (see

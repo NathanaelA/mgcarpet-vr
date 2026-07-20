@@ -14,9 +14,9 @@
 //! Self-skips when the baked tree is absent (game data is optional).
 
 use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use mgc_sim::mc1::rivals::RivalConfig;
 use mgc_sim::mc1::spells::SpellId;
-use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::path::PathBuf;
 
 #[path = "common/mod.rs"]

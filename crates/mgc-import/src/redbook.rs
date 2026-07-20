@@ -153,7 +153,10 @@ pub fn mute_leading_junk(pcm: &mut [i16]) -> Option<u32> {
         .chunks_exact(JUNK_SECTOR)
         .take(300)
         .map(|seg| {
-            let rms = (seg.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>()
+            let rms = (seg
+                .iter()
+                .map(|&x| f64::from(x) * f64::from(x))
+                .sum::<f64>()
                 / seg.len() as f64)
                 .sqrt() as f32;
             let zc = seg.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count() as f32

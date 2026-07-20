@@ -1,7 +1,7 @@
 //! Scratch (playtest-cave round 2): what floods the pool on level 003?
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 use std::collections::HashMap;
 
 fn main() {

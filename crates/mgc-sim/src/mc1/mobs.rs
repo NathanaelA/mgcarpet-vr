@@ -19,9 +19,9 @@
 //!   (:45086-:45087); `link` guards on the placed flag in both the
 //!   original and this port, so the second call is a no-op.
 
+use crate::engine::features::Gen;
 use crate::mc1::behavior::{BEHAVIOR, BehaviorRow};
 use crate::mc1::combat::{Inbox, MailTarget};
-use crate::engine::features::Gen;
 use crate::mc1::sprite_stats::SPRITE_STATS;
 use crate::mc1::tables::{COS, SIN};
 
@@ -700,7 +700,8 @@ impl Gen {
         let blocked = |x: u16, y: u16| {
             self.cap_bit(x, y) == 0x100
                 || (self.is_cave()
-                    && self.t.angle[crate::engine::features::tile((x >> 8) as u8, (y >> 8) as u8)] & 8
+                    && self.t.angle[crate::engine::features::tile((x >> 8) as u8, (y >> 8) as u8)]
+                        & 8
                         != 0)
         };
         if !blocked(prop.0, prop.1) {

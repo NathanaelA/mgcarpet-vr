@@ -189,11 +189,7 @@ impl Gen {
         if target == PLAYER_TARGET {
             return 105;
         }
-        match self
-            .rival_ents
-            .iter()
-            .position(|&e| e != 0 && e == target)
-        {
+        match self.rival_ents.iter().position(|&e| e != 0 && e == target) {
             Some(slot) => 105 + 8 * slot as u16,
             None => 52,
         }

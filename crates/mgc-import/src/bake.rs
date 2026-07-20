@@ -486,14 +486,16 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
         }
         let outputs = crate::bundle::bake_mc1_menu(src, out_dir).map_err(|e| e.to_string())?;
         if !outputs.is_empty() {
-            println!("mc1: baked frontend bundle mc1-ui ({} members)", outputs.len());
+            println!(
+                "mc1: baked frontend bundle mc1-ui ({} members)",
+                outputs.len()
+            );
             manifest.extend(outputs);
         }
     }
 
     if let Some(src) = &found.mc2 {
-        let (outputs, skipped) =
-            bake_mc2_archive(src, out_dir).map_err(|e| e.to_string())?;
+        let (outputs, skipped) = bake_mc2_archive(src, out_dir).map_err(|e| e.to_string())?;
         println!("mc2: baked {} levels", outputs.len());
         if !skipped.is_empty() {
             println!(

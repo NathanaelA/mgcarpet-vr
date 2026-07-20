@@ -3,10 +3,10 @@
 //! release every disposition, tick with the player parked near the
 //! m27 tree, and report chain populations, class-9 launches, sounds
 //! and the misfit ledger.
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::FeatureAssets;
 use mgc_sim::engine::features::Planes;
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 
 fn main() {
     let root = std::path::Path::new("baked");

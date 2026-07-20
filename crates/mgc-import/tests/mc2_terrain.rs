@@ -70,7 +70,11 @@ fn native_mc2_terrain_golden() {
         checked += 1;
     }
 
-    let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let got: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     eprintln!("mc2 terrain golden: {checked} levels, hash {got}");
     assert_eq!(
         got, GOLDEN,

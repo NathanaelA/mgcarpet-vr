@@ -42,8 +42,17 @@ fn main() {
         if t.kind == mgc_formats::ThingKind::Entity && matches!(t.class, 5 | 11) {
             println!(
                 "slot {:3} ({},{:2}) at ({},{}) dis {} swi {}/{} parent {} child {} par3 {:?}",
-                t.slot, t.class, t.model, t.x, t.y, t.dis_id, t.swi_sz, t.swi_id, t.parent,
-                t.child, t.par3
+                t.slot,
+                t.class,
+                t.model,
+                t.x,
+                t.y,
+                t.dis_id,
+                t.swi_sz,
+                t.swi_id,
+                t.parent,
+                t.child,
+                t.par3
             );
         }
     }

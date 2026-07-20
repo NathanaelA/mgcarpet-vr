@@ -13,10 +13,10 @@
 
 use mgc_formats::{Thing, ThingKind};
 use mgc_render::{Billboard, HealthBar};
+use mgc_sim::engine::world::LivePose;
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
 use mgc_sim::mc1::sprite_stats::SPRITE_STATS;
-use mgc_sim::engine::world::LivePose;
 use mgc_sim::{HEIGHT_SCALE, MAP_TILES};
 
 /// Engine fixed-point units per tile.

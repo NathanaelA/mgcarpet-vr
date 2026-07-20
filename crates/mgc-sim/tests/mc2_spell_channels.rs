@@ -13,9 +13,9 @@
 //!
 //! Self-skips without baked mc2 data (game data is optional).
 
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 use std::path::PathBuf;
 
 fn baked_root() -> Option<PathBuf> {
@@ -710,7 +710,10 @@ fn mc2_volcano_boulders_are_not_cyclones() {
         }
     }
     assert!(boulders_seen, "the volcano actually erupted boulders");
-    assert!(boulder_fire, "a landing boulder lights a 30-tick (10,6) fire");
+    assert!(
+        boulder_fire,
+        "a landing boulder lights a 30-tick (10,6) fire"
+    );
     assert_eq!(
         w.mc2_book_view().xp[21] - xp21,
         0,
@@ -1365,7 +1368,11 @@ fn mc2_rebound_deflects_and_reowns() {
         let mut row = None;
         for _ in 0..12 {
             w.tick(pose, PlayerCommand::default());
-            let Some(r) = w.debug_flock_probe(9, 0).into_iter().find(|r| r.slot == slot) else {
+            let Some(r) = w
+                .debug_flock_probe(9, 0)
+                .into_iter()
+                .find(|r| r.slot == slot)
+            else {
                 break; // detonated/expired — no deflection happened
             };
             if r.id24 == 0xFFFF {
@@ -1375,9 +1382,15 @@ fn mc2_rebound_deflects_and_reowns() {
         }
         let row = row.unwrap_or_else(|| panic!("T{} bolt re-owns to the player", tier + 1));
         // Reverse ray = 0x400 + 0x400 = 0 (north). f34 carries it.
-        assert_eq!(row.aim, 0, "the reverse ray points back at the shooter side");
+        assert_eq!(
+            row.aim, 0,
+            "the reverse ray points back at the shooter side"
+        );
         if precise {
-            assert_eq!(row.yaw, 0, "T3 PRECISE returns exactly down the reverse ray");
+            assert_eq!(
+                row.yaw, 0,
+                "T3 PRECISE returns exactly down the reverse ray"
+            );
         } else {
             let dev = (row.yaw as i32 + 22) & 0x7FF;
             assert!(dev <= 44, "T1 scatter stays within ±22 of the reverse ray");

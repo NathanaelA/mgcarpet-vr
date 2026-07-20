@@ -1,9 +1,9 @@
 //! Scratch (playtest-cave): why don't level-003's corridor doors
 //! (pillar open/close) trigger? Enumerate the (14,2)/(10,63)/(10,64)
 //! records + switches, then fly into a switch box and watch.
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 
 fn main() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");

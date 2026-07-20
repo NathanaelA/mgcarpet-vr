@@ -58,11 +58,11 @@
 //! and take claims but nothing collects them yet); sounds omitted.
 
 use crate::chassis::ChassisParams;
-use crate::ids::GameId;
-use crate::mc1::combat::MailTarget;
 use crate::engine::features::{
     self, Ent, FeatureAssets, Gen, Planes, Rec, TerrainPlanes, build_table, lcg32,
 };
+use crate::ids::GameId;
+use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::spells::{SPELL_COUNT, SPELLS, SpellDef, SpellId};
 use crate::mc1::sprite_stats::SPRITE_STATS;
@@ -1344,21 +1344,21 @@ impl World {
             // build countdown (act_life counts 30→0 and would read as
             // a dying bar), 53 the collapse.
             || (e.class64 == 10 && e.model65 == 45 && e.tick70 == 52))
-        .then(|| {
-            // MC1's live dwelling parks act_life at f44
-            // (tick_building_live's build finish) and the damage mail
-            // drains it; max_life (30) is the BUILD countdown length,
-            // not health.
-            let denom = if e.class64 == 10 && e.model65 == 45 && e.f44 > 0 {
-                e.f44 as f32
-            } else {
-                e.max_life as f32
-            };
-            if denom <= 0.0 {
-                return 0.0;
-            }
-            (e.act_life.max(0) as f32 / denom).min(1.0)
-        });
+            .then(|| {
+                // MC1's live dwelling parks act_life at f44
+                // (tick_building_live's build finish) and the damage mail
+                // drains it; max_life (30) is the BUILD countdown length,
+                // not health.
+                let denom = if e.class64 == 10 && e.model65 == 45 && e.f44 > 0 {
+                    e.f44 as f32
+                } else {
+                    e.max_life as f32
+                };
+                if denom <= 0.0 {
+                    return 0.0;
+                }
+                (e.act_life.max(0) as f32 / denom).min(1.0)
+            });
         PoseGameBits {
             skip: false,
             segment,
@@ -1397,12 +1397,11 @@ impl World {
             // retail CompareEvent08 drains the SAME field on damage):
             // the bar denominates against the parked value, so damage
             // visibly eats it.
-            let denom =
-                if e.class64 == 10 && e.model65 == 45 && e.tick70 == 52 && e.f140 > 0 {
-                    (1000 * e.f140) as f32
-                } else {
-                    e.max_life as f32
-                };
+            let denom = if e.class64 == 10 && e.model65 == 45 && e.tick70 == 52 && e.f140 > 0 {
+                (1000 * e.f140) as f32
+            } else {
+                e.max_life as f32
+            };
             if denom <= 0.0 {
                 return 0.0;
             }
@@ -6035,7 +6034,12 @@ impl World {
         // The wizard scan — the human, alive, not yet holding this
         // spell (the SpellEnabled[model] gate, EF:55713).
         let owned = self.g.mc2_spell_tokens.0 & (1 << model) != 0;
-        if self.prune_owned_jars && self.mc2_book.ent.get(model as usize).is_some_and(|&e| e != 0)
+        if self.prune_owned_jars
+            && self
+                .mc2_book
+                .ent
+                .get(model as usize)
+                .is_some_and(|&e| e != 0)
         {
             // Unfaithful improvement (deliberate, P-class): an
             // owned-spell jar can never be collected — remove it
@@ -6793,9 +6797,7 @@ impl World {
             .ent
             .iter()
             .skip(1)
-            .filter(|e| {
-                e.class64 == 11 && matches!(e.model65, 12 | 31) && e.flags & 0x400 == 0
-            })
+            .filter(|e| e.class64 == 11 && matches!(e.model65, 12 | 31) && e.flags & 0x400 == 0)
             .map(|e| (e.x as f32 / 256.0, e.y as f32 / 256.0, e.model65))
             .collect()
     }
@@ -10961,8 +10963,8 @@ mod tests {
     /// shot — not a generic any-solid `victim_scan`.
     #[test]
     fn mc2_possession_claim_probe_whitelists_targets() {
-        use crate::mc1::combat::MailTarget;
         use crate::engine::features::BldgParam;
+        use crate::mc1::combat::MailTarget;
 
         // Build a world with a possession projectile at tile (100,100)
         // and ONE candidate overlapping it; return the claim-probe hit.
@@ -13443,10 +13445,7 @@ mod tests {
         });
         assert!(burst.is_some(), "the meteor impact spawned its burst");
         for _ in 0..6 {
-            w.tick(
-                PlayerPose::level(mx, my, mz, 0),
-                PlayerCommand::default(),
-            );
+            w.tick(PlayerPose::level(mx, my, mz, 0), PlayerCommand::default());
         }
         assert!(
             w.g.ent[t].act_life < 60000 || w.g.ent[t].mail[0].0 > 0,
@@ -13464,8 +13463,8 @@ mod tests {
     /// undershooting the flying player into the terrain below.
     #[test]
     fn mc2_hostile_bolt_lands_at_the_player_box_center() {
-        use crate::mc1::combat::PLAYER_HH;
         use crate::engine::features::Gen;
+        use crate::mc1::combat::PLAYER_HH;
         use crate::mc1::mobs::MobCtx;
 
         let mut w = mc2_flat_world();

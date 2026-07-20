@@ -1,4 +1,4 @@
- //! The simulation core: pure, headless, deterministic.
+//! The simulation core: pure, headless, deterministic.
 //!
 //! Ground rules (enforced by review, not yet by tooling):
 //! - No I/O, no rendering, no wall-clock time, no threads.

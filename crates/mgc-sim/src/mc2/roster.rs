@@ -2731,8 +2731,7 @@ impl Gen {
                             // never reads z): the leviathan flies
                             // far above its node, so a 3-D read would
                             // stall the descend transition.
-                            if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32)
-                                < 768
+                            if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32) < 768
                             {
                                 self.m23_mode(i, M23_BASE + 1, 0, 500);
                             }

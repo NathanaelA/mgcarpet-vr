@@ -51,8 +51,8 @@
 //!   retail (savegame/debug only) — not carried.
 
 use crate::engine::features::{Gen, tile};
-use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::engine::world::World;
+use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
 /// The devourable class-9 projectile SUBTYPES (EF:13545-63) — the
 /// pyramid is an anti-magic zone eating incoming spell projectiles;

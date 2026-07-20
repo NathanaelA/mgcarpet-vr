@@ -9,9 +9,9 @@
 //! player's gamedata bake is absent (CI without game assets).
 
 use mgc_formats::LevelPackage;
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 use mgc_sim::mc2::rivals::Mc2RivalConfig;
 use std::path::Path;
 

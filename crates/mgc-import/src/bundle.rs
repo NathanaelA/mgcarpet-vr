@@ -315,7 +315,10 @@ const MC1_SOUND_BANKS: std::ops::RangeInclusive<u32> = 0..=13;
 
 // One shared normalization factor per song — the
 // overlay SUM is what must not clip (MC1 GM contract).
-fn normalize_gm_pair(mut base: Vec<f32>, mut stem: Option<Vec<f32>>) -> (Vec<i16>, Option<Vec<i16>>) {
+fn normalize_gm_pair(
+    mut base: Vec<f32>,
+    mut stem: Option<Vec<f32>>,
+) -> (Vec<i16>, Option<Vec<i16>>) {
     let frames = base.len().max(stem.as_ref().map_or(0, Vec::len));
     base.resize(frames, 0.0);
     let mut peak = 0f32;
@@ -1010,9 +1013,7 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
         if mpal[..] == pal[..] {
             return;
         }
-        let rgb = |p: &[u8], i: usize| {
-            [p[i * 3] as i32, p[i * 3 + 1] as i32, p[i * 3 + 2] as i32]
-        };
+        let rgb = |p: &[u8], i: usize| [p[i * 3] as i32, p[i * 3 + 1] as i32, p[i * 3 + 2] as i32];
         let lut: Vec<u8> = (0..256)
             .map(|i| {
                 // Index 0 is the engine-wide transparent index —

@@ -1635,50 +1635,51 @@ impl Gen {
             .get(spell)
             .map(|r| r.tiers[tier])
             .unwrap_or_default();
-        let spawned = crate::engine::world::World::mc2_dispatch_arm(spell, sub.life).and_then(|arm| {
-            // Muzzle: the piece's position + its sprite half-height
-            // (retail `pos.z += array_0x52_82.yaw`, EF:30296 —
-            // the shift-rot vertical; f78 is our derivation).
-            let (mx, my, mz) = {
-                let e = &self.ent[i];
-                (e.x, e.y, e.z.wrapping_add(e.f78 as i16))
-            };
-            let p = self.mc2_spawn_cast_proj(arm.subtype, mx, my, mz)?;
-            let own = self.ent[i].id24;
-            // `sub_655C0` aim (EF:30292-99): absolute yaw/pitch at
-            // the target's current position — no lead.
-            let yaw = Gen::angle_between(mx, my, tx, ty);
-            let dh = Gen::isqrt(Gen::dist2_sq(mx, my, tx, ty) as u32) as i32;
-            let pitch = Gen::pitch_toward(mz, tz, dh);
-            {
-                let e = &mut self.ent[p];
-                e.id24 = own;
-                e.f68 = arm.impact.0;
-                e.f69 = arm.impact.1;
-                e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
-                if arm.charge {
-                    e.f71 = sub.life.max(0) as u8;
+        let spawned =
+            crate::engine::world::World::mc2_dispatch_arm(spell, sub.life).and_then(|arm| {
+                // Muzzle: the piece's position + its sprite half-height
+                // (retail `pos.z += array_0x52_82.yaw`, EF:30296 —
+                // the shift-rot vertical; f78 is our derivation).
+                let (mx, my, mz) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z.wrapping_add(e.f78 as i16))
+                };
+                let p = self.mc2_spawn_cast_proj(arm.subtype, mx, my, mz)?;
+                let own = self.ent[i].id24;
+                // `sub_655C0` aim (EF:30292-99): absolute yaw/pitch at
+                // the target's current position — no lead.
+                let yaw = Gen::angle_between(mx, my, tx, ty);
+                let dh = Gen::isqrt(Gen::dist2_sq(mx, my, tx, ty) as u32) as i32;
+                let pitch = Gen::pitch_toward(mz, tz, dh);
+                {
+                    let e = &mut self.ent[p];
+                    e.id24 = own;
+                    e.f68 = arm.impact.0;
+                    e.f69 = arm.impact.1;
+                    e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+                    if arm.charge {
+                        e.f71 = sub.life.max(0) as u8;
+                    }
+                    e.f30 = yaw;
+                    e.f32 = pitch;
+                    e.f34 = yaw;
+                    e.f36 = pitch;
+                    // a5 = 0: no caster speed boost, clamp only
+                    // (EF:44226-31). NOTE: f40 stays 0 — retail sets no
+                    // XP back-ref on turret shots (EF:30288-89 writes
+                    // only id + target); turret kills award nothing.
+                    e.f126 = e.f126.clamp(384, 0x2000);
+                    e.f146 = tgt; // homing target (word_0x96_150)
                 }
-                e.f30 = yaw;
-                e.f32 = pitch;
-                e.f34 = yaw;
-                e.f36 = pitch;
-                // a5 = 0: no caster speed boost, clamp only
-                // (EF:44226-31). NOTE: f40 stays 0 — retail sets no
-                // XP back-ref on turret shots (EF:30288-89 writes
-                // only id + target); turret kills award nothing.
-                e.f126 = e.f126.clamp(384, 0x2000);
-                e.f146 = tgt; // homing target (word_0x96_150)
-            }
-            // The local player's castle FIREBALL swaps to the
-            // star muzzle sprite 42 (EF:30290-91).
-            if own == crate::mc1::mobs::PLAYER_TARGET && spell == 0 {
-                let e = &mut self.ent[p];
-                e.type86 = 42;
-                e.frame88 = 0;
-            }
-            Some((yaw, pitch))
-        });
+                // The local player's castle FIREBALL swaps to the
+                // star muzzle sprite 42 (EF:30290-91).
+                if own == crate::mc1::mobs::PLAYER_TARGET && spell == 0 {
+                    let e = &mut self.ent[p];
+                    e.type86 = 42;
+                    e.frame88 = 0;
+                }
+                Some((yaw, pitch))
+            });
         if let Some((yaw, pitch)) = spawned {
             // First shot of the burst: the `sub_6DCA0` cast sound
             // (a6 = state==7, EF:44232-33) — fireball 9, lightning

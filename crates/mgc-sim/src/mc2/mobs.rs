@@ -2619,10 +2619,7 @@ impl Gen {
         duration: i32,
     ) {
         let v = victim as usize;
-        if victim == 0
-            || victim == PLAYER_TARGET
-            || v >= self.ent.len()
-            || self.ent[v].class64 != 5
+        if victim == 0 || victim == PLAYER_TARGET || v >= self.ent.len() || self.ent[v].class64 != 5
         {
             return;
         }

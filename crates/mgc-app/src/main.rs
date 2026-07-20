@@ -672,8 +672,9 @@ fn load_level(
         }
         match (&shading, &angle, feature_src) {
             (Some(sh), Some(an), (Some(search), Some(build_tab), Some(build_dat))) => {
-                let mut assets =
-                    mgc_sim::engine::features::FeatureAssets::parse(&search, &build_tab, &build_dat)?;
+                let mut assets = mgc_sim::engine::features::FeatureAssets::parse(
+                    &search, &build_tab, &build_dat,
+                )?;
                 if let Some(prm) = bundle.bldgprm.as_deref() {
                     assets = assets.with_bldgprm(prm);
                 }
@@ -1257,13 +1258,17 @@ enum UiAtlas {
 /// `self.renderer`… free.
 macro_rules! sess {
     ($s:expr) => {
-        $s.session.as_deref_mut().expect("gameplay path without a session")
+        $s.session
+            .as_deref_mut()
+            .expect("gameplay path without a session")
     };
 }
 /// Immutable counterpart of [`sess!`].
 macro_rules! sess_ref {
     ($s:expr) => {
-        $s.session.as_deref().expect("gameplay path without a session")
+        $s.session
+            .as_deref()
+            .expect("gameplay path without a session")
     };
 }
 /// The level-UI asset bank visible from the current mode: the
@@ -1487,8 +1492,11 @@ impl App {
             let audio_dir = match &level {
                 Some(l) => l.audio_dir.clone(),
                 None => {
-                    let d = PathBuf::from("baked/assets")
-                        .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+                    let d = PathBuf::from("baked/assets").join(if is_mc2 {
+                        "mc2-audio"
+                    } else {
+                        "mc1-audio"
+                    });
                     d.is_dir().then_some(d)
                 }
             };
@@ -1703,7 +1711,11 @@ impl App {
         }
         let variant = if self.is_mc2() {
             "mc2-day"
-        } else if self.campaign.as_ref().is_some_and(|c| c.id == campaign::CampaignId::Mc1Hw) {
+        } else if self
+            .campaign
+            .as_ref()
+            .is_some_and(|c| c.id == campaign::CampaignId::Mc1Hw)
+        {
             "mc1-arctic"
         } else {
             "mc1-temperate"
@@ -1840,7 +1852,8 @@ impl App {
                     // The hand-off setter, not a bare assign — the
                     // inactive mover's state is stale and reads back
                     // as a phantom warp/velocity.
-                    sess.sim.set_thrust_model(sim_thrust(self.cfg.controls.models.thrust));
+                    sess.sim
+                        .set_thrust_model(sim_thrust(self.cfg.controls.models.thrust));
                 }
             }
             "controls.models.altitude" => {
@@ -1849,17 +1862,29 @@ impl App {
                 }
             }
             "gameplay.cheat.dev_spells" => {
-                if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
+                if let Some(w) = self
+                    .session
+                    .as_deref_mut()
+                    .and_then(|s| s.sim.world.as_mut())
+                {
                     w.set_dev_spells(self.cfg.gameplay.cheat.dev_spells);
                 }
             }
             "gameplay.cheat.invincible" => {
-                if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
+                if let Some(w) = self
+                    .session
+                    .as_deref_mut()
+                    .and_then(|s| s.sim.world.as_mut())
+                {
                     w.set_invincible(self.cfg.gameplay.cheat.invincible);
                 }
             }
             "gameplay.enhancement.prune_owned_jars" => {
-                if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
+                if let Some(w) = self
+                    .session
+                    .as_deref_mut()
+                    .and_then(|s| s.sim.world.as_mut())
+                {
                     w.set_prune_owned_jars(self.cfg.gameplay.enhancement.prune_owned_jars);
                 }
             }
@@ -2056,7 +2081,11 @@ impl App {
                 println!(
                     "sky: {}{}",
                     onoff(v),
-                    if self.session.as_deref().is_none_or(|s| s.level.sky.is_none()) {
+                    if self
+                        .session
+                        .as_deref()
+                        .is_none_or(|s| s.level.sky.is_none())
+                    {
                         " (this level has no sky bitmap)"
                     } else {
                         ""
@@ -2162,7 +2191,11 @@ impl App {
         // The in-game echo (the retail F3-style live feedback): ride
         // the sim's notification line when a world is up. Set while
         // paused it simply shows once the clock resumes.
-        if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
+        if let Some(w) = self
+            .session
+            .as_deref_mut()
+            .and_then(|s| s.sim.world.as_mut())
+        {
             w.notify_option(toast);
         }
         true
@@ -2176,7 +2209,8 @@ impl App {
             return;
         };
         let f = &sess.sim.flyer;
-        let pose = mgc_sim::engine::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
+        let pose =
+            mgc_sim::engine::world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, 0.0);
         let listener = mgc_audio::Listener {
             pos: (pose.x, pose.y, pose.z),
             yaw: pose.heading,
@@ -2673,8 +2707,7 @@ impl App {
             // option): fireballs/explosions/standing fire brighten
             // the terrain, Night/Cave only (retail's MapType gate —
             // the day tables invert, added rows would darken).
-            if self.cfg.render.preference.light_sources
-                && level.mc2_env != entities::Mc2MapEnv::Day
+            if self.cfg.render.preference.light_sources && level.mc2_env != entities::Mc2MapEnv::Day
             {
                 lights = entities::lights_from_poses(&poses);
             }
@@ -2717,9 +2750,10 @@ impl App {
             };
             // Beyond-Sight rival position markers (interim for the
             // retail name labels — DrawText track).
-            level
-                .map_dots
-                .extend(entities::rival_markers(&w.rival_views(), w.beyond_sight_tier()));
+            level.map_dots.extend(entities::rival_markers(
+                &w.rival_views(),
+                w.beyond_sight_tier(),
+            ));
             self.castle_pos = poses
                 .iter()
                 .find(|p| p.class == 3 && p.model == 2 && p.player_owned)
@@ -2788,7 +2822,11 @@ impl App {
         if !self.paused {
             return;
         }
-        if let Some(w) = self.session.as_deref_mut().and_then(|s| s.sim.world.as_mut()) {
+        if let Some(w) = self
+            .session
+            .as_deref_mut()
+            .and_then(|s| s.sim.world.as_mut())
+        {
             let l = self
                 .pending_equip
                 .0
@@ -2811,7 +2849,10 @@ impl App {
     fn pane_open(&self) -> bool {
         self.ctrl_held
             && self.pane.is_some()
-            && self.session.as_deref().is_some_and(|s| s.level.ui.is_some())
+            && self
+                .session
+                .as_deref()
+                .is_some_and(|s| s.level.ui.is_some())
     }
 
     fn pane_spell_name(&self, spell: u8) -> &'static str {
@@ -4154,7 +4195,11 @@ impl ApplicationHandler for App {
                     if down && !self.ctrl_held {
                         self.ctrl_held = true;
                         self.ctrl_grab_restore = self.grabbed;
-                        if self.session.as_deref().is_some_and(|s| s.level.ui.is_some()) {
+                        if self
+                            .session
+                            .as_deref()
+                            .is_some_and(|s| s.level.ui.is_some())
+                        {
                             self.set_grab(false);
                             self.fire_held = false;
                             self.fire_right_held = false;
@@ -4453,7 +4498,12 @@ impl ApplicationHandler for App {
                 self.sync_world();
                 // Castle-less death confirmed → the level restarts
                 // (the original's lost + level-over flow).
-                if sess!(self).sim.world.as_mut().is_some_and(|w| w.take_restart()) {
+                if sess!(self)
+                    .sim
+                    .world
+                    .as_mut()
+                    .is_some_and(|w| w.take_restart())
+                {
                     self.restart_level();
                 }
 
@@ -4857,10 +4907,7 @@ impl ApplicationHandler for App {
                         // colour-cycles the ink unless zoomed out —
                         // the static black remap slot [1] is the
                         // baseline.
-                        if !is_mc2
-                            && w.completed()
-                            && !w.player_dead()
-                        {
+                        if !is_mc2 && w.completed() && !w.player_dead() {
                             let (ax, ay) = assets.hud_notification_anchor();
                             let hud_s = size.0 / 640.0;
                             let font_s = size.0 / 320.0;
@@ -6019,7 +6066,11 @@ fn apply_instruments(
 /// (the retail human-branch grant law, :49226-33). MC2: learn the
 /// carried book with its banked XP — `mc2_grant_plausible` is the
 /// same grant+bank+re-derive path retail's `sub_549A0` carry feeds.
-fn apply_campaign_book(w: &mut mgc_sim::engine::world::World, run: &CampaignRun, level: &LoadedLevel) {
+fn apply_campaign_book(
+    w: &mut mgc_sim::engine::world::World,
+    run: &CampaignRun,
+    level: &LoadedLevel,
+) {
     match run.id {
         campaign::CampaignId::Mc2 => {
             let Some(save) = run.save.mc2() else { return };
@@ -6057,7 +6108,9 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
     use campaign::{CampaignId, NextStep};
     match run.id {
         CampaignId::Mc2 => {
-            let Some(save) = run.save.mc2_mut() else { return };
+            let Some(save) = run.save.mc2_mut() else {
+                return;
+            };
             // Book carry: serialize the live book into str_611 (all
             // XP banked — the between-levels shape).
             let v = w.mc2_book_view();
@@ -6126,7 +6179,9 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
         }
         CampaignId::Mc1 | CampaignId::Mc1Hw => {
             let hw = run.id == CampaignId::Mc1Hw;
-            let Some(save) = run.save.mc1_mut() else { return };
+            let Some(save) = run.save.mc1_mut() else {
+                return;
+            };
             // Commit collected spells to the persistent flags (the
             // retail level-completion commit into var_15318).
             let owned = w.loadout().owned;
@@ -6490,8 +6545,7 @@ fn main() -> std::process::ExitCode {
     // map) is the loader, constructing a gameplay session when the
     // player launches one. Only the headless instruments and single-
     // level mode load a level up front.
-    let headless =
-        args.screenshot.is_some() || args.map.is_some() || args.flock_probe.is_some();
+    let headless = args.screenshot.is_some() || args.map.is_some() || args.flock_probe.is_some();
     let boot_level = if campaign_run.is_some() && !headless {
         None
     } else {
@@ -6514,7 +6568,12 @@ fn main() -> std::process::ExitCode {
 
     if let Some(out) = &args.map {
         let level = boot_level.as_ref().expect("headless paths load a level");
-        return match run_map(level, out, args.map_scale, cfg.render.debug.map_trigger_areas) {
+        return match run_map(
+            level,
+            out,
+            args.map_scale,
+            cfg.render.debug.map_trigger_areas,
+        ) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

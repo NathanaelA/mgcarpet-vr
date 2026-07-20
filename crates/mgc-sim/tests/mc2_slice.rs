@@ -10,9 +10,9 @@
 //! untouched — the columns share the chassis, not the fixtures).
 //! Self-skips without baked mc2 data.
 
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 use std::path::PathBuf;
 
 #[path = "common/mod.rs"]

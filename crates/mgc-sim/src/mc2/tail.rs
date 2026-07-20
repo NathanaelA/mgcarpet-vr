@@ -24,8 +24,8 @@
 //!   our pool slot-order scan over the mobs.rs list stands in.
 
 use super::sprite_params::SPRITE_PARAMS;
-use crate::mc1::combat::MailTarget;
 use crate::engine::features::Gen;
+use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::MobCtx;
 
 /// The whirlwind's victim GRAB latch (retail byte[3] & 0x10, dword
@@ -613,7 +613,8 @@ impl Gen {
         if ground == pz {
             let (tx, ty) = ((px >> 8) as u8, (py >> 8) as u8);
             let h = |dx: u8, dy: u8| {
-                self.t.height[crate::engine::features::tile(tx.wrapping_add(dx), ty.wrapping_add(dy))]
+                self.t.height
+                    [crate::engine::features::tile(tx.wrapping_add(dx), ty.wrapping_add(dy))]
                     as i32
             };
             let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);

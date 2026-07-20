@@ -12,8 +12,8 @@
 //! plumbing under test lives in lib.rs, which only these steps drive.
 
 use mgc_sim::engine::features::{FeatureAssets, Planes};
-use mgc_sim::mc1::spells::SpellId;
 use mgc_sim::engine::world::World;
+use mgc_sim::mc1::spells::SpellId;
 use mgc_sim::{FlightInput, Simulation, ThrustModel};
 
 /// Synthetic diamond-ring SEARCH.DAT + a 4x4 building row (the same

@@ -51,8 +51,8 @@
 //! ground re-snap) and the `sub_1EEE0` settle on the walk leg's hit path
 //! are not run — no idle SOUND rng is drawn.
 
-use super::super::mc1::mobs::MobCtx;
 use super::super::engine::world::World;
+use super::super::mc1::mobs::MobCtx;
 use super::behavior::{BEHAVIOR, Mc2BehaviorRow};
 use super::multipart::BRANCH_STATE;
 

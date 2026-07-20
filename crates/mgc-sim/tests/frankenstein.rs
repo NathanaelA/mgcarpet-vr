@@ -10,9 +10,9 @@
 //! shared player-intake fallback; awake/movement/objective serve MC2
 //! natively).
 
-use mgc_sim::ids::GameId;
 use mgc_sim::engine::features::{FeatureAssets, Planes};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
+use mgc_sim::ids::GameId;
 use std::path::PathBuf;
 
 #[path = "common/mod.rs"]
@@ -93,7 +93,7 @@ fn mc2_level_through_the_seam_no_crash_deterministic() {
         return;
     };
     let Some(got) = run(&root) else {
-        common::golden_skip("mc2 level-000 has no baked terrain (genlevel oracle absent)");
+        common::golden_skip("mc2 level-000 has no baked terrain (bundle predates native terrain)");
         return;
     };
     // Bit-identical across runs: the MC2 chassis (u16 entity rand,
