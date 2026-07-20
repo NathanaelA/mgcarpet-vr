@@ -349,3 +349,103 @@ fn final_destruction_flattens_the_tower_to_a_barren_square() {
         }
     }
 }
+
+/// An AUTHORED rival castle's terrain must belong to its LEVEL.
+///
+/// Retail stamps one build pass per authored level with the row = the
+/// pass index (`+29866 = i`, i = 0..count-1, :54983-91), so the rows
+/// raised are 0..=level — and BUILD row 0 is EMPTY (w = h = 0). A
+/// `castle_level` of 1 is therefore level 0: a bare flag that owns no
+/// terrain at all. The port used to stamp rows 1..=level+1, raising a
+/// tower the castle did not own; the demolish walks the row that
+/// matches the LEVEL, so the extra ring outlived the castle as a
+/// flagless stump (glaring on the mc2:06 ocean site the player found,
+/// and the same off-by-one drove the MC1 sightings).
+#[test]
+fn an_authored_castle_owns_only_its_own_levels_terrain() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    for castle_level in [1u8, 2, 3] {
+        let mut w = build_world(&root);
+        let before = w.planes().height.to_vec();
+        let mut cfgs: [Option<mgc_sim::mc1::rivals::RivalConfig>; 8] = Default::default();
+        let mut book = [false; 24];
+        book[0] = true;
+        book[16] = true; // Castle: the starting-castle gate
+        cfgs[1] = Some(mgc_sim::mc1::rivals::RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level,
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        let Some(castle) = w
+            .debug_pool()
+            .1
+            .into_iter()
+            .find(|e| e.class == 3 && e.model == 2)
+        else {
+            eprintln!("skipping: level 005 spawns no rival castle");
+            return;
+        };
+        // The authored level is castle_level - 1, and a level-0
+        // castle has raised nothing yet.
+        if castle_level == 1 {
+            assert_eq!(
+                w.planes().height,
+                before.as_slice(),
+                "a bare-flag castle (castle_level 1 = level 0) stamps no terrain"
+            );
+        }
+        // Settle the build, then destroy it outright.
+        let pose = PlayerPose::from_tiles(8.5, 40.0, 8.5, 0.0, 0.0, 0.0);
+        for _ in 0..200 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        // One lethal knocks ONE level off, and damage is only
+        // processed from the established sub-state — so hit, let the
+        // demolish + repaint settle, hit again.
+        for _ in 0..40 {
+            w.debug_mail_hit(castle.slot, 60000, 1);
+            for _ in 0..40 {
+                w.tick(pose, PlayerCommand::default());
+            }
+            if !w
+                .debug_pool()
+                .1
+                .iter()
+                .any(|e| e.slot == castle.slot && e.class == 3 && e.model == 2)
+            {
+                break;
+            }
+        }
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(
+            !w.debug_pool()
+                .1
+                .iter()
+                .any(|e| e.slot == castle.slot && e.class == 3 && e.model == 2),
+            "castle_level {castle_level}: the castle died"
+        );
+        // Nothing the castle raised may outlive it. The collapse
+        // leaves ordinary rubble, so allow a little settling noise —
+        // a surviving tower ring is 40+ units, far above this.
+        let (tx, ty) = (castle.tx as i32, castle.ty as i32);
+        for dy in -12i32..=12 {
+            for dx in -12i32..=12 {
+                let t = ((ty + dy) as usize % 256) * 256 + ((tx + dx) as usize % 256);
+                let (now, was) = (w.planes().height[t] as i32, before[t] as i32);
+                assert!(
+                    now - was < 12,
+                    "castle_level {castle_level}: stump left at ({dx},{dy}) — {was} → {now}"
+                );
+            }
+        }
+    }
+}

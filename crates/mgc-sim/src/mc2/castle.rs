@@ -297,8 +297,10 @@ impl Gen {
             self.mc2_castle_eject(i);
             self.ent[i].f136 += cut;
             self.snd(30, i);
-            // The scratch-entity restore (EF:61632-61636): model 0
-            // → datum-based heights, level 0 → no re-scatter.
+            // The scratch entity carries the row (EF:61628-31); its
+            // model-0 branch only sets the mana-sphere drop z
+            // (EF:28092-28108) — it does NOT restore heights, and
+            // nothing else does either. Level 0 → no re-scatter.
             let lvl = self.ent[i].f26;
             self.mc2_castle_unstamp(i, lvl.clamp(1, 7) as u8);
             self.ent[i].f26 = lvl - 1;
@@ -361,17 +363,29 @@ impl Gen {
         self.ent[i].f136 = MC2_CASTLE_CAP[lvl];
     }
 
-    /// The MC2 castle build datum (ctor `sub_4AA40` EF:33390-99):
-    /// 32 × the corner-mean ground over the BUILD00 row-1 footprint
-    /// centered on the (even-parity-snapped) anchor tile. Feeds
-    /// `site_z` — the painter/leveler datum — for EVERY (3,2) spawn
-    /// path: the human cast, the rival direct build, the authored
-    /// starting castle.
+    /// The MC2 castle build datum (ctor `sub_4AA40` EF:33399):
+    /// `32 * sub_48E60(tlx, tly, w, h)` — the PERIMETER MINIMUM
+    /// ground over the BUILD00 row-1 footprint centered on the
+    /// (even-parity-snapped) anchor tile. Feeds `site_z` — the
+    /// painter/leveler datum — for EVERY (3,2) spawn path: the human
+    /// cast, the rival direct build, the authored starting castle.
+    ///
+    /// MIN, not mean, and the distinction is load-bearing: the stamp
+    /// writes `datum + cell` ABSOLUTELY while the demolish only
+    /// SUBTRACTS `cell` back off, and nothing anywhere saves the
+    /// original ground. Taking the perimeter minimum is what makes
+    /// that asymmetry harmless — the leftover pad lands at or below
+    /// the lowest surrounding ground, so it reads as flush or sunken.
+    /// Our old corner-MEAN datum sat above the low side of any
+    /// sloped site, and the un-stamp left exactly `mean - ground` of
+    /// stone-textured mesa standing where the castle had been: the
+    /// flagless "tower". Flat sites (mean == min) never showed it,
+    /// which is precisely the site-dependence the player reported.
     pub(crate) fn mc2_castle_site_z(&self, cx: u8, cy: u8) -> i16 {
         let def = self.assets.build_tab[1 % self.assets.build_tab.len()];
         let tlx = cx.wrapping_sub(def.w / 2);
         let tly = cy.wrapping_sub(def.h / 2);
-        (32 * self.avg4(tlx, tly, def.h, def.w)) as i16
+        (32 * self.mc2_perimeter_min(tlx, tly, def.w as u16, def.h as u16)) as i16
     }
 
     /// `SetShiftByCastle_49EC0` (EF:32882): AABB half-extents from
@@ -947,7 +961,15 @@ impl Gen {
     /// arm (generic ctor → f59 = 1 → long settle); the upgrade
     /// spawns with f59 = 0 (short settle).
     pub(crate) fn mc2_spawn_castle_painter(&mut self, castle: usize, repaint: bool) {
-        let row = self.ent[castle].f26.clamp(1, 7) as u8;
+        // The BUILD row IS the castle level, verbatim and UNCLAMPED
+        // (`sub_5FBD0` EF:60336 `indexx->byte_0x46_70 =
+        // a1x->dword_0x10_16`, and the authored spawn's per-level
+        // pass EF:43797). Level 0 selects BUILD00 row 0, which is
+        // EMPTY (w = h = 0) — a level-0 castle is a bare flag with no
+        // structure, which is exactly why the destroy path never
+        // un-stamps it. Clamping the row UP to 1 here stamped a
+        // level-1 tower that nothing would ever remove.
+        let row = self.ent[castle].f26.clamp(0, 7) as u8;
         if self
             .mc2_spawn_castle_painter_at(castle, row, repaint)
             .is_some()

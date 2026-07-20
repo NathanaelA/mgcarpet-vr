@@ -556,3 +556,140 @@ fn mc2_pane_castable_reflects_castle_gate() {
         "castle-less world: at least one castle-gated tier reads grey"
     );
 }
+
+/// A castle's terrain must not outlive it — on SLOPED ground.
+///
+/// The stamp writes `datum + cell` absolutely; the demolish only
+/// subtracts `cell` back off, and nothing anywhere saves the original
+/// ground. Retail keeps that asymmetry harmless by taking the datum as
+/// the PERIMETER MINIMUM of the row-1 footprint (`sub_4AA40` EF:33399
+/// → `sub_48E60`/`sub_48F20`, init 250), so the leftover pad lands at
+/// or below the lowest surrounding ground. The port used the corner
+/// MEAN, which on any slope sits above the low side — and the demolish
+/// left `mean - ground` of stone-textured mesa standing where the
+/// castle had been, the flagless "tower" the player reported. Flat
+/// ground (mean == min) hid it, hence the site-dependence.
+/// `clear_spot`'s scan plus a relief requirement over the row-1
+/// footprint: the site must slope by at least 12 height units.
+fn sloped_spot(w: &World) -> Option<(u16, u16)> {
+    let p = w.planes();
+    let mut best: Option<(u16, u16, u8)> = None;
+    for cy in (24..222u16).step_by(2) {
+        'cand: for cx in (24..232u16).step_by(2) {
+            for dy in -9i32..=25 {
+                for dx in -9i32..=9 {
+                    let t =
+                        ((cy as i32 + dy) as usize % 256) * 256 + ((cx as i32 + dx) as usize % 256);
+                    if p.angle[t] & 0x80 != 0 || p.angle[t] & 0xF == 0 {
+                        continue 'cand;
+                    }
+                }
+            }
+            let (mut lo, mut hi) = (255u8, 0u8);
+            for dy in -4i32..=4 {
+                for dx in -4i32..=4 {
+                    let t =
+                        ((cy as i32 + dy) as usize % 256) * 256 + ((cx as i32 + dx) as usize % 256);
+                    lo = lo.min(p.height[t]);
+                    hi = hi.max(p.height[t]);
+                }
+            }
+            if best.is_none_or(|(_, _, r)| hi - lo > r) {
+                best = Some((cx, cy, hi - lo));
+            }
+        }
+    }
+    best.filter(|&(_, _, relief)| relief >= 12)
+        .map(|(cx, cy, _)| (cx, cy))
+}
+
+#[test]
+fn a_castle_on_a_slope_leaves_no_mesa_behind() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    // A clear site whose row-1 footprint genuinely SLOPES — the whole
+    // point is that mean != min there. `clear_spot` happily returns
+    // dead-flat ground, where the old mean datum equalled the min and
+    // the bug could not show.
+    let (cx, cy) = sloped_spot(&w).expect("a sloped clear site");
+    let foot = |w: &World, cx: u16, cy: u16| {
+        let (mut lo, mut hi) = (255u8, 0u8);
+        for dy in -4i32..=4 {
+            for dx in -4i32..=4 {
+                let t = ((cy as i32 + dy) as usize % 256) * 256 + ((cx as i32 + dx) as usize % 256);
+                lo = lo.min(w.planes().height[t]);
+                hi = hi.max(w.planes().height[t]);
+            }
+        }
+        (lo, hi)
+    };
+    let (lo, hi) = foot(&w, cx, cy);
+    eprintln!("site ({cx},{cy}) relief {lo}..{hi}");
+
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+    let before: Vec<u8> = w.planes().height.to_vec();
+
+    w.mc2_select_spell(2, 0, 0);
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..140 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let castle = w
+        .debug_pool()
+        .1
+        .into_iter()
+        .find(|e| e.class == 3 && e.model == 2)
+        .expect("the castle stands");
+    let (tx, ty) = (castle.tx as i32, castle.ty as i32);
+
+    // Demolish it out of existence (level 1 → dead).
+    for _ in 0..8 {
+        w.tick(
+            pose,
+            PlayerCommand {
+                demolish: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        if count(&w, 3, 2) == 0 {
+            break;
+        }
+    }
+    assert_eq!(count(&w, 3, 2), 0, "the castle is gone");
+
+    // With the datum at the perimeter MIN this site comes back
+    // EXACTLY (worst residue 0); with the old corner MEAN it kept an
+    // 18-unit mesa. The bound sits between the two so the test
+    // actually discriminates — the un-stamp's own LCG jitter (up to
+    // +19, retail-faithful) never fires here because the apron cells
+    // carry height 0 and land on the `cell >= current` zeroing arm.
+    for dy in -6i32..=6 {
+        for dx in -6i32..=6 {
+            let t = ((ty + dy) as usize % 256) * 256 + ((tx + dx) as usize % 256);
+            let (now, was) = (w.planes().height[t] as i32, before[t] as i32);
+            assert!(
+                now - was <= 8,
+                "mesa left at ({dx},{dy}): {was} → {now} (site relief {lo}..{hi})"
+            );
+        }
+    }
+}

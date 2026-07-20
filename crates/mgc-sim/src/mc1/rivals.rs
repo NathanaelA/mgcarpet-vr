@@ -331,7 +331,14 @@ impl World {
         // 177 + team, the :30809-10 family).
         self.g.set_sprite(c, 177 + r.slot as u16);
         // Terrain: replay the build painter per stage (instant, the
-        // divisor-1 flatten + paint of rows 1..=lvl+1).
+        // divisor-1 flatten + paint). Retail's loop runs one pass per
+        // AUTHORED LEVEL with the build row = the pass index
+        // (:54983-91 `+29866 = i`, i = 0..count-1), so the rows
+        // stamped are 0..=lvl — and row 0 is EMPTY (w = h = 0). Our
+        // rows 1..=lvl cover exactly the same ground; passing lvl + 1
+        // stamped one row too many, which for the common authored
+        // level 0 (`castle_level` 1) raised a whole level-1 tower that
+        // the castle never owned and the demolish never removed.
         let (cx, cy, cz) = {
             let e = &self.g.ent[c];
             (
@@ -340,7 +347,7 @@ impl World {
                 (e.z >> 5) as i32,
             )
         };
-        self.g.stamp_castle_terrain(lvl as usize + 1, cx, cy, cz);
+        self.g.stamp_castle_terrain(lvl as usize, cx, cy, cz);
         self.terrain_dirty = true;
         // Extents + capacity ladder + full stored mana (cap 320000).
         self.g.castle_extents(c, lvl);

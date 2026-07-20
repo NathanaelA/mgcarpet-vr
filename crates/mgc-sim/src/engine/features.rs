@@ -570,6 +570,15 @@ impl std::hash::Hash for PalFlash {
     fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
+/// The pool's SCRATCH slot — retail's `str_29795[0]` /
+/// `Entities_EA3E4[0]`, the always-present entity 0 that routines
+/// borrow to run a handler on a synthetic event without allocating
+/// (the castle demolish's fake collapse, MC1 :56517-24; MC2's
+/// downgrade restore, EF:61628-31). Never allocated by
+/// [`Gen::new_event`] (the free stack is built 999→1) and never
+/// visited by a pool scan (they all start at 1).
+pub(crate) const SCRATCH: usize = 0;
+
 /// The event-pool engine: terrain planes + the original's 1000-slot
 /// event pool and PRNG streams. Serves both the load-time feature pass
 /// (fixpoint loop, this module) and the runtime world tick
@@ -2794,7 +2803,9 @@ impl Gen {
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
         let target = (e.z >> 5) as i32;
-        let level = e.f71.clamp(1, 8) as usize;
+        // Row = level verbatim (retail never clamps it): level 0
+        // paints nothing, which is what a bare-flag castle owns.
+        let level = e.f71.min(8) as usize;
         let divisor = (e.f26 as i32 + 1).max(1);
         for r in 1..=level {
             self.flatten_build_row(r, cx, cy, target, divisor);
@@ -2933,7 +2944,11 @@ impl Gen {
     /// promoted like the painter finish (:30697-707). Rival wizards
     /// with a nonzero level-tail castle level spawn on this.
     pub(crate) fn stamp_castle_terrain(&mut self, rows: usize, cx: u8, cy: u8, target: i32) {
-        let rows = rows.clamp(1, 8);
+        // `rows` is the castle LEVEL: rows 1..=level, matching
+        // retail's one-pass-per-level walk over build rows 0..=level
+        // (row 0 is empty). Level 0 therefore stamps NOTHING — the
+        // loop and the protect-bit block below both degenerate.
+        let rows = rows.min(8);
         for r in 1..=rows {
             self.flatten_build_row(r, cx, cy, target, 1);
             self.paint_build_row(r, cx, cy);
@@ -3475,7 +3490,9 @@ impl Gen {
                     {
                         let e = &mut self.ent[p];
                         e.f146 = i as u16;
-                        e.f71 = lvl.clamp(1, 8) as u8;
+                        // The repaint row is the level VERBATIM
+                        // (sub_47020 :56104 `+71 = +26`).
+                        e.f71 = lvl.min(8) as u8;
                         e.id24 = own;
                     }
                     self.ent[i].f59 = 1; // wait for the repaint painter
@@ -3555,36 +3572,58 @@ impl Gen {
     /// balloon is released, the ENTIRE bank scatters, the entity is
     /// freed — the player is castle-less (die now = restart).
     fn castle_downgrade(&mut self, i: usize) {
-        self.terrain_dirty = true; // the synchronous un-stamp below
-        self.snd(30, i);
-        let lvl = self.ent[i].f26;
-        // 10% capacity haircut before the ejector (:56507-09) — the
-        // ejector spills everything above the reduced ceiling.
-        let cut = 10 * self.ent[i].f136 / 100;
-        self.ent[i].f136 -= cut;
-        self.castle_eject(i);
-        // The footprint un-stamp: a zeroed fake collapse event over
-        // the CURRENT level's build row, run synchronously
-        // (sub_28FE0 direct call, :56524).
+        let lvl0 = self.ent[i].f26;
         let (x, y, site_z, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.site_z, e.id24)
         };
-        if let Some(f) = self.new_event() {
+        // EVERYTHING down to the ladder reset sits inside retail's
+        // `if (level > 0)` (:56506). A level-0 castle is a bare flag —
+        // BUILD row 0 is empty (w = h = 0), so it never stamped any
+        // terrain — and it takes the death arm alone. Without the
+        // guard a level-0 death demolished a row-1 footprint that was
+        // never built, knocking a phantom tower stump into the map.
+        let lvl = if lvl0 > 0 {
+            self.terrain_dirty = true; // the synchronous un-stamp below
+            self.snd(30, i);
+            // 10% capacity haircut before the ejector (:56507-09) —
+            // the ejector spills everything above the reduced ceiling.
+            let cut = 10 * self.ent[i].f136 / 100;
+            self.ent[i].f136 -= cut;
+            self.castle_eject(i);
+            // The footprint un-stamp: a fake collapse event over the
+            // CURRENT level's build row, run synchronously (sub_28FE0
+            // direct call, :56524). The row is the level VERBATIM
+            // (:56519 `+29866 = +26`) — never clamped.
+            //
+            // Retail builds this event in the SCRATCH slot (entity 0,
+            // `dword_AE400_AE3F0() + 29795`, :56517-24) — it never
+            // allocates, so the un-stamp cannot fail. Ours used to
+            // take a pool slot with no else-arm, and `castle_eject`
+            // immediately above can spend up to 36 of them: on a
+            // pool-pressured level the demolish silently skipped the
+            // terrain entirely and left the whole tower standing with
+            // its flag gone — the reported symptom exactly. Slot 0 is
+            // reserved here too (the free stack is built 999→1 and
+            // every scan starts at 1), and its `rand` persists across
+            // demolishes just like retail's scratch `+4`.
             {
-                let e = &mut self.ent[f];
+                let e = &mut self.ent[SCRATCH];
                 e.class64 = 10;
                 e.model65 = 0; // zeroed model → z>>5 datum fallback
-                e.f71 = lvl.clamp(1, 8) as u8;
+                e.f71 = lvl0.min(8) as u8;
                 e.f26 = 0; // no evacuees on a castle (:56521)
                 e.x = x;
                 e.y = y;
                 e.z = site_z;
+                e.flags = 0;
             }
-            self.tick_building_collapse(f);
-            self.free_entity(f);
-        }
-        let lvl = lvl - 1;
+            self.tick_building_collapse(SCRATCH);
+            self.ent[SCRATCH].class64 = 0;
+            lvl0 - 1
+        } else {
+            lvl0
+        };
         self.ent[i].f26 = lvl;
         if lvl <= 0 {
             // Total destruction (:56531-37): release the balloons,

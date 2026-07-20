@@ -226,13 +226,23 @@ fn level_005_golden_state_hashes() {
     // and wanders them; the first evacuee militia appear once the crater
     // dig reaches a house at checkpoint B, so post-init + A hold while
     // B-E move in BOTH the layout hash and the OBSERVABLE projection.
+    //
+    // Re-pinned for the authored-castle footprint fix: retail stamps
+    // one build pass per authored level with the row = the pass index
+    // (:54983-91), i.e. rows 0..=level, and BUILD row 0 is EMPTY.
+    // `spawn_starting_castle` was passing `level + 1`, so every
+    // authored rival castle wore one build ring more terrain than it
+    // owned — and since the demolish un-stamps the row matching the
+    // LEVEL, that surplus ring outlived the castle as a flagless
+    // stump. Level 005's rivals hold authored castles, so their
+    // load-time footprint shrinks by a ring: EVERY layout hash moves.
     const GOLDEN: [u64; 6] = [
-        0x795499327cc36b28, // post-init (feature pass + disposition 0)
-        0xe37dd14011ee7d15, // A: 32 idle ticks far afield
-        0xf336f70e45cc937b, // B: crater trigger fired + 120 dig ticks
-        0x036cfde55a8817bb, // C: ambush disposition fired
-        0xff9ce49d65da179f, // D: 64 ticks of two-hand fireball combat
-        0x68dc051dcb47d580, // E: 100 aftermath ticks
+        0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
+        0x06e8a54a916839d7, // A: 32 idle ticks far afield
+        0x12524aa4af2f1fdd, // B: crater trigger fired + 120 dig ticks
+        0x60e76100aefd92c9, // C: ambush disposition fired
+        0x5a7abd4b6f6d97d9, // D: 64 ticks of two-hand fireball combat
+        0xc04022bcf5e367fe, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -247,8 +257,13 @@ fn level_005_golden_state_hashes() {
     // moves but OBSERVABLE holds, the re-pin is layout-only by
     // construction; if OBSERVABLE moves too, behavior moved and the
     // claim must say so.
+    // The castle-footprint re-pin above moves post-init ONLY: the
+    // authored castles stamp one ring less terrain at load, and
+    // nothing downstream diverges — A-E hold byte-for-byte, which is
+    // the evidence that the fix changed the castles' footprint and
+    // not the way the level plays.
     const OBSERVABLE: [u64; 6] = [
-        0x09a4bbee6ed601d4, // post-init — holds (no militia yet)
+        0xf67c96de5b515a64, // post-init — the ring of castle terrain
         0x797dd4817a1d1f11, // A — holds (no militia yet)
         0x7b733a85a7e27541, // B — militia settle/wander from here
         0x56117358a7b6c164, // C
