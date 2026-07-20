@@ -327,6 +327,22 @@ impl Simulation {
                 ..FlightInput::default()
             };
         }
+        // A DEAD wizard is PINNED at the grave (retail sub_463B0 :55575
+        // zeros the speeds and only turns the camera toward the killer).
+        // Kill the momentum BEFORE the move so nothing drifts the
+        // viewport off the corpse: the MC1/MC2 carpet speeds AND the
+        // enhanced mover's float velocity (its speed state) — the latter
+        // is what kept sliding the camera along the terrain post-death.
+        // FALLING is left alone: retail's death fall keeps the
+        // horizontal glide down to touchdown.
+        if dead {
+            self.carpet.act_speed = 0;
+            self.carpet.tgt_speed = 0;
+            self.carpet.strafe = 0;
+            self.flyer.vx = 0.0;
+            self.flyer.vy = 0.0;
+            self.flyer.vz = 0.0;
+        }
         // The MC2 ending sequence seizes the flyer (retail swaps the
         // player's actionIndex to 11, sub_5E8C0 — every control
         // input dies with it; the scripted pose lands after the
@@ -409,13 +425,11 @@ impl Simulation {
             self.flyer.vy = 0.0;
             self.carpet.z = ((y * 256.0) as i32).min(i16::MAX as i32) as i16;
         }
-        // Dead (sub_463B0 :55575-91): speeds zeroed, the camera
-        // turns toward the killer while the grey screen waits for
-        // Space.
+        // Dead (sub_463B0 :55575-91): the speeds were already zeroed
+        // before the move (the flyer is pinned at the grave); here the
+        // grey-screen camera just turns toward the killer while it waits
+        // for Space.
         if dead {
-            self.carpet.tgt_speed = 0;
-            self.carpet.act_speed = 0;
-            self.carpet.strafe = 0;
             if let Some(w) = &self.world
                 && let Some((kx, kz)) = w.killer_pos()
             {
@@ -1120,6 +1134,56 @@ mod tests {
             }
         }
         panic!("the corpse never landed (enhanced, far from spawn)");
+    }
+
+    /// A DEAD wizard is pinned at the grave. Under the enhanced mover
+    /// the camera rides the float velocity (`flyer.v*`), NOT the carpet
+    /// speeds — so if only the carpet is zeroed the viewport keeps
+    /// sliding along the terrain after touchdown. Once dead, the flyer
+    /// must not drift.
+    #[test]
+    fn dead_wizard_pins_at_the_grave_under_enhanced() {
+        let mut sim = Simulation::with_world(flat_world(vec![80; MAP_TILES * MAP_TILES]));
+        sim.thrust_model = ThrustModel::Enhanced;
+        sim.altitude_model = AltitudeModel::ExtendedLift;
+        sim.flyer.x = 128.0;
+        sim.flyer.z = 128.0;
+        sim.flyer.y = 80.0 / 8.0 + 3.0;
+        sim.sync_carpet_from_flyer();
+        // Fly forward so the flyer carries real horizontal momentum.
+        let fwd = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..20 {
+            sim.step(&fwd);
+        }
+        assert!(
+            sim.flyer.vx.abs() + sim.flyer.vz.abs() > 0.1,
+            "the wizard is moving before the mortal blow"
+        );
+        sim.world.as_mut().unwrap().debug_kill_player();
+        for _ in 0..300 {
+            sim.step(&FlightInput::default());
+            if sim.world.as_ref().unwrap().player_dead() {
+                break;
+            }
+        }
+        assert!(
+            sim.world.as_ref().unwrap().player_dead(),
+            "the corpse landed"
+        );
+        let (x0, z0) = (sim.flyer.x, sim.flyer.z);
+        for _ in 0..60 {
+            sim.step(&FlightInput::default());
+        }
+        let drift = (sim.flyer.x - x0).abs() + (sim.flyer.z - z0).abs();
+        assert!(
+            drift < 1e-4,
+            "the dead wizard slid {drift} tiles off the grave"
+        );
+        assert_eq!(sim.flyer.vx, 0.0, "float velocity is pinned");
+        assert_eq!(sim.flyer.vz, 0.0, "float velocity is pinned");
     }
 
     /// Backspace full stop (retail action 0x27): both the actual and

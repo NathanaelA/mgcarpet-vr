@@ -388,10 +388,10 @@ impl Mc1Menu {
             return;
         }
         match &mut self.modal {
-            Some(Modal::EditLabel { buf, .. }) | Some(Modal::EditName { buf }) => {
-                if buf.len() < 20 {
-                    buf.push(c.to_ascii_uppercase());
-                }
+            Some(Modal::EditLabel { buf, .. }) | Some(Modal::EditName { buf })
+                if buf.len() < 20 =>
+            {
+                buf.push(c.to_ascii_uppercase());
             }
             _ => {}
         }

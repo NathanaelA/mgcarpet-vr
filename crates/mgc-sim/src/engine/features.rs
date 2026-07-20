@@ -674,9 +674,11 @@ pub(crate) struct Gen {
     /// wizard-mana ledger consumes this when it lands). Pool wizards
     /// are debited directly. Hash-transparent at zero.
     pub(crate) mc2_player_drain: Mc2Quiet<1>,
-    /// Class-14 scroll pickups banked for the Phase-4.2 spell-XP
-    /// system (retail grants 4 XP each in single-player,
-    /// UpdateScroll_59C80 EF:41180-83). Hash-transparent at zero.
+    /// Running "scrolls collected" tally for the human. The XP award
+    /// is live — `mc2_class14_tick` grants +4 to every owned spell on
+    /// pickup (UpdateScroll_59C80 EF:41180-83) — so this counter is now
+    /// a hashed tally only, not a deferral bank. Hash-transparent at
+    /// zero.
     pub(crate) mc2_scrolls: Mc2Quiet<2>,
     /// The human's collected MC2 spell tokens, a bitmask by spell
     /// model 0..25 (retail: `SpellEnabled[model]` on the wizard,
@@ -1926,8 +1928,29 @@ impl Gen {
                 self.ent[i].f84 = 256;
                 self.link(i, x, y, z.wrapping_add(640));
             }
+            // sub_3B860 (:47613): the crab egg (10,52). Laid at RUNTIME
+            // by the adult crab (mobs.rs) — authored (10,52) records are
+            // purged by MODEL in the load fixpoint (`event_loop`, model
+            // 52 ineligible), so the link/refill/sprite here are
+            // load-transparent and only the runtime egg incubates.
+            // State 56 = the hatch timer; f26 (600) is the creator
+            // default, immediately overwritten by the layer with
+            // 10*(rand%10)+100. Extents ride sprite 205.
+            52 => {
+                e.tick70 = 56;
+                e.max_life = 100000;
+                e.f44 = 500;
+                e.f26 = 600;
+                e.f140 = 500;
+                e.f136 = 2000;
+                e.flags &= !8;
+                let (x, y, z) = (e.x, e.y, e.z);
+                self.link(i, x, y, z);
+                self.refill_life(i);
+                self.set_sprite(i, 205);
+            }
             // All remaining retail models (0, 1, 5, 6, 8, 13, 14, 15,
-            // 17, 23, 25, 33, 38, 39, 44, 52, …): purged unticked, no
+            // 17, 23, 25, 33, 38, 39, 44, …): purged unticked, no
             // terrain writes, no global PRNG — slot churn only. Models
             // 13/14/15 draw from their (doomed) entity LCG; unobservable.
             _ => {
@@ -3945,6 +3968,49 @@ impl Gen {
         self.ent[i].flags |= 0x400;
     }
 
+    /// sub_296A0 (:31097), byte70 56: the crab egg's incubation. Ground-
+    /// snap z, run the act_life safety timeout (a pre-decrement read: it
+    /// despawns only once act_life has already gone negative), then the
+    /// f26 hatch timer the same way — f26 reaching 0 promotes to the
+    /// hatch (state 57, an inert max_life the hatch never reads). No
+    /// damage inbox; the egg dies only by timeout. No PRNG draws.
+    pub(crate) fn tick_egg_incubate(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        let timer = self.ent[i].f26;
+        self.ent[i].f26 = timer - 1;
+        if timer == 0 {
+            self.ent[i].tick70 = 57;
+            self.ent[i].max_life = 5000;
+        }
+    }
+
+    /// sub_29700 (:31120), byte70 57: the hatch. Ground-snap, spawn a
+    /// WILD class-5 m5 crab at the snapped position (retail's crab ctor
+    /// sets no owner — deliberately NOT inheriting the layer's), and —
+    /// only if the crab took a slot — a class-10 m1 flash carrying the
+    /// crab's id24; then despawn the egg unconditionally. The alloc
+    /// order (crab, then flash, then free the egg) is retail's and feeds
+    /// the pool-slot hash.
+    pub(crate) fn tick_egg_hatch(&mut self, i: usize) {
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        let z = self.ground_z(x, y) as i16;
+        self.ent[i].z = z;
+        if let Some(crab) = self.spawn_creature(5, x, y, z) {
+            let owner = self.ent[crab].id24;
+            if let Some(flash) = self.spawn_creator(1, x, y, z) {
+                self.ent[flash].id24 = owner;
+            }
+        }
+        self.ent[i].flags |= 0x400;
+    }
+
     /// sub_33800 (:40980): paint one building tile. `a4 < 8` writes a
     /// terrain class + retexture; higher codes select {type,
     /// orientation} pairs from the paint tables and set the protection
@@ -4581,6 +4647,257 @@ mod tests {
                 "m{model} chases the wizard"
             );
         }
+    }
+
+    /// A village collapse spawns evacuee militia (m4) at the building's
+    /// pre-collapse corner height, which floats above the freshly-
+    /// lowered rubble ground. Retail's idle handler `sub_1B5D0` runs the
+    /// movement core `sub_196E0` (`creature_move`) on every alive tick
+    /// (:22541) — the sole carrier of the altitude clamp — so the
+    /// militiaman drifts down onto the ground (row-0 `v_14` = -4) and
+    /// wanders there at idle speed. Our port had dropped that call, so
+    /// the collapse militia froze mid-air and never wandered — the
+    /// "floating archers that just sit there" on level 04.
+    #[test]
+    fn militia_spawned_above_ground_settles_and_wanders() {
+        use crate::mc1::behavior::BEHAVIOR;
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let i = g.spawn_creature(4, 0x4000, 0x4000, 0).unwrap();
+        assert_eq!(g.ent[i].tick70, 25, "m4 spawns into idle (state 25)");
+        let ground = g.ground_z(g.ent[i].x, g.ent[i].y) as i16;
+        // Float him a few hundred units up, as a collapse over dropped
+        // rubble tiles would, and put the player far off so he stays
+        // idle (no aggro) and simply wanders.
+        g.ent[i].z = ground + 400;
+        let (x0, y0) = (g.ent[i].x, g.ent[i].y);
+        let ctx = ctx_at(0xC000, 0xC000, 0);
+        for _ in 0..500 {
+            g.creature_tick(i, &ctx);
+        }
+        assert_eq!(g.ent[i].tick70, 25, "stays idle with nothing to fight");
+        let floor = ground.wrapping_add(BEHAVIOR[g.ent[i].row156 as usize].v_12);
+        assert!(
+            (g.ent[i].z - floor).abs() <= 4,
+            "idle militia settles onto the ground floor (z {} vs floor {})",
+            g.ent[i].z,
+            floor
+        );
+        assert!(
+            g.ent[i].x != x0 || g.ent[i].y != y0,
+            "idle militia wanders instead of freezing where it spawned"
+        );
+    }
+
+    /// The same movement core rides the CHASE state (`sub_1BB20` →
+    /// `sub_1A120` → `sub_196E0` :21654) at speed 0, so a militiaman who
+    /// spawned high and then acquired a target still settles onto the
+    /// ground while he stands and shoots.
+    #[test]
+    fn militia_chasing_from_a_float_settles() {
+        use crate::mc1::behavior::BEHAVIOR;
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let i = g.spawn_creature(4, 0x4000, 0x4000, 0).unwrap();
+        let ground = g.ground_z(g.ent[i].x, g.ent[i].y) as i16;
+        g.ent[i].z = ground + 400;
+        g.ent[i].tick70 = 26; // chase
+        g.ent[i].f146 = crate::mc1::mobs::PLAYER_TARGET;
+        let ctx = ctx_at(0x4200, 0x4000, ground); // 2 tiles east, in range
+        for _ in 0..500 {
+            g.creature_tick(i, &ctx);
+        }
+        let floor = ground.wrapping_add(BEHAVIOR[g.ent[i].row156 as usize].v_12);
+        assert!(
+            (g.ent[i].z - floor).abs() <= 4,
+            "chasing militia settles onto the ground (z {} vs floor {})",
+            g.ent[i].z,
+            floor
+        );
+    }
+
+    /// D4: the militia idle pair-up (sub_1B5D0 :22661-90). Two idle
+    /// militiamen with nothing to fight and no house to shelter in fall
+    /// into an escort pair — one follows the other into the pack state
+    /// (0x1B=27) with its leader set; the chosen leader (now the target
+    /// of a packed sibling) stays idle. Before the fix `(4,3)` was a
+    /// dead arm and the pair-up scan was stubbed, so every militiaman
+    /// wandered as a loner.
+    #[test]
+    fn idle_militia_pairs_up_into_a_pack() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        // Two militia a few hundred units apart (well inside the row-4
+        // range 4096), nothing else on the map, the player far away so
+        // neither acquires a wizard target.
+        let a = g.spawn_creature(4, 0x4000, 0x4000, 0).unwrap();
+        let b = g.spawn_creature(4, 0x4300, 0x4000, 0).unwrap();
+        assert_eq!(g.ent[a].tick70, 25, "m4 spawns idle");
+        assert_eq!(g.ent[b].tick70, 25, "m4 spawns idle");
+        let ctx = ctx_at(0xC000, 0xC000, 0);
+        for _ in 0..400 {
+            // Keep them facing each other so the v_30 cone always admits
+            // the sibling — otherwise the wander jitter swings the
+            // heading in and out of cone and the scan timing turns
+            // nondeterministic. (Setting the facing does not itself pair
+            // them; the new pair-up scan does.)
+            g.ent[a].f30 = Gen::angle_between(g.ent[a].x, g.ent[a].y, g.ent[b].x, g.ent[b].y);
+            g.ent[b].f30 = Gen::angle_between(g.ent[b].x, g.ent[b].y, g.ent[a].x, g.ent[a].y);
+            g.creature_tick(a, &ctx);
+            g.creature_tick(b, &ctx);
+        }
+        let a_packed = g.ent[a].tick70 == 27 && g.ent[a].f52 != 0;
+        let b_packed = g.ent[b].tick70 == 27 && g.ent[b].f52 != 0;
+        assert!(
+            a_packed ^ b_packed,
+            "exactly one militiaman falls in behind the other (a state {} f52 {}, b state {} f52 {})",
+            g.ent[a].tick70,
+            g.ent[a].f52,
+            g.ent[b].tick70,
+            g.ent[b].f52,
+        );
+        let (follower, leader) = if a_packed { (a, b) } else { (b, a) };
+        assert_eq!(
+            g.ent[follower].f52 as usize, leader,
+            "the follower's leader is its sibling"
+        );
+        assert_eq!(g.ent[leader].tick70, 25, "the chosen leader stays idle");
+    }
+
+    /// The m15 castle guard's wizard-acquisition scan (sub_1FF60
+    /// :25733-64): a rival-owned guard, awake, with the wizard in
+    /// range+cone, promotes into the STATIONARY chase and stops (the
+    /// sub_20410 entry trailer). A human-owned guard never targets the
+    /// human (the owner gate) — the fix that made castle L3+ archers
+    /// actually engage instead of patrolling harmlessly.
+    #[test]
+    fn m15_guard_scans_and_chases_the_wizard() {
+        let mk = |owner: u16| {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                crate::verbs::VerbSet::MC1,
+            );
+            let i = g.spawn_creature(15, 0x4000, 0x4000, 0).unwrap();
+            assert_eq!(
+                g.ent[i].tick70, 91,
+                "m15 spawns into the guard-wander state"
+            );
+            g.ent[i].id24 = owner;
+            g.ent[i].f58 = 16; // awake
+            g.ent[i].f63 = 15; // on the v_26 scan tick, NOT the heading-vote tick
+            let ctx = ctx_at(0x4200, 0x4000, 0); // 2 tiles east, well inside v_28
+            g.ent[i].f30 = Gen::angle_between(0x4000, 0x4000, ctx.px, ctx.py); // in cone
+            g.creature_tick(i, &ctx);
+            (g.ent[i].tick70, g.ent[i].f146, g.ent[i].f126)
+        };
+        // Rival-owned guard: acquires the wizard, enters chase, stops.
+        assert_eq!(
+            mk(50),
+            (92, crate::mc1::mobs::PLAYER_TARGET, 0),
+            "the rival guard chases the wizard and halts (entry trailer)"
+        );
+        // Human-owned guard: the owner gate keeps it patrolling.
+        assert_eq!(
+            mk(crate::mc1::mobs::PLAYER_TARGET).0,
+            91,
+            "a human-owned guard never targets the human"
+        );
+    }
+
+    /// The crab egg (`sub_3B860`/`sub_296A0`/`sub_29700`): the creator
+    /// stamps state 56, the incubation timer counts down and promotes
+    /// to the hatch (57), which lays a WILD m5 crab and self-despawns.
+    /// Regression guard for the model-52 → state-52 misroute (eggs used
+    /// to masquerade as live village buildings).
+    #[test]
+    fn crab_egg_incubates_and_hatches_a_wild_crab() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let egg = g.spawn_creator(52, 0x4000, 0x4000, 0).unwrap();
+        assert_eq!(
+            g.ent[egg].tick70, 56,
+            "the egg starts incubating (state 56)"
+        );
+        assert_eq!((g.ent[egg].class64, g.ent[egg].model65), (10, 52));
+        assert_eq!(g.ent[egg].act_life, 100000, "the safety timeout is armed");
+
+        // The layer's real hatch timer (here a short 3), then count down.
+        g.ent[egg].f26 = 3;
+        for _ in 0..3 {
+            g.tick_egg_incubate(egg);
+            assert_eq!(g.ent[egg].tick70, 56, "still incubating");
+        }
+        g.tick_egg_incubate(egg); // the tick that reads f26 == 0
+        assert_eq!(g.ent[egg].tick70, 57, "f26 hitting 0 promotes to hatch");
+
+        let crabs = |g: &Gen| {
+            (1..g.ent.len())
+                .filter(|&j| {
+                    g.ent[j].class64 == 5 && g.ent[j].model65 == 5 && g.ent[j].act_life >= 0
+                })
+                .count()
+        };
+        let before = crabs(&g);
+        g.tick_egg_hatch(egg);
+        assert_ne!(
+            g.ent[egg].flags & 0x400,
+            0,
+            "the egg despawns after hatching"
+        );
+        assert_eq!(crabs(&g), before + 1, "one m5 crab hatched");
+        let crab = (1..g.ent.len())
+            .find(|&j| g.ent[j].class64 == 5 && g.ent[j].model65 == 5 && g.ent[j].act_life >= 0)
+            .unwrap();
+        assert_eq!(g.ent[crab].tick70, 31, "the crab spawns in its m5 state");
+        assert_eq!(
+            g.ent[crab].id24, crab as u16,
+            "the crab is WILD (owns itself, not the layer's owner)"
+        );
+    }
+
+    /// The model-52 egg no longer aliases into the live-building state:
+    /// a fresh egg dispatches to the incubation handler, never
+    /// `tick_building_live`, so it can never masquerade as a village.
+    #[test]
+    fn crab_egg_does_not_become_a_phantom_village() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let egg = g.spawn_creator(52, 0x4000, 0x4000, 0).unwrap();
+        // The old bug stamped tick70 = model = 52 (the live-building
+        // state); the fix stamps 56 and gates state 52 on model 45.
+        assert_ne!(
+            g.ent[egg].tick70, 52,
+            "the egg is not in the building state"
+        );
+        assert_eq!(g.ent[egg].tick70, 56);
     }
 
     /// Only the %-forms of the m18 timer table draw the per-entity

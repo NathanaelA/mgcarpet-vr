@@ -14,9 +14,11 @@
 //!
 //! APPROXIMATIONS:
 //! - `sub_6D8B0(id, 0x12, hits)` = wizard spell-XP credit for row 18
-//!   (EF:58228 — NOT an earthquake event, the open-closure trace §1);
-//!   the spell-XP intake is deferred, hits computed and dropped like
-//!   the rest of the tail band.
+//!   (EF:58228 — NOT an earthquake event, the open-closure trace §1).
+//!   The dome's own area beat DOES credit it (the `mc2_cast_xp` mail
+//!   push at the type-0 beat below, EF:23388-95); only the summit-rain
+//!   flood's row-18 XP — on the (10,91) apocalypse mana-rain child —
+//!   is still deferred, hits computed and dropped.
 //! - The `life==3` children: (10,18) = the ground-vortex eruption
 //!   controller (`sub_32A70` — emits (10,16) tornadoes riding the
 //!   whirlwind driver, the (10,19) column + a (9,0) bolt on tick 0,
@@ -485,7 +487,9 @@ impl Gen {
     /// live spheres like retail; the 200-slot free cushion is a
     /// pool-exhaustion belt (deliberate: retail has none); the
     /// every-other-tick 26-row spell-XP flood (`sub_6D8B0`, xp =
-    /// tier-2 xpos1/512) is deferred like every XP intake.
+    /// tier-2 xpos1/512) is the lone remaining MC2 XP gap (hits
+    /// computed then discarded — see the module header; every other
+    /// XP source is wired through the `mc2_cast_xp` mail).
     pub(crate) fn mc2_summit91_tick(&mut self, i: usize) {
         for _ in 0..3 {
             let (x, y, z) = {

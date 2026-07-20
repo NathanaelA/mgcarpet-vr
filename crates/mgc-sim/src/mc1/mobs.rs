@@ -1389,9 +1389,11 @@ impl Gen {
                     }
 
                     // Egg-laying (:22945-55): 500 over max mana buys a
-                    // class-10 m52 egg (1 own-LCG draw). DEVIATION:
-                    // the egg's hatch handler is unported — it stands
-                    // one tick and despawns (flagged in ROADMAP).
+                    // class-10 m52 egg (1 own-LCG draw). The creator's
+                    // f26=600 is overwritten here with the real
+                    // 100..190-tick hatch timer; the egg then incubates
+                    // (`tick_egg_incubate`) and hatches a wild m5 crab
+                    // (`tick_egg_hatch`).
                     if self.ent[i].f136 + 500 < self.ent[i].f140 {
                         let (x, y, z) = {
                             let e = &self.ent[i];
@@ -1454,10 +1456,6 @@ impl Gen {
         }
     }
 
-    /// m4's stationary chase: face the target and fire the dart thunk
-    /// every v_26 while in range; drop back to (stationary) wander
-    /// when the target leaves or dies. Interim stub for the mimic's
-    /// custom family handlers.
     /// m4 CHASE (sub_1BB20 :22690): the militiaman stands his ground
     /// and shoots. Entering arms him (sub_1BC50 :22745 — ONE LCG:
     /// sprite 206 on 11/20 else 1, speed 0, filter = target
@@ -1486,6 +1484,15 @@ impl Gen {
             self.ent[i].f66 = tc;
             self.ent[i].f67 = tm;
         }
+        // Retail runs the movement core (sub_196E0 :21654, via
+        // sub_1A120) every alive tick — at chase speed 0 it only
+        // altitude-clamps, settling a militiaman a collapse spawned
+        // above ground so the 3D range gate below can reach the target
+        // instead of failing on the stale spawn height.
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return;
+        }
         let e = &self.ent[i];
         if e.f63 & 3 == 0 {
             let yaw = Self::angle_between(e.x, e.y, tx, ty);
@@ -1508,23 +1515,45 @@ impl Gen {
         }
     }
 
-    /// m4 IDLE, state 25 (sub_1B5D0 :22436): the unarmed-look /
-    /// filter restore, then every 4·v_26 the acquisition ladder —
-    /// (1) a wizard on the village wanted list (+528 ≠ 0, the
-    /// hostility gate) within aggro range, (2) the nearest burrower
-    /// (m9), NO gate — villagers fight burrowers on their own, (3) a
-    /// house within 0x1000 to move back into (the death slot with
-    /// +26 = 1 = the silent-absorb walk-in; house occupants++).
-    /// Deviation: the idle pair-up pack (:22650-84) stays stubbed.
+    /// m4 IDLE, state 25 (sub_1B5D0 :22436): the movement core, the
+    /// unarmed-look / filter restore, then the wander jitter and every
+    /// 4·v_26 the acquisition ladder — (1) a wizard on the village
+    /// wanted list (+528 ≠ 0, the hostility gate) within aggro range,
+    /// (2) the nearest burrower (m9), NO gate — villagers fight
+    /// burrowers on their own, (3) a house within 0x1000 to move back
+    /// into (the death slot with +26 = 1 = the silent-absorb walk-in;
+    /// house occupants++). Retail runs `sub_196E0` (`creature_move`) on
+    /// the ALIVE path every tick (:22541) — the sole carrier of the
+    /// altitude clamp `sub_42000`, so a militiaman spawned above ground
+    /// by a village collapse settles onto it (every behavior row's
+    /// v_14 is negative), and the idle speed (f128 = 30) makes him
+    /// wander with the same two-draw yaw jitter as `mob_wander`
+    /// (:22572-79). When nothing hostile, no burrower and no house is
+    /// in reach, the idle pair-up scan (:22661-90) runs — identical to
+    /// the shared `pack_scan`, so a lone militiaman falls in behind the
+    /// nearest packless sibling (state 0x1B).
     fn militia_idle(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         if self.ent[i].type86 != 0 {
-            // Disarm (sub_1BCE0 :22765).
+            // Disarm: the unarmed sprite + hit-anything filter restore.
             self.set_sprite(i, 0);
             self.ent[i].f66 = 3;
             self.ent[i].f67 = 0xFF;
         }
+        self.creature_move(i);
+        if self.ent[i].act_life < 0 {
+            return; // walled in — dies via the prologue next tick
+        }
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
         let (v26, r) = (row.v_26, row.v_28 as i32);
+        if (self.ent[i].f63 as i16) % v26 == 0 {
+            // Wander re-heading (:22572-79, identical to `mob_wander`):
+            // d1 picks the sign via % 157, d2's low byte + 85 the size.
+            let d1 = self.ent_rand(i);
+            let d2 = self.ent_rand(i);
+            let mag = ((d2 & 0xFF) + 85) as i32;
+            let sign = if d1 % 157 >= 79 { 1 } else { -1 };
+            self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
+        }
         if (self.ent[i].f63 as i16) % (4 * v26) != 0 {
             return;
         }
@@ -1554,6 +1583,13 @@ impl Gen {
             self.ent[b].f26 += 1;
             self.ent[i].f26 = 1;
             self.ent[i].tick70 = base + 4;
+        } else {
+            // Nothing to fight and no house in the +36418 list to shelter
+            // in (a house there blocks the pair-up in retail) → fall in
+            // behind the nearest packless sibling. The scan matches the
+            // shared pack_scan exactly (same-model, f52==0, v_28² range,
+            // v_30 cone → leader + state base+3, 0x1B).
+            self.pack_scan(i, base);
         }
     }
 
@@ -2367,6 +2403,91 @@ impl Gen {
         }
     }
 
+    /// m15 castle-guard WANDER, state 91 (sub_1FF60 :25662): the grid-
+    /// walk movement (sub_20480, always), then — every v_26 ticks while
+    /// awake — the wizard-acquisition scan (:25733-64, the shared
+    /// sub_19D70 scan A reduced to the player: v_28² range + v_30 cone +
+    /// the +16/0x20 invisibility skip + the owner gate). Acquiring the
+    /// wizard promotes to the STATIONARY chase (92) and runs the
+    /// chase-entry trailer (sub_20410) on that tick. Without this scan
+    /// the castle's L3+ archers patrolled forever and never engaged —
+    /// rival guards were harmless. HW shares this handler verbatim.
+    fn guard_wander(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.grid_walk(i, base);
+        let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
+        if (self.ent[i].f63 as i16) % v26 == 0
+            && self.ent[i].f58 != 0
+            && self.player_in_aggro_range(i, ctx)
+        {
+            self.ent[i].f146 = PLAYER_TARGET;
+            self.ent[i].tick70 = base + 2;
+        }
+        if self.ent[i].tick70 == base + 2 {
+            self.guard_enter_chase(i);
+        }
+    }
+
+    /// sub_20410 (:25885): the guard stops (speed 0) and rolls the alert
+    /// sprite — ONE LCG draw, armed 206 on 11/20 else 1.
+    fn guard_enter_chase(&mut self, i: usize) {
+        let r = self.ent_rand(i);
+        self.ent[i].f126 = 0;
+        self.set_sprite(i, if r % 20 <= 10 { 206 } else { 1 });
+    }
+
+    /// sub_20450 (:25899): leaving the chase restores the walk speed
+    /// (f128) and the unarmed sprite.
+    fn guard_exit_chase(&mut self, i: usize) {
+        self.ent[i].f126 = self.ent[i].f128;
+        self.set_sprite(i, 0);
+    }
+
+    /// m15 castle-guard CHASE, state 92 (sub_201D0 :25771): STATIONARY —
+    /// face the target every 4th tick (heading f34 only, never a step or
+    /// a move core), break back to WANDER (91) on target loss or when
+    /// the 3D distance reaches v_28, else fire the (9,13) bolt every
+    /// v_26 (the existing m15 thunk — class-9 m13, filter 3/0xFF, launch
+    /// z + f84, default 100 damage). Any break runs the exit trailer.
+    fn guard_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        let tgt = self.ent[i].f146;
+        let (tx, ty, tz, alive) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, true)
+        } else {
+            let t = tgt as usize;
+            if t == 0 || t >= self.ent.len() {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, false)
+            } else {
+                let c = &self.ent[t];
+                (c.x, c.y, c.z, c.act_life >= 0 && c.flags & 0x400 == 0)
+            }
+        };
+        // Aim (heading only, :25832-33).
+        if self.ent[i].f63 & 3 == 0 {
+            let e = &self.ent[i];
+            self.ent[i].f34 = Self::angle_between(e.x, e.y, tx, ty);
+        }
+        if !alive {
+            self.ent[i].tick70 = base + 1; // target lost (:25834)
+        } else {
+            let e = &self.ent[i];
+            let row = &BEHAVIOR[e.row156 as usize];
+            if (e.f63 as i16) % row.v_26 == 0 {
+                let dz = tz.wrapping_sub(e.z) as i32;
+                let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
+                if Self::isqrt(sq as u32) >= row.v_28 as u32 {
+                    self.ent[i].tick70 = base + 1; // out of range (:25841)
+                } else {
+                    self.attack_thunk(i, 15, tgt, tx, ty, tz, 0, 0);
+                }
+            }
+        }
+        // Exit trailer (:25862): restore the walk speed on any break.
+        if self.ent[i].tick70 != base + 2 {
+            self.guard_exit_chase(i);
+        }
+    }
+
     // ---- dispatch -----------------------------------------------------------
 
     /// The awake pre-pass sub_54F80 (:64300), run before dispatch:
@@ -2480,6 +2601,13 @@ impl Gen {
                                 self.genie_ambush(i, base, ctx);
                             } else {
                                 self.ent[i].tick70 = base + 2;
+                                if model == 15 {
+                                    // The m15 guard runs its chase-entry
+                                    // trailer (sub_20410) on the
+                                    // retaliate path too (sub_1FF60
+                                    // LABEL_33 → LABEL_34).
+                                    self.guard_enter_chase(i);
+                                }
                             }
                             return;
                         }
@@ -2516,7 +2644,10 @@ impl Gen {
             // half the story): stand-and-shoot with the +528 wanted-
             // timer hostility gate, armed/unarmed sprite swaps and
             // the walk-back-into-a-house exit. State 24 = the disarm
-            // slot the chase breaks to. Pack pair-up (27) stubbed.
+            // slot the chase breaks to. State 27 = the pair-up pack
+            // (sub_1BBE0 = mob_pack; a member promoted to chase re-arms
+            // on its first militia_chase tick, same as the idle/spawn
+            // promotions).
             (4, 0) => {
                 if self.ent[i].type86 != 0 {
                     self.set_sprite(i, 0);
@@ -2527,7 +2658,7 @@ impl Gen {
             }
             (4, 1) => self.militia_idle(i, base, ctx),
             (4, 2) => self.militia_chase(i, base, ctx),
-            (4, 3) => {}
+            (4, 3) => self.mob_pack(i, base),
 
             // -- idles --
             // m5's spawn state falls straight through to wander
@@ -2557,7 +2688,7 @@ impl Gen {
             }
             (9, 1) => self.m9_hidden(i, base, ctx),
             (11, 1) => self.genie_wander(i, base, ctx),
-            (15, 1) => self.grid_walk(i, base),
+            (15, 1) => self.guard_wander(i, base, ctx),
             // The villager families' custom hunts.
             (12, 1) => self.m12_wander(i),
             (13, 1) => self.feeder_wander(i, base, false),
@@ -2595,6 +2726,7 @@ impl Gen {
             (11, 2) => self.genie_chase(i, base, ctx),
             // m12's chase slot 74 = the house APPROACH.
             (12, 2) => self.m12_approach(i),
+            (15, 2) => self.guard_chase(i, base, ctx),
             (16, 2) => self.wyvern_chase(i, base, ctx),
             (_, 2) => self.mob_chase(i, base, ctx),
 

@@ -139,6 +139,10 @@ struct LaunchParams {
 /// The slot's durable retail-format record, tagged by game — MC1/HW
 /// and MC2 have distinct on-disk formats, so the run carries exactly
 /// one. `level` on the MC1 record = the level to play.
+// Exactly one lives per run (the `save` field, never a collection), so the
+// larger MC2 variant costs nothing to hold inline — boxing would only add
+// indirection through every accessor for no memory win.
+#[allow(clippy::large_enum_variant)]
 enum CampaignSave {
     Mc1(saves::Mc1Save),
     Mc2(saves::Mc2Save),

@@ -1591,8 +1591,8 @@ impl Gen {
 
     /// `AddTree_4AC40` (:33433) — the MC2 tree (2,0). FOUR per-entity
     /// LCG draws (lifespan, x/y jitter, sprite pick), byte-faithful.
-    /// APPROX register: the class-2 tick column is unported (trees
-    /// hold inert — natural-lifespan decay and burn states OPEN).
+    /// The class-2 tick column (the tree burn ladder + static decay)
+    /// lives in `scenery.rs`.
     pub(crate) fn mc2_spawn_tree(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         let i = self.new_event()?;
         {

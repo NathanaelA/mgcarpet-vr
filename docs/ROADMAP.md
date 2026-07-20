@@ -48,6 +48,68 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### Player reports 2026-07-20 — FIXED 2026-07-20 (playtest owed)
+- **Collapse-evacuee militia FLOAT** (level 04 "floating archers"):
+  fixed in the dormant-arm BONUS below (restored the militia movement
+  core + wander).
+- **Player-death camera slid along the terrain** instead of pinning at
+  the corpse. The dead-state handler (mgc-sim/lib.rs) zeroed only the
+  MC1/MC2 carpet speeds; under the Enhanced mover the camera rides the
+  float velocity (`flyer.v*`), which kept drifting. Fix = zero BOTH the
+  carpet speeds AND the enhanced float velocity BEFORE the move whenever
+  dead (a true pin); FALLING keeps its faithful glide; the existing
+  turn-toward-killer (killer_pos → yaw) completes the retail behavior.
+  Test `dead_wizard_pins_at_the_grave_under_enhanced`.
+
+### Player reports 2026-07-19 — FIXED 2026-07-19
+- Rival castle sink PLAYER-CERTIFIED; firefly damage accepted as
+  FAITHFUL (byte-verified; the opt-in "stronger firefly" lever would
+  be the `f63 % 35` shooter throttle). Playtest still owed on: worm
+  possession color, thrust-model switch hand-off, and the
+  enhanced-thrust×Faithful-altitude vertical (decline-crosstalk
+  ruling: the altitude AXIS owns vertical on both thrust models —
+  see DEVIATIONS "move_enhanced (level-plane thrust)").
+- MC2 big map coverage FIXED 2026-07-19 (playtest owed): map-screen
+  pane now spans the faithful 318.75 tiles vertically (retail
+  DrawMinimap scaling 204, EF:21840-49) instead of the bare 256-tile
+  world; retail's 4.6% terrain-vs-entity horizontal misalignment
+  deliberately not reproduced (DEVIATIONS mgc-render).
+
+### Player reports 2026-07-19 round 2 (traced 2026-07-19)
+- **MC1 level 04 trigger altitude-gated — TRACED FAITHFUL, no fix.**
+  The retail probe is the same 3-axis AABB (sub_118C0 :16963 has a z
+  arm; the 2-D suspicion is refuted — :58490 is unrelated UI code):
+  class-11 volumes get authored horizontal extents but a FIXED 4096
+  vertical half-extent (:44038 → sub_37130 :43790), probe the
+  sprite-44 wizard at flight altitude, and resnap z to the CURRENT
+  (dug) ground on quiet probes (:67632). Retail's speed-0 sink is
+  the same 8 units/tick (:55171). RESIDUAL suspect if the player
+  still finds it worse than retail: our hole dug DEEPER than retail
+  at the trigger cell (terrain bake / crater depth — the same
+  memimage-compare class as the MC2 foundation angle-nibble check).
+- **MC1 level 04 trigger-spawned skeletons passive — FIXED
+  2026-07-19, TWO stacked gaps** (playtest owed). Skeleton = the
+  (5,9) burrower mound. Gap 1: the state-55 handler `m9_hidden` was
+  missing retail sub_1D060's awake-gated WIZARD scan (:23796-23833)
+  — the only path that ever targets the player from state 55. Gap 2
+  (the player-visible one — reported again post-fix-1 as "attack my
+  castle but never me"): mounds bury 400 ticks after emerging with
+  no player near, and the buried arm was a stub with NO way back up
+  — retail sub_1D6D0 (:24016-28) arms a −50 countdown when the
+  wizard enters the 24-tile wake gate and the mound RISES again
+  (sub_1DDB0 :24273); the level-04 army had buried itself before
+  the player ever arrived (the castle worked because building it
+  nearby kept nearby mounds awake → never buried → unbounded-radius
+  castle hunt). Both ported; tests
+  `m9_mound_scans_the_wizard_when_awake` +
+  `m9_buried_mound_rises_near_the_wizard`; live-level verify:
+  dis-2 army buries player-far, then 16 risers chasing within 400
+  ticks of hovering it. Goldens unmoved. STILL OPEN (AI track):
+  the roam/convert self-spawn (surfaced :23834-23920 tile-dis-3
+  gated, buried :24030-118 unconditional owner stamp — the
+  undead-army growth that consumes villagers/creatures within
+  0x600 and mints new (5,9)s).
+
 ### MC2 fidelity debts
 - Jar re-collect / double-manifestation side bug — mask desync lets a
   carried spell's jar re-collect; root fix = set the SpellEnabled mask bit
@@ -55,10 +117,12 @@ and lists what remains; history lives in the archive and git.
 - Human MC2 death does not scatter its spellbook — `mc2_scatter_spells`
   (cast.rs) is uncalled; wire into the human-death path + re-mint from a
   `known` mask on respawn.
-- Rivals: DEFENSE state body untranscribed (weave+reactive approximated);
-  disguise VISUAL unported; steal-mana/cruise-scroll-grab casts unwired;
+- Rivals: DEFENSE disguise VISUAL unported (the state machine, tier
+  pick, shadowing and speed law ARE faithful — sub_15FC0/sub_161A0);
   heal rate = MC1 stand-in; per-projectile hate-feed timing; creatures
-  aggro only the human. Rival-spell tail: Duel tether, Beyond-Sight T2,
+  aggro only the human. (Scroll-grab cast IS wired at rivals.rs:1968;
+  steal-mana is absent from retail's rival rotation — neither a gap.)
+  Rival-spell tail: Duel tether, Beyond-Sight T2,
   rival rebound-window mirror.
 - Model helpers: doomsday (5,10) x41/6 helpers; m22 worm head + link-length
   provenance (floor 96 APPROX); (10,76) fire-sphere own creator; (10,9)
@@ -72,8 +136,9 @@ and lists what remains; history lives in the archive and git.
   re-snap) partly swept; kind-3/4/5 `&2` handle-tracking branches dormant.
 - Class-5 stale-slot deaths — banked root fix = hash-excluded per-slot
   generation counter (REVIEW PR-3 class).
-- Building type 68 projectile-devouring structure (`sub_21F60`) unported;
-  Global Death 0x12/0x13 m18+m19 homing reconstruction banked.
+- Global Death 0x12/0x13 m18+m19 homing reconstruction banked.
+  (Type-68 `sub_21F60` line removed 2026-07-20 — audit found it ported
+  as the doomsday devour pass, doomsday.rs:466.)
 - Metamorph carpet-hide + spell-name level-up banner (presentation).
 
 ### MC1 fidelity debts (the INTERIM inventory)

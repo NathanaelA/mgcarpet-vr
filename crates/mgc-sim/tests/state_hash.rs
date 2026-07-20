@@ -217,13 +217,22 @@ fn level_005_golden_state_hashes() {
     // fixture's first house fills during the combat window); A-C hold.
     // Any behavioral re-pin here moves the OBSERVABLE projection below
     // at the same checkpoints — expected and REQUIRED.
+    //
+    // Re-pinned for the m4 militia movement-core fix: retail's idle
+    // (sub_1B5D0 :22541) and chase (sub_1A120 :21654) handlers both run
+    // sub_196E0 (`creature_move`) every alive tick — the altitude-clamp
+    // carrier — which our port had dropped, freezing collapse-spawned
+    // militia mid-air. Restoring it (plus the idle wander jitter) settles
+    // and wanders them; the first evacuee militia appear once the crater
+    // dig reaches a house at checkpoint B, so post-init + A hold while
+    // B-E move in BOTH the layout hash and the OBSERVABLE projection.
     const GOLDEN: [u64; 6] = [
         0x795499327cc36b28, // post-init (feature pass + disposition 0)
         0xe37dd14011ee7d15, // A: 32 idle ticks far afield
-        0xd586b0f8e4e7a45a, // B: crater trigger fired + 120 dig ticks
-        0x33a250c42d61569b, // C: ambush disposition fired
-        0x9f6a5fd47305a944, // D: 64 ticks of two-hand fireball combat
-        0xd81dccfbd92bcbd9, // E: 100 aftermath ticks
+        0xf336f70e45cc937b, // B: crater trigger fired + 120 dig ticks
+        0x036cfde55a8817bb, // C: ambush disposition fired
+        0xff9ce49d65da179f, // D: 64 ticks of two-hand fireball combat
+        0x68dc051dcb47d580, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -239,12 +248,12 @@ fn level_005_golden_state_hashes() {
     // construction; if OBSERVABLE moves too, behavior moved and the
     // claim must say so.
     const OBSERVABLE: [u64; 6] = [
-        0x09a4bbee6ed601d4,
-        0x797dd4817a1d1f11,
-        0xbb23b68555315fd5,
-        0xfa89ab230f971f40,
-        0x5cf85ee7f75b41d2,
-        0x8e471bd2f137dbb4,
+        0x09a4bbee6ed601d4, // post-init — holds (no militia yet)
+        0x797dd4817a1d1f11, // A — holds (no militia yet)
+        0x7b733a85a7e27541, // B — militia settle/wander from here
+        0x56117358a7b6c164, // C
+        0x8a3df49c966ec36f, // D
+        0x920d98529e1fc2e7, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

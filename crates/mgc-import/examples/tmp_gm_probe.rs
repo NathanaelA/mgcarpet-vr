@@ -51,10 +51,8 @@ fn main() {
                                 cc7.push((ch, val));
                             }
                         }
-                        EventKind::Control { ch, ctrl, .. } => {
-                            if !other_cc.contains(&(ch, ctrl)) {
-                                other_cc.push((ch, ctrl));
-                            }
+                        EventKind::Control { ch, ctrl, .. } if !other_cc.contains(&(ch, ctrl)) => {
+                            other_cc.push((ch, ctrl));
                         }
                         _ => {}
                     }

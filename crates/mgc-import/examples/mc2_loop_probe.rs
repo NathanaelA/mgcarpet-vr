@@ -38,7 +38,7 @@ fn main() {
             println!(
                 "  subsong {sub}: EVNT@{ev} len={sz}  first_tempo={} us/qn ({} bpm)  loops={:?}",
                 tempo,
-                if tempo > 0 { 60_000_000 / tempo } else { 0 },
+                60_000_000_u32.checked_div(tempo).unwrap_or(0),
                 loops
             );
             sub += 1;

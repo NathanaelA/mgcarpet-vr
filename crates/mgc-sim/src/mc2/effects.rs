@@ -304,16 +304,19 @@ impl Gen {
     /// The mine's detonation: a ch0 area blast scaled by the tier
     /// intensity (`f44` = 1/2/4/8) plus the big-explosion visual, then
     /// despawn. APPROX for the untraced `sub_6DCA0` relaunch (OPEN); the
-    /// owner-immunity rides `area_write` (the mine's id24), and the
-    /// detonation XP award is deferred (the Gen layer can't reach the
-    /// spellbook).
+    /// owner-immunity rides `area_write` (the mine's id24). The trip
+    /// awards the owner one spell-23 XP (`sub_6D8B0(id, 23, 1)`,
+    /// EF:29979) through the `mc2_cast_xp` mail — the world tick's drain
+    /// re-applies `sub_6D8B0`'s own human-only guard, so a rival mine's
+    /// award is filtered there (like every other pool-side award site).
     fn mc2_mine_detonate(&mut self, i: usize, ctx: &MobCtx) {
-        let (x, y, z, blast) = {
+        let (x, y, z, blast, owner) = {
             let e = &self.ent[i];
-            (e.x, e.y, e.z, e.f44 as u32)
+            (e.x, e.y, e.z, e.f44 as u32, e.id24)
         };
         let dmg = blast.saturating_mul(250);
         self.area_write(i, 0, dmg, ctx, false, false);
+        self.mc2_cast_xp.0.push((owner, 23, 1));
         self.mc2_spawn_big_explosion(x, y, z);
         self.ent[i].flags |= 0x400;
     }

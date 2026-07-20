@@ -275,10 +275,8 @@ impl MainMenu {
                     buf.push(c.to_ascii_uppercase());
                 }
             }
-            Some(Modal::Slots { edit: Some(e), .. }) => {
-                if e.len() < 15 {
-                    e.push(c);
-                }
+            Some(Modal::Slots { edit: Some(e), .. }) if e.len() < 15 => {
+                e.push(c);
             }
             _ => {}
         }

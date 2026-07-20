@@ -1915,12 +1915,24 @@ impl World {
                     let hp = (self.player.state == LifeState::Alive).then_some(self.human_pose);
                     self.g.mc2_castle_piece_tick(i, hp)
                 }
-                // Live village buildings and their collapse.
-                10 if self.g.ent[i].tick70 == 52 => self.g.tick_building_live(i),
-                10 if self.g.ent[i].tick70 == 53 => {
+                // Live village buildings and their collapse — MODEL 45
+                // only. State 52/53 is house-exclusive (the construction
+                // finish and tick_building_live set it only on m45); the
+                // crab egg's model-52 no longer aliases into it (its
+                // creator now stamps state 56, below). The castle-
+                // demolish fake collapse is a direct call, not this
+                // dispatch, so gating on m45 leaves it untouched.
+                10 if self.g.ent[i].tick70 == 52 && self.g.ent[i].model65 == 45 => {
+                    self.g.tick_building_live(i)
+                }
+                10 if self.g.ent[i].tick70 == 53 && self.g.ent[i].model65 == 45 => {
                     self.g.tick_building_collapse(i);
                     self.terrain_dirty = true;
                 }
+                // The crab egg (10,52): incubation timer (56) → hatch
+                // (57), which lays a wild m5 crab and self-despawns.
+                10 if self.g.ent[i].tick70 == 56 => self.g.tick_egg_incubate(i),
+                10 if self.g.ent[i].tick70 == 57 => self.g.tick_egg_hatch(i),
                 // Combat effects (fire, spreader, splash, possess
                 // flash, lava bomb, blast ring, eruption driver,
                 // plume, magnet, hit-flash, steal-flash, storm
@@ -5924,8 +5936,9 @@ impl World {
 
     /// The class-14 tick column (strE0): 8/9 = terrain-pinned
     /// markers, 10 = the pickup scroll (UpdateScroll_59C80 :41158 —
-    /// grants 4 XP single-player, banked in [`Gen::mc2_scrolls`]
-    /// until the Phase-4.2 XP system; sound 63), 6 = the terrain
+    /// grants +4 XP single-player to every owned spell on human
+    /// overlap, tallied in [`Gen::mc2_scrolls`]; sound 63), 6 = the
+    /// terrain
     /// riser (sub_59F60, [`crate::mc2::riser`]), 7 = the cave pillar
     /// (sub_5B100, [`crate::mc2::cave`]), 0..=5 = the authentic
     /// no-ops.
