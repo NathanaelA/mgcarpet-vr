@@ -64,7 +64,7 @@ use crate::engine::features::{
 use crate::ids::GameId;
 use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
-use crate::mc1::spells::{SPELL_COUNT, SPELLS, SpellDef, SpellId};
+use crate::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellDef, SpellId};
 use crate::mc1::sprite_stats::SPRITE_STATS;
 use crate::verbs::{
     AwakeVerb, CommitGateVerb, DamageVerb, MovementVerb, ObjectiveVerb, TargetingVerb, VerbKind,
@@ -1159,10 +1159,11 @@ impl World {
             w.mc2_generate_events();
         }
         w.fire_disposition(0, true);
-        // MC2's campaign baseline (`SetDefaultSpells_5C0A0`, the
-        // LevelInit_56C00 tail): every level starts with fireball +
-        // possess granted at 0 XP. MC1 stays spell-less below —
-        // different game, different law.
+        // MC2's level-start book: fireball + possess at 0 XP. MC1
+        // stays spell-less below — different game, different law.
+        // (The real retail site is `InitialiseSpells_54A50`, NOT
+        // `SetDefaultSpells_5C0A0` which grants nothing; the scope
+        // caveat lives on `mc2_seed_default_spells`.)
         if matches!(w.game, GameId::Mc2) {
             w.mc2_seed_default_spells();
         }
@@ -2592,12 +2593,46 @@ impl World {
         };
         self.g.extents(m, h4, v4);
         self.player.owned[id] = m as u16;
-        if self.player.left.is_none() {
-            self.player.left = Some(spell);
-        } else if self.player.right.is_none() {
-            self.player.right = Some(spell);
-        }
+        // NO hand binding here: retail's level-init rebuild assigns the
+        // hands from the OWNED SET in book order, not in grant order
+        // (see `rebind_hands_canonical`). Binding incrementally here
+        // made the result depend on the order the app happened to
+        // grant in — ascending spell id — which put Heal (1) in the
+        // right hand where retail puts Possess (3).
         Some(m)
+    }
+
+    /// The level-init hand assignment (`sub_3DD50_3E090` :49193-49254,
+    /// HW `hw:45339-45383`): clear both hands, then walk the canonical
+    /// BOOK order [`DISPLAY_ORDER`] (`byte_99B88` :5752) and bind the
+    /// first owned spell to the LEFT hand and the second to the RIGHT.
+    /// Fewer than two owned leaves the remaining hand empty (retail's
+    /// 255 sentinel; the input path simply suppresses that button).
+    ///
+    /// Book order is `[0, 3, 2, 16, 1, ...]` — Fireball, Possess,
+    /// Accelerate, Castle, Heal — so a player holding Fireball, Heal
+    /// and Possess starts Fireball/Possess, NOT Fireball/Heal: Heal
+    /// sits at book position 5, behind three other spells.
+    ///
+    /// Order-independent by construction, so it does not matter which
+    /// order the campaign carry or the plausible instrument grants in.
+    /// Mid-level jar pickups do NOT come through here — retail binds
+    /// those to the LEFT hand only (:64855), which
+    /// [`Self::collect_spell_jar`] already does.
+    fn rebind_hands_canonical(&mut self) {
+        self.player.left = None;
+        self.player.right = None;
+        for &s in &DISPLAY_ORDER {
+            if self.player.owned[s as usize] == 0 {
+                continue;
+            }
+            if self.player.left.is_none() {
+                self.player.left = Some(SpellId(s));
+            } else if self.player.right.is_none() {
+                self.player.right = Some(SpellId(s));
+                break;
+            }
+        }
     }
 
     /// Dev/playtest toggle (G-class enhancement; the original ships
@@ -2615,6 +2650,11 @@ impl World {
             for s in 0..SPELL_COUNT as u8 {
                 self.grant_spell(SpellId(s));
             }
+            // Retail's cheat leaves the hands alone, but this
+            // instrument is usually flipped on a spell-less world
+            // where they are empty; bind them the same way a level
+            // start would so the toggle is usable.
+            self.rebind_hands_canonical();
         }
     }
 
@@ -2848,6 +2888,9 @@ impl World {
                 self.grant_spell(SpellId(s));
             }
         }
+        // Retail binds the hands from the finished owned set, so this
+        // runs once after the whole batch — never per grant.
+        self.rebind_hands_canonical();
     }
 
     /// Wire the level's completion goal: the required banked share
@@ -7803,6 +7846,213 @@ mod tests {
 
     fn at_trigger() -> PlayerPose {
         PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0)
+    }
+
+    /// MC2's level-init hand assignment (`InitialiseSpells_54A50`
+    /// EF:38755-62): first enabled index → LEFT, second → RIGHT.
+    /// MC2's canonical order is the identity (`spellIndex_D94FF`,
+    /// GameUI.cpp:59), so it is always the two lowest owned indices —
+    /// Fireball (0) and Possession (1) with every authored level row.
+    ///
+    /// Player report: "in level 003 the left hand is Beyond Sight and
+    /// the right is possession; in 001 it's speed + possession". The
+    /// batch grant was running the jar-PICKUP law, which binds left,
+    /// then right, then overwrites LEFT for every spell past the
+    /// second — leaving left = the LAST granted and right = the
+    /// SECOND. This test pins the level-start law; the pickup law is
+    /// pinned below it and must stay as it is.
+    #[test]
+    fn mc2_level_start_hands_are_the_two_lowest_indices() {
+        // mc2:003's authored human row.
+        let grants: Vec<(u8, i32)> = [0u8, 1, 2, 3, 4, 6, 11, 12]
+            .iter()
+            .map(|&s| (s, 0i32))
+            .collect();
+        let mut w = mc2_flat_world();
+        w.mc2_grant_plausible(&grants);
+        assert_eq!(w.mc2_book.left, 0, "LEFT = Fireball, not the last granted");
+        assert_eq!(w.mc2_book.right, 1, "RIGHT = Possession");
+
+        // Order-independent, like MC1's.
+        let mut rev = mc2_flat_world();
+        let mut back = grants.clone();
+        back.reverse();
+        rev.mc2_grant_plausible(&back);
+        assert_eq!((rev.mc2_book.left, rev.mc2_book.right), (0, 1));
+
+        // Every MC2 world is seeded with 0 and 1 at construction, so a
+        // later batch must not disturb the pair no matter what it adds
+        // — "always fireball + possession", the player's requirement.
+        let mut extra = mc2_flat_world();
+        assert_eq!((extra.mc2_book.left, extra.mc2_book.right), (0, 1));
+        extra.mc2_grant_plausible(&[(9, 0), (21, 0), (25, 0)]);
+        assert_eq!(
+            (extra.mc2_book.left, extra.mc2_book.right),
+            (0, 1),
+            "high-index grants must not steal a hand"
+        );
+
+        // The PICKUP law is untouched: collecting a further spell with
+        // both hands full overwrites the LEFT hand (EF:55735-49).
+        w.mc2_dev_grant_for_test(13);
+        assert_eq!(w.mc2_book.left, 13, "a pickup still takes the left hand");
+        assert_eq!(w.mc2_book.right, 1, "...and leaves the right alone");
+    }
+
+    /// Retail's level-init hand assignment (`sub_3DD50_3E090`
+    /// :49213-49254): LEFT/RIGHT = the first two owned spells walked in
+    /// BOOK order `byte_99B88` = `[0, 3, 2, 16, 1, ...]`, NOT in
+    /// ascending spell id.
+    ///
+    /// Player report: "you start with fireball + heal, it should be
+    /// fireball + possession". The port bound hands incrementally as
+    /// spells were granted, and every caller grants ascending, so Heal
+    /// (id 1) took the right hand — but Heal is book position 5,
+    /// behind Possess, Accelerate and Castle, and can only reach a
+    /// hand when nothing above it is owned.
+    #[test]
+    fn level_start_hands_follow_book_order_not_spell_id() {
+        // The mc1:005 owned set.
+        let mut w = flat_world();
+        w.grant_spells(&[0, 1, 2, 3, 4, 16, 23]);
+        assert_eq!(w.player.left, Some(SpellId(0)), "LEFT = Fireball");
+        assert_eq!(
+            w.player.right,
+            Some(SpellId(3)),
+            "RIGHT = Possess (book pos 2), NOT Heal (id 1, book pos 5)"
+        );
+
+        // Order-independent: retail rebuilds from the owned SET, so the
+        // same spells granted in reverse must bind identically.
+        let mut rev = flat_world();
+        rev.grant_spells(&[23, 16, 4, 3, 2, 1, 0]);
+        assert_eq!(
+            (rev.player.left, rev.player.right),
+            (w.player.left, w.player.right),
+            "hand binding must not depend on grant order"
+        );
+
+        // Fewer than two owned leaves the other hand empty (retail 255).
+        let mut one = flat_world();
+        one.grant_spells(&[7]);
+        assert_eq!(one.player.left, Some(SpellId(7)));
+        assert_eq!(one.player.right, None, "one spell leaves RIGHT empty");
+
+        // Heal DOES reach a hand when it outranks everything owned:
+        // book order puts 1 (pos 5) ahead of 7 (pos 11).
+        let mut heal = flat_world();
+        heal.grant_spells(&[1, 7]);
+        assert_eq!(
+            (heal.player.left, heal.player.right),
+            (Some(SpellId(1)), Some(SpellId(7)))
+        );
+    }
+
+    /// The m13 archer bolt's constructor uses the DOUBLING sprite
+    /// setter (`sub_370A0_37460`, :46274) where every other class-9
+    /// ctor uses the plain one — so the arrow carries twice the
+    /// collision half-extents. The port applied the plain setter and
+    /// gave every archer bolt (m4/m9/m10 creatures + the m15 castle
+    /// guard) a half-size hitbox.
+    ///
+    /// Also pins m9's re-skin (:21957): row 203 is sprite family base
+    /// 215 against 195's base 193, but identical 45x60 size and
+    /// 5-view fold — cosmetic only, no geometry change.
+    ///
+    /// Like the boulder, no golden fixture reaches this path: nothing
+    /// in level-005 or level-032 ever fires a bolt.
+    #[test]
+    fn archer_bolt_has_double_extents_and_m9_reskin_is_cosmetic() {
+        let mut w = flat_world();
+        let (bx, by, bz) = (100 * 256, 100 * 256, (100i16 / 8 + 4) * 256);
+
+        // Row 195 = 45x60 -> plain halves would be 22/22/30.
+        let p = w.g.spawn_bolt(bx, by, bz).unwrap();
+        assert_eq!(w.g.ent[p].type86, 195);
+        let box_of = |w: &World, i: usize| (w.g.ent[i].f80, w.g.ent[i].f82, w.g.ent[i].f84);
+        assert_eq!(box_of(&w, p), (44, 44, 60), "the arrow's box is DOUBLED");
+        assert_eq!(w.g.ent[p].f78, 30, "+78 is never doubled");
+
+        // m9's override: new billboard family, same geometry.
+        w.g.set_sprite_x2(p, 203);
+        assert_eq!(w.g.ent[p].type86, 203);
+        assert_eq!(box_of(&w, p), (44, 44, 60), "203 changes art, not geometry");
+
+        // Idempotent: retail calls it twice on the same entity (ctor
+        // :46274 then thunk :21928) and the box must not reach 4x.
+        w.g.set_sprite_x2(p, 203);
+        assert_eq!(
+            box_of(&w, p),
+            (44, 44, 60),
+            "repeat calls must not grow the box"
+        );
+
+        // The sibling boulder ctor (:46297) stays on the PLAIN setter:
+        // row 196 = 128x100 -> undoubled halves.
+        let b = w.g.spawn_slow_bolt(bx, by, bz).unwrap();
+        assert_eq!(w.g.ent[b].type86, 196);
+        assert_eq!(box_of(&w, b), (64, 64, 50), "the boulder is NOT doubled");
+    }
+
+    /// The Troll/Ape boulder (class-9 m14, flight state 15) must be
+    /// SILENT in flight and speak only through its `(10,0)` impact.
+    ///
+    /// Player report: the stone-throwers "sound like arrows being
+    /// shot". Cause: state 15 was aliased onto state 13's handler,
+    /// whose first tick rolls ids 33-36 — the `arrow1`..`arrow4`
+    /// samples, and `:63799` is the ONLY site in the whole binary that
+    /// emits them. The arrow roll is FAITHFUL for state 13's real
+    /// users (the m4/m9/m10 archer creatures and the m15 castle
+    /// guard), so the second half of this test pins that it survives:
+    /// the fix must not over-correct into silencing the archers.
+    ///
+    /// No golden fixture reaches state 15 — level-005 and level-032
+    /// are full of (5,7) trolls but neither script ever lands a throw
+    /// — which is exactly why the alias went unnoticed.
+    #[test]
+    fn troll_boulder_is_silent_in_flight_and_booms_on_impact() {
+        // Drive the WHOLE world so the spawned impact entity ticks
+        // too — the boom belongs to the effect, not the projectile.
+        // Sounds accumulate because nothing drains them here.
+        let fly = |w: &mut World| {
+            let mut ids = Vec::new();
+            for _ in 0..48 {
+                w.tick(away(), PlayerCommand::default());
+                ids.extend(w.g.sounds.drain(..).map(|s| s.id));
+            }
+            ids
+        };
+
+        // The boulder: class-9 m14 / state 15, as sub_1AE30 arms it
+        // (780 damage, impact descriptor (10,0)).
+        let mut w = flat_world();
+        let (bx, by, bz) = (100 * 256, 100 * 256, (100i16 / 8 + 4) * 256);
+        let b = w.g.spawn_slow_bolt(bx, by, bz).unwrap();
+        w.g.arm_projectile(b, 1, 3, 0xFF, 0, bx + 4096, by, bz, 780, 0);
+        assert_eq!(w.g.ent[b].tick70, 15, "fixture must be state 15");
+        w.g.sounds.clear();
+        let ids = fly(&mut w);
+        assert!(
+            !ids.iter().any(|&id| (33..=36).contains(&id)),
+            "the boulder must NOT roll the arrow quartet: {ids:?}"
+        );
+        assert!(
+            ids.contains(&3),
+            "the boulder's (10,0) impact must sound (sub_3A490 -> :28114): {ids:?}"
+        );
+
+        // The archer bolt: state 13 keeps its arrow roll — faithful
+        // retail asset reuse, not a bug to "fix".
+        let mut w = flat_world();
+        let a = w.g.spawn_bolt(bx, by, bz).unwrap();
+        w.g.arm_projectile(a, 1, 3, 0xFF, 0, bx + 4096, by, bz, 250, 0);
+        assert_eq!(w.g.ent[a].tick70, 13, "fixture must be state 13");
+        w.g.sounds.clear();
+        let ids = fly(&mut w);
+        assert!(
+            ids.iter().any(|&id| (33..=36).contains(&id)),
+            "the archer bolt keeps arrow1..arrow4: {ids:?}"
+        );
     }
 
     #[test]

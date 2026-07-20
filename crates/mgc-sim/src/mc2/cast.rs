@@ -664,6 +664,13 @@ impl World {
 
     /// The dev-toggle grant: a manifestation with no jar (state 3M,
     /// hidden by the draw filter), wired like a pickup.
+    /// Test hook: grant one spell through the PICKUP path, so a test
+    /// can pin that the jar law still overwrites the left hand.
+    #[cfg(test)]
+    pub(crate) fn mc2_dev_grant_for_test(&mut self, spell: usize) {
+        self.mc2_dev_grant(spell);
+    }
+
     fn mc2_dev_grant(&mut self, spell: usize) {
         let (px, py, pz) = self.human_pose;
         if let Some(m) = self.g.mc2_spawn_spell_token(spell as u8, px, py, pz) {
@@ -702,6 +709,8 @@ impl World {
             // level-up toast — this is an init-time install).
             self.mc2_relevel(s, false, false);
         }
+        // Level-start binding, not the pickup law (see the fn doc).
+        self.mc2_rebind_hands_canonical();
     }
 
     /// The collect wiring shared by the jar pickup and the dev grant
@@ -1670,11 +1679,36 @@ impl World {
 
     // ---- level-init defaults / death scatter -------------------------------
 
-    /// `SetDefaultSpells_5C0A0` (the tail of `LevelInit_56C00`,
-    /// LevelInit.cpp:41): the campaign baseline — MC2 starts every
-    /// level with FIREBALL and POSSESS granted at 0 XP (MC1 by
-    /// contrast inits spell-less). The adopt order binds fireball → left,
-    /// possess → right via the pickup's own v12 quick-slot law.
+    /// The MC2 level-start book: FIREBALL (0) and POSSESS (1) at 0 XP
+    /// (MC1 by contrast inits spell-less). The adopt order binds
+    /// fireball → left, possess → right via the pickup's own v12
+    /// quick-slot law.
+    ///
+    /// CORRECTION — do NOT re-derive from the name this once cited:
+    /// `SetDefaultSpells_5C0A0` (`Spells.cpp:110`) grants NOTHING. It
+    /// only rewrites the static SPELLS table's `isEnabled_1` /
+    /// `fontType_0x1B` / `maxManaLimit_A` flags. The real grant is
+    /// `InitialiseSpells_54A50`'s gate (`EventsFunctions.cpp:38721-62`):
+    /// walk indices 0..25 ascending, enable the human's entitled set —
+    /// the level's authored `starting_spells` row on campaign level 0
+    /// or a direct `--level N` launch, the CARRIED book thereafter,
+    /// always minus `blocked_spells` — then first enabled → left,
+    /// second → right at tier 0.
+    ///
+    /// Spells are HOARDED across levels in both games — neither engine
+    /// re-grants a book each level. Retail's fallback to the authored
+    /// row applies ONLY when there is no carry (campaign level 0, or a
+    /// direct `--level N`); on campaign levels > 0 the carried book is
+    /// the whole story, and the level's `allowed`/`blocked` rows only
+    /// ever TAKE spells away (MC1 does this from index 025; MC2 not at
+    /// all in campaign).
+    ///
+    /// So seeding `{0, 1}` unconditionally here is a floor retail does
+    /// not have: a spell permanently lost to the wraith steal would be
+    /// handed back by us and not by retail. Correct for level 000
+    /// (whose row IS `{0,1}`) and harmless for the hands, but OPEN —
+    /// see docs/ROADMAP.md. The campaign carry itself is already right
+    /// (`apply_campaign_book`).
     pub(crate) fn mc2_seed_default_spells(&mut self) {
         for s in [0usize, 1] {
             if self.mc2_book.ent[s] != 0 {
@@ -1684,6 +1718,39 @@ impl World {
             if let Some(m) = self.g.mc2_spawn_spell_token(s as u8, px, py, pz) {
                 self.mc2_adopt_manifestation(m, s);
                 self.g.mc2_spell_tokens.0 |= 1 << s;
+            }
+        }
+        self.mc2_rebind_hands_canonical();
+    }
+
+    /// The MC2 level-init hand assignment (`InitialiseSpells_54A50`,
+    /// EF:38664-38762): clear both hands, then walk the spell indices
+    /// in canonical order — `spellIndex_D94FF` (GameUI.cpp:59) is the
+    /// IDENTITY over 0..25 — binding the first enabled spell to the
+    /// LEFT hand and the second to the RIGHT. Fewer than two enabled
+    /// leaves the remaining hand at -1, and the cast path suppresses
+    /// that button. Tier stays 0 (`SubSpellIndex*` derive from the
+    /// per-level-zeroed `array_0x437`, EF:38659 / :59421).
+    ///
+    /// A level start must NOT reuse the jar-pickup law in
+    /// [`Self::mc2_adopt_manifestation`]: that binds left, then right,
+    /// then OVERWRITES left for every further spell, so a batch of N
+    /// grants ends with left = the LAST granted and right = the
+    /// SECOND. mc2:003's `{0,1,2,3,4,6,11,12}` came out Beyond Sight
+    /// (12) / Possession (1) instead of Fireball / Possession. The
+    /// pickup law is right for actual pickups and is unchanged.
+    pub(crate) fn mc2_rebind_hands_canonical(&mut self) {
+        self.mc2_book.left = -1;
+        self.mc2_book.right = -1;
+        for s in 0..26usize {
+            if self.mc2_book.ent[s] == 0 {
+                continue;
+            }
+            if self.mc2_book.left == -1 {
+                self.mc2_book.left = s as i8;
+            } else if self.mc2_book.right == -1 {
+                self.mc2_book.right = s as i8;
+                break;
             }
         }
     }

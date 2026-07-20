@@ -17,9 +17,11 @@
 //!   hitscan walk + state-14 segment chain, confirmed vs remc2
 //!   sub_66750); the explosion's +146 stamps hit-or-0 where the
 //!   original writes garbage on a miss (deliberate).
-//! - Class-9 model 14 (m7's bolt) has NO handler in remc1's truncated
-//!   state table; interim m13-style straight bolt at its slow init
-//!   speed (OPEN: retail table).
+//! - Class-9 model 14 / state 15 (the Troll & Ape boulder) has no
+//!   TRANSCRIBED handler — remc1's class-9 tick table is truncated —
+//!   so `proj_boulder_tick` reconstructs it: straight flight, silent,
+//!   `(10,0)` impact. It must NOT alias onto state 13, whose
+//!   first-tick roll is the arrow quartet (OPEN: retail table).
 //! - Mana-shield reflection (+17 bit 7) is ported but nothing sets the
 //!   flag yet (OPEN: wizard shields are the spell track).
 
@@ -316,7 +318,13 @@ impl Gen {
     /// sub_3A0C0 (:46256): the m13 straight bolt. Life 13, default
     /// row/damage (NewEvent's +44 = 100 unless the thunk overrides).
     pub(crate) fn spawn_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
-        self.spawn_projectile(13, 13, x, y, z, 384, 13, 0, 195)
+        let p = self.spawn_projectile(13, 13, x, y, z, 384, 13, 0, 195)?;
+        // The ctor's sprite call is the DOUBLING setter (:46274), not
+        // the plain one every other class-9 ctor uses — the arrow
+        // carries twice the collision half-extents (44/44/60 rather
+        // than 22/22/30 for its 45x60 row).
+        self.set_sprite_x2(p, 195);
+        Some(p)
     }
 
     /// sub_3A390 (:46392): the m18 GLOBAL DEATH fuse. Fireball-shaped
@@ -914,7 +922,10 @@ impl Gen {
             9 => self.proj_m9_tick(i, ctx),
             10 => self.proj_castle_ball_tick(i, ctx),
             12 => self.proj_m12_tick(i, ctx),
-            13 | 15 => self.proj_bolt_tick(i, ctx),
+            13 => self.proj_bolt_tick(i, ctx),
+            // The Troll/Ape boulder — its own state, silent in flight
+            // (it used to alias onto 13 and inherit the arrow roll).
+            15 => self.proj_boulder_tick(i, ctx),
             17 => self.proj_firewall_tick(i, ctx),
             // Player-spell payload projectiles (spell track).
             2 | 4 | 5 | 6 | 7 | 11 => self.proj_payload_tick(i, ctx),
@@ -1654,8 +1665,54 @@ impl Gen {
         false
     }
 
-    /// sub_54180 (:63789): the straight bolt (m13, and interim m14) —
-    /// first-tick LCG sound roll, direct ch0 area write on any end.
+    /// Class-9 m14 / **state 15** (`sub_3A1A0` :46281) — the Troll and
+    /// Ape boulder (class-5 m7's throw, `sub_1AE30` :22101). Its own
+    /// flight state, NOT the arrow's.
+    ///
+    /// The boulder is SILENT in flight; the only sound it makes is its
+    /// impact. Retail's arrow roll (ids 33-36 = `arrow1`..`arrow4`)
+    /// lives solely in state 13's `sub_54180` (:63799 — the binary's
+    /// ONLY emitter of those four ids), and this is state 15. Proof
+    /// they are different handlers: `sub_1AE30` writes the impact
+    /// descriptor `+68 = 10` / `+69 = 0` (:22103-04), which state 13
+    /// never reads — dead stores otherwise. So the throw speaks
+    /// through its `(10,0)` impact (`sub_3A490` :46454), whose tick
+    /// plays sound 3 (:28114).
+    ///
+    /// APPROX(original: state 15's table entry is NOT transcribed —
+    /// remc1's class-9 tick table `str_25573C` (:4838) stops at state
+    /// 0x0D while its address span holds 22 entries, the only short
+    /// table in the block; the best-fit orphan is `sub_542B0_54640`
+    /// :63841). Two deliberate departures from that orphan, registered
+    /// in docs/DEVIATIONS.md: the flight stays STRAIGHT (the orphan
+    /// steers toward `+146`), and the impact inherits the thrown
+    /// `+44 = 780` (:22112) instead of the `(10,0)` default 400 — the
+    /// transcribed 780 write would otherwise be a dead store.
+    fn proj_boulder_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (yaw, pitch, speed) = {
+            let e = &self.ent[i];
+            (e.f30, e.f32, e.f126)
+        };
+        Self::polar_step(&mut tmp, yaw, pitch, speed);
+        let ground = self.ground_z(tmp.0, tmp.1) as i16;
+        let hit = self.victim_scan_at(i, tmp, ctx);
+        let grounded = ground > tmp.2;
+        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        self.ent[i].act_life -= 1;
+        if hit.is_some() || grounded || self.ent[i].act_life < 0 {
+            self.proj_explode(i, ctx, hit, true);
+        }
+        false
+    }
+
+    /// sub_54180 (:63789): the straight bolt (m13) — first-tick LCG
+    /// sound roll (the `arrow1`..`arrow4` quartet), direct ch0 area
+    /// write on any end. Retail reuses the arrow samples across every
+    /// user of this state — the skeleton/archer creatures m4/m9/m10
+    /// and the castle guard m15 — including m9, whose projectile wears
+    /// a different billboard (sprite 203, :21947). That reuse IS
+    /// faithful; only the boulder was wrongly borrowing it.
     fn proj_bolt_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;

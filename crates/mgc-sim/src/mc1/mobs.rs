@@ -69,6 +69,25 @@ impl Gen {
         e.f84 = s.height / 2;
     }
 
+    /// sub_370A0_37460 (:43772): [`set_sprite`](Self::set_sprite), then
+    /// DOUBLE the three collision half-extents (+80/+82/+84 — never
+    /// +78). Because the inner call re-derives the extents first, this
+    /// is idempotent: retail calls it on the same entity twice (the
+    /// m13 ctor at :46274 and then the firing thunk at :21928) and the
+    /// box does not grow to 4x.
+    ///
+    /// Only three call sites exist in the whole binary, all on the m13
+    /// arrow path — the sibling m14 boulder ctor (:46297) deliberately
+    /// uses the PLAIN setter, so the two projectiles differ in hitbox
+    /// as well as in art.
+    pub(crate) fn set_sprite_x2(&mut self, i: usize, t: u16) {
+        self.set_sprite(i, t);
+        let e = &mut self.ent[i];
+        e.f80 *= 2;
+        e.f82 *= 2;
+        e.f84 *= 2;
+    }
+
     /// sub_37130_374F0 (:43790): explicit extent override.
     pub(crate) fn extents(&mut self, i: usize, horiz: u16, vert: u16) {
         let e = &mut self.ent[i];
@@ -1987,6 +2006,12 @@ impl Gen {
                 let dmg = if self.ent[i].f144 != 0 { 600 } else { 400 };
                 if let Some(p) = self.spawn_bolt(x, y, launch_z) {
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, dmg, 0);
+                    // m9 alone re-skins its bolt (:21957): row 203 =
+                    // sprite family base 215 where 195 is base 193 —
+                    // same 45x60 size, same 5-view fold, so this is
+                    // PURELY the billboard. Its arrow sound is retail
+                    // asset reuse and stays (see DEVIATIONS.md).
+                    self.set_sprite_x2(p, 203);
                 }
             }
             // sub_1E380 (:24554): m11's 3000-payload wizard-seeker
