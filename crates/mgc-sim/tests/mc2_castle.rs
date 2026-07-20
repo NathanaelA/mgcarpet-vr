@@ -693,3 +693,84 @@ fn a_castle_on_a_slope_leaves_no_mesa_behind() {
         }
     }
 }
+
+/// THE CASTLE AS A WEAPON: a rising castle EXECUTES what stands on
+/// its footprint.
+///
+/// Retail's (10,42) castle painter runs `sub_57390` over every cell of
+/// the cumulative footprint on EVERY tick of the 19-tick rise
+/// (EF:27826-27), gated on the painter's kill bit — which only the
+/// level-UP spawn sets (`sub_60480` EF:61602), never the damage
+/// repaint (`sub_5FBD0`). Class-5 creatures die unless their model is
+/// protected {6, 8, 10, 16, 22, 23, 27} (+ 25 in action 200), and the
+/// skip test is an OWNER compare, so the builder's own creatures are
+/// spared. Our painter did none of this, which is why castles read as
+/// far less lethal than retail.
+#[test]
+fn a_rising_castle_executes_what_stands_under_it() {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = clear_spot(&w);
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+
+    // Model 19 is unprotected; model 16 is on the protected list.
+    // One of each, on the footprint centre, NOT owned by the caster.
+    let victim = w.debug_mc2_spawn_creature(19, cx, cy, 900);
+    let immune = w.debug_mc2_spawn_creature(16, cx, cy, 900);
+    assert!(victim != 0 && immune != 0, "both creatures spawned");
+    // And one unprotected creature that the CASTER owns: retail's
+    // owner compare spares it.
+    let own_id = w
+        .debug_pool()
+        .1
+        .iter()
+        .find(|e| e.slot == victim)
+        .unwrap()
+        .id24;
+    assert_eq!(own_id, 900, "the victim is owned by the stranger");
+    let friend = w.debug_mc2_spawn_creature(19, cx, cy, 0xFFFF /* PLAYER_TARGET */);
+    assert!(friend != 0, "the friendly creature spawned");
+
+    let alive = |w: &World, slot: usize| {
+        w.debug_pool()
+            .1
+            .iter()
+            .any(|e| e.slot == slot && e.class == 5 && e.life >= 0)
+    };
+    assert!(alive(&w, victim) && alive(&w, immune) && alive(&w, friend));
+
+    w.mc2_select_spell(2, 0, 0);
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..140 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    assert_eq!(count(&w, 3, 2), 1, "the castle rose");
+    assert!(
+        !alive(&w, victim),
+        "the rising castle killed the unprotected creature under it"
+    );
+    assert!(
+        alive(&w, immune),
+        "model 16 is on retail's protected list and survives"
+    );
+    assert!(
+        alive(&w, friend),
+        "the builder's OWN creature is spared (the owner compare)"
+    );
+}

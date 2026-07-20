@@ -48,6 +48,16 @@ pub(crate) const MC2_CASTLE_HP: [u32; 8] = [0, 20000, 40000, 40000, 60000, 60000
 /// a class-10 home).
 pub(crate) const F_UPGRADE_ARMED: u32 = 0x40;
 
+/// The castle painter's KILL BIT (`struct_byte_0xc_12_15.byte[2] & 1`,
+/// EF:27826): while it is set, every footprint cell the painter
+/// touches is run through [`Gen::mc2_building_clear_tile`] on EVERY
+/// tick of the 19-tick rise — the rising castle EXECUTES what stands
+/// on it. Only the level-UP painter carries it (`sub_60480` EF:61602
+/// `byte[2] |= 1`); the damage REPAINT painter (`sub_5FBD0` EF:60336)
+/// does not, so a castle re-stamping itself after a hit kills nothing.
+/// The MC1 column has the identical arm on `+18 & 1` (:56492).
+pub(crate) const F_BUILD_KILL: u32 = 1 << 21;
+
 /// `sub_60400` (EF:61523): (balloons, guards) by castle level —
 /// byte-identical to MC1's fleet quota (sub_47400 :56264).
 const fn mc2_castle_quota(lvl: i16) -> (usize, usize) {
@@ -265,6 +275,10 @@ impl Gen {
         let Some(p) = self.mc2_spawn_castle_painter_at(i, lvl as u8, false) else {
             return;
         };
+        // The level-up painter is ARMED (EF:61602 `byte[2] |= 1`):
+        // the rise executes whatever stands on the footprint. The
+        // repaint painter is not — see [`F_BUILD_KILL`].
+        self.ent[p].flags |= F_BUILD_KILL;
         self.snd(10, i);
         self.ent[i].f26 = lvl;
         self.ent[i].tick70 = 5;
@@ -1086,6 +1100,8 @@ impl Gen {
         let mut delta = vec![0i32; w * h];
         let mut paint: Vec<(u8, u8, u8)> = Vec::new();
         let do_paint = countdown % 7 == 0 || countdown == 1;
+        let kill = self.ent[i].flags & F_BUILD_KILL != 0;
+        let owner = self.ent[i].id24;
         for r in 1..=row {
             let Some(rd) = self.assets.build_tab.get(r).copied() else {
                 continue;
@@ -1108,6 +1124,18 @@ impl Gen {
                     let c = &cells[2 * (dy * rw + dx)..2 * (dy * rw + dx) + 2];
                     let gx = tlx.wrapping_add((offx + dx) as u8);
                     let gy = tly.wrapping_add((offy + dy) as u8);
+                    // THE CASTLE AS A WEAPON (EF:27826-27): while the
+                    // kill bit is set, EVERY cell of the cumulative
+                    // footprint is purged on EVERY tick of the rise —
+                    // ahead of the height write, and regardless of
+                    // whether this cell carries a pad height or a
+                    // paint code. That relentless cadence is what
+                    // makes a rising castle lethal to anything that
+                    // wanders onto it, not just to what stood there
+                    // when the build began.
+                    if kill {
+                        self.mc2_building_clear_tile(tile(gx, gy), owner);
+                    }
                     if c[1] != 0xff {
                         let t = tile(gx, gy);
                         delta[(offy + dy) * w + offx + dx] =

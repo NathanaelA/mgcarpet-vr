@@ -48,6 +48,81 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### Player reports 2026-07-21 — FIXED 2026-07-21 (playtest owed)
+- **MC2 castles were not lethal to what they rise over.** Retail's
+  (10,42) castle painter runs `sub_57390` over EVERY cell of the
+  cumulative footprint on EVERY tick of the 19-tick rise (EF:27826-27),
+  gated on the painter's kill bit (`byte[2] & 1`) which only the
+  level-UP spawn sets (`sub_60480` EF:61602) — never the damage repaint
+  (`sub_5FBD0`). Our MC2 painter never purged at all, so castles only
+  killed incidentally (creatures the terrain lift happened to strand);
+  the player's report was MC2 fireflies (model 19, unprotected)
+  surviving builds they should not. MC1's column already had the arm
+  (`build_footprint_kill` under `+18 & 1`, :56492). Now ported as
+  `F_BUILD_KILL`. Also fixed in `mc2_building_clear_tile`: the skip
+  test is retail's OWNER compare (`victim.id24 != owner`), not a slot
+  compare — a wizard's own creatures walk through their own
+  construction — and the victim's killer/attacker pair
+  (`word_0x24_36`/`+38`) now credits the builder. The slot compare was
+  indistinguishable on the village path (an unowned building's `id24`
+  defaults to its own slot) but wrong for an owned castle. Test
+  `a_rising_castle_executes_what_stands_under_it`.
+- **Destroying a castle left a flagless "tower" standing** (both games,
+  site-dependent; player-confirmed fixed on the mc2:06 ocean site,
+  rival Belix). The remnant was never an entity — the (3,2) castle
+  entity CARRIES the flag and despawned correctly; what stood was
+  painted TERRAIN. Three independent causes, all now closed:
+  1. **MC2 datum was the corner MEAN, retail's is the perimeter MIN**
+     (`sub_4AA40` EF:33399 → `sub_48E60`/`sub_48F20`, init 250). The
+     stamp writes `datum + cell` absolutely, the demolish only
+     subtracts `cell` back, and nothing saves the original ground —
+     the min datum is exactly what makes that asymmetry land flush.
+     The mean sat above the low side of any slope and left
+     `mean - ground` of stone mesa. Flat sites hid it → the
+     site-dependence. `mc2_castle_site_z` now uses the existing
+     verbatim `mc2_perimeter_min`. Test
+     `a_castle_on_a_slope_leaves_no_mesa_behind` (18-unit mesa before,
+     0 after).
+  2. **Level-0 castles stamped BUILD row 1.** Retail's build row IS
+     the level, unclamped, and row 0 is EMPTY (w = h = 0) — a level-0
+     castle is a bare flag owning no terrain, which is why the destroy
+     path never un-stamps it. Both columns clamped the row up to 1
+     (MC2 `mc2_spawn_castle_painter`; MC1 `spawn_starting_castle`
+     passing `lvl + 1`, plus the painter/repaint clamps), raising a
+     tower nothing would ever remove. MC1's demolish also lacked
+     retail's `if (level > 0)` guard (:56506), so a level-0 death
+     demolished a row-1 footprint that was never built. Test
+     `an_authored_castle_owns_only_its_own_levels_terrain`.
+  3. **MC1's un-stamp could silently not run at all.** Retail builds
+     the fake collapse event in the SCRATCH slot (entity 0, :56517-24)
+     and never allocates; ours took a pool slot with no else-arm,
+     right after `castle_eject` can spend up to 36 — on a
+     pool-pressured level the whole demolish was skipped and the full
+     tower stayed with its flag gone. Now uses `SCRATCH`.
+  - Level 005's goldens re-pinned (authored rival castles stamp one
+    ring less at load): all six layout hashes move, the OBSERVABLE
+    projection moves at post-init ONLY and holds A-E — the evidence
+    that footprints changed and play did not.
+  - NOT a bug, deliberate: the leftover flatten pad itself. Retail has
+    ONE heightmap, no backup, and the demolish is a relative
+    subtraction — a destroyed castle genuinely leaves its levelled pad
+    (plus up to +19 of byte-wrapping LCG rubble jitter, faithful in
+    both columns). Only the EXCESS above the datum was ours.
+- **MC1 Global Death had no player-visible effect.** Retail's only
+  sighting of the spell is a full-screen palette flash at the
+  detonation — `sub_44BE0(owner, 3)` → `Type_160+152`, painted by the
+  frame tail (:41813 case 3: red +48, blue saturated, green untouched
+  = a violet wash, then the case-1 `FadeInOut(pal, 4, 1)` ramp home).
+  The field handler had it commented as OPEN/unported. Now ported as
+  `PalFlash` (Gen, hash-silent presentation channel) → `PlayerVitals
+  .pal_flash` → the ui.rs overlay, armed only when the field's owner is
+  the local player (retail gates on the slot compare). Test asserts the
+  row-3 arm inside `global_death_fuses_at_the_caster_into_the_flat_plane_field`.
+- OPEN, same channel: **row 6** (`sub_44BE0(v4, 6)` at :29215 — the
+  warm R+48/G+32/B+32 wash when a creature lands a charge on the
+  player) is still unported; the `PalFlash` channel is now there to
+  carry it. Rows 2 and 7 are already drawn (hit flash, death grey-out).
+
 ### Player reports 2026-07-20 — FIXED 2026-07-20 (playtest owed)
 - **Collapse-evacuee militia FLOAT** (level 04 "floating archers"):
   fixed in the dormant-arm BONUS below (restored the militia movement
@@ -111,6 +186,18 @@ and lists what remains; history lives in the archive and git.
   0x600 and mints new (5,9)s).
 
 ### MC2 fidelity debts
+- `mc2_seed_default_spells` unconditionally seeds `{0,1}` at EVERY level
+  init — a floor retail does not have. Spells are HOARDED across levels
+  in both games; retail's `InitialiseSpells_54A50` (EF:38721-62) grants
+  the carried book alone on campaign levels > 0, and falls back to the
+  level's authored `starting_spells` row only when there is no carry
+  (level 0, or a direct `--level N` = `LEVEL_LOADED_FROM_ARG`). Two
+  consequences: (a) a spell permanently lost to the wraith steal would be
+  handed back by us and not by retail; (b) direct `--level N` playtest
+  launches should get the authored row (8 spells on mc2:003) instead of
+  2 — the row is imported and in the bundle but consumed only by rivals.
+  The campaign CARRY itself is already correct (`apply_campaign_book`),
+  as is the HAND binding (`mc2_rebind_hands_canonical`).
 - Jar re-collect / double-manifestation side bug — mask desync lets a
   carried spell's jar re-collect; root fix = set the SpellEnabled mask bit
   in `mc2_adopt_manifestation` (hashed path — needs golden verification).

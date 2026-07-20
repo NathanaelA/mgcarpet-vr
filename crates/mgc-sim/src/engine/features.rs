@@ -2694,34 +2694,51 @@ impl Gen {
     /// EXCEPT models 6/8/16 (:51753 — boss-tier exemptions). Every
     /// other class (wizards, balloons, castles, projectiles,
     /// effects) is structurally immune (:51760 default: break).
-    fn build_footprint_kill(&mut self, bt: usize, cx: u8, cy: u8, owner: u16) {
-        let def = self.assets.build_tab[bt % self.assets.build_tab.len()];
-        let (w, h) = (def.w as u16, def.h as u16);
-        let x0 = cx.wrapping_sub((w >> 1) as u8);
-        let y0 = cy.wrapping_sub((h >> 1) as u8);
-        let mut rows = h;
-        let (mut x, mut y) = (x0, y0);
-        let mut c = def.offset as usize;
-        while rows != 0 {
-            let ctl = self.assets.build_dat[c] as i8;
-            c += 1;
-            if ctl == 0 {
-                y = y.wrapping_add(1);
-                rows -= 1;
-                x = x0;
+    ///
+    /// SWEEP SHAPE (:30631-35): the kill fires for EVERY cell of every
+    /// positive RLE run, over rows 1..=level, on EVERY painter tick —
+    /// and crucially it runs BEFORE the cell byte is even read
+    /// (`sub_40E20` at :30634, `v15 = *(v36 + v13++)` only at :30635),
+    /// so an EMPTY cell of the footprint kills exactly like a masonry
+    /// one. Gating this on `byte != 0` (as this used to) shrank the
+    /// lethal area to the masonry alone — under 40% of the rectangle
+    /// at level 7 (899 of 2304 tiles) — which is why castles read as
+    /// far less deadly than retail. Only negative runs (explicit
+    /// skips) are spared; MC1's castle rows contain none.
+    fn build_footprint_kill(&mut self, level: usize, cx: u8, cy: u8, owner: u16) {
+        for bt in 1..=level {
+            let Some(def) = self.assets.build_tab.get(bt).copied() else {
                 continue;
-            }
-            if ctl < 0 {
-                x = x.wrapping_add((-(ctl as i32)) as u8);
-                continue;
-            }
-            for _ in 0..ctl {
-                let b = self.assets.build_dat[c];
+            };
+            let (w, h) = (def.w as u16, def.h as u16);
+            let x0 = cx.wrapping_sub((w >> 1) as u8);
+            let y0 = cy.wrapping_sub((h >> 1) as u8);
+            let mut rows = h;
+            let (mut x, mut y) = (x0, y0);
+            let mut c = def.offset as usize;
+            while rows != 0 {
+                let ctl = self.assets.build_dat[c] as i8;
                 c += 1;
-                if b != 0 {
+                if ctl == 0 {
+                    y = y.wrapping_add(1);
+                    rows -= 1;
+                    x = x0;
+                    continue;
+                }
+                if ctl < 0 {
+                    x = x.wrapping_add((-(ctl as i32)) as u8);
+                    continue;
+                }
+                for _ in 0..ctl {
+                    c += 1; // the cell byte, consumed but NOT consulted
                     let mut j = self.map_entity[tile(x, y)] as usize;
                     while j != 0 {
                         let next = self.ent[j].next20 as usize;
+                        // The 0x400 test is ours, not retail's (:51743
+                        // has no such guard): our freed entities keep
+                        // their tile link until the sweep, and
+                        // `free_entity` on an already-freed slot would
+                        // corrupt the free list. Vacuous otherwise.
                         if self.ent[j].id24 != owner && self.ent[j].flags & 0x400 == 0 {
                             match self.ent[j].class64 {
                                 2 => self.free_entity(j),
@@ -2735,8 +2752,8 @@ impl Gen {
                         }
                         j = next;
                     }
+                    x = x.wrapping_add(1);
                 }
-                x = x.wrapping_add(1);
             }
         }
     }
@@ -4471,6 +4488,59 @@ mod tests {
     /// pure-wait state with no helper spawned freezes the castle
     /// forever (neither upgradable nor destroyable) under meteor pool
     /// exhaustion.
+    /// The castle kill sweeps the WHOLE footprint rectangle, not just
+    /// the cells that carry masonry. Retail fires `sub_40E20` before
+    /// it even reads the cell byte (:30634 precedes :30635), so an
+    /// EMPTY cell of the build row executes what stands on it exactly
+    /// like a wall cell does. Gating on the byte (as the port used to)
+    /// cut the lethal area to under 40% of the rectangle at level 7.
+    #[test]
+    fn castle_kill_sweeps_empty_footprint_cells_too() {
+        // A 3x3 build row whose CENTRE cell is empty (0) — a hole in
+        // the masonry that must still kill.
+        let grid = vec![0u8; 1024];
+        let dat: Vec<u8> = vec![
+            3, 0x10, 0x10, 0x10, 0, // row 0 of the footprint
+            3, 0x10, 0x00, 0x10, 0, // row 1: the EMPTY centre
+            3, 0x10, 0x10, 0x10, 0, // row 2
+        ];
+        let mut tab = Vec::new();
+        tab.extend_from_slice(&0u32.to_le_bytes());
+        tab.extend_from_slice(&[0, 0]); // row 0: EMPTY, like the real tables
+        for _ in 1..8 {
+            tab.extend_from_slice(&0u32.to_le_bytes());
+            tab.extend_from_slice(&[3, 3]);
+        }
+        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut g = Gen::new(flat_land(8), assets, 1, ChassisParams::MC1, VerbSet::MC1);
+        let (cx, cy) = (100u8, 100u8);
+        let at = |g: &mut Gen, model: u16, tx: u8, ty: u8, own: u16| {
+            let s = g
+                .spawn_creature(model, (tx as u16) << 8, (ty as u16) << 8, 0)
+                .unwrap();
+            g.ent[s].id24 = own;
+            s
+        };
+        // The footprint is centred on (cx, cy): top-left is
+        // (cx - 1, cy - 1), so the EMPTY centre cell is (cx, cy).
+        let on_hole = at(&mut g, 0, cx, cy, 7);
+        let on_wall = at(&mut g, 0, cx + 1, cy, 7);
+        let exempt = at(&mut g, 16, cx.wrapping_sub(1), cy, 7);
+        let owned = at(&mut g, 0, cx, cy.wrapping_sub(1), 9);
+        g.build_footprint_kill(1, cx, cy, 9);
+        assert!(
+            g.ent[on_hole].act_life < 0,
+            "the EMPTY centre cell kills too — the whole rectangle is lethal"
+        );
+        assert!(g.ent[on_wall].act_life < 0, "a masonry cell kills");
+        assert!(g.ent[exempt].act_life >= 0, "m16 is exempt");
+        assert!(
+            g.ent[owned].act_life >= 0,
+            "the owner's own creature is spared"
+        );
+        assert_eq!(g.ent[on_hole].f38, 9, "the kill credits the castle owner");
+    }
+
     #[test]
     fn castle_transform_retries_failed_spawns() {
         let mut g = Gen::new(

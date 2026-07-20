@@ -105,7 +105,7 @@ impl Gen {
     /// the 38x38 tile block, `sub_57390` per tile — the SAME clear
     /// the building creator uses ([`Gen::mc2_building_clear_tile`],
     /// scenery removed, unprotected creatures killed).
-    fn mc2_pyramid_wipe(&mut self, cx: u8, cy: u8, own: usize) {
+    fn mc2_pyramid_wipe(&mut self, cx: u8, cy: u8, own: u16) {
         for j in 0..38u8 {
             let y = cy.wrapping_sub(19).wrapping_add(j);
             for k in 0..38u8 {
@@ -289,7 +289,7 @@ impl World {
                     self.g.ent[i].f46 = 22;
                     self.g.ent[i].f146 = PLAYER_TARGET;
                     self.mc2_doom_meter = 60;
-                    self.g.mc2_pyramid_wipe(cx, cy, i);
+                    self.g.mc2_pyramid_wipe(cx, cy, self.g.ent[i].id24);
                     fall = true;
                 }
                 1 => {

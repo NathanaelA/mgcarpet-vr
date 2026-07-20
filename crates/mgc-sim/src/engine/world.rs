@@ -7619,6 +7619,24 @@ impl World {
     /// tile with the given tier and owner (bypassing the carrier), as
     /// the carrier's landing would. Returns the mine slot, or 0.
     #[doc(hidden)]
+    /// Test hook: drop a roster creature (`{2, 16, 19, 25}`) on a tile
+    /// centre at ground level, owned by `owner`. Used by the
+    /// castle-crush coverage — the (10,42) painter's footprint purge
+    /// keys off class/model/owner, so the test needs a creature it
+    /// chose standing where the castle is about to rise.
+    #[doc(hidden)]
+    pub fn debug_mc2_spawn_creature(&mut self, model: u8, cx: u16, cy: u16, owner: u16) -> usize {
+        let (x, y) = ((cx << 8) | 0x80, (cy << 8) | 0x80);
+        let z = self.g.ground_z(x, y) as i16;
+        match self.g.mc2_spawn_creature_model(model, x, y, z) {
+            Some(s) => {
+                self.g.ent[s].id24 = owner;
+                s
+            }
+            None => 0,
+        }
+    }
+
     pub fn debug_mc2_place_mine(&mut self, cx: u16, cy: u16, tier: u8, owner: u16) -> usize {
         let (x, y) = ((cx << 8) | 0x80, (cy << 8) | 0x80);
         let lifespan = self

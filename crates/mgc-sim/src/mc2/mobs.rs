@@ -1926,12 +1926,25 @@ impl Gen {
     /// `sub_57390` (:39746): building placement clears its footprint
     /// tile — scenery entities removed, creatures killed EXCEPT the
     /// protected models {6, 8, 10, 16, 22, 23, 27} (+ 25 while in
-    /// action 200). `builder` = the building's own slot (skipped).
-    pub(crate) fn mc2_building_clear_tile(&mut self, t: usize, builder: usize) {
+    /// action 200, retail's `actionIndex != -56`).
+    ///
+    /// `owner` is the caller's `id_0x1A_26` and the skip test is
+    /// `victim.id24 != owner` — an OWNER compare, not a slot compare:
+    /// a wizard's own creatures walk through their own construction
+    /// unharmed. It degenerates to "skip the builder itself" for an
+    /// unowned building, whose `id24` defaults to its own slot, which
+    /// is why the slot-compare this used to do was indistinguishable
+    /// on the village path — but NOT on the castle path, where the
+    /// castle carries its wizard's id.
+    ///
+    /// The victim's killer/attacker pair (`word_0x24_36` /
+    /// `word_0x26_38`) is stamped with the owner, so the kill credits
+    /// the builder.
+    pub(crate) fn mc2_building_clear_tile(&mut self, t: usize, owner: u16) {
         let mut j = self.map_entity[t] as usize;
         while j != 0 {
             let next = self.ent[j].next20 as usize;
-            if j != builder {
+            if self.ent[j].id24 != owner {
                 match self.ent[j].class64 {
                     2 => self.free_entity(j),
                     5 => {
@@ -1940,6 +1953,8 @@ impl Gen {
                             || (m == 25 && self.ent[j].tick70 == 200);
                         if !protected {
                             self.ent[j].act_life = -1;
+                            self.ent[j].f36 = owner;
+                            self.ent[j].f38 = owner;
                         }
                     }
                     _ => {}
@@ -2047,7 +2062,7 @@ impl Gen {
                         tlx.wrapping_add(dx as u8),
                         tly.wrapping_add(dy as u8),
                     );
-                    self.mc2_building_clear_tile(t, i);
+                    self.mc2_building_clear_tile(t, self.ent[i].id24);
                 }
             }
         }
