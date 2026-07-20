@@ -1,0 +1,241 @@
+//! Refactor guard for the `Simulation` tier — the flight state that
+//! lives OUTSIDE [`World`] and which `World::state_hash` cannot see:
+//! the tick counter, the float `Flyer` pose, both carpet structs and
+//! the two G-class model selectors.
+//!
+//! This gap matters most for save/load (`docs/archive/DESIGN-SAVES.md`): a
+//! restored world can be byte-perfect while the carpet resumes at the
+//! wrong speed or aim, and no world-level golden would notice. The
+//! `hash_sees_*` tests below are the coverage proof; the goldens are
+//! the ordinary refactor pin.
+//!
+//! Same re-pin protocol as `state_hash.rs`: run with `--nocapture`,
+//! copy the printed array, and say in the commit that the behavior
+//! change was deliberate. Self-skips when the baked tree is absent.
+
+use mgc_sim::engine::features::{FeatureAssets, Planes};
+use mgc_sim::engine::world::World;
+use mgc_sim::{AltitudeModel, FlightInput, Simulation, ThrustModel};
+use std::path::PathBuf;
+
+#[path = "common/mod.rs"]
+mod common;
+
+fn baked_root() -> Option<PathBuf> {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
+    p.join("mc1/level-005.mgcl").exists().then_some(p)
+}
+
+/// Level 005 without the authored wizards — the rival column is
+/// already pinned by `state_hash.rs`; this fixture is about the
+/// flight tier riding on top of a live world.
+fn build_world(root: &std::path::Path) -> World {
+    let file = std::fs::File::open(root.join("mc1/level-005.mgcl")).unwrap();
+    let pkg: mgc_formats::LevelPackage = mgc_formats::mgcl::read(file).unwrap();
+    let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc1-temperate")).unwrap();
+    let terrain = pkg.terrain.as_ref().unwrap();
+    let planes = Planes {
+        height: terrain.height.clone(),
+        tile_type: terrain.tile_type.clone(),
+        shading: terrain.shading.clone().unwrap(),
+        angle: terrain.angle.clone().unwrap(),
+        ceiling: Vec::new(),
+    };
+    let assets = FeatureAssets::parse(
+        bundle.search.as_ref().unwrap(),
+        bundle.build_tab.as_ref().unwrap(),
+        bundle.build_dat.as_ref().unwrap(),
+    )
+    .unwrap();
+    let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
+    World::new(planes, &pkg.things.things, seed, assets)
+}
+
+fn sim(root: &std::path::Path, thrust: ThrustModel) -> Simulation {
+    let mut s = Simulation::with_world(build_world(root));
+    s.thrust_model = thrust;
+    s.altitude_model = AltitudeModel::Faithful;
+    s.sync_carpet_from_flyer();
+    s
+}
+
+fn steps(s: &mut Simulation, n: usize, input: &FlightInput) {
+    for _ in 0..n {
+        s.step(input);
+    }
+}
+
+/// Cruise, bank into a turn, then coast — the three regimes where the
+/// carpet carries state a world snapshot cannot reconstruct.
+fn run(root: &std::path::Path, thrust: ThrustModel) -> Vec<u64> {
+    let mut s = sim(root, thrust);
+    let mut out = vec![s.state_hash()];
+
+    // A: sustained forward thrust from rest (speed ramp + terrain follow).
+    steps(
+        &mut s,
+        40,
+        &FlightInput {
+            thrust: 1.0,
+            stick_y: -40,
+            ..Default::default()
+        },
+    );
+    out.push(s.state_hash());
+
+    // B: hard right turn with strafe — exercises the roll/pitch stick
+    // filters and the second polar step.
+    steps(
+        &mut s,
+        30,
+        &FlightInput {
+            thrust: 1.0,
+            strafe: 1.0,
+            stick_x: 96,
+            stick_y: -20,
+            yaw_delta: 0.05,
+            ..Default::default()
+        },
+    );
+    out.push(s.state_hash());
+
+    // C: hands off — momentum decays, the filters settle.
+    steps(&mut s, 40, &FlightInput::default());
+    out.push(s.state_hash());
+
+    out
+}
+
+#[test]
+fn flight_tier_golden_state_hashes() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked data not present");
+        return;
+    };
+    let faithful = run(&root, ThrustModel::Mc1);
+    let enhanced = run(&root, ThrustModel::Enhanced);
+    assert_eq!(
+        (faithful.clone(), enhanced.clone()),
+        (
+            run(&root, ThrustModel::Mc1),
+            run(&root, ThrustModel::Enhanced)
+        ),
+        "sim is not deterministic"
+    );
+    println!("faithful: {faithful:#018x?}\nenhanced: {enhanced:#018x?}");
+
+    const FAITHFUL: [u64; 4] = [
+        0xb32adc6a3bade6d2, // post-init
+        0x8073dd7f4ae812e9, // A: 40 ticks of forward thrust
+        0x5a2ff8cd38c0e77b, // B: 30 ticks of banked turn + strafe
+        0x32d0464cc10242b9, // C: 40 ticks of coast
+    ];
+    const ENHANCED: [u64; 4] = [
+        0x18aad48f24e35375, // post-init
+        0x8533aaa5dd796993, // A
+        0xa407fd1da8f36074, // B
+        0x06d1643f21654d0d, // C
+    ];
+    assert_eq!(
+        (faithful, enhanced),
+        (FAITHFUL.to_vec(), ENHANCED.to_vec()),
+        "flight-tier state hash diverged — if this behavior change is \
+         DELIBERATE, re-pin (run with --nocapture) and say so in the commit"
+    );
+}
+
+/// The coverage proof, and the reason this file exists: two sims whose
+/// WORLDS are identical but whose carpets differ must not hash alike.
+/// If this ever passes trivially, `Simulation::state_hash` has stopped
+/// covering the flight tier and every save/load fixture built on it is
+/// blind.
+#[test]
+fn hash_sees_the_carpet_when_the_world_cannot() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked data not present");
+        return;
+    };
+    let base = sim(&root, ThrustModel::Mc1);
+
+    let mut moving = sim(&root, ThrustModel::Mc1);
+    moving.carpet.act_speed = 80;
+    assert_eq!(
+        base.world.as_ref().unwrap().state_hash(),
+        moving.world.as_ref().unwrap().state_hash(),
+        "fixture is wrong: the worlds must be identical for this to prove anything"
+    );
+    assert_ne!(
+        base.state_hash(),
+        moving.state_hash(),
+        "carpet speed must reach the sim hash"
+    );
+
+    let mut aimed = sim(&root, ThrustModel::Mc1);
+    aimed.carpet.aim_pitch = 200;
+    assert_ne!(
+        base.state_hash(),
+        aimed.state_hash(),
+        "aim must reach the hash"
+    );
+
+    let mut drifting = sim(&root, ThrustModel::Enhanced);
+    drifting.flyer.vx = 1.0;
+    let mut still = sim(&root, ThrustModel::Enhanced);
+    still.flyer.vx = 0.0;
+    assert_ne!(
+        still.state_hash(),
+        drifting.state_hash(),
+        "float velocity must reach the hash"
+    );
+
+    // Sign-of-zero must not alias: the float fields hash by bit
+    // pattern, not by value.
+    let mut neg_zero = sim(&root, ThrustModel::Enhanced);
+    neg_zero.flyer.vx = -0.0;
+    assert_ne!(
+        still.state_hash(),
+        neg_zero.state_hash(),
+        "floats must hash by bit pattern, not by value"
+    );
+}
+
+/// The tick counter is real state: MC2's cave-drip cadence keys off
+/// it, and a restore that resets it to zero silently re-phases the
+/// world (`World::mc2_turn` is hash-excluded precisely BECAUSE it is
+/// a function of this counter).
+#[test]
+fn hash_sees_the_tick_counter() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked data not present");
+        return;
+    };
+    let a = sim(&root, ThrustModel::Mc1);
+    let mut b = sim(&root, ThrustModel::Mc1);
+    b.tick += 1;
+    assert_ne!(a.state_hash(), b.state_hash(), "tick must reach the hash");
+}
+
+/// The two G-class selectors change the simulation, so they belong in
+/// the digest (and, in due course, in every save header).
+#[test]
+fn hash_sees_the_model_selectors() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked data not present");
+        return;
+    };
+    let faithful = sim(&root, ThrustModel::Mc1);
+    let enhanced = sim(&root, ThrustModel::Enhanced);
+    assert_ne!(
+        faithful.state_hash(),
+        enhanced.state_hash(),
+        "thrust model must reach the hash"
+    );
+
+    let mut lifted = sim(&root, ThrustModel::Mc1);
+    lifted.altitude_model = AltitudeModel::ExtendedLift;
+    assert_ne!(
+        faithful.state_hash(),
+        lifted.state_hash(),
+        "altitude model must reach the hash"
+    );
+}

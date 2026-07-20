@@ -40,9 +40,11 @@ pub enum Mc1Action {
     NewGame,
     /// Resume/launch the current campaign level.
     Continue,
+    /// Write the campaign to a slot. Carries NO label: the slot row is
+    /// DERIVED (player name + level + progress), so there is nothing
+    /// for the player to author here — see [`Mc1Action::SetName`].
     SaveTo {
         slot: usize,
-        label: String,
     },
     LoadFrom(usize),
     /// The edited save name (retail slot label, max 20).
@@ -211,11 +213,6 @@ impl Bank {
 
 /// The modal state over the base menu.
 enum Modal {
-    /// Save-label editor for a slot ("--" seeds empty).
-    EditLabel {
-        slot: usize,
-        buf: String,
-    },
     /// Load confirm for a slot.
     ConfirmLoad {
         slot: usize,
@@ -366,10 +363,7 @@ impl Mc1Menu {
     }
 
     pub fn editing(&self) -> bool {
-        matches!(
-            self.modal,
-            Some(Modal::EditLabel { .. }) | Some(Modal::EditName { .. })
-        )
+        matches!(self.modal, Some(Modal::EditName { .. }))
     }
 
     /// Esc: close the modal / leave the submode. Never arms the quit
@@ -388,9 +382,7 @@ impl Mc1Menu {
             return;
         }
         match &mut self.modal {
-            Some(Modal::EditLabel { buf, .. }) | Some(Modal::EditName { buf })
-                if buf.len() < 20 =>
-            {
+            Some(Modal::EditName { buf }) if buf.len() < 20 => {
                 buf.push(c.to_ascii_uppercase());
             }
             _ => {}
@@ -398,17 +390,13 @@ impl Mc1Menu {
     }
 
     pub fn key_backspace(&mut self) {
-        if let Some(Modal::EditLabel { buf, .. } | Modal::EditName { buf }) = &mut self.modal {
+        if let Some(Modal::EditName { buf }) = &mut self.modal {
             buf.pop();
         }
     }
 
     pub fn key_enter(&mut self) {
         match self.modal.take() {
-            Some(Modal::EditLabel { slot, buf }) => {
-                self.pending = Some(Mc1Action::SaveTo { slot, label: buf });
-                self.sub = Sub::None;
-            }
             Some(Modal::EditName { buf }) => {
                 self.pending = Some(Mc1Action::SetName(buf));
             }
@@ -450,14 +438,6 @@ impl Mc1Menu {
             let ok = Self::ok_hit(mx, my);
             let cancel = Self::cancel_hit(mx, my);
             match self.modal.take() {
-                Some(Modal::EditLabel { slot, buf }) => {
-                    if ok {
-                        self.pending = Some(Mc1Action::SaveTo { slot, label: buf });
-                        self.sub = Sub::None;
-                    } else if !cancel {
-                        self.modal = Some(Modal::EditLabel { slot, buf });
-                    }
-                }
                 Some(Modal::EditName { buf }) => {
                     if ok {
                         self.pending = Some(Mc1Action::SetName(buf));
@@ -502,15 +482,15 @@ impl Mc1Menu {
                     self.modal = Some(Modal::ConfirmLoad { slot });
                 }
             }
+            // Picking a slot SAVES. No label editor in between: the
+            // row is composed for display (player name + level +
+            // progress), so seeding an editor from it and writing the
+            // result back accumulated the suffix on every save.
             (5..=10, Sub::Save) => {
-                let slot = id as usize - 5;
-                let seed = self
-                    .slots
-                    .get(slot)
-                    .filter(|s| s.1)
-                    .map(|s| s.0.clone())
-                    .unwrap_or_default();
-                self.modal = Some(Modal::EditLabel { slot, buf: seed });
+                self.pending = Some(Mc1Action::SaveTo {
+                    slot: id as usize - 5,
+                });
+                self.sub = Sub::None;
             }
             // New Game asks only when there IS progress to lose
             // (retail confirms via the byte_9687C gate; a fresh
@@ -629,13 +609,6 @@ impl Mc1Menu {
                         shown.push('_');
                     }
                     texts.push((shown, 112, 90));
-                }
-                Modal::EditLabel { buf: edit, .. } => {
-                    let mut shown = edit.clone();
-                    if caret_on {
-                        shown.push('_');
-                    }
-                    texts.push((shown, 112, 87));
                 }
                 Modal::ConfirmLoad { slot } => {
                     let label = self

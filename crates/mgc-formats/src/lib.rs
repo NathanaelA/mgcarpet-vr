@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bundle;
 pub mod mgcl;
+pub mod mgcs;
 
 /// Current `.mgcl` format version (see docs/FORMAT.md "Versioning").
 /// 2: MC1 packages gained `wizards.json` (per-player AI records +

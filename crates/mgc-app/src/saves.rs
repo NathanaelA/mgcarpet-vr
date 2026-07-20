@@ -1,25 +1,33 @@
-//! Retail-format campaign save files, both games — the durable
-//! progression records (docs/traces/mc1-campaign-save-menu.md,
-//! mc2-campaign-save-menu.md). NOT the mid-level world snapshots
-//! (retail MC1 `gam%05d.dat` / MC2 `SLEV*` dump the native RAM
-//! layout; out of scope by design — the campaign save captures
-//! everything between levels, which is also where retail MC2 lets
-//! you save from the menu).
+//! Save slots, both games (docs/archive/DESIGN-SAVES.md; retail research in
+//! docs/traces/mc1-campaign-save-menu.md, mc2-campaign-save-menu.md).
 //!
-//! Layouts are byte-exact with retail so GOG-era saves load and our
-//! saves load back into retail. Per-game directories (the formats
-//! collide — both use `.gam`, different slot counts):
-//! `saves/mc1/carpddNN.gam` (6 slots, NN = 00..05),
-//! `saves/mc1hw/carpddNN.gam` (byte-identical format),
-//! `saves/mc2/SAVEn.GAM` (8 slots, n = 1..8).
+//! A slot is TWO files sharing a stem:
+//!
+//! - `<stem>.mgcs` — the native save ([`mgc_formats::mgcs`]), always
+//!   written. It carries the campaign record plus, when the save was
+//!   taken mid-level, the world payload. This is what the port reads.
+//! - `<stem>.gam` — the retail record, written alongside as a
+//!   one-way, best-effort export for players who want to carry
+//!   progress into retail. It is read ONLY when no `.mgcs` exists for
+//!   that slot (an imported GOG-era save), and is otherwise
+//!   overwritten. Round-tripping back from retail is not supported:
+//!   a `.gam` cannot carry mid-level state, so preferring it would
+//!   silently discard a resume.
+//!
+//! Retail has no mid-level menu save for MC1 at all (it is Alt+S to a
+//! single hard-coded slot 199) and a separate two-slot file set for
+//! MC2, so neither game's snapshot shares storage with its campaign
+//! save. Ours do share, which is why a native slot is not readable by
+//! retail — an accepted consequence.
+//!
+//! The retail layouts stay byte-exact so GOG-era saves load and our
+//! exports load back. Per-game directories (the formats collide —
+//! both use `.gam`, different slot counts):
+//! `saves/mc1/carpddNN.{gam,mgcs}` (6 slots, NN = 00..05),
+//! `saves/mc1hw/carpddNN.{gam,mgcs}` (byte-identical format),
+//! `saves/mc2/SAVEn.{GAM,mgcs}` (8 slots, n = 1..8).
 
 use std::path::{Path, PathBuf};
-
-/// The per-game saves directory, next to `mgcarpet.json` (never
-/// inside `gamedata/`).
-pub fn dir(tag: &str) -> PathBuf {
-    Path::new("saves").join(tag)
-}
 
 // ---------------------------------------------------------------- MC1
 
@@ -28,11 +36,6 @@ pub const MC1_SLOTS: usize = 6;
 /// MC1 record size: magic 4 + name 20 + two 32-byte config buffers +
 /// 12 settings + 4 level + 24 blob + 2 counters + 12 settings again.
 pub const MC1_SIZE: usize = 142;
-
-/// `save/carpdd%02X.gam` (remc1 :61982) — slot is 0-based.
-pub fn mc1_path(tag: &str, slot: usize) -> PathBuf {
-    dir(tag).join(format!("carpdd{slot:02x}.gam"))
-}
 
 /// The MC1/HW menu save (`sub_51C90_51FD0` write / `sub_51AF0_51E30`
 /// read, remc1 :62052-62081 / :62007-62041): pure campaign
@@ -123,11 +126,6 @@ pub const MC2_SLOTS: usize = 8;
 pub const MC2_SIZE: usize = 1319;
 /// The `.GAM` signature word (`0xFFFFFFF7` = -9).
 pub const MC2_MAGIC: u32 = 0xFFFF_FFF7;
-
-/// `SAVE/SAVE%d.GAM` — slot is 0-based here, retail names 1-based.
-pub fn mc2_path(slot: usize) -> PathBuf {
-    dir("mc2").join(format!("SAVE{}.GAM", slot + 1))
-}
 
 /// One secret-portal record as saved (17 bytes,
 /// Type_SecretMapScreenPortals_E2970.h — packed, all LE):
@@ -367,6 +365,229 @@ impl Mc2Save {
     }
 }
 
+// --------------------------------------------------------- slot model
+
+/// The retail-format path for a slot, under an explicit saves root —
+/// THE one place either game's slot filename is spelled.
+///
+/// MC2 `SAVE/SAVE%d.GAM` (slot is 0-based here, retail names it
+/// 1-based); MC1/HW `save/carpdd%02X.gam` (remc1 :61982). The public
+/// wrappers pass the default root (`saves/`, next to `mgcarpet.json`
+/// and never inside `gamedata/`); tests pass a temp dir.
+fn retail_path_in(root: &Path, tag: &str, slot: usize) -> PathBuf {
+    let dir = root.join(tag);
+    if tag == "mc2" {
+        dir.join(format!("SAVE{}.GAM", slot + 1))
+    } else {
+        dir.join(format!("carpdd{slot:02x}.gam"))
+    }
+}
+
+/// The native save beside a retail slot: same stem, `.mgcs`.
+pub fn native_path(tag: &str, slot: usize) -> PathBuf {
+    retail_path(tag, slot).with_extension("mgcs")
+}
+
+/// The retail-format path for a slot, per game.
+pub fn retail_path(tag: &str, slot: usize) -> PathBuf {
+    retail_path_in(Path::new("saves"), tag, slot)
+}
+
+/// Slots per game.
+pub fn slot_count(tag: &str) -> usize {
+    if tag == "mc2" { MC2_SLOTS } else { MC1_SLOTS }
+}
+
+/// What the menu needs to draw one slot row, without decoding the
+/// ~570 KiB payload behind it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SlotInfo {
+    /// Label to show. Empty when the slot is free (callers supply
+    /// their own per-game placeholder).
+    pub label: String,
+    pub occupied: bool,
+    /// The level this slot sits at — the one it resumes into, or the
+    /// one the campaign is parked in front of. Every slot has one.
+    pub level: u32,
+    /// `Some(mana_percent)` when the slot carries a world payload and
+    /// so resumes straight into play; `None` = a hub save.
+    ///
+    /// The percentage IS the in-level marker: a run in progress reads
+    /// "L3 15%", a hub save just "L3".
+    pub resume: Option<u8>,
+    /// Read from a native `.mgcs`. False means the row came from an
+    /// imported retail `.gam` with no native file beside it.
+    pub native: bool,
+    /// The file exists and could not be read AT ALL — corrupt, or a
+    /// container so foreign that even the campaign record was
+    /// unreachable. Shown as occupied-but-unloadable rather than as an
+    /// empty slot, so a save is never silently overwritten.
+    pub incompatible: bool,
+    /// Read by SALVAGE: the container version is one this build cannot
+    /// apply, so the campaign progress was lifted out of it and the
+    /// world payload was dropped. Loading it resumes at the hub.
+    ///
+    /// Surfaced because it is a LOSS. A slot that silently stopped
+    /// resuming would read as "my save is fine" right up until the
+    /// player noticed their level restart.
+    pub stale: bool,
+    /// Campaign position, for the menu's level column.
+    pub campaign_level: u32,
+}
+
+/// Probe one slot: native first, retail as the fallback.
+///
+/// Never fails — an unreadable file becomes an `incompatible` row.
+/// The menu must be able to list a directory of junk without an error
+/// path, and must never present a damaged save as an empty slot.
+pub fn scan_slot(tag: &str, slot: usize) -> SlotInfo {
+    scan_slot_in(Path::new("saves"), tag, slot)
+}
+
+fn scan_slot_in(root: &Path, tag: &str, slot: usize) -> SlotInfo {
+    let native = retail_path_in(root, tag, slot).with_extension("mgcs");
+    if native.exists() {
+        return match std::fs::File::open(&native)
+            .map_err(|e| e.to_string())
+            .and_then(|f| mgc_formats::mgcs::read_header(f).map_err(|e| e.to_string()))
+        {
+            Ok(h) => SlotInfo {
+                label: h.label,
+                occupied: true,
+                level: h.level,
+                resume: h.resume.as_ref().map(|r| r.mana_pct),
+                native: true,
+                incompatible: false,
+                stale: false,
+                campaign_level: h.campaign_level,
+            },
+            // The version gate fired. The campaign record inside is
+            // retail's byte layout, not ours, so it survives any
+            // container version — salvage it and present a hub slot.
+            Err(_) => return salvage_slot(&native, tag),
+        };
+    }
+    // No native file: an imported retail save, campaign-only by
+    // construction (no retail `.gam` can carry mid-level state).
+    let retail = retail_path_in(root, tag, slot);
+    let Ok(bytes) = std::fs::read(&retail) else {
+        return SlotInfo::default();
+    };
+    let decoded = if tag == "mc2" {
+        Mc2Save::decode(&bytes).map(|s| (s.label, s.levels_completed))
+    } else {
+        Mc1Save::decode(&bytes).map(|s| (s.name, s.level as u32))
+    };
+    match decoded {
+        // An imported `.gam` knows only the campaign counter, so that
+        // is also the best "which level" it can offer.
+        Ok((label, campaign_level)) => SlotInfo {
+            label,
+            occupied: true,
+            level: campaign_level,
+            resume: None,
+            native: false,
+            incompatible: false,
+            stale: false,
+            campaign_level,
+        },
+        Err(_) => SlotInfo {
+            occupied: true,
+            incompatible: true,
+            ..Default::default()
+        },
+    }
+}
+
+/// Lift the campaign record out of a save this build cannot apply.
+///
+/// The resume is gone with the payload — its field order belongs to
+/// `SNAPSHOT_VERSION` and a stale one cannot be applied — but the
+/// player's progress is not our format's to lose.
+fn salvage_slot(native: &Path, tag: &str) -> SlotInfo {
+    let unreadable = SlotInfo {
+        occupied: true,
+        native: true,
+        incompatible: true,
+        ..Default::default()
+    };
+    let Ok(file) = std::fs::File::open(native) else {
+        return unreadable;
+    };
+    let Ok(rec) = mgc_formats::mgcs::recover(file) else {
+        return unreadable;
+    };
+    // The label in an old header may predate whatever we now store, so
+    // prefer the campaign record's own name when there is one.
+    let from_record = if tag == "mc2" {
+        Mc2Save::decode(&rec.campaign).map(|s| (s.label, s.levels_completed))
+    } else {
+        Mc1Save::decode(&rec.campaign).map(|s| (s.name, s.level as u32))
+    };
+    let (label, campaign_level) = match from_record {
+        Ok(v) => v,
+        // The header parsed but the record did not: nothing
+        // trustworthy left to load.
+        Err(_) => return unreadable,
+    };
+    let label = if label.trim().is_empty() {
+        rec.label
+    } else {
+        label
+    };
+    SlotInfo {
+        label,
+        occupied: true,
+        level: campaign_level,
+        resume: None,
+        native: true,
+        incompatible: false,
+        stale: true,
+        campaign_level,
+    }
+}
+
+/// Probe every slot for a game.
+pub fn scan_slots(tag: &str) -> Vec<SlotInfo> {
+    (0..slot_count(tag)).map(|s| scan_slot(tag, s)).collect()
+}
+
+/// Write both halves of a slot: the native save, and the retail
+/// export beside it.
+///
+/// The native write is the one that matters; an export failure is
+/// reported but does NOT fail the save, because the export is a
+/// convenience and losing it must never cost the player their
+/// progress. A native failure is fatal to the operation.
+pub fn write_slot(
+    tag: &str,
+    slot: usize,
+    save: &mgc_formats::mgcs::SavePackage,
+) -> Result<(), String> {
+    write_slot_in(Path::new("saves"), tag, slot, save)
+}
+
+fn write_slot_in(
+    root: &Path,
+    tag: &str,
+    slot: usize,
+    save: &mgc_formats::mgcs::SavePackage,
+) -> Result<(), String> {
+    let native = retail_path_in(root, tag, slot).with_extension("mgcs");
+    if let Some(dir) = native.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let bytes = mgc_formats::mgcs::to_bytes(save).map_err(|e| e.to_string())?;
+    std::fs::write(&native, &bytes).map_err(|e| format!("{}: {e}", native.display()))?;
+
+    // Best effort from here on.
+    let retail = retail_path_in(root, tag, slot);
+    if let Err(e) = std::fs::write(&retail, &save.campaign) {
+        eprintln!("save: retail export to {} failed: {e}", retail.display());
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------- helpers
 
 /// NUL-terminated fixed field → String (lossy — retail names are
@@ -472,10 +693,229 @@ mod tests {
         assert!(Mc2Save::decode(&[0u8; MC2_SIZE]).is_err());
     }
 
+    // ------------------------------------------------- the slot model
+
+    /// A scratch saves root under the target dir; removed on drop.
+    /// Per-test paths, so nothing here depends on the process cwd and
+    /// tests stay parallel-safe.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("mgcarpet-test-{name}"));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Scratch(p)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn mid_level_package(label: &str) -> mgc_formats::mgcs::SavePackage {
+        let mut header =
+            mgc_formats::mgcs::hub_header(mgc_formats::Game::MagicCarpet1, label.into(), 4, 12);
+        header.resume = Some(mgc_formats::mgcs::InLevel {
+            bundle: "mc1-temperate".into(),
+            entry_sha256: "deadbeef".into(),
+            snapshot_version: 1,
+            tick: 999,
+            mana_pct: 15,
+            thrust_model: None,
+            altitude_model: None,
+        });
+        mgc_formats::mgcs::SavePackage {
+            header,
+            campaign: Mc1Save {
+                name: label.into(),
+                level: 4,
+                ..Default::default()
+            }
+            .encode(),
+            snapshot: Some(vec![3u8; 256]),
+        }
+    }
+
+    /// Writing a slot must leave BOTH files: the native save the port
+    /// reads, and the retail export beside it.
+    #[test]
+    fn writing_a_slot_leaves_a_retail_export_beside_it() {
+        let s = Scratch::new("saves-export");
+        write_slot_in(&s.0, "mc1", 2, &mid_level_package("WIZARD")).unwrap();
+
+        let native = retail_path_in(&s.0, "mc1", 2).with_extension("mgcs");
+        let retail = retail_path_in(&s.0, "mc1", 2);
+        assert!(native.exists(), "native save");
+        assert!(retail.exists(), "retail export");
+        // The export is the retail record verbatim, so retail can read it.
+        let bytes = std::fs::read(&retail).unwrap();
+        assert_eq!(bytes.len(), MC1_SIZE);
+        assert_eq!(Mc1Save::decode(&bytes).unwrap().name, "WIZARD");
+    }
+
+    /// THE precedence rule. A slot with both files must resolve to the
+    /// native one — the retail `.gam` cannot carry mid-level state, so
+    /// preferring it would silently turn a resume into a restart.
+    #[test]
+    fn the_native_save_wins_over_the_retail_export() {
+        let s = Scratch::new("saves-precedence");
+        write_slot_in(&s.0, "mc1", 0, &mid_level_package("RESUME")).unwrap();
+        // Both files now exist, and the retail one knows nothing about
+        // the level in progress.
+        assert!(retail_path_in(&s.0, "mc1", 0).exists());
+
+        let info = scan_slot_in(&s.0, "mc1", 0);
+        assert!(info.native, "the native file must be the one read");
+        assert_eq!(info.resume, Some(15), "the resume must survive");
+        assert_eq!(info.level, 12, "and so must the level it resumes into");
+        assert_eq!(info.label, "RESUME");
+    }
+
+    /// A retail save with no native file beside it is an import: it
+    /// lists, and it resumes at the hub because that is all a `.gam`
+    /// can express.
+    #[test]
+    fn a_lone_retail_save_is_imported_as_a_hub_slot() {
+        let s = Scratch::new("saves-import");
+        let path = retail_path_in(&s.0, "mc1", 1);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            Mc1Save {
+                name: "GOG".into(),
+                level: 9,
+                ..Default::default()
+            }
+            .encode(),
+        )
+        .unwrap();
+
+        let info = scan_slot_in(&s.0, "mc1", 1);
+        assert!(info.occupied);
+        assert!(!info.native);
+        assert_eq!(info.label, "GOG");
+        assert_eq!(info.campaign_level, 9);
+        assert_eq!(info.resume, None, "a .gam cannot carry a resume");
+    }
+
+    /// A save from a container version this build cannot apply must
+    /// still give up its campaign progress — that record is retail's
+    /// byte layout, not ours, so it is not our format's to lose. The
+    /// resume goes with the payload, and the row says so.
+    #[test]
+    fn an_old_container_is_salvaged_for_its_progress() {
+        let s = Scratch::new("saves-salvage");
+        let native = retail_path_in(&s.0, "mc1", 0).with_extension("mgcs");
+        std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+
+        // A v1 save: `level` is the OBJECT it used to be, which is
+        // exactly what this build's header cannot parse.
+        let record = Mc1Save {
+            name: "RAIN".into(),
+            level: 3,
+            ..Default::default()
+        }
+        .encode();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            use zip::write::SimpleFileOptions;
+            let opts = SimpleFileOptions::default();
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            zip.start_file("save.json", opts).unwrap();
+            zip.write_all(
+                br#"{"save_version":1,"game":"mc1","label":"RAIN","campaign_level":3,
+                     "level":{"index":3,"bundle":"mc1-temperate","tick":182}}"#,
+            )
+            .unwrap();
+            zip.start_file("campaign.bin", opts).unwrap();
+            zip.write_all(&record).unwrap();
+            zip.start_file("snapshot.bin", opts).unwrap();
+            zip.write_all(&[0u8; 16]).unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::write(&native, buf.into_inner()).unwrap();
+
+        let info = scan_slot_in(&s.0, "mc1", 0);
+        assert!(info.occupied);
+        assert!(info.stale, "salvaged, and the row must say so");
+        assert!(!info.incompatible, "progress came through, so it loads");
+        assert_eq!(info.label, "RAIN", "the name survives");
+        assert_eq!(info.level, 3, "and the campaign position");
+        assert_eq!(info.resume, None, "but the resume is gone with the payload");
+    }
+
+    /// A damaged save must never render as an empty slot — an empty
+    /// row is an invitation to overwrite it.
+    #[test]
+    fn a_damaged_save_lists_as_unreadable_not_empty() {
+        let s = Scratch::new("saves-damaged");
+        let native = retail_path_in(&s.0, "mc1", 3).with_extension("mgcs");
+        std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+        std::fs::write(&native, b"not a zip at all").unwrap();
+
+        let info = scan_slot_in(&s.0, "mc1", 3);
+        assert!(info.occupied, "the file exists, so the slot is taken");
+        assert!(info.incompatible);
+        assert_ne!(info, SlotInfo::default(), "must not read as empty");
+    }
+
+    #[test]
+    fn an_absent_slot_is_empty() {
+        let s = Scratch::new("saves-absent");
+        assert_eq!(scan_slot_in(&s.0, "mc1", 4), SlotInfo::default());
+    }
+
+    /// Re-saving between levels must drop a stale world payload, or a
+    /// finished level would still offer to resume into itself.
+    #[test]
+    fn a_hub_save_clears_a_previous_resume() {
+        let s = Scratch::new("saves-lifecycle");
+        write_slot_in(&s.0, "mc1", 0, &mid_level_package("MID")).unwrap();
+        assert_eq!(scan_slot_in(&s.0, "mc1", 0).resume, Some(15));
+
+        let hub = mgc_formats::mgcs::SavePackage {
+            header: mgc_formats::mgcs::hub_header(
+                mgc_formats::Game::MagicCarpet1,
+                "MID".into(),
+                5,
+                12,
+            ),
+            campaign: Mc1Save {
+                name: "MID".into(),
+                level: 5,
+                ..Default::default()
+            }
+            .encode(),
+            snapshot: None,
+        };
+        write_slot_in(&s.0, "mc1", 0, &hub).unwrap();
+        let info = scan_slot_in(&s.0, "mc1", 0);
+        assert_eq!(info.resume, None, "the stale payload must be gone");
+        assert_eq!(info.campaign_level, 5);
+    }
+
+    #[test]
+    fn native_and_retail_paths_share_a_stem() {
+        assert_eq!(
+            native_path("mc1hw", 0),
+            Path::new("saves/mc1hw/carpdd00.mgcs")
+        );
+        assert_eq!(native_path("mc2", 7), Path::new("saves/mc2/SAVE8.mgcs"));
+        assert_eq!(slot_count("mc2"), MC2_SLOTS);
+        assert_eq!(slot_count("mc1hw"), MC1_SLOTS);
+    }
+
     #[test]
     fn slot_paths() {
-        assert_eq!(mc1_path("mc1hw", 0), Path::new("saves/mc1hw/carpdd00.gam"));
-        assert_eq!(mc2_path(0), Path::new("saves/mc2/SAVE1.GAM"));
-        assert_eq!(mc2_path(7), Path::new("saves/mc2/SAVE8.GAM"));
+        assert_eq!(
+            retail_path("mc1hw", 0),
+            Path::new("saves/mc1hw/carpdd00.gam")
+        );
+        assert_eq!(retail_path("mc2", 0), Path::new("saves/mc2/SAVE1.GAM"));
+        assert_eq!(retail_path("mc2", 7), Path::new("saves/mc2/SAVE8.GAM"));
     }
 }

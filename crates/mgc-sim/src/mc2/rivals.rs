@@ -2902,3 +2902,130 @@ impl Gen {
         Some(s)
     }
 }
+
+// ------------------------------------------------------------ snapshot
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer, snap_enum};
+
+snap_enum!(
+    Mc2AiState,
+    "Mc2AiState",
+    0 => Mc2AiState::Fresh,
+    1 => Mc2AiState::Upgrade,
+    2 => Mc2AiState::Build,
+    3 => Mc2AiState::Possess,
+    4 => Mc2AiState::RaidCastle,
+    5 => Mc2AiState::AttackWizard,
+    6 => Mc2AiState::RaidBalloon,
+    7 => Mc2AiState::HuntMana,
+    8 => Mc2AiState::Home,
+    9 => Mc2AiState::Cruise,
+    10 => Mc2AiState::Defense,
+);
+
+impl Snap for Mc2Rival {
+    fn put(&self, w: &mut Writer) {
+        let Mc2Rival {
+            slot,
+            ent,
+            book,
+            known,
+            cooldown,
+            mana,
+            mana_max,
+            mana_delta,
+            agg,
+            per,
+            refl,
+            life_scale,
+            state,
+            hate,
+            war,
+            burst,
+            poverty,
+            target,
+            target_sig,
+            site,
+            strafe,
+            weave,
+            weave_dir,
+            shield_state,
+            avoid,
+            avoid_exit,
+            vdes,
+            grace,
+            eliminated,
+            shield,
+            invisible,
+            rebound,
+        } = self;
+        w.put(slot);
+        w.put(ent);
+        w.put(book);
+        w.put(known);
+        w.put(cooldown);
+        w.put(mana);
+        w.put(mana_max);
+        w.put(mana_delta);
+        w.put(agg);
+        w.put(per);
+        w.put(refl);
+        w.put(life_scale);
+        w.put(state);
+        w.put(hate);
+        w.put(war);
+        w.put(burst);
+        w.put(poverty);
+        w.put(target);
+        w.put(target_sig);
+        w.put(site);
+        w.put(strafe);
+        w.put(weave);
+        w.put(weave_dir);
+        w.put(shield_state);
+        w.put(avoid);
+        w.put(avoid_exit);
+        w.put(vdes);
+        w.put(grace);
+        w.put(eliminated);
+        w.put(shield);
+        w.put(invisible);
+        w.put(rebound);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2Rival {
+            slot: r.get()?,
+            ent: r.get()?,
+            book: r.get()?,
+            known: r.get()?,
+            cooldown: r.get()?,
+            mana: r.get()?,
+            mana_max: r.get()?,
+            mana_delta: r.get()?,
+            agg: r.get()?,
+            per: r.get()?,
+            refl: r.get()?,
+            life_scale: r.get()?,
+            state: r.get()?,
+            hate: r.get()?,
+            war: r.get()?,
+            burst: r.get()?,
+            poverty: r.get()?,
+            target: r.get()?,
+            target_sig: r.get()?,
+            site: r.get()?,
+            strafe: r.get()?,
+            weave: r.get()?,
+            weave_dir: r.get()?,
+            shield_state: r.get()?,
+            avoid: r.get()?,
+            avoid_exit: r.get()?,
+            vdes: r.get()?,
+            grace: r.get()?,
+            eliminated: r.get()?,
+            shield: r.get()?,
+            invisible: r.get()?,
+            rebound: r.get()?,
+        })
+    }
+}

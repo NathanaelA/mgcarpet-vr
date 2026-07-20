@@ -106,12 +106,222 @@ On load, main-portal states are **reconstructed from `numLevelsCompleted`**
 
 ### B. Mid-level snapshot `SLEV%d/SMAP%d/SVER%d.DAT` — full world dump
 
-`Level.cpp:172-405`. SMAP = 5×64 KB terrain planes + 128 KB entityIndex +
-4802 B buildings = **463,554 B** uncompressed; SLEV = whole
-`type_shadow_D41A0_BYTESTR_0` entity/game blob, compressed, pointer fix-ups on
-load (`sub_57680_FixPointersAfterLoad`); SVER = 8 B {version=15, level}.
-GOG install ships slot 2 (`GAME/NETHERW/SAVE/SMAP2.DAT` = exact 463,554 B).
-NOT a documentable subset — retail RAM layout.
+Raw RAM image, no serialisation. **Not portable and not readable by us** —
+absolute 32-bit pointers throughout. Documented for behaviour, not interop;
+the port's own design is `docs/archive/DESIGN-SAVES.md`.
+
+**TWO slots, and the shipped one is not a player save.** All three writers
+build the name as `"%s/%s/%s%d%s.DAT"` with `savefileindex + 1`
+(`Level.cpp:188`, `:221`, `:248`) ⇒ index 0 → `…1.DAT`, index 1 → `…2.DAT`.
+Index **0 = the pause-menu player save**; index **1 = an automatic
+level-start checkpoint**. The GOG install ships `SLEV2/SMAP2/SVER2` — the
+**checkpoint**, and its `SVER2` reads `{15, 0}` = level 0. (The trailing
+`savefileindex2` is a remc2 debugging addition; every retail call site passes
+`""`.)
+
+#### Trigger — pause menu only, no hotkey
+
+`P` (scancode 0x19, `PlayerInput.cpp:311-315`, `:1040-1044`) →
+`PauseUnpauseGame_18BB0` (`:406`), gated `!MULTIPLAYER_MODE` and refused
+while `D41A0_0.byte_0x36E0B & 2` (`:420-422`), the bit set during the
+level-exit cinematic (`EventsFunctions.cpp:60430`).
+
+Icons `DrawPauseMenu_2FD90` (`GameUI.cpp:4909`), one column, sprites from
+`GameBitmapIndexes.h:51-55`: 174 save (`:4926`), 175 load — greyed unless
+`byteindex_208` (`:4928-4937`), 176/177 sound/music — greyed on capability
+(`:4939-4969`), 178 options (`:4970`). Layout
+`GetPauseMenuCoordinates_2FFE0` (`PlayerInput.cpp:2712`): centred column,
+`y = (400 - 4*h)/2 - 60`. Hit-test `ReadPauseMenuEvents_197F0`
+(`:1729-1876`); band 2 splits left/right at mid-width into sound/music, later
+bands shift up one (`:1768-1786`); dispatch `:1789-1832`. Whole menu is
+suppressed when `byteindex_206` (the F10 clean-screen toggle, `:280-286`).
+
+Neither save nor load acts directly — both raise an OK/Cancel confirm
+(`DrawOkCancelMenu_30A60`, `GameUI.cpp:4590-4620`; `langindexbuffer[423]`
+"Load Level", `[424]` "Save Level", rendered `"<text>?"`). Handler
+`ReadOkayCancelButtonEvents_19E00` (`PlayerInput.cpp:2355-2440`): case 2 →
+`LoadLevel_555D0(0, levelnumber_43w)` (`:2411-2419`), case 3 →
+`SaveLevel_55080(0, levelnumber_43w, "")` (`:2421-2429`). Enter (0x1c) /
+Esc (0x01) accepted alongside the mouse (`:2379-2400`). Result toast via
+`ShowMessage_52D70`, `langindexbuffer[429]`. `byteindex_208` is refreshed on
+every pause toggle (`:465`) and right after a save (`:2428`).
+
+**No save/load hotkey exists** — `README.TXT`'s control list has none, and
+the only keyboard route is `P` → click → Enter. (Alt+S in MC2 is stereo
+toggle.) Debug-only, gated on `setting_byte2_23 < 0`: Alt/Ctrl+`R` = restart
+from checkpoint (`:216-218`), Alt/Ctrl+`F` = full restart (`:233-235`).
+
+#### The checkpoint slot (index 1)
+
+`sub_57640` (`EventsFunctions.cpp:39913-39921`) calls
+`SaveLevel_55080(1, level, "")` once at the end of the level fade-in, from
+`PaletteChanges_47760` case 2 (`:31932`), latched by `setting_38545 & 0x80`.
+`sub_48350` clears the latch (`:32287-32295`) at the top of every outer-loop
+iteration (`:31314`) ⇒ **rewritten on every level entry**.
+
+`sub_575C0` (`:39894-39910`), called unconditionally each frame from
+`DrawAndEventsInGame_47560` (`:31821`), restores it when
+`byte[2] & 8 && byte[2] & 4` — set by the death dispatcher case 0xF
+(`:37671`). So death **rewinds to level start inside a normal frame, with no
+fade and no load screen**. If the restore fails the flags survive and the
+outer loop takes the full-reload branch `sub_56D60` (`:31497-31501`).
+
+This is a **performance device, not a mercy mechanic** — castle respawn is
+still the in-level checkpoint, and the fallback is exactly a level reload.
+The port does not copy it (`docs/archive/DESIGN-SAVES.md`).
+
+#### `SVERn.DAT` — 8 B
+
+`SaveLevelSVER_55450` (`Level.cpp:242-252`): `{ int32 version = 15, int32
+levelNumber }`. Observed `0f 00 00 00 | 00 00 00 00`.
+
+#### `SMAPn.DAT` — seven `fwrite`s, 463,554 B
+
+`SaveLevelSMAP_55320` (`Level.cpp:216-236`); load mirrors it
+(`LoadLevelSMAP_558E0`, `:329-373`).
+
+| # | size | global | meaning |
+|---|---|---|---|
+| 1 | 65536 | `mapTerrainType_10B4E0` | tile type (`Terrain.h:19`) |
+| 2 | 65536 | `mapHeightmap_11B4E0` | height (`Terrain.h:20`) |
+| 3 | 65536 | `mapShading_12B4E0` | shading/light (`Terrain.h:21`) |
+| 4 | 65536 | `mapAngle_13B4E0` | tile angle/variant (`Terrain.h:22`) |
+| 5 | 65536 | `x_BYTE_14B4E0_second_heightmap` | **cave-roof / lower heightmap** (`BasicTerrain.h:111`) |
+| 6 | 131072 | `mapEntityIndex_15B4E0` | **`int16`** per-tile entity index (`Terrain.h:23`) |
+| 7 | 4802 | `building_F2CD0x` | terrain-modification LUT (`Terrain.h:14`) |
+
+5×65536 + 131072 + 4802 = **463,554**, and the loader hard-asserts
+`filesize == 0x712C2` (`DataFileIO.cpp:208`). Block 7 is declared
+`char[2800][2]` but only 2401×2 = 7⁴×2 bytes are written — the index is the
+4-corner tuple `(a4&7) + 7*(a3&7) + 49*(a2&7) + 343*(a1&7)` ∈ [0,2400]
+(`Terrain.cpp:1986`, fill `:1092-1116`); the rest is remc2 over-allocation.
+
+#### `SLEVn.DAT` — one `fwrite`, 224,791 B
+
+`SaveLevelSLEV_55250` (`Level.cpp:172-213`) = a plain `fwrite` of
+`sizeof(shadow_type_D41A0_BYTESTR_0)`. **Not compressed** — the load path
+uses `ReadFileAndDecompress` only because that helper is reused everywhere,
+and `DataFileRNC::Decompress` no-ops unless the first 3 bytes are `RNC`.
+`Convert_to_shadow_/from_shadow_D41A0_BYTESTR_0` (`Basic.cpp:3195`, `:3002`)
+are purely a **64-bit port shim** so the on-disk layout still matches the
+retail 32-bit RAM image; retail was a straight `fwrite` of the global.
+
+Before dumping, the writer re-anchors `dword_0x36DF6 = &str_D7BD6[59]`
+(`:189`) for the load-time rebase, and converts `time_393` from an absolute
+start-stamp to an elapsed delta (`:192`, restored `:201`; undone on load at
+`:398`). `sub_55100(1)` turns pointer unions into offsets before the write
+and `(2)` back after (`:1080-1234`).
+
+Struct `type_shadow_D41A0_BYTESTR_0` (`LevelStructs.h:412-480`; native twin
+`:203-269`; `#pragma pack(1)` `:24`), offsets encoded in the field names:
+
+| off | size | field | contents |
+|---|---|---|---|
+| 0x00004 | 4 | `dword_0x4` | **level ID** (`levelID_2FED0`) — the load-time identity check |
+| 0x00008 | 4 | `rand_0x8` | **RNG** (`x = 9377x + 9439`, `EventsFunctions.cpp:39942`) |
+| 0x0000C | 4 | | local player slot + player count |
+| 0x00035 | 4 | | free-entity-list top |
+| 0x00039 | 508 | `array_0x39` | **per-TMAP loaded flags** (0/1/2), written by `sub_71930` just before the save |
+| 0x00246 | 4000 | | free-entity pointer list — rebuilt on load |
+| 0x011E6 | 4004 | | draw-list top + pointers — rebuilt |
+| 0x0218A | 16 | `m_GameSettings` | graphics/HUD (`LevelStructs.h:25-64`) — **discarded on load** |
+| 0x021AA | 16 | | capability flags |
+| 0x02362 | 48 | | 8 × `axis_3d` |
+| **0x02BDE** | **16992** | `array_0x2BDE[8]` | **per-player state, 2124 B each** (`LevelStructs.h:105-136`) |
+| 0x06E3E | 80 | `playerInputs_0x6E3E[8]` | (`LevelStructs.h:154-163`) |
+| **0x06E8E** | **168000** | `struct_0x6E8E[1000]` | **entity pool, 168 B each** (`LevelStructs.h:330-386`) |
+| **0x2FECE** | **26116** | `str_2FECE` | **level blob** (`LevelStructs.h:283-321`) — see below |
+| 0x364D2 | 108 | | spell-availability counters (`sub_574A0`, `EventsFunctions.cpp:39864`) |
+| 0x3654C | 80 | `struct_0x3654C[8]` | **stage/objective slots**; `str_36552_un` is a pointer union — offsetised |
+| 0x3659C | 88 | `struct_0x3659C[8]` | per-player objective state (`LevelStructs.h:193-203`) |
+| 0x365F4 | 88 | `array_0x365F4[11]` | **StageVars**; `str_0x3647C_4` pointer union — offsetised |
+| 0x3664C | 1950 | `str_0x3664C[50]` | event/marker slots; `event_A` pointer union — offsetised |
+| 0x36DEA | 45 | | fly-assist flag, mouse x/y, `dword_0x36DF6`, StageVar count/index, `byte_0x36E0B` (pause-block bits), tail |
+| **0x36E17** | | | **= 224,791** |
+
+Inside `str_2FECE`: 1091 B header (`levelID_2FED0`, `MapType`, the terrain
+seeds at `word_0x2FEE9/ED/F1`) · `0x30311` 1200×20 B = the authored **THING
+table** *with its runtime mutations* (e.g. `DisId = -1` spent-sentinels;
+`BasicTerrain.h:7-18`) · `0x360D2` 8×110 B wizard map settings
+(`BasicTerrain.h:20-34`) · `0x36442` 8×7 B objective definitions · `0x3647A`
+11×8 B StageVar definitions.
+
+Per-player block (2124 B, base `0x2BDE + 2124·p`): flag dword @+0 (`byte[2]`
+= complete/reload/restart/secret bits), `playerIndex` @+0x00a, `Turn`
+@+0x012, 49-char notification @+0x01c, 8×48 rival names @+0x051, 33 camera
+records @+0x1d1, 64-char name @+0x39f, `MenuState` @+0x3DF, then
+`type_str_164` (1120 B) @+0x3E6 with the castle entity index @+0x3A, balloon
+list, level stats and `time_393` — which contains `type_str_611` at +611
+(`global_types.h:174-216`, `:255-319`). ⇒ **spell XP for player `p` is at
+SLEV `0x2BDE + 2124·p + 1609`, 505 B, byte-identical to §A's block at 214.**
+
+**Total per save: 224,791 + 463,554 + 8 = 688,353 B.**
+
+#### Validation — by rejection, never deletion
+
+`sub_55750_TestExistingSaveFile` (`DataFileIO.cpp:167-215`): SVER must be
+exactly 8 B with `[0] == 0xf` and `[4] == levelindex` (`:188`); SLEV's dword
+at +4 must equal the live `levelID_2FED0` and its length must equal the
+struct size (`:194-200`); SMAP's length must be exactly 0x712C2 (`:208-209`).
+Failure greys the Load icon, makes the click a no-op, and makes
+`LoadLevel_555D0` bail before touching state (`Level.cpp:287-289`) — **no
+error dialog, no migration path**. There is no `remove()`/`unlink()` anywhere
+in remc2: a snapshot for another level is simply invisible, never deleted.
+
+#### Load — seamless in-place restore
+
+`LoadLevel_555D0` (`Level.cpp:255-326`) never touches `LevelInitGame_56A30`,
+`CLEVELS/LEVELS.TAB` or the load screen. It preserves the live
+graphics/display settings across the call (`:275-286` / `:312-323`) —
+so the snapshot's `m_GameSettings` is written but **discarded** — validates,
+loads SMAP (`:291`), **stashes the live player block** (`:294-297`), blits
+SLEV over `D41A0_0` (`:298`), re-links offsets→pointers `sub_55100(2)`
+(`:301`), then:
+
+- `sub_57680_FixPointersAfterLoad` (`:1236-1258`) — null the first event
+  slot; re-point entities whose `dword_0xA4_164x == 0x2c75e28` at the shared
+  `type_str_164` pool; give each player's entity its own record; rebase every
+  live entity's `dword_0xA0_160x` through `dword_0x36DF6`.
+- `sub_549A0` (`:1261-1268`) — **copies five spell arrays from the pre-load
+  session over the snapshot's** (`SpellExperience_0x263_611x`,
+  `SpellLevels_0x41D_1053z`, …). **Spell research/XP is deliberately NOT
+  rewound by an in-level load.** The port does not imitate this.
+- `sub_49F90` (`:1271-1302`) — rebuilds both entity lists from scratch, so
+  the 8 KB of pointers in the file is dead weight.
+- `sub_55AB0` (`:1305-1337`) — re-creates the orbiting mana-sphere entities
+  (class 15) and re-runs `SetSpell_6D5E0`.
+- `sub_71990` (`:1339-1372`) — texture/particle re-init from `array_0x39`,
+  budget-checked.
+- `FlvInitSet_473B0` (`Animation.cpp:81`) — animation state reset.
+
+Not saved at all: the whole `x_D41A0_BYTEARRAY_4_struct` scratch global
+(`engine_support.h:280-380`) — `levelnumber_43w`, settings, volumes, names,
+per-level stats, menu state — plus the terrain-deformation RNG `rand2_17B4E0`
+(`Terrain.h:17`; remc2 pins it to `0x21ed` on load, `Level.cpp:341`),
+`Entities_EA3E4`, palettes, sprite banks, samples, CD audio, and everything
+`LevelInit_56C00` derives (`LevelInit.cpp:9-50`) — none of which is
+re-initialised, because the level is never reloaded.
+
+#### Gating and write order
+
+`SaveLevel_55080` (`:411`) and `LoadLevel_555D0` (`:273`) both wrap their
+entire body in `!(setting_byte1_22 & MULTIPLAYER_MODE)` — hard block,
+silently returning false. Pause itself needs `!MULTIPLAYER_MODE` and is
+refused during the level-exit cinematic. **No death gate** — the pause menu
+stays reachable while dead; death uses the checkpoint slot instead.
+
+Confirm dialogs on both actions; **overwrite is silent** (one player slot,
+mode `546` = create/truncate). Write order is SLEV → SMAP → SVER, each gated
+on the previous (`:415-420`), which makes SVER-last a crude commit marker:
+an interrupted save leaves the triple failing validation rather than
+half-loading.
+
+Unresolved (would need retail runs): confirmation that slot 0 produces
+`SLEV1/SMAP1/SVER1`; whether the shipped `SLEV2` triple is a Bullfrog
+artifact or GOG packaging; the cross-session Load-icon case (the validator
+encodes no session, so a previous session's snapshot for the same level
+should light the icon); and direct confirmation of the `sub_549A0` spell-XP
+carry.
 
 ## Menu / intro / map screen
 

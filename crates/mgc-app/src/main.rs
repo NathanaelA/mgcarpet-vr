@@ -16,6 +16,7 @@ mod entities;
 mod frontend;
 mod frontend_mc1;
 mod menu;
+mod minimenu;
 mod saves;
 mod settings;
 mod ui;
@@ -191,6 +192,61 @@ struct CampaignRun {
     next: Option<campaign::NextStep>,
 }
 
+/// The slot's campaign record, native file first.
+///
+/// Returns `None` for "start fresh" — either `new_game`, or nothing
+/// on disk. A file that EXISTS but cannot be read is an error, not a
+/// fresh start: silently starting over would overwrite it on the
+/// first level completion.
+fn campaign_record(tag: &str, slot: usize, new_game: bool) -> Result<Option<Vec<u8>>, String> {
+    if new_game {
+        return Ok(None);
+    }
+    let native = saves::native_path(tag, slot);
+    if native.exists() {
+        let open =
+            || std::fs::File::open(&native).map_err(|e| format!("{}: {e}", native.display()));
+        match mgc_formats::mgcs::read(open()?) {
+            Ok(pkg) => {
+                if pkg.is_in_level() {
+                    // The campaign half still resolves the level to
+                    // launch; resuming INTO the snapshot is the load
+                    // path's job, not the campaign opener's.
+                    println!("campaign {tag}: slot {} holds a mid-level save", slot + 1);
+                }
+                return Ok(Some(pkg.campaign));
+            }
+            // A container this build cannot apply. The campaign record
+            // inside is retail's byte layout, so it survives any
+            // version of ours — take it and lose only the resume.
+            // Reported, never silent: the player is down a save state.
+            Err(e) => {
+                let rec = mgc_formats::mgcs::recover(open()?)
+                    .map_err(|_| format!("{}: {e}", native.display()))?;
+                println!(
+                    "campaign {tag}: slot {} was written by save version {} — \
+                     progress recovered, the in-level resume was dropped",
+                    slot + 1,
+                    rec.save_version
+                );
+                return Ok(Some(rec.campaign));
+            }
+        }
+    }
+    let retail = saves::retail_path(tag, slot);
+    if retail.exists() {
+        println!(
+            "campaign {tag}: slot {} imported from the retail save {}",
+            slot + 1,
+            retail.display()
+        );
+        return std::fs::read(&retail)
+            .map(Some)
+            .map_err(|e| format!("{}: {e}", retail.display()));
+    }
+    Ok(None)
+}
+
 impl CampaignRun {
     /// Open (or start) a campaign: load the slot's retail-format save
     /// unless `new_game`, and resolve the level to launch. Errors are
@@ -198,14 +254,15 @@ impl CampaignRun {
     fn start(id: campaign::CampaignId, slot: usize, new_game: bool) -> Result<Self, String> {
         use campaign::CampaignId;
         let hw = id == CampaignId::Mc1Hw;
+        // The native save is authoritative; the retail `.gam` is read
+        // only when no native file exists for the slot (an imported
+        // GOG-era save). See `saves`.
+        let record = campaign_record(id.tag(), slot, new_game)?;
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
-                let path = saves::mc1_path(id.tag(), slot);
-                let save = if !new_game && path.exists() {
-                    let s = saves::Mc1Save::decode(
-                        &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
-                    )
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let save = if let Some(bytes) = record {
+                    let s = saves::Mc1Save::decode(&bytes)
+                        .map_err(|e| format!("{} slot {}: {e}", id.tag(), slot + 1))?;
                     println!(
                         "campaign {}: slot {} \"{}\" at level {}",
                         id.tag(),
@@ -239,12 +296,9 @@ impl CampaignRun {
                 })
             }
             CampaignId::Mc2 => {
-                let path = saves::mc2_path(slot);
-                let save = if !new_game && path.exists() {
-                    let s = saves::Mc2Save::decode(
-                        &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
-                    )
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let save = if let Some(bytes) = record {
+                    let s = saves::Mc2Save::decode(&bytes)
+                        .map_err(|e| format!("mc2 slot {}: {e}", slot + 1))?;
                     println!(
                         "campaign mc2: slot {} \"{}\" — {} level(s) completed",
                         slot + 1,
@@ -290,70 +344,131 @@ impl CampaignRun {
         PathBuf::from(format!("baked/{}/level-{level:03}.mgcl", self.id.tag()))
     }
 
-    /// Write the slot file (creating `saves/<game>/`). IO failure is
+    /// The retail record's bytes, whichever game this is.
+    fn campaign_bytes(&self) -> Vec<u8> {
+        match &self.save {
+            CampaignSave::Mc2(s) => s.encode(),
+            CampaignSave::Mc1(s) => s.encode(),
+        }
+    }
+
+    /// The bundle-level game tag for a save header.
+    fn save_game(&self) -> Game {
+        match self.id {
+            campaign::CampaignId::Mc1 => Game::MagicCarpet1,
+            campaign::CampaignId::Mc1Hw => Game::HiddenWorlds,
+            campaign::CampaignId::Mc2 => Game::MagicCarpet2,
+        }
+    }
+
+    /// The slot's display label.
+    fn label(&self) -> String {
+        match &self.save {
+            CampaignSave::Mc2(s) => s.label.clone(),
+            CampaignSave::Mc1(s) => s.name.clone(),
+        }
+    }
+
+    /// Campaign position for the header's level column.
+    fn campaign_level(&self) -> u32 {
+        match &self.save {
+            CampaignSave::Mc2(s) => s.levels_completed,
+            CampaignSave::Mc1(s) => s.level as u32,
+        }
+    }
+
+    /// A hub save: campaign progress only, no world payload.
+    fn hub_package(&self) -> mgc_formats::mgcs::SavePackage {
+        mgc_formats::mgcs::SavePackage {
+            header: mgc_formats::mgcs::hub_header(
+                self.save_game(),
+                self.label(),
+                self.campaign_level(),
+                // The level the campaign is sitting at, so a hub save
+                // reads "L3" exactly like the in-level save taken in
+                // the same level.
+                self.current,
+            ),
+            campaign: self.campaign_bytes(),
+            snapshot: None,
+        }
+    }
+
+    /// Write the slot (creating `saves/<game>/`): the native `.mgcs`
+    /// plus the retail `.gam` export beside it. IO failure is
     /// reported, never fatal — losing a save must not kill the run.
+    ///
+    /// This is the BETWEEN-LEVELS write, so it clears any world
+    /// payload the slot was carrying: completing a level must not
+    /// leave a resume pointing back into it (design "Lifecycle").
     fn persist(&self) {
-        let (path, bytes) = match &self.save {
-            CampaignSave::Mc2(s) => (saves::mc2_path(self.slot), s.encode()),
-            CampaignSave::Mc1(s) => (saves::mc1_path(self.id.tag(), self.slot), s.encode()),
-        };
-        let write = || -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            std::fs::write(&path, bytes)
-        };
-        match write() {
-            Ok(()) => println!("campaign saved: {}", path.display()),
-            Err(e) => eprintln!("error: campaign save {}: {e}", path.display()),
+        match saves::write_slot(self.id.tag(), self.slot, &self.hub_package()) {
+            Ok(()) => println!(
+                "campaign saved: {}",
+                saves::native_path(self.id.tag(), self.slot).display()
+            ),
+            Err(e) => eprintln!("error: campaign save: {e}"),
         }
     }
 }
 
 /// Scan the 8 MC2 save slots for the frontend pickers: (label,
-/// occupied) per slot — "Empty" for vacant/foreign files, exactly
-/// retail's probe (signature + 20-byte label, MI:1461-79).
+/// One frontend slot row: (label, occupied).
+///
+/// Native-first, like every other read of a slot (`saves::scan_slot`),
+/// so a slot picked here resumes into the same thing the mini-menu
+/// would have resumed into. A slot carrying a world payload gets its
+/// level appended — the player has to be able to tell, BEFORE picking,
+/// which slots drop them straight back into play and which start a
+/// level over.
+///
+/// Letters, digits and spaces only in the suffix: these labels reach
+/// the same FONT1 bank the mini-menu draws through, where punctuation
+/// slots hold game icons rather than ASCII.
+fn frontend_slot_row(tag: &str, i: usize, empty: &str, default_label: &str) -> (String, bool) {
+    let info = saves::scan_slot(tag, i);
+    if !info.occupied {
+        return (empty.to_string(), false);
+    }
+    if info.incompatible {
+        // Occupied, so it is never offered as a free slot to
+        // overwrite blind.
+        return (format!("{} unreadable", i + 1), true);
+    }
+    let mut label = if info.label.trim().is_empty() {
+        default_label.to_string()
+    } else {
+        info.label.trim().to_string()
+    };
+    // Every slot shows its level; a resuming one adds how far into it
+    // the run had got. Same shape as the mini-menu's rows.
+    match info.resume {
+        Some(pct) => label.push_str(&format!("  L{} {pct}%", info.level)),
+        None => label.push_str(&format!("  L{}", info.level)),
+    }
+    if info.stale {
+        // Salvaged from an older container: the progress is here, the
+        // resume is not. Say so — a slot that quietly stopped resuming
+        // reads as fine until the level restarts.
+        label.push_str(" old");
+    }
+    (label, true)
+}
+
 /// Scan the 6 MC1/HW save slots: (label, occupied); "--" = empty,
 /// exactly the retail slot list (`sub_51A10`, :61982).
 fn scan_mc1_slots(tag: &str) -> Vec<(String, bool)> {
     (0..saves::MC1_SLOTS)
-        .map(|i| {
-            match std::fs::read(saves::mc1_path(tag, i))
-                .ok()
-                .and_then(|b| saves::Mc1Save::decode(&b).ok())
-            {
-                Some(s) => {
-                    let label = if s.name.is_empty() {
-                        format!("CARPET{}", i + 1)
-                    } else {
-                        s.name
-                    };
-                    (label, true)
-                }
-                None => ("--".to_string(), false),
-            }
-        })
+        .map(|i| frontend_slot_row(tag, i, "--", &format!("CARPET{}", i + 1)))
         .collect()
 }
 
+/// Scan the 8 MC2 save slots: (label, occupied) — "Empty" for
+/// vacant/foreign files, exactly retail's probe (signature + 20-byte
+/// label, MI:1461-79).
 fn scan_mc2_slots() -> Vec<(String, bool)> {
     (0..saves::MC2_SLOTS)
-        .map(|i| {
-            match std::fs::read(saves::mc2_path(i))
-                .ok()
-                .and_then(|b| saves::Mc2Save::decode(&b).ok())
-            {
-                Some(s) => {
-                    let label = if s.label.is_empty() {
-                        format!("SLOT {}", i + 1)
-                    } else {
-                        s.label
-                    };
-                    (label, true)
-                }
-                None => ("Empty".to_string(), false),
-            }
-        })
+        .map(|i| frontend_slot_row("mc2", i, "Empty", &format!("SLOT {}", i + 1)))
         .collect()
 }
 
@@ -476,6 +591,16 @@ struct LoadedLevel {
     /// 0-based level number = the `CdTracks_DB080` speech row
     /// (docs/traces/mc2-voiceover-triggers.md §4).
     level_number: u32,
+    /// The asset bundle this level resolved to (`mc1-temperate`,
+    /// `mc2-night`, …). Recorded in a mid-level save: the snapshot
+    /// omits `Gen::assets`, so a restore against a different bundle
+    /// would re-supply different feature data.
+    bundle_variant: String,
+    /// Hex SHA-256 of the level package's source archive entry — the
+    /// save's rejection key. `None` on community-authored packages,
+    /// which carry no `source` block; such a level can still be saved,
+    /// it just cannot be identity-checked on load.
+    entry_sha256: Option<String>,
     /// The bundle's sentence bank (ETEXT.DAT, index = sentence id);
     /// empty on older bakes. Feeds the narration subtitles and
     /// the MC1 win message (entries 60/61).
@@ -1070,6 +1195,8 @@ fn load_level(
         audio_dir,
         music_track,
         level_number: package.meta.level,
+        bundle_variant: variant.to_string(),
+        entry_sha256: package.meta.source.as_ref().map(|s| s.entry_sha256.clone()),
         etext: bundle.etext.unwrap_or_default(),
         sky: bundle.sky,
         plausible_spells,
@@ -1359,9 +1486,18 @@ struct App {
     last_map_tick: Option<u64>,
     /// P-key pause: the sim clock freezes, rendering and UI stay live.
     paused: bool,
-    /// The in-game options menu, riding on pause (P opens both). None
-    /// = closed.
+    /// The in-game options menu. On the frontend screens P opens this
+    /// directly; IN A LEVEL it is a second layer opened from the
+    /// mini-menu's Options row. None = closed.
     menu: Option<menu::MenuState>,
+    /// The in-level pause mini-menu (save/load/options). Present
+    /// exactly while paused in a level.
+    ///
+    /// It deliberately does NOT gate input the way `menu` does:
+    /// retail keeps the whole input path live during pause, so spell
+    /// selection and the big map stay usable underneath (see the
+    /// `minimenu` module docs).
+    mini: Option<minimenu::MiniMenu>,
     /// Whether the cursor was grabbed when the menu opened, so close
     /// restores THAT state.
     menu_grab_restore: bool,
@@ -1561,6 +1697,7 @@ impl App {
             last_map_tick: None,
             paused: false,
             menu: None,
+            mini: None,
             menu_grab_restore: false,
             specs: settings::registry(),
             cfg_file,
@@ -1698,8 +1835,12 @@ impl App {
             r.set_objective_marks(Vec::new(), 0);
             r.set_map_view(false);
         }
-        // Per-level transients die with the session.
+        // Per-level transients die with the session. The mini-menu is
+        // one of them: it is an IN-LEVEL surface, and a stale panel
+        // surviving into the frontend would offer to save a run that
+        // is no longer loaded.
         self.paused = false;
+        self.mini = None;
         self.quit_fade = None;
         self.won_handled = false;
         self.exit_confirm = false;
@@ -1978,10 +2119,17 @@ impl App {
         }
     }
 
-    /// Open/close the pause options menu: pause rides along (the sim
-    /// clock freezes, all sound suspends — the retail pause law), the
-    /// cursor is freed for the menu and restored on close. Without UI
-    /// assets (no baked font) this is a plain pause.
+    /// Open/close the pause menu: pause rides along (the sim clock
+    /// freezes, all sound suspends — the retail pause law), the cursor
+    /// is freed and restored on close. Without UI assets (no baked
+    /// font) this is a plain pause.
+    ///
+    /// Which menu depends on the screen. IN A LEVEL it is the small
+    /// `minimenu` panel, which leaves the game's own input live
+    /// underneath — restoring retail MC1's pause-to-rearrange-spells
+    /// behaviour that a full-screen menu regressed. On the frontend
+    /// screens there is no sim to pause and no HUD to preserve, so P
+    /// opens the options menu directly, as before.
     fn toggle_menu(&mut self) {
         if !self.paused {
             self.paused = true;
@@ -1990,7 +2138,11 @@ impl App {
             self.ensure_frontend_ui();
             // Without a baked font there is no menu — plain pause.
             if ui_assets!(self).is_some() {
-                self.menu = Some(menu::MenuState::new(&self.specs));
+                if self.screen == Screen::Level {
+                    self.mini = Some(minimenu::MiniMenu::new());
+                } else {
+                    self.menu = Some(menu::MenuState::new(&self.specs));
+                }
                 self.menu_grab_restore = self.grabbed;
                 self.set_grab(false);
                 self.fire_held = false;
@@ -1998,7 +2150,10 @@ impl App {
             }
         } else {
             self.paused = false;
-            let closed = self.menu.take().is_some();
+            // Unpause is the ONLY way out of the mini-menu (the
+            // standing Esc law), and it closes the options layer with
+            // it if one is stacked on top.
+            let closed = self.menu.take().is_some() | self.mini.take().is_some();
             match self.screen {
                 // In-level: unpause re-locks the pointer if flight
                 // held it when the menu opened.
@@ -2367,6 +2522,308 @@ impl App {
         println!("level restarted (died without a castle)");
     }
 
+    /// Handle a left-click that landed on the pause mini-menu.
+    ///
+    /// Returns true when the click was consumed. A click ANYWHERE
+    /// else while paused falls through to the game's own handlers —
+    /// that is the whole point of the small panel.
+    fn mini_click(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let Some(mini) = &self.mini else { return false };
+        let size = self.view_size();
+        let Some(assets) = ui_assets!(self) else {
+            return false;
+        };
+        if !minimenu::covers(assets, mini, size.0, size.1, self.cursor) {
+            return false;
+        }
+        let hit = minimenu::hit_test(assets, mini, size.0, size.1, self.cursor);
+        let tag = self.campaign.as_ref().map(|r| r.id.tag());
+        let mini = self.mini.as_mut().expect("checked above");
+        match hit {
+            minimenu::Hit::None => {}
+            minimenu::Hit::Save | minimenu::Hit::Load => {
+                let saving = hit == minimenu::Hit::Save;
+                match tag {
+                    Some(tag) => {
+                        mini.slots = saves::scan_slots(tag);
+                        mini.mode = minimenu::Mode::Slots { saving };
+                    }
+                    // Single-level mode has no slots to write into.
+                    None => self.mini_toast("No campaign running"),
+                }
+            }
+            minimenu::Hit::Options => {
+                self.menu = Some(menu::MenuState::new(&self.specs));
+            }
+            minimenu::Hit::Back => mini.reset_to_root(),
+            minimenu::Hit::Slot(i) => {
+                let saving = matches!(mini.mode, minimenu::Mode::Slots { saving: true });
+                let occupied = mini.slots.get(i).is_some_and(|s| s.occupied);
+                let unreadable = mini.slots.get(i).is_some_and(|s| s.incompatible);
+                if saving {
+                    match self.save_slot(i) {
+                        Ok(in_level) => self.mini_toast(format!(
+                            "Saved to slot {}{}",
+                            i + 1,
+                            if in_level { " (resume)" } else { "" }
+                        )),
+                        Err(e) => self.mini_toast(e),
+                    }
+                    // Re-scan so the row reflects what was just
+                    // written (label, and the mid-level marker).
+                    if let (Some(tag), Some(mini)) = (tag, self.mini.as_mut()) {
+                        mini.slots = saves::scan_slots(tag);
+                    }
+                } else if !occupied {
+                    self.mini_toast("That slot is empty");
+                } else if unreadable {
+                    self.mini_toast("That slot cannot be read");
+                } else {
+                    match self.load_slot(i, event_loop) {
+                        // A successful load replaced the session
+                        // wholesale — drop the menu and resume.
+                        Ok(()) => {
+                            self.mini = None;
+                            self.menu = None;
+                            self.paused = false;
+                            if let Some(a) = &mut self.audio {
+                                a.set_paused(false);
+                            }
+                        }
+                        Err(e) => self.mini_toast(e),
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Report a mini-menu result on the in-game toast line rather than
+    /// inside the panel.
+    ///
+    /// The panel is narrow by design, so a message long enough to be
+    /// useful ("slot 3 was saved with the mc2-night bundle, this level
+    /// resolves to …") ran off the right edge of the screen. The toast
+    /// is the surface built for this, and it is the same one option
+    /// changes already use.
+    ///
+    /// The notification is hash-excluded, so writing it from the app
+    /// cannot perturb the sim. Its timer runs on the SIM clock, which
+    /// is stopped while paused — so the message simply stays up for as
+    /// long as the player is in the menu, then decays once play
+    /// resumes. That is the behaviour we want here.
+    fn mini_toast(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        println!("{msg}");
+        if let Some(w) = self
+            .session
+            .as_deref_mut()
+            .and_then(|s| s.sim.world.as_mut())
+        {
+            w.notify_option(msg);
+        }
+    }
+
+    /// Write the current run into a save slot, including the live
+    /// world when a level is running (docs/archive/DESIGN-SAVES.md).
+    ///
+    /// Saving is offered only from the paused mini-menu, and pause is
+    /// an inter-tick boundary by construction — which is exactly
+    /// where both retail engines snapshot — so no extra quiescing is
+    /// needed here.
+    ///
+    /// Returns whether a WORLD payload went with it, so the caller can
+    /// tell the player — "did my resume get written" is the one thing
+    /// worth reporting about a save.
+    fn save_slot(&mut self, slot: usize) -> Result<bool, String> {
+        let Some(run) = &self.campaign else {
+            return Err("no campaign is running (launch with --campaign)".into());
+        };
+        if slot >= saves::slot_count(run.id.tag()) {
+            return Err(format!("slot {} is out of range", slot + 1));
+        }
+        let mut package = run.hub_package();
+
+        // The world half, when a level is up. A save taken at the hub
+        // is campaign-only and resumes at the campaign screen.
+        if let Some(sess) = self.session.as_deref() {
+            let level = &sess.level;
+            // What the player has taken POSSESSION of, world-relative.
+            // Not `banked` — that is the castle panel's numerator
+            // (houses + castle stored) and reads 0 under MC2 until a
+            // castle stands, however much has actually been collected.
+            let mana_pct = sess
+                .sim
+                .world
+                .as_ref()
+                .map(|w| w.player_mana_share_pct())
+                .unwrap_or(0);
+            package.snapshot = Some(sess.sim.snapshot());
+            package.header.resume = Some(mgc_formats::mgcs::InLevel {
+                bundle: level.bundle_variant.clone(),
+                entry_sha256: level.entry_sha256.clone().unwrap_or_default(),
+                snapshot_version: mgc_sim::snapshot::SNAPSHOT_VERSION,
+                tick: sess.sim.tick,
+                mana_pct,
+                thrust_model: Some(format!("{:?}", sess.sim.thrust_model)),
+                altitude_model: Some(format!("{:?}", sess.sim.altitude_model)),
+            });
+        }
+
+        let in_level = package.is_in_level();
+        saves::write_slot(run.id.tag(), slot, &package)?;
+        Ok(in_level)
+    }
+
+    /// Resume into a slot's saved level: resolve the level it was
+    /// taken in, build it as a fresh start would, and apply the
+    /// payload over it.
+    ///
+    /// `self.campaign` must ALREADY be the run for this slot — the
+    /// frontend sets it up (with its own per-game dressing) before
+    /// calling, and the in-level path adopts it first. Returns false
+    /// when the slot is campaign-only, having changed nothing; the
+    /// caller decides where a hub save should land.
+    ///
+    /// The rebuild-then-apply shape is not incidental. The snapshot
+    /// deliberately omits the level package's own data (`Gen::assets`
+    /// and friends), so there is nothing to construct a world FROM;
+    /// the level supplies the immutable half and the payload supplies
+    /// the mutable half.
+    fn resume_slot(&mut self, slot: usize) -> Result<bool, String> {
+        let Some(run) = &self.campaign else {
+            return Err("no campaign is running (launch with --campaign)".into());
+        };
+        let tag = run.id.tag();
+        if slot >= saves::slot_count(tag) {
+            return Err(format!("slot {} is out of range", slot + 1));
+        }
+        let path = saves::native_path(tag, slot);
+        if !path.exists() {
+            // An imported retail `.gam` with no native file: campaign
+            // only, by construction.
+            return Ok(false);
+        }
+        let file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let package =
+            mgc_formats::mgcs::read(file).map_err(|e| format!("{}: {e}", path.display()))?;
+        let Some(in_level) = package.header.resume.as_ref() else {
+            return Ok(false);
+        };
+        // The level lives on the HEADER, not inside `resume` — every
+        // save carries one, and a single copy cannot disagree with
+        // itself.
+        let index = package.header.level;
+
+        // Rebuild the level the save was taken in, not the one the
+        // campaign order would pick — a mid-level save is pinned to
+        // its own level.
+        let mut fresh = CampaignRun::start(run.id, slot, false)?;
+        fresh.current = index;
+        let level_path = fresh.level_path(index);
+        let level = load_level(
+            &level_path,
+            self.launch.tileset,
+            self.launch.terrain_features,
+            false,
+            self.cfg.gameplay.enhancement.prune_owned_jars,
+            self.launch.pool_slots,
+            self.launch.awake_range,
+        )?;
+
+        // The rejection keys, checked BEFORE the level is installed so
+        // a refusal leaves the running session alone. `bake_epoch` is
+        // deliberately not among them (design "Rejection policy").
+        if let Some(have) = level.entry_sha256.as_deref() {
+            if !in_level.entry_sha256.is_empty() && have != in_level.entry_sha256 {
+                return Err(format!(
+                    "slot {} was saved in a different build of level {index} — \
+                     the level package has been rebaked since",
+                    slot + 1
+                ));
+            }
+        }
+        if level.bundle_variant != in_level.bundle {
+            return Err(format!(
+                "slot {} was saved with the {} bundle, this level resolves to {}",
+                slot + 1,
+                in_level.bundle,
+                level.bundle_variant
+            ));
+        }
+        let Some(snapshot) = package.snapshot.as_deref() else {
+            return Err(format!("slot {} has no world payload", slot + 1));
+        };
+
+        self.campaign = Some(fresh);
+        self.install_level(level);
+
+        // Apply onto the freshly installed world. A failure here is
+        // NOT recoverable in place: `restore` may have written part of
+        // the world before erroring, so the level is rebuilt from
+        // scratch rather than left half-applied.
+        let applied = self
+            .session
+            .as_deref_mut()
+            .ok_or_else(|| "level did not install".to_string())
+            .and_then(|s| s.sim.restore(snapshot).map_err(|e| e.to_string()));
+        if let Err(e) = applied {
+            eprintln!("error: slot {}: {e} — restarting the level", slot + 1);
+            self.restart_level();
+            return Err(format!("slot {}: {e}", slot + 1));
+        }
+
+        // The restore replaced the world wholesale, so the renderer's
+        // terrain and entity mirrors and the interpolation history all
+        // have to be re-seeded — the same set the castle-less-death
+        // restart re-seeds, for the same reason. `pose_prev`/`pose_cur`
+        // in particular MUST be cleared: a stale snapshot could
+        // coincidentally pair a (slot, generation) that now means a
+        // different entity.
+        //
+        // The flyer needs no re-derivation: it and the carpet are both
+        // in the payload, so they come back mutually consistent.
+        if let Some(sess) = self.session.as_deref_mut() {
+            sess.prev_flyer = sess.sim.flyer;
+            sess.pose_prev = Vec::new();
+            sess.pose_cur = Vec::new();
+            if let Some(w) = sess.sim.world.as_mut() {
+                w.terrain_dirty = true;
+                w.entities_dirty = true;
+            }
+        }
+        self.sync_world();
+        println!(
+            "resumed slot {} — level {index} at {}% mana, tick {}",
+            slot + 1,
+            in_level.mana_pct,
+            in_level.tick
+        );
+        Ok(true)
+    }
+
+    /// Load a slot from INSIDE a level (the mini-menu's Load).
+    ///
+    /// Adopts the slot's campaign record, then either resumes into its
+    /// saved level or — for a campaign-only slot — leaves the level
+    /// for the hub, because that is where such a save was taken and
+    /// where it means something. Dropping the player into a fresh run
+    /// of some level instead would be a restart wearing a load's
+    /// clothes.
+    fn load_slot(&mut self, slot: usize, event_loop: &ActiveEventLoop) -> Result<(), String> {
+        let Some(run) = &self.campaign else {
+            return Err("no campaign is running (launch with --campaign)".into());
+        };
+        let fresh = CampaignRun::start(run.id, slot, false)?;
+        self.campaign = Some(fresh);
+        if self.resume_slot(slot)? {
+            return Ok(());
+        }
+        println!("loaded slot {} — returning to the hub", slot + 1);
+        self.confirm_exit(event_loop);
+        Ok(())
+    }
+
     /// Load and install the campaign's next level in-place — the
     /// mid-run counterpart of `App::new` + `resumed`'s upload block.
     /// A load failure is fatal (a campaign with a hole is not
@@ -2404,13 +2861,26 @@ impl App {
     /// the per-level transients. Any previous session's remains
     /// (sounds included) are cut first.
     fn install_level(&mut self, mut level: LoadedLevel) {
-        // A direct level→level switch (the demon-mouth chain) never
-        // passes through a frontend teardown — cut the old level's
-        // sounds here so they die at its boundary (retail stops sfx +
-        // music before every launch, remc1 :59992-94).
-        if self.session.is_some()
-            && let Some(a) = &mut self.audio
-        {
+        // Retail stops sfx + speech before EVERY launch (remc1
+        // :59992-94), so this is unconditional rather than gated on an
+        // outgoing session.
+        //
+        // It used to be gated, which covered the direct level→level
+        // switch (the demon-mouth chain, which never passes through a
+        // frontend teardown) but not a launch FROM a frontend, where
+        // there is no session to detect. The world map plays the
+        // upcoming level's narration while you stand on it, so entering
+        // a level — by portal or by loading a mid-level save — carried
+        // that narration into play over the top of the level's own
+        // audio.
+        //
+        // Cutting it is the RIGHT behaviour, not merely the tidy one:
+        // entering early is supposed to cut the map's line, and the
+        // level then plays its own, DIFFERENT narration (player ground
+        // truth). That in-level line is raised by `audio_tick` from the
+        // sim's trigger ramp, well after this point, so it is never the
+        // thing being stopped here.
+        if let Some(a) = &mut self.audio {
             a.stop_sounds();
             a.stop_speech();
             // A P-pause held across a direct level→level chain (the
@@ -2422,6 +2892,7 @@ impl App {
         }
         self.paused = false;
         self.menu = None;
+        self.mini = None;
         let mut sim = match level.world.take() {
             Some(mut w) => {
                 w.terrain_dirty = true;
@@ -2673,6 +3144,21 @@ impl App {
         };
         let Session { sim, level, .. } = sess;
         let Some(w) = &mut sim.world else { return };
+        // MC2: the sim's book owns the selected tier. `spell_levels` is
+        // a read-only MIRROR of `Mc2Spellbook::sel`, refreshed here —
+        // before any early return below — so the two can never be seen
+        // disagreeing (docs/archive/DESIGN-SAVES.md prerequisite 3).
+        //
+        // They used to: `pane_commit` wrote the REQUESTED tier straight
+        // into `spell_levels`, while `mc2_select_spell` clamps it to the
+        // XP-earned cap and bails outright on an unlearned spell
+        // (mc2/cast.rs:631,648). The mirror existed but only ran while
+        // the pane was being drawn, so between a commit and the next
+        // pane frame the tier NAME and the shift-commit tier were read
+        // from a value the sim had rejected.
+        if matches!(level.game, mgc_sim::ids::GameId::Mc2) {
+            self.spell_levels = w.mc2_book_view().sel;
+        }
         for slot in w.take_rival_deaths() {
             // The retail death broadcast ("%name% <str 54>",
             // :55499-517) — the sim raises the on-screen toast at the
@@ -2865,13 +3351,22 @@ impl App {
                 .is_some_and(|s| s.level.ui.is_some())
     }
 
+    /// The spell's display name at its CURRENTLY selected tier (MC2
+    /// reads the mirror of the sim's book; MC1 has no tiers).
     fn pane_spell_name(&self, spell: u8) -> &'static str {
+        self.pane_spell_name_at(spell, self.spell_levels[spell as usize])
+    }
+
+    /// As [`Self::pane_spell_name`] but at an explicit tier — for the
+    /// commit path, where the requested tier is known before the sim
+    /// has accepted (and possibly clamped) it.
+    fn pane_spell_name_at(&self, spell: u8, tier: u8) -> &'static str {
         if self.is_mc2() {
             // The retail per-TIER hint name (docs/spell-audit/
             // spell-names.md): "Possession" / "Mana Magnet" / "Mana Lock"
             // by level, not one generic label. Resolves the live
             // hint_text so the Day/non-Day Morph/Army names come through.
-            let tier = self.spell_levels[spell as usize] as usize;
+            let tier = tier as usize;
             let name = self
                 .session
                 .as_deref()
@@ -2895,29 +3390,35 @@ impl App {
         let Some(pane) = &self.pane else { return };
         let spell = pane.order[slot];
         let multi = pane.levels > 1;
-        self.spell_levels[spell as usize] = level;
         self.pane_bound[hand as usize] = Some(spell);
         let hand_name = if hand == 0 { "left" } else { "right" };
         if self.is_mc2() {
             // The native MC2 spell column: the pane commit IS
             // retail's "Change Spell" action — tier +
             // quick-slot bind through the sim's class-15 machinery.
+            //
+            // NB no `spell_levels` write here: under MC2 the sim's book
+            // is authoritative and `sync_world` mirrors it back. Writing
+            // the REQUESTED tier would re-open the disagreement the
+            // mirror exists to prevent — the sim clamps to the earned
+            // cap and rejects an unlearned spell outright, so the two
+            // routinely differ.
             self.pending_mc2_select = Some((spell, level, hand));
             self.flush_equip_if_paused();
+            // Logged at the requested tier, not `spell_levels`: while
+            // running, the select is still queued for the next tick and
+            // the mirror has not caught up yet.
+            let name = self.pane_spell_name_at(spell, level);
             if multi {
-                println!(
-                    "selector: {hand_name} hand = {} level {}",
-                    self.pane_spell_name(spell),
-                    level + 1
-                );
+                println!("selector: {hand_name} hand = {name} level {}", level + 1);
             } else {
-                println!(
-                    "selector: {hand_name} hand = {}",
-                    self.pane_spell_name(spell)
-                );
+                println!("selector: {hand_name} hand = {name}");
             }
             return;
         }
+        // MC1: the tier is app-owned (there is no sim-side book to be
+        // authoritative), so record it here.
+        self.spell_levels[spell as usize] = level;
         // MC1: pane spell = the MC1 manifestation directly.
         if hand == 0 {
             self.pending_equip.0 = Some(spell);
@@ -3169,11 +3670,18 @@ impl App {
     fn apply_map_action(&mut self, action: worldmap::MapAction) {
         use worldmap::MapAction;
         match action {
-            MapAction::SaveTo { slot, label } => {
+            MapAction::SaveTo { slot } => {
                 if let Some(run) = &mut self.campaign {
                     run.slot = slot;
                     if let Some(s) = run.save.mc2_mut() {
-                        s.label = label;
+                        // The slot's stored label is the PLAYER NAME —
+                        // never a per-slot string, and never the
+                        // rendered row. The list composes the rest
+                        // (level, progress) at draw time; storing a
+                        // composed row was how the suffix accumulated.
+                        if !s.player_name.trim().is_empty() {
+                            s.label = s.player_name.clone();
+                        }
                     }
                     run.persist();
                 }
@@ -3188,6 +3696,21 @@ impl App {
                             _ => run.current,
                         };
                         self.campaign = Some(run);
+                        // A slot saved mid-level resumes INTO that
+                        // level rather than dropping the player on the
+                        // map to replay it from the start. Tried first,
+                        // so the map dressing below is skipped when we
+                        // are leaving the map anyway.
+                        //
+                        // The grab release mirrors the map's ordinary
+                        // portal launch: the map CONFINES the pointer,
+                        // and flight re-grabs on the next click.
+                        self.set_grab(false);
+                        match self.resume_slot(slot) {
+                            Ok(true) => return,
+                            Ok(false) => {}
+                            Err(e) => eprintln!("error: resume slot {}: {e}", slot + 1),
+                        }
                         if let (Some(wm), Some(save)) = (
                             &mut self.worldmap,
                             self.campaign.as_ref().and_then(|c| c.save.mc2()),
@@ -3424,13 +3947,16 @@ impl App {
                     }
                     self.campaign_switch(0, event_loop);
                 }
-                Mc1Action::SaveTo { slot, label } => {
+                Mc1Action::SaveTo { slot } => {
                     if let Some(run) = &mut self.campaign {
                         run.slot = slot;
                         if let Some(s) = run.save.mc1_mut() {
-                            if !label.is_empty() {
-                                s.name = label;
-                            }
+                            // `name` IS the player name here (the MC1
+                            // record has one field for both), set by
+                            // `SetName` and left alone otherwise. It is
+                            // never overwritten with the rendered slot
+                            // row — that is what accumulated the level
+                            // and progress suffix on every save.
                             s.level = run.current as u16;
                         }
                         run.persist();
@@ -3444,6 +3970,16 @@ impl App {
                             Ok(run) => {
                                 self.campaign = Some(run);
                                 self.ui_atlas = UiAtlas::None;
+                                // A slot saved mid-level resumes INTO
+                                // that level, at the saved position —
+                                // otherwise picking it here would
+                                // silently restart the level the save
+                                // was trying to preserve. A
+                                // campaign-only slot just stays on the
+                                // menu, which is where it was taken.
+                                if let Err(e) = self.resume_slot(slot) {
+                                    eprintln!("error: resume slot {}: {e}", slot + 1);
+                                }
                             }
                             Err(e) => eprintln!("error: load: {e}"),
                         }
@@ -3523,8 +4059,8 @@ impl App {
                 MenuAction::EnterMap => {
                     self.open_map_screen(event_loop);
                 }
-                MenuAction::SaveTo { slot, label } => {
-                    self.apply_map_action(worldmap::MapAction::SaveTo { slot, label });
+                MenuAction::SaveTo { slot } => {
+                    self.apply_map_action(worldmap::MapAction::SaveTo { slot });
                 }
                 MenuAction::LoadFrom(slot) => {
                     self.apply_map_action(worldmap::MapAction::LoadFrom(slot));
@@ -3564,6 +4100,15 @@ impl App {
 
     fn set_grab(&mut self, grab: bool) {
         let Some(window) = &self.window else { return };
+        // While PAUSED the cursor always stays free: the mini-menu
+        // needs it, and pause keeps the rest of the input path live,
+        // so several ordinary paths try to re-grab underneath it —
+        // closing the big map is the obvious one. Re-grabbing there
+        // left the mini-menu clickable but the pointer invisible.
+        // Unpause re-grabs by clearing `paused` BEFORE calling here.
+        if grab && self.paused {
+            return;
+        }
         if grab {
             let ok = window
                 .set_cursor_grab(CursorGrabMode::Locked)
@@ -3684,6 +4229,17 @@ impl ApplicationHandler for App {
                             self.exit_confirm = false;
                         }
                     }
+                    return;
+                }
+                // The pause mini-menu consumes clicks that land ON it
+                // and nothing else — checked before the options menu
+                // so a stacked Options layer still wins, and before
+                // the in-level handlers so the panel is clickable.
+                if down
+                    && button == MouseButton::Left
+                    && self.menu.is_none()
+                    && self.mini_click(event_loop)
+                {
                     return;
                 }
                 if self.menu.is_some() {
@@ -3900,6 +4456,12 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if down && !self.grabbed {
+                    // Click-to-recapture. While PAUSED `set_grab` is a
+                    // no-op (the mini-menu needs the cursor), so this
+                    // just swallows the click — which is what we want:
+                    // falling through would latch `fire_held` with no
+                    // tick to consume it, and unpause would open with
+                    // an unintended shot.
                     self.set_grab(true);
                     return; // the grab click doesn't fire
                 }
@@ -3987,9 +4549,19 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 if down && event.logical_key == Key::Named(NamedKey::Escape) {
-                    if self.menu.is_some() {
-                        // Esc closes the options menu (and unpauses)
-                        // instead of ungrabbing/quitting.
+                    if self.menu.is_some() && self.mini.is_some() {
+                        // The options layer was opened FROM the
+                        // in-level mini-menu: Esc closes just that
+                        // layer and drops back to the mini-menu, STILL
+                        // PAUSED — so the map, the spell selector and
+                        // the rest of the live-input pause are usable
+                        // again. Esc never dismisses the mini-menu
+                        // itself; unpause is its only exit.
+                        self.menu = None;
+                    } else if self.menu.is_some() {
+                        // Options opened directly on a frontend screen
+                        // (no mini-menu behind it): Esc closes it and
+                        // unpauses, as before.
                         self.toggle_menu();
                     } else if self.screen == Screen::Menu {
                         // Main menu: close the modal, else the exit
@@ -4682,8 +5254,10 @@ impl ApplicationHandler for App {
                                     }
                                     bound =
                                         [u8::try_from(bv.left).ok(), u8::try_from(bv.right).ok()];
-                                    // Mirror for the drag/commit path.
-                                    self.spell_levels = sel;
+                                    // `spell_levels` is NOT mirrored here
+                                    // any more — `sync_world` owns that,
+                                    // every frame rather than only while
+                                    // the pane happens to be drawn.
                                     self.pane_bound = bound;
                                 }
                             } else {
@@ -4759,9 +5333,19 @@ impl ApplicationHandler for App {
                         // paused inspection happens.
                         quads.extend(ui::pause_quads(size.0, size.1));
                     }
+                    // The pause mini-menu. It carries no "PAUSED" text
+                    // of its own — the retail indicator above is the
+                    // pause state, this is the menu.
+                    //
+                    // Hidden while the options layer is up: the two
+                    // panels on screen at once read as clutter, and
+                    // the options menu is modal anyway. Esc closes
+                    // that layer and this comes straight back.
+                    if let (Some(mini), None) = (&self.mini, &self.menu) {
+                        quads.extend(minimenu::draw(assets, mini, size.0, size.1, self.cursor));
+                    }
                     // The options menu (over everything but the quit
-                    // fade; the pause bars above stay as the retail
-                    // nod).
+                    // fade).
                     if let Some(st) = &self.menu {
                         quads.extend(menu::draw(
                             assets,

@@ -275,16 +275,11 @@ impl std::hash::Hash for Player {
             heal_active,
             accel,
             accel_held,
-            // Not hashed directly: the derived `speed_boost` below
-            // already reflects it; skipping it keeps the goldens
-            // byte-stable.
-            accel_mc2_factor: _,
-            // MC2-only, nonzero only mid-invis-window; skipped to keep
-            // the goldens byte-stable (no fixture casts invis).
-            invis_strength: _,
-            // MC2-only, nonzero only while transformed; skipped for the
-            // same golden-stability reason (no fixture casts metamorph).
-            metamorph: _,
+            // The three MC2 cast-window latches are hashed BELOW, and
+            // only when armed — see the note there.
+            accel_mc2_factor,
+            invis_strength,
+            metamorph,
             speed_boost,
             teleport_return,
             life,
@@ -309,12 +304,43 @@ impl std::hash::Hash for Player {
         if death_owned_blue.iter().any(|&b| b) {
             death_owned_blue.hash(h);
         }
+        // The MC2 cast-window latches, same transparent-at-pristine
+        // shape: zero in every fixture that does not cast the spell,
+        // so no golden moves, but VISIBLE once armed.
+        //
+        // These were previously excluded outright, `accel_mc2_factor`
+        // on the grounds that `speed_boost` already reflects it. It
+        // does not, in the way that matters here: `speed_boost` is
+        // recomputed from scratch each tick, so a running sim only
+        // diverges a tick LATER, and the latch independently gates
+        // control flow before `speed_boost` is ever read
+        // ([`World::thrust_cancel`], [`World::full_stop_cancel_accel`]).
+        // At rest — which is exactly where a snapshot round trip is
+        // compared — all three were invisible to the digest, so a
+        // codec that dropped them would have passed
+        // (docs/archive/DESIGN-SAVES.md prerequisite 2).
+        if *accel_mc2_factor != 0 {
+            accel_mc2_factor.hash(h);
+        }
+        if *invis_strength != 0 {
+            invis_strength.hash(h);
+        }
+        if *metamorph != 0 {
+            metamorph.hash(h);
+        }
     }
 }
 
+/// The intrinsic mana ceiling every wizard is born with (`u32_322`,
+/// :55031-33) — the seed `recompute_mana` accumulates claims onto, and
+/// therefore the part of `mana_max` that was never collected.
+const WIZARD_BASE_MANA: u32 = 1000;
+
 /// FNV-1a 64, spelled out so fixture hashes are stable across Rust
 /// releases and platforms (std's default hasher guarantees neither).
-struct Fnv(u64);
+/// Shared with [`crate::Simulation::state_hash`] so both tiers digest
+/// through one hasher.
+pub(crate) struct Fnv(pub u64);
 
 impl std::hash::Hasher for Fnv {
     fn finish(&self) -> u64 {
@@ -3641,7 +3667,7 @@ impl World {
     /// house tally + own castle stored (the HUD % numerator, :54721).
     fn recompute_mana(&mut self) {
         for r in &mut self.rivals {
-            r.mana_max = 1000; // the intrinsic base (u32_322, :55031-33)
+            r.mana_max = WIZARD_BASE_MANA; // the intrinsic base (u32_322, :55031-33)
         }
         // The MC2 column keeps its own roster; retail grows the same
         // per-wizard ceiling there (`maxMana_0x8C_140`, sub_13CE0
@@ -3649,9 +3675,9 @@ impl World {
         // or it pins at 1000 forever (no castle past rung 1, expensive
         // spells locked).
         for r in &mut self.mc2_rivals {
-            r.mana_max = 1000;
+            r.mana_max = WIZARD_BASE_MANA;
         }
-        let mut max = 1000u32;
+        let mut max = WIZARD_BASE_MANA;
         let mut houses = 0u32;
         // The world total SEEDS with the census caller's intrinsic
         // base (:56867 — u32_188 = a1's u32_322, the human's 1000).
@@ -3663,7 +3689,7 @@ impl World {
         // 15% thresholds.
         let mut world = match self.game {
             GameId::Mc2 => 1u32,
-            _ => 1000,
+            _ => WIZARD_BASE_MANA,
         };
         let mut castle_stored = 0u32;
         for j in 1..self.g.ent.len() {
@@ -4171,6 +4197,30 @@ impl World {
             })
         };
         [hand(false), hand(true)]
+    }
+
+    /// The player's CLAIMED share of the world's mana, 0..=100.
+    ///
+    /// This is the SELF panel's grey bar — everything the player has
+    /// taken possession of — not the castle panel's white one. The
+    /// distinction matters off MC1: [`Player::banked`] counts only
+    /// `(10,45)` houses and `(3,2)` castle-stored mana, so under MC2 it
+    /// reads 0 until a castle stands, however much the player has
+    /// actually collected.
+    ///
+    /// Two corrections the raw fields do not carry:
+    ///
+    /// - `mana_max` SEEDS at the intrinsic 1000 every wizard is born
+    ///   with (`u32_322`, :55031-33), which is not something the player
+    ///   collected. Subtracted, so a fresh level reads 0%.
+    /// - the world total seeds per game — 1000 for MC1 (matching that
+    ///   base), but 1 for MC2, whose type-0 objective divides by it
+    ///   (EF:40751). Clamping the result keeps the MC2 seam from
+    ///   producing a share above 100.
+    pub fn player_mana_share_pct(&self) -> u8 {
+        let claimed = self.player.mana_max.saturating_sub(WIZARD_BASE_MANA) as u64;
+        let world = self.player.world_mana.max(1) as u64;
+        (claimed * 100 / world).min(100) as u8
     }
 
     /// Spellbook/HUD snapshot.
@@ -7794,6 +7844,382 @@ impl World {
     }
 }
 
+// ------------------------------------------------------------ snapshot
+//
+// See `crate::snapshot`. Every struct here is written through an
+// exhaustive destructure and read back through an exhaustive struct
+// literal, so a new field breaks the build in both directions.
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer, snap_enum};
+
+snap_enum!(
+    GameId,
+    "GameId",
+    0 => GameId::Mc1,
+    1 => GameId::Mc1Hw,
+    2 => GameId::Mc2,
+);
+
+snap_enum!(
+    LifeState,
+    "LifeState",
+    0 => LifeState::Alive,
+    1 => LifeState::Falling,
+    2 => LifeState::Dead,
+);
+
+impl Snap for Notification {
+    fn put(&self, w: &mut Writer) {
+        let Notification { text, timer, color } = self;
+        w.put(text);
+        w.put(timer);
+        w.put(color);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Notification {
+            text: r.get()?,
+            timer: r.get()?,
+            color: r.get()?,
+        })
+    }
+}
+
+impl Snap for Mc2EndSeq {
+    fn put(&self, w: &mut Writer) {
+        let Mc2EndSeq {
+            phase,
+            counter,
+            speed,
+            target,
+            target_model,
+            x,
+            y,
+            z,
+            yaw,
+        } = self;
+        w.put(phase);
+        w.put(counter);
+        w.put(speed);
+        w.put(target);
+        w.put(target_model);
+        w.put(x);
+        w.put(y);
+        w.put(z);
+        w.put(yaw);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2EndSeq {
+            phase: r.get()?,
+            counter: r.get()?,
+            speed: r.get()?,
+            target: r.get()?,
+            target_model: r.get()?,
+            x: r.get()?,
+            y: r.get()?,
+            z: r.get()?,
+            yaw: r.get()?,
+        })
+    }
+}
+
+impl Snap for Mc2Stage {
+    fn put(&self, w: &mut Writer) {
+        let Mc2Stage {
+            kind,
+            target,
+            point,
+            state,
+            row,
+            force,
+            bound,
+        } = self;
+        w.put(kind);
+        w.put(target);
+        w.put(point);
+        w.put(state);
+        w.put(row);
+        w.put(force);
+        w.put(bound);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2Stage {
+            kind: r.get()?,
+            target: r.get()?,
+            point: r.get()?,
+            state: r.get()?,
+            row: r.get()?,
+            force: r.get()?,
+            bound: r.get()?,
+        })
+    }
+}
+
+impl Snap for Player {
+    fn put(&self, w: &mut Writer) {
+        let Player {
+            mana,
+            mana_max,
+            mana_delta,
+            banked,
+            world_mana,
+            left,
+            right,
+            owned,
+            shield,
+            invisible,
+            rebound,
+            beyond_sight,
+            heal_active,
+            accel,
+            accel_held,
+            accel_mc2_factor,
+            invis_strength,
+            metamorph,
+            speed_boost,
+            teleport_return,
+            life,
+            grace,
+            regen_delay,
+            state,
+            fall_speed,
+            killer,
+            death_owned,
+            death_owned_blue,
+            hit_flash,
+            lost,
+        } = self;
+        w.put(mana);
+        w.put(mana_max);
+        w.put(mana_delta);
+        w.put(banked);
+        w.put(world_mana);
+        w.put(&left.map(|s| s.0));
+        w.put(&right.map(|s| s.0));
+        w.put(owned);
+        w.put(shield);
+        w.put(invisible);
+        w.put(rebound);
+        w.put(beyond_sight);
+        w.put(heal_active);
+        w.put(accel);
+        w.put(accel_held);
+        w.put(accel_mc2_factor);
+        w.put(invis_strength);
+        w.put(metamorph);
+        w.put(speed_boost);
+        w.put(teleport_return);
+        w.put(life);
+        w.put(grace);
+        w.put(regen_delay);
+        w.put(state);
+        w.put(fall_speed);
+        w.put(killer);
+        w.put(death_owned);
+        w.put(death_owned_blue);
+        w.put(hit_flash);
+        w.put(lost);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Player {
+            mana: r.get()?,
+            mana_max: r.get()?,
+            mana_delta: r.get()?,
+            banked: r.get()?,
+            world_mana: r.get()?,
+            left: r.get::<Option<u8>>()?.map(SpellId),
+            right: r.get::<Option<u8>>()?.map(SpellId),
+            owned: r.get()?,
+            shield: r.get()?,
+            invisible: r.get()?,
+            rebound: r.get()?,
+            beyond_sight: r.get()?,
+            heal_active: r.get()?,
+            accel: r.get()?,
+            accel_held: r.get()?,
+            accel_mc2_factor: r.get()?,
+            invis_strength: r.get()?,
+            metamorph: r.get()?,
+            speed_boost: r.get()?,
+            teleport_return: r.get()?,
+            life: r.get()?,
+            grace: r.get()?,
+            regen_delay: r.get()?,
+            state: r.get()?,
+            fall_speed: r.get()?,
+            killer: r.get()?,
+            death_owned: r.get()?,
+            death_owned_blue: r.get()?,
+            hit_flash: r.get()?,
+            lost: r.get()?,
+        })
+    }
+}
+
+impl World {
+    /// The identity fingerprint: what a restore may not paper over.
+    pub(crate) fn snap_identity(&self, w: &mut Writer) {
+        w.put(&self.game);
+        w.put(&self.table.len());
+        self.g.snap_identity(w);
+    }
+
+    pub(crate) fn snap_check_identity(&self, r: &mut Reader) -> Result<(), SnapshotError> {
+        r.expect("game", self.game)?;
+        r.expect("level table size", self.table.len())?;
+        self.g.snap_check_identity(r)
+    }
+
+    pub(crate) fn snap_write(&self, w: &mut Writer) {
+        let World {
+            g,
+            // Identity, written by `snap_identity` ahead of the
+            // payload — not repeated here.
+            game: _,
+            mc2_stages,
+            mc2_stage_current,
+            mc2_stagevars,
+            mc2_sv_held,
+            mc2_sv_deferred,
+            mc2_objective_pause,
+            mc2_speech_ramp,
+            mc2_speech_cue,
+            mc2_apocalypse,
+            mc2_turn,
+            mc2_doom_meter,
+            mc2_doom_level,
+            placeholders,
+            table,
+            terrain_dirty,
+            entities_dirty,
+            pending_teleport,
+            player,
+            rivals,
+            mc2_rivals,
+            kill_tally,
+            human_pose,
+            rival_deaths,
+            duel,
+            mc2_duel,
+            mc2_book,
+            start_markers,
+            win_pct,
+            win_streak,
+            completed,
+            dev_spells,
+            prune_owned_jars,
+            prev_fire,
+            accel_veto,
+            pending_respawn,
+            pending_restart,
+            invincible,
+            notification,
+            won,
+            mc2_endseq,
+            mc2_end_pending,
+        } = self;
+        g.snap_write(w);
+        w.put(mc2_stages);
+        w.put(mc2_stage_current);
+        w.put(mc2_stagevars);
+        w.put(mc2_sv_held);
+        w.put(mc2_sv_deferred);
+        w.put(mc2_objective_pause);
+        w.put(mc2_speech_ramp);
+        w.put(mc2_speech_cue);
+        w.put(mc2_apocalypse);
+        // `mc2_turn` is hash-EXCLUDED (it is a function of the tick
+        // counter) but still saved: deriving it on load would mean
+        // re-deriving it correctly, and there is nothing to gain.
+        w.put(mc2_turn);
+        w.put(mc2_doom_meter);
+        w.put(mc2_doom_level);
+        w.put(placeholders);
+        w.put(table);
+        w.put(terrain_dirty);
+        w.put(entities_dirty);
+        w.put(pending_teleport);
+        w.put(player);
+        w.put(rivals);
+        w.put(mc2_rivals);
+        w.put(kill_tally);
+        w.put(human_pose);
+        w.put(rival_deaths);
+        w.put(duel);
+        w.put(mc2_duel);
+        w.put(mc2_book);
+        w.put(start_markers);
+        w.put(win_pct);
+        w.put(win_streak);
+        w.put(completed);
+        w.put(dev_spells);
+        w.put(prune_owned_jars);
+        w.put(prev_fire);
+        w.put(accel_veto);
+        w.put(pending_respawn);
+        w.put(pending_restart);
+        w.put(invincible);
+        w.put(notification);
+        w.put(won);
+        w.put(mc2_endseq);
+        w.put(mc2_end_pending);
+    }
+
+    /// Overwrite this world's state from the stream, keeping the
+    /// level-package data (`Gen::assets`, `Gen::retile`) and the
+    /// construction-fixed chassis/verb column already in place.
+    ///
+    /// Both dirty flags are forced on afterwards regardless of what
+    /// the stream said: the app's terrain and entity mirrors are
+    /// stale by definition after a restore.
+    pub(crate) fn snap_apply(&mut self, r: &mut Reader) -> Result<(), SnapshotError> {
+        self.g.snap_apply(r)?;
+        self.mc2_stages = r.get()?;
+        self.mc2_stage_current = r.get()?;
+        self.mc2_stagevars = r.get()?;
+        self.mc2_sv_held = r.get()?;
+        self.mc2_sv_deferred = r.get()?;
+        self.mc2_objective_pause = r.get()?;
+        self.mc2_speech_ramp = r.get()?;
+        self.mc2_speech_cue = r.get()?;
+        self.mc2_apocalypse = r.get()?;
+        self.mc2_turn = r.get()?;
+        self.mc2_doom_meter = r.get()?;
+        self.mc2_doom_level = r.get()?;
+        self.placeholders = r.get()?;
+        self.table = r.get()?;
+        self.terrain_dirty = r.get()?;
+        self.entities_dirty = r.get()?;
+        self.pending_teleport = r.get()?;
+        self.player = r.get()?;
+        self.rivals = r.get()?;
+        self.mc2_rivals = r.get()?;
+        self.kill_tally = r.get()?;
+        self.human_pose = r.get()?;
+        self.rival_deaths = r.get()?;
+        self.duel = r.get()?;
+        self.mc2_duel = r.get()?;
+        self.mc2_book = r.get()?;
+        self.start_markers = r.get()?;
+        self.win_pct = r.get()?;
+        self.win_streak = r.get()?;
+        self.completed = r.get()?;
+        self.dev_spells = r.get()?;
+        self.prune_owned_jars = r.get()?;
+        self.prev_fire = r.get()?;
+        self.accel_veto = r.get()?;
+        self.pending_respawn = r.get()?;
+        self.pending_restart = r.get()?;
+        self.invincible = r.get()?;
+        self.notification = r.get()?;
+        self.won = r.get()?;
+        self.mc2_endseq = r.get()?;
+        self.mc2_end_pending = r.get()?;
+        self.terrain_dirty = true;
+        self.entities_dirty = true;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7871,6 +8297,324 @@ mod tests {
 
     fn away() -> PlayerPose {
         PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
+    }
+
+    /// The save row's progress figure. Two things it must get right,
+    /// both of which the raw fields get wrong:
+    ///
+    /// - a fresh level reads 0%, not the intrinsic 1000 the wizard is
+    ///   born with expressed as a share;
+    /// - it tracks what the player POSSESSES, so it works under MC2,
+    ///   where `Player::banked` (houses + castle stored) stays 0 until
+    ///   a castle stands. That was the reported bug: MC2 saves showed
+    ///   0% with mana plainly collected.
+    #[test]
+    fn mana_share_counts_possessions_not_the_starting_ceiling() {
+        let mut w = flat_world();
+        // Untouched: the base is all there is, so nothing is claimed.
+        assert_eq!(
+            w.player.mana_max, WIZARD_BASE_MANA,
+            "fixture: a fresh player holds exactly the base"
+        );
+        assert_eq!(w.player_mana_share_pct(), 0, "a fresh level is 0%");
+
+        // Claim a quarter of a world that also holds the base.
+        w.player.mana_max = WIZARD_BASE_MANA + 250;
+        w.player.world_mana = 1000;
+        assert_eq!(w.player_mana_share_pct(), 25);
+
+        // The MC2 seam: its world total seeds at 1, not at the base,
+        // so an unclamped ratio could exceed 100.
+        w.player.mana_max = WIZARD_BASE_MANA + 500;
+        w.player.world_mana = 1;
+        assert_eq!(w.player_mana_share_pct(), 100, "clamped, never over");
+
+        // And a zero denominator must not divide by zero.
+        w.player.world_mana = 0;
+        assert_eq!(w.player_mana_share_pct(), 100);
+    }
+
+    /// `banked` is the CASTLE panel's numerator and is not
+    /// interchangeable with the possession share — the two diverge
+    /// exactly where the bug was.
+    #[test]
+    fn mana_share_is_not_the_banked_castle_figure() {
+        let mut w = flat_world();
+        // Mana collected, nothing banked into a castle: the MC2 shape.
+        w.player.mana_max = WIZARD_BASE_MANA + 400;
+        w.player.world_mana = 1000;
+        w.player.banked = 0;
+        assert_eq!(w.player.banked, 0, "fixture: nothing in a castle");
+        assert_eq!(
+            w.player_mana_share_pct(),
+            40,
+            "possessions still register — this is what read 0% before"
+        );
+    }
+
+    // ------------------------------------------------------ snapshot
+
+    /// A sim that has been played for a while: pristine state
+    /// round-trips through anything, including a codec that dropped
+    /// half its fields, so every snapshot assertion below is made
+    /// against a world that has actually run.
+    ///
+    /// Parked ON the micro-world's proximity trigger, so play does not
+    /// merely move the carpet — the disposition fires, the crater and
+    /// creature allocate, and the pool's `free`/`slot_gen` actually
+    /// change. Flying somewhere empty would leave those two identical
+    /// to a fresh world and quietly defeat the tests that check them.
+    fn played_sim(ticks: usize) -> crate::Simulation {
+        let mut sim = crate::Simulation::with_world(flat_world());
+        // The same spot `at_trigger()` names, in flyer tile units.
+        sim.flyer.x = 100.5;
+        sim.flyer.z = 100.5;
+        sim.flyer.y = 105.0 / 8.0;
+        sim.sync_carpet_from_flyer();
+        // Hover on the trigger first. The proximity probe is throttled
+        // to every 8th tick, so thrusting away immediately would leave
+        // the volume before it ever fires.
+        for _ in 0..24 {
+            sim.step(&crate::FlightInput::default());
+        }
+        let fly = crate::FlightInput {
+            thrust: 1.0,
+            stick_x: 40,
+            stick_y: -20,
+            ..Default::default()
+        };
+        for _ in 0..ticks {
+            sim.step(&fly);
+        }
+        sim
+    }
+
+    /// The acceptance test in miniature (the full one, on real baked
+    /// levels, is `tests/snapshot.rs`): snapshot a played sim, apply
+    /// it onto a freshly built one, and require the two to be
+    /// indistinguishable — by digest AND by the arrays the digest
+    /// cannot see.
+    #[test]
+    fn snapshot_round_trips_a_played_world() {
+        let live = played_sim(120);
+        let bytes = live.snapshot();
+
+        let mut restored = crate::Simulation::with_world(flat_world());
+        // Fixture validity: the target must START different, or the
+        // whole test would pass on a codec that wrote nothing.
+        assert_ne!(
+            live.state_hash(),
+            restored.state_hash(),
+            "fixture is wrong: a fresh world already matches the played one"
+        );
+        restored.restore(&bytes).expect("restore");
+
+        assert_eq!(live.state_hash(), restored.state_hash(), "state hash");
+        let (a, b) = (
+            live.world.as_ref().unwrap(),
+            restored.world.as_ref().unwrap(),
+        );
+        assert_eq!(a.observable_digest(), b.observable_digest(), "observable");
+    }
+
+    /// `SlotGens` hashes to NOTHING (features.rs) and `free` is a
+    /// plain `Vec<u16>` whose ORDER is the pool economy — the state
+    /// hash is blind to both, so a codec bug there would sail past
+    /// the test above. They get their own assertions.
+    #[test]
+    fn snapshot_carries_what_the_hash_cannot_see() {
+        let live = played_sim(120);
+        let bytes = live.snapshot();
+        let fresh = crate::Simulation::with_world(flat_world());
+        let mut restored = crate::Simulation::with_world(flat_world());
+        restored.restore(&bytes).expect("restore");
+
+        let g = |s: &crate::Simulation| {
+            let w = s.world.as_ref().unwrap();
+            (w.g.free.clone(), w.g.slot_gen.0.clone())
+        };
+        let (live_free, live_gen) = g(&live);
+        let (fresh_free, fresh_gen) = g(&fresh);
+        let (rest_free, rest_gen) = g(&restored);
+
+        // Fixture validity again: play must have MOVED both, or
+        // "restored == live" would hold trivially.
+        //
+        // Note this is an ORDER difference, not a length one: the
+        // crater allocates and then frees itself, so the stack ends
+        // the same SIZE with its top permuted. Which is the whole
+        // reason `free` is saved verbatim instead of rebuilt from
+        // occupancy — a rebuild would match on length and set, and
+        // still hand out different slots from here on.
+        assert!(
+            live_free != fresh_free,
+            "fixture is wrong: play left the free stack untouched \
+             (len {} vs {})",
+            live_free.len(),
+            fresh_free.len()
+        );
+        let bumped = |g: &[u32]| g.iter().filter(|&&v| v != 0).count();
+        assert_ne!(
+            bumped(&live_gen),
+            bumped(&fresh_gen),
+            "fixture is wrong: play did not bump any slot generation"
+        );
+
+        assert!(
+            live_free == rest_free,
+            "free stack order is the pool economy, and it did not survive \
+             the round trip"
+        );
+        assert!(
+            live_gen == rest_gen,
+            "slot generations did not survive the round trip (hash-silent, \
+             so nothing else would have caught this)"
+        );
+    }
+
+    /// The other hash-blind fields, which a digest-derived codec would
+    /// also have dropped: `Rec::par3` (hash-excluded), `World::mc2_turn`
+    /// (excluded as a function of the tick counter), and the three MC2
+    /// cast-window latches, which are hashed only when armed.
+    #[test]
+    fn snapshot_carries_the_hash_excluded_fields() {
+        let mut live = played_sim(20);
+        {
+            let w = live.world.as_mut().unwrap();
+            w.table[0].par3 = 0x5A5A;
+            w.mc2_turn = 12345;
+            w.player.accel_mc2_factor = 3;
+            w.player.invis_strength = 2;
+            w.player.metamorph = 19;
+        }
+        let bytes = live.snapshot();
+        let mut restored = crate::Simulation::with_world(flat_world());
+        restored.restore(&bytes).expect("restore");
+
+        let w = restored.world.as_ref().unwrap();
+        assert_eq!(w.table[0].par3, 0x5A5A, "Rec::par3");
+        assert_eq!(w.mc2_turn, 12345, "World::mc2_turn");
+        assert_eq!(w.player.accel_mc2_factor, 3);
+        assert_eq!(w.player.invis_strength, 2);
+        assert_eq!(w.player.metamorph, 19);
+    }
+
+    /// A restored sim must not merely LOOK identical — it must go on
+    /// producing the same world. This is the divergence test: any
+    /// field the codec dropped that feeds a later decision shows up
+    /// as a split some ticks down the line, not at restore time.
+    #[test]
+    fn restored_sim_stays_identical_under_further_ticks() {
+        let mut live = played_sim(60);
+        let mut restored = crate::Simulation::with_world(flat_world());
+        restored.restore(&live.snapshot()).expect("restore");
+
+        let fly = crate::FlightInput {
+            thrust: 1.0,
+            stick_x: -30,
+            ..Default::default()
+        };
+        for i in 0..600 {
+            live.step(&fly);
+            restored.step(&fly);
+            assert_eq!(
+                live.state_hash(),
+                restored.state_hash(),
+                "diverged {i} ticks after restore"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_rejects_damaged_streams() {
+        use crate::snapshot::SnapshotError;
+        let live = played_sim(20);
+        let bytes = live.snapshot();
+        let mut sim = crate::Simulation::with_world(flat_world());
+
+        let mut bad_magic = bytes.clone();
+        bad_magic[0] ^= 0xFF;
+        assert!(matches!(
+            sim.restore(&bad_magic),
+            Err(SnapshotError::BadMagic(_))
+        ));
+
+        let mut bad_version = bytes.clone();
+        bad_version[4] = 0xEE;
+        assert!(matches!(
+            sim.restore(&bad_version),
+            Err(SnapshotError::Version(_))
+        ));
+
+        assert_eq!(
+            sim.restore(&bytes[..bytes.len() - 4]),
+            Err(SnapshotError::Truncated)
+        );
+
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(sim.restore(&trailing), Err(SnapshotError::Trailing(1)));
+    }
+
+    /// Coverage proof for the three MC2 cast-window latches
+    /// (`accel_mc2_factor`, `invis_strength`, `metamorph`), which were
+    /// hash-EXCLUDED until `docs/archive/DESIGN-SAVES.md` prerequisite 2.
+    ///
+    /// They must be invisible at pristine — that is what keeps every
+    /// existing golden byte-stable — and visible the moment they are
+    /// armed, or a snapshot codec that silently dropped them would
+    /// round-trip "successfully" against the digest. Both halves are
+    /// asserted here; the pristine half is the one that will fail
+    /// first if someone promotes these to an unconditional hash.
+    #[test]
+    fn hash_sees_the_mc2_cast_latches_only_when_armed() {
+        let base = flat_world().state_hash();
+
+        // Pristine transparency: an untouched world still hashes to the
+        // same value it did while the fields were excluded outright.
+        assert_eq!(
+            base,
+            flat_world().state_hash(),
+            "the builder must be deterministic for the rest to mean anything"
+        );
+
+        let mut speed = flat_world();
+        speed.player.accel_mc2_factor = 3;
+        assert_ne!(
+            base,
+            speed.state_hash(),
+            "accel_mc2_factor must reach the hash once armed: it gates \
+             thrust_cancel/full_stop_cancel_accel before speed_boost is read"
+        );
+
+        let mut invis = flat_world();
+        invis.player.invis_strength = 2;
+        assert_ne!(
+            base,
+            invis.state_hash(),
+            "invis_strength must reach the hash once armed: it drives the \
+             per-tier break-on-self-cast law"
+        );
+
+        let mut meta = flat_world();
+        meta.player.metamorph = 19;
+        assert_ne!(
+            base,
+            meta.state_hash(),
+            "metamorph must reach the hash once armed: it hides the carpet \
+             and names the model drawn in its place"
+        );
+
+        // Distinct latches must not collide with each other either —
+        // a single `if any != 0 { .. }` guard would pass the asserts
+        // above while conflating the three.
+        let mut other = flat_world();
+        other.player.invis_strength = 3;
+        assert_ne!(
+            invis.state_hash(),
+            other.state_hash(),
+            "the latch VALUE must reach the hash, not merely its armedness"
+        );
     }
 
     fn at_trigger() -> PlayerPose {

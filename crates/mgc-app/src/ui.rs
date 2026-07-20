@@ -1557,6 +1557,10 @@ pub fn exit_confirm_quads(
     quads
 }
 
+/// The retail PAUSED indicator (drawn at 320-native 132,50): two
+/// small white bars over the live view. Kept alongside the pause
+/// mini-menu — the panel is a MENU, this is the pause state, and the
+/// player reads them in different places.
 pub fn pause_quads(w: f32, _h: f32) -> Vec<UiQuad> {
     let s = (w / 640.0).max(1.0);
     let (x, y) = (132.0 * s, 50.0 * s);

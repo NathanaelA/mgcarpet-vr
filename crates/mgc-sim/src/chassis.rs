@@ -121,3 +121,13 @@ impl std::hash::Hash for ChassisParams {
         }
     }
 }
+
+// ------------------------------------------------------------ snapshot
+//
+// Only `RandWidth` travels: `ChassisParams` as a whole is fixed at
+// construction and identity-CHECKED rather than restored, because its
+// `bucket_excluded_states` is a `&'static [u8]` with nowhere to land.
+
+use crate::snapshot::snap_enum;
+
+snap_enum!(RandWidth, "RandWidth", 0 => RandWidth::U32, 1 => RandWidth::U16);

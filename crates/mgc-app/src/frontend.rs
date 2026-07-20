@@ -33,9 +33,10 @@ use mgc_render::UiQuad;
 pub enum MenuAction {
     /// New Game / the door — enter the world-map screen.
     EnterMap,
+    /// Write the campaign to a slot. Carries NO label: slot names are
+    /// not player-authored — see `MenuAction::SetName`.
     SaveTo {
         slot: usize,
-        label: String,
     },
     LoadFrom(usize),
     SetName(String),
@@ -427,11 +428,7 @@ impl MainMenu {
                 if in_rect(mx, my, ok_rect(x1, y1, h)) {
                     self.sounds.push(SND_CLICK);
                     let action = if *save {
-                        let label = edit.take().or_else(|| selected.map(|k| slots[k].0.clone()));
-                        selected.map(|k| MenuAction::SaveTo {
-                            slot: k,
-                            label: label.unwrap_or_default(),
-                        })
+                        selected.map(|k| MenuAction::SaveTo { slot: k })
                     } else {
                         selected.filter(|&k| slots[k].1).map(MenuAction::LoadFrom)
                     };

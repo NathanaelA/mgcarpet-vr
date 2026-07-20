@@ -21,6 +21,9 @@ and lists what remains; history lives in the archive and git.
   retail.
 - `FIDELITY.md` — fail-open fidelity gaps and approximations still owed.
 - `FORMAT.md` — the baked bundle/level format spec (lockstep with code).
+- `archive/DESIGN-SAVES.md` — save/load and the in-game menu: retail
+  findings and the settled rulings. IMPLEMENTED; kept for the rulings and
+  the reasoning behind them, which the code comments cite.
 - `traces/`, `spell-audit/` — the decompile research bank; cited by code
   comments; consult before re-porting anything.
 - `archive/` — completed working documents (surveys, reviews, audits,
@@ -47,6 +50,174 @@ and lists what remains; history lives in the archive and git.
   restructure, retrospective.
 
 ## Remaining work
+
+### Saves + in-game menu — LANDED 2026-07-21 (playtest owed)
+- Mid-level save/load and the pause mini-menu, per `archive/DESIGN-SAVES.md`
+  (which now records status, deviations and the remaining open item).
+- Sim payload codec `mgc_sim::snapshot` — dependency-free, hand-written,
+  exhaustive destructure out / exhaustive struct literal back, so a new
+  field is a compile error in both directions. Restore APPLIES onto an
+  already-built world (the level package supplies `Gen::assets`/`retile`
+  and the `&'static` chassis slice); an identity fingerprint refuses a
+  foreign world before writing anything.
+- `.mgcs` container (`mgc_formats::mgcs`): ZIP + `save.json` header +
+  `campaign.bin` + `snapshot.bin`, DEFLATEd (unlike `.mgcl`, which stays
+  Stored for its committed hashes). Header alone drives the slot list.
+- Slot model: `<stem>.mgcs` native + `<stem>.gam` retail export beside it;
+  native always wins, the `.gam` is read only when no native file exists.
+- **OPEN — mid-level option gating.** `entity_pool_size` (and anything else
+  that resizes the pool) still has no "mid-level changeable" axis in the
+  settings registry, so it can be changed from the in-level Options layer.
+  The snapshot identity check turns the result into a REFUSED load rather
+  than a corrupt one, but the option should grey out instead.
+- UI round 1 (player review) landed: the panel's own "PAUSED" title
+  dropped (the retail banner stays — banner = state, panel = menu),
+  results moved to the toast line (they overflowed a
+  narrow panel), cursor stays free for the whole pause (`set_grab` refuses
+  to re-grab while paused — closing the big map was re-capturing it), Esc
+  from Options returns to the mini-menu instead of unpausing, the two
+  panels are mutually exclusive on screen, panel background darkened for
+  contrast over sky and desert.
+- UI round 2 (player review): loading is now decided by the SLOT, not by
+  where you loaded from — a mid-level slot resumes into its level from the
+  main menu / world map too (it used to adopt the record and leave you on
+  the menu, so entering replayed the level from the start), and a
+  campaign-only slot loaded in-level exits to the hub. Frontend slot lists
+  route through `saves::scan_slot` and show `L<n>` on a resuming slot.
+  Slot-row text is letters/digits/spaces/`%` ONLY: the messaging font is
+  the game's FONT1 bank at `glyph = byte + 1`, so `*` drew as a lightning
+  flash and an em dash drew as three junk glyphs.
+- UI round 3: EVERY slot names its level (`L3`), and a resuming slot adds
+  the mana percentage the run had reached (`L3 15%`) — one shape, the
+  suffix says which, and the number doubles as a how-far-in marker.
+  `level` was promoted onto the save header (both kinds of save carry one,
+  and one copy cannot disagree with itself); `InLevel` gained `mana_pct`
+  and lost its duplicate `index`. `SAVE_VERSION` 1 -> 2.
+- Rebase hazard, seen once already: the exhaustive destructure makes any
+  commit that adds a `Gen`/`World`/`Player`/rival field FAIL THE BUILD
+  until the field is added to the codec (`Gen::pal_flash` from the
+  purple-flash commit did exactly this). That is the design working. Judge
+  separately whether the addition also needs a `SNAPSHOT_VERSION` bump: it
+  does whenever the byte layout shifts, which is essentially always,
+  because the identity fingerprint is written AHEAD of the payload and so
+  cannot catch the misalignment.
+- The mini-menu is TEXT rows, not the icon set `archive/DESIGN-SAVES.md` ruling 7
+  anticipated: text carries the label, level and progress that icons
+  cannot, in a panel narrow enough to leave the HUD and the map's live
+  view usable. No `assets/static/` art is owed unless the panel grows an
+  icon row.
+- Version gates now read the version through a minimal PROBE struct before
+  deserializing the rest. A bump is precisely when the schema changed
+  shape, so a full parse fails on an unrelated field and buries the
+  explanation (v1 saves reported "invalid type: map, expected u32"). Same
+  law on the payload side. Regression test carries a verbatim v1 header.
+- Cross-version SALVAGE: a `.mgcs` this build cannot apply still gives up
+  its campaign record (`mgcs::recover`) — that record is RETAIL's byte
+  layout, so it survives any version of ours; only the resume, whose field
+  order is `SNAPSHOT_VERSION`'s, is lost. Such a slot lists amber + `old`
+  (`SlotInfo::stale`) so the loss is visible before it bites; re-saving
+  heals it. Verified against real v1 saves.
+- Per-slot save NAMING removed (all three frontends). Every editor seeded
+  itself from the RENDERED slot row and wrote it back as the name, so the
+  `L<n> <pct>%` suffix accumulated on each save. Slot names are now derived
+  — stored label = player name, level/progress composed at draw time — and
+  `SaveTo` carries no label. The `SetName` dialogs (player name) stay and
+  are the only writers of a stored label.
+- Playtest round 1 fixes: MC2 save rows read 0% because the figure came
+  from `Player::banked` — the CASTLE panel's numerator (`(10,45)` houses +
+  `(3,2)` castle stored), which stays 0 under MC2 until a castle stands.
+  Now `World::player_mana_share_pct`: what the player POSSESSES, minus the
+  intrinsic 1000 every wizard is born with (so a fresh level reads 0%) and
+  clamped, because MC2 seeds its world total at 1 rather than at that base.
+- Also fixed (PRE-EXISTING, surfaced by loading): `install_level` cut sfx
+  and speech only when an outgoing session existed, so a launch FROM a
+  frontend never cut the world map's narration of the upcoming level and it
+  played on over the level. Now unconditional, matching retail
+  (remc1 :59992-94) and the observed behaviour that entering early cuts the
+  map line and the level plays its own, different narration.
+- **PLAYTEST OWED**: mini-menu placement against both HUDs and both map
+  screens (`minimenu::{MARGIN, TOP, WIDTH}` are the dial); the load
+  round trip in all four menu/level x resume/hub combinations; the MC2
+  tier-name fix from prereq 3.
+
+### Player reports 2026-07-21 — FIXED 2026-07-21 (playtest owed)
+- **OPEN — MC1 militia/"archers" roam unbounded and hover over water.**
+  Player report (mc1:02, level-independent): an archer walking
+  perfectly horizontally out over the sea, "like a flyer". Player is
+  certain retail militia never do this — they get flying LEEWAY (so a
+  collapsing building can pop them into the air without killing them)
+  but stay near their building. Most creatures are visibly glued to
+  the ground.
+  - **REPRODUCED headlessly** (probe, not kept): an m4 spawned on
+    height-22 coastal land walks off the coast and is left 713 engine
+    units above the seabed, shedding 1 unit/tick — ~700 ticks of
+    horizontal flight. It then crossed 100+ tiles and the map seam.
+  - The hover is arithmetically faithful GIVEN the roam: in-band
+    descent is 25% of `v_14` = 1/tick, and the militiaman crosses a
+    tile in 8.5 ticks, so it can shed only ~0.27 height units per
+    tile. On ordinary slopes that lag is sub-height-unit (invisible =
+    "glued"); at a coastline it is 20+ height units at once.
+  - **RULED OUT — all verified byte-exact vs the decompile**: the
+    altitude clamp (`sub_42000`, and `sub_196E0` calls it, NOT the
+    water-aware `sub_42090`); the ground reference (`sub_11F50` →
+    `sub_724C0`, bilinear ×32); the move permit (`sub_11640` mode 1)
+    and behavior row 0 (`v_20 = 0xFFFFFFFF` really does permit water);
+    the roughness probe (`sub_19650`); the position commit
+    (`sub_41C70`, pure list maintenance, no ground snap); the m4 ctor
+    (`sub_386DE`, speed 30); the wander draws; the acquisition ladder;
+    and the runtime dispatch loop (`sub_41780_41AC0` walks all 1000
+    slots every step — NO per-entity stagger, hypothesis refuted).
+  - **RULED OUT — the house leash.** `sub_1B5D0`'s steer-home branch
+    keys on `+146` holding a (10,45) house, but every writer of `+146`
+    on the m4 path is gated on `class == 3`, and the ladder explicitly
+    EXCLUDES (10,45). Dead code for model 4. The two lists it scans
+    are `+36462` = wizards and `+36418` = `str_36382x[9]` = the m9
+    burrowers — neither can yield a house.
+  - **So nothing in the transcribed decompile bounds the roam.** Every
+    piece verified faithful while the aggregate is visibly wrong —
+    which in remc1 has twice meant incomplete transcription (the
+    truncated class-9 state table; `sub_41C70` "SYNCHRONIZED" with a
+    missing body) rather than a mis-port.
+  - NEXT (measurements, not theories): (1) compare our militia
+    POPULATION over time against retail's emit law — if villages
+    over-produce, the rare wanderer becomes a common sight, which fits
+    "archers are generally not constrained anymore" better than any
+    single-creature explanation; (2) check for an m4 lifetime/despawn
+    we have dropped. Player is gathering more data.
+- **OPEN — MC1 tick rate is an unverified ESTIMATE.** Retail advances
+  the sim once per RENDERED FRAME (`DrawAndEventsInGame` :41672; the
+  F3 speeds are 4×/16× of it, which our `game_speed` models
+  correctly). MC1 ran uncapped and hardware-bound, so `TICK_RATE_HZ =
+  24` is borrowed from MC2's 24 FPS limiter (documented as such in
+  mgc-sim/src/lib.rs). This scales every MC1 motion in wall-clock
+  terms. Cannot by itself explain the militia roam (a wrong constant
+  makes the ocean crossing sooner or later, never impossible).
+- **OPEN — two PROVEN MC1 militia deviations** (independent of the
+  roam, both from the `sub_1B5D0` trace): (1) our idle ladder has a
+  port-invented "nearest building within 0x1000 → walk in" step and
+  routes it through `mob_death` — retail's idle has NO house step at
+  all (its walk-in lives in the dead leash branch and is a SILENT
+  absorb), so ours leaves militia corpses at houses; (2) militia aggro
+  reads a single global `player_aggro` flag instead of retail's
+  per-wizard `+528` wanted timer, so MC1 RIVAL wizards never draw
+  militia fire. Also minor: retail's idle zeroes `+26` every tick
+  (:22482), ours does not.
+- **The castle-transformation kill was too weak in BOTH columns**
+  (player report: "castle building works as a destruction spell, but a
+  lot less than it should"). The mechanism is NOT a movement lockup —
+  it is an explicit model-keyed execution over the footprint, and
+  immunity is by MODEL, not by flight (hence wyvern/griffon immune,
+  dragon/worm/bee/vulture not).
+  - **MC1: the lethal area was under 40% of retail's.** `sub_40E20`
+    fires for EVERY cell of every positive RLE run, over rows
+    1..=level, BEFORE the cell byte is read (:30634 precedes :30635) —
+    an EMPTY footprint cell kills exactly like a masonry one. Our
+    `build_footprint_kill` gated on `byte != 0`, shrinking a level-7
+    castle's sweep from 2304 tiles to 899, and swept only the top row.
+    Both fixed; test `castle_kill_sweeps_empty_footprint_cells_too`.
+    MC1's exemption list {6, 8, 16} = Kraken/Griffon/Wyvern and the
+    owner-spare were already faithful.
+  - **MC2: the castle path never purged at all** (below).
 
 ### Player reports 2026-07-21 — FIXED 2026-07-21 (playtest owed)
 - **MC2 castles were not lethal to what they rise over.** Retail's

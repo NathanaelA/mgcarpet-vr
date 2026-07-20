@@ -20,6 +20,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 mgc-audio = { version = "0.1.0", path = "../mgc-audio" }
 
+# Tests only: fabricating an OLD-format `.mgcs` to prove the salvage
+# path recovers campaign progress from a container this build cannot
+# apply. Nothing in the binary writes ZIPs — `mgc-formats` owns that.
+[dev-dependencies]
+zip = { version = "2", default-features = false }
+
 [[bin]]
 name = "mgcarpet"
 path = "src/main.rs"

@@ -1942,3 +1942,120 @@ impl World {
         self.entities_dirty = true;
     }
 }
+
+// ------------------------------------------------------------ snapshot
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer, snap_enum};
+
+snap_enum!(
+    AiState,
+    "AiState",
+    0 => AiState::Fresh,
+    1 => AiState::Upgrade,
+    2 => AiState::Build,
+    3 => AiState::Possess,
+    4 => AiState::RaidCastle,
+    5 => AiState::AttackWizard,
+    6 => AiState::RaidBalloon,
+    7 => AiState::HuntMana,
+    8 => AiState::Home,
+    9 => AiState::Cruise,
+);
+
+impl Snap for Rival {
+    fn put(&self, w: &mut Writer) {
+        let Rival {
+            slot,
+            ent,
+            owned,
+            known,
+            allowed,
+            learn,
+            cooldown,
+            mana,
+            mana_max,
+            mana_delta,
+            agg,
+            acc,
+            tempo,
+            state,
+            hate,
+            war,
+            burst,
+            poverty,
+            target,
+            target_sig,
+            site,
+            jink,
+            vdes,
+            grace,
+            regen_stall,
+            eliminated,
+            shield,
+            invisible,
+            rebound,
+        } = self;
+        w.put(slot);
+        w.put(ent);
+        w.put(owned);
+        w.put(known);
+        w.put(allowed);
+        w.put(learn);
+        w.put(cooldown);
+        w.put(mana);
+        w.put(mana_max);
+        w.put(mana_delta);
+        w.put(agg);
+        w.put(acc);
+        w.put(tempo);
+        w.put(state);
+        w.put(hate);
+        w.put(war);
+        w.put(burst);
+        w.put(poverty);
+        w.put(target);
+        w.put(target_sig);
+        w.put(site);
+        w.put(jink);
+        w.put(vdes);
+        w.put(grace);
+        w.put(regen_stall);
+        w.put(eliminated);
+        w.put(shield);
+        w.put(invisible);
+        w.put(rebound);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Rival {
+            slot: r.get()?,
+            ent: r.get()?,
+            owned: r.get()?,
+            known: r.get()?,
+            allowed: r.get()?,
+            learn: r.get()?,
+            cooldown: r.get()?,
+            mana: r.get()?,
+            mana_max: r.get()?,
+            mana_delta: r.get()?,
+            agg: r.get()?,
+            acc: r.get()?,
+            tempo: r.get()?,
+            state: r.get()?,
+            hate: r.get()?,
+            war: r.get()?,
+            burst: r.get()?,
+            poverty: r.get()?,
+            target: r.get()?,
+            target_sig: r.get()?,
+            site: r.get()?,
+            jink: r.get()?,
+            vdes: r.get()?,
+            grace: r.get()?,
+            regen_stall: r.get()?,
+            eliminated: r.get()?,
+            shield: r.get()?,
+            invisible: r.get()?,
+            rebound: r.get()?,
+        })
+    }
+}

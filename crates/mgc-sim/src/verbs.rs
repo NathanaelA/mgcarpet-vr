@@ -259,3 +259,57 @@ impl Default for VerbSet {
         VerbSet::MC1
     }
 }
+
+// ------------------------------------------------------------ snapshot
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer, snap_enum};
+
+snap_enum!(AwakeVerb, "AwakeVerb", 0 => AwakeVerb::Mc1, 1 => AwakeVerb::Mc2);
+snap_enum!(MovementVerb, "MovementVerb", 0 => MovementVerb::Mc1, 1 => MovementVerb::Mc2);
+snap_enum!(
+    TargetingVerb,
+    "TargetingVerb",
+    0 => TargetingVerb::Mc1,
+    1 => TargetingVerb::Mc2,
+    2 => TargetingVerb::Mc1Hw,
+);
+snap_enum!(DamageVerb, "DamageVerb", 0 => DamageVerb::Mc1, 1 => DamageVerb::Mc2);
+snap_enum!(ObjectiveVerb, "ObjectiveVerb", 0 => ObjectiveVerb::Mc1, 1 => ObjectiveVerb::Mc2);
+snap_enum!(CorpseVerb, "CorpseVerb", 0 => CorpseVerb::Mc1, 1 => CorpseVerb::Mc2);
+snap_enum!(CommitGateVerb, "CommitGateVerb", 0 => CommitGateVerb::Mc1, 1 => CommitGateVerb::Mc2);
+snap_enum!(FlightVerb, "FlightVerb", 0 => FlightVerb::Mc1, 1 => FlightVerb::Mc2);
+
+impl Snap for VerbSet {
+    fn put(&self, w: &mut Writer) {
+        let VerbSet {
+            awake,
+            movement,
+            targeting,
+            damage,
+            objective,
+            corpse,
+            commit_gate,
+            flight,
+        } = self;
+        w.put(awake);
+        w.put(movement);
+        w.put(targeting);
+        w.put(damage);
+        w.put(objective);
+        w.put(corpse);
+        w.put(commit_gate);
+        w.put(flight);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(VerbSet {
+            awake: r.get()?,
+            movement: r.get()?,
+            targeting: r.get()?,
+            damage: r.get()?,
+            objective: r.get()?,
+            corpse: r.get()?,
+            commit_gate: r.get()?,
+            flight: r.get()?,
+        })
+    }
+}

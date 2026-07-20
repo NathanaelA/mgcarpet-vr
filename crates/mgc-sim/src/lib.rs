@@ -19,6 +19,7 @@ pub mod flight;
 pub mod ids;
 pub mod mc1;
 pub mod mc2;
+pub mod snapshot;
 pub mod verbs;
 
 use engine::{features, world};
@@ -46,7 +47,7 @@ pub const HEIGHT_SCALE: f32 = 1.0 / 8.0;
 /// The thrust/steering model — the G-class flight-control tier
 /// (ROADMAP "Flight-control tiers"). Selected once at the sim
 /// boundary; replays must record it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum ThrustModel {
     /// The faithful MC1 model (remc1 sub_455D0, ported in
     /// [`flight`]): rate-based stick steering, accelerate/decelerate
@@ -67,7 +68,7 @@ pub enum ThrustModel {
 /// settles by itself; no fly-up control exists). `ExtendedLift` adds
 /// explicit float up/down keys — no original equivalent — capped at
 /// the level's highest terrain tile and never bypassing wall blocking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum AltitudeModel {
     #[default]
     Faithful,
@@ -235,6 +236,60 @@ impl Simulation {
         };
         sim.sync_carpet_from_flyer();
         sim
+    }
+
+    /// Deterministic digest of the FULL sim state: the world's own
+    /// [`World::state_hash`](world::World::state_hash) folded together
+    /// with the flight tier that lives out here.
+    ///
+    /// The world hash alone is blind to carpet momentum and aim —
+    /// exactly where a snapshot/restore bug hides, since a restored
+    /// world can be byte-perfect while the carpet resumes at the wrong
+    /// speed (`docs/archive/DESIGN-SAVES.md`). This is the digest save/load
+    /// fixtures compare; world-only goldens keep using the world's.
+    ///
+    /// The full destructure makes a new `Simulation` field a compile
+    /// error here: extend the hash deliberately.
+    pub fn state_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let Simulation {
+            tick,
+            flyer,
+            thrust_model,
+            altitude_model,
+            carpet,
+            carpet_mc2,
+            accel_was_active,
+            terrain_height,
+            world: attached,
+        } = self;
+        let mut h = world::Fnv(0xcbf2_9ce4_8422_2325);
+        tick.hash(&mut h);
+        // Floats by BIT PATTERN (the `Player::speed_boost` precedent):
+        // determinism here is bit-exact, and `-0.0` must not alias
+        // `0.0`.
+        for f in [
+            flyer.x,
+            flyer.y,
+            flyer.z,
+            flyer.vx,
+            flyer.vy,
+            flyer.vz,
+            flyer.yaw,
+            flyer.pitch,
+            flyer.roll,
+        ] {
+            f.to_bits().hash(&mut h);
+        }
+        (thrust_model, altitude_model).hash(&mut h);
+        carpet.hash(&mut h);
+        carpet_mc2.hash(&mut h);
+        accel_was_active.hash(&mut h);
+        terrain_height.hash(&mut h);
+        // Folded, not re-derived: the world keeps its own pinned
+        // goldens and this tier adds to them.
+        attached.as_ref().map(world::World::state_hash).hash(&mut h);
+        h.finish()
     }
 
     /// Ground altitude in tile units at a world position (nearest tile;

@@ -4325,6 +4325,552 @@ impl Gen {
     }
 }
 
+// ------------------------------------------------------------ snapshot
+//
+// The save codec for everything defined in this module
+// (`crate::snapshot`). It lives here rather than in that module
+// because `Gen` and its members are `pub(crate)` with private
+// internals, and — more usefully — because a new field should break
+// the build next to the line that declared it.
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer};
+
+impl Snap for Planes {
+    fn put(&self, w: &mut Writer) {
+        let Planes {
+            height,
+            tile_type,
+            shading,
+            angle,
+            ceiling,
+        } = self;
+        w.put(height);
+        w.put(tile_type);
+        w.put(shading);
+        w.put(angle);
+        // Empty off-cave; the length prefix carries that by itself.
+        w.put(ceiling);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Planes {
+            height: r.get()?,
+            tile_type: r.get()?,
+            shading: r.get()?,
+            angle: r.get()?,
+            ceiling: r.get()?,
+        })
+    }
+}
+
+impl Snap for Ent {
+    fn put(&self, w: &mut Writer) {
+        let Ent {
+            rand,
+            max_life,
+            act_life,
+            flags,
+            next20,
+            prev22,
+            id24,
+            f38,
+            f40,
+            f46,
+            f50,
+            f68,
+            f69,
+            mail,
+            f144,
+            f26,
+            f28,
+            f30,
+            f32,
+            f44,
+            f34,
+            f36,
+            f52,
+            f54,
+            f56,
+            f58,
+            f59,
+            f63,
+            class64,
+            model65,
+            f66,
+            f67,
+            tick70,
+            f71,
+            x,
+            y,
+            z,
+            f78,
+            f80,
+            f82,
+            f84,
+            type86,
+            frame88,
+            frames89,
+            f126,
+            f128,
+            f130,
+            f136,
+            f140,
+            f146,
+            row156,
+            thing_slot,
+            dest_x,
+            dest_y,
+            site_z,
+        } = self;
+        w.put(rand);
+        w.put(max_life);
+        w.put(act_life);
+        w.put(flags);
+        w.put(next20);
+        w.put(prev22);
+        w.put(id24);
+        w.put(f38);
+        w.put(f40);
+        w.put(f46);
+        w.put(f50);
+        w.put(f68);
+        w.put(f69);
+        w.put(mail);
+        w.put(f144);
+        w.put(f26);
+        w.put(f28);
+        w.put(f30);
+        w.put(f32);
+        w.put(f44);
+        w.put(f34);
+        w.put(f36);
+        w.put(f52);
+        w.put(f54);
+        w.put(f56);
+        w.put(f58);
+        w.put(f59);
+        w.put(f63);
+        w.put(class64);
+        w.put(model65);
+        w.put(f66);
+        w.put(f67);
+        w.put(tick70);
+        w.put(f71);
+        w.put(x);
+        w.put(y);
+        w.put(z);
+        w.put(f78);
+        w.put(f80);
+        w.put(f82);
+        w.put(f84);
+        w.put(type86);
+        w.put(frame88);
+        w.put(frames89);
+        w.put(f126);
+        w.put(f128);
+        w.put(f130);
+        w.put(f136);
+        w.put(f140);
+        w.put(f146);
+        w.put(row156);
+        w.put(thing_slot);
+        w.put(dest_x);
+        w.put(dest_y);
+        w.put(site_z);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        // A full literal, NOT `..Default::default()` — struct-update
+        // syntax would make a forgotten field compile silently, which
+        // is the entire failure mode this codec is shaped to prevent.
+        Ok(Ent {
+            rand: r.get()?,
+            max_life: r.get()?,
+            act_life: r.get()?,
+            flags: r.get()?,
+            next20: r.get()?,
+            prev22: r.get()?,
+            id24: r.get()?,
+            f38: r.get()?,
+            f40: r.get()?,
+            f46: r.get()?,
+            f50: r.get()?,
+            f68: r.get()?,
+            f69: r.get()?,
+            mail: r.get()?,
+            f144: r.get()?,
+            f26: r.get()?,
+            f28: r.get()?,
+            f30: r.get()?,
+            f32: r.get()?,
+            f44: r.get()?,
+            f34: r.get()?,
+            f36: r.get()?,
+            f52: r.get()?,
+            f54: r.get()?,
+            f56: r.get()?,
+            f58: r.get()?,
+            f59: r.get()?,
+            f63: r.get()?,
+            class64: r.get()?,
+            model65: r.get()?,
+            f66: r.get()?,
+            f67: r.get()?,
+            tick70: r.get()?,
+            f71: r.get()?,
+            x: r.get()?,
+            y: r.get()?,
+            z: r.get()?,
+            f78: r.get()?,
+            f80: r.get()?,
+            f82: r.get()?,
+            f84: r.get()?,
+            type86: r.get()?,
+            frame88: r.get()?,
+            frames89: r.get()?,
+            f126: r.get()?,
+            f128: r.get()?,
+            f130: r.get()?,
+            f136: r.get()?,
+            f140: r.get()?,
+            f146: r.get()?,
+            row156: r.get()?,
+            thing_slot: r.get()?,
+            dest_x: r.get()?,
+            dest_y: r.get()?,
+            site_z: r.get()?,
+        })
+    }
+}
+
+impl Snap for Rec {
+    fn put(&self, w: &mut Writer) {
+        let Rec {
+            class,
+            model,
+            x,
+            y,
+            dis_id,
+            swi_sz,
+            swi_id,
+            parent,
+            child,
+            par3,
+        } = self;
+        w.put(class);
+        w.put(model);
+        w.put(x);
+        w.put(y);
+        w.put(dis_id);
+        w.put(swi_sz);
+        w.put(swi_id);
+        w.put(parent);
+        w.put(child);
+        // `par3` is hash-EXCLUDED but very much real state, so it is
+        // saved. This is the class of field a hash-derived codec
+        // would have dropped.
+        w.put(par3);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Rec {
+            class: r.get()?,
+            model: r.get()?,
+            x: r.get()?,
+            y: r.get()?,
+            dis_id: r.get()?,
+            swi_sz: r.get()?,
+            swi_id: r.get()?,
+            parent: r.get()?,
+            child: r.get()?,
+            par3: r.get()?,
+        })
+    }
+}
+
+impl Snap for SoundEvent {
+    fn put(&self, w: &mut Writer) {
+        let SoundEvent {
+            id,
+            pos,
+            tag,
+            player,
+        } = self;
+        w.put(id);
+        w.put(pos);
+        w.put(tag);
+        w.put(player);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(SoundEvent {
+            id: r.get()?,
+            pos: r.get()?,
+            tag: r.get()?,
+            player: r.get()?,
+        })
+    }
+}
+
+impl Snap for PalFlash {
+    fn put(&self, w: &mut Writer) {
+        let PalFlash { row, ticks } = self;
+        w.put(row);
+        w.put(ticks);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(PalFlash {
+            row: r.get()?,
+            ticks: r.get()?,
+        })
+    }
+}
+
+impl Snap for Mc2PlayerDebuffs {
+    fn put(&self, w: &mut Writer) {
+        let Mc2PlayerDebuffs { slow, stun } = self;
+        w.put(slow);
+        w.put(stun);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2PlayerDebuffs {
+            slow: r.get()?,
+            stun: r.get()?,
+        })
+    }
+}
+
+/// Newtypes over one field: the wrapper adds a hash policy, never a
+/// wire shape.
+macro_rules! snap_newtype {
+    ($($t:ty),* $(,)?) => {$(
+        impl Snap for $t {
+            fn put(&self, w: &mut Writer) {
+                w.put(&self.0);
+            }
+            fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+                Ok(Self(r.get()?))
+            }
+        }
+    )*};
+}
+
+snap_newtype!(
+    SlotGens,
+    Mc2LifeScale,
+    NightShade,
+    Mc2Ord,
+    Mc2XpMail,
+    Mc2StealMail,
+    Mc2CastleResearch,
+);
+
+impl<const TAG: u8> Snap for Mc2Quiet<TAG> {
+    fn put(&self, w: &mut Writer) {
+        w.put(&self.0);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Self(r.get()?))
+    }
+}
+
+impl<const TAG: u8> Snap for Mc2SlotMap<TAG> {
+    fn put(&self, w: &mut Writer) {
+        w.put(&self.0);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Self(r.get()?))
+    }
+}
+
+impl Gen {
+    /// The geometry a restore cannot paper over: pool and table sizes
+    /// renumber every slot handle in the stream if they differ.
+    pub(crate) fn snap_identity(&self, w: &mut Writer) {
+        w.put(&self.chassis.pool_slots);
+        w.put(&self.chassis.level_table_slots);
+        w.put(&self.chassis.bucket_models);
+        w.put(&self.chassis.win_streak_ticks);
+        w.put(&self.chassis.awake_gate_sq);
+        w.put(&self.chassis.ent_rand_width);
+        w.put(&self.verbs);
+        w.put(&self.ent.len());
+        w.put(&self.t.height.len());
+        w.put(&(!self.t.ceiling.is_empty()));
+    }
+
+    pub(crate) fn snap_check_identity(&self, r: &mut Reader) -> Result<(), SnapshotError> {
+        r.expect("chassis.pool_slots", self.chassis.pool_slots)?;
+        r.expect("chassis.level_table_slots", self.chassis.level_table_slots)?;
+        r.expect("chassis.bucket_models", self.chassis.bucket_models)?;
+        r.expect("chassis.win_streak_ticks", self.chassis.win_streak_ticks)?;
+        r.expect("chassis.awake_gate_sq", self.chassis.awake_gate_sq)?;
+        r.expect("chassis.ent_rand_width", self.chassis.ent_rand_width)?;
+        r.expect("verbs", self.verbs)?;
+        r.expect("pool size", self.ent.len())?;
+        r.expect("terrain size", self.t.height.len())?;
+        r.expect("cave ceiling", !self.t.ceiling.is_empty())?;
+        Ok(())
+    }
+
+    pub(crate) fn snap_write(&self, w: &mut Writer) {
+        let Gen {
+            t,
+            // Level-package data, re-supplied by the caller from the
+            // reloaded bundle rather than carried in the save.
+            assets: _,
+            retile: _,
+            map_entity,
+            ent,
+            slot_gen,
+            free,
+            rand,
+            pseudo,
+            spawn_count,
+            player_mail,
+            player_damage,
+            erupting,
+            plume,
+            player_knock,
+            mc2_debuffs,
+            rival_ents,
+            mc2_life_scale,
+            player_aggro,
+            player_invisible,
+            player_rebound,
+            kills,
+            shots,
+            hits,
+            player_danger,
+            banked_houses,
+            castle_alert,
+            player_alert,
+            balloon_alert,
+            // Hash-SILENT always (presentation), so nothing in the
+            // acceptance test would notice this being dropped — the
+            // `slot_gen` class of field. Saved because it is still
+            // state: a save taken mid-flash restores mid-flash.
+            pal_flash,
+            exhausted,
+            // Fixed at construction and identity-checked above; the
+            // `&'static [u8]` inside `chassis` is why they cannot
+            // simply ride along.
+            chassis: _,
+            verbs: _,
+            verb_fallbacks,
+            misfits,
+            sounds,
+            terrain_dirty,
+            mc2_night_shade,
+            mc2_spawn_ord,
+            mc2_player_drain,
+            mc2_scrolls,
+            mc2_spell_tokens,
+            mc2_cast_xp,
+            mc2_steal_mail,
+            mc2_aura_claim,
+            mc2_wanted,
+            mc2_rebound_precise,
+            mc2_allied,
+            mc2_castle_research,
+        } = self;
+        w.put(t);
+        w.put(map_entity);
+        w.put(ent);
+        w.put(slot_gen);
+        // `free` is saved VERBATIM and never rebuilt from occupancy:
+        // its ORDER is the pool economy (allocation pops the stack),
+        // so a rebuilt stack would re-order future spawns even though
+        // the set of free slots matched.
+        w.put(free);
+        w.put(rand);
+        w.put(pseudo);
+        w.put(spawn_count);
+        w.put(player_mail);
+        w.put(player_damage);
+        w.put(erupting);
+        w.put(plume);
+        w.put(player_knock);
+        w.put(mc2_debuffs);
+        w.put(rival_ents);
+        w.put(mc2_life_scale);
+        w.put(player_aggro);
+        w.put(player_invisible);
+        w.put(player_rebound);
+        w.put(kills);
+        w.put(shots);
+        w.put(hits);
+        w.put(player_danger);
+        w.put(banked_houses);
+        w.put(castle_alert);
+        w.put(player_alert);
+        w.put(balloon_alert);
+        w.put(pal_flash);
+        w.put(exhausted);
+        w.put(verb_fallbacks);
+        w.put(misfits);
+        w.put(sounds);
+        w.put(terrain_dirty);
+        w.put(mc2_night_shade);
+        w.put(mc2_spawn_ord);
+        w.put(mc2_player_drain);
+        w.put(mc2_scrolls);
+        w.put(mc2_spell_tokens);
+        w.put(mc2_cast_xp);
+        w.put(mc2_steal_mail);
+        w.put(mc2_aura_claim);
+        w.put(mc2_wanted);
+        w.put(mc2_rebound_precise);
+        w.put(mc2_allied);
+        w.put(mc2_castle_research);
+    }
+
+    pub(crate) fn snap_apply(&mut self, r: &mut Reader) -> Result<(), SnapshotError> {
+        self.t = r.get()?;
+        self.map_entity = r.get()?;
+        self.ent = r.get()?;
+        self.slot_gen = r.get()?;
+        self.free = r.get()?;
+        self.rand = r.get()?;
+        self.pseudo = r.get()?;
+        self.spawn_count = r.get()?;
+        self.player_mail = r.get()?;
+        self.player_damage = r.get()?;
+        self.erupting = r.get()?;
+        self.plume = r.get()?;
+        self.player_knock = r.get()?;
+        self.mc2_debuffs = r.get()?;
+        self.rival_ents = r.get()?;
+        self.mc2_life_scale = r.get()?;
+        self.player_aggro = r.get()?;
+        self.player_invisible = r.get()?;
+        self.player_rebound = r.get()?;
+        self.kills = r.get()?;
+        self.shots = r.get()?;
+        self.hits = r.get()?;
+        self.player_danger = r.get()?;
+        self.banked_houses = r.get()?;
+        self.castle_alert = r.get()?;
+        self.player_alert = r.get()?;
+        self.balloon_alert = r.get()?;
+        self.pal_flash = r.get()?;
+        self.exhausted = r.get()?;
+        self.verb_fallbacks = r.get()?;
+        self.misfits = r.get()?;
+        self.sounds = r.get()?;
+        self.terrain_dirty = r.get()?;
+        self.mc2_night_shade = r.get()?;
+        self.mc2_spawn_ord = r.get()?;
+        self.mc2_player_drain = r.get()?;
+        self.mc2_scrolls = r.get()?;
+        self.mc2_spell_tokens = r.get()?;
+        self.mc2_cast_xp = r.get()?;
+        self.mc2_steal_mail = r.get()?;
+        self.mc2_aura_claim = r.get()?;
+        self.mc2_wanted = r.get()?;
+        self.mc2_rebound_precise = r.get()?;
+        self.mc2_allied = r.get()?;
+        self.mc2_castle_research = r.get()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

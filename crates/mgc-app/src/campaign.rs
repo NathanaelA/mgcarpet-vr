@@ -46,7 +46,8 @@ use mgc_sim::mc1::spells::SPELL_COUNT;
 /// complete worlds parked in the campaign index range (multiplayer maps);
 /// 039 is the authentically-broken flat-plateau level. Campaign = indices
 /// 0-49 minus these five = 45 played levels; 50-69 are the multiplayer
-/// pool, excluded by the `< 50` gate in [`is_campaign_level`].
+/// pool, excluded by the [`MC1_CAMPAIGN_LEN`] gate in
+/// [`is_campaign_level`]. **MC1's alone** — HW has no skip table.
 const MC1_BLACKLIST: &[u32] = &[8, 17, 28, 33, 39];
 
 /// MC1 campaign length: indices 0-49 (45 played, after the blacklist).

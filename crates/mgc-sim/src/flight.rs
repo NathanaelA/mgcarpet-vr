@@ -77,7 +77,7 @@
 use crate::engine::features::Gen;
 
 /// Faithful carpet state (the human entity + Type_160 fields we use).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct Mc1State {
     /// Position in engine units (8.8 tiles, wrapping like the
     /// original's 16-bit axes).
@@ -291,7 +291,7 @@ pub fn mc1_move(
 /// explicitly overwrites the generic default with row 104 on cave
 /// maps, row 66 otherwise (EF:33329-32; trace §0.1 — row 59 is the
 /// pre-overwrite default and must NOT be used).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mc2Row {
     /// `word_160_0xa_10`: the climb-ramp band / soft-ceiling offset.
     pub band: i16,
@@ -326,7 +326,7 @@ impl Default for Mc2Row {
 /// The MC2-only carpet channels (trace §5) layered over [`Mc1State`]
 /// — the shared pose/speed/strafe state stays in the MC1 struct so
 /// the renderer/camera derivation is model-agnostic.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct Mc2Ext {
     /// `moveSpeed_0x14C_332` (0..3): the stagger/web SLOW — scales
     /// the pose delta, forward and strafe speed by (4−n)/4. Drives
@@ -633,6 +633,115 @@ pub fn mc2_move(
         }
     }
     moved
+}
+
+// ------------------------------------------------------------ snapshot
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer};
+
+impl Snap for Mc1State {
+    fn put(&self, w: &mut Writer) {
+        let Mc1State {
+            x,
+            y,
+            z,
+            yaw,
+            roll_f,
+            pitch_f,
+            aim_pitch,
+            eff_pitch,
+            act_speed,
+            tgt_speed,
+            strafe,
+            tick_ctr,
+            rand,
+        } = self;
+        w.put(x);
+        w.put(y);
+        w.put(z);
+        w.put(yaw);
+        w.put(roll_f);
+        w.put(pitch_f);
+        w.put(aim_pitch);
+        w.put(eff_pitch);
+        w.put(act_speed);
+        w.put(tgt_speed);
+        w.put(strafe);
+        w.put(tick_ctr);
+        w.put(rand);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc1State {
+            x: r.get()?,
+            y: r.get()?,
+            z: r.get()?,
+            yaw: r.get()?,
+            roll_f: r.get()?,
+            pitch_f: r.get()?,
+            aim_pitch: r.get()?,
+            eff_pitch: r.get()?,
+            act_speed: r.get()?,
+            tgt_speed: r.get()?,
+            strafe: r.get()?,
+            tick_ctr: r.get()?,
+            rand: r.get()?,
+        })
+    }
+}
+
+impl Snap for Mc2Row {
+    fn put(&self, w: &mut Writer) {
+        let Mc2Row {
+            band,
+            clearance,
+            buoyancy,
+        } = self;
+        w.put(band);
+        w.put(clearance);
+        w.put(buoyancy);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2Row {
+            band: r.get()?,
+            clearance: r.get()?,
+            buoyancy: r.get()?,
+        })
+    }
+}
+
+impl Snap for Mc2Ext {
+    fn put(&self, w: &mut Writer) {
+        let Mc2Ext {
+            move_speed,
+            move_speed_ctr,
+            mobilize,
+            mobilize_ctr,
+            add,
+            water_ctr,
+            nudge_latch,
+            row,
+        } = self;
+        w.put(move_speed);
+        w.put(move_speed_ctr);
+        w.put(mobilize);
+        w.put(mobilize_ctr);
+        w.put(add);
+        w.put(water_ctr);
+        w.put(nudge_latch);
+        w.put(row);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2Ext {
+            move_speed: r.get()?,
+            move_speed_ctr: r.get()?,
+            mobilize: r.get()?,
+            mobilize_ctr: r.get()?,
+            add: r.get()?,
+            water_ctr: r.get()?,
+            nudge_latch: r.get()?,
+            row: r.get()?,
+        })
+    }
 }
 
 #[cfg(test)]

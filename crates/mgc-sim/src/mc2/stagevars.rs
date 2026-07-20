@@ -993,3 +993,67 @@ impl World {
 fn abs16(a: u16, b: u16) -> i32 {
     (a.wrapping_sub(b) as i16 as i32).abs()
 }
+
+// ------------------------------------------------------------ snapshot
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer};
+
+impl Snap for Mc2StageVar {
+    fn put(&self, w: &mut Writer) {
+        let Mc2StageVar {
+            kind,
+            flags,
+            chain,
+            cadence,
+            hold_word,
+            hold_subtype,
+            point,
+            watch_template,
+            watch_model,
+            watch_ent,
+            param,
+        } = self;
+        w.put(kind);
+        w.put(flags);
+        w.put(chain);
+        w.put(cadence);
+        w.put(hold_word);
+        w.put(hold_subtype);
+        w.put(point);
+        w.put(watch_template);
+        w.put(watch_model);
+        w.put(watch_ent);
+        w.put(param);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2StageVar {
+            kind: r.get()?,
+            flags: r.get()?,
+            chain: r.get()?,
+            cadence: r.get()?,
+            hold_word: r.get()?,
+            hold_subtype: r.get()?,
+            point: r.get()?,
+            watch_template: r.get()?,
+            watch_model: r.get()?,
+            watch_ent: r.get()?,
+            param: r.get()?,
+        })
+    }
+}
+
+impl Snap for Mc2Held {
+    fn put(&self, w: &mut Writer) {
+        let Mc2Held { ent, slot, timer } = self;
+        w.put(ent);
+        w.put(slot);
+        w.put(timer);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2Held {
+            ent: r.get()?,
+            slot: r.get()?,
+            timer: r.get()?,
+        })
+    }
+}

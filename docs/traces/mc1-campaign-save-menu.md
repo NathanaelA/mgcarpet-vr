@@ -49,11 +49,196 @@ Level decode on load: `var_u16_17 = stored/4 − byte_12CBD0 − byte_12CBD1`
 
 ### B. In-level quicksave `gam%05d.dat` + `map%05d.dat`, slot 199 — full snapshot
 
-ALT+S / ALT+L (`:19976-20006`). `gam` = raw dump of entire
-`Type_str_AE400_AE3F0` (`sub_3E750_3EA90` `:49525-49530`; read preserves
-`var_0`/`set` `:49480-49496`); `map` = 4×64 KB terrain planes + 128 KB
-entityIndex + 4802 B `byte_B5D40` (`:49545-49579`). `"movie/gam%05d.dat"`
-variant = demo recording. Retail RAM layout — not a documentable subset.
+Raw RAM image, no serialisation. **Not portable and not readable by us** —
+absolute 32-bit pointers throughout. Documented for behaviour, not for
+interop; the port's own design is `docs/archive/DESIGN-SAVES.md`.
+
+**Binding.** ALT+S / ALT+L, no menu path. `ProcessKeys_16B00` (`:19931`),
+reached per frame via `sub_17C20` (`:20292`, called `:20336`) from
+`DrawAndEventsInGame_34530_348F0` (`:41667-41668`). Alt test =
+`pressedKeys_12EEF0_12EEE0[56]` (`:19976`, scancode 0x38 = LEFT Alt);
+`case 0x1f` = S → save (`:19979`), `case 0x26` = L → load (`:19995`). Both
+arms zero `lastPressedKey` (`:19993`, `:20014`), which makes the second
+Alt+S arm at `:20379-20381` (`MakeControlCommand_188A0(10,0)`) **dead** —
+control commands 10/11 (`:48600-48609`) fire only from a demo stream.
+
+**Slot.** Format strings `"c:/CARPET.CD/%s/gam%05d.dat"` (`:49528`) and
+`map%05d.dat` (`:49576`), but ALT+S/L pass the literal **199**
+(`:19985-19986`, `:19998-19999`). ONE global slot — not per-level, not
+per-campaign-slot, no rotation. Hard-coded absolute DOS path with no
+fallback (unlike the level loader, `:49289-49302`). `"movie/gam%05d.dat"`
+(`:49348`, `:49416`, `:49571`) = demo recording: same code, same layout,
+different directory; snapshots at frame 0 (`:49651-49654`) and restores on
+playback (`:49609-49612`). ALT+S/L never touch it.
+
+**No sharing with §A.** Disjoint filenames, disjoint code; an in-level save
+writes no progression bytes. Only incidental overlap: the 24-byte persistent
+spell block §A stores lives *inside* the dump, so it rides along.
+
+#### `gam00199.dat` — one `fwrite`, 232,713 B
+
+`sub_3E750_3EA90` (`:49525-49530`) → `sub_62E60_63370` (`:74409`) = create/
+truncate + single `fwrite` + close. Size = `sizeof(Type_str_AE400_AE3F0)`
+(`Basic.h:535` comments `//size 232713`); HW's IDA output renders it as the
+address symbol `byte_38D09` = 0x38D09 = 232713 (`hw:45668`). `#pragma pack(1)`
+(`Basic.h:26`), 32-bit DOS4GW ⇒ 4-byte pointers.
+
+| off | size | field | contents |
+|---|---|---|---|
+| 0 | 4 | `var_0` | mode/pause block — **discarded on load** |
+| 4 | 4 | `rand_4` | **global RNG** (LCG `x = 9377x + 9439`, `:52223`) |
+| 8 | 4 | | local player index (2) + player count (2) |
+| 12 | 28 | `str_12`, `var_u32_32/36/38` | opaque |
+| 40 | 4 | | free-list top |
+| 44 | 532 | `var_u8_44[]` | **sprite/texture bank residency** (529 used, 0/1/2; `sub_593B0_598C0` `:66933-66948`) |
+| 576 | 17 | | music/ambient id, palette/fade, stub |
+| 593 | 4000 | | free-entity **raw pointer stack** — rebuilt on load |
+| 4593 | 4004 | | recycle top + recycle **pointer stack** — rebuilt |
+| 8597 | 36 | `set` | graphics settings — **discarded on load** |
+| 8633 | 544 | | opaque |
+| 9177 | 64 | | 8 × (`axis_3d` + u16) |
+| 9241 | 2033 | | opaque |
+| 11274 | 2049 | `str_11274` | scratch/template player record |
+| **13323** | **16392** | `str_13323[8]` | **per-wizard records, 2049 B each** |
+| 29715 | 80 | | per-player pending control-command slot |
+| **29795** | **164000** | `str_29795[1000]` | **entity pool, 164 B each** |
+| **193795** | **38812** | `str_193795` | decompressed `levels.dat` record for the current level (`:49319`, `:51535`) |
+| 232607 | 106 | `str_232607` | thing count (4) + 96 B per-type census (`:43933-43954`) + **level number @232707** (2) + **tick counter @232709** (4) |
+| | **232713** | | |
+
+Wizard record `TypeStrAE400_13323` = 2049 B (`Basic.h:250-300`): `playIndex`
+@+10 (index into the entity pool), 8×68 B message slots @+28, 33×14 B camera
+keyframe ring @+572, 12 B name @+1046, 48 B chat @+1094, UI-mode byte @+1098,
+then `Type_160 str_1103` (946 B, `Basic.h:159-243`) = the spell/mana column:
+`var_14958_1635_532[24]` (i32 spell ids, −1 = empty), `var_676` (24×u16),
+`var_15198_1875_772[24]`, `var_15222_1899_796[48]`,
+`var_15318_1995_892[24]` (the block §A persists), selected-spell indices
+@+940/+944 (255 = none).
+
+Entity `Type_AE400_29795` = 164 B (`Basic.h:341-412`): `next` **pointer** @0,
+per-entity `rand` @4, maxLife @8, actLife @12, flags @16, id @24, **class
+byte @64** (0 = free slot), sClass/sModel @66/67, position `axis_3d` @72,
+velocity @78, speeds @126/128, **model-table pointer @156**, **owner-record
+pointer @160**. Castles, mounds, creatures, spell effects and players all
+live in this one pool.
+
+#### `map00199.dat` — six `fwrite`s, 398,018 B
+
+`sub_3E8C0_3EC00` (`:49566-49579`), in order; loads mirror exactly
+(`:49545-49563`).
+
+| # | size | global | meaning |
+|---|---|---|---|
+| 1 | 65536 | `mapTerrainType_CC1E0` | 256×256 tile/texture id (`:14951`) |
+| 2 | 65536 | `mapHeightmap_DC1E0` | height (`:14952`) |
+| 3 | 65536 | `mapShading_EC1E0` | shading/lighting (`:14953`) |
+| 4 | 65536 | `mapAngle_FC1E0` | tile angle (low 3 bits = corner class, bit 7 = locked) (`:14955`) |
+| 5 | 131072 | `mapEntityIndex_10C1E0` | **`int16`** per-tile entity index (`:14957`) |
+| 6 | 4802 | `byte_B5D40` | `char[2401][2]` auto-tile LUT, 7⁴ corner tuples → (type, angle) (`:14863`, used `:41233-41236`) |
+
+Block 6 is **derived**, rebuilt at level gen by `sub_32560` (`:39947`, fill
+`:40151-40178`) — saved anyway.
+
+**Total per save: 232,713 + 398,018 = 630,731 B.**
+
+#### Sequences
+
+Save (`:19979-19994`): snapshot sprite banks `sub_593B0_598C0` (`:19982`) ·
+stash level number into `+232707` (`:19983`) and tick counter
+`dword_AC5D4` into `+232709` (`:19984`) — both live in the *other*, unsaved
+global · write gam (`:19985`) · write map (`:19986`) · rebuild free/recycle
+stacks (`:19987-19988`) · toast 100 ticks (`:19989-19991`).
+
+Load (`:19995-20014`): `sub_3E690_3E9D0(199)` (`:49459`) = existence probe
+(`:49462`) → stash `var_0` + `set` (`:49466-49469`) → read the whole file
+**straight over the live struct** (`:49492`; `RncUnpack_62B60_63070` no-ops
+unless the first 4 bytes are `RNC\x01`, `:73665-73667`) → restore `var_0` +
+`set` (`:49493-49494`) → pointer fixups `sub_416B0` (`:49508`) → rebuild
+stacks (`:49515-49516`) · read map (`:19999`) · restore level number
+(`:20000`) and tick (`:20001`) · re-sync sprite banks `sub_59420_59930`
+(`:20002`, `:66959`) · reset input idle baseline `FlvInitSet_356E0_35AA0`
+(`:20003`) · toast (`:20004-20006`).
+
+Snapshot point is a clean **inter-tick boundary**: input runs at `:41668`,
+the sim tick at `:41677-41688`.
+
+#### Fixups and rebuilds
+
+`sub_416B0` (`:52152-52188`; HW `sub_419F0` `hw:48208-48240`) is a genuine
+pointer-rebasing pass, two loops:
+1. Owner relink, per player: `str_29795[str_13323[i].playIndex].+160 =
+   &str_13323[i].str_1103` (`:52173`, `hw:48222`).
+2. Model-table rebase, every entity with class byte ≠ 0: delta between the
+   *expected* and *saved* `+156` of the local player's carpet, applied to
+   all. HW shows it unobscured (`hw:48232-48237`); anchor `unk_99018 ==
+   &unk_98F38[7]` (`Type_156` = 32 B, `Basic.h:314-330`), the canonical `+156`
+   for a player carpet (`:44190`). Delta is 0 on a same-build reload; the
+   pass exists to survive a moved table.
+
+`sub_37220_375E0` (`:43825-43859`) walks entities 999→1 and **regenerates
+both 4000-byte pointer stacks**, so the 8 KB of pointers in the file is dead
+weight. The caller then sets the recycle top to −1 (`:49516`, `:19988`),
+discarding what it just built — the same idiom level init uses
+(`:51566-51571`). Entity `next` pointers are stale but every list is rebuilt
+each tick at the top of `sub_41780_41AC0` (`:52216-52260`).
+`mapEntityIndex` holds **indices**, not pointers — no fixup needed.
+
+Not saved at all: the whole second master struct `str_AE408_AE3F8` (only the
+level number is smuggled through `+232707`), the terrain-modification RNG
+`pseudoRand_12C1E0` (`:41238`), sprite/texture bank *contents*, palettes,
+sound/MIDI, mouse. Saved-but-discarded: `var_0` and the 36-byte `set` — so
+reflections/shadows/sky/blur survive a load.
+
+#### No validation — and a retail bug
+
+**No magic, no version, no length field, no checksum in either file, and
+nothing is checked.** The only "validation" is a bare open+close probe
+(`:49535`, `:49586`). `sub_3EEA0_3F1E0` reads `FileLengthBytes` bytes with no
+cap (`:49738-49740`); its return is ignored at `:49492`, and *that* return is
+ignored at the call site `:19998`. Map reads are unchecked too — a truncated
+file silently leaves the previous map's tail in memory. Contrast §A, which
+does validate its magic (`:62021-62023`).
+
+⇒ **ALT+L with no save present still prints "Game loaded."** and executes the
+restore steps anyway, copying the level-start-zeroed `str_232607` (`:51487`)
+over the live level number and tick counter — **silently setting the current
+level to 0**. Identical in HW (`hw:18196-18199`).
+
+#### Gating
+
+Blocked: network game (`var_u8_0 & 0x10`, `:19980`, `:19996`) — but the key
+is still swallowed, so it is a **silent** no-op with no message; demo
+playback (`var_u8_0 & 4` skips all key handling, `:41667`); a control command
+already queued this tick (`:19974`, `:20329`); UI mode 3 = text entry (modes
+0/4 `:20326-20336`, 1 `:20635`, 2 `:20645`, 3 routes to text `:20743`);
+AI-driven local player (`:20316-20321`).
+
+Allowed: **while paused** — `sub_17C20` is deliberately NOT gated on the
+pause bit at `:41667`, while `:41666` and `:41670` are. (This is the retail
+basis for pause-and-rearrange; see `docs/archive/DESIGN-SAVES.md`.) Also allowed
+**while dead** — no life check anywhere in the path.
+
+No confirmation, no slot picker, no overwrite prompt. Feedback is a 100-tick
+toast with hard-coded English literals, **not** from the localisable
+`dword_AE238_AE228[]` table the F1–F9 messages use (`:20090`, `:20135`) — so
+both strings are untranslated in retail.
+
+#### HW delta and port artefacts
+
+**No functional differences.** Verified across binding, gate, slot, paths,
+struct size, map block sizes, preserved fields, fixup algorithm, level/tick
+stash offsets, stack rebuild, bank snapshot/restore, input reset and toast
+text. Port artefacts (not retail): HW's `sub_3E750_3EA90` body is commented
+out `//fix!!!` (`hw:45668`) so the HW port cannot save; remc1's `movie/`
+variant passes `sizeof(pointer)` instead of the struct size (`:49393`), the
+`save/` variant at `:49529` is correct; `Basic.h:290` comments
+`Type_AE400_9177` as "len 48" when it is 8 (only 8 closes the offsets) —
+trust the offset-encoded names, not the comments.
+
+Unresolved (would need retail runs): whether right Alt (E0 38) also lands on
+index 56; behaviour when only one of the two files exists; whether a
+cross-level ALT+L (which restores the embedded 38,812 B level record and
+resets `var_u16_17`) really teleports you back into the saved level.
 
 Save dir created at first run `CreateGameDir_3EC90('C',"\carpet.cd","save")`
 (`:51471`); GOG DOSBox overlays to `cloud_saves/`.

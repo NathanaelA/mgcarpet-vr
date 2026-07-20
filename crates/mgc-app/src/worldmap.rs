@@ -286,7 +286,9 @@ const MAP_BUTTONS: [(MapButton, (f32, f32), usize, usize); 4] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MapAction {
     /// Write the campaign record to this slot under this label.
-    SaveTo { slot: usize, label: String },
+    /// Write the campaign to a slot. Carries NO label: slot names are
+    /// not player-authored (the row is the player name + level).
+    SaveTo { slot: usize },
     /// Load this slot's record.
     LoadFrom(usize),
     /// Confirmed campaign reset (retail sub_7E640 — stays on the map).
@@ -1030,16 +1032,12 @@ impl WorldMap {
                         return true; // only occupied slots load
                     }
                     d.selected = Some(k);
-                    if matches!(d.kind, DialogKind::Save) {
-                        // Select-to-edit (retail copies the label
-                        // into the edit buffer; a fresh slot starts
-                        // empty).
-                        d.edit = Some(if occupied {
-                            d.slots[k].0.clone()
-                        } else {
-                            String::new()
-                        });
-                    }
+                    // No select-to-edit. Retail copied the slot label
+                    // into an edit buffer here, but our slot rows are
+                    // COMPOSED for display (player name + level +
+                    // progress) — seeding an editor from a rendered row
+                    // and writing it back accumulated the suffix on
+                    // every save. Slot names are derived, not authored.
                     self.sounds.push(SND_CLICK);
                     return true;
                 }
@@ -1052,16 +1050,7 @@ impl WorldMap {
             self.sounds.push(SND_CLICK);
             let action = match d.kind {
                 DialogKind::NewGame => Some(MapAction::NewGame),
-                DialogKind::Save => {
-                    let label = d
-                        .edit
-                        .take()
-                        .or_else(|| d.selected.map(|k| d.slots[k].0.clone()));
-                    d.selected.map(|k| MapAction::SaveTo {
-                        slot: k,
-                        label: label.unwrap_or_default(),
-                    })
-                }
+                DialogKind::Save => d.selected.map(|k| MapAction::SaveTo { slot: k }),
                 DialogKind::Load => d
                     .selected
                     .filter(|&k| d.slots[k].1)
@@ -1678,32 +1667,20 @@ mod tests {
         // Still opening: clicks swallowed, nothing selected.
         assert!(wm.click(&save, size, (100.0, 200.0)));
         assert!(wm.dialog.as_ref().unwrap().selected.is_none());
-        // Open it fully, then click slot row 2 (fresh slot): edit
-        // field starts EMPTY.
+        // Open it fully, then click slot row 2 (a fresh slot).
         for _ in 0..40 {
             wm.tick(1.0 / 60.0, &save);
         }
         // Row k=1 at (29+20, 60+32+16) → 640-space (55, 110) → ×2.
         assert!(wm.click(&save, size, (110.0, 224.0)));
         assert_eq!(wm.dialog.as_ref().unwrap().selected, Some(1));
-        assert!(wm.dialog_editing());
-        // Type a label: filter passes alphanumerics/space, max 15.
-        for c in "MY GAME!#".chars() {
-            wm.dialog_char(c);
-        }
-        assert_eq!(wm.dialog.as_ref().unwrap().edit.as_deref(), Some("MY GAME"));
-        wm.dialog_backspace();
-        wm.dialog_enter(); // commit into the row
-        assert_eq!(wm.dialog.as_ref().unwrap().slots[1].0, "MY GAM");
-        // OK ((29+15, 60+200-28) → (44,232) 640-space): the action.
+        // Picking a slot does NOT open a label editor: slot names are
+        // derived (player name + level + progress), not authored.
+        assert!(!wm.dialog_editing());
+        // OK ((29+15, 60+200-28) → (44,232) 640-space): the action,
+        // carrying the slot and nothing else.
         assert!(wm.click(&save, size, (46.0 * 2.0, 240.0 * 2.0)));
-        assert_eq!(
-            wm.take_action(),
-            Some(MapAction::SaveTo {
-                slot: 1,
-                label: "MY GAM".into()
-            })
-        );
+        assert_eq!(wm.take_action(), Some(MapAction::SaveTo { slot: 1 }));
         assert!(wm.dialog.is_none());
     }
 

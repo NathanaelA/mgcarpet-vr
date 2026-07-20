@@ -1790,3 +1790,39 @@ impl World {
         self.g.mc2_spell_tokens.0 = 0;
     }
 }
+
+// ------------------------------------------------------------ snapshot
+
+use crate::snapshot::{Reader, Snap, SnapshotError, Writer};
+
+impl Snap for Mc2Spellbook {
+    fn put(&self, w: &mut Writer) {
+        let Mc2Spellbook {
+            ent,
+            xp_vol,
+            xp_bank,
+            levels,
+            sel,
+            left,
+            right,
+        } = self;
+        w.put(ent);
+        w.put(xp_vol);
+        w.put(xp_bank);
+        w.put(levels);
+        w.put(sel);
+        w.put(left);
+        w.put(right);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(Mc2Spellbook {
+            ent: r.get()?,
+            xp_vol: r.get()?,
+            xp_bank: r.get()?,
+            levels: r.get()?,
+            sel: r.get()?,
+            left: r.get()?,
+            right: r.get()?,
+        })
+    }
+}
