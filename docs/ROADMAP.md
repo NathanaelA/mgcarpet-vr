@@ -111,21 +111,337 @@ Every one turned out to be a TRANSCRIPTION defect, not a design gap.
   - `m12_approach` (`sub_1F120` :25165): C precedence makes the think
     gate `(f63 % v_26) / 2`, not `f63 % (v_26 / 2)`.
   - `m12_approach` (:25168-70): the same pre-decrement `+26` test.
-- STILL OPEN (banked, needs care): our `m12_approach` returns early on
-  patience-out and does a top-of-function target-validity check; retail
-  has neither — its validity test lives INSIDE the think gate and it
-  FALLS THROUGH, so it can still promote to BUILD the same tick.
+- The rest of `m12_approach`'s shape (the early return, the
+  top-of-function validity check, the walk/gate order and the 2-D range
+  test) was banked and has since LANDED — see the audit item below.
 
-**SYSTEMATIC LEAD — the pre/post-decrement class.** Three of the five
-defects above are the same shape: retail does
-`v = field; field = v - 1; if (v <op>)`, testing the PRE-decrement
-value, and our port wrote `field -= 1; if (field <op>)`. Confirmed
-present in `sub_25130` (corpse flame), `sub_1EED0`/`sub_1F120` (settler)
-and — UNFIXED — `sub_25CE0` (`blast_ring_tick`, :28684-86), which
-therefore runs one ring pass fewer than retail. A sweep of every
-per-tick life decrement in the effects/creature families is owed; for a
-short-lived entity this halves its whole output, which is exactly how
-the castle bug hid.
+Three of the five defects above share one error class, promoted to its
+own item below.
+
+### Pre/post-decrement audit — DONE 2026-07-21 (all 70 sites), ACCEPTED
+
+Status: all 11 fixes landed, suite + goldens green, and the player
+ACCEPTED the batch. The **m12 settlers were re-checked in-game and
+confirmed correct** — the one change that could have contradicted an
+earlier player confirmation, since settlers now arrive later (154 -> 241
+ticks) even though the build tile is unchanged. The remaining fixes were
+accepted on the analysis below rather than individually playtested;
+Meteor, Duel, Possess, Lightning and the MC2 lightning trail are the
+ones where a future playtest would still be informative.
+
+**The law, corrected.** Retail sometimes writes
+`v = field; field = v - 1; if (v <op>)` — testing the **PRE**-decrement
+value — and sometimes a genuine post-decrement. The original "retail
+overwhelmingly writes PRE" framing was **wrong**, and a blanket rewrite
+would have introduced bugs. The real rule is per-FAMILY:
+
+- **MC1 class-10 effect handlers are PRE** (`sub_24F60`, `25410`,
+  `25760`, `25A60`, `262D0`, `26360`, `263C0`, `26D20`, `25CE0`, and the
+  already-fixed `25130`). Our port had every one of them backwards.
+- **MC1 class-9 flight/projectile handlers are genuinely POST**
+  (`sub_53DC0`, `53980`, `530C0`, `534C0`, `542B0`, `52B30`). Our port
+  had every one of them RIGHT. Exceptions that are also genuinely post
+  and must not be touched: `sub_29780` (both branches, the wall-of-fire
+  cloud) and `sub_499C0` (class-2 trees).
+- **MC2 `EventsFunctions.cpp` is post-DOMINANT** in the effect/mob
+  region — 19 post forms to 1 pre in the audited span. Only two MC2
+  sites were wrong.
+
+The error therefore correlated with the source file's idiom *shape*,
+not with any individual transcription slip.
+
+**Audited: all 70 decrement-then-test sites.** 11 wrong, 55 correct,
+4 unclear/no retail counterpart. **All 11 fixed:**
+
+| site | entity | effect of the fix |
+| --- | --- | --- |
+| `blast_ring_tick` (`:28685`) | meteor blast, life 9 | 9 -> 10 ring passes, 376 -> 417 fires; the ring was landing 90% of its authored ch0 damage (measured) |
+| `duel_tether_tick` (`:28956`) | life 8 | 9 grip ticks, not 8 — ~11% of the Duel spell's only output |
+| `possess_flash_tick` (`:28433`) | life 8 | 9 ch1 claim ticks — how many balls/houses a Possess converts |
+| `hit_flash_tick` (`:28906`) | effective life 2 | 3 flash ticks, not 2 (33%) |
+| `fire_tick` (`:28068`) | every fire, life 8 | 9 burn ticks |
+| `effect_tick` state 5 (`:28285`) | water splash, life 8 | 9 anim ticks |
+| `steal_flash_tick` (`:28933`) | life 8 | 9 anim ticks |
+| `storm_cloud_tick` (`:29311`) | life 32 | 66 bolts, not 64 |
+| `lava_bomb_tick` (`:28592`) | life 100-163 | one tick of a long flight |
+| `mc2_lightning_node_tick` (EF:58910) | life **1** | 2 ticks, not 1 — every lightning trail node was HALVED |
+| `mc2_roster` m12 roam (EF:14195) | counter 2 or 5 | one more roam period-hit per cycle, every villager |
+| `mana_magnet_tick` (`:31241`) | life 128 | 129 passes |
+
+**`m12_approach` (`sub_1F120` :25164-77) also landed** — the banked
+non-mechanical item. Retail has no top-of-function validity check and
+no early return: the walk runs BEFORE the think gate on every tick, the
+re-aim and the proximity promotion run only INSIDE it, the
+patience/dead-anchor bail FALLS THROUGH (so it can still promote to
+BUILD the same tick), `+146` is never cleared, and the range test is
+the three-axis ROOTED distance (`sub_42340_42680` :52721), not a 2-D
+squared one. Verified on the isolated settler fixture: the build TILE
+is unchanged at (123,107) — the spot the player confirmed — while the
+build tick moves 154 -> 241.
+
+**Goldens re-pinned**, each attributed by probe rather than assumed:
+`flight_tier` (C leg only) and `level_005` GOLDEN + OBSERVABLE (B-E;
+post-init and A hold). OBSERVABLE moving is correct here — these are
+behavior changes, not layout changes.
+
+**Test-fixture lesson.** `worm_chain_dies_from_the_head_...` broke on
+the `fire_tick` fix and it was NOT a regression: the worm is a chaser
+that parks beside the player, and the one-tick phase shift left it
+permanently outside a fixed forward beam (head at full 4600 life after
+30,000 ticks). The fixture now aims at the worm, which is what its own
+assertion was ever about. A positional fixture can fail for reasons
+that have nothing to do with the claim it makes.
+
+### Audit follow-up batch — LANDED 2026-07-21 (castle playtest owed)
+
+The same-transcription-pass items banked by the pre/post audit, worked
+through with the player's ruling on the two that were decisions rather
+than fixes.
+
+**Class-10 flash omissions — FIXED.** Retail bumps `+26` EVERY tick,
+before the life test, at all four flashes (`sub_25760` :28432,
+`sub_262D0` :28905, `sub_26360` :28932, `sub_263C0` :28955); the anim
+step `sub_42510` was also missing from `possess_flash_tick` (:28437) and
+`duel_tether_tick` (:28959), and the class-10 state-5 splash was missing
+its one-shot sound 27 (:28288-91) and retail's early return on the death
+tick (:28294). Verified live by probe: the possess flash's `+26` now
+counts 1..9 across its 9 ticks. `sub_25760` and `sub_263C0` both carry
+remc1's `//SYNCHRONIZED WITH REMC1` marker.
+
+**Castle painter `sub_285C0` — FULL faithful restructure (player ruling).**
+Retail decrements `+26` at the TOP (:30510) and the whole body reads the
+POST value. Four corrections:
+- the flatten divisor IS the counter (:30563); ours read the pre value
+  and added 1, so every ramp step was divided by post + 2;
+- the paint gate is `f26 % 7 == 0 || f26 == 1` (:30646) — post 14/7/1;
+  ours fired at pre 14/7/0, i.e. post 13/6/-1, entirely different ticks;
+- the tick that reads a PRE value of 1 returns WITHOUT working
+  (:30512-16), so the body runs 18 ticks, not 20;
+- the finish is deferred behind a negative idle phase that counts UP,
+  and only the tick reading -1 promotes protection, sets the castle to
+  sub-state 5 and despawns (:30682-84, :30697-709).
+
+The idle length is retail's byte +60, which we do NOT model as a field
+because both writers are known and complementary: :47583 spawns the
+plain painter with +60 = 1 (25-tick idle) and :56490 spawns the
+upgrade-commit painter with +60 = 0 AND the +18 kill bit (:56492). Our
+`flags & 0x10000` therefore selects the branch exactly.
+
+MEASURED (the goldens do not reach the painter, so this was probed
+directly): raising a castle over ground 40 units below its target, the
+ramp was `62,64,...,96,98,100` — flat +2 over 20 ticks — and is now
+`62,64,...,88,91,94,97,100`, 18 ticks with the tail accelerating as the
+divisor shrinks. **The footprint crush stays lethal** (a 17-part worm
+still goes 153,000 -> 0); it simply executes on 18 ticks instead of 20.
+**A castle playtest is owed** — this is the one change that alters
+behavior the player previously certified.
+
+**MC2 roster operator nits — FIXED.** `EF:16517-19` and `EF:16699` are
+exact `== 0` tests and `EF:15890-92` an exact `!= 0`; we had `<= 0` and
+`> 0`. No behavior change today (every counter is seeded positive), but
+the code now matches. Also `EF:16050-65`: retail's m18 case 2 has an
+explicit `case 3:` and a `default: return;` — our `_ =>` catch-all would
+have run the spin-down body for any future sub-state >= 4, so the arm is
+now literal.
+
+**`mc2_mine_tick` — PARTIALLY fixed; the expiry TEARDOWN is now traced.**
+Retail's expiry is post `<= 0` (EF:29842-45); ours was `< 0`, giving the
+mine an extra tick. FIXED.
+
+CORRECTION to an earlier reading in this file's history: retail's
+`byte_0x46_70 = 6` at expiry is NOT an engine action/handler switch.
+In MC2 the dispatch index is `actionIndex_0x45_69` (offset 69, our
+`tick70`); `byte_0x46_70` is offset 70 — our **`f71`** — and for the
+mine it is a PRIVATE sub-state machine switched on inside `sub_3A8B0`
+itself (EF:29881). The MC1 field names are one offset off from MC2's,
+which is what made this look like a class-10 table collision. There is
+no table collision and nothing blocks the port.
+
+The expiry teardown is now PORTED (EF:30043-86):
+sub-state **6** clears the draw flags and (when `byte_0x44_68 == 0`)
+advances to **7** with a 10-tick timer; **7** counts down to **9**;
+**9** SINKS the mine (`z -= 32 * counter`, accelerating) until it meets
+the ground, then spawns a class-10 puff — model **5** over water, model
+**0** over land — and despawns. Sub-states 7 and 9 skip the lifespan
+countdown (EF:29840). The draw-bit clear `&= 0xFF7FFFFE` uses the port's
+established `flags &= !1` idiom (as at `mc2/mobs.rs`, `mc2/tail.rs`);
+retail's bit 23 has no modeled meaning here.
+
+VERIFIED by probe on a 40-tick mine: `f71` walks 6 -> 7 (counting 10..1)
+-> 9, then one puff spawns and the mine despawns, 51 ticks total. The
+sink resolves in a single tick because the mine is linked AT ground
+level (retail links it the same way), so the visible teardown is the
+draw-bit clear, the 10-tick pause, then the puff.
+
+The DETONATION family remains separately OPEN in
+`spell-audit/magic-mine.md` §6 — this changes only what an UNFIRED mine
+does when its lifespan runs out.
+
+The port's proximity scan is our own construction, so its `act_life & 0xF`
+cadence is not comparable to retail's frame counter.
+
+### m9 grounded arm — FIXED + PLAYER-VERIFIED 2026-07-21
+
+Investigated before ruling, as asked. `byte_0x39_57` is not an
+m9-specific flag: it is the standard awake/proximity counter (our `f58`),
+written by the m9 ctor (EF:33948-49, always non-zero) and by the
+per-frame awake pass `sub_68C70`. So retail's grounded phase is fully
+reachable, and the entry condition already matched ours. The bodies did
+not. Restored `sub_20940`'s shape (EF:12357-89):
+
+- **The damage/death head now runs FIRST.** Ours returned before
+  `mc2_state_head`, so **a grounded hive could not take damage or die**.
+  That was a real bug, not a stylistic deviation.
+- The stand-up counts UP toward 0 and only the tick that READS -1 fires
+  `sub_20F80` (EF:12638 — f71 = 0, f26 = 400, sprite 201; our exit was
+  already faithful). Same pre/post family as the audit above.
+- An AWAKE hive arms the 50-tick stand-up and scans NOTHING that tick.
+- An ASLEEP hive parks `f26` at 0 and feeds in place indefinitely —
+  retail never walks a hive no wizard has approached. Ours cycled 400
+  walking ticks + 50 grounded, so hives wandered ~89% of the time and
+  their offspring landed in different places over a level's lifetime.
+
+Net consume rate is roughly preserved either way (~18 per 450 ticks), so
+split rates barely move; what changes is WHERE hives and their offspring
+end up, and that a grounded hive is now killable. This is live content:
+**80 of 165 levels author m9, 4,577 records** (level 065 alone has 515).
+
+`DEVIATIONS.md:140` stays accurate as written — it only ever covered
+WHICH scan the grounded sweep reuses, not whether one runs.
+
+Golden: the MC2 cave fixture re-pinned, GOLDEN (last two checkpoints)
+and OBSERVABLE (last one). OBSERVABLE moving is correct — behavior
+moved. ATTRIBUTED by probe: the magic-mine teardown landed in the same
+batch and moves nothing there.
+
+PLAYER-VERIFIED in-game: hives behave as intended.
+
+REGRESSION TEST LANDED: `mc2_grounded_hive_still_takes_damage`
+(`engine/world.rs` tests) — spawns a real hive via `mc2_spawn_m9` in the
+existing `mc2_flat_world()` harness, parks the player far so it settles
+into the squat, then mails it lethal damage. Proven non-vacuous: delete
+the `mc2_state_head` call from the grounded arm and it fails with "it
+was immune".
+
+The earlier "cannot construct an m9" note was WRONG and cost time — the
+MC2 roster has direct constructors (`mc2_spawn_m9`) and a ready
+`mc2_flat_world()` harness sitting in the Phase-4.3 roster probes. The
+mistake was reaching for MC1's `spawn_creature` (which builds the MC1
+burrower) and `flat_world()` (an MC1 world whose BEHAVIOR table is 31
+rows against MC2's 157). **For MC2 fixtures: use `mc2_flat_world()` +
+`mc2_spawn_*`, never the MC1 helpers.**
+
+### Magic Mine — mostly CLOSED 2026-07-21 (low priority remainder)
+
+Set spell 23 straight end to end. Two fixes have landed; the pacing
+question is unresolved and is the reason this needs its own session.
+
+**LANDED 2026-07-21**
+- **The mine was INVISIBLE** — `(10,78)` was missing from the MC2
+  class-10 draw allowlist (`world.rs::drawable`). It ticked, armed and
+  detonated correctly but exported no pose, so a cast looked like a
+  carrier that flew off and dissolved. Player-reported. NOT a regression:
+  no commit ever had 78 in that list, so the mine has been invisible for
+  as long as it has placed a persistent mine — which is exactly why it
+  "used to work" (the OLD broken behavior, a fireball bursting on
+  contact, was the visible one). Regression assert added to
+  `mc2_magic_mine_places_a_persistent_mine_not_a_fireball` and proven to
+  fail without the fix. **LESSON: entity-counting tests cannot see a
+  missing pose. `count(class, model)` and "the player can see it" are
+  different assertions.**
+- **Expiry**: post `<= 0` (EF:29842-45), and the full teardown chain
+  6 -> 7 -> 9 (draw-bit clear, 10-tick pause, accelerating sink, puff
+  model 5 over water / 0 over land, despawn). Probe-verified.
+
+**LANDED 2026-07-21 (round 2, player retail observations)**
+- **The mine HOVERS.** EF:29862-72: it clamps up out of the ground then
+  floats toward ground + 1024 in +/-48 steps with a 96-unit deadband
+  (gated on `f69 == 0`). Ours sat on the ground because the whole block
+  was missing. Player-observed in retail ("rises to about castle-tower
+  height, same sprite"); probe-verified 3200 -> 4160 and holding.
+  Sub-states 7 and 9 are excluded from this block in retail precisely so
+  the sink is not fought by the float.
+- **A TRIGGERED mine now tears down instead of vanishing** — it hangs,
+  sinks to the ground and goes out in a puff, reusing retail's own
+  expiry chain. Probe-verified end to end: hover 4016 -> trigger ->
+  10-tick hang -> accelerating sink -> puff -> despawn.
+- **THE BLAST NOW REACHES ANYONE.** Player-reported: a wizard right
+  beside a tripped mine took nothing. Cause: `ent_overlap` sums BOTH
+  parties' extents and the mine ctor never set `f80/f82/f84`, so the
+  blast was a POINT — pre-existing, and the 1024 hover made it
+  unmissable. The detonation now opens a 1024 (4-tile) box for the
+  write and restores it afterwards, and SPITS a (9,0) bolt at whatever
+  tripped it (§5 step 4 calls the detonation a *relaunch*, not an area
+  write; the player expected a projectile). Regression test
+  `mc2_magic_mine_blast_reaches_a_neighbouring_wizard`, proven to fail
+  without the fix. Measured 750 damage at 2 tiles = 250 area + 500 bolt.
+  All three DELIBERATE, registered in `DEVIATIONS.md`.
+
+  **FIXTURE TRAP worth remembering: SPAWN GRACE ate the damage.** The
+  first four probe runs read zero and looked like the fix had failed.
+  A freshly built world gives the player grace, and the mine trips ~28
+  ticks in — inside it. The test now burns grace off far from the mine
+  and asserts `vitals().grace == 0` before proving anything.
+
+**CAST PACING — RESOLVED, NOT A BUG.** The player tested the
+delay-after-cast progression against retail and it is FAITHFUL. The
+LABEL_16 duration block is correct as ported; no change needed. (Keep
+the analysis below only as the record of why.)
+
+**RETAIL OBSERVATIONS — the spell is largely broken in retail.** The
+player could not get a retail mine to trigger at all, despite a rival
+wizard flying over it repeatedly, and saw no projectile from mine to
+victim. This CORROBORATES §6 open question 1: `sub_50840` leaves
+`word_0x36_54 = -1` and no writer that sets it was ever pinned — if
+nothing arms it, a retail mine never fires. Ours is therefore MORE
+useful than retail's. Ruling: implement faithfully where cheap, but do
+not sink time into matching a spell nobody can use.
+
+**THE (former) OPEN QUESTION — cast pacing, kept for the record.** The player observes tier 0 casts
+fast, tier 1 slower, tier 2 very slow, and expects that with plenty of
+mana several mines should be placeable in sequence (each merely blocking
+mana REGENERATION). Established so far:
+- The mana gate is NOT the throttle and is faithful: retail EF:60953
+  compares the WIZARD's pool `mana_0x90_144` against the spell's
+  `maxMana_0x8C_140`, and our `mc2_cast_gate` compares `player.mana`
+  against the spell cost. Same test.
+- The throttle is one level up: magic mine (0x17) sits in retail's
+  LABEL_16 band (EF:60946-48), which SKIPS the cast entirely while the
+  spell object's timer `word_0x2E_46` is non-zero, and `sub_5F7B0`
+  (EF:60973) arms that timer from the tier's duration `word_0x30_48`.
+  Longer tier duration ⇒ longer re-cast block. Our port mirrors the
+  shape (`f26 = f28`; blocked while `f26 > 0`).
+- **UNVERIFIED**: whether `sub.word_0x18` is the right duration column
+  per tier, and whether the mine belongs in the LABEL_16 band at all.
+  If retail really allows several simultaneous mines, one of those two
+  is wrong. Get the per-tier numbers (duration, sub_spell, maxManaLimit,
+  cost) via a THROWAWAY internal test — do NOT add a public debug
+  accessor to the shipping crate.
+- This ties directly to `spell-audit/magic-mine.md` §6 open question 3:
+  "Carrier count per cast — `sub_6CAC0` fires on the
+  `word_0x2E_46 == word_0x30_48` tick; believed exactly one mine per
+  cast; verify it does not re-lay while the spell-holder lives." That
+  IS the player's question. Settle it against retail first.
+
+**Still open from `spell-audit/magic-mine.md` §6**
+- `word_0x36_54` / `word_0x34_52` provenance (the armed gate).
+- The exact `sub_6DCA0` detonation blast for spell index 23 — our
+  detonation is an approximation, and the port's proximity SCAN is our
+  own construction (its `act_life & 0xF` cadence is not comparable to
+  retail's frame counter).
+- Retail sets ACTION-adjacent state via `byte_0x46_70`; note this is
+  our `f71`, NOT `tick70` — see the naming trap below.
+- Model-78 vs -78 homing (`sub_67960`), low priority.
+
+**THE NAMING TRAP — cost this session real time, read before starting.**
+Our `Ent` field names come from MC1 offsets, and MC2's equivalents sit
+ONE OFFSET LOWER in the name. MC2 `actionIndex_0x45_69` (offset 69) is
+our `tick70`; MC2 `byte_0x46_70` (offset 70) is our `f71`; the spell
+object's (timer, duration) pair `word_0x2E_46`/`word_0x30_48` is our
+`f26`/`f28`. Reading the NAME instead of the offset produced a confident
+wrong claim (that MC2 action 6 collided with MC1's standing fire, and
+that the teardown was therefore unportable). ALWAYS resolve MC2 fields
+by offset, never by our field name.
 
 ### Saves + in-game menu — LANDED 2026-07-21 (playtest owed)
 - Mid-level save/load and the pause mini-menu, per `archive/DESIGN-SAVES.md`

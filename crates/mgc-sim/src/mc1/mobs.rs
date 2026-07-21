@@ -1687,35 +1687,42 @@ impl Gen {
     /// house; +26 runs down every v_26/2 ticks (target gone or
     /// patience out → wander); inside 0xA00 → BUILD with +26 = 0.
     fn m12_approach(&mut self, i: usize) {
-        let t = self.ent[i].f146 as usize;
-        let valid =
-            t != 0 && t < self.ent.len() && self.ent[t].class64 == 10 && self.ent[t].model65 == 45;
-        if !valid {
-            self.ent[i].f26 = 5;
-            self.ent[i].f146 = 0;
-            self.ent[i].tick70 = 73;
-            return;
-        }
+        // :25164 — the walk runs BEFORE the think gate and on EVERY
+        // tick, on last tick's heading; only the re-aim and the
+        // proximity promotion sit inside the gate.
+        self.creature_move(i);
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
         // :25165 — C precedence makes retail's `f63 % v_26 / 2` read
         // `(f63 % v_26) / 2`, NOT `f63 % (v_26 / 2)`: the think fires
         // whenever the remainder is 0 or 1, i.e. twice as often.
-        if (self.ent[i].f63 as i16) % v26.max(1) / 2 == 0 {
-            // :25168-70 — pre-decrement test, as in m12_wander.
-            let pre = self.ent[i].f26;
-            self.ent[i].f26 = pre - 1;
-            if pre == 0 {
-                self.ent[i].f26 = 5;
-                self.ent[i].f146 = 0;
-                self.ent[i].tick70 = 73;
-                return;
-            }
+        if (self.ent[i].f63 as i16) % v26.max(1) / 2 != 0 {
+            return;
         }
-        let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-        let (bx, by) = (self.ent[t].x, self.ent[t].y);
+        // :25166 — retail indexes the anchor unconditionally; the only
+        // validity test is the class BYTE at +64 being zero (a freed
+        // slot), and it is folded into the patience test below. There
+        // is no top-of-function guard and +146 is never cleared, so a
+        // bailing settler keeps its stale anchor. The bounds clamp is
+        // ours: retail's pool index cannot leave the table.
+        let t = (self.ent[i].f146 as usize).min(self.ent.len() - 1);
+        // :25168-70 — pre-decrement test, as in m12_wander.
+        let pre = self.ent[i].f26;
+        self.ent[i].f26 = pre - 1;
+        if pre == 0 || self.ent[t].class64 == 0 {
+            self.ent[i].f26 = 5;
+            self.ent[i].tick70 = 73;
+            // :25172 — NO return: retail falls through, so the
+            // proximity test below can still promote to BUILD on the
+            // very tick patience ran out.
+        }
+        let (ex, ey, ez) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        let (bx, by, bz) = (self.ent[t].x, self.ent[t].y, self.ent[t].z);
         self.ent[i].f34 = Self::angle_between(ex, ey, bx, by);
-        self.creature_move(i);
-        if Self::dist2_sq(ex, ey, bx, by) < 0xA00 * 0xA00 {
+        // :25176 — sub_42340_42680 (:52721) is a THREE-axis distance,
+        // and the 0xA00 is compared against the rooted value.
+        let dz = bz.wrapping_sub(ez) as i16 as i32;
+        let d3 = Self::dist2_sq(ex, ey, bx, by).wrapping_add(dz.wrapping_mul(dz));
+        if Self::isqrt(d3 as u32) < 0xA00 {
             self.ent[i].f26 = 0;
             self.ent[i].tick70 = 72;
         }

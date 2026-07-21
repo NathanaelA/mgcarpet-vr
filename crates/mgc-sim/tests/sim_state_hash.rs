@@ -131,17 +131,32 @@ fn flight_tier_golden_state_hashes() {
     // settler's ent_rand phase at BUILD therefore shifts, moving where
     // and when it plants. Post-init and A hold in both thrust models;
     // the settler's think only diverges past ~40 ticks.
+    //
+    // Re-pinned again for the rest of sub_1F120's APPROACH shape
+    // (:25164-77): the walk runs before the think gate on every tick,
+    // the re-aim and the proximity promotion run only INSIDE it, the
+    // patience/dead-anchor bail falls through instead of returning,
+    // and the range test is the three-axis rooted distance. Only the
+    // C leg moves — the settler's think diverges past ~40 ticks, as
+    // before. The build SITE is unchanged (tile 123,107); only the
+    // arrival tick moves, 154 -> 241.
+    //
+    // Re-pinned once more for the class-10 effect PRE-decrement batch
+    // (fire, splash, possess/hit/steal flash, duel tether, lava bomb,
+    // storm cloud): every one of these runs a tick longer. Only the
+    // ENHANCED C leg moves — the faithful arrays hold, which is the
+    // evidence that the batch touched effect lifetimes and not flight.
     const FAITHFUL: [u64; 4] = [
         0xb32adc6a3bade6d2, // post-init
         0x8073dd7f4ae812e9, // A: 40 ticks of forward thrust
         0x466cb8ab076b1034, // B: 30 ticks of banked turn + strafe
-        0x650594b2720fbe10, // C: 40 ticks of coast
+        0xe3589b1fbfed33d1, // C: 40 ticks of coast
     ];
     const ENHANCED: [u64; 4] = [
         0x18aad48f24e35375, // post-init
         0x8533aaa5dd796993, // A
         0x79194b5a4173da13, // B
-        0x2cceb09f2e8f83cf, // C
+        0x5aef335e9fd3768e, // C
     ];
     assert_eq!(
         (faithful, enhanced),

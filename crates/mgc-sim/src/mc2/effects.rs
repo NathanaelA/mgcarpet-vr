@@ -254,11 +254,81 @@ impl Gen {
     /// `word_0x36_54` armed gate are untraced (OPEN, magic-mine.md §6);
     /// the port arms after the random delay and delivers a direct ch0
     /// blast scaled by the tier intensity.
+    /// EXPIRY TEARDOWN (EF:30043-86). `byte_0x46_70` is NOT an engine
+    /// action index — MC2 dispatches on `actionIndex_0x45_69` (offset
+    /// 69, our `tick70`) — it is offset 70, our `f71`, and here it is a
+    /// sub-state machine switched on inside `sub_3A8B0` itself
+    /// (EF:29881). A mine whose lifespan runs out enters 6, which
+    /// clears the draw bit and (once `f69` is clear) advances to 7 with
+    /// a 10-tick timer; 7 counts down into 9 with a counter of 3; 9
+    /// SINKS the mine by an accelerating `32 * counter` per tick until
+    /// it meets the ground, then drops a class-10 puff — model 5 over
+    /// water, model 0 over land — and despawns.
     pub(crate) fn mc2_mine_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
-            self.ent[i].flags |= 0x400;
-            return false;
+        // EF:29840-45 — sub-states 7 and 9 skip the lifespan countdown.
+        // The expiry test is post-decrement `<= 0`, and it enters the
+        // teardown rather than despawning; the switch below then runs
+        // sub-state 6 on this SAME tick.
+        if self.ent[i].f71 != 7 && self.ent[i].f71 != 9 {
+            self.ent[i].act_life -= 1;
+            if self.ent[i].act_life <= 0 {
+                self.ent[i].f71 = 6;
+            }
+            // EF:29862-72 — the mine clamps UP out of the ground, then
+            // FLOATS toward ground + 1024 in +/-48 steps with a 96-unit
+            // deadband (gated on f69 == 0). Player-observed in retail:
+            // the mine rises to roughly castle-tower height rather than
+            // resting on the ground, which is where ours sat because
+            // this whole block was missing.
+            let (x, y) = (self.ent[i].x, self.ent[i].y);
+            let g = self.ground_z(x, y);
+            if (self.ent[i].z as i32) < g {
+                self.ent[i].z = g as i16;
+            }
+            let target = g + 1024;
+            let delta = self.ent[i].z as i32 - target;
+            if self.ent[i].f69 == 0 && delta.abs() > 96 {
+                let step = if delta <= 0 { 48 } else { -48 };
+                self.ent[i].z = (self.ent[i].z as i32 + step) as i16;
+            }
+        }
+        match self.ent[i].f71 {
+            // EF:30043-54 — clear the draw bit and wait for f69.
+            6 => {
+                self.ent[i].flags &= !1;
+                if self.ent[i].f69 == 0 {
+                    self.ent[i].f71 = 7;
+                    self.ent[i].f26 = 10;
+                }
+                return false;
+            }
+            // EF:30055-62 — the 10-tick pause before the sink.
+            7 => {
+                self.ent[i].f26 -= 1;
+                if self.ent[i].f26 == 0 {
+                    self.ent[i].f71 = 9;
+                    self.ent[i].f26 = 3;
+                }
+                return false;
+            }
+            // EF:30073-85 — the accelerating sink, then the puff.
+            9 => {
+                self.ent[i].f26 += 1;
+                let step = 32 * self.ent[i].f26 as i32;
+                self.ent[i].z = (self.ent[i].z as i32 - step) as i16;
+                let (x, y) = (self.ent[i].x, self.ent[i].y);
+                let g = self.ground_z(x, y);
+                if self.ent[i].z as i32 >= g {
+                    return false;
+                }
+                self.ent[i].z = g as i16;
+                let model = if self.on_water_pub(x, y) { 5 } else { 0 };
+                let z = self.ent[i].z;
+                self.spawn_effect(model, x, y, z);
+                self.ent[i].flags |= 0x400;
+                return false;
+            }
+            _ => {}
         }
         if self.ent[i].f26 > 0 {
             self.ent[i].f26 -= 1; // arming
@@ -273,9 +343,11 @@ impl Gen {
         };
         // A rival-owned mine triggers on the out-of-pool human; a
         // player-owned mine scans the pool for rival avatars/castles.
-        let mut hit = own != crate::mc1::mobs::PLAYER_TARGET
-            && Self::isqrt(Self::dist2_sq(mx, my, ctx.px, ctx.py) as u32) < 3584;
-        if !hit {
+        // Remember WHICH wizard tripped it — the detonation spits at it.
+        let mut victim = (own != crate::mc1::mobs::PLAYER_TARGET
+            && Self::isqrt(Self::dist2_sq(mx, my, ctx.px, ctx.py) as u32) < 3584)
+            .then_some(crate::mc1::mobs::PLAYER_TARGET);
+        if victim.is_none() {
             for j in 1..self.ent.len() {
                 if j == i {
                     continue;
@@ -290,13 +362,13 @@ impl Gen {
                     continue;
                 }
                 if Self::isqrt(Self::dist2_sq(mx, my, e.x, e.y) as u32) < 3584 {
-                    hit = true;
+                    victim = Some(j as u16);
                     break;
                 }
             }
         }
-        if hit {
-            self.mc2_mine_detonate(i, ctx);
+        if let Some(v) = victim {
+            self.mc2_mine_detonate(i, ctx, v);
         }
         false
     }
@@ -309,16 +381,48 @@ impl Gen {
     /// EF:29979) through the `mc2_cast_xp` mail — the world tick's drain
     /// re-applies `sub_6D8B0`'s own human-only guard, so a rival mine's
     /// award is filtered there (like every other pool-side award site).
-    fn mc2_mine_detonate(&mut self, i: usize, ctx: &MobCtx) {
+    fn mc2_mine_detonate(&mut self, i: usize, ctx: &MobCtx, victim: u16) {
         let (x, y, z, blast, owner) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f44 as u32, e.id24)
         };
         let dmg = blast.saturating_mul(250);
+        // THE BLAST NEEDS A BOX. `ent_overlap` sums BOTH parties'
+        // extents, and the mine ctor never set f80/f82/f84 — so the
+        // blast was a POINT and a wizard standing right beside it took
+        // nothing (player-reported), which the 1024 hover then made
+        // unmissable. Retail's real blast is the untraced `sub_6DCA0`
+        // relaunch (magic-mine.md §6 Q2); 1024 (4 tiles) is our
+        // stand-in. Restored after the write so the box does not
+        // linger through the sink.
+        let saved = {
+            let e = &mut self.ent[i];
+            let s = (e.f80, e.f82, e.f84);
+            e.f80 = 1024;
+            e.f82 = 1024;
+            e.f84 = 1024;
+            s
+        };
         self.area_write(i, 0, dmg, ctx, false, false);
+        {
+            let e = &mut self.ent[i];
+            (e.f80, e.f82, e.f84) = saved;
+        }
+        // ...and it SPITS at whatever tripped it. magic-mine.md §5
+        // step 4 calls the detonation a "relaunch" (`sub_6DCA0`), i.e.
+        // a spell LAUNCH and not a bare area write, and the player
+        // expected a projectile from mine to wizard. The exact family
+        // for spell 23 is OPEN, so we reuse the (9,0) bolt.
+        // DELIBERATE — see docs/DEVIATIONS.md.
+        self.mc2_atk_bolt(i, victim, ctx);
         self.mc2_cast_xp.0.push((owner, 23, 1));
         self.mc2_spawn_big_explosion(x, y, z);
-        self.ent[i].flags |= 0x400;
+        // Instead of vanishing on the spot, hand the spent mine to the
+        // SAME teardown retail runs at lifespan expiry (f71 = 6 -> 7 ->
+        // 9): it hangs a moment, sinks to the ground and goes out in a
+        // puff. The 7/9 states are excluded from the hover block above,
+        // so the sink is not fought by the float.
+        self.ent[i].f71 = 6;
     }
 
     /// `sub_4FE40` (EF:36506) — the (10,34) MC2 TELEPORTER pad

@@ -813,8 +813,13 @@ impl Gen {
     /// `sub_67410` (EF:58906, action 14) — the inert trail-node tick:
     /// pure `life--`, despawn at `< 0`. No flight, no logic.
     pub(crate) fn mc2_lightning_node_tick(&mut self, i: usize) {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // EF:58910-12 — the life test reads the PRE-decrement value.
+        // The spawn seeds life 1, so retail draws the node for TWO
+        // ticks; the post-decrement form drew it for one and halved
+        // every lightning trail.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
         }
     }

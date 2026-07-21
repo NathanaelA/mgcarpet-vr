@@ -269,13 +269,34 @@ fn level_005_golden_state_hashes() {
     // LEVEL, that surplus ring outlived the castle as a flagless
     // stump. Level 005's rivals hold authored castles, so their
     // load-time footprint shrinks by a ring: EVERY layout hash moves.
+    //
+    // Re-pinned for the rest of sub_1F120's APPROACH shape (:25164-77):
+    // the walk runs before the think gate on every tick, the re-aim and
+    // the proximity promotion run only INSIDE it, the patience /
+    // dead-anchor bail falls through instead of returning (so it can
+    // still promote to BUILD the same tick), +146 is never cleared, and
+    // the range test is the three-axis ROOTED distance (sub_42340_42680
+    // :52721), not a 2-D squared one. Settlers therefore arrive later:
+    // on the isolated settler fixture the build tile is UNCHANGED
+    // (123,107) but the build tick moves 154 -> 241. Post-init and A
+    // hold; B-E move, as with every settler re-pin above.
+    //
+    // Re-pinned for the class-10 effect PRE-decrement batch: retail's
+    // whole class-10 family reads the PRE-decrement life (sub_24F60
+    // :28068, sub_25410 :28285, sub_25760 :28433, sub_25A60 :28592,
+    // sub_262D0 :28906, sub_26360 :28933, sub_263C0 :28956, sub_26D20
+    // :29311, sub_25CE0 :28685) while the class-9 FLIGHT family is
+    // genuinely post-decrement. Our port had it backwards at the
+    // class-10 sites and right at the class-9 ones, so every fire,
+    // splash, flash, tether and cloud ran one tick short. B-E move;
+    // post-init and A hold (nothing has died yet at A).
     const GOLDEN: [u64; 6] = [
         0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
         0x06e8a54a916839d7, // A: 32 idle ticks far afield
-        0xc512dff73d9024ac, // B: crater trigger fired + 120 dig ticks
-        0x87818627e43a246c, // C: ambush disposition fired
-        0x597016c35e8fb241, // D: 64 ticks of two-hand fireball combat
-        0x4472a449716db9f6, // E: 100 aftermath ticks
+        0xd1b3764cfd555f74, // B: crater trigger fired + 120 dig ticks
+        0xe63297fee458ef65, // C: ambush disposition fired
+        0x4bc4a5ad748be6a4, // D: 64 ticks of two-hand fireball combat
+        0x77e6851c706681d2, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -295,13 +316,19 @@ fn level_005_golden_state_hashes() {
     // nothing downstream diverges — A-E hold byte-for-byte, which is
     // the evidence that the fix changed the castles' footprint and
     // not the way the level plays.
+    // The m12 APPROACH re-pin and the class-10 PRE-decrement batch BOTH
+    // move OBSERVABLE at B-E, and that is the correct signal: these are
+    // behavior changes, not layout changes. Settlers arrive later, and
+    // every fire, splash, flash, tether and cloud lives one tick longer,
+    // so populations and poses at B-E genuinely differ. Post-init and A
+    // hold — nothing has died and no settler has thought yet.
     const OBSERVABLE: [u64; 6] = [
         0xf67c96de5b515a64, // post-init — the ring of castle terrain
         0x797dd4817a1d1f11, // A — holds (no militia yet)
-        0xd836d3a103feb42d, // B — settler phase + first corpse flames
-        0x86b238bd93390be4, // C
-        0xe6c20017c35b692b, // D
-        0x826867dc463563de, // E
+        0x9e3b27f303c46ab5, // B — settler phase + first corpse flames
+        0x5e3404450ad1b96e, // C
+        0x9b9a0a33788c2a2d, // D
+        0x99cf84c0814e0647, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

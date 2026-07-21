@@ -958,6 +958,60 @@ fn mc2_fools_mana_tier2_retaliates_with_lightning() {
 }
 
 #[test]
+fn mc2_magic_mine_blast_reaches_a_neighbouring_wizard() {
+    // The mine's detonation must actually REACH someone standing next
+    // to it. Player-reported: it did not. `ent_overlap` sums BOTH
+    // parties' extents and the mine ctor never set f80/f82/f84, so the
+    // blast was a POINT — and once the mine started hovering 1024 above
+    // ground (EF:29862-72) even standing on the spot could not overlap
+    // it. The detonation now opens a real blast box and spits a bolt at
+    // whatever tripped it.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    let (cx, cy) = open_spot(&w);
+    // Burn off SPAWN GRACE far from the mine site first — grace absorbs
+    // the blast and makes a working mine look broken.
+    let (fx, fz) = (cx as f32 + 60.5, cy as f32 + 60.5);
+    for _ in 0..400 {
+        let alt = w.ground_height_tiles(fx, fz) + 4.0;
+        w.tick(
+            PlayerPose::from_tiles(fx, alt, fz, 0.0, 0.0, 0.0),
+            PlayerCommand::default(),
+        );
+    }
+    assert_eq!(
+        w.vitals().grace,
+        0,
+        "grace must be gone or this proves nothing"
+    );
+
+    // A RIVAL-owned mine, so the human is a valid victim.
+    assert!(w.debug_mc2_place_mine(cx, cy, 0, 7) != 0, "mine placed");
+    let before = w.player_damage_taken();
+    let (px, pz) = (cx as f32 + 2.5, cy as f32 + 0.5);
+    for _ in 0..300 {
+        let alt = w.ground_height_tiles(px, pz) + 4.0;
+        w.tick(
+            PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0),
+            PlayerCommand::default(),
+        );
+        if w.player_damage_taken() > before {
+            break;
+        }
+    }
+    assert!(
+        w.player_damage_taken() > before,
+        "a wizard two tiles from a tripped mine takes damage"
+    );
+}
+
+#[test]
 fn mc2_magic_mine_places_a_persistent_mine_not_a_fireball() {
     // Magic Mine (23) lands a persistent (10,78) proximity mine ahead
     // of the caster — not a fireball that bursts on first contact. With
@@ -1001,6 +1055,14 @@ fn mc2_magic_mine_places_a_persistent_mine_not_a_fireball() {
         count(&w, 10, 78),
         1,
         "the mine persists with no enemy nearby (no contact-detonate)"
+    );
+    // ...AND IS DRAWN. Player-reported: the mine ticked, armed and
+    // detonated correctly but (10,78) was missing from the MC2 class-10
+    // draw allowlist, so a cast looked like a carrier that flew off and
+    // dissolved. Counting entities cannot see that — only a pose can.
+    assert!(
+        w.live_poses().iter().any(|p| p.type_index == 66),
+        "the placed mine exports a sprite pose (ctor sprite 66)"
     );
 }
 

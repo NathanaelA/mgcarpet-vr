@@ -2805,16 +2805,56 @@ impl Gen {
     }
 
     /// sub_285C0 (:30445), byte70 44: the CASTLE painter — the m42
-    /// event a castle level-up spawns. 20 ticks (counter +26 armed
-    /// to 19 on the first tick); each tick flattens the CUMULATIVE
-    /// footprints of build rows 1..=level toward the event z, paints
-    /// on every 7th counter value and the last, and the finish
-    /// stamps the protection bit over the level footprint and hands
-    /// the castle (f146) to sub-state 5 (:30703-08).
+    /// event a castle level-up spawns. The counter (+26) is armed to
+    /// 19 on the first tick and DECREMENTED AT THE TOP (:30510), so
+    /// the whole body reads the POST value: 18 work ticks (counter
+    /// 18..1), the flatten divisor IS the counter (:30563), and the
+    /// paint fires when `f26 % 7 == 0 || f26 == 1` (:30646), i.e. at
+    /// 14, 7 and 1. The tick that reads a PRE value of 1 returns
+    /// early WITHOUT working (:30512-16) and arms a negative idle
+    /// phase; the counter then counts UP, and the tick that reads -1
+    /// stamps the protection bit over the level footprint, hands the
+    /// castle (f146) to sub-state 5, and despawns (:30697-709).
+    ///
+    /// Measured on a castle raised over ground 40 units below its
+    /// target: the ramp was `62,64,...,96,98,100` — a flat +2 over 20
+    /// ticks (divisor 20..1) — and is now `62,64,...,88,91,94,97,100`,
+    /// 18 ticks with the tail accelerating as the divisor shrinks.
+    /// The footprint crush stays lethal (a 17-part worm still goes
+    /// 153,000 -> 0), it simply executes on 18 ticks instead of 20.
+    ///
+    /// The idle length comes from retail's byte +60, which we do not
+    /// model as a field because both of its writers are known and
+    /// they are complementary: :47583 spawns the plain painter with
+    /// +60 = 1 (a 25-tick idle), and :56490 spawns the upgrade-commit
+    /// painter with +60 = 0 AND the +18 kill bit (:56492). The kill
+    /// bit — our `flags & 0x10000` — therefore selects the branch.
     fn tick_castle_painter(&mut self, i: usize) {
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
             self.ent[i].f26 = 19;
+        }
+        let pre = self.ent[i].f26;
+        if pre <= 0 {
+            // :30682-84 — the negative idle phase counts UP, and only
+            // the tick that READS -1 finishes.
+            self.ent[i].f26 = pre + 1;
+            if pre == -1 {
+                self.finish_castle_painter(i);
+            }
+            return;
+        }
+        self.ent[i].f26 = pre - 1;
+        if pre == 1 {
+            // :30512-16 — no work on this tick: arm the idle phase and
+            // return. The armed (kill-bit) painter carries +60 = 0 and
+            // so finishes on the NEXT tick; the plain one idles 25.
+            self.ent[i].f26 = if self.ent[i].flags & 0x10000 != 0 {
+                -1
+            } else {
+                -25
+            };
+            return;
         }
         let e = self.ent[i];
         let cx = ((e.x as u32 + 128) >> 8) as u8;
@@ -2823,7 +2863,8 @@ impl Gen {
         // Row = level verbatim (retail never clamps it): level 0
         // paints nothing, which is what a bare-flag castle owns.
         let level = e.f71.min(8) as usize;
-        let divisor = (e.f26 as i32 + 1).max(1);
+        // :30563 — the divisor is the POST-decrement counter itself.
+        let divisor = (e.f26 as i32).max(1);
         for r in 1..=level {
             self.flatten_build_row(r, cx, cy, target, divisor);
         }
@@ -2835,33 +2876,38 @@ impl Gen {
         if e.flags & 0x10000 != 0 {
             self.build_footprint_kill(level, cx, cy, e.id24);
         }
-        if e.f26 % 7 == 0 || e.f26 == 0 {
+        // :30646 — retail SKIPS when `f26 % 7 && f26 != 1`.
+        if e.f26 % 7 == 0 || e.f26 == 1 {
             for r in 1..=level {
                 self.paint_build_row(r, cx, cy);
             }
         }
-        self.ent[i].f26 -= 1;
-        if self.ent[i].f26 < 0 {
-            // Finish (:30697-707): PROMOTE pending protection — only
-            // tiles carrying bit 0x08 flip to 0x80; unpainted cells of
-            // the RLE footprint stay unprotected.
-            let def = self.assets.build_tab[level % self.assets.build_tab.len()];
-            let x0 = cx.wrapping_sub((def.w >> 1) as u8);
-            let y0 = cy.wrapping_sub((def.h >> 1) as u8);
-            for dy in 0..def.h {
-                for dx in 0..def.w {
-                    let t = tile(x0.wrapping_add(dx), y0.wrapping_add(dy));
-                    if self.t.angle[t] & 8 != 0 {
-                        self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
-                    }
+    }
+
+    /// The castle painter's finish (:30697-709): PROMOTE pending
+    /// protection — only tiles carrying bit 0x08 flip to 0x80;
+    /// unpainted cells of the RLE footprint stay unprotected.
+    fn finish_castle_painter(&mut self, i: usize) {
+        let e = self.ent[i];
+        let cx = ((e.x as u32 + 128) >> 8) as u8;
+        let cy = ((e.y as u32 + 128) >> 8) as u8;
+        let level = e.f71.min(8) as usize;
+        let def = self.assets.build_tab[level % self.assets.build_tab.len()];
+        let x0 = cx.wrapping_sub((def.w >> 1) as u8);
+        let y0 = cy.wrapping_sub((def.h >> 1) as u8);
+        for dy in 0..def.h {
+            for dx in 0..def.w {
+                let t = tile(x0.wrapping_add(dx), y0.wrapping_add(dy));
+                if self.t.angle[t] & 8 != 0 {
+                    self.t.angle[t] = (self.t.angle[t] & 0x77) | 0x80;
                 }
             }
-            let c = self.ent[i].f146 as usize;
-            if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
-                self.ent[c].f59 = 5;
-            }
-            self.ent[i].flags |= 0x400;
         }
+        let c = self.ent[i].f146 as usize;
+        if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
+            self.ent[c].f59 = 5;
+        }
+        self.ent[i].flags |= 0x400;
     }
 
     /// sub_28200 (:30284), byte70 43: the castle ground LEVELER — a
@@ -3784,8 +3830,11 @@ impl Gen {
     /// spell-side state-21 APPROX puller is separate; unify when the
     /// (9,17)→(10,54) chain is traced).
     pub(crate) fn mana_magnet_tick(&mut self, i: usize) {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :31241-43 — PRE-decrement life test: 129 magnet passes over
+        // the 128 life, not 128. Quiet, but the same law.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return;
         }

@@ -297,24 +297,42 @@ fn mc2_cave_behaviors_and_goldens() {
 
     // GOLDEN: pin the checkpoint hashes. Re-pin deliberately when a
     // cave system lands a fidelity fix (document the move in git).
+    //
+    // Re-pinned for the m9 grounded-arm fix (`sub_20940` EF:12357-89):
+    // the damage/death head now runs FIRST (a grounded hive was
+    // unkillable), the stand-up counts UP and only the tick that READS
+    // -1 stands the hive back up, an AWAKE hive arms the 50-tick
+    // stand-up instead of scanning, and an ASLEEP hive parks at 0 and
+    // feeds in place rather than cycling back to a 400-tick walk. This
+    // level authors m9, so its hives move and eat on a different
+    // schedule. The first two checkpoints hold; the last two move.
+    // ATTRIBUTED by probe: the magic-mine teardown landed in the same
+    // batch and moves NOTHING here (identical hashes before and after
+    // it), so this re-pin is m9 alone.
     assert_eq!(
         got,
         vec![
             0xb9ef2aab49926cbcu64,
             0x7a89b38d106e4b85,
-            0xda67b7efcb54c962,
-            0x638e8fb0b8dc2512,
+            0x8622703d123f88c1,
+            0xdcb532dae4b6c65a,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
 
     // The layout-INDEPENDENT companion golden — see state_hash.rs:
     // survives hashed-layout re-pins; moves ONLY with real behavior.
+    //
+    // The m9 grounded-arm fix moves the LAST checkpoint only, and that
+    // is the correct signal: a hive that no wizard has approached now
+    // squats and feeds in place instead of cycling back into a 400-tick
+    // walk, so late-run hive positions genuinely differ. The first
+    // three hold — the divergence needs ~400 asleep ticks to appear.
     const OBSERVABLE: [u64; 4] = [
         0xb0299049353c6c29,
         0x2d60a54a359da557,
         0x1ada7615a38d2848,
-        0xc05c627a6f66b3ba,
+        0x367a0a11830499dc,
     ];
     assert_eq!(
         obs, OBSERVABLE,

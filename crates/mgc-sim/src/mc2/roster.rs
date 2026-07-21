@@ -414,15 +414,48 @@ impl Gen {
                     }
                 }
                 if self.ent[i].f71 != 0 {
-                    // sub_20940 — the grounded variant (:12291):
-                    // negative countdown, then the consume sweep
-                    // (deliberate: the mirror shares the seek path).
-                    self.ent[i].f26 -= 1;
-                    if self.ent[i].f26 <= -50 {
-                        self.mc2_set_sprite(i, 201);
-                        self.ent[i].f71 = 0;
-                        self.ent[i].f26 = 400;
+                    // sub_20940 (EF:12291) — the GROUNDED variant.
+                    //
+                    // The damage/death head runs FIRST and
+                    // short-circuits, exactly as in the walking arm
+                    // (EF:12357-75). Omitting it made a grounded hive
+                    // unkillable.
+                    match self.mc2_state_head(i) {
+                        1 => {
+                            self.ent[i].f146 = self.ent[i].f40;
+                            self.ent[i].tick70 = M9_BASE + 2; // action 74
+                            return;
+                        }
+                        2 => {
+                            self.ent[i].tick70 = M9_BASE + 4; // action 76
+                            return;
+                        }
+                        _ => {}
                     }
+                    // EF:12377-84 — the stand-up counts UP toward 0 and
+                    // only the tick that READS -1 fires sub_20F80
+                    // (EF:12638: f71 = 0, f26 = 400, sprite 201). No
+                    // consume sweep runs during it.
+                    let v7 = self.ent[i].f26;
+                    if v7 < 0 {
+                        self.ent[i].f26 = v7 + 1;
+                        if v7 == -1 {
+                            self.mc2_set_sprite(i, 201);
+                            self.ent[i].f71 = 0;
+                            self.ent[i].f26 = 400;
+                        }
+                        return;
+                    }
+                    // EF:12385-89 — an AWAKE hive arms the 50-tick
+                    // stand-up and scans nothing this tick. The player
+                    // being near is what stands the hive back up.
+                    if self.ent[i].f58 != 0 {
+                        self.ent[i].f26 = -50;
+                        return;
+                    }
+                    // Asleep: f26 stays parked at 0, so the hive squats
+                    // and feeds in place indefinitely — retail never
+                    // walks a hive that no wizard has approached.
                     let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
                     if self.ent[i].f63 as i16 % period == 0 {
                         self.m9_consume_scan(i);
@@ -650,8 +683,15 @@ impl Gen {
                         let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1) as u8;
                         if self.ent[i].f63 % period == 0 {
                             self.mc2_wander_turn(i);
-                            self.ent[i].f26 -= 1;
-                            if self.ent[i].f26 <= 0 {
+                            // :14195-99 — the roam counter test reads
+                            // the PRE-decrement value and compares
+                            // `== 0`, so the villager spends one MORE
+                            // period-hit roaming than the post-form
+                            // allows (the ctor's 2 buys three hits,
+                            // the state re-entries' 5 buys six).
+                            let pre = self.ent[i].f26;
+                            self.ent[i].f26 = pre - 1;
+                            if pre == 0 {
                                 self.ent[i].tick70 = M12_BASE + 3;
                                 self.ent[i].f26 = 1;
                             }
@@ -1811,7 +1851,8 @@ impl Gen {
                     self.m18_timer(i, 0, 0);
                 } else {
                     self.ent[i].f26 -= 1;
-                    if self.ent[i].f26 > 0 {
+                    // EF:15890-92 — retail tests the post value for `!= 0`.
+                    if self.ent[i].f26 != 0 {
                         if self.ent[i].f58 != 0 {
                             let d = self.mc2_rand(i);
                             if d & 1 == 0
@@ -1889,7 +1930,12 @@ impl Gen {
                             self.m18_timer(i, 2, 3);
                         }
                     }
-                    _ => {
+                    // EF:16050-63 — retail's case 3 is EXPLICIT and its
+                    // `default:` RETURNS. Nothing seeds a sub-state past
+                    // 3 today, so a catch-all was equivalent; keep the
+                    // arm literal so a future sub-state cannot silently
+                    // inherit the spin-down body.
+                    3 => {
                         self.ent[i].f26 -= 1;
                         if self.ent[i].f26 < 0 {
                             self.m18_timer(i, 1, 0);
@@ -1899,6 +1945,7 @@ impl Gen {
                             self.ent[i].f34 = yaw;
                         }
                     }
+                    _ => return, // EF:16065 — `default: return;`
                 }
             }
             3 => self.m18_timer(i, 0, 0), // :16074 — re-enter roam
@@ -2133,7 +2180,8 @@ impl Gen {
                 _ => {
                     // 8/9 — the dive-melee (:16542-63).
                     self.ent[i].f26 -= 1;
-                    if self.ent[i].f26 <= 0 {
+                    // EF:16517-19 — retail tests the post value for `== 0`.
+                    if self.ent[i].f26 == 0 {
                         self.ent[i].f71 = 0;
                         break;
                     }
@@ -2249,7 +2297,8 @@ impl Gen {
                         self.ent[i].f126 = 2 * self.ent[i].f128; // 64
                         let hit = self.mc2_chase_attack(i, M20_BASE, ctx, Self::mc2_atk_melee_1024);
                         self.ent[i].f26 -= 1;
-                        if hit || self.ent[i].f26 <= 0 {
+                        // EF:16699 — retail is `if (!(--f26))`, an exact `== 0`.
+                        if hit || self.ent[i].f26 == 0 {
                             self.ent[i].f71 = 0;
                             self.ent[i].f126 = self.ent[i].f128;
                         }
@@ -2257,7 +2306,8 @@ impl Gen {
                     _ => {
                         let hit = self.mc2_chase_attack(i, M20_BASE, ctx, Self::mc2_atk_melee_1024);
                         self.ent[i].f26 -= 1;
-                        if hit || self.ent[i].f26 <= 0 {
+                        // EF:16699 — retail is `if (!(--f26))`, an exact `== 0`.
+                        if hit || self.ent[i].f26 == 0 {
                             self.ent[i].f71 = 0;
                             self.ent[i].f126 = self.ent[i].f128;
                         }

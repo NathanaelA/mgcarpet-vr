@@ -2081,8 +2081,13 @@ impl Gen {
     /// friction. Slope roll APPROX: central-difference gradient in
     /// place of sub_41F50's table.
     fn lava_bomb_tick(&mut self, i: usize) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28592-94 — the life test reads the PRE-decrement value: the
+        // whole class-10 effect family is pre-decrement in retail (the
+        // class-9 flight handlers genuinely are not), so this runs one
+        // more tick than the post-decrement form allows.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
@@ -2187,8 +2192,11 @@ impl Gen {
             return false;
         }
         self.move_relink(i, x, y, g.wrapping_add(1024));
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :29311-13 — PRE-decrement life test, as across the whole
+        // class-10 effect family: 33 bolt ticks, not 32.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
@@ -2224,11 +2232,21 @@ impl Gen {
     /// claim broadcast every tick of its 8-tick life over the 512
     /// extents; balls and built houses consume the SENDER field.
     fn possess_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28433-36 — the life test reads the PRE-decrement value: the
+        // whole class-10 effect family is pre-decrement in retail (the
+        // class-9 flight handlers genuinely are not), so this runs one
+        // more tick than the post-decrement form allows.
+        // :28432 — retail bumps +26 every tick, BEFORE the life test, so
+        // it counts even on the tick the flash dies.
+        self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
+        // :28437 — the anim step runs before the ch1 write.
+        self.anim_advance(i);
         let amt = self.ent[i].f44 as u32;
         self.area_write(i, 1, amt, ctx, false, false);
         false
@@ -2662,11 +2680,23 @@ impl Gen {
             1 => self.spreader_tick(i),
             6 => self.standing_fire_tick(i, ctx),
             5 => {
-                self.ent[i].act_life -= 1;
-                if self.ent[i].act_life < 0 {
+                // :28285-87 — PRE-decrement life test (class-10
+                // family): the splash animates 9 ticks, not 8.
+                let life = self.ent[i].act_life;
+                self.ent[i].act_life = life - 1;
+                if life < 0 {
+                    // :28294 — retail frees and returns here: no anim
+                    // step and no sound on the death tick.
                     self.ent[i].flags |= 0x400;
+                    return false;
                 }
                 self.anim_advance(i);
+                // :28288-91 — the one-shot splash sound, latched on the
+                // same `& 2` bit the rest of the family uses.
+                if self.ent[i].flags & 2 == 0 {
+                    self.ent[i].flags |= 2;
+                    self.snd(27, i);
+                }
                 false
             }
             12 => self.possess_flash_tick(i, ctx),
@@ -2700,11 +2730,23 @@ impl Gen {
     /// (+44 = 200) into it each tick. The victim's intake latches
     /// the CASTER-side pull (:55663-82).
     fn duel_tether_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28956-58 — the life test reads the PRE-decrement value: the
+        // whole class-10 effect family is pre-decrement in retail (the
+        // class-9 flight handlers genuinely are not), so this runs one
+        // more tick than the post-decrement form allows.
+        // :28955 — retail bumps +26 every tick, BEFORE the life test, so
+        // it counts even on the tick the flash dies.
+        self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
+        // :28959 — the anim step. (The victim-tracking transport below
+        // is OURS: retail's sub_263C0 simply broadcasts ch4 over the
+        // tether's own extents and never moves it. See ROADMAP.)
+        self.anim_advance(i);
         let victim = self.ent[i].f146;
         let amt = self.ent[i].f44 as u32;
         if victim == crate::mc1::mobs::PLAYER_TARGET {
@@ -3031,8 +3073,11 @@ impl Gen {
             self.ent[i].f26 -= 1;
             return false;
         }
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28068-70 — PRE-decrement life test (class-10 family): every
+        // fire burns one tick longer than the post form allowed.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
@@ -3149,8 +3194,14 @@ impl Gen {
     /// sub_25CE0 (:28671): the growing fire-ring blast — per-tick ch0
     /// at +44/maxLife, a ring of fires per tick, radius (+2) % 11.
     fn blast_ring_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28685-88 — the life test reads the PRE-decrement value, so the
+        // ring runs one more pass than the post-decrement form allows.
+        // Measured 9 -> 10 passes, 376 -> 417 fires; the per-tick ch0
+        // write is f44/max_life, so the ring was landing 90% of its
+        // authored damage.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
@@ -3197,8 +3248,16 @@ impl Gen {
     /// sub_262D0 (:28898): the bolt hit-flash — one ch0 write and the
     /// thunder-crack 24 (:28911), brief.
     fn hit_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28906-08 — the life test reads the PRE-decrement value: the
+        // whole class-10 effect family is pre-decrement in retail (the
+        // class-9 flight handlers genuinely are not), so this runs one
+        // more tick than the post-decrement form allows.
+        // :28905 — retail bumps +26 every tick, BEFORE the life test, so
+        // it counts even on the tick the flash dies.
+        self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
@@ -3215,8 +3274,16 @@ impl Gen {
 
     /// sub_26360 (:28924): m11's mana-steal flash — one ch3 write.
     fn steal_flash_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28933-35 — the life test reads the PRE-decrement value: the
+        // whole class-10 effect family is pre-decrement in retail (the
+        // class-9 flight handlers genuinely are not), so this runs one
+        // more tick than the post-decrement form allows.
+        // :28932 — retail bumps +26 every tick, BEFORE the life test, so
+        // it counts even on the tick the flash dies.
+        self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }

@@ -1032,9 +1032,16 @@ fn drawable(game: GameId, class: u16, model: u16) -> bool {
                 // magnet aura (retail AddAuxiliary_50500 sets no
                 // SetEntityIndex — the visual is the streaming mana).
                 // (10,13)/(10,14) are the MC2 smoke particles.
-                // (10,79) is the castle defend turret (ctor sprite 66,
-                // sub_508E0 EF:37000).
-                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77 | 79))))
+                // (10,78) is the MAGIC MINE and (10,79) the castle
+                // defend turret — both ctor sprite 66 (sub_50840 /
+                // sub_508E0 EF:37000). The mine was missing here for as
+                // long as it has placed a persistent mine: it ticked,
+                // armed and detonated correctly but was NEVER DRAWN, so
+                // a cast looked like a carrier that flew off and
+                // dissolved. Player-reported; the sim-level goldens
+                // could not see it because they count entities, not
+                // poses.
+                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77 | 78 | 79))))
 }
 
 /// The game-keyed per-entity presentation decisions for
@@ -9605,6 +9612,37 @@ mod tests {
     }
 
     #[test]
+    fn mc2_grounded_hive_still_takes_damage() {
+        // sub_20940 (EF:12357-75) runs the damage/death head FIRST.
+        // Ours returned before it, so a hive that had settled into its
+        // feeding squat was UNKILLABLE — the arm this pins.
+        let mut w = mc2_flat_world();
+        let h = w.g.mc2_spawn_m9(112 << 8, 110 << 8, 3200).expect("hive");
+        // Keep the player far so the hive falls asleep and grounds.
+        let far = PlayerPose::level(10 << 8, 10 << 8, 3400, 0);
+        let mut grounded = false;
+        for _ in 0..4000 {
+            w.tick(far, PlayerCommand::default());
+            if w.g.ent[h].f71 != 0 {
+                grounded = true;
+                break;
+            }
+        }
+        assert!(
+            grounded,
+            "an undisturbed hive settles into the grounded squat"
+        );
+        let before = w.g.ent[h].act_life;
+        assert!(before > 0);
+        w.g.ent[h].mail[0] = (before as u32 + 1, PLAYER_TARGET);
+        w.tick(far, PlayerCommand::default());
+        assert!(
+            w.g.ent[h].act_life < before,
+            "a GROUNDED hive takes the damage in its inbox (it was immune)"
+        );
+    }
+
+    #[test]
     fn castle_transformation_kills_the_footprint_but_spares_the_exempt() {
         let mut w = bare_creature_world(2); // wild lunger at ~(113,110)
         // An owned creature and a boss-exempt m16 on the footprint.
@@ -10032,9 +10070,32 @@ mod tests {
             fire_left: true,
             ..Default::default()
         };
+        // Aim at the worm instead of down a fixed bearing. This worm is
+        // a CHASER: it closes on the player and parks beside him, so a
+        // static forward beam can miss it forever (it did, once the
+        // class-10 fire fix shifted the chase phase by a tick). What
+        // this test is about is that killing the HEAD corpses the whole
+        // chain — not that a static pose can hit a moving target.
+        let aim = |w: &World| {
+            let mut p = firing_line();
+            if let Some(h) =
+                w.g.ent
+                    .iter()
+                    .position(|e| e.class64 == 5 && e.model65 == 0)
+            {
+                p.heading = crate::engine::features::Gen::angle_between(
+                    p.x,
+                    p.y,
+                    w.g.ent[h].x,
+                    w.g.ent[h].y,
+                );
+            }
+            p
+        };
         let mut cleared = false;
         for _ in 0..3000 {
-            w.tick(firing_line(), fire);
+            let p = aim(&w);
+            w.tick(p, fire);
             if count(&w, 5, 0) == 0 {
                 cleared = true;
                 break;
