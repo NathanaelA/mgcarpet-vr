@@ -374,10 +374,18 @@ fn an_authored_castle_owns_only_its_own_levels_terrain() {
         let mut book = [false; 24];
         book[0] = true;
         book[16] = true; // Castle: the starting-castle gate
+        // tempo 0, NOT 255: the castle-rebuild lockout is
+        // 32*((255-tempo)/8)+32 ticks (rivals.rs, :55552-57), so a
+        // fast rival raises a REPLACEMENT castle inside the settle
+        // window below — and then both assertions measure the new
+        // castle instead of a stump left by the old one. At tempo 0
+        // the lockout is 1024 ticks, well past this fixture. The
+        // preplant itself comes from `castle_level` + book[16] and
+        // does not depend on tempo.
         cfgs[1] = Some(mgc_sim::mc1::rivals::RivalConfig {
             aggression: 200,
             accuracy: 255,
-            tempo: 255,
+            tempo: 0,
             castle_level,
             book,
             allowed: book,

@@ -3099,15 +3099,23 @@ impl Gen {
     /// sub_25130 (:28127): the fire-spreader — one ring of fires at
     /// radius +26 (0 = the single corpse flame), then gone.
     fn spreader_tick(&mut self, i: usize) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // :28142-48 — the life test reads the PRE-decrement value, so a
+        // life-1 puff ticks TWICE before it is freed.
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }
-        if self.ent[i].flags & 2 != 0 {
-            return false;
+        // :28149-53 — the `& 2` latch guards ONLY the one-shot sound.
+        // The ring spawn below runs on EVERY tick, exactly as the
+        // sibling blast_ring_tick does; hoisting the whole body under
+        // this latch halved the corpse flame (one pass instead of two)
+        // and with it every "castle as weapon" crush.
+        if self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            self.snd(3, i); // :28152
         }
-        self.ent[i].flags |= 2;
         let (x, y, z, owner, radius, inherit) = {
             let e = &self.ent[i];
             (

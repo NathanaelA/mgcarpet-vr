@@ -295,7 +295,13 @@ impl Gen {
                 act: 30,
                 max: 30,
                 accel: 0,
-                row: 0,
+                // Row 16, not 0: remc1's m4 ctor (sub_386DE) could not resolve
+                // the row symbol and substituted unk_98F38[0]; the unresolved
+                // declaration survives commented out as `//int unk_99138;//fix`
+                // directly above it, and unk_99138 self-identifies as row 16.
+                // Every other single-body ctor maps model n -> row 12+n, and
+                // row 16 is referenced by no constructor anywhere.
+                row: 16,
                 f44: 500,
             },
             5 => C {
@@ -1647,8 +1653,14 @@ impl Gen {
             let mag = ((d2 & 0xFF) + 85) as i32;
             let sign = if d1 % 157 >= 79 { 1 } else { -1 };
             self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
-            self.ent[i].f26 -= 1;
-            if self.ent[i].f26 <= 0 {
+            // :25077-84 — the test reads the PRE-decrement +26, so from
+            // the ctor's 2 the settler spends THREE wander think-ticks,
+            // not two. Testing post-decrement left our stream two
+            // ent_rand draws ahead of retail's at BUILD time, which
+            // rerolls btype and the side jitter.
+            let pre = self.ent[i].f26;
+            self.ent[i].f26 = pre - 1;
+            if pre == 0 {
                 self.ent[i].f26 = 1;
                 self.ent[i].tick70 = 75;
             }
@@ -1685,9 +1697,14 @@ impl Gen {
             return;
         }
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
-        if (self.ent[i].f63 as i16) % (v26 / 2).max(1) == 0 {
-            self.ent[i].f26 -= 1;
-            if self.ent[i].f26 <= 0 {
+        // :25165 — C precedence makes retail's `f63 % v_26 / 2` read
+        // `(f63 % v_26) / 2`, NOT `f63 % (v_26 / 2)`: the think fires
+        // whenever the remainder is 0 or 1, i.e. twice as often.
+        if (self.ent[i].f63 as i16) % v26.max(1) / 2 == 0 {
+            // :25168-70 — pre-decrement test, as in m12_wander.
+            let pre = self.ent[i].f26;
+            self.ent[i].f26 = pre - 1;
+            if pre == 0 {
                 self.ent[i].f26 = 5;
                 self.ent[i].f146 = 0;
                 self.ent[i].tick70 = 73;

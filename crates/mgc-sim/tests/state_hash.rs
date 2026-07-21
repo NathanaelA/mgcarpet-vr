@@ -227,6 +227,39 @@ fn level_005_golden_state_hashes() {
     // dig reaches a house at checkpoint B, so post-init + A hold while
     // B-E move in BOTH the layout hash and the OBSERVABLE projection.
     //
+    // Re-pinned for the m12 settler transcription fixes (sub_1EED0
+    // :25077-84, sub_1F120 :25165-70) — pre-decrement +26 tests in
+    // WANDER and APPROACH, and the `(f63 % v_26) / 2` think gate. This
+    // level has settlers, so their ent_rand phase shifts B-E.
+    //
+    // Re-pinned for the corpse-flame two-pass fix (sub_25130 :28142-58):
+    // retail's life test reads the PRE-decrement value, and the `& 2`
+    // latch guards ONLY the one-shot sound — so a life-1 corpse puff
+    // spawns its fire ring on TWO ticks. Our port tested post-decrement
+    // AND returned early on the latch, so it spawned one ring: every
+    // creature death delivered HALF its fire damage. Measured on a
+    // 17-part worm crushed under a fresh level-1 castle: 10,400 before,
+    // 20,400 after, against a 20,000 ladder — i.e. retail's reported
+    // "the crush destroys the castle outright, or leaves the bar at 0".
+    // The ~50% per-cell spawn gate is FAITHFUL and stays (confirmed in
+    // remc2's independent decompile of a different binary,
+    // engine/EventsFunctions.cpp:22793) — it was never the halving.
+    // B-E move: the crater dig at B is the first thing that kills.
+    //
+    // Re-pinned for the m4 behavior-ROW fix (row 0 -> row 16): remc1's
+    // m4 ctor (sub_386DE) could not resolve its row symbol and wrote
+    // unk_98F38[0]; the unresolved declaration survives commented out
+    // as `//int unk_99138;//fix` directly above it, and unk_99138
+    // self-identifies as row 16. Row 0 is the flyer row (v_14=-4,
+    // v_20=0xFFFFFFFF), which is why militia never descended and
+    // walked out over water; row 16 is the ground-walker row
+    // (v_14=-128, v_20=0xFFF080FE).
+    // Blast radius CONFIRMED by probe, not assumed: level 005 holds
+    // ZERO live m4 through post-init/A/B/C, gains its first at D and a
+    // second at E. Exactly D and E move, in both arrays. (The
+    // "militia appear at B" claim in the note below is stale — that
+    // was written before the crater/evacuation timing changed.)
+    //
     // Re-pinned for the authored-castle footprint fix: retail stamps
     // one build pass per authored level with the row = the pass index
     // (:54983-91), i.e. rows 0..=level, and BUILD row 0 is EMPTY.
@@ -239,10 +272,10 @@ fn level_005_golden_state_hashes() {
     const GOLDEN: [u64; 6] = [
         0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
         0x06e8a54a916839d7, // A: 32 idle ticks far afield
-        0x12524aa4af2f1fdd, // B: crater trigger fired + 120 dig ticks
-        0x60e76100aefd92c9, // C: ambush disposition fired
-        0x5a7abd4b6f6d97d9, // D: 64 ticks of two-hand fireball combat
-        0xc04022bcf5e367fe, // E: 100 aftermath ticks
+        0xc512dff73d9024ac, // B: crater trigger fired + 120 dig ticks
+        0x87818627e43a246c, // C: ambush disposition fired
+        0x597016c35e8fb241, // D: 64 ticks of two-hand fireball combat
+        0x4472a449716db9f6, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -265,10 +298,10 @@ fn level_005_golden_state_hashes() {
     const OBSERVABLE: [u64; 6] = [
         0xf67c96de5b515a64, // post-init — the ring of castle terrain
         0x797dd4817a1d1f11, // A — holds (no militia yet)
-        0x7b733a85a7e27541, // B — militia settle/wander from here
-        0x56117358a7b6c164, // C
-        0x8a3df49c966ec36f, // D
-        0x920d98529e1fc2e7, // E
+        0xd836d3a103feb42d, // B — settler phase + first corpse flames
+        0x86b238bd93390be4, // C
+        0xe6c20017c35b692b, // D
+        0x826867dc463563de, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

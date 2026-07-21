@@ -124,17 +124,24 @@ fn flight_tier_golden_state_hashes() {
     );
     println!("faithful: {faithful:#018x?}\nenhanced: {enhanced:#018x?}");
 
+    // Re-pinned for the m12 settler transcription fixes (sub_1EED0
+    // :25077-84, sub_1F120 :25165-70): retail tests the PRE-decrement
+    // +26 in both WANDER and APPROACH, and C precedence makes its
+    // think gate `(f63 % v_26) / 2`, not `f63 % (v_26 / 2)`. The
+    // settler's ent_rand phase at BUILD therefore shifts, moving where
+    // and when it plants. Post-init and A hold in both thrust models;
+    // the settler's think only diverges past ~40 ticks.
     const FAITHFUL: [u64; 4] = [
         0xb32adc6a3bade6d2, // post-init
         0x8073dd7f4ae812e9, // A: 40 ticks of forward thrust
-        0x5a2ff8cd38c0e77b, // B: 30 ticks of banked turn + strafe
-        0x32d0464cc10242b9, // C: 40 ticks of coast
+        0x466cb8ab076b1034, // B: 30 ticks of banked turn + strafe
+        0x650594b2720fbe10, // C: 40 ticks of coast
     ];
     const ENHANCED: [u64; 4] = [
         0x18aad48f24e35375, // post-init
         0x8533aaa5dd796993, // A
-        0xa407fd1da8f36074, // B
-        0x06d1643f21654d0d, // C
+        0x79194b5a4173da13, // B
+        0x2cceb09f2e8f83cf, // C
     ];
     assert_eq!(
         (faithful, enhanced),

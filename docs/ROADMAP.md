@@ -51,6 +51,82 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### Player reports 2026-07-21 (round 2) — ALL FIXED + PLAYER-CONFIRMED
+
+All three closed and confirmed by the player in-game the same session.
+Every one turned out to be a TRANSCRIPTION defect, not a design gap.
+
+**1. MC1 castle-as-weapon took HALVED damage — FIXED.**
+- Root cause: `spreader_tick` (the `(10,1)` corpse flame, retail
+  `sub_25130` :28142-58) ran its fire-ring spawn ONCE. Retail runs it on
+  EVERY tick of the puff's life, and the puff's life is 1, so retail
+  spawns the ring TWICE. Two independent off-by-ones caused this:
+  (a) retail's life test reads the PRE-decrement value, ours read
+  post-decrement; (b) retail's `& 2` latch guards ONLY the one-shot
+  sound (`sub_55370_558A0(.., -1, 3)`), while our port had hoisted the
+  whole body under it and returned early.
+- Every creature death in MC1 was therefore delivering half its fire
+  damage — the castle crush was just where the player could see it.
+- MEASURED on a 17-part worm crushed under a fresh level-1 castle:
+  **10,400 before → 20,400 after**, against a 20,000 ladder. That is
+  retail's reported "destroys the castle outright, or leaves the bar at
+  0 so any scratch finishes it", to the unit.
+- RULED OUT and documented so it is not re-opened: the ~50% per-cell
+  spawn gate `2 * (rand % 0x9D / 79) - 1 > 0` is FAITHFUL. `rand` is a
+  self-contained LCG (`9377*s + 9439`), the idiom appears 16× in remc1
+  as the engine's RandomSign, and remc2's INDEPENDENT decompile of a
+  DIFFERENT binary has the identical gate in the identical loop
+  (`engine/EventsFunctions.cpp:22793`). The numeric fit that made it
+  look guilty (51 × 400 = 20,400) is explained by the two-pass law with
+  the gate intact. Intake, ring size, part count, one-shot latch and
+  mail accumulation were all verified faithful and lossless.
+
+**2. MC1 militia never descended — FIXED (one wrong byte).**
+- Root cause: the m4 constructor pointed at BEHAVIOR row 0 instead of
+  row 16. remc1's `sub_386DE` could not resolve the row symbol and
+  substituted `unk_98F38[0]`; the unresolved declaration survives in the
+  file, commented out as `//int unk_99138;//fix` (:44891) directly above
+  that constructor, and `unk_99138` (:5328) self-identifies as `0x0010`
+  = row 16. Every other single-body ctor maps model n → row 12+n
+  (12,13,14,15,**0**,17,…), and row 16 is referenced by NO ctor anywhere.
+- Row 0 is the FLYER row (`v_14=-4`, `v_20=0xFFFFFFFF`); row 16 is the
+  ground-walker row (`v_14=-128`, `v_20=0xFFF080FE`).
+- This ALSO closed the separate "archers walk out over the sea like a
+  flyer" report: row 16's terrain mask excludes water, and its descent
+  gives ground-glue WITH the flying leeway the player described.
+- The previous "arithmetically faithful GIVEN the roam" analysis was
+  right about the function BODY and wrong about the question.
+
+**3. mc1:000 "extraneous tower" — NOT a spawn bug; m12 settler fixed.**
+- The building is settler-built ~44 ticks in (reads as "at init" from
+  the cockpit), not a THING row. The player re-checked and confirmed
+  retail builds there too — the ORIGINAL premise was withdrawn. No
+  load-path admission test differs; the whole THING chain is faithful.
+- But three genuine transcription defects were found in the m12 chain
+  and fixed, and the player then confirmed the settlers now travel to
+  and build at the shore location retail uses:
+  - `m12_wander` (`sub_1EED0` :25077-84): pre-decrement `+26` test —
+    retail spends THREE wander think-ticks from the ctor's 2, we spent
+    two, leaving our `ent_rand` phase 2 draws ahead at BUILD.
+  - `m12_approach` (`sub_1F120` :25165): C precedence makes the think
+    gate `(f63 % v_26) / 2`, not `f63 % (v_26 / 2)`.
+  - `m12_approach` (:25168-70): the same pre-decrement `+26` test.
+- STILL OPEN (banked, needs care): our `m12_approach` returns early on
+  patience-out and does a top-of-function target-validity check; retail
+  has neither — its validity test lives INSIDE the think gate and it
+  FALLS THROUGH, so it can still promote to BUILD the same tick.
+
+**SYSTEMATIC LEAD — the pre/post-decrement class.** Three of the five
+defects above are the same shape: retail does
+`v = field; field = v - 1; if (v <op>)`, testing the PRE-decrement
+value, and our port wrote `field -= 1; if (field <op>)`. Confirmed
+present in `sub_25130` (corpse flame), `sub_1EED0`/`sub_1F120` (settler)
+and — UNFIXED — `sub_25CE0` (`blast_ring_tick`, :28684-86), which
+therefore runs one ring pass fewer than retail. A sweep of every
+per-tick life decrement in the effects/creature families is owed; for a
+short-lived entity this halves its whole output, which is exactly how
+the castle bug hid.
+
 ### Saves + in-game menu — LANDED 2026-07-21 (playtest owed)
 - Mid-level save/load and the pause mini-menu, per `archive/DESIGN-SAVES.md`
   (which now records status, deviations and the remaining open item).
@@ -141,7 +217,13 @@ and lists what remains; history lives in the archive and git.
   tier-name fix from prereq 3.
 
 ### Player reports 2026-07-21 — FIXED 2026-07-21 (playtest owed)
-- **OPEN — MC1 militia/"archers" roam unbounded and hover over water.**
+- **FIXED 2026-07-21 (round 2) — MC1 militia/"archers" roam unbounded
+  and hover over water.** Same single root cause as the "never descend"
+  report: the m4 ctor used BEHAVIOR row 0 (the FLYER row, terrain mask
+  `0xFFFFFFFF`) instead of row 16 (ground-walker, mask `0xFFF080FE`,
+  which excludes water). See the round-2 entry above. The analysis
+  below is kept because its REPRODUCTION is still the right probe, but
+  its "faithful given the roam" conclusion is superseded.
   Player report (mc1:02, level-independent): an archer walking
   perfectly horizontally out over the sea, "like a flyer". Player is
   certain retail militia never do this — they get flying LEEWAY (so a
