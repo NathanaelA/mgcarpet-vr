@@ -3040,17 +3040,38 @@ impl World {
             if (id == 2 && self.accel_veto.0) || (id == 21 && self.accel_veto.1) {
                 return;
             }
-            if !armed {
-                if !self.spell_gate(id, def) {
+            // THE HOLD IS NOT FREE. `sub_55E80` (:64936) debits on
+            // every tick the burst sits at FULL (`+48 == +50`) — which
+            // is every held tick, since the re-arm below re-pins it —
+            // and the amount is the whole `+136` one-shot cost, not a
+            // separate sustain column (there is none: `+140` is
+            // cost/count and is never spent). remc1 ships that debit
+            // commented out behind a `//fix` marker, but remc2's
+            // independent tree runs it live (`sub_68DE0`,
+            // EventsFunctions.cpp:55569), so the gap is the remc1
+            // maintainer's, not retail's. So the gate and the debit
+            // belong on EVERY re-arm, not just the first: a one-shot
+            // buys a 251-tick 2x glide for one cost, the hold pays
+            // that cost per tick for 3x.
+            if !self.spell_gate(id, def) {
+                // The sustained refusal is SILENT (:55873/:55890 just
+                // return); only a fresh cast buzzes here. Retail does
+                // sound one buzz on the tick a hold runs dry, from the
+                // manifestation gate `sub_55DD0` (:64930) — a path we
+                // do not model for these two spells.
+                if !armed {
                     self.g.snd_player(29); // cast-blocked buzz
-                    return;
                 }
-                self.mana_debit(def.possess_mana);
+                return;
             }
+            self.mana_debit(def.possess_mana);
             self.g.ent[m].f26 = def.count as i16;
-            if matches!(id, 2 | 21) {
-                self.player.accel_held = true; // held = the 3.0 factor
-            }
+            // Held = the 3.0 factor. Cleared every tick
+            // (`speed_boost`), so a refused re-arm above drops the
+            // flyer to 2.0 for the rest of the burst — retail's
+            // exhaustion behaviour, which drains the remaining count
+            // at 2x rather than cancelling.
+            self.player.accel_held = true;
             if !armed {
                 self.break_cloak(id);
                 self.emit_spell(id, m, p, right, ctx);
@@ -11091,6 +11112,64 @@ mod tests {
         }
         assert_eq!(w.accel_override(), None, "expired burst drops the override");
         assert_eq!(w.player_speed_boost(), 0.0);
+    }
+
+    /// The sustained Accelerate is NOT free: `sub_55E80` (:64936,
+    /// live in remc2 as `sub_68DE0`) debits the full cost on every
+    /// tick the burst sits at full, and a dry pool drops the flyer
+    /// from 3x to 2x for the rest of the burst instead of cancelling
+    /// it. No `dev_spells` here — that pin no-ops both the gate and
+    /// the debit, which is exactly how this went unnoticed.
+    #[test]
+    fn held_accelerate_drains_mana_every_tick() {
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        w.grant_spell(SpellId(2));
+        let cost = crate::mc1::spells::SPELLS[2].possess_mana;
+        // The intrinsic base pool IS one cast (both are 1000), and the
+        // ceiling is re-censused every tick from claimed entities, so
+        // an unclaimed test world can never fund a second re-arm —
+        // which makes this world the sharpest probe there is: before
+        // the fix the hold stayed at 3.0 forever on an empty pool.
+        assert_eq!(w.player.mana, cost, "base pool funds exactly one arm");
+        w.tick(
+            away(),
+            PlayerCommand {
+                equip_left: Some(SpellId(2)),
+                ..Default::default()
+            },
+        );
+        let fwd = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        w.tick(away(), fwd);
+        assert_eq!(w.accel_override(), Some(3.0), "the cast tick channels");
+        assert_eq!(
+            w.player.mana_delta,
+            -(cost as i32),
+            "the cast stamps the debit onto the regen delta"
+        );
+
+        // The debit lands on the next wizard tick and empties the
+        // pool, so this re-arm is refused: the burst keeps propelling
+        // at 2.0 rather than cancelling, and the hold is over.
+        w.tick(away(), fwd);
+        assert_eq!(w.player.mana, 0, "the held tick actually spent the pool");
+        assert_eq!(
+            w.accel_override(),
+            Some(2.0),
+            "an unaffordable re-arm falls back to the 2.0 glide"
+        );
+        assert_ne!(w.player.accel, 0, "exhaustion does not cancel the channel");
+
+        // And it stays refused while the pool is short of the FULL
+        // cost — no partial-price 3.0.
+        for _ in 0..4 {
+            w.tick(away(), fwd);
+            assert_eq!(w.accel_override(), Some(2.0), "still unaffordable");
+            assert!(w.player.mana < cost, "regen has not refunded an arm yet");
+        }
     }
 
     #[test]

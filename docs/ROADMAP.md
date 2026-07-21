@@ -51,6 +51,55 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### Two player-reported bugs — BOTH FIXED 2026-07-21, playtest owed
+
+**1. MC1 Accelerate: the sustained cast was free.** Fixed at
+`world.rs:3043-3072` — the affordability gate and the debit now run on
+EVERY re-arm, not only the first.
+
+Retail debits from the manifestation tick, `sub_55E80` (:64936): on
+every tick the burst sits at full (`+48 == +50`, which the hold's
+re-arm re-pins each tick) it overwrites the caster's regen accumulator
+with `-(+136)` — the FULL one-shot cost, 1000 for both 2 and 21. There
+is no separate sustain column (`+140` is cost/count and is never
+spent). **remc1 ships that debit commented out behind a `//fix`
+marker**, which is where the free hold came from; remc2's independent
+tree runs the identical block live (`sub_68DE0`,
+EventsFunctions.cpp:55569), so the gap is the remc1 maintainer's, not
+retail's.
+
+Exhaustion drops the flyer back to 2x for the rest of the burst rather
+than cancelling — that falls out of `accel_held` being recomputed each
+tick. Known small gap: retail sounds one buzz on the tick a hold runs
+dry (from the manifestation gate `sub_55DD0` :64930); the cast path's
+sustained refusal is silent (:55873/:55890) and ours has no buzz at
+all. Pinned by `held_accelerate_drains_mana_every_tick` (verified
+non-vacuous).
+
+**Playtest question, not a code question:** the cost is the whole
+intrinsic base pool (both are 1000), so before any mana is claimed the
+hold buys exactly ONE tick of 3x and then glides at 2x. Mid-game pools
+fund a real hold. If that reads as too expensive, suspect the tick
+RATE, not the amount — retail ticks once per rendered frame, we run
+24 Hz.
+
+**2. MC2 save recorded the level the carpet was parked on.** Fixed in
+`main.rs` (committed): the stored `levels_completed` was right; the
+slot row renders the `.mgcs` header's level column, which is
+`run.current`, and `campaign_complete` never advanced it — so the run
+still called itself "in level 6" while sitting on the map, until
+clicking the next portal ran `campaign_switch`. The park-one-back rule
+was innocent (`open_map_screen` doesn't use it). The pending-level rule
+`start` applies on load is now the named `mc2_pending_level`, and map
+entry re-applies it, so a slot names the same level before and after a
+reload. Also fixes the map's asset-failure fallbacks, which were
+relaunching the level just finished.
+
+Also banked, lower priority: **make MSAA the default** once it has more
+playtime. Player-verified this session as fast and good-looking on
+integrated graphics; the reason to wait is that it is startup-only and
+nobody has yet run it across a full campaign.
+
 ### Intro/outro FMVs — LANDED 2026-07-21, playtest round 1 done
 
 The full-screen movies play, with their soundtrack and subtitles: the
