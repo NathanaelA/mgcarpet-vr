@@ -500,6 +500,38 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
+            group: "render · preference",
+            label: "fullscreen",
+            class: Preference,
+            key: Some("Alt+Enter"),
+            cli: Some("--fullscreen"),
+            cfg_path: "render.preference.fullscreen",
+            // DOS ran one exclusive full-screen video mode and offered
+            // no window, so fullscreen IS the faithful presentation —
+            // and now the default. Still classed Preference: a display
+            // device knob cannot affect the simulation either way.
+            read: |c| Val::Toggle {
+                on: c.render.preference.fullscreen,
+                faithful: true,
+            },
+            desc: "Borderless fullscreen: the window loses its frame and covers \
+                   the monitor it sits on. No exclusive video-mode switch, so \
+                   alt-tab stays instant. At aspects wider than 4:3 the HUD \
+                   panels anchor to the screen edges (castle left, spells \
+                   right) instead of stretching; narrower than 4:3 the whole \
+                   HUD scales down to fit the width. The 3D view keeps square \
+                   pixels either way — the field of view widens or narrows \
+                   with the screen.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.fullscreen = v,
+                descs: [
+                    "Windowed, 4:3 by default (resizable).",
+                    "Borderless fullscreen on the current monitor.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
             // A Preference (retail MC2 ships a shading toggle —
             // Shift+F7 "Flat Shading"); the cfg_path keeps the legacy
             // "enhancement" segment so saved configs stay valid.

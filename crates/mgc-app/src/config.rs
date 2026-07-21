@@ -243,6 +243,20 @@ pub struct RenderPreference {
     /// page-flipped at whatever rate the frame took), so fidelity-free
     /// by construction.
     pub vsync: bool,
+    /// Borderless fullscreen (Alt+Enter, the classic toggle). DEFAULTS
+    /// ON: the originals ran one exclusive full-screen video mode and
+    /// offered no window, so fullscreen is the faithful presentation as
+    /// well as the one people want. The
+    /// window drops its decorations and covers the monitor the window
+    /// currently sits on — a BORDERLESS window, never an exclusive
+    /// video-mode change: no mode switch, no black-screen flicker, and
+    /// alt-tab stays instant. The desktop's own resolution is used, so
+    /// the presentation aspect is whatever the monitor is; the HUD
+    /// layout law (`ui::HudFrame`) anchors the panels to the screen
+    /// edges instead of stretching them. A display-device preference
+    /// with no retail analogue (DOS was 320×200/640×480 exclusive),
+    /// hence Preference — fidelity-free either way.
+    pub fullscreen: bool,
 }
 
 /// The fog-distance menu stops: (tiles, tag).
@@ -261,6 +275,7 @@ impl Default for RenderPreference {
             light_sources: true,
             fog_distance: 50,
             vsync: true,
+            fullscreen: true,
         }
     }
 }
@@ -814,7 +829,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 5;
+const DEFAULTS_VERSION: u64 = 6;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp
@@ -858,6 +873,44 @@ fn ensure_defaults(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tracked `mgcarpet.json.defaults` is GENERATED output that
+    /// also lives in the repository, so it drifts silently whenever an
+    /// option is added or a default changes — and a stale baseline is
+    /// merged UNDER the user's overrides, so it really does decide what
+    /// people run. Regenerate it (delete it and start the game, or copy
+    /// what this test prints) in the same change as the option.
+    #[test]
+    #[ignore = "regenerates the tracked baseline; run explicitly"]
+    fn regenerate_tracked_defaults() {
+        let path = Path::new("../../mgcarpet.json");
+        ensure_defaults(&defaults_path(path)).expect("write");
+    }
+
+    #[test]
+    fn tracked_defaults_baseline_is_current() {
+        let path = Path::new("../../mgcarpet.json.defaults");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return; // not running from the repo
+        };
+        let tracked: serde_json::Value = serde_json::from_str(&text).expect("defaults parse");
+        assert_eq!(
+            tracked.get("_version").and_then(|v| v.as_u64()),
+            Some(DEFAULTS_VERSION),
+            "the tracked defaults baseline is stamped for an older schema"
+        );
+        let want = serde_json::to_value(Config::default()).expect("config serializes");
+        let serde_json::Value::Object(want) = want else {
+            unreachable!()
+        };
+        for (key, value) in want {
+            assert_eq!(
+                tracked.get(&key),
+                Some(&value),
+                "tracked defaults disagree with Config::default() at {key}"
+            );
+        }
+    }
 
     #[test]
     fn stale_defaults_file_regenerates_on_version_bump() {

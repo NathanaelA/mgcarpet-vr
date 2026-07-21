@@ -126,7 +126,7 @@ struct Layout {
 }
 
 fn layout(assets: &UiAssets, m: &MiniMenu, w: f32, h: f32) -> Layout {
-    let s = (w / 640.0).max(1.0);
+    let s = crate::ui::HudFrame::new(w, h).s.max(1.0);
     let fs = 2.0 * s;
     let lh = assets.font_line_height().max(8.0) * fs;
     let row_h = lh * 1.3;

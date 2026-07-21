@@ -808,6 +808,91 @@ const DEFAULT_FOG_TILES: f32 = 20.0;
 /// infinite (the original's rounding-error void-mobs live at that wrap;
 /// not reproduced).
 const BOOK_MAP_ZOOM: f32 = MAP_TILES as f32;
+
+/// The UI's authored coordinate space: the original's hi-res mode.
+pub const NATIVE_W: f32 = 640.0;
+pub const NATIVE_H: f32 = 480.0;
+
+/// The non-4:3 presentation law, in one place.
+///
+/// Every HUD element is authored in the original's 640×480 native
+/// coordinates. Historically we mapped them with the two INDEPENDENT
+/// factors `w/640` and `h/480`, which is a stretch: at 16:9 the art
+/// smears horizontally, and the further from 4:3 the worse it reads.
+///
+/// The law here instead uses ONE uniform scale, `s = min(w/640,
+/// h/480)`, so native art never distorts, and spends the leftover
+/// slack on ANCHORING rather than stretching:
+///
+/// * Wider than 4:3 (`s = h/480`): the vertical is exact and the
+///   horizontal has slack. Left-anchored groups (the castle/wizard
+///   controls) hug x=0; right-anchored groups (the equipped spell
+///   hands) hug x=w. The gap opens in the MIDDLE of the top strip,
+///   where the live sky shows through — the panels stay where the eye
+///   and the mouse expect them, at the screen corners.
+/// * Narrower than 4:3 (`s = w/640`): the horizontal is exact — the
+///   whole HUD simply shrinks to match the screen width, exactly as
+///   asked — and the vertical slack goes to the top/bottom anchors, so
+///   the strip stays at the top and the selector pane at the bottom.
+/// * Exactly 4:3: `s = w/640 = h/480` and every anchor collapses onto
+///   the authored coordinate. The 4:3 layout is bit-for-bit what it was
+///   before this law existed — that is the invariant the tests pin.
+///
+/// The 3D view is deliberately NOT part of this: it fills its rect and
+/// takes its aspect from it, so the FOV widens/narrows with the screen
+/// while pixels stay square (see `mgc_render::camera_matrix`).
+#[derive(Debug, Clone, Copy)]
+pub struct HudFrame {
+    /// Uniform native→physical scale.
+    pub s: f32,
+    /// Physical viewport size.
+    pub w: f32,
+    pub h: f32,
+}
+
+impl HudFrame {
+    pub fn new(w: f32, h: f32) -> Self {
+        Self {
+            s: (w / NATIVE_W).min(h / NATIVE_H),
+            w,
+            h,
+        }
+    }
+
+    /// A native length in physical px.
+    pub fn len(&self, n: f32) -> f32 {
+        n * self.s
+    }
+
+    /// Native x, LEFT-anchored (measured from the screen's left edge).
+    pub fn lx(&self, x: f32) -> f32 {
+        x * self.s
+    }
+
+    /// Native x, RIGHT-anchored: `x` is still the authored 640-space
+    /// coordinate, but its distance from the RIGHT edge is what is
+    /// preserved.
+    pub fn rx(&self, x: f32) -> f32 {
+        self.w - (NATIVE_W - x) * self.s
+    }
+
+    /// Native y, TOP-anchored.
+    pub fn ty(&self, y: f32) -> f32 {
+        y * self.s
+    }
+
+    /// Native y, BOTTOM-anchored (distance from the bottom preserved).
+    pub fn by(&self, y: f32) -> f32 {
+        self.h - (NATIVE_H - y) * self.s
+    }
+
+    /// Native x, CENTER-anchored: the authored offset from the 640-space
+    /// center is preserved about the physical center.
+    pub fn cx(&self, x: f32) -> f32 {
+        self.w * 0.5 + (x - NATIVE_W * 0.5) * self.s
+    }
+}
+
 // The book/map screen topology (sub_20E60 case 4 + the spellbook grid
 // at :26915), in the original's hi-res 640×480 native coordinates,
 // scaled to the live resolution by w/640, hpx/480. The live world fills
@@ -830,7 +915,10 @@ const BOOK_MAP_Y: f32 = 0.0;
 //   bottom bar: y 416..480 (black)
 /// The 2px black demarcation between the book panes (native px).
 const BOOK_GAP: f32 = 2.0;
-const BOOK_MAP_W: f32 = 384.0 - BOOK_GAP;
+/// The map pane's native BOTTOM (its width is no longer a constant —
+/// it is derived per frame as "everything left of the spellbook
+/// column, less the gap", which at 4:3 comes out to the authored
+/// 384 − BOOK_GAP and at any other aspect is the whole remainder).
 const BOOK_MAP_H: f32 = 416.0;
 /// The spellbook grid origin (native px): 24 spells in 4 cols × 6 rows
 /// of the slot-slab [3] = 64×37, tightly packed from (384,194). FIXED —
@@ -2879,11 +2967,12 @@ impl Renderer {
     /// The in-flight radar disc: (diameter, center_x, center_y) in
     /// pixels. The disc is anchored at the screen CORNER (0,0) so its
     /// center sits at its radius (retail DrawMinimap(0,0)) — scaled by
-    /// the HUD factor (w/640) to track the sprite panels. Single source
+    /// the uniform HUD factor (`HudFrame::s`) to track the sprite
+    /// panels, which are LEFT-anchored in the same corner. Single source
     /// of truth for both the shader uniform and the stamp projection;
     /// they MUST agree or terrain and stamps diverge.
     fn minimap_rect(&self, w: u32, hpx: u32) -> (f32, f32, f32) {
-        let hud = w as f32 / 640.0;
+        let hud = HudFrame::new(w as f32, hpx as f32).s;
         let diam = (MINIMAP_DIAM * hud).min(w.min(hpx) as f32);
         // Anchored at the corner (0,0), touching both screen edges — the
         // disc center is exactly at its radius (retail DrawMinimap(0,0)).
@@ -3127,29 +3216,61 @@ impl Renderer {
         // Native→screen scale for the book layout (kept distinct from the
         // camera basis's `sx/sy` sin/cos below — the collision zeroed the
         // map pane's height when yaw=0).
-        let res_x = w as f32 / 640.0;
-        let res_y = hpx as f32 / 480.0;
+        let f = HudFrame::new(w as f32, hpx as f32);
         // The map pane's native height differs per topology: MC1 book
         // 416 (measured), MC2 split 400 (EF:21804 locMinimapHeight).
         let book_map_h = match self.map_layout {
             MapScreenLayout::Mc1Book => BOOK_MAP_H,
             MapScreenLayout::Mc2Split => MC2_MAP_VIEW_H,
         };
-        // The world viewport = the top-right rectangle. Its LEFT edge is
-        // the SPELLBOOK's left (384); its BOTTOM recedes by BOOK_GAP above
-        // the spellbook top (194−2) so a 2px black gap separates them —
-        // the horizontal bar of the "T" demarcation (the gap comes out
-        // of the live view, not the spellbook).
+        // === The map screen at any aspect ===
+        // The three panes are NOT equally elastic, so the layout is
+        // solved in dependency order instead of stretched as a block:
+        //
+        //  1. The SPELLBOOK is rigid — its cells are art (4 cols of 64
+        //     native px), so it gets the uniform scale and nothing
+        //     else. That fixes the whole RIGHT COLUMN's width.
+        //  2. The world VIEWPORT is the free one: it is a 3D view, so
+        //     any rect is a legal rect (the projection takes its aspect
+        //     from whatever it is handed). It fills the right column
+        //     above the spellbook, however wide and tall that is.
+        //  3. The MAP PANE takes everything left over — full width to
+        //     the left of the column, full height above the log strip.
+        //     Its zoom law already keys off its own aspect
+        //     (`map_pane_zoom`), so a wider pane simply shows more
+        //     world: the map still fits across the pane's SHORTER axis
+        //     and wraps toroidally along the longer one, which is why
+        //     an arbitrarily wide pane stays readable instead of
+        //     zooming the world into a smear.
+        //
+        // At exactly 4:3 every anchor collapses onto the authored
+        // coordinate, reproducing the measured retail layout unchanged.
+        let col_x = f.rx(BOOK_SPELL_X);
+        // The pane/viewport floor: the black log strip below keeps its
+        // native height (MC1 64px; MC2 80px, the CTRL pane's zone).
+        let pane_bottom = f.by(book_map_h);
+        // The world viewport = the right column above the spellbook. In
+        // MC1 its BOTTOM recedes by BOOK_GAP above the spellbook top so
+        // a 2px black gap separates them — the horizontal bar of the
+        // "T" demarcation (the gap comes out of the live view, not the
+        // spellbook). MC2 has no spellbook: the view runs the full pane
+        // height (EF:21804).
         let view_rect = (
-            (BOOK_SPELL_X * res_x) as u32,
+            col_x as u32,
             0u32,
-            w.saturating_sub((BOOK_SPELL_X * res_x) as u32),
+            (f.w - col_x) as u32,
             match self.map_layout {
-                MapScreenLayout::Mc1Book => ((BOOK_SPELL_Y - BOOK_GAP) * res_y) as u32,
-                // MC2: the live view runs the full minimap height
-                // (no spellbook below it), y 0..400 (EF:21804).
-                MapScreenLayout::Mc2Split => (MC2_MAP_VIEW_H * res_y) as u32,
+                MapScreenLayout::Mc1Book => (f.by(BOOK_SPELL_Y) - f.len(BOOK_GAP)).max(0.0) as u32,
+                MapScreenLayout::Mc2Split => pane_bottom as u32,
             },
+        );
+        // The map pane: origin at the screen corner, right edge receding
+        // by BOOK_GAP from the column (the vertical bar of the "T").
+        let map_pane = (
+            BOOK_MAP_X,
+            BOOK_MAP_Y,
+            (col_x - f.len(BOOK_GAP)).max(0.0),
+            pane_bottom,
         );
 
         let aspect = if self.map_view {
@@ -3162,6 +3283,33 @@ impl Renderer {
             view_rect.2 as f32 / view_rect.3.max(1) as f32
         } else {
             w as f32 / hpx as f32
+        };
+        // The FLIGHT view's field of view at non-4:3, anchored on the
+        // retail 4:3 frustum so the projection stays perspective-true
+        // (square pixels, no anamorphic squeeze) at any screen shape:
+        //
+        //   aspect ≥ 4:3 — hold the VERTICAL fov at the retail 60° and
+        //     let the horizontal grow. The classic "Hor+" rule: a wide
+        //     screen shows the retail frame plus more world to the
+        //     sides, never a cropped-and-zoomed version of it.
+        //   aspect < 4:3 — hold the HORIZONTAL fov at its 4:3 value and
+        //     let the VERTICAL grow instead. Pure Hor+ would cut world
+        //     off the sides here, which in a game with rival wizards
+        //     hunting you is a real disadvantage handed out by monitor
+        //     shape. Anchoring the other axis means every screen sees
+        //     AT LEAST the retail 4:3 frustum, and never less.
+        //
+        // The map screen is deliberately exempt: its viewport keeps the
+        // flight `fov_y` into a narrower rect on purpose (the middle-
+        // slice ruling above), and re-widening it there would undo
+        // that.
+        let cam = &CameraView {
+            fov_y: if self.map_view {
+                cam.fov_y
+            } else {
+                flight_fov_y(cam.fov_y, aspect)
+            },
+            ..*cam
         };
         let view_proj = camera_matrix(cam, aspect);
         let sky = self.sky_color_linear();
@@ -3358,12 +3506,14 @@ impl Renderer {
             // active surface, shared by stamps and path.
             let surface = if self.map_view {
                 // Same pane rect as the map-globals block, in px.
-                let (pw, ph) = (BOOK_MAP_W * res_x, book_map_h * res_y);
-                let cx = (BOOK_MAP_X * res_x) + pw * 0.5;
-                let cy = (BOOK_MAP_Y * res_y) + ph * 0.5;
+                let (px0, py0, pw, ph) = map_pane;
+                let cx = px0 + pw * 0.5;
+                let cy = py0 + ph * 0.5;
                 // Icons scale with the pane like every book element
                 // (retail only ever rendered ≤640 wide; native-size
-                // icons at HD read a third of their proportion).
+                // icons at HD read a third of their proportion) — the
+                // UNIFORM factor, so a wide pane spreads the stamps out
+                // rather than fattening them.
                 Some((
                     cx,
                     cy,
@@ -3372,7 +3522,7 @@ impl Renderer {
                     self.map_pane_zoom(pw / ph),
                     false,
                     pw / ph,
-                    res_x,
+                    f.s,
                 ))
             } else {
                 // Same (diam, center) as the shader uniform — shared via
@@ -3466,8 +3616,7 @@ impl Renderer {
             // The book map pane at native (0,0) 382×378, player-centered
             // and yaw-rotated, rectangular (round mask off). Placed by
             // pixel rect → NDC so it matches the stamp projection.
-            let (px0, py0) = (BOOK_MAP_X * res_x, BOOK_MAP_Y * res_y);
-            let (pw, ph) = (BOOK_MAP_W * res_x, book_map_h * res_y);
+            let (px0, py0, pw, ph) = map_pane;
             let cx_px = px0 + pw * 0.5;
             let cy_px = py0 + ph * 0.5;
             let map_globals: [f32; 12] = [
@@ -3836,6 +3985,33 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture
 /// as the world pass. `None` when the point is at/behind the near
 /// plane. For screen-space overlays anchored to world positions (the
 /// aim crosshair; future name labels).
+/// The FLIGHT view's effective vertical FOV at a given aspect, anchored
+/// on the retail 4:3 frustum so the projection stays perspective-true
+/// (square pixels, no anamorphic squeeze) at any screen shape:
+///
+/// * `aspect >= 4:3` — hold the VERTICAL fov at retail's 60° and let
+///   the horizontal grow. The classic "Hor+" rule: a wide screen shows
+///   the retail frame PLUS more world to the sides, never a cropped
+///   and zoomed version of it.
+/// * `aspect < 4:3` — hold the HORIZONTAL fov at its 4:3 value and let
+///   the VERTICAL grow instead. Pure Hor+ would cut world off the sides
+///   here, and in a game with rival wizards hunting you that is a real
+///   disadvantage handed out by monitor shape. Anchoring the other axis
+///   means every screen sees AT LEAST the retail 4:3 frustum.
+///
+/// At exactly 4:3 both arms return `fov_y` unchanged. Shared by the
+/// renderer and [`world_to_screen`] — the crosshair and the world-
+/// anchored markers project through the SAME frustum the scene is
+/// drawn with, or they drift apart at non-4:3.
+pub fn flight_fov_y(fov_y: f32, aspect: f32) -> f32 {
+    let ref_aspect = NATIVE_W / NATIVE_H;
+    if aspect >= ref_aspect {
+        fov_y
+    } else {
+        2.0 * ((fov_y * 0.5).tan() * ref_aspect / aspect).atan()
+    }
+}
+
 pub fn world_to_screen(
     cam: &CameraView,
     surface_w: f32,
@@ -3855,7 +4031,14 @@ pub fn world_to_screen(
         }
         c + d
     };
-    let m = camera_matrix(cam, surface_w / surface_h);
+    let aspect = surface_w / surface_h;
+    let m = camera_matrix(
+        &CameraView {
+            fov_y: flight_fov_y(cam.fov_y, aspect),
+            ..*cam
+        },
+        aspect,
+    );
     let v = [wrapn(x, cam.x), alt, wrapn(z, cam.z), 1.0];
     // `m` is column-major (see camera_matrix): clip_r = Σc m[c][r]·v[c].
     let clip = |r: usize| m[0][r] * v[0] + m[1][r] * v[1] + m[2][r] * v[2] + m[3][r];
@@ -3933,6 +4116,40 @@ mod tests {
         let a = world_to_screen(&cam, w, h, 12.0, 5.0, -10.0).unwrap();
         let b = world_to_screen(&cam, w, h, 12.0, 5.0, 246.0).unwrap();
         assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
+    }
+
+    /// The flight FOV law: 4:3 is untouched, wide screens gain
+    /// horizontal view without losing vertical, narrow screens gain
+    /// vertical view without losing horizontal. In every case the
+    /// frustum CONTAINS the retail 4:3 one — no screen shape can see
+    /// less than retail did.
+    #[test]
+    fn flight_fov_never_shows_less_than_the_retail_frustum() {
+        let base = 60.0_f32.to_radians();
+        let ref_a = NATIVE_W / NATIVE_H;
+        let tan_v_ref = (base * 0.5).tan();
+        let tan_h_ref = tan_v_ref * ref_a;
+        for &aspect in &[ref_a, 16.0 / 9.0, 21.0 / 9.0, 5.0 / 4.0, 1.0, 0.75] {
+            let fov = flight_fov_y(base, aspect);
+            let tan_v = (fov * 0.5).tan();
+            let tan_h = tan_v * aspect;
+            assert!(
+                tan_v >= tan_v_ref - 1e-5,
+                "vertical view shrank at aspect {aspect}"
+            );
+            assert!(
+                tan_h >= tan_h_ref - 1e-5,
+                "horizontal view shrank at aspect {aspect}"
+            );
+        }
+        // 4:3 is the identity — the retail presentation is unmoved.
+        assert_eq!(flight_fov_y(base, ref_a), base);
+        // Wide: vertical pinned, horizontal grows.
+        assert_eq!(flight_fov_y(base, 16.0 / 9.0), base);
+        // Narrow: horizontal pinned exactly, vertical grows.
+        let fov = flight_fov_y(base, 1.0);
+        assert!(fov > base);
+        assert!(((fov * 0.5).tan() * 1.0 - tan_h_ref).abs() < 1e-5);
     }
 
     fn stamp_at(x: f32, z: f32) -> MapStamp {

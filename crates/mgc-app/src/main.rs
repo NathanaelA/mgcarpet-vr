@@ -1539,6 +1539,9 @@ struct App {
     /// PlayerAction 0x1F/0x20 equivalent (PlayerCommand.mc2_select).
     pending_mc2_select: Option<(u8, u8, u8)>,
     shift_held: bool,
+    /// Alt latch, for the Alt+Enter fullscreen combo. Tracked at the
+    /// very top of the key handler so no early `return` can strand it.
+    alt_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
     /// FPS-overlay accounting: frames and wall time since the last
@@ -1717,6 +1720,7 @@ impl App {
             pending_equip: (None, None),
             pending_mc2_select: None,
             shift_held: false,
+            alt_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
             fps_frames: 0,
@@ -1761,6 +1765,48 @@ impl App {
     /// `render.enhancement.hud_transparency`.
     fn hud_transparent(&self) -> bool {
         self.cfg.render.enhancement.hud_transparency.transparent()
+    }
+
+    /// Alt+Enter. Unlike the `option_key` table (session-only by
+    /// design), this one PERSISTS: which screen shape you play in is a
+    /// property of the machine, not of the run, and having it revert on
+    /// the next launch would be a bug rather than a nicety.
+    fn toggle_fullscreen(&mut self) {
+        self.cfg.render.preference.fullscreen = !self.cfg.render.preference.fullscreen;
+        self.apply_fullscreen();
+        if let Some(spec) = settings::registry()
+            .iter()
+            .find(|s| s.cfg_path == "render.preference.fullscreen")
+        {
+            self.persist_option(spec);
+        }
+        let on = self.cfg.render.preference.fullscreen;
+        if let Some(w) = self
+            .session
+            .as_deref_mut()
+            .and_then(|s| s.sim.world.as_mut())
+        {
+            w.notify_option(format!("Fullscreen {}", if on { "on" } else { "off" }));
+        }
+    }
+
+    /// Push `render.preference.fullscreen` onto the live window.
+    /// BORDERLESS, never exclusive: `Fullscreen::Borderless(None)`
+    /// takes the monitor the window currently sits on and keeps the
+    /// desktop video mode, so there is no mode switch to flicker
+    /// through and alt-tab costs nothing. The surface follows through
+    /// the `Resized` event winit posts for the size change — nothing
+    /// here touches the renderer.
+    fn apply_fullscreen(&self) {
+        if let Some(window) = &self.window {
+            window.set_fullscreen(
+                self.cfg
+                    .render
+                    .preference
+                    .fullscreen
+                    .then_some(winit::window::Fullscreen::Borderless(None)),
+            );
+        }
     }
 
     /// The running game's identity, session or not (the campaign id
@@ -1973,6 +2019,7 @@ impl App {
                     r.set_vsync(self.cfg.render.preference.vsync);
                 }
             }
+            "render.preference.fullscreen" => self.apply_fullscreen(),
             "render.enhancement.hud_transparency" => {
                 let transparent = self.hud_transparent();
                 if let Some(r) = &mut self.renderer {
@@ -3555,9 +3602,18 @@ impl App {
         // y==0 / y>=478 in the 640×480 screen space (the CursorMoved
         // clamp guarantees the edge is reachable). Sub-pixel window
         // scales widen the test to one native pixel.
+        //
+        // The map is letterboxed, so "the edge" is the PICTURE's, not
+        // the window's — and the test reads as "at or BEYOND it", which
+        // takes in the whole bar. That matters because the confined
+        // pointer can rest anywhere in the bar: an edge-only trigger
+        // would leave a dead strip where the cursor is off the map and
+        // nothing scrolls. `unletterbox` maps bar positions outside
+        // 0..VIEW on whichever axis is barred — right/left on a wide
+        // window, top/bottom on a narrow one — so the same two
+        // comparisons per axis serve both cases unchanged.
         let edge_dir = {
-            let scale = (size.0 / 640.0).min(size.1 / 480.0);
-            let (mx, my) = (cursor.0 / scale, cursor.1 / scale);
+            let (mx, my) = ui::unletterbox(cursor, size, 640.0, 480.0);
             let dx = if mx < 1.0 {
                 -1.0
             } else if mx >= 638.0 {
@@ -4134,8 +4190,10 @@ impl ApplicationHandler for App {
         // pixel grid (no fractional-scale aliasing) and the aspect is
         // retail 4:3. Physical (not logical) so fractional DPI scales
         // (125% etc.) can't reintroduce a fractional multiple. The
-        // window stays resizable; fullscreen/non-4:3 presentation is
-        // the banked ui-native-layer work.
+        // window stays resizable, and `render.preference.fullscreen`
+        // (Alt+Enter) swaps it for a borderless cover of the current
+        // monitor — the HUD layout law handles whatever aspect that
+        // turns out to be.
         let title = match self.session.as_deref() {
             Some(sess) => format!("Magic Carpet — {}", sess.level.label),
             None => match self.campaign.as_ref() {
@@ -4145,7 +4203,16 @@ impl ApplicationHandler for App {
         };
         let attrs = Window::default_attributes()
             .with_title(title)
-            .with_inner_size(winit::dpi::PhysicalSize::new(1280u32, 960u32));
+            .with_inner_size(winit::dpi::PhysicalSize::new(1280u32, 960u32))
+            // Borderless from the first frame when the config says so,
+            // so a fullscreen launch never flashes a 4:3 window first.
+            .with_fullscreen(
+                self.cfg
+                    .render
+                    .preference
+                    .fullscreen
+                    .then_some(winit::window::Fullscreen::Borderless(None)),
+            );
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -4492,19 +4559,25 @@ impl ApplicationHandler for App {
                 // The world-map screen owns a confined pointer
                 // (retail captures the mouse to the 640×480 screen;
                 // edge contact scrolls the map). The grab confines to
-                // the WINDOW — clamp the rest of the way to the 4:3
-                // map area and warp the OS cursor back when it
-                // strays (also covers platforms where the Confined
-                // grab is unsupported).
+                // the WINDOW; clamp to the same rect and warp the OS
+                // cursor back when it strays, which also covers
+                // platforms where the Confined grab is unsupported.
                 // Only the MAP confines/clamps (edge scrolling needs
                 // the boundary pixel); the menus run a free pointer.
+                //
+                // The clamp is to the WINDOW, not to the 4:3 picture.
+                // Clamping to the picture while it was anchored at the
+                // top-left was the same rect; now that it is CENTRED it
+                // is not, and the old clamp trapped the pointer in a
+                // picture-sized box at the top-left — the map's right
+                // edge became unreachable (player-reported). Letting
+                // the pointer into the bars is also what makes the
+                // whole bar scroll rather than one boundary pixel.
                 if self.screen == Screen::Map && self.menu.is_none() {
                     let size = self.view_size();
-                    let scale = (size.0 / 640.0).min(size.1 / 480.0);
-                    let area = (640.0 * scale, 480.0 * scale);
                     let cl = (
-                        self.cursor.0.clamp(0.0, area.0 - 1.0),
-                        self.cursor.1.clamp(0.0, area.1 - 1.0),
+                        self.cursor.0.clamp(0.0, size.0 - 1.0),
+                        self.cursor.1.clamp(0.0, size.1 - 1.0),
                     );
                     if cl != self.cursor {
                         self.cursor = cl;
@@ -4545,9 +4618,31 @@ impl ApplicationHandler for App {
                 self.set_grab(false);
                 self.fire_held = false;
                 self.fire_right_held = false;
+                // Alt-tabbing away eats the Alt key-up, which would
+                // leave the latch stuck and turn the next bare Enter
+                // into a fullscreen toggle instead of the map.
+                self.alt_held = false;
+                self.shift_held = false;
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
+                // Alt latch + Alt+Enter, both BEFORE every other key
+                // path. The latch has to lead because the menu, the
+                // frontend text fields and the exit dialog all `return`
+                // out below, and a swallowed key-up would leave Alt
+                // stuck down. Alt+Enter must lead the plain-Enter arm
+                // (:4795) for the same reason it exists — otherwise the
+                // classic combo just opens the map book.
+                if matches!(
+                    event.physical_key,
+                    PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight)
+                ) {
+                    self.alt_held = down;
+                }
+                if down && self.alt_held && event.logical_key == Key::Named(NamedKey::Enter) {
+                    self.toggle_fullscreen();
+                    return;
+                }
                 if down && event.logical_key == Key::Named(NamedKey::Escape) {
                     if self.menu.is_some() && self.mini.is_some() {
                         // The options layer was opened FROM the
@@ -5398,7 +5493,7 @@ impl ApplicationHandler for App {
                                 ) else {
                                     continue;
                                 };
-                                let s = (size.0 / 640.0).max(1.0);
+                                let s = ui::HudFrame::new(size.0, size.1).s.max(1.0);
                                 let ih = 12.0 * s;
                                 let iw = ih * st.w as f32 / st.h as f32;
                                 // A dark slab behind the luminous icon
@@ -5462,7 +5557,7 @@ impl ApplicationHandler for App {
                         });
                         let blink =
                             0.5 + 0.5 * (((sess.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
-                        ui::crosshair_quads(&mut quads, size.0, neutral, locks, blink);
+                        ui::crosshair_quads(&mut quads, size.0, size.1, neutral, locks, blink);
                     }
                     // The top-of-screen notification line (retail
                     // `DrawTextPauseEndOfLevel_2CE30`, EF:21787): the
@@ -5478,8 +5573,12 @@ impl ApplicationHandler for App {
                     if !self.book_open() && assets.has_font() {
                         if let Some((msg, color)) = w.notification() {
                             let (ax, ay) = assets.hud_notification_anchor();
-                            let hud_s = size.0 / 640.0;
-                            let font_s = size.0 / 320.0;
+                            // Uniform HUD scale (`ui::HudFrame`): the
+                            // toast rides under the LEFT-anchored panel
+                            // group, so its anchor is native×s. The font
+                            // runs at 2× because FONT1 is 320-native.
+                            let hud_s = ui::HudFrame::new(size.0, size.1).s;
+                            let font_s = 2.0 * hud_s;
                             let tint = [
                                 color[0] as f32 / 255.0,
                                 color[1] as f32 / 255.0,
@@ -5503,8 +5602,12 @@ impl ApplicationHandler for App {
                         // baseline.
                         if !is_mc2 && w.completed() && !w.player_dead() {
                             let (ax, ay) = assets.hud_notification_anchor();
-                            let hud_s = size.0 / 640.0;
-                            let font_s = size.0 / 320.0;
+                            // Uniform HUD scale (`ui::HudFrame`): the
+                            // toast rides under the LEFT-anchored panel
+                            // group, so its anchor is native×s. The font
+                            // runs at 2× because FONT1 is 320-native.
+                            let hud_s = ui::HudFrame::new(size.0, size.1).s;
+                            let font_s = 2.0 * hud_s;
                             let black = [0.0, 0.0, 0.0, 1.0];
                             // The two sentences are ETEXT 60/61, read
                             // from the bundle's baked bank (literal
@@ -5543,8 +5646,12 @@ impl ApplicationHandler for App {
                         // presentation).
                         if let Some((text, _)) = &self.subtitle {
                             let (_, ay) = assets.hud_notification_anchor();
-                            let hud_s = size.0 / 640.0;
-                            let font_s = size.0 / 320.0;
+                            // Uniform HUD scale (`ui::HudFrame`): the
+                            // toast rides under the LEFT-anchored panel
+                            // group, so its anchor is native×s. The font
+                            // runs at 2× because FONT1 is 320-native.
+                            let hud_s = ui::HudFrame::new(size.0, size.1).s;
+                            let font_s = 2.0 * hud_s;
                             let lh = assets.font_line_height();
                             let white = [1.0, 1.0, 1.0, 1.0];
                             let max_w = size.0 * 0.8 / font_s;
@@ -5586,7 +5693,7 @@ impl ApplicationHandler for App {
                     // toast rows; above the fade (a debug instrument
                     // stays readable). White FONT1 ink.
                     if !self.fps_text.is_empty() && assets.has_font() {
-                        let font_s = size.0 / 320.0;
+                        let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
                         let pad = 4.0 * font_s;
                         let w_px = assets.text_width(&self.fps_text) * font_s;
                         let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
@@ -5773,6 +5880,9 @@ struct Args {
     light_sources: Option<bool>,
     /// Vertical-sync override (config `render.preference.vsync`).
     vsync: Option<bool>,
+    /// Borderless-fullscreen override (config
+    /// `render.preference.fullscreen`).
+    fullscreen: Option<bool>,
     /// CLI override of `render.debug.fps` (the FPS overlay).
     fps: Option<bool>,
     /// Animation clock for `--screenshot` (game turns; default 0).
@@ -5834,6 +5944,7 @@ fn parse_args() -> Result<Args, String> {
     let mut reflections = None;
     let mut light_sources = None;
     let mut vsync = None;
+    let mut fullscreen = None;
     let mut fps = None;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
@@ -5997,6 +6108,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-light-sources" => light_sources = Some(false),
             "--vsync" => vsync = Some(true),
             "--no-vsync" => vsync = Some(false),
+            "--fullscreen" => fullscreen = Some(true),
+            "--windowed" => fullscreen = Some(false),
             "--fps" => fps = Some(true),
             "--no-fps" => fps = Some(false),
             "--thrust" => {
@@ -6112,7 +6225,8 @@ fn parse_args() -> Result<Args, String> {
                      [--subtitles on|off] [--fog-distance TILES (0 = no fog)] \
                      [--sky|--no-sky] [--reflections|--no-reflections] \
                      [--light-sources|--no-light-sources] \
-                     [--vsync|--no-vsync] [--fps|--no-fps] \
+                     [--vsync|--no-vsync] [--fullscreen|--windowed] \
+                     [--fps|--no-fps] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
@@ -6160,6 +6274,7 @@ fn parse_args() -> Result<Args, String> {
         reflections,
         light_sources,
         vsync,
+        fullscreen,
         fps,
         anim_turn,
         terrain_features,
@@ -7058,6 +7173,9 @@ fn main() -> std::process::ExitCode {
     }
     if let Some(v) = args.vsync {
         cfg.render.preference.vsync = v;
+    }
+    if let Some(v) = args.fullscreen {
+        cfg.render.preference.fullscreen = v;
     }
     if let Some(v) = args.fps {
         cfg.render.debug.fps = v;

@@ -838,7 +838,24 @@ by offset, never by our field name.
   replay nuance.
 - WATCH: temple hover sprite polarity may be inverted; langindexbuffer[2]
   byte-verify; OK2/CANCEL2 pressed-state sprites.
-- Non-4:3 aspect handling.
+- Non-4:3 aspect handling: DONE for the in-game HUD, the 3D view
+  (`mgc_render::HudFrame` + `flight_fov_y`), the FMV player, and BOTH
+  main menus — the temple and the MC1 globe now centre, via
+  `ui::letterbox`/`unletterbox`/`offset_quads` (player-reported: they
+  sat in the top-left corner). Borderless fullscreen is now the
+  DEFAULT (`render.preference.fullscreen`), which is also the faithful
+  reading — DOS ran one exclusive full-screen mode and offered no
+  window.
+  The WORLD MAP is centred too, which took three more pieces than the
+  menus. The edge-scroll now reads "at or BEYOND the picture edge", so
+  the WHOLE letterbox bar scrolls instead of one boundary pixel (player
+  ruling) — on the barred axis, whichever it is: left/right on a wide
+  window, top/bottom on a squashed one. The confined pointer is clamped
+  to the WINDOW, not the picture, or the map's right edge is
+  unreachable. And map content is now CROPPED to the 640x480 screen
+  (`ui::clip_quads`): the map scrolls, so portals and dressing hang off
+  the viewport constantly, and what the window edge used to clip for
+  free was landing in the visible bars.
 
 ### Render
 - TMAPS textured fullscreen map (the "green look" for MC1's book map).

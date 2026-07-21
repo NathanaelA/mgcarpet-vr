@@ -432,8 +432,7 @@ impl Mc1Menu {
     }
 
     pub fn click(&mut self, size: (f32, f32), cursor: (f32, f32)) {
-        let scale = (size.0 / W as f32).min(size.1 / H as f32);
-        let (mx, my) = (cursor.0 / scale, cursor.1 / scale);
+        let (mx, my) = crate::ui::unletterbox(cursor, size, W as f32, H as f32);
         if self.modal.is_some() {
             let ok = Self::ok_hit(mx, my);
             let cancel = Self::cancel_hit(mx, my);
@@ -538,8 +537,8 @@ impl Mc1Menu {
     /// Compose + resolve this frame's screen; returns the RGBA quad
     /// set (one screen quad; the atlas is re-uploaded by the app).
     pub fn frame(&mut self, size: (f32, f32), cursor: (f32, f32)) -> (Vec<u8>, Vec<UiQuad>) {
-        let scale = (size.0 / W as f32).min(size.1 / H as f32);
-        let (mx, my) = (cursor.0 / scale, cursor.1 / scale);
+        let (scale, ox, oy) = crate::ui::letterbox(size, W as f32, H as f32);
+        let (mx, my) = crate::ui::unletterbox(cursor, size, W as f32, H as f32);
         let mut buf = std::mem::take(&mut self.screen);
         buf.copy_from_slice(&self.bg);
         // The menu movies: retail steps them on alternate menu
@@ -664,7 +663,7 @@ impl Mc1Menu {
         }
         self.screen = buf;
         let quads = vec![UiQuad {
-            rect: [0.0, 0.0, W as f32 * scale, H as f32 * scale],
+            rect: [ox, oy, W as f32 * scale, H as f32 * scale],
             uv: [0.0, 0.0, W as f32, H as f32],
             tint: [1.0, 1.0, 1.0, 1.0],
         }];

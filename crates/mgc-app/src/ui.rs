@@ -488,7 +488,12 @@ impl UiAssets {
     /// grid is authored for 640×480, so placement scales by
     /// (w/640, h/480) to cover any window.
     pub fn web_quads(&self, w: f32, h: f32) -> Vec<UiQuad> {
-        let (sx, sy) = (w / 640.0, h / 480.0);
+        // Uniform: the equipped-panel frame is art, and the cells it
+        // sits in are already uniform (see `book_cell`).
+        let (sx, sy) = {
+            let s = HudFrame::new(w, h).s;
+            (s, s)
+        };
         let mut quads = Vec::with_capacity(24);
         let mut id = 1usize; // actPlayerIndex starts at 1 (EF:21680)
         let mut y = 0.0f32;
@@ -757,6 +762,72 @@ fn snap(rect: [f32; 4]) -> [f32; 4] {
     [x0, y0, x1 - x0, y1 - y0]
 }
 
+/// Fit a fixed-size frontend screen into the window: the largest
+/// integer-free scale that fits, CENTRED, with the remainder as
+/// letterbox bars.
+///
+/// Every full-screen frontend surface (both main menus, the world map,
+/// the FMV player) is authored at a fixed 4:3 resolution and blown up
+/// to the window. Anchoring that at the top-left leaves the whole
+/// screen shoved into a corner on any window that is not 4:3 — which
+/// fullscreen usually is not.
+///
+/// Returns `(scale, offset_x, offset_y)`. Callers scale their authored
+/// coordinates by `scale` and translate by the offset; input has to
+/// make the same trip in reverse ([`unletterbox`]).
+pub(crate) fn letterbox(size: (f32, f32), w: f32, h: f32) -> (f32, f32, f32) {
+    let scale = (size.0 / w).min(size.1 / h);
+    (
+        scale,
+        ((size.0 - w * scale) * 0.5).floor(),
+        ((size.1 - h * scale) * 0.5).floor(),
+    )
+}
+
+/// Window cursor → authored screen coordinates, the inverse of
+/// [`letterbox`]. Hit tests are written against the authored layout,
+/// so they must not see window pixels.
+pub(crate) fn unletterbox(cursor: (f32, f32), size: (f32, f32), w: f32, h: f32) -> (f32, f32) {
+    let (scale, ox, oy) = letterbox(size, w, h);
+    ((cursor.0 - ox) / scale, (cursor.1 - oy) / scale)
+}
+
+/// Crop quads to a `w`x`h` viewport anchored at the origin, dropping
+/// what falls entirely outside and proportionally cropping the rest
+/// (rect AND uv, so partial sprites are cut rather than squashed).
+///
+/// A letterboxed screen needs this where an un-letterboxed one does
+/// not: content that hangs off the viewport — a map portal half
+/// scrolled past the edge — used to be clipped for free by the window
+/// boundary, because the picture reached it. Once the picture is
+/// centred, that same overhang lands in the visible bars instead.
+pub(crate) fn clip_quads(quads: &mut Vec<UiQuad>, w: f32, h: f32) {
+    quads.retain_mut(|q| {
+        let (x, y, qw, qh) = (q.rect[0], q.rect[1], q.rect[2], q.rect[3]);
+        if qw <= 0.0 || qh <= 0.0 || x >= w || y >= h || x + qw <= 0.0 || y + qh <= 0.0 {
+            return false;
+        }
+        // Texels per rect pixel, so the uv window follows the crop.
+        let (ux, uy) = (q.uv[2] / qw, q.uv[3] / qh);
+        let (x0, y0) = (x.max(0.0), y.max(0.0));
+        let (x1, y1) = ((x + qw).min(w), (y + qh).min(h));
+        q.uv[0] += (x0 - x) * ux;
+        q.uv[1] += (y0 - y) * uy;
+        q.uv[2] = (x1 - x0) * ux;
+        q.uv[3] = (y1 - y0) * uy;
+        q.rect = [x0, y0, x1 - x0, y1 - y0];
+        true
+    });
+}
+
+/// Translate every quad into the letterboxed screen.
+pub(crate) fn offset_quads(quads: &mut [UiQuad], ox: f32, oy: f32) {
+    for q in quads {
+        q.rect[0] += ox;
+        q.rect[1] += oy;
+    }
+}
+
 pub(crate) fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
     UiQuad {
         rect: snap(rect),
@@ -805,16 +876,23 @@ const SPR_SLOT_BG_ACTIVE: usize = 4;
 
 /// One grid cell's slab rect in screen pixels (the icon is pre-composited
 /// onto the 64×37 slot slab). `k` = display index 0..24.
+/// The grid is the RIGID pane of the map screen (see the map-screen
+/// layout law in `mgc_render::Renderer::render`): the cells are art, so
+/// they keep the uniform scale and never stretch. The block is anchored
+/// into the screen's bottom-RIGHT corner — right-anchored so its last
+/// column still ends flush at x=w, bottom-anchored so the black log
+/// strip below keeps its 64 native px. The renderer derives the world
+/// viewport and the map pane from the same two anchors, so the three
+/// panes cannot drift apart.
 fn book_cell(w: f32, h: f32, k: usize) -> [f32; 4] {
-    let sx = w / 640.0;
-    let sy = h / 480.0;
+    let f = HudFrame::new(w, h);
     let col = (k % BOOK_GRID_COLS) as f32;
     let row = (k / BOOK_GRID_COLS) as f32;
     [
-        (BOOK_GRID_X + col * BOOK_CELL_W) * sx,
-        (BOOK_GRID_Y + row * BOOK_CELL_H) * sy,
-        BOOK_CELL_W * sx,
-        BOOK_CELL_H * sy,
+        f.rx(BOOK_GRID_X + col * BOOK_CELL_W),
+        f.by(BOOK_GRID_Y + row * BOOK_CELL_H),
+        f.len(BOOK_CELL_W),
+        f.len(BOOK_CELL_H),
     ]
 }
 
@@ -889,7 +967,7 @@ pub fn book_quads(
         // OWNED = full colour (raw). NOT owned = the icon's SHAPE cut
         // into the slab as a dark relief (the original's
         // blend[0xA6|dest], sub_23AE0).
-        let su = (w / 640.0).min(h / 480.0);
+        let su = HudFrame::new(w, h).s;
         let icon_id = SPR_SPELL_ICON + spell as usize;
         if let Some((iw, ih)) = assets.sprite_dims(icon_id) {
             let irect = [cell[0], cell[1], iw * su, ih * su];
@@ -959,7 +1037,10 @@ pub fn book_quads(
         let sp = spell_id.0;
         let k = DISPLAY_ORDER.iter().position(|&d| d == sp).unwrap_or(0);
         let cell = book_cell(w, h, k);
-        let (sx, sy) = (w / 640.0, h / 480.0);
+        let (sx, sy) = {
+            let s = HudFrame::new(w, h).s;
+            (s, s)
+        };
         let frame = if loadout.cooldown[sp as usize] > 0.0 {
             SPR_SLOT_HELD
         } else {
@@ -971,7 +1052,7 @@ pub fn book_quads(
                 assets.sprite_quad_rect_tint(frame, [cell[0], cell[1], fw * sx, fh * sy], WHITE),
             );
         }
-        let su = sx.min(sy);
+        let su = sx;
         let icon_id = SPR_SPELL_ICON + sp as usize;
         if let Some((iw, ih)) = assets.sprite_dims(icon_id) {
             // Retail draws the icon at the frame origin (DrawBitmap
@@ -1052,6 +1133,11 @@ const BAR_X: f32 = 58.0; // bars start +58 from the sub-panel origin
 /// One HUD section = 640/5 = 128 native px (the 5×20% top strip).
 const HUD_SECTION: f32 = 128.0;
 
+/// The non-4:3 presentation law — ONE source, shared with the
+/// renderer (which anchors the radar disc, the map panes and the world
+/// viewport by the same rule). See [`mgc_render::HudFrame`].
+pub use mgc_render::HudFrame;
+
 /// A solid bar fill at panel-space (x,y) scaled to screen — the
 /// original's `sub_22810(x,y,64,h,(val<<6)/max,color)`: `fill` is the
 /// value/max fraction of the 64-px ruler. Faithful sub_22810 (:26991)
@@ -1113,10 +1199,16 @@ pub fn hud_quads(
     mc2_book: Option<&Mc2BookView>,
     dev_spells: bool,
     w: f32,
-    _h: f32,
+    h: f32,
 ) -> Vec<UiQuad> {
     let mut quads = Vec::new();
-    let s = w / 640.0;
+    // The strip splits into two anchored groups (see `HudFrame`): the
+    // radar + three wizard sub-panels are LEFT-anchored — they already
+    // read as `native * s` from x=0, so nothing below changes — and the
+    // two equipped-spell panels are RIGHT-anchored, which is the only
+    // place the anchor is spelled out.
+    let f = HudFrame::new(w, h);
+    let s = f.s;
     // Panel-background tint: translucent (faithful MC1, always-on
     // transparency) or opaque (the MC2 readability toggle).
     let panel_tint = if transparent { PANEL_TINT } else { WHITE };
@@ -1346,7 +1438,11 @@ pub fn hud_quads(
     // meter at y=+36: a progress bar (partial mana toward the next cast)
     // plus a row of dots (whole casts currently affordable) — sub_23D40
     // :27700-34.
-    for (hand, px) in [(0usize, 510.0), (1usize, 574.0)] {
+    // `px` is the panel's PHYSICAL left edge, right-anchored off the
+    // authored 510/574 (the pair ends at 574+64 = 638, i.e. 2 native px
+    // clear of the right edge — the mirror of the radar's x=2 margin,
+    // so the two groups sit symmetrically in their corners).
+    for (hand, px) in [(0usize, f.rx(510.0)), (1usize, f.rx(574.0))] {
         // The bound spell + cast-in-progress state per column: MC1
         // reads the loadout; MC2 reads the native spell book (the
         // quick-slots + the armed cast window).
@@ -1370,7 +1466,7 @@ pub fn hud_quads(
         let frame = if active { SPR_SLOT_HELD } else { SPR_SLOT_IDLE };
         push_opt(
             &mut quads,
-            assets.sprite_quad_tint(frame, px * s, 2.0 * s, s, panel_tint),
+            assets.sprite_quad_tint(frame, px, 2.0 * s, s, panel_tint),
         );
         if mc2 {
             // MC2 hand panel: the dedicated BIG spell-icon run —
@@ -1385,7 +1481,7 @@ pub fn hud_quads(
             let Some(sp) = spell else { continue };
             push_opt(
                 &mut quads,
-                assets.sprite_quad(123 + sp as usize, px * s, 2.0 * s, s),
+                assets.sprite_quad(123 + sp as usize, px, 2.0 * s, s),
             );
             // The selected LEVEL numeral (retail's per-level "I/II/III"
             // art), top-right of the big icon — the SAME baked sprite the
@@ -1397,11 +1493,11 @@ pub fn hud_quads(
                 .unwrap_or((10.0, 12.0));
             push_opt(
                 &mut quads,
-                assets.sprite_quad(MC2_SPR_SUB_NUM + level, (px + 60.0 - nw) * s, 3.0 * s, s),
+                assets.sprite_quad(MC2_SPR_SUB_NUM + level, px + (60.0 - nw) * s, 3.0 * s, s),
             );
             let cost = bv.cost[sp as usize].max(1);
             let mana = loadout.mana;
-            let mx = (px + 4.0) * s;
+            let mx = px + 4.0 * s;
             let my = (2.0 + 36.0) * s;
             let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
             quads.push(solid([mx, my, partial * s, 4.0 * s], METER_GREY));
@@ -1419,7 +1515,7 @@ pub fn hud_quads(
             // pane's `|| dev` arm) — don't wash what casts fine.
             if !dev_spells && !bv.castable[sp as usize][level] {
                 let (fw, fh) = assets.sprite_dims(frame).unwrap_or((64.0, 44.0));
-                quads.push(solid([px * s, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
+                quads.push(solid([px, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
             }
             continue;
         }
@@ -1429,7 +1525,7 @@ pub fn hud_quads(
             // the placement), native size × the HUD scale.
             push_opt(
                 &mut quads,
-                assets.sprite_quad(SPR_SPELL_ICON + sp as usize, px * s, 2.0 * s, s),
+                assets.sprite_quad(SPR_SPELL_ICON + sp as usize, px, 2.0 * s, s),
             );
             // Availability meter at (frame+4, frame+36) — sub_23D40
             // :27703-34: the grey partial-cast progress bar, then one
@@ -1439,7 +1535,7 @@ pub fn hud_quads(
             // manifestation's +136).
             let cost = loadout.cost[sp as usize].max(1);
             let mana = loadout.mana;
-            let mx = (px + 4.0) * s; // sub_23D40 a1+4
+            let mx = px + 4.0 * s; // sub_23D40 a1+4
             let my = (2.0 + 36.0) * s; // a2+36
             let partial = (56.0 * (mana % cost) as f32 / cost as f32).floor();
             quads.push(solid([mx, my, partial * s, 4.0 * s], METER_GREY));
@@ -1450,7 +1546,7 @@ pub fn hud_quads(
             // can't fire.
             if !loadout.bindable[sp as usize] {
                 let (fw, fh) = assets.sprite_dims(frame).unwrap_or((64.0, 44.0));
-                quads.push(solid([px * s, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
+                quads.push(solid([px, 2.0 * s, fw * s, fh * s], LOCKED_WASH));
             }
         }
     }
@@ -1473,7 +1569,7 @@ const CANCEL_SPRITE: usize = 258;
 /// 50×32 native (the sprite size). One geometry shared by the draw
 /// and the click hit test.
 pub fn exit_confirm_rects(w: f32, h: f32) -> ([f32; 4], [f32; 4]) {
-    let s = (w / 640.0).max(1.0);
+    let s = HudFrame::new(w, h).s.max(1.0);
     let (bw, bh) = (50.0 * s, 32.0 * s);
     let ok = [w / 2.0 - bw, h / 2.0 - bh / 2.0, bw, bh];
     let cancel = [w / 2.0, h / 2.0 - bh / 2.0, bw, bh];
@@ -1531,7 +1627,7 @@ pub fn exit_confirm_quads(
             // MC1 fallback: a labeled slab in the same geometry.
             None => {
                 quads.push(solid(r, SLAB_BG));
-                let s = (w / 640.0).max(1.0);
+                let s = HudFrame::new(w, h).s.max(1.0);
                 for e in [
                     [r[0], r[1], r[2], s],
                     [r[0], r[1] + r[3] - s, r[2], s],
@@ -1561,8 +1657,8 @@ pub fn exit_confirm_quads(
 /// small white bars over the live view. Kept alongside the pause
 /// mini-menu — the panel is a MENU, this is the pause state, and the
 /// player reads them in different places.
-pub fn pause_quads(w: f32, _h: f32) -> Vec<UiQuad> {
-    let s = (w / 640.0).max(1.0);
+pub fn pause_quads(w: f32, h: f32) -> Vec<UiQuad> {
+    let s = HudFrame::new(w, h).s.max(1.0);
     let (x, y) = (132.0 * s, 50.0 * s);
     let ink = [0.95, 0.95, 0.95, 0.95];
     vec![
@@ -1583,7 +1679,7 @@ pub fn vitals_quads(
     grace_meter: bool,
 ) -> Vec<UiQuad> {
     let mut quads = Vec::new();
-    let scale = (w / 640.0).max(1.0);
+    let scale = HudFrame::new(w, h).s.max(1.0);
     let bw = w * 0.25;
     let y = h - 26.0 * scale;
     // Spawn-grace shimmer: a thin white strip draining bottom-center
@@ -1653,11 +1749,12 @@ pub fn vitals_quads(
 pub fn crosshair_quads(
     quads: &mut Vec<UiQuad>,
     w: f32,
+    h: f32,
     neutral: Option<(f32, f32)>,
     locks: [Option<(f32, f32)>; 2],
     blink: f32,
 ) {
-    let s = w / 640.0;
+    let s = HudFrame::new(w, h).s;
     let red = [0.30 + 0.70 * blink.clamp(0.0, 1.0), 0.02, 0.02, 1.0];
     if let Some((cx, cy)) = neutral {
         plus_glyph(quads, cx, cy, s, [0.0, 0.0, 0.0, 1.0]);
@@ -1871,22 +1968,31 @@ pub struct SelectorHover {
 }
 
 /// One grid cell's screen rect. Native geometry per the trace §2.2:
-/// `x = edgeW + col·boxW`, `y = (480 − 2·boxH) + row·boxH`, bottom-
-/// anchored; we scale native 640×480 by (w/640, h/480) like the rest
-/// of the UI.
+/// `x = edgeW + col·boxW`, `y = (480 − 2·boxH) + row·boxH`.
+///
+/// The pane is the "largely fixed" surface of the layout law: its
+/// cells ARE the spell buttons, so they take the uniform scale and
+/// nothing else. It stays BOTTOM-anchored (its retail home) and
+/// CENTER-anchored horizontally — the strip is a symmetric band across
+/// the bottom in retail, so at a wider-than-4:3 screen the slack
+/// splits evenly to either side rather than piling up on one edge.
+/// `sx`/`sy` are both the uniform factor, kept as two fields so the
+/// per-cell offset arithmetic below reads unchanged.
 struct PaneGeom {
     edge_w: f32,
     box_w: f32,
     box_h: f32,
     sub_w: f32,
     sub_h: f32,
+    f: HudFrame,
     sx: f32,
     sy: f32,
 }
 
 impl PaneGeom {
     fn new(assets: &UiAssets, pane: &SelectorPane, w: f32, h: f32) -> Self {
-        let (sx, sy) = (w / 640.0, h / 480.0);
+        let f = HudFrame::new(w, h);
+        let (sx, sy) = (f.s, f.s);
         if pane.mc2_art {
             let (bw, bh) = assets.sprite_dims(MC2_SPR_BOX).unwrap_or((48.0, 40.0));
             let (ew, _) = assets.sprite_dims(MC2_SPR_EDGE).unwrap_or((8.0, 80.0));
@@ -1899,6 +2005,7 @@ impl PaneGeom {
                 box_h: bh,
                 sub_w: sw,
                 sub_h: sh,
+                f,
                 sx,
                 sy,
             }
@@ -1912,6 +2019,7 @@ impl PaneGeom {
                 box_h: 37.0,
                 sub_w: 52.0,
                 sub_h: 36.0,
+                f,
                 sx,
                 sy,
             }
@@ -1927,10 +2035,10 @@ impl PaneGeom {
     fn cell(&self, slot: usize, cols: usize) -> [f32; 4] {
         let (col, row) = ((slot % cols) as f32, (slot / cols) as f32);
         [
-            (self.edge_w + col * self.box_w) * self.sx,
-            (self.grid_top() + row * self.box_h) * self.sy,
-            self.box_w * self.sx,
-            self.box_h * self.sy,
+            self.f.cx(self.edge_w + col * self.box_w),
+            self.f.by(self.grid_top() + row * self.box_h),
+            self.f.len(self.box_w),
+            self.f.len(self.box_h),
         ]
     }
 
@@ -1946,10 +2054,10 @@ impl PaneGeom {
     fn sub_cell(&self, slot: usize, cols: usize, levels: f32, l: u8) -> [f32; 4] {
         let x0 = self.submenu_x(slot, cols, levels);
         [
-            (x0 + l as f32 * self.sub_w) * self.sx,
-            (self.grid_top() - self.sub_h) * self.sy,
-            self.sub_w * self.sx,
-            self.sub_h * self.sy,
+            self.f.cx(x0 + l as f32 * self.sub_w),
+            self.f.by(self.grid_top() - self.sub_h),
+            self.f.len(self.sub_w),
+            self.f.len(self.sub_h),
         ]
     }
 }
@@ -2072,7 +2180,7 @@ pub fn selector_quads(
             // (EF:22452). The alpha tint stands in for the blend.
             if hovered {
                 let tag_tint = [1.0, 1.0, 1.0, 0.75];
-                let su = g.sx.min(g.sy);
+                let su = g.sx;
                 if view.bound[0] == Some(spell as u8) {
                     push_opt(
                         &mut quads,
@@ -2160,12 +2268,12 @@ pub fn selector_quads(
 
     // --- Pane end frames + hovered-slot highlight (MC2 art) ---
     if pane.mc2_art {
-        let top = g.grid_top() * g.sy;
+        let top = g.f.by(g.grid_top());
         push_opt(
             &mut quads,
             assets.sprite_quad_rect_tint(
                 MC2_SPR_EDGE,
-                [0.0, top, g.edge_w * g.sx, 2.0 * g.box_h * g.sy],
+                [g.f.cx(0.0), top, g.edge_w * g.sx, 2.0 * g.box_h * g.sy],
                 WHITE,
             ),
         );
@@ -2174,7 +2282,7 @@ pub fn selector_quads(
             assets.sprite_quad_rect_tint(
                 MC2_SPR_EDGE,
                 [
-                    (g.edge_w + pane.cols as f32 * g.box_w) * g.sx,
+                    g.f.cx(g.edge_w + pane.cols as f32 * g.box_w),
                     top,
                     g.edge_w * g.sx,
                     2.0 * g.box_h * g.sy,
@@ -2285,7 +2393,202 @@ pub fn selector_quads(
 
 #[cfg(test)]
 mod tests {
+    /// Cropping must CUT a partial sprite, not squash it: the visible
+    /// part keeps its scale and the uv window follows the rect, so the
+    /// texels shown are exactly the ones inside the viewport.
+    #[test]
+    fn clip_crops_rather_than_squashing() {
+        use mgc_render::UiQuad;
+        let quad = |rect: [f32; 4]| UiQuad {
+            rect,
+            uv: [100.0, 200.0, 10.0, 20.0],
+            tint: [1.0; 4],
+        };
+        // Fully inside: untouched. Fully outside: dropped.
+        let mut q = vec![
+            quad([5.0, 5.0, 10.0, 20.0]),
+            quad([-40.0, 0.0, 10.0, 20.0]),
+            quad([700.0, 0.0, 10.0, 20.0]),
+        ];
+        super::clip_quads(&mut q, 640.0, 480.0);
+        assert_eq!(q.len(), 1, "only the inside quad survives");
+        assert_eq!(q[0].uv, [100.0, 200.0, 10.0, 20.0], "inside quad untouched");
+
+        // Half off the left edge: half the width, half the texels, and
+        // the uv window advances by the cut.
+        let mut q = vec![quad([-5.0, 0.0, 10.0, 20.0])];
+        super::clip_quads(&mut q, 640.0, 480.0);
+        assert_eq!(q[0].rect, [0.0, 0.0, 5.0, 20.0]);
+        assert_eq!(q[0].uv, [105.0, 200.0, 5.0, 20.0]);
+        // The scale is preserved — that is what "crop, not squash"
+        // means: texels-per-pixel is the same before and after.
+        assert_eq!(q[0].uv[2] / q[0].rect[2], 10.0 / 10.0);
+
+        // Off the bottom-right: cut on both axes, origin unchanged.
+        let mut q = vec![quad([635.0, 470.0, 10.0, 20.0])];
+        super::clip_quads(&mut q, 640.0, 480.0);
+        assert_eq!(q[0].rect, [635.0, 470.0, 5.0, 10.0]);
+        assert_eq!(q[0].uv, [100.0, 200.0, 5.0, 10.0]);
+    }
+
+    /// A 4:3 window has no bars; a wider one bars left/right and a
+    /// narrower one top/bottom. In every case the picture is centred
+    /// and the cursor round-trips.
+    #[test]
+    fn letterbox_centres_and_round_trips() {
+        let (w, h) = (640.0, 480.0);
+        for size in [
+            (640.0, 480.0),
+            (1280.0, 960.0),
+            (1600.0, 900.0),
+            (800.0, 900.0),
+        ] {
+            let (scale, ox, oy) = super::letterbox(size, w, h);
+            // The picture fits, and the bars are even on both sides.
+            assert!(
+                w * scale <= size.0 + 0.5 && h * scale <= size.1 + 0.5,
+                "{size:?}"
+            );
+            assert!((ox * 2.0 - (size.0 - w * scale)).abs() <= 1.0, "{size:?} x");
+            assert!((oy * 2.0 - (size.1 - h * scale)).abs() <= 1.0, "{size:?} y");
+            // A point in the middle of the picture maps back to itself.
+            let mid = (ox + w * scale / 2.0, oy + h * scale / 2.0);
+            let back = super::unletterbox(mid, size, w, h);
+            assert!(
+                (back.0 - w / 2.0).abs() < 1.0 && (back.1 - h / 2.0).abs() < 1.0,
+                "{size:?}"
+            );
+        }
+    }
+
+    /// The map's edge-scroll reads "at or BEYOND the picture edge", so
+    /// the whole letterbox bar scrolls rather than only the boundary
+    /// pixel — otherwise the confined pointer has a dead strip where it
+    /// is off the map and nothing happens. It has to hold on the
+    /// barred axis whichever one that is: left/right on a wide window,
+    /// top/bottom on a squashed one.
+    #[test]
+    fn cursor_anywhere_in_a_letterbox_bar_reads_as_beyond_the_edge() {
+        let (w, h) = (640.0, 480.0);
+        // Wide: bars left and right.
+        let size = (1600.0, 900.0);
+        let (_, ox, _) = super::letterbox(size, w, h);
+        assert!(ox > 1.0, "expected side bars, got ox={ox}");
+        for x in [0.0, ox / 2.0, ox - 1.0] {
+            let (mx, _) = super::unletterbox((x, size.1 / 2.0), size, w, h);
+            assert!(
+                mx < 1.0,
+                "x={x} in the left bar did not read as past the edge"
+            );
+        }
+        for x in [size.0 - 1.0, size.0 - ox / 2.0] {
+            let (mx, _) = super::unletterbox((x, size.1 / 2.0), size, w, h);
+            assert!(
+                mx >= 638.0,
+                "x={x} in the right bar did not read as past the edge"
+            );
+        }
+        // Squashed: bars top and bottom, same rule on y.
+        let size = (800.0, 900.0);
+        let (_, _, oy) = super::letterbox(size, w, h);
+        assert!(oy > 1.0, "expected top/bottom bars, got oy={oy}");
+        for y in [0.0, oy / 2.0, oy - 1.0] {
+            let (_, my) = super::unletterbox((size.0 / 2.0, y), size, w, h);
+            assert!(
+                my < 1.0,
+                "y={y} in the top bar did not read as past the edge"
+            );
+        }
+        for y in [size.1 - 1.0, size.1 - oy / 2.0] {
+            let (_, my) = super::unletterbox((size.0 / 2.0, y), size, w, h);
+            assert!(
+                my >= 478.0,
+                "y={y} in the bottom bar did not read as past the edge"
+            );
+        }
+    }
+
     use super::*;
+
+    /// The invariant that makes the whole non-4:3 law safe to land: at
+    /// any 4:3 size every anchor collapses onto the authored native
+    /// coordinate, so nothing about the retail presentation moved.
+    #[test]
+    fn hud_frame_is_the_identity_at_four_by_three() {
+        for &(w, h) in &[(640.0, 480.0), (1280.0, 960.0), (320.0, 240.0)] {
+            let f = HudFrame::new(w, h);
+            let s = w / 640.0;
+            assert_eq!(f.s, s);
+            for &x in &[0.0, 2.0, 384.0, 510.0, 574.0, 640.0] {
+                assert_eq!(f.lx(x), x * s, "left anchor at {w}x{h}");
+                assert!((f.rx(x) - x * s).abs() < 1e-3, "right anchor at {w}x{h}");
+                assert!((f.cx(x) - x * s).abs() < 1e-3, "center anchor at {w}x{h}");
+            }
+            for &y in &[0.0, 194.0, 416.0, 480.0] {
+                assert_eq!(f.ty(y), y * s);
+                assert!((f.by(y) - y * s).abs() < 1e-3, "bottom anchor at {w}x{h}");
+            }
+        }
+    }
+
+    /// Wider than 4:3: the vertical is exact, the slack is horizontal,
+    /// and it lands BETWEEN the two anchored groups — the left group
+    /// still hugs x=0, the right group still hugs x=w.
+    #[test]
+    fn wide_screen_anchors_to_the_edges_without_stretching() {
+        let (w, h) = (1920.0, 1080.0); // 16:9
+        let f = HudFrame::new(w, h);
+        assert_eq!(f.s, h / 480.0, "uniform scale keyed off the height");
+        // Left group: the radar's 2px inset is still 2 native px in.
+        assert_eq!(f.lx(2.0), 2.0 * f.s);
+        // Right group: the spell-hand pair still ends 2 native px clear
+        // of the RIGHT edge, mirroring the radar's inset.
+        assert!((f.rx(638.0) - (w - 2.0 * f.s)).abs() < 1e-3);
+        // …and the pair keeps its authored 64-native width apart.
+        assert!((f.rx(574.0) - f.rx(510.0) - 64.0 * f.s).abs() < 1e-3);
+        // The slack is genuinely in the middle, not eaten by a stretch.
+        let gap = f.rx(510.0) - f.lx(510.0);
+        assert!(gap > 0.0, "wide screens open a gap between the groups");
+        assert!((gap - (w - 640.0 * f.s)).abs() < 1e-3);
+    }
+
+    /// Narrower than 4:3: the whole HUD simply shrinks to match the
+    /// screen WIDTH, and the vertical slack goes to the anchors.
+    #[test]
+    fn narrow_screen_shrinks_to_the_width() {
+        let (w, h) = (800.0, 800.0); // 1:1
+        let f = HudFrame::new(w, h);
+        assert_eq!(f.s, w / 640.0, "uniform scale keyed off the width");
+        // Horizontal is exact: the strip still spans edge to edge.
+        assert_eq!(f.lx(0.0), 0.0);
+        assert!((f.rx(640.0) - w).abs() < 1e-3);
+        // Vertical slack: the strip stays at the top, the selector pane
+        // and the log strip stay at the bottom.
+        assert_eq!(f.ty(0.0), 0.0);
+        assert!((f.by(480.0) - h).abs() < 1e-3);
+        assert!(f.by(416.0) > 416.0 * f.s, "bottom-anchored rows drop");
+    }
+
+    /// The spellbook is the RIGID pane: same pixel size at every
+    /// aspect, always flush into the bottom-right corner.
+    #[test]
+    fn spellbook_is_rigid_and_corner_anchored_at_any_aspect() {
+        for &(w, h) in &[(1280.0, 960.0), (1920.0, 1080.0), (800.0, 800.0)] {
+            let s = HudFrame::new(w, h).s;
+            let first = book_cell(w, h, 0);
+            let last = book_cell(w, h, 23);
+            // Cells keep their authored proportions — never stretched.
+            assert!((first[2] - 64.0 * s).abs() < 1e-3, "cell w at {w}x{h}");
+            assert!((first[3] - 37.0 * s).abs() < 1e-3, "cell h at {w}x{h}");
+            // Last column ends flush at the right edge.
+            assert!((last[0] + last[2] - w).abs() < 1e-3, "flush at {w}x{h}");
+            // Grid bottom leaves exactly the 64-native log strip.
+            assert!(
+                (last[1] + last[3] - (h - 64.0 * s)).abs() < 1e-3,
+                "log strip at {w}x{h}"
+            );
+        }
+    }
 
     #[test]
     fn spellbook_grid_is_tightly_packed_at_native_coords() {

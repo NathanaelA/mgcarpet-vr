@@ -188,6 +188,8 @@ their source.
 
 ## mgc-app — main.rs
 
+- **map edge-scroll (the whole letterbox bar scrolls)** — PLAYER-RULED. Retail scrolls the map when the confined cursor sits on the exact screen-edge pixel (MI:3132-75). Letterboxed, that edge is the PICTURE's, and the pointer can rest anywhere in the black bar beyond it — an edge-only trigger would leave a dead strip where the cursor is off the map and nothing happens. The test reads "at or beyond the edge", which takes in the whole bar on whichever axis is barred. Retail had no bars, so there is nothing to be faithful to.
+- **App::new (no menu music under a launch intro)** — The campaign frontend normally starts its menu track (`csetup` / the MC2 SETUP render) at boot. When the intro chain is about to play, it does not: the movie owns the audio from its first frame, and starting the menu track only to stop it a frame later was audible as a blip of menu MIDI under the opening (player-reported). The chain hands back to `enter_main_menu`, which starts it properly.
 - **main.rs::WorldInit::prune_owned_jars** — removes spell jars the local player already owns at every level load (the sim self-culls owned jars on their next tick). Preference-class improvement over retail, applies to both MC1 and MC2.
 - **main.rs::load_level `--pool-slots` (chassis.pool_slots)** — dev flag bumps the entity pool beyond the game's pristine profile; limit-removing override, G-class, a run under a bumped pool is not a faithful fixture.
 - **main.rs::load_level `--awake-range` (chassis.awake_gate_sq)** — dev flag overrides the creature awake gate (faithful = 24 tiles; 0 = always awake); G-class, not a faithful run.

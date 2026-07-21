@@ -348,8 +348,7 @@ impl MainMenu {
     /// Left-click at a window position. Returns the button the app
     /// must service with a slot scan (Save/Load), if any.
     pub fn click(&mut self, size: (f32, f32), cursor: (f32, f32)) -> Option<&'static str> {
-        let scale = (size.0 / W).min(size.1 / H);
-        let (mx, my) = (cursor.0 / scale, cursor.1 / scale);
+        let (mx, my) = crate::ui::unletterbox(cursor, size, W, H);
         if self.modal.is_some() {
             self.modal_click(mx, my);
             return None;
@@ -558,7 +557,12 @@ impl MainMenu {
 
     /// This frame's quads (over black letterbox, like the map).
     pub fn quads(&self, size: (f32, f32), cursor: (f32, f32)) -> Vec<UiQuad> {
-        let scale = (size.0 / W).min(size.1 / H);
+        // Everything below is authored in the temple screen's own
+        // coordinates and scaled on the way out; the letterbox offset
+        // is applied to the finished list, and the cursor makes the
+        // same trip in reverse so hit tests stay in authored space.
+        let (scale, ox, oy) = crate::ui::letterbox(size, W, H);
+        let cursor = crate::ui::unletterbox(cursor, size, W, H);
         let mut quads = Vec::new();
         // Background.
         quads.push(UiQuad {
@@ -579,7 +583,7 @@ impl MainMenu {
             quads.push(q);
         }
         // Hover art (retail lights the hovered button only).
-        let (mx, my) = (cursor.0 / scale, cursor.1 / scale);
+        let (mx, my) = cursor;
         if self.modal.is_none()
             && let Some(btn) = Self::button_hit(mx, my)
             && let Some(&(_, pos, _, spr)) = BUTTONS.iter().find(|(b, ..)| *b == btn)
@@ -644,14 +648,17 @@ impl MainMenu {
                 }
             }
         }
-        // Cursor (case-4 sprite 39).
+        // Cursor (case-4 sprite 39). In authored space like every
+        // other quad here — the letterbox translation below puts it
+        // back under the real pointer.
         if let Some((sx, sy, w, h)) = self.rects.get(39).copied().flatten() {
             quads.push(UiQuad {
-                rect: [cursor.0, cursor.1, w * scale, h * scale],
+                rect: [cursor.0 * scale, cursor.1 * scale, w * scale, h * scale],
                 uv: [sx, sy, w, h],
                 tint: [1.0, 1.0, 1.0, 1.0],
             });
         }
+        crate::ui::offset_quads(&mut quads, ox, oy);
         quads
     }
 }

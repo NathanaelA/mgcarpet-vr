@@ -140,7 +140,7 @@ impl Layout {
 }
 
 fn layout(assets: &UiAssets, specs: &[Spec], st: &MenuState, w: f32, h: f32) -> Layout {
-    let s = (w / 640.0).max(1.0);
+    let s = crate::ui::HudFrame::new(w, h).s.max(1.0);
     // Notification-size FONT1 (glyphs are 320-native).
     let fs = 2.0 * s;
     let lh = assets.font_line_height().max(8.0) * fs;

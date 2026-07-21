@@ -1207,7 +1207,11 @@ impl WorldMap {
     /// This frame's quads: background crop, ambient dressing, trail
     /// dots, portals, the carpet, the cursor.
     pub fn quads(&mut self, save: &Mc2Save, size: (f32, f32), cursor: (f32, f32)) -> Vec<UiQuad> {
-        let scale = (size.0 / VIEW_W).min(size.1 / VIEW_H);
+        // Authored in the retail 640x480 screen; the letterbox offset
+        // goes on the finished list and the cursor makes the same trip
+        // in reverse, so every hit test below stays in screen space.
+        let (scale, ox, oy) = crate::ui::letterbox(size, VIEW_W, VIEW_H);
+        let cursor = crate::ui::unletterbox(cursor, size, VIEW_W, VIEW_H);
         let mut quads = Vec::new();
         quads.push(UiQuad {
             rect: [0.0, 0.0, VIEW_W * scale, VIEW_H * scale],
@@ -1335,16 +1339,25 @@ impl WorldMap {
         // The frontend overlay: border frame, corner buttons,
         // description text, parchment dialog — over the map, under
         // the cursor (retail draw order).
-        let cursor_640 = (cursor.0 / scale, cursor.1 / scale);
-        quads.extend(self.overlay_quads(save, scale, cursor_640));
-        // Cursor: the map screen's own bank sprite 239 (MI:986).
+        quads.extend(self.overlay_quads(save, scale, cursor));
+        // Everything so far belongs INSIDE the 640x480 screen. Crop it
+        // there: the map scrolls, so portals and dressing routinely
+        // hang off the viewport edge, and on a letterboxed window that
+        // overhang would otherwise be drawn out across the black bars.
+        crate::ui::clip_quads(&mut quads, VIEW_W * scale, VIEW_H * scale);
+        // Cursor: the map screen's own bank sprite 239 (MI:986). Drawn
+        // AFTER the crop, deliberately — the pointer may sit in a bar
+        // (that is how the edge-scroll is reached) and must stay
+        // visible there. In screen space like everything else; the
+        // translation below puts it back under the real pointer.
         if let Some((sx, sy, w, h)) = self.rects.get(239).copied().flatten() {
             quads.push(UiQuad {
-                rect: [cursor.0, cursor.1, w * scale, h * scale],
+                rect: [cursor.0 * scale, cursor.1 * scale, w * scale, h * scale],
                 uv: [sx, sy, w, h],
                 tint: [1.0, 1.0, 1.0, 1.0],
             });
         }
+        crate::ui::offset_quads(&mut quads, ox, oy);
         quads
     }
 
@@ -1377,8 +1390,7 @@ impl WorldMap {
     /// launches on arrival (MI:3330-3405). Returns true when the
     /// click hit anything.
     pub fn click(&mut self, save: &Mc2Save, size: (f32, f32), cursor: (f32, f32)) -> bool {
-        let scale = (size.0 / VIEW_W).min(size.1 / VIEW_H);
-        let (sx, sy) = (cursor.0 / scale, cursor.1 / scale);
+        let (sx, sy) = crate::ui::unletterbox(cursor, size, VIEW_W, VIEW_H);
         if self.dialog.is_some() {
             return self.dialog_click(sx, sy);
         }
@@ -1539,6 +1551,80 @@ mod tests {
         let idle = wm.portal_sprite(&p).unwrap();
         assert!((33..=35).contains(&idle));
         assert!(wm.take_sounds().is_empty());
+    }
+
+    /// Nothing the map draws may escape its 640x480 screen. On a
+    /// letterboxed window the overhang would land in the black bars —
+    /// the map scrolls, so portals and dressing sit half off the edge
+    /// as a matter of course (player-reported: "visuals overlaid over
+    /// the map run out into the empty borders").
+    #[test]
+    fn map_content_stays_inside_the_screen() {
+        let save = save_with(6);
+        let mut wm = bare();
+        // The bare fixture has no sprite bank, so nothing would draw:
+        // give every id a 24x24 cell. Portals then land all over the
+        // map and plenty of them straddle the viewport edge.
+        wm.rects = (0..320).map(|_| Some((0.0, 0.0, 24.0, 24.0))).collect();
+        wm.border_rect = Some((0.0, 0.0, VIEW_W, VIEW_H));
+        wm.enter_visit(&save);
+        // Scrolled to the middle, so content hangs off every edge.
+        wm.scroll = (300.0, 240.0);
+        for size in [(1600.0, 900.0), (800.0, 900.0), (1280.0, 960.0)] {
+            let (scale, ox, oy) = crate::ui::letterbox(size, VIEW_W, VIEW_H);
+            let quads = wm.quads(&save, size, (size.0 / 2.0, size.1 / 2.0));
+            assert!(quads.len() > 5, "no map content at {size:?}");
+            // The cursor sprite is deliberately exempt (it may sit in a
+            // bar to reach the edge-scroll), so skip the last quad.
+            for q in &quads[..quads.len() - 1] {
+                let (x, y) = (q.rect[0] - ox, q.rect[1] - oy);
+                assert!(
+                    x >= -0.01
+                        && y >= -0.01
+                        && x + q.rect[2] <= VIEW_W * scale + 0.01
+                        && y + q.rect[3] <= VIEW_H * scale + 0.01,
+                    "quad {:?} escapes the {}x{} screen at window {size:?}",
+                    q.rect,
+                    VIEW_W * scale,
+                    VIEW_H * scale
+                );
+            }
+        }
+    }
+
+    /// Clicks must land on the same portal whatever shape the window
+    /// is. The screen is authored at 640x480 and letterboxed into the
+    /// window, so a hit test that divides raw window pixels by the
+    /// scale is off by the bar width — everything the player aims at
+    /// sits to one side of where they clicked. Fullscreen is the
+    /// default, so a non-4:3 window is the NORMAL case, not the edge
+    /// one; the other tests here all use an exact 4:3 size and cannot
+    /// see this.
+    #[test]
+    fn clicks_hit_the_same_portal_in_a_letterboxed_window() {
+        let save = save_with(6);
+        // Portal 6 at (763,652) in map space, scrolled into view.
+        let scroll = (600.0, 500.0);
+        let screen = (763.0 + 10.0 - scroll.0, 652.0 + 10.0 - scroll.1);
+        for size in [
+            (1280.0, 960.0), // exact 4:3 — no bars
+            (1600.0, 900.0), // wide — bars left/right
+            (800.0, 900.0),  // squashed — bars top/bottom
+        ] {
+            let mut wm = bare();
+            wm.enter_visit(&save_with(5));
+            wm.enter_visit(&save);
+            wm.set_parked(5);
+            wm.scroll = scroll;
+            // Where that screen point actually lands in the window.
+            let (scale, ox, oy) = crate::ui::letterbox(size, VIEW_W, VIEW_H);
+            let cur = (ox + screen.0 * scale, oy + screen.1 * scale);
+            assert!(
+                wm.click(&save, size, cur),
+                "portal missed at window size {size:?} (bars {ox}x{oy})"
+            );
+            assert!(wm.travel.is_some(), "no travel started at {size:?}");
+        }
     }
 
     #[test]
