@@ -951,6 +951,22 @@ by offset, never by our field name.
   free was landing in the visible bars.
 
 ### Render
+- Anti-aliasing (`render.preference.anti_aliasing`, default off):
+  off / msaa / 1.5x / 2x. The supersample modes are PLAYER-VERIFIED
+  (1.5x "does most of the job"; measured 175/130/95 fps for
+  off/1.5x/2x on integrated graphics). 3x was tried and dropped — the
+  gain was marginal and it visibly cost frames.
+  **MSAA is UNVERIFIED** — nobody has run it. It is startup-only
+  (baked into all nine pipelines) and the mirror pass had to become
+  multisampled with a resolve, since it shares those pipelines. Watch
+  for: the reflection resolving correctly, and MSAA being a no-op on
+  sprite silhouettes, which is expected (the discard-based cutout is
+  immune to it) rather than a bug.
+- OPEN, low priority: at 3x supersampling the radar's player cross
+  vanished entirely. 3x is gone, but the mechanism was never found and
+  a thin HUD mark may simply be dimming at 2x. Suspects: intensity
+  dilution of a 1-scene-pixel mark under the box downsample, or the
+  ui.wgsl pixel snap collapsing a sub-pixel quad to zero width.
 - TMAPS textured fullscreen map (the "green look" for MC1's book map).
 - SKY bitmap cloud-plane bake + the 50-slot night/cave dynamic-light
   system; `hmap2` water-reflection plane.

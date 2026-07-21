@@ -1002,11 +1002,44 @@ enum Target {
     },
 }
 
+/// The supersample buffer: the whole frame rendered larger than the
+/// window, then averaged down on the way to the surface.
+struct Ssaa {
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    /// Scaled pixel size of the buffer.
+    size: (u32, u32),
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     target: Target,
     depth: wgpu::TextureView,
+    /// MSAA sample count baked into every pipeline; 1 = off. Fixed at
+    /// construction — changing it means rebuilding all nine pipelines,
+    /// so the option is startup-only.
+    samples: u32,
+    /// The multisampled colour target + its depth, when `samples > 1`.
+    /// The main pass renders here and RESOLVES into the surface (or the
+    /// supersample buffer, though the two modes are exclusive).
+    msaa_color: Option<wgpu::TextureView>,
+    /// The mirror pass shares its pipelines with the main pass, so its
+    /// target has to carry the same sample count and resolve into the
+    /// sampled reflection texture the water reads.
+    msaa_mirror: Option<wgpu::TextureView>,
+    msaa_mirror_size: (u32, u32),
+    /// Supersampling factor, 1.0 = off. At 1.0 there is no offscreen
+    /// buffer and no resolve pass at all — the frame goes straight to
+    /// the surface exactly as it did before this existed.
+    render_scale: f32,
+    /// The offscreen scene buffer + its resolve bind group; `None`
+    /// whenever `render_scale` is 1.0 or the target is already
+    /// offscreen (screenshots render at their own size).
+    ssaa: Option<Ssaa>,
+    ssaa_pipeline: wgpu::RenderPipeline,
+    ssaa_layout: wgpu::BindGroupLayout,
+    ssaa_sampler: wgpu::Sampler,
     /// Color format of the render target (the mirror texture must
     /// match it — the reflection pass reuses the terrain pipeline).
     format: wgpu::TextureFormat,
@@ -1167,7 +1200,13 @@ impl std::error::Error for RenderError {}
 
 impl Renderer {
     /// Renderer presenting to a winit window.
-    pub fn for_window(window: Arc<winit::window::Window>) -> Result<Self, RenderError> {
+    /// `samples` is the MSAA sample count (1 = off). It is fixed for
+    /// the renderer's life: every pipeline bakes it in, so changing it
+    /// means rebuilding all of them — the option is startup-only.
+    pub fn for_window(
+        window: Arc<winit::window::Window>,
+        samples: u32,
+    ) -> Result<Self, RenderError> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let surface = instance
@@ -1192,6 +1231,7 @@ impl Renderer {
             format,
             width,
             height,
+            samples.clamp(1, 8),
         ))
     }
 
@@ -1226,6 +1266,8 @@ impl Renderer {
             format,
             width,
             height,
+            // Screenshots render at an exact size with no AA.
+            1,
         ))
     }
 
@@ -1236,7 +1278,16 @@ impl Renderer {
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
+        samples: u32,
     ) -> Self {
+        // Every pipeline that draws into the scene target must agree
+        // with it on the sample count — including the ones the MIRROR
+        // pass reuses, which is why the reflection buffer is
+        // multisampled too rather than those pipelines being duplicated.
+        let ms = wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain"),
             source: wgpu::ShaderSource::Wgsl(include_str!("terrain.wgsl").into()),
@@ -1398,7 +1449,7 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: ms,
             multiview: None,
             cache: None,
         });
@@ -1535,7 +1586,7 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: ms,
             multiview: None,
             cache: None,
         });
@@ -1617,7 +1668,7 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: ms,
             multiview: None,
             cache: None,
         });
@@ -1700,6 +1751,74 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
+            multisample: ms,
+            multiview: None,
+            cache: None,
+        });
+
+        // Supersample resolve: the offscreen scene buffer blitted to
+        // the surface through a linear sampler. Built always, used only
+        // when `render_scale > 1`.
+        let ssaa_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ssaa"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
+        });
+        let ssaa_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ssaa"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let ssaa_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("ssaa"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let ssaa_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ssaa"),
+            bind_group_layouts: &[&ssaa_layout],
+            push_constant_ranges: &[],
+        });
+        let ssaa_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ssaa"),
+            layout: Some(&ssaa_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &ssaa_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ssaa_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            // The resolve writes to the SURFACE, which is never
+            // multisampled — this one pipeline stays single-sampled
+            // whatever `samples` is.
             multisample: Default::default(),
             multiview: None,
             cache: None,
@@ -1790,7 +1909,7 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: ms,
             multiview: None,
             cache: None,
         });
@@ -1837,7 +1956,7 @@ impl Renderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: ms,
                 multiview: None,
                 cache: None,
             });
@@ -1913,7 +2032,7 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: ms,
             multiview: None,
             cache: None,
         });
@@ -2005,12 +2124,12 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: ms,
             multiview: None,
             cache: None,
         });
 
-        let depth = create_depth(&device, width, height);
+        let depth = create_depth(&device, width, height, samples);
 
         Self {
             device,
@@ -2061,6 +2180,15 @@ impl Renderer {
             reflection_view: None,
             reflection_bind_group: None,
             reflection_size: (0, 0),
+            samples,
+            msaa_color: None,
+            msaa_mirror: None,
+            msaa_mirror_size: (0, 0),
+            render_scale: 1.0,
+            ssaa: None,
+            ssaa_pipeline,
+            ssaa_layout,
+            ssaa_sampler,
             reflections: true,
             lights: Vec::new(),
             billboard_pipeline,
@@ -2937,7 +3065,31 @@ impl Renderer {
     }
 
     /// Replace this frame's UI quads (drawn last, in list order).
-    pub fn set_ui_quads(&mut self, quads: Vec<UiQuad>) {
+    pub fn set_ui_quads(&mut self, mut quads: Vec<UiQuad>) {
+        // Callers lay the UI out in WINDOW pixels; the renderer's own
+        // screen-space quads (the map stamps) and the UI uniform are in
+        // the SCENE buffer's pixels, which supersampling makes larger.
+        // Bring the caller's quads into that space so the two agree —
+        // the UI is then rasterized at the supersampled resolution and
+        // averaged down with everything else, which is what smooths its
+        // scaled-up sprite edges.
+        if let Some(ss) = &self.ssaa {
+            let (sx, sy) = match &self.target {
+                Target::Window { config, .. } => (
+                    ss.size.0 as f32 / config.width.max(1) as f32,
+                    ss.size.1 as f32 / config.height.max(1) as f32,
+                ),
+                Target::Offscreen { .. } => (1.0, 1.0),
+            };
+            for q in &mut quads {
+                q.rect = [
+                    q.rect[0] * sx,
+                    q.rect[1] * sy,
+                    q.rect[2] * sx,
+                    q.rect[3] * sy,
+                ];
+            }
+        }
         self.ui_quads = quads;
     }
 
@@ -3173,7 +3325,121 @@ impl Renderer {
             config.height = height;
             surface.configure(&self.device, config);
         }
-        self.depth = create_depth(&self.device, width, height);
+        self.rebuild_ssaa();
+        // Depth and the MSAA colour buffer follow the SCENE buffer,
+        // which is the supersampled one when supersampling is on.
+        let (dw, dh) = self.size();
+        self.depth = create_depth(&self.device, dw, dh, self.samples);
+        self.msaa_color = self.make_msaa_target(dw, dh, "msaa-scene");
+    }
+
+    /// A multisampled colour attachment, or `None` when MSAA is off.
+    fn make_msaa_target(&self, w: u32, h: u32, label: &str) -> Option<wgpu::TextureView> {
+        if self.samples <= 1 {
+            return None;
+        }
+        Some(
+            self.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: w.max(1),
+                        height: h.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: self.samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
+        )
+    }
+
+    /// The MSAA sample count in force (1 = off). Baked into the
+    /// pipelines at construction, so this is what the CURRENT renderer
+    /// is running, not what the config asks for.
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
+    /// Supersampling factor: render the whole frame this much larger
+    /// than the window and average it down on the way to the screen.
+    ///
+    /// 1.0 turns it off completely — no offscreen buffer, no resolve
+    /// pass, the frame goes straight to the surface as it always did.
+    /// Above 1.0 it antialiases EVERYTHING the frame contains: terrain
+    /// and sprite silhouettes in the 3D view, and the scaled-up 2D UI
+    /// with them. Cost goes as the square, so 2.0 is four times the
+    /// pixels.
+    pub fn set_render_scale(&mut self, scale: f32) {
+        let scale = scale.clamp(1.0, 4.0);
+        if (self.render_scale - scale).abs() < f32::EPSILON {
+            return;
+        }
+        self.render_scale = scale;
+        self.rebuild_ssaa();
+        let (dw, dh) = self.size();
+        self.depth = create_depth(&self.device, dw, dh, self.samples);
+    }
+
+    /// (Re)create the supersample buffer for the current window size,
+    /// or drop it when it is not wanted.
+    fn rebuild_ssaa(&mut self) {
+        let want = match &self.target {
+            // An offscreen target is already rendering at whatever size
+            // the caller asked for (screenshots) — supersampling it
+            // would silently change that size.
+            Target::Offscreen { .. } => None,
+            Target::Window { config, .. } if self.render_scale > 1.0 => Some((
+                ((config.width as f32 * self.render_scale) as u32).max(1),
+                ((config.height as f32 * self.render_scale) as u32).max(1),
+            )),
+            Target::Window { .. } => None,
+        };
+        let Some(size) = want else {
+            self.ssaa = None;
+            return;
+        };
+        if self.ssaa.as_ref().is_some_and(|s| s.size == size) {
+            return;
+        }
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ssaa-scene"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&Default::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ssaa"),
+            layout: &self.ssaa_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.ssaa_sampler),
+                },
+            ],
+        });
+        self.ssaa = Some(Ssaa {
+            view,
+            bind_group,
+            size,
+        });
     }
 
     /// Vertical sync: on = wait for the display (AutoVsync — FIFO
@@ -3197,7 +3463,14 @@ impl Renderer {
         }
     }
 
+    /// The size everything renders AT — the supersample buffer's when
+    /// one is active, otherwise the target's. Layout and projection key
+    /// off this, which is what lets the UI antialias too: it is laid out
+    /// against the larger buffer and averaged down with the rest.
     fn size(&self) -> (u32, u32) {
+        if let Some(ss) = &self.ssaa {
+            return ss.size;
+        }
         match &self.target {
             Target::Window { config, .. } => (config.width, config.height),
             Target::Offscreen { width, height, .. } => (*width, *height),
@@ -3433,6 +3706,11 @@ impl Renderer {
                     }));
                 self.reflection_view = Some(view);
                 self.reflection_size = (w, hpx);
+                // The mirror pass reuses the main pass's pipelines, so
+                // its attachment must match their sample count; it
+                // resolves into the sampled texture the water reads.
+                self.msaa_mirror = self.make_msaa_target(w, hpx, "msaa-mirror");
+                self.msaa_mirror_size = (w, hpx);
             }
         }
 
@@ -3606,10 +3884,29 @@ impl Renderer {
             Target::Window { surface, .. } => Some(surface.get_current_texture()?),
             Target::Offscreen { .. } => None,
         };
-        let color_view = match (&frame, &self.target) {
+        // Everything draws into the supersample buffer when there is
+        // one; the resolve pass at the end of `render` puts it on the
+        // surface.
+        let surface_view = match (&frame, &self.target) {
             (Some(f), _) => f.texture.create_view(&Default::default()),
             (None, Target::Offscreen { color, .. }) => color.create_view(&Default::default()),
             _ => unreachable!(),
+        };
+        let scene_view = match &self.ssaa {
+            Some(ss) => ss.view.clone(),
+            None => surface_view.clone(),
+        };
+        // With MSAA the main pass draws into the multisampled buffer
+        // and RESOLVES into the scene view; without it, straight in.
+        // (MSAA and supersampling are exclusive in the UI, but the
+        // plumbing composes either way.)
+        if self.msaa_color.is_none() && self.samples > 1 {
+            let (sw, sh) = self.size();
+            self.msaa_color = self.make_msaa_target(sw, sh, "msaa-scene");
+        }
+        let (color_view, color_resolve) = match &self.msaa_color {
+            Some(ms) => (ms.clone(), Some(scene_view.clone())),
+            None => (scene_view.clone(), None),
         };
 
         if self.map_view {
@@ -3680,8 +3977,13 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mirror"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: rv,
-                    resolve_target: None,
+                    // MSAA: draw into the multisampled mirror buffer and
+                    // resolve into `rv`, the texture the water samples.
+                    view: match &self.msaa_mirror {
+                        Some(ms) => ms,
+                        None => rv,
+                    },
+                    resolve_target: self.msaa_mirror.as_ref().map(|_| rv),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: sky[0],
@@ -3755,7 +4057,7 @@ impl Renderer {
                 label: Some("terrain"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &color_view,
-                    resolve_target: None,
+                    resolve_target: color_resolve.as_ref(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
@@ -3872,6 +4174,26 @@ impl Renderer {
                 pass.draw(0..6, 0..ui_count);
             }
         }
+        // Resolve the supersample buffer down to the surface.
+        if let Some(ss) = &self.ssaa {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ssaa-resolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.ssaa_pipeline);
+            pass.set_bind_group(0, &ss.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
         self.queue.submit([encoder.finish()]);
         if let Some(frame) = frame {
             frame.present();
@@ -3959,7 +4281,7 @@ fn request_device(
     Ok((adapter, device, queue))
 }
 
-fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+fn create_depth(device: &wgpu::Device, width: u32, height: u32, samples: u32) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -3969,7 +4291,7 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

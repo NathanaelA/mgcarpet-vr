@@ -264,6 +264,11 @@ pub struct RenderPreference {
     /// case. Off is a Preference, not a fidelity gap: nothing in the
     /// simulation reads it.
     pub movies: bool,
+    /// Edge smoothing for the 3D view. See [`AntiAliasing`].
+    ///
+    /// No retail analogue — DOS drew one 320x200 buffer and filtered
+    /// nothing — so it is fidelity-free, a display knob like vsync.
+    pub anti_aliasing: AntiAliasing,
     /// Show the movies' subtitle lines.
     ///
     /// Retail gates these on LANGUAGE and sound, not on taste: the
@@ -276,6 +281,50 @@ pub struct RenderPreference {
     /// OFF is that faithful reading; ON forces the strip open, which
     /// also lifts the picture the way retail does to make room.
     pub movie_subtitles: bool,
+}
+
+/// How the 3D view's jagged edges are smoothed.
+///
+/// The two techniques are not interchangeable here, because most of
+/// this engine's visible stair-stepping is NOT triangle edges. Every
+/// creature, tree and building is a quad whose silhouette comes from
+/// discarding palette index 0 — hard 1-bit transparency, nearest
+/// sampled. MSAA runs the fragment shader once per fragment and a
+/// discard kills all of that fragment's samples, so those silhouettes
+/// come out exactly as aliased as they went in; what it does smooth is
+/// true geometry, chiefly the terrain against the sky. Supersampling
+/// re-evaluates the discard at a higher resolution, so it is the only
+/// one that reaches the sprites — at the cost of the whole frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AntiAliasing {
+    Off,
+    /// 4x multisampling: cheap, smooths terrain silhouettes only.
+    /// Baked into the render pipelines, so it needs a restart.
+    Msaa,
+    /// Supersample the whole frame at 1.5x (2.25x the pixels).
+    Ssaa15,
+    /// Supersample at 2x (4x the pixels).
+    Ssaa2,
+}
+
+impl AntiAliasing {
+    /// MSAA sample count for the pipelines (1 = none).
+    pub fn samples(self) -> u32 {
+        match self {
+            AntiAliasing::Msaa => 4,
+            _ => 1,
+        }
+    }
+
+    /// Supersampling factor (1.0 = none).
+    pub fn render_scale(self) -> f32 {
+        match self {
+            AntiAliasing::Ssaa15 => 1.5,
+            AntiAliasing::Ssaa2 => 2.0,
+            _ => 1.0,
+        }
+    }
 }
 
 /// The fog-distance menu stops: (tiles, tag).
@@ -296,6 +345,7 @@ impl Default for RenderPreference {
             vsync: true,
             fullscreen: true,
             movies: true,
+            anti_aliasing: AntiAliasing::Off,
             movie_subtitles: false,
         }
     }
@@ -850,7 +900,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 7;
+const DEFAULTS_VERSION: u64 = 9;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

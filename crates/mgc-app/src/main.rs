@@ -2065,6 +2065,19 @@ impl App {
                 }
             }
             "render.preference.fullscreen" => self.apply_fullscreen(),
+            // The supersample factor is live; MSAA is baked into every
+            // pipeline, so it only takes effect next launch. Say so
+            // rather than leaving the player wondering why nothing
+            // changed.
+            "render.preference.anti_aliasing" => {
+                let aa = self.cfg.render.preference.anti_aliasing;
+                if let Some(r) = &mut self.renderer {
+                    r.set_render_scale(aa.render_scale());
+                    if r.samples() != aa.samples() {
+                        println!("anti-aliasing: MSAA applies on the next launch");
+                    }
+                }
+            }
             "render.enhancement.hud_transparency" => {
                 let transparent = self.hud_transparent();
                 if let Some(r) = &mut self.renderer {
@@ -4461,7 +4474,12 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        match Renderer::for_window(window.clone()) {
+        // MSAA is baked into every pipeline, so it is read ONCE here
+        // and a change needs a restart (the option says so).
+        match Renderer::for_window(
+            window.clone(),
+            self.cfg.render.preference.anti_aliasing.samples(),
+        ) {
             Ok(mut renderer) => {
                 // Level assets upload only when a session booted with
                 // the app (single-level mode); a campaign boots into
@@ -4492,6 +4510,7 @@ impl ApplicationHandler for App {
                 renderer.set_hud_transparent(self.hud_transparent());
                 renderer.set_reflections(self.cfg.render.preference.reflections);
                 renderer.set_vsync(self.cfg.render.preference.vsync);
+                renderer.set_render_scale(self.cfg.render.preference.anti_aliasing.render_scale());
                 // Map-screen topology follows the book surface: no
                 // map book (MC2, or MC1 with spell_selector=mc2) =
                 // the split layout with the stretched live view.
@@ -6165,6 +6184,8 @@ struct Args {
     fullscreen: Option<bool>,
     /// FMV playback override (config `render.preference.movies`).
     movies: Option<bool>,
+    /// Anti-aliasing override (`render.preference.anti_aliasing`).
+    anti_aliasing: Option<config::AntiAliasing>,
     /// Movie-subtitle override (`render.preference.movie_subtitles`).
     movie_subtitles: Option<bool>,
     /// CLI override of `render.debug.fps` (the FPS overlay).
@@ -6230,6 +6251,7 @@ fn parse_args() -> Result<Args, String> {
     let mut vsync = None;
     let mut fullscreen = None;
     let mut movies = None;
+    let mut anti_aliasing = None;
     let mut movie_subtitles = None;
     let mut fps = None;
     let mut anim_turn = 0.0f32;
@@ -6392,6 +6414,15 @@ fn parse_args() -> Result<Args, String> {
             "--no-reflections" => reflections = Some(false),
             "--light-sources" => light_sources = Some(true),
             "--no-light-sources" => light_sources = Some(false),
+            "--anti-aliasing" => {
+                anti_aliasing = match it.next().as_deref() {
+                    Some("off") => Some(config::AntiAliasing::Off),
+                    Some("msaa") => Some(config::AntiAliasing::Msaa),
+                    Some("1.5x") => Some(config::AntiAliasing::Ssaa15),
+                    Some("2x") => Some(config::AntiAliasing::Ssaa2),
+                    _ => return Err("--anti-aliasing wants off|msaa|1.5x|2x".into()),
+                };
+            }
             "--vsync" => vsync = Some(true),
             "--no-vsync" => vsync = Some(false),
             "--fullscreen" => fullscreen = Some(true),
@@ -6516,7 +6547,7 @@ fn parse_args() -> Result<Args, String> {
                      [--sky|--no-sky] [--reflections|--no-reflections] \
                      [--light-sources|--no-light-sources] \
                      [--vsync|--no-vsync] [--fullscreen|--windowed] \
-                     [--movies|--no-movies] \
+                     [--movies|--no-movies] [--anti-aliasing off|msaa|1.5x|2x] \
                      [--fps|--no-fps] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
@@ -6567,6 +6598,7 @@ fn parse_args() -> Result<Args, String> {
         vsync,
         fullscreen,
         movies,
+        anti_aliasing,
         movie_subtitles,
         fps,
         anim_turn,
@@ -7486,6 +7518,9 @@ fn main() -> std::process::ExitCode {
     }
     if let Some(v) = args.movies {
         cfg.render.preference.movies = v;
+    }
+    if let Some(v) = args.anti_aliasing {
+        cfg.render.preference.anti_aliasing = v;
     }
     if let Some(v) = args.movie_subtitles {
         cfg.render.preference.movie_subtitles = v;

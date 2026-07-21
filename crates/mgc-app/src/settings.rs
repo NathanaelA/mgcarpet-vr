@@ -533,6 +533,52 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · preference",
+            label: "anti_aliasing",
+            class: Preference,
+            key: None,
+            cli: Some("--anti-aliasing"),
+            cfg_path: "render.preference.anti_aliasing",
+            // A display knob with no retail analogue — DOS drew one
+            // 320x200 buffer and filtered nothing — so it is
+            // fidelity-free, like vsync.
+            read: |c| Val::Choice {
+                cur: match c.render.preference.anti_aliasing {
+                    crate::config::AntiAliasing::Off => 0,
+                    crate::config::AntiAliasing::Msaa => 1,
+                    crate::config::AntiAliasing::Ssaa15 => 2,
+                    crate::config::AntiAliasing::Ssaa2 => 3,
+                },
+                faithful: 0,
+                variants: &["off", "msaa", "1.5x", "2x"],
+            },
+            desc: "Smooth the 3D view's jagged edges. MSAA is cheap but only \
+                   reaches true geometry — chiefly the landscape against the sky \
+                   — because creatures and buildings are cut out of their sprites \
+                   by a hard transparency test that multisampling cannot soften; \
+                   it also needs a restart, being built into the render \
+                   pipelines. 1.5x and 2x supersample the WHOLE frame instead, \
+                   which is the only thing that smooths those sprite outlines, at \
+                   2.25x and 4x the pixels respectively.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.render.preference.anti_aliasing = match i {
+                        1 => crate::config::AntiAliasing::Msaa,
+                        2 => crate::config::AntiAliasing::Ssaa15,
+                        3 => crate::config::AntiAliasing::Ssaa2,
+                        _ => crate::config::AntiAliasing::Off,
+                    }
+                },
+                descs: &[
+                    "No smoothing — the original's hard pixel edges.",
+                    "4x multisampling: cheap, landscape edges only (restart).",
+                    "Supersample at 1.5x: smooths everything, ~2.25x the pixels.",
+                    "Supersample at 2x: smoothest, 4x the pixels.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
             label: "movies",
             class: Preference,
             key: None,
