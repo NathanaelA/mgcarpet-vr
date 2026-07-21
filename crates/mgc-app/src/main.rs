@@ -248,6 +248,22 @@ fn campaign_record(tag: &str, slot: usize, new_game: bool) -> Result<Option<Vec<
     Ok(None)
 }
 
+/// The MC2 level a save is waiting on: a revealed-but-uncompleted
+/// secret takes precedence (the player is mid-branch), otherwise the
+/// linear frontier. `levels_completed` counts opened portals, so it
+/// indexes the first unopened one.
+///
+/// One rule, applied both when a slot is opened and whenever the run
+/// returns to the map — a slot saved from the map must name the same
+/// level before and after a reload.
+fn mc2_pending_level(save: &saves::Mc2Save) -> u32 {
+    save.secrets
+        .iter()
+        .find(|p| p.activated == 2)
+        .map(|p| p.level as u32)
+        .unwrap_or(save.levels_completed)
+}
+
 impl CampaignRun {
     /// Open (or start) a campaign: load the slot's retail-format save
     /// unless `new_game`, and resolve the level to launch. Errors are
@@ -321,14 +337,7 @@ impl CampaignRun {
                             .into(),
                     );
                 }
-                // A revealed-but-uncompleted secret level takes
-                // precedence on resume (the player was mid-branch).
-                let pending_secret = save
-                    .secrets
-                    .iter()
-                    .find(|p| p.activated == 2)
-                    .map(|p| p.level as u32);
-                let current = pending_secret.unwrap_or(save.levels_completed);
+                let current = mc2_pending_level(&save);
                 Ok(Self {
                     id,
                     slot,
@@ -3549,6 +3558,17 @@ impl App {
         // the carpet parks there.
         let current = self.campaign.as_ref().map(|c| c.current);
         self.teardown_session();
+        // Back on the map the run is no longer IN a level: it is
+        // waiting on the next one, exactly as it would be after
+        // reloading this slot. Without this, `current` kept naming the
+        // level just played — so a save taken here recorded the level
+        // already finished, and the fallback launches below replayed it
+        // instead of moving on.
+        if let Some(run) = &mut self.campaign
+            && let Some(pending) = run.save.mc2().map(mc2_pending_level)
+        {
+            run.current = pending;
+        }
         if self.worldmap.is_none()
             && let Err(e) = self.load_worldmap()
         {
