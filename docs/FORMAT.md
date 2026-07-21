@@ -380,6 +380,46 @@ place of MC1's `build.*.bin`. The versioning/
 evolution rules above apply unchanged (`bundle.json`
 `format_version`).
 
+## Movie bundles
+
+The full-screen FMV streams bake as their own per-game bundle
+instances, `mc1-movies` and `mc2-movies` — the intro chain, MC1's
+win/lose movies, MC2's six cutscenes and both endings. Loader:
+`crate::movie::MovieSet` (mgc-app).
+
+| member | contents |
+|---|---|
+| `bundle.json` | same manifest schema as graphics bundles |
+| `movies.json` | `MovieIndex`: `movies[]` of `{name, file, frames, width, height, source}`; `name` is the lowercased source stem (`intro`, `outro`, `logo`, `cut1`, `levelw1`, `title-01`), which is how the engine's sequence tables refer to it |
+| `movies/<name>.fmv` | the ORIGINAL stream, byte for byte |
+| `font.bin` + `font.json` | the subtitle strip's font — `SFONT1` (both games ship it), HSPR glyph masks packed like every other baked font |
+| `subtitles.json` | the string table the scripts' subtitle cues index: a JSON string array — MC1 `DATA/ETEXT.DAT` (80 entries, the intro narration at 0..=16), MC2 `LANGUAGE/L2.TXT` (471 entries, English; L1 is French) |
+
+This is the one bundle that does not translate its input, and the
+exception is deliberate. A decoded frame is 320x200 8bpp = 64 KB and
+MC1's `INTRO.DAT` is 3165 of them, so pre-decoding would turn a 75 MB
+stream into ~200 MB of canvases no runtime can hold. The engine
+therefore keeps the original bytes and decodes one frame at a time
+through `mgc_import::fmv::FmvCursor`, exactly as retail's
+`PlayInfoFmv` does. The whole set is ~107 MB for MC1 and ~139 MB for
+MC2; that is local disk only, since bundles are baked from the
+player's own install and never shipped.
+
+The format is a 12-byte Bullfrog header `{u32 header_size=12, u16
+magic=0xAF12, u16 frame_count, u16 width, u16 height}` wrapping
+Autodesk Animator FLIC frame chunks (BRUN, LC, SS2, BLACK, COLOR,
+COPY, PSTAMP, prefix). Every stream in both games is 320x200. It
+carries **no audio stream** — there is no field for one — but the
+movies are not silent. Their soundtrack is assembled at playback time
+by the per-movie event script, which cues sample-bank loads, one-shot
+and looping effects and the narration voice clips out of the ordinary
+`sounds.bin` banks, over the MIDI `INTRO`/`CUTS` sub-songs, with
+subtitle lines against the narration. The scripts are compiled-in game
+code, not file data, and live in `mgc-app`'s `movie::script`.
+
+Streams are indexed by source stem only: which movie plays when is
+the engine's business, so no role or sequence mapping is baked in.
+
 ## Audio bundles
 
 Audio is per-GAME, not per-graphics-variant (MC1's sample/music bank
@@ -411,7 +451,9 @@ when a soundfont is available (above). MC2
 per-sample WAV containers are stripped to keep `sounds.bin` raw PCM),
 `SOUND/MUSIC.DAT` (the AIL XMI music bank: trailer u32 → 4-driver ×
 2-bank directory; gameplay = G driver bank 0 ("C2"), six single-song
-`FORM XDIR…CAT XMID` containers GAME1/2/3/SETUP/INTRO/CUTS; MapType
+`FORM XDIR…CAT XMID` containers GAME1/2/3/SETUP/INTRO/CUTS, all six baked — INTRO and
+CUTS as `mc2-intro`/`mc2-cuts`, the score for the movie bundle's
+audio-less streams; MapType
 picks GAMEn — Night/Day/Cave — and the menu plays SETUP; XMI → SMF
 via the summed-run delta / embedded note-duration / strip-cc110-119
 laws in docs/traces/mc2-music-dat-xmi.md, division 60 + tempo

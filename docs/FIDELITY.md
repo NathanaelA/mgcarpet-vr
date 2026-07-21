@@ -342,6 +342,134 @@ plausible-and-playable floor until it resolves.
 
 ---
 
+## Full-screen movies (FMV) — LANDED, with named gaps
+
+**Original.** One player serves every full-screen movie in both games
+(`PlayInfoFmv_107C0` :16159; remc2 `Animation.cpp:41`). It streams a
+12-byte-header Bullfrog FLIC one frame at a time into the visible
+320x200 surface, breaking at `frameCount - 1` so the file's last frame
+(the ring delta back to frame 0) never shows. Pacing does NOT come
+from the file: each movie carries a compiled-in event script of
+`(startFrame, key, index)` records, and key `'A'` sets the inter-frame
+delay in ticks of the shared 120 Hz timer (default 5 = 24 fps,
+`dword_9ADC4` :6457). Abort is any key or either mouse button, and is
+PER MOVIE — the flag resets at the top of each call — with several
+call sites passing `allowSkip = 0`. Palette COLOR chunks install live,
+on the frame they arrive; the fades between movies are 16/32-step DAC
+ramps run by the CALLER, not the player.
+
+Sequences: MC1/HW dispatch INTEL → LOGO → INTRO → TITLE → main menu
+(`sub_4AB20_4AE60` :57879-907), holding the logo 8 s and the title
+6 s; MC2 runs a welcome still, INTRO, then INTRO2 (`Intros_76D10`,
+MenusAndIntros.cpp:736-800). MC1 plays a congratulation movie after a
+won level, picking LEVELW1 or LEVELW2 by the parity of the free-running
+timer (:59905), and LEVELOSE after a lost one; the outro fires when the
+worlds-completed counter reaches 50 (25 for HW). MC2 slots CUT1-5 after
+level indices 4/8/12/16/23 (`cutScene_E16E0`, MenusAndIntros.cpp:189)
+and CUT6 — its ending — after 24.
+
+**Port.** `mgc-import fmv.rs` (`FmvCursor`, the incremental decoder),
+`mgc-import bundle.rs::bake_movies` (raw streams + `MovieIndex`),
+`mgc-app movie.rs` (the player: cue chain, tick-denominated pacing,
+per-movie skip, boundary fades, holds, the audio cue stream and the
+subtitle strip), `mgc-audio`'s movie-sample lane, and the seams in
+`mgc-app main.rs` (`Screen::Movie`, `intro_movies`, `mc2_cutscene`,
+`mc1_win_movie`, the `NextStep::Outro` arm). Option:
+`render.preference.movies` (Preference, default ON = faithful).
+
+**Verified.** All 24 retail streams decode to their exact header frame
+counts through the cursor (`fmv::tests::full_screen_movies_decode`),
+and the cursor agrees frame-for-frame with the eager decoder on the
+menu movies. The player's frame budget, per-movie skip, unskippable
+cues, authored and default pacing, post-movie holds and the intro's
+full soundtrack (bank order, 51 sample cues, the four music cues
+including the looped middle section, all 17 subtitle lines) are pinned
+by `mgc-app movie::tests`. The transcription has an independent
+cross-check: `every_cued_sample_exists` resolves every sample index in
+every script against the baked sound banks, and the banks corroborate
+the reading — MC1's intro loads exactly the banks holding
+`voc1`..`voc12`, one clip per narration cue, and MC2 banks 5-9 are
+`viscut1`..`viscut5`, one per cutscene. PLAYTEST OWED — none of this
+has been seen or HEARD running by a player yet.
+
+**Deviations & interims.**
+- **Three player-ruled corrections** (all in docs/DEVIATIONS.md, all
+  first-playtest findings): playback runs 25% slower than the authored
+  delays, because at the authored rate a narration clip is cut off by
+  the next scene's bank load — retail clips it too, but it reads as a
+  defect; the script fires one frame early, so long scene holds park on
+  the settled page instead of a frame or two into the next flip; and
+  skipping a movie stops its music, which retail leaves running.
+- **Subtitles are gated on a setting, not on language + sound.** Retail
+  turns the strip on for every non-English build, and for an English one
+  only when there is no digital-sound device (remc1 `sub_357C0_35B80`;
+  remc2 MenusAndIntros.cpp:756-765) — the narration is recorded in
+  English only, so subtitles are its stand-in, never a preference. This
+  port ships English audio, so the faithful state here is OFF and that
+  is the default; `render.preference.movie_subtitles` forces the strip
+  open for anyone who wants the text. MC2's CUT6 suppression is
+  unconditional in retail and is not modelled — forcing subtitles on
+  subtitles CUT6 too.
+- **The subtitle font is right, the pen is approximated.** SFONT1 and
+  the string tables are exact, as is the picture lift (MC1 21 rows, MC2
+  31), the pen origin and the advance (`tabRecord[4] - 1` — the glyphs
+  kern by a pixel; advancing by the full width ran MC1's longest
+  narration line to x=363 on a 320px screen, which is what a playtest
+  saw). But MC1's strip runs from buffer row 180,
+  which is 20 rows ABOVE the band the lift clears — retail draws those
+  rows over live picture, and the frame decoder can repaint them
+  between subtitle changes. We draw the text last, so ours always
+  survives. Whether retail's flickers, and how badly, was not
+  determined.
+- **Sample volume/fade operands are flattened.** MC2's `'H'` key starts
+  a looping sample at volume 0 and a paired `'O'`/`'P'` then raises it
+  to 127 or 80; we start the loop at full instead, so those two
+  ambiences arrive without their fade-in and one plays louder than
+  retail. MC1 has no volume operands at all, so MC1 is unaffected.
+- **Two MC1 scripts are TRUNCATED in the decompile** and only their
+  leading delay record survives: `LEVELOSE` (up to 4 records lost) and
+  `INTEL` (up to 2). `LEVELOSE`'s bank load and cue are RECONSTRUCTED
+  from the sample banks rather than transcribed — bank 8 holds exactly
+  one sample, `failed` — and its cue frame is a guess. Neither movie is
+  reachable in this engine anyway.
+- **`LEVELW2` is scored better than retail.** Retail points both win
+  movies at one script (`dword_4A5D8_4A918`), so `levelw2` plays with
+  bank 6's `win1` at frame 200. An unreferenced table at 0x4A5FC is
+  byte-identical but for bank 7 (`win2`) and frame 180 — plainly
+  `levelw2`'s own script, orphaned by the shared pointer. We give each
+  movie its own table, which is a **deliberate deviation**: it fixes a
+  retail bug rather than reproducing it.
+- **INTEL.DAT is never played.** It is the Intel Pentium branding
+  bumper, gated on CPUID family 5 model 1 (`sub_19470` :19475) — no
+  machine running this port qualifies. MC2 ships the file and never
+  references it at all. Baked, unused.
+- **LEVELOSE.DAT has no seam.** A failed MC1 level does not route back
+  through a post-level screen in this engine, so the world-lost movie
+  never fires. The stream is baked and the call site is documented at
+  `mc1_win_movie`.
+- **MC1's title overlay (TITLE-02/04) is unported** — retail composites
+  a 4-frame loop over the held title screen via a different stepper
+  (`sub_4F120_4F460` :60245); ours holds the title static.
+- **MC2's welcome still screen** (HSCREEN0 at 0x178E5F, fade in, hold
+  2 s, fade out) ahead of its intro is unported.
+- **The MC1 attract mode is unported**: after 40 s idle on the main
+  menu retail rotates INTRO, TITLE and a recorded input demo
+  (`MOVIE/MVI%05d.DAT` — an input recording, not a movie). The demo
+  format is unimplemented.
+- **The delay is reset per movie, not carried across.** Retail's
+  `dword_9ADC4` is a process-global that only the `'A'` key writes, so
+  a movie with no delay record inherits the previous movie's rate.
+  Every transcribed table opens with an `'A'` record, so the two are
+  equivalent and ours cannot drift.
+- **Frame pacing is wall-clock, not a busy-wait on the game timer.**
+  Retail spins on the shared 120 Hz counter and zeroes it after each
+  frame; we accumulate delta time and drop frames under stall rather
+  than catching up. Same rate, no lost seconds on a slow host.
+- **Centred letterboxing** on non-4:3 windows is ours; retail had one
+  320x200 mode and no such case.
+
+---
+
 *Entries to come (the full subsystem list, in rough dependency
 order): terrain features & villages; triggers, events & portals;
 monsters (per-model AI); combat & damage channels; projectiles &

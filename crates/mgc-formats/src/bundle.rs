@@ -37,6 +37,10 @@
 //!   string array indexed by the engine's sentence id
 //! - `sky.bin` — the 256x256 8bpp parallax sky bitmap (absent on
 //!   variants without one, e.g. MC2 cave)
+//! - `movies.json` + `movies/<name>.fmv` — the full-screen FMV
+//!   streams, copied raw ([`MovieIndex`]); the one member kind the
+//!   engine decodes itself, because decoding at bake time would cost
+//!   ~200 MB for MC1's intro alone
 
 use std::path::{Path, PathBuf};
 
@@ -197,6 +201,39 @@ pub struct MusicTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gm_danger_file: Option<String>,
     /// Provenance: original source (`CGAME1.HMP`, `redbook track 2`).
+    pub source: String,
+}
+
+/// `movies.json`: the full-screen FMV streams (intro, outro, the MC2
+/// cutscenes, MC1's win/lose movies). Unlike every other bundle
+/// member these are copied RAW — a decoded 320×200 frame is 64 KB and
+/// MC1's intro alone is 3165 of them, so the runtime decodes one frame
+/// at a time out of the original stream (`mgc_import::fmv::FmvCursor`)
+/// rather than reading pre-decoded canvases. The format carries no
+/// audio STREAM — but the movies are not silent: their soundtrack is
+/// assembled at playback time by the per-movie event script, out of
+/// the ordinary sample banks (narration, effects) over the MIDI
+/// `INTRO`/`CUTS` sub-songs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MovieIndex {
+    pub movies: Vec<MovieEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MovieEntry {
+    /// Lowercased source stem, which is how the engine's sequence
+    /// tables name it (`intro`, `outro`, `logo`, `cut1`, `levelw1`,
+    /// `title-01`).
+    pub name: String,
+    /// Bundle member holding the raw stream (`movies/<name>.fmv`).
+    pub file: String,
+    /// Header frame count. Every retail stream decodes to exactly this
+    /// many frames, but playback still runs until the decoder says the
+    /// stream is done — this is for progress and sizing only.
+    pub frames: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Provenance: the original CD path (`INTRO/INTRO.DAT`).
     pub source: String,
 }
 

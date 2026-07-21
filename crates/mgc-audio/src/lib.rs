@@ -55,6 +55,12 @@ pub struct Audio {
     /// instant a line starts (FadeDownSoundVolume_59A50) and ramps
     /// them back when it ends (the 120 Hz FadeUpSoundVolume timer).
     duck_gain: f32,
+    /// Movie-sample voices: `(channel, sample id)` for every cue the
+    /// FMV player has running. The movies' soundtrack is assembled
+    /// from these — see [`Audio::play_movie_sample`].
+    movie_voices: Vec<(usize, u32)>,
+    /// The sample bank the movie player's `'E'` cue selected.
+    movie_bank: u32,
 }
 
 impl Audio {
@@ -73,6 +79,8 @@ impl Audio {
             danger_down: -2.0 * 20.0 / TICK_RATE,
             prefer_gm: true,
             duck_gain: 1.0,
+            movie_voices: Vec::new(),
+            movie_bank: 0,
         }
     }
 
@@ -225,6 +233,90 @@ impl Audio {
         let _ = self.out.tx.send(output::Cmd::StopSpeech);
         self.duck_gain = 1.0;
         let _ = self.out.tx.send(output::Cmd::Duck { gain: 1.0 });
+    }
+
+    /// Select the sample bank movie cues draw from — retail's `'E'`
+    /// script key, which loads `SNDS<bank>-<quality>` over the
+    /// previous set (remc1 `sub_5D070_5D580`). Loading a bank stops
+    /// everything playing out of the old one, as retail does.
+    pub fn set_movie_bank(&mut self, bank: u32) {
+        if self.movie_bank != bank {
+            self.stop_movie_samples();
+            self.movie_bank = bank;
+        }
+    }
+
+    /// Play one movie sound cue: the `'S'` (one-shot) and `'R'`
+    /// (looping) script keys. `id` is the 1-based index within the
+    /// selected bank, exactly as the retail tables store it.
+    ///
+    /// These deliberately bypass the gameplay mixer: that is a ported
+    /// 3-D ruleset with per-id request slots and a listener, and a
+    /// movie has neither a world nor a listener — retail plays these
+    /// straight onto voices too.
+    ///
+    /// Safe to share the channel pool with it: no session is alive
+    /// during a movie, and even if one were, [`mixer::FaithfulMixer`]
+    /// allocates only channels that are both unkeyed AND absent from
+    /// the output's live mask, so a sounding movie voice cannot be
+    /// stolen. Voices are taken from the top of the range, away from
+    /// the mixer's allocation order.
+    pub fn play_movie_sample(&mut self, id: u32, looped: bool) -> Result<(), String> {
+        let bank = self.movie_bank;
+        let Some(bundle) = &self.bundle else {
+            return Err("no audio bundle loaded".into());
+        };
+        let Some((index, blob)) = &bundle.sounds else {
+            return Err("bundle has no samples".into());
+        };
+        let entry = index
+            .banks
+            .iter()
+            .find(|b| b.bank == bank)
+            .and_then(|b| b.entries.iter().find(|e| e.id == id))
+            .ok_or_else(|| format!("no sample {id} in bank {bank}"))?;
+        let (at, len) = (entry.offset as usize, entry.len as usize);
+        let pcm = blob
+            .get(at..at + len)
+            .ok_or_else(|| format!("sample {bank}:{id} overruns the blob"))?
+            .to_vec();
+        // Top of the channel range, away from the gameplay mixer's
+        // allocation order, so a stray live voice cannot be stolen.
+        let used: Vec<usize> = self.movie_voices.iter().map(|(c, _)| *c).collect();
+        let Some(ch) = (0..output::CHANNELS).rev().find(|c| !used.contains(c)) else {
+            return Ok(()); // all 32 voices busy — retail drops it too
+        };
+        let rate = index.sample_rate;
+        let _ = self.out.tx.send(output::Cmd::Play {
+            ch,
+            pcm: std::sync::Arc::new(pcm),
+            sample_rate: rate,
+            vol: 0x7FFF,
+            pan: 0x7FFF,
+            looped,
+        });
+        self.movie_voices.push((ch, id));
+        Ok(())
+    }
+
+    /// Stop movie cues playing sample `id` — the `'T'` script key.
+    pub fn stop_movie_sample(&mut self, id: u32) {
+        self.movie_voices.retain(|&(ch, playing)| {
+            if playing == id {
+                let _ = self.out.tx.send(output::Cmd::Stop { ch });
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// Stop every movie cue — `'S'`/`'T'` with index 0, and the end
+    /// of a movie.
+    pub fn stop_movie_samples(&mut self) {
+        for (ch, _) in std::mem::take(&mut self.movie_voices) {
+            let _ = self.out.tx.send(output::Cmd::Stop { ch });
+        }
     }
 
     /// Play a bundle music track by name (`cgame1`, `track-02`),

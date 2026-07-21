@@ -532,6 +532,63 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
+            group: "render · preference",
+            label: "movies",
+            class: Preference,
+            key: None,
+            cli: Some("--no-movies"),
+            cfg_path: "render.preference.movies",
+            // Retail always plays them and has no switch, so ON is
+            // the faithful reading; it is a Preference rather than a
+            // fidelity knob because nothing downstream can tell.
+            read: |c| Val::Toggle {
+                on: c.render.preference.movies,
+                faithful: c.render.preference.movies,
+            },
+            desc: "Play the full-screen movies: the intro chain at launch, \
+                   Magic Carpet 2's six cutscenes between levels, and the \
+                   ending. Any key skips the rest of a chain while it plays, \
+                   so turning this off only saves the keypress. The movies \
+                   have no soundtrack of their own — the original scores them \
+                   from MIDI, because the format cannot hold audio.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.movies = v,
+                descs: [
+                    "Skip straight past intro, cutscenes and ending.",
+                    "Play them (as the original does).",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
+            label: "movie_subtitles",
+            class: Preference,
+            key: None,
+            cli: Some("--movie-subtitles"),
+            cfg_path: "render.preference.movie_subtitles",
+            // Faithful when OFF for this build: retail shows the strip
+            // only in non-English builds or with no sound device.
+            read: |c| Val::Toggle {
+                on: c.render.preference.movie_subtitles,
+                faithful: !c.render.preference.movie_subtitles,
+            },
+            desc: "Subtitle the movies' narration. The original ties this to \
+                   language, not preference: the voice track is English only, so \
+                   it subtitles every non-English build, and an English one only \
+                   when the machine has no sound card. Turning it on here forces \
+                   the strip open — which lifts the picture a little, as the \
+                   original does, to clear a band for the text.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.movie_subtitles = v,
+                descs: [
+                    "No subtitles (an English machine with sound hears the narration).",
+                    "Show the narration as text.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
             // A Preference (retail MC2 ships a shading toggle —
             // Shift+F7 "Flat Shading"); the cfg_path keeps the legacy
             // "enhancement" segment so saved configs stay valid.

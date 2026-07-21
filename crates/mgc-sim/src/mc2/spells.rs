@@ -128,7 +128,8 @@ pub fn spell_index(model: u8) -> usize {
     }
 }
 
-/// The retail `LANGUAGE/L1.TXT` spell-name strings (English), lang
+/// The retail `LANGUAGE/L2.TXT` spell-name strings (English — L1 is
+/// French), lang
 /// indices **159..=265**, extracted verbatim from `game.gog` and
 /// cross-verified 1:1 against the SPELLS.DAT `hintText` indices
 /// (docs/spell-audit/spell-names.md §2). Index 159 = the level-up
@@ -253,7 +254,7 @@ static MC2_LANG: [&str; 107] = [
     "Cave In III",                           // 265
 ];
 
-/// Resolve a `LANGUAGE/L1.TXT` lang-string index (159..=265) to its
+/// Resolve a `LANGUAGE/L2.TXT` lang-string index (159..=265) to its
 /// verbatim English string. Out-of-range → `""`.
 pub fn lang(idx: i16) -> &'static str {
     (idx as usize)

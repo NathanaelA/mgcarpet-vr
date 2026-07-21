@@ -492,6 +492,16 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
             );
             manifest.extend(outputs);
         }
+        let outputs =
+            crate::bundle::bake_movies(src, out_dir, "mc1-movies", mgc_formats::Game::MagicCarpet1)
+                .map_err(|e| e.to_string())?;
+        if !outputs.is_empty() {
+            println!(
+                "mc1: baked movie bundle mc1-movies ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        }
     }
 
     if let Some(src) = &found.mc2 {
@@ -532,6 +542,16 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
         if !outputs.is_empty() {
             println!(
                 "mc2: baked world-map bundle mc2-ui ({} members)",
+                outputs.len()
+            );
+            manifest.extend(outputs);
+        }
+        let outputs =
+            crate::bundle::bake_movies(src, out_dir, "mc2-movies", mgc_formats::Game::MagicCarpet2)
+                .map_err(|e| e.to_string())?;
+        if !outputs.is_empty() {
+            println!(
+                "mc2: baked movie bundle mc2-movies ({} members)",
                 outputs.len()
             );
             manifest.extend(outputs);

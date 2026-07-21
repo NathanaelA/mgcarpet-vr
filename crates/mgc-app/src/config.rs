@@ -257,6 +257,25 @@ pub struct RenderPreference {
     /// with no retail analogue (DOS was 320×200/640×480 exclusive),
     /// hence Preference — fidelity-free either way.
     pub fullscreen: bool,
+    /// Play the full-screen FMV movies (intro, MC2 cutscenes, outro).
+    /// ON is the faithful setting — retail plays them and offers no
+    /// way to turn them off; the switch exists because a 3165-frame
+    /// intro wears thin on replay, and any key skips the chain in any
+    /// case. Off is a Preference, not a fidelity gap: nothing in the
+    /// simulation reads it.
+    pub movies: bool,
+    /// Show the movies' subtitle lines.
+    ///
+    /// Retail gates these on LANGUAGE and sound, not on taste: the
+    /// narration is recorded in English only, so both games turn
+    /// subtitles on for every non-English build, and for English only
+    /// when there is no digital-sound device (remc1
+    /// `sub_357C0_35B80`; remc2 MenusAndIntros.cpp:756-765). An
+    /// English install with working sound — which is what this port
+    /// runs — therefore shows NONE, and hears the narration instead.
+    /// OFF is that faithful reading; ON forces the strip open, which
+    /// also lifts the picture the way retail does to make room.
+    pub movie_subtitles: bool,
 }
 
 /// The fog-distance menu stops: (tiles, tag).
@@ -276,6 +295,8 @@ impl Default for RenderPreference {
             fog_distance: 50,
             vsync: true,
             fullscreen: true,
+            movies: true,
+            movie_subtitles: false,
         }
     }
 }
@@ -829,7 +850,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 6;
+const DEFAULTS_VERSION: u64 = 7;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

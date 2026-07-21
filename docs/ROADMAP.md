@@ -51,6 +51,99 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### Intro/outro FMVs — LANDED 2026-07-21, playtest round 1 done
+
+The full-screen movies play, with their soundtrack and subtitles: the
+launch intro chain, MC1's per-level congratulation movie, MC2's six
+cutscenes and both endings.
+
+**Playtest round 1 raised six MC1 findings, all fixed.** Four are
+player-ruled deviations (docs/DEVIATIONS.md): playback ran too fast and
+clipped a narration line, so every delay is stretched 25%; scene holds
+landed a frame or two into the next page-flip, so the script fires one
+frame early; a movie's music played on under the NEXT movie, so the
+score now ends with the movie that started it (reported twice — the
+skip path first, then the natural transition it had masked); and the
+menu track no longer starts at boot when an intro is about to play,
+which was audible as a blip of menu MIDI under the opening. Two were
+plain transcription bugs: the subtitle pen advanced by the glyph's full
+width where retail advances by `width - 1` (running the longest line to
+x=363 on a 320px screen), and the pen-box clip edge was briefly passed
+where the canvas row stride belonged. MC2's intro was reported good.
+Round 2 owed — the fixes are unconfirmed and the endings are unplayed.
+
+**What landed.**
+- `mgc-import fmv.rs`: `FmvCursor`, an incremental one-frame-at-a-time
+  decoder over the raw stream. The eager `decode` stays for the 3-30
+  frame menu loops; the cursor is what the full-screen movies need
+  (MC1's intro is 3165 frames = ~200 MB of canvases eagerly).
+- `bake_movies` → new `assets/mc1-movies` (107 MB) and
+  `assets/mc2-movies` (139 MB) bundles: the streams copied RAW plus a
+  `MovieIndex`. The only bundle that does not translate its input, for
+  the reason above. Local disk only — bundles are baked from the
+  player's own install. **BAKE_EPOCH 19.**
+- `assets/mc2-audio` gains `mc2-intro` + `mc2-cuts` (MUSIC.DAT GM
+  sub-songs 4 and 5): the movies' score. The container carries no
+  audio, so MIDI is all they have.
+- `mgc-app movie.rs`: the player — cue chains, per-movie skip, the
+  transcribed event scripts (pacing, music, samples, subtitles),
+  boundary fades, post-movie holds.
+- `mgc-audio`: a movie-sample lane (`play_movie_sample` /
+  `set_movie_bank` / stop), bypassing the 3-D gameplay mixer.
+- Seams in `main.rs`: `Screen::Movie`, `intro_movies` (boot),
+  `mc2_cutscene`, `mc1_win_movie`, and the `NextStep::Outro` arm that
+  used to just print "campaign complete!".
+- Option `render.preference.movies` (default ON = faithful),
+  `--movies`/`--no-movies`.
+
+**Four corrections to the recon, all found in the decompile.**
+
+0. **The movies are NOT silent.** The container has no audio STREAM,
+   but that is not the same as having no soundtrack — the same event
+   script assembles one at playback time out of the ordinary sample
+   banks: narration clips, effects, ambient loops, over the MIDI
+   score, with subtitles against the narration. MC1's intro alone
+   cues 51 samples, twelve voice clips and seventeen subtitle lines.
+   The sample banks corroborate the whole transcription: the intro
+   loads exactly the banks holding `voc1`..`voc12`, and MC2 banks 5-9
+   are `viscut1`..`viscut5`, one per cutscene. All of it is ported —
+   samples, music and subtitles — with the text coming from the games'
+   own string tables (MC1 `ETEXT.DAT` 0..=16, MC2 `L2.TXT` 0x10..0x118,
+   both verified to be the narration verbatim) and the strip drawn in
+   SFONT1, which both games ship.
+
+   Note retail only SHOWS the subtitles when the narration cannot be
+   heard — non-English builds, or no sound card. Ours defaults to that
+   (off) with `render.preference.movie_subtitles` to force them on.
+
+1. **Retail DOES pace these movies.** The banked "no frame pacing"
+   claim was wrong. Each movie carries a compiled-in event script of
+   `(startFrame, key, index)` records; `'A'` sets the inter-frame delay
+   in 120 Hz ticks (default 5 = 24 fps). MC1's intro changes rate 39
+   times and opens on a 2.5 s hold. A flat 20 fps would have been
+   wrong everywhere. The `'A'` and music records are transcribed in
+   `movie::script`; samples and subtitles are not (docs/FIDELITY.md).
+2. **Skip is per MOVIE, not per chain** — the abort flag resets at the
+   top of every `PlayInfoFmv`. Several call sites pass `allowSkip = 0`:
+   both endings and all six MC2 cutscenes are unskippable.
+3. **The last frame never shows.** Both games break at
+   `frameCount - 1`; the final FLIC frame is the ring delta back to
+   frame 0.
+
+**Also newly traced.** `LEVELW1`/`LEVELW2` are two interchangeable
+world-won movies picked by timer parity — no level index involved;
+`LEVELOSE` is their world-lost sibling. `INTEL.DAT` is an Intel Pentium
+bumper gated on CPUID family 5 model 1, so it never plays (MC2 ships it
+and never references it). `MOVIE/MVI00000.DAT` is not a movie at all —
+it is the attract-mode input recording. `DATA/SMATITLE.DAT` is a static
+screen, not an FMV.
+
+**Still owed** (all registered in docs/FIDELITY.md): MC1's TITLE-02/04
+animated title overlay;
+MC2's welcome still screen; MC1's 40-second attract mode; and a seam
+for `LEVELOSE` (a failed MC1 level does not route through a post-level
+screen in this engine).
+
 ### Player reports 2026-07-21 (round 2) — ALL FIXED + PLAYER-CONFIRMED
 
 All three closed and confirmed by the player in-game the same session.
@@ -905,8 +998,10 @@ by offset, never by our field name.
   bump). LATE: game-manual naming reconciliation sweep.
 
 ### Later tracks
-- FMV/cutscenes (decoders located): intros, MC1 win/lose + outro, MC2
-  CUT1-6 + attract mode, PPERF score screen, ScrollDialog unroll.
+- FMV/cutscenes — PROMOTED to "next session", see the top of Remaining
+  work (recon done: one format, 320×200, decoder already written, the
+  outro seam already named). Remainder here: attract mode, PPERF score
+  screen, ScrollDialog unroll.
 - Feature-family plugin promotion (authenticity-matrix columns → whole
   swappable families) — design agreed, mostly folded into existing seams.
 - Flight feel-tuning pass vs remc2; custom level designs (wyvern-kite,

@@ -17,8 +17,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use mgc_formats::bundle::{
-    BUNDLE_VERSION, BundleManifest, BundleSource, MusicIndex, MusicTrack, SpeechClip, SpeechIndex,
-    TerrainAtlasInfo,
+    BUNDLE_VERSION, BundleManifest, BundleSource, MovieEntry, MovieIndex, MusicIndex, MusicTrack,
+    SpeechClip, SpeechIndex, TerrainAtlasInfo,
 };
 use mgc_formats::{Game, Importer};
 
@@ -673,11 +673,15 @@ pub fn bake_mc2_audio(
             // `SOUND_start_sequence(track-1)`, Sound.cpp:4974): Night=1
             // →GAME1, Day=2→GAME2, Cave=3→GAME3; menu StartMusic(4)→
             // SETUP (idx 3, the shared C2SETUP).
-            const ROLES: [(usize, &str); 4] = [
+            // Sub-songs 4/5 are INTRO and CUTS — the score for the
+            // full-screen movies, which carry no audio of their own.
+            const ROLES: [(usize, &str); 6] = [
                 (0, "mc2-night"),
                 (1, "mc2-day"),
                 (2, "mc2-cave"),
                 (3, "mc2-menu"),
+                (4, "mc2-intro"),
+                (5, "mc2-cuts"),
             ];
             for (idx, role) in ROLES {
                 let sub = subsongs.get(idx).ok_or_else(|| {
@@ -1201,6 +1205,173 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
     Ok(outputs
         .into_iter()
         .map(|(name, sha)| (format!("assets/mc1-ui/{name}"), sha))
+        .collect())
+}
+
+/// The full-screen FMV movies → `assets/<variant>/`: every Bullfrog
+/// stream under `INTRO/`, copied RAW plus a [`MovieIndex`].
+///
+/// This is the one bundle that does not translate its input. A decoded
+/// frame is 64 KB and MC1's `INTRO.DAT` is 3165 of them — pre-decoding
+/// would turn a 75 MB stream into 200 MB of canvases nothing can hold,
+/// so the engine keeps the original bytes and decodes one frame at a
+/// time (`fmv::FmvCursor`). The whole set is ~92 MB for MC1 and ~140 MB
+/// for MC2; that is local disk only, since bundles are baked from the
+/// player's own install and never shipped.
+///
+/// Streams are keyed by lowercased source stem (`intro`, `outro`,
+/// `logo`, `cut1`, `levelw1`); which movie plays when is the engine's
+/// business, not the importer's, so no role mapping is baked in.
+pub fn bake_movies(
+    src: &GameSource,
+    out_dir: &Path,
+    variant: &str,
+    game: Game,
+) -> Result<Vec<(String, String)>, BakeError> {
+    // Header-screen the whole catalog rather than naming files: the
+    // two games' INTRO sets differ, and a stream we cannot decode is
+    // one we must not index.
+    let mut found: Vec<(String, Vec<u8>)> = Vec::new();
+    for rel in src.list() {
+        if !rel.to_uppercase().starts_with("INTRO/") {
+            continue;
+        }
+        let Ok(raw) = src.read(&rel) else { continue };
+        if crate::fmv::header(&raw).is_some() {
+            found.push((rel, raw));
+        }
+    }
+    if found.is_empty() {
+        eprintln!("note: {variant}: no FMV streams under INTRO/ — skipping movie bundle");
+        return Ok(Vec::new());
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let dir = out_dir.join("assets").join(variant);
+    let movie_dir = dir.join("movies");
+    std::fs::create_dir_all(&movie_dir).map_err(|e| BakeError::Io(movie_dir.clone(), e))?;
+    let mut outputs = Vec::new();
+    let mut sources = Vec::new();
+    let mut emit = |name: &str, bytes: &[u8]| -> Result<(), BakeError> {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| BakeError::Io(path, e))?;
+        outputs.push((name.to_string(), hex(&Sha256::digest(bytes))));
+        Ok(())
+    };
+
+    let mut index = MovieIndex { movies: Vec::new() };
+    for (rel, raw) in &found {
+        let (width, height, frames) = crate::fmv::header(raw).expect("header re-parses");
+        let name = Path::new(rel)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_lowercase();
+        let file = format!("movies/{name}.fmv");
+        emit(&file, raw)?;
+        sources.push(BundleSource {
+            file: rel.clone(),
+            sha256: hex(&Sha256::digest(raw)),
+        });
+        index.movies.push(MovieEntry {
+            name,
+            file,
+            frames: frames as u32,
+            width: width as u32,
+            height: height as u32,
+            source: rel.clone(),
+        });
+    }
+    emit(
+        "movies.json",
+        &serde_json::to_vec_pretty(&index).expect("movie index serializes"),
+    )?;
+
+    // The subtitle strip's font and text, so the movie bundle is
+    // self-contained. Retail draws the narration subtitles with
+    // SFONT1 (`sub_24AB0`, remc1:27911) — a bigger, outlined font than
+    // the in-game FONT1, and BOTH games ship the same file.
+    let font_rel = if src.exists("DATA/SCREENS/SFONT1.DAT") {
+        "DATA/SCREENS/SFONT1"
+    } else {
+        "DATA/SFONT1"
+    };
+    if src.exists(&format!("{font_rel}.DAT")) {
+        let get = |rel: &str| -> Result<Vec<u8>, BakeError> {
+            let raw = src
+                .read(rel)
+                .map_err(|e| BakeError::Io(Path::new(rel).to_path_buf(), e))?;
+            if crate::rnc::is_rnc(&raw) {
+                crate::rnc::decompress(&raw).map_err(|e| {
+                    BakeError::Level(Path::new(rel).to_path_buf(), 0, format!("RNC: {e:?}"))
+                })
+            } else {
+                Ok(raw)
+            }
+        };
+        let dat = get(&format!("{font_rel}.DAT"))?;
+        let tab = get(&format!("{font_rel}.TAB"))?;
+        let glyphs = crate::hspr::decode(&dat, &tab)
+            .map_err(|e| BakeError::Level(Path::new(font_rel).to_path_buf(), 0, e.to_string()))?;
+        let packed = sprites::pack(&glyphs, UI_ATLAS_WIDTH);
+        emit("font.bin", &packed.atlas)?;
+        emit(
+            "font.json",
+            &serde_json::to_vec_pretty(&packed.index).expect("font index serializes"),
+        )?;
+        sources.push(BundleSource {
+            file: format!("{font_rel}.DAT"),
+            sha256: hex(&Sha256::digest(&dat)),
+        });
+
+        // The lines themselves. The scripts' subtitle keys are indices
+        // into the game's own string table: MC1's is `DATA/ETEXT.DAT`
+        // (80 NUL-terminated strings, the intro narration at 0..=16 —
+        // remc1 `sub_44700_44A40`), MC2's is the 471-entry
+        // `LANGUAGE/L2.TXT` bank (English; L1 is French), which the
+        // cutscenes index directly.
+        let (text_rel, strings) = if src.exists("DATA/ETEXT.DAT") {
+            let raw = get("DATA/ETEXT.DAT")?;
+            let mut entries: Vec<String> = raw
+                .split(|&b| b == 0)
+                .map(|s| s.iter().map(|&b| b as char).collect())
+                .collect();
+            while entries.last().is_some_and(String::is_empty) {
+                entries.pop();
+            }
+            ("DATA/ETEXT.DAT", entries)
+        } else {
+            let raw = get("LANGUAGE/L2.TXT")?;
+            ("LANGUAGE/L2.TXT", crate::hscreen::language_strings(&raw))
+        };
+        emit(
+            "subtitles.json",
+            &serde_json::to_vec_pretty(&strings).expect("subtitles serialize"),
+        )?;
+        sources.push(BundleSource {
+            file: text_rel.into(),
+            sha256: hex(&Sha256::digest(&get(text_rel)?)),
+        });
+    }
+
+    let manifest = BundleManifest {
+        format_version: BUNDLE_VERSION,
+        bake_epoch: mgc_formats::BAKE_EPOCH,
+        variant: variant.to_string(),
+        game,
+        importer: Importer {
+            name: "mgc-import".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        sources,
+    };
+    emit(
+        "bundle.json",
+        &serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )?;
+    Ok(outputs
+        .into_iter()
+        .map(|(name, sha)| (format!("assets/{variant}/{name}"), sha))
         .collect())
 }
 

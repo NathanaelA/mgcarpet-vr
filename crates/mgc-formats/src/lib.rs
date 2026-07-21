@@ -107,7 +107,17 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    (DATA/FONT1 glyph masks for frontend text) and `strings.json`
 ///    (LANGUAGE/L1.TXT, 471 entries — level descriptions at
 ///    23+level).
-pub const BAKE_EPOCH: u32 = 18;
+/// 19: new `assets/mc1-movies` + `assets/mc2-movies` bundles: the
+///    full-screen FMV streams (`movies/<name>.fmv`) copied RAW plus
+///    `movies.json` (`bundle::MovieIndex`). Raw because a decoded
+///    frame is 64 KB and MC1's intro is 3165 of them; the engine
+///    decodes one frame at a time (`fmv::FmvCursor`).
+///    `assets/mc2-audio` gains `mc2-intro` + `mc2-cuts` (MUSIC.DAT GM
+///    sub-songs 4 and 5) — the movies' MIDI score. The movie bundles
+///    also carry the subtitle strip's `font.bin`/`font.json` (SFONT1,
+///    shipped by both games) and `subtitles.json` (MC1 ETEXT.DAT,
+///    MC2 LANGUAGE/L2.TXT) so they are self-contained.
+pub const BAKE_EPOCH: u32 = 19;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

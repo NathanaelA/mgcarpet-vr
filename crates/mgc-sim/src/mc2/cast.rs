@@ -402,7 +402,7 @@ impl World {
     /// The MC2 per-tier spell name shown on the CTRL-pane hover and the
     /// spell-change toast (`SetSpellHelpPopupCoordinates_88D40` case 0 /
     /// EF:37925): resolve the LIVE `hint_text` lang index (post the
-    /// Day/non-Day `level_init_patch`) to its retail `L1.TXT` string, so
+    /// Day/non-Day `level_init_patch`) to its retail `L2.TXT` string, so
     /// each tier reads as its own name ("Possession"/"Mana Magnet"/"Mana
     /// Lock"), not one generic label. Empty when mc2 spell data is absent
     /// (docs/spell-audit/spell-names.md).

@@ -1178,10 +1178,15 @@ impl MoviePlayer {
             self.resolve();
             self.dirty = false;
         }
-        let (scale, ox, oy) = crate::ui::letterbox(size, Self::W as f32, Self::H as f32);
+        let scale = (size.0 / Self::W as f32).min(size.1 / Self::H as f32);
         let (w, h) = (Self::W as f32 * scale, Self::H as f32 * scale);
         let quads = vec![UiQuad {
-            rect: [ox, oy, w, h],
+            rect: [
+                ((size.0 - w) * 0.5).floor(),
+                ((size.1 - h) * 0.5).floor(),
+                w,
+                h,
+            ],
             uv: [0.0, 0.0, Self::W as f32, Self::H as f32],
             tint: [1.0, 1.0, 1.0, 1.0],
         }];

@@ -17,6 +17,7 @@ mod frontend;
 mod frontend_mc1;
 mod menu;
 mod minimenu;
+mod movie;
 mod saves;
 mod settings;
 mod ui;
@@ -1366,6 +1367,22 @@ enum Screen {
     Menu,
     /// The MC2 world-map hub.
     Map,
+    /// A full-screen FMV run (intro / cutscene / outro).
+    Movie,
+}
+
+/// What follows a finished (or skipped) FMV chain. Every movie in the
+/// game covers a transition, so the player always hands back to one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterMovie {
+    /// Back to the campaign's main menu (the intro chain at launch).
+    Menu,
+    /// Back to the MC2 world map (the cutscenes sit between a
+    /// finished level and the map).
+    Map,
+    /// Leave the game — the outro is the last thing either campaign
+    /// shows.
+    Quit,
 }
 
 /// Which atlas currently occupies the renderer's single UI-atlas
@@ -1387,6 +1404,8 @@ enum UiAtlas {
     /// The frontend-owned level-UI atlas (the P options menu over a
     /// frontend screen — fonts + panel art without a session).
     FrontendUi,
+    /// The FMV player's resolved frame (re-uploaded as it decodes).
+    Movie,
 }
 
 /// The running session, mutably — the gameplay paths' accessor.
@@ -1580,6 +1599,17 @@ struct App {
     mainmenu: Option<frontend::MainMenu>,
     /// The MC1/HW frontend (the 320×200 globe menu).
     mc1menu: Option<frontend_mc1::Mc1Menu>,
+    /// The running FMV chain — owns the frame while
+    /// `screen == Screen::Movie`, and is dropped when it ends.
+    movie: Option<movie::MoviePlayer>,
+    /// The launch intro is still owed (consumed on the first frontend
+    /// frame — the window has to exist before a movie can play).
+    boot_intro: bool,
+    /// Which MC2 cutscenes have played this run (retail's
+    /// `overplayed_5`, which is per-process and never persisted).
+    cutscenes_played: [bool; 5],
+    /// What to do once the chain finishes or the player skips it.
+    movie_then: AfterMovie,
     /// Which surface owns the frame (see [`Screen`]). Frontend
     /// screens hold no session — the level is constructed on launch
     /// and torn down on exit.
@@ -1621,6 +1651,7 @@ impl App {
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
+        let has_campaign = campaign.is_some();
         let is_mc2 = match (&level, &campaign) {
             (Some(l), _) => matches!(l.game, mgc_sim::ids::GameId::Mc2),
             (None, Some(run)) => run.id == campaign::CampaignId::Mc2,
@@ -1734,7 +1765,7 @@ impl App {
             // temple; MC1/HW: the globe menu) with NO level loaded —
             // the frontend is the loader; a session is constructed
             // when the player launches one.
-            screen: if campaign.is_some() {
+            screen: if has_campaign {
                 Screen::Menu
             } else {
                 Screen::Level
@@ -1744,6 +1775,13 @@ impl App {
             worldmap: None,
             mainmenu: None,
             mc1menu: None,
+            movie: None,
+            // A campaign booting to its menu gets the intro chain; a
+            // direct `--level` launch does not, matching retail's own
+            // level shortcut.
+            boot_intro: has_campaign,
+            cutscenes_played: [false; 5],
+            movie_then: AfterMovie::Menu,
             ui_atlas: UiAtlas::None,
             frontend_audio_accum: 0.0,
             frontend_ui: None,
@@ -1754,8 +1792,15 @@ impl App {
             // Single-level mode boots straight into its session.
             Some(l) => app.install_level(l),
             // Campaign boot: frontend only — its dedicated menu music
-            // starts now (MC1 `csetup`, MC2 the SETUP render).
-            None => app.frontend_music(),
+            // starts now (MC1 `csetup`, MC2 the SETUP render). NOT when
+            // the intro chain is about to play: the movie owns the
+            // audio from the first frame, and starting the menu track
+            // here only to stop it on the next frame is audible as a
+            // blip of menu MIDI under the opening (player-reported).
+            // The chain hands back to `enter_main_menu`, which starts
+            // it properly.
+            None if !app.boot_intro => app.frontend_music(),
+            None => {}
         }
         app
     }
@@ -2217,6 +2262,8 @@ impl App {
                         self.free_menu_pointer();
                     }
                 }
+                // A movie owns the whole screen and takes no pointer.
+                Screen::Movie => {}
             }
         }
         // Retail pause suspends ALL sound; resumed sounds pick up
@@ -3858,6 +3905,14 @@ impl App {
     /// One frontend frame (`screen != Level`): the P options menu
     /// over a frozen screen, or the live menu/map frame.
     fn frontend_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        // The launch intro, on the first frontend frame there is a
+        // window to show it in. Retail runs it BEFORE the main menu
+        // (a campaign booted straight into a level — `--level` — gets
+        // no intro, same as retail's own level shortcut).
+        if std::mem::take(&mut self.boot_intro) && self.screen == Screen::Menu {
+            let cues = self.intro_movies();
+            self.play_movies(&cues, AfterMovie::Menu, event_loop);
+        }
         // The mixer flush is tick-denominated (24 Hz fade ramps +
         // the voiceover-duck recovery); with no sim ticking, pump it
         // from wall time so the map's ambient bursts (screams,
@@ -3909,9 +3964,194 @@ impl App {
         match self.screen {
             Screen::Menu => self.menu_screen_frame(dt, event_loop),
             Screen::Map => self.map_screen_frame(dt, event_loop),
+            Screen::Movie => self.movie_screen_frame(dt, event_loop),
             // Level with no session (a failed campaign launch mid-
             // exit): nothing to draw.
             Screen::Level => {}
+        }
+    }
+
+    /// The launch intro chain, per campaign.
+    ///
+    /// MC1/HW run a dispatcher state machine — INTEL → LOGO → INTRO →
+    /// TITLE → main menu (`sub_4AB20_4AE60`, remc1:57879-57907) — with
+    /// an 8 s hold on the logo and 6 s on the title
+    /// (`sub_4B480_4B7C0`). INTEL.DAT is the Intel Pentium branding
+    /// bumper and plays ONLY on a CPUID family-5/model-1 part
+    /// (`sub_19470`, remc1:19475), so it never plays here; MC2 ships
+    /// the file but never references it at all.
+    ///
+    /// MC2 runs a welcome still, then INTRO and INTRO2
+    /// (`Intros_76D10`, MenusAndIntros.cpp:736-800). The still is the
+    /// HSCREEN0 welcome screen, not a movie, and is not yet drawn.
+    ///
+    /// The MC1 title's animated overlay (TITLE-02/04, a 4-frame loop
+    /// composited over the held title) is not ported — the title holds
+    /// static. See docs/FIDELITY.md.
+    fn intro_movies(&self) -> Vec<movie::Cue> {
+        if self.is_mc2() {
+            vec![movie::Cue::new("intro"), movie::Cue::new("intro2")]
+        } else {
+            let hw = self
+                .campaign
+                .as_ref()
+                .is_some_and(|c| c.id == campaign::CampaignId::Mc1Hw);
+            // Hidden Worlds swaps in its own title art (remc1:60305).
+            let title = if hw { "title-03" } else { "title-01" };
+            vec![
+                movie::Cue::new("logo").holding(8.0),
+                movie::Cue::new("intro"),
+                movie::Cue::new(title).holding(6.0),
+            ]
+        }
+    }
+
+    /// MC2's between-level cutscene for a just-completed level, if it
+    /// has one and it has not already played.
+    ///
+    /// The table is `cutScene_E16E0` (MenusAndIntros.cpp:189), which
+    /// stores `levelIndex + 1` and so fires CUT1-5 after level indices
+    /// 4, 8, 12, 16 and 23. CUT6 belongs to level 24 and is the
+    /// campaign ending — it is played from the outro seam instead, so
+    /// it is not in this table.
+    ///
+    /// Retail marks each entry `overplayed_5` when it plays and never
+    /// resets or persists the flag, so a cutscene shows once per
+    /// process; `cutscenes_played` reproduces that.
+    fn mc2_cutscene(&mut self, level: u32) -> Option<movie::Cue> {
+        if !self.is_mc2() {
+            return None;
+        }
+        let slot = [4u32, 8, 12, 16, 23].iter().position(|&l| l == level)?;
+        if std::mem::replace(&mut self.cutscenes_played[slot], true) {
+            return None;
+        }
+        // Retail plays the cutscenes unskippable
+        // (`PlayInfoFmv(0, ..)`, MenusAndIntros.cpp:4142).
+        Some(movie::Cue::unskippable(
+            ["cut1", "cut2", "cut3", "cut4", "cut5"][slot],
+        ))
+    }
+
+    /// Start an FMV chain from the running campaign's movie bundle,
+    /// then do `then`. Falls straight through to `then` when the
+    /// movies are unavailable (no bundle, or an install without them)
+    /// or the player has them switched off — a missing movie must
+    /// never strand the campaign.
+    fn play_movies(&mut self, cues: &[movie::Cue], then: AfterMovie, event_loop: &ActiveEventLoop) {
+        let mc2 = self.is_mc2();
+        let player = if self.cfg.render.preference.movies {
+            let dir = if mc2 {
+                "baked/assets/mc2-movies"
+            } else {
+                "baked/assets/mc1-movies"
+            };
+            movie::MoviePlayer::new(
+                Path::new(dir),
+                cues,
+                mc2,
+                self.cfg.render.preference.movie_subtitles,
+            )
+        } else {
+            None
+        };
+        match player {
+            Some(p) => {
+                // A movie owns the whole screen with no level behind
+                // it. Dropping the session here also kills the level's
+                // looping sounds, its narration and the danger-music
+                // ramp, none of which may bleed under a cutscene; the
+                // continuation tears down again, harmlessly.
+                self.teardown_session();
+                self.movie = Some(p);
+                self.movie_then = then;
+                self.screen = Screen::Movie;
+                self.ui_atlas = UiAtlas::None;
+                self.set_grab(false);
+                // The movies carry no audio of their own — their
+                // score is cued frame by frame out of the event
+                // script, so whatever was playing stops here and the
+                // script starts the right track.
+                if let Some(a) = &mut self.audio {
+                    a.stop_music();
+                }
+            }
+            None => self.finish_movies(then, event_loop),
+        }
+    }
+
+    /// One FMV frame: decode on the 20 fps clock, present the 320×200
+    /// canvas letterboxed, and hand over to the continuation when the
+    /// chain runs out.
+    fn movie_screen_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        let size = self.view_size();
+        let Some(player) = &mut self.movie else {
+            let then = self.movie_then;
+            self.finish_movies(then, event_loop);
+            return;
+        };
+        player.tick(dt);
+        // The script's audio cues. The FLIC container holds no audio
+        // stream, so these — the narration clips, the effects and the
+        // MIDI score — ARE the movie's soundtrack.
+        let actions = player.take_actions();
+        if let Some(a) = &mut self.audio {
+            for action in actions {
+                match action {
+                    movie::Action::Music { track, looped } => {
+                        if self.cfg.audio.music
+                            && let Err(e) = a.play_music(track, looped)
+                        {
+                            eprintln!("note: movie music {track}: {e}");
+                        }
+                    }
+                    movie::Action::StopMusic => a.stop_music(),
+                    movie::Action::Bank(bank) => a.set_movie_bank(bank),
+                    movie::Action::Sample { id, looped } => {
+                        if self.cfg.audio.sound
+                            && let Err(e) = a.play_movie_sample(id, looped)
+                        {
+                            eprintln!("note: movie sample {id}: {e}");
+                        }
+                    }
+                    movie::Action::StopSample(id) => a.stop_movie_sample(id),
+                    movie::Action::StopSamples => a.stop_movie_samples(),
+                }
+            }
+        }
+        let Some(player) = &mut self.movie else {
+            return;
+        };
+        if player.done() {
+            self.movie = None;
+            let then = self.movie_then;
+            self.finish_movies(then, event_loop);
+            return;
+        }
+        let (rgba, quads) = player.frame(size);
+        if let Some(r) = &mut self.renderer {
+            r.load_ui_atlas(
+                movie::MoviePlayer::W as u32,
+                movie::MoviePlayer::H as u32,
+                rgba,
+            );
+            self.ui_atlas = UiAtlas::Movie;
+            // Black behind, so a non-4:3 window letterboxes rather
+            // than showing whatever the last screen left.
+            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            q.extend(quads);
+            r.set_ui_quads(q);
+        }
+    }
+
+    /// Leave the movie screen for whatever the chain was covering.
+    fn finish_movies(&mut self, then: AfterMovie, event_loop: &ActiveEventLoop) {
+        self.movie = None;
+        self.ui_atlas = UiAtlas::None;
+        match then {
+            AfterMovie::Menu => self.enter_main_menu(),
+            AfterMovie::Map => self.open_map_screen(event_loop),
+            AfterMovie::Quit => event_loop.exit(),
         }
     }
 
@@ -4283,6 +4523,15 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = state == ElementState::Pressed;
+                // Retail's movie abort takes either mouse button as
+                // readily as a key (`lastPressedKey || mouseLeft ||
+                // mouseRight`, remc1 sub_10300).
+                if self.screen == Screen::Movie {
+                    if down && let Some(m) = &mut self.movie {
+                        m.skip();
+                    }
+                    return;
+                }
                 // The exit-confirm dialog owns the pointer: OK
                 // confirms, Cancel dismisses, everything else (and
                 // any fire-through) is swallowed.
@@ -4641,6 +4890,17 @@ impl ApplicationHandler for App {
                 }
                 if down && self.alt_held && event.logical_key == Key::Named(NamedKey::Enter) {
                     self.toggle_fullscreen();
+                    return;
+                }
+                // A movie owns the screen: ANY key abandons the rest
+                // of the chain, as retail does — the skip is not per
+                // movie. Placed after the Alt+Enter arm so fullscreen
+                // still toggles during playback, and before every
+                // other key path so nothing else sees the keypress.
+                if self.screen == Screen::Movie {
+                    if down && let Some(m) = &mut self.movie {
+                        m.skip();
+                    }
                     return;
                 }
                 if down && event.logical_key == Key::Named(NamedKey::Escape) {
@@ -5722,16 +5982,18 @@ impl ApplicationHandler for App {
                                     .as_ref()
                                     .is_some_and(|c| c.id != campaign::CampaignId::Mc2);
                                 if mc1 {
-                                    // The retail transition beat:
-                                    // a win returns to the MAIN
-                                    // MENU (FMV + score screen
-                                    // deferred); Continue launches
-                                    // the next level.
+                                    // The retail transition beat: a
+                                    // win plays the congratulation
+                                    // movie and returns to the MAIN
+                                    // MENU (the score screen is still
+                                    // deferred); Continue launches the
+                                    // next level.
                                     if let Some(run) = &mut self.campaign {
                                         run.current = n;
                                     }
                                     self.quit_fade = None;
-                                    self.enter_main_menu();
+                                    let win = mc1_win_movie();
+                                    self.play_movies(&[win], AfterMovie::Menu, event_loop);
                                 } else {
                                     // MC2's direct level chain (the
                                     // demon-mouth secret dive).
@@ -5740,13 +6002,31 @@ impl ApplicationHandler for App {
                             }
                             Some(campaign::NextStep::MapScreen) => {
                                 self.quit_fade = None;
-                                self.open_map_screen(event_loop);
+                                // MC2 slots a cutscene in front of the
+                                // map after certain levels.
+                                let done = self.campaign.as_ref().map_or(0, |c| c.current);
+                                match self.mc2_cutscene(done) {
+                                    Some(cue) => {
+                                        self.play_movies(&[cue], AfterMovie::Map, event_loop)
+                                    }
+                                    None => self.open_map_screen(event_loop),
+                                }
                             }
                             Some(campaign::NextStep::Outro) => {
-                                // The outro FMV slot (deferred with
-                                // the intro track).
+                                // The campaign's ending movie, then
+                                // out. MC1/HW have a dedicated
+                                // OUTRO.DAT; MC2's ending is the last
+                                // of its six cutscenes.
                                 println!("campaign complete!");
-                                event_loop.exit();
+                                self.quit_fade = None;
+                                // Both endings are unskippable in
+                                // retail (`PlayInfoFmv(0, ..)`).
+                                let outro = if self.is_mc2() { "cut6" } else { "outro" };
+                                self.play_movies(
+                                    &[movie::Cue::unskippable(outro)],
+                                    AfterMovie::Quit,
+                                    event_loop,
+                                );
                             }
                             None => event_loop.exit(),
                         }
@@ -5883,6 +6163,10 @@ struct Args {
     /// Borderless-fullscreen override (config
     /// `render.preference.fullscreen`).
     fullscreen: Option<bool>,
+    /// FMV playback override (config `render.preference.movies`).
+    movies: Option<bool>,
+    /// Movie-subtitle override (`render.preference.movie_subtitles`).
+    movie_subtitles: Option<bool>,
     /// CLI override of `render.debug.fps` (the FPS overlay).
     fps: Option<bool>,
     /// Animation clock for `--screenshot` (game turns; default 0).
@@ -5945,6 +6229,8 @@ fn parse_args() -> Result<Args, String> {
     let mut light_sources = None;
     let mut vsync = None;
     let mut fullscreen = None;
+    let mut movies = None;
+    let mut movie_subtitles = None;
     let mut fps = None;
     let mut anim_turn = 0.0f32;
     let mut terrain_features = true;
@@ -6110,6 +6396,10 @@ fn parse_args() -> Result<Args, String> {
             "--no-vsync" => vsync = Some(false),
             "--fullscreen" => fullscreen = Some(true),
             "--windowed" => fullscreen = Some(false),
+            "--movies" => movies = Some(true),
+            "--movie-subtitles" => movie_subtitles = Some(true),
+            "--no-movie-subtitles" => movie_subtitles = Some(false),
+            "--no-movies" => movies = Some(false),
             "--fps" => fps = Some(true),
             "--no-fps" => fps = Some(false),
             "--thrust" => {
@@ -6226,6 +6516,7 @@ fn parse_args() -> Result<Args, String> {
                      [--sky|--no-sky] [--reflections|--no-reflections] \
                      [--light-sources|--no-light-sources] \
                      [--vsync|--no-vsync] [--fullscreen|--windowed] \
+                     [--movies|--no-movies] \
                      [--fps|--no-fps] \
                      [--screenshot out.png [--camera x,y,z,yaw,pitch] [--map-view] \
                      [--anim-turn N]] \
@@ -6275,6 +6566,8 @@ fn parse_args() -> Result<Args, String> {
         light_sources,
         vsync,
         fullscreen,
+        movies,
+        movie_subtitles,
         fps,
         anim_turn,
         terrain_features,
@@ -6813,6 +7106,23 @@ fn apply_campaign_book(
 /// persist the slot file. A free function because it runs inside the
 /// redraw's `&mut sim.world` borrow (field-disjoint from
 /// `self.campaign`).
+/// MC1's world-won congratulation movie. Retail keeps TWO of them and
+/// picks by the parity of the free-running 120 Hz timer
+/// (`dword_AC5D4_AC5C4 & 1`, remc1:59905) — a coin flip with no level
+/// or world index in it, so ours flips a coin too.
+///
+/// Its sibling `LEVELOSE.DAT` (the world-LOST movie, the `& 4` arm of
+/// the same test) has no seam here: a failed MC1 level does not route
+/// back through a post-level screen in this engine. See
+/// docs/FIDELITY.md.
+fn mc1_win_movie() -> movie::Cue {
+    let flip = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos())
+        & 1;
+    movie::Cue::new(if flip == 0 { "levelw1" } else { "levelw2" })
+}
+
 fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::world::World) {
     use campaign::{CampaignId, NextStep};
     match run.id {
@@ -7173,6 +7483,12 @@ fn main() -> std::process::ExitCode {
     }
     if let Some(v) = args.vsync {
         cfg.render.preference.vsync = v;
+    }
+    if let Some(v) = args.movies {
+        cfg.render.preference.movies = v;
+    }
+    if let Some(v) = args.movie_subtitles {
+        cfg.render.preference.movie_subtitles = v;
     }
     if let Some(v) = args.fullscreen {
         cfg.render.preference.fullscreen = v;
