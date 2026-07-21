@@ -1345,8 +1345,25 @@ mod tests {
 
     const BUNDLE: &str = "../../baked/assets/mc1-movies";
 
+    /// Report a baked-data skip, mirroring `mgc-sim`'s golden guard
+    /// (`tests/common/mod.rs`): `baked/` never exists in CI, so these
+    /// tests self-skip — but the `GOLDEN-SKIP:` line keeps the skip
+    /// COUNTED rather than reading as "everything verified", and
+    /// `MGC_REQUIRE_GOLDENS=1` turns it into a failure on the
+    /// fixture-equipped pre-release run.
+    fn golden_skip(what: &str) {
+        if std::env::var_os("MGC_REQUIRE_GOLDENS").is_some_and(|v| v != "0" && !v.is_empty()) {
+            panic!("MGC_REQUIRE_GOLDENS is set, but: {what}");
+        }
+        eprintln!("GOLDEN-SKIP: {what}");
+    }
+
     fn set() -> Option<()> {
-        Path::new(BUNDLE).is_dir().then_some(())
+        let there = Path::new(BUNDLE).is_dir();
+        if !there {
+            golden_skip("no baked mc1-movies bundle");
+        }
+        there.then_some(())
     }
 
     /// Drive a two-movie chain to completion and check the frame
@@ -1776,6 +1793,7 @@ mod tests {
     fn narration_clips_fit_before_their_bank_is_swapped() {
         let dir = Path::new("../../baked/assets/mc1-audio");
         if !dir.is_dir() {
+            golden_skip("no baked mc1-audio bundle");
             return;
         }
         let raw = std::fs::read(dir.join("sounds.json")).expect("sounds.json");
@@ -1860,14 +1878,17 @@ mod tests {
     fn every_cued_sample_exists() {
         let mc2_names = |n: &str| n.starts_with("cut") || n == "intro2";
         let mut checked = 0usize;
+        let mut walked = 0usize;
         for (game, dir) in [
             (false, "../../baked/assets/mc1-audio"),
             (true, "../../baked/assets/mc2-audio"),
         ] {
             let dir = Path::new(dir);
             if !dir.is_dir() {
+                golden_skip(&format!("no baked bundle {}", dir.display()));
                 continue;
             }
+            walked += 1;
             let raw = std::fs::read(dir.join("sounds.json")).expect("sounds.json");
             let index: mgc_formats::bundle::SoundIndex =
                 serde_json::from_slice(&raw).expect("sounds.json parses");
@@ -1905,7 +1926,15 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 120, "only {checked} sample cues checked");
+        // The vacuity floor — an index typo is only caught by cues
+        // that actually ran. It can only be asserted over the bundles
+        // that were WALKED: with no `baked/` tree at all (CI) there is
+        // nothing to check and the skip above is the report.
+        match walked {
+            2 => assert!(checked > 120, "only {checked} sample cues checked"),
+            1 => assert!(checked > 0, "a bundle is present but cued nothing"),
+            _ => {}
+        }
     }
 
     /// The narration lines must reach PIXELS, not just the cue list:
