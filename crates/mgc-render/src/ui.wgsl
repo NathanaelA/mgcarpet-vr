@@ -24,6 +24,8 @@ struct Instance {
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
+    // UV in TEXELS (not normalized): the fragment stage clamps it to
+    // the sprite's own cell before sampling.
     @location(0) uv: vec2<f32>,
     // 0 = textured, 1 = solid tint quad, 2 = MASK-DARKEN (the sprite is a
     // coverage MASK; inside it the destination — the stone slab already
@@ -34,6 +36,9 @@ struct VsOut {
     // Used for unowned spellbook icons).
     @location(1) @interpolate(flat) mode: u32,
     @location(2) @interpolate(flat) tint: vec4<f32>,
+    // The sprite's cell in the atlas, in texels — the clamp bounds.
+    @location(3) @interpolate(flat) uv_min: vec2<f32>,
+    @location(4) @interpolate(flat) uv_max: vec2<f32>,
 };
 
 @vertex
@@ -43,7 +48,14 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
     );
     let c = corners[vid];
-    let px = inst.rect.xy + c * inst.rect.zw;
+    // SNAP each corner to the pixel grid. The UI is authored at a fixed
+    // resolution and scaled by an arbitrary factor, so quad edges land
+    // between pixels; adjacent sprites (a scroll's three pieces, the
+    // panel behind a button) then leave a hairline gap or overlap along
+    // their shared edge. Rounding the CORNERS rather than the origin
+    // keeps neighbours welded: two quads sharing an edge round the same
+    // coordinate the same way, so the seam cannot open.
+    let px = round(inst.rect.xy + c * inst.rect.zw);
     var out: VsOut;
     // Pixel -> NDC (y down in pixels, up in NDC).
     out.clip = vec4<f32>(
@@ -55,8 +67,10 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     // uv.z (width) encodes the draw mode: 0 = solid tint; < 0 = silhouette
     // (|w| is the real width); > 0 = normal textured.
     let uvw = abs(inst.uv.z);
-    let tex_size = vec2<f32>(textureDimensions(atlas_tex));
-    out.uv = (inst.uv.xy + c * vec2<f32>(uvw, inst.uv.w)) / tex_size;
+    let uv_size = vec2<f32>(uvw, inst.uv.w);
+    out.uv = inst.uv.xy + c * uv_size;
+    out.uv_min = inst.uv.xy;
+    out.uv_max = inst.uv.xy + uv_size;
     if inst.uv.z == 0.0 {
         out.mode = 1u;
     } else if inst.uv.z < 0.0 {
@@ -74,7 +88,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return in.tint;
     }
     // Nearest-texel chunky sampling, like every sprite path here.
-    let c = textureSample(atlas_tex, atlas_samp, in.uv);
+    //
+    // Clamped to the sprite's own cell first. Sprites are packed into
+    // the atlas with NO gutter between them, so a fragment whose
+    // interpolated coordinate reaches the far edge samples the
+    // NEIGHBOURING sprite instead — one stray row or column of foreign
+    // pixels along the edge. Half a texel in from each side keeps every
+    // sample inside the cell without shifting the interior.
+    let tex_size = vec2<f32>(textureDimensions(atlas_tex));
+    let t = clamp(in.uv, in.uv_min + 0.5, in.uv_max - 0.5) / tex_size;
+    let c = textureSample(atlas_tex, atlas_samp, t);
     if c.a < 0.5 {
         discard;
     }
