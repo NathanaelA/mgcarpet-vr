@@ -12,8 +12,8 @@
 //! renders.
 
 use mgc_formats::{Thing, ThingKind};
-use mgc_render::{Billboard, HealthBar};
-use mgc_sim::engine::world::LivePose;
+use mgc_render::{Billboard, FireParticle, HealthBar};
+use mgc_sim::engine::world::{BlastView, LivePose};
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
 use mgc_sim::mc1::sprite_stats::SPRITE_STATS;
@@ -254,11 +254,27 @@ pub fn billboards_from_poses(
     game: GameId,
     poses: &[LivePose],
     sprite_dims: impl Fn(u16) -> Option<(u16, u16, u16)>,
+    enhanced_fire: bool,
 ) -> Vec<Billboard> {
     let mut out = Vec::new();
     for p in poses {
         if p.map_only {
             continue; // map presence only (unclaimed MC2 buildings)
+        }
+        // Enhanced fire: the procedural pass draws these instead — the
+        // (10,0/1) fire/explosion cells (their retail sprite would sit
+        // hot under the flash→soot lifecycle) and the flame-flying
+        // set: the (9,0) fireball, the MC2 (9,28) charged fireball,
+        // and the MC2 (10,77) firestorm satellites (the flame + comet
+        // trail replaces each core). Classic leaves every retail
+        // sprite untouched.
+        if enhanced_fire
+            && (p.class == 10
+                && (matches!(p.model, 0 | 1 | 77)
+                    || (matches!(p.model, 6 | 19) && p.fire_life.is_some()))
+                || p.class == 9 && matches!(p.model, 0 | 28))
+        {
+            continue;
         }
         let Some(s) = resolve_pose_sprite(game, p.type_index, &sprite_dims) else {
             continue;
@@ -754,6 +770,794 @@ pub fn lights_from_poses(poses: &[LivePose]) -> Vec<[f32; 4]> {
         .collect()
 }
 
+/// One blast ring's world pitch in tiles: the `(10,17)` driver places
+/// ring cells at 160 sim units per ring index (:28707), and a tile is
+/// 256 units.
+const RING_PITCH: f32 = 160.0 / 256.0;
+
+/// PROTOTYPE: one tracked blast in the render-side fire ledger — a live
+/// `(10,17)` driver, or a recently dead one whose smoke is still
+/// choreographed (the driver despawns ticks before the rim smoke
+/// clears, so the ledger must outlive it).
+///
+/// The comb law lives here: driver pass `p` (1-based; `elapsed` counts
+/// completed passes) fires ring `(2(p-1)) mod 11` — the EVEN radii
+/// sweep outward first (wave 1, 6 passes), then the ODD radii back-fill
+/// the burnt interior (wave 2, 5 passes), and a driver that outlives
+/// one full 11-pass comb re-burns the same rings CYCLICALLY (the ring
+/// table wraps). `passes` is what distinguishes every blast kind: the
+/// MC1 meteor/volcano runs 11 (pre-decrement), the MC2 tiered meteor
+/// 2/5/10 (its tier fuse — a short fuse scales BOTH duration and final
+/// radius), and the MC2 doomsday death sphere 70 (a rolling firestorm
+/// cycling the comb ~6 times).
+#[derive(Debug, Clone, Copy)]
+pub struct LedgerBlast {
+    pub slot: u16,
+    pub generation: u32,
+    pub x: f32,
+    pub z: f32,
+    pub plane_z: f32,
+    /// Ring passes completed (whole ticks; the frame's smooth-motion
+    /// alpha is added at emission time). Keeps advancing after the
+    /// driver despawns.
+    pub elapsed: f32,
+    /// Total passes the driver runs (MC1 pre-decrement: max_life + 1).
+    pub passes: f32,
+}
+
+impl LedgerBlast {
+    /// One full comb cycle — the driver's ring table is mod 11.
+    pub const CYCLE: f32 = 11.0;
+
+    /// The comb cycle containing blast time `t`: (cycle start as a
+    /// pass offset, passes this cycle runs — capped at a full comb).
+    pub fn cycle_at(&self, t: f32) -> (f32, f32) {
+        let base = (((t - 1.0) / Self::CYCLE).floor()).max(0.0) * Self::CYCLE;
+        (base, (self.passes - base).clamp(0.0, Self::CYCLE))
+    }
+
+    /// The cycle-local time at which a `cp`-pass cycle's wave-1 front
+    /// stops (pass 6 fires ring 10, or the cycle's final pass if it
+    /// dies sooner — the MC2 low tiers).
+    pub fn wave1_end_of(cp: f32) -> f32 {
+        cp.min(6.0)
+    }
+
+    /// A `cp`-pass cycle's final wave-1 fire radius in tiles.
+    pub fn wave1_max_of(cp: f32) -> f32 {
+        RING_PITCH * 2.0 * (Self::wave1_end_of(cp) - 1.0).max(0.0)
+    }
+
+    /// The blast's overall fire extent (its first cycle's wave-1 max —
+    /// later cycles never exceed it): crater membership, preview.
+    pub fn wave1_max(&self) -> f32 {
+        Self::wave1_max_of(self.passes.min(Self::CYCLE))
+    }
+}
+
+/// PROTOTYPE: the render-side blast ledger. Latches every live blast
+/// driver each sim tick and keeps aging it after the driver despawns,
+/// until the last rim smoke is gone — the procedural flame walls, the
+/// shockwave, and the crater-cell smoke all read blasts from here.
+#[derive(Debug, Default)]
+pub struct BlastLedger {
+    entries: Vec<LedgerBlast>,
+}
+
+impl BlastLedger {
+    /// Advance every tracked blast by `steps` sim ticks, then refresh /
+    /// insert from the live driver views (authoritative while alive).
+    /// Call once per sim tick with steps = 1.
+    pub fn update(&mut self, views: &[BlastView], steps: f32) {
+        for e in &mut self.entries {
+            e.elapsed += steps;
+        }
+        for v in views {
+            if let Some(e) = self
+                .entries
+                .iter_mut()
+                .find(|e| e.slot == v.slot && e.generation == v.generation)
+            {
+                e.elapsed = v.elapsed;
+                e.x = v.x;
+                e.z = v.z;
+                e.plane_z = v.plane_z;
+            } else {
+                self.entries.push(LedgerBlast {
+                    slot: v.slot,
+                    generation: v.generation,
+                    x: v.x,
+                    z: v.z,
+                    plane_z: v.plane_z,
+                    elapsed: v.elapsed,
+                    passes: v.passes as f32,
+                });
+            }
+        }
+        // Retire once the rim smoke horizon has passed: the longest-
+        // lived cells (life 14) are born at wave 1's end (~pass 6).
+        self.entries.retain(|e| e.elapsed < e.passes + 16.0);
+    }
+
+    /// Drop everything (level restart / session teardown).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn blasts(&self) -> &[LedgerBlast] {
+        &self.entries
+    }
+
+    /// A preview ledger from hand-built entries (headless stills).
+    pub fn synthetic(entries: Vec<LedgerBlast>) -> Self {
+        Self { entries }
+    }
+
+    /// The tracked blast whose crater covers (x, z), torus-aware:
+    /// nearest center within its wave-1 extent plus `margin` tiles.
+    /// Returns (outward dir x, outward dir z, distance, blast).
+    fn crater_at(&self, x: f32, z: f32, margin: f32) -> Option<(f32, f32, f32, &LedgerBlast)> {
+        let full = MAP_TILES as f32;
+        let wrap = |d: f32| {
+            let mut d = d;
+            if d > full / 2.0 {
+                d -= full;
+            }
+            if d < -full / 2.0 {
+                d += full;
+            }
+            d
+        };
+        let mut best: Option<(f32, f32, f32, &LedgerBlast)> = None;
+        for b in &self.entries {
+            let (dx, dz) = (wrap(x - b.x), wrap(z - b.z));
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist > b.wave1_max() + margin {
+                continue;
+            }
+            if best.is_none_or(|(_, _, d, _)| dist < d) {
+                // Outward radial direction; an on-center cell gets a
+                // stable arbitrary heading instead of NaN.
+                let (ox, oz) = if dist > 0.05 {
+                    (dx / dist, dz / dist)
+                } else {
+                    (1.0, 0.0)
+                };
+                best = Some((ox, oz, dist, b));
+            }
+        }
+        best
+    }
+}
+
+/// Terrain altitude at a tile position (torus-wrapped nearest sample).
+fn terrain_at(height: &[u8], x: f32, z: f32) -> f32 {
+    let map = MAP_TILES;
+    let tx = (x.floor() as i32).rem_euclid(map as i32) as usize;
+    let tz = (z.floor() as i32).rem_euclid(map as i32) as usize;
+    height[tz * map + tx] as f32 * HEIGHT_SCALE
+}
+
+/// PROTOTYPE (throwaway): turn fireball projectiles into a cloud of
+/// glowing fire particles — a hot head cluster plus a tapering comet
+/// trail streamed backward along the projectile's velocity. Stateless
+/// by motion law (trail = head − velocity·age), so it needs no history
+/// buffer; `time` (wall seconds) drives smooth turbulence and shimmer.
+///
+/// Emits for the MC1/MC2 fireball projectile (class 9, model 0) and its
+/// impact burst (class 10, models 0/1) — the same (class, model) set
+/// the dynamic-light pass already recognizes.
+pub fn fire_particles_from_poses(
+    prev: &[LivePose],
+    cur: &[LivePose],
+    blasts: &BlastLedger,
+    alpha: f32,
+    time: f32,
+) -> Vec<FireParticle> {
+    use std::collections::HashMap;
+    use std::f32::consts::TAU;
+    let by_slot: HashMap<u16, &LivePose> = prev.iter().map(|p| (p.slot, p)).collect();
+    let wrap_delta = |p: f32, q: f32| {
+        let mut d = q - p;
+        if d > 128.0 {
+            d -= 256.0;
+        }
+        if d < -128.0 {
+            d += 256.0;
+        }
+        d
+    };
+    // Cheap deterministic hash -> [0,1) for per-particle phase constants.
+    let hash = |a: u32| {
+        let mut x = a.wrapping_mul(0x9E37_79B9);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x85EB_CA6B);
+        x ^= x >> 13;
+        (x & 0xFFFF) as f32 / 65536.0
+    };
+
+    let mut out = Vec::new();
+    for c in cur {
+        // The flame-flying set: (9,0) = the fireball — MC1's, MC2's
+        // L1 AND every MC2 creature/rival bolt (they share the model);
+        // (9,28) = MC2's charged/repeat fireball body; (10,77) = the
+        // MC2 firestorm's 25 orbiting fireball satellites (same retail
+        // sprite 340 — the whole tumbling constellation burns).
+        let is_projectile =
+            c.class == 9 && matches!(c.model, 0 | 28) || c.class == 10 && c.model == 77;
+        // Burning-in-place set: the (10,0/1) fire/explosion, plus the
+        // standing fires — (10,6) in both games (MC1: Wall of Fire
+        // curtain / ground patches / burning trees; MC2: tree burn)
+        // and MC2's (10,19) volcano/dome fire spray. Models 6/19 key
+        // on the pose carrying fire_life (the world gates model 19
+        // off for MC1, where 19 is the volcano smoke plume).
+        let is_impact = c.class == 10
+            && (matches!(c.model, 0 | 1) || (matches!(c.model, 6 | 19) && c.fire_life.is_some()));
+        if !is_projectile && !is_impact {
+            continue;
+        }
+
+        // Lerped head position + per-tick velocity (from the prev/cur
+        // pair, matched on slot+generation like lerp_poses).
+        let (mut hx, mut hz, mut hy) = (c.x, c.z, c.alt);
+        let (mut vx, mut vz, mut vy) = (0.0f32, 0.0f32, 0.0f32);
+        if let Some(a) = by_slot
+            .get(&c.slot)
+            .filter(|a| a.generation == c.generation)
+        {
+            let (dx, dz, dy) = (wrap_delta(a.x, c.x), wrap_delta(a.z, c.z), c.alt - a.alt);
+            if dx * dx + dz * dz + dy * dy < SNAP_TILES * SNAP_TILES {
+                hx = (a.x + dx * alpha).rem_euclid(256.0);
+                hz = (a.z + dz * alpha).rem_euclid(256.0);
+                hy = a.alt + dy * alpha;
+                vx = dx;
+                vz = dz;
+                vy = dy;
+            }
+        }
+        // Center the flame near the sprite's visual middle.
+        hy += 0.4;
+
+        // Velocity direction (fall back to facing when barely moving).
+        let vspeed = (vx * vx + vz * vz + vy * vy).sqrt();
+        let (dirx, dirz, diry) = if vspeed > 0.02 {
+            (vx / vspeed, vz / vspeed, vy / vspeed)
+        } else {
+            (c.yaw.sin(), -c.yaw.cos(), 0.0)
+        };
+        // A horizontal perpendicular for lateral dance.
+        let perp = (-dirz, dirx);
+        let seed_base = c.slot as u32 * 131 + c.generation;
+
+        // One proportional size knob: scales every disc AND every
+        // positional offset, so the whole flame shrinks without changing
+        // shape. 0.45 keeps the head disc (plus its cluster jitter)
+        // inside one tile — the shader window fades every disc to zero
+        // before its quad edge, so nothing spills past its footprint.
+        let scale = 0.45f32;
+
+        // --- Impact cell: TEMPORAL decay -----------------------------
+        // A CRATER cell (inside a tracked blast's footprint) draws
+        // NOTHING here — the ledger-driven emitter synthesizes the
+        // whole crater (walls + smoke) procedurally, and the sim cell
+        // exists only for fidelity. A STANDALONE fire (a fireball hit,
+        // a burning corpse's flame trail, any genuine ground fire — no
+        // blast nearby) BURNS: retail drew its flame sprite for the
+        // whole cell life, so the flame here holds for most of it —
+        // upright licking fire in place — and only the tail of the
+        // life cools into rising smoke. Age is driven by the sim's
+        // per-cell `fire_life` (0 fresh → 1 dying); the 1-tick (10,1)
+        // explosion seeder runs the same law compressed = a quick
+        // bright burst.
+        if is_impact {
+            if blasts.crater_at(hx, hz, 1.2).is_some() {
+                continue;
+            }
+            let (elapsed_cur, maxlife) = c.fire_life.unwrap_or((0.0, 1.0));
+            // SUB-TICK animation: advance the cell's age fractionally with
+            // the smooth-motion alpha, so the burn→smoke lifecycle plays
+            // out continuously across the frames between ticks (the sim
+            // steps once per tick; the render fills in the gap). A cell
+            // present last tick ages elapsed_prev→elapsed_cur (they differ
+            // by 1); a cell born this tick holds at its fresh value.
+            let prev_life = by_slot
+                .get(&c.slot)
+                .filter(|a| a.generation == c.generation)
+                .and_then(|a| a.fire_life);
+            let fresh = prev_life.is_none();
+            let elapsed = match prev_life {
+                Some((ep, _)) => ep + (elapsed_cur - ep) * alpha,
+                None => elapsed_cur,
+            };
+            let age = (elapsed / maxlife).clamp(0.0, 1.0);
+            let (smoke, fade) = if matches!(c.model, 6 | 19) {
+                // Standing fire / fire spray: act_life is routinely
+                // overridden below the nominal 240 (curtain sheets 1,
+                // patches 14, ground waves 30, MC2 tree burns 130..189,
+                // MC2 trail sprays 10), so age-since-birth is
+                // unknowable — this law runs on REMAINING life: full
+                // flame until the last ~4 ticks, then smoke out (a
+                // long tree burn just burns longer, as retail did).
+                // `fresh` keeps a newborn short-fused sheet (the
+                // rising Wall of Fire curtain) burning on its birth
+                // tick instead of being born mid-smoke.
+                const TAIL: f32 = 4.0;
+                let remaining = (maxlife - elapsed).max(0.0);
+                let u = if fresh {
+                    0.0
+                } else {
+                    (1.0 - remaining / TAIL).clamp(0.0, 1.0)
+                };
+                (u * u * (3.0 - 2.0 * u), 1.0 - u * 0.9)
+            } else {
+                // Burn → smoke by LIFE FRACTION (not an absolute
+                // flash): full flame through ~40% of the life, then a
+                // smooth hand-over — the back half is a real smoke
+                // puff (the fireball-in-the-face experience), not
+                // just a fade tail.
+                let s = ((age - 0.42) / 0.28).clamp(0.0, 1.0);
+                (s * s * (3.0 - 2.0 * s), (1.0 - age * 1.05).clamp(0.0, 1.0))
+            };
+            if fade <= 0.02 {
+                continue;
+            }
+            // TREE fires ENGULF their tree: among the model-6 standing
+            // fires only tree burns carry a long re-seeded life
+            // (130..189 remaining vs ≤30 for curtain sheets / patches
+            // / ground waves), so size eases up with REMAINING life —
+            // a fresh tree wears a full crown of flame that visibly
+            // dies down to a normal fire as the tree chars out.
+            let engulf = if c.model == 6 {
+                1.0 + ((maxlife - elapsed - 25.0) / 55.0).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            // The 1-tick explosion seeder detonates bigger and hotter
+            // than a steady ground fire; the standing fire's sheet
+            // burns a touch larger than a ground fire cell.
+            let boom = match c.model {
+                1 => 1.45f32,
+                6 | 19 => 1.25 * engulf,
+                _ => 1.0,
+            };
+            // Three licks in place: jittered around the cell, taller
+            // than wide while burning, billowing out and rising as
+            // they turn to smoke.
+            for j in 0..3u32 {
+                let ph = hash(seed_base ^ (j * 2657));
+                let lick = (time * 8.0 + ph * 40.0 + j as f32 * 2.1).sin();
+                let jx = (ph - 0.5) * 0.5 + 0.08 * lick;
+                let jz = (hash(seed_base ^ (j * 977)) - 0.5) * 0.5 - 0.08 * lick;
+                // The engulfing crown grows UPWARD (into the canopy),
+                // not into the ground.
+                let rise =
+                    (0.12 * j as f32) * engulf + (0.55 + 0.1 * lick) * smoke + 0.3 * (engulf - 1.0);
+                out.push(FireParticle {
+                    x: hx + jx * boom,
+                    z: hz + jz * boom,
+                    y: hy + rise,
+                    w: (0.62 + 0.12 * ph + 0.55 * smoke) * boom,
+                    h: (0.88 + 0.16 * ph + 0.4 * smoke) * boom,
+                    // Flicker while burning, cool to soot as it smokes.
+                    heat: ((0.88 + 0.12 * lick) * (1.0 - smoke)).clamp(0.0, 1.0),
+                    alpha: fade * (0.85 - 0.18 * smoke),
+                    seed: ph * TAU + time * 4.0,
+                });
+            }
+            continue;
+        }
+
+        // --- Projectile: hot head cluster -----------------------------
+        // Styled per projectile kind: `g` scales the flame's diameter
+        // (discs + lateral spread), the trail count its reach.
+        let style = flame_style(c.class, c.model);
+        let g = scale * style.girth;
+        let core_n: u32 = 5;
+        let trail_n: u32 = (16.0 * style.length).round() as u32;
+        for j in 0..core_n {
+            let ph = hash(seed_base ^ (j * 2657));
+            let sw = (time * 9.0 + ph * 40.0).sin();
+            let cw = (time * 7.0 + ph * 31.0).cos();
+            let off = 0.18 * g;
+            out.push(FireParticle {
+                x: hx + perp.0 * off * sw + dirx * off * 0.3 * cw,
+                z: hz + perp.1 * off * sw + dirz * off * 0.3 * cw,
+                y: hy + 0.22 * g * cw,
+                w: (1.05 + 0.2 * ph) * g,
+                h: (1.3 + 0.25 * ph) * g,
+                heat: 0.94 + 0.06 * ph,
+                alpha: 0.62,
+                seed: ph * TAU + time * 4.0,
+            });
+        }
+
+        // --- Comet trail: fire near the head, dying into SOOT --------
+        // The wake streams backward along -velocity, at a FIXED per-step
+        // spacing (so `length` extends the reach without thinning it).
+        // The near half is flame; past the midpoint the particles cool
+        // to smoke (heat→0, which the shader renders as grey soot),
+        // BILLOW (grow), RISE, and dissipate (alpha→0). A held rapid-
+        // fire stream spaces its balls ~1 tile apart, so the stretched
+        // trails overlap several successors deep and the stream reads
+        // as one continuous flamethrower jet, no seams.
+        for i in 1..=trail_n {
+            let age = i as f32 / trail_n as f32; // 0..1
+            let back = i as f32 * 0.42 * scale;
+            let ph = hash(seed_base ^ (i * 8191));
+            // Smoke regime ramps in past the midpoint (smoothstep).
+            let smoke = {
+                let t = ((age - 0.45) / 0.55).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            // Turbulence: lateral sway + rise, both stronger for smoke.
+            let sway = (time * 5.0 + ph * 25.0 + i as f32 * 0.9).sin() * (0.15 + 0.6 * age) * g;
+            let rise = ((time * 4.0 + ph * 17.0).sin() * 0.12 + 0.28 * age + 0.6 * smoke) * g;
+            out.push(FireParticle {
+                x: hx - dirx * back + perp.0 * sway,
+                z: hz - dirz * back + perp.1 * sway,
+                y: hy - diry * back + rise,
+                // Flame tapers, then smoke billows back outward.
+                w: ((1.2 - 0.7 * age + 1.1 * smoke) * g).max(0.16),
+                h: ((1.35 - 0.75 * age + 1.0 * smoke) * g).max(0.2),
+                // Cool steadily to ~0 (full soot) by the tail.
+                heat: (1.0 - 1.25 * age).max(0.03),
+                // Fade the smoke out as it dissipates.
+                alpha: (0.72 - 0.62 * age).max(0.05) * (1.0 - 0.5 * smoke),
+                seed: ph * TAU + time * 3.0,
+            });
+        }
+    }
+    out
+}
+
+/// A parameterized projectile-flame look: `girth` scales the flame's
+/// diameter (every disc and lateral offset), `length` the comet trail's
+/// reach along the heading (per-step spacing is fixed, so a longer
+/// trail keeps its density). 1.0/1.0 = the original prototype look.
+/// Spawn bigger or smaller flames for new purposes by adding a row to
+/// [`flame_style`].
+#[derive(Debug, Clone, Copy)]
+pub struct FlameStyle {
+    pub girth: f32,
+    pub length: f32,
+}
+
+impl FlameStyle {
+    /// The fireball: slimmer than the prototype (it claimed too much
+    /// screen at gameplay range) but half again as LONG, so a held
+    /// rapid-fire stream (~1 tile between balls) melts into one
+    /// continuous flamethrower jet.
+    pub const FIREBALL: FlameStyle = FlameStyle {
+        girth: 0.75,
+        length: 1.5,
+    };
+    /// A firestorm satellite: 25 of these tumble on a ~1-2-tile orb,
+    /// so each burns small and SHORT-tailed — the constellation's own
+    /// density supplies the rage; full fireball trails would smother
+    /// it in smoke.
+    pub const FIRESTORM: FlameStyle = FlameStyle {
+        girth: 0.6,
+        length: 0.6,
+    };
+}
+
+/// The flame look for a projectile (class, model) — the same set
+/// [`fire_particles_from_poses`] flies; future flaming projectiles
+/// add arms here.
+fn flame_style(class: u8, model: u8) -> FlameStyle {
+    match (class, model) {
+        (9, 0 | 28) => FlameStyle::FIREBALL,
+        (10, 77) => FlameStyle::FIRESTORM,
+        _ => FlameStyle {
+            girth: 1.0,
+            length: 1.0,
+        },
+    }
+}
+
+/// PROTOTYPE procedural flame walls: the crater's expanding flame front,
+/// synthesized per frame from the blast ledger instead of the discrete
+/// tick-spawned ring cells (which step ~1.25 tiles/tick — the chop this
+/// replaces). Two walls per blast, mirroring the driver's real comb:
+/// wave 1 = the outward even-radii sweep, wave 2 = the odd back-fill
+/// re-burn crossing the interior afterwards. Each wall is a continuous
+/// band of hot leading discs with a soot trail, terrain-draped like the
+/// shockwave, sub-tick smooth, with total time = the driver's real pass
+/// schedule. The per-blast angular sample set is FIXED (sized for the
+/// final radius), so each sample behaves like a tiny outward-flying
+/// projectile — stable identity, no re-sampling shimmer; they bunch
+/// into one bright ball at detonation and fan out with the front.
+///
+/// Behind the walls, the crater SMOKE is synthesized here too: one
+/// virtual ring of soot cells per completed pass, laid out where
+/// `blast_ring_tick` spawns its real (sim-faithful, sprite-suppressed)
+/// fire cells, with a radius-dependent virtual lifetime — inner cells
+/// clear fast, the rim's smoke lingers well past the driver's death.
+/// Fully render-side, so the sim keeps retail cell lifetimes exactly.
+pub fn crater_particles(
+    ledger: &BlastLedger,
+    height: &[u8],
+    alpha: f32,
+    time: f32,
+) -> Vec<FireParticle> {
+    use std::f32::consts::TAU;
+    // Angular spacing of wall samples at their FINAL radius (tiles).
+    const SPACING: f32 = 0.55;
+    // How long a wall lingers (fading) after its front stops (ticks).
+    const FADE_T: f32 = 1.3;
+    let hash = |a: u32| {
+        let mut x = a.wrapping_mul(0x9E37_79B9);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x85EB_CA6B);
+        x ^= x >> 13;
+        (x & 0xFFFF) as f32 / 65536.0
+    };
+    let mut out = Vec::new();
+    for b in ledger.blasts() {
+        let t = b.elapsed + alpha;
+        let seed_base = b.slot as u32 * 131 + b.generation;
+        // Walls are computed per COMB CYCLE (a >11-pass driver — the
+        // doomsday sphere — re-runs the two-wave sweep every 11
+        // passes). The previous cycle is evaluated too: its wave-2
+        // fade tail overhangs the next cycle's start.
+        let (cbase, cp) = b.cycle_at(t);
+        let mut cycles = [(cbase, cp), (0.0, 0.0)];
+        if cbase >= LedgerBlast::CYCLE {
+            cycles[1] = (cbase - LedgerBlast::CYCLE, LedgerBlast::CYCLE);
+        }
+        for (ci, &(cb, cp)) in cycles.iter().enumerate().filter(|(_, c)| c.1 > 0.0) {
+            let tl = t - cb; // cycle-local time
+            let w1_end = LedgerBlast::wave1_end_of(cp);
+            let r1 = RING_PITCH * 2.0 * (tl - 1.0).clamp(0.0, w1_end - 1.0);
+            // Wave 2 (odd back-fill) exists only in a cycle running
+            // past pass 6; it eases out of the centre over the tick
+            // before its first ring.
+            let wave2 = (cp >= 7.0 && tl >= 6.0).then(|| {
+                let tt = (tl - 7.0).clamp(-1.0, cp - 7.0);
+                (
+                    (RING_PITCH * (2.0 * tt + 1.0)).max(0.0),
+                    RING_PITCH * (2.0 * (cp - 7.0) + 1.0),
+                    cp,
+                    // The re-burn crosses ground wave 1 already torched:
+                    // visibly weaker, more ember than blaze.
+                    0.72,
+                )
+            });
+            // (front radius now, final radius, cycle-local end, strength)
+            let waves = [
+                Some((r1, LedgerBlast::wave1_max_of(cp), w1_end, 1.0)),
+                wave2,
+            ];
+            for (wi, wave) in waves.into_iter().enumerate() {
+                let wi = (wi + ci * 2) as u32; // decorrelate cycle seeds
+                let Some((r, r_max, end, strength)) = wave else {
+                    continue;
+                };
+                if r <= 0.05 || r_max <= 0.05 {
+                    continue;
+                }
+                // Fade out over FADE_T after the front finishes; the
+                // rim hand-over goes to the lingering crater smoke.
+                let fade = (1.0 - (tl - end) / FADE_T).clamp(0.0, 1.0);
+                if fade <= 0.02 {
+                    continue;
+                }
+                // Bunched samples at small radii overlap heavily — thin
+                // them so the newborn wall reads as one bright ball,
+                // not a blown-out core.
+                let converge = (r / (r + 1.2)).clamp(0.25, 1.0);
+                let n = ((TAU * r_max / SPACING) as u32).max(10);
+                for k in 0..n {
+                    let ph = hash(seed_base ^ (k * 7919) ^ (wi * 331));
+                    let ang = (k as f32 + ph * 0.7) / n as f32 * TAU;
+                    let (ox, oz) = (ang.cos(), ang.sin());
+                    let flick = 0.8 + 0.2 * (time * 11.0 + ph * 40.0).sin();
+                    // Two stacked discs per sample on the radial axis:
+                    // a hot LEADING head just past the front and a
+                    // cooling trail behind it — the same outer-hot →
+                    // inner-soot gradient the smoke streaks carry, so
+                    // heavy tangential overlap reinforces the direction
+                    // instead of washing it out.
+                    for (axis, heat, aw, ah, al) in [
+                        (0.30, (0.9 + 0.1 * ph) * flick, 1.05, 1.15, 0.9),
+                        (-0.75, 0.28 * flick, 1.3, 1.2, 0.72),
+                    ] {
+                        let rad = (r + axis + (ph - 0.5) * 0.3).max(0.05);
+                        let x = (b.x + ox * rad).rem_euclid(MAP_TILES as f32);
+                        let z = (b.z + oz * rad).rem_euclid(MAP_TILES as f32);
+                        let y = b.plane_z.max(terrain_at(height, x, z)) + 0.4;
+                        out.push(FireParticle {
+                            x,
+                            z,
+                            y: y + 0.12 * (time * 6.0 + ph * 20.0).sin(),
+                            w: aw,
+                            h: ah,
+                            // The post-front fade also COOLS to soot:
+                            // the dying wall must read as fire burning
+                            // out into the smoke, not a lingering hot
+                            // ring — on a short-fused blast (MC2 low
+                            // tiers) that ring flashed like a phantom
+                            // second wave.
+                            heat: (heat * strength * fade).clamp(0.0, 1.0),
+                            alpha: al * fade * strength * converge,
+                            seed: ph * TAU + time * 4.0,
+                        });
+                    }
+                }
+            }
+        }
+
+        // --- Crater smoke: virtual soot cells, comb-scheduled --------
+        // One ring per completed pass, in the driver's real firing
+        // order. Each virtual cell fades in over its first tick (the
+        // wall sweeping over it is its flash), drifts inward, and
+        // dissolves over a radius-dependent lifetime: inner ≈ 3 ticks
+        // (the crater centre clears while the blast still burns), rim
+        // ≈ 14 (its smoke lingers ~8 ticks past the driver's death).
+        for p in 1..=(t.floor().clamp(0.0, b.passes) as u32) {
+            let r = (2 * (p - 1)) % 11; // the cyclic ring table
+            let vlife = (3 + r).min(14) as f32;
+            let elapsed = t - p as f32;
+            if elapsed > 14.0 {
+                continue; // long past dissolve (long drivers: old cycles)
+            }
+            let age = (elapsed / vlife).clamp(0.0, 1.0);
+            // Dissolve a bit faster than the full life (fewer stacked
+            // puffs in the aged inner pile), fade in over ~0.8 ticks.
+            let fade = (1.0 - age * 1.25).clamp(0.0, 1.0) * (elapsed / 0.8).clamp(0.0, 1.0);
+            if fade <= 0.02 {
+                continue;
+            }
+            let rt = RING_PITCH * r as f32;
+            let inward = age * 0.9;
+            let n = (8 * r).max(4);
+            for k in 0..n {
+                let cs = seed_base ^ (p * 8887) ^ (k * 271);
+                let ph = hash(cs);
+                let ang = (k as f32 + ph) / n as f32 * TAU;
+                let (ox, oz) = (ang.cos(), ang.sin());
+                // Two discs stacked on the radial axis (outer + inner
+                // soot): the streak layout the cell smoke always had,
+                // sliding toward the crater centre as it ages.
+                for j in 0..2u32 {
+                    let s = j as f32;
+                    let ph2 = hash(cs ^ (j * 2657));
+                    let wob = (time * 7.0 + ph2 * 30.0).sin();
+                    let axis = 0.4 - s * 1.3 - inward;
+                    let jit = (ph2 - 0.5) * (0.3 + 0.35 * age);
+                    let rad = rt + (ph - 0.5) * 0.5 + axis * 1.2;
+                    let x = (b.x + ox * rad - oz * jit * 1.2).rem_euclid(MAP_TILES as f32);
+                    let z = (b.z + oz * rad + ox * jit * 1.2).rem_euclid(MAP_TILES as f32);
+                    let y = b.plane_z.max(terrain_at(height, x, z)) + 0.4;
+                    out.push(FireParticle {
+                        x,
+                        z,
+                        y: y + 0.1 * age + 0.05 * wob,
+                        w: (1.05 - 0.1 * s + 0.35 * age) * 1.2,
+                        h: (1.1 - 0.1 * s + 0.3 * age) * 1.2,
+                        heat: 0.0,
+                        alpha: fade * (0.95 - 0.06 * s),
+                        seed: ph2 * TAU + time * 4.0,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// PROTOTYPE meteor shockwave: ONE soft translucent ring per tracked
+/// blast — the pressure wave DETACHING from the fire at the end of the
+/// wave-1 sweep. It does not lead the flame: it materializes at the
+/// fire's edge just as the front stops expanding, then runs on outward
+/// as the blast's continuation — the explosion's momentum outliving its
+/// flame — decelerating and fading. Scale and timing derive from the
+/// blast's own pass schedule, so a short-fused MC2 tier makes a small,
+/// quick puff at its own (smaller) fire edge.
+/// The ring is DRAPED over the terrain: its altitude is `max(plane_z,
+/// terrain_z)` — a flat floor at the detonation plane that climbs only
+/// where terrain rises above it (peaks/walls), never sinking below.
+/// Emitted as [`FireParticle`]s with a heat sentinel (`< 0`) that the
+/// fire shader renders as a cool vapor band instead of flame.
+pub fn shockwave_particles(
+    ledger: &BlastLedger,
+    height: &[u8],
+    alpha: f32,
+    time: f32,
+) -> Vec<FireParticle> {
+    use std::f32::consts::TAU;
+    // The band fades in slightly BEFORE the front stops (ticks) — the
+    // hand-over reads as continuous rather than a pop at the end.
+    const START_LEAD: f32 = 0.6;
+    // How long the detached wave runs on past the fire edge (ticks).
+    const RUN_T: f32 = 2.4;
+    let mut out = Vec::new();
+    for b in ledger.blasts() {
+        // Per comb cycle: a >11-pass driver (the doomsday sphere)
+        // detaches a fresh pressure ring at the end of EVERY cycle's
+        // wave-1 sweep. (The wave finishes ~3 ticks before the cycle
+        // does, so cycles never overlap.)
+        let t = b.elapsed + alpha;
+        let (cbase, cp) = b.cycle_at(t);
+        let end_local = LedgerBlast::wave1_end_of(cp);
+        if end_local <= 1.0 {
+            continue; // degenerate cycle tail: no front to detach from
+        }
+        let w1_max = LedgerBlast::wave1_max_of(cp);
+        // Run distance scales with the blast: a tier-1 MC2 puff sends
+        // a small short wave, the full meteor its ~2.7-tile ring.
+        let run_dist = 0.8 + 0.3 * w1_max;
+        let t0 = cbase + end_local - START_LEAD;
+        let phase = ((t - t0) / RUN_T).clamp(0.0, 1.0);
+        // Born straddling the wall's final front (inner rim inside the
+        // fire — the continuation), then the center runs outward with
+        // an ease-out: fast on detachment, decelerating as it dies.
+        let run = 1.0 - (1.0 - phase) * (1.0 - phase);
+        let center = w1_max - 0.2 + run_dist * run;
+        // Quick fade-in out of the flame, slow fade-out as it runs.
+        let fade = (phase / 0.15).clamp(0.0, 1.0) * (1.0 - phase * phase);
+        if phase <= 0.0 || fade <= 0.02 || center < 0.4 {
+            continue;
+        }
+        // Fine angular sampling → continuous band regardless of size.
+        let n = (24.0 + center * 12.0) as u32;
+        for k in 0..n {
+            let ang = k as f32 / n as f32 * TAU;
+            let (ox, oz) = (ang.cos(), ang.sin());
+            let x = (b.x + ox * center).rem_euclid(MAP_TILES as f32);
+            let z = (b.z + oz * center).rem_euclid(MAP_TILES as f32);
+            let y = b.plane_z.max(terrain_at(height, x, z)) + 0.12;
+            out.push(FireParticle {
+                x,
+                y,
+                z,
+                // ≈1.3-tile band radially; a touch flatter than round.
+                w: 0.85,
+                h: 0.7,
+                heat: -1.0,        // shockwave sentinel (grey vapor band)
+                alpha: fade * 0.3, // much subtler than v1
+                seed: ang * 3.0 + time,
+            });
+        }
+    }
+    out
+}
+
+/// PROTOTYPE overdraw cap (`MGC_FIRE_CAP`, particles per ~1.2-tile ground
+/// cell; default 6, 0 = off): a massive blast stacks hundreds of big
+/// overlapping quads, and past a handful of layers the extra ones add
+/// almost nothing but fill cost. This keeps the first `max_per` particles
+/// whose centers fall in each ground cell and drops the rest — so the
+/// sparse flame front and shockwave pass untouched while the dense inner
+/// pile is bounded. The crater cells are stationary and generation order
+/// is deterministic, so the kept set is stable frame-to-frame (no flicker).
+pub fn cap_particle_density(particles: Vec<FireParticle>) -> Vec<FireParticle> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static CAP: OnceLock<usize> = OnceLock::new();
+    let max_per = *CAP.get_or_init(|| {
+        std::env::var("MGC_FIRE_CAP")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(6)
+    });
+    if max_per == 0 {
+        return particles;
+    }
+    const CELL: f32 = 1.2;
+    let mut counts: HashMap<(i32, i32), usize> = HashMap::new();
+    let mut kept = Vec::with_capacity(particles.len());
+    for p in particles {
+        let key = ((p.x / CELL).floor() as i32, (p.z / CELL).floor() as i32);
+        let c = counts.entry(key).or_insert(0);
+        if *c < max_per {
+            *c += 1;
+            kept.push(p);
+        }
+    }
+    kept
+}
+
 /// The Beyond-Sight rival position markers (interim for the retail
 /// name labels, :57413-48): a 2x2 dot in the rival's team color at
 /// each live, non-cloaked rival wizard.
@@ -964,6 +1768,7 @@ mod tests {
             yaw: 0.0,
             segment: false,
             life_frac: None,
+            fire_life: None,
             player_owned: owned,
             team: owned.then_some(0),
             blend: 0,

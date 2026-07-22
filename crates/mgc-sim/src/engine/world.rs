@@ -824,6 +824,12 @@ pub struct LivePose {
     /// heads) — feeds the unfaithful debug health-bar overlay. None
     /// for everything the overlay shouldn't tag.
     pub life_frac: Option<f32>,
+    /// PROTOTYPE: for class-10 fire/explosion cells, `(elapsed_ticks,
+    /// max_life_ticks)` — the fire renderer flashes hot for the first
+    /// ~tick (absolute, so a 1-ring-per-tick blast reads as "flash then
+    /// soot" no matter the cell's total life) then dissolves soot over
+    /// the remaining life. None for non-fire poses.
+    pub fire_life: Option<(f32, f32)>,
     /// The entity belongs to the player: owner (+24) for projectiles/
     /// effects, claim owner (+144) for balls/houses, castle/balloon
     /// ownership for class 3. Drives the map's team-color rule
@@ -846,6 +852,30 @@ pub struct LivePose {
     /// pass still plots them (0xF0F UNPOSSESSED_BUILDING2,
     /// GameUI.cpp:1276-1295 — it never skips on the claim bit).
     pub map_only: bool,
+}
+
+/// PROTOTYPE: an active meteor/volcano blast driver ([`World::mc1_blasts`])
+/// — the invisible `(10,17)` fire-ring engine, exposed for the fire and
+/// shockwave effects. Tile units; `plane_z` is the detonation altitude (the
+/// flat disk the shockwave floats at, before terrain climbs it).
+#[derive(Debug, Clone, Copy)]
+pub struct BlastView {
+    /// Pool slot + generation — the render-side blast ledger's identity
+    /// key (it must keep tracking a blast after the driver despawns).
+    pub slot: u16,
+    pub generation: u32,
+    pub x: f32,
+    pub z: f32,
+    pub plane_z: f32,
+    /// Ticks since detonation, and the driver's total life.
+    pub elapsed: f32,
+    pub max_life: f32,
+    /// Total ring passes the driver will run (MC1's pre-decrement life
+    /// test runs max_life + 1; MC2's post-decrement form runs max_life).
+    /// One comb ring `(radius + 2) % 11` fires per pass, so this — not
+    /// max_life alone — determines the blast's final fire extent (the
+    /// MC2 tiered meteor scales by overriding max_life: 2/5/10).
+    pub passes: u32,
 }
 
 /// One rival wizard's presentation snapshot ([`World::rival_views`]).
@@ -1334,6 +1364,28 @@ impl World {
                 yaw: (e.f30 & 0x7FF) as f32 * (TAU / 2048.0),
                 segment: bits.segment,
                 life_frac: bits.life_frac,
+                // (10,0/1) fire/explosion both games; (10,6) = the
+                // standing fire in BOTH games (MC1: Wall of Fire
+                // curtain / ground patches / burning trees; MC2: its
+                // own tree burn, mc2_spawn_fire6); (10,19) = MC2's
+                // volcano/dome ground-fire spray — MC2-gated because
+                // MC1's model 19 is the volcano smoke PLUME. NOTE: the
+                // standing fires' act_life is routinely overridden
+                // below the nominal 240 (curtain sheets 1, patches 14,
+                // MC2 tree burns 130..189, trail sprays 10), so
+                // `elapsed` is only meaningful as `max_life - elapsed`
+                // = REMAINING life — the fire renderer's standing-fire
+                // law works on that.
+                fire_life: if e.class64 == 10
+                    && (matches!(e.model65, 0 | 1 | 6)
+                        || (e.model65 == 19 && self.game == GameId::Mc2))
+                    && e.max_life > 0
+                {
+                    let elapsed = (e.max_life as f32 - e.act_life as f32).max(0.0);
+                    Some((elapsed, e.max_life as f32))
+                } else {
+                    None
+                },
                 player_owned: e.id24 == PLAYER_TARGET
                     || (e.class64 == 10 && e.f144 == PLAYER_TARGET),
                 team: {
@@ -4534,6 +4586,32 @@ impl World {
     /// One rival's app-facing snapshot: the book-roster row
     /// (sub_22880 :27009-165) and the map name-label pass
     /// (:57413-48) consume these. Serves both columns — MC1 rivals
+    /// PROTOTYPE: active `(10,17)` blast drivers for the shockwave effect
+    /// (MC1 meteor / volcano). Center + detonation plane + age, tile units.
+    pub fn mc1_blasts(&self) -> Vec<BlastView> {
+        // Pre/post-decrement is per FAMILY: MC1's blast_ring_tick tests
+        // the PRE-decrement life (max_life + 1 passes), MC2's
+        // mc2_meteor_tick the post (max_life passes).
+        let pre_decrement = self.game != GameId::Mc2;
+        self.g
+            .ent
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, e)| e.class64 == 10 && e.model65 == 17 && e.max_life > 0)
+            .map(|(i, e)| BlastView {
+                slot: i as u16,
+                generation: self.g.slot_gen.0.get(i).copied().unwrap_or(0),
+                x: e.x as f32 / 256.0,
+                z: e.y as f32 / 256.0,
+                plane_z: e.z as f32 / 256.0,
+                elapsed: (e.max_life as f32 - e.act_life as f32).max(0.0),
+                max_life: e.max_life as f32,
+                passes: e.max_life + u32::from(pre_decrement),
+            })
+            .collect()
+    }
+
     /// and the MC2 rival column, whichever is populated.
     pub fn rival_views(&self) -> Vec<RivalView> {
         let mc1 = self.rivals.iter().map(|r| {

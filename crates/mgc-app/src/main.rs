@@ -972,7 +972,10 @@ fn load_level(
             Some(w) => {
                 let poses = w.live_poses();
                 (
-                    entities::billboards_from_poses(game_id, &poses, dims),
+                    // Load-time set: no fire exists at level start, so
+                    // the enhanced-fire sprite suppression is moot here
+                    // (sync_world re-derives with the real flag).
+                    entities::billboards_from_poses(game_id, &poses, dims, false),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
                     // (and the blink phase starts low).
@@ -1363,6 +1366,11 @@ struct Session {
     /// is off or fewer than two ticks have run.
     pose_prev: Vec<mgc_sim::engine::world::LivePose>,
     pose_cur: Vec<mgc_sim::engine::world::LivePose>,
+    /// PROTOTYPE fire effect: the render-side blast ledger — tracks
+    /// live `(10,17)` blast drivers and keeps aging them after they
+    /// despawn, so the crater fire/smoke choreography outlives the
+    /// driver. Updated once per sim tick alongside the pose snapshots.
+    fire_blasts: entities::BlastLedger,
 }
 
 /// Which surface owns the frame: a running level, or one of the
@@ -1572,6 +1580,14 @@ struct App {
     alt_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
+    /// PROTOTYPE fire effect: wall-clock seconds, drives flame
+    /// turbulence/shimmer (advances even while paused).
+    effect_time: f32,
+    /// The `enhanced_fire()` value last applied to the renderer's
+    /// billboard/fire sets — flipping the option in the PAUSE menu
+    /// must swap sprites/particles immediately, and while paused
+    /// neither the tick path nor apply_smooth_motion runs to do it.
+    fire_applied: Option<bool>,
     /// FPS-overlay accounting: frames and wall time since the last
     /// readout refresh, plus the rendered text (recomputed every
     /// half-second so the number is readable, not a blur).
@@ -1763,6 +1779,8 @@ impl App {
             alt_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
+            effect_time: 0.0,
+            fire_applied: None,
             fps_frames: 0,
             fps_elapsed: 0.0,
             fps_text: String::new(),
@@ -2631,6 +2649,7 @@ impl App {
             // coincidentally pair (slot, generation) across the restart.
             sess.pose_prev = Vec::new();
             sess.pose_cur = Vec::new();
+            sess.fire_blasts.clear();
             self.castle_pos = None;
             self.won_handled = false;
         }
@@ -2903,6 +2922,7 @@ impl App {
             sess.prev_flyer = sess.sim.flyer;
             sess.pose_prev = Vec::new();
             sess.pose_cur = Vec::new();
+            sess.fire_blasts.clear();
             if let Some(w) = sess.sim.world.as_mut() {
                 w.terrain_dirty = true;
                 w.entities_dirty = true;
@@ -3040,6 +3060,7 @@ impl App {
             prev_flyer,
             pose_prev: Vec::new(),
             pose_cur: Vec::new(),
+            fire_blasts: entities::BlastLedger::default(),
         }));
         self.screen = Screen::Level;
         // The selection surfaces follow the running game.
@@ -3216,6 +3237,15 @@ impl App {
     /// recomposes at tick rate by design). Skipped while paused (no
     /// live lerp window) or until two ticks have run since the
     /// toggle/level armed it.
+    /// Is the procedural fire active? The `render.enhancement.fire`
+    /// option, but it also needs smooth_motion (the flame is built on
+    /// the interpolated pose timeline) — with smooth_motion off the
+    /// classic sprites draw regardless of the option.
+    fn enhanced_fire(&self) -> bool {
+        self.cfg.render.enhancement.fire == config::FireEffects::Enhanced
+            && self.cfg.render.enhancement.smooth_motion
+    }
+
     fn apply_smooth_motion(&mut self, alpha: f32) {
         let Some(sess) = self.session.as_deref() else {
             return;
@@ -3227,6 +3257,7 @@ impl App {
         {
             return;
         }
+        let enhanced_fire = self.enhanced_fire();
         let Some(r) = &mut self.renderer else { return };
         let poses = entities::lerp_poses(&sess.pose_prev, &sess.pose_cur, alpha.clamp(0.0, 1.0));
         let index = sess.level.sprites.as_ref().map(|(i, _)| i);
@@ -3239,7 +3270,37 @@ impl App {
             sess.level.game,
             &poses,
             dims,
+            enhanced_fire,
         ));
+        // Enhanced fire: the procedural crater (walls + smoke) goes
+        // FIRST so it wins density-cap slots; then the velocity-aware
+        // projectile/impact particles, then the shockwave ring (all
+        // blast-driven parts read the ledger). Classic clears the set.
+        if enhanced_fire {
+            let a = alpha.clamp(0.0, 1.0);
+            let mut fire = entities::crater_particles(
+                &sess.fire_blasts,
+                &sess.level.view.height,
+                a,
+                self.effect_time,
+            );
+            fire.extend(entities::fire_particles_from_poses(
+                &sess.pose_prev,
+                &sess.pose_cur,
+                &sess.fire_blasts,
+                a,
+                self.effect_time,
+            ));
+            fire.extend(entities::shockwave_particles(
+                &sess.fire_blasts,
+                &sess.level.view.height,
+                a,
+                self.effect_time,
+            ));
+            r.set_fire_particles(entities::cap_particle_density(fire));
+        } else {
+            r.set_fire_particles(Vec::new());
+        }
         if self.cfg.render.debug.health_bars {
             r.set_health_bars(entities::health_bars_from_poses(
                 sess.level.game,
@@ -3255,10 +3316,22 @@ impl App {
     }
 
     fn sync_world(&mut self) {
+        let enhanced_fire = self.enhanced_fire();
+        // A fire-option flip must re-derive the sprite/particle sets
+        // even while PAUSED (no ticks → entities never dirty, and
+        // apply_smooth_motion skips) — treat it as an entities change.
+        let fire_changed = self.fire_applied != Some(enhanced_fire);
+        self.fire_applied = Some(enhanced_fire);
         let Some(sess) = self.session.as_deref_mut() else {
             return;
         };
-        let Session { sim, level, .. } = sess;
+        let Session {
+            sim,
+            level,
+            pose_cur,
+            fire_blasts,
+            ..
+        } = sess;
         let Some(w) = &mut sim.world else { return };
         // MC2: the sim's book owns the selected tier. `spell_levels` is
         // a read-only MIRROR of `Mc2Spellbook::sel`, refreshed here —
@@ -3290,7 +3363,7 @@ impl App {
             eprintln!("{name} has died");
         }
         let terrain = w.terrain_dirty;
-        let entities = w.entities_dirty;
+        let entities = w.entities_dirty || fire_changed;
         if terrain {
             let (Some(shading), Some(angle)) =
                 (level.view.shading.as_mut(), level.view.angle.as_mut())
@@ -3329,7 +3402,8 @@ impl App {
                     .and_then(|i| i.sprites.get(id as usize))
                     .map(|s| (s.width, s.height, s.flags))
             };
-            level.billboards = entities::billboards_from_poses(level.game, &poses, dims);
+            level.billboards =
+                entities::billboards_from_poses(level.game, &poses, dims, enhanced_fire);
             if self.cfg.render.debug.health_bars {
                 bars = entities::health_bars_from_poses(level.game, &poses, dims);
             }
@@ -3394,6 +3468,35 @@ impl App {
                 r.set_billboards(level.billboards.clone());
                 r.set_health_bars(bars);
                 r.set_lights(&lights);
+            }
+            // The paused fire flip: swap the particle set in place
+            // (unpaused, apply_smooth_motion re-derives it right after
+            // this with the proper sub-tick alpha anyway).
+            if fire_changed {
+                if enhanced_fire && !pose_cur.is_empty() {
+                    let mut fire = entities::crater_particles(
+                        fire_blasts,
+                        &level.view.height,
+                        1.0,
+                        self.effect_time,
+                    );
+                    fire.extend(entities::fire_particles_from_poses(
+                        pose_cur,
+                        pose_cur,
+                        fire_blasts,
+                        1.0,
+                        self.effect_time,
+                    ));
+                    fire.extend(entities::shockwave_particles(
+                        fire_blasts,
+                        &level.view.height,
+                        1.0,
+                        self.effect_time,
+                    ));
+                    r.set_fire_particles(entities::cap_particle_density(fire));
+                } else {
+                    r.set_fire_particles(Vec::new());
+                }
             }
             // Upright map icons + the guide path are drawn screen-
             // space by the renderer (never baked into the rotated map
@@ -5321,6 +5424,8 @@ impl ApplicationHandler for App {
                 let raw_dt = (now - self.last_frame).as_secs_f32();
                 let dt = raw_dt.min(0.25);
                 self.last_frame = now;
+                // PROTOTYPE fire clock (advances while paused too).
+                self.effect_time += raw_dt;
                 // FPS-overlay accounting: true wall time (the clamp
                 // above is sim pacing, not measurement), readout
                 // refreshed every half-second. Counts while paused
@@ -5408,6 +5513,10 @@ impl ApplicationHandler for App {
                         if let Some(w) = &sess.sim.world {
                             sess.pose_prev = std::mem::take(&mut sess.pose_cur);
                             sess.pose_cur = w.live_poses();
+                            // PROTOTYPE fire: track blast drivers (one
+                            // tick per step; dead ones keep aging so
+                            // their smoke choreography finishes).
+                            sess.fire_blasts.update(&w.mc1_blasts(), 1.0);
                         }
                     }
                     // The mixer flush is per-tick like the original's
@@ -7436,6 +7545,155 @@ fn run_screenshot(
         pitch: pitch_deg.to_radians(),
         roll: 0.0,
         fov_y: FOV_Y,
+    };
+    // PROTOTYPE fire preview (MGC_FIRE_PREVIEW=1): override the camera
+    // to a fixed vantage and drop a rapid-fire row of fireballs (to see
+    // them merge) plus an impact blossom — a still for discussing shape,
+    // colour, size. Reuses the real emitter with synthetic poses.
+    let cam = if let Ok(mode) = std::env::var("MGC_FIRE_PREVIEW") {
+        use mgc_sim::engine::world::LivePose;
+        let mk = |slot: u16, class: u8, model: u8, x: f32, z: f32, alt: f32| LivePose {
+            slot,
+            generation: 1,
+            class,
+            model,
+            type_index: 0,
+            frame: 0,
+            x,
+            z,
+            alt,
+            yaw: 0.0,
+            segment: false,
+            life_frac: None,
+            fire_life: None,
+            player_owned: true,
+            team: Some(0),
+            blend: 0,
+            map_only: false,
+        };
+        let mut prev = Vec::new();
+        let mut cur = Vec::new();
+        // Blast ledger for the emitters: the meteor scene fills it, the
+        // projectile scenes leave it empty (no crater).
+        let mut ledger = entities::BlastLedger::default();
+        // Sub-tick fraction fed to the emitters (meteor overrides).
+        let mut a = 1.0f32;
+        let preview_cam = if mode == "meteor" {
+            // Real comb-law crater: a synthetic ledger blast drives the
+            // procedural walls + smoke + shockwave at phase T
+            // (`MGC_FIRE_PHASE` ticks after detonation, default 4.3 =
+            // mid wave-1 sweep; try ~8.5 for the wave-2 re-burn, ~13
+            // for the lingering smoke). `MGC_FIRE_PASSES` (default 11
+            // = the MC1 meteor) picks the driver's fuse: 2/5/10 = the
+            // MC2 tiers, 70 = the doomsday sphere's cycling firestorm.
+            let t: f32 = std::env::var("MGC_FIRE_PHASE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4.3);
+            let passes: f32 = std::env::var("MGC_FIRE_PASSES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(11.0);
+            let (cx, cz) = (132.0f32, 128.0f32);
+            a = t.fract();
+            ledger = entities::BlastLedger::synthetic(vec![entities::LedgerBlast {
+                slot: 999,
+                generation: 1,
+                x: cx,
+                z: cz,
+                plane_z: 6.0,
+                elapsed: t.floor(),
+                passes,
+            }]);
+            // The crater (walls + smoke) is fully ledger-driven now —
+            // no synthetic cells needed; the ledger entry above is the
+            // whole scene. (cx/cz feed only that entry.)
+            let _ = (cx, cz);
+            CameraView {
+                x: 120.0,
+                y: 13.0,
+                z: 128.0,
+                yaw: 90.0_f32.to_radians(),
+                pitch: -30.0_f32.to_radians(),
+                roll: 0.0,
+                fov_y: FOV_Y,
+            }
+        } else if mode == "fp" {
+            // First-person: the player has just loosed a rapid-fire
+            // stream flying AWAY (+x); nearest ball ~3 tiles ahead so
+            // its on-screen size reads at gameplay scale.
+            // A single ball just launched, receding ~6 tiles ahead with
+            // a slight rightward cross-drift so we read its side at
+            // gameplay scale (a stream fired straight away just stacks
+            // into one head-on bloom).
+            cur.push(mk(0, 9, 0, 126.5, 129.0, 7.2));
+            prev.push(mk(0, 9, 0, 126.5 - 1.4, 129.0 - 0.7, 7.2));
+            CameraView {
+                x: 120.0,
+                y: 8.5,
+                z: 127.0,
+                yaw: 90.0_f32.to_radians(),
+                pitch: -4.0_f32.to_radians(),
+                roll: 0.0,
+                fov_y: FOV_Y,
+            }
+        } else if mode == "single" {
+            // One fireball flying across-screen (+z) at 1.8 tiles/tick,
+            // seen close so the comet head + trail structure is legible.
+            cur.push(mk(0, 9, 0, 134.0, 128.0, 6.0));
+            prev.push(mk(0, 9, 0, 134.0, 128.0 - 2.2, 6.0));
+            CameraView {
+                x: 126.0,
+                y: 6.5,
+                z: 128.0,
+                yaw: 90.0_f32.to_radians(),
+                pitch: -2.0_f32.to_radians(),
+                roll: 0.0,
+                fov_y: FOV_Y,
+            }
+        } else {
+            // A rapid-fire stream: heads flying across-screen (+z) at
+            // 1.5 tiles/tick, spaced ~1 tile (true held-fire cadence) so
+            // the tile-contained balls fuse via overlapping wakes.
+            // prev = cur − velocity so the emitter recovers the trail.
+            let vel = 1.5f32;
+            for i in 0..10u16 {
+                let z = 121.0 + i as f32 * 1.0;
+                cur.push(mk(i, 9, 0, 134.0, z, 6.0));
+                prev.push(mk(i, 9, 0, 134.0, z - vel, 6.0));
+            }
+            // A lone hero fireball with a longer isolated trail.
+            cur.push(mk(20, 9, 0, 136.0, 138.0, 6.5));
+            prev.push(mk(20, 9, 0, 136.0, 138.0 - 2.2, 6.5));
+            // An impact blossom (class 10).
+            cur.push(mk(30, 10, 0, 140.0, 118.0, 6.0));
+            prev.push(mk(30, 10, 0, 140.0, 118.0, 6.0));
+            CameraView {
+                x: 120.0,
+                y: 6.0,
+                z: 128.0,
+                yaw: 90.0_f32.to_radians(),
+                pitch: 0.0,
+                roll: 0.0,
+                fov_y: FOV_Y,
+            }
+        };
+        // Same assembly order as the live path: crater first (it wins
+        // density-cap slots), then cells/projectiles, then shockwave.
+        let mut fire = entities::crater_particles(&ledger, &level.view.height, a, 3.7);
+        fire.extend(entities::fire_particles_from_poses(
+            &prev, &cur, &ledger, a, 3.7,
+        ));
+        fire.extend(entities::shockwave_particles(
+            &ledger,
+            &level.view.height,
+            a,
+            3.7,
+        ));
+        renderer.set_fire_particles(entities::cap_particle_density(fire));
+        preview_cam
+    } else {
+        cam
     };
     renderer.render(&cam).map_err(|e| format!("render: {e}"))?;
     let (w, h, rgba) = renderer.read_offscreen();

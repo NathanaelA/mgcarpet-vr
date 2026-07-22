@@ -351,6 +351,22 @@ impl Default for RenderPreference {
     }
 }
 
+/// The fire look: `classic` = whatever the running game draws normally
+/// (the retail fire/explosion sprites, untouched); `enhanced` = the
+/// procedural fire — fireball flame + comet trail (the core sprite is
+/// hidden under it), the meteor crater's two-wave flame walls with
+/// lingering smoke, and the detaching shockwave ring. Presentation
+/// only: the sim never changes, whichever is selected. Classic is the
+/// default for now — pending broader playtesting before enhanced
+/// earns default-on status.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FireEffects {
+    #[default]
+    Classic,
+    Enhanced,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderEnhancement {
@@ -387,6 +403,11 @@ pub struct RenderEnhancement {
     /// through). Covers MC1's class-12 jars (red AND blue) and MC2's
     /// class-15 spell tokens.
     pub expose_jar_spells: bool,
+    /// Procedural fire (fireball flame/trail, meteor crater walls +
+    /// smoke, shockwave) vs the retail sprites. Defaults to classic
+    /// for now. Needs smooth_motion for the frame-rate flame; with
+    /// smooth_motion off the classic sprites draw regardless.
+    pub fire: FireEffects,
 }
 
 impl Default for RenderEnhancement {
@@ -397,6 +418,7 @@ impl Default for RenderEnhancement {
             hud_transparency: HudTransparency::default(),
             map_owned_buildings: false,
             expose_jar_spells: false,
+            fire: FireEffects::default(),
         }
     }
 }
@@ -900,7 +922,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 9;
+const DEFAULTS_VERSION: u64 = 11;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

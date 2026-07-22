@@ -725,6 +725,47 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · enhancement",
+            label: "fire",
+            // Purely visual (the sim is identical whichever is chosen,
+            // exactly like smooth_motion) — Preference, not a fidelity
+            // event; lives in the enhancement group + cfg segment.
+            class: Preference,
+            key: None,
+            cli: Some("--fire"),
+            cfg_path: "render.enhancement.fire",
+            read: |c| Val::Choice {
+                cur: match c.render.enhancement.fire {
+                    crate::config::FireEffects::Classic => 0,
+                    crate::config::FireEffects::Enhanced => 1,
+                },
+                faithful: 0,
+                variants: &["classic", "enhanced"],
+            },
+            desc: "The fire look. Classic = the retail fire and explosion \
+                   sprites, exactly as the running game draws them. Enhanced = \
+                   procedural fire: the fireball becomes a flame with a comet \
+                   trail (its core sprite hidden), the meteor blast an \
+                   expanding two-wave flame front leaving lingering smoke, \
+                   capped by a detaching shockwave ring. Presentation only — \
+                   the simulation is identical either way. Needs smooth \
+                   motion; with it off, classic draws regardless.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.render.enhancement.fire = match i {
+                        1 => crate::config::FireEffects::Enhanced,
+                        _ => crate::config::FireEffects::Classic,
+                    }
+                },
+                descs: &[
+                    "Retail fire/explosion sprites, as the original drew them \
+                     (default).",
+                    "Procedural flame, smoke and shockwave.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
             label: "map_owned_buildings",
             class: Enhancement,
             key: None,

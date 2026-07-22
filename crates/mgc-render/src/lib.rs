@@ -769,6 +769,35 @@ pub struct UiQuad {
     pub tint: [f32; 4],
 }
 
+/// PROTOTYPE fire particle (throwaway) — one glowing flame disc in the
+/// world, fed per frame by the app's fireball-trail emitter.
+#[derive(Debug, Clone, Copy)]
+pub struct FireParticle {
+    /// World center (x/z tile coords, y altitude).
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// World half-extents (width, height); flames run taller than wide.
+    pub w: f32,
+    pub h: f32,
+    /// 0..1 heat (1 = white-hot core, 0 = dark ember / soot).
+    pub heat: f32,
+    /// 0..1 coverage / opacity.
+    pub alpha: f32,
+    /// Per-particle procedural phase (dapple + flicker seed).
+    pub seed: f32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct FireInstance {
+    pos: [f32; 3],
+    size: [f32; 2],
+    heat: f32,
+    alpha: f32,
+    seed: f32,
+}
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct BillboardInstance {
@@ -1136,6 +1165,17 @@ pub struct Renderer {
     billboard_mirror_bind_group: Option<wgpu::BindGroup>,
     billboard_buf: Option<wgpu::Buffer>,
     billboard_capacity: usize,
+
+    // PROTOTYPE fire pass (throwaway): premultiplied-additive flame
+    // discs over the world, sharing the globals bind group.
+    fire_pipeline: wgpu::RenderPipeline,
+    fire_bind_group: wgpu::BindGroup,
+    /// Fire bind group over the mirror globals (atlas.w = 2) — draws the
+    /// flames into the water-reflection pass.
+    fire_mirror_bind_group: wgpu::BindGroup,
+    fire_buf: Option<wgpu::Buffer>,
+    fire_capacity: usize,
+    fire_particles: Vec<FireParticle>,
     /// CPU copy of the sprite index for per-frame view selection.
     sprite_index: Option<mgc_formats::bundle::SpriteIndex>,
     sprite_tex: Option<wgpu::Texture>,
@@ -1961,6 +2001,104 @@ impl Renderer {
                 cache: None,
             });
 
+        // PROTOTYPE fire pass: premultiplied-additive flame discs.
+        // Globals-only bind group (camera basis + fog); own blend so
+        // hot cores add and cool soot occludes.
+        let fire_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fire"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("fire.wgsl").into()),
+        });
+        let fire_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fire"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let fire_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fire"),
+            layout: &fire_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buf.as_entire_binding(),
+            }],
+        });
+        let fire_mirror_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fire-mirror"),
+            layout: &fire_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: mirror_globals_buf.as_entire_binding(),
+            }],
+        });
+        let fire_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fire"),
+            bind_group_layouts: &[&fire_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        // Premultiplied alpha: result = src.rgb + dst.rgb*(1-src.a).
+        // src.a≈0 (hot) → additive glow; src.a>0 (soot) → over-occlude.
+        let premul = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let fire_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fire"),
+            layout: Some(&fire_layout),
+            vertex: wgpu::VertexState {
+                module: &fire_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<FireInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3, 1 => Float32x2, 2 => Float32, 3 => Float32, 4 => Float32,
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fire_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(premul),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: ms,
+            multiview: None,
+            cache: None,
+        });
+
         // Health-bar overlay: solid-color instanced quads on the same
         // camera basis; own single-binding layout so bars draw even
         // before any sprite atlas is loaded.
@@ -2197,6 +2335,12 @@ impl Renderer {
             billboard_bind_group: None,
             billboard_buf: None,
             billboard_capacity: 0,
+            fire_pipeline,
+            fire_bind_group,
+            fire_mirror_bind_group,
+            fire_buf: None,
+            fire_capacity: 0,
+            fire_particles: Vec::new(),
             sprite_index: None,
             sprite_tex: None,
             colormap_tex: None,
@@ -3174,6 +3318,11 @@ impl Renderer {
         self.billboards = billboards;
     }
 
+    /// PROTOTYPE: replace the fire-particle set (empty = no fire).
+    pub fn set_fire_particles(&mut self, particles: Vec<FireParticle>) {
+        self.fire_particles = particles;
+    }
+
     /// Replace the monster health-bar overlay set (empty = off).
     pub fn set_health_bars(&mut self, bars: Vec<HealthBar>) {
         self.health_bars = bars;
@@ -3316,6 +3465,40 @@ impl Renderer {
         });
         out.extend(translucent);
         (out, opaque)
+    }
+
+    /// PROTOTYPE: fire particles → GPU instances (nearest torus copy).
+    fn fire_instances(&self, cam: &CameraView) -> Vec<FireInstance> {
+        let full = MAP_TILES as f32;
+        let wrap = |p: f32, c: f32| {
+            let mut d = p - c;
+            if d > full / 2.0 {
+                d -= full;
+            }
+            if d < -full / 2.0 {
+                d += full;
+            }
+            c + d
+        };
+        // Only a trivially-safe opacity cull here — dropping ~zero-alpha
+        // particles before they become quads. (Spatial/fog culling by the
+        // particle CENTER wrongly erases big particles straddling the fog
+        // wall or the view edge, so the fog fade is left entirely to the
+        // shader, which does it per fragment.)
+        let mut out = Vec::with_capacity(self.fire_particles.len());
+        for f in &self.fire_particles {
+            if f.alpha <= 0.004 {
+                continue;
+            }
+            out.push(FireInstance {
+                pos: [wrap(f.x, cam.x), f.y, wrap(f.z, cam.z)],
+                size: [f.w, f.h],
+                heat: f.heat,
+                alpha: f.alpha,
+                seed: f.seed,
+            });
+        }
+        out
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -3735,6 +3918,25 @@ impl Renderer {
                 .write_buffer(self.billboard_buf.as_ref().unwrap(), 0, bytes);
         }
 
+        // PROTOTYPE fire particle instances.
+        let fire_insts = self.fire_instances(cam);
+        let fire_count = fire_insts.len() as u32;
+        if !fire_insts.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(&fire_insts);
+            let need = bytes.len();
+            if self.fire_buf.is_none() || self.fire_capacity < need {
+                self.fire_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("fire instances"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.fire_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.fire_buf.as_ref().unwrap(), 0, bytes);
+        }
+
         // Health-bar instances (wrap-nearest like billboards).
         let full = MAP_TILES as f32;
         let wrapn = |p: f32, c: f32| {
@@ -4032,6 +4234,14 @@ impl Renderer {
                 pass.set_vertex_buffer(0, bbuf.slice(..));
                 pass.draw(0..6, 0..opaque_count);
             }
+            // PROTOTYPE fire in the reflection (mirror globals flip the
+            // quads under the sea plane) — so the flame shows in water.
+            if let (1.., Some(buf)) = (fire_count, &self.fire_buf) {
+                pass.set_pipeline(&self.fire_pipeline);
+                pass.set_bind_group(0, &self.fire_mirror_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..fire_count);
+            }
         }
         {
             // The book screen: the world viewport fills the top-right,
@@ -4126,6 +4336,14 @@ impl Renderer {
                         pass.set_pipeline(&self.billboard_blend_pipeline);
                         pass.draw(0..6, opaque_count..instance_count);
                     }
+                }
+                // PROTOTYPE fire: premultiplied-additive flame discs,
+                // over the world (depth-tested, not written).
+                if let (1.., Some(buf)) = (fire_count, &self.fire_buf) {
+                    pass.set_pipeline(&self.fire_pipeline);
+                    pass.set_bind_group(0, &self.fire_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..fire_count);
                 }
                 if let (1.., Some(buf)) = (bar_count, &self.bar_buf) {
                     pass.set_pipeline(&self.bar_pipeline);
