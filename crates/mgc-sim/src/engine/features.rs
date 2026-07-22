@@ -3917,10 +3917,17 @@ impl Gen {
             if src != self.ent[i].f144 {
                 self.ent[i].f144 = src;
                 self.ent[i].flags &= !1;
-                // Anchored at the CLAIMANT (:30806) — the player-
-                // gated id 4 sounds exactly when YOU capture.
+                // Chime 4, anchored at the CLAIMANT (:30806-07 —
+                // `sub_55370(claimant, -1, 4)`: the a2 = -1 arm plays
+                // POSITIONALLY for ANY wizard, not just the local
+                // player; the earlier player-only reading was the
+                // per-call-site gate mis-read, see mgc-audio's
+                // policy_mc1 notes). A rival's possession-claim is
+                // audible when you are near the claimant.
                 if src == crate::mc1::mobs::PLAYER_TARGET {
                     self.snd_player(4);
+                } else if (src as usize) < self.ent.len() && self.ent[src as usize].class64 != 0 {
+                    self.snd(4, src as usize);
                 }
                 self.set_sprite(i, 177);
             }
@@ -5018,6 +5025,48 @@ mod tests {
         );
         assert_eq!(g.ring_cells(0, 0).len(), r0 - 1);
         assert_eq!(g.ring_cells(0, 1).len(), r0 + r1 - 1);
+    }
+
+    /// The possession-claim chime (:30806-07) plays for ANY claimant —
+    /// `sub_55370(claimant, -1, 4)`'s a2 = -1 arm is positional, not
+    /// player-gated (the mis-read that silenced rival claims,
+    /// 2026-07-22). No golden exercises a rival house-claim, so this
+    /// pins the emit directly: rival claim → world-sourced id 4
+    /// anchored at the claimant; player claim → the local chime.
+    #[test]
+    fn house_claim_chimes_for_any_wizard() {
+        let assets = synthetic_assets();
+        let mut g = Gen::new(flat_land(8), assets, 1, ChassisParams::MC1, VerbSet::MC1);
+        let b = g.new_event().unwrap();
+        g.ent[b].class64 = 3;
+        g.ent[b].model65 = 45;
+        g.ent[b].act_life = 100;
+        g.ent[b].f63 = 1; // off the 40-tick occupancy beat
+        let r = g.new_event().unwrap();
+        g.ent[r].class64 = 3;
+        g.ent[r].model65 = 0;
+        g.ent[r].x = 5 * 256;
+        g.ent[r].y = 6 * 256;
+        g.ent[b].mail[1] = (0, r as u16);
+        g.tick_building_live(b);
+        let ev = g
+            .sounds
+            .iter()
+            .find(|s| s.id == 4)
+            .expect("rival claim must chime");
+        assert!(!ev.player, "positional, not the local-player channel");
+        assert_eq!(ev.tag, r as u16, "anchored at the CLAIMANT");
+        assert_eq!(ev.pos.0, 5 * 256);
+        // The player's own claim still rings the local chime.
+        g.sounds.clear();
+        g.ent[b].mail[1] = (0, crate::mc1::mobs::PLAYER_TARGET);
+        g.tick_building_live(b);
+        let ev = g
+            .sounds
+            .iter()
+            .find(|s| s.id == 4)
+            .expect("player claim must chime");
+        assert!(ev.player);
     }
 
     #[test]

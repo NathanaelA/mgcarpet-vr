@@ -77,11 +77,15 @@ enum Policy {
     /// Mode 3: keep a running (tag, id) instance, drop the request.
     KeepRunning,
     /// Modes 1/3 but only accepted for player-sourced (or untagged)
-    /// requests (MC1 ids 4, 14, 29 / 17; MC2 ids 14, 29 — the
-    /// level-index gate: only the LOCAL player's Select/CantUse
-    /// plays, Sound.cpp:6454-77).
+    /// requests (MC1 and MC2 ids 14, 29 — Select/CantUse, whose call
+    /// sites pass the owning wizard's id and only the LOCAL player's
+    /// matches: remc1 :48721-88/:49072/:55905, Sound.cpp:6454-77).
+    /// NOTE the gate is per CALL SITE, not per dispatcher case: MC1
+    /// cases 4/14/29/17 all share the two-armed local-or-(-1) shape,
+    /// but 4 and 17 are only ever requested with a2 = -1 (the
+    /// positional arm) — misreading the case shape as "player only"
+    /// silenced rival hit grunts and capture chimes (2026-07-22).
     RestartPlayerOnly,
-    KeepRunningPlayerOnly,
     /// Ambient loop with a fixed fade-in target (ids 1, 2, 5, 31).
     Loop(u16),
     /// MC2 playType 4 (DoorC2 47 / Tornado 49, EF:44324-31): a
@@ -102,10 +106,22 @@ fn policy_mc1(id: u8) -> Policy {
         1 | 2 => Policy::Loop(70),
         5 => Policy::Loop(120),
         31 => Policy::Loop(85),
-        3 | 9 | 15 | 16 | 18..=28 | 30 | 40 | 42..=45 => Policy::Restart,
-        4 | 14 | 29 => Policy::RestartPlayerOnly,
-        7 | 8 | 10..=13 | 32..=39 | 41 => Policy::KeepRunning,
-        17 => Policy::KeepRunningPlayerOnly,
+        // 4 sits with the plain restarts: its dispatcher case (:64548)
+        // is two-armed (owner == local ? full-volume : owner == -1 ?
+        // positional), but every id-4 call site passes -1 (:29444
+        // claim chime, :30807 house claim) — the positional arm is the
+        // only one that ever fires, so ANY wizard's capture chimes.
+        3 | 4 | 9 | 15 | 16 | 18..=28 | 30 | 40 | 42..=45 => Policy::Restart,
+        // 14/29 really are local-player-only: their call sites pass
+        // the OWNING wizard's id as a2 (:48721-88/:49072 Select,
+        // :55905/:64931 CantUse), so only the local player's matches.
+        14 | 29 => Policy::RestartPlayerOnly,
+        // 17, the wizard hit "ugh" (same two-armed case, :64598-620):
+        // the ONLY call site is the shared wizard damage intake at
+        // :55726, which passes -1 for every wizard — player AND
+        // rival hits grunt, positionally. (A player-only reading here
+        // silenced rival hits — player report 2026-07-22.)
+        7 | 8 | 10..=13 | 17 | 32..=39 | 41 => Policy::KeepRunning,
         _ => Policy::Drop,
     }
 }
@@ -373,9 +389,7 @@ impl FaithfulMixer {
                     return;
                 }
                 let restart = matches!(p, Policy::Restart | Policy::RestartPlayerOnly);
-                if matches!(p, Policy::RestartPlayerOnly | Policy::KeepRunningPlayerOnly)
-                    && !player_sourced
-                {
+                if matches!(p, Policy::RestartPlayerOnly) && !player_sourced {
                     return;
                 }
                 *slot = Slot {
