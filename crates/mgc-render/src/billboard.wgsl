@@ -69,16 +69,26 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         vec2<f32>(-0.5, 0.0), vec2<f32>(0.5, 1.0), vec2<f32>(-0.5, 1.0),
     );
     let c = corners[vid];
-    var world = inst.pos
-        + globals.cam_right.xyz * (c.x * inst.size.x)
-        + globals.cam_up.xyz * (c.y * inst.size.y);
-    // The water-reflection MIRROR pass (atlas.w = 2): flip the
-    // finished quad about the sea plane — the sprite's reflection
-    // hangs upside-down below the water (the swapped corners mirror
-    // the image vertically for free).
+    var anchor = inst.pos;
+    var up = globals.cam_up.xyz;
+    // The water-reflection MIRROR pass (atlas.w = 2): the sprite's
+    // reflection hangs upside-down below the water — flip the ANCHOR
+    // about the sea plane and expand DOWN the real camera's up axis.
+    // Flipping the finished quad instead would counter-tilt its plane
+    // by 2x the camera pitch (edge-on at a 45° look-down): a camera-
+    // facing billboard seen through a mirror no longer faces the
+    // camera. Expanding in the true screen basis keeps the reflection
+    // full-body at any pitch — and leaves the atlas frame and the
+    // flags.x fold untouched, so the figure never reads as wrongly
+    // rotated. The downward run still mirrors the image vertically
+    // for free.
     if globals.atlas.w == 2u {
-        world.y = -world.y;
+        anchor.y = -anchor.y;
+        up = -up;
     }
+    let world = anchor
+        + globals.cam_right.xyz * (c.x * inst.size.x)
+        + up * (c.y * inst.size.y);
     var out: VsOut;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
     out.frac = vec2<f32>(c.x + 0.5, 1.0 - c.y);

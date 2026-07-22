@@ -62,14 +62,20 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
     );
     let c = corners[vid];
-    var world = inst.pos
-        + globals.cam_right.xyz * (c.x * inst.size.x)
-        + globals.cam_up.xyz * (c.y * inst.size.y);
-    // Water-reflection MIRROR pass (atlas.w = 2): flip the quad about
-    // the sea plane so the flame hangs upside-down under the water.
+    var anchor = inst.pos;
+    var up = globals.cam_up.xyz;
+    // Water-reflection MIRROR pass (atlas.w = 2): the flame hangs
+    // upside-down under the water — flip the ANCHOR about the sea
+    // plane and expand DOWN the real camera's up axis (flipping the
+    // finished quad would counter-tilt it with pitch and collapse it
+    // edge-on at a 45° look-down; see billboard.wgsl).
     if globals.atlas.w == 2u {
-        world.y = -world.y;
+        anchor.y = -anchor.y;
+        up = -up;
     }
+    let world = anchor
+        + globals.cam_right.xyz * (c.x * inst.size.x)
+        + up * (c.y * inst.size.y);
     var out: VsOut;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
     out.local = c;
