@@ -26,7 +26,7 @@
 use super::sprite_params::SPRITE_PARAMS;
 use crate::engine::features::Gen;
 use crate::mc1::combat::MailTarget;
-use crate::mc1::mobs::MobCtx;
+use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 
 /// The whirlwind's victim GRAB latch (retail byte[3] & 0x10, dword
 /// 0x1000_0000) — a free high bit next to the mobs.rs MC2 band.
@@ -770,19 +770,46 @@ impl Gen {
 
     // ---- ticks ---------------------------------------------------------------
 
-    /// `sub_339B0` (EF:24562) — the orb hub tick: phase 0 init (the
-    /// leader arm is dead code for model 76 — word_0x96_150 has no
-    /// writer, trace §2) → phase 1 pulse: terrain clamp
-    /// (z >= ground + radius, `sub_33C70`), the ±18 radius breathe
-    /// bouncing across [192,480] (`sub_33AD0`), the constellation
+    /// `sub_339B0` (EF:24562) — the orb hub tick: phase 0 init sizes
+    /// the ring from the LEADER's extents when f146 carries one
+    /// (`maxSpeed = pitch>>1` floored at 128, `minSpeed = 6*pitch>>2`
+    /// capped at 640 — EF:24581-90; a wizard's 121 pitch gives the
+    /// tight [128,181] shell, a castle brain's 128·w+640 flips the
+    /// bounds INVERTED so the breathe hard-snaps across up to
+    /// [640,3392]) → phase 1 pulse: snap to the leader + collapse on
+    /// its death, terrain clamp (z >= ground + radius — `sub_33C70`),
+    /// the ±18 radius breathe (`sub_33AD0`), the constellation
     /// tumble (+22/+16 head spin, per-sphere spin, all 25
     /// repositioned — `sub_33B20`), the slot-0 damage pass
     /// (`sub_10C80(type 0, 70)` per carrier, sound 3 on any hit —
     /// `sub_33C00`); life out → phase 2 collapse: keep tumbling,
     /// radius -= |step|, and at < 0 spawn a (10,0) ground fire and
     /// tear the whole 26-entity chain down (`sub_33D40`).
+    ///
+    /// The leader is the impact seam's struck victim (proj.rs
+    /// (10,76) arm) — trace §2's "dead code" call is REFUTED
+    /// (adjudication in docs/traces/mc2-class10-m76-fire-spheres.md
+    /// §7): retail's `sub_65B50` (EF:63029) pins the hub via the
+    /// charged fireball. An authored map-THING orb keeps f146 = 0
+    /// and behaves exactly as before.
     pub(crate) fn mc2_fire_orb_tick(&mut self, i: usize, ctx: &MobCtx) {
         if self.ent[i].f71 == 0 {
+            // Phase-0 leader sizing (EF:24581-90): ring bounds from
+            // the victim's AABB half-extent. The human wizard lives
+            // outside the pool — its extents are the sprite-44
+            // derivation (`SetEntityIndexAndRot(44)`: pitch = s6/2),
+            // same law the pool wizards get at spawn.
+            let leader = self.ent[i].f146;
+            let pitch = match leader {
+                0 => None,
+                PLAYER_TARGET => Some(self.mc2_params_ext(44).0 / 2),
+                v => ((v as usize) < self.ent.len()).then(|| self.ent[v as usize].f80),
+            };
+            if let Some(p) = pitch {
+                let e = &mut self.ent[i];
+                e.f130 = ((p as i32) >> 1).max(128) as i16;
+                e.f128 = ((6 * p as i32) >> 2).min(640) as i16;
+            }
             self.ent[i].f71 = 1;
         } else if self.ent[i].f71 > 1 {
             if self.ent[i].f71 == 2 {
@@ -811,7 +838,35 @@ impl Gen {
             }
             return;
         }
-        // Phase 1: terrain clamp (leader arm dead for model 76).
+        // Phase 1 — `sub_33C70` order: leader snap FIRST, then the
+        // terrain/ceiling clamps, then the leader-death collapse
+        // (EF:24726-45). The snap rides the leader's position plus
+        // its `array_0x52_82.yaw` z-offset (f78; wizard = 100), so
+        // an airborne victim wears the orb 100 units overhead while
+        // a castle's huge radius lets the ground clamp win and the
+        // sphere balloons over the footprint.
+        let leader = self.ent[i].f146;
+        let mut leader_dead = false;
+        if leader != 0 {
+            if leader == PLAYER_TARGET {
+                let off = (self.mc2_params_ext(44).1 / 2) as i16;
+                self.move_relink(i, ctx.px, ctx.py, ctx.pz.wrapping_add(off));
+                leader_dead = ctx.pdead;
+            } else if (leader as usize) < self.ent.len() {
+                let v = leader as usize;
+                let (vx, vy, vz, dead) = {
+                    let t = &self.ent[v];
+                    (
+                        t.x,
+                        t.y,
+                        t.z.wrapping_add(t.f78 as i16),
+                        t.act_life < 0 || t.flags & 0x400 != 0,
+                    )
+                };
+                self.move_relink(i, vx, vy, vz);
+                leader_dead = dead;
+            }
+        }
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         let floor = (self.ground_z(x, y) as i16).wrapping_add(self.ent[i].f44 as i16);
         if self.ent[i].z < floor {
@@ -824,6 +879,12 @@ impl Gen {
             if self.ent[i].z > c {
                 self.ent[i].z = c;
             }
+        }
+        // Leader dead → collapse, set at `sub_33C70`'s tail
+        // (EF:24743-45): the rest of THIS tick still pulses; the
+        // next tick enters phase 2.
+        if leader_dead {
+            self.ent[i].f71 = 2;
         }
         // sub_33AD0 — the breathe bounce.
         {

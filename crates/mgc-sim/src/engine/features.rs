@@ -5268,6 +5268,7 @@ mod tests {
             pz,
             pyaw: 0,
             pmana: 1000,
+            pdead: false,
         }
     }
 

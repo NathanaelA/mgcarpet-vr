@@ -7570,6 +7570,7 @@ fn run_screenshot(
             team: Some(0),
             blend: 0,
             map_only: false,
+            flame_scale: 1.0,
         };
         let mut prev = Vec::new();
         let mut cur = Vec::new();

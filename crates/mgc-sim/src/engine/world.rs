@@ -852,6 +852,12 @@ pub struct LivePose {
     /// pass still plots them (0xF0F UNPOSSESSED_BUILDING2,
     /// GameUI.cpp:1276-1295 — it never skips on the claim bit).
     pub map_only: bool,
+    /// PROTOTYPE (enhanced fire): flame-segment size multiplier,
+    /// 1.0 for everything except a leadered firestorm's (10,77)
+    /// satellites, which carry the hub's envelope stretch (a
+    /// castle-pinned lattice grows its flames instead of reading
+    /// sparse). Presentation-only, hash-silent.
+    pub flame_scale: f32,
 }
 
 /// PROTOTYPE: an active meteor/volcano blast driver ([`World::mc1_blasts`])
@@ -1323,6 +1329,29 @@ impl World {
     pub fn live_poses(&self) -> Vec<LivePose> {
         const TAU: f32 = std::f32::consts::TAU;
         let mut out = Vec::new();
+        // Enhanced-fire pre-pass: a leadered (10,76) firestorm hub
+        // stretches its ring to the victim's envelope; stamp the
+        // hub's bound onto its 25 chained satellites so their flame
+        // segments grow with it. sqrt keeps the growth tasteful; the
+        // authored 192..480 breathe band (and every flyer-pinned
+        // shell, ≤181) maps to 1.0 = the tuned FIRESTORM look, an
+        // L6/L7 castle envelope (3392) to ~2.7×.
+        let mut flame_scale = vec![1.0f32; self.g.ent.len()];
+        if self.game == GameId::Mc2 {
+            for e in self.g.ent.iter().skip(1) {
+                if e.class64 == 10 && e.model65 == 76 && e.flags & 0x400 == 0 {
+                    let bound = e.f128.max(e.f130) as f32;
+                    let s = (bound / 480.0).sqrt().clamp(1.0, 3.0);
+                    let mut n = e.f54 as usize;
+                    let mut hops = 0;
+                    while n != 0 && n < flame_scale.len() && hops < 32 {
+                        flame_scale[n] = s;
+                        n = self.g.ent[n].f54 as usize;
+                        hops += 1;
+                    }
+                }
+            }
+        }
         for (i, e) in self.g.ent.iter().enumerate().skip(1) {
             if e.class64 == 0 || !drawable(self.game, e.class64 as u16, e.model65 as u16) {
                 continue;
@@ -1399,6 +1428,7 @@ impl World {
                 },
                 blend: bits.blend,
                 map_only: bits.map_only,
+                flame_scale: flame_scale[i],
             });
         }
         out
@@ -1574,6 +1604,7 @@ impl World {
             pz: player.z,
             pyaw: player.heading,
             pmana: self.player.mana,
+            pdead: self.player.state != LifeState::Alive,
         };
         self.human_pose = (player.x, player.y, player.z);
 
@@ -4974,6 +5005,7 @@ impl World {
             pz: 0,
             pyaw: 0,
             pmana: 0,
+            pdead: false,
         };
         while self.g.ent[b].flags & 0x400 == 0 {
             self.g.mc2_load_beam_tick(b, &ctx);
@@ -9104,6 +9136,7 @@ mod tests {
                 pz: 0,
                 pyaw: 0,
                 pmana: 0,
+                pdead: false,
             };
             w.g.proj_tick(bolt, &ctx);
             w.g.ent[bolt].f146 != 0
@@ -12774,6 +12807,7 @@ mod tests {
             pz: 0,
             pyaw: 0,
             pmana: 0,
+            pdead: false,
         };
         w.g.area_write(fire, 0, 400, &ctx, false, false);
         assert!(
@@ -14158,6 +14192,198 @@ mod tests {
         assert!(fire_seen, "the collapse ground fire burned");
     }
 
+    /// The charged fireball's firestorm PINS to the struck victim
+    /// (`sub_65B50` EF:63027-29 + the `sub_339B0` phase-0 leader
+    /// sizing / `sub_33C70` follow — the trace §2 "dead code"
+    /// adjudication is REFUTED): the (9,28)→(10,76) impact leaders
+    /// the hub with the victim, sizes the ring from its extents,
+    /// stamps the owner onto all 25 satellites (local human → the
+    /// star sprite 42), and the hub rides the victim thereafter.
+    #[test]
+    fn mc2_firestorm_pins_to_struck_flyer() {
+        use crate::engine::features::Gen;
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        let (tx, ty) = mc2_pos(110, 100);
+        let ground = w.g.ground_z(tx, ty) as i16;
+        // The victim: a class-5 flyer 16 tiles up (the meteor test's
+        // wyvern stand-in shape).
+        let t = w.g.new_event().unwrap();
+        let tz = ground + 16 * 256;
+        {
+            let e = &mut w.g.ent[t];
+            e.class64 = 5;
+            e.model65 = 16;
+            e.act_life = 60000;
+            e.max_life = 60000;
+            e.f58 = 64;
+            e.flags |= 8;
+            e.f28 = 1;
+            e.f80 = 128;
+            e.f82 = 128;
+            e.f78 = 200;
+            e.f84 = 300;
+        }
+        w.g.link(t, tx, ty, tz);
+        // The charged fireball: a bolt armed with the (10,76) impact
+        // and LOCKED on the flyer, owned by the local human.
+        let (mx, my) = mc2_pos(100, 100);
+        let mz = ground + 512;
+        let m = w.g.mc2_spawn_bolt(mx, my, mz).unwrap();
+        let dh = Gen::isqrt(Gen::dist2_sq(mx, my, tx, ty) as u32) as i32;
+        {
+            let e = &mut w.g.ent[m];
+            e.id24 = PLAYER_TARGET;
+            e.f146 = t as u16;
+            e.f68 = 10;
+            e.f69 = 76;
+            e.f44 = 70;
+            e.f30 = Gen::angle_between(mx, my, tx, ty);
+            e.f32 = Gen::pitch_toward(mz, tz + 200, dh);
+        }
+        let ctx = MobCtx {
+            px: mx,
+            py: my,
+            pz: mz,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+        for _ in 0..60 {
+            if w.g.ent[m].flags & 0x400 != 0 {
+                break;
+            }
+            w.g.mc2_flyer_tick(m, &ctx);
+        }
+        assert!(w.g.ent[m].flags & 0x400 != 0, "the fireball detonated");
+        let h = (1..w.g.ent.len())
+            .find(|&j| {
+                let e = &w.g.ent[j];
+                e.class64 == 10 && e.model65 == 76 && e.flags & 0x400 == 0
+            })
+            .expect("the firestorm hub spawned");
+        assert_eq!(w.g.ent[h].f146, t as u16, "hub leadered to the victim");
+        assert_eq!(w.g.ent[h].max_life, 30, "the sub_65B50 life override");
+        for j in 1..w.g.ent.len() {
+            let e = &w.g.ent[j];
+            if e.class64 == 10 && e.model65 == 77 && e.flags & 0x400 == 0 {
+                assert_eq!(e.id24, PLAYER_TARGET, "satellite owner stamped");
+                assert_eq!(e.type86, 42, "human satellites wear sprite 42");
+            }
+        }
+        // First hub tick: phase-0 sizing from the victim's f80 = 128
+        // (maxSpeed = max(64,128), minSpeed = min(192,640)).
+        w.g.mc2_fire_orb_tick(h, &ctx);
+        assert_eq!(w.g.ent[h].f130, 128, "ring bound A from leader pitch");
+        assert_eq!(w.g.ent[h].f128, 192, "ring bound B from leader pitch");
+        // The pin: teleport the victim; the hub follows on its tick.
+        let (nx, ny) = mc2_pos(114, 104);
+        w.g.move_relink(t, nx, ny, tz);
+        w.g.mc2_fire_orb_tick(h, &ctx);
+        assert_eq!(
+            (w.g.ent[h].x, w.g.ent[h].y),
+            (nx, ny),
+            "the hub rides the victim — no escape"
+        );
+    }
+
+    /// A firestorm leadered to a CASTLE BRAIN stretches over the
+    /// building envelope: phase-0 sizing from the brain's
+    /// `SetShiftByCastle` extents flips the breathe bounds into the
+    /// inverted regime (maxSpeed 3392 > minSpeed cap 640) and the
+    /// radius hard-snaps across [640, 3392] — the retail "massive
+    /// fireworks" over an L6/L7 footprint (adjudication:
+    /// docs/traces/mc2-class10-m76-fire-spheres.md §7).
+    #[test]
+    fn mc2_firestorm_stretches_over_castle_envelope() {
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(170, 170);
+        let gz = w.g.ground_z(x, y) as i16;
+        // A castle-brain husk with the L6/L7 half-extent
+        // (128·48 + 640 = 6784 — the SetShiftByCastle law).
+        let b = w.g.new_event().unwrap();
+        {
+            let e = &mut w.g.ent[b];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.act_life = 40000;
+            e.max_life = 40000;
+            e.f80 = 6784;
+            e.f82 = 6784;
+        }
+        w.g.link(b, x, y, gz);
+        let h = w.g.mc2_spawn_fire_orb(x, y, gz + 500).expect("orb");
+        w.g.ent[h].f146 = b as u16;
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+        let mut rmax = 0i16;
+        let mut rmin = i16::MAX;
+        for _ in 0..6 {
+            w.g.mc2_fire_orb_tick(h, &ctx);
+            let r = w.g.ent[h].f44 as i16;
+            rmax = rmax.max(r);
+            rmin = rmin.min(r);
+        }
+        assert_eq!(w.g.ent[h].f130, 3392, "maxSpeed = pitch >> 1");
+        assert_eq!(w.g.ent[h].f128, 640, "minSpeed capped at 640");
+        assert_eq!(rmax, 3392, "the ring balloons to the envelope bound");
+        assert_eq!(rmin, 640, "…and snaps back to the 640 floor");
+    }
+
+    /// Leader death collapses the firestorm (`sub_33C70` EF:24743-45
+    /// → phase 2): the victim dying ends the orb early — the shrink
+    /// begins while the hub's own life is still far from exhausted.
+    #[test]
+    fn mc2_firestorm_collapses_when_leader_dies() {
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(170, 170);
+        let gz = w.g.ground_z(x, y) as i16;
+        let wiz = w.g.new_event().unwrap();
+        {
+            let e = &mut w.g.ent[wiz];
+            e.class64 = 3;
+            e.model65 = 0;
+            e.act_life = 1000;
+            e.max_life = 1000;
+            e.f80 = 121;
+        }
+        w.g.link(wiz, x, y, gz + 2000);
+        let h = w.g.mc2_spawn_fire_orb(x, y, gz + 500).expect("orb");
+        w.g.ent[h].f146 = wiz as u16;
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+        w.g.mc2_fire_orb_tick(h, &ctx);
+        assert_eq!(w.g.ent[h].f71, 1, "alive while the leader lives");
+        w.g.ent[wiz].act_life = -1;
+        w.g.mc2_fire_orb_tick(h, &ctx);
+        assert_eq!(w.g.ent[h].f71, 2, "leader death arms the collapse");
+        assert!(
+            w.g.ent[h].act_life > 70,
+            "…while the hub's own life is barely spent"
+        );
+        for _ in 0..60 {
+            w.g.mc2_fire_orb_tick(h, &ctx);
+        }
+        assert!(w.g.ent[h].flags & 0x400 != 0, "the chain tore down early");
+    }
+
     /// The class-11 slot-condition switch (sub_6F300): a model-13
     /// switch watches class-5 model 0; with the slot empty its
     /// 16-tick countdown arms and it chain-fires its disposition.
@@ -14661,6 +14887,7 @@ mod tests {
             pz: mz,
             pyaw: 0,
             pmana: 0,
+            pdead: false,
         };
         // First homing tick: the steer target is the BOX CENTER.
         w.g.mc2_flyer_tick(m, &ctx);
@@ -14755,6 +14982,7 @@ mod tests {
             pz,
             pyaw: 0,
             pmana: 0,
+            pdead: false,
         };
         // First homing tick: the steer target is the player's BOX
         // CENTER, not the pose z.

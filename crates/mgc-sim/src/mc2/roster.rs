@@ -1945,7 +1945,7 @@ impl Gen {
                             self.ent[i].f34 = yaw;
                         }
                     }
-                    _ => return, // EF:16065 — `default: return;`
+                    _ => {} // EF:16065 — `default: return;` (nothing follows either match)
                 }
             }
             3 => self.m18_timer(i, 0, 0), // :16074 — re-enter roam

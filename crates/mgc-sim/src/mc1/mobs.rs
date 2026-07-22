@@ -44,6 +44,11 @@ pub(crate) struct MobCtx {
     /// The player's castable pool (+140) — the genie's mana hunt
     /// (:24523-46) takes the first wizard holding ANY mana.
     pub(crate) pmana: u32,
+    /// The human wizard is dead or death-falling (retail's leader
+    /// death test `life_0x8 < 0` reads the player entity like any
+    /// other; our player lives outside the pool, so followers get
+    /// the state through the ctx).
+    pub(crate) pdead: bool,
 }
 
 /// Animation frame counts by sprite draw type (`byte_90AD8`, :2716):

@@ -1151,7 +1151,10 @@ pub fn fire_particles_from_poses(
         // Styled per projectile kind: `g` scales the flame's diameter
         // (discs + lateral spread), the trail count its reach.
         let style = flame_style(c.class, c.model);
-        let g = scale * style.girth;
+        // A stretched firestorm's satellites grow their girth with
+        // the hub's envelope (pose flame_scale, 1.0 elsewhere); the
+        // trail count stays — length would smother the lattice.
+        let g = scale * style.girth * c.flame_scale;
         let core_n: u32 = 5;
         let trail_n: u32 = (16.0 * style.length).round() as u32;
         for j in 0..core_n {
@@ -1773,6 +1776,7 @@ mod tests {
             team: owned.then_some(0),
             blend: 0,
             map_only: false,
+            flame_scale: 1.0,
         }
     }
 

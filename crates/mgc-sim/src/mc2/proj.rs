@@ -582,15 +582,35 @@ impl Gen {
             }
             // The CHARGED/repeat fireball's firestorm (spell 0, tier
             // life>=2 → arm 28/(10,76)): retail's action `sub_65B50`
-            // (EF:246b50) spawns the (10,76) fire orb via `sub_65C20`,
-            // then overrides the head's maxLife to 30 — a brief burst
-            // vs the level's 80-life authored firestorm; the chain
-            // despawns with the head.
+            // (EF:63012-53) spawns the (10,76) fire orb via
+            // `sub_65C20`, overrides the head's maxLife to 30 — a
+            // brief burst vs the level's 80-life authored firestorm —
+            // then LEADERS the hub (EF:63029) and stamps the owner id
+            // onto all 25 satellites, swapping the local human's to
+            // the star sprite 42 (`SetEntityIndex_49C90` — index
+            // only, the row-340 extent quad stays). The hub leader
+            // rides the generic f146 = victim stamp below: retail
+            // copies the projectile's homing LOCK, which for a homed
+            // hit IS the struck victim; the struck-write form also
+            // covers the struck castle brain, whose envelope the
+            // hub's phase-0 sizing stretches over — the adjudicated
+            // retail behavior remc2's `sub_65C20` under-transcribes
+            // (docs/traces/mc2-class10-m76-fire-spheres.md §7).
             (10, 76) => {
                 let s = self.mc2_spawn_fire_orb(x, y, z);
                 if let Some(s) = s {
                     self.ent[s].max_life = 30;
                     self.ent[s].act_life = 30;
+                    let human = id == PLAYER_TARGET;
+                    let mut n = self.ent[s].f54 as usize;
+                    while n != 0 {
+                        self.ent[n].id24 = id;
+                        if human {
+                            self.ent[n].type86 = 42;
+                            self.ent[n].frame88 = 0;
+                        }
+                        n = self.ent[n].f54 as usize;
+                    }
                 }
                 s
             }
