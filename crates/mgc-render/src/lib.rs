@@ -679,12 +679,13 @@ struct Globals {
     /// the w slots carry tan(fov/2) h/v for the sky ray.
     cam_right: [f32; 4],
     cam_up: [f32; 4],
-    /// x/y = framebuffer size in pixels, z = water-reflection flag
-    /// for this pass (1 = the main pass may sample the mirror
-    /// texture; 0 in the mirror pass itself and when reflections are
-    /// off), w = dynamic light count. Only terrain.wgsl declares this
-    /// field on — the other shaders' shorter Globals structs bind a
-    /// prefix.
+    /// x/y = framebuffer size in pixels, z = sea-sheen flag for this
+    /// pass (1 = the main pass runs the mirror/haze blend on water; 0
+    /// in the mirror pass itself and when reflections are off — note
+    /// the mirror pre-pass may be reach-skipped while the sheen stays
+    /// on, the water then wearing the pure sky haze), w = dynamic
+    /// light count. Only terrain.wgsl declares this field on — the
+    /// other shaders' shorter Globals structs bind a prefix.
     viewport: [f32; 4],
     /// Dynamic point lights: xyz = world position (tile units), w =
     /// intensity (1 = retail's 128 spell/explosion baseline; the
@@ -824,6 +825,95 @@ const SKY_SRGB: [f32; 3] = [0.42, 0.55, 0.75];
 /// 0.75·D..0.95·D). Most monster sight radii are 15-20 tiles, so the
 /// retail distance is exactly what hides acquisition pop-in.
 const DEFAULT_FOG_TILES: f32 = 20.0;
+
+/// Shore-field bake geometry — must match terrain.wgsl's SHORE_RES /
+/// SHORE_MAX: texels per tile edge, and the distance saturation.
+const SHORE_RES: usize = 4;
+const SHORE_MAX: f32 = 2.5;
+/// Tile edge of one deep-water presence block (the mirror-pass gate).
+const WATER_BLOCK: usize = 8;
+
+/// Bake the shore-haze distance law into the sub-tile field the
+/// terrain shader samples: for every SHORE_RES x SHORE_RES texel of
+/// every tile in the given tile rect (torus-wrapped), the Euclidean
+/// distance from the texel center to the nearest non-deep-water tile
+/// rect (type != 0) within the 7x7 tile neighbourhood of the texel's
+/// own tile — verbatim the shader's former per-fragment kernel —
+/// saturated at SHORE_MAX and quantized to R8Unorm (value/SHORE_MAX).
+fn bake_shore_region(
+    types: &[u8],
+    n: usize,
+    field: &mut [u8],
+    tx0: usize,
+    tz0: usize,
+    tw: usize,
+    th: usize,
+) {
+    let s = n * SHORE_RES;
+    for rz in 0..th {
+        let tz = (tz0 + rz) % n;
+        for rx in 0..tw {
+            let tx = (tx0 + rx) % n;
+            // Land rect origins near this tile, UNWRAPPED (the shader
+            // measured against tile±3 in continuous world space; the
+            // texture lookup alone wrapped).
+            let mut land = [[0f32; 2]; 49];
+            let mut nland = 0;
+            for dz in -3i32..=3 {
+                for dx in -3i32..=3 {
+                    let wx = (tx as i32 + dx).rem_euclid(n as i32) as usize;
+                    let wz = (tz as i32 + dz).rem_euclid(n as i32) as usize;
+                    if types[wz * n + wx] != 0 {
+                        land[nland] = [(tx as i32 + dx) as f32, (tz as i32 + dz) as f32];
+                        nland += 1;
+                    }
+                }
+            }
+            for j in 0..SHORE_RES {
+                let pz = tz as f32 + (j as f32 + 0.5) / SHORE_RES as f32;
+                for i in 0..SHORE_RES {
+                    let px = tx as f32 + (i as f32 + 0.5) / SHORE_RES as f32;
+                    let mut shore = SHORE_MAX;
+                    for l in &land[..nland] {
+                        let ddx = (l[0] - px).max(px - (l[0] + 1.0)).max(0.0);
+                        let ddz = (l[1] - pz).max(pz - (l[1] + 1.0)).max(0.0);
+                        shore = shore.min((ddx * ddx + ddz * ddz).sqrt());
+                    }
+                    field[(tz * SHORE_RES + j) * s + tx * SHORE_RES + i] =
+                        (shore / SHORE_MAX * 255.0).round() as u8;
+                }
+            }
+        }
+    }
+}
+
+/// Diff two tile-type planes and rebake (against `new`) every tile
+/// whose 7x7 kernel saw a change — the incremental arm of the shore
+/// bake for runtime terrain mutation.
+fn rebake_shore_changed(field: &mut [u8], old: &[u8], new: &[u8], n: usize) {
+    let mut dirty = vec![false; n * n];
+    for z in 0..n {
+        for x in 0..n {
+            if old[z * n + x] == new[z * n + x] {
+                continue;
+            }
+            for dz in -3i32..=3 {
+                for dx in -3i32..=3 {
+                    let wx = (x as i32 + dx).rem_euclid(n as i32) as usize;
+                    let wz = (z as i32 + dz).rem_euclid(n as i32) as usize;
+                    dirty[wz * n + wx] = true;
+                }
+            }
+        }
+    }
+    for z in 0..n {
+        for x in 0..n {
+            if dirty[z * n + x] {
+                bake_shore_region(new, n, field, x, z, 1, 1);
+            }
+        }
+    }
+}
 
 // Both maps are player-centered, yaw-rotated and toroidally wrapping.
 // World spans derive from the original's DrawMinimap_49300 params:
@@ -1215,6 +1305,19 @@ pub struct Renderer {
     /// Terrain plane textures [type, shade, angle, height] kept for
     /// runtime updates (craters, quakes — `update_terrain`).
     plane_texs: Option<[wgpu::Texture; 4]>,
+    /// Baked shore-distance plane (the shader's shore-haze law,
+    /// precomputed — see `bake_shore_region`), its CPU image, and the
+    /// tile-type snapshot it was baked from: `update_terrain` diffs
+    /// against the snapshot and rebakes only around changed tiles.
+    shore_tex: Option<wgpu::Texture>,
+    shore_field: Vec<u8>,
+    shore_types: Vec<u8>,
+    /// Deep-water (tile type 0) presence per 8x8-tile block, plus the
+    /// level-wide flag — the mirror-pass visibility gate: no deep
+    /// water within visible reach means no fragment can sample the
+    /// mirror, so the whole reflection pre-pass is skipped.
+    water_blocks: Vec<bool>,
+    has_deep_water: bool,
     /// Overhead map texture, rewritten when terrain/entities change.
     map_tex: Option<wgpu::Texture>,
 }
@@ -1415,6 +1518,18 @@ impl Renderer {
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Baked shore-distance field (R8Unorm; the shore-haze
+                // law precomputed on the CPU, read with textureLoad).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -2288,6 +2403,11 @@ impl Renderer {
             wave_mode: 0,
             anim_turn: 0.0,
             plane_texs: None,
+            shore_tex: None,
+            shore_field: Vec::new(),
+            shore_types: Vec::new(),
+            water_blocks: Vec::new(),
+            has_deep_water: false,
             map_tex: None,
             smooth_shading: false,
             fog_distance: DEFAULT_FOG_TILES,
@@ -2763,6 +2883,40 @@ impl Renderer {
             .as_ref()
             .map(|c| byte_tex("ceiling heights", c, n as u32, n as u32));
 
+        // Shore-distance field + deep-water block mask, both derived
+        // from the tile-type plane alone (rebaked incrementally on
+        // terrain mutation — see `update_terrain`).
+        self.shore_types = level.tile_type.clone();
+        self.shore_field = vec![255u8; n * SHORE_RES * n * SHORE_RES];
+        bake_shore_region(&self.shore_types, n, &mut self.shore_field, 0, 0, n, n);
+        self.rebuild_water_blocks(n);
+        let shore_extent = wgpu::Extent3d {
+            width: (n * SHORE_RES) as u32,
+            height: (n * SHORE_RES) as u32,
+            depth_or_array_layers: 1,
+        };
+        let shore_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shore field"),
+            size: shore_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            shore_tex.as_image_copy(),
+            &self.shore_field,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some((n * SHORE_RES) as u32),
+                rows_per_image: None,
+            },
+            shore_extent,
+        );
+        let shore_view = shore_tex.create_view(&Default::default());
+
         // Colormap (x = palette index, y = shade): the engine's shade
         // remap composed with the palette on the CPU. sRGB format so
         // sampling yields linear color. Texture texels and flat tile
@@ -2858,6 +3012,10 @@ impl Renderer {
                         &height_tex.create_view(&Default::default()),
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&shore_view),
+                },
             ],
         }));
         // The water-reflection MIRROR pass twin: identical planes,
@@ -2911,6 +3069,10 @@ impl Renderer {
                     resource: wgpu::BindingResource::TextureView(
                         &height_tex.create_view(&Default::default()),
                     ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&shore_view),
                 },
             ],
         }));
@@ -2972,11 +3134,16 @@ impl Renderer {
                                 &ceiling_tex.create_view(&Default::default()),
                             ),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: wgpu::BindingResource::TextureView(&shore_view),
+                        },
                     ],
                 }));
             self.ceiling_tex = Some(ceiling_tex);
         }
         self.plane_texs = Some([type_tex, shade_tex, angle_tex, height_tex]);
+        self.shore_tex = Some(shore_tex);
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
@@ -3076,7 +3243,128 @@ impl Renderer {
         if let (Some(c), Some(tex)) = (&level.ceiling, &self.ceiling_tex) {
             write(tex, c);
         }
+        self.update_shore_field(&level.tile_type);
         self.update_map(level, overlay);
+    }
+
+    /// Rebake the shore-distance field around CHANGED tile types only
+    /// (craters and quakes touch a handful of tiles; height-only
+    /// mutation changes nothing here), re-upload it, and refresh the
+    /// deep-water block mask.
+    fn update_shore_field(&mut self, tile_type: &[u8]) {
+        if self.shore_types == tile_type || self.shore_types.len() != tile_type.len() {
+            return;
+        }
+        let n = MAP_TILES;
+        rebake_shore_changed(&mut self.shore_field, &self.shore_types, tile_type, n);
+        self.shore_types.copy_from_slice(tile_type);
+        if let Some(tex) = &self.shore_tex {
+            self.queue.write_texture(
+                tex.as_image_copy(),
+                &self.shore_field,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some((n * SHORE_RES) as u32),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: (n * SHORE_RES) as u32,
+                    height: (n * SHORE_RES) as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.rebuild_water_blocks(n);
+    }
+
+    /// The mirror-pass visibility gate: is any deep-water (type 0)
+    /// tile within the camera's visible reach? Conservative — reach
+    /// is the fog cutoff, capped by where the HIGHEST frustum corner
+    /// ray meets the wave-crest plane (looking down over a city that
+    /// reach is short; any ray at or above the horizon makes it
+    /// unbounded), with margins on top — false only when no visible
+    /// fragment can possibly blend the mirror image.
+    fn deep_water_in_reach(
+        &self,
+        cam: &CameraView,
+        right: [f32; 3],
+        up: [f32; 3],
+        fwd: [f32; 3],
+        tan_h: f32,
+        tan_v: f32,
+    ) -> bool {
+        if !self.has_deep_water {
+            return false;
+        }
+        let mut reach = if self.fog_distance > 0.0 {
+            self.fog_distance
+        } else {
+            f32::INFINITY
+        };
+        // The highest surface a fragment can mirror-blend at: the
+        // 0.6-tile altitude-fade top plus the ~0.25-tile swell.
+        let h = cam.y - 0.9;
+        if h > 0.0 {
+            let mut ground = 0.0f32;
+            for (sh, sv) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                let d = [
+                    fwd[0] + right[0] * tan_h * sh + up[0] * tan_v * sv,
+                    fwd[1] + right[1] * tan_h * sh + up[1] * tan_v * sv,
+                    fwd[2] + right[2] * tan_h * sh + up[2] * tan_v * sv,
+                ];
+                if d[1] < 0.0 {
+                    ground = ground.max(h * (d[0] * d[0] + d[2] * d[2]).sqrt() / -d[1]);
+                } else {
+                    ground = f32::INFINITY;
+                }
+            }
+            reach = reach.min(ground);
+        }
+        if !reach.is_finite() {
+            return true;
+        }
+        let reach = reach * 1.05 + 2.0;
+        let n = MAP_TILES as f32;
+        let nb = MAP_TILES / WATER_BLOCK;
+        let half = WATER_BLOCK as f32 * 0.5;
+        for bz in 0..nb {
+            for bx in 0..nb {
+                if !self.water_blocks[bz * nb + bx] {
+                    continue;
+                }
+                // Torus-wrapped point-to-block-rect distance.
+                let mut dx = (cam.x - (bx * WATER_BLOCK) as f32 - half).rem_euclid(n);
+                if dx > n * 0.5 {
+                    dx -= n;
+                }
+                let mut dz = (cam.z - (bz * WATER_BLOCK) as f32 - half).rem_euclid(n);
+                if dz > n * 0.5 {
+                    dz -= n;
+                }
+                let ax = (dx.abs() - half).max(0.0);
+                let az = (dz.abs() - half).max(0.0);
+                if ax * ax + az * az <= reach * reach {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Rebuild the coarse deep-water presence mask (the mirror-pass
+    /// visibility gate) from the tile-type snapshot.
+    fn rebuild_water_blocks(&mut self, n: usize) {
+        let nb = n / WATER_BLOCK;
+        self.water_blocks = vec![false; nb * nb];
+        self.has_deep_water = false;
+        for z in 0..n {
+            for x in 0..n {
+                if self.shore_types[z * n + x] == 0 {
+                    self.water_blocks[(z / WATER_BLOCK) * nb + x / WATER_BLOCK] = true;
+                    self.has_deep_water = true;
+                }
+            }
+        }
     }
 
     /// Recompose + re-upload ONLY the overhead map texture (dots,
@@ -3773,20 +4061,28 @@ impl Renderer {
         // `camera_matrix`'s basis, bank included — billboards stay
         // screen-aligned in the rolled view like retail's
         // SetBillboards_3B560(-roll)).
-        let (right, up, _fwd) = camera_basis(cam);
+        let (right, up, fwd) = camera_basis(cam);
         // The basis w slots carry tan(fov/2) h/v — the sky shader's
         // per-pixel ray reconstruction (billboards read .xyz only).
         let tan_v = (cam.fov_y * 0.5).tan();
         let tan_h = tan_v * aspect;
-        // The water-reflection mirror pass runs on the live view only
-        // (the book viewport's sub-rect would need its own transform)
-        // and never on caves (no open water; the ceiling pass would
-        // mirror nonsense). Only water levels animate (wave_mode!=0).
-        let mirror_active = self.reflections
+        // The sea-sheen arm runs on the live view only (the book
+        // viewport's sub-rect would need its own transform) and never
+        // on caves (no open water; the ceiling pass would mirror
+        // nonsense). Only water levels animate (wave_mode!=0).
+        let sheen_active = self.reflections
             && !self.map_view
             && self.wave_mode != 0
             && self.ceiling_bind_group.is_none()
             && self.mirror_bind_group.is_some();
+        // The mirror pre-pass itself — a full second scene render —
+        // only runs when some deep-water tile is within visible
+        // reach. With none, no visible fragment can sample the mirror
+        // image (haze saturates to the flat sky sheen on all shore
+        // water), so skipping the pass is free fps over cities and
+        // inland stretches of water levels.
+        let mirror_active =
+            sheen_active && self.deep_water_in_reach(cam, right, up, fwd, tan_h, tan_v);
         let globals = Globals {
             view_proj,
             camera: [cam.x, cam.y, cam.z, self.fog_distance],
@@ -3803,7 +4099,11 @@ impl Renderer {
             viewport: [
                 w as f32,
                 hpx as f32,
-                mirror_active as u32 as f32,
+                // The sheen arm stays live even when the mirror pass
+                // is skipped for reach — shore water then wears the
+                // full sky haze, which needs no mirror image (the
+                // dummy is bound in its place).
+                sheen_active as u32 as f32,
                 self.lights.len() as f32,
             ],
             lights: {
@@ -4825,5 +5125,84 @@ mod tests {
             assert!(quad.rect[1] + quad.rect[3] <= ph + 1e-3);
             assert!(quad.uv[2] > 0.0, "uv width stays positive (textured mode)");
         }
+    }
+
+    /// A deterministic islands-and-sea tile-type plane for shore
+    /// tests (LCG; ~1/4 land in clustered patches).
+    fn shore_test_map(n: usize) -> Vec<u8> {
+        let mut seed = 0x2545_f491_u32;
+        let mut types = vec![0u8; n * n];
+        for _ in 0..n * n / 24 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let x = (seed >> 8) as usize % n;
+            let z = (seed >> 20) as usize % n;
+            for dz in 0..3 {
+                for dx in 0..3 {
+                    types[((z + dz) % n) * n + (x + dx) % n] = 1;
+                }
+            }
+        }
+        types
+    }
+
+    /// The CPU shore bake reproduces the shader's former per-fragment
+    /// 7x7 kernel verbatim: for every texel center, distance to the
+    /// nearest non-deep-water tile rect among the texel's tile ±3,
+    /// saturated and quantized identically.
+    #[test]
+    fn shore_bake_matches_the_shader_kernel_law() {
+        let n = 64;
+        let types = shore_test_map(n);
+        let mut field = vec![255u8; n * SHORE_RES * n * SHORE_RES];
+        bake_shore_region(&types, n, &mut field, 0, 0, n, n);
+        let s = n * SHORE_RES;
+        for tex_z in (0..s).step_by(3) {
+            for tex_x in (0..s).step_by(3) {
+                // The shader kernel, literally: fragment position =
+                // texel center, tile = floor(position).
+                let px = (tex_x as f32 + 0.5) / SHORE_RES as f32;
+                let pz = (tex_z as f32 + 0.5) / SHORE_RES as f32;
+                let (tbx, tbz) = (px.floor() as i32, pz.floor() as i32);
+                let mut shore = 9.0f32;
+                for dz in -3i32..=3 {
+                    for dx in -3i32..=3 {
+                        let (tx, tz) = (tbx + dx, tbz + dz);
+                        let wx = tx.rem_euclid(n as i32) as usize;
+                        let wz = tz.rem_euclid(n as i32) as usize;
+                        if types[wz * n + wx] != 0 {
+                            let ddx = (tx as f32 - px).max(px - (tx as f32 + 1.0)).max(0.0);
+                            let ddz = (tz as f32 - pz).max(pz - (tz as f32 + 1.0)).max(0.0);
+                            shore = shore.min((ddx * ddx + ddz * ddz).sqrt());
+                        }
+                    }
+                }
+                let want = (shore.min(SHORE_MAX) / SHORE_MAX * 255.0).round() as u8;
+                assert_eq!(field[tex_z * s + tex_x], want, "texel ({tex_x},{tex_z})");
+            }
+        }
+    }
+
+    /// The incremental rebake (diff + dirty ±3 tiles) lands on the
+    /// exact same field as a from-scratch bake of the mutated map —
+    /// the runtime crater path can't drift from the law.
+    #[test]
+    fn shore_incremental_rebake_equals_full_bake() {
+        let n = 64;
+        let old = shore_test_map(n);
+        let mut new = old.clone();
+        // A crater: dig a 4x4 patch of land to deep water across a
+        // wrap seam, and raise one sea tile.
+        for dz in 0..4 {
+            for dx in 0..4 {
+                new[((62 + dz) % n) * n + (62 + dx) % n] = 0;
+            }
+        }
+        new[10 * n + 10] = 1;
+        let mut incremental = vec![255u8; n * SHORE_RES * n * SHORE_RES];
+        bake_shore_region(&old, n, &mut incremental, 0, 0, n, n);
+        rebake_shore_changed(&mut incremental, &old, &new, n);
+        let mut full = vec![255u8; n * SHORE_RES * n * SHORE_RES];
+        bake_shore_region(&new, n, &mut full, 0, 0, n, n);
+        assert_eq!(incremental, full);
     }
 }

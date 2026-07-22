@@ -67,6 +67,18 @@ const ATLAS_CELLS_PER_ROW: i32 = 8;
 // stage — heights live here (not in the vertex buffer) so runtime
 // terrain mutation (craters, quakes) is a texture update.
 @group(0) @binding(7) var t_height: texture_2d<u32>;
+// Baked shore-distance field for the mirror blend's shore haze:
+// SHORE_RES texels per tile, R8Unorm = rect-distance to the nearest
+// non-deep-water tile / SHORE_MAX, saturated. The distance law itself
+// (the old in-shader 7x7 tile kernel) is baked on the CPU at terrain
+// upload — 49 textureLoads per water fragment inflated this shader's
+// register footprint enough to halve the framerate on every terrain
+// fragment, water on screen or not.
+@group(0) @binding(8) var t_shore: texture_2d<f32>;
+
+// Shore-field geometry; must match the CPU bake (lib.rs).
+const SHORE_RES: f32 = 4.0;
+const SHORE_MAX: f32 = 2.5;
 
 struct VsIn {
     @builtin(instance_index) instance: u32,
@@ -81,6 +93,10 @@ struct VsOut {
     // Water-shimmer shade offset in LUT rows, interpolated across the
     // triangle exactly like the original's per-corner pnt5_32.
     @location(2) shade_wave: f32,
+    // PRE-WAVE terrain height: the mirror blend's slope fade reads the
+    // authored surface tilt from screen-space derivatives, and the wave
+    // swell (up to ~14 degrees) must not flicker flat sea out of it.
+    @location(3) flat_y: f32,
 };
 
 const TAU: f32 = 6.283185307179586;
@@ -103,6 +119,7 @@ fn vs_main(in: VsIn) -> VsOut {
         (i32(in.pos.z) % 256 + 256) % 256,
     );
     pos.y = f32(textureLoad(t_height, hg, 0).r) * 0.125;
+    out.flat_y = pos.y;
     out.shade_wave = 0.0;
 
     // Water surface animation: the original's per-grid-corner sine
@@ -216,19 +233,16 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
     // Facing is per pass arm: the floor pass (arm 0) fronts UP; the
     // ceiling pass (arm 1) reuses the same index buffer viewed from
     // BELOW — its legit view is back-wound. The MIRROR pass (arm 2)
-    // is EXEMPT: its whole world is deliberately viewed from the flip
-    // side, and caves never mirror (`mirror_active` requires no
-    // ceiling), so there is no wall to peek through — applying the
-    // law there fog-painted every legit reflection fragment and
-    // blanked the water mirror (player report 2026-07-17, round 2).
+    // is EXEMPT — and facing CANNOT discriminate there: the flipped
+    // landscape's plausible reflection is composed of BOTH sides
+    // (slope top-sides are back-wound, the textured undersides of
+    // flat terrain front-wound — painting either blanks half the
+    // mirror; player reports 2026-07-17 round 2 and 2026-07-22). The
+    // netherworld peek through sloped water is instead cured on the
+    // SAMPLING side (see the slope fade at the mirror blend below).
     let peek = (globals.atlas.w == 0u && !front) || (globals.atlas.w == 1u && front);
-    if peek {
-        let d = distance(in.world, globals.camera.xyz);
-        var out: FsOut;
-        out.color = vec4<f32>(globals.fog_color.rgb * fog_amount(d), 1.0);
-        out.depth = plan_depth(in.world.xz);
-        return out;
-    }
+    // (The peek RETURN sits below the texel lookup: watery arm-0
+    // fragments are exempt and need `index` to identify themselves.)
     // Tile index from world position, wrapped to the 256x256 torus.
     let tile = vec2<i32>(
         (i32(floor(in.world.x)) % 256 + 256) % 256,
@@ -270,6 +284,23 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
         index = i32(textureLoad(t_atlas, cell * ATLAS_CELL + within, 0).r);
     } else {
         index = i32(textureLoad(t_tile_colors, vec2<i32>(ty, 0), 0).r);
+    }
+    let watery = index < 12;
+
+    // WATERY arm-0 backfaces are exempt from the peek black-out: the
+    // shore-edge water corners WAVE, and on the up-swell the camera
+    // sees the lifted face from UNDERNEATH — black-painting it opened
+    // a "crack in reality" along wavy shorelines (player diagnosis
+    // 2026-07-22). Retail's back-to-front tile blit had no underside
+    // to show — the near tile's quad painted those pixels with its
+    // own water texture — so falling through to normal texel shading
+    // is exactly the retail look.
+    if peek && !(globals.atlas.w == 0u && watery) {
+        let d = distance(in.world, globals.camera.xyz);
+        var out: FsOut;
+        out.color = vec4<f32>(globals.fog_color.rgb * fog_amount(d), 1.0);
+        out.depth = plan_depth(in.world.xz);
+        return out;
     }
 
     var base: vec3<f32>;
@@ -316,7 +347,8 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
     let lit = base * in.light;
 
     let dist = distance(in.world, globals.camera.xyz);
-    var rgb = mix(lit, globals.fog_color.rgb, fog_amount(dist));
+    let fog_a = fog_amount(dist);
+    var rgb = mix(lit, globals.fog_color.rgb, fog_a);
 
     // Sea reflection (retail GRO reflection block, simplified): sea
     // fragments at sea level blend the mirror texture at their own
@@ -344,22 +376,118 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
     // in counterphase); discard them so the mirrored landscape / sky
     // shows through, while a transition tile's LAND texels still
     // reflect.
-    let watery = index < 12;
     if globals.atlas.w == 2u && watery {
-        discard;
+        // ...but ONLY the mirror plane itself: near sea level AND
+        // near-horizontal. Steep or elevated water is not part of the
+        // y = 0 mirror (the main pass slope/altitude fades its OWN
+        // mirror blend away) — it is scenery in the mirrored world,
+        // and discarding it punched an x-ray window through the
+        // flipped bank into the netherworld wherever a reflective
+        // surface was itself reflected (player screenshot
+        // 2026-07-22). Retained, it renders its plain water texture —
+        // matching exactly what the main pass shows on that face.
+        let flat_world = vec3<f32>(in.world.x, in.flat_y, in.world.z);
+        let n = cross(dpdx(flat_world), dpdy(flat_world));
+        if in.flat_y < 0.6 && abs(normalize(n).y) >= 0.97 {
+            discard;
+        }
     }
     if globals.viewport.z > 0.5 && globals.atlas.w == 0u && watery {
         // Altitude fade (0.2..0.6 tiles): elevated tiles reusing the
         // low palette indices (dark speckles) must not mirror.
-        let water = clamp((0.6 - in.world.y) / 0.4, 0.0, 1.0);
+        var water = clamp((0.6 - in.world.y) / 0.4, 0.0, 1.0);
+        // Surface tilt: the y = 0 planar mirror is only valid on
+        // HORIZONTAL water — on a tilted face (river runs, channel
+        // walls) the screen-space sample peeks INSIDE the flipped
+        // terrain volume, the netherworld x-ray (wrong in retail
+        // too; player 2026-07-22). Tilt feeds the haze CONTENT
+        // selector below, never the sheen weight: an earlier weight-
+        // multiply version zeroed the sheen on steep faces, which
+        // bypassed the haze entirely and left sharp plain-texture
+        // patches against the sky-sheened water around them (player
+        // screenshot, mc2:01 ~60-degree cliff-base face, round 5).
+        // Level enough to mirror up to ~40 degrees, full sky haze
+        // past ~60. Pre-wave (flat_y), so the swell can't flicker
+        // the open sea's reflection.
+        let flat_world = vec3<f32>(in.world.x, in.flat_y, in.world.z);
+        let slope_n = cross(dpdx(flat_world), dpdy(flat_world));
+        let level = smoothstep(0.5, 0.77, abs(normalize(slope_n).y));
+        // Shore haze (player idea; certified "works rather well",
+        // round 2 stretched + sky-colored it): near land the mirror
+        // IMAGE gives way to flat SKY color — shallow shore water is
+        // turbid, and what the haze replaces is mostly reflected sky
+        // anyway, so the band is tonally continuous with the true
+        // mirror around it ("can't see where it begins"). The sheen
+        // weight itself is untouched: hazy water stays as reflective-
+        // looking as open sea. Also masks the residual shoreline
+        // artifact class (thin flipped-bank silhouettes, wave-lifted
+        // samples). Distance to the nearest non-deep-water tile
+        // (type != 0, atlas cell 0 = the all-water cell in both
+        // games), the certified 7x7-tile-kernel law: fully opaque
+        // only within 1/4 tile of the waterline (~10% of the reach),
+        // then one smooth gradient across the rest, flat by ~2.2
+        // tiles (round-3 player tuning: the earlier SQUARED curve
+        // kept ~2 tiles near-opaque, visibly steep in daylight; night
+        // was already perfect). Saturation stays inside the kernel's
+        // guaranteed 2-tile reach so no onset ring shows where land
+        // falls off the kernel's edge. The distance itself comes from
+        // the baked t_shore field (manual bilinear — group 0 carries
+        // no sampler).
+        var haze = 0.0;
         if water > 0.0 {
+            let sp = in.world.xz * SHORE_RES - 0.5;
+            let s0 = vec2<i32>(floor(sp));
+            let sf = sp - floor(sp);
+            let sn = i32(256.0 * SHORE_RES);
+            var v: array<f32, 4>;
+            for (var i = 0; i < 4; i = i + 1) {
+                let c = s0 + vec2<i32>(i % 2, i / 2);
+                let wc = vec2<i32>((c.x % sn + sn) % sn, (c.y % sn + sn) % sn);
+                v[i] = textureLoad(t_shore, wc, 0).r;
+            }
+            let shore = mix(mix(v[0], v[1], sf.x), mix(v[2], v[3], sf.x), sf.y)
+                * SHORE_MAX;
+            // Mirror content survives only where the water is BOTH
+            // far enough from shore AND level enough; everything else
+            // wears the flat sky sheen.
+            haze = 1.0 - smoothstep(0.25, 2.2, shore) * level;
+        }
+        if water > 0.0 {
+            // Sample the mirror where the RESTING surface point
+            // projects, not at this fragment's own screen position:
+            // the swell lifts a crest ~1/4 tile above the y = 0
+            // mirror plane, raising its pixels past the flipped
+            // bank's silhouette into reflected SKY — a sky-colored
+            // crack opening along the shoreline every wave cycle
+            // (player screenshot 2026-07-22). Re-projecting the
+            // pre-wave point anchors the sample inside the valid
+            // mirror image, and lets the reflection bob with the
+            // swell for free.
+            let rest = globals.view_proj * vec4<f32>(flat_world, 1.0);
+            let rest_px = vec2<f32>(rest.x / rest.w + 1.0, 1.0 - rest.y / rest.w)
+                * 0.5 * globals.viewport.xy;
             let wob = in.shade_wave * globals.viewport.y * 0.0006;
-            let uv = (in.clip.xy + vec2<f32>(wob, wob)) / globals.viewport.xy;
+            let uv = (rest_px + vec2<f32>(wob, wob)) / globals.viewport.xy;
             // A heavy cool cast on the mirrored image (player taste,
-            // round 3) — water never reflects neutrally.
-            let mirror = textureSampleLevel(t_mirror, s_mirror, uv, 0.0).rgb
-                * vec3<f32>(0.60, 0.78, 1.20);
-            rgb = mix(rgb, mirror, 0.5 * water);
+            // round 3) — water never reflects neutrally. The shore
+            // haze gets the same cast so its sky matches the mirror's
+            // reflected sky exactly.
+            let tint = vec3<f32>(0.60, 0.78, 1.20);
+            let mirror = textureSampleLevel(t_mirror, s_mirror, uv, 0.0).rgb * tint;
+            // The haze sky is the flat fog constant, but what the
+            // mirror reflects on open sea is the SKY TEXTURE, whose
+            // horizon rows run brighter than the constant in MC1
+            // (atlas.z = 1) — brighten the haze there to match
+            // (player round 6, "mc1 haze a bit too dark").
+            // Multiplicative, so night's black sky stays black; MC2's
+            // per-environment fog colors already track their skies.
+            let sky_boost = select(1.0, 1.3, globals.atlas.z == 1u);
+            let sheen = mix(mirror, globals.fog_color.rgb * sky_boost * tint, haze);
+            // The sheen fades with the fog like everything else —
+            // un-fogged it kept water (and the coastline haze) visible
+            // straight through the fog band to any distance, revealing
+            // shores far past the view distance (player 2026-07-23).
+            rgb = mix(rgb, sheen, 0.5 * water * (1.0 - fog_a));
         }
     }
 
