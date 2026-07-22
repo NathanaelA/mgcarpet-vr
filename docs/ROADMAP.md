@@ -51,6 +51,23 @@ and lists what remains; history lives in the archive and git.
 
 ## Remaining work
 
+### MC1 castle datum — CLOSED as FAITHFUL 2026-07-22 (opt-in candidate banked)
+
+The reported "peak castle sinks as it upgrades" is retail MC1 behavior,
+confirmed both by decompile trace (the leveler re-averages the grown
+footprint's outside corners on every transform; `+154` has exactly one
+writer, the leveler finish :30424) and by the player's own retail
+replay (peak build in the ocean — every upgrade stepped lower). Port is
+line-faithful; full law in `traces/mc1-castle-datum.md`; regression pin
+`crates/mgc-sim/tests/mc1_castle_datum.rs`. MC2 is clean in both
+retail and port (datum computed once at the ctor, frozen).
+
+BANKED (player: "keep it in mind, maybe get back to it"): an OPT-IN
+MC2-style frozen-datum alternate for MC1 (lock `site_z` after the L1
+leveler pass; sim-divergent, so faithful stays the default and goldens
+stay untouched; the regression test must be consciously updated with
+it).
+
 ### Two player-reported bugs — BOTH FIXED 2026-07-21, playtest owed
 
 **1. MC1 Accelerate: the sustained cast was free.** Fixed at

@@ -7719,6 +7719,17 @@ impl World {
         self.g.ent.get(m).map_or(0, |e| e.f26)
     }
 
+    /// The first live castle's build-site z datum (+154), in raw
+    /// 32·height units (test/dev instrument).
+    #[doc(hidden)]
+    pub fn debug_castle_site_z(&self) -> Option<i16> {
+        self.g
+            .ent
+            .iter()
+            .find(|e| e.class64 == 3 && e.model65 == 2)
+            .map(|e| e.site_z)
+    }
+
     /// Count live class-10 model-45 buildings carrying the given
     /// build-type tag (`f71`) — the type-9 destroy-building objective's
     /// per-stage oracle (test/dev instrument; level-001 vaults). Alive =

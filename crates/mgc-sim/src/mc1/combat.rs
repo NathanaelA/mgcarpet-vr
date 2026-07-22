@@ -1389,7 +1389,7 @@ impl Gen {
         }
         let (px, py) = ((cx as u16) << 8, (cy as u16) << 8);
         // The build datum: MC1 = the center ground; MC2's ctor
-        // (sub_4AA40 EF:33390-99) = 32 x the corner-mean over the
+        // (sub_4AA40 EF:33390-99) = 32 x the perimeter-MIN over the
         // BUILD00 row-1 footprint.
         let z = match self.verbs.movement {
             crate::verbs::MovementVerb::Mc2 => self.mc2_castle_site_z(cx, cy),
