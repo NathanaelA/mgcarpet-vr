@@ -202,6 +202,14 @@ pub struct RenderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderPreference {
+    /// The aim crosshair (toggle at runtime with C): a white-edged
+    /// black cross at the TRUE aim point. Gameplay aim cursor, ON by
+    /// default — both retails steered by a live on-screen cursor, and
+    /// the enhanced chase-the-pointer steering is unreadable without
+    /// it (the crosshair IS the desired heading). Split 2026-07-23
+    /// from the autoaim lock markers, which stay a debug instrument
+    /// (`render.debug.autoaim_hints`).
+    pub crosshair: bool,
     /// The textured parallax sky (retail's Sky option, on by
     /// default): the per-environment 256x256 cloud plane scrolled by
     /// yaw (4 wraps per revolution), slid by pitch, rolled with the
@@ -338,6 +346,7 @@ pub const FOG_STOPS: [(u32, &str); 4] = [
 impl Default for RenderPreference {
     fn default() -> Self {
         Self {
+            crosshair: true,
             sky: true,
             reflections: true,
             light_sources: true,
@@ -430,16 +439,19 @@ pub struct RenderDebug {
     /// runtime with H). The original never shows creature life — the
     /// combat-system debugging instrument.
     pub health_bars: bool,
-    /// The autoaim crosshair (toggle at runtime with C): a
-    /// white-edged black cross at the TRUE aim point (the faithful
-    /// camera pitches at half the aim pitch, so aim is never screen
-    /// center) plus per-hand lock markers — left `+`, right `×`,
-    /// blinking red — on the target each hand's equipped spell would
-    /// acquire this instant. A crude, strictly-functional
+    /// The autoaim lock markers: per-hand markers — left `+`, right
+    /// `×`, blinking red — on the target each hand's equipped spell
+    /// would acquire this instant. A crude, strictly-functional
     /// projectile-behavior predictor (pure preview: no sim writes, no
-    /// RNG); the original shows no aim UI at all. Acquisition ≠ hit
-    /// (homing is capped 5/tick yaw).
-    pub crosshair: bool,
+    /// RNG); the original shows no such UI. Acquisition ≠ hit (homing
+    /// is capped 5/tick yaw). Split 2026-07-23 from the plain aim
+    /// crosshair, which is now the `render.preference.crosshair`
+    /// gameplay cursor. Deliberately NO serde alias for the legacy
+    /// `crosshair` key: the menu-persist path MERGES into the
+    /// existing mgcarpet.json, so a migrated file holds BOTH keys and
+    /// an alias makes that a "duplicate field" load error. The stale
+    /// key is simply ignored.
+    pub autoaim_hints: bool,
     /// Overlay live trigger volumes / portals on the overhead map as
     /// tinted circles (toggle at runtime with V). The original never
     /// reveals trigger areas — this is a sanctioned deviation, and the
@@ -456,6 +468,13 @@ pub struct RenderDebug {
     /// with `vsync` off to read the machine's real headroom instead of
     /// the display refresh.
     pub fps: bool,
+    /// The coordinate overlay (toggle at runtime with K): carpet
+    /// position in engine units in the bottom-LEFT corner — "x N,
+    /// y N, z N (+E)" where z is the altitude and (+E) the elevation
+    /// over the terrain underneath. The flight/altitude debugging
+    /// instrument (the desired-altitude band language IS engine
+    /// units: clearance 128/256, band 1024/3072).
+    pub coords: bool,
 }
 
 // ===========================================================================
@@ -480,6 +499,13 @@ pub struct ControlPreferences {
     /// Mouse-to-stick / mouse-look sensitivity multiplier (P-class
     /// preference, 1.0 = default).
     pub mouse_sensitivity: f32,
+    /// Per-axis fractions of the general sensitivity, 0.0..=1.0
+    /// (shown as 0–100%). X (horizontal/turn) DEFAULTS TO HALF —
+    /// player ruling 2026-07-23: full-rate X saturates the enhanced
+    /// turn damper into an all-or-nothing feel; half stretches it
+    /// back into a fluid range. Y (vertical/aim) defaults to full.
+    pub mouse_sensitivity_x: f32,
+    pub mouse_sensitivity_y: f32,
     /// Invert the mouse Y axis. `invert_y = true` means mouse-up/forward
     /// = nose DOWN (dive), like a flight stick — the polarity BOTH
     /// originals ship — and it is the DEFAULT. `false` = mouse-up = nose
@@ -500,6 +526,8 @@ impl Default for ControlPreferences {
         Self {
             bindings: Bindings::default(),
             mouse_sensitivity: 1.0,
+            mouse_sensitivity_x: 0.5,
+            mouse_sensitivity_y: 1.0,
             invert_y: true,
             fly_assistant: FlyAssistant::default(),
         }
@@ -560,8 +588,14 @@ pub enum ThrustModel {
     #[default]
     #[serde(alias = "mc1")]
     Classic,
-    /// Hold-to-fly with automatic deceleration on release (the MVP
-    /// model, retuned; keeps the authentic level-plane thrust rule).
+    /// Hold-to-fly with automatic deceleration on release (keeps the
+    /// authentic level-plane thrust rule). Steering is
+    /// chase-the-pointer: the mouse moves the aim crosshair (a
+    /// desired heading, kept on-screen) and the carpet turns to
+    /// chase it with an ease-out curve; casts fire along the
+    /// crosshair. The camera banks proportionally to turn rate ×
+    /// forward speed (never when standing or strafing), unlike
+    /// retail's fixed bank.
     Enhanced,
 }
 
@@ -574,9 +608,13 @@ pub enum AltitudeModel {
     #[default]
     #[serde(alias = "faithful")]
     Classic,
-    /// Classic behavior PLUS explicit float up/down keys (E/Q), with
-    /// float-up capped at the level's highest terrain tile (never a
-    /// god's-eye view) and wall blocking fully intact.
+    /// The desired-altitude law: E/Q pin a GROUND-RELATIVE desired
+    /// altitude (fast steps at the classic full-pitch climb rate);
+    /// the carpet drifts toward it at the game's standard descent
+    /// speed, follows terrain at that offset, and recovers from any
+    /// bump or fling. Capped at the per-game climb band (4 tiles
+    /// over terrain; MC2 caves higher), wall blocking and the cave
+    /// roof fully intact.
     #[serde(alias = "extended-lift")]
     Enhanced,
 }
@@ -859,6 +897,13 @@ pub struct DevConfig {
     /// state; a level so launched is not a faithful fixture. Grants on
     /// top of whatever the world already gave (starting spells etc.).
     pub plausible_spellbook: bool,
+    /// Unclamp the enhanced-altitude band: q/e may pin the desired
+    /// altitude anywhere up to the GLOBAL lift ceiling (the level's
+    /// highest terrain + the 4-tile soft-ceiling margin) instead of
+    /// the per-game ground-relative band (1024/3072 over terrain).
+    /// The altitude-system inspection instrument from the original
+    /// enhanced-flight spec; live-applied, never a faithful fixture.
+    pub lift_unclamped: bool,
 }
 
 // ===========================================================================
@@ -922,7 +967,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 11;
+const DEFAULTS_VERSION: u64 = 15;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp
@@ -1023,6 +1068,26 @@ mod tests {
         let text = std::fs::read_to_string(&dpath).unwrap();
         assert!(text.contains("\"_version\""), "regenerated file is stamped");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The 2026-07-23 crosshair/autoaim split, against the REAL file
+    /// shape the menu-persist merge produces: a migrated mgcarpet.json
+    /// holds BOTH the stale `render.debug.crosshair` key and the new
+    /// `autoaim_hints`. A serde alias would reject that as a
+    /// "duplicate field" (both names map to one field), so the stale
+    /// key must parse as plain unknown-and-ignored instead.
+    #[test]
+    fn stale_debug_crosshair_key_is_ignored_not_duplicate() {
+        let overlay = serde_json::json!({
+            "render": {"debug": {"crosshair": true, "autoaim_hints": true}}
+        });
+        let cfg: Config = serde_json::from_value(overlay).unwrap();
+        assert!(cfg.render.debug.autoaim_hints, "new key honored");
+        assert!(
+            cfg.render.preference.crosshair,
+            "stale debug key does NOT leak into the gameplay crosshair \
+             (which simply keeps its default)"
+        );
     }
 
     #[test]

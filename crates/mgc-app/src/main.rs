@@ -2141,7 +2141,15 @@ impl App {
             }
             "controls.models.altitude" => {
                 if let Some(sess) = self.session.as_deref_mut() {
-                    sess.sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
+                    // The setter re-seeds the desired altitude at the
+                    // live pose when entering the enhanced tier.
+                    sess.sim
+                        .set_altitude_model(sim_altitude(self.cfg.controls.models.altitude));
+                }
+            }
+            "dev.lift_unclamped" => {
+                if let Some(sess) = self.session.as_deref_mut() {
+                    sess.sim.lift_unclamped = self.cfg.dev.lift_unclamped;
                 }
             }
             "gameplay.cheat.dev_spells" => {
@@ -2472,17 +2480,25 @@ impl App {
                 )
             }
             KeyCode::KeyC => {
-                self.cfg.render.debug.crosshair = !self.cfg.render.debug.crosshair;
-                let v = self.cfg.render.debug.crosshair;
+                self.cfg.render.preference.crosshair = !self.cfg.render.preference.crosshair;
+                let v = self.cfg.render.preference.crosshair;
                 println!(
-                    "autoaim crosshair: {}",
-                    if v {
-                        "on (predictor instrument)"
-                    } else {
-                        "off (original)"
-                    }
+                    "aim crosshair: {}",
+                    if v { "on" } else { "off (no aim cursor)" }
                 );
-                ("render.debug.crosshair", format!("Crosshair {}", onoff(v)))
+                (
+                    "render.preference.crosshair",
+                    format!("Crosshair {}", onoff(v)),
+                )
+            }
+            KeyCode::KeyK => {
+                self.cfg.render.debug.coords = !self.cfg.render.debug.coords;
+                let v = self.cfg.render.debug.coords;
+                println!(
+                    "coordinate overlay: {}",
+                    if v { "on (engine units)" } else { "off" }
+                );
+                ("render.debug.coords", format!("Coordinates {}", onoff(v)))
             }
             _ => return false,
         };
@@ -2640,6 +2656,7 @@ impl App {
             sess.sim = Simulation::with_world(w);
             sess.sim.thrust_model = thrust;
             sess.sim.altitude_model = altitude;
+            sess.sim.lift_unclamped = self.cfg.dev.lift_unclamped;
             if let Some(start) = sess.level.start {
                 sess.sim.flyer = start;
                 sess.sim.sync_carpet_from_flyer();
@@ -3049,6 +3066,9 @@ impl App {
         };
         sim.thrust_model = sim_thrust(self.cfg.controls.models.thrust);
         sim.altitude_model = sim_altitude(self.cfg.controls.models.altitude);
+        // Dev instrument: unclamp the enhanced-altitude band to the
+        // global lift ceiling (highest terrain + the 4-tile margin).
+        sim.lift_unclamped = self.cfg.dev.lift_unclamped;
         if let Some(start) = level.start {
             sim.flyer = start;
             sim.sync_carpet_from_flyer();
@@ -5631,13 +5651,15 @@ impl ApplicationHandler for App {
                 // (remc1 :52434: pitch_8 = u16_329/2) — casts still
                 // aim along the full published pitch.
                 let aim = a.pitch + (b.pitch - a.pitch) * alpha;
-                // Faithful only: the horizon bank from the filtered
-                // roll stick, full value (remc1 :52432 — the missing
-                // turn cue). The enhanced mouse-look stays flat
-                // (deliberate).
+                // The horizon bank. Faithful: the filtered roll stick,
+                // full value (remc1 :52432 — the missing turn cue).
+                // Enhanced: the proportional bank the sim derives from
+                // turn_rate × speed (deliberate deviation) — camera
+                // roll only, the HUD stays screen-space level.
+                let roll = a.roll + (b.roll - a.roll) * alpha;
                 let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
-                    config::ThrustModel::Classic => (aim * 0.5, a.roll + (b.roll - a.roll) * alpha),
-                    config::ThrustModel::Enhanced => (aim, 0.0),
+                    config::ThrustModel::Classic => (aim * 0.5, roll),
+                    config::ThrustModel::Enhanced => (aim, roll),
                 };
                 let cam = CameraView {
                     x: lerp_wrap(a.x, b.x),
@@ -5925,44 +5947,79 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
-                    // The autoaim crosshair (P-class predictor;
-                    // `render.debug.crosshair`, C toggles): the
-                    // white-edged cross at the TRUE aim point (full
-                    // aim pitch — the faithful camera runs half), and
-                    // +/x lock markers on the target each hand's
-                    // equipped spell would acquire this instant
-                    // (World::aim_preview — the pure scan twin).
-                    if self.cfg.render.debug.crosshair
+                    // The aim crosshair (`render.preference.crosshair`,
+                    // C toggles — the gameplay aim cursor, and under
+                    // enhanced thrust the chase-steering target) and
+                    // the autoaim lock markers (+/x on the target each
+                    // hand's equipped spell would acquire this instant;
+                    // `render.debug.autoaim_hints`, World::aim_preview
+                    // — the pure scan twin). Split options 2026-07-23.
+                    let want_cross = self.cfg.render.preference.crosshair;
+                    let want_hints = self.cfg.render.debug.autoaim_hints;
+                    if (want_cross || want_hints)
                         && !self.book_open()
                         && vitals.state == mgc_sim::engine::world::LifeState::Alive
                     {
                         let f = &sess.sim.flyer;
-                        let (sy, cyaw) = cam.yaw.sin_cos();
+                        // The aim heading. Enhanced chase steering:
+                        // the crosshair sits at the DESIRED heading
+                        // (yaw + lead) and the autoaim preview scans
+                        // along it — matching the cast pose, which
+                        // launches along the crosshair while the hull
+                        // is still coming around. The desired heading
+                        // is predicted at FRAME rate: mouse motion the
+                        // sim has not consumed yet (`self.mouse`, the
+                        // per-tick accumulator, already sensitivity-
+                        // scaled) is added on top of the tick-rate
+                        // lead, re-clamped against the interpolated
+                        // camera — otherwise the pointer steps at
+                        // 24 Hz while the camera glides (choppy,
+                        // player report 2026-07-23).
+                        let (neutral_yaw, pose_yaw) = match self.cfg.controls.models.thrust {
+                            config::ThrustModel::Classic => (cam.yaw, f.yaw),
+                            config::ThrustModel::Enhanced => {
+                                let lead = (sess.sim.aim_yaw() + self.mouse.yaw - cam.yaw)
+                                    .clamp(-mgc_sim::LEAD_MAX, mgc_sim::LEAD_MAX);
+                                let a = cam.yaw + lead;
+                                (a, a)
+                            }
+                        };
+                        let (sy, cyaw) = neutral_yaw.sin_cos();
                         let (sp, cp) = aim.sin_cos();
                         // The acquire range: 5120 units = 20 tiles.
                         const AIM_D: f32 = 20.0;
-                        let neutral = mgc_render::world_to_screen(
-                            &cam,
-                            size.0,
-                            size.1,
-                            cam.x + sy * cp * AIM_D,
-                            cam.y + sp * AIM_D,
-                            cam.z - cyaw * cp * AIM_D,
-                        );
-                        let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
-                            f.x, f.y, f.z, f.yaw, f.pitch, 0.0,
-                        );
-                        let locks = w.aim_preview(pose).map(|l| {
-                            l.and_then(|l| {
-                                // Lock markers honor the fog wall too
-                                // (relevant when fog_distance < the
-                                // 20-tile acquire range).
-                                if fog_cut(&cam, l.x, l.alt, l.z, fog_wall) {
-                                    return None;
-                                }
-                                mgc_render::world_to_screen(&cam, size.0, size.1, l.x, l.alt, l.z)
+                        let neutral = if want_cross {
+                            mgc_render::world_to_screen(
+                                &cam,
+                                size.0,
+                                size.1,
+                                cam.x + sy * cp * AIM_D,
+                                cam.y + sp * AIM_D,
+                                cam.z - cyaw * cp * AIM_D,
+                            )
+                        } else {
+                            None
+                        };
+                        let locks = if want_hints {
+                            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
+                                f.x, f.y, f.z, pose_yaw, f.pitch, 0.0,
+                            );
+                            w.aim_preview(pose).map(|l| {
+                                l.and_then(|l| {
+                                    // Lock markers honor the fog wall
+                                    // too (relevant when fog_distance
+                                    // < the 20-tile acquire range).
+                                    if fog_cut(&cam, l.x, l.alt, l.z, fog_wall) {
+                                        return None;
+                                    }
+                                    mgc_render::world_to_screen(
+                                        &cam, size.0, size.1, l.x, l.alt, l.z,
+                                    )
+                                })
                             })
-                        });
+                        } else {
+                            [None, None]
+                        };
                         let blink =
                             0.5 + 0.5 * (((sess.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
                         ui::crosshair_quads(&mut quads, size.0, size.1, neutral, locks, blink);
@@ -6113,6 +6170,33 @@ impl ApplicationHandler for App {
                             font_s,
                         ));
                     }
+                    // The coordinate overlay (render · debug, K):
+                    // bottom-LEFT, across the room from the fps
+                    // readout. Engine units — the language the
+                    // altitude bands speak (floor 128/256, band
+                    // 1024/3072): x/y = the horizontal position on
+                    // the sim's wrapping 8.8 axes, z = altitude,
+                    // (+E) = elevation over the terrain underneath.
+                    // Reads the interpolated camera pose (= the
+                    // carpet), so it glides with the picture.
+                    if self.cfg.render.debug.coords && assets.has_font() {
+                        let g = sess.sim.ground_height(cam.x, cam.z);
+                        let xe = (cam.x.rem_euclid(256.0) * 256.0) as u16;
+                        let ye = (cam.z.rem_euclid(256.0) * 256.0) as u16;
+                        let ze = (cam.y * 256.0).round() as i32;
+                        let elev = ze - (g * 256.0).round() as i32;
+                        let text = format!("x {xe}, y {ye}, z {ze} ({elev:+})");
+                        let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
+                        let pad = 4.0 * font_s;
+                        let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
+                        quads.extend(assets.text_quads(
+                            &text,
+                            pad,
+                            y,
+                            [1.0, 1.0, 1.0, 1.0],
+                            font_s,
+                        ));
+                    }
                     self.hovered = hovered;
                     if let Some(r) = &mut self.renderer {
                         r.set_ui_quads(quads);
@@ -6213,7 +6297,17 @@ impl ApplicationHandler for App {
             // BOTH control models. The two branches consume dy with
             // opposite senses downstream, so each applies its own flip
             // to land on the same polarity.
-            let inv = self.cfg.controls.preferences.invert_y;
+            let p = &self.cfg.controls.preferences;
+            let inv = p.invert_y;
+            // Per-axis fractions of the general sensitivity: X governs
+            // the horizontal (turn/stick-x), Y the vertical (aim), in
+            // BOTH control models. X defaults to half so the enhanced
+            // turn damper integrates over a fluid range instead of
+            // saturating to its cap on a flick (player, 2026-07-23).
+            let (sx, sy) = (
+                p.mouse_sensitivity_x.clamp(0.0, 1.0),
+                p.mouse_sensitivity_y.clamp(0.0, 1.0),
+            );
             if self.cfg.controls.models.thrust == config::ThrustModel::Classic {
                 // The classic stick's native sense IS the flight-stick
                 // polarity: pass dy through when inverted.
@@ -6223,17 +6317,17 @@ impl ApplicationHandler for App {
                 // from screen center, clamped ±127 — on a 320-wide
                 // screen that's ~0.8 stick units per pixel; modern
                 // default trades a little of that for precision).
-                let s = STICK_PER_PIXEL * self.cfg.controls.preferences.mouse_sensitivity;
-                self.stick.x = (self.stick.x + dx as f32 * s).clamp(-127.0, 127.0);
-                self.stick.y = (self.stick.y - dy as f32 * s).clamp(-127.0, 127.0);
+                let s = STICK_PER_PIXEL * p.mouse_sensitivity;
+                self.stick.x = (self.stick.x + dx as f32 * s * sx).clamp(-127.0, 127.0);
+                self.stick.y = (self.stick.y - dy as f32 * s * sy).clamp(-127.0, 127.0);
                 self.stick_idle_ticks = 0;
             } else {
                 // Mouse-look's native sense is the FPS convention:
                 // flip dy when inverted.
                 let dy = if inv { -dy } else { dy };
-                let s = MOUSE_SENSITIVITY * self.cfg.controls.preferences.mouse_sensitivity;
-                self.mouse.yaw += dx as f32 * s;
-                self.mouse.pitch -= dy as f32 * s;
+                let s = MOUSE_SENSITIVITY * p.mouse_sensitivity;
+                self.mouse.yaw += dx as f32 * s * sx;
+                self.mouse.pitch -= dy as f32 * s * sy;
             }
         }
     }
@@ -6265,6 +6359,8 @@ struct Args {
     map_triggers: Option<bool>,
     /// CLI override of `render.debug.health_bars`.
     health_bars: Option<bool>,
+    /// CLI override of `render.preference.crosshair` (the gameplay
+    /// aim cursor; the autoaim hints are menu/config-only).
     crosshair: Option<bool>,
     /// CLI override of `gameplay.cheat.dev_spells`.
     dev_spells: Option<bool>,
@@ -6278,6 +6374,8 @@ struct Args {
     expose_jar_spells: Option<bool>,
     /// CLI override of `render.debug.grace_meter`.
     grace_meter: Option<bool>,
+    /// CLI override of `render.debug.coords`.
+    coords: Option<bool>,
     /// `--dev-mode`: pre-select the whole dev-instrument kit for one
     /// run (expose_jar_spells, health_bars, crosshair,
     /// map_trigger_areas, grace_meter); individual flags still
@@ -6364,6 +6462,7 @@ fn parse_args() -> Result<Args, String> {
     let mut invincible = None;
     let mut expose_jar_spells = None;
     let mut grace_meter = None;
+    let mut coords = None;
     let mut dev_mode = false;
     let mut thrust = None;
     let mut altitude = None;
@@ -6524,6 +6623,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-health-bars" => health_bars = Some(false),
             "--crosshair" => crosshair = Some(true),
             "--no-crosshair" => crosshair = Some(false),
+            "--coords" => coords = Some(true),
+            "--no-coords" => coords = Some(false),
             "--dev-spells" => dev_spells = Some(true),
             "--no-dev-spells" => dev_spells = Some(false),
             "--plausible-spellbook" => plausible_spellbook = Some(true),
@@ -6660,7 +6761,7 @@ fn parse_args() -> Result<Args, String> {
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
-                     [--crosshair|--no-crosshair] \
+                     [--crosshair|--no-crosshair] [--coords|--no-coords] \
                      [--health-bars|--no-health-bars] \
                      [--dev-spells|--no-dev-spells] \
                      [--plausible-spellbook|--no-plausible-spellbook] \
@@ -6711,6 +6812,7 @@ fn parse_args() -> Result<Args, String> {
         invincible,
         expose_jar_spells,
         grace_meter,
+        coords,
         dev_mode,
         thrust,
         altitude,
@@ -7736,13 +7838,14 @@ fn main() -> std::process::ExitCode {
     if args.dev_mode {
         cfg.render.enhancement.expose_jar_spells = true;
         cfg.render.debug.health_bars = true;
-        cfg.render.debug.crosshair = true;
+        cfg.render.debug.autoaim_hints = true;
         cfg.render.debug.map_trigger_areas = true;
         cfg.render.debug.grace_meter = true;
         cfg.render.debug.fps = true;
+        cfg.render.debug.coords = true;
         println!(
-            "dev-mode: expose_jar_spells + health_bars + crosshair + map_trigger_areas + \
-             grace_meter + fps on (one run)"
+            "dev-mode: expose_jar_spells + health_bars + autoaim_hints + map_trigger_areas + \
+             grace_meter + fps + coords on (one run)"
         );
     }
     let en = &mut cfg.render.enhancement;
@@ -7759,11 +7862,14 @@ fn main() -> std::process::ExitCode {
     if let Some(v) = args.health_bars {
         de.health_bars = v;
     }
-    if let Some(v) = args.crosshair {
-        de.crosshair = v;
-    }
     if let Some(v) = args.grace_meter {
         de.grace_meter = v;
+    }
+    if let Some(v) = args.coords {
+        de.coords = v;
+    }
+    if let Some(v) = args.crosshair {
+        cfg.render.preference.crosshair = v;
     }
     if let Some(v) = args.thrust {
         cfg.controls.models.thrust = v;
@@ -8005,11 +8111,17 @@ fn main() -> std::process::ExitCode {
              \x20         {move_keys} (impulses: speed persists until countered),"
         ),
         config::ThrustModel::Enhanced => {
-            println!("controls: enhanced — mouse look, {move_keys} (hold-to-fly),")
+            println!(
+                "controls: enhanced — mouse points the crosshair, the carpet chases it (banks \
+                 with forward speed; casts fire along the crosshair), {move_keys} (hold-to-fly),"
+            )
         }
     }
     if cfg.controls.models.altitude == config::AltitudeModel::Enhanced {
-        println!("          E/Q float up/down (enhanced altitude, capped at the highest terrain),");
+        println!(
+            "          E/Q set the desired altitude over terrain (the carpet drifts to it; \
+             capped 4 tiles up),"
+        );
     }
     println!("          Backspace full-stops the carpet (speed + steering; MC2's stabilize key),");
     println!("          Space respawns after death (at your castle; no castle = level restart),");

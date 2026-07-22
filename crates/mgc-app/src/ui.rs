@@ -1735,17 +1735,20 @@ pub fn vitals_quads(
     quads
 }
 
-/// The autoaim crosshair instrument (`render.debug.crosshair` / C —
-/// P-class, playtest predictor, not a combat aid): a black,
-/// white-edged cross at the TRUE aim point (the faithful camera
-/// pitches at HALF the aim pitch, so the aim is never screen
-/// center), plus per-hand lock markers on the target each hand's
-/// equipped spell would acquire this instant (`World::aim_preview`):
-/// left hand = an upright `+`, right hand = a diagonal `×`, cores
-/// blinking gently red while locked (both shapes compose when the
-/// hands lock the same target). Acquisition ≠ hit — homing yaw is
-/// authentically capped at 5/tick, so the marker shows what the shot
-/// will CHASE, not what it will catch.
+/// The aim crosshair + autoaim lock markers (SPLIT options since
+/// 2026-07-23 — the caller passes `None`/empty for whichever is off):
+/// `neutral` = the gameplay aim cursor (`render.preference.crosshair`
+/// / C) — a black, white-edged cross at the TRUE aim point (the
+/// faithful camera pitches at HALF the aim pitch, so the aim is never
+/// screen center; under enhanced thrust it rides the chase-steering
+/// desired heading). `locks` = the debug predictor
+/// (`render.debug.autoaim_hints`): per-hand markers on the target
+/// each hand's equipped spell would acquire this instant
+/// (`World::aim_preview`): left hand = an upright `+`, right hand = a
+/// diagonal `×`, cores blinking gently red while locked (both shapes
+/// compose when the hands lock the same target). Acquisition ≠ hit —
+/// homing yaw is authentically capped at 5/tick, so the marker shows
+/// what the shot will CHASE, not what it will catch.
 pub fn crosshair_quads(
     quads: &mut Vec<UiQuad>,
     w: f32,

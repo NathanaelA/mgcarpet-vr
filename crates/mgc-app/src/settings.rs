@@ -370,6 +370,36 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · preference",
+            label: "crosshair",
+            class: Preference,
+            key: Some("C"),
+            cli: Some("--crosshair"),
+            cfg_path: "render.preference.crosshair",
+            // Faithful = ON: both retails steered by a live on-screen
+            // cursor; a bare aim cross is the closest analog.
+            read: |c| Val::Toggle {
+                on: c.render.preference.crosshair,
+                faithful: true,
+            },
+            desc: "The aim crosshair: a cross at the TRUE aim point (the \
+                   faithful camera pitches at half the aim pitch, so aim is \
+                   never screen center). Under enhanced thrust this IS the \
+                   chase-the-pointer target \u{2014} steering is unreadable \
+                   without it. Autoaim lock markers are a separate debug \
+                   option.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.preference.crosshair = v,
+                descs: [
+                    "No aim cursor (retail showed the live mouse pointer; \
+                     the classic virtual stick hides it).",
+                    "The white-edged aim cross \u{2014} and the enhanced \
+                     steering target.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · preference",
             label: "sky",
             class: Preference,
             key: Some("F6"),
@@ -832,21 +862,22 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · debug",
-            label: "crosshair",
+            label: "autoaim_hints",
             class: Debug,
-            key: Some("C"),
-            cli: Some("--crosshair"),
-            cfg_path: "render.debug.crosshair",
-            read: toggle!(c => render.debug.crosshair),
-            desc: "The autoaim crosshair: a cross at the TRUE aim point plus \
-                   per-hand lock markers on the target each equipped spell \
-                   would acquire this instant. The original shows no aim UI \
-                   at all.",
+            key: None,
+            cli: None,
+            cfg_path: "render.debug.autoaim_hints",
+            read: toggle!(c => render.debug.autoaim_hints),
+            desc: "Autoaim lock markers: blinking per-hand markers on the \
+                   target each equipped spell would acquire this instant \
+                   (left +, right \u{d7}). A projectile-behavior predictor; \
+                   the original shows no such UI. The plain aim crosshair \
+                   is its own option (render \u{b7} preference).",
             ctl: Ctl::Toggle {
-                set: |c, v| c.render.debug.crosshair = v,
+                set: |c, v| c.render.debug.autoaim_hints = v,
                 descs: [
-                    "No aim UI, as retail.",
-                    "Aim cross + blinking per-hand lock markers.",
+                    "No lock markers, as retail.",
+                    "Blinking per-hand lock markers on the acquired target.",
                 ],
             },
         },
@@ -912,6 +943,28 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Render,
+            group: "render · debug",
+            label: "coords",
+            class: Debug,
+            key: Some("K"),
+            cli: Some("--coords"),
+            cfg_path: "render.debug.coords",
+            read: toggle!(c => render.debug.coords),
+            desc: "Carpet coordinates, bottom-left corner, engine units: \
+                   \"x N, y N, z N (+E)\" \u{2014} z is the altitude, (+E) \
+                   the elevation over the terrain underneath. The flight/\
+                   altitude debugging instrument (the altitude bands speak \
+                   engine units: clearance 128/256, band 1024/3072).",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.coords = v,
+                descs: [
+                    "No coordinate readout, as retail.",
+                    "Live position + elevation over terrain.",
+                ],
+            },
+        },
         // ---- controls · preferences -------------------------------------
         Spec {
             domain: Controls,
@@ -965,6 +1018,53 @@ pub fn registry() -> Vec<Spec> {
                 min: 0.1,
                 max: 3.0,
                 step: 0.1,
+            },
+        },
+        Spec {
+            domain: Controls,
+            group: "controls · preferences",
+            label: "mouse_sensitivity_x",
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "controls.preferences.mouse_sensitivity_x",
+            read: |c| Val::Scalar {
+                text: format!("{:.0}%", c.controls.preferences.mouse_sensitivity_x * 100.0),
+                faithful: "50%",
+            },
+            desc: "Horizontal (turn) share of the mouse sensitivity, \
+                   0-100%. Defaults to 50% — at full share the enhanced \
+                   turn damper saturates on a flick (all-or-nothing \
+                   turning); half keeps the whole turn-rate range \
+                   reachable.",
+            ctl: Ctl::Slider {
+                get: |c| c.controls.preferences.mouse_sensitivity_x,
+                set: |c, v| c.controls.preferences.mouse_sensitivity_x = v,
+                min: 0.0,
+                max: 1.0,
+                step: 0.05,
+            },
+        },
+        Spec {
+            domain: Controls,
+            group: "controls · preferences",
+            label: "mouse_sensitivity_y",
+            class: Preference,
+            key: None,
+            cli: None,
+            cfg_path: "controls.preferences.mouse_sensitivity_y",
+            read: |c| Val::Scalar {
+                text: format!("{:.0}%", c.controls.preferences.mouse_sensitivity_y * 100.0),
+                faithful: "100%",
+            },
+            desc: "Vertical (aim) share of the mouse sensitivity, \
+                   0-100%.",
+            ctl: Ctl::Slider {
+                get: |c| c.controls.preferences.mouse_sensitivity_y,
+                set: |c, v| c.controls.preferences.mouse_sensitivity_y = v,
+                min: 0.0,
+                max: 1.0,
+                step: 0.05,
             },
         },
         Spec {
@@ -1386,6 +1486,28 @@ pub fn registry() -> Vec<Spec> {
                 descs: [
                     "Only what the level itself grants.",
                     "The campaign-plausible spell set at entry.",
+                ],
+            },
+        },
+        Spec {
+            domain: Dev,
+            group: "dev",
+            label: "lift_unclamped",
+            class: Instrument,
+            key: None,
+            cli: None,
+            cfg_path: "dev.lift_unclamped",
+            read: toggle!(c => dev.lift_unclamped),
+            desc: "Unclamp the enhanced-altitude band: q/e may pin the \
+                   desired altitude anywhere up to the level's highest \
+                   terrain + a 4-tile margin, instead of the per-game \
+                   ground-relative band. Altitude-system inspection; \
+                   applies live.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.dev.lift_unclamped = v,
+                descs: [
+                    "The per-game band: 1024 over terrain (MC2 caves 3072).",
+                    "Free climb to the global lift ceiling (instrument).",
                 ],
             },
         },

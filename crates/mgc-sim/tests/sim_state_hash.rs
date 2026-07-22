@@ -137,26 +137,27 @@ fn flight_tier_golden_state_hashes() {
     // the re-aim and the proximity promotion run only INSIDE it, the
     // patience/dead-anchor bail falls through instead of returning,
     // and the range test is the three-axis rooted distance. Only the
-    // C leg moves — the settler's think diverges past ~40 ticks, as
-    // before. The build SITE is unchanged (tile 123,107); only the
-    // arrival tick moves, 154 -> 241.
-    //
-    // Re-pinned once more for the class-10 effect PRE-decrement batch
-    // (fire, splash, possess/hit/steal flash, duel tether, lava bomb,
-    // storm cloud): every one of these runs a tick longer. Only the
-    // ENHANCED C leg moves — the faithful arrays hold, which is the
-    // evidence that the batch touched effect lifetimes and not flight.
+    // Re-pinned for the enhanced-flight enhancements (2026-07-22/23
+    // rulings, culminating in chase-the-pointer steering + the
+    // desired-altitude law). BOTH arrays move on every steering-state
+    // reshape, for different reasons: FAITHFUL only because the
+    // steering/altitude fields (aim_lead, turn_rate, lift_desired,
+    // lift_unclamped) feed the hash — the faithful trajectory itself
+    // is untouched (this fixture runs AltitudeModel::Faithful, where
+    // the new law never executes, and the integer movers were not
+    // modified). ENHANCED moves because chase steering genuinely
+    // changes the yaw path — the deliberate deviation itself.
     const FAITHFUL: [u64; 4] = [
-        0xb32adc6a3bade6d2, // post-init
-        0x8073dd7f4ae812e9, // A: 40 ticks of forward thrust
-        0x466cb8ab076b1034, // B: 30 ticks of banked turn + strafe
-        0xe3589b1fbfed33d1, // C: 40 ticks of coast
+        0x79529db4487029e4, // post-init
+        0xa3ae3c391f171f3d, // A: 40 ticks of forward thrust
+        0xc47a83054bc7f344, // B: 30 ticks of banked turn + strafe
+        0x98952dd06be9735d, // C: 40 ticks of coast
     ];
     const ENHANCED: [u64; 4] = [
-        0x18aad48f24e35375, // post-init
-        0x8533aaa5dd796993, // A
-        0x79194b5a4173da13, // B
-        0x5aef335e9fd3768e, // C
+        0x41cd4a0274834665, // post-init
+        0x79690ea8f33c1aa3, // A
+        0x24628b46591edfee, // B
+        0x0221e328cdd1f4e9, // C
     ];
     assert_eq!(
         (faithful, enhanced),

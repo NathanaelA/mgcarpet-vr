@@ -60,14 +60,24 @@ pub enum ThrustModel {
     /// hold-to-move strafe to the forward axis. Keeps the authentic
     /// level-plane thrust rule (aim pitch never steals horizontal
     /// mobility; vertical belongs to the altitude model's law).
+    /// Steering is chase-the-pointer: the mouse moves the aim
+    /// crosshair (a desired heading, clamped on-screen) and the
+    /// carpet turns to chase it with an ease-out curve; casts launch
+    /// along the crosshair while the hull catches up. The camera
+    /// banks ∝ turn_rate × forward speed — "an actual flyer, not a
+    /// toy" (player ruling; retail's fixed velocity-independent bank
+    /// is the departure point).
     Enhanced,
 }
 
 /// The altitude model — the second G-class tier. `Faithful` =
 /// terrain-follow only (the carpet floats up along rising ground and
-/// settles by itself; no fly-up control exists). `ExtendedLift` adds
-/// explicit float up/down keys — no original equivalent — capped at
-/// the level's highest terrain tile and never bypassing wall blocking.
+/// settles by itself; no fly-up control exists). `ExtendedLift` is
+/// the desired-altitude law — no original equivalent: q/e pin a
+/// GROUND-RELATIVE desired altitude the carpet drifts toward at the
+/// game's standard descent speed, capped at the per-game climb band
+/// (1024 over terrain; MC2 cave row 3072) and never bypassing wall
+/// blocking or the cave roof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum AltitudeModel {
     #[default]
@@ -83,7 +93,10 @@ pub struct FlightInput {
     pub thrust: f32,
     /// Right (+) / left (-) perpendicular to the view, horizontal.
     pub strafe: f32,
-    /// Up (+) / down (-) in world space.
+    /// Up (+) / down (-) — the enhanced-altitude q/e axis: steps the
+    /// carpet at the classic full-pitch climb rate and pins the
+    /// ground-relative DESIRED altitude (see [`lift_desired_law`]).
+    /// Ignored under [`AltitudeModel::Faithful`].
     pub lift: f32,
     pub yaw_delta: f32,
     pub pitch_delta: f32,
@@ -138,7 +151,8 @@ pub struct Flyer {
     /// FULL value — retail's render pose takes `u16_327` unhalved
     /// (:52432) while pitch is halved (:52433); MC2 identical
     /// (`rotation.roll = roll_0x155_341`, EF:40258). The enhanced
-    /// mover leaves it 0 (deliberate: no tilt in mouse-look).
+    /// mover banks ∝ turn_rate × forward speed (deliberate — zero
+    /// when standing, unlike retail's fixed bank).
     pub roll: f32,
 }
 
@@ -176,9 +190,50 @@ const FAITHFUL_CRUISE_TPS: f32 = 80.0 / 256.0 * TICK_RATE_HZ as f32; // 7.5 @ 24
 const ACCEL: f32 = FAITHFUL_CRUISE_TPS * (1.0 - DRAG_PER_TICK) / (TICK_DT * DRAG_PER_TICK);
 const MAX_PITCH: f32 = 1.45; // radians
 const MIN_CLEARANCE: f32 = 0.75; // tiles above ground
-/// Extended-lift float rate, engine units/tick at full input (an
-/// invented constant — the enhancement has no original equivalent).
-const LIFT_STEP: f32 = 48.0;
+
+// --- Enhanced-throttle steering: chase-the-pointer + proportional
+// bank (deliberate deviations — docs/DEVIATIONS.md "enhanced flight").
+// Retail turning is velocity-independent and banks a fixed amount even
+// in place. The enhanced tier (player design, 2026-07-23, Gothic-3
+// precedent): the mouse moves a DESIRED heading — the aim crosshair —
+// and the carpet turns to chase it with an ease-out curve (rate ∝
+// remaining error, capped). Yaw twin of the desired-altitude law.
+// (Supersedes the one-session turn-rate damper, which collapsed into
+// all-or-nothing: a mouse reports displacement, not velocity.)
+/// Turn-rate cap, radians/sec — matched to the classic model's own max
+/// (roll filter 254 → yaw += 254/8 per tick ≈ 2.33 rad/s at 24 Hz).
+const TURN_RATE_MAX: f32 = 2.4;
+/// Chase convergence gain, 1/sec: turn rate = lead × CHASE_GAIN
+/// (capped), so the carpet closes on the pointer exponentially with a
+/// ~200 ms time constant; leads beyond TURN_RATE_MAX/CHASE_GAIN
+/// (≈27°) turn at the full capped rate.
+const CHASE_GAIN: f32 = 5.0;
+/// The crosshair lead clamp, radians (±34°): the desired heading
+/// stays INSIDE the view at any aspect (half-hFOV at 4:3 ≈ 37.6°), so
+/// the crosshair position is always the truth (player ruling). Public
+/// so the app's frame-rate crosshair prediction clamps identically.
+pub const LEAD_MAX: f32 = 0.6;
+/// Bank = BANK_SCALE · turn_rate (rad/s) · signed forward speed
+/// (tiles/s), clamped ±BANK_MAX — camera roll only, zero when
+/// standing, gated off while strafing. Retuned 2026-07-23 (player:
+/// 0.030 slammed every turn to the clamp): a max-rate turn at cruise
+/// now banks ~11°, leaving the clamp for Accelerate-boosted turns.
+const BANK_SCALE: f32 = 0.015;
+const BANK_MAX: f32 = 0.6;
+
+// --- Enhanced-altitude: the desired-altitude law (deliberate
+// deviation — docs/DEVIATIONS.md "enhanced flight"). q/e pin a
+// GROUND-RELATIVE desired altitude; the carpet drifts toward it at
+// the game's standard descent speed and q/e move at the classic
+// model's own max climb rate.
+/// The q/e step, engine units/tick — the classic carpet's max climb/
+/// descent at full pitch and normal cruise (80·sin(254·τ/2048) ≈ 56;
+/// speed-spell scaling deliberately ignored, player write-up).
+const LIFT_QE_STEP: i16 = 56;
+/// The MC1 drift rate toward the desired altitude, engine units/tick
+/// (= MC1's standard 8/tick sink; the MC2 arms use the row's own
+/// |buoyancy| so drift always matches the game's passive descent).
+const LIFT_DRIFT_MC1: i16 = 8;
 
 /// The whole game state and its single mutation entry point.
 #[derive(Default)]
@@ -203,6 +258,24 @@ pub struct Simulation {
     /// The Accelerate override was live last tick (its expiry resets
     /// the speed target to +80 max forward, :65191-97).
     accel_was_active: bool,
+    /// Enhanced-throttle steering state (deliberate deviation).
+    /// `aim_lead` = the chase-the-pointer desired-heading offset ahead
+    /// of the carpet yaw, radians, clamped ±[`LEAD_MAX`] — the aim
+    /// crosshair sits at yaw+lead and the carpet turns to close it.
+    /// `turn_rate` = the ACTUAL rate the chase produced this tick,
+    /// rad/s (feeds the proportional bank).
+    aim_lead: f32,
+    turn_rate: f32,
+    /// Enhanced-altitude state (deliberate deviation): the pinned
+    /// GROUND-RELATIVE desired altitude, engine units over terrain.
+    /// PINNED through flings/pins/catapults (player ruling 6); reset
+    /// to the spawn offset on respawn and re-seeded at level hand-off.
+    lift_desired: i16,
+    /// Dev instrument (`dev.lift_unclamped`, live-applied by the
+    /// app): unclamp the desired-altitude band to the global lift
+    /// ceiling (the level's highest terrain + the 4-tile soft-ceiling
+    /// margin) instead of the per-game ground-relative band.
+    pub lift_unclamped: bool,
     /// 256x256 height bytes, row-major `y * 256 + x`; empty means flat.
     /// The static fallback when no [`world::World`] is attached.
     terrain_height: Vec<u8>,
@@ -260,6 +333,10 @@ impl Simulation {
             carpet,
             carpet_mc2,
             accel_was_active,
+            turn_rate,
+            aim_lead,
+            lift_desired,
+            lift_unclamped,
             terrain_height,
             world: attached,
         } = self;
@@ -285,11 +362,27 @@ impl Simulation {
         carpet.hash(&mut h);
         carpet_mc2.hash(&mut h);
         accel_was_active.hash(&mut h);
+        turn_rate.to_bits().hash(&mut h);
+        aim_lead.to_bits().hash(&mut h);
+        lift_desired.hash(&mut h);
+        lift_unclamped.hash(&mut h);
         terrain_height.hash(&mut h);
         // Folded, not re-derived: the world keeps its own pinned
         // goldens and this tier adds to them.
         attached.as_ref().map(world::World::state_hash).hash(&mut h);
         h.finish()
+    }
+
+    /// The AIM heading, radians — where the crosshair points and casts
+    /// launch. Under enhanced thrust this leads the carpet by the
+    /// chase-steering lead (aim is instant, the hull catches up —
+    /// player ruling 2026-07-23); under the faithful models aim IS the
+    /// carpet heading.
+    pub fn aim_yaw(&self) -> f32 {
+        match self.thrust_model {
+            ThrustModel::Enhanced => self.flyer.yaw + self.aim_lead,
+            ThrustModel::Mc1 => self.flyer.yaw,
+        }
     }
 
     /// Ground altitude in tile units at a world position (nearest tile;
@@ -308,10 +401,49 @@ impl Simulation {
     }
 
     /// Re-seed the faithful integer carpet from `flyer` (spawn, level
-    /// hand-off, tests that set the flyer directly).
+    /// hand-off, tests that set the flyer directly). Also seeds the
+    /// enhanced-altitude desired offset from the pose (ruling 6: the
+    /// spawn altitude is the reset point).
     pub fn sync_carpet_from_flyer(&mut self) {
-        let f = &self.flyer;
+        let f = self.flyer;
         self.carpet = flight::Mc1State::from_tiles(f.x, f.z, f.y, f.yaw);
+        self.seed_lift_desired();
+    }
+
+    /// The desired-altitude offset band, engine units over terrain:
+    /// clearance floor .. climb band, game-keyed (MC1 128..1024; MC2
+    /// by tuning row — 256..1024 open, 256..3072 cave, the decompile's
+    /// row-104 band; the cave ROOF stays a separate dynamic clamp).
+    fn lift_band(&self) -> (i16, i16) {
+        match &self.world {
+            Some(w) if w.verbs().flight == verbs::FlightVerb::Mc2 => {
+                let row = w.mc2_carpet_row();
+                (row.clearance, row.band)
+            }
+            _ => (128, 1024),
+        }
+    }
+
+    /// Seed the desired altitude from the current flyer pose (level
+    /// hand-off / model switch), clamped into the game band.
+    fn seed_lift_desired(&mut self) {
+        let (x, z, y) = (self.flyer.x, self.flyer.z, self.flyer.y);
+        let g = self.ground_height(x, z);
+        let (lo, hi) = self.lift_band();
+        self.lift_desired = (((y - g) * 256.0) as i32).clamp(lo as i32, hi as i32) as i16;
+    }
+
+    /// Switch the altitude model mid-run (the options-menu path):
+    /// entering the enhanced tier re-seeds the desired altitude at
+    /// the live pose so the carpet doesn't lunge for a stale target.
+    pub fn set_altitude_model(&mut self, model: AltitudeModel) {
+        if model == self.altitude_model {
+            return;
+        }
+        self.altitude_model = model;
+        if model == AltitudeModel::ExtendedLift {
+            self.seed_lift_desired();
+        }
     }
 
     /// Switch the thrust model mid-run WITH the mover-state hand-off
@@ -359,6 +491,9 @@ impl Simulation {
                 f.vy = 0.0;
             }
         }
+        // The enhanced turn damper starts (and leaves) centered.
+        self.turn_rate = 0.0;
+        self.aim_lead = 0.0;
         self.thrust_model = model;
     }
 
@@ -397,6 +532,9 @@ impl Simulation {
             self.flyer.vx = 0.0;
             self.flyer.vy = 0.0;
             self.flyer.vz = 0.0;
+            // The enhanced turn damper is steering state — pinned too.
+            self.turn_rate = 0.0;
+            self.aim_lead = 0.0;
         }
         // The MC2 ending sequence seizes the flyer (retail swaps the
         // player's actionIndex to 11, sub_5E8C0 — every control
@@ -444,6 +582,10 @@ impl Simulation {
                 w.full_stop_cancel_accel();
             }
             self.accel_was_active = false;
+            // The enhanced turn damper recenters with the steering
+            // (the stop's SetCenterScreenForFlyAssistant analog).
+            self.turn_rate = 0.0;
+            self.aim_lead = 0.0;
         }
 
         match self.thrust_model {
@@ -515,8 +657,16 @@ impl Simulation {
                 ThrustModel::Mc1 => self.carpet.act_speed as f32 / 256.0,
                 ThrustModel::Enhanced => (f.vx * f.vx + f.vy * f.vy + f.vz * f.vz).sqrt() * TICK_DT,
             };
+            // The pose heading is the AIM: under enhanced chase
+            // steering casts launch along the crosshair (yaw + lead),
+            // not the hull — you shoot where you point while the
+            // carpet is still coming around (player ruling).
+            let aim = match self.thrust_model {
+                ThrustModel::Enhanced => f.yaw + self.aim_lead,
+                ThrustModel::Mc1 => f.yaw,
+            };
             w.tick(
-                world::PlayerPose::from_tiles(f.x, f.y, f.z, f.yaw, f.pitch, speed),
+                world::PlayerPose::from_tiles(f.x, f.y, f.z, aim, f.pitch, speed),
                 world::PlayerCommand {
                     fire_left: input.fire_left,
                     fire_right: input.fire_right,
@@ -541,6 +691,17 @@ impl Simulation {
                 f.vy = 0.0;
                 f.vz = 0.0;
                 self.carpet = flight::Mc1State::from_tiles(f.x, f.z, f.y, f.yaw);
+                // Ruling 6: death/respawn resets the pinned desired
+                // altitude to the spawn offset (ground + one tile).
+                let (lo, hi) = if w.verbs().flight == verbs::FlightVerb::Mc2 {
+                    let row = w.mc2_carpet_row();
+                    (row.clearance, row.band)
+                } else {
+                    (128, 1024)
+                };
+                self.lift_desired = 256i16.clamp(lo, hi);
+                self.turn_rate = 0.0;
+                self.aim_lead = 0.0;
             }
             if let Some((x, z)) = w.take_teleport() {
                 // Portal arrival: the original moves the entity to the
@@ -649,11 +810,18 @@ impl Simulation {
             }
         }
 
-        // Extended lift: the deliberate deviation, layered OUTSIDE the
-        // ported routine — vertical only (it cannot cross a wall), the
-        // z-floor stays, and float-up caps at the level's highest
-        // terrain + the soft-ceiling band (never a god's-eye view).
-        if self.altitude_model == AltitudeModel::ExtendedLift {
+        // Enhanced altitude: the desired-altitude law (deliberate
+        // deviation), layered OUTSIDE the ported routine — vertical
+        // only (it cannot cross a wall), the z-floor stays, and the
+        // climb caps ground-relative at the band (never a god's-eye
+        // view). Skipped during the death fall/dead wait so the drift
+        // never fights gravity or lifts the corpse.
+        if self.altitude_model == AltitudeModel::ExtendedLift
+            && !self
+                .world
+                .as_ref()
+                .is_some_and(|w| w.player_falling() || w.player_dead())
+        {
             let g = match &self.world {
                 Some(w) => w.ground_z_engine(self.carpet.x, self.carpet.y),
                 None => {
@@ -661,27 +829,18 @@ impl Simulation {
                         * 256.0) as i16
                 }
             };
-            let floor = g.saturating_add(128);
-            if input.lift != 0.0 {
-                let ceil = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
-                let dz = (input.lift * LIFT_STEP) as i16;
-                let new_z = self.carpet.z.saturating_add(dz);
-                // Rising: capped at the ceiling, but never yanked DOWN
-                // from altitude already held above it (wall-climb gains
-                // are legitimate). Descending: the z-floor holds.
-                self.carpet.z = if dz > 0 {
-                    new_z.min(ceil.max(self.carpet.z))
-                } else {
-                    new_z.max(floor)
-                };
-            } else if self.carpet.z > floor {
-                // Hover keys idle: the carpet settles gently toward
-                // the terrain-follow floor (deliberate — gameplay
-                // assumes ground-contact pickups like spell jars;
-                // holding altitude forever made you overfly them).
-                // Rate = the faithful 8/tick passive sink.
-                self.carpet.z = (self.carpet.z - 8).max(floor);
-            }
+            let (hi, cap) = self.lift_caps(g, 1024);
+            self.carpet.z = lift_desired_law(
+                self.carpet.z,
+                g,
+                &mut self.lift_desired,
+                input.lift,
+                128,
+                hi,
+                cap,
+                0,
+                LIFT_DRIFT_MC1,
+            );
         }
 
         // MC2 cave ceiling: the player clamps (no bounce, no damage)
@@ -805,26 +964,41 @@ impl Simulation {
             self.accel_was_active = false;
         }
 
-        // Extended lift (the deviation) — lift key only: the faithful
-        // row-0xe buoyancy IS the idle settle on this arm, so the MC1
-        // path's idle-sink branch is deliberately absent. The floor
-        // is ground+256 (the MC2 clearance, trace §9), and the cave
-        // roof re-clamps after so the deviation can't pierce it.
-        if self.altitude_model == AltitudeModel::ExtendedLift && input.lift != 0.0 {
+        // Enhanced altitude: the desired-altitude law (deliberate
+        // deviation). The row buoyancy the mover already applied is
+        // compensated inside the law so the NET rates match MC1's;
+        // the drift-down simply RIDES the buoyancy (the game's own
+        // standard descent). The cave roof re-clamps after so the
+        // deviation can't pierce it, and the paralyze web keeps full
+        // authority (no drift while mobilized — the −51 settle is the
+        // faithful law). Skipped during the death fall/dead wait.
+        if self.altitude_model == AltitudeModel::ExtendedLift
+            && self.carpet_mc2.mobilize == 0
+            && !self
+                .world
+                .as_ref()
+                .is_some_and(|w| w.player_falling() || w.player_dead())
+        {
             let (cx, cy) = (self.carpet.x, self.carpet.y);
+            let row = self.carpet_mc2.row;
             let w = self.world.as_ref().expect("checked above");
             let g = w.ground_z_engine(cx, cy);
-            let floor = g.saturating_add(self.carpet_mc2.row.clearance);
-            let ceil = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
-            let dz = (input.lift * LIFT_STEP) as i16;
-            let new_z = self.carpet.z.saturating_add(dz);
-            self.carpet.z = if dz > 0 {
-                new_z.min(ceil.max(self.carpet.z))
-            } else {
-                new_z.max(floor)
-            };
+            let sink = row.buoyancy.unsigned_abs() as i16;
+            let (hi, cap) = self.lift_caps(g, row.band);
+            self.carpet.z = lift_desired_law(
+                self.carpet.z,
+                g,
+                &mut self.lift_desired,
+                input.lift,
+                row.clearance,
+                hi,
+                cap,
+                sink,
+                sink,
+            );
+            let w = self.world.as_ref().expect("checked above");
             if let Some(c) = w.player_cave_ceiling(cx, cy) {
-                let c = c.max(floor);
+                let c = c.max(g.saturating_add(row.clearance));
                 if self.carpet.z > c {
                     self.carpet.z = c;
                 }
@@ -866,9 +1040,27 @@ impl Simulation {
             (4 - self.carpet_mc2.move_speed) as f32 / 4.0
         };
 
+        // Chase-the-pointer steering (deliberate deviation — player
+        // design 2026-07-23): mouse motion moves the DESIRED heading
+        // (the aim crosshair, clamped on-screen); the carpet turns
+        // toward it at rate ∝ remaining lead, capped — max-rate
+        // through big leads, easing out on arrival, dead stop once
+        // closed. The desired heading is world-pinned: only the mouse
+        // moves it. Pitch stays direct look (phase 1 — the
+        // off-desired pitch assist is a banked phase 2).
+        self.aim_lead = (self.aim_lead + input.yaw_delta).clamp(-LEAD_MAX, LEAD_MAX);
+        let step = if self.aim_lead.abs() < 1e-4 {
+            self.aim_lead // snap the tail closed (floats never reach 0)
+        } else {
+            (self.aim_lead * CHASE_GAIN * TICK_DT)
+                .clamp(-TURN_RATE_MAX * TICK_DT, TURN_RATE_MAX * TICK_DT)
+        };
+        self.aim_lead -= step;
+        self.turn_rate = step / TICK_DT;
+
         let f = &mut self.flyer;
 
-        f.yaw += input.yaw_delta;
+        f.yaw += step;
         f.pitch = (f.pitch + input.pitch_delta).clamp(-MAX_PITCH, MAX_PITCH);
 
         // Movement basis: the yaw ground plane (yaw 0 faces -Z;
@@ -877,13 +1069,9 @@ impl Simulation {
         let fwd = [sy, 0.0, -cy];
         let right = [cy, 0.0, sy];
 
-        // Explicit float up/down = the extended-lift enhancement only
-        // (the faithful altitude model has no lift keys — its
-        // vertical is the pitch/buoyancy law after the move).
-        let lift = match self.altitude_model {
-            AltitudeModel::ExtendedLift => input.lift,
-            AltitudeModel::Faithful => 0.0,
-        };
+        // Vertical belongs entirely to the altitude arms after the
+        // move (the faithful pitch/buoyancy law, or the enhanced
+        // desired-altitude law — q/e no longer feed velocity).
 
         // The Accelerate override (types 2/21): while channeling, the
         // spell REPLACES the thrust model — normal thrust input is
@@ -895,7 +1083,7 @@ impl Simulation {
         let over = self.world.as_ref().and_then(|w| w.accel_override());
         let thrust = if over.is_some() { 0.0 } else { input.thrust };
         let ax = fwd[0] * thrust + right[0] * input.strafe;
-        let ay = lift;
+        let ay = 0.0;
         let az = fwd[2] * thrust + right[2] * input.strafe;
         f.vx += ax * ACCEL * TICK_DT;
         f.vy += ay * ACCEL * TICK_DT;
@@ -1040,6 +1228,7 @@ impl Simulation {
         // living hover clearance sits ABOVE it and would hold the
         // corpse off the ground forever.
         let dead_fall = self.world.as_ref().is_some_and(|w| w.player_falling());
+        let dead = self.world.as_ref().is_some_and(|w| w.player_dead());
         let floor = ground + if dead_fall { 0.5 } else { MIN_CLEARANCE };
         let ceiling = self.lift_ceiling();
         // MC2 cave roof (sub_5D530 EF:59758-63): hard clamp at
@@ -1050,11 +1239,59 @@ impl Simulation {
             let ez = (self.flyer.z.rem_euclid(256.0) * 256.0) as u16;
             w.player_cave_ceiling(ex, ez).map(|c| c as f32 / 256.0)
         });
-        let f = &mut self.flyer;
-        if f.y < floor {
-            f.y = floor;
-            f.vy = f.vy.max(0.0);
+        {
+            let f = &mut self.flyer;
+            if f.y < floor {
+                f.y = floor;
+                f.vy = f.vy.max(0.0);
+            }
         }
+        // Enhanced altitude: the desired-altitude law (deliberate
+        // deviation), engine units on the float pose. No mover sink
+        // to compensate on this arm (q/e stopped feeding velocity);
+        // the net drift = the game's standard passive descent.
+        // Skipped while dead/falling (gravity owns the corpse) and
+        // under the paralyze web (the −51 settle is the faithful law).
+        if self.altitude_model == AltitudeModel::ExtendedLift && !dead_fall && !dead && !web_stop {
+            let mc2 = self
+                .world
+                .as_ref()
+                .is_some_and(|w| w.verbs().flight == verbs::FlightVerb::Mc2);
+            if mc2 && let Some(w) = &self.world {
+                self.carpet_mc2.row = w.mc2_carpet_row();
+            }
+            let row = self.carpet_mc2.row;
+            // The offset floor rides this model's own hover clearance
+            // (0.75 tiles) where it sits above the game's, so the
+            // drift target never fights the floor clamp.
+            let clr = (MIN_CLEARANCE * 256.0) as i16;
+            let (lo, band, net) = if mc2 {
+                (
+                    row.clearance.max(clr),
+                    row.band,
+                    row.buoyancy.unsigned_abs() as i16,
+                )
+            } else {
+                (clr, 1024, LIFT_DRIFT_MC1)
+            };
+            let g_e = ((ground * 256.0) as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let z_e = ((self.flyer.y * 256.0).round() as i32)
+                .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let (hi, cap) = self.lift_caps(g_e, band);
+            let nz = lift_desired_law(
+                z_e,
+                g_e,
+                &mut self.lift_desired,
+                input.lift,
+                lo,
+                hi,
+                cap,
+                0,
+                net,
+            );
+            self.flyer.y = nz as f32 / 256.0;
+        }
+        let f = &mut self.flyer;
         // The cap only stops further RISING past the ceiling — it
         // never pulls down altitude already held (the faithful model
         // has no hard ceiling; wall-climb altitude is legitimate).
@@ -1074,11 +1311,31 @@ impl Simulation {
                 f.vy = f.vy.min(0.0);
             }
         }
-        // Extended lift with the hover keys idle: settle toward the
-        // floor at any speed (deliberate — ground-contact pickups
-        // assume the carpet comes down by itself).
-        if self.altitude_model == AltitudeModel::ExtendedLift && input.lift == 0.0 && f.y > floor {
-            f.y = (f.y - 8.0 / 256.0).max(floor);
+        // The proportional bank (deliberate deviation — ruling 5):
+        // bank ∝ turn_rate × signed forward speed, camera roll only,
+        // zero when standing — retail's fixed velocity-independent
+        // bank is exactly what the enhanced tier departs from.
+        // Player ruling 2026-07-23: banking is for forward/backward
+        // MOTION only — a strafing turn must stay level, so any
+        // strafe input gates the bank off (the forward projection
+        // alone can't discriminate: at a hard turn the velocity lags
+        // the nose by ~45° whether the motion came from thrust or
+        // strafe).
+        let fwd_sp = f.vx * fwd[0] + f.vz * fwd[2];
+        let strafe_gate = (1.0 - input.strafe.abs()).clamp(0.0, 1.0);
+        f.roll = (BANK_SCALE * self.turn_rate * fwd_sp * strafe_gate).clamp(-BANK_MAX, BANK_MAX);
+    }
+
+    /// The enhanced-altitude band + cap for one arm: `(hi, cap_abs)` —
+    /// the desired-offset ceiling and the absolute altitude cap. The
+    /// debug unclamp swaps the ground-relative band for the global
+    /// lift ceiling.
+    fn lift_caps(&self, g: i16, band: i16) -> (i16, i16) {
+        if self.lift_unclamped {
+            let c = ((self.lift_ceiling() * 256.0) as i32).min(i16::MAX as i32) as i16;
+            (i16::MAX / 2, c)
+        } else {
+            (band, g.saturating_add(band))
         }
     }
 
@@ -1094,6 +1351,65 @@ impl Simulation {
         };
         max_ground + 4.0
     }
+}
+
+/// One tick of the enhanced-altitude desired-altitude law, in engine
+/// units — shared by all three mover arms (deliberate deviation, see
+/// docs/DEVIATIONS.md "enhanced flight"; player rulings 1/4/6 of
+/// 2026-07-22).
+///
+/// `z` — the mover's committed altitude this tick; `g` — ground under
+/// the carpet; `desired` — the pinned ground-relative offset (updated
+/// in place); `lift` — the q/e axis; `lo..hi` — the offset band;
+/// `cap_abs` — the absolute climb cap (band top, or the global lift
+/// ceiling under the debug unclamp); `sink` — the passive sink the
+/// faithful mover ALREADY applied this tick (the MC2 row buoyancy),
+/// compensated out so the NET rates are uniform across games; `net` —
+/// the net drift rate = the game's standard passive descent.
+///
+/// The unified q/e rule (ruling 4): the key always steps the CARPET
+/// at the classic full-pitch climb rate; `desired` follows via
+/// max/min, so a toward-key while lagging is a pure boost (desired
+/// untouched) and an away-key (or pushing past) drags desired along.
+fn lift_desired_law(
+    z: i16,
+    g: i16,
+    desired: &mut i16,
+    lift: f32,
+    lo: i16,
+    hi: i16,
+    cap_abs: i16,
+    sink: i16,
+    net: i16,
+) -> i16 {
+    let (z, g) = (z as i32, g as i32);
+    let (lo, hi, cap) = (lo as i32, hi as i32, cap_abs as i32);
+    let (sink, net) = (sink as i32, net as i32);
+    let floor = (g + lo).min(cap);
+    let mut d = (*desired as i32).clamp(lo, hi);
+    let mut nz = z;
+    if lift > 0.0 {
+        // Climb at the q/e rate (+ the sink already taken out). Never
+        // yanked DOWN from altitude already held above the cap
+        // (wall-climb gains stay legitimate, like classic lift did).
+        nz = (z + LIFT_QE_STEP as i32 + sink).min(cap.max(z));
+        d = d.max((nz - g).min(hi));
+    } else if lift < 0.0 {
+        nz = (z - (LIFT_QE_STEP as i32 - sink).max(0)).max(floor.min(z));
+        d = d.min((nz - g).max(lo));
+    } else {
+        // Drift toward ground+desired at the standard descent speed:
+        // climbing compensates the mover's own sink, descending RIDES
+        // it (net = the game's passive descent either way).
+        let target = (g + d).min(cap);
+        if z < target {
+            nz = (z + net + sink).min(target);
+        } else if z > target {
+            nz = (z - (net - sink).max(0)).max(target);
+        }
+    }
+    *desired = d as i16;
+    nz.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
 #[cfg(test)]
@@ -1437,22 +1753,334 @@ mod tests {
         assert_eq!(sim.carpet.z, z0 - 80, "speed-0 hover bleeds 8/tick");
     }
 
+    // ---- the enhanced-flight enhancements (2026-07-22 rulings):
+    // turn-rate damper, proportional bank, desired-altitude law ----
+
+    /// A world-less MC1-arm sim on flat ground with the desired
+    /// altitude seeded at `alt` tiles.
+    fn lift_sim(alt: f32) -> Simulation {
+        let mut sim = Simulation::with_terrain(vec![0u8; MAP_TILES * MAP_TILES]);
+        sim.altitude_model = AltitudeModel::ExtendedLift;
+        sim.flyer.y = alt;
+        sim.sync_carpet_from_flyer();
+        sim
+    }
+
     #[test]
-    fn extended_lift_caps_at_highest_terrain() {
+    fn desired_altitude_qe_steps_fast_and_pins() {
+        let mut sim = lift_sim(1.0);
+        assert_eq!(sim.lift_desired, 256, "seeded from the spawn pose");
+        let up = FlightInput {
+            lift: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..4 {
+            sim.step(&up);
+        }
+        // The classic full-pitch climb rate, 56/tick.
+        assert_eq!(sim.carpet.z, 256 + 4 * 56);
+        assert_eq!(sim.lift_desired, 256 + 4 * 56, "desired climbs with you");
+        // Release: PINNED — the old idle settle-to-floor is gone.
+        for _ in 0..50 {
+            sim.step(&FlightInput::default());
+        }
+        assert_eq!(sim.carpet.z, 256 + 4 * 56, "holds the pinned altitude");
+    }
+
+    #[test]
+    fn desired_altitude_caps_ground_relative() {
+        let mut sim = lift_sim(1.0);
+        let up = FlightInput {
+            lift: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..100 {
+            sim.step(&up);
+        }
+        // Ruling 1: the cap is GROUND-RELATIVE — 1024 over terrain,
+        // not the level's highest tile.
+        assert_eq!(sim.carpet.z, 1024, "band top over flat ground");
+        assert_eq!(sim.lift_desired, 1024);
+    }
+
+    #[test]
+    fn desired_altitude_unclamped_debug_reaches_global_ceiling() {
         let mut th = vec![0u8; MAP_TILES * MAP_TILES];
         th[0] = 80; // a lone 10-tile peak far away
         let mut sim = Simulation::with_terrain(th);
         sim.altitude_model = AltitudeModel::ExtendedLift;
-        let rise = FlightInput {
+        sim.lift_unclamped = true;
+        sim.flyer.y = 1.0;
+        sim.sync_carpet_from_flyer();
+        let up = FlightInput {
             lift: 1.0,
             ..Default::default()
         };
-        for _ in 0..500 {
-            sim.step(&rise);
+        for _ in 0..200 {
+            sim.step(&up);
         }
-        // Cap = highest terrain (10) + the soft-ceiling band (4).
-        assert!(sim.flyer.y > 10.0, "lift works, y={}", sim.flyer.y);
-        assert!(sim.flyer.y <= 14.01, "no god view, y={}", sim.flyer.y);
+        // The debug toggle restores the old absolute cap: highest
+        // terrain (10 tiles) + the soft-ceiling band (4).
+        assert_eq!(sim.carpet.z, 14 * 256, "global ceiling, z={}", sim.carpet.z);
+    }
+
+    #[test]
+    fn desired_altitude_toward_key_boosts_away_key_sets() {
+        // Flung below desired (ruling 4's unified q/e rule).
+        let mut sim = lift_sim(3.0);
+        assert_eq!(sim.lift_desired, 768);
+        sim.carpet.z = 300;
+        sim.step(&FlightInput {
+            lift: 1.0,
+            ..Default::default()
+        });
+        assert_eq!(sim.carpet.z, 356, "the toward-key boosts at 56/tick");
+        assert_eq!(sim.lift_desired, 768, "…without moving desired");
+        sim.step(&FlightInput {
+            lift: -1.0,
+            ..Default::default()
+        });
+        assert_eq!(sim.carpet.z, 300);
+        assert_eq!(sim.lift_desired, 300, "the away-key SETS desired");
+    }
+
+    #[test]
+    fn desired_altitude_recovers_from_flings_at_drift_rate() {
+        // Ruling 6: desired is PINNED; the flyer recovers from ANY
+        // displacement at the standard 8/tick drift.
+        let mut sim = lift_sim(2.0);
+        sim.carpet.z = 900; // flung up
+        sim.step(&FlightInput::default());
+        assert_eq!(sim.carpet.z, 892, "drifts down 8/tick");
+        for _ in 0..100 {
+            sim.step(&FlightInput::default());
+        }
+        assert_eq!(sim.carpet.z, 512, "parks at the pinned desired");
+        sim.carpet.z = 200; // flung down
+        sim.step(&FlightInput::default());
+        assert_eq!(sim.carpet.z, 208, "drifts back up 8/tick");
+    }
+
+    #[test]
+    fn desired_altitude_follows_terrain_offset() {
+        // Ruling 1: the target is ground+desired, so terrain rising
+        // underneath carries the whole band with it.
+        let mut th = vec![0u8; MAP_TILES * MAP_TILES];
+        for (i, h) in th.iter_mut().enumerate() {
+            if i % MAP_TILES >= 100 {
+                *h = 16; // a 2-tile plateau east of x=100
+            }
+        }
+        let mut sim = Simulation::with_terrain(th);
+        sim.altitude_model = AltitudeModel::ExtendedLift;
+        sim.flyer.x = 50.0;
+        sim.flyer.z = 128.0;
+        sim.flyer.y = 2.0;
+        sim.sync_carpet_from_flyer();
+        assert_eq!(sim.lift_desired, 512);
+        // Warp over the plateau (a fling analog): the floor bumps the
+        // carpet first, then the drift restores the 512 offset OVER
+        // the new ground.
+        sim.carpet.x = 110 * 256;
+        for _ in 0..200 {
+            sim.step(&FlightInput::default());
+        }
+        assert_eq!(sim.carpet.z, 512 + 512, "offset held over the plateau");
+    }
+
+    #[test]
+    fn desired_altitude_under_enhanced_thrust() {
+        let mut sim = Simulation::with_terrain(vec![0u8; MAP_TILES * MAP_TILES]);
+        sim.thrust_model = ThrustModel::Enhanced;
+        sim.altitude_model = AltitudeModel::ExtendedLift;
+        sim.flyer.y = 1.0;
+        sim.sync_carpet_from_flyer();
+        let up = FlightInput {
+            lift: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..100 {
+            sim.step(&up);
+        }
+        assert!(
+            (sim.flyer.y - 4.0).abs() < 0.01,
+            "ground-relative cap on the float arm too, y={}",
+            sim.flyer.y
+        );
+        // Pinned on release — the old settle-to-floor is gone.
+        for _ in 0..100 {
+            sim.step(&FlightInput::default());
+        }
+        assert!(
+            (sim.flyer.y - 4.0).abs() < 0.01,
+            "pinned, y={}",
+            sim.flyer.y
+        );
+        // q descends fast and drags desired with it; release holds.
+        let down = FlightInput {
+            lift: -1.0,
+            ..Default::default()
+        };
+        for _ in 0..5 {
+            sim.step(&down);
+        }
+        let held = sim.flyer.y;
+        assert!(held < 3.0, "q descends at the fast rate, y={held}");
+        for _ in 0..50 {
+            sim.step(&FlightInput::default());
+        }
+        assert!(
+            (sim.flyer.y - held).abs() < 0.01,
+            "desired followed q down, y={}",
+            sim.flyer.y
+        );
+    }
+
+    #[test]
+    fn chase_steering_converges_on_the_pointer() {
+        let mut sim = Simulation::new();
+        sim.thrust_model = ThrustModel::Enhanced;
+        // One swipe pins a desired heading 0.4 rad right of the nose.
+        sim.step(&FlightInput {
+            yaw_delta: 0.4,
+            ..Default::default()
+        });
+        let first = sim.flyer.yaw;
+        assert!(first > 0.0, "starts turning immediately");
+        assert!(
+            first < 0.4,
+            "…but gradually, not head-snap: first step {first}"
+        );
+        // The desired WORLD heading is pinned: yaw + lead is invariant
+        // while the carpet converges with no further mouse motion.
+        let desired = sim.aim_yaw();
+        assert!((desired - 0.4).abs() < 1e-5, "desired = the swipe");
+        let mut prev_step = f32::MAX;
+        let mut prev_yaw = sim.flyer.yaw;
+        for _ in 0..60 {
+            sim.step(&FlightInput::default());
+            let step = sim.flyer.yaw - prev_yaw;
+            prev_yaw = sim.flyer.yaw;
+            assert!(step >= 0.0, "never overshoots into a wobble");
+            // Monotone ease-out — except the final snap that closes
+            // the sub-1e-4 tail in one (imperceptible) step.
+            assert!(
+                step <= prev_step + 1e-6 || step < 2e-4,
+                "eases out (rate ∝ error)"
+            );
+            prev_step = step.max(1e-9);
+            assert!(
+                (sim.aim_yaw() - desired).abs() < 1e-4,
+                "the pointer stays world-pinned while chasing"
+            );
+        }
+        assert!(
+            (sim.flyer.yaw - 0.4).abs() < 1e-3,
+            "arrives at the pointer, yaw={}",
+            sim.flyer.yaw
+        );
+        let settled = sim.flyer.yaw;
+        sim.step(&FlightInput::default());
+        assert_eq!(sim.flyer.yaw, settled, "dead stop once closed");
+    }
+
+    #[test]
+    fn chase_lead_clamps_on_screen_and_rate_caps() {
+        let mut sim = Simulation::new();
+        sim.thrust_model = ThrustModel::Enhanced;
+        // Wild continuous swipes: the lead clamps at LEAD_MAX (the
+        // crosshair stays on screen) and the per-tick turn never
+        // exceeds the cap (≈ the classic model's own max turn rate).
+        let swipe = FlightInput {
+            yaw_delta: 3.0,
+            ..Default::default()
+        };
+        let mut prev = 0.0f32;
+        for _ in 0..20 {
+            sim.step(&swipe);
+            let d = sim.flyer.yaw - prev;
+            prev = sim.flyer.yaw;
+            assert!(d <= TURN_RATE_MAX * TICK_DT + 1e-5, "rate capped, d={d}");
+            assert!(
+                sim.aim_yaw() - sim.flyer.yaw <= LEAD_MAX + 1e-5,
+                "lead clamped on screen"
+            );
+        }
+    }
+
+    #[test]
+    fn bank_needs_motion_and_levels_out() {
+        let mut sim = Simulation::new();
+        sim.thrust_model = ThrustModel::Enhanced;
+        // Turning in place: NO bank (ruling 5 — the departure from
+        // retail's fixed velocity-independent bank).
+        let turn = FlightInput {
+            yaw_delta: 0.2,
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            sim.step(&turn);
+        }
+        assert!(
+            sim.flyer.roll.abs() < 0.02,
+            "no bank standing, roll={}",
+            sim.flyer.roll
+        );
+        // At cruise, a right turn banks right (positive roll).
+        let fwd_turn = FlightInput {
+            thrust: 1.0,
+            yaw_delta: 0.2,
+            ..Default::default()
+        };
+        for _ in 0..40 {
+            sim.step(&fwd_turn);
+        }
+        assert!(
+            sim.flyer.roll > 0.1,
+            "banks into a moving right turn, roll={}",
+            sim.flyer.roll
+        );
+        assert!(sim.flyer.roll <= BANK_MAX + 1e-6);
+        // Turn released: the bank levels out with the rate.
+        let fwd = FlightInput {
+            thrust: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..80 {
+            sim.step(&fwd);
+        }
+        assert!(
+            sim.flyer.roll.abs() < 0.02,
+            "levels out, roll={}",
+            sim.flyer.roll
+        );
+    }
+
+    #[test]
+    fn bank_gates_off_while_strafing() {
+        // Player ruling 2026-07-23: banking is for forward/backward
+        // motion only — a strafing turn (orbiting) stays level.
+        let mut sim = Simulation::new();
+        sim.thrust_model = ThrustModel::Enhanced;
+        let strafe_turn = FlightInput {
+            strafe: 1.0,
+            yaw_delta: 0.2,
+            ..Default::default()
+        };
+        for _ in 0..40 {
+            sim.step(&strafe_turn);
+        }
+        assert_eq!(sim.flyer.roll, 0.0, "a strafing turn stays level");
+    }
+
+    #[test]
+    fn altitude_model_switch_seeds_desired_from_pose() {
+        let mut sim = Simulation::with_terrain(vec![0u8; MAP_TILES * MAP_TILES]);
+        sim.flyer.y = 2.5;
+        sim.sync_carpet_from_flyer();
+        sim.lift_desired = 0; // stale
+        sim.set_altitude_model(AltitudeModel::ExtendedLift);
+        assert_eq!(sim.lift_desired, 640, "re-seeded at the live pose");
     }
 
     /// The 2026-07-19 ruling amendment: under Faithful altitude the

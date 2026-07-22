@@ -49,7 +49,12 @@ const MAGIC: u32 = 0x5343_474D;
 ///    is written ahead of the payload — and then apply every field
 ///    after the insertion point SHIFTED, so the version check is what
 ///    stands between an old save and a silently mangled world.
-pub const SNAPSHOT_VERSION: u32 = 2;
+/// 3: the enhanced-flight steering/altitude state (`turn_rate`,
+///    `turn_grace`, `lift_desired`) joined the flight tier.
+/// 4: chase-the-pointer steering replaced the turn-rate damper —
+///    `turn_grace: u8` left the stream, `aim_lead: f32` joined (any
+///    v3 saves from the one damper playtest round refuse cleanly).
+pub const SNAPSHOT_VERSION: u32 = 4;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,6 +429,12 @@ impl Simulation {
             carpet,
             carpet_mc2,
             accel_was_active,
+            turn_rate,
+            aim_lead,
+            lift_desired,
+            // Dev config, not game state: re-armed by the app from
+            // `dev.lift_unclamped`, never carried through a save.
+            lift_unclamped: _,
             terrain_height,
             world,
         } = self;
@@ -448,6 +459,9 @@ impl Simulation {
         w.put(carpet);
         w.put(carpet_mc2);
         w.put(accel_was_active);
+        w.put(turn_rate);
+        w.put(aim_lead);
+        w.put(lift_desired);
         w.put(terrain_height);
         // The world is written inline rather than through `Snap`: it
         // has no `get` side (it cannot be built from the stream, only
@@ -505,6 +519,9 @@ impl Simulation {
         self.carpet = r.get()?;
         self.carpet_mc2 = r.get()?;
         self.accel_was_active = r.get()?;
+        self.turn_rate = r.get()?;
+        self.aim_lead = r.get()?;
+        self.lift_desired = r.get()?;
         self.terrain_height = r.get()?;
         // The world applies onto itself, keeping assets and retile.
         if r.get::<u8>()? != 0 {

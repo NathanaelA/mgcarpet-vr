@@ -1066,6 +1066,11 @@ by offset, never by our field name.
 ### Banked opt-ins (enhancement/alternate features)
 - Torso-aim enhanced aiming (intended eventual enhanced default);
   predictive autoaim closure (no-mutation aim_assist variant).
+- Enhanced-flight PHASE 2: the off-desired pitch assist (ruling 3 —
+  evaluate after playtesting phase 1). Phase 1 LANDED 2026-07-23:
+  turn-rate damper + proportional bank + ground-relative
+  desired-altitude law (see DEVIATIONS "flight & controls"); feel
+  constants (TURN_GAIN/DECAY/BANK_SCALE) tuned by playtest.
 - Exclude creatures from pyramid damage; slot-16 summon-corpse death
   animation; legible map markers; MC2 XMI/AIL no-CD faithful-alternate
   arrangement.
