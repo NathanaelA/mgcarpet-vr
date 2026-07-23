@@ -165,9 +165,26 @@ not exist without:
 - **Bullfrog Productions** — for the 1994 original that was so far ahead
   of its time we're still catching up to it.
 
+## Android Stuff
+ 
+```bash
+  # At least once you need to push the baked data
+  adb push baked/ /sdcard/mgcarpet/baked/
+  
+  # Then you can build and install the APK
+  cd crates/mgc-app/android
+  ANDROID_NDK_HOME=/home/nathanaela/Android/Sdk/ndk/30.0.14904198 \
+  ANDROID_SDK_ROOT=/home/nathanaela/Android/Sdk \
+    make apk   
+  adb install -r build/mgcarpet-vr.apk
+```
+
+
 ## License
 
 GPL-3.0-or-later. The RNC decompressor is ported from remc2's
 implementation (itself derived from the decompiled original ProPack).
 
 [remc2]: https://github.com/thobbsinteractive/magic-carpet-2-hd
+
+

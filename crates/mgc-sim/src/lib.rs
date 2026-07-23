@@ -25,6 +25,12 @@ pub mod verbs;
 use engine::{features, world};
 use mc1::spells;
 
+#[cfg(target_os = "android")]
+const IS_ANDROID: bool = true;
+
+#[cfg(not(target_os = "android"))]
+const IS_ANDROID: bool = false;
+
 /// Fixed simulation tick rate.
 ///
 /// 24 Hz — faithful to retail MC2, whose engine advanced one "game turn"
@@ -143,6 +149,8 @@ pub struct FlightInput {
     /// units) — the roll's abort sense: a per-tick |dx| > 16 means
     /// the player grabbed the stick (sub_55C60 EF:38951-56).
     pub raw_dx: i16,
+    // Used to track extra commands for UI stuff in VR
+    pub extra_data: u8,
 }
 
 /// The carpet: position in tile units, velocity in tiles/second.
@@ -757,8 +765,10 @@ impl Simulation {
                 ThrustModel::Enhanced => f.yaw + self.aim_lead,
                 ThrustModel::Mc1 => f.yaw,
             };
+            // The Pitch on Android needs to be 0 so it is level with the ground for spells
+            let pitch = if IS_ANDROID { 0.0 } else { f.pitch };
             w.tick(
-                world::PlayerPose::from_tiles(f.x, f.y, f.z, aim, f.pitch, speed),
+                world::PlayerPose::from_tiles(f.x, f.y, f.z, aim, pitch, speed),
                 world::PlayerCommand {
                     fire_left: input.fire_left,
                     fire_right: input.fire_right,

@@ -9,6 +9,8 @@
 //! offscreen and exits, which is how terrain changes get verified
 //! without a display.
 
+extern crate core;
+
 mod bakecheck;
 mod campaign;
 mod config;
@@ -3456,6 +3458,40 @@ impl App {
             .as_mut()
             .unwrap()
             .poll(&self.ctx.as_mut().unwrap().xr_session);
+
+        if input.extra_data & 0x01 != 0 {
+            if let Some(r) = &mut self.renderer {
+                let on = !r.map_view();
+                r.set_map_view(on);
+                // The screen-mode ding (sub_3DC90 :49072 —
+                // sound 14 on EVERY mode switch, enter and
+                // exit alike). While paused the request sits
+                // in the mixer and flushes on unpause — the
+                // retail deferred-ding quirk.
+                self.ui_ding();
+                // The book frees the cursor for spell binding;
+                // closing it returns to mouse-look.
+                if on {
+                    self.set_grab(false);
+                    self.fire_held = false;
+                    self.fire_right_held = false;
+                } else {
+                    self.set_grab(true);
+                }
+                // Entering/leaving the fullscreen map fixes
+                // your ORIENTATION but not your velocity in
+                // the original (player ground truth; traced
+                // as EMERGENT — map modes write no input, so
+                // the steering filters decay ~×0.75/tick to
+                // center while the target speed persists,
+                // :49017-20/:49044). We recenter the virtual
+                // stick; the sim's filters decay on their own
+                // because tick_input sends zero stick while
+                // the book is open.
+                self.stick = VirtualStick::default();
+            }
+        }
+
         input
     }
 
@@ -7770,7 +7806,6 @@ impl ApplicationHandler for App {
                 return;
             }
         }
-        log::info!("rApp Handler configuration setp 2 done");
 
         self.wgpu = Some(wgpu_ctx);
         self.ctx = Some(ctx);
@@ -7928,9 +7963,10 @@ fn parse_args() -> Result<Args, String> {
     let mut args = parse_base_args()?;
     //args.campaign = Some(campaign::CampaignId::Mc2);
     args.sky = Option::from(false);
-    args.crosshair = Option::from(false);
+    args.crosshair = Option::from(true);
     args.slot = 1;
-    args.dev_spells = Option::from(true);
+    args.dev_spells = Option::from(false);
+    args.level = PathBuf::from("baked/mc1/level-001.mgcl");
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
