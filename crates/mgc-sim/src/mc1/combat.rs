@@ -12,7 +12,9 @@
 //!   self-aim (:21947-48) (deliberate: decompile casualty).
 //! - Aim assist scores candidates by angular miss (Δyaw² + Δpitch²)
 //!   with a distance tiebreak (deliberate approximation of sub_54A90's
-//!   squared-miss-distance metric; exact port OPEN).
+//!   squared-miss-distance metric; exact port OPEN for the CREATURE
+//!   cones — the possess acquisition runs the exact metric, see
+//!   `aim_assist_possess_mc1`).
 //! - The m9 lightning BEAM (sub_535E0 :63272) is a full port (one-tick
 //!   hitscan walk + state-14 segment chain, confirmed vs remc2
 //!   sub_66750); the explosion's +146 stamps hit-or-0 where the
@@ -984,12 +986,16 @@ impl Gen {
     /// (10,12) ch1-claim flash.
     fn proj_m1_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let _ = ctx;
-        // Re-acquire per tick while untargeted, like the engine's
-        // state-1 handler (:62961).
+        // ONE acquisition roll on the first untargeted tick — the
+        // +16&2 latch (:62952-60), same idiom as the HW dart and the
+        // castle ball. A lob that finds nothing (or later loses its
+        // slot) flies straight and never re-acquires.
         if self.ent[i].f146 == 0 {
-            self.aim_assist_possess(i);
-        }
-        if self.ent[i].f146 != 0 {
+            if self.ent[i].flags & 2 == 0 {
+                self.ent[i].flags |= 2;
+                self.aim_assist_possess(i);
+            }
+        } else {
             self.home_possess(i);
         }
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
@@ -1027,11 +1033,18 @@ impl Gen {
         }
     }
 
-    /// sub_54520 case 1 (:64040-77): possess acquisition — nearest
-    /// awake mana ball (m39/40) not already owned/claimed by the
-    /// shooter, or any house (m45), inside the ±0x71 yaw+pitch cone
-    /// within 5120. Snaps the heading on success.
+    /// sub_54520 case 1 (:64040-77): possess acquisition — the awake
+    /// (+58 != 0) mana balls (m39/40) and houses (m45) not already
+    /// CLAIMED by the shooter (+144 only — the creator +24 half of the
+    /// gate is impact-only, :17067), inside the ±0x71 yaw+pitch cone
+    /// within 2-D distance 5120 (sub_423D0 has no z term). Best by
+    /// sub_54A90's score (:64212-17): the distance decomposed onto the
+    /// angular-error axes — 16.16 cos terms >>16, sin terms >>14
+    /// through an i16 truncation (~4x misalignment weight) — compared
+    /// UNSIGNED (the -1 reject sentinel = u32::MAX). Snaps the heading
+    /// on success.
     fn aim_assist_possess_mc1(&mut self, i: usize) {
+        use crate::mc1::tables::{COS, SIN};
         let (px, py, pz, yaw, pitch, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
@@ -1043,28 +1056,32 @@ impl Gen {
                 continue;
             }
             let candidate = match c.model65 {
-                39 | 40 => c.f58 != 0 && c.f144 != own && c.id24 != own,
-                45 => c.f144 != own && c.id24 != own,
+                39 | 40 | 45 => c.f144 != own && c.f58 != 0,
                 _ => false,
             };
             if !candidate {
                 continue;
             }
             let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
-            let d2 = Self::dist2_sq(px, py, tx, ty);
-            let dz = tz.wrapping_sub(pz) as i32;
-            if d2.wrapping_add(dz.wrapping_mul(dz)) > 5120 * 5120 {
-                continue;
-            }
             let ty_yaw = Self::angle_between(px, py, tx, ty);
-            let dh = Self::isqrt(d2 as u32) as i32;
-            let ty_pitch = Self::pitch_toward(pz, tz, dh);
-            let dy = Self::angdist(yaw, ty_yaw) as u32;
-            let dp = Self::angdist(pitch, ty_pitch) as u32;
-            if dy > 0x71 || dp > 0x71 {
+            let dy = Self::angdist(yaw, ty_yaw) as usize;
+            if dy > 0x71 {
                 continue;
             }
-            let score = dy * dy + dp * dp;
+            let dist = Self::isqrt(Self::dist2_sq(px, py, tx, ty) as u32) as i32;
+            let ty_pitch = Self::pitch_toward(pz, tz, dist);
+            let dp = Self::angdist(pitch, ty_pitch) as usize;
+            if dp > 0x71 || dist > 5120 {
+                continue;
+            }
+            let v8 = dist * COS[dy];
+            let v9 = dist * SIN[dy];
+            let v10 = dist * COS[dp];
+            let v11 = ((SIN[dp] * dist) >> 14) as i16 as i32;
+            let score = ((v10 >> 16) * (v10 >> 16)
+                + (v8 >> 16) * (v8 >> 16)
+                + ((v9 >> 14) as i16 as i32) * ((v9 >> 14) as i16 as i32)
+                + v11 * v11) as u32;
             if best.is_none() || best.is_some_and(|(_, bs, _, _)| score < bs) {
                 best = Some((j as u16, score, ty_yaw, ty_pitch));
             }
@@ -2662,9 +2679,19 @@ impl Gen {
         }
         // Owner recolor (:29627-32): claimed balls swap to the owner
         // wizard's color row (base 105 + 8*color, wizext var_48);
-        // unowned/wild stay on the neutral 52 row.
+        // unowned/wild stay on the neutral 52 row. MC1 art is in raw
+        // slot order; MC2's sphere families are authored in Transform
+        // order (GetManaSphereIndexFromId EF:26800 routes through
+        // TransformPlayerColorIndex — crate::mc2::COLOR_ART).
         let base = match self.owner_team(self.ent[i].f144) {
-            Some(team) => 105 + 8 * team as usize,
+            Some(team) => {
+                let art = if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                    crate::mc2::color_art(team)
+                } else {
+                    team
+                };
+                105 + 8 * art as usize
+            }
             None => 52,
         };
         let ty = (base + size) as u16;

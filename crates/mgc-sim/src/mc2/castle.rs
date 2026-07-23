@@ -22,9 +22,7 @@
 //! returns (balloons, guards), the same quota table as MC1's
 //! sub_47400 :56264.
 //!
-//! Deliberate approximations: the owner palette shift
-//! (`word_0x5A_90 += TransformPlayerColorIndex`, EF:61139) rides the
-//! renderer team tint; `sub_5F890` (Create-Castle HUD widget sync,
+//! Deliberate approximations: `sub_5F890` (Create-Castle HUD widget sync,
 //! EF:61029) is a no-op (no ported widget); the balloon/guard slot
 //! arrays (`array_0x3C_60`/`array_0x5C_92`) are scan-collected (same
 //! membership, no per-slot indices).
@@ -808,8 +806,10 @@ impl Gen {
         }
         self.link(i, x, y, z);
         self.refill_life(i);
-        let team = self.owner_team(own).unwrap_or(0) as u16;
-        self.mc2_set_sprite(i, 169 + team);
+        // Balloon family 169+k is authored in Transform order like
+        // every MC2 team art band (crate::mc2::COLOR_ART).
+        let team = self.owner_team(own).unwrap_or(0);
+        self.mc2_set_sprite(i, 169 + crate::mc2::color_art(team) as u16);
         if self.is_cave() {
             // The cave placement box override (EF:33426-27,
             // SetEntityShiftRot(256, 768)).

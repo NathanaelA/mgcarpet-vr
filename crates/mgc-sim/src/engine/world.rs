@@ -8611,6 +8611,232 @@ mod tests {
         );
     }
 
+    /// A rival possession cast must launch UNTARGETED: retail's shared
+    /// emission (sub_56510 :65233-52) never writes the projectile's
+    /// +146 — for the AI exactly as for the human — so the lob's own
+    /// one-shot sub_54520 case-1 acquisition (mana balls AND houses)
+    /// picks the victim. Pre-locking the AI's ball target onto the lob
+    /// bypassed that scan, which made a rival bolt unable to stray
+    /// onto a dwelling (retail's accidental house possession). The
+    /// attack spells keep the live pre-lock (fireball contrast half).
+    #[test]
+    fn rival_possess_bolt_spawns_untargeted() {
+        use crate::mc1::rivals::{Rival, RivalConfig};
+        use crate::mc1::spells::SPELL_COUNT;
+        let mut w = flat_world();
+        let wiz = w.g.new_event().expect("wizard slot");
+        {
+            let e = &mut w.g.ent[wiz];
+            e.class64 = 3;
+            e.model65 = 1;
+            e.x = 0x8000;
+            e.y = 0x8000;
+            e.z = 3400;
+        }
+        let ball = w.g.spawn_mana_ball(0x9000, 0x8000, 3200).expect("ball");
+        let cfg = RivalConfig {
+            aggression: 128,
+            accuracy: 128,
+            tempo: 128,
+            castle_level: 0,
+            book: [false; SPELL_COUNT],
+            allowed: [false; SPELL_COUNT],
+        };
+        w.rivals.push(Rival::new(1, wiz as u16, &cfg));
+        let ri = w.rivals.len() - 1;
+        w.rivals[ri].target = ball as u16;
+
+        w.rival_emit(ri, wiz, 3, 0x8000, 0x8000, 3400, 0, 0);
+        let lob = (1..w.g.ent.len())
+            .find(|&j| {
+                w.g.ent[j].class64 == 9 && w.g.ent[j].model65 == 1 && w.g.ent[j].flags & 0x400 == 0
+            })
+            .expect("possess lob spawned");
+        assert_eq!(
+            w.g.ent[lob].f146, 0,
+            "possess lob spawns untargeted (sub_56510 writes no +146)"
+        );
+        assert_eq!(w.g.ent[lob].id24, wiz as u16, "lob owner = the rival tag");
+
+        // Contrast: an attack spell keeps the homing pre-lock.
+        w.rival_emit(ri, wiz, 0, 0x8000, 0x8000, 3400, 0, 0);
+        let fb = (1..w.g.ent.len())
+            .find(|&j| {
+                w.g.ent[j].class64 == 9 && w.g.ent[j].model65 == 0 && w.g.ent[j].flags & 0x400 == 0
+            })
+            .expect("fireball spawned");
+        assert_eq!(
+            w.g.ent[fb].f146, ball as u16,
+            "attack spells keep the live homing pre-lock"
+        );
+    }
+
+    /// The possess lob's acquisition is ONE-SHOT — the +16&2 latch
+    /// (:62952-60): a lob that finds nothing on its first untargeted
+    /// tick flies straight forever; a target entering the cone later
+    /// must NOT be picked up. (The old per-tick re-acquire was a
+    /// misread of the same lines.)
+    #[test]
+    fn possess_acquisition_is_one_shot() {
+        let mut w = flat_world();
+        let lob = w.g.spawn_spell_lob(1, 0x8000, 0x8000, 3200).expect("lob");
+        {
+            let e = &mut w.g.ent[lob];
+            e.id24 = 7;
+            e.f66 = 10;
+            e.f69 = 12;
+            e.f30 = 0;
+            e.f32 = 0;
+        }
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+        // Empty cone: the latch arms, no target is found.
+        w.g.proj_tick(lob, &ctx);
+        assert_eq!(w.g.ent[lob].f146, 0, "nothing to acquire");
+        assert_ne!(w.g.ent[lob].flags & 2, 0, "acquire latch armed");
+
+        // A ball dead ahead, well inside cone and range — too late.
+        let (lx, ly, lz) = (w.g.ent[lob].x, w.g.ent[lob].y, w.g.ent[lob].z);
+        let mut p = (lx, ly, lz);
+        Gen::polar_step(&mut p, w.g.ent[lob].f30, 0, 2048);
+        let _ball = w.g.spawn_mana_ball(p.0, p.1, 3200).expect("ball");
+        w.g.proj_tick(lob, &ctx);
+        assert_eq!(
+            w.g.ent[lob].f146, 0,
+            "latched lob never re-acquires (:62957 sets +16&2 once)"
+        );
+    }
+
+    /// sub_54A90's selection metric is the 2-D DISTANCE decomposed
+    /// onto the angular-error axes (:64212-17) — so a NEAR mana ball
+    /// slightly off-axis beats a FAR house sitting dead ahead. The
+    /// old pure-angular score (Δyaw²+Δpitch²) chose the house.
+    #[test]
+    fn possess_acquisition_prefers_the_near_ball_over_the_aligned_far_house() {
+        let mut w = flat_world();
+        let lob = w.g.spawn_spell_lob(1, 0x8000, 0x8000, 3200).expect("lob");
+        // House dead ahead at 4600.
+        let house_x = 0x8000u16.wrapping_add(4600);
+        let h = w.g.spawn_creator(45, house_x, 0x8000, 3200).expect("house");
+        let aim = Gen::angle_between(0x8000, 0x8000, house_x, 0x8000);
+        {
+            let e = &mut w.g.ent[lob];
+            e.id24 = 7;
+            e.f66 = 10;
+            e.f69 = 12;
+            e.f30 = aim;
+            e.f32 = 0;
+        }
+        // Ball at 700, offset 0x50 (~14°) off the aim — inside the
+        // ±0x71 cone.
+        let mut p = (0x8000u16, 0x8000u16, 3200i16);
+        Gen::polar_step(&mut p, (aim + 0x50) & 0x7FF, 0, 700);
+        let ball = w.g.spawn_mana_ball(p.0, p.1, 3200).expect("ball");
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+        w.g.proj_tick(lob, &ctx);
+        assert_eq!(
+            w.g.ent[lob].f146, ball as u16,
+            "distance-weighted score: the near ball wins over the aligned far house"
+        );
+        let _ = h;
+    }
+
+    /// The full accidental-claim chain, RIVAL-owned end to end: an
+    /// untargeted possess lob acquires an unclaimed dwelling (houses
+    /// are awake — ctor default +58=0xFA — and live on the possess
+    /// acquisition list :64058-71), the impact runs the (10,12) claim
+    /// flash, its ch1 broadcast lands on the house, and the live-
+    /// building intake re-owns it to the RIVAL tag — retail's
+    /// sub_11AC0 (:17061-71) has no player-vs-rival distinction.
+    #[test]
+    fn rival_possess_lob_accidentally_claims_a_dwelling() {
+        let mut w = flat_world();
+        let rival_tag = 7u16;
+        // Register the tag as rival slot 2 so the claim recolor can
+        // resolve its team (owner_team = the wizext var_48 stand-in).
+        w.g.rival_ents[2] = rival_tag;
+        let house_x = 0x8000u16.wrapping_add(1500);
+        let h = w.g.spawn_creator(45, house_x, 0x8000, 3200).expect("house");
+        {
+            let e = &mut w.g.ent[h];
+            e.tick70 = 52; // live village building
+            e.act_life = 2000;
+            e.f144 = 0; // unclaimed
+            e.f80 = 0x700;
+            e.f82 = 0x700;
+            e.f84 = 0x4000; // the go-live z-extent (features fixup)
+            e.f28 |= 2; // the go-live ch1 claim bit (features :2054 fixup)
+        }
+        let lob = w.g.spawn_spell_lob(1, 0x8000, 0x8000, 3200).expect("lob");
+        {
+            let e = &mut w.g.ent[lob];
+            e.id24 = rival_tag;
+            e.f66 = 10;
+            e.f69 = 12;
+            e.f26 = 200;
+            e.f30 = Gen::angle_between(0x8000, 0x8000, house_x, 0x8000);
+            e.f32 = 0;
+        }
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+        // Fly until impact (life is 21 ticks; the house overlap ends
+        // it long before).
+        for _ in 0..32 {
+            if w.g.ent[lob].flags & 0x400 != 0 {
+                break;
+            }
+            w.g.proj_tick(lob, &ctx);
+        }
+        assert_ne!(w.g.ent[lob].flags & 0x400, 0, "lob detonated");
+        let flash = (1..w.g.ent.len())
+            .find(|&j| {
+                w.g.ent[j].class64 == 10
+                    && w.g.ent[j].model65 == 12
+                    && w.g.ent[j].flags & 0x400 == 0
+            })
+            .expect("the (10,12) claim flash spawned");
+        assert_eq!(
+            w.g.ent[flash].id24, rival_tag,
+            "flash carries the rival tag"
+        );
+        // One flash tick broadcasts the ch1 claim; the building tick
+        // consumes it.
+        w.g.effect_tick(flash, &ctx);
+        assert_ne!(
+            w.g.ent[h].mail[1].1, 0,
+            "ch1 claim mail landed on the house"
+        );
+        w.g.tick_building_live(h);
+        assert_eq!(
+            w.g.ent[h].f144, rival_tag,
+            "the dwelling is rival-possessed (accidental claim, retail-faithful)"
+        );
+        assert_eq!(
+            w.g.ent[h].type86,
+            177 + 2,
+            "the claimed flag wears the owner's color (row 177 + team, :30808-09)"
+        );
+    }
+
     /// The village LEASH (sub_1F640 :25390-96): the door-radius test
     /// runs BEFORE the fullness test, so a villager anchored to a FULL
     /// house that is still beyond 0x800 keeps its anchor and steers
@@ -12469,6 +12695,53 @@ mod tests {
 
     fn mc2_pos(tx: u16, ty: u16) -> (u16, u16) {
         ((tx << 8) | 128, (ty << 8) | 128)
+    }
+
+    /// The MC2 claim intake colorizes the flag by OWNER: retail adds
+    /// the player color onto the sprite word AFTER the re-set
+    /// (`word_0x5A_90 += TransformPlayerColorIndex`, :28039) — flag
+    /// row 177 + COLOR_ART[slot], same family as the rival castle
+    /// flag. The old bare-177 stamp flew the HUMAN's flag on every
+    /// rival-claimed dwelling; the un-Transformed slot showed the
+    /// WRONG team's art on slots 2/4/6/7 (Rahn flying Jark's plum).
+    #[test]
+    fn mc2_claimed_dwelling_flies_the_owners_flag() {
+        let mut w = mc2_flat_world();
+        let rival_tag = 9u16;
+        // Rival tag registered as color slot 2 (Rahn, green) — a slot
+        // the Transform permutes (COLOR_ART[2] = 4), so this test
+        // discriminates raw-slot indexing from art-order indexing.
+        w.g.rival_ents[2] = rival_tag;
+        let (x, y) = mc2_pos(100, 100);
+        let h = w.g.new_event().expect("house");
+        {
+            let e = &mut w.g.ent[h];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.tick70 = 52; // parked building
+            e.act_life = 2000;
+            e.f144 = 0; // unclaimed
+        }
+        w.g.link(h, x, y, 3200);
+
+        w.g.ent[h].mail[1] = (0, rival_tag);
+        w.g.mc2_house_tick(h);
+        assert_eq!(w.g.ent[h].f144, rival_tag, "the rival claim took");
+        assert_eq!(
+            w.g.ent[h].type86,
+            177 + 4,
+            "the flag wears the OWNER's ART row (177 + COLOR_ART[2] = 181, the green band)"
+        );
+
+        // A player re-claim swaps it back to the team-0 flag row.
+        w.g.ent[h].mail[1] = (0, crate::mc1::mobs::PLAYER_TARGET);
+        w.g.mc2_house_tick(h);
+        assert_eq!(
+            w.g.ent[h].f144,
+            crate::mc1::mobs::PLAYER_TARGET,
+            "the player re-claim took"
+        );
+        assert_eq!(w.g.ent[h].type86, 177, "player flag = the team-0 row");
     }
 
     /// The possession projectile (action 18) rides the CLAIM probe

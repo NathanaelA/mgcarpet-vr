@@ -3902,9 +3902,13 @@ impl Gen {
     /// ticks the mana pool +140 tracks occupants<<8, and a FULL house
     /// with capacity > 5 has a ~1/16 chance to emit a villager.
     /// The ch1 possession re-owner (:30801-14): claim the sender,
-    /// chime 4, clear the active bit, swap to the claimed sprite
-    /// (177). The immediate mana credit off the claimer's +48 is
-    /// omitted here (deliberate: it belongs to the mana-economy track).
+    /// chime 4, clear the active bit, swap to the claimed FLAG sprite
+    /// — row 177 + the owner's color (:30808-09 adds the claimant
+    /// wizext's var_48 straight onto +86/type86; the same per-team
+    /// family mechanism as the claimed-ball rows in `ball_resize`).
+    /// (An earlier reading took the `+86 +=` line for a mana credit —
+    /// +86 is the sprite type field; there is no mana movement in the
+    /// claim block.)
     pub(crate) fn tick_building_live(&mut self, i: usize) {
         if self.ent[i].act_life < 0 {
             // Killed directly (castle crush life = -1, :17638).
@@ -3943,7 +3947,10 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.f78, e.f80, e.f82, e.f84)
                 };
-                self.set_sprite(i, 177);
+                // Owner recolor (:30808-09): flag row 177 + team color
+                // (rows 177-184 are the eight team flags).
+                let flag = 177 + self.owner_team(src).unwrap_or(0) as u16;
+                self.set_sprite(i, flag);
                 let e = &mut self.ent[i];
                 e.f78 = f78;
                 e.f80 = f80;

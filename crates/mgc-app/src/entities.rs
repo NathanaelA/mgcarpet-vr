@@ -698,6 +698,7 @@ pub fn map_dots_from_poses(
 /// the DrawText path lands, a 2x2 team-color marker dot stands in
 /// (banked with the font track).
 pub fn map_stamps_from_poses(
+    game: GameId,
     poses: &[LivePose],
     icons: &MapIcons,
     beyond_sight: bool,
@@ -706,6 +707,14 @@ pub fn map_stamps_from_poses(
     let mut out = Vec::new();
     for p in poses {
         let team = p.team.map(|t| (t as usize).min(7)).unwrap_or(0);
+        // MC2's stamp art families (castle 58+k, balloon 66+k) are
+        // authored in TransformPlayerColorIndex order — retail's
+        // castle marker is `Transform(owner) + 58` (GameUI.cpp:1193).
+        // MC1's stamp family is raw slot order (sub_48710 [58+team]).
+        let team = match game {
+            GameId::Mc2 => mgc_sim::mc2::color_art(team as u8) as usize,
+            _ => team,
+        };
         let icon = match (p.class, p.model) {
             (3, 2) => icons.castle[team].as_ref(),
             (3, 3) if p.team == Some(0) || beyond_sight => icons.balloon[team].as_ref(),

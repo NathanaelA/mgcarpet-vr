@@ -33,6 +33,30 @@ pub(crate) mod tail;
 pub mod terrain_paint;
 pub(crate) mod tokens;
 
+/// `TransformPlayerColorIndex_616D0` (remc2 GameUI.cpp:869), the
+/// single-player branch (:908-936): the permutation between a player's
+/// COLOR SLOT (the `playersColors_E88E0x` table row — map dots,
+/// nameplates, bars) and the index of his ART FAMILY (the pre-colored
+/// sprite bands: mana spheres 105+8k, castle/dwelling flags 177+k,
+/// balloons 169+k, carpets 272+k, minimap castle/balloon stamps
+/// 58+k/66+k). The art was authored in THIS order — verified
+/// empirically against the baked atlases: art k=2 is Jark's plum,
+/// k=4 is Rahn's green (exact table RGB matches), k=6/7 swap
+/// Prish/Yragore. Indexing art by the RAW slot hands Rahn purple
+/// spheres while his map dot stays green.
+///
+/// (The multiplayer branch is a different permutation with a genuine
+/// retail bug — `case 7` mapped two teams onto art slot 7 and
+/// orphaned slot 6; remc2 patches it with `index2 = 6 //fix`. We ship
+/// the single-player branch: campaign rivals only.)
+pub const COLOR_ART: [u8; 8] = [0, 1, 4, 3, 2, 5, 7, 6];
+
+/// Art-family index for a color slot (see [`COLOR_ART`]); slots
+/// beyond 7 clamp to the identity, matching retail's `default` arm.
+pub fn color_art(slot: u8) -> u8 {
+    COLOR_ART.get(slot as usize).copied().unwrap_or(slot)
+}
+
 /// The retail sprite-extents derivation (`sub_718.. init pass`,
 /// remc2 EF:44870-44910): the shipped particle-param table stores
 /// only ONE of the (speed_6, rotSpeed_8) pair per row — at load the

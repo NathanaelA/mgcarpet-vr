@@ -3451,6 +3451,7 @@ impl App {
                 sim.tick as u32,
             );
             level.map_stamps = entities::map_stamps_from_poses(
+                level.game,
                 &poses,
                 &level.map_icons,
                 w.beyond_sight(),

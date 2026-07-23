@@ -345,9 +345,12 @@ impl World {
             e.f28 = 29;
         }
         self.g.link(i, x, y, z);
-        // Carpet sprite by color: rival colors 1..7 -> 273..279
-        // (EF:43744-58; the human keeps 44).
-        self.g.mc2_set_sprite(i, 272 + slot as u16);
+        // Carpet sprite by color: retail switches on
+        // TransformPlayerColorIndex (EF:43732) -> models 273..279
+        // (the human keeps 44) — the art families are authored in
+        // Transform order (crate::mc2::COLOR_ART).
+        self.g
+            .mc2_set_sprite(i, 272 + crate::mc2::color_art(slot) as u16);
         let mut r = Mc2Rival::new(slot, i as u16, &cfg);
         // Life scalar: wizard maxLife *= Life/256 (EF:43768-72).
         self.g.ent[i].max_life = ((10000u64 * r.life_scale as u64) >> 8).max(1) as u32;
@@ -483,9 +486,11 @@ impl World {
         self.g.ent[c].site_z = z;
         self.g.link(c, sx, sy, z);
         self.g.refill_life(c);
-        // The team flag (sprite 177 + color — the MC1-column pattern;
-        // the MC2 stage pieces carry the visible castle).
-        self.g.mc2_set_sprite(c, 177 + r.slot as u16);
+        // The team flag: retail `+90 += TransformPlayerColorIndex`
+        // (EF:61133) — flag family 177 + COLOR_ART[slot] (the MC2
+        // stage pieces carry the visible castle).
+        self.g
+            .mc2_set_sprite(c, 177 + crate::mc2::color_art(r.slot) as u16);
         let lvl = (castle_level - 1).min(7);
         self.g.ent[c].f26 = lvl as i16;
         // One BUILD00 terrain pass per authored level (the EF:43787
@@ -2501,8 +2506,10 @@ impl World {
         self.g.ent[c].site_z = z;
         self.g.link(c, ax, ay, z);
         self.g.refill_life(c);
-        self.g
-            .mc2_set_sprite(c, 177 + self.mc2_rivals[ri].slot as u16);
+        self.g.mc2_set_sprite(
+            c,
+            177 + crate::mc2::color_art(self.mc2_rivals[ri].slot) as u16,
+        );
         {
             let r = &mut self.mc2_rivals[ri];
             r.mana_delta = if r.mana_delta >= 0 {

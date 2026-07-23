@@ -183,14 +183,17 @@ impl Gen {
     }
 
     /// `GetManaSphereColorIndexFromEntityId_369F0` (EF:26782): the
-    /// owner's mana-sphere particle-row base — 52 wild, 105+8·team
-    /// for ANY wizard (the human = team 0, rivals by slot).
+    /// owner's mana-sphere particle-row base — 52 wild, and
+    /// `105 + 8·TransformPlayerColorIndex(team)` for ANY wizard
+    /// (EF:26800; the human = team 0, rivals by slot; the sphere art
+    /// families are authored in Transform order,
+    /// crate::mc2::COLOR_ART).
     fn mc2_ball_color(&self, target: u16) -> u16 {
         if target == PLAYER_TARGET {
             return 105;
         }
         match self.rival_ents.iter().position(|&e| e != 0 && e == target) {
-            Some(slot) => 105 + 8 * slot as u16,
+            Some(slot) => 105 + 8 * crate::mc2::color_art(slot as u8) as u16,
             None => 52,
         }
     }

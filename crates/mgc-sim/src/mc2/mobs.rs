@@ -2165,9 +2165,12 @@ impl Gen {
     /// full enterable houses) and SetMaxDistance_5C8D0 are OPEN
     /// (economy track); the byte[2]&0x20 strong-claim lock waits
     /// for the MC2 spell column (all claims run the weak possess
-    /// variant :28035-40); the claimed sprite-row colorize
-    /// (`word_0x5A_90 += color`, :28039) rides our renderer's team
-    /// tint instead of the pre-colored row band.
+    /// variant :28035-40). The claimed sprite-row colorize
+    /// (`word_0x5A_90 += color`, :28039) is ported: flag row 177 +
+    /// owner color, index shifted AFTER the extent derivation off the
+    /// base row (there is no team-tint stage in the billboard pass —
+    /// the earlier note claiming one was wrong, and bare 177 flew the
+    /// human's flag on rival-claimed houses).
     pub(crate) fn mc2_house_tick(&mut self, i: usize) {
         // CompareEvent08_38B00 (:28255): 0 idle / 1 hit / 2 dead.
         self.ent[i].f40 = 0;
@@ -2232,6 +2235,14 @@ impl Gen {
                     self.snd_player(4);
                 }
                 self.mc2_set_sprite(i, 177);
+                // Owner recolor (EF:28035-40; castle-builder trace
+                // `+90 += TransformPlayerColorIndex`): the flag INDEX
+                // shifts to the owner's ART row AFTER the extent
+                // derivation off the base row — flag family 177 +
+                // COLOR_ART[slot], same as the rival castle flag. Bare
+                // 177 flew the HUMAN's flag on rival-claimed houses.
+                let team = self.owner_team(src).unwrap_or(0);
+                self.ent[i].type86 = 177 + crate::mc2::color_art(team) as u16;
             }
         }
         let (x, y) = (self.ent[i].x, self.ent[i].y);

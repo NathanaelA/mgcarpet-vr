@@ -155,8 +155,9 @@ pub(crate) struct Rival {
     /// it recovers past max/4+6000 (or max/2) (:19468-91).
     poverty: bool,
     /// Current target: entity slot or [`PLAYER_TARGET`]; 0 = none.
+    /// (pub(crate) for the possess-emission tests in engine::world.)
+    pub(crate) target: u16,
     /// Signature = team + model + (class<<7) (sub_15420 :19039).
-    target: u16,
     target_sig: u16,
     /// Scouted castle site (+150).
     site: (u16, u16),
@@ -178,7 +179,7 @@ pub(crate) struct Rival {
 }
 
 impl Rival {
-    fn new(slot: u8, ent: u16, cfg: &RivalConfig) -> Self {
+    pub(crate) fn new(slot: u8, ent: u16, cfg: &RivalConfig) -> Self {
         let mut cooldown = [0u16; SPELL_COUNT];
         // The castle-build stagger (:55049): 4 ticks per player slot.
         cooldown[16] = 4 * slot as u16;
@@ -1669,7 +1670,7 @@ impl World {
     /// the rival's entity slot (so friendly-fire immunity, homing and
     /// the damage plumbing all Just Work).
     #[allow(clippy::too_many_arguments)]
-    fn rival_emit(
+    pub(crate) fn rival_emit(
         &mut self,
         ri: usize,
         i: usize,
@@ -1721,7 +1722,15 @@ impl World {
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = def.possess_mana as i32;
         // Live homing target — the class-9 re-acquire keeps it warm.
-        if target != 0 {
+        // NOT the possess lob: retail's emission (sub_56510 :65233-52)
+        // never writes the projectile's +146 — for the AI exactly as
+        // for the human — so the lob spawns untargeted and its own
+        // one-shot sub_54520 case-1 acquisition (balls AND houses)
+        // picks the victim. Pre-locking the AI's mana-ball target here
+        // bypassed that scan, which is what made a rival bolt unable
+        // to stray onto a dwelling (the accidental house possession
+        // retail allows).
+        if target != 0 && s != 3 {
             e.f146 = target;
             if target == PLAYER_TARGET {
                 // Being targeted arms the danger music (:64013/:64095).
