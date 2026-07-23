@@ -803,22 +803,28 @@ impl Gen {
     /// buildings (level-001 cross sinks, level-000 spires) and every
     /// wizard / marker keep the bit set or fall off the list, so
     /// possession passes through them (NOT the generic probe, which
-    /// would consume the shot on those sinks). The `+148` claim-owner
-    /// half of retail's self-check has no ported field — the `+24`
-    /// (`id24`) half stands (APPROX).
+    /// would consume the shot on those sinks). Retail's accept filter
+    /// (EF:3862-67) is TWO-armed: the creator half (`id_0x1A_26` →
+    /// `id24`) AND the claim-owner half (`playerEntityIndex_0x94_148`
+    /// → `f144`, the field both claim intakes write) — a ball or
+    /// building the caster already possesses does NOT eat the bolt;
+    /// it flies through to the unclaimed field behind. A
+    /// rival-claimed target fails neither half and stays claimable.
     fn claim_admits(&self, j: usize, own: u16) -> bool {
         let c = &self.ent[j];
         if c.flags & 8 == 0 {
             return false;
         }
         match (c.class64, c.model65) {
-            (5, 22) => c.id24 != own,
-            (10, 39) | (10, 40) => c.id24 != own,
+            (5, 22) => c.id24 != own && c.f144 != own,
+            (10, 39) | (10, 40) => c.id24 != own && c.f144 != own,
             // The (10,57) foreign sphere: gated on the parent tag
-            // (+40), no id re-check (sub_108B0's early-return arm).
+            // (+40), no id/owner re-check (sub_108B0's early-return
+            // arm, EF:3846).
             (10, 57) => c.f40 != own,
             (10, 45) => {
                 c.id24 != own
+                    && c.f144 != own
                     && self
                         .assets
                         .bldgprm

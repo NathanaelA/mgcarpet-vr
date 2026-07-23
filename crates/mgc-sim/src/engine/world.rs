@@ -12351,6 +12351,88 @@ mod tests {
         );
     }
 
+    /// The claim probe's accept filter (`sub_108B0` EF:3862-67) is
+    /// two-armed: creator (`id_0x1A_26`) AND claim owner
+    /// (`playerEntityIndex_0x94_148` → `f144`). A ball or building
+    /// the caster ALREADY possesses must not eat the bolt — otherwise
+    /// claimed balls near the caster shield the unclaimed field
+    /// behind them. A rival-claimed target stays a legit hit (weak
+    /// claims re-flip).
+    #[test]
+    fn mc2_possession_probe_skips_caster_claimed_targets() {
+        use crate::engine::features::BldgParam;
+        use crate::mc1::combat::MailTarget;
+
+        let caster = crate::mc1::mobs::PLAYER_TARGET;
+        // A candidate with claim owner `f144` overlapping the bolt;
+        // return the claim-probe hit.
+        let setup = |class: u8, model: u8, f144: u16| -> (usize, Option<MailTarget>) {
+            let mut w = mc2_flat_world();
+            w.g.assets.bldgprm = vec![BldgParam {
+                rate: 20,
+                flags: 0x00,
+                chain: 0,
+            }];
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let p = w.g.new_event().expect("projectile slot");
+            {
+                let e = &mut w.g.ent[p];
+                e.class64 = 9;
+                e.model65 = 17;
+                e.tick70 = 18;
+                e.id24 = caster;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+                e.f78 = 0;
+            }
+            w.g.link(p, x, y, gz);
+            let j = w.g.new_event().expect("candidate slot");
+            {
+                let e = &mut w.g.ent[j];
+                e.class64 = class;
+                e.model65 = model;
+                e.flags |= 8; // solid
+                e.id24 = 7; // spawned by a foreign owner
+                e.f144 = f144;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+                e.f78 = 0;
+            }
+            w.g.link(j, x, y, gz);
+            (j, w.g.claim_victim_scan_at(p, (x, y, gz)))
+        };
+
+        for (class, model, what) in [
+            (10u8, 39u8, "512 mana sphere"),
+            (10, 40, "random mana sphere"),
+            (10, 45, "building"),
+            (5, 22, "worm head"),
+        ] {
+            // Already possessed by the CASTER → the bolt flies through.
+            assert!(
+                setup(class, model, caster).1.is_none(),
+                "bolt must fly through a caster-claimed {what}"
+            );
+            // Unclaimed → hit.
+            let (j, hit) = setup(class, model, 0);
+            assert_eq!(
+                hit,
+                Some(MailTarget::Pool(j)),
+                "bolt detonates on an unclaimed {what}"
+            );
+            // Claimed by a RIVAL → still a legit target.
+            let (j, hit) = setup(class, model, 7);
+            assert_eq!(
+                hit,
+                Some(MailTarget::Pool(j)),
+                "bolt detonates on a rival-claimed {what}"
+            );
+        }
+    }
+
     /// The (10,54) mana-magnet aura (`sub_38D80`) drags nearby mana
     /// balls toward its eye so they converge and merge — the retail
     /// centre-island magnet — it must grip the balls, not creatures.

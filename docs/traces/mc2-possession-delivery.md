@@ -223,6 +223,25 @@ That is the whole bug for the playtest deviation. Stone templates stay closed on
 
 ---
 
+## Addendum 2026-07-23 — the probe's ownership gate, port fix
+
+Player report: already-claimed mana balls near the caster CONSUMED the
+bolt and shielded unclaimed balls behind them. Root cause: the port's
+`claim_admits` (mc1/combat.rs) carried only the creator half
+(`id_0x1A_26` → `id24`) of `sub_108B0`'s two-armed accept filter
+(EF:3862-67) — the claim-owner half (`playerEntityIndex_0x94_148` →
+`f144`, the field both claim intakes write) was noted APPROX-missing
+and never wired. Retail's bolt flies THROUGH anything already owned
+by the CASTER (either field) and still collides with rival-claimed
+targets; the gate is in the scan itself (a true fly-through, not a
+consumed-but-no-op hit) and applies identically at both call sites
+(`CastPosses_65F60`, `sub_674C0`). Fixed: `claim_admits` now checks
+`f144 != own` on the (5,22)/(10,39|40)/(10,45) arms — (10,57) keeps
+its parent-tag-only early-return arm (EF:3846). The autoaim lists
+(`mc2_aim_scan`) already had the `f144` skip. Non-vacuity test:
+`mc2_possession_probe_skips_caster_claimed_targets` (world.rs);
+goldens unchanged (they never fire projectiles).
+
 ## OPEN items
 1. **SPELLS.DAT possession rows**: the per-level `life_0x1A` values (0/1/2) and mana costs (`maxMana_0x8C_140` of the class-15 token) were not extracted — pull from the baked spell data when the MC2 cast column lands.
 2. **(10,54)/(10,69) auxiliary tick** (`AddAuxiliary_50500` action 0x3B, EF:36817) — cosmetic shimmer; body not transcribed here.
