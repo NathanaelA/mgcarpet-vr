@@ -21,6 +21,12 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use mgc_sim::{HEIGHT_SCALE, MAP_TILES};
 
+#[cfg(target_os = "android")]
+const IS_ANDROID: bool = true;
+
+#[cfg(not(target_os = "android"))]
+const IS_ANDROID: bool = false;
+
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Number of light levels in the engine's shade-remap table.
@@ -4972,7 +4978,8 @@ impl Renderer {
             && !self.map_view
             && self.wave_mode != 0
             && self.ceiling_bind_group.is_none()
-            && self.mirror_bind_group.is_some();
+            && self.mirror_bind_group.is_some()
+            && !IS_ANDROID;
         // The mirror pre-pass itself — a full second scene render —
         // only runs when some deep-water tile is within visible
         // reach. With none, no visible fragment can sample the mirror
