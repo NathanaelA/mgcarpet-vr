@@ -72,6 +72,12 @@ pub fn mail_trace_slot() -> usize {
 use engine::world;
 use mc1::spells;
 
+#[cfg(target_os = "android")]
+const IS_ANDROID: bool = true;
+
+#[cfg(not(target_os = "android"))]
+const IS_ANDROID: bool = false;
+
 /// Fixed simulation tick rate.
 ///
 /// 24 Hz — faithful to retail MC2, whose engine advanced one "game turn"
@@ -225,6 +231,8 @@ pub struct FlightInput {
     /// units) — the roll's abort sense: a per-tick |dx| > 16 means
     /// the player grabbed the stick (sub_55C60 EF:38951-56).
     pub raw_dx: i16,
+    // Used to track extra commands for UI stuff in VR
+    pub extra_data: u8,
     /// REPLAY-ONLY exact move byte (retail `dw_0` bits 1/2 speed,
     /// 4/8 strafe): when set, the faithful movers consume these bits
     /// verbatim instead of deriving them from the float axes. The
