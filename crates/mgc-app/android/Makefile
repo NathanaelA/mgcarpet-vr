@@ -1,4 +1,4 @@
-# Packages the mgc-vr .so into a signed, sideloadable APK for Meta Quest 3.
+# Packages the mgc-app .so into a signed, sideloadable APK for Meta Quest 3.
 #
 # No Gradle: this project is a Cargo workspace everywhere else, and the
 # manifest carries no resources (@string/@drawable etc.) — a direct
@@ -11,7 +11,7 @@
 #   cargo-ndk         — `cargo install cargo-ndk`
 #
 # Usage:
-#   make apk        # crates/mgc-vr/android/build/mgcarpet-vr.apk
+#   make apk        # crates/mgc-app/android/build/mgcarpet-vr.apk
 #   make install     # adb install -r the above
 #   make clean
 
