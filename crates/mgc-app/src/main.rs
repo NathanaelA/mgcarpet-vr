@@ -2123,7 +2123,20 @@ impl App {
             // The map texture recompose is tick-throttled and the menu
             // opens paused — recompose explicitly so the toggle shows.
             "render.debug.map_trigger_areas" | "render.enhancement.map_owned_buildings" => {
-                if let Some(sess) = self.session.as_deref() {
+                if let Some(sess) = self.session.as_deref_mut() {
+                    // The dot set itself consumes the option, and no
+                    // entity sync runs while paused — re-derive it
+                    // before the recompose.
+                    if let Some(w) = &sess.sim.world {
+                        sess.level.map_dots = entities::map_dots_from_poses(
+                            sess.level.game,
+                            &w.live_poses(),
+                            &sess.level.palette_rgba,
+                            self.cfg.render.enhancement.map_owned_buildings,
+                            sess.level.mc2_env,
+                            sess.sim.tick as u32,
+                        );
+                    }
                     let overlay = map_overlay(&sess.level, &self.cfg);
                     if let Some(r) = &mut self.renderer {
                         r.update_map(&sess.level.view, &overlay);

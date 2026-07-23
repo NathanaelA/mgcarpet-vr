@@ -846,11 +846,12 @@ pub struct LivePose {
     /// renderer maps 2/3 to plain alpha 1/3 / 2/3 (the blend matrix
     /// is `nearest_palette(⅓·src + ⅔·dst)` minus quantization).
     pub blend: u8,
-    /// The entity appears on the overhead map but draws NO world
-    /// billboard — MC2 unclaimed buildings: the flag sprite is
-    /// suppressed (byte[0] bit 0, EF:27292-97) but the retail map
-    /// pass still plots them (0xF0F UNPOSSESSED_BUILDING2,
-    /// GameUI.cpp:1276-1295 — it never skips on the claim bit).
+    /// The entity draws NO world billboard, only (at most) a map
+    /// marker — unclaimed buildings: the flag sprite is suppressed
+    /// (MC2 byte[0] bit 0, EF:27292-97). MC2's retail map pass still
+    /// plots them (0xF0F UNPOSSESSED_BUILDING2, GameUI.cpp:1276-1295
+    /// — it never skips on the claim bit); MC1's map draws buildings
+    /// only under the `map_owned_buildings` enhancement.
     pub map_only: bool,
     /// PROTOTYPE (enhanced fire): flame-segment size multiplier,
     /// 1.0 for everything except a leadered firestorm's (10,77)
@@ -1442,12 +1443,13 @@ impl World {
         // Houses (m45): the visible building is painted terrain; the
         // entity billboard is the OWNER FLAG (sprite 177 + color row) —
         // drawn only once CLAIMED. An unclaimed dwelling stays OUT of
-        // the billboard and map passes (`map_only`, and the MC1 map-dot
-        // loop skips it), but it is NO LONGER fully skipped: it rides in
-        // the pose set with a `life_frac` so the debug health-bar
-        // overlay covers it like every other destroyable. Full-skip was
-        // why MC1 unclaimed dwellings showed no bar (MC2 already did
-        // this via map_only).
+        // the billboard pass (`map_only`) but rides in the pose set
+        // with a `life_frac` so the debug health-bar overlay covers it
+        // like every other destroyable (full-skip was why MC1 unclaimed
+        // dwellings showed no bar). On the map, MC1 dwellings draw
+        // nothing by default (player-certified retail behavior) — the
+        // app's `map_owned_buildings` enhancement is what consumes
+        // these poses for MC2-style building markers.
         let unclaimed_house = e.class64 == 10 && e.model65 == 45 && e.f144 == 0;
         // Body segments hide from map dots + health bars (the heads
         // carry both) — MC1's state 120.

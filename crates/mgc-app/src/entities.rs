@@ -331,9 +331,10 @@ pub fn health_bars_from_poses(
 }
 
 /// The team color pairs `byte_99B58[16]` (remc1 :5740): per team,
-/// even entry = the violet-family projectile/blink-A color, odd =
-/// the blue-family creature/blink-B color. Raw palette indices,
-/// exactly as plotted.
+/// even entry = the bright/solid color (projectiles, blink-A), odd =
+/// the darker alternate (creatures, blink-B). Raw palette indices,
+/// exactly as plotted; row = the wizard slot (0 = the human, whose
+/// even entry 0xB7 is a near-white lavender in the game palette).
 const TEAM_COLORS: [(u8, u8); 8] = [
     (0xB7, 0x71),
     (0x7D, 0x7A),
@@ -345,9 +346,9 @@ const TEAM_COLORS: [(u8, u8); 8] = [
     (0x10, 0x0E),
 ];
 #[cfg(test)]
-const TEAM0_VIOLET: u8 = TEAM_COLORS[0].0;
+const TEAM0_EVEN: u8 = TEAM_COLORS[0].0;
 #[cfg(test)]
-const TEAM0_BLUE: u8 = TEAM_COLORS[0].1;
+const TEAM0_ODD: u8 = TEAM_COLORS[0].1;
 
 /// Icon patches for the map's UI-sprite markers (cropped from the
 /// composited HSPR atlas): castle = sprite 58+team, balloon = 66+team
@@ -580,8 +581,8 @@ fn mc2_map_dots(
 /// the original's state-120 exclusion. `turn` = the sim tick
 /// (MC1's claimed-ball blink derives its ~4 Hz phase from it; MC2's
 /// `colorIndex_121` divides it directly). `owned_buildings` = our
-/// MC2-style enhancement: owned dwellings get a 2x2 grown dot instead
-/// of the original's barely-distinct 1px.
+/// MC2-style enhancement: dwellings mark like MC2's (unclaimed pink,
+/// possessed blinking the owner pair); off, no building marks at all.
 ///
 /// MC2 worlds dispatch to [`mc2_map_dots`] — the real
 /// DrawMinimapEntities_B_61A00 law.
@@ -597,18 +598,23 @@ pub fn map_dots_from_poses(
         return mc2_map_dots(poses, palette, env, turn);
     }
     let blink = (turn >> 3) & 1 == 0;
+    // MC2's linked-building flash phase (`colorIndex_121[3]`, the
+    // same one mc2_map_dots runs): the dwelling-marker enhancement
+    // blinks at MC2's cadence, not the ~2.7x slower MC1 claimed-ball
+    // phase above (player ruling — the option IS MC2's behavior).
+    let blink3 = (turn / 3) & 1 == 1;
     // The engine's computed colors go through its 16x16x16 RGB LUT
-    // (byte_AD167_AD157, BLUE-major per the retail map's blue-violet
-    // village dots): [1] = near-black (wild creatures), [16] = dark
-    // green (villagers), [3856] = the vivid blue-violet (wild
-    // class-9/10 things — houses, projectiles).
-    let near_black = nearest_palette_index(palette, vga(7, 3, 3));
-    // Villager green: retail's LUT[16] decodes to (r0, g1, b0) — a
-    // green so dark the nearest-palette match lands on black. The map
-    // is gameplay-critical, so aim at a legible mid-green instead of
-    // the literal cube color (deliberate: map-marker legibility).
-    let dark_green = nearest_palette_index(palette, vga(8, 32, 8));
-    let wild_blue = nearest_palette_index(palette, vga(3, 7, 63));
+    // (byte_AD167_AD157). The cube is RED-major and pre-incremented
+    // (build loop :41950-77: R strides 256, G 16, B 1, entry values
+    // 3 + 4·level), so LUT[n] decodes 6-bit RGB (3+4·((n-1)>>8),
+    // 3+4·(((n-1)>>4)&15), 3+4·((n-1)&15)): [1] = near-black (wild
+    // creatures), [16] = the vivid violet-blue (villagers — the
+    // "village speckles" on the retail map are the VILLAGERS, not
+    // the houses), [3856] = (n-1 = 0xF0F) bright magenta — the same
+    // RGB444 code MC2's UNPOSSESSED_BUILDING2 resolves.
+    let near_black = nearest_palette_index(palette, vga(3, 3, 3));
+    let villager_blue = nearest_palette_index(palette, vga(3, 3, 63));
+    let wild_magenta = nearest_palette_index(palette, vga(63, 3, 63));
     let red = nearest_palette_index(palette, vga(63, 3, 7));
     const SCENERY: u8 = 28;
     const WILD_BALL: u8 = 232; // v74 = -24 (:57291)
@@ -618,15 +624,8 @@ pub fn map_dots_from_poses(
         if p.segment {
             continue;
         }
-        // Unclaimed MC1 dwellings ride the pose set only so the debug
-        // health-bar overlay can cover them; they take NO map dot
-        // (retail never marks houses — the owned-building markers are
-        // the opt-in `owned_buildings` enhancement).
-        if p.map_only {
-            continue;
-        }
         let team = p.team.map(|t| TEAM_COLORS[(t as usize).min(7)]);
-        let owner_color = team.map(|(v, _)| v).unwrap_or(wild_blue);
+        let owner_color = team.map(|(v, _)| v).unwrap_or(wild_magenta);
         let mut size = 1u8;
         let color = match (p.class, p.model) {
             // Charred trees leave the map (v29 stays 0, :57219).
@@ -637,7 +636,7 @@ pub fn map_dots_from_poses(
             (2, _) => SCENERY,
             // Castle/balloon draw as icon STAMPS, not dots.
             (3, _) => continue,
-            (5, 12..=14) if team.is_none() => dark_green,
+            (5, 12..=14) if team.is_none() => villager_blue,
             // :57252 (the team pair's odd entry).
             (5, _) if team.is_some() => team.unwrap().1,
             (5, _) => near_black,
@@ -647,24 +646,34 @@ pub fn map_dots_from_poses(
                 size = 2;
                 owner_color
             }
-            // Mana balls: wild = 232; claimed BLINK the team pair
-            // on the global phase (:57282-91).
-            (10, 39 | 40) => {
+            // Mana balls: wild = 232; claimed model 39 BLINKS the team
+            // pair on the global flash phase (:57282-92). Model 40
+            // carries no phase term — it falls through LABEL_32 like
+            // any other class-10 (steady even entry / wild magenta).
+            (10, 39) => {
                 if let Some((v, b)) = team {
                     if blink { v } else { b }
                 } else {
                     WILD_BALL
                 }
             }
-            // Houses and every other class-10 effect: the owner rule
-            // (yes, the original dots houses — the blue-violet
-            // village speckles on the retail map). The enhancement
-            // grows OWNED dwellings to 2x2 for legibility.
+            // Dwellings: retail marks NO buildings on the map
+            // (player-certified from original gameplay; the
+            // decompile's LABEL_32 house arm notwithstanding — see
+            // docs/DEVIATIONS.md), so the faithful default plots
+            // nothing. The `owned_buildings` enhancement brings MC2's
+            // law over: unclaimed = the steady magenta 0xF0F code,
+            // possessed = the owner pair blinking at MC2's flash
+            // cadence, 1px like MC2's markers.
             (10, 45) => {
-                if owned_buildings && team.is_some() {
-                    size = 2;
+                if !owned_buildings {
+                    continue;
                 }
-                owner_color
+                if let Some((v, b)) = team {
+                    if blink3 { v } else { b }
+                } else {
+                    wild_magenta
+                }
             }
             (10, _) => owner_color,
             (12, _) => red,
@@ -1859,36 +1868,90 @@ mod tests {
         assert_eq!((out[0].x, out[0].z), (50.0, 50.0));
     }
 
-    /// The verbatim sub_48710 color switch (:57184-:57292).
+    /// The verbatim sub_48710 color switch (:57184-:57292), plus the
+    /// dwelling-marker enhancement arms.
     #[test]
     fn map_dot_color_switch() {
-        let pal = [[0u8; 4]; 256];
+        // Distinct anchors for the LUT-computed colors: [1] the
+        // 0xF0F magenta (wild class-9/10), [2] the LUT[16]
+        // villager violet-blue.
+        let mut pal = [[0u8; 4]; 256];
+        pal[1] = [255, 12, 255, 255];
+        pal[2] = [12, 12, 255, 255];
         // blink true ↔ turn 0, false ↔ turn 8 ((turn >> 3) & 1 == 0).
-        let dots = |p: LivePose, blink: bool| {
+        let dots = |p: LivePose, owned_buildings: bool, blink: bool| {
             map_dots_from_poses(
                 GameId::Mc1,
                 &[p],
                 &pal,
-                false,
+                owned_buildings,
                 Mc2MapEnv::Day,
                 if blink { 0 } else { 8 },
             )
         };
 
-        // Player projectiles = the team-0 violet; wild = LUT blue.
-        assert_eq!(dots(pose(9, 0, true, 42), false)[0].color, TEAM0_VIOLET);
-        // Claimed mana balls blink the team pair on the phase.
-        assert_eq!(dots(pose(10, 39, true, 105), true)[0].color, TEAM0_VIOLET);
-        assert_eq!(dots(pose(10, 39, true, 105), false)[0].color, TEAM0_BLUE);
+        // Player projectiles = the team-0 even entry; wild = the
+        // LUT[3856] magenta (RED-major cube: n-1 = 0xF0F).
+        assert_eq!(
+            dots(pose(9, 0, true, 42), false, false)[0].color,
+            TEAM0_EVEN
+        );
+        assert_eq!(dots(pose(9, 0, false, 42), false, false)[0].color, 1);
+        // Wild villagers = the LUT[16] violet-blue (the retail map's
+        // village speckles).
+        assert_eq!(dots(pose(5, 13, false, 0), false, false)[0].color, 2);
+        // Claimed model-39 balls blink the team pair on the phase;
+        // model 40 has no phase term (LABEL_32): steady even entry.
+        assert_eq!(
+            dots(pose(10, 39, true, 105), false, true)[0].color,
+            TEAM0_EVEN
+        );
+        assert_eq!(
+            dots(pose(10, 39, true, 105), false, false)[0].color,
+            TEAM0_ODD
+        );
+        assert_eq!(
+            dots(pose(10, 40, true, 105), false, true)[0].color,
+            TEAM0_EVEN
+        );
+        assert_eq!(
+            dots(pose(10, 40, true, 105), false, false)[0].color,
+            TEAM0_EVEN
+        );
         // Wild balls = the raw 232 (:57291).
-        assert_eq!(dots(pose(10, 39, false, 52), false)[0].color, 232);
+        assert_eq!(dots(pose(10, 39, false, 52), false, false)[0].color, 232);
         // Portals draw the 2x2 grown dot (:57270).
-        assert_eq!(dots(pose(10, 34, false, 223), false)[0].size, 2);
+        assert_eq!(dots(pose(10, 34, false, 223), false, false)[0].size, 2);
         // Charred trees leave the map (:57219).
-        assert!(dots(pose(2, 0, false, 226), false).is_empty());
-        assert_eq!(dots(pose(2, 0, false, 83), false).len(), 1);
+        assert!(dots(pose(2, 0, false, 226), false, false).is_empty());
+        assert_eq!(dots(pose(2, 0, false, 83), false, false).len(), 1);
         // Castles/balloons are icon stamps, never dots.
-        assert!(dots(pose(3, 2, true, 0), false).is_empty());
+        assert!(dots(pose(3, 2, true, 0), false, false).is_empty());
+
+        // Dwellings, faithful default: NO marker, claimed or not
+        // (player-certified retail behavior).
+        let mut unclaimed = pose(10, 45, false, 105);
+        unclaimed.map_only = true; // as live_poses_mc1 exports them
+        assert!(dots(unclaimed, false, false).is_empty());
+        assert!(dots(pose(10, 45, true, 105), false, false).is_empty());
+        // The MC2-style enhancement: unclaimed = steady magenta on
+        // every phase; possessed = the owner pair blinking at MC2's
+        // (turn / 3) & 1 cadence, NOT the slower claimed-ball phase;
+        // all 1px.
+        let at_turn = |p: LivePose, turn: u32| {
+            map_dots_from_poses(GameId::Mc1, &[p], &pal, true, Mc2MapEnv::Day, turn)
+        };
+        for turn in 0..8 {
+            assert_eq!(at_turn(unclaimed, turn)[0].color, 1);
+            assert_eq!(at_turn(unclaimed, turn)[0].size, 1);
+        }
+        let claimed = pose(10, 45, true, 105);
+        assert_eq!(at_turn(claimed, 3)[0].color, TEAM0_EVEN);
+        assert_eq!(at_turn(claimed, 0)[0].color, TEAM0_ODD);
+        // Distinct from the ball phase: turn 8 flips the ball blink
+        // but sits on the dark half of the building phase.
+        assert_eq!(at_turn(claimed, 8)[0].color, TEAM0_ODD);
+        assert_eq!(at_turn(claimed, 3)[0].size, 1);
     }
 
     /// The MC2 minimap law (DrawMinimapEntities_B_61A00, remc2

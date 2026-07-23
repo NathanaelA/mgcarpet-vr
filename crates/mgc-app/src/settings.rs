@@ -802,14 +802,16 @@ pub fn registry() -> Vec<Spec> {
             cli: None,
             cfg_path: "render.enhancement.map_owned_buildings",
             read: toggle!(c => render.enhancement.map_owned_buildings),
-            desc: "Highlight claimed/possessed dwellings on the overhead map in \
-                   the owner's color — MC2's map behavior brought to MC1 as an \
-                   opt-in (MC1 never marks houses).",
+            desc: "Mark dwellings on the overhead map the way MC2 does: \
+                   unclaimed pink, claimed/possessed flashing in the owner's \
+                   color — brought to MC1 as an opt-in (retail MC1 never \
+                   marks buildings).",
             ctl: Ctl::Toggle {
                 set: |c, v| c.render.enhancement.map_owned_buildings = v,
                 descs: [
                     "Unmarked dwellings, as retail MC1 draws them.",
-                    "Owned dwellings tinted in the owner's color.",
+                    "MC2-style markers: unclaimed pink, owned flashing in \
+                     the owner's color.",
                 ],
             },
         },
