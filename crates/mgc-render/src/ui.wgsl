@@ -1,13 +1,27 @@
-// Screen-space UI sprites (spellbook icons, HUD slots, mana bars).
-// Quads live in pixel coordinates, origin top-left; the atlas is
-// RGBA, pre-composited on the CPU through the engine's blend LUT
-// (`blend[src | dest<<8]`, the original's 2D blit path) so the shader
+// Screen-space or world-space UI sprites (spellbook icons, HUD slots,
+// mana bars). In the default screen-space mode quads live in pixel
+// coordinates, origin top-left. In VR the same quad stream can be pinned
+// to a world-space panel in front of the player so the HUD has
+// stereoscopic depth instead of being glued to the near plane.
+// The atlas is RGBA, pre-composited on the CPU through the engine's blend
+// LUT (`blend[src | dest<<8]`, the original's 2D blit path) so the shader
 // stays a dumb textured blit. A zero-width UV rect means "solid quad"
 // (mana-bar fills, dim overlays) drawn from the tint alone.
 
 struct UiGlobals {
     // Surface size in pixels (z/w unused).
     screen: vec4<f32>,
+    // Per-eye view-projection matrix (used in world-space mode).
+    view_proj: mat4x4<f32>,
+    // World-space panel basis.  The panel is centered in screen pixels;
+    // a pixel offset from the screen centre is multiplied by panel_scale
+    // and expanded along panel_right / panel_up.
+    panel_origin: vec3<f32>,
+    panel_scale: f32,
+    panel_right: vec3<f32>,
+    panel_mode: u32,
+    panel_up: vec3<f32>,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> ui: UiGlobals;
@@ -57,13 +71,28 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     // coordinate the same way, so the seam cannot open.
     let px = round(inst.rect.xy + c * inst.rect.zw);
     var out: VsOut;
-    // Pixel -> NDC (y down in pixels, up in NDC).
-    out.clip = vec4<f32>(
-        px.x / ui.screen.x * 2.0 - 1.0,
-        1.0 - px.y / ui.screen.y * 2.0,
-        0.0,
-        1.0,
-    );
+
+    if ui.panel_mode == 1u {
+        // WORLD-SPACE HUD PANEL (VR): each pixel offset from the screen
+        // centre is mapped onto a rectangle floating in world space, then
+        // projected through the per-eye view-projection matrix.
+        let center = ui.screen.xy * 0.5;
+        let offset = (px - center) * ui.panel_scale;
+        let world = ui.panel_origin
+                  + ui.panel_right * offset.x
+                  + ui.panel_up    * offset.y;
+        out.clip = ui.view_proj * vec4<f32>(world, 1.0);
+    } else {
+        // SCREEN-SPACE HUD (flat screen): Pixel -> NDC (y down in pixels,
+        // up in NDC).
+        out.clip = vec4<f32>(
+            px.x / ui.screen.x * 2.0 - 1.0,
+            1.0 - px.y / ui.screen.y * 2.0,
+            0.0,
+            1.0,
+        );
+    }
+
     // uv.z (width) encodes the draw mode: 0 = solid tint; < 0 = silhouette
     // (|w| is the real width); > 0 = normal textured.
     let uvw = abs(inst.uv.z);
