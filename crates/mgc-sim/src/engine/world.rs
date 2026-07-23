@@ -13504,6 +13504,57 @@ mod tests {
         assert_eq!(w.g.ent[jar].f54, 64, "re-steal lock re-armed");
     }
 
+    /// The castle-site scout derives its scan-start sector on the
+    /// position cast to SIGNED int16 (sub_13B00 EF:6076/:6079), NOT
+    /// the unsigned `pos >> 14`: coordinate band 2 (0x8000..0xBFFF)
+    /// starts at corner 3 and band 3 (0xC000..0xFFFF) at corner 0.
+    /// Load-bearing on mc2:04 — Rahn starts at (64,255) and retail's
+    /// first candidate is tile (64,0), his OWN island across the
+    /// y-wrap (the authored crater pad); the unsigned form scouted
+    /// (64,192), open sea, and planted his castle there.
+    #[test]
+    fn mc2_castle_scout_uses_the_signed_sector_derivation() {
+        use crate::mc2::rivals::Mc2RivalConfig;
+        let mut w = mc2_flat_world();
+        let mut cfg: [Option<Mc2RivalConfig>; 8] = Default::default();
+        cfg[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 0,
+            start: [false; 26],
+            start_level: [0; 26],
+            blocked: [false; 26],
+        });
+        w.set_mc2_wizards(&cfg, 2);
+        let rival = (1..w.g.ent.len())
+            .find(|&j| w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 1)
+            .expect("rival spawned");
+        // No foreign castles exist, so the FIRST scanned corner is
+        // always accepted — the assertion isolates the sector math.
+        // Band 3 y (Rahn's mc2:04 start): y = 255 → corner y = 0
+        // (across the wrap), never 3<<14.
+        let (x, y) = ((64u16 << 8) | 128, (255u16 << 8) | 128);
+        let gz = w.g.ground_z(x, y) as i16;
+        w.g.move_relink(rival, x, y, gz);
+        assert!(w.mc2_rival_scout_site(0, rival), "scout accepts");
+        assert_eq!(
+            w.mc2_rivals[0].site,
+            (1 << 14, 0),
+            "band-3 y scouts corner 0 across the wrap (retail signed math)"
+        );
+        // Band 2 x: x = tile 150 (0x9680) → corner x = 3<<14, not 2<<14.
+        let (x, y) = ((150u16 << 8) | 128, (50u16 << 8) | 128);
+        w.g.move_relink(rival, x, y, gz);
+        assert!(w.mc2_rival_scout_site(0, rival), "scout accepts");
+        assert_eq!(
+            w.mc2_rivals[0].site,
+            (3 << 14, 0),
+            "band-2 x scouts corner 3 (retail signed math)"
+        );
+    }
+
     /// The MC2 rival carpet carries `byte_0x38_56 = 29` (the wizard
     /// vulnerability mask). Without it f28 stays 0 and `area_write`'s
     /// per-channel gate drops every hit at the mailbox, so a fireball

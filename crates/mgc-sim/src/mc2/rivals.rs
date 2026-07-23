@@ -219,7 +219,7 @@ pub(crate) struct Mc2Rival {
     pub(crate) target: u16,
     target_sig: u16,
     /// Scouted castle site (axis_0x9A_154x).
-    site: (u16, u16),
+    pub(crate) site: (u16, u16),
     /// The strafe channel (strafeSpeed_0x10_16): decays 4/tick,
     /// stepped at yaw+90. Written 80 by the reactive dodge
     /// (EF:7469) and 3*minSpeed*Reflexes/255 by the combat weave.
@@ -1320,14 +1320,36 @@ impl World {
     /// Castle-site scout (sub_13B00 EF:6056-6103): walk the 4x4
     /// sector grid from the OWN sector (+x inner, +y outer, wrapping
     /// mod 4); a sector CORNER qualifies when the nearest foreign
-    /// castle is over 12288 away in CHEBYSHEV max(|dx|,|dy|)
-    /// (`sub_583B0`). The FIRST qualifying corner wins — no
+    /// castle is over 12288 away in CHEBYSHEV max(|dx|,|dy|) on the
+    /// UNSIGNED axes (`sub_583B0` over `axis_3d` uint16 x/y — the
+    /// brain-trace metric OPEN is CLOSED: raw units, not
+    /// supercell-scaled). The FIRST qualifying corner wins — no
     /// nearest-ranking, no water veto, no +128 centre offset, no
     /// second candidate (the duplicated check in the decompile is a
     /// loop-unroll artifact, not a second candidate).
-    fn mc2_rival_scout_site(&mut self, ri: usize, i: usize) -> bool {
+    ///
+    /// The scan-start sector is NOT the unsigned `pos >> 14`: retail
+    /// derives it on the position cast to SIGNED int16 with the
+    /// round-toward-zero correction (EF:6076/:6079 —
+    /// `(int16_t)(pos - (sign<<14) - sign) >> 14`, sign = the -1/0
+    /// indicator), then truncates to a byte. In the upper coordinate
+    /// bands that DIFFERS from the unsigned shift: band 2
+    /// (0x8000..0xBFFF) starts the scan at corner 3, band 3
+    /// (0xC000..0xFFFF) at corner 0. Load-bearing on mc2:04 — Rahn
+    /// starts at (64,255), and the signed form points the first
+    /// candidate across the y-wrap at tile (64,0), the authored
+    /// crater pad on HIS OWN island; the unsigned form scanned from
+    /// (64,192) and planted the castle in the open sea.
+    pub(crate) fn mc2_rival_scout_site(&mut self, ri: usize, i: usize) -> bool {
         let me = self.mc2_rivals[ri].ent;
-        let (sx, sy) = (self.g.ent[i].x >> 14, self.g.ent[i].y >> 14);
+        // EF:6074-79 — the signed-trunc sector, kept as the raw byte
+        // (the `(x_BYTE)v13 + i` addition wraps mod 256, then & 3).
+        let sector = |v: u16| -> u16 {
+            let c = v as i16;
+            let s: i16 = if c < 0 { -1 } else { 0 };
+            (((c - (s << 14) - s) >> 14) as u8) as u16
+        };
+        let (sx, sy) = (sector(self.g.ent[i].x), sector(self.g.ent[i].y));
         for row in 0..4u16 {
             for col in 0..4u16 {
                 let tx = (sx.wrapping_add(col) & 3) << 14;

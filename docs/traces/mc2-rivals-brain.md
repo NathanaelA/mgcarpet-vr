@@ -15,6 +15,19 @@ neutral. The deltas are a handful of constants, one genuinely new movement sub (
 All citations to `/home/rain/projects/mgcarpet/reference/remc2/remc2/`: EF = `engine/EventsFunctions.cpp`,
 otherwise file:line. Trace date 2026-07-12. Read `mc2-castle-builder.md` for transcription conventions.
 
+> **CORRECTIONS (mc2:04 sea-castle fix):** two §1.4 scout-site items are now CLOSED against
+> the decompile bodies.
+> 1. **`sub_583B0` metric (worklist 9, "supercell-scaled?"):** it is plain **unsigned Chebyshev
+>    `max(|dx|,|dy|)` in raw world units** (EF:40408; `axis_3d.x/y` are `uint16_t` — axis_3d.h) —
+>    the port's `> 12288` gate as shipped is verbatim-correct.
+> 2. **The scan-start supercell is NOT `pos >> 14`.** EF:6076/:6079 derive it on the position
+>    cast to **SIGNED int16** with the round-toward-zero correction
+>    (`(int16_t)(pos − (sign<<14) − sign) >> 14`, sign = the −1/0 indicator), then truncate to a
+>    byte. Coordinate band 2 (0x8000..0xBFFF) therefore starts the scan at corner **3** and band
+>    3 (0xC000..0xFFFF) at corner **0** — not 2/3 as the unsigned form gives. Load-bearing on
+>    mc2:04: Rahn (start y = 255, band 3) scouts tile (64,0) — his own island across the y-wrap,
+>    the authored crater pad — where the unsigned form scouted open sea at (64,192).
+
 ---
 
 ## Headline findings (read first)
@@ -825,8 +838,9 @@ For each MC1 `rivals.rs` mechanism: SAME / DIFFERENT / ABSENT in MC2.
 7. **Drop the free-instant runtime AI castle** (`rival_cast_castle`'s castle-less direct-plant path is MC1);
    route AI Create Castle through the shared `sub_5F660`/build machinery (castle-builder §4).
 8. **Move defense into cascade step 7** (or document the pre-cascade placement as an accepted approximation).
-9. **Re-derive the scout-site distance threshold** from `sub_583B0`'s `0x3000` (§1.4) rather than the
-   MC1-inherited `12288²`.
+9. ~~**Re-derive the scout-site distance threshold** from `sub_583B0`'s `0x3000` (§1.4) rather than the
+   MC1-inherited `12288²`.~~ **CLOSED** — see the CORRECTIONS banner: raw unsigned Chebyshev, `12288`
+   as ported is correct; the real §1.4 gap was the SIGNED supercell derivation.
 10. **Load personality + book from `WizardMapSettings_0x360D2`** (Aggression/Perception/Reflexes/Life +
     StartingSpells/BlockedSpells/byte_0x360FBx level array) — the MC2 editor struct (BasicTerrain.h:20-34),
     not the MC1 `wizards.json` shape. Coordinate with the sibling lifecycle trace (spawn/init owns the
@@ -836,7 +850,8 @@ For each MC1 `rivals.rs` mechanism: SAME / DIFFERENT / ABSENT in MC2.
 
 - `sub_16580` support subs: `sub_169C0` (situation classifier) + `sub_16730` (neighbor probe) + the
   `x_WORD_D3FCE`/`x_WORD_D3FE8` yaw tables — dump verbatim before porting the water steer.
-- `sub_583B0` metric (supercell-scaled?) — confirm the `0x3000` threshold's units for the scout site.
+- ~~`sub_583B0` metric (supercell-scaled?) — confirm the `0x3000` threshold's units for the scout site.~~
+  **CLOSED** — raw unsigned Chebyshev (CORRECTIONS banner).
 - `sub_15CB0`/`sub_15D20`/`sub_15D40` — the spell-pickup acquire chain (learning), transcribe fully for §4.
 - `byte_0x360FBx[26]` in WizardMapSettings — confirmed to exist; verify it is starting LEVEL (assumed).
 - `dword_0x16D_365` (init 2000, decremented in housekeeping) — purpose unconfirmed (post-death immunity?).
