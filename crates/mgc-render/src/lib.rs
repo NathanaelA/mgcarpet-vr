@@ -4352,12 +4352,20 @@ impl Renderer {
         );
         // The map pane: origin at the screen corner, right edge receding
         // by BOOK_GAP from the column (the vertical bar of the "T").
-        let map_pane = (
+        let mut map_pane = (
             BOOK_MAP_X,
             BOOK_MAP_Y,
             (col_x - f.len(BOOK_GAP)).max(0.0),
             pane_bottom,
         );
+        // In VR the whole HUD is rendered on a small world-space panel,
+        // so the book-map pane is tiny and hard to read. Double it in
+        // world-space mode; it is allowed to overlap the world viewport
+        // because the map view is the point of this screen.
+        if self.ui_panel_mode == 1 {
+            map_pane.2 = (map_pane.2 * 2.0).min(f.w - map_pane.0);
+            map_pane.3 = (map_pane.3 * 2.0).min(f.h - map_pane.1);
+        }
 
         let aspect = if self.map_view {
             // Aspect-true to the viewport rect in BOTH layouts: same
@@ -4417,8 +4425,8 @@ impl Renderer {
             && !self.map_view
             && self.wave_mode != 0
             && self.ceiling_bind_group.is_none()
-            && self.mirror_bind_group.is_some()
-            && !IS_ANDROID;
+            && self.mirror_bind_group.is_some();
+        // && !IS_ANDROID;
         // The mirror pre-pass itself — a full second scene render —
         // only runs when some deep-water tile is within visible
         // reach. With none, no visible fragment can sample the mirror
