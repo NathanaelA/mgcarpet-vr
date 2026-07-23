@@ -22,7 +22,7 @@ use openxr as xr;
 
 /// Turn rate at full stick deflection, radians/tick (24 Hz sim) — a
 /// traditional flight-stick feel, independent of head orientation.
-const YAW_RATE_PER_TICK: f32 = 1.2 / mgc_sim::TICK_RATE_HZ as f32;
+const YAW_RATE_PER_TICK: f32 = 1.5 / mgc_sim::TICK_RATE_HZ as f32; // was 1.2
 const PITCH_RATE_PER_TICK: f32 = 0.8 / mgc_sim::TICK_RATE_HZ as f32;
 
 pub struct InputActions {
@@ -35,6 +35,16 @@ pub struct InputActions {
     btn_b: xr::Action<bool>,
     btn_x: xr::Action<bool>,
     btn_y: xr::Action<bool>,
+    menu_click: xr::Action<bool>,
+    thumbstick_left_click: xr::Action<bool>,
+    thumbstick_right_click: xr::Action<bool>,
+    squeeze_left: xr::Action<f32>,
+    squeeze_right: xr::Action<f32>,
+    left_spell: u8,
+    right_spell: u8,
+    last_squeeze_left: bool,
+    last_squeeze_right: bool,
+    last_menu: bool,
 }
 
 impl InputActions {
@@ -46,8 +56,15 @@ impl InputActions {
         let trigger_right = action_set.create_action("trigger_right", "Cast right", &[])?;
         let btn_a = action_set.create_action("btn_a", "Respawn", &[])?;
         let btn_b = action_set.create_action("btn_b", "Demolish", &[])?;
-        let btn_x = action_set.create_action("btn_x", "Equip left (dev)", &[])?;
-        let btn_y = action_set.create_action("btn_y", "Equip right (dev)", &[])?;
+        let btn_x = action_set.create_action("btn_x", "Button x", &[])?;
+        let btn_y = action_set.create_action("btn_y", "Button y", &[])?;
+        let thumbstick_left_click =
+            action_set.create_action("left_thumbstick_click", "left thumbstick click", &[])?;
+        let thumbstick_right_click =
+            action_set.create_action("right_thumbstick_click", "right thumbstick click", &[])?;
+        let menu_click = action_set.create_action("menu_click", "Menu", &[])?;
+        let squeeze_left = action_set.create_action("squeeze_left", "Squeeze Left", &[])?;
+        let squeeze_right = action_set.create_action("squeeze_right", "Squeeze Right", &[])?;
 
         instance.suggest_interaction_profile_bindings(
             instance.string_to_path("/interaction_profiles/oculus/touch_controller")?,
@@ -69,6 +86,14 @@ impl InputActions {
                     instance.string_to_path("/user/hand/right/input/trigger/value")?,
                 ),
                 xr::Binding::new(
+                    &squeeze_left,
+                    instance.string_to_path("/user/hand/left/input/squeeze/value")?,
+                ),
+                xr::Binding::new(
+                    &squeeze_right,
+                    instance.string_to_path("/user/hand/right/input/squeeze/value")?,
+                ),
+                xr::Binding::new(
                     &btn_a,
                     instance.string_to_path("/user/hand/right/input/a/click")?,
                 ),
@@ -84,6 +109,18 @@ impl InputActions {
                     &btn_y,
                     instance.string_to_path("/user/hand/left/input/y/click")?,
                 ),
+                xr::Binding::new(
+                    &thumbstick_left_click,
+                    instance.string_to_path("/user/hand/left/input/thumbstick/click")?,
+                ),
+                xr::Binding::new(
+                    &thumbstick_right_click,
+                    instance.string_to_path("/user/hand/right/input/thumbstick/click")?,
+                ),
+                xr::Binding::new(
+                    &menu_click,
+                    instance.string_to_path("/user/hand/left/input/menu/click")?,
+                ),
             ],
         )?;
 
@@ -97,6 +134,16 @@ impl InputActions {
             btn_b,
             btn_x,
             btn_y,
+            thumbstick_left_click,
+            thumbstick_right_click,
+            menu_click,
+            squeeze_left,
+            squeeze_right,
+            left_spell: 0,
+            right_spell: 0,
+            last_squeeze_left: false,
+            last_squeeze_right: false,
+            last_menu: false,
         })
     }
 
@@ -111,7 +158,7 @@ impl InputActions {
     /// Syncs the action set and reads every action; call once per XR
     /// frame (not per sim tick — the same reading feeds however many
     /// sim ticks fire within one frame's accumulator burst).
-    pub fn poll(&self, session: &xr::Session<xr::Vulkan>) -> FlightInput {
+    pub fn poll(&mut self, session: &xr::Session<xr::Vulkan>) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
 
         let axis = |a: &xr::Action<xr::Vector2f>| {
@@ -133,18 +180,47 @@ impl InputActions {
         let left = axis(&self.left_stick);
         let right = axis(&self.right_stick);
 
-        FlightInput {
-            thrust: left.y,
-            strafe: left.x,
+        let mut extra_data = 0;
+
+        if pressed(&self.menu_click) && !self.last_menu {
+            extra_data |= 1;
+        }
+
+        let pitch_delta = if left.y < 0.0 { 0.5 } else { -0.5 };
+
+        let flight_input = FlightInput {
+            thrust: left.y * 4.0,
+            strafe: left.x * 4.0,
             yaw_delta: right.x * YAW_RATE_PER_TICK,
-            pitch_delta: right.y * PITCH_RATE_PER_TICK,
+            pitch_delta: pitch_delta, // right.y * PITCH_RATE_PER_TICK,
             fire_left: value(&self.trigger_left) > 0.5,
             fire_right: value(&self.trigger_right) > 0.5,
             respawn: pressed(&self.btn_a),
             demolish: pressed(&self.btn_b),
-            equip_left: pressed(&self.btn_x).then(|| mgc_sim::mc1::spells::SpellId(0)),
-            equip_right: pressed(&self.btn_y).then(|| mgc_sim::mc1::spells::SpellId(0)),
+            equip_left: (!self.last_squeeze_left && value(&self.squeeze_left) > 0.5).then(|| {
+                self.left_spell += 1;
+                if self.left_spell >= 24 {
+                    self.left_spell = 0;
+                }
+                mgc_sim::mc1::spells::SpellId(self.left_spell)
+            }),
+            equip_right: (!self.last_squeeze_right && value(&self.squeeze_right) > 0.5).then(
+                || {
+                    self.right_spell += 1;
+                    if self.right_spell >= 24 {
+                        self.right_spell = 0;
+                    }
+                    mgc_sim::mc1::spells::SpellId(self.right_spell)
+                },
+            ),
+            extra_data,
             ..Default::default()
-        }
+        };
+
+        self.last_squeeze_right = value(&self.squeeze_right) > 0.5;
+        self.last_squeeze_left = value(&self.squeeze_left) > 0.5;
+        self.last_menu = pressed(&self.menu_click);
+
+        flight_input
     }
 }

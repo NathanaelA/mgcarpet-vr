@@ -37,7 +37,7 @@
         android:hasCode="false">
 
         <!--
-          NativeActivity: the OS calls into the .so produced by mgc-vr.
+          NativeActivity: the OS calls into the .so produced by mgc-app.
           lib_name must match the Cargo package name (hyphens → underscores).
         -->
         <activity
