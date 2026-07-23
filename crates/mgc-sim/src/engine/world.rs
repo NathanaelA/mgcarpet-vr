@@ -4806,36 +4806,77 @@ impl World {
                 }
             }
             // `ApplyEvents_498A0` between passes (EV:161-282): tick
-            // the live cave sculptors in slot order to completion —
-            // the settle-TICK band (painters trace §4.4). Slot-order
-            // rounds mean every animated sculptor's phase-0 terrain
-            // SAMPLE happens before any same-pass sculptor's phase-1
-            // WRITE, exactly like retail; dead slots are reaped so
-            // later passes reuse them (per-entity rand = slot +
-            // global stream).
-            self.mc2_settle_cave_band();
+            // every settle-band one-shot in slot order to completion.
+            self.mc2_apply_events();
         }
+        // Retail crosses the whole map build with the mixer OFF —
+        // `soundActive_E3799` is saved+zeroed before the generate and
+        // restored only after disposition 0 (EF:39364-65, :39430) —
+        // so the settle's scorch rumbles and carve sounds never reach
+        // the card. And the wizards are initialized only after the
+        // load: any player mail the settle's area probes wrote (a
+        // start marker on a scorch island — mc2:04) dies with that
+        // init instead of landing as damage on the first live tick.
+        self.g.sounds.clear();
+        self.g.player_mail = [(0, 0); 6];
     }
 
-    /// The load-time settle for the cave sculptor band — the cave
-    /// slice of `ApplyEvents_498A0` (EV:410-526). Ticks actions
-    /// 0x57..=0x5C in slot order until the band is quiet; action
-    /// 0x5D (the drip) is in the settle DISABLE band (EV:516-25) —
-    /// a live one despawns without running. No-op off-cave.
-    fn mc2_settle_cave_band(&mut self) {
-        if !self.g.is_cave() {
-            return;
-        }
+    /// `ApplyEvents_498A0` (EV:410-556) — the inter-pass load
+    /// settle: one global LCG step (EV:420), then sweep the pool to
+    /// fixpoint. Class-10 eligibility is by MODEL; an eligible
+    /// entity's OWN action handler runs to completion:
+    /// - settle-TICK band: the dome 0x9 (EV:477), the SCORCH RING
+    ///   0xB + fire trail 0xF (EV:456-65 — the only survivors of
+    ///   the low band), the painters 0x1B..=0x20 (EV:493), the beam
+    ///   0x32/0x33 + cave sculptors 0x50..=0x55/0x58 (EV:506-25),
+    ///   and a building 0x2D only while its build action 0x33 = 51
+    ///   runs (EV:527-46) — parked buildings age untouched.
+    /// - settle-DISABLE band: every other class-10 model (EV:458-61,
+    ///   508-14, 548-52) — e.g. the fire trail's spray children die
+    ///   unrun at load.
+    /// - The (14,2) pillar MEASURE (life 0) ticks alongside
+    ///   (EV:431-41); grow/retract are trigger-fired at runtime.
+    ///
+    /// Each class-10 arm ages f63 AFTER its handler (byte_0x3E_62++,
+    /// the live loop's :52406 order — the scorch radius cadence
+    /// f63%3 depends on it).
+    ///
+    /// This settle is why retail's authored one-shot terrain effects
+    /// — the mc2:04 island craters, raise-land domes, fire-trail
+    /// carves — are FINISHED before play begins: they burn out here,
+    /// before disposition 0 spawns the population and before the
+    /// wizard init, so nothing can be hurt by them. Slot-order
+    /// rounds mean every animated sculptor's phase-0 terrain SAMPLE
+    /// happens before any same-pass sculptor's phase-1 WRITE,
+    /// exactly like retail; dead slots are reaped so later passes
+    /// reuse them (per-entity rand = slot + global stream).
+    fn mc2_apply_events(&mut self) {
+        // EV:420 — the per-call global PRNG step.
+        features::lcg32(&mut self.g.rand);
+        // The load probe target: the human start marker (the
+        // mc2_stamp_fence_leg precedent). Mail the probe writes
+        // cannot outlive the load — the generate tail clears it.
+        let (sx, sy) = self
+            .start_markers
+            .iter()
+            .flatten()
+            .next()
+            .copied()
+            .unwrap_or((0, 0));
+        let ctx = MobCtx {
+            px: (sx << 8) | 128,
+            py: (sy << 8) | 128,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
         for _ in 0..1024 {
             let mut live = false;
             for i in 1..self.g.ent.len() {
-                if self.g.ent[i].flags & 0x400 != 0 {
+                if self.g.ent[i].class64 == 0 || self.g.ent[i].flags & 0x400 != 0 {
                     continue;
                 }
-                // The (14,2) pillar spawns in its own pass (EV:226-33)
-                // and its MEASURE (life 0) runs in the ApplyEvents
-                // settle like everything else; grow/retract can only
-                // be trigger-fired at runtime.
                 if self.g.ent[i].class64 == 14 && self.g.ent[i].tick70 == 7 {
                     if self.g.mc2_pillar_tick(i) {
                         live = true;
@@ -4845,27 +4886,68 @@ impl World {
                 if self.g.ent[i].class64 != 10 {
                     continue;
                 }
-                match self.g.ent[i].tick70 {
-                    0x57 => self.g.ent[i].flags |= 0x400,
-                    0x58 => {
-                        self.g.mc2_tube_carve_tick(i);
-                        live = true;
+                // The model bands (EV:453-552).
+                let ticks = match self.g.ent[i].model65 {
+                    0x9 | 0xB | 0xF | 0x1B..=0x20 | 0x32 | 0x33 | 0x50..=0x55 | 0x58 => true,
+                    // A parked building ages without running
+                    // (EV:531-34).
+                    0x2D => {
+                        if self.g.ent[i].tick70 != 51 {
+                            self.g.ent[i].f63 = self.g.ent[i].f63.wrapping_add(1);
+                            continue;
+                        }
+                        true
                     }
-                    0x59 => {
-                        self.g.mc2_cave_mesa_tick(i);
-                        live = true;
+                    _ => false,
+                };
+                if ticks {
+                    live = true;
+                    // The dispatch is the entity's own action — the
+                    // live-loop arms under the load ctx.
+                    match self.g.ent[i].tick70 {
+                        9 => {
+                            self.g.mc2_dome_tick(i, &ctx, self.mc2_apocalypse);
+                        }
+                        11 => {
+                            self.g.mc2_scorch_ring_tick(i, &ctx);
+                        }
+                        15 => {
+                            self.g.mc2_fire_trail_tick(i);
+                        }
+                        // The one-tick stage/chain markers.
+                        0x1E | 0x1F | 0x21 | 0x36 => self.g.ent[i].flags |= 0x400,
+                        // The 30-tick build action — retail towns
+                        // stand FINISHED at the fade-in.
+                        51 => self.tick_arm_mc2_building(i),
+                        // The (10,51) ridge/damage beam (a raw
+                        // authored one; chains never spawn here).
+                        0x37 => {
+                            self.g.mc2_load_beam_tick(i, &ctx);
+                        }
+                        // The cave sculptor band; 0x57 = the (10,80)
+                        // chain marker's self-despawn.
+                        0x57 => self.g.ent[i].flags |= 0x400,
+                        0x58 => {
+                            self.g.mc2_tube_carve_tick(i);
+                        }
+                        0x59 => {
+                            self.g.mc2_cave_mesa_tick(i);
+                        }
+                        0x5A => {
+                            self.g.mc2_cave_dome_tick(i);
+                        }
+                        0x5B | 0x5C => {
+                            self.g.mc2_cave_pit_hill_tick(i);
+                        }
+                        // A tick-band model with no ported handler
+                        // cannot run — reap it.
+                        _ => self.g.ent[i].flags |= 0x400,
                     }
-                    0x5A => {
-                        self.g.mc2_cave_dome_tick(i);
-                        live = true;
-                    }
-                    0x5B | 0x5C => {
-                        self.g.mc2_cave_pit_hill_tick(i);
-                        live = true;
-                    }
-                    0x5D => self.g.ent[i].flags |= 0x400,
-                    _ => continue,
+                } else {
+                    // The settle DISABLE band.
+                    self.g.ent[i].flags |= 0x400;
                 }
+                self.g.ent[i].f63 = self.g.ent[i].f63.wrapping_add(1);
             }
             if !live {
                 break;
@@ -12695,6 +12777,80 @@ mod tests {
 
     fn mc2_pos(tx: u16, ty: u16) -> (u16, u16) {
         ((tx << 8) | 128, (ty << 8) | 128)
+    }
+
+    /// Authored (10,11) SCORCH RINGS settle at LOAD — model 0xB is
+    /// in `ApplyEvents_498A0`'s settle-TICK band (EV:456-65), so the
+    /// crater is pre-dug before disposition 0 spawns the population
+    /// (mc2:04's start-island flock) and before the wizard exists.
+    /// Also pins the muted load mixer (EF:39364-65/:39430) and the
+    /// dead load-probe mail.
+    #[test]
+    fn mc2_authored_scorch_ring_settles_at_load() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let rec =
+            |slot: u32, class: u16, model: u16, x: u16, y: u16, dis_id: u16| mgc_formats::Thing {
+                slot,
+                kind: mgc_formats::ThingKind::Entity,
+                class,
+                model,
+                x,
+                y,
+                dis_id,
+                swi_sz: 0,
+                swi_id: 0,
+                parent: 0,
+                child: 0,
+                par3: None,
+            };
+        let things = [
+            // The human start marker ON the crater island (mc2:04's
+            // shape — the load probe overlaps the ring).
+            rec(1, 3, 4, 100, 100, 0xFFFF),
+            // The authored crater effector.
+            rec(2, 10, 11, 100, 100, 0xFFFF),
+            // The flock stand-in: a dis-0 goat one tile off center.
+            rec(3, 5, 1, 101, 100, 0),
+        ];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+
+        // The ring burned out during the load settle: none live.
+        assert!(
+            !w.g.ent.iter().any(|e| e.class64 == 10 && e.model65 == 11),
+            "the authored scorch ring must settle at load, not run live"
+        );
+        // The crater is already dug at tick 0.
+        assert!(
+            w.g.t.height[features::tile(100, 100)] < 100,
+            "the crater digs during the load settle"
+        );
+        // The load probe's mail died with the load (retail's wizard
+        // init follows the map build): no damage lands at tick 1.
+        assert_eq!(w.g.player_mail, [(0, 0); 6], "load mail must not survive");
+        // The load is silent — retail crosses the generate with the
+        // mixer off, so no scorch rumbles (sound 10) queue up.
+        assert!(
+            w.g.sounds.iter().all(|s| s.id != 10),
+            "settle sounds must not reach the level start"
+        );
+        // The flock spawned AFTER the settle and stays unhurt.
+        let goat = (1..w.g.ent.len())
+            .find(|&i| w.g.ent[i].class64 == 5 && w.g.ent[i].model65 == 1)
+            .expect("the dis-0 goat spawned");
+        let full = w.g.ent[goat].act_life;
+        for _ in 0..45 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.ent[goat].act_life, full,
+            "the start-island flock survives the level start"
+        );
     }
 
     /// The MC2 claim intake colorizes the flag by OWNER: retail adds

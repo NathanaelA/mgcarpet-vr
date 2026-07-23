@@ -486,13 +486,21 @@ fn mc2_slice_behaviors_and_goldens() {
 
     // Pinned goldens: regenerate with --nocapture on a DELIBERATE
     // behavior change and say so in the commit.
+    //
+    // Re-pinned for the full `ApplyEvents_498A0` load settle (EV:410-
+    // 556): authored settle-band one-shots now run to completion at
+    // LOAD (scorch craters pre-dug, buildings pre-built), the settle
+    // steps the global LCG per pass (EV:420), settled slots are
+    // reaped before dis 0, and the load mixer is muted (EF:39364-65/
+    // :39430). Every checkpoint moves — the world enters play with
+    // different terrain, RNG phase and pool layout by design.
     const GOLDEN: [u64; 6] = [
-        0x3f29a575e74ed7ce, // post-init (GenerateEvents + dis 0)
-        0xac2894c19444ec6b, // A: 64 idle ticks afield
-        0x52c4a61b85ac224c, // B: the type-5 fly-to latched
-        0x5da0547d0f700eaf, // C: goat awake/flee window
-        0xf83f8f81b271eae7, // D: fireball combat over the goat
-        0x7bc91738e9e0901e, // E: census + villager/archer provocation
+        0x19b2420902423851, // post-init (GenerateEvents + dis 0)
+        0x2e8def083bfb72fa, // A: 64 idle ticks afield
+        0x93af44c5f972e2d7, // B: the type-5 fly-to latched
+        0x7c82f40f6b188c55, // C: goat awake/flee window
+        0x916bd529db710797, // D: fireball combat over the goat
+        0x4464467bcaac5649, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -502,13 +510,15 @@ fn mc2_slice_behaviors_and_goldens() {
 
     // The layout-INDEPENDENT companion golden — see state_hash.rs:
     // survives hashed-layout re-pins; moves ONLY with real behavior.
+    // The ApplyEvents load settle moves all six — REAL behavior by
+    // design (pre-dug craters, shifted load RNG phase).
     const OBSERVABLE: [u64; 6] = [
-        0x9a885593f099242c,
-        0xc8a0f078fd10afd7,
-        0xddc9ae4bc40fafc9,
-        0xd9ff6a0b332668d2,
-        0x2861dfece633f89a,
-        0xc419744a214ba321,
+        0x5951c95adf7436f9,
+        0xe88b1fcbe36c032a,
+        0x9cc70e1767ea069b,
+        0xa82971be678ddf25,
+        0x1d73602e3d7898ec,
+        0x836c6bfc1f4094c7,
     ];
     assert_eq!(
         obs, OBSERVABLE,

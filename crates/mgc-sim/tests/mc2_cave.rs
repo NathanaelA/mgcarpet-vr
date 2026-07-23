@@ -187,8 +187,11 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     // flagged rows binding kind-1 walkers, kind-4 guardians and kind-6
     // timer spawns. Pin the census by kind and the kind-9 anchor.
     let held = w.debug_mc2_held();
+    // The pool slot is a load-layout artifact (the ApplyEvents settle
+    // reaps its one-shots during load, shifting later spawns) — the
+    // anchor's identity is the MODEL+KIND pair.
     assert!(
-        held.contains(&(447, 18, 9)),
+        held.iter().any(|&(_, m, k)| m == 18 && k == 9),
         "level-014: the kind-9 model-18 hold survived the verbatim row bake"
     );
     let mut kinds = std::collections::BTreeMap::<u8, usize>::new();
@@ -309,13 +312,21 @@ fn mc2_cave_behaviors_and_goldens() {
     // ATTRIBUTED by probe: the magic-mine teardown landed in the same
     // batch and moves NOTHING here (identical hashes before and after
     // it), so this re-pin is m9 alone.
+    //
+    // Re-pinned for the full `ApplyEvents_498A0` load settle (EV:410-
+    // 556): authored scorch rings (level 014 has 9) now dig their
+    // craters DURING the load instead of the first 40 live ticks, the
+    // settle steps the global LCG once per pass (EV:420), and settled
+    // one-shots are reaped at load (slot layout shifts). ALL FOUR
+    // checkpoints move — the world enters play with different terrain,
+    // RNG phase and pool layout, which is the fidelity fix itself.
     assert_eq!(
         got,
         vec![
-            0xb9ef2aab49926cbcu64,
-            0x7a89b38d106e4b85,
-            0x8622703d123f88c1,
-            0xdcb532dae4b6c65a,
+            0x50c384f9d62a3dadu64,
+            0xeed5009480e93bb9,
+            0x0014e75348e14e62,
+            0x3770ad419634747b,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -328,11 +339,16 @@ fn mc2_cave_behaviors_and_goldens() {
     // squats and feeds in place instead of cycling back into a 400-tick
     // walk, so late-run hive positions genuinely differ. The first
     // three hold — the divergence needs ~400 asleep ticks to appear.
+    //
+    // The ApplyEvents load settle moves ALL FOUR — a REAL behavior
+    // change by design: the level's 9 authored scorch rings finish
+    // their dig before tick 0 (terrain plane differs at every
+    // checkpoint) and the load RNG phase shifts every spawn after it.
     const OBSERVABLE: [u64; 4] = [
-        0xb0299049353c6c29,
-        0x2d60a54a359da557,
-        0x1ada7615a38d2848,
-        0x367a0a11830499dc,
+        0x4504aa689dad600c,
+        0xf19b104a99371181,
+        0x314278800b2eb1b4,
+        0xc2403b19f2bb583c,
     ];
     assert_eq!(
         obs, OBSERVABLE,
