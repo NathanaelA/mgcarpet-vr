@@ -33,7 +33,7 @@ mod xr_input;
 
 use mgc_formats::bundle::Bundle;
 use mgc_formats::{Game, LevelPackage, mgcl};
-use mgc_render::{Billboard, CameraView, LevelView, Renderer};
+use mgc_render::{Billboard, CameraView, LevelView, NATIVE_H, NATIVE_W, Renderer};
 use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT, ThrustModel};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6512,6 +6512,70 @@ impl App {
                 proj: xr_init::xr_projection_matrix(v.fov, 0.05, 600.0),
             }
         };
+
+        // Place the HUD on a world-space panel in front of the player's
+        // head. This keeps the 2D HUD readable in stereo instead of
+        // smearing it across the per-eye near plane.
+        let head_pos_stage = xr::Vector3f {
+            x: (views[0].pose.position.x/* + views[1].pose.position.x */),
+            y: (views[0].pose.position.y/* + views[1].pose.position.y */), // * 1.2,
+            z: (views[0].pose.position.z/* + views[1].pose.position.z */),
+        };
+        let head_q = views[0].pose.orientation;
+        let head_fwd_stage = xr_init::quat_rotate(head_q, [0.0, 0.0, -1.0]);
+        let head_right_stage = xr_init::quat_rotate(head_q, [1.0, 0.0, 0.0]);
+        let head_up_stage = xr_init::quat_rotate(head_q, [0.0, 1.0, 0.0]);
+
+        let head_pos_world = [
+            flyer.x + rotate_by_flyer_yaw(head_pos_stage)[0],
+            flyer.y + rotate_by_flyer_yaw(head_pos_stage)[1], //  head_pos_stage.y,
+            flyer.z + rotate_by_flyer_yaw(head_pos_stage)[2],
+        ];
+        let head_fwd_world = rotate_by_flyer_yaw(xr::Vector3f {
+            x: head_fwd_stage[0], // - 0.5, // - 1.5,
+            y: head_fwd_stage[1], // + 1.0,
+            z: head_fwd_stage[2], // - 3.0,
+        });
+        let head_right_world = rotate_by_flyer_yaw(xr::Vector3f {
+            x: head_right_stage[0],
+            y: head_right_stage[1],
+            z: head_right_stage[2],
+        });
+        let head_up_world = rotate_by_flyer_yaw(xr::Vector3f {
+            x: head_up_stage[0],
+            y: head_up_stage[1],
+            z: head_up_stage[2],
+        });
+
+        // Distance and size are in stage/world units. 2 units in front of
+        // the head with a scale of distance*0.0015 keeps the 480px HUD
+        // comfortably legible; tune these if the panel feels too close.
+        let hud_distance = 0.2_f32;
+        let hud_scale = hud_distance * 0.0015_f32;
+
+        // Fine-tune the HUD position in native UI pixels.
+        // These shift the *content*: negative x = left, negative y = up.
+        let hud_shift_x = NATIVE_W / 0.6_f32; // move HUD left by 1/3 of its width
+        let hud_shift_y = NATIVE_H / 0.5_f32; // move HUD up by 1/8 of its height
+
+        let panel_right = head_right_world;
+        let panel_up = [-head_up_world[0], -head_up_world[1], -head_up_world[2]];
+        let panel_origin = [
+            head_pos_world[0] + head_fwd_world[0] /* hud_distance */
+                - panel_right[0] * hud_shift_x * hud_scale
+                - panel_up[0] * hud_shift_y * hud_scale,
+            head_pos_world[1] + head_fwd_world[1] * hud_distance
+                - panel_right[1] * hud_shift_x * hud_scale
+                - panel_up[1] * hud_shift_y * hud_scale,
+            head_pos_world[2] + head_fwd_world[2] /* * hud_distance */
+                - panel_right[2] * hud_shift_x * hud_scale
+                - panel_up[2] * hud_shift_y * hud_scale,
+        ];
+        self.renderer
+            .as_mut()
+            .expect("exist")
+            .set_ui_panel_transform(panel_origin, panel_right, panel_up, hud_scale);
+
         StereoView {
             left: make_eye(&views[0]),
             right: make_eye(&views[1]),

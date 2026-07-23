@@ -820,6 +820,22 @@ pub struct UiQuad {
     pub tint: [f32; 4],
 }
 
+/// Uniform data for `ui.wgsl`. In screen-space mode only `screen` is
+/// used. In world-space (VR) mode the panel basis and per-eye
+/// view-projection matrix place the HUD at a comfortable distance.
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct UiGlobals {
+    screen: [f32; 4],
+    view_proj: [[f32; 4]; 4],
+    panel_origin: [f32; 3],
+    panel_scale: f32,
+    panel_right: [f32; 3],
+    panel_mode: u32,
+    panel_up: [f32; 3],
+    _pad: f32,
+}
+
 /// PROTOTYPE fire particle (throwaway) — one glowing flame disc in the
 /// world, fed per frame by the app's fireball-trail emitter.
 #[derive(Debug, Clone, Copy)]
@@ -1376,6 +1392,14 @@ pub struct Renderer {
     ui_buf: Option<wgpu::Buffer>,
     ui_capacity: usize,
     ui_quads: Vec<UiQuad>,
+    /// World-space HUD panel state. When `ui_panel_mode` is 1 the UI is
+    /// drawn as a panel floating in front of the player (VR); mode 0 is
+    /// the normal screen-space HUD.
+    ui_panel_origin: [f32; 3],
+    ui_panel_right: [f32; 3],
+    ui_panel_up: [f32; 3],
+    ui_panel_scale: f32,
+    ui_panel_mode: u32,
     /// Upright screen-space map icons (castle/balloon), projected onto
     /// whichever map surface is active each frame. World-positioned but
     /// drawn unrotated so they always point up.
@@ -2494,7 +2518,7 @@ impl Renderer {
             });
         let ui_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ui globals"),
-            size: 16,
+            size: std::mem::size_of::<UiGlobals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2644,6 +2668,11 @@ impl Renderer {
             ui_buf: None,
             ui_capacity: 0,
             ui_quads: Vec::new(),
+            ui_panel_origin: [0.0; 3],
+            ui_panel_right: [1.0, 0.0, 0.0],
+            ui_panel_up: [0.0, -1.0, 0.0],
+            ui_panel_scale: 0.001,
+            ui_panel_mode: 0,
             map_stamps: Vec::new(),
             map_path: None,
             objective_marks: Vec::new(),
@@ -3693,7 +3722,33 @@ impl Renderer {
         self.ui_quads = quads;
     }
 
-    /// Set the upright map icons (own castle/balloons). They are drawn
+    /// Place the HUD on a world-space panel in front of the player.
+    /// `origin` is the world-space panel centre; `right` and `up` are the
+    /// world-space axes that correspond to +screen-x and +screen-y (with
+    /// the UI's origin at the top-left, `up` is usually `-head_up`).
+    /// `scale` is world units per UI pixel. Pass this before `render_stereo`
+    /// to make the UI readable in VR; without it the HUD is drawn as a
+    /// screen-space overlay at the near plane.
+    pub fn set_ui_panel_transform(
+        &mut self,
+        origin: [f32; 3],
+        right: [f32; 3],
+        up: [f32; 3],
+        scale: f32,
+    ) {
+        self.ui_panel_origin = origin;
+        self.ui_panel_right = right;
+        self.ui_panel_up = up;
+        self.ui_panel_scale = scale;
+        self.ui_panel_mode = 1;
+    }
+
+    /// Disable the world-space HUD panel and return to screen-space UI.
+    pub fn clear_ui_panel_transform(&mut self) {
+        self.ui_panel_mode = 0;
+    }
+
+    /// Set the upright map icons (own castle/balloon). They are drawn
     /// screen-space over the active map surface — never baked into the
     /// rotated map texture — so they stay upright under rotation.
     pub fn set_map_stamps(&mut self, stamps: Vec<MapStamp>) {
@@ -4629,11 +4684,28 @@ impl Renderer {
         // vertex buffer (no per-frame concatenation copy).
         let ui_count = (self.ui_quads.len() + stamp_quads.len()) as u32;
         if ui_count > 0 {
-            self.queue.write_buffer(
-                &self.ui_globals_buf,
-                0,
-                bytemuck::cast_slice(&[w as f32, hpx as f32, 0.0, 0.0]),
-            );
+            const IDENTITY: [[f32; 4]; 4] = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+            let globals = UiGlobals {
+                screen: [w as f32, hpx as f32, 0.0, 0.0],
+                view_proj: if self.ui_panel_mode == 1 {
+                    view_proj
+                } else {
+                    IDENTITY
+                },
+                panel_origin: self.ui_panel_origin,
+                panel_scale: self.ui_panel_scale,
+                panel_right: self.ui_panel_right,
+                panel_mode: self.ui_panel_mode,
+                panel_up: self.ui_panel_up,
+                _pad: 0.0,
+            };
+            self.queue
+                .write_buffer(&self.ui_globals_buf, 0, bytemuck::bytes_of(&globals));
             let ui_bytes: &[u8] = bytemuck::cast_slice(&self.ui_quads);
             let stamp_bytes: &[u8] = bytemuck::cast_slice(&stamp_quads);
             let need = ui_bytes.len() + stamp_bytes.len();
