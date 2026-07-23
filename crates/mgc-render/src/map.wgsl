@@ -9,9 +9,16 @@
 // the terrain. (Icon stamps and the guide path draw screen-space over
 // this pass — upright and evenly spaced — see project_map_stamps /
 // project_guide_path in lib.rs.)
+//
+// In VR the same quad can be pinned to the world-space HUD panel so the
+// minimap background sits with the rest of the HUD instead of being
+// glued to the per-eye near plane.
 
 struct MapGlobals {
-    // xy = quad center in NDC, zw = quad half-extents in NDC
+    // Screen-space mode: xy = quad center in NDC, zw = quad half-extents
+    // in NDC.
+    // World-space mode: xy = pixel offset from the screen centre to the
+    // quad centre, zw = pixel half-extents.
     rect: vec4<f32>,
     // xy = player position in tile coordinates (the sample center),
     // z = heading in radians (yaw), w = zoom (tiles across the quad's
@@ -22,6 +29,15 @@ struct MapGlobals {
     // z = output alpha (HUD transparency; 1 = opaque), w = world period
     // in tiles (MAP_TILES; the toroidal wrap + texture size)
     mode: vec4<f32>,
+    // Per-eye view-projection matrix (used in world-space mode).
+    view_proj: mat4x4<f32>,
+    // World-space HUD panel basis (used in world-space mode).
+    panel_origin: vec3<f32>,
+    panel_scale: f32,
+    panel_right: vec3<f32>,
+    panel_mode: u32,
+    panel_up: vec3<f32>,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> mg: MapGlobals;
@@ -41,7 +57,20 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     );
     let c = corners[vi];
     var out: VsOut;
-    out.clip = vec4<f32>(mg.rect.xy + c * mg.rect.zw, 0.0, 1.0);
+
+    if mg.panel_mode == 1u {
+        // WORLD-SPACE HUD PANEL (VR): the rect holds the pixel offset
+        // from the screen centre and the pixel half-extents.
+        let px = mg.rect.xy + c * mg.rect.zw;
+        let world = mg.panel_origin
+                  + mg.panel_right * (px.x * mg.panel_scale)
+                  + mg.panel_up    * (px.y * mg.panel_scale);
+        out.clip = mg.view_proj * vec4<f32>(world, 1.0);
+    } else {
+        // SCREEN-SPACE: the rect is NDC centre + half-extents.
+        out.clip = vec4<f32>(mg.rect.xy + c * mg.rect.zw, 0.0, 1.0);
+    }
+
     out.uv = c;
     return out;
 }
@@ -99,8 +128,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // 0x2C00→0x2400; a linear WHITE-mix approximates that until the
     // LUT bake. POLARITY CHECK OWED: the locked-spell wash proved fog
     // row 0x30 DARKENS (player 2026-07-08), so rows 0x24-0x2C may
-    // darken too — if retail's cross reads dark on the map, flip the
-    // mix target to black.
+    // darken too — if retail's player marker reads dark on the map, flip
+    // the mix target to black.
     let cuv = abs(in.uv);
     let arm_x = 1.0 / 6.0;      // pane_w/12 px over a pane_w/2 half-span
     let arm_y = aspect / 6.0;   // the same PIXEL length in uv.y units
