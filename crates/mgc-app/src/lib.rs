@@ -3721,11 +3721,16 @@ impl App {
 
     #[cfg(target_os = "android")]
     fn tick_input(&mut self) -> FlightInput {
-        let input = self
+        let owned = if let Some(w) = sess!(self).sim.world.as_mut() {
+            w.loadout().owned
+        } else {
+            [false; 24]
+        };
+        let mut input = self
             .input
             .as_mut()
             .unwrap()
-            .poll(&self.ctx.as_mut().unwrap().xr_session);
+            .poll(&self.ctx.as_mut().unwrap().xr_session, owned);
 
         if input.extra_data & 0x01 != 0 {
             if let Some(r) = &mut self.renderer {
@@ -8472,7 +8477,9 @@ fn parse_args() -> Result<Args, String> {
     let mut args = parse_base_args()?;
     //args.campaign = Some(campaign::CampaignId::Mc2);
     args.sky = Option::from(false);
-    args.crosshair = Option::from(true);
+    args.crosshair = Option::from(false);
+    args.expose_jar_spells = Option::from(true);
+    args.plausible_spellbook = Option::from(true);
     args.slot = 1;
     args.dev_spells = Option::from(false);
     args.level = PathBuf::from("baked/mc1/level-001.mgcl");

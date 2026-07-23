@@ -158,7 +158,7 @@ impl InputActions {
     /// Syncs the action set and reads every action; call once per XR
     /// frame (not per sim tick — the same reading feeds however many
     /// sim ticks fire within one frame's accumulator burst).
-    pub fn poll(&mut self, session: &xr::Session<xr::Vulkan>) -> FlightInput {
+    pub fn poll(&mut self, session: &xr::Session<xr::Vulkan>, owned: [bool; 24]) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
 
         let axis = |a: &xr::Action<xr::Vector2f>| {
@@ -186,7 +186,13 @@ impl InputActions {
             extra_data |= 1;
         }
 
-        let pitch_delta = if left.y < 0.0 { 0.5 } else { -0.5 };
+        let pitch_delta = if left.y < 0.0 {
+            0.3
+        } else if (left.y > 0.0) {
+            -0.3
+        } else {
+            0.0
+        };
 
         let flight_input = FlightInput {
             thrust: left.y * 4.0,
