@@ -118,10 +118,20 @@ fn level_005_trigger_cascade() {
 
     // Both triggers were one-shot: no NEW spawns on re-entry (the
     // ambush creatures now move and may die in the fresh crater, so
-    // the count can only shrink).
+    // the count can only shrink). The VILLAGE families (m4/12/13/14)
+    // are excluded: full dwellings emit and absorb villagers on their
+    // own clock (sub_28DC0/sub_1F640), so their count breathes either
+    // way — only the trigger-spawned models prove one-shot-ness.
+    let non_village = |w: &World| {
+        w.live_things()
+            .iter()
+            .filter(|t| t.class == 5 && !matches!(t.model, 4 | 12 | 13 | 14))
+            .count()
+    };
+    let nv_final = non_village(&w);
     fly(&mut w, 101.5, 117.5, 32);
     fly(&mut w, 95.5, 109.5, 32);
-    assert!(creature_count(&w) <= live_final);
+    assert!(non_village(&w) <= nv_final);
 }
 
 /// Live class-5 creature count (heads only; movement can kill).

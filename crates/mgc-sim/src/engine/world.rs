@@ -8609,6 +8609,112 @@ mod tests {
         );
     }
 
+    /// The village LEASH (sub_1F640 :25390-96): the door-radius test
+    /// runs BEFORE the fullness test, so a villager anchored to a FULL
+    /// house that is still beyond 0x800 keeps its anchor and steers
+    /// home — the pull that keeps retail villages clustered around
+    /// their dwellings. The broken order (fullness first) dropped the
+    /// anchor at ANY distance the moment the home filled, and the
+    /// whole village diffused across the map (the population-explosion
+    /// dispersal).
+    #[test]
+    fn full_house_still_pulls_its_villager_home() {
+        let mut w = flat_world();
+        let h = w.g.spawn_creator(45, 0x8000, 0x8000, 3200).expect("house");
+        w.g.ent[h].f128 = 8; // capacity
+        w.g.ent[h].f26 = 8; // FULL
+        let m =
+            w.g.spawn_creature(13, 0x8000 + 0x1000, 0x8000, 3200)
+                .expect("feeder");
+        w.g.ent[m].f146 = h as u16;
+        w.g.ent[m].f63 = 0; // think tick (f63 % v_26 == 0)
+
+        w.g.feeder_wander(m, 78, false);
+
+        assert_eq!(
+            w.g.ent[m].f146, h as u16,
+            "beyond the door radius the anchor must SURVIVE fullness"
+        );
+        assert_eq!(w.g.ent[m].tick70, 79, "no walk-in from afar");
+        assert_eq!(w.g.ent[h].f26, 8, "occupancy untouched");
+        // And it steers home: due west of the house the aim is ~1536
+        // (yaw 0 = north, 11-bit circle) — the walk step that runs
+        // before the think nudges it a hair off-axis, so allow a small
+        // cone. A jitter draw instead would swing ±(85..=340).
+        let aim = w.g.ent[m].f34 as i32;
+        assert!(
+            (aim - 1536).abs() <= 8,
+            "the think must re-aim AT the full home, not jitter away (f34 = {aim})"
+        );
+    }
+
+    /// The drop arm (:25396-401 LABEL_36): only INSIDE the door radius
+    /// does a full home release its villager — and the release slows
+    /// the wander to the accel speed (+126 = +130) until a new home is
+    /// acquired (which restores the max speed, :25436-38).
+    #[test]
+    fn full_house_releases_only_at_the_door_and_slows_the_wanderer() {
+        let mut w = flat_world();
+        let h = w.g.spawn_creator(45, 0x8000, 0x8000, 3200).expect("house");
+        w.g.ent[h].f128 = 8;
+        w.g.ent[h].f26 = 8; // FULL
+        let m =
+            w.g.spawn_creature(13, 0x8000 + 0x400, 0x8000, 3200)
+                .expect("feeder");
+        w.g.ent[m].f146 = h as u16;
+        w.g.ent[m].f63 = 0;
+
+        w.g.feeder_wander(m, 78, false);
+
+        assert_eq!(w.g.ent[m].f146, 0, "at the door of a full home: drop");
+        assert_eq!(
+            w.g.ent[m].f126, w.g.ent[m].f130,
+            "the dropped wanderer slows to the accel speed"
+        );
+
+        // On the next think it re-acquires (the house is nearest) and
+        // speeds back up to max for the walk home.
+        w.g.feeder_wander(m, 78, false);
+        assert_eq!(w.g.ent[m].f146, h as u16, "re-acquired the village");
+        assert_eq!(
+            w.g.ent[m].f126, w.g.ent[m].f128,
+            "homing runs at the max speed"
+        );
+    }
+
+    /// The m14 migrant filter (sub_1FAC0 :25603) selects the nearest
+    /// house BEYOND 0xE100000 dist² INSIDE the scan loop — a migrant
+    /// standing in a village still emigrates to the distant one. The
+    /// broken shape (test the global nearest, bail if it is too close)
+    /// left migrants beside their birth village anchorless forever —
+    /// they never migrated, never got absorbed, and piled up.
+    #[test]
+    fn migrant_skips_the_near_village_and_anchors_to_the_far_one() {
+        let mut w = flat_world();
+        let near =
+            w.g.spawn_creator(45, 0x8000 + 0x600, 0x8000, 3200)
+                .expect("near house");
+        let far =
+            w.g.spawn_creator(45, 0x8000 + 0x4000, 0x8000, 3200)
+                .expect("far house");
+        let m =
+            w.g.spawn_creature(14, 0x8000, 0x8000, 3200)
+                .expect("migrant");
+        w.g.ent[m].f63 = 0;
+
+        w.g.feeder_wander(m, 84, true);
+
+        assert_ne!(
+            w.g.ent[m].f146, near as u16,
+            "a migrant never anchors inside the 0xE100000 radius"
+        );
+        assert_eq!(
+            w.g.ent[m].f146, far as u16,
+            "the nearest house BEYOND the radius is the migration target"
+        );
+        assert_eq!(w.g.ent[m].f126, w.g.ent[m].f128, "migrates at max speed");
+    }
+
     // ------------------------------------------------------ snapshot
 
     /// A sim that has been played for a while: pristine state

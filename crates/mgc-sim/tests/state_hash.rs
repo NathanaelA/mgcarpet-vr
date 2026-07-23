@@ -290,13 +290,22 @@ fn level_005_golden_state_hashes() {
     // class-10 sites and right at the class-9 ones, so every fire,
     // splash, flash, tether and cloud ran one tick short. B-E move;
     // post-init and A hold (nothing has died yet at A).
+    //
+    // Re-pinned for the m13/m14 feeder-wander transcription fixes
+    // (sub_1F640 :25382-25438 / sub_1FAC0 :25558-25614): door radius
+    // BEFORE fullness on the rooted 3-axis distance (the village
+    // leash — a full home keeps pulling its villager back), act-speed
+    // swaps on anchor drop/acquire (+126 = +130 / +128), the m14
+    // distant filter INSIDE the acquire loop, and one think gate
+    // wrapping both arms. Villager walk/absorb streams shift, so B-E
+    // move; post-init and A hold (no feeder has thought yet).
     const GOLDEN: [u64; 6] = [
         0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
         0x06e8a54a916839d7, // A: 32 idle ticks far afield
-        0xcb4c659427dc89bc, // B: crater trigger fired + 120 dig ticks
-        0x72ccac58dbadb473, // C: ambush disposition fired
-        0xd9b65735a9a69434, // D: 64 ticks of two-hand fireball combat
-        0xdaefa9736ab36635, // E: 100 aftermath ticks
+        0xbef57a871357f076, // B: crater trigger fired + 120 dig ticks
+        0xd30acf219762c714, // C: ambush disposition fired
+        0xc3b5b4a6a0d23515, // D: 64 ticks of two-hand fireball combat
+        0x28473f328e596cb9, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -337,13 +346,17 @@ fn level_005_golden_state_hashes() {
     // extra (unclaimed, always-present) house poses shift every
     // checkpoint. The raw GOLDEN state hash above is UNCHANGED — proof
     // the sim itself did not move.
+    // The feeder-wander leash fix moves OBSERVABLE at B-E as well —
+    // a behavior change by design: villagers steer home instead of
+    // diffusing, walk in the door in different ticks, and the act
+    // speeds they wear differ. Post-init and A hold.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
         0x203eb5b24d0ab0e0, // A
-        0xf1e83074252085c5, // B — settler phase + walk-in silent absorb
-        0x3a785913e4b79ecb, // C
-        0xf5561cdf787f6bde, // D
-        0xc5231fc112256801, // E
+        0x5fb716e8a43f6e32, // B — settler phase + feeder leash
+        0xdea926f4c8033595, // C
+        0x028118efca7bae5f, // D
+        0x9f172a5c5b77dd57, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

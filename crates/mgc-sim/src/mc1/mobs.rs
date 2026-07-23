@@ -1854,45 +1854,58 @@ impl Gen {
     }
 
     /// m13/m14 feeder wander (sub_1F640 :25296 / sub_1FAC0 :25472):
-    /// with a house target — steer in from beyond 0x800, drop it if
-    /// the house fills (+128 ≤ +26), walk in the door inside 0x800
-    /// (death slot with +26 = 1 = silent absorb, house occupants++);
-    /// without one — jitter-walk and acquire the nearest house every
-    /// v_26 (`distant`: m14 only migrates to a village farther than
-    /// 0xE100000 dist² — wrapping 32-bit math, verbatim).
-    fn feeder_wander(&mut self, i: usize, base: u8, distant: bool) {
+    /// with a house target — steer home from beyond the 0x800 door
+    /// radius (rooted THREE-axis distance, sub_42340_42680, and this
+    /// runs BEFORE the fullness test: a full home keeps PULLING its
+    /// villager back — the village leash), inside it walk in the door
+    /// if there is room (death slot with +26 = 1 = silent absorb,
+    /// house occupants++) else drop the anchor and slow to the accel
+    /// speed (:25398-402); without one — jitter-walk and acquire the
+    /// nearest house every v_26, speeding up to max for the walk home
+    /// (:25436-38) (`distant`: m14 only ever anchors to a village
+    /// farther than 0xE100000 dist² — unsigned 32-bit 2-D math,
+    /// verbatim — the cross-map migrant stream).
+    pub(crate) fn feeder_wander(&mut self, i: usize, base: u8, distant: bool) {
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return;
         }
+        // One think gate wraps BOTH arms (:25382) — a stale/invalid
+        // anchor is also only dropped on a think tick.
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
-        let think = (self.ent[i].f63 as i16) % v26 == 0;
-        let t = self.ent[i].f146 as usize;
-        let valid =
-            t != 0 && t < self.ent.len() && self.ent[t].class64 == 10 && self.ent[t].model65 == 45;
-        if valid {
-            if !think {
-                return;
-            }
-            if self.ent[t].f128 <= self.ent[t].f26 {
-                self.ent[i].f146 = 0; // the house is full (:25397-404)
-                return;
-            }
-            let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-            let (bx, by) = (self.ent[t].x, self.ent[t].y);
-            if Self::dist2_sq(ex, ey, bx, by) > 0x800 * 0x800 {
-                self.ent[i].f34 = Self::angle_between(ex, ey, bx, by);
-            } else {
-                self.ent[t].f26 += 1;
-                self.ent[i].f26 = 1;
-                self.ent[i].tick70 = base + 4; // walks in the door
-            }
+        if (self.ent[i].f63 as i16) % v26 != 0 {
             return;
         }
+        let t = self.ent[i].f146 as usize;
         if t != 0 {
+            let valid =
+                t < self.ent.len() && self.ent[t].class64 == 10 && self.ent[t].model65 == 45;
+            if valid {
+                let (ex, ey, ez) = {
+                    let e = &self.ent[i];
+                    (e.x, e.y, e.z)
+                };
+                let (bx, by, bz) = {
+                    let e = &self.ent[t];
+                    (e.x, e.y, e.z)
+                };
+                let dz = bz.wrapping_sub(ez) as i32;
+                let d3 = Self::dist2_sq(ex, ey, bx, by).wrapping_add(dz.wrapping_mul(dz));
+                if Self::isqrt(d3 as u32) > 0x800 {
+                    self.ent[i].f34 = Self::angle_between(ex, ey, bx, by);
+                    return;
+                }
+                if self.ent[t].f128 > self.ent[t].f26 {
+                    self.ent[t].f26 += 1;
+                    self.ent[i].f26 = 1;
+                    self.ent[i].tick70 = base + 4; // walks in the door
+                    return;
+                }
+            }
+            // Full or invalid: drop the anchor, wander at the accel
+            // speed (:25399-401 LABEL_36) until a new home is taken.
             self.ent[i].f146 = 0;
-        }
-        if !think {
+            self.ent[i].f126 = self.ent[i].f130;
             return;
         }
         let d1 = self.ent_rand(i);
@@ -1900,15 +1913,31 @@ impl Gen {
         let mag = ((d2 & 0xFF) + 85) as i32;
         let sign = if d1 % 157 >= 79 { 1 } else { -1 };
         self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
+        // Acquire (:25420-38): nearest house by unsigned 2-D squared
+        // distance; the m14 migrant arm filters INSIDE the loop — the
+        // nearest house BEYOND the threshold, not "nothing if the
+        // nearest is inside it".
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-        if let Some(b) = self.nearest_building(ex, ey, None) {
-            if distant {
-                let d2 = Self::dist2_sq(ex, ey, self.ent[b].x, self.ent[b].y);
-                if d2 <= 0xE100000u32 as i32 {
-                    return;
-                }
+        let mut best: Option<(usize, u32)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 {
+                continue;
             }
+            let dx = c.x.wrapping_sub(ex) as i16 as i32;
+            let dy = c.y.wrapping_sub(ey) as i16 as i32;
+            let d2 = (dx * dx) as u32 + (dy * dy) as u32;
+            if distant && d2 <= 0xE100000 {
+                continue;
+            }
+            if best.is_none_or(|(_, b)| d2 < b) {
+                best = Some((j, d2));
+            }
+        }
+        if let Some((b, _)) = best {
             self.ent[i].f146 = b as u16;
+            // Head home at the max speed (:25437, +126 = +128).
+            self.ent[i].f126 = self.ent[i].f128;
         }
     }
 

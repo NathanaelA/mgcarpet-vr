@@ -147,17 +147,25 @@ fn flight_tier_golden_state_hashes() {
     // the new law never executes, and the integer movers were not
     // modified). ENHANCED moves because chase steering genuinely
     // changes the yaw path — the deliberate deviation itself.
+    //
+    // Re-pinned for the m13/m14 feeder-wander transcription fixes
+    // (sub_1F640 :25382-25438 / sub_1FAC0 :25558-25614): the door
+    // radius is tested BEFORE fullness on the rooted 3-axis distance
+    // (a full home still pulls its villager — the village leash), the
+    // anchor drop/acquire swap the act speed (+126 = +130 / +128), and
+    // the m14 distant filter runs INSIDE the acquire loop. Post-init
+    // holds; A-C move because village feeders think within the window.
     const FAITHFUL: [u64; 4] = [
         0x79529db4487029e4, // post-init
-        0xa3ae3c391f171f3d, // A: 40 ticks of forward thrust
-        0xc47a83054bc7f344, // B: 30 ticks of banked turn + strafe
-        0x98952dd06be9735d, // C: 40 ticks of coast
+        0x49ccc9c6ac24f87f, // A: 40 ticks of forward thrust
+        0x6fd7147f48f6b903, // B: 30 ticks of banked turn + strafe
+        0x42c1288dc4d3f1a0, // C: 40 ticks of coast
     ];
     const ENHANCED: [u64; 4] = [
         0x41cd4a0274834665, // post-init
-        0x79690ea8f33c1aa3, // A
-        0x24628b46591edfee, // B
-        0x0221e328cdd1f4e9, // C
+        0x535a87c149a9a0e8, // A
+        0xcfec99a3d6f2731c, // B
+        0xafdc2085a1b5fdbc, // C
     ];
     assert_eq!(
         (faithful, enhanced),
