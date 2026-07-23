@@ -50,8 +50,6 @@ use crate::xr_init::XrContext;
 #[cfg(target_os = "android")]
 use crate::xr_input::InputActions;
 #[cfg(target_os = "android")]
-use log::log;
-#[cfg(target_os = "android")]
 use mgc_render::{EyeView, StereoView};
 #[cfg(target_os = "android")]
 use openxr as xr;
@@ -7712,7 +7710,11 @@ impl ApplicationHandler for App {
         self.eye_width = width;
         self.input = Some(input);
 
-        log::info!("rApp Handler configuration setp 1 done");
+        log::info!(
+            "rApp Handler configuration step 1 done; size: {} {}",
+            width,
+            height
+        );
 
         match Renderer::for_xr(
             wgpu_ctx.device.clone(),
@@ -7726,9 +7728,7 @@ impl ApplicationHandler for App {
                 // the app (single-level mode); a campaign boots into
                 // the frontend, which brings its own atlas — the
                 // first launch's `install_level` uploads the rest.
-                log::info!("rApp Handler configuration setp Inside Renderer Ok");
                 if let Some(sess) = self.session.as_deref() {
-                    log::info!("rApp Handler configuration Inside Renderer Session exists");
                     let overlay = map_overlay(&sess.level, &self.cfg);
                     renderer.load_level(&sess.level.view, &overlay);
                     if let Some((index, atlas)) = &sess.level.sprites {
@@ -7785,18 +7785,14 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
-                log::info!("Redraw Requested Start");
                 fn handle_redraw(
                     this: &mut App,
                     _cam: &CameraView,
                 ) -> Result<(), wgpu::SurfaceError> {
-                    log::info!("Redraw Requested xr_tick");
-
                     this.xr_tick()
                 }
 
                 self.redraw_requested(event_loop, handle_redraw);
-                log::info!("Redraw Requested completed");
             }
 
             _ => {}
@@ -7930,8 +7926,11 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     // TODO: Configure this via a menu option...
     let mut args = parse_base_args()?;
-    args.campaign = Some(campaign::CampaignId::Mc2);
+    //args.campaign = Some(campaign::CampaignId::Mc2);
+    args.sky = Option::from(false);
+    args.crosshair = Option::from(false);
     args.slot = 1;
+    args.dev_spells = Option::from(true);
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
