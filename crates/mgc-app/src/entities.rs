@@ -294,10 +294,13 @@ pub fn billboards_from_poses(
     out
 }
 
-/// Monster health bars from the live pose set (unfaithful debug
-/// overlay, `render.debug.health_bars` / H): one classic red-on-black
-/// bar hovering above each class-5 chain head, width tied to the
-/// sprite's world width, life fraction sim-owned.
+/// Health bars from the live pose set (unfaithful debug overlay,
+/// `render.debug.health_bars` / H): one classic red-on-black bar
+/// hovering above EVERYTHING destroyable — every entity the sim tags
+/// with a `life_frac` (class-5 chain heads, wizard-family castles and
+/// carpets, and destructible structures like dwellings). Width tracks
+/// the sprite when there is one; structures rendered as models (no
+/// billboard sprite) fall back to a fixed bar so they are covered too.
 pub fn health_bars_from_poses(
     game: GameId,
     poses: &[LivePose],
@@ -308,14 +311,19 @@ pub fn health_bars_from_poses(
         let Some(frac) = p.life_frac else {
             continue;
         };
-        let Some(s) = resolve_pose_sprite(game, p.type_index, &sprite_dims) else {
-            continue;
+        // Sprite-backed entities float the bar at sprite height and
+        // scale its width; entities with no resolvable billboard
+        // (dwellings, other structures) still get a bar at a default
+        // height/width so the overlay covers all destroyables.
+        let (world_h, world_w) = match resolve_pose_sprite(game, p.type_index, &sprite_dims) {
+            Some(s) => (s.world_h, s.world_w.clamp(0.6, 2.0)),
+            None => (1.5, 1.5),
         };
         out.push(HealthBar {
             x: p.x,
-            y: p.alt + s.world_h + 0.15,
+            y: p.alt + world_h + 0.15,
             z: p.z,
-            w: s.world_w.clamp(0.6, 2.0),
+            w: world_w,
             frac,
         });
     }
@@ -610,8 +618,13 @@ pub fn map_dots_from_poses(
         if p.segment {
             continue;
         }
-        // LABEL_32 (:57272-76): owner class-3 → the team color;
-        // wild → the LUT[3856] blue-violet.
+        // Unclaimed MC1 dwellings ride the pose set only so the debug
+        // health-bar overlay can cover them; they take NO map dot
+        // (retail never marks houses — the owned-building markers are
+        // the opt-in `owned_buildings` enhancement).
+        if p.map_only {
+            continue;
+        }
         let team = p.team.map(|t| TEAM_COLORS[(t as usize).min(7)]);
         let owner_color = team.map(|(v, _)| v).unwrap_or(wild_blue);
         let mut size = 1u8;

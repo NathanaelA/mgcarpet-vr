@@ -848,14 +848,15 @@ pub fn registry() -> Vec<Spec> {
             cli: Some("--health-bars"),
             cfg_path: "render.debug.health_bars",
             read: toggle!(c => render.debug.health_bars),
-            desc: "Red-on-black health bars floating above monsters. The \
-                   original never shows creature life — the combat-system \
+            desc: "Red-on-black health bars floating above everything \
+                   destroyable — monsters, dwellings and other structures. \
+                   The original never shows this life — the combat-system \
                    debugging instrument.",
             ctl: Ctl::Toggle {
                 set: |c, v| c.render.debug.health_bars = v,
                 descs: [
-                    "No creature life shown, as retail.",
-                    "Every creature wears a life bar.",
+                    "No life shown, as retail.",
+                    "Everything destroyable wears a life bar.",
                 ],
             },
         },

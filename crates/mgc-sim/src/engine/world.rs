@@ -1440,18 +1440,15 @@ impl World {
     /// life bar denominates against the parked build value (f44).
     fn live_poses_mc1(&self, e: &Ent) -> PoseGameBits {
         // Houses (m45): the visible building is painted terrain; the
-        // entity billboard is the OWNER FLAG (sprite 177 + color row)
-        // — drawn only once CLAIMED. MC1 keeps the full skip.
+        // entity billboard is the OWNER FLAG (sprite 177 + color row) —
+        // drawn only once CLAIMED. An unclaimed dwelling stays OUT of
+        // the billboard and map passes (`map_only`, and the MC1 map-dot
+        // loop skips it), but it is NO LONGER fully skipped: it rides in
+        // the pose set with a `life_frac` so the debug health-bar
+        // overlay covers it like every other destroyable. Full-skip was
+        // why MC1 unclaimed dwellings showed no bar (MC2 already did
+        // this via map_only).
         let unclaimed_house = e.class64 == 10 && e.model65 == 45 && e.f144 == 0;
-        if unclaimed_house {
-            return PoseGameBits {
-                skip: true,
-                segment: false,
-                life_frac: None,
-                blend: 0,
-                map_only: false,
-            };
-        }
         // Body segments hide from map dots + health bars (the heads
         // carry both) — MC1's state 120.
         let segment = e.class64 == 5 && e.tick70 == 120;
@@ -1484,7 +1481,7 @@ impl World {
             segment,
             life_frac,
             blend: 0,
-            map_only: false,
+            map_only: unclaimed_house,
         }
     }
 
@@ -8498,6 +8495,117 @@ mod tests {
             w.player_mana_share_pct(),
             40,
             "possessions still register — this is what read 0% before"
+        );
+    }
+
+    /// A militia, feeder or retired settler that walks into a dwelling
+    /// must vanish SILENTLY in the death slot — retail's per-model slots
+    /// (militia sub_1BC10, m13 sub_1FA00, m14 sub_1FE90) all gate on the
+    /// +26 walk-in flag and despawn with no corpse. Falling through to
+    /// the corpse path drops a 400-dmg ground fire ON the house the
+    /// creature just entered, which drove the endless MC1 village churn.
+    ///
+    /// The discriminator is the DISPATCH model (base/6), not model65: a
+    /// retired settler walks in still carrying model65 = 12 yet reaches
+    /// the m13 death slot (state 79 -> 82). Gating on model65 was the
+    /// bug — militia (m4) and settlers fell through and blasted the house.
+    #[test]
+    fn walk_in_absorb_is_silent_and_leaves_no_corpse() {
+        // (label, model65 the creature carries into the slot, slot base)
+        // Militia and both feeders — plus the settler, which reaches the
+        // m13 slot (base 78) while its stored model65 is still 12.
+        for (label, model65, base) in [
+            ("militia m4", 4u8, 24u8),
+            ("feeder m13", 13, 78),
+            ("feeder m14", 14, 84),
+            ("settler in m13 slot", 12, 78),
+        ] {
+            let mut w = flat_world();
+            let m =
+                w.g.spawn_creature(4, 0x8000, 0x8000, 800)
+                    .expect("creature");
+            w.g.ent[m].model65 = model65;
+            // The exact walk-in militia_idle/feeder_wander perform.
+            w.g.ent[m].f26 = 1; // silent-absorb flag
+            w.g.ent[m].tick70 = base + 4; // walk-in DEATH slot
+
+            w.g.mob_death(m, base);
+
+            assert_ne!(
+                w.g.ent[m].flags & 0x400,
+                0,
+                "{label}: walk-in must despawn silently (flags |= 0x400)"
+            );
+            assert_eq!(
+                w.g.ent[m].tick70,
+                base + 4,
+                "{label}: walk-in must NOT advance to the corpse slot (base+5)"
+            );
+        }
+    }
+
+    /// The gate is specific, not a blanket "any +26 vanishes": a genuine
+    /// combat death (no walk-in flag) still corpses, and a model whose
+    /// retail death slot has NO +26 gate (a guard, m15) corpses even when
+    /// +26 is nonzero for its own reasons. Reverting the fix breaks the
+    /// walk-in test above; loosening it to "any +26" breaks these.
+    #[test]
+    fn only_the_walk_in_slots_absorb() {
+        // Combat death of a militia — +26 clear -> corpse (base+5).
+        let mut w = flat_world();
+        let m = w.g.spawn_creature(4, 0x8000, 0x8000, 800).expect("militia");
+        w.g.ent[m].f26 = 0;
+        w.g.ent[m].tick70 = 28;
+        w.g.mob_death(m, 24);
+        assert_eq!(w.g.ent[m].tick70, 29, "combat militia death must corpse");
+        assert_eq!(w.g.ent[m].flags & 0x400, 0, "combat death is not silent");
+
+        // A guard (m15, slot base 90) with +26 set: its retail slot has
+        // no absorb gate, so it must still corpse — proof we keyed on the
+        // dispatch model, not merely on +26.
+        let g = w.g.spawn_creature(15, 0x8000, 0x8000, 800).expect("guard");
+        w.g.ent[g].f26 = 7;
+        w.g.ent[g].tick70 = 94;
+        w.g.mob_death(g, 90);
+        assert_eq!(w.g.ent[g].tick70, 95, "non-walk-in model must corpse");
+        assert_eq!(w.g.ent[g].flags & 0x400, 0, "guard death is not silent");
+    }
+
+    /// Possessing a dwelling must NOT shrink its footprint extent. The
+    /// re-owner stamps the owner-flag sprite (177); the plain sprite-set
+    /// overwrites +80/+82 with the flag's tiny extent, which drags the
+    /// villager-emit / defender pop-out spawn (x + f80) from OUTSIDE the
+    /// footprint onto the roof — where the creature walls in, dies, and
+    /// its 400 corpse-flame collapses the house you just possessed. The
+    /// port preserves the footprint (deliberate deviation, DEVIATIONS.md).
+    #[test]
+    fn possession_preserves_the_dwelling_footprint() {
+        let mut w = flat_world();
+        let h = w.g.spawn_creator(45, 0x8000, 0x8000, 0).expect("house");
+        w.g.ent[h].tick70 = 52; // live village building
+        w.g.ent[h].act_life = 2000;
+        w.g.ent[h].f144 = 0; // unclaimed
+        // A real dwelling's footprint half-extent (building_fixup value).
+        w.g.ent[h].f80 = 0x700;
+        w.g.ent[h].f82 = 0x700;
+
+        // A possession claim (ch1), then the live-building tick runs the
+        // genuine re-owner path.
+        w.g.ent[h].mail[1] = (0, crate::mc1::mobs::PLAYER_TARGET);
+        w.g.tick_building_live(h);
+
+        assert_eq!(
+            w.g.ent[h].f144,
+            crate::mc1::mobs::PLAYER_TARGET,
+            "the claim took: house is player-owned"
+        );
+        assert_eq!(
+            w.g.ent[h].f80, 0x700,
+            "footprint x-extent must survive possession (else emits spawn on the roof)"
+        );
+        assert_eq!(
+            w.g.ent[h].f82, 0x700,
+            "footprint y-extent must survive possession"
         );
     }
 

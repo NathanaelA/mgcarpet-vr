@@ -3929,7 +3929,26 @@ impl Gen {
                 } else if (src as usize) < self.ent.len() && self.ent[src as usize].class64 != 0 {
                     self.snd(4, src as usize);
                 }
+                // The owner-flag sprite, but PRESERVING the building's
+                // footprint extents (+78/80/82/84). Retail's
+                // sub_36FA0_37360(_,177) (:30808) overwrites +80 with the
+                // tiny flag sprite's extent — and the villager-emit /
+                // defender pop-out spawn at (x + f80). With the footprint
+                // extent clobbered, that spawn point collapses from just
+                // OUTSIDE the footprint to ON the roof, where the creature
+                // is walled-in, dies, and its corpse-flame (400) destroys
+                // the very house you just possessed (a self-sustaining
+                // collapse). Deliberate deviation — see docs/DEVIATIONS.md.
+                let (f78, f80, f82, f84) = {
+                    let e = &self.ent[i];
+                    (e.f78, e.f80, e.f82, e.f84)
+                };
                 self.set_sprite(i, 177);
+                let e = &mut self.ent[i];
+                e.f78 = f78;
+                e.f80 = f80;
+                e.f82 = f82;
+                e.f84 = f84;
             }
         }
         if self.ent[i].mail[0].1 != 0 {

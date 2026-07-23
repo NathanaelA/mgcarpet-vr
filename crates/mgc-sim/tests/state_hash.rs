@@ -293,10 +293,10 @@ fn level_005_golden_state_hashes() {
     const GOLDEN: [u64; 6] = [
         0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
         0x06e8a54a916839d7, // A: 32 idle ticks far afield
-        0xd1b3764cfd555f74, // B: crater trigger fired + 120 dig ticks
-        0xe63297fee458ef65, // C: ambush disposition fired
-        0x4bc4a5ad748be6a4, // D: 64 ticks of two-hand fireball combat
-        0x77e6851c706681d2, // E: 100 aftermath ticks
+        0xcb4c659427dc89bc, // B: crater trigger fired + 120 dig ticks
+        0x72ccac58dbadb473, // C: ambush disposition fired
+        0xd9b65735a9a69434, // D: 64 ticks of two-hand fireball combat
+        0xdaefa9736ab36635, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -322,13 +322,28 @@ fn level_005_golden_state_hashes() {
     // every fire, splash, flash, tether and cloud lives one tick longer,
     // so populations and poses at B-E genuinely differ. Post-init and A
     // hold — nothing has died and no settler has thought yet.
+    // The walk-in silent-absorb fix (mob_death now vanishes militia and
+    // retired settlers that enter a house, matching retail's per-model
+    // death slots, instead of dropping them into the corpse path whose
+    // 400-dmg flame destroyed the dwelling and churned the village) moves
+    // B-E again: those creatures no longer corpse, so no flame, no house
+    // damage, and the populations that survive differ. A still holds.
+    //
+    // The whole array then re-pins once more — including post-init and A
+    // — for a PRESENTATION change, NOT a behavior one: `live_poses` now
+    // keeps unclaimed MC1 dwellings in the pose set (as `map_only`, so no
+    // billboard and no map dot) purely so the debug health-bar overlay
+    // can cover them. `observable_digest` hashes the pose set, so the
+    // extra (unclaimed, always-present) house poses shift every
+    // checkpoint. The raw GOLDEN state hash above is UNCHANGED — proof
+    // the sim itself did not move.
     const OBSERVABLE: [u64; 6] = [
-        0xf67c96de5b515a64, // post-init — the ring of castle terrain
-        0x797dd4817a1d1f11, // A — holds (no militia yet)
-        0x9e3b27f303c46ab5, // B — settler phase + first corpse flames
-        0x5e3404450ad1b96e, // C
-        0x9b9a0a33788c2a2d, // D
-        0x99cf84c0814e0647, // E
+        0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
+        0x203eb5b24d0ab0e0, // A
+        0xf1e83074252085c5, // B — settler phase + walk-in silent absorb
+        0x3a785913e4b79ecb, // C
+        0xf5561cdf787f6bde, // D
+        0xc5231fc112256801, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

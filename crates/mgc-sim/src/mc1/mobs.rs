@@ -2149,10 +2149,20 @@ impl Gen {
 
     /// DEATH sub_1A6C0 (:21820): one tick — body segments become
     /// corpses (any segment's killer propagates to the head), kill
-    /// credit, then self to CORPSE. m13/m14 absorbed by a castle
-    /// (+26 != 0) despawn silently instead (:25451-62, :25625-28).
-    fn mob_death(&mut self, i: usize, base: u8) {
-        if matches!(self.ent[i].model65, 13 | 14) && self.ent[i].f26 != 0 {
+    /// credit, then self to CORPSE. A militia (m4), feeder (m13/m14)
+    /// or retired settler that walked into a house set +26 = 1 and
+    /// despawns silently instead — no corpse, so no mana ball, no
+    /// death-flame, no 400-dmg fire onto the dwelling it just entered.
+    /// Retail decides this in the per-model death slots, each of which
+    /// gates on +26 regardless of how the slot was reached (walk-in or
+    /// combat): militia sub_1BC10 (:22729), m13 sub_1FA00 (:25447),
+    /// m14 sub_1FE90 (:25623). Keyed on the DISPATCH model (base/6),
+    /// NOT model65 — a settler walks in still carrying model65 = 12 yet
+    /// dispatches through the m13 slot (state 79 -> death 82); gating on
+    /// model65 leaves militia and settlers falling through to the corpse
+    /// path, whose 400-dmg fire drives the village-churn destruction.
+    pub(crate) fn mob_death(&mut self, i: usize, base: u8) {
+        if matches!(base / 6, 4 | 13 | 14) && self.ent[i].f26 != 0 {
             self.ent[i].flags |= 0x400;
             return;
         }
