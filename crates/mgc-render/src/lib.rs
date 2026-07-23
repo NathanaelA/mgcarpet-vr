@@ -748,6 +748,13 @@ struct Globals {
 /// handful on screen).
 const MAX_LIGHTS: usize = 16;
 
+const IDENTITY_MAT4: [[f32; 4]; 4] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
 /// One world sprite to draw, resolved from a level entity. Static data;
 /// the view-dependent part (which rotation view, mirroring) is computed
 /// per frame from `yaw` and the camera.
@@ -827,6 +834,24 @@ pub struct UiQuad {
 #[repr(C)]
 struct UiGlobals {
     screen: [f32; 4],
+    view_proj: [[f32; 4]; 4],
+    panel_origin: [f32; 3],
+    panel_scale: f32,
+    panel_right: [f32; 3],
+    panel_mode: u32,
+    panel_up: [f32; 3],
+    _pad: f32,
+}
+
+/// Uniform data for `map.wgsl`. The first three vec4s are the legacy
+/// screen-space layout; the trailing fields support the world-space HUD
+/// panel mode used in VR.
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct MapGlobals {
+    rect: [f32; 4],
+    player: [f32; 4],
+    mode: [f32; 4],
     view_proj: [[f32; 4]; 4],
     panel_origin: [f32; 3],
     panel_scale: f32,
@@ -1885,13 +1910,13 @@ impl Renderer {
         });
         let map_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("map globals"),
-            size: 48, // 3 vec4: rect, player(x,z,yaw,zoom), mode(round,aspect,_,_)
+            size: std::mem::size_of::<MapGlobals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let minimap_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("minimap globals"),
-            size: 48,
+            size: std::mem::size_of::<MapGlobals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -3781,6 +3806,15 @@ impl Renderer {
     fn minimap_rect(&self, w: u32, hpx: u32) -> (f32, f32, f32) {
         let hud = HudFrame::new(w as f32, hpx as f32).s;
         let diam = (MINIMAP_DIAM * hud).min(w.min(hpx) as f32);
+        // In VR the HUD is rendered on a world-space panel at a fixed
+        // distance, so the small retail minimap is hard to read. Double
+        // its size in world-space mode; the cap keeps it inside the eye
+        // buffer when the panel is close to the screen edges.
+        let diam = if self.ui_panel_mode == 1 {
+            (diam * 1.78).min(w.min(hpx) as f32)
+        } else {
+            diam
+        };
         // Anchored at the corner (0,0), touching both screen edges — the
         // disc center is exactly at its radius (retail DrawMinimap(0,0)).
         let c = diam * 0.5;
@@ -4684,18 +4718,12 @@ impl Renderer {
         // vertex buffer (no per-frame concatenation copy).
         let ui_count = (self.ui_quads.len() + stamp_quads.len()) as u32;
         if ui_count > 0 {
-            const IDENTITY: [[f32; 4]; 4] = [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ];
             let globals = UiGlobals {
                 screen: [w as f32, hpx as f32, 0.0, 0.0],
                 view_proj: if self.ui_panel_mode == 1 {
                     view_proj
                 } else {
-                    IDENTITY
+                    IDENTITY_MAT4
                 },
                 panel_origin: self.ui_panel_origin,
                 panel_scale: self.ui_panel_scale,
@@ -4766,46 +4794,82 @@ impl Renderer {
             let (px0, py0, pw, ph) = map_pane;
             let cx_px = px0 + pw * 0.5;
             let cy_px = py0 + ph * 0.5;
-            let map_globals: [f32; 12] = [
-                cx_px / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
-                1.0 - cy_px / hpx as f32 * 2.0, // pixel center → NDC y (flip)
-                pw / w as f32,                  // NDC half-width
-                ph / hpx as f32,                // NDC half-height
-                cam.x,
-                cam.z,
-                cam.yaw,
-                self.map_pane_zoom(pw / ph),
-                0.0,              // rectangular (no round mask)
-                pw / ph,          // sampler aspect = pane w/h
-                1.0,              // opaque (the map pane sits over the world)
-                MAP_TILES as f32, // world period for the toroidal wrap
-            ];
+            let rect = if self.ui_panel_mode == 1 {
+                // Pixel offset from the screen centre + pixel half-extents.
+                [
+                    cx_px - w as f32 * 0.5,
+                    cy_px - hpx as f32 * 0.5,
+                    pw * 0.5,
+                    ph * 0.5,
+                ]
+            } else {
+                [
+                    cx_px / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
+                    1.0 - cy_px / hpx as f32 * 2.0, // pixel center → NDC y (flip)
+                    pw / w as f32,                  // NDC half-width
+                    ph / hpx as f32,                // NDC half-height
+                ]
+            };
+            let map_globals = MapGlobals {
+                rect,
+                player: [cam.x, cam.z, cam.yaw, self.map_pane_zoom(pw / ph)],
+                mode: [0.0, pw / ph, 1.0, MAP_TILES as f32],
+                view_proj: if self.ui_panel_mode == 1 {
+                    view_proj
+                } else {
+                    IDENTITY_MAT4
+                },
+                panel_origin: self.ui_panel_origin,
+                panel_scale: self.ui_panel_scale,
+                panel_right: self.ui_panel_right,
+                panel_mode: self.ui_panel_mode,
+                panel_up: self.ui_panel_up,
+                _pad: 0.0,
+            };
             self.queue
-                .write_buffer(&self.map_globals_buf, 0, bytemuck::cast_slice(&map_globals));
+                .write_buffer(&self.map_globals_buf, 0, bytemuck::bytes_of(&map_globals));
         } else {
             // In-flight round minimap, corner-anchored at (0,0). Disc +
             // position scale with the HUD (w/640).
             let (disc, cx, cy) = self.minimap_rect(w, hpx);
-            let hw = disc / w as f32; // NDC half-width
-            let hh = disc / hpx as f32; // NDC half-height
-            let minimap_globals: [f32; 12] = [
-                cx / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
-                1.0 - cy / hpx as f32 * 2.0, // pixel center → NDC y (flip)
-                hw,
-                hh,
-                cam.x,
-                cam.z,
-                cam.yaw,
-                self.minimap_zoom,
-                1.0,                // round mask
-                1.0,                // square disc → aspect 1
-                self.minimap_alpha, // HUD transparency
-                MAP_TILES as f32,   // world period for the toroidal wrap
-            ];
+            let rect = if self.ui_panel_mode == 1 {
+                // Pixel offset from the screen centre + pixel half-extents.
+                [
+                    cx - w as f32 * 0.5,
+                    cy - hpx as f32 * 0.5,
+                    disc * 0.5,
+                    disc * 0.5,
+                ]
+            } else {
+                let hw = disc / w as f32; // NDC half-width
+                let hh = disc / hpx as f32; // NDC half-height
+                [
+                    cx / w as f32 * 2.0 - 1.0,   // pixel center → NDC x
+                    1.0 - cy / hpx as f32 * 2.0, // pixel center → NDC y (flip)
+                    hw,
+                    hh,
+                ]
+            };
+            let minimap_globals = MapGlobals {
+                rect,
+                player: [cam.x, cam.z, cam.yaw, self.minimap_zoom],
+                mode: [1.0, 1.0, self.minimap_alpha, MAP_TILES as f32],
+                view_proj: if self.ui_panel_mode == 1 {
+                    view_proj
+                } else {
+                    IDENTITY_MAT4
+                },
+                panel_origin: self.ui_panel_origin,
+                panel_scale: self.ui_panel_scale,
+                panel_right: self.ui_panel_right,
+                panel_mode: self.ui_panel_mode,
+                panel_up: self.ui_panel_up,
+                _pad: 0.0,
+            };
             self.queue.write_buffer(
                 &self.minimap_globals_buf,
                 0,
-                bytemuck::cast_slice(&minimap_globals),
+                bytemuck::bytes_of(&minimap_globals),
             );
         }
 
