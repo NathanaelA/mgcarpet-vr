@@ -1288,15 +1288,23 @@ pub fn bake_movies(
     )?;
 
     // The subtitle strip's font and text, so the movie bundle is
-    // self-contained. Retail draws the narration subtitles with
-    // SFONT1 (`sub_24AB0`, remc1:27911) — a bigger, outlined font than
-    // the in-game FONT1, and BOTH games ship the same file.
+    // self-contained. The two games use DIFFERENT movie fonts: MC1
+    // draws the narration subtitles with SFONT1 (`sub_24AB0`,
+    // remc1:27911) — a bigger, outlined font than the in-game FONT1 —
+    // while MC2 loads a dedicated 7×8 monospace font out of
+    // HSCREEN0.DAT before every FMV (`hscreen::fmv_font`; remc2
+    // `Intros_76D10` / `PlayInGameFmv_82670`). Both are emitted in
+    // the same `char - 31` glyph-id space so the player's lookup is
+    // uniform (SFONT1 is authored that way; the FMV font's raw-ASCII
+    // records are re-indexed here).
     let font_rel = if src.exists("DATA/SCREENS/SFONT1.DAT") {
         "DATA/SCREENS/SFONT1"
     } else {
         "DATA/SFONT1"
     };
-    if src.exists(&format!("{font_rel}.DAT")) {
+    let mc2_font_rel = "DATA/SCREENS/HSCREEN0.DAT";
+    let mc2 = game == Game::MagicCarpet2;
+    if src.exists(&format!("{font_rel}.DAT")) || (mc2 && src.exists(mc2_font_rel)) {
         let get = |rel: &str| -> Result<Vec<u8>, BakeError> {
             let raw = src
                 .read(rel)
@@ -1309,20 +1317,56 @@ pub fn bake_movies(
                 Ok(raw)
             }
         };
-        let dat = get(&format!("{font_rel}.DAT"))?;
-        let tab = get(&format!("{font_rel}.TAB"))?;
-        let glyphs = crate::hspr::decode(&dat, &tab)
-            .map_err(|e| BakeError::Level(Path::new(font_rel).to_path_buf(), 0, e.to_string()))?;
+        let glyphs = if mc2 {
+            let raw = src
+                .read(mc2_font_rel)
+                .map_err(|e| BakeError::Io(Path::new(mc2_font_rel).to_path_buf(), e))?;
+            let decoded = crate::hscreen::fmv_font(&raw)
+                .map_err(|e| BakeError::Level(Path::new(mc2_font_rel).to_path_buf(), 0, e))?;
+            sources.push(BundleSource {
+                file: mc2_font_rel.into(),
+                sha256: hex(&Sha256::digest(&raw)),
+            });
+            // Records are raw-ASCII indexed; shift into the `char - 31`
+            // id space (ASCII 32 → id 1, matching SFONT1's layout) and
+            // normalize the raster to the mask convention (the pool
+            // stores a flat palette index — 150 — that retail never
+            // shows: `DrawText_7FB90` sets flag 64 so every visible
+            // pixel is repainted in the caller's ink by
+            // `GameBitmap::DrawColourizedBitmap`).
+            decoded
+                .into_iter()
+                .skip(31)
+                .enumerate()
+                .map(|(i, mut s)| {
+                    s.index = i;
+                    s.group = i;
+                    for f in &mut s.frames {
+                        for v in f.iter_mut() {
+                            *v = (*v != 0) as u8;
+                        }
+                    }
+                    s
+                })
+                .collect()
+        } else {
+            let dat = get(&format!("{font_rel}.DAT"))?;
+            let tab = get(&format!("{font_rel}.TAB"))?;
+            let decoded = crate::hspr::decode(&dat, &tab).map_err(|e| {
+                BakeError::Level(Path::new(font_rel).to_path_buf(), 0, e.to_string())
+            })?;
+            sources.push(BundleSource {
+                file: format!("{font_rel}.DAT"),
+                sha256: hex(&Sha256::digest(&dat)),
+            });
+            decoded
+        };
         let packed = sprites::pack(&glyphs, UI_ATLAS_WIDTH);
         emit("font.bin", &packed.atlas)?;
         emit(
             "font.json",
             &serde_json::to_vec_pretty(&packed.index).expect("font index serializes"),
         )?;
-        sources.push(BundleSource {
-            file: format!("{font_rel}.DAT"),
-            sha256: hex(&Sha256::digest(&dat)),
-        });
 
         // The lines themselves. The scripts' subtitle keys are indices
         // into the game's own string table: MC1's is `DATA/ETEXT.DAT`

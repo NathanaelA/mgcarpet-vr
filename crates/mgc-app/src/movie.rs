@@ -691,8 +691,8 @@ impl Subtitles {
         self.glyphs.get(Self::id(ch)).copied().flatten()
     }
 
-    /// Pen advance for a glyph. Retail steps by the TAB record's width
-    /// field MINUS ONE (`tabRecord[4] - 1`, remc1
+    /// Pen advance for a glyph — MC1 only. Retail steps by the TAB
+    /// record's width field MINUS ONE (`tabRecord[4] - 1`, remc1
     /// `DrawText_51560_518A0`) — the glyphs kern by a pixel. Advancing
     /// by the full width instead adds up fast: it pushed MC1's longest
     /// narration line to 353 px against a 300 px pen box, i.e. off the
@@ -701,8 +701,19 @@ impl Subtitles {
         self.glyph(ch).map_or(4, |g| g.2.saturating_sub(1).max(1))
     }
 
+    /// Pen width of a run of MC1 advances (the MC2 movie path never
+    /// measures glyphs — it is monospace via [`Subtitles::cell`]).
+    #[cfg(test)]
     fn width(&self, s: &str) -> usize {
         s.chars().map(|c| self.advance(c)).sum()
+    }
+
+    /// MC2's monospace cell: the FMV font's records are all the same
+    /// width, and retail advances by entry 65's ('A') for EVERY
+    /// character (`DrawText_7FB90` — no per-glyph width anywhere in
+    /// the movie path).
+    fn cell(&self) -> usize {
+        self.glyph('A').map_or(7, |g| g.2)
     }
 
     fn line_height(&self) -> usize {
@@ -776,6 +787,53 @@ impl Subtitles {
             }
         }
     }
+}
+
+/// MC2's caption wrap, ported walk-for-walk from retail (`sub_7FCB0`,
+/// the `a6 == 5, a8 == 0` movie path): scan for separators (space or
+/// end), and append the pending word to the line while the span from
+/// the separator BEFORE the line's first word through the candidate's
+/// own separator fits `2*cell * span <= 630 - 3 * 2*cell` — 42 cells
+/// at the FMV font's 7-px cell, measured in 640-space against the
+/// fixed cell width (monospace: per-glyph widths never enter).
+/// Wrapped lines keep their trailing separator space — retail copies
+/// through it, and its strlen feeds the centring — while the final
+/// line ends at the terminator without one. The first line's span is
+/// measured from index 0 instead of a preceding separator (one char
+/// less of slack for every later line), a retail off-by-one this
+/// keeps: the wrap points are the shipped look.
+fn mc2_wrap(text: &str, cell: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    // Retail's cursors: `v96` = separator before the line's first
+    // word, `v101` = the previous separator seen.
+    let (mut v96, mut v101) = (0usize, 0usize);
+    let mut k = 0usize;
+    loop {
+        let c = if k < n { chars[k] } else { '\0' };
+        if c == ' ' || c == '\0' {
+            if v101 != 0 {
+                if 2 * cell * (k - v96) <= 630 - 6 * cell {
+                    line.extend(&chars[v101 + 1..(k + 1).min(n)]);
+                } else {
+                    lines.push(std::mem::take(&mut line));
+                    line = chars[v101 + 1..(k + 1).min(n)].iter().collect();
+                    v96 = v101;
+                }
+            } else {
+                line = chars[0..(k + 1).min(n)].iter().collect();
+            }
+            v101 = k;
+        }
+        if k >= n {
+            break;
+        }
+        k += 1;
+    }
+    lines.push(line);
+    lines
 }
 
 impl MovieSet {
@@ -1241,62 +1299,63 @@ impl MoviePlayer {
     /// Lay one subtitle into the band. The games differ: MC1 pens the
     /// text left-aligned at x=10 with the line breaks authored into the
     /// string itself (`DrawText_51560_518A0` — no wrapping, `\n`
-    /// resets x); MC2 word-wraps to the strip width and CENTRES each
-    /// line (`DrawText_7FAE0`).
+    /// resets x); MC2 word-wraps MONOSPACE to a 42-cell line and
+    /// CENTRES each line (`sub_7FCB0` → `DrawText_7FAE0`, all layout
+    /// in 640-space halved by the low-res blitter).
     fn draw_subtitle(&self, buf: &mut [u8], subs: &Subtitles, text: &str, ink: (u8, u8)) {
         let (w, h) = (Self::W, Self::H);
         let lh = subs.line_height();
-        let mut lines: Vec<String> = Vec::new();
-        if self.mc2 {
-            // Word wrap into the 320-wide strip, with the same 3-glyph
-            // right margin retail leaves.
-            let limit = w.saturating_sub(24);
-            let mut line = String::new();
-            for word in text.split_whitespace() {
-                let candidate = if line.is_empty() {
-                    word.to_string()
-                } else {
-                    format!("{line} {word}")
-                };
-                if subs.width(&candidate) > limit && !line.is_empty() {
-                    lines.push(std::mem::take(&mut line));
-                    line = word.to_string();
-                } else {
-                    line = candidate;
-                }
-            }
-            if !line.is_empty() {
-                lines.push(line);
-            }
+        let cell = subs.cell();
+        let lines: Vec<String> = if self.mc2 {
+            mc2_wrap(text, cell)
         } else {
             // MC1's strings carry their own breaks as CRLF; `\r` is
             // ignored and the leading space of the next line is part of
             // the authored layout.
-            lines = text.split('\n').map(|l| l.replace('\r', "")).collect();
-        }
+            text.split('\n').map(|l| l.replace('\r', "")).collect()
+        };
         // The pen: MC1 at buffer (10,180) under a 21-row lift = screen
-        // (10,159); MC2's strip starts at buffer row 201 under a
-        // 31-row lift = screen row 170.
+        // (10,159); MC2 at 640-space y=340 into a buffer 31 rows below
+        // the blit window = screen row 170. Lines past the screen edge
+        // are drawn with their bottom rows clipped, exactly as the
+        // blit window cuts retail's oversized buffer (MC2's band is
+        // 320×40 at buffer row 201 but only 30 rows of it show).
         let top = if self.mc2 { 170 } else { 159 };
         for (i, line) in lines.iter().enumerate() {
             let y = top + i * lh;
-            if y + lh > h {
+            if y >= h {
                 break;
             }
-            let mut x = if self.mc2 {
-                (w.saturating_sub(subs.width(line))) / 2
+            if self.mc2 {
+                // Centering, retail's way: 640-space
+                // `posx = 630/2 - width65 * strlen / 2` — the strlen
+                // COUNTS each wrapped line's trailing space, and the
+                // odd 315 floors on the halve, both shifting the line
+                // ~2 px left of true centre. Single-character lines
+                // draw nothing (`DrawText_7FAE0` only pens strlen > 1).
+                let len = line.chars().count();
+                if len <= 1 {
+                    continue;
+                }
+                let posx640 = (315 - (cell * len) as i32).max(0);
+                let x0 = posx640 as usize / 2;
+                for (j, c) in line.chars().enumerate() {
+                    // Space and tab advance the pen without drawing
+                    // (`DrawText_7FB90`'s explicit arms).
+                    if c != ' ' && c != '\t' {
+                        subs.blit(buf, w, h, w, x0 + j * cell, y, c, ink);
+                    }
+                }
             } else {
-                10
-            };
-            // Retail clips the strip to its pen box — MC1 x=10..310
-            // (`sub_51360_516A0(10, 180, 300, 50)`), MC2 the full
-            // 320-space width less a margin.
-            let right = if self.mc2 { 315 } else { 310 };
-            for c in line.chars() {
-                subs.blit(buf, w, h, right, x, y, c, ink);
-                x += subs.advance(c);
-                if x >= right {
-                    break;
+                // Retail clips MC1's strip to its pen box, x=10..310
+                // (`sub_51360_516A0(10, 180, 300, 50)`).
+                let (mut x, right) = (10, 310);
+                for c in line.chars() {
+                    subs.blit(buf, w, h, right, x, y, c, ink);
+                    x += subs.advance(c);
+                    if x >= right {
+                        break;
+                    }
                 }
             }
         }
@@ -1988,6 +2047,48 @@ mod tests {
             .filter(|(i, (a, b))| a != b && *i < 159 * MoviePlayer::W)
             .count();
         assert_eq!(outside, 0, "{outside} subtitle pixels above the strip");
+    }
+
+    /// The wrap law, pinned against a retail 320×200 screen capture of
+    /// cutscene caption L2:17 (player-supplied, 2026 replay): three
+    /// lines, split exactly at these words, starting at these columns.
+    /// Pure — no baked data needed; the FMV font's cell is 7.
+    #[test]
+    fn mc2_wrap_matches_retail_capture() {
+        let caption = "dimension you've just come from, you have good reason \
+                       to wonder how long that dimension has left";
+        let lines = mc2_wrap(caption, 7);
+        assert_eq!(
+            lines,
+            vec![
+                "dimension you've just come from, you have ".to_string(),
+                "good reason to wonder how long that ".to_string(),
+                "dimension has left".to_string(),
+            ]
+        );
+        // Retail centring: 640-space `315 - 7*strlen`, halved with the
+        // floor. The capture's measured line starts are 10/31/94.
+        let starts: Vec<usize> = lines
+            .iter()
+            .map(|l| (315 - 7 * l.chars().count()) / 2)
+            .collect();
+        assert_eq!(starts, vec![10, 31, 94]);
+    }
+
+    /// A line's span allowance is 42 cells measured through its
+    /// trailing separator — captions longer than two SFONT1-sized
+    /// lines were the reported bug, so hold the wrap to the band's
+    /// real capacity: this 3-liner must not lose its tail.
+    #[test]
+    fn mc2_wrap_keeps_the_whole_caption() {
+        let caption = "one two three four five six seven eight nine ten \
+                       eleven twelve thirteen fourteen fifteen sixteen";
+        let lines = mc2_wrap(caption, 7);
+        let rejoined: String = lines.concat();
+        assert_eq!(rejoined.split_whitespace().count(), 16, "{lines:?}");
+        for l in &lines {
+            assert!(l.chars().count() <= 42, "over-long line {l:?}");
+        }
     }
 
     /// Clear the fade-in, then run `seconds` of playback and report

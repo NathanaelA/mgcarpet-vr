@@ -255,12 +255,17 @@ impl MainMenu {
         )
     }
 
-    /// Esc: close the modal only. Retail auto-selects the Exit
-    /// button (MI:5842-43), but Esc also serves as the
-    /// pointer-release/abandon key in play, so here it never quits
-    /// (deliberate) — quitting is the Exit button's job.
+    /// Esc: Cancel on an open dialog (the scroll widget's scancode-1
+    /// arm, `DrawScrollDialog2_7B660` MI:5660-63), else select the
+    /// Exit button exactly as a click would (MI:5842-43 — scancode 1
+    /// sets `selected_8` on button id 11; retail plays no click
+    /// sample in that arm, only in the mouse one).
     pub fn escape(&mut self) {
-        self.modal = None;
+        if self.modal.is_some() {
+            self.press_cancel();
+        } else {
+            self.modal = Some(Modal::ExitConfirm);
+        }
     }
 
     /// Keystrokes: the name filter is retail `sub_7C200` (space,
@@ -295,15 +300,14 @@ impl MainMenu {
         }
     }
 
-    /// Enter: commit the name / close a slot edit field.
+    /// Enter = the OK button (the scroll widget's scancode-28 arm,
+    /// `DrawScrollDialog2_7B660` MI:5656-58, click sample included).
+    /// An open slot-label edit field consumes it first, committing
+    /// the label rather than the dialog.
     pub fn key_enter(&mut self) {
         match &mut self.modal {
-            Some(Modal::Name { buf }) => {
-                self.pending = Some(MenuAction::SetName(std::mem::take(buf)));
-                self.modal = None;
-            }
             Some(Modal::Slots {
-                edit,
+                edit: edit @ Some(_),
                 selected,
                 slots,
                 ..
@@ -314,7 +318,57 @@ impl MainMenu {
                     s.0 = e;
                 }
             }
-            _ => {}
+            Some(_) => self.press_ok(),
+            None => {}
+        }
+    }
+
+    /// The OK button's semantics for the open modal — one law for the
+    /// mouse hit and the Enter key. A slot dialog with nothing valid
+    /// selected clicks but stays up (retail: the sample plays, the
+    /// action needs a selection).
+    fn press_ok(&mut self) {
+        let Some(modal) = &mut self.modal else { return };
+        match modal {
+            Modal::Name { buf } => {
+                self.sounds.push(SND_CLICK);
+                self.pending = Some(MenuAction::SetName(std::mem::take(buf)));
+                self.modal = None;
+            }
+            Modal::ExitConfirm => {
+                self.sounds.push(SND_CLICK);
+                self.pending = Some(MenuAction::Quit);
+                self.modal = None;
+            }
+            Modal::Slots {
+                save,
+                open,
+                slots,
+                selected,
+                ..
+            } => {
+                if *open < 200.0 {
+                    return; // still unrolling — swallow, like clicks
+                }
+                self.sounds.push(SND_CLICK);
+                let action = if *save {
+                    selected.map(|k| MenuAction::SaveTo { slot: k })
+                } else {
+                    selected.filter(|&k| slots[k].1).map(MenuAction::LoadFrom)
+                };
+                if let Some(a) = action {
+                    self.pending = Some(a);
+                    self.modal = None;
+                }
+            }
+        }
+    }
+
+    /// The Cancel button: close the dialog, keep the state (with the
+    /// click sample — retail plays it on the keyboard arm too).
+    fn press_cancel(&mut self) {
+        if self.modal.take().is_some() {
+            self.sounds.push(SND_CLICK);
         }
     }
 
@@ -370,76 +424,48 @@ impl MainMenu {
 
     fn modal_click(&mut self, mx: f32, my: f32) {
         let Some(modal) = &mut self.modal else { return };
-        match modal {
-            Modal::Name { buf } => {
-                let (x1, y1, h) = (356.0 - DIALOG_W / 2.0, 112.0, 80.0);
-                if in_rect(mx, my, ok_rect(x1, y1, h)) {
-                    self.sounds.push(SND_CLICK);
-                    self.pending = Some(MenuAction::SetName(std::mem::take(buf)));
-                    self.modal = None;
-                } else if in_rect(mx, my, cancel_rect(x1, y1, h)) {
-                    self.sounds.push(SND_CLICK);
-                    self.modal = None;
-                }
+        // Each modal's dialog box, for the shared OK/Cancel rects.
+        let (x1, y1, h) = match modal {
+            Modal::Name { .. } => (356.0 - DIALOG_W / 2.0, 112.0, 80.0),
+            Modal::ExitConfirm => (352.0 - DIALOG_W / 2.0, 26.0, 80.0),
+            // Retail anchors: Save (78,160), Load (448,160).
+            Modal::Slots { save, .. } => (if *save { 78.0 } else { 448.0 }, 160.0, 200.0),
+        };
+        if let Modal::Slots {
+            save,
+            open,
+            slots,
+            selected,
+            edit,
+        } = modal
+        {
+            if *open < 200.0 {
+                return;
             }
-            Modal::ExitConfirm => {
-                let (x1, y1, h) = (352.0 - DIALOG_W / 2.0, 26.0, 80.0);
-                if in_rect(mx, my, ok_rect(x1, y1, h)) {
-                    self.sounds.push(SND_CLICK);
-                    self.pending = Some(MenuAction::Quit);
-                    self.modal = None;
-                } else if in_rect(mx, my, cancel_rect(x1, y1, h)) {
-                    self.sounds.push(SND_CLICK);
-                    self.modal = None;
-                }
-            }
-            Modal::Slots {
-                save,
-                open,
-                slots,
-                selected,
-                edit,
-            } => {
-                if *open < 200.0 {
-                    return;
-                }
-                // Retail anchors: Save (78,160), Load (448,160).
-                // Rows at y1+32+16k (retail y1+16*(k+1), 1-based).
-                let (x1, y1, h) = (if *save { 78.0 } else { 448.0 }, 160.0, 200.0);
-                for k in 0..slots.len() {
-                    let ry = y1 + 32.0 + 16.0 * k as f32;
-                    if mx >= x1 + 10.0 && mx < x1 + 10.0 + 92.0 && my >= ry && my < ry + 16.0 {
-                        if !*save && !slots[k].1 {
-                            return;
-                        }
-                        *selected = Some(k);
-                        if *save {
-                            *edit = Some(if slots[k].1 {
-                                slots[k].0.clone()
-                            } else {
-                                String::new()
-                            });
-                        }
-                        self.sounds.push(SND_CLICK);
+            // Rows at y1+32+16k (retail y1+16*(k+1), 1-based).
+            for k in 0..slots.len() {
+                let ry = y1 + 32.0 + 16.0 * k as f32;
+                if mx >= x1 + 10.0 && mx < x1 + 10.0 + 92.0 && my >= ry && my < ry + 16.0 {
+                    if !*save && !slots[k].1 {
                         return;
                     }
-                }
-                if in_rect(mx, my, ok_rect(x1, y1, h)) {
-                    self.sounds.push(SND_CLICK);
-                    let action = if *save {
-                        selected.map(|k| MenuAction::SaveTo { slot: k })
-                    } else {
-                        selected.filter(|&k| slots[k].1).map(MenuAction::LoadFrom)
-                    };
-                    if let Some(a) = action {
-                        self.pending = Some(a);
-                        self.modal = None;
+                    *selected = Some(k);
+                    if *save {
+                        *edit = Some(if slots[k].1 {
+                            slots[k].0.clone()
+                        } else {
+                            String::new()
+                        });
                     }
-                } else if in_rect(mx, my, cancel_rect(x1, y1, h)) {
                     self.sounds.push(SND_CLICK);
-                    self.modal = None;
+                    return;
                 }
             }
+        }
+        if in_rect(mx, my, ok_rect(x1, y1, h)) {
+            self.press_ok();
+        } else if in_rect(mx, my, cancel_rect(x1, y1, h)) {
+            self.press_cancel();
         }
     }
 
@@ -660,5 +686,96 @@ impl MainMenu {
         }
         crate::ui::offset_quads(&mut quads, ox, oy);
         quads
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bare() -> MainMenu {
+        MainMenu {
+            atlas: Vec::new(),
+            atlas_w: 1,
+            atlas_h: 1,
+            rects: Vec::new(),
+            font: Vec::new(),
+            strings: Vec::new(),
+            anim: 0.0,
+            modal: None,
+            pending: None,
+            sounds: Vec::new(),
+        }
+    }
+
+    /// The retail key law end to end: Esc on the bare menu arms the
+    /// exit confirm (MI:5842-43), Enter is its OK (MI:5656-58), a
+    /// second Esc is its Cancel (MI:5660-63).
+    #[test]
+    fn escape_arms_exit_confirm_enter_confirms() {
+        let mut m = bare();
+        m.escape();
+        assert!(matches!(m.modal, Some(Modal::ExitConfirm)));
+        assert_eq!(m.take_action(), None, "arming must not quit by itself");
+        m.key_enter();
+        assert_eq!(m.take_action(), Some(MenuAction::Quit));
+        assert!(m.modal.is_none());
+    }
+
+    #[test]
+    fn second_escape_declines_exit_confirm() {
+        let mut m = bare();
+        m.escape();
+        m.escape();
+        assert!(m.modal.is_none());
+        assert_eq!(m.take_action(), None);
+        // The decline clicked (the widget's keyboard arm plays the
+        // sample); the arming press did not.
+        assert_eq!(m.take_sounds(), vec![SND_CLICK]);
+    }
+
+    /// Enter presses OK on the slot dialogs too, honouring the same
+    /// selection law as the mouse; an open label editor consumes it
+    /// first.
+    #[test]
+    fn enter_presses_ok_on_slot_dialogs() {
+        let mut m = bare();
+        m.open_slots(false, vec![("GAME".into(), true), ("Empty".into(), false)]);
+        // Unroll the parchment.
+        for _ in 0..40 {
+            m.tick(1.0 / 60.0);
+        }
+        // Nothing selected: the click sounds, the dialog stays.
+        m.key_enter();
+        assert!(m.modal.is_some());
+        assert_eq!(m.take_action(), None);
+        if let Some(Modal::Slots { selected, .. }) = &mut m.modal {
+            *selected = Some(0);
+        }
+        m.key_enter();
+        assert_eq!(m.take_action(), Some(MenuAction::LoadFrom(0)));
+        assert!(m.modal.is_none());
+    }
+
+    #[test]
+    fn enter_commits_an_open_label_edit_before_ok() {
+        let mut m = bare();
+        m.open_slots(true, vec![("OLD".into(), true)]);
+        for _ in 0..40 {
+            m.tick(1.0 / 60.0);
+        }
+        if let Some(Modal::Slots { selected, edit, .. }) = &mut m.modal {
+            *selected = Some(0);
+            *edit = Some("NEW".into());
+        }
+        m.key_enter();
+        // First Enter closed the editor, not the dialog.
+        assert!(m.modal.is_some());
+        assert_eq!(m.take_action(), None);
+        if let Some(Modal::Slots { slots, .. }) = &m.modal {
+            assert_eq!(slots[0].0, "NEW");
+        }
+        m.key_enter();
+        assert_eq!(m.take_action(), Some(MenuAction::SaveTo { slot: 0 }));
     }
 }

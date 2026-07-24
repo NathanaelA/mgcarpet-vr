@@ -410,12 +410,26 @@ has been seen or HEARD running by a player yet.
   open for anyone who wants the text. MC2's CUT6 suppression is
   unconditional in retail and is not modelled — forcing subtitles on
   subtitles CUT6 too.
-- **The subtitle font is right, the pen is approximated.** SFONT1 and
-  the string tables are exact, as is the picture lift (MC1 21 rows, MC2
-  31), the pen origin and the advance (`tabRecord[4] - 1` — the glyphs
-  kern by a pixel; advancing by the full width ran MC1's longest
-  narration line to x=363 on a 320px screen, which is what a playtest
-  saw). But MC1's strip runs from buffer row 180,
+- **The subtitle fonts and pens are per-game, both retail-exact.**
+  MC1: SFONT1, left pen at x=10, advance `tabRecord[4] - 1` (the
+  glyphs kern by a pixel; advancing by the full width ran MC1's
+  longest narration line to x=363 on a 320px screen, which is what a
+  playtest saw), authored CRLF line breaks. MC2: NOT SFONT1 — retail
+  loads a dedicated 7×8 monospace font out of HSCREEN0.DAT before
+  every movie (`Intros_76D10` / `PlayInGameFmv_82670`; lowercase
+  records repeat the capitals, so captions render all-caps) and lays
+  it out in 640-space halved by the low-res blitter: fixed 7-px cell
+  for every character, greedy 42-cell word wrap, centring by
+  `315 - 7·strlen` (counting each wrapped line's trailing space),
+  8-px line stacking from screen row 170 — up to four lines, where
+  SFONT1's 14-px glyphs fit two (the shipped bug: long captions lost
+  their tails). The wrap walk and its off-by-ones are ported
+  index-for-index and pinned against a retail screen capture
+  (`movie::tests::mc2_wrap_matches_retail_capture` — same three
+  lines, same word splits, same starting columns). The ink is flat
+  nearest-white with no outline (`DrawColourizedBitmap` repaints
+  every glyph pixel), also retail. The picture lift is exact for both
+  (MC1 21 rows, MC2 31). But MC1's strip runs from buffer row 180,
   which is 20 rows ABOVE the band the lift clears — retail draws those
   rows over live picture, and the frame decoder can repaint them
   between subtitle changes. We draw the text last, so ours always

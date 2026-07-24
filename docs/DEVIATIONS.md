@@ -229,7 +229,7 @@ their source.
 - **settings.rs::registry (render.enhancement.smooth_motion)** — Faithful value is OFF (retail steps everything at sim rate); the option ships default-ON as a deliberate default deviation (Preference-class, so it does not flag the run).
 - **settings.rs::registry (gameplay.enhancement.prune_owned_jars)** — Faithful value is OFF (retail leaves owned spell jars in the world forever); ships default-ON as a deliberate default deviation (Preference-class cleanup, does not flag the run).
 - **frontend_mc1.rs::Mc1Menu.player_name / EditName modal** — MC1 rename dialog pre-fills the current save name (edit rather than retype), and retail's two prompts ("Enter your name" + "Enter your call-name", etext 34/35, only the call-name used) are collapsed to ONE name field. Deliberate, matching MC2's name dialog.
-- **frontend.rs::MainMenu::escape (MC2 menu)** — Retail's Esc auto-selects the Exit button (MI:5842-43); the port makes Esc close the modal only and never quit, because Esc doubles as the in-play pointer-release/abandon key. Deliberate. Quitting is the Exit button's job.
+- **frontend_mc1.rs::Mc1Menu::escape / key_enter (MC1 menu keys)** — PLAYER-RULED (2026-07-24): the MC2 retail menu key law (Esc = the Exit button when nothing is open, MI:5842-43; on any dialog Enter = OK / Esc = Cancel, the `DrawScrollDialog2_7B660` scancode 28/1 arms, MI:5656-63) is applied to the MC1 frontend as well, whose own retail key handling was never traced. A second Esc always declines what the first one opened. (The MC2 menu and world-map dialogs got the same law by straight fidelity — the earlier "Esc never quits" deviation here is RETIRED: Esc still never quits directly, it arms the confirm exactly as retail does.)
 
 
 ## mgc-render

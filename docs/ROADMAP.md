@@ -138,6 +138,17 @@ x=363 on a 320px screen), and the pen-box clip edge was briefly passed
 where the canvas row stride belonged. MC2's intro was reported good.
 Round 2 owed — the fixes are unconfirmed and the endings are unplayed.
 
+**MC2 subtitle layout fixed 2026-07-24 (playtest owed).** A player
+report (long captions lost their tails — the port stacked two lines
+where retail shows three) traced to the wrong font: MC2 movies never
+use SFONT1. Retail loads a dedicated 7×8 monospace font from
+HSCREEN0.DAT before every FMV and lays captions out monospace —
+42-cell greedy wrap, 8-px line stacking (up to four lines), all-caps,
+flat nearest-white ink. The wrap walk is ported index-for-index and
+pinned against a retail screen capture. Details in docs/FIDELITY.md
+("The subtitle fonts and pens are per-game"); BAKE_EPOCH 20 rebakes
+the `mc2-movies` font.
+
 **What landed.**
 - `mgc-import fmv.rs`: `FmvCursor`, an incremental one-frame-at-a-time
   decoder over the raw stream. The eager `decode` stays for the 3-30

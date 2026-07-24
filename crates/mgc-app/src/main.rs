@@ -5224,10 +5224,32 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
+                    // The map's open parchment dialog takes Enter as
+                    // OK (the scroll widget's scancode-28 arm,
+                    // MI:5656-58; Esc/Cancel is the Escape block
+                    // above). Edit fields were serviced first.
+                    if self.screen == Screen::Map
+                        && event.logical_key == Key::Named(NamedKey::Enter)
+                        && let Some(w) = &mut self.worldmap
+                        && w.dialog_open()
+                    {
+                        w.dialog_enter();
+                        return;
+                    }
                     // The main menu swallows the rest of the
-                    // keyboard; the map keeps its pan keys + P
+                    // keyboard, Enter first pressing the open
+                    // dialog's OK; the map keeps its pan keys + P
                     // (preferences).
                     if self.screen == Screen::Menu {
+                        if event.logical_key == Key::Named(NamedKey::Enter) {
+                            if mc1 {
+                                if let Some(m) = &mut self.mc1menu {
+                                    m.key_enter();
+                                }
+                            } else if let Some(m) = &mut self.mainmenu {
+                                m.key_enter();
+                            }
+                        }
                         return;
                     }
                 }

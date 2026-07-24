@@ -366,14 +366,18 @@ impl Mc1Menu {
         matches!(self.modal, Some(Modal::EditName { .. }))
     }
 
-    /// Esc: close the modal / leave the submode. Never arms the quit
-    /// confirm (Esc doubles as the in-game release/abandon key;
-    /// quitting is the Quit hotspot's job).
+    /// Esc: decline/close the modal, else leave the submode, else arm
+    /// the quit confirm — the MC2 menu's retail law (Esc = the Exit
+    /// button, MI:5842-43; Esc on a dialog = Cancel, MI:5660-63),
+    /// applied to both frontends by player ruling so a second Esc
+    /// always declines what the first one opened.
     pub fn escape(&mut self) {
         if self.modal.is_some() {
             self.modal = None;
         } else if self.sub != Sub::None {
             self.sub = Sub::None;
+        } else {
+            self.modal = Some(Modal::ConfirmQuit);
         }
     }
 
@@ -395,12 +399,20 @@ impl Mc1Menu {
         }
     }
 
+    /// Enter = the OK button on every dialog (the MC2 scroll widget's
+    /// scancode-28 law, applied to both frontends by player ruling).
     pub fn key_enter(&mut self) {
         match self.modal.take() {
             Some(Modal::EditName { buf }) => {
                 self.pending = Some(Mc1Action::SetName(buf));
             }
-            other => self.modal = other,
+            Some(Modal::ConfirmLoad { slot }) => {
+                self.pending = Some(Mc1Action::LoadFrom(slot));
+                self.sub = Sub::None;
+            }
+            Some(Modal::ConfirmNew) => self.pending = Some(Mc1Action::NewGame),
+            Some(Modal::ConfirmQuit) => self.pending = Some(Mc1Action::Quit),
+            None => {}
         }
     }
 

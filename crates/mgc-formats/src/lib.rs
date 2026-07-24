@@ -117,7 +117,12 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    also carry the subtitle strip's `font.bin`/`font.json` (SFONT1,
 ///    shipped by both games) and `subtitles.json` (MC1 ETEXT.DAT,
 ///    MC2 LANGUAGE/L2.TXT) so they are self-contained.
-pub const BAKE_EPOCH: u32 = 19;
+/// 20: `assets/mc2-movies` font is the dedicated 7×8 monospace FMV
+///    font out of HSCREEN0.DAT (what retail loads before every MC2
+///    movie), re-indexed into SFONT1's `char - 31` id space with the
+///    raster normalized to mask value 1 — not SFONT1, whose 14-px
+///    lines could only stack two rows in the subtitle band.
+pub const BAKE_EPOCH: u32 = 20;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

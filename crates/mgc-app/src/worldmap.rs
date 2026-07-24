@@ -969,14 +969,22 @@ impl WorldMap {
         self.pending_action.take()
     }
 
-    /// Esc on the map: an open dialog closes; otherwise back to the
-    /// menu (retail NewGameDraw returns 2, MI:3430-31).
+    /// Esc on the map: an open dialog closes — Cancel, with the click
+    /// sample (the scroll widget's scancode-1 arm, MI:5660-63 + the
+    /// sample at :5686-87); otherwise back to the menu (retail
+    /// NewGameDraw returns 2, MI:3430-31).
     pub fn escape(&mut self) {
-        if self.dialog.is_some() {
-            self.dialog = None;
+        if self.dialog.take().is_some() {
+            self.sounds.push(SND_CLICK);
         } else {
             self.pending_action = Some(MapAction::ExitToMenu);
         }
+    }
+
+    /// An open parchment dialog (deciding whether Enter belongs to
+    /// it).
+    pub fn dialog_open(&self) -> bool {
+        self.dialog.is_some()
     }
 
     /// A keystroke for the save-label editor (retail sub_7F6A0:
@@ -999,15 +1007,44 @@ impl WorldMap {
         }
     }
 
-    /// Enter closes the edit field, committing the label into the
-    /// slot row (the actual save happens on OK — retail law).
+    /// Enter: an open edit field closes first, committing the label
+    /// into the slot row (the actual save happens on OK — retail
+    /// law); otherwise Enter is the OK button (the scroll widget's
+    /// scancode-28 arm, MI:5656-58).
     pub fn dialog_enter(&mut self) {
-        if let Some(d) = &mut self.dialog
-            && let Some(edit) = d.edit.take()
-            && let Some(k) = d.selected
-            && let Some(slot) = d.slots.get_mut(k)
-        {
-            slot.0 = edit;
+        let Some(d) = &mut self.dialog else { return };
+        if let Some(edit) = d.edit.take() {
+            if let Some(k) = d.selected
+                && let Some(slot) = d.slots.get_mut(k)
+            {
+                slot.0 = edit;
+            }
+            return;
+        }
+        self.press_ok();
+    }
+
+    /// The OK button's action — one law for the mouse hit and the
+    /// Enter key. Ignored while the scroll is still unrolling, like
+    /// clicks; Save/Load with nothing valid selected clicks but
+    /// stays up.
+    fn press_ok(&mut self) {
+        let Some(d) = &self.dialog else { return };
+        if d.open < d.height {
+            return;
+        }
+        self.sounds.push(SND_CLICK);
+        let action = match d.kind {
+            DialogKind::NewGame => Some(MapAction::NewGame),
+            DialogKind::Save => d.selected.map(|k| MapAction::SaveTo { slot: k }),
+            DialogKind::Load => d
+                .selected
+                .filter(|&k| d.slots[k].1)
+                .map(MapAction::LoadFrom),
+        };
+        if let Some(a) = action {
+            self.pending_action = Some(a);
+            self.dialog = None;
         }
     }
 
@@ -1044,25 +1081,11 @@ impl WorldMap {
             }
         }
         let (ok_r, ca_r) = dialog_button_rects(d.anchor, d.height, DIALOG_W);
-        let ok = in_rect(mx, my, ok_r);
-        let cancel = in_rect(mx, my, ca_r);
-        if ok {
-            self.sounds.push(SND_CLICK);
-            let action = match d.kind {
-                DialogKind::NewGame => Some(MapAction::NewGame),
-                DialogKind::Save => d.selected.map(|k| MapAction::SaveTo { slot: k }),
-                DialogKind::Load => d
-                    .selected
-                    .filter(|&k| d.slots[k].1)
-                    .map(MapAction::LoadFrom),
-            };
-            if let Some(a) = action {
-                self.pending_action = Some(a);
-                self.dialog = None;
-            }
+        if in_rect(mx, my, ok_r) {
+            self.press_ok();
             return true;
         }
-        if cancel {
+        if in_rect(mx, my, ca_r) {
             self.sounds.push(SND_CLICK);
             self.dialog = None;
             return true;
@@ -1802,6 +1825,38 @@ mod tests {
         assert_eq!(wm.take_action(), None);
         wm.escape();
         assert_eq!(wm.take_action(), Some(MapAction::ExitToMenu));
+    }
+
+    /// Enter = the OK button (the scroll widget's scancode-28 arm):
+    /// swallowed while the parchment is still unrolling, then the
+    /// dialog's action — including the selection law on slot
+    /// dialogs.
+    #[test]
+    fn enter_confirms_the_open_dialog() {
+        let mut wm = with_overlay_rects(bare());
+        let save = save_with(3);
+        wm.open_dialog(DialogKind::NewGame, Vec::new());
+        wm.dialog_enter();
+        assert!(wm.dialog.is_some(), "unrolling dialog swallows Enter");
+        assert_eq!(wm.take_action(), None);
+        for _ in 0..40 {
+            wm.tick(1.0 / 60.0, &save);
+        }
+        wm.dialog_enter();
+        assert_eq!(wm.take_action(), Some(MapAction::NewGame));
+        assert!(wm.dialog.is_none());
+
+        // A load dialog holds until a valid slot is selected.
+        wm.open_dialog(DialogKind::Load, vec![("GAME".into(), true)]);
+        for _ in 0..40 {
+            wm.tick(1.0 / 60.0, &save);
+        }
+        wm.dialog_enter();
+        assert!(wm.dialog.is_some(), "no selection: OK clicks, stays up");
+        assert_eq!(wm.take_action(), None);
+        wm.dialog.as_mut().unwrap().selected = Some(0);
+        wm.dialog_enter();
+        assert_eq!(wm.take_action(), Some(MapAction::LoadFrom(0)));
     }
 
     #[test]

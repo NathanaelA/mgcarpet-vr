@@ -41,6 +41,15 @@ const MENU_BG: (usize, usize) = (768, 168_081);
 const MENU_SPRITE_POOL: (usize, usize) = (168_849, 102_213);
 const MENU_SPRITE_INDEX: (usize, usize) = (271_062, 411);
 
+// The FMV subtitle font, loaded by BOTH movie contexts — the boot
+// intros (`Intros_76D10`, MenusAndIntros.cpp:739-744) and the six
+// campaign cutscenes (`PlayInGameFmv_82670`, :4054-59) — right before
+// `PlayInfoFmv`: a 272-record bank indexed by RAW ASCII byte
+// (`DrawText_7FB90` reads `spritestr[char]`), glyphs 7×8 with every
+// record the same width — the movie subtitle renderer is monospace.
+const FMV_FONT_POOL: (usize, usize) = (0x164FCD, 860);
+const FMV_FONT_INDEX: (usize, usize) = (0x165329, 548);
+
 /// The decoded world-map screen assets.
 pub struct WorldMap {
     /// 1280×960 8bpp row-major palette indices.
@@ -100,6 +109,16 @@ pub fn mainmenu(file: &[u8]) -> Result<MainMenu, String> {
         palette,
         sprites,
     })
+}
+
+/// Decode the FMV subtitle font out of the raw HSCREEN0 file bytes:
+/// 272 records indexed by raw ASCII (record 0 is the null slot,
+/// lowercase records repeat the capital glyphs — retail movie
+/// subtitles render all-caps).
+pub fn fmv_font(file: &[u8]) -> Result<Vec<DecodedSprite>, String> {
+    let pool = chunk(file, FMV_FONT_POOL, "FMV font pool")?;
+    let index = chunk(file, FMV_FONT_INDEX, "FMV font index")?;
+    crate::hspr::decode(&pool, &index).map_err(|e| format!("HSCREEN0: FMV font: {e}"))
 }
 
 /// Decode the map screen's ornate border frame into a 640×480 8bpp
@@ -324,6 +343,39 @@ mod tests {
             .filter(|&i| b[i] != 0)
             .count();
         assert_eq!(center, 0, "frame center is transparent");
+    }
+
+    /// The FMV subtitle font against the pristine install: the bank
+    /// retail loads before every movie is a raw-ASCII-indexed 7×8
+    /// MONOSPACE font — the geometry the movie subtitle renderer's
+    /// wrap/centre/stack laws are all built on (42-cell lines, 8-px
+    /// line height → up to four lines in the strip, where SFONT1's
+    /// 14-px glyphs fit only two).
+    #[test]
+    fn fmv_font_decodes_monospace_7x8() {
+        let found = crate::gamedata::Gamedata::locate(std::path::Path::new("../../gamedata"));
+        let Some(src) = found.mc2 else { return };
+        let file = src
+            .read("DATA/SCREENS/HSCREEN0.DAT")
+            .expect("HSCREEN0.DAT readable");
+        let glyphs = fmv_font(&file).expect("FMV font decodes");
+        assert_eq!(glyphs.len(), 272, "FMV font record count");
+        for ascii in 32..=126usize {
+            let g = &glyphs[ascii];
+            assert_eq!((g.width, g.height), (7, 8), "glyph {ascii} is 7×8");
+        }
+        // Lowercase records repeat the capitals — retail movie
+        // subtitles render all-caps.
+        assert_eq!(
+            glyphs[b'a' as usize].frames, glyphs[b'A' as usize].frames,
+            "lowercase maps to capital art"
+        );
+        // Space is blank; the renderer skips it, but nothing would
+        // show even if it did not.
+        assert!(
+            glyphs[32].frames[0].iter().all(|&p| p == 0),
+            "space glyph is empty"
+        );
     }
 
     /// Language-file parsing: header skip + NUL-splitting, pinned on
