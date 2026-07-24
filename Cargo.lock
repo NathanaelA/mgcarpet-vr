@@ -1091,6 +1091,7 @@ dependencies = [
  "serde_json",
  "wgpu",
  "winit",
+ "x11rb",
  "zip",
 ]
 

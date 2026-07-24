@@ -1343,6 +1343,54 @@ fn sim_altitude(a: config::AltitudeModel) -> mgc_sim::AltitudeModel {
     }
 }
 
+/// X11 focus HAMMER for the boot grab. winit's `focus_window` only
+/// PETITIONS the WM (`_NET_ACTIVE_WINDOW` client message, timestamp
+/// 0) — focus-stealing-prevention WMs (compiz among them) are
+/// entitled to ignore that, the launch terminal keeps focus, no
+/// `Focused(true)` ever fires, and the focus-gated boot grab stays
+/// dormant. `XSetInputFocus` is the protocol PRIMITIVE the WM cannot
+/// veto — it is how SDL raises windows, and the reason "SDL would
+/// have taken care of it". Throwaway connection: input focus is
+/// server-global state any client may set. Errors ignored — the
+/// bounded caller retries. No-op off X11 (Wayland activates new
+/// toplevels compositor-side and offers no client-side equivalent).
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "redox",
+        target_family = "wasm",
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos"
+    ))
+))]
+fn x11_force_focus(window: &Window) {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::{ConnectionExt as _, InputFocus};
+    let xid = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Xlib(h)) => h.window as u32,
+        Ok(RawWindowHandle::Xcb(h)) => h.window.get(),
+        _ => return,
+    };
+    if let Ok((conn, _)) = x11rb::connect(None) {
+        let _ = conn.set_input_focus(InputFocus::PARENT, xid, x11rb::CURRENT_TIME);
+        let _ = conn.flush();
+    }
+}
+
+#[cfg(not(all(
+    unix,
+    not(any(
+        target_os = "redox",
+        target_family = "wasm",
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos"
+    ))
+)))]
+fn x11_force_focus(_window: &Window) {}
+
 /// Currently-held key axes, sampled into a `FlightInput` per tick.
 #[derive(Default)]
 struct HeldKeys {
@@ -1583,6 +1631,19 @@ struct App {
     fire_held: bool,
     fire_right_held: bool,
     grabbed: bool,
+    /// A `--level` boot wants the pointer captured, but grabs against
+    /// a window the platform has not finished focusing/mapping fail
+    /// (X11/Wayland defer constraints; some WMs hold their own grab
+    /// through placement). Armed in `resumed`, retried on focus gain
+    /// and per frame (has_focus-gated) until a grab STICKS; cleared
+    /// by success or by any deliberate free.
+    boot_grab: bool,
+    /// Remaining focus-activation re-asks for the boot grab: the
+    /// `focus_window()` in `resumed` can race the WM's ASYNC map (it
+    /// no-ops on a not-yet-visible window), so the frame loop re-asks
+    /// while this counts down — bounded, so a WM that ignores
+    /// activation is pestered for under a second, not forever.
+    boot_focus_asks: u8,
     /// Cursor position in window pixels (book-screen interactions).
     cursor: (f32, f32),
     /// Spell under the cursor on the book screen (display hit test,
@@ -1808,6 +1869,8 @@ impl App {
             fire_held: false,
             fire_right_held: false,
             grabbed: false,
+            boot_grab: false,
+            boot_focus_asks: 0,
             cursor: (0.0, 0.0),
             hovered: None,
             quick_binds: [None; 10],
@@ -4758,7 +4821,15 @@ impl App {
                 .is_ok();
             window.set_cursor_visible(!ok);
             self.grabbed = ok;
+            // A boot-grab wish is fulfilled by any successful grab;
+            // a failed attempt leaves it armed for the frame retry.
+            if ok {
+                self.boot_grab = false;
+            }
         } else {
+            // A deliberate FREE cancels any pending boot grab — the
+            // screen has moved on to wanting the cursor.
+            self.boot_grab = false;
             // FREE the pointer for UI use — but in FULLSCREEN "free"
             // still means CONFINED to the window (cursor visible):
             // there is no desktop to reach, and an unconfined cursor
@@ -4834,12 +4905,40 @@ impl App {
         quads.extend(ui::cursor_quads(self.cursor.0, self.cursor.1, s));
     }
 
+    /// Whether plain in-level FLIGHT is on screen with no surface
+    /// wanting a free cursor: not paused (mini-menu/options), no
+    /// abandon dialog, no held CTRL selector, and not the book map's
+    /// freed-pointer state. This is the state whose pointer is
+    /// captured and hidden.
+    fn level_wants_grab(&self) -> bool {
+        self.screen == Screen::Level
+            && self.session.is_some()
+            && !self.paused
+            && !self.exit_confirm
+            && !self.ctrl_held
+            && !(self.book_open() && self.selector.map_book)
+    }
+
     /// Re-assert the pointer mode the current screen wants — the
     /// fullscreen transition is allowed to drop grabs/confinement on
     /// several platforms, so every toggle re-applies the active state
     /// (and picks up the fullscreen-vs-windowed "free" flavor above).
     fn reassert_pointer(&mut self) {
         if self.grabbed {
+            self.set_grab(true);
+        } else if self.level_wants_grab()
+            && self
+                .window
+                .as_ref()
+                .is_some_and(|w| w.fullscreen().is_some())
+        {
+            // The fullscreen ruling: in-level flight is ALWAYS
+            // captured. Without this arm, a focus bounce (WMs do this
+            // around boot and workspace switches) dropped fullscreen
+            // flight into the free-CONFINED state — pointer visible
+            // over a flying carpet, waiting for a click nothing
+            // announced. Windowed keeps the classic alt-tab law:
+            // flight recaptures on click.
             self.set_grab(true);
         } else {
             match self.screen {
@@ -4947,6 +5046,39 @@ impl ApplicationHandler for App {
         }
         window.request_redraw();
         self.window = Some(window);
+        // A `--level` boot installs its session in `App::new`, BEFORE
+        // this window exists — `install_level`'s closing grab was a
+        // no-op (`set_grab` bails windowless). Re-assert it now: a
+        // level always opens captured, this pathway included. The
+        // brand-new window is typically not focused/mapped yet and
+        // the platform can refuse the constraint here (X11/Wayland),
+        // so the wish is ALSO armed as `boot_grab`, which the focus
+        // handler and the frame loop keep retrying until one grab
+        // sticks — boot is a level opening, not an alt-tab return.
+        if self.screen == Screen::Level && self.session.is_some() {
+            self.set_grab(true);
+            // Armed even when the immediate grab reported success: an
+            // X11 grab can succeed against a still-unfocused window,
+            // and the WM's boot-time focus dance can bounce a
+            // Focused(false)/(true) pair through AFTER it — the wish
+            // must survive until one grab lands WHILE focused (that
+            // success clears it).
+            self.boot_grab = true;
+            // A terminal launch commonly leaves input focus IN THE
+            // TERMINAL (focus-follows-mouse WMs, or any WM that does
+            // not auto-activate new windows) — then no Focused(true)
+            // ever fires and the has_focus-gated retry stays dormant.
+            // Ask the WM to activate us: booting a game is the
+            // legitimate case for taking focus. (X11 honors it;
+            // Wayland ignores the call but auto-activates new
+            // toplevels compositor-side.) The frame loop re-asks
+            // while `boot_focus_asks` counts down: this request can
+            // race the WM's async map and silently no-op.
+            if let Some(w) = &self.window {
+                w.focus_window();
+            }
+            self.boot_focus_asks = 60;
+        }
         self.last_frame = std::time::Instant::now();
     }
 
@@ -5357,7 +5489,13 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => {
+                let pending = self.boot_grab;
                 self.set_grab(false);
+                // A WM focus BOUNCE during window placement must not
+                // kill the boot wish — only deliberate frees do (the
+                // retry is has_focus-gated, so it stays dormant while
+                // the window is genuinely in the background).
+                self.boot_grab = pending;
                 self.fire_held = false;
                 self.fire_right_held = false;
                 // Alt-tabbing away eats the Alt key-up, which would
@@ -5372,8 +5510,20 @@ impl ApplicationHandler for App {
             // above intentionally released. Mouse-look is NOT yanked
             // back (grabbed was cleared on loss) — flight recaptures
             // on click, as always; this restores the fullscreen
-            // confinement / frontend confinement only.
-            WindowEvent::Focused(true) => self.reassert_pointer(),
+            // confinement / frontend confinement only. Exception: the
+            // FIRST focus of a `--level` boot completes the armed
+            // boot grab (the pre-focus attempt in `resumed` can fail
+            // platform-side) — that focus gain is the level opening,
+            // not an alt-tab return.
+            WindowEvent::Focused(true) => {
+                if self.boot_grab {
+                    // Completion clears the flag; failure leaves it
+                    // armed for the per-frame retry.
+                    self.set_grab(true);
+                } else {
+                    self.reassert_pointer();
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 // Alt latch + Alt+Enter, both BEFORE every other key
@@ -5870,6 +6020,36 @@ impl ApplicationHandler for App {
                     self.fps_text.clear();
                     self.fps_frames = 0;
                     self.fps_elapsed = 0.0;
+                }
+                // A still-armed boot grab retries every frame until
+                // it STICKS: both the attempt in `resumed` and the
+                // one on the first focus can fail while the WM is
+                // still placing/animating the fresh window (some hold
+                // their own pointer grab through it). Success or any
+                // deliberate free clears the flag inside `set_grab`.
+                if self.boot_grab {
+                    // has_focus-gated: an X11 pointer grab can succeed
+                    // GLOBALLY, and retrying while alt-tabbed away
+                    // would steal the pointer from another app. While
+                    // focus has not arrived, briefly keep re-asking
+                    // for activation (the `resumed` request races the
+                    // WM's async map).
+                    if self.window.as_ref().is_some_and(|w| w.has_focus()) {
+                        self.set_grab(true);
+                    } else if self.boot_focus_asks > 0 {
+                        self.boot_focus_asks -= 1;
+                        if let Some(w) = &self.window {
+                            w.focus_window();
+                            // Every 15th ask escalates from petition
+                            // to the X11 primitive: by then the map
+                            // has settled, and a WM that ignores
+                            // `_NET_ACTIVE_WINDOW` (compiz FSP) will
+                            // ignore it forever.
+                            if self.boot_focus_asks % 15 == 0 {
+                                x11_force_focus(w);
+                            }
+                        }
+                    }
                 }
                 // A frontend screen owns the frame: no session, no
                 // sim, no HUD — its own tick + quads, rendered over

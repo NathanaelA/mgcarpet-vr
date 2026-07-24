@@ -20,6 +20,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 mgc-audio = { version = "0.1.0", path = "../mgc-audio" }
 
+# X11 only: the boot-grab focus hammer. winit's `focus_window` merely
+# petitions the WM (`_NET_ACTIVE_WINDOW`, timestamp 0), which
+# focus-stealing-prevention WMs are free to ignore — `XSetInputFocus`
+# is the protocol primitive they cannot veto (what SDL does). Same
+# version winit already carries; no new build cost. Scoped to the
+# targets winit's own X11 backend covers.
+[target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies]
+x11rb = "0.13"
+
 # Tests only: fabricating an OLD-format `.mgcs` to prove the salvage
 # path recovers campaign progress from a container this build cannot
 # apply. Nothing in the binary writes ZIPs — `mgc-formats` owns that.
