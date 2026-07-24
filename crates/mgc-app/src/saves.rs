@@ -299,6 +299,7 @@ impl Mc2Save {
 const S611_BANK: usize = 0; // i32[26] SpellExperience (banked XP)
 const S611_VOL: usize = 104; // i32[26] spellsExperience (volatile XP)
 const S611_ENABLED: usize = 208; // i16[26] manifestation handle (0 = not learned)
+const S611_RING: usize = 338; // u8[26] array_0x3B5 cycle-ring membership (0/1/2)
 const S611_OWNED: usize = 390; // u8[26] granted/owned flag (THE learned set)
 const S611_LEVELS: usize = 442; // u8[26] derived tier 0..2
 const S611_SEL: usize = 468; // u8[26] selected sub-spell/tier
@@ -318,6 +319,10 @@ pub struct Mc2Book {
     pub sel: [u8; 26],
     pub left: i8,
     pub right: i8,
+    /// `array_0x3B5` cycle-ring membership (0 = none, 1 = left,
+    /// 2 = right) — retail's own campaign carry copies it
+    /// (`sub_549A0` Level.cpp:1265) and the whole-blob save keeps it.
+    pub ring: [u8; 26],
 }
 
 impl Mc2Save {
@@ -340,6 +345,7 @@ impl Mc2Save {
             out.xp[s] = bank.saturating_add(vol);
             out.levels[s] = b[S611_LEVELS + s];
             out.sel[s] = b[S611_SEL + s];
+            out.ring[s] = b[S611_RING + s].min(2);
         }
         out
     }
@@ -359,6 +365,7 @@ impl Mc2Save {
             b[S611_OWNED + s] = book.owned[s] as u8;
             b[S611_LEVELS + s] = book.levels[s];
             b[S611_SEL + s] = book.sel[s];
+            b[S611_RING + s] = book.ring[s].min(2);
         }
         b[S611_LEFT..S611_LEFT + 2].copy_from_slice(&(book.left as i16).to_le_bytes());
         b[S611_RIGHT..S611_RIGHT + 2].copy_from_slice(&(book.right as i16).to_le_bytes());
@@ -674,18 +681,25 @@ mod tests {
         book.xp[4] = 12345;
         book.levels[4] = 2;
         book.sel[4] = 1;
+        book.ring[0] = 1;
+        // A ring member the player does not currently possess — the
+        // carry keeps it RAW (skip-not-drop).
+        book.ring[7] = 2;
         save.set_book(&book);
         assert_eq!(save.book(), book);
         // The typed view survives the byte codec too.
         let loaded = Mc2Save::decode(&save.encode()).unwrap();
         assert_eq!(loaded.book(), book);
         // Learned spells carry a nonzero manifestation handle for
-        // retail's enabled-gate; XP lands banked.
+        // retail's enabled-gate; XP lands banked; the ring sits at
+        // retail's own array_0x3B5 offset so a retail load honors it.
         assert_eq!(loaded.str611[S611_OWNED + 4], 1);
         assert_eq!(
             &loaded.str611[S611_BANK + 16..S611_BANK + 20],
             &12345i32.to_le_bytes()
         );
+        assert_eq!(loaded.str611[S611_RING], 1);
+        assert_eq!(loaded.str611[S611_RING + 7], 2);
     }
 
     #[test]

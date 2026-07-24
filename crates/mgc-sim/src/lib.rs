@@ -118,6 +118,10 @@ pub struct FlightInput {
     /// MC2 spell selection (the CTRL-pane commit): (spell index
     /// 0..25, tier, hand 0 = left / 1 = right).
     pub mc2_select: Option<(u8, u8, u8)>,
+    /// Cycle-ring membership write (the pane's SHIFT+click, retail
+    /// cmd 0x26): (spell index, 0 = none / 1 = left ring / 2 =
+    /// right). Both games' columns consume it.
+    pub spell_ring: Option<(u8, u8)>,
     /// The Backspace full stop (retail MC2 action 0x27, EF:37954-66):
     /// zero the actual AND target speed, kill an active Speed/
     /// Accelerate channel, recenter the steering (the app resets the
@@ -684,6 +688,7 @@ impl Simulation {
                     equip_left: input.equip_left,
                     equip_right: input.equip_right,
                     mc2_select: input.mc2_select,
+                    spell_ring: input.spell_ring,
                     respawn: input.respawn,
                     demolish: input.demolish,
                 },

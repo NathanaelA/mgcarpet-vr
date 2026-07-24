@@ -191,15 +191,28 @@ struct CampaignRun {
     save: CampaignSave,
     /// What follows the current fade-out (set at the won edge).
     next: Option<campaign::NextStep>,
+    /// MC1/HW spell cycle-ring carry (native-only sidecar — the
+    /// retail record has no room; see `SaveHeader::mc1_spell_ring`).
+    /// Installed into each fresh world, refreshed at the won edge.
+    /// All-zero on MC2 runs.
+    mc1_ring: [u8; 24],
 }
 
-/// The slot's campaign record, native file first.
+/// The slot's campaign record, native file first: `(retail-format
+/// bytes, the native header's MC1 cycle ring)`. The ring rides only
+/// the native container (`None` from a retail import or a
+/// version-recovery — those simply start with an empty ring).
 ///
 /// Returns `None` for "start fresh" — either `new_game`, or nothing
 /// on disk. A file that EXISTS but cannot be read is an error, not a
 /// fresh start: silently starting over would overwrite it on the
 /// first level completion.
-fn campaign_record(tag: &str, slot: usize, new_game: bool) -> Result<Option<Vec<u8>>, String> {
+#[allow(clippy::type_complexity)]
+fn campaign_record(
+    tag: &str,
+    slot: usize,
+    new_game: bool,
+) -> Result<Option<(Vec<u8>, Option<[u8; 24]>)>, String> {
     if new_game {
         return Ok(None);
     }
@@ -215,7 +228,7 @@ fn campaign_record(tag: &str, slot: usize, new_game: bool) -> Result<Option<Vec<
                     // path's job, not the campaign opener's.
                     println!("campaign {tag}: slot {} holds a mid-level save", slot + 1);
                 }
-                return Ok(Some(pkg.campaign));
+                return Ok(Some((pkg.campaign, pkg.header.mc1_spell_ring)));
             }
             // A container this build cannot apply. The campaign record
             // inside is retail's byte layout, so it survives any
@@ -230,7 +243,7 @@ fn campaign_record(tag: &str, slot: usize, new_game: bool) -> Result<Option<Vec<
                     slot + 1,
                     rec.save_version
                 );
-                return Ok(Some(rec.campaign));
+                return Ok(Some((rec.campaign, None)));
             }
         }
     }
@@ -242,7 +255,7 @@ fn campaign_record(tag: &str, slot: usize, new_game: bool) -> Result<Option<Vec<
             retail.display()
         );
         return std::fs::read(&retail)
-            .map(Some)
+            .map(|b| Some((b, None)))
             .map_err(|e| format!("{}: {e}", retail.display()));
     }
     Ok(None)
@@ -275,6 +288,8 @@ impl CampaignRun {
         // only when no native file exists for the slot (an imported
         // GOG-era save). See `saves`.
         let record = campaign_record(id.tag(), slot, new_game)?;
+        let mc1_ring = record.as_ref().and_then(|(_, r)| *r).unwrap_or([0; 24]);
+        let record = record.map(|(b, _)| b);
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
                 let save = if let Some(bytes) = record {
@@ -310,6 +325,7 @@ impl CampaignRun {
                     current,
                     save: CampaignSave::Mc1(save),
                     next: None,
+                    mc1_ring,
                 })
             }
             CampaignId::Mc2 => {
@@ -344,6 +360,7 @@ impl CampaignRun {
                     current,
                     save: CampaignSave::Mc2(save),
                     next: None,
+                    mc1_ring: [0; 24],
                 })
             }
         }
@@ -389,16 +406,23 @@ impl CampaignRun {
 
     /// A hub save: campaign progress only, no world payload.
     fn hub_package(&self) -> mgc_formats::mgcs::SavePackage {
+        let mut header = mgc_formats::mgcs::hub_header(
+            self.save_game(),
+            self.label(),
+            self.campaign_level(),
+            // The level the campaign is sitting at, so a hub save
+            // reads "L3" exactly like the in-level save taken in
+            // the same level.
+            self.current,
+        );
+        // The MC1 cycle ring rides the native header only (the
+        // retail record has no room); omitted while empty so
+        // ring-less saves keep their old shape.
+        if self.id != campaign::CampaignId::Mc2 && self.mc1_ring != [0; 24] {
+            header.mc1_spell_ring = Some(self.mc1_ring);
+        }
         mgc_formats::mgcs::SavePackage {
-            header: mgc_formats::mgcs::hub_header(
-                self.save_game(),
-                self.label(),
-                self.campaign_level(),
-                // The level the campaign is sitting at, so a hub save
-                // reads "L3" exactly like the in-level save taken in
-                // the same level.
-                self.current,
-            ),
+            header,
             campaign: self.campaign_bytes(),
             snapshot: None,
         }
@@ -1574,6 +1598,12 @@ struct App {
     /// Pending MC2 pane commit: (spell, tier, hand) — the sim's
     /// PlayerAction 0x1F/0x20 equivalent (PlayerCommand.mc2_select).
     pending_mc2_select: Option<(u8, u8, u8)>,
+    /// Pending cycle-ring write: (spell, 0/1/2) — retail cmd 0x26,
+    /// the pane's SHIFT+click toggle (PlayerCommand.spell_ring).
+    pending_ring: Option<(u8, u8)>,
+    /// Mouse-wheel remainder for the wheel spell-cycling enhancement
+    /// (line deltas accumulate; each whole ±1 cycles one step).
+    wheel_accum: f32,
     shift_held: bool,
     /// Alt latch, for the Alt+Enter fullscreen combo. Tracked at the
     /// very top of the key handler so no early `return` can strand it.
@@ -1775,6 +1805,8 @@ impl App {
             prev_owned: [false; 24],
             pending_equip: (None, None),
             pending_mc2_select: None,
+            pending_ring: None,
+            wheel_accum: 0.0,
             shift_held: false,
             alt_held: false,
             last_frame: std::time::Instant::now(),
@@ -2823,6 +2855,15 @@ impl App {
                 .as_ref()
                 .map(|w| w.player_mana_share_pct())
                 .unwrap_or(0);
+            // Mid-level, the WORLD's cycle ring is the live one
+            // (run.mc1_ring only refreshes at the won edge) — keep
+            // the header sidecar in step with the snapshot.
+            if run.id != campaign::CampaignId::Mc2
+                && let Some(w) = sess.sim.world.as_ref()
+            {
+                let ring = w.loadout().ring;
+                package.header.mc1_spell_ring = (ring != [0; 24]).then_some(ring);
+            }
             package.snapshot = Some(sess.sim.snapshot());
             package.header.resume = Some(mgc_formats::mgcs::InLevel {
                 bundle: level.bundle_variant.clone(),
@@ -3204,6 +3245,7 @@ impl App {
                 .take()
                 .map(mgc_sim::mc1::spells::SpellId),
             mc2_select: self.pending_mc2_select.take(),
+            spell_ring: self.pending_ring.take(),
             full_stop: std::mem::take(&mut self.pending_full_stop),
             respawn: std::mem::take(&mut self.pending_respawn),
             demolish: std::mem::take(&mut self.pending_demolish),
@@ -3590,7 +3632,73 @@ impl App {
             if let Some((spell, tier, hand)) = self.pending_mc2_select.take() {
                 w.mc2_select_spell(spell, tier, hand);
             }
+            if let Some((spell, val)) = self.pending_ring.take() {
+                w.spell_ring_set(spell, val);
+            }
         }
+    }
+
+    /// The spell's current cycle-ring membership (0/1=left/2=right),
+    /// whichever game's column holds it.
+    fn ring_of(&self, spell: u8) -> u8 {
+        let Some(w) = self.session.as_deref().and_then(|s| s.sim.world.as_ref()) else {
+            return 0;
+        };
+        let s = spell as usize;
+        if self.is_mc2() {
+            w.mc2_book_view().ring.get(s).copied().unwrap_or(0)
+        } else {
+            w.loadout().ring.get(s).copied().unwrap_or(0)
+        }
+    }
+
+    /// The in-flight cycle walk (`sub_18DA0` PI:1839-1942): step from
+    /// the equipped spell ±1, wrap 0..n, take the first spell that is
+    /// BOTH possessed and a member of this button's ring; a full lap
+    /// with no qualifier does nothing (the all-unavailable no-op —
+    /// vanished MC1 spells and undead-stolen MC2 spells stay members,
+    /// they are just skipped). A single-member ring re-selects itself.
+    /// The equip carries the spell's STORED level (`array_0x437`).
+    fn cycle_spell_ring(&mut self, hand: u8, backward: bool) {
+        let Some(w) = self.session.as_deref().and_then(|s| s.sim.world.as_ref()) else {
+            return;
+        };
+        let side = hand + 1;
+        let (ring, owned, cur, sel) = if self.is_mc2() {
+            let bv = w.mc2_book_view();
+            let mut owned = bv.owned;
+            if self.cfg.gameplay.cheat.dev_spells {
+                owned = [true; 26];
+            }
+            let cur = if hand == 0 { bv.left } else { bv.right };
+            (
+                bv.ring.to_vec(),
+                owned.to_vec(),
+                cur as i32,
+                bv.sel.to_vec(),
+            )
+        } else {
+            let l = w.loadout();
+            let cur = if hand == 0 { l.left } else { l.right };
+            (
+                l.ring.to_vec(),
+                l.owned.to_vec(),
+                cur.map_or(-1, |s| s as i32),
+                vec![0u8; 24],
+            )
+        };
+        let Some(s) = ring_next(&ring, &owned, side, cur, backward) else {
+            return; // no possessed member on this ring — do nothing
+        };
+        if self.is_mc2() {
+            // Cmd 31/32 with byte2 = the stored level.
+            self.pending_mc2_select = Some((s as u8, sel[s], hand));
+        } else if hand == 0 {
+            self.pending_equip.0 = Some(s as u8);
+        } else {
+            self.pending_equip.1 = Some(s as u8);
+        }
+        self.flush_equip_if_paused();
     }
 
     /// The CTRL selector pane is up (hold-to-show; needs the pane
@@ -4855,8 +4963,9 @@ impl ApplicationHandler for App {
                     // The CTRL selector pane (over flight OR the map
                     // screen): press anchors the level flyout for the
                     // clicked hand, release commits level + binding
-                    // (remc2 PI:806-929); SHIFT+click fast-binds the
-                    // stored level (cmd 0x26). Fire never leaks
+                    // (remc2 PI:806-929); SHIFT+click edits the
+                    // CYCLE RING (cmd 0x26 — toggle/move, no equip
+                    // side-effect, PI:856-878). Fire never leaks
                     // through the pane.
                     let hand = match button {
                         MouseButton::Left => 0u8,
@@ -4889,8 +4998,17 @@ impl ApplicationHandler for App {
                                     .unwrap_or(false);
                             if owned {
                                 if self.shift_held {
-                                    let level = self.spell_levels[spell.unwrap_or(0) as usize];
-                                    self.pane_commit(slot, hand, level);
+                                    // Retail's ring-edit truth table
+                                    // (PI:856-878): same-button click
+                                    // on a member removes it; any
+                                    // other click adds/moves it to
+                                    // the clicked button's ring.
+                                    let spell = spell.unwrap_or(0);
+                                    let side = hand + 1;
+                                    let cur = self.ring_of(spell);
+                                    let val = if cur == side { 0 } else { side };
+                                    self.pending_ring = Some((spell, val));
+                                    self.flush_equip_if_paused();
                                 } else if self.selector_drag.is_none() {
                                     // A second button joining mid-drag
                                     // must not steal the live drag.
@@ -4957,6 +5075,21 @@ impl ApplicationHandler for App {
                     self.set_grab(true);
                     return; // the grab click doesn't fire
                 }
+                // In-flight cycle-ring rotation (remc2 PI:528-546):
+                // SHIFT+click = next spell on that button's ring,
+                // ALT+click = previous; the click is consumed (retail
+                // clears the MouseButtonState bit — no cast fires).
+                // ALT wins when both are down, as in retail's
+                // else-if order.
+                if down && (self.alt_held || self.shift_held) {
+                    let hand = match button {
+                        MouseButton::Left => 0u8,
+                        MouseButton::Right => 1u8,
+                        _ => return,
+                    };
+                    self.cycle_spell_ring(hand, self.alt_held);
+                    return;
+                }
                 match button {
                     MouseButton::Left => self.fire_held = down,
                     MouseButton::Right => self.fire_right_held = down,
@@ -4977,6 +5110,27 @@ impl ApplicationHandler for App {
                 };
                 if let (Some(st), Some(assets)) = (&mut self.menu, assets) {
                     menu::scroll_by(assets, &self.specs, st, size.0, size.1, rows);
+                    self.wheel_accum = 0.0;
+                    return;
+                }
+                // Wheel spell-cycling (enhancement, the remc2/MC2HD
+                // idiom — no retail analogue): wheel walks the LEFT
+                // button's cycle ring, SHIFT+wheel the RIGHT; down =
+                // forward, up = backward. Same walk as the faithful
+                // SHIFT/ALT+click rotation, so the ring is shared.
+                if !self.cfg.gameplay.enhancement.wheel_spells || !self.grabbed {
+                    self.wheel_accum = 0.0;
+                    return;
+                }
+                self.wheel_accum += rows;
+                let hand = if self.shift_held { 1u8 } else { 0u8 };
+                while self.wheel_accum >= 1.0 {
+                    self.wheel_accum -= 1.0;
+                    self.cycle_spell_ring(hand, false);
+                }
+                while self.wheel_accum <= -1.0 {
+                    self.wheel_accum += 1.0;
+                    self.cycle_spell_ring(hand, true);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -5774,6 +5928,7 @@ impl ApplicationHandler for App {
                             let mut sel = [0u8; 26];
                             let mut xp = [0i32; 26];
                             let mut xpos = [[0i32; 3]; 26];
+                            let mut ring = [0u8; 26];
                             let mut bound = [loadout.left, loadout.right];
                             if mc2 {
                                 // The native spell book: ownership,
@@ -5812,6 +5967,7 @@ impl ApplicationHandler for App {
                                         sel[s] = bv.sel[s];
                                         xp[s] = bv.xp[s];
                                         xpos[s] = bv.xpos[s];
+                                        ring[s] = bv.ring[s];
                                     }
                                     bound =
                                         [u8::try_from(bv.left).ok(), u8::try_from(bv.right).ok()];
@@ -5829,6 +5985,7 @@ impl ApplicationHandler for App {
                                     cost[s] = mgc_sim::mc1::spells::SPELLS[s].possess_mana;
                                     max_level[s] = pane.levels - 1;
                                     sel[s] = self.spell_levels[s];
+                                    ring[s] = loadout.ring[s];
                                 }
                             }
                             let view = ui::SelectorView {
@@ -5838,6 +5995,7 @@ impl ApplicationHandler for App {
                                 selected_level: &sel[..n],
                                 max_level: &max_level[..n],
                                 bound,
+                                ring: &ring[..n],
                                 mana: loadout.mana,
                                 cost: &cost[..n],
                                 xp: &xp[..n],
@@ -6404,6 +6562,8 @@ struct Args {
     plausible_spellbook: Option<bool>,
     /// CLI override of `gameplay.enhancement.prune_owned_jars`.
     prune_owned_jars: Option<bool>,
+    /// CLI override of `gameplay.enhancement.wheel_spells`.
+    wheel_spells: Option<bool>,
     /// CLI override of `gameplay.cheat.invincible`.
     invincible: Option<bool>,
     /// CLI override of `render.enhancement.expose_jar_spells`.
@@ -6495,6 +6655,7 @@ fn parse_args() -> Result<Args, String> {
     let mut dev_spells = None;
     let mut plausible_spellbook = None;
     let mut prune_owned_jars = None;
+    let mut wheel_spells = None;
     let mut invincible = None;
     let mut expose_jar_spells = None;
     let mut grace_meter = None;
@@ -6667,6 +6828,8 @@ fn parse_args() -> Result<Args, String> {
             "--no-plausible-spellbook" => plausible_spellbook = Some(false),
             "--prune-owned-jars" => prune_owned_jars = Some(true),
             "--no-prune-owned-jars" => prune_owned_jars = Some(false),
+            "--wheel-spells" => wheel_spells = Some(true),
+            "--no-wheel-spells" => wheel_spells = Some(false),
             "--invincible" => invincible = Some(true),
             "--no-invincible" => invincible = Some(false),
             "--expose-jar-spells" => expose_jar_spells = Some(true),
@@ -6802,6 +6965,7 @@ fn parse_args() -> Result<Args, String> {
                      [--dev-spells|--no-dev-spells] \
                      [--plausible-spellbook|--no-plausible-spellbook] \
                      [--prune-owned-jars|--no-prune-owned-jars] \
+                     [--wheel-spells|--no-wheel-spells] \
                      [--invincible|--no-invincible] \
                      [--expose-jar-spells|--no-expose-jar-spells] \
                      [--grace-meter|--no-grace-meter] \
@@ -6845,6 +7009,7 @@ fn parse_args() -> Result<Args, String> {
         dev_spells,
         plausible_spellbook,
         prune_owned_jars,
+        wheel_spells,
         invincible,
         expose_jar_spells,
         grace_meter,
@@ -7363,6 +7528,32 @@ fn apply_instruments(
     }
 }
 
+/// The cycle-ring walk (`sub_18DA0` PI:1839-1942), pure: step from
+/// the equipped spell `cur` (−1 = empty hand) by ±1, wrap around
+/// `ring.len()`, return the first spell that is BOTH possessed and a
+/// member of `side`'s ring (1 = left, 2 = right). Checks exactly one
+/// full lap — the equipped spell itself is the LAST candidate, so a
+/// single-member ring re-selects itself — and returns `None` when no
+/// member qualifies (the all-unavailable no-op, PI:1889/1931).
+fn ring_next(ring: &[u8], owned: &[bool], side: u8, cur: i32, backward: bool) -> Option<usize> {
+    let n = ring.len() as i32;
+    let step: i32 = if backward { -1 } else { 1 };
+    let mut i = cur + step;
+    for _ in 0..n {
+        if i < 0 {
+            i = n - 1;
+        } else if i >= n {
+            i = 0;
+        }
+        let s = i as usize;
+        if ring[s] == side && owned[s] {
+            return Some(s);
+        }
+        i += step;
+    }
+    None
+}
+
 /// Install the campaign's cross-level carry into a fresh world.
 /// MC1/HW: grant collected-flags ∩ the level's availability mask
 /// (the retail human-branch grant law, :49226-33). MC2: learn the
@@ -7384,6 +7575,10 @@ fn apply_campaign_book(
             if !grants.is_empty() {
                 w.mc2_grant_plausible(&grants);
             }
+            // The rest of retail's sub_549A0 carry: selected tiers +
+            // the cycle ring (raw), hands kept where still possessed
+            // (the L:1332-35 validation).
+            w.mc2_install_selector_carry(&book.sel, &book.ring, book.left, book.right);
         }
         _ => {
             let Some(save) = run.save.mc1() else { return };
@@ -7397,6 +7592,10 @@ fn apply_campaign_book(
             if !spells.is_empty() {
                 w.grant_spells(&spells);
             }
+            // Cycle-ring carry (native-only sidecar; kept RAW like
+            // MC2's — unavailable members are skipped at cycle time,
+            // not dropped).
+            w.install_mc1_ring(run.mc1_ring);
         }
     }
 }
@@ -7440,6 +7639,7 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
                 sel: v.sel,
                 left: v.left,
                 right: v.right,
+                ring: v.ring,
             });
             let exit = w.mc2_exit_model();
             if campaign::mc2_is_secret(level) {
@@ -7503,12 +7703,14 @@ fn campaign_complete(run: &mut CampaignRun, level: u32, w: &mgc_sim::engine::wor
             };
             // Commit collected spells to the persistent flags (the
             // retail level-completion commit into var_15318).
-            let owned = w.loadout().owned;
+            let loadout = w.loadout();
             for s in 0..24 {
-                if owned[s] {
+                if loadout.owned[s] {
                     save.blob24[s] = 1;
                 }
             }
+            // Cycle-ring carry (native-only sidecar).
+            run.mc1_ring = loadout.ring;
             let next = campaign::mc1_next_level(level, hw);
             // `level` in the save = the level to PLAY on resume
             // (retail's post-increment var_u16_17 semantic; the end
@@ -7956,6 +8158,9 @@ fn main() -> std::process::ExitCode {
     if let Some(v) = args.prune_owned_jars {
         cfg.gameplay.enhancement.prune_owned_jars = v;
     }
+    if let Some(v) = args.wheel_spells {
+        cfg.gameplay.enhancement.wheel_spells = v;
+    }
     if let Some(v) = args.dev_spells {
         cfg.gameplay.cheat.dev_spells = v;
     }
@@ -8208,4 +8413,70 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::ring_next;
+
+    // 6-spell fixture: ring = [L, R, L, 0, L, R], all owned.
+    const RING: [u8; 6] = [1, 2, 1, 0, 1, 2];
+
+    #[test]
+    fn forward_walks_the_side_and_wraps() {
+        let owned = [true; 6];
+        // From spell 0 forward on the LEFT ring: next member is 2.
+        assert_eq!(ring_next(&RING, &owned, 1, 0, false), Some(2));
+        // From 4 forward: wraps past 5 back to 0.
+        assert_eq!(ring_next(&RING, &owned, 1, 4, false), Some(0));
+        // RIGHT ring from 1 forward: 5.
+        assert_eq!(ring_next(&RING, &owned, 2, 1, false), Some(5));
+    }
+
+    #[test]
+    fn backward_is_the_mirror() {
+        let owned = [true; 6];
+        assert_eq!(ring_next(&RING, &owned, 1, 2, true), Some(0));
+        // From 0 backward: wraps to 4.
+        assert_eq!(ring_next(&RING, &owned, 1, 0, true), Some(4));
+    }
+
+    #[test]
+    fn empty_hand_starts_at_the_ends() {
+        let owned = [true; 6];
+        // -1 forward starts at slot 0 (retail -1+1).
+        assert_eq!(ring_next(&RING, &owned, 1, -1, false), Some(0));
+        // -1 backward wraps straight to the tail (retail -1-1 -> 25).
+        assert_eq!(ring_next(&RING, &owned, 2, -1, true), Some(5));
+    }
+
+    #[test]
+    fn unavailable_members_are_skipped_not_dropped() {
+        // Spell 2 lost (MC1 jar vanish / MC2 undead steal): still a
+        // member, but the walk passes over it.
+        let mut owned = [true; 6];
+        owned[2] = false;
+        assert_eq!(ring_next(&RING, &owned, 1, 0, false), Some(4));
+    }
+
+    #[test]
+    fn all_unavailable_does_nothing() {
+        // Ring populated but nothing possessed -> None (the special
+        // case: cycling must be a no-op, not an unbind).
+        let owned = [false; 6];
+        assert_eq!(ring_next(&RING, &owned, 1, 0, false), None);
+        // No members on this side at all -> None too.
+        assert_eq!(ring_next(&[0u8; 6], &[true; 6], 1, 0, false), None);
+    }
+
+    #[test]
+    fn single_member_ring_reselects_itself() {
+        let mut ring = [0u8; 6];
+        ring[3] = 1;
+        let owned = [true; 6];
+        // The equipped spell is the last candidate of the lap
+        // (retail PI:1881 breaks on it after 26 steps).
+        assert_eq!(ring_next(&ring, &owned, 1, 3, false), Some(3));
+        assert_eq!(ring_next(&ring, &owned, 1, 3, true), Some(3));
+    }
 }

@@ -1948,6 +1948,10 @@ pub struct SelectorView<'a> {
     pub max_level: &'a [u8],
     /// Pane spell bound to each hand (corner tags; [left, right]).
     pub bound: [Option<u8>; 2],
+    /// Cycle-ring membership per spell (`array_0x3B5`: 0 = none,
+    /// 1 = the LEFT-button ring, 2 = RIGHT) — retail keys the hover
+    /// corner tag on THIS (EF:22546-53), not on the equipped hand.
+    pub ring: &'a [u8],
     /// Player mana + per-shot stand-in cost (the hovered box's live
     /// shot meter).
     pub mana: u32,
@@ -2069,6 +2073,21 @@ pub fn rect_hit(r: [f32; 4], c: (f32, f32)) -> bool {
     c.0 >= r[0] && c.0 < r[0] + r[2] && c.1 >= r[1] && c.1 < r[1] + r[3]
 }
 
+/// A corner-notch TRIANGLE — the MC1-art pane's stand-in for MC2's
+/// corner-tag sprites: the old 6×6 tab square slashed on its
+/// diagonal so it points INTO the top corner it sits in (player
+/// direction). Built from one-native-pixel row slivers; the quad
+/// batch has no triangle primitive. `x` = the tab area's LEFT edge,
+/// `right` = right-align the shrinking rows (the top-right corner).
+fn corner_tri(quads: &mut Vec<UiQuad>, x: f32, y: f32, sx: f32, sy: f32, right: bool, t: [f32; 4]) {
+    const N: usize = 6;
+    for i in 0..N {
+        let w = (N - i) as f32 * sx;
+        let rx = if right { x + i as f32 * sx } else { x };
+        quads.push(solid([rx, y + i as f32 * sy, w, sy], t));
+    }
+}
+
 /// Ring outline (the MC1-art hover feedback, book idiom).
 fn ring(quads: &mut Vec<UiQuad>, f: [f32; 4], t: [f32; 4]) {
     quads.push(solid([f[0], f[1], f[2], 2.0], t));
@@ -2177,20 +2196,26 @@ pub fn selector_quads(
                     ));
                 }
             }
-            // L/R mouse-binding corner tags — retail shows them only
-            // on the HOVERED box (or mid-cast), as transparent blits
+            // L/R mouse-binding corner tags, as transparent blits
             // (EF:22546-22553); right tag at +boxW−tagLeftW
             // (EF:22452). The alpha tint stands in for the blend.
-            if hovered {
+            // Keyed on CYCLE-RING membership (`array_0x3B5`,
+            // EF:22547) plus the equipped hand, and drawn on EVERY
+            // box, not only the hovered one — the queued sets must
+            // read at a glance (player-ruled; the decompile's
+            // `spellOnCursor_50` hover gate notwithstanding — see
+            // DEVIATIONS).
+            {
+                let ring = view.ring.get(spell).copied().unwrap_or(0);
                 let tag_tint = [1.0, 1.0, 1.0, 0.75];
                 let su = g.sx;
-                if view.bound[0] == Some(spell as u8) {
+                if ring == 1 || view.bound[0] == Some(spell as u8) {
                     push_opt(
                         &mut quads,
                         assets.sprite_quad_tint(MC2_SPR_TAG_LEFT, cell[0], cell[1], su, tag_tint),
                     );
                 }
-                if view.bound[1] == Some(spell as u8) {
+                if ring == 2 || view.bound[1] == Some(spell as u8) {
                     let tag_w = assets
                         .sprite_dims(MC2_SPR_TAG_LEFT)
                         .map_or(14.0, |(w, _)| w);
@@ -2230,22 +2255,37 @@ pub fn selector_quads(
             if owned && !castable {
                 quads.push(solid(cell, LOCKED_WASH));
             }
-            // Bound-hand corner marks (small solid tabs; the MC2 art
-            // uses its dedicated corner-tag sprites).
-            let tab = [0.95, 0.95, 0.95, 0.9];
-            if view.bound[0] == Some(spell as u8) {
-                quads.push(solid([cell[0], cell[1], 6.0 * g.sx, 6.0 * g.sy], tab));
+            // Bound-hand corner marks (translucent white triangles
+            // pointing into their corner — the MC1-art stand-in for
+            // MC2's corner-tag sprites, player-tuned). Cycle-ring
+            // members wear the same notch dimmed — the queued set
+            // reads at a glance, the equipped spell stays brighter.
+            let tab = [1.0, 1.0, 1.0, 0.5];
+            let dim = [1.0, 1.0, 1.0, 0.25];
+            let member = view.ring.get(spell).copied().unwrap_or(0);
+            if view.bound[0] == Some(spell as u8) || member == 1 {
+                let t = if view.bound[0] == Some(spell as u8) {
+                    tab
+                } else {
+                    dim
+                };
+                corner_tri(&mut quads, cell[0], cell[1], g.sx, g.sy, false, t);
             }
-            if view.bound[1] == Some(spell as u8) {
-                quads.push(solid(
-                    [
-                        cell[0] + cell[2] - 6.0 * g.sx,
-                        cell[1],
-                        6.0 * g.sx,
-                        6.0 * g.sy,
-                    ],
-                    tab,
-                ));
+            if view.bound[1] == Some(spell as u8) || member == 2 {
+                let t = if view.bound[1] == Some(spell as u8) {
+                    tab
+                } else {
+                    dim
+                };
+                corner_tri(
+                    &mut quads,
+                    cell[0] + cell[2] - 6.0 * g.sx,
+                    cell[1],
+                    g.sx,
+                    g.sy,
+                    true,
+                    t,
+                );
             }
             if hovered {
                 ring(&mut quads, cell, [0.9, 0.85, 0.5, 0.9]);

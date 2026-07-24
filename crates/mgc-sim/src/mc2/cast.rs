@@ -54,7 +54,7 @@ const NOTIFY_RED: [u8; 3] = [255, 0, 0];
 
 /// The 26-spell `str_611` subset for one wizard (spell-XP trace §0).
 /// All arrays are keyed by spell index 0..25 (`spell_t`).
-#[derive(Clone, Copy, Hash)]
+#[derive(Clone, Copy)]
 pub(crate) struct Mc2Spellbook {
     /// `SpellsEnabled_0x333`: pool slot of the spell's class-15
     /// manifestation, 0 = not learned.
@@ -71,6 +71,13 @@ pub(crate) struct Mc2Spellbook {
     /// (spell index, -1 = none).
     pub(crate) left: i8,
     pub(crate) right: i8,
+    /// `array_0x3B5` — per-spell cycle-ring membership: 0 = none,
+    /// 1 = the LEFT-button ring, 2 = RIGHT. Written ONLY by the
+    /// pane's SHIFT+click (cmd 0x26, a raw byte store EF:37951);
+    /// the normal equip routes never touch it. Deliberately kept on
+    /// spell LOSS (sub_69300 clears possession + the equip pointer,
+    /// not this) — the cycle walk skips unpossessed members.
+    pub(crate) ring: [u8; 26],
 }
 
 impl Default for Mc2Spellbook {
@@ -83,6 +90,7 @@ impl Default for Mc2Spellbook {
             sel: [0; 26],
             left: -1,
             right: -1,
+            ring: [0; 26],
         }
     }
 }
@@ -99,6 +107,37 @@ impl Mc2Spellbook {
             && self.sel == [0; 26]
             && self.left == -1
             && self.right == -1
+            && self.ring == [0; 26]
+    }
+}
+
+/// Manual, NOT derived: `ring` is folded only when populated, behind
+/// a field tag (the transparent-while-clear discipline) — every book
+/// pinned before the ring existed feeds the identical byte stream.
+/// Field order up to `right` must stay the old derive order.
+impl std::hash::Hash for Mc2Spellbook {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        let Mc2Spellbook {
+            ent,
+            xp_vol,
+            xp_bank,
+            levels,
+            sel,
+            left,
+            right,
+            ring,
+        } = self;
+        ent.hash(h);
+        xp_vol.hash(h);
+        xp_bank.hash(h);
+        levels.hash(h);
+        sel.hash(h);
+        left.hash(h);
+        right.hash(h);
+        if *ring != [0; 26] {
+            h.write_u8(0xB5);
+            ring.hash(h);
+        }
     }
 }
 
@@ -132,6 +171,8 @@ pub struct Mc2BookView {
     pub castable: [[bool; 3]; 26],
     pub left: i8,
     pub right: i8,
+    /// `array_0x3B5` cycle-ring membership (0/1=left/2=right).
+    pub ring: [u8; 26],
 }
 
 /// One `sub_6DCA0` projectile arm (cast-path trace §2): the class-9
@@ -602,6 +643,7 @@ impl World {
             castable,
             left: self.mc2_book.left,
             right: self.mc2_book.right,
+            ring: self.mc2_book.ring,
         }
     }
 
@@ -660,6 +702,60 @@ impl World {
         // pick reads as its distinct spell, not a generic label.
         let name = self.mc2_spell_name(s, t as usize);
         self.set_notification(name, NOTIFY_TICKS_SELECT, NOTIFY_RED);
+    }
+
+    /// Retail cmd 0x26 (SHIFT+click fast-bind, EF:37950-53): a raw
+    /// byte store into the cycle ring + sound 14. No equip
+    /// side-effect — ring membership is a separate concept from what
+    /// sits on each button. The toggle/move truth table lives in the
+    /// SENDER (the app's pane click, PI:856-878); the sim just
+    /// stores.
+    pub(crate) fn mc2_ring_set(&mut self, spell: u8, val: u8) {
+        let s = spell as usize;
+        if s >= 26 {
+            return;
+        }
+        self.mc2_book.ring[s] = val.min(2);
+        self.g.snd_player(14);
+    }
+
+    /// The rest of retail's cross-level carry (`sub_549A0` L:1261-68
+    /// beyond what `mc2_grant_plausible` re-derives): the per-spell
+    /// selected tier (`array_0x437`), the cycle ring (`array_0x3B5`,
+    /// carried RAW — even for spells not possessed this level), and
+    /// the hand pointers, kept only if the spell is possessed here
+    /// (the L:1332-35 load validation; otherwise the canonical
+    /// level-start binding from the grant pass stands). Call AFTER
+    /// `mc2_grant_plausible` — the tier clamp reads the levels that
+    /// pass derived.
+    pub fn mc2_install_selector_carry(
+        &mut self,
+        sel: &[u8; 26],
+        ring: &[u8; 26],
+        left: i8,
+        right: i8,
+    ) {
+        if !matches!(self.game(), crate::ids::GameId::Mc2) {
+            return;
+        }
+        for s in 0..26 {
+            self.mc2_book.ring[s] = ring[s].min(2);
+            // sel ≤ levels holds in any well-formed carry (select
+            // clamps at write); min() only guards a foreign save.
+            self.mc2_book.sel[s] = sel[s].min(self.mc2_book.levels[s]);
+            let m = self.mc2_book.ent[s] as usize;
+            if m != 0 {
+                // Push the carried tier into the live manifestation
+                // (retail's sub_55AB0 SetSpells to array_0x437).
+                self.mc2_set_spell(m, self.mc2_book.sel[s]);
+            }
+        }
+        if (0..26).contains(&(left as i32)) && self.mc2_book.ent[left as usize] != 0 {
+            self.mc2_book.left = left;
+        }
+        if (0..26).contains(&(right as i32)) && self.mc2_book.ent[right as usize] != 0 {
+            self.mc2_book.right = right;
+        }
     }
 
     /// The dev-toggle grant: a manifestation with no jar (state 3M,
@@ -1812,6 +1908,7 @@ impl Snap for Mc2Spellbook {
             sel,
             left,
             right,
+            ring,
         } = self;
         w.put(ent);
         w.put(xp_vol);
@@ -1820,6 +1917,7 @@ impl Snap for Mc2Spellbook {
         w.put(sel);
         w.put(left);
         w.put(right);
+        w.put(ring);
     }
     fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
         Ok(Mc2Spellbook {
@@ -1830,6 +1928,7 @@ impl Snap for Mc2Spellbook {
             sel: r.get()?,
             left: r.get()?,
             right: r.get()?,
+            ring: r.get()?,
         })
     }
 }

@@ -440,6 +440,10 @@ pub struct LoadoutView {
     /// retail never blocks binding on the castable pool; per-cast
     /// mana gates apply at cast time. All-true under dev_spells.
     pub bindable: [bool; 24],
+    /// Cycle-ring membership per spell (0 = none, 1 = the LEFT-button
+    /// ring, 2 = RIGHT) — the MC2 selector's `array_0x3B5` idiom on
+    /// the MC1 column (enhancement-class).
+    pub ring: [u8; 24],
 }
 
 /// The player's pose in engine units for trigger/portal tests: x/y are
@@ -508,6 +512,12 @@ pub struct PlayerCommand {
     /// PlayerAction 0x1F/0x20 "Change Spell", remc2 EF:37898):
     /// (spell index 0..25, tier 0..2, hand 0 = left / 1 = right).
     pub mc2_select: Option<(u8, u8, u8)>,
+    /// Cycle-ring membership write (retail cmd 0x26, the pane's
+    /// SHIFT+click fast-bind, EF:37950): (spell index, 0 = none /
+    /// 1 = left ring / 2 = right). The toggle truth table is the
+    /// sender's (PI:856-878); the sim stores the byte. MC2 →
+    /// `mc2_book.ring`; MC1/HW → the enhancement-class `mc1_ring`.
+    pub spell_ring: Option<(u8, u8)>,
     /// The respawn key (Space, command 15 :20081/:48620) — only
     /// consumed while dead.
     pub respawn: bool,
@@ -671,6 +681,13 @@ pub struct World {
     /// 4.2 cast column ([`crate::mc2::cast`]). Hashed only once
     /// touched (pristine = hash-transparent, the MC1 goldens hold).
     pub(crate) mc2_book: crate::mc2::cast::Mc2Spellbook,
+    /// MC1/HW cycle-ring membership per spell (0 = none, 1 = the
+    /// LEFT-button ring, 2 = RIGHT) — the MC2 selector's `array_0x3B5`
+    /// idiom adapted for the MC1 column (enhancement-class; retail MC1
+    /// has no such mechanic). Kept on spell LOSS like MC2's: the cycle
+    /// walk skips unowned members. Hash-gated transparent-while-clear
+    /// (tag 0xB5) so every MC1 golden stands.
+    pub(crate) mc1_ring: [u8; 24],
     /// Player-start marker tiles by slot (class-3 models 4..=11,
     /// str_9177 :44068-107), captured before the level-init
     /// disposition consumes the records.
@@ -1219,6 +1236,7 @@ impl World {
             duel: None,
             mc2_duel: None,
             mc2_book: Default::default(),
+            mc1_ring: [0; 24],
             notification: None,
             won: false,
             mc2_endseq: None,
@@ -1680,6 +1698,11 @@ impl World {
 
         // Hand equips (the original's commands 0x15/0x16, :48717-31).
         self.equip_hands(cmd.equip_left, cmd.equip_right);
+
+        // Cycle-ring membership store (retail cmd 0x26, EF:37950).
+        if let Some((s, v)) = cmd.spell_ring {
+            self.spell_ring_set(s, v);
+        }
 
         // Per-hand cast triggers (the carpet fire tick,
         // sub_46840_46B80 :55825-34, dw_0 bits 0x10/0x20). Casting is
@@ -2843,6 +2866,7 @@ impl World {
             rival_deaths: _,
             duel,
             mc2_book,
+            mc1_ring,
             start_markers,
             win_pct,
             win_streak,
@@ -2929,6 +2953,13 @@ impl World {
         // fireball+possess baseline, so it always hashes there).
         if !mc2_book.is_pristine() {
             mc2_book.hash(&mut h);
+        }
+        // The MC1 cycle ring — transparent while clear (tag 0xB5,
+        // the selector's array_0x3B5 idiom): every pre-ring golden
+        // stands.
+        if *mc1_ring != [0; 24] {
+            h.write_u8(0xB5);
+            mc1_ring.hash(&mut h);
         }
         // The MC2 rival column (Phase 4.3b): hash-gated on presence
         // — every pre-rivals golden stands.
@@ -4250,6 +4281,36 @@ impl World {
         }
     }
 
+    /// Cycle-ring membership store (retail cmd 0x26, EF:37950-53 — a
+    /// raw byte write, no equip side-effect): 0 = none, 1 = the
+    /// LEFT-button ring, 2 = RIGHT. One byte per spell, so a spell is
+    /// exclusive to one ring by construction. MC2 stores into the
+    /// book's `array_0x3B5`; MC1/HW into the enhancement-class
+    /// `mc1_ring` (same law, no retail analogue).
+    pub fn spell_ring_set(&mut self, spell: u8, val: u8) {
+        if matches!(self.game, GameId::Mc2) {
+            self.mc2_ring_set(spell, val);
+            return;
+        }
+        let s = spell as usize;
+        if s >= SPELL_COUNT {
+            return;
+        }
+        self.mc1_ring[s] = val.min(2);
+        // The same chime retail's cmd 0x26 plays (EF:37952 sound 14).
+        self.g.snd_player(14);
+    }
+
+    /// Install the campaign-carried MC1 cycle ring at level load (the
+    /// MC1 twin of `mc2_install_selector_carry` — native-save-only
+    /// state, the retail `.gam` has no room for it).
+    pub fn install_mc1_ring(&mut self, ring: [u8; 24]) {
+        if matches!(self.game, GameId::Mc2) {
+            return;
+        }
+        self.mc1_ring = ring.map(|v| v.min(2));
+    }
+
     /// Per-hand crosshair preview (the P-class `crosshair`
     /// instrument): the target each hand's EQUIPPED spell would
     /// acquire if cast this instant, through the pure read-only twin
@@ -4387,6 +4448,7 @@ impl World {
             win_pct: self.win_pct,
             completed: self.completed,
             bindable,
+            ring: self.mc1_ring,
         }
     }
 
@@ -8337,6 +8399,7 @@ impl World {
             duel,
             mc2_duel,
             mc2_book,
+            mc1_ring,
             start_markers,
             win_pct,
             win_streak,
@@ -8383,6 +8446,7 @@ impl World {
         w.put(duel);
         w.put(mc2_duel);
         w.put(mc2_book);
+        w.put(mc1_ring);
         w.put(start_markers);
         w.put(win_pct);
         w.put(win_streak);
@@ -8435,6 +8499,7 @@ impl World {
         self.duel = r.get()?;
         self.mc2_duel = r.get()?;
         self.mc2_book = r.get()?;
+        self.mc1_ring = r.get()?;
         self.start_markers = r.get()?;
         self.win_pct = r.get()?;
         self.win_streak = r.get()?;
@@ -13508,6 +13573,99 @@ mod tests {
         assert_eq!(w.mc2_book.left, -1, "the left hand untouched");
         assert_eq!(w.g.ent[jar].f36, 0, "hint consumed");
         assert_eq!(w.g.ent[jar].f54, 64, "re-steal lock re-armed");
+    }
+
+    /// The cycle ring (`array_0x3B5`, cmd 0x26): a raw store with no
+    /// equip side-effect; hash-visible once set (transparent while
+    /// clear); DELIBERATELY KEPT on spell loss (`sub_69300` clears
+    /// possession + the equip pointer, never the ring) so the walk
+    /// skips-not-drops a stolen member; and the sub_549A0 carry
+    /// installer restores sel/ring and keeps only still-possessed
+    /// hands.
+    #[test]
+    fn mc2_cycle_ring_store_loss_and_carry() {
+        let mut w = mc2_flat_world();
+        w.set_dev_spells(true);
+        // Order matters: the dev grant inside select(2) runs the
+        // PICKUP hand law (left steals when both hands are taken —
+        // the seeded book starts left=0/right=1), so bind spell 2
+        // FIRST and re-pin fireball's left after.
+        w.mc2_select_spell(2, 0, 1);
+        w.mc2_select_spell(0, 0, 0);
+        assert_eq!((w.mc2_book.left, w.mc2_book.right), (0, 2));
+
+        // The tag gate: a populated ring is hash-visible, a cleared
+        // one feeds the exact pre-ring byte stream.
+        let h0 = w.state_hash();
+        w.mc2_book.ring[2] = 1;
+        assert_ne!(w.state_hash(), h0, "populated ring is hash-visible");
+        w.mc2_book.ring[2] = 0;
+        assert_eq!(w.state_hash(), h0, "cleared ring is hash-transparent");
+
+        // Ring store via the command stream — no equip side-effect.
+        let pose = PlayerPose::from_tiles(100.5, 105.0 / 8.0, 100.5, 0.0, 0.0, 0.0);
+        let cmd = PlayerCommand {
+            spell_ring: Some((2, 1)),
+            ..Default::default()
+        };
+        w.tick(pose, cmd);
+        assert_eq!(w.mc2_book.ring[2], 1, "cmd 0x26 stored the byte");
+        assert_eq!(w.mc2_book.left, 0, "no equip side-effect (left)");
+        assert_eq!(w.mc2_book.right, 2, "no equip side-effect (right)");
+
+        // Spell loss keeps the ring (EF:55811-24 never touches it):
+        // yank the RIGHT hand (roll code 1), where spell 2 sits.
+        w.g.ent[w.mc2_book.ent[2] as usize].f54 = 0;
+        w.mc2_spell_steal(1, 1);
+        assert_eq!(w.mc2_book.ent[2], 0, "possession cleared");
+        assert_eq!(w.mc2_book.right, -1, "equip pointer cleared");
+        assert_eq!(w.mc2_book.ring[2], 1, "ring membership KEPT on loss");
+
+        // The carry installer: ring raw, sel clamped, hands only
+        // where possessed (spell 2 is stolen -> right stays put).
+        let mut sel = [0u8; 26];
+        sel[0] = 2; // above the earned level -> clamps
+        let mut ring = [0u8; 26];
+        ring[2] = 2;
+        ring[5] = 1; // not possessed -> still carried RAW
+        w.mc2_install_selector_carry(&sel, &ring, 0, 2);
+        assert_eq!(w.mc2_book.ring[2], 2, "ring carried");
+        assert_eq!(w.mc2_book.ring[5], 1, "unpossessed member carried raw");
+        assert_eq!(
+            w.mc2_book.sel[0], w.mc2_book.levels[0],
+            "carried sel clamps to the earned level"
+        );
+        assert_eq!(w.mc2_book.left, 0, "possessed hand carried");
+        assert_eq!(w.mc2_book.right, -1, "unpossessed hand dropped (L:1332-35)");
+    }
+
+    /// The MC1 twin: `spell_ring_set` stores into `mc1_ring`
+    /// (tag 0xB5, transparent while clear) and the loadout view
+    /// surfaces it; losing the spell's manifestation keeps the ring.
+    #[test]
+    fn mc1_cycle_ring_store_and_hash_gate() {
+        let mut w = flat_world();
+        w.grant_spells(&[0, 3]);
+        // The tag gate, on the raw field (spell_ring_set also chimes,
+        // and the sounds vec is hashed — keep the proof pure).
+        let h0 = w.state_hash();
+        w.mc1_ring[3] = 2;
+        assert_ne!(w.state_hash(), h0, "populated ring is hash-visible");
+        w.mc1_ring[3] = 0;
+        assert_eq!(
+            w.state_hash(),
+            h0,
+            "cleared ring returns to the pre-ring stream (tag gate)"
+        );
+        // The store + the loadout surface.
+        w.spell_ring_set(3, 2);
+        assert_eq!(w.loadout().ring[3], 2, "stored + surfaced");
+        // Manifestation destroyed (jar loss): owned drops, ring stays.
+        w.spell_ring_set(0, 1);
+        assert_ne!(w.player.owned[0], 0);
+        w.player.owned[0] = 0;
+        assert!(!w.loadout().owned[0], "spell vanished");
+        assert_eq!(w.loadout().ring[0], 1, "ring membership KEPT");
     }
 
     /// The kind-3/4/5 DEAD-WATCH SCRUB (`sub_12500` EF:5086-89 /

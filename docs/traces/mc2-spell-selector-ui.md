@@ -659,3 +659,46 @@ port must read them from the loaded `SPELLS_BEGIN_BUFFER_str` table, not hardcod
   traced); the destination rect is authoritative and there is no separate cutout-stretch blit.
   (c) numeric per-spell/per-level mana costs are data-driven in `SPELLS_BEGIN_BUFFER_str` (game
   data), not source literals.
+
+---
+
+## ADDENDUM (cycle-ring session) — corrections + the queued-list law
+
+A dedicated trace of the SHIFT/ALT mechanics (decompile re-read) corrected
+three points above and settled the persistence law. Citations as before
+(PI = PlayerInput.cpp, EF = EventsFunctions.cpp, L = Level.cpp).
+
+1. **`array_0x3B5` is a CYCLE-RING membership flag, not "which button
+   holds this spell".** It is written ONLY by SHIFT+click (cmd 0x26 — a
+   raw byte store, EF:37950-53, no equip side-effect). The normal
+   click→submenu equip (cmd 0x1F/0x20) never touches it. §1's "quick set
+   both/none" reading was wrong; the sender (PI:856-878) implements a
+   toggle/move: SHIFT+same-button on a member removes it (byte2=0), any
+   other SHIFT+click adds/moves it to the clicked button's ring. One byte
+   ⇒ a spell is exclusive to one ring; there is no both=3 state.
+2. **Cycling** (`sub_18DA0` PI:1839-1942): SHIFT = forward (dir 0), ALT =
+   backward (dir 1) — flight call sites PI:528/533/541/546, map screen
+   PI:955-977. LMB = ring 1, RMB = ring 2. Walks from the equipped spell
+   ±1 with 0↔25 wrap; a candidate needs `SpellEnabled != 0` AND
+   `array_0x3B5 == side`; 26 fruitless steps → return with NO command
+   (the all-unavailable no-op, PI:1889/1931); the equipped spell is the
+   lap's LAST candidate, so a single-member ring re-selects itself. On a
+   hit it emits cmd 31/32 with `byte2 = array_0x437[spell]` — the stored
+   level rides along.
+3. **Corner tags are keyed on `array_0x3B5`,** not the equipped hand
+   (EF:22546-53 reads the ring array), and drawn hover-only (or
+   mid-cast) as §2.4 said. Our pane draws ring ∪ equipped — see
+   DEVIATIONS.
+4. **Persistence:** the ring and `array_0x437` carry across campaign
+   levels (`sub_549A0` L:1261-68 via the `byteindex_256ar` template) and
+   ride the whole-D41A0 SLEV save (L:199). Spell LOSS (`sub_69300`
+   EF:55811-24) clears possession + the equip pointer(s) but NOT the
+   ring — a lost spell stays a member and is merely skipped. Equip
+   pointers are validated at level load (drop to −1 unless possessed,
+   L:1332-35); the ring is never validated.
+
+Port: `Mc2Spellbook::ring` / `World::mc1_ring` (MC1 = enhancement twin),
+command `spell_ring` (cmd 0x26), app walk `ring_next` (sub_18DA0), carry
+`mc2_install_selector_carry` + the `.mgcs` header's `mc1_spell_ring`;
+wheel/SHIFT+wheel = `gameplay.enhancement.wheel_spells` (no retail
+analogue).

@@ -54,7 +54,7 @@ const MAGIC: u32 = 0x5343_474D;
 /// 4: chase-the-pointer steering replaced the turn-rate damper —
 ///    `turn_grace: u8` left the stream, `aim_lead: f32` joined (any
 ///    v3 saves from the one damper playtest round refuse cleanly).
-pub const SNAPSHOT_VERSION: u32 = 4;
+pub const SNAPSHOT_VERSION: u32 = 5;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

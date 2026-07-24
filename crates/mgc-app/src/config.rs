@@ -770,6 +770,12 @@ pub struct GameplayEnhancement {
     /// purist run. Covers MC1's class-12 jars and MC2's class-15 spell
     /// tokens. See docs/FIDELITY.md.
     pub prune_owned_jars: bool,
+    /// Mouse-wheel spell cycling (the remc2/MC2HD idiom, no retail
+    /// analogue): the wheel walks the LEFT button's cycle ring,
+    /// SHIFT+wheel the RIGHT. Purely additive input — the faithful
+    /// SHIFT/ALT+click rotation works either way — so it defaults ON;
+    /// disable for a purist input surface.
+    pub wheel_spells: bool,
 }
 
 impl Default for GameplayEnhancement {
@@ -779,6 +785,8 @@ impl Default for GameplayEnhancement {
             // Default-ON: removing jars you can never pick up. Purists
             // disable it with `--no-prune-owned-jars`.
             prune_owned_jars: true,
+            // Default-ON: additive input, collides with nothing.
+            wheel_spells: true,
         }
     }
 }
@@ -967,7 +975,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 15;
+const DEFAULTS_VERSION: u64 = 16;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

@@ -122,6 +122,14 @@ pub struct SaveHeader {
     /// save, which resumes at the campaign screen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<InLevel>,
+    /// MC1/HW spell cycle-ring membership (0 = none / 1 = left ring /
+    /// 2 = right, per spell) — NATIVE-ONLY campaign carry: the retail
+    /// 142-byte `.gam` record has no room for it, so it lives here and
+    /// is simply absent from the exported file. MC2 needs no twin (its
+    /// ring sits inside the retail `str_611` blob at 0x3B5). `None` on
+    /// MC2 slots and on pre-ring saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mc1_spell_ring: Option<[u8; 24]>,
 }
 
 /// The mid-level half of the header. The level itself lives in
@@ -362,6 +370,7 @@ pub fn hub_header(game: Game, label: String, campaign_level: u32, level: u32) ->
         level,
         bake_epoch: BAKE_EPOCH,
         resume: None,
+        mc1_spell_ring: None,
     }
 }
 

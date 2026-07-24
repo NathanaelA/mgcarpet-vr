@@ -1430,6 +1430,32 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · enhancement",
+            label: "wheel_spells",
+            // Purely additive input (retail has no wheel binding at
+            // all), so it does not flag the run.
+            class: Preference,
+            key: None,
+            cli: Some("--no-wheel-spells"),
+            cfg_path: "gameplay.enhancement.wheel_spells",
+            read: |c| Val::Toggle {
+                on: c.gameplay.enhancement.wheel_spells,
+                faithful: false,
+            },
+            desc: "Mouse-wheel spell cycling (the remc2/MC2HD idiom): the \
+                   wheel walks the left button's queued-spell ring, \
+                   SHIFT+wheel the right. The faithful SHIFT/ALT+click \
+                   rotation works either way.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.enhancement.wheel_spells = v,
+                descs: [
+                    "Wheel does nothing in flight, as retail.",
+                    "Wheel cycles the queued spells (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
