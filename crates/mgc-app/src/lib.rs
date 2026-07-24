@@ -3721,16 +3721,28 @@ impl App {
 
     #[cfg(target_os = "android")]
     fn tick_input(&mut self) -> FlightInput {
+        let is_mc2 = self.is_mc2();
+
         let owned = if let Some(w) = sess!(self).sim.world.as_mut() {
-            w.loadout().owned
+            if is_mc2 {
+                w.mc2_book_view().owned
+            } else {
+                let mut owned = [false; 26];
+                let mc1_owned = w.loadout().owned;
+                for i in 0..24 {
+                    owned[i] = mc1_owned[i]
+                }
+                owned
+            }
         } else {
-            [false; 24]
+            [false; 26]
         };
-        let mut input = self
-            .input
-            .as_mut()
-            .unwrap()
-            .poll(&self.ctx.as_mut().unwrap().xr_session, owned);
+
+        let mut input = self.input.as_mut().unwrap().poll(
+            &self.ctx.as_mut().unwrap().xr_session,
+            owned,
+            is_mc2,
+        );
 
         if input.extra_data & 0x01 != 0 {
             if let Some(r) = &mut self.renderer {
@@ -8482,7 +8494,7 @@ fn parse_args() -> Result<Args, String> {
     args.plausible_spellbook = Option::from(true);
     args.slot = 1;
     args.dev_spells = Option::from(false);
-    args.level = PathBuf::from("baked/mc1/level-001.mgcl");
+    args.level = PathBuf::from("baked/mc1/level-003.mgcl");
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);

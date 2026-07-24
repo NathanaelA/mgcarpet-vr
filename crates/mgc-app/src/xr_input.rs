@@ -19,6 +19,7 @@
 
 use mgc_sim::FlightInput;
 use openxr as xr;
+use serde::de::Unexpected::Option;
 
 /// Turn rate at full stick deflection, radians/tick (24 Hz sim) — a
 /// traditional flight-stick feel, independent of head orientation.
@@ -45,6 +46,8 @@ pub struct InputActions {
     last_squeeze_left: bool,
     last_squeeze_right: bool,
     last_menu: bool,
+    last_thumbstick_right_click: bool,
+    last_thumbstick_left_click: bool,
 }
 
 impl InputActions {
@@ -144,6 +147,8 @@ impl InputActions {
             last_squeeze_left: false,
             last_squeeze_right: false,
             last_menu: false,
+            last_thumbstick_right_click: false,
+            last_thumbstick_left_click: false,
         })
     }
 
@@ -158,7 +163,12 @@ impl InputActions {
     /// Syncs the action set and reads every action; call once per XR
     /// frame (not per sim tick — the same reading feeds however many
     /// sim ticks fire within one frame's accumulator burst).
-    pub fn poll(&mut self, session: &xr::Session<xr::Vulkan>, owned: [bool; 24]) -> FlightInput {
+    pub fn poll(
+        &mut self,
+        session: &xr::Session<xr::Vulkan>,
+        owned: [bool; 26],
+        is_mc2: bool,
+    ) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
 
         let axis = |a: &xr::Action<xr::Vector2f>| {
@@ -175,6 +185,19 @@ impl InputActions {
             a.state(session, xr::Path::NULL)
                 .map(|s| s.current_state)
                 .unwrap_or(0.0)
+        };
+        let next_spell = |spell: u8| {
+            for i in spell + 1..26 {
+                if owned[i as usize] {
+                    return i;
+                }
+            }
+            for i in 0..spell {
+                if owned[i as usize] {
+                    return i;
+                }
+            }
+            128
         };
 
         let left = axis(&self.left_stick);
@@ -194,7 +217,61 @@ impl InputActions {
             0.0
         };
 
-        let flight_input = FlightInput {
+        let mut equip_left = 128;
+        let mut equip_right = 128;
+        let mut mc2_select = None;
+
+        if is_mc2 {
+            if !self.last_squeeze_left && value(&self.squeeze_left) > 0.5 {
+                self.left_spell = next_spell(self.left_spell);
+                if self.left_spell < 128 {
+                    mc2_select = Some((self.left_spell, 0, 0));
+                }
+            };
+            if !self.last_squeeze_right && value(&self.squeeze_right) > 0.5 {
+                self.right_spell = next_spell(self.right_spell);
+                if self.right_spell < 128 {
+                    mc2_select = Some((self.right_spell, 0, 1));
+                }
+            };
+            if !self.last_thumbstick_right_click && pressed(&self.thumbstick_right_click) {
+                if self.right_spell == 3 {
+                    self.right_spell = 16; // castle spell
+                } else {
+                    self.right_spell = 3; // possess spell
+                }
+                mc2_select = Some((self.right_spell, 0, 1));
+            }
+        } else {
+            equip_left = if !self.last_squeeze_left && value(&self.squeeze_left) > 0.5 {
+                self.left_spell = next_spell(self.left_spell);
+                self.left_spell
+            } else {
+                128
+            };
+            equip_right = if !self.last_squeeze_right && value(&self.squeeze_right) > 0.5 {
+                self.right_spell = next_spell(self.right_spell);
+                self.right_spell
+            } else {
+                128
+            };
+            if !self.last_thumbstick_right_click && pressed(&self.thumbstick_right_click) {
+                if self.right_spell == 3 {
+                    self.right_spell = 16; // castle spell
+                } else {
+                    self.right_spell = 3; // possess spell
+                }
+                equip_right = self.right_spell;
+            }
+        }
+
+        self.last_squeeze_right = value(&self.squeeze_right) > 0.5;
+        self.last_squeeze_left = value(&self.squeeze_left) > 0.5;
+        self.last_menu = pressed(&self.menu_click);
+        self.last_thumbstick_right_click = pressed(&self.thumbstick_right_click);
+        self.last_thumbstick_left_click = pressed(&self.thumbstick_left_click);
+
+        FlightInput {
             thrust: left.y * 4.0,
             strafe: left.x * 4.0,
             yaw_delta: right.x * YAW_RATE_PER_TICK,
@@ -203,30 +280,11 @@ impl InputActions {
             fire_right: value(&self.trigger_right) > 0.5,
             respawn: pressed(&self.btn_a),
             demolish: pressed(&self.btn_b),
-            equip_left: (!self.last_squeeze_left && value(&self.squeeze_left) > 0.5).then(|| {
-                self.left_spell += 1;
-                if self.left_spell >= 24 {
-                    self.left_spell = 0;
-                }
-                mgc_sim::mc1::spells::SpellId(self.left_spell)
-            }),
-            equip_right: (!self.last_squeeze_right && value(&self.squeeze_right) > 0.5).then(
-                || {
-                    self.right_spell += 1;
-                    if self.right_spell >= 24 {
-                        self.right_spell = 0;
-                    }
-                    mgc_sim::mc1::spells::SpellId(self.right_spell)
-                },
-            ),
+            equip_left: (equip_left < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_left)),
+            equip_right: (equip_right < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_right)),
+            mc2_select,
             extra_data,
             ..Default::default()
-        };
-
-        self.last_squeeze_right = value(&self.squeeze_right) > 0.5;
-        self.last_squeeze_left = value(&self.squeeze_left) > 0.5;
-        self.last_menu = pressed(&self.menu_click);
-
-        flight_input
+        }
     }
 }
