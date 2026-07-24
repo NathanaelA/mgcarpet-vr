@@ -3723,28 +3723,71 @@ impl App {
     fn tick_input(&mut self) -> FlightInput {
         let is_mc2 = self.is_mc2();
 
-        let owned = if let Some(w) = sess!(self).sim.world.as_mut() {
-            if is_mc2 {
-                w.mc2_book_view().owned
-            } else {
-                let mut owned = [false; 26];
-                let mc1_owned = w.loadout().owned;
-                for i in 0..24 {
-                    owned[i] = mc1_owned[i]
+        let is_mc2 = self.is_mc2();
+        let mut grabbed = self.grabbed;
+        let mut owned = [false; 26];
+
+        if grabbed {
+            owned = if let Some(w) = sess!(self).sim.world.as_mut() {
+                if is_mc2 {
+                    w.mc2_book_view().owned
+                } else {
+                    let mut owned = [false; 26];
+                    let mc1_owned = w.loadout().owned;
+                    for i in 0..24 {
+                        owned[i] = mc1_owned[i]
+                    }
+                    owned
                 }
-                owned
-            }
+            } else {
+                [false; 26]
+            };
+        }
+
+        // We have to reset grabbed if we are on the map view.
+        let on = if let Some(r) = &mut self.renderer {
+            let on = r.map_view();
+            on
         } else {
-            [false; 26]
+            false
         };
 
-        let mut input = self.input.as_mut().unwrap().poll(
+        if on || self.paused {
+            grabbed = true;
+        }
+
+        let input = self.input.as_mut().unwrap().poll(
             &self.ctx.as_mut().unwrap().xr_session,
             owned,
             is_mc2,
+            grabbed,
         );
 
-        if input.extra_data & 0x01 != 0 {
+        if !grabbed {
+            // log::info!("!grabbed {} {} {} {}", self.cursor.0, self.cursor.1, input.thrust, input.strafe);
+            if input.thrust != 0.0 || input.strafe != 0.0 {
+                self.cursor.0 = (self.cursor.0 - input.thrust * 12.0).clamp(0.0, 2400.0); // 1800
+                self.cursor.1 = (self.cursor.1 - input.strafe * 12.0).clamp(0.0, 2000.0);
+            }
+            if !is_mc2 {
+                if input.fire_left || input.fire_right {
+                    let size = self.view_size();
+                    if let Some(m) = &mut self.mc1menu {
+                        m.click(size, self.cursor);
+                        self.grabbed = true;
+                    }
+                }
+            }
+
+            return FlightInput::default();
+            //self.cursor = (100 as f32, 100 as f32);
+        }
+
+        if input.extra_data & 0x02 != 0 {
+            // Pause
+            self.toggle_menu();
+        } else if input.extra_data & 0x01 != 0 {
+            // Mini Mab/book
             if let Some(r) = &mut self.renderer {
                 let on = !r.map_view();
                 r.set_map_view(on);
@@ -3762,6 +3805,7 @@ impl App {
                     self.fire_right_held = false;
                 } else {
                     self.set_grab(true);
+                    //self.grabbed = true;
                 }
                 // Entering/leaving the fullscreen map fixes
                 // your ORIENTATION but not your velocity in
@@ -5395,7 +5439,7 @@ impl App {
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
                 .is_ok();
             window.set_cursor_visible(!ok);
-            self.grabbed = ok;
+            self.grabbed = if IS_ANDROID { true } else { ok };
             // A boot-grab wish is fulfilled by any successful grab;
             // a failed attempt leaves it armed for the frame retry.
             if ok {
@@ -5665,9 +5709,14 @@ impl App {
                 roll: 0.0,
                 fov_y: FOV_Y,
             };
+            // quads.extend(minimenu::draw(assets, mini, size.0, size.1, self.cursor));
+
             match render(self, &cam) {
                 Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
                 Err(e) => eprintln!("render: {e}"),
+            }
+            if IS_ANDROID {
+                let _input = self.tick_input();
             }
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -5689,6 +5738,7 @@ impl App {
             // under it, EventsFunctions.cpp:31796; the dialog
             // only owns the input. P still pauses if wanted.)
             self.accumulator = 0.0;
+            let _input = self.tick_input();
         }
 
         // The toast line decays on WALL time at the authentic
@@ -6890,9 +6940,6 @@ impl App {
     /// before being added to the flyer's world position/orientation.
     #[cfg(target_os = "android")]
     fn build_stereo_view(&mut self, views: &[xr::View]) -> StereoView {
-        if self.session.is_none() {
-            log::info!("Self Session is None");
-        }
         let flyer = if let Some(sess) = self.session.as_deref() {
             sess.sim.flyer.clone()
         } else {
@@ -8348,7 +8395,7 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+    fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, _event: DeviceEvent) {
         if !self.grabbed {
             return;
         }
@@ -8487,14 +8534,14 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     // TODO: Configure this via a menu option...
     let mut args = parse_base_args()?;
-    //args.campaign = Some(campaign::CampaignId::Mc2);
+    args.campaign = Some(campaign::CampaignId::Mc1);
     args.sky = Option::from(false);
     args.crosshair = Option::from(false);
     args.expose_jar_spells = Option::from(true);
     args.plausible_spellbook = Option::from(true);
     args.slot = 1;
     args.dev_spells = Option::from(false);
-    args.level = PathBuf::from("baked/mc1/level-003.mgcl");
+    // args.level = PathBuf::from("baked/mc1/level-003.mgcl");
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
