@@ -650,12 +650,23 @@ impl Simulation {
         if let Some(w) = &mut self.world {
             let f = self.flyer;
             // Forward speed in tiles/tick — the cast inherits it onto
-            // the projectile's base speed like the carpet's +126.
+            // the projectile's base speed like the carpet's +126, and
+            // MC2's Speed spell reads its direction from the sign.
             // Faithful: +126 itself, sign included; enhanced: the
-            // velocity magnitude.
+            // horizontal velocity's SIGNED component along the hull
+            // axis — the retail-analog signed carpet speed (backward
+            // drift reads negative). The hull, not the aim: the boost
+            // drives along the hull basis, and right after a sharp
+            // mouse turn the aim projection would misread forward
+            // motion as backward. (The former |v| magnitude could
+            // never go negative — the Speed spell always propelled
+            // forward — and read strafe/fall speed as forward.)
             let speed = match self.thrust_model {
                 ThrustModel::Mc1 => self.carpet.act_speed as f32 / 256.0,
-                ThrustModel::Enhanced => (f.vx * f.vx + f.vy * f.vy + f.vz * f.vz).sqrt() * TICK_DT,
+                ThrustModel::Enhanced => {
+                    let (sy, cy) = f.yaw.sin_cos();
+                    (f.vx * sy - f.vz * cy) * TICK_DT
+                }
             };
             // The pose heading is the AIM: under enhanced chase
             // steering casts launch along the crosshair (yaw + lead),
@@ -912,11 +923,17 @@ impl Simulation {
         }
 
         // The speed-up (MC2 spell 3) rides the Accelerate channel —
-        // same expiry edge as MC1 (:65191-97 shape).
+        // the MC1-shaped expiry edge, but MC2's restore KEEPS the
+        // sign: retail writes `minSpeed * v2` with `v2` the current
+        // velocity's sign (`GetScroll_69DB0` EF:56267-69), so a
+        // backward boost hands back backward base speed, where MC1
+        // resets to +80 max forward even out of backwards flight
+        // (:65191-97, its authentic quirk — kept on the MC1 path).
         let over = self.world.as_ref().and_then(|w| w.accel_override());
         if self.accel_was_active && over.is_none() {
-            self.carpet.tgt_speed = 80;
-            self.carpet.act_speed = 80;
+            let sign = if self.carpet.act_speed >= 0 { 1 } else { -1 };
+            self.carpet.tgt_speed = 80 * sign;
+            self.carpet.act_speed = 80 * sign;
         }
         self.accel_was_active = over.is_some();
 

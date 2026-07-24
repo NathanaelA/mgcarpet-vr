@@ -4427,12 +4427,18 @@ impl World {
         // hard-overrides speed every tick with no brake input
         // (docs/spell-audit/speed.md §5) — this is the recorded-gameplay
         // interruptibility restored over the trace (deliberate: recorded
-        // gameplay is senior). A reverse thrust brakes the
-        // (always-forward) boost — the same resisting-only law as MC1
-        // Accelerate below (retail's v_14 arms only when the press
-        // moves v_12, :55766-80).
+        // gameplay is senior). The brake is the RESISTING input for
+        // the boost's direction — reverse thrust against a forward
+        // boost, forward thrust against a backward one — the same
+        // resisting-only law as MC1 Accelerate below (retail's v_14
+        // arms only when the press moves v_12, :55766-80).
         if self.player.accel_mc2_factor != 0 {
-            if thrust < 0.0 {
+            let resisting = if self.player.accel >= 0 {
+                thrust < 0.0
+            } else {
+                thrust > 0.0
+            };
+            if resisting {
                 let m = self.mc2_book.ent[3] as usize;
                 if m != 0 {
                     self.g.ent[m].f26 = 0;

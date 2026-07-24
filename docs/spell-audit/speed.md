@@ -82,10 +82,36 @@ Key retail properties:
 
 ## 3. Current port — how `accel` is applied
 
-`crates/mgc-sim/src/mc2/cast.rs:747-752` — the direct-effect arm for spell 3:
+**Direction LANDED 2026-07-24** (player report): the cast arm now
+derives the boost sign from the caster's current velocity
+(`accel = p.speed >= 0 ? 1 : -1`, the EF:56212-15 `v2` law — MC2's one
+spell doubles as MC1's Accelerate AND Accelerate Backwards), the
+brake-cancel is the RESISTING input for that direction
+(`World::thrust_cancel`), and the expiry restore keeps the sign
+(`±80`, EF:56267-69 — unlike MC1's authentic always-+80 quirk, which
+stays on the MC1 path). Test:
+`mc2_speed_direction_follows_current_velocity`.
+
+**Round 2 same day (player retest): the ENHANCED pose seam.** Under
+the enhanced flight model the pose's `speed` was the velocity
+MAGNITUDE (`sqrt(vx²+vy²+vz²)` — never negative), so the world could
+not see backward flight and the spell stayed forward-only there.
+Fixed: the enhanced pose now reports the SIGNED horizontal component
+along the HULL axis (`(vx·sin(yaw) − vz·cos(yaw))·dt` — hull, not
+aim: the boost drives along the hull basis, and right after a sharp
+mouse turn an aim projection would misread forward motion as
+backward). This also makes the `+126` projectile inheritance signed
+like retail (strafe/fall speed no longer read as forward cast speed).
+The enhanced boost is the permanent-throttle law in either direction:
+start reverse motion, cast, and it self-propels backward with no key
+held until expiry or the resisting forward press. Test:
+`mc2_enhanced_backward_flight_casts_a_backward_speed_boost`.
+
+The direct-effect arm for spell 3 (mc2/cast.rs), pre-2026-07-24 shape
+for the history below:
 ```
 3 => {
-    self.player.accel = 1;
+    self.player.accel = 1;          // now: if p.speed >= 0 { 1 } else { -1 }
     self.player.accel_held = true;
     self.mc2_award_xp(PLAYER_TARGET, 3, 1);
     self.g.snd_player(19);

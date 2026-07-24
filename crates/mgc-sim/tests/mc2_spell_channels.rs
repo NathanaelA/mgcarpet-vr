@@ -813,6 +813,153 @@ fn mc2_speed_window_interrupts_on_brake() {
 }
 
 #[test]
+fn mc2_speed_direction_follows_current_velocity() {
+    // MC2's one Speed spell doubles as MC1's Accelerate AND Accelerate
+    // Backwards: the boost direction is the caster's velocity sign at
+    // the cast (`GetScroll_69DB0` EF:56212-15 — `speed_0xc_12 >= 0`
+    // is forward, standstill included). The brake is the RESISTING
+    // input for that direction.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    let fire = PlayerCommand {
+        fire_left: true,
+        ..Default::default()
+    };
+
+    // Cast while flying BACKWARD → a backward boost.
+    let back = PlayerPose {
+        speed: -80,
+        ..pose_at(&w, cx, cy)
+    };
+    w.mc2_select_spell(3, 0, 0);
+    w.tick(back, fire);
+    let over = w.accel_override().expect("the Speed boost is live");
+    assert!(
+        over < 0.0,
+        "backward flight casts a backward boost ({over})"
+    );
+
+    // A further BACKWARD press does not cancel it...
+    w.thrust_cancel(-1.0);
+    w.tick(back, PlayerCommand::default());
+    assert!(
+        w.mc2_book_view().armed[3],
+        "backward thrust rides along with a backward boost"
+    );
+    // ...the resisting (forward) input does.
+    w.thrust_cancel(1.0);
+    w.tick(back, PlayerCommand::default());
+    assert!(
+        !w.mc2_book_view().armed[3],
+        "forward thrust brakes a backward boost"
+    );
+    assert!(w.accel_override().is_none());
+
+    // Standstill counts as FORWARD (retail `>= 0`).
+    let still = pose_at(&w, cx, cy);
+    assert_eq!(still.speed, 0, "fixture pose is at standstill");
+    w.mc2_select_spell(3, 0, 0);
+    w.tick(still, fire);
+    let over = w.accel_override().expect("the Speed boost is live");
+    assert!(over > 0.0, "standstill casts a forward boost ({over})");
+}
+
+#[test]
+fn mc2_enhanced_backward_flight_casts_a_backward_speed_boost() {
+    // The enhanced pose must report SIGNED forward speed at the world
+    // seam: flying backward reads negative, so the Speed direction law
+    // (velocity sign, `GetScroll_69DB0` EF:56212-15) casts a BACKWARD
+    // boost. The pose formerly carried the velocity MAGNITUDE, which
+    // can never go negative — under enhanced flight the spell
+    // propelled forward out of backward flight at every tier
+    // (player-reported). The boost then drives with no key held (the
+    // permanent-throttle law), until the RESISTING forward press
+    // brakes it.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    w.set_dev_spells(true);
+    let (cx, cy) = open_spot(&w);
+    w.mc2_select_spell(3, 0, 0);
+
+    let mut sim = mgc_sim::Simulation::with_world(w);
+    sim.thrust_model = mgc_sim::ThrustModel::Enhanced;
+    sim.altitude_model = mgc_sim::AltitudeModel::ExtendedLift;
+    sim.flyer.x = cx as f32 + 0.5;
+    sim.flyer.z = cy as f32 + 0.5;
+    let ground = sim
+        .world
+        .as_ref()
+        .unwrap()
+        .ground_height_tiles(sim.flyer.x, sim.flyer.z);
+    sim.flyer.y = ground + 3.0;
+    sim.sync_carpet_from_flyer();
+
+    // Reverse thrust until the flyer genuinely drifts backward.
+    let back = mgc_sim::FlightInput {
+        thrust: -1.0,
+        ..Default::default()
+    };
+    for _ in 0..30 {
+        sim.step(&back);
+    }
+    let (sy, cyaw) = sim.flyer.yaw.sin_cos();
+    let fwd_v = sim.flyer.vx * sy - sim.flyer.vz * cyaw;
+    assert!(
+        fwd_v < -0.5,
+        "reverse thrust moves the flyer backward (forward speed {fwd_v})"
+    );
+
+    // Cast Speed while drifting backward (idle thrust on the cast
+    // tick, so the resisting-input brake cannot eat the window).
+    sim.step(&mgc_sim::FlightInput {
+        fire_left: true,
+        ..Default::default()
+    });
+    let over = sim
+        .world
+        .as_ref()
+        .unwrap()
+        .accel_override()
+        .expect("the Speed boost is live");
+    assert!(
+        over < 0.0,
+        "backward enhanced flight casts a backward boost ({over})"
+    );
+
+    // The boost keeps driving backward with NO key held...
+    for _ in 0..10 {
+        sim.step(&mgc_sim::FlightInput::default());
+    }
+    let (sy, cyaw) = sim.flyer.yaw.sin_cos();
+    let fwd_v = sim.flyer.vx * sy - sim.flyer.vz * cyaw;
+    assert!(fwd_v < -0.5, "the backward boost self-propels ({fwd_v})");
+    // ...until the RESISTING (forward) press brakes it.
+    sim.step(&mgc_sim::FlightInput {
+        thrust: 1.0,
+        ..Default::default()
+    });
+    sim.step(&mgc_sim::FlightInput::default());
+    assert!(
+        sim.world.as_ref().unwrap().accel_override().is_none(),
+        "forward thrust brakes the backward boost"
+    );
+}
+
+#[test]
 fn mc2_earthquake_carves_without_flooding_the_pool() {
     // Earthquake (17) lays a travelling trail of (10,11) SCORCH RINGS
     // (the earth-carve, like a moving Crater) — NOT (10,19) ground-fire

@@ -1314,9 +1314,16 @@ impl World {
             // speed_up: the accelerate channel (`GetScroll_69DB0`
             // EF:56189), sound 19. The per-tier factor `subSpellIndex`
             // = {2,3,4} drives 160/240/320 sustained (not the MC1
-            // fixed 3.0/2.0) — docs/spell-audit/speed.md.
+            // fixed 3.0/2.0) — docs/spell-audit/speed.md. MC2's one
+            // spell doubles as MC1's Accelerate AND Accelerate
+            // Backwards: the direction is the caster's CURRENT
+            // velocity sign (EF:56212-15 — `v2 = speed_0xc_12 >= 0 ?
+            // 1 : -1`, standstill counts as forward; retail re-derives
+            // it every effect tick, but the hard speed override makes
+            // the sign self-sustaining, so the cast-time latch is the
+            // same law).
             3 => {
-                self.player.accel = 1;
+                self.player.accel = if p.speed >= 0 { 1 } else { -1 };
                 self.player.accel_held = true;
                 self.player.accel_mc2_factor = sub.sub_spell.clamp(1, 8) as i8;
                 self.mc2_award_xp(PLAYER_TARGET, 3, 1);
