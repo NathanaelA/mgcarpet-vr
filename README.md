@@ -67,7 +67,9 @@ SHA-256 hashes are committed as pins.
 
    ./mgcarpet --level mc1:9   # a specific level (mc1 | mc1hw | mc2)
 
-   # a full campaign (mc1 | mc1hw | mc2) running in save N slot
+   # a full campaign (mc1 | mc1hw | mc2); like retail, it starts a
+   # fresh unsaved run — save (or load) from the in-game menu, or
+   # resume save slot N directly with --slot
    ./mgcarpet --campaign <game> [--slot N]
    ```
 

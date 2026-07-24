@@ -183,8 +183,11 @@ impl CampaignSave {
 /// writes the slot file, so quitting anywhere resumes correctly.
 struct CampaignRun {
     id: campaign::CampaignId,
-    /// 0-based save slot (`--slot`, default slot 1).
-    slot: usize,
+    /// 0-based save slot; `None` = the virtual slot 0 (`--slot`
+    /// default) — retail's own boot shape: a fresh throwaway campaign
+    /// that never touches disk until the player saves from the menu
+    /// (which adopts the chosen slot).
+    slot: Option<usize>,
     /// The level being played right now.
     current: u32,
     /// The slot's durable record (MC1/HW or MC2, matching `id`).
@@ -281,32 +284,52 @@ impl CampaignRun {
     /// Open (or start) a campaign: load the slot's retail-format save
     /// unless `new_game`, and resolve the level to launch. Errors are
     /// user-facing (bad save file, finished campaign).
-    fn start(id: campaign::CampaignId, slot: usize, new_game: bool) -> Result<Self, String> {
+    fn start(
+        id: campaign::CampaignId,
+        slot: Option<usize>,
+        new_game: bool,
+    ) -> Result<Self, String> {
         use campaign::CampaignId;
         let hw = id == CampaignId::Mc1Hw;
+        // 1-based slot number for messages; the virtual slot reads 0.
+        let slot_no = slot.map_or(0, |s| s + 1);
         // The native save is authoritative; the retail `.gam` is read
         // only when no native file exists for the slot (an imported
-        // GOG-era save). See `saves`.
-        let record = campaign_record(id.tag(), slot, new_game)?;
+        // GOG-era save). See `saves`. The virtual slot 0 has no file,
+        // ever — it always starts fresh.
+        let record = match slot {
+            Some(s) => campaign_record(id.tag(), s, new_game)?,
+            None => None,
+        };
         let mc1_ring = record.as_ref().and_then(|(_, r)| *r).unwrap_or([0; 24]);
         let record = record.map(|(b, _)| b);
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
                 let save = if let Some(bytes) = record {
                     let s = saves::Mc1Save::decode(&bytes)
-                        .map_err(|e| format!("{} slot {}: {e}", id.tag(), slot + 1))?;
+                        .map_err(|e| format!("{} slot {}: {e}", id.tag(), slot_no))?;
                     println!(
                         "campaign {}: slot {} \"{}\" at level {}",
                         id.tag(),
-                        slot + 1,
+                        slot_no,
                         s.name,
                         s.level
                     );
                     s
                 } else {
-                    println!("campaign {}: new game (slot {})", id.tag(), slot + 1);
+                    match slot {
+                        Some(_) => println!("campaign {}: new game (slot {slot_no})", id.tag()),
+                        None => println!(
+                            "campaign {}: new game (virtual slot 0 — save from the menu \
+                             to keep progress)",
+                            id.tag()
+                        ),
+                    }
+                    // The default wizard name when none is entered —
+                    // player slot 0 of the retail name table (remc1
+                    // off_99B68; MC2's GameUI list opens the same way).
                     saves::Mc1Save {
-                        name: format!("CARPET{}", slot + 1),
+                        name: "Zanzamar".into(),
                         ..Default::default()
                     }
                 };
@@ -316,7 +339,7 @@ impl CampaignRun {
                             "campaign {}: slot {} is a completed campaign — relaunch with \
                              --new-game to start over",
                             id.tag(),
-                            slot + 1
+                            slot_no
                         )
                     })?;
                 Ok(Self {
@@ -331,18 +354,25 @@ impl CampaignRun {
             CampaignId::Mc2 => {
                 let save = if let Some(bytes) = record {
                     let s = saves::Mc2Save::decode(&bytes)
-                        .map_err(|e| format!("mc2 slot {}: {e}", slot + 1))?;
+                        .map_err(|e| format!("mc2 slot {}: {e}", slot_no))?;
                     println!(
                         "campaign mc2: slot {} \"{}\" — {} level(s) completed",
-                        slot + 1,
-                        s.label,
-                        s.levels_completed
+                        slot_no, s.label, s.levels_completed
                     );
                     s
                 } else {
-                    println!("campaign mc2: new game (slot {})", slot + 1);
+                    match slot {
+                        Some(_) => println!("campaign mc2: new game (slot {slot_no})"),
+                        None => println!(
+                            "campaign mc2: new game (virtual slot 0 — save from the menu \
+                             to keep progress)"
+                        ),
+                    }
+                    // Same retail default name as MC1 — the head of
+                    // the wizard list (GameUI.h) when none is entered.
                     saves::Mc2Save {
-                        label: format!("SLOT {}", slot + 1),
+                        label: "Zanzamar".into(),
+                        player_name: "Zanzamar".into(),
                         ..Default::default()
                     }
                 };
@@ -436,10 +466,14 @@ impl CampaignRun {
     /// payload the slot was carrying: completing a level must not
     /// leave a resume pointing back into it (design "Lifecycle").
     fn persist(&self) {
-        match saves::write_slot(self.id.tag(), self.slot, &self.hub_package()) {
+        // The virtual slot 0 run keeps its progress in memory only —
+        // retail's boot shape. Nothing lands on disk until the player
+        // saves from the menu, which adopts the chosen slot.
+        let Some(slot) = self.slot else { return };
+        match saves::write_slot(self.id.tag(), slot, &self.hub_package()) {
             Ok(()) => println!(
                 "campaign saved: {}",
-                saves::native_path(self.id.tag(), self.slot).display()
+                saves::native_path(self.id.tag(), slot).display()
             ),
             Err(e) => eprintln!("error: campaign save: {e}"),
         }
@@ -3008,7 +3042,7 @@ impl App {
         // Rebuild the level the save was taken in, not the one the
         // campaign order would pick — a mid-level save is pinned to
         // its own level.
-        let mut fresh = CampaignRun::start(run.id, slot, false)?;
+        let mut fresh = CampaignRun::start(run.id, Some(slot), false)?;
         fresh.current = index;
         let level_path = fresh.level_path(index);
         let level = load_level(
@@ -3105,7 +3139,7 @@ impl App {
         let Some(run) = &self.campaign else {
             return Err("no campaign is running (launch with --campaign)".into());
         };
-        let fresh = CampaignRun::start(run.id, slot, false)?;
+        let fresh = CampaignRun::start(run.id, Some(slot), false)?;
         self.campaign = Some(fresh);
         if self.resume_slot(slot)? {
             return Ok(());
@@ -4171,7 +4205,7 @@ impl App {
         match action {
             MapAction::SaveTo { slot } => {
                 if let Some(run) = &mut self.campaign {
-                    run.slot = slot;
+                    run.slot = Some(slot);
                     if let Some(s) = run.save.mc2_mut() {
                         // The slot's stored label is the PLAYER NAME —
                         // never a per-slot string, and never the
@@ -4186,7 +4220,7 @@ impl App {
                 }
             }
             MapAction::LoadFrom(slot) => {
-                match CampaignRun::start(campaign::CampaignId::Mc2, slot, false) {
+                match CampaignRun::start(campaign::CampaignId::Mc2, Some(slot), false) {
                     Ok(run) => {
                         let parked = match run.save.mc2() {
                             Some(s) if run.current == s.levels_completed && run.current > 0 => {
@@ -4654,7 +4688,7 @@ impl App {
                 }
                 Mc1Action::SaveTo { slot } => {
                     if let Some(run) = &mut self.campaign {
-                        run.slot = slot;
+                        run.slot = Some(slot);
                         if let Some(s) = run.save.mc1_mut() {
                             // `name` IS the player name here (the MC1
                             // record has one field for both), set by
@@ -4671,7 +4705,7 @@ impl App {
                 Mc1Action::LoadFrom(slot) => {
                     let id = self.campaign.as_ref().map(|c| c.id);
                     if let Some(id) = id {
-                        match CampaignRun::start(id, slot, false) {
+                        match CampaignRun::start(id, Some(slot), false) {
                             Ok(run) => {
                                 self.campaign = Some(run);
                                 self.ui_atlas = UiAtlas::None;
@@ -7082,8 +7116,10 @@ struct Args {
     /// saves under `saves/<game>/`. Overrides `--level`.
     campaign: Option<campaign::CampaignId>,
     /// `--slot N` (1-based): the campaign save slot (MC1/HW: 1-6,
-    /// MC2: 1-8). Stored 0-based. Default slot 1.
-    slot: usize,
+    /// MC2: 1-8), stored 0-based. `None` (the default, also `--slot
+    /// 0`) = the virtual slot 0: a fresh throwaway campaign, retail's
+    /// boot shape — nothing persists until the player saves in-game.
+    slot: Option<usize>,
     /// `--new-game`: start the campaign fresh even if the slot holds
     /// a save (the slot is only overwritten at the first completion).
     new_game: bool,
@@ -7190,7 +7226,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut level = PathBuf::from("baked/mc1/level-000.mgcl");
     let mut campaign_id = None;
-    let mut slot = 0usize;
+    let mut slot = None;
     let mut new_game = false;
     let mut screenshot = None;
     let mut camera = None;
@@ -7281,10 +7317,12 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--slot needs a number")?
                     .parse()
                     .map_err(|e| format!("--slot: {e}"))?;
-                if !(1..=8).contains(&n) {
-                    return Err("--slot must be 1-6 (mc1/mc1hw) or 1-8 (mc2)".into());
+                if n > 8 {
+                    return Err(
+                        "--slot must be 0 (fresh, unsaved), 1-6 (mc1/mc1hw) or 1-8 (mc2)".into(),
+                    );
                 }
-                slot = n - 1;
+                slot = n.checked_sub(1);
             }
             "--new-game" => new_game = true,
             "--tileset" => {
@@ -7505,6 +7543,8 @@ fn parse_args() -> Result<Args, String> {
             "--help" | "-h" => {
                 return Err(format!(
                     "usage: mgcarpet [--level <game:index> | <baked/.../level-NNN.mgcl>] \
+                     [--campaign mc1|mc1hw|mc2 [--slot N] [--new-game]] \
+                     (slot 0 = default: a fresh run, saved only from the in-game menu) \
                      [--tileset 0|1] [--config <path>] \
                      [--smooth-shading|--no-smooth-shading] \
                      [--map-triggers|--no-map-triggers] \
@@ -8747,10 +8787,12 @@ fn main() -> std::process::ExitCode {
             campaign::CampaignId::Mc2 => saves::MC2_SLOTS,
             _ => saves::MC1_SLOTS,
         };
-        if args.slot >= max_slots {
+        if let Some(s) = args.slot
+            && s >= max_slots
+        {
             eprintln!(
                 "error: --slot {} out of range for {} ({} slots)",
-                args.slot + 1,
+                s + 1,
                 id.tag(),
                 max_slots
             );
