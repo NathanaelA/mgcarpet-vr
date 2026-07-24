@@ -1563,6 +1563,13 @@ impl Gen {
     /// the shared `pack_scan`, so a lone militiaman falls in behind the
     /// nearest packless sibling (state 0x1B).
     fn militia_idle(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        // First statement of the retail handler (:22482): the walk-in
+        // flag is re-zeroed every idle tick, so +26 is only ever set
+        // during the one-tick hop from the house branch below into the
+        // silent-absorb death slot. Without this, the spawn stagger
+        // (+26 = slot % 100) survives into combat and mob_death's
+        // absorb gate swallows the corpse — no mana ball.
+        self.ent[i].f26 = 0;
         if self.ent[i].type86 != 0 {
             // Disarm: the unarmed sprite + hit-anything filter restore.
             self.set_sprite(i, 0);

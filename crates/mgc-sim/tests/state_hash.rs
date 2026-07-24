@@ -291,6 +291,17 @@ fn level_005_golden_state_hashes() {
     // splash, flash, tether and cloud ran one tick short. B-E move;
     // post-init and A hold (nothing has died yet at A).
     //
+    // Re-pinned for the militia idle +26 re-zero (sub_1B5D0 :22482):
+    // retail's FIRST statement in the m4 idle handler clears the
+    // walk-in flag every tick, so the silent-absorb death gate only
+    // ever sees +26 != 0 on the one-tick house hop. Our port kept the
+    // spawn stagger (+26 = slot % 100) alive into combat, so once
+    // mob_death's gate widened to m4 virtually every militia despawned
+    // silently — no corpse, no 500-mana ball. Level 005 holds no live
+    // m4 until D, so exactly D and E move — and OBSERVABLE holds,
+    // because no militia dies inside the window: the moved hashes are
+    // the re-zeroed +26 field itself, layout-only by construction.
+    //
     // Re-pinned for the m13/m14 feeder-wander transcription fixes
     // (sub_1F640 :25382-25438 / sub_1FAC0 :25558-25614): door radius
     // BEFORE fullness on the rooted 3-axis distance (the village
@@ -304,8 +315,8 @@ fn level_005_golden_state_hashes() {
         0x06e8a54a916839d7, // A: 32 idle ticks far afield
         0xbef57a871357f076, // B: crater trigger fired + 120 dig ticks
         0xd30acf219762c714, // C: ambush disposition fired
-        0xc3b5b4a6a0d23515, // D: 64 ticks of two-hand fireball combat
-        0x28473f328e596cb9, // E: 100 aftermath ticks
+        0xb6889c441c572844, // D: 64 ticks of two-hand fireball combat
+        0x35fa538fba677a83, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

@@ -5637,6 +5637,72 @@ mod tests {
         assert_eq!(g.ent[leader].tick70, 25, "the chosen leader stays idle");
     }
 
+    /// The militia death slot (sub_1BC10 :22729) gates on +26: nonzero
+    /// = the silent house-absorb walk-in, zero = the normal corpse path
+    /// and its mana ball (spawn +140 = life/2 = 500, sub_386DE). Retail
+    /// re-zeroes +26 as the FIRST statement of every idle tick
+    /// (sub_1B5D0 :22482), so the spawn stagger (+26 = slot % 100)
+    /// never reaches the gate. Our port had dropped that zero, so once
+    /// the absorb gate widened to m4 virtually every militiaman died
+    /// silently — no corpse, no mana ball ("archers stopped dropping").
+    #[test]
+    fn combat_killed_militia_corpses_and_drops_its_mana_ball() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let i = g.spawn_creature(4, 0x4000, 0x4000, 0).unwrap();
+        assert_eq!(g.ent[i].f140, 500, "militia carries life/2 = 500 mana");
+        // Force the trap regardless of which slot the fixture hands out.
+        g.ent[i].f26 = 37;
+        // One idle tick with nothing to fight: retail zeroes +26 here.
+        let ctx = ctx_at(0xC000, 0xC000, 0);
+        g.creature_tick(i, &ctx);
+        // Kill him: the inbox death routes idle to the death slot (28).
+        g.ent[i].tick70 = 28;
+        g.creature_tick(i, &ctx);
+        assert_eq!(
+            g.ent[i].tick70, 29,
+            "combat death takes the corpse path, not the silent absorb"
+        );
+        g.ent[i].f63 = 0; // on the corpse's 8-tick drop beat
+        g.creature_tick(i, &ctx);
+        let ball = (1..g.ent.len())
+            .find(|&b| g.ent[b].class64 == 10 && g.ent[b].model65 == 39)
+            .expect("the corpse dropped a mana ball");
+        assert_eq!(g.ent[ball].f140, 500, "the ball carries the 500 mana");
+    }
+
+    /// The counterpart the absorb gate exists for: a militiaman who
+    /// walked back into a house (+26 = 1, sub_1B5D0 :22561) reaches the
+    /// same death slot and despawns silently — no corpse, no ball.
+    #[test]
+    fn house_walkin_militia_still_absorbs_silently() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let i = g.spawn_creature(4, 0x4000, 0x4000, 0).unwrap();
+        g.ent[i].f26 = 1; // the house-branch walk-in mark
+        g.ent[i].tick70 = 28;
+        let ctx = ctx_at(0xC000, 0xC000, 0);
+        g.creature_tick(i, &ctx);
+        assert!(
+            g.ent[i].flags & 0x400 != 0,
+            "the walk-in despawns instead of corpsing"
+        );
+        assert!(
+            (1..g.ent.len()).all(|b| g.ent[b].class64 != 10 || g.ent[b].model65 != 39),
+            "no mana ball from an absorbed walk-in"
+        );
+    }
+
     /// The m15 castle guard's wizard-acquisition scan (sub_1FF60
     /// :25733-64): a rival-owned guard, awake, with the wizard in
     /// range+cone, promotes into the STATIONARY chase and stops (the
