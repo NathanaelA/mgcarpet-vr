@@ -50,10 +50,20 @@ SHA-256 hashes are committed as pins.
 2. Copy your installed GOG game directories into a `gamedata/` folder
    next to the binary — see [gamedata/README.md](gamedata/README.md)
    for the expected layout. Any subset works (MC1 only is fine).
-3. Run it:
+3. Run it. The easiest way — no command line needed — is to
+   double-click the campaign launcher for the game you want to play:
+
+   * `magic-carpet-1` — the Magic Carpet campaign
+   * `magic-carpet-hidden-worlds` — the Hidden Worlds campaign
+   * `magic-carpet-2` — the Magic Carpet 2 campaign
+
+   Each one simply starts `mgcarpet --campaign <game>` from its own
+   folder: level order, exits and retail-format saves included.
+
+   The `mgcarpet` binary itself does the same and more, from a shell:
 
    ```sh
-   ./mgcarpet                 # MC1 campaign level 1
+   ./mgcarpet                 # single level mc1:0 (dev default)
 
    ./mgcarpet --level mc1:9   # a specific level (mc1 | mc1hw | mc2)
 

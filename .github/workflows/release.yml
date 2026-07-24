@@ -46,10 +46,17 @@ jobs:
           name="mgcarpet-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           bin="target/${{ matrix.target }}/release"
+          # mgcarpet = the game; magic-carpet-* = the double-clickable
+          # campaign launchers (each just starts mgcarpet --campaign
+          # from its own folder — no command line needed).
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp "$bin/mgcarpet.exe" "$bin/mgc-import.exe" "dist/$name/"
+            cp "$bin/mgcarpet.exe" "$bin/mgc-import.exe" \
+               "$bin/magic-carpet-1.exe" "$bin/magic-carpet-hidden-worlds.exe" \
+               "$bin/magic-carpet-2.exe" "dist/$name/"
           else
-            cp "$bin/mgcarpet" "$bin/mgc-import" "dist/$name/"
+            cp "$bin/mgcarpet" "$bin/mgc-import" \
+               "$bin/magic-carpet-1" "$bin/magic-carpet-hidden-worlds" \
+               "$bin/magic-carpet-2" "dist/$name/"
           fi
           cp README.md LICENSE "dist/$name/"
           # The GM music soundfont + its license, committed under
