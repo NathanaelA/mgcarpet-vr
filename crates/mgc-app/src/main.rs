@@ -4919,6 +4919,55 @@ impl App {
             && !(self.book_open() && self.selector.map_book)
     }
 
+    /// Whether the OS pointer is PINNED by winit on Windows: its
+    /// Windows backend clips BOTH `Locked` and `Confined`-with-
+    /// hidden-cursor to a 1×1 rect (a deliberate keep-off-the-taskbar
+    /// workaround, window_state.rs `refresh_os_cursor`), so absolute
+    /// position freezes — only raw deltas flow. Those combos are
+    /// exactly our software-cursor surfaces: the flight grab, the
+    /// map screen (confined+hidden in ANY window mode) and every
+    /// fullscreen hidden-cursor state. There, `self.cursor` is
+    /// advanced from raw deltas and absolute reports are ignored.
+    /// X11 confinement keeps true absolute motion (this predicate is
+    /// how "works on Linux" was "utterly broken on Windows");
+    /// unfocused windows are never clipped, hence the focus term.
+    fn windows_pinned_pointer(&self) -> bool {
+        cfg!(target_os = "windows")
+            && self.window.as_ref().is_some_and(|w| {
+                w.has_focus()
+                    && (self.grabbed || self.screen == Screen::Map || w.fullscreen().is_some())
+            })
+    }
+
+    /// A live slider drag in the options menu tracks the pointer
+    /// (apply live; persist on release). Fed by `CursorMoved` where
+    /// the OS reports absolute motion, and by the raw-delta
+    /// integration where Windows has the pointer pinned.
+    fn pointer_drag_follow(&mut self) {
+        if let Some(st) = &self.menu
+            && let Some(i) = st.drag
+        {
+            let size = self.view_size();
+            if let Some(assets) = ui_assets!(self) {
+                let changed = menu::pointer_apply(
+                    assets,
+                    &mut self.cfg,
+                    &self.specs,
+                    self.menu.as_mut().unwrap(),
+                    size.0,
+                    size.1,
+                    self.cursor,
+                    i,
+                    false,
+                );
+                if changed {
+                    let path = self.specs[i].cfg_path;
+                    self.apply_option(path);
+                }
+            }
+        }
+    }
+
     /// Re-assert the pointer mode the current screen wants — the
     /// fullscreen transition is allowed to drop grabs/confinement on
     /// several platforms, so every toggle re-applies the active state
@@ -5429,6 +5478,15 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // Windows PINS the OS pointer to a 1×1 clip in every
+                // hidden-cursor confined/locked state (winit's
+                // taskbar workaround), so the only absolute reports
+                // here are the pin point itself — accepting them
+                // would stomp the delta-integrated software cursor.
+                // The deltas own the cursor in those states.
+                if self.windows_pinned_pointer() {
+                    return;
+                }
                 self.cursor = (position.x as f32, position.y as f32);
                 // The world-map screen owns a confined pointer
                 // (retail captures the mouse to the 640×480 screen;
@@ -5463,30 +5521,7 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
-                // A live slider drag in the options menu tracks the
-                // pointer (apply live; persist on release).
-                if let Some(st) = &self.menu
-                    && let Some(i) = st.drag
-                {
-                    let size = self.view_size();
-                    if let Some(assets) = ui_assets!(self) {
-                        let changed = menu::pointer_apply(
-                            assets,
-                            &mut self.cfg,
-                            &self.specs,
-                            self.menu.as_mut().unwrap(),
-                            size.0,
-                            size.1,
-                            self.cursor,
-                            i,
-                            false,
-                        );
-                        if changed {
-                            let path = self.specs[i].cfg_path;
-                            self.apply_option(path);
-                        }
-                    }
-                }
+                self.pointer_drag_follow();
             }
             WindowEvent::Focused(false) => {
                 let pending = self.boot_grab;
@@ -6982,6 +7017,20 @@ impl ApplicationHandler for App {
 
     fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         if !self.grabbed {
+            // Windows pinned-pointer states outside the flight grab
+            // (map screen, fullscreen menus/dialogs): the OS pointer
+            // is nailed to a 1×1 clip, so the software cursor is OURS
+            // to move — integrate the raw deltas, clamped to the
+            // window like the map's absolute clamp. Elsewhere the
+            // ungrabbed cursor is CursorMoved-driven; return.
+            if self.windows_pinned_pointer()
+                && let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
+            {
+                let size = self.view_size();
+                self.cursor.0 = (self.cursor.0 + dx as f32).clamp(0.0, size.0 - 1.0);
+                self.cursor.1 = (self.cursor.1 + dy as f32).clamp(0.0, size.1 - 1.0);
+                self.pointer_drag_follow();
+            }
             return;
         }
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
