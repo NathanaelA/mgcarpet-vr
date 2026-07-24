@@ -10467,6 +10467,107 @@ mod tests {
         assert_eq!(count(&w, 3, 2), 0, "the entity is gone");
     }
 
+    /// Total castle destruction RELEASES the balloons (sub_46D20
+    /// :55949-75 writes the balloon's state word to 0 and keeps the
+    /// entity flying) — it must NOT despawn them: a despawn erases
+    /// any in-flight cargo from the per-tick census, shrinking the
+    /// owner's mana total on every destroy/rebuild cycle (the
+    /// reported "disappearing mana" leak).
+    #[test]
+    fn castle_total_death_releases_balloons_with_cargo() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        // The spawned castle settles ESTABLISHED at level 1, whose
+        // fleet quota is one balloon (FLEET[1]).
+        for _ in 0..80 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let b = (1..w.g.ent.len())
+            .find(|&j| {
+                let e = &w.g.ent[j];
+                e.class64 == 3 && e.model65 == 3 && e.flags & 0x400 == 0
+            })
+            .expect("the level-1 fleet spawned a balloon");
+        // Load the balloon with cargo and park it MID-FLIGHT, well
+        // away from the castle, so the cargo is airborne (not yet
+        // deposited) when the castle dies.
+        w.g.move_relink(b, 100 << 8, 100 << 8, 4000);
+        w.g.ent[b].f140 = 7_000;
+        w.g.ent[b].f146 = 0;
+        // Demolish: level 1 → total destruction, castle-less.
+        w.tick(
+            pose,
+            PlayerCommand {
+                demolish: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(w.loadout().castle.is_none(), "the demolish razed it");
+        assert_eq!(
+            w.g.ent[b].flags & 0x400,
+            0,
+            "the balloon was RELEASED, not despawned"
+        );
+        assert_eq!(w.g.ent[b].f140, 7_000, "the cargo rides on");
+        assert!(
+            w.loadout().mana_max >= 7_000 + WIZARD_BASE_MANA,
+            "the census keeps the cargo: no destroy/rebuild leak"
+        );
+    }
+
+    /// The dispatcher's over-quota cull (:56399-411): when the fleet
+    /// quota shrinks below the live balloon count (downgrade, or a
+    /// rebuild at a lower level re-adopting released balloons), the
+    /// excess balloons are FREED — cargo first spilled as an owned
+    /// (10,39) ball (sub_27690), so the census total is conserved.
+    #[test]
+    fn balloon_cull_over_quota_spills_the_cargo() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        // Settle at level 1 (fleet quota 1)...
+        for _ in 0..80 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 3, 3), 1, "the quota-1 fleet");
+        // ...then forge a SECOND owned balloon carrying cargo (the
+        // released-orphan shape a rebuild re-adopts) on a fresh slot.
+        let b = w.g.spawn_mana_ball(100 << 8, 100 << 8, 4000).unwrap();
+        {
+            let e = &mut w.g.ent[b];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.id24 = PLAYER_TARGET;
+            e.f144 = PLAYER_TARGET;
+            e.f140 = 5_000;
+            e.f146 = 0;
+        }
+        let balls_before = count(&w, 10, 39);
+        // Two ticks cover a full every-other-tick dispatcher pass.
+        for _ in 0..2 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 3, 3), 1, "the excess balloon was culled");
+        assert!(
+            count(&w, 10, 39) > balls_before,
+            "the culled cargo spilled as a ball"
+        );
+        assert!(
+            w.loadout().mana_max >= 5_000 + WIZARD_BASE_MANA,
+            "the census keeps the culled cargo"
+        );
+    }
+
     /// A lethal (here the demolish key) landing MID-TRANSFORMATION must
     /// defer until the castle is established — the original's standing
     /// tick is the only damage processor. Processing it under a live

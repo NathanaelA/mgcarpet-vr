@@ -3261,6 +3261,21 @@ impl Gen {
             };
             balloons.push(b);
         }
+        // The over-quota cull (:56399-411, the dispatcher's slot-
+        // cleanup tail): a shrunken fleet quota (downgrade — including
+        // to the level-0 bare flag, quota 0) FREES the excess
+        // balloons, cargo first spilled as an owned ball (sub_27690,
+        // which spawns nothing for an empty balloon — only loaded
+        // culls leave a ball behind). Retail walks its 3-slot
+        // register; our scan-order tail stands in (the same
+        // approximation as the retarget re-pick above). Only TOTAL
+        // castle death orphans the fleet alive (sub_47A70's !level
+        // arm frees the castle without another dispatcher pass).
+        while balloons.len() > bq {
+            let b = balloons.pop().expect("len > bq >= 0");
+            self.corpse_drop(b);
+            self.ent[b].flags |= 0x400;
+        }
         // Guard respawn (:56412-47): throttled by the castle's +46
         // cooldown (ours f46) — at most ONE guard per dispatch pass,
         // 16 passes between spawns — placed at (x+128, y+640) on the
@@ -3690,8 +3705,15 @@ impl Gen {
         self.ent[i].f26 = lvl;
         if lvl <= 0 {
             // Total destruction (:56531-37): release the balloons,
-            // scatter the whole remaining bank (the level-0 ejector
-            // rule spills ALL stored, :56172), free the castle.
+            // clear the owner's castle slot, free the castle. The
+            // full-bank scatter below is a DELIBERATE deviation
+            // (docs/DEVIATIONS.md): retail's !level arm frees the
+            // castle without ever calling the ejector, so the
+            // residual bank (whatever the level-1 downgrade eject
+            // left, ≤ ~90% of cap) vanishes with the entity — a
+            // shipped-engine mana leak. We route it through the
+            // ejector's own level-0 all-stored rule (:56172) instead,
+            // conserving the census total.
             self.ent[i].f136 = 0;
             self.castle_eject(i);
             for j in 1..self.ent.len() {
@@ -3700,7 +3722,16 @@ impl Gen {
                     && self.ent[j].id24 == own
                     && self.ent[j].flags & 0x400 == 0
                 {
-                    self.ent[j].flags |= 0x400; // release ≈ despawn
+                    // RELEASE, not despawn (sub_46D20(a1, 0) :55949-75
+                    // writes the balloon's state word +48 to 0 and
+                    // leaves it flying). The balloon idles in place
+                    // with its CARGO INTACT — the per-tick census
+                    // keeps counting the carried f140, and a rebuilt
+                    // castle's dispatcher re-adopts owned (3,3) slots
+                    // wholesale. Despawning here (the old arm) erased
+                    // any in-flight cargo from the owner's mana total:
+                    // the destroy/rebuild mana leak.
+                    self.ent[j].f146 = 0; // drop the work target → idle
                 }
             }
             self.ent[i].flags |= 0x400;

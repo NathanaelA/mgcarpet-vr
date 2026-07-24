@@ -1089,6 +1089,152 @@ pub fn book_quads(
     (quads, hovered)
 }
 
+/// One living wizard's row on the map-screen mana/kills scoreboard
+/// ([`roster_quads`]): the roster name, the census mana total
+/// (entity +136/0x8C — base + Σ owned entity mana, NOT the spendable
+/// +140/0x90), the kill row, and the slot's `(box, text)` colors
+/// (see `entities::roster_team_colors`).
+pub struct RosterEntry {
+    pub name: String,
+    pub mana: u32,
+    pub kills: [u16; 8],
+    pub box_c: [f32; 4],
+    pub text_c: [f32; 4],
+}
+
+/// The map screen's wizard scoreboard — one screen shared by both
+/// games: MC1's bottom-strip hover roster (`sub_22880` :27009) and
+/// MC2's ALT "sorcerer scores" (`DrawSorcererScores_2D1D0` EF:22207)
+/// draw the same centered grid from the same tile sprites: head tile
+/// [85] (name at +8,+6; total mana `%d` at +8,+20) plus an 8-wide
+/// kill-matrix of cell tiles [86] (`%03d` at +8,+10, the Type_160+30 /
+/// word_0x26_38 kill tallies). Rows exist only for LIVING wizards
+/// (slot flag +6 == 1); layout centers by the living count.
+///
+/// Both games FILL the tile interiors (inset 4, size − 8) with the
+/// wizard's box color, opaque: MC1 via sub_24C20 (:27070-89), MC2 via
+/// `DrawLine_2BC80` — a MISNAMED filled-rect blitter (Basic.cpp:1865
+/// `memset` per row), not a border (playtest-verified against retail
+/// screenshots 2026-07-24). The SELF-cell is a black fill in both
+/// (MC1 `byte_AD167[1]` ink :27109; MC2 clrd `[0]` EF:22333), no
+/// number.
+///
+/// Per-game flavor kept faithful:
+///  - Absent/dead columns: MC1 draws NOTHING but still ADVANCES the
+///    cursor (:27100-24 — only the self-cell arm draws inside the
+///    skip branch; v9 += cellW runs regardless), leaving a GAP at a
+///    dead wizard's column. MC2 compacts — `blackBarX` advances only
+///    inside the alive branch (EF:22318-56).
+///  - Centering quirks are retail's own: MC1 widths count the living
+///    columns + the head tile (:27042-47) though up to 8 column
+///    positions span; MC2 counts living columns + ONE CELL width for
+///    the head (EF:22264) though the head tile is wider.
+///
+/// `rows[slot] = None` = slot absent or dead (retail's +6 != 1).
+pub fn roster_quads(
+    assets: &UiAssets,
+    rows: &[Option<RosterEntry>; 8],
+    mc2: bool,
+    w: f32,
+    h: f32,
+) -> Vec<UiQuad> {
+    let s = HudFrame::new(w, h).s;
+    let (pw, ph) = assets.sprite_dims(SPR_ROSTER_HEAD).unwrap_or((104.0, 38.0));
+    let (cw, ch) = assets.sprite_dims(SPR_ROSTER_CELL).unwrap_or((36.0, 38.0));
+    let alive = rows.iter().flatten().count() as f32;
+    let mut quads = Vec::new();
+    if alive == 0.0 {
+        return quads;
+    }
+    // Retail centers in the native 640×480(400) field; we center on
+    // the live screen (same thing at 4:3).
+    let head_w_for_centering = if mc2 { cw } else { pw };
+    let x0 = (w - (alive * cw + head_w_for_centering) * s) / 2.0;
+    let mut y = (h - alive * ph * s) / 2.0;
+    // A tile or its fallback: the sprite blit, else a plain dark slab
+    // (the tiles exist in both shipped atlases; belt only).
+    let tile = |quads: &mut Vec<UiQuad>, id: usize, rect: [f32; 4]| {
+        push_opt(
+            quads,
+            assets
+                .sprite_quad_rect_tint(id, rect, WHITE)
+                .or(Some(solid(rect, [0.10, 0.09, 0.08, 0.92]))),
+        );
+    };
+    // The opaque interior fill (inset 4, size − 8) — MC1 sub_24C20 /
+    // MC2 DrawLine_2BC80, both raw memset fills of the palette color.
+    let fill = |quads: &mut Vec<UiQuad>, r: [f32; 4], c: [f32; 4]| {
+        quads.push(solid(
+            [
+                r[0] + 4.0 * s,
+                r[1] + 4.0 * s,
+                r[2] - 8.0 * s,
+                r[3] - 8.0 * s,
+            ],
+            c,
+        ));
+    };
+    // The self-cell ink: MC1 byte_AD167[1] / MC2 clrd[0], both black.
+    const SELF_INK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    for (i, row) in rows.iter().enumerate() {
+        let Some(r) = row else { continue };
+        let head = [x0, y, pw * s, ph * s];
+        tile(&mut quads, SPR_ROSTER_HEAD, head);
+        fill(&mut quads, head, r.box_c);
+        quads.extend(assets.text_quads(&r.name, x0 + 8.0 * s, y + 6.0 * s, r.text_c, s));
+        quads.extend(assets.text_quads(
+            &format!("{}", r.mana),
+            x0 + 8.0 * s,
+            y + 20.0 * s,
+            r.text_c,
+            s,
+        ));
+        let mut x = x0 + pw * s;
+        for (j, col) in rows.iter().enumerate() {
+            match col {
+                // Absent/dead column: draws nothing, and the columns
+                // COMPACT in sync with the row removal (player-ruled,
+                // deliberate — docs/DEVIATIONS.md): MC2 retail
+                // compacts (EF:22318-56, blackBarX advances only in
+                // the alive branch); MC1's decompiled loop advances
+                // unconditionally (:27100-24), which would leave a
+                // one-column hole at an eliminated wizard — unverified
+                // against retail and reads as a bug, so MC1 follows
+                // the MC2 law.
+                None => continue,
+                Some(_) if j == i => {
+                    // The self-cell: a black-filled box, no number.
+                    let cell = [x, y, cw * s, ch * s];
+                    tile(&mut quads, SPR_ROSTER_CELL, cell);
+                    fill(&mut quads, cell, SELF_INK);
+                }
+                Some(c) => {
+                    let cell = [x, y, cw * s, ch * s];
+                    tile(&mut quads, SPR_ROSTER_CELL, cell);
+                    fill(&mut quads, cell, c.box_c);
+                    quads.extend(assets.text_quads(
+                        &format!("{:03}", r.kills[j]),
+                        x + 8.0 * s,
+                        y + 10.0 * s,
+                        c.text_c,
+                        s,
+                    ));
+                }
+            }
+            x += cw * s;
+        }
+        y += ph * s;
+    }
+    quads
+}
+
+/// The map-roster tiles, same index in BOTH shipped banks (MC1
+/// begSprTab :27083/:27130; MC2 MSPRD00 `SPELL_TILE`/`SPELL_TILE_MINI`,
+/// GameBitmapIndexes.h:21-22): [85] = the 104×38 head tile (portrait/
+/// name + mana), [86] = the 36×38 kill-matrix cell.
+const SPR_ROSTER_HEAD: usize = 85;
+const SPR_ROSTER_CELL: usize = 86;
+
 // Panel sprite ids (remc1 begSprTab). The panel strip is laid out at
 // the original's 640-wide coordinates, scaled to the live resolution.
 const SPR_SLOT_IDLE: usize = 1; // equipped-spell frame, idle

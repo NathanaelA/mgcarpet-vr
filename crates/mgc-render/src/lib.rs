@@ -1038,7 +1038,9 @@ const BOOK_GAP: f32 = 2.0;
 /// it is derived per frame as "everything left of the spellbook
 /// column, less the gap", which at 4:3 comes out to the authored
 /// 384 − BOOK_GAP and at any other aspect is the whole remainder).
-const BOOK_MAP_H: f32 = 416.0;
+/// Public: the app's map-screen hover tests (the mana-roster strip)
+/// share this bottom edge.
+pub const BOOK_MAP_H: f32 = 416.0;
 /// The spellbook grid origin (native px): 24 spells in 4 cols × 6 rows
 /// of the slot-slab [3] = 64×37, tightly packed from (384,194). FIXED —
 /// the gap is taken from the map/viewport, not here. The grid is drawn
@@ -1068,7 +1070,7 @@ pub enum MapScreenLayout {
 
 /// MC2 map screen: the live-view/minimap bottom edge (native px;
 /// remc2 `locViewportHeight/locMinimapHeight = 400`, EF:21804).
-const MC2_MAP_VIEW_H: f32 = 400.0;
+pub const MC2_MAP_VIEW_H: f32 = 400.0;
 /// MC2 map-screen zoom (EF:21840-49): retail `DrawMinimap_63600`
 /// scaling = 204 world-units/px over the 400-native-px pane height →
 /// 400·204/256 = 318.75 tiles vertically — the whole 256-tile world
@@ -4373,12 +4375,24 @@ impl Renderer {
                 self.ui_capacity = need.next_power_of_two();
             }
             let buf = self.ui_buf.as_ref().unwrap();
-            if !ui_bytes.is_empty() {
-                self.queue.write_buffer(buf, 0, ui_bytes);
+            // Instance order = z-order (later draws on top). In FLIGHT
+            // the stamps go last so the minimap dots read over the
+            // radar frame art; on the MAP SCREEN the app UI goes last
+            // so its overlays (the mana roster, the book) draw over
+            // the projected castle/balloon stamps — retail's roster is
+            // painted after the map's wizard marks (sub_22880 runs
+            // after sub_48710 in the case-4 view; DrawSorcererScores
+            // after DrawMinimapMarks, EF:21942/21952).
+            let (first, second) = if self.map_view {
+                (stamp_bytes, ui_bytes)
+            } else {
+                (ui_bytes, stamp_bytes)
+            };
+            if !first.is_empty() {
+                self.queue.write_buffer(buf, 0, first);
             }
-            if !stamp_bytes.is_empty() {
-                self.queue
-                    .write_buffer(buf, ui_bytes.len() as u64, stamp_bytes);
+            if !second.is_empty() {
+                self.queue.write_buffer(buf, first.len() as u64, second);
             }
         }
 

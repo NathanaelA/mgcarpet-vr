@@ -1720,6 +1720,53 @@ fn vga(r: u8, g: u8, b: u8) -> [u8; 3] {
     ]
 }
 
+/// Per-slot map-roster color pair `(box, text)` as RGBA, resolved
+/// through the level palette. MC1: the `byte_99B58` team pairs (even =
+/// box tint, odd = text — sub_22880 :27087-88). MC2: the map-env
+/// `playersColors_E88E0x` table, `[0]` = border, `[1]` = text
+/// (DrawSorcererScores_2D1D0 EF:22277-78); night/cave use the night
+/// table with the cave's wizard-0 override, same as the dot pass.
+pub fn roster_team_colors(
+    game: GameId,
+    env: Mc2MapEnv,
+    palette: &[[u8; 4]; 256],
+) -> [([f32; 4], [f32; 4]); 8] {
+    // Solid UI tints are written RAW onto the sRGB swapchain (the
+    // shader returns the tint, the surface encodes) — so a palette
+    // byte fed straight through gets gamma-encoded TWICE and washes
+    // out lighter than the retail framebuffer. Decode sRGB→linear
+    // here so the display round-trips back to the palette color.
+    // (Atlas SPRITES are unaffected: their textures are sRGB-typed
+    // and decode on sample.)
+    let lin = |b: u8| {
+        let c = b as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let rgba = |idx: u8| {
+        let p = palette[idx as usize];
+        [lin(p[0]), lin(p[1]), lin(p[2]), 1.0]
+    };
+    let tab = if game == GameId::Mc2 {
+        match env {
+            Mc2MapEnv::Day => MC2_TEAM_DAY,
+            Mc2MapEnv::Night | Mc2MapEnv::Cave => {
+                let mut t = MC2_TEAM_NIGHT;
+                if env == Mc2MapEnv::Cave {
+                    t[0] = (0xE0, 0x58);
+                }
+                t
+            }
+        }
+    } else {
+        TEAM_COLORS
+    };
+    tab.map(|(a, b)| (rgba(a), rgba(b)))
+}
+
 /// Nearest palette entry by squared RGB distance (the engine's
 /// `sub_5CC70_5D180` palette-match used to build its RGB LUT).
 fn nearest_palette_index(palette: &[[u8; 4]; 256], rgb: [u8; 3]) -> u8 {

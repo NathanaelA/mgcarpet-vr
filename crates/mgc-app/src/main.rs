@@ -6014,6 +6014,79 @@ impl ApplicationHandler for App {
                             self.selector_hover = hover;
                         }
                     }
+                    // The map-screen wizard scoreboard: name + census
+                    // mana total + the kill matrix, one screen shared
+                    // by both games (ui::roster_quads). Retail
+                    // triggers: MC1 = the cursor over the blank strip
+                    // below the map pane (`mouse.y >= 382`, :26838-39);
+                    // MC2 = held ALT (PI:951 → MenuState 7 →
+                    // DrawSorcererScores_2D1D0). DELIBERATE (player
+                    // ruling): BOTH triggers work in BOTH games —
+                    // neither input means anything else on the map
+                    // screen. Doubles as the mana-conservation
+                    // instrument (the census total is base + Σ owned
+                    // entity mana, the leak-visible quantity).
+                    if self.book_open() {
+                        let strip_top =
+                            ui::HudFrame::new(size.0, size.1).by(if self.selector.map_book {
+                                mgc_render::BOOK_MAP_H
+                            } else {
+                                mgc_render::MC2_MAP_VIEW_H
+                            });
+                        if self.alt_held || self.cursor.1 >= strip_top {
+                            let colors = entities::roster_team_colors(
+                                sess.level.game,
+                                sess.level.mc2_env,
+                                &sess.level.palette_rgba,
+                            );
+                            let mut rows: [Option<ui::RosterEntry>; 8] = Default::default();
+                            // Slot 0 = the human. Retail's in-play flag
+                            // (+6) drops at the death event, so the row
+                            // exists only while Alive. Name: the
+                            // campaign's entered name (retail overrides
+                            // the slot-0 table name with the player
+                            // string), else the table default.
+                            if vitals.state == mgc_sim::engine::world::LifeState::Alive {
+                                let name = self
+                                    .campaign
+                                    .as_ref()
+                                    .and_then(|c| {
+                                        c.save
+                                            .mc1()
+                                            .map(|s| s.name.clone())
+                                            .or_else(|| c.save.mc2().map(|s| s.player_name.clone()))
+                                            .filter(|n| !n.trim().is_empty())
+                                    })
+                                    .unwrap_or_else(|| {
+                                        if is_mc2 {
+                                            mgc_sim::mc2::rivals::MC2_RIVAL_NAMES[0].into()
+                                        } else {
+                                            mgc_sim::mc1::rivals::RIVAL_NAMES[0].into()
+                                        }
+                                    });
+                                rows[0] = Some(ui::RosterEntry {
+                                    name,
+                                    mana: loadout.mana_max,
+                                    kills: w.player_kill_row(),
+                                    box_c: colors[0].0,
+                                    text_c: colors[0].1,
+                                });
+                            }
+                            for r in w.rival_views() {
+                                let slot = r.slot as usize;
+                                if r.alive && (1..8).contains(&slot) {
+                                    rows[slot] = Some(ui::RosterEntry {
+                                        name: r.name.to_string(),
+                                        mana: r.mana_max,
+                                        kills: r.kills,
+                                        box_c: colors[slot].0,
+                                        text_c: colors[slot].1,
+                                    });
+                                }
+                            }
+                            quads.extend(ui::roster_quads(assets, &rows, is_mc2, size.0, size.1));
+                        }
+                    }
                     if !self.book_open() {
                         // The paralyze WEB overlay (remc2 EF:21668-
                         // 710): the HWEB bank tiled over the view
