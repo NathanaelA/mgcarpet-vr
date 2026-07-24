@@ -1,0 +1,12 @@
+# Cross-compilation configuration for Meta Quest 3 (aarch64-linux-android).
+#
+# Usage:
+#   cargo ndk -t arm64-v8a build -p mgc-vr          (preferred: cargo-ndk sets the linker)
+#   cargo build --target aarch64-linux-android -p mgc-vr   (direct, uses linker below)
+#
+# Install the toolchain once:
+#   rustup target add aarch64-linux-android
+#   cargo install cargo-ndk
+
+[target.aarch64-linux-android]
+linker = "/home/nathanaela/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android32-clang"

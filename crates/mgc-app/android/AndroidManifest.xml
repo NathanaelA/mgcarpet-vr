@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.mgcarpet.vr"
+          android:versionCode="1"
+          android:versionName="0.1.0">
+
+    <!--
+      minSdkVersion 26: AAudio (cpal's Android backend) needs API 26+.
+      targetSdkVersion 29: deliberately BELOW the scoped-storage cutover
+      (30), so android.permission.READ_EXTERNAL_STORAGE grants full
+      legacy /sdcard/ access at install time with no runtime permission
+      prompt — appropriate for a sideloaded homebrew APK (this would not
+      be accepted as-is for a Play Store submission, which requires
+      targeting a much newer API; not a concern for adb-installed VR
+      homebrew).
+    -->
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="29"/>
+
+    <!-- VR headtracking required; Quest 3 always provides it -->
+    <uses-feature
+        android:name="android.hardware.vr.headtracking"
+        android:required="true"
+        android:version="1"/>
+
+    <!-- Passthrough is optional — useful for future mixed-reality overlays -->
+    <uses-feature
+        android:name="com.oculus.feature.PASSTHROUGH"
+        android:required="false"/>
+
+    <!-- /sdcard/mgcarpet/baked/ game data — legacy full access under targetSdkVersion 29 (see above) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+    <application
+        android:label="Magic Carpet VR"
+        android:requestLegacyExternalStorage="true"
+        android:hasCode="false">
+
+        <!--
+          NativeActivity: the OS calls into the .so produced by mgc-vr.
+          lib_name must match the Cargo package name (hyphens → underscores).
+        -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+            android:exported="true"
+            android:resizeableActivity="false"
+            android:screenOrientation="landscape">
+
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="mgc_app"/>
+
+            <!-- Main launcher + VR category: Quest OS launches this as a VR app -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+                <category android:name="com.oculus.intent.category.VR"/>
+            </intent-filter>
+
+            <!-- Tell the Meta runtime this is a VR-only application -->
+            <meta-data
+                android:name="com.oculus.intent.category.VR"
+                android:value="vr_only"/>
+
+        </activity>
+    </application>
+</manifest>
