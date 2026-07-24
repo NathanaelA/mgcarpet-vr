@@ -25,10 +25,17 @@ the trigger and small dressing details differ.
   Gameplay outranks; see the CONFLICTED note in
   mc2-walker-wander-ai.md. Retail MC1's map, by contrast, SUSPENDS
   flight input and turns the pointer into the ball+arrow cursor for
-  book spell-selection. Our port suspends stick input on the map in
-  both games (MC1-faithful); OPEN DESIGN OPTION (player, undecided):
-  the MC2-selector-in-MC1 configuration could adopt MC2's
-  keep-flying map behaviour.
+  book spell-selection. PORT (player-ruled 2026-07-24): the map
+  suspends movement input iff the BOOK is on it (`tick_input`,
+  `book_open && selector.map_book`) — MC2 keep-flies (retail), MC1
+  default suspends (retail), and an MC1 run with the selector in the
+  MC2 position EXCLUSIVELY adopts the keep-flying map wholesale. The
+  bookless map keeps the pointer GRABBED and hidden (round-2 ruling:
+  the freed pointer both showed the stock OS cursor and killed
+  classic-model steering, whose virtual stick is grab-gated) —
+  mouse-look, fire and quick-equip stay live under it; the roster
+  comes up on ALT (hover needs a live pointer and is gated on
+  !grabbed), the CTRL pane frees the cursor only while held.
 - **PORT** (player ruling 2026-07-24): both triggers work in BOTH games
   (hover strip = below the map pane bottom, `BOOK_MAP_H` 416 / MC2 400;
   ALT = the existing `alt_held` latch). Deliberate unification —

@@ -95,6 +95,13 @@ pub struct SpriteIndex {
     /// source entries are kept as frame-less placeholders so ids
     /// stay aligned).
     pub sprites: Vec<SpriteEntry>,
+    /// UI banks only: where the appended retail `DATA/POINTERS` bank
+    /// begins in `sprites` (its entries follow at `pointer_base + k`,
+    /// k = the retail bank index — MC1 ball = 1, MC2 day/night/cave =
+    /// 1/9/10). 0 = no pointer bank (an older bake, or a non-UI
+    /// atlas).
+    #[serde(default)]
+    pub pointer_base: u32,
 }
 
 /// One logical sprite: all frames share one size; frame 0 is the base

@@ -2347,7 +2347,12 @@ impl App {
                 // In-level: unpause re-locks the pointer if flight
                 // held it when the menu opened.
                 Screen::Level => {
-                    if closed && self.menu_grab_restore && !self.book_open() {
+                    // Re-lock unless the BOOK map owns the cursor
+                    // (the bookless map flies grabbed).
+                    if closed
+                        && self.menu_grab_restore
+                        && (!self.book_open() || !self.selector.map_book)
+                    {
                         self.set_grab(true);
                     }
                 }
@@ -3229,11 +3234,22 @@ impl App {
         let k = &self.keys;
         // Keyboard turn rate: radians per tick (enhanced model only).
         let key_turn = 2.2 * TICK_DT;
-        // The abandon-confirm dialog owns input exactly like the map/
-        // book modes (retail replaces the movement read with the
-        // OkCancel event read, PlayerInput.cpp:2356 — steering decays,
-        // speed persists, the world keeps running).
-        let book = self.book_open() || self.exit_confirm;
+        // Whether the fullscreen map suspends movement input follows
+        // the SELECTOR LAYOUT, per game law (player ruling
+        // 2026-07-24): retail MC1's map replaces flight input with
+        // the ball+arrow cursor for BOOK spell-picking, so a map
+        // carrying the book (`map_book`) suspends; retail MC2's map
+        // keeps NORMAL CONTROLS live — you fly HUD-less (keyboard
+        // only here: mouse-look is grab-gated and the map frees the
+        // pointer for the CTRL pane/roster). An MC1 run with the
+        // selector in the MC2 position EXCLUSIVELY (no book on the
+        // map) adopts the MC2 behavior wholesale.
+        //
+        // The abandon-confirm dialog always owns input (retail
+        // replaces the movement read with the OkCancel event read,
+        // PlayerInput.cpp:2356 — steering decays, speed persists,
+        // the world keeps running).
+        let book = (self.book_open() && self.selector.map_book) || self.exit_confirm;
         let mc1 = self.cfg.controls.models.thrust == config::ThrustModel::Classic;
         // Explicit float up/down is the enhanced-altitude tier; the
         // classic altitude model has no vertical control at all.
@@ -4772,16 +4788,26 @@ impl App {
         let s = ui::HudFrame::new(size.width as f32, size.height as f32)
             .s
             .max(1.0);
-        // In-level MC1 draws the RETAIL pointer (POINTERS[0], baked
-        // at [87] — the level atlas is bound on this path); MC2's
-        // retail cursor is a raw bitmap blob, not a bank sprite, so
-        // the quad arrow stands in there (and on an older MC1 bake).
-        if self.screen == Screen::Level && !self.is_mc2() {
+        // In-level, BOTH games draw their RETAIL pointer from the
+        // POINTERS bank at the level atlas tail (bound on this
+        // path): MC1 the golden arrow+mana-ball, MC2 the grey one —
+        // day/night/cave variants per map type. The quad arrow
+        // stands in only on an older bake.
+        if self.screen == Screen::Level {
+            let entry = if self.is_mc2() {
+                match self.session.as_deref().map(|sess| sess.level.mc2_env) {
+                    Some(entities::Mc2MapEnv::Night) => ui::POINTER_ENTRY_NIGHT,
+                    Some(entities::Mc2MapEnv::Cave) => ui::POINTER_ENTRY_CAVE,
+                    _ => ui::POINTER_ENTRY_DEFAULT,
+                }
+            } else {
+                ui::POINTER_ENTRY_DEFAULT
+            };
             let retail = self
                 .session
                 .as_deref()
                 .and_then(|sess| sess.level.ui.as_ref())
-                .and_then(|a| a.pointer_quad(self.cursor.0, self.cursor.1, s));
+                .and_then(|a| a.pointer_quad(self.cursor.0, self.cursor.1, s, entry));
             if let Some(q) = retail {
                 quads.push(q);
                 return;
@@ -4935,7 +4961,15 @@ impl ApplicationHandler for App {
                         if ui::rect_hit(ok, self.cursor) {
                             self.confirm_exit(event_loop);
                         } else if ui::rect_hit(cancel, self.cursor) {
+                            // Cancel returns to play: re-lock the
+                            // pointer the dialog released (unless the
+                            // BOOK map underneath keeps it free) —
+                            // without this, resuming took an extra
+                            // click-to-recapture.
                             self.exit_confirm = false;
+                            if !self.book_open() || !self.selector.map_book {
+                                self.set_grab(true);
+                            }
                         }
                     }
                     return;
@@ -5140,15 +5174,17 @@ impl ApplicationHandler for App {
                     self.fire_right_held = false;
                     return;
                 }
-                if self.book_open() {
+                // The BOOKLESS map keeps the pointer grabbed and the
+                // controls fully live (player ruling 2026-07-24) —
+                // clicks fall through to normal fire handling below.
+                // Only the BOOK map consumes them here.
+                if self.book_open() && self.selector.map_book {
                     // Book screen: clicking an owned spell binds it to
                     // that hand (the original's commands 0x15/0x16)
                     // AND closes the book back into flight (original
                     // UX). Clicks on unowned slots
-                    // or empty page do nothing. (Without the map book
-                    // — the MC2 layout — the map screen ignores
-                    // clicks; the CTRL pane above is the selector.)
-                    if down && self.selector.map_book {
+                    // or empty page do nothing.
+                    if down {
                         let owned = self
                             .session
                             .as_deref()
@@ -5391,11 +5427,25 @@ impl ApplicationHandler for App {
                         }
                     } else if self.exit_confirm {
                         // Esc on the confirm dialog = cancel, stay
-                        // in the level (the retail dialog's No).
+                        // in the level (the retail dialog's No) —
+                        // re-locking the pointer like the mouse
+                        // Cancel does.
                         self.exit_confirm = false;
-                    } else if self.grabbed {
-                        // First Esc releases the pointer; abandoning
-                        // the level takes a second press.
+                        if !self.book_open() || !self.selector.map_book {
+                            self.set_grab(true);
+                        }
+                    } else if self.grabbed
+                        && self
+                            .window
+                            .as_ref()
+                            .is_none_or(|w| w.fullscreen().is_none())
+                    {
+                        // WINDOWED: the first Esc releases the pointer
+                        // (to the desktop); abandoning the level takes
+                        // a second press. FULLSCREEN has no desktop to
+                        // release to (player ruling 2026-07-24) — Esc
+                        // falls through and opens the abandon dialog
+                        // directly.
                         self.set_grab(false);
                     } else if self.quit_fade.is_none() {
                         // The retail MC2 "Abandon level?" confirm
@@ -5576,26 +5626,35 @@ impl ApplicationHandler for App {
                         // in the mixer and flushes on unpause — the
                         // retail deferred-ding quirk.
                         self.ui_ding();
-                        // The book frees the cursor for spell binding;
-                        // closing it returns to mouse-look.
-                        if on {
-                            self.set_grab(false);
-                            self.fire_held = false;
-                            self.fire_right_held = false;
-                        } else {
-                            self.set_grab(true);
+                        if self.selector.map_book {
+                            // The BOOK map (retail MC1): the cursor is
+                            // freed for spell binding; closing returns
+                            // to mouse-look. Entering/leaving fixes
+                            // your ORIENTATION but not your velocity
+                            // (player ground truth; traced as EMERGENT
+                            // — map modes write no input, so the
+                            // steering filters decay ~×0.75/tick while
+                            // the target speed persists,
+                            // :49017-20/:49044). We recenter the
+                            // virtual stick; the sim's filters decay
+                            // on their own because tick_input sends
+                            // zero stick while the book is open.
+                            if on {
+                                self.set_grab(false);
+                                self.fire_held = false;
+                                self.fire_right_held = false;
+                            } else {
+                                self.set_grab(true);
+                            }
+                            self.stick = VirtualStick::default();
                         }
-                        // Entering/leaving the fullscreen map fixes
-                        // your ORIENTATION but not your velocity in
-                        // the original (player ground truth; traced
-                        // as EMERGENT — map modes write no input, so
-                        // the steering filters decay ~×0.75/tick to
-                        // center while the target speed persists,
-                        // :49017-20/:49044). We recenter the virtual
-                        // stick; the sim's filters decay on their own
-                        // because tick_input sends zero stick while
-                        // the book is open.
-                        self.stick = VirtualStick::default();
+                        // The BOOKLESS map (retail MC2, player-ruled
+                        // 2026-07-24): the pointer stays GRABBED and
+                        // hidden — normal controls (mouse-look/stick,
+                        // fire, keys) remain fully live under the map;
+                        // the roster comes up on ALT, the selector on
+                        // CTRL (which frees the cursor while held).
+                        // Nothing to do on toggle.
                     }
                     return;
                 }
@@ -5625,7 +5684,11 @@ impl ApplicationHandler for App {
                         self.ctrl_held = false;
                         self.selector_drag = None;
                         self.selector_hover = ui::SelectorHover::default();
-                        if !self.book_open() && self.ctrl_grab_restore {
+                        // Re-grab unless the BOOK map holds the cursor
+                        // (the bookless map keeps controls live, so
+                        // releasing CTRL over it returns to mouse-look).
+                        if (!self.book_open() || !self.selector.map_book) && self.ctrl_grab_restore
+                        {
                             self.set_grab(true);
                         }
                     }
@@ -5651,7 +5714,11 @@ impl ApplicationHandler for App {
                             _ => None,
                         };
                         if let Some(d) = digit {
-                            if self.book_open() {
+                            // Digit-binding needs a hovered BOOK cell;
+                            // the bookless map keeps flight semantics
+                            // (quick-equip), same as the rest of its
+                            // live controls.
+                            if self.book_open() && self.selector.map_book {
                                 if let Some(spell) = self.hovered {
                                     // One spell ↔ one digit (retail:
                                     // assigning a quick key unassigns
@@ -6161,7 +6228,12 @@ impl ApplicationHandler for App {
                             } else {
                                 mgc_render::MC2_MAP_VIEW_H
                             });
-                        if self.alt_held || self.cursor.1 >= strip_top {
+                        // The hover trigger needs a LIVE pointer — on
+                        // the bookless map the cursor stays grabbed
+                        // (its position freezes), so a stale low
+                        // position must not pin the roster open; ALT
+                        // is that map's trigger.
+                        if self.alt_held || (!self.grabbed && self.cursor.1 >= strip_top) {
                             let colors = entities::roster_team_colors(
                                 sess.level.game,
                                 sess.level.mc2_env,

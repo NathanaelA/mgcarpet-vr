@@ -192,6 +192,7 @@ pub fn pack(sprites: &[DecodedSprite], atlas_width: u32) -> PackedSprites {
             atlas_width,
             atlas_height,
             sprites: entries,
+            pointer_base: 0,
         },
     }
 }

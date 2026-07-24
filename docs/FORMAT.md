@@ -367,6 +367,15 @@ flags high byte is the engine's *draw type* (how facing/animation pick
 a family member — see `mgc_sim::mc1_sprite_stats`); flags bit 0 marks
 animated entries.
 
+Since bake epoch 22 `SpriteIndex` also carries `pointer_base`
+(serde-default 0): on `ui-sprites` banks, the index where the appended
+retail `DATA/POINTERS` cursor bank begins (its entries follow at
+`pointer_base + k`, k = the retail bank index — [0] is a null "don't
+draw" sentinel in both games; MC1's in-game arrow+mana-ball is [1] and
+its menu HAND variants [2..=8]; MC2's grey cursor is per map type: day
+[1], night [9], cave [10]). 0 = no pointer bank (non-UI atlases, older
+bakes).
+
 Provenance per source (MC1): `PAL{N}-0.DAT`, `TABLES.DAT` /
 `DTABLES.DAT`, `BLK{N}-1.DAT`, `TMAPS{N}-0.DAT/.TAB`,
 `BUILD{N}-0.TAB/.DAT`, `SEARCH.DAT` for N = 0 (temperate) / 1

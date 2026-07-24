@@ -39,6 +39,10 @@ pub struct UiAssets {
     /// Base-atlas frame rects (x, y, w, h) per HSPR sprite id — the
     /// map's icon-marker crops.
     sprite_rects: Vec<Option<(u32, u32, u32, u32)>>,
+    /// Where the appended retail `DATA/POINTERS` bank begins in
+    /// `sprite_rects` (0 = none/older bake). Entries follow at
+    /// `pointer_base + k`, k = the retail bank index.
+    pointer_base: usize,
     /// MC2 selector GRID tiles (pre-composited box + icon, one bit-
     /// copy per state so the draw path never layers): uv per spell ×
     /// [0 castable(89), 1 hovered shot-meter(87), 2 owned-unaffordable
@@ -467,6 +471,7 @@ impl UiAssets {
             atlas_rgba: rgba,
             slot_uv,
             sprite_rects,
+            pointer_base: index.pointer_base as usize,
             pane_uv,
             sub_uv,
             glyph_uv,
@@ -591,12 +596,18 @@ impl UiAssets {
         quads
     }
 
-    /// The retail in-game mouse pointer ([`SPR_POINTER_BALL`], the
-    /// arrow + mana ball) as a cursor quad, arrow tip at (x, y).
-    /// None on an MC2 atlas caller-side (gate by game) and on an
-    /// older MC1 bake (87 sprites — the software arrow stands in).
-    pub fn pointer_quad(&self, x: f32, y: f32, scale: f32) -> Option<UiQuad> {
-        self.sprite_quad(SPR_POINTER_BALL, x, y, scale)
+    /// The retail in-game mouse pointer as a cursor quad, tip at
+    /// (x, y) — the arrow + mana ball both games attach to their
+    /// pointer (MC1 golden, MC2 grey). `entry` is the POINTERS-bank
+    /// index: MC1 always 1 (sub_5C05C installs :42024/:49068); MC2
+    /// per map type — day 1, night 9, cave 10 (SetCursor_8CD27 /
+    /// LevelInit.cpp:24-38). None on an older bake (`pointer_base`
+    /// 0) — the software arrow stands in.
+    pub fn pointer_quad(&self, x: f32, y: f32, scale: f32, entry: usize) -> Option<UiQuad> {
+        if self.pointer_base == 0 {
+            return None;
+        }
+        self.sprite_quad(self.pointer_base + entry, x, y, scale)
     }
 
     /// A pre-composited MC2 selector grid tile (see `pane_uv`); None
@@ -1287,20 +1298,21 @@ pub fn cursor_quads(x: f32, y: f32, s: f32) -> Vec<UiQuad> {
 /// name + mana), [86] = the 36×38 kill-matrix cell.
 const SPR_ROSTER_HEAD: usize = 85;
 const SPR_ROSTER_CELL: usize = 86;
-/// The retail mouse pointer — the bake appends MC1's DATA/POINTERS
-/// bank (9 entries) at the tail of the 87-sprite UI bank. Bank
-/// anatomy (settled by rendering under each palette, 2026-07-24):
-/// [0] null sentinel; [1] = the ARROW + MANA BALL, the IN-GAME
-/// cursor (authored for the LEVEL palette — clean orange ball there,
-/// noise elsewhere); [2..=8] = the pointing HAND, the MENU cursor,
-/// pre-quantized SEVEN times for the different menu-screen palettes
-/// ([7] is the MAINMENU.PAL one; the rest map to gconfig/pmulti/
-/// pperf/language/smatitle-family screens). Level atlas indices:
-/// [88] = the ball. STATIC — the "frames" are palette variants, not
-/// animation (cycling them reads as palette flicker). MC1 banks
-/// only; MC2's index 87+ is unrelated MSPRD art — callers gate by
-/// game.
-const SPR_POINTER_BALL: usize = 88;
+// The retail POINTERS bank rides at the tail of each level UI atlas
+// (`Assets::pointer_base`). Bank anatomy — settled by rendering each
+// entry under each candidate palette (2026-07-24): [0] = null "don't
+// draw" sentinel in BOTH games. MC1: [1] = the golden ARROW + MANA
+// BALL in-game cursor (level palette); [2..=8] = the pointing HAND
+// menu cursor pre-quantized per menu-screen palette ([7] =
+// MAINMENU.PAL — the frontend blits it from its own copy of the
+// bank). MC2: the grey arrow+ball per map type — day [1], night [9],
+// cave [10]. STATIC always: same-size runs in these banks are
+// PALETTE VARIANTS, not animation (cycling them reads as flicker).
+/// The in-game pointer entry both games use on DAY-family palettes.
+pub const POINTER_ENTRY_DEFAULT: usize = 1;
+/// MC2's night / cave pointer entries (LevelInit.cpp:24-38).
+pub const POINTER_ENTRY_NIGHT: usize = 9;
+pub const POINTER_ENTRY_CAVE: usize = 10;
 
 // Panel sprite ids (remc1 begSprTab). The panel strip is laid out at
 // the original's 640-wide coordinates, scaled to the live resolution.

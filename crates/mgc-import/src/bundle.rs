@@ -1757,14 +1757,18 @@ fn bake_variant(
         let tab = source(&format!("{ui}.TAB"), &mut sources)?;
         let mut decoded = crate::hspr::decode(&dat, &tab)
             .map_err(|e| BakeError::Level(Path::new(&dat_file).to_path_buf(), 0, e.to_string()))?;
-        // MC1: the retail MOUSE POINTERS (DATA/POINTERS, its own tiny
-        // HSPR bank) append at the tail of the UI bank — [87] = the
-        // pointer-with-mana-ball installed for every view mode
-        // (sub_5C05C, remc1 :42024/:49068), [88] = the mode-2 variant
-        // (:49063) — so the in-level surfaces can draw the real
-        // cursor. MC2's cursor is a raw bitmap blob, not a bank
-        // sprite; its atlases are untouched.
-        if spec.game == Game::MagicCarpet1 {
+        // The retail MOUSE POINTERS (DATA/POINTERS, a tiny HSPR bank
+        // BOTH games ship) append at the tail of the UI bank, their
+        // start recorded as `pointer_base` — so the in-level surfaces
+        // can draw the real cursor. Entry law: [0] is a null "don't
+        // draw" sentinel in both games; MC1 [1] = the arrow+mana-ball
+        // every view mode installs (sub_5C05C, remc1 :42024/:49068;
+        // [2..=8] the menu HAND per menu-screen palette); MC2 picks
+        // per map type — day [1], night [9], cave [10]
+        // (SetCursor_8CD27 / LevelInit.cpp:24-38).
+        let mut pointer_base = 0u32;
+        if src.exists("DATA/POINTERS.DAT") {
+            pointer_base = decoded.len() as u32;
             let pdat = source("DATA/POINTERS.DAT", &mut sources)?;
             let ptab = source("DATA/POINTERS.TAB", &mut sources)?;
             decoded.extend(crate::hspr::decode(&pdat, &ptab).map_err(|e| {
@@ -1774,8 +1778,14 @@ fn bake_variant(
                     e.to_string(),
                 )
             })?);
+        } else {
+            eprintln!(
+                "note: {}: no DATA/POINTERS.DAT — no retail cursor",
+                spec.variant
+            );
         }
-        let packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
+        let mut packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
+        packed.index.pointer_base = pointer_base;
         emit("ui-sprites.bin", &packed.atlas)?;
         emit(
             "ui-sprites.json",

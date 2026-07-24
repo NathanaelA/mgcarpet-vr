@@ -127,7 +127,11 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    ball, [88] = the mode-2 variant) and emitted as
 ///    `pointer-sprites.{bin,json}` in `assets/mc1-ui` for the
 ///    frontend's composed cursor. MC2 banks unchanged.
-pub const BAKE_EPOCH: u32 = 21;
+/// 22: the POINTERS append covers BOTH games' level UI banks
+///    (MC2's grey day/night/cave cursor variants included), with its
+///    start recorded in the new `SpriteIndex::pointer_base` field
+///    (0 = no bank) instead of hardcoded indices.
+pub const BAKE_EPOCH: u32 = 22;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.
