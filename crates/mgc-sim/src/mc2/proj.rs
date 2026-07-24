@@ -318,7 +318,7 @@ impl Gen {
     /// `xtype == -1` admits anything, else class must match and
     /// `xsubtype == -1` or model must match. The human counts as
     /// class 3 model 0.
-    fn mc2_proj_filter(&self, i: usize, hit: Option<MailTarget>) -> Option<MailTarget> {
+    pub(crate) fn mc2_proj_filter(&self, i: usize, hit: Option<MailTarget>) -> Option<MailTarget> {
         let (fc, fm) = (self.ent[i].f66, self.ent[i].f67);
         if fc == 0xFF {
             return hit;

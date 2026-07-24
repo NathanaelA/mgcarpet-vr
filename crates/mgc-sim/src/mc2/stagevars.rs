@@ -25,8 +25,9 @@
 //! creatures are KILLABLE — a lethal hit routes to the model's prekill,
 //! `actionIndex = 8m+4`), a hit from a foreign class/model breaks the
 //! hold into aggro (`StageVar2 = 10` + `sub_1E040`'s `8m+2`/`8m+6` FLEE
-//! split), and the kind-3/4 guardian arm aggros on the watched entity
-//! (kind 3, the ambush law) or its target (kind 4) when it nears `v_28`.
+//! split), and the kind-3 guardian arm aggros on the watched entity
+//! when it nears `v_28` (the ambush law; kind 4's "join the watched
+//! entity's fight" arm is retail-inert — see `mc2_held_watch`).
 //! The m27 kraken body instead runs its full 0xDF stage-command state
 //! ([`World::mc2_m27_held_tick`] = `sub_29930`). `site_z` carries the
 //! KIND (retail's `StageVar2_0x49_73`), the same field metamorph/summon
@@ -325,6 +326,22 @@ impl World {
             let e = &mut self.g.ent[ent];
             e.site_z = 0;
             e.tick70 = model.wrapping_mul(8).wrapping_add(1); // 8*model+1 = active
+            // IMMEDIATE RESCAN ON GATE RELEASE (port nudge, retail-
+            // observed): retail's mc2:04 archers attack the worms the
+            // INSTANT the skeletons are extinct; on the port's idle
+            // cadence a released creature waited up to 4*v_26 ticks
+            // (~5 s) for its next acquire scan. Zeroing the phase
+            // counter makes the same tick's brain run hit every
+            // `f63 % n == 0` gate (the stagevar pre-pass runs before
+            // the entity loop; the loop increments f63 AFTER the
+            // handler). Reaction-path releases only — the spawn-time
+            // cadence-skip (`direct`) keeps its fresh ordinal so
+            // same-spawn flocks stay de-synced. Mechanism
+            // unrecovered in remc2 — re-check against the true
+            // NETHERW.EXE decompile someday (DEVIATIONS entry).
+            if !direct {
+                e.f63 = 0;
+            }
         }
         self.mc2_sv_held.retain(|h| h.ent as usize != ent);
     }
@@ -411,8 +428,20 @@ impl World {
                         // watch-by-model: the referenced subtype extinct
                         self.mc2_model_extinct(v.watch_model)
                     } else {
-                        // watch a bound entity's death
-                        v.watch_ent != 0 && self.mc2_ent_dead(v.watch_ent, v.watch_template)
+                        // The &2-clear "death watch": retail's scan
+                        // dereferences the RAW value pass-3 stored
+                        // (EF:5183-90) — which in the shipped engine
+                        // is never a live entity reference (remc2
+                        // needed a pointer range guard AND the
+                        // `0xae02` bandaid in sub_1D700 to survive
+                        // it), so the garbage reads "dead" and the
+                        // gate fires the first scan after the watched
+                        // thing SPAWNS. Player-replayed on mc2:04
+                        // (2026-07-24): retail's archer flock marches
+                        // at load — the kind-9 row fires immediately
+                        // and chains the flock onto the kind-3 march
+                        // row. Port the observable law: bound ⇒ fired.
+                        v.watch_ent != 0
                     };
                     if fired {
                         self.mc2_stagevars[s].flags |= 0x04;
@@ -463,6 +492,30 @@ impl World {
                     self.mc2_stagevar_arm(ent, slot);
                 }
                 continue;
+            }
+            // The DEAD-WATCH SCRUB (`sub_12500`'s kind-3/4/5 quiet
+            // arms, EF:5086-89 / :5098-5104): on a `&2` (watch-model)
+            // row, a cached handle whose occupant reads dead or
+            // being-removed clears EVERY tick. The moment a watched
+            // archer dies, the whole pack's caches zero and the next
+            // shadow-walk re-resolves to the NEXT LIVE victim — this
+            // is what rolls the mc2:04 skeleton assault through the
+            // flock kill by kill instead of camping the first
+            // corpse. Kinds 8/9 deliberately keep their cache
+            // (retail's clear is gated `index >= 4 && <= 5` in that
+            // arm; kind 3 has its own).
+            if matches!(v.kind, 3..=5) && v.flags & 0x02 != 0 {
+                if let Some(x) = self.mc2_sv_held.iter_mut().find(|x| x.ent == h.ent) {
+                    let w = x.timer as u16 as usize;
+                    if w != 0
+                        && (w >= self.g.ent.len()
+                            || self.g.ent[w].act_life < 0
+                            || self.g.ent[w].class64 == 0
+                            || self.g.ent[w].flags & 0x400 != 0)
+                    {
+                        x.timer = 0;
+                    }
+                }
             }
             let (ex, ey) = (self.g.ent[ent].x, self.g.ent[ent].y);
             let release = match v.kind {
@@ -544,18 +597,6 @@ impl World {
                 && e.act_life >= 0
                 && !matches!(e.tick70, 0xB4 | 0xE8 | 0xEA)
                 && e.flags & 0x400 == 0
-        })
-    }
-
-    /// A bound live entity slot reads dead / being-removed. Anchored
-    /// on the `thing_slot` identity like `mc2_bound_gone`: our
-    /// pool recycles through a LIFO free list, so a raw read of the
-    /// bound slot could observe a REUSED entity as "alive" and the
-    /// gate would never fire; a slot whose occupant no longer carries
-    /// the watched template is the original's death.
-    fn mc2_ent_dead(&self, slot: u16, template: u16) -> bool {
-        self.g.ent.get(slot as usize).is_none_or(|e| {
-            e.class64 == 0 || e.thing_slot != template || e.act_life < 0 || e.flags & 0x400 != 0
         })
     }
 
@@ -784,18 +825,29 @@ impl World {
         }
     }
 
-    /// The kind-3/4 GUARDIAN arm, every 8th tick of the STATIC f63
-    /// ordinal (module doc). Kind 3 (`sub_1D7C0`, EF:10069-95) is the
-    /// AMBUSH law: aggro on the WATCHED entity itself when it comes
-    /// within the row's `v_28`. Kind 4 (`sub_1D700`, EF:10022-66)
-    /// joins the watched entity's FIGHT: aggro on its current target
-    /// when that target nears. Both mark `StageVar2 = 10` + raise.
+    /// The kind-3 GUARDIAN arm, every 8th tick of the STATIC f63
+    /// ordinal (module doc): the AMBUSH law (`sub_1D7C0`,
+    /// EF:10069-95) — aggro on the WATCHED entity itself when it
+    /// comes within the row's `v_28`; marks `StageVar2 = 10` + raise.
+    ///
+    /// Kind 4's "join the watched entity's fight" arm (`sub_1D700`,
+    /// EF:10022-66) is NOT ported: it reads the watched creature's
+    /// `word_0x96_150`, which on a stage-held creature is
+    /// uninitialized pool garbage in the shipped engine — remc2 had
+    /// to add the literal `if (v4 == 0xae02) return;` bandaid there
+    /// after its level-5 replay hit exactly that junk — so the arm
+    /// dereferences noise and never validly fires. Player-replayed on
+    /// retail mc2:04 (2026-07-24): the worms crawl along with the
+    /// skeleton column and never join the battle; a working join arm
+    /// made our worms attack the archers, who then killed them and
+    /// died in the death-novas. Kind 4 keeps the shadow walk, the
+    /// held-hit retaliation and the fired-bit release.
     fn mc2_held_watch(&mut self, i: usize, base: u8) {
         if self.g.ent[i].f63 & 7 != 0 {
             return;
         }
         let kind = self.g.ent[i].site_z;
-        if !matches!(kind, 3 | 4) {
+        if kind != 3 {
             return;
         }
         let Some(hpos) = self.mc2_sv_held.iter().position(|h| h.ent as usize == i) else {
@@ -812,16 +864,7 @@ impl World {
         if watch == 0 {
             return;
         }
-        let aggro_at = match kind {
-            3 => watch,
-            _ => {
-                let t = self.g.ent[watch].f146 as usize;
-                if t == 0 || t >= self.g.ent.len() {
-                    return;
-                }
-                t
-            }
-        };
+        let aggro_at = watch;
         let me = {
             let e = &self.g.ent[i];
             (e.x, e.y, e.z)
@@ -841,7 +884,7 @@ impl World {
     /// Resolve a held creature's WATCHED entity: `&2` (watch-model)
     /// slots cache the handle in word74 (`sub_1E3E0`, resolved on
     /// first need — retail resolves it in `sub_1D8C0`'s idle arm);
-    /// else the bound entity. 0 = none/dead. Shared by the kind-3/4
+    /// else the bound entity. 0 = none/dead. Shared by the kind-3
     /// guardian arm and the kind-3/4/5 shadow movement.
     fn mc2_watch_handle(&mut self, i: usize, hpos: usize, v: &Mc2StageVar) -> usize {
         let slot = self.mc2_sv_held[hpos].slot as usize;
@@ -855,11 +898,19 @@ impl World {
         } else {
             v.watch_ent
         } as usize;
-        if watch == 0
-            || watch >= self.g.ent.len()
-            || self.g.ent[watch].class64 == 0
-            || self.g.ent[watch].act_life < 0
-        {
+        // Retail consumes the handle RAW — `sub_1D8C0`'s walk and
+        // `sub_1D7C0`'s release deref the slot with NO liveness test
+        // (EF:10178-84, :10080-86). A dead watch keeps steering the
+        // pack at its frozen corpse position (free only clears the
+        // class byte); each arrival's proximity release aggro-fails
+        // on the dead target and re-leashes through `sub_12330`,
+        // which ZEROES word74 (EF:5017) — scrubbing the stale cache
+        // creature by creature until a fresh `sub_1E3E0` resolve
+        // finds the next LIVE victim. This corpse-beacon loop is how
+        // mc2:04's skeleton assault works through the archer flock
+        // kill by kill; a liveness filter here deadlocked the whole
+        // pack on its first kill.
+        if watch == 0 || watch >= self.g.ent.len() {
             return 0;
         }
         watch

@@ -182,17 +182,17 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
 
     // StageVar hold-gate: with the row table baked VERBATIM (byte0 is
     // a FLAG byte, not signed — reading it signed drops every flagged
-    // row), level-014's full table loads: the kind-9 model-18 (THING
-    // 334, gate = template-6 death — never fires in this run) PLUS the
-    // flagged rows binding kind-1 walkers, kind-4 guardians and kind-6
-    // timer spawns. Pin the census by kind and the kind-9 anchor.
+    // row), level-014's full table loads: the flagged rows binding
+    // kind-1 walkers, kind-4 guardians and kind-6 timer spawns. The
+    // kind-9 model-18 hold (THING 334, &2-clear bound watch on
+    // template 6) RELEASES AT BIND — retail's bound "death watch"
+    // fires the first scan after the watched thing spawns (the
+    // garbage-deref law, player-replayed on mc2:04), and thing 6
+    // spawns at load. Pin the census by kind and the release.
     let held = w.debug_mc2_held();
-    // The pool slot is a load-layout artifact (the ApplyEvents settle
-    // reaps its one-shots during load, shifting later spawns) — the
-    // anchor's identity is the MODEL+KIND pair.
     assert!(
-        held.iter().any(|&(_, m, k)| m == 18 && k == 9),
-        "level-014: the kind-9 model-18 hold survived the verbatim row bake"
+        !held.iter().any(|&(_, _, k)| k == 9),
+        "level-014: the kind-9 bound watch fired at bind and released its hold"
     );
     let mut kinds = std::collections::BTreeMap::<u8, usize>::new();
     for &(_, _, k) in &held {
@@ -200,9 +200,7 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     }
     assert_eq!(
         kinds,
-        [(1u8, 7usize), (4, 26), (6, 26), (9, 1)]
-            .into_iter()
-            .collect(),
+        [(1u8, 7usize), (4, 26), (6, 26)].into_iter().collect(),
         "level-014 held census by kind (verbatim StageVar rows)"
     );
 
@@ -320,13 +318,34 @@ fn mc2_cave_behaviors_and_goldens() {
     // one-shots are reaped at load (slot layout shifts). ALL FOUR
     // checkpoints move — the world enters play with different terrain,
     // RNG phase and pool layout, which is the fidelity fix itself.
+    // Re-pinned (last checkpoint ONLY) for the mc2:04 battle fixes:
+    // the m9 brain's prey scan now seeks CASTLES over the class-3
+    // chain (EF:12119-21), its cone scan is class-3-only, and the
+    // stagevar kind-3/4/5 dead-watch scrub (sub_12500 EF:5086-89)
+    // re-resolves a dead watch to the next live victim. Level 014
+    // authors m9 + kind-4/9 holds, so the disposition-storm phase
+    // (checkpoint D) plays out differently; A-C hold.
+    //
+    // Re-pinned (A-D; load checkpoint holds) for the bound
+    // death-watch fire-at-bind law (retail's sub_12780 &2-clear arm
+    // dereferences a garbage pointer — player-replayed on mc2:04):
+    // level 014's kind-9 model-18 hold releases on tick 1 (its
+    // watched template 6 spawns at load), so the m18 acts from the
+    // first checkpoint on. The load checkpoint holding pins that the
+    // composition itself is unchanged.
+    //
+    // Re-pinned (LAST checkpoint only) for the immediate-rescan-on-
+    // release nudge (released creatures get f63 = 0 so the acquire
+    // scan runs the release tick — the retail-observed mc2:04 worm
+    // switch timing): the disposition-storm phase's gate releases
+    // now rescan immediately.
     assert_eq!(
         got,
         vec![
             0x50c384f9d62a3dadu64,
-            0xeed5009480e93bb9,
-            0x0014e75348e14e62,
-            0x3770ad419634747b,
+            0xc3f12ba364c17aa5,
+            0xa4073a5b7b3a46ee,
+            0xb46e6b7098c63743,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -344,11 +363,21 @@ fn mc2_cave_behaviors_and_goldens() {
     // change by design: the level's 9 authored scorch rings finish
     // their dig before tick 0 (terrain plane differs at every
     // checkpoint) and the load RNG phase shifts every spawn after it.
+    // The mc2:04 battle fixes (m9 castle scan + dead-watch scrub)
+    // move the LAST checkpoint only — real behavior in the
+    // disposition-storm phase, same signal as the hash pin above.
+    //
+    // The bound-watch fire-at-bind law ALSO moves the last
+    // checkpoint only: the released m18 wanders from tick 1, but its
+    // observable divergence needs the long disposition-storm phase
+    // to accumulate — the earlier state-hash moves are RNG-phase and
+    // hold-table internals, which this projection is blind to by
+    // design.
     const OBSERVABLE: [u64; 4] = [
         0x4504aa689dad600c,
         0xf19b104a99371181,
         0x314278800b2eb1b4,
-        0xc2403b19f2bb583c,
+        0x3e15cfc05d9c958f,
     ];
     assert_eq!(
         obs, OBSERVABLE,

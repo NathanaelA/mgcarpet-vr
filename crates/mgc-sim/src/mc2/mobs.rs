@@ -1272,26 +1272,44 @@ impl Gen {
                     });
                     if target.is_none() {
                         // Scan B: nearest model-9 creature, no cone
-                        // (:11811).
+                        // (:11811). RETAIL-OBSERVED EXTENSION
+                        // (player-replayed mc2:04, 2026-07-24): the
+                        // retail archers shoot until every skeleton
+                        // is dead, THEN start shooting the worms —
+                        // the monster-hunter design ("archers target
+                        // unnatural creatures"). The decompile's
+                        // Scan B walks only chain[9] and the retail
+                        // mechanism is unrecovered, so the port falls
+                        // back to the next UNNATURAL model when the
+                        // watched one is EXTINCT — never before, so
+                        // the battle order is preserved. Set = worms
+                        // (m3); extend if other levels surface more.
                         let e = &self.ent[i];
                         let row = &BEHAVIOR[e.row156 as usize];
                         let range = (row.v_28 as i32) * (row.v_28 as i32);
                         let (ex, ey) = (e.x, e.y);
-                        let mut best: Option<(u16, i32)> = None;
-                        for (j, c) in self.ent.iter().enumerate().skip(1) {
-                            if c.class64 == 5
-                                && c.model65 == 9
-                                && c.act_life >= 0
-                                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
-                                && c.flags & 0x400 == 0
-                            {
-                                let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
-                                if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
-                                    best = Some((j as u16, d2));
+                        for model in [9u8, 3] {
+                            let mut best: Option<(u16, i32)> = None;
+                            let mut extinct = true;
+                            for (j, c) in self.ent.iter().enumerate().skip(1) {
+                                if c.class64 == 5
+                                    && c.model65 == model
+                                    && c.act_life >= 0
+                                    && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                                    && c.flags & 0x400 == 0
+                                {
+                                    extinct = false;
+                                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                                    if d2 <= range && best.is_none_or(|(_, bd)| d2 < bd) {
+                                        best = Some((j as u16, d2));
+                                    }
                                 }
                             }
+                            target = best.map(|(s, _)| s);
+                            if !extinct {
+                                break;
+                            }
                         }
-                        target = best.map(|(s, _)| s);
                     }
                     if let Some(t) = target {
                         // Shrines never become targets (:11824).
@@ -1404,17 +1422,19 @@ impl Gen {
         Self::polar_step(&mut pos, e.f30, e.f32, e.f126);
         // Victim probe (sub_10780 → the shared tile-chain scan;
         // module-doc APPROX). Owner-immunity via id24 like MC1, PLUS
-        // the projectile's target-class filter: the archer's fire
-        // state launches arrows with xtype=3/xsubtype=-1 (sub_200F0
-        // :11955-56) and sub_10780 skips every victim outside that
-        // class (:3766-69) — arrows pass through fellow archers and
-        // villagers, they only strike WIZARDS. (APPROX: the original
-        // keeps scanning the ring past a non-matching body in the
-        // same tick; we let the arrow fly on and re-probe next tick.)
-        let hit = match self.victim_scan_at(i, pos, ctx) {
-            Some(crate::mc1::combat::MailTarget::Pool(v)) if self.ent[v].class64 != 3 => None,
-            other => other,
-        };
+        // the projectile's own xtype/xsubtype filter (:3766-69) via
+        // the shared `mc2_proj_filter`. The fire seams stamp the
+        // TARGET's class+model onto the arrow (creature thunks
+        // sub_1CCE0/sub_1CDA0; the archer combat state's own bytes
+        // come from sub_20060 — sub_200F0's 3/-1 is the IDLE reset,
+        // not the combat filter) — so a skeleton volley strikes the
+        // FIRST archer along its path, not just the locked target:
+        // stray arrows through a packed flock are what spread the
+        // mc2:04 war. (APPROX: the original keeps scanning the ring
+        // past a non-matching body in the same tick; we let the
+        // arrow fly on and re-probe next tick.)
+        let scanned = self.victim_scan_at(i, pos, ctx);
+        let hit = self.mc2_proj_filter(i, scanned);
         let above_ground = self.ground_z(pos.0, pos.1) as i16 <= pos.2;
         if above_ground {
             let life = self.ent[i].act_life;

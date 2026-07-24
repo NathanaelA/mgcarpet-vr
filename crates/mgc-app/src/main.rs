@@ -7071,7 +7071,7 @@ fn run_flock_probe(
     let mut csv = std::io::BufWriter::new(file);
     writeln!(
         csv,
-        "tick,slot,id,x,y,z,yaw,aim,speed,min_speed,max_speed,state,role,life,awake,leader,target,attacker,cadence,px,py,pdist,blocked"
+        "tick,slot,id,x,y,z,yaw,aim,speed,min_speed,max_speed,state,role,hold,life,awake,leader,target,attacker,cadence,px,py,pdist,blocked"
     )
     .map_err(|e| e.to_string())?;
 
@@ -7204,7 +7204,7 @@ fn run_flock_probe(
                 let pd = dist((gx, gy), (px, py));
                 writeln!(
                     csv,
-                    "{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.1},{:.1},{pd:.2},{}",
+                    "{t},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.1},{:.1},{pd:.2},{}",
                     r.slot,
                     r.id24,
                     r.x,
@@ -7217,6 +7217,7 @@ fn run_flock_probe(
                     r.max_speed,
                     r.state,
                     r.state.wrapping_sub(8),
+                    r.hold,
                     r.life,
                     r.awake,
                     r.leader,

@@ -348,15 +348,17 @@ impl Gen {
         }
     }
 
-    /// The generic cone scan of the m9 brain (:12159-93): nearest
-    /// wizard OR creature in range + FOV (unlike the wizard-only
-    /// shared scan).
+    /// The awake cone scan of the m9 brain (:12159-93): the walk is
+    /// over `dword_38519` — the CLASS-3 chain (wizards, castles,
+    /// balloons; no model filter, :12164-68) — NOT the creature
+    /// pool. Nearest in range + FOV, invisibility (byte[0] & 0x20)
+    /// skipped; the id gate excuses the summoner's own things.
     fn m9_cone_scan(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         let range = (row.v_28 as i32) * (row.v_28 as i32);
         let cone = row.v_30 as u16;
-        let (ex, ey, eyaw) = (e.x, e.y, e.f30);
+        let (ex, ey, eyaw, my_id) = (e.x, e.y, e.f30, e.id24);
         let mut best: Option<(u16, i32)> = None;
         let mut consider = |tx: u16, ty: u16, slot: u16| {
             let d2 = Self::dist2_sq(ex, ey, tx, ty);
@@ -374,12 +376,8 @@ impl Gen {
             consider(ctx.px, ctx.py, PLAYER_TARGET);
         }
         for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if j == i || c.act_life < 0 || c.flags & (0x400 | 0x20) != 0 {
-                continue;
-            }
-            let ok = (c.class64 == 3 && c.model65 <= 1)
-                || (c.class64 == 5 && c.model65 != 9 && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA));
-            if ok {
+            if c.class64 == 3 && c.id24 != my_id && c.act_life >= 0 && c.flags & (0x400 | 0x20) == 0
+            {
                 consider(c.x, c.y, j as u16);
             }
         }
@@ -478,14 +476,31 @@ impl Gen {
                         self.mc2_move_core(i);
                         let period = BEHAVIOR[self.ent[i].row156 as usize].v_26.max(1);
                         if self.ent[i].f63 as i16 % period == 0 {
-                            // Prey seek: nearest model-2 (:12118-48).
-                            let (ex, ey) = (self.ent[i].x, self.ent[i].y);
+                            // Prey seek (:12117-48): the nearest
+                            // model-2 on the `dword_38519` chain —
+                            // the CLASS-3 chain, so the prey is a
+                            // CASTLE, not the (5,2) creature. The
+                            // skeleton FACES it unconditionally at
+                            // ANY distance (:12137 — the map-wide
+                            // castle march; on mc2:04 the channel
+                            // bank + the move-core retries funnel
+                            // the column onto the authored ford
+                            // straight past the archer island) and
+                            // only CHASES within pitch + v_28 (3D,
+                            // :12138-39). The id skip (:12121) also
+                            // excuses a wizard-summoned skeleton
+                            // from besieging its owner's castle.
+                            let (ex, ey, ez) = {
+                                let e = &self.ent[i];
+                                (e.x, e.y, e.z)
+                            };
+                            let my_id = self.ent[i].id24;
                             let row = &BEHAVIOR[self.ent[i].row156 as usize];
                             let mut prey: Option<(usize, i32)> = None;
                             for (j, c) in self.ent.iter().enumerate().skip(1) {
-                                if j != i
-                                    && c.class64 == 5
+                                if c.class64 == 3
                                     && c.model65 == 2
+                                    && c.id24 != my_id
                                     && c.act_life >= 0
                                     && c.flags & 0x400 == 0
                                 {
@@ -495,24 +510,38 @@ impl Gen {
                                     }
                                 }
                             }
-                            if let Some((j, d2)) = prey {
-                                let (tx2, ty2, tf80) =
-                                    (self.ent[j].x, self.ent[j].y, self.ent[j].f80);
+                            // `v41x` — set only when a chase target
+                            // was ACQUIRED this tick. A castle found
+                            // but out of reach is DISCARDED (:12141)
+                            // yet still steers the march, and the
+                            // cone/convert scans run in its shadow;
+                            // the random turn runs only with NO
+                            // castle on the map at all (:12149-56).
+                            let mut acquired = false;
+                            if let Some((j, _)) = prey {
+                                let (tx2, ty2, tz2, pitch) = {
+                                    let c = &self.ent[j];
+                                    (c.x, c.y, c.z, c.f82)
+                                };
                                 self.ent[i].f34 = Self::angle_between(ex, ey, tx2, ty2);
-                                let reach = tf80 as i32 + row.v_28 as i32;
-                                if d2 <= reach * reach {
+                                let reach = (pitch as i32 + row.v_28 as i32).max(0) as u32;
+                                if Self::mc2_dist3((ex, ey, ez), (tx2, ty2, tz2)) <= reach {
                                     self.ent[i].f146 = j as u16;
                                     self.ent[i].tick70 = M9_BASE + 2;
+                                    acquired = true;
                                 }
                             } else {
                                 self.mc2_wander_turn(i);
-                                if self.ent[i].f146 == 0 && self.ent[i].f58 != 0 {
+                            }
+                            if !acquired {
+                                if self.ent[i].f58 != 0 {
                                     if let Some(t) = self.m9_cone_scan(i, ctx) {
                                         self.ent[i].f146 = t;
                                         self.ent[i].tick70 = M9_BASE + 2;
+                                        acquired = true;
                                     }
                                 }
-                                if self.ent[i].f146 == 0 && self.ent[i].tick70 == M9_BASE + 1 {
+                                if !acquired {
                                     self.m9_consume_scan(i);
                                 }
                             }
@@ -542,13 +571,16 @@ impl Gen {
                         }
                         let row = &BEHAVIOR[self.ent[i].row156 as usize];
                         let period = row.v_26.max(1);
+                        // A castle target extends the ring by its
+                        // PITCH extent (:12551 — array_0x52_82.pitch,
+                        // the second of the extent trio).
                         let range = row.v_28 as u32
                             + if slot != PLAYER_TARGET
                                 && (slot as usize) < self.ent.len()
                                 && self.ent[slot as usize].class64 == 3
                                 && self.ent[slot as usize].model65 == 2
                             {
-                                self.ent[slot as usize].f80 as u32
+                                self.ent[slot as usize].f82 as u32
                             } else {
                                 0
                             };

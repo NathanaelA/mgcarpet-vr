@@ -13504,6 +13504,304 @@ mod tests {
         assert_eq!(w.g.ent[jar].f54, 64, "re-steal lock re-armed");
     }
 
+    /// The kind-3/4/5 DEAD-WATCH SCRUB (`sub_12500` EF:5086-89 /
+    /// :5098-5104): a watch-model row's cached handle clears the tick
+    /// its occupant reads dead, so the pack re-resolves to the NEXT
+    /// live instance of the watched model. Without it, mc2:04's
+    /// skeleton assault killed ONE archer and then camped its corpse
+    /// forever (the stale handle even re-spread through the sibling
+    /// cache-reuse of `sub_1E3E0`).
+    #[test]
+    fn mc2_kind3_watch_rebinds_after_the_watched_death() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Table records 10/11 give the row loader its hold/watch
+        // MODELS (dis 5 = never fired, nothing auto-spawns).
+        let rec = |slot: u32, class: u16, model: u16| mgc_formats::Thing {
+            slot,
+            kind: mgc_formats::ThingKind::Entity,
+            class,
+            model,
+            x: 10,
+            y: 10,
+            dis_id: 5,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = [rec(10, 5, 9), rec(11, 5, 4)];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        // Slot 1: kind 3 (0xC3 = kind 3 + hold-by-MODEL + watch-by-
+        // MODEL), holds model(thing 10) = 9, watches model(thing 11)
+        // = 4 — the mc2:04 skeleton row shape.
+        w.set_mc2_stagevars(&[(0, 0, 0, 0, 0), (-61i8, 0, 10, 0, 11)]);
+        // Two archers; the skeleton sits 17 tiles from A, 35 from B —
+        // inside shadow range, outside the 2048 release ring.
+        let (ax, ay) = mc2_pos(108, 100);
+        let a = w.g.mc2_spawn_archers(ax, ay, 0).unwrap();
+        let (bx, by) = mc2_pos(90, 100);
+        let b = w.g.mc2_spawn_archers(bx, by, 0).unwrap();
+        let (sx, sy) = mc2_pos(125, 100);
+        let s = w.g.mc2_spawn_m9(sx, sy, 0).unwrap();
+        w.mc2_stagevar_attach(s, 10);
+        // Materialize (16 ticks) + the deferred arm + one resolve.
+        let pose = PlayerPose::level(10 << 8, 10 << 8, 4000, 0);
+        for _ in 0..30 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let timer = |w: &World| {
+            w.mc2_sv_held
+                .iter()
+                .find(|h| h.ent as usize == s)
+                .map(|h| h.timer as u16)
+        };
+        assert_eq!(w.g.ent[s].tick70, 79, "the skeleton is stage-held (72+7)");
+        assert_eq!(
+            timer(&w),
+            Some(a as u16),
+            "the watch resolved to the NEAR archer"
+        );
+        // The watched archer dies: the scrub must clear the cache and
+        // the next walk re-resolves to the surviving archer.
+        w.g.ent[a].act_life = -1;
+        for _ in 0..12 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(
+            timer(&w),
+            Some(b as u16),
+            "the dead watch was scrubbed and re-resolved to the next live archer"
+        );
+    }
+
+    /// The (9,13) arrow strikes the FIRST victim along its path that
+    /// matches its own xtype/xsubtype filter (`sub_10780` EF:3766-69
+    /// via the fire seams stamping the TARGET's class+model —
+    /// `sub_1CCE0`/`sub_1CDA0`/`sub_20060`) — NOT only wizards. The
+    /// collateral is load-bearing choreography: mc2:04's skeleton
+    /// volleys into the packed archer flock break bystanders into
+    /// the fight, which is what spreads the scripted war.
+    #[test]
+    fn mc2_arrow_direct_hits_the_first_filter_matching_creature() {
+        let mut w = mc2_flat_world();
+        // A skeleton shooter and an archer bystander 3 tiles east of
+        // the arrow's flight origin, dead on the flight line.
+        let (sx, sy) = mc2_pos(100, 100);
+        let s = w.g.mc2_spawn_m9(sx, sy, 0).unwrap();
+        let (vx, vy) = mc2_pos(103, 100);
+        let v = w.g.mc2_spawn_archers(vx, vy, 0).unwrap();
+        let vz = w.g.ground_z(vx, vy) as i16 + 100;
+        let full = w.g.ent[v].act_life;
+        // The arrow as the skeleton's volley arms it: owner id, the
+        // TARGET's (class, model) as the collision filter, aimed at
+        // a point BEYOND the bystander so only the path filter can
+        // connect.
+        let a = w.g.mc2_spawn_arrow(sx, sy, vz).unwrap();
+        w.g.ent[a].id24 = w.g.ent[s].id24;
+        w.g.ent[a].f44 = 400;
+        w.g.ent[a].f66 = 5;
+        w.g.ent[a].f67 = 4;
+        let (fx, fy) = mc2_pos(110, 100);
+        w.g.ent[a].f30 = Gen::angle_between(sx, sy, fx, fy);
+        w.g.ent[a].f32 = 0;
+        let pose = PlayerPose::level(10 << 8, 10 << 8, 4000, 0);
+        for _ in 0..8 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[v].act_life < full,
+            "the arrow direct-hit the filter-matching archer in its path \
+             (life {} of {full})",
+            w.g.ent[v].act_life
+        );
+        assert!(
+            w.g.ent[a].flags & 0x400 != 0,
+            "the arrow despawned on the direct hit"
+        );
+    }
+
+    /// The &2-clear "death watch" fires the first scan after the
+    /// watched thing SPAWNS — retail's `sub_12780` dereferences the
+    /// raw value pass-3 stored, which in the shipped engine is never
+    /// a live entity reference (remc2's `//fix` range guard + the
+    /// `0xae02` bandaid exist to suppress it), so the garbage reads
+    /// "dead" immediately. Player-replayed on retail mc2:04
+    /// (2026-07-24): the archer flock marches AT LOAD — its kind-9
+    /// row fires at bind and chains the flock onto the kind-3 march
+    /// row. This is the mc2:04 row shape in miniature.
+    #[test]
+    fn mc2_bound_death_watch_fires_at_bind_and_chains() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let rec = |slot: u32, class: u16, model: u16| mgc_formats::Thing {
+            slot,
+            kind: mgc_formats::ThingKind::Entity,
+            class,
+            model,
+            x: 10,
+            y: 10,
+            dis_id: 5,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = [rec(10, 5, 9), rec(11, 5, 4)];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        // Slot 1 = the chain target (sv[3] shape): kind 3 + &2
+        // (0x43), holds nothing, watch-model = model(thing 10) = 9.
+        // Slot 2 = the archer hold (sv[2] shape): kind 9 + &1 (0x89),
+        // holds subtype(thing 11) = 4, CHAIN = 1, death-watch bound
+        // to thing 10's spawn.
+        w.set_mc2_stagevars(&[
+            (0, 0, 0, 0, 0),
+            (0x43u8 as i8, 0, 0, 0, 10),
+            (0x89u8 as i8, 1, 11, 0, 10),
+        ]);
+        // The archer holds on slot 2; 40 tiles from the skeleton so
+        // the kind-3 ambush ring (row 75 v_28 = 5120) stays cold.
+        let (ax, ay) = mc2_pos(60, 100);
+        let a = w.g.mc2_spawn_archers(ax, ay, 0).unwrap();
+        w.mc2_stagevar_attach(a, 11);
+        assert_eq!(w.g.ent[a].site_z, 9, "held on the kind-9 row");
+        let pose = PlayerPose::level(10 << 8, 10 << 8, 4000, 0);
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[a].site_z, 9,
+            "unbound watch: the hold stands (NULL pointer, no fire)"
+        );
+        // The watched thing spawns → pass-3 binds → the next scan
+        // fires the gate WITHOUT any death, and the chain re-holds
+        // the archer on the kind-3 march row.
+        let (sx, sy) = mc2_pos(100, 100);
+        let s = w.g.mc2_spawn_m9(sx, sy, 0).unwrap();
+        w.mc2_stagevar_attach(s, 10);
+        w.tick(pose, PlayerCommand::default());
+        assert!(w.g.ent[s].act_life >= 0, "the watched skeleton LIVES");
+        assert_eq!(
+            w.g.ent[a].site_z, 3,
+            "the bound watch fired at bind and the chain re-held the archer on slot 1"
+        );
+        assert_eq!(
+            w.mc2_sv_held
+                .iter()
+                .find(|h| h.ent as usize == a)
+                .map(|h| h.slot),
+            Some(1),
+            "the archer's binding moved to the chain slot"
+        );
+    }
+
+    /// Kind-4's "join the watched entity's fight" arm is retail-inert
+    /// (`sub_1D700` reads a stage-held creature's uninitialized
+    /// `word_0x96_150` — the `0xae02` `//fix` bandaid marks the junk;
+    /// player-replayed on mc2:04: the worms crawl along and never
+    /// join). A kind-4 holder must stay HELD even when its watched
+    /// creature has a live target standing right next to it.
+    #[test]
+    fn mc2_kind4_hold_never_joins_the_watched_fight() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let rec = |slot: u32, class: u16, model: u16| mgc_formats::Thing {
+            slot,
+            kind: mgc_formats::ThingKind::Entity,
+            class,
+            model,
+            x: 10,
+            y: 10,
+            dis_id: 5,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        };
+        let things = [rec(10, 5, 9), rec(11, 5, 4)];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        // Slot 1: kind 4 + &1 + &2 (0xC4) — the mc2:04 worm row
+        // shape: holds subtype(thing 10) = 9, watch-model =
+        // model(thing 11) = 4.
+        w.set_mc2_stagevars(&[(0, 0, 0, 0, 0), (0xC4u8 as i8, 0, 10, 0, 11)]);
+        let (gx, gy) = mc2_pos(100, 100);
+        let g = w.g.mc2_spawn_m9(gx, gy, 0).unwrap();
+        w.mc2_stagevar_attach(g, 10);
+        // The WATCHED archer = the nearest one (b, 2 tiles away); its
+        // live TARGET (a) stands 5 tiles from the holder — inside row
+        // 80's v_28 = 2048... a ported join arm would aggro the
+        // holder onto a.
+        let (ax, ay) = mc2_pos(105, 100);
+        let a = w.g.mc2_spawn_archers(ax, ay, 0).unwrap();
+        let (bx, by) = mc2_pos(102, 100);
+        let b = w.g.mc2_spawn_archers(bx, by, 0).unwrap();
+        let pose = PlayerPose::level(10 << 8, 10 << 8, 4000, 0);
+        for _ in 0..40 {
+            // The idle brain clears a non-shrine f146 each period —
+            // keep the watched archer's target live across ticks.
+            w.g.ent[b].f146 = a as u16;
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.ent[g].site_z, 4,
+            "the kind-4 holder stays held — the join arm never fires"
+        );
+    }
+
+    /// The archer's acquire Scan B falls back to the next UNNATURAL
+    /// model (the worms, m3) ONLY once the skeletons are EXTINCT —
+    /// retail-replayed on mc2:04 (2026-07-24): the archers shoot
+    /// until every skeleton is dead, then start shooting the worms.
+    /// While any skeleton LIVES (even out of range), worms are
+    /// invisible to the scan — the battle order is preserved.
+    #[test]
+    fn mc2_archer_scan_falls_back_to_worms_only_at_skeleton_extinction() {
+        let mut w = mc2_flat_world();
+        let (ax, ay) = mc2_pos(100, 100);
+        let a = w.g.mc2_spawn_archers(ax, ay, 0).unwrap();
+        // A live skeleton far out of the archer's v_28 (row 75 =
+        // 5120 = 20 tiles), and a worm 6 tiles from the archer.
+        let (sx, sy) = mc2_pos(200, 200);
+        let s = w.g.mc2_spawn_m9(sx, sy, 0).unwrap();
+        let (wx, wy) = mc2_pos(106, 100);
+        let worm = w.g.mc2_spawn_m3(wx, wy, 0).unwrap();
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 4000, 0);
+        for _ in 0..140 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.ent[a].f146, 0,
+            "a live skeleton anywhere keeps the worms invisible to Scan B"
+        );
+        w.g.ent[s].act_life = -1;
+        for _ in 0..140 {
+            w.tick(pose, PlayerCommand::default());
+            if w.g.ent[a].f146 != 0 {
+                break;
+            }
+        }
+        assert_eq!(
+            w.g.ent[a].f146, worm as u16,
+            "at skeleton extinction the archer acquires the nearest worm"
+        );
+    }
+
     /// The castle-site scout derives its scan-start sector on the
     /// position cast to SIGNED int16 (sub_13B00 EF:6076/:6079), NOT
     /// the unsigned `pos >> 14`: coordinate band 2 (0x8000..0xBFFF)
