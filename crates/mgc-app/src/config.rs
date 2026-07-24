@@ -1012,7 +1012,8 @@ impl Config {
     }
 
     #[cfg(target_os = "android")]
-    pub fn load(path: &Path, explicit: bool) -> Result<Self, String> {
+    pub fn load(_path: &Path, _explicit: bool) -> Result<Self, String> {
+        // This load call doesn't need to do anything on Android.
         return Result::<Self, String>::Ok(Self::default());
     }
 }
