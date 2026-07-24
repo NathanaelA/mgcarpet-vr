@@ -800,7 +800,9 @@ struct Mc2EndSeq {
 #[derive(Clone, Debug)]
 pub struct Notification {
     pub text: String,
-    /// Ticks remaining before the line clears.
+    /// Retail FRAMES remaining before the line clears (1/24s of wall
+    /// time each — aged by [`World::age_notification`], never by the
+    /// sim tick, so game speed does not stretch or blink the line).
     pub timer: u16,
     /// Ink colour, RGB (DrawText's resolved `color`).
     pub color: [u8; 3],
@@ -1583,17 +1585,6 @@ impl World {
     pub fn tick(&mut self, player: PlayerPose, cmd: PlayerCommand) {
         // One global LCG draw per tick, before any handler (:52223).
         lcg32(&mut self.g.rand);
-
-        // The top-of-screen notification decays on its own clock (retail
-        // decrements the per-player message life each frame, clearing at
-        // zero). Presentation transient — hash-excluded, so this never
-        // perturbs the goldens.
-        if let Some(n) = &mut self.notification {
-            n.timer = n.timer.saturating_sub(1);
-            if n.timer == 0 {
-                self.notification = None;
-            }
-        }
 
         // Broad-phase bucket counts for the kill triggers: class-5
         // events by model, excluding state 120 (multipart body
@@ -7427,8 +7418,9 @@ impl World {
     }
 
     /// Raise the top-of-screen notification (retail `SetCurrentNotif
-    /// icationMessage`): `text` shown for `ticks` (retail's level-up
-    /// path uses 200, the select toast 20), inked `color` (RGB). The
+    /// icationMessage`): `text` shown for `ticks` retail frames
+    /// (retail's level-up path uses 200, the select toast 20), inked
+    /// `color` (RGB). The
     /// shared message surface — spell selection/level-ups now, deaths/
     /// rival events/objectives later. Replaces any current line (last
     /// writer wins, like the single retail buffer).
@@ -7455,6 +7447,24 @@ impl World {
         self.notification
             .as_ref()
             .map(|n| (n.text.as_str(), n.color))
+    }
+
+    /// Age the notification by `frames` retail frames, clearing at
+    /// zero. Retail decrements the per-player message life once per
+    /// RENDERED FRAME, not per game turn — so a toast's on-screen
+    /// time never followed the speed multiplier. The app drives this
+    /// on an unscaled 24Hz wall-clock cadence (the frame pacing the
+    /// tick-denominated retail lifetimes were written against), which
+    /// restores that: SLOW no longer parks a toast forever and VERY
+    /// FAST no longer blinks it. Presentation transient — headless
+    /// replays never call it, and the hash never sees it.
+    pub fn age_notification(&mut self, frames: u16) {
+        if let Some(n) = &mut self.notification {
+            n.timer = n.timer.saturating_sub(frames);
+            if n.timer == 0 {
+                self.notification = None;
+            }
+        }
     }
 
     /// Drain this tick's sound requests plus the ambient-loop inputs

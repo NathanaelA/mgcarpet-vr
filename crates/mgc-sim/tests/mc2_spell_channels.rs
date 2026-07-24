@@ -1500,7 +1500,7 @@ fn mc2_quake_family_lifetimes_scale_with_tier() {
 #[test]
 fn mc2_spell_select_raises_notification_toast() {
     // The change-spell path (EF:37925) raises the top-of-screen
-    // notification with the chosen TIER's own name, on a 20-tick life
+    // notification with the chosen TIER's own name, on a 20-frame life
     // (the presentation surface — hash-excluded, so the goldens never
     // see it). Selecting Possession tier 1 must toast "Mana Magnet"
     // (its distinct per-tier hint name), then decay to nothing.
@@ -1513,8 +1513,6 @@ fn mc2_spell_select_raises_notification_toast() {
         return;
     };
     w.set_dev_spells(true);
-    let (cx, cy) = open_spot(&w);
-    let pose = pose_at(&w, cx, cy);
 
     assert!(w.notification().is_none(), "no toast at level start");
 
@@ -1525,16 +1523,15 @@ fn mc2_spell_select_raises_notification_toast() {
     assert_eq!(text, want, "the toast is the chosen tier's spell name");
     assert_eq!(color, [255, 0, 0], "plain toasts are red");
 
-    // The 20-tick select life decays and clears (the toast never
-    // perturbs the state hash — the countdown just runs on its own).
-    for _ in 0..19 {
-        w.tick(pose, PlayerCommand::default());
-    }
+    // The 20-frame select life decays on the app-driven wall-clock
+    // frame cadence — never the sim tick, so game speed cannot
+    // stretch or blink it — and clears.
+    w.age_notification(19);
     assert!(w.notification().is_some(), "toast still live before expiry");
-    w.tick(pose, PlayerCommand::default());
+    w.age_notification(1);
     assert!(
         w.notification().is_none(),
-        "toast cleared after its 20-tick life"
+        "toast cleared after its 20-frame life"
     );
 }
 

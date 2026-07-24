@@ -257,6 +257,17 @@ impl Spec {
         }
     }
 
+    /// Whether menu changes to this option are written to
+    /// `mgcarpet.json`. Keyed by config path like [`mutability`].
+    /// Game speed is a situational control that the game itself
+    /// resets to normal at every level entry, so a persisted value
+    /// would only ever be a stale surprise at the next launch.
+    ///
+    /// [`mutability`]: Spec::mutability
+    pub fn persists(&self) -> bool {
+        self.cfg_path != "sim.options.game_speed"
+    }
+
     /// The trailing `[key T | --flag | cfg.path]` toggle comment.
     fn toggle_hint(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
@@ -347,7 +358,9 @@ pub fn registry() -> Vec<Spec> {
             },
             desc: "How fast the world runs. Retail's F3 option: the whole \
                    simulation is paced up or down — everything moves, fights \
-                   and regenerates at the multiplied rate.",
+                   and regenerates at the multiplied rate. A situational \
+                   control, not a preference: it resets to normal at every \
+                   level start and is never saved.",
             ctl: Ctl::Choice {
                 set: |c, i| {
                     c.sim.options.game_speed = match i {

@@ -113,6 +113,9 @@ pub struct SimOptions {
     /// loop expresses the same thing by scaling the tick accumulator.
     /// Hash-neutral: every tick is bit-identical, only the wall-clock
     /// pacing changes. Toggle at runtime with F3 (retail's key).
+    /// Session-only: resets to Normal at every level entry and is
+    /// never persisted — a situational control (waiting out balloon
+    /// mana runs), not a standing preference.
     pub game_speed: GameSpeed,
 }
 

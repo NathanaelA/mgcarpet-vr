@@ -1300,8 +1300,11 @@ const MC2_LEVEL_END_TEXT: [u16; 25] = [
     53, 59, 65, 68, 71, 76, 78, 85, 91, 96, 101, 104, 109, 114, 117, 123, 125, 130, 132, 135, 139,
     142, 150, 156, 158,
 ];
-/// Subtitle dwell: retail parks the objective textbox for 200 ticks
-/// (`byte_counter_current_objective_box_0x36E04 = 200`).
+/// Subtitle dwell: retail parks the objective textbox for 200 frames
+/// (`byte_counter_current_objective_box_0x36E04 = 200`). Counted on
+/// the 24Hz WALL clock, not sim ticks — the line overtitles a
+/// wall-time voiceover, and game speed must not cut it short or park
+/// it (same law as the notification toast).
 const SUBTITLE_TICKS: u16 = 200;
 
 /// The ETEXT sentence behind one speech cue: `lvl` = 0-based level,
@@ -1502,11 +1505,12 @@ struct App {
     /// near-level flight hold altitude). Faithful for MC2;
     /// enhancement-class in MC1/HW like Backspace.
     stick_idle_ticks: u16,
-    /// The live narration subtitle: sentence + remaining dwell ticks
-    /// (retail parks the objective textbox for 200 ticks —
+    /// The live narration subtitle: sentence + remaining dwell frames
+    /// (retail parks the objective textbox for 200 —
     /// `byte_counter_current_objective_box_0x36E04`, EF:22000). Set
     /// when a speech cue fires (per `audio.subtitles`), counted down
-    /// per sim tick, drawn centered over the live view.
+    /// on the 24Hz wall clock alongside the toast (never sim ticks —
+    /// it overtitles wall-time speech), drawn centered over the view.
     subtitle: Option<(String, u16)>,
     /// Space pressed since the last sim tick (respawn confirm).
     pending_full_stop: bool,
@@ -1610,6 +1614,11 @@ struct App {
     alt_held: bool,
     last_frame: std::time::Instant,
     accumulator: f32,
+    /// Toast-decay clock: WALL seconds toward the next 24Hz
+    /// notification frame. Deliberately NOT speed-scaled — retail
+    /// ages the message line per rendered frame, not per game turn
+    /// (see the tick loop).
+    toast_accumulator: f32,
     /// PROTOTYPE fire effect: wall-clock seconds, drives flame
     /// turbulence/shimmer (advances even while paused).
     effect_time: f32,
@@ -1811,6 +1820,7 @@ impl App {
             alt_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
+            toast_accumulator: 0.0,
             effect_time: 0.0,
             fire_applied: None,
             fps_frames: 0,
@@ -2000,6 +2010,7 @@ impl App {
         self.castle_pos = None;
         self.last_map_tick = None;
         self.accumulator = 0.0;
+        self.toast_accumulator = 0.0;
         self.frontend_music();
     }
 
@@ -2276,8 +2287,12 @@ impl App {
     /// Persist one option's CURRENT value into the sparse overlay
     /// config (`mgcarpet.json`): only that dotted path is touched, so
     /// hand-written overrides and `gamedata` survive. Menu changes
-    /// persist; runtime-key toggles stay session-only.
+    /// persist; runtime-key toggles stay session-only, as does the
+    /// occasional spec that opts out wholesale (`Spec::persists`).
     fn persist_option(&self, spec: &settings::Spec) {
+        if !spec.persists() {
+            return;
+        }
         let full = match serde_json::to_value(&self.cfg) {
             Ok(v) => v,
             Err(e) => {
@@ -2632,14 +2647,8 @@ impl App {
                     self.subtitle = Some((text.clone(), SUBTITLE_TICKS));
                 }
             }
-            // Subtitle dwell countdown (one per sim tick, like the
-            // retail box counter).
-            if let Some((_, ticks)) = &mut self.subtitle {
-                *ticks -= 1;
-                if *ticks == 0 {
-                    self.subtitle = None;
-                }
-            }
+            // The dwell countdown lives with the toast decay in the
+            // frame loop (wall clock), not here per sim tick.
         }
         audio.tick();
     }
@@ -2692,6 +2701,9 @@ impl App {
             // starting spells in canonical order on the first tick.
             self.quick_binds = [None; 10];
             self.prev_owned = [false; 24];
+            // A restart is a level entry — the situational sim speed
+            // resets with the rest (mirrors `install_level`).
+            self.cfg.sim.options.game_speed = config::GameSpeed::Normal;
             apply_instruments(
                 &mut w,
                 self.cfg.gameplay.cheat.dev_spells,
@@ -3172,6 +3184,12 @@ impl App {
         self.won_handled = false;
         self.exit_confirm = false;
         self.accumulator = 0.0;
+        self.toast_accumulator = 0.0;
+        // Sim speed is a situational control (waiting out balloon
+        // runs at 4x), not a standing preference — every level opens
+        // at the authentic pace. Session-only by the same token: the
+        // menu never persists it (`Spec::persists`).
+        self.cfg.sim.options.game_speed = config::GameSpeed::Normal;
         // Renderer: the same upload block `resumed` runs at startup.
         let sess = sess_ref!(self);
         let overlay = map_overlay(&sess.level, &self.cfg);
@@ -5894,6 +5912,33 @@ impl ApplicationHandler for App {
                     // under it, EventsFunctions.cpp:31796; the dialog
                     // only owns the input. P still pauses if wanted.)
                     self.accumulator = 0.0;
+                }
+
+                // The toast line decays on WALL time at the authentic
+                // 24Hz — retail decrements the message life once per
+                // rendered frame, not per game turn, so the speed
+                // multiplier never parked a SLOW toast forever or
+                // blinked a VERY FAST one. Frozen with the rest of the
+                // clock under P-pause.
+                if !self.paused {
+                    self.toast_accumulator += dt;
+                    let frames =
+                        ((self.toast_accumulator / TICK_DT) as u32).min(u16::MAX as u32) as u16;
+                    if frames > 0 {
+                        self.toast_accumulator -= f32::from(frames) * TICK_DT;
+                        if let Some(w) = sess!(self).sim.world.as_mut() {
+                            w.age_notification(frames);
+                        }
+                        // The narration subtitle dwells on the same
+                        // wall clock (it overtitles a wall-time
+                        // voiceover).
+                        if let Some((_, t)) = &mut self.subtitle {
+                            *t = t.saturating_sub(frames);
+                            if *t == 0 {
+                                self.subtitle = None;
+                            }
+                        }
+                    }
                 }
 
                 // Per-frame tick burst cap: at high multipliers a slow
