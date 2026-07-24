@@ -1615,6 +1615,8 @@ impl Config {
     /// a missing override file simply yields the baseline; a path the
     /// user asked for must exist. Malformed JSON is always an error —
     /// better loud than silently authentic.
+    #[allow(dead_code)]
+    #[cfg(not(target_os = "android"))]
     pub fn load(path: &Path, explicit: bool) -> Result<Self, String> {
         let defaults_path = defaults_path(path);
         ensure_defaults(&defaults_path)?;
@@ -1640,6 +1642,11 @@ impl Config {
         // silhouette melt band. 0 stays "fog off".
         cfg.render.preference.fog_distance = cfg.render.preference.fog_distance.min(MAX_FOG_TILES);
         Ok(cfg)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn load(path: &Path, explicit: bool) -> Result<Self, String> {
+        return Result::<Self, String>::Ok(Self::default());
     }
 }
 

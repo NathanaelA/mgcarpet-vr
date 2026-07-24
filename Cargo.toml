@@ -43,3 +43,4 @@ too_many_arguments = "allow"
 # Data decompression is unusably slow at opt-level 0; the importer chews
 # through megabytes of RNC even in dev builds.
 opt-level = 1
+

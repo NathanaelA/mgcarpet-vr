@@ -1,8 +1,12 @@
 # Claude local settings
 .claude
 
+.idea
+
 # Build output
 /target
+/crates/mgc-vr/android/build
+/crates/mgc-app/android/build
 
 # Original game data (bring your own GOG copy) — never committed
 /gamedata/*
