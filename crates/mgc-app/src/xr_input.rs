@@ -168,6 +168,7 @@ impl InputActions {
         session: &xr::Session<xr::Vulkan>,
         owned: [bool; 26],
         is_mc2: bool,
+        grabbed: bool,
     ) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
 
@@ -192,7 +193,7 @@ impl InputActions {
                     return i;
                 }
             }
-            for i in 0..spell {
+            for i in 0..26 {
                 if owned[i as usize] {
                     return i;
                 }
@@ -208,8 +209,13 @@ impl InputActions {
         if pressed(&self.menu_click) && !self.last_menu {
             extra_data |= 1;
         }
+        if pressed(&self.thumbstick_left_click) && !self.last_thumbstick_left_click {
+            extra_data |= 2;
+        }
 
-        let pitch_delta = if left.y < 0.0 {
+        let pitch_delta = if !grabbed {
+            right.y
+        } else if left.y < 0.0 {
             0.3
         } else if (left.y > 0.0) {
             -0.3
