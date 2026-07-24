@@ -92,9 +92,18 @@ fn locate_gamedata(config_override: Option<&Path>) -> Option<PathBuf> {
     default.is_dir().then(|| default.to_path_buf())
 }
 
+#[cfg(target_os = "android")]
+pub fn ensure_baked(_level_path: &Path, _config_gamedata: Option<&Path>) -> Result<(), String> {
+    // Android builds ship with baked data in the APK; no bake is
+    // possible at runtime.
+    Ok(())
+}
+
 /// Ensure the baked tree serving `level_path` is present and current;
 /// bake it from game data when it isn't. `Ok(())` means the caller
 /// can load the level normally.
+#[allow(dead_code)]
+#[cfg(not(target_os = "android"))]
 pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result<(), String> {
     // Same root rule as load_level: <baked>/<game>/level-NNN.mgcl —
     // but only trust the inference when the path actually follows the

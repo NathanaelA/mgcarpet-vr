@@ -640,6 +640,50 @@ pub struct CameraView {
     pub fov_y: f32,
 }
 
+/// Per-eye camera state for stereoscopic (Meta Quest / OpenXR) rendering.
+/// Position/orientation mirror [`CameraView`]; `proj` is OpenXR's own
+/// projection matrix for this eye (column-major, depth 0..1) — it is
+/// typically asymmetric (the Quest's optics aren't centered on the eye),
+/// so it's used directly in place of [`CameraView::fov_y`]'s symmetric
+/// build. `fov_y` still approximates the eye's vertical half-angle for
+/// the sky ray reconstruction and billboard facing math, which assume a
+/// symmetric frustum — a cosmetic approximation at the frame edges only.
+#[derive(Debug, Clone, Copy)]
+pub struct EyeView {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub roll: f32,
+    pub fov_y: f32,
+    pub proj: [[f32; 4]; 4],
+}
+
+impl EyeView {
+    /// A same-position/orientation [`CameraView`] for reusing the mono
+    /// path's basis and billboard-sort helpers, which don't touch `proj`.
+    fn as_camera(&self) -> CameraView {
+        CameraView {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            roll: self.roll,
+            fov_y: self.fov_y,
+        }
+    }
+}
+
+/// A stereo frame: one [`EyeView`] per eye, rendered by
+/// [`Renderer::render_stereo`].
+#[derive(Debug, Clone, Copy)]
+pub struct StereoView {
+    pub left: EyeView,
+    pub right: EyeView,
+}
+
 /// The rolled camera basis (right, up, fwd) shared by the view
 /// matrix and the billboard expansion vectors.
 fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
@@ -1151,6 +1195,9 @@ enum Target {
         width: u32,
         height: u32,
     },
+    /// VR: no surface — each frame's left/right color views come from the
+    /// caller (the OpenXR swapchain), passed directly to `render_stereo`.
+    Xr { width: u32, height: u32 },
 }
 
 /// The supersample buffer: the whole frame rendered larger than the
@@ -1448,6 +1495,29 @@ impl Renderer {
             width,
             height,
             // Screenshots render at an exact size with no AA.
+            1,
+        ))
+    }
+
+    /// Renderer for Meta Quest / OpenXR: `device`/`queue` are pre-created
+    /// against the SAME Vulkan objects the XR session owns (see
+    /// `mgc-app`'s `wgpu_share` module); there is no wgpu `Surface` — the
+    /// per-frame color targets are the caller's XR swapchain image views,
+    /// passed to [`Self::render_stereo`].
+    pub fn for_xr(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, RenderError> {
+        Ok(Self::finish_init(
+            device,
+            queue,
+            Target::Xr { width, height },
+            format,
+            width,
+            height,
             1,
         ))
     }
@@ -3603,6 +3673,7 @@ impl Renderer {
                     ss.size.1 as f32 / config.height.max(1) as f32,
                 ),
                 Target::Offscreen { .. } => (1.0, 1.0),
+                Target::Xr { .. } => (1.0, 1.0),
             };
             for q in &mut quads {
                 q.rect = [
@@ -3998,6 +4069,7 @@ impl Renderer {
                 ((config.height as f32 * self.render_scale) as u32).max(1),
             )),
             Target::Window { .. } => None,
+            Target::Xr { .. } => None,
         };
         let Some(size) = want else {
             self.ssaa = None;
@@ -4074,23 +4146,34 @@ impl Renderer {
         match &self.target {
             Target::Window { config, .. } => (config.width, config.height),
             Target::Offscreen { width, height, .. } => (*width, *height),
+            Target::Xr { width, height } => (*width, *height),
         }
+    }
+
+    /// Android is stereo-only (`Target::Xr`, [`Self::render_stereo`]);
+    /// the shared shell still compiles mono `render()` call sites
+    /// there, so the symbol must exist — as a no-op.
+    #[cfg(target_os = "android")]
+    pub fn render(&mut self, _cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
+        Ok(())
     }
 
     /// Render one frame to the renderer's own target: acquire the
     /// swapchain image (window) or the offscreen color buffer, draw
     /// into it via [`Self::render_texture`], and present.
+    #[cfg(not(target_os = "android"))]
     pub fn render(&mut self, cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
         let frame = match &self.target {
             Target::Window { surface, .. } => Some(surface.get_current_texture()?),
             Target::Offscreen { .. } => None,
+            Target::Xr { .. } => panic!("render() on an XR renderer — use render_stereo"),
         };
         let surface_view = match (&frame, &self.target) {
             (Some(f), _) => f.texture.create_view(&Default::default()),
             (None, Target::Offscreen { color, .. }) => color.create_view(&Default::default()),
             _ => unreachable!(),
         };
-        self.render_texture(cam, &surface_view);
+        self.render_texture(cam, &surface_view, None);
         if let Some(frame) = frame {
             frame.present();
         }
@@ -4104,7 +4187,16 @@ impl Renderer {
     /// keep every downstream feature: the supersample and MSAA passes
     /// resolve into the given view exactly as they do onto the window
     /// surface.
-    pub fn render_texture(&mut self, cam: &CameraView, surface_view: &wgpu::TextureView) {
+    ///
+    /// `proj` overrides the camera-derived view-projection matrix (the
+    /// XR path's per-eye asymmetric matrices); `None` computes it from
+    /// `cam` as the mono path always has.
+    pub fn render_texture(
+        &mut self,
+        cam: &CameraView,
+        surface_view: &wgpu::TextureView,
+        proj: Option<[[f32; 4]; 4]>,
+    ) {
         let (w, hpx) = self.size();
 
         // Book-screen layout (sub_20E60 case 4), native 640×480 scaled to
@@ -4210,7 +4302,8 @@ impl Renderer {
             },
             ..*cam
         };
-        let view_proj = camera_matrix(cam, aspect);
+        let view_proj = proj.unwrap_or_else(|| camera_matrix(cam, aspect));
+
         let sky = self.sky_color_linear();
         // Camera right/up for billboard expansion (matches
         // `camera_matrix`'s basis, bank included — billboards stay
@@ -4906,6 +4999,144 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
+    fn render_eye(&mut self, eye: &EyeView, color_view: &wgpu::TextureView) {
+        let cam = eye.as_camera();
+        self.render_texture(&cam, color_view, Some(eye_view_proj(eye)));
+    }
+
+    /// One eye's pass for [`Self::render_stereo`]: sky, terrain (+
+    /// ceiling), billboards. VR has no book/map/mirror/UI screens, so
+    /// this is a trimmed twin of `render()`'s inner `draw_world` closure
+    /// rather than a refactor of it — that closure is inseparable from
+    /// the 2D book/map layout math around it.
+    fn render_eye2(&mut self, eye: &EyeView, color_view: &wgpu::TextureView) {
+        let (w, hpx) = self.size();
+        let view_proj = eye_view_proj(eye);
+        let cam = eye.as_camera();
+        let (right, up, _fwd) = camera_basis(&cam);
+        let tan_v = (eye.fov_y * 0.5).tan();
+        let tan_h = tan_v * (w as f32 / hpx.max(1) as f32);
+        let sky = self.sky_color_linear();
+
+        let globals = Globals {
+            view_proj,
+            camera: [eye.x, eye.y, eye.z, self.fog_distance],
+            fog_color: [sky[0] as f32, sky[1] as f32, sky[2] as f32, self.anim_turn],
+            atlas: [
+                self.atlas_cells,
+                self.smooth_shading as u32,
+                self.wave_mode,
+                0,
+            ],
+            cam_right: [right[0], right[1], right[2], tan_h],
+            cam_up: [up[0], up[1], up[2], tan_v],
+            viewport: [w as f32, hpx as f32, 0.0, self.lights.len() as f32],
+            lights: {
+                let mut arr = [[0.0f32; 4]; MAX_LIGHTS];
+                arr[..self.lights.len()].copy_from_slice(&self.lights);
+                arr
+            },
+        };
+        self.queue
+            .write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
+
+        let (instances, opaque_count) = self.billboard_instances(&cam);
+        let instance_count = instances.len() as u32;
+        if !instances.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(&instances);
+            let need = bytes.len();
+            if self.billboard_buf.is_none() || self.billboard_capacity < need {
+                self.billboard_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("billboard instances"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.billboard_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.billboard_buf.as_ref().unwrap(), 0, bytes);
+        }
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("xr eye"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: sky[0],
+                            g: sky[1],
+                            b: sky[2],
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            if let Some(sky_bg) = &self.sky_bind_group {
+                pass.set_pipeline(&self.sky_pipeline);
+                pass.set_bind_group(0, sky_bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            if let (Some(bg), Some(vb), Some(ib)) =
+                (&self.bind_group, &self.vertex_buf, &self.index_buf)
+            {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]);
+                pass.set_vertex_buffer(0, vb.slice(..));
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.index_count, 0, 0..9);
+                if let Some(cbg) = &self.ceiling_bind_group {
+                    pass.set_bind_group(0, cbg, &[]);
+                    pass.draw_indexed(0..self.index_count, 0, 0..9);
+                }
+            }
+            if let (1.., Some(bg), Some(buf)) = (
+                instance_count,
+                &self.billboard_bind_group,
+                &self.billboard_buf,
+            ) {
+                pass.set_bind_group(0, bg, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                if opaque_count > 0 {
+                    pass.set_pipeline(&self.billboard_pipeline);
+                    pass.draw(0..6, 0..opaque_count);
+                }
+                if instance_count > opaque_count {
+                    pass.set_pipeline(&self.billboard_blend_pipeline);
+                    pass.draw(0..6, opaque_count..instance_count);
+                }
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Render one stereo frame: `render_eye` for each XR swapchain eye
+    /// texture. No surface is involved (VR has no `wgpu::Surface`), so
+    /// unlike `render()` this cannot fail with a `SurfaceError`.
+    pub fn render_stereo(
+        &mut self,
+        stereo: &StereoView,
+        left_color: &wgpu::TextureView,
+        right_color: &wgpu::TextureView,
+    ) {
+        self.render_eye(&stereo.left, left_color);
+        self.render_eye(&stereo.right, right_color);
+    }
+
     /// Read back the offscreen target as tightly-packed RGBA8 rows.
     /// Panics if the renderer targets a window.
     pub fn read_offscreen(&self) -> (u32, u32, Vec<u8>) {
@@ -5079,18 +5310,34 @@ pub fn world_to_screen(
     ))
 }
 
-fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
+/// View matrix (world → camera space, look direction mapped to -Z),
+/// shared by the mono symmetric-fov path and the stereo XR path (which
+/// supplies its own projection matrix instead of `camera_matrix`'s).
+fn view_matrix(cam: &CameraView) -> [[f32; 4]; 4] {
     let (right, up, fwd) = camera_basis(cam);
     let eye = [cam.x, cam.y, cam.z];
     let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-
-    // View matrix: camera basis rows, look direction mapped to -Z.
-    let view = [
+    [
         [right[0], up[0], -fwd[0], 0.0],
         [right[1], up[1], -fwd[1], 0.0],
         [right[2], up[2], -fwd[2], 0.0],
         [-dot(right, eye), -dot(up, eye), dot(fwd, eye), 1.0],
-    ];
+    ]
+}
+
+/// `a * b`, both column-major 4x4.
+fn mat4_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let mut out = [[0.0f32; 4]; 4];
+    for (c, out_col) in out.iter_mut().enumerate() {
+        for (r, out_cell) in out_col.iter_mut().enumerate() {
+            *out_cell = (0..4).map(|k| a[k][r] * b[c][k]).sum();
+        }
+    }
+    out
+}
+
+fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
+    let view = view_matrix(cam);
 
     // Perspective, near 0.05 tiles, far 600 (a 256-tile world plus fog
     // headroom), depth 0..1.
@@ -5103,14 +5350,14 @@ fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
         [0.0, 0.0, near * far / (near - far), 0.0],
     ];
 
-    // proj * view, both column-major.
-    let mut out = [[0.0f32; 4]; 4];
-    for (c, out_col) in out.iter_mut().enumerate() {
-        for (r, out_cell) in out_col.iter_mut().enumerate() {
-            *out_cell = (0..4).map(|k| proj[k][r] * view[c][k]).sum();
-        }
-    }
-    out
+    mat4_mul(&proj, &view)
+}
+
+/// `EyeView.proj * view_matrix(eye)` — the stereo counterpart of
+/// `camera_matrix`, using the eye's own (possibly asymmetric) OpenXR
+/// projection instead of building a symmetric one from `fov_y`.
+fn eye_view_proj(eye: &EyeView) -> [[f32; 4]; 4] {
+    mat4_mul(&eye.proj, &view_matrix(&eye.as_camera()))
 }
 
 #[cfg(test)]

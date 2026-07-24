@@ -21,15 +21,20 @@ mod movie;
 mod saves;
 mod settings;
 mod ui;
+#[cfg(target_os = "android")]
+mod wgpu_share;
 mod worldmap;
-
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+#[cfg(target_os = "android")]
+mod xr_init;
+#[cfg(target_os = "android")]
+mod xr_input;
 
 use mgc_formats::bundle::Bundle;
 use mgc_formats::{Game, LevelPackage, mgcl};
 use mgc_render::{Billboard, CameraView, LevelView, Renderer};
-use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT};
+use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT, ThrustModel};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::{
     DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
@@ -37,6 +42,29 @@ use winit::event::{
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
+
+#[cfg(target_os = "android")]
+use crate::wgpu_share::WgpuContext;
+#[cfg(target_os = "android")]
+use crate::xr_init::XrContext;
+#[cfg(target_os = "android")]
+use crate::xr_input::InputActions;
+#[cfg(target_os = "android")]
+use log::log;
+#[cfg(target_os = "android")]
+use mgc_render::{EyeView, StereoView};
+#[cfg(target_os = "android")]
+use openxr as xr;
+#[cfg(target_os = "android")]
+use winit::platform::android::ActiveEventLoopExtAndroid;
+#[cfg(target_os = "android")]
+use winit::platform::android::activity::AndroidApp;
+
+#[cfg(target_os = "android")]
+const IS_ANDROID: bool = true;
+
+#[cfg(not(target_os = "android"))]
+const IS_ANDROID: bool = false;
 
 const FOV_Y: f32 = 60.0_f32.to_radians();
 const MOUSE_SENSITIVITY: f32 = 0.0022;
@@ -1567,6 +1595,16 @@ macro_rules! ui_assets {
     };
 }
 
+/// Whether the session is currently running frames.
+#[cfg(target_os = "android")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XRSessionState {
+    Idle,
+    Running,
+    Stopping,
+    Exiting,
+}
+
 struct App {
     /// The running gameplay instance; None while a frontend screen
     /// owns the app (campaign boot, between levels).
@@ -1818,6 +1856,27 @@ struct App {
     /// owns the input. Esc/Cancel stays, Enter/OK abandons to the hub
     /// (or exits, single-level).
     exit_confirm: bool,
+
+    #[cfg(target_os = "android")]
+    swapchain: Option<xr::Swapchain<xr::Vulkan>>,
+    /// Per swapchain-image-index eye views: (left = array layer 0, right
+    /// = array layer 1). OpenXR double/triple-buffers the swapchain, so
+    /// there are usually 2-3 entries, indexed by `acquire_image()`.
+    #[cfg(target_os = "android")]
+    eye_views: Vec<(wgpu::TextureView, wgpu::TextureView)>,
+    #[cfg(target_os = "android")]
+    eye_width: u32,
+    #[cfg(target_os = "android")]
+    eye_height: u32,
+    #[cfg(target_os = "android")]
+    input: Option<InputActions>,
+
+    #[cfg(target_os = "android")]
+    wgpu: Option<WgpuContext>,
+    #[cfg(target_os = "android")]
+    ctx: Option<XrContext>,
+    #[cfg(target_os = "android")]
+    xrsession_state: XRSessionState,
 }
 
 impl App {
@@ -1978,6 +2037,22 @@ impl App {
             frontend_ui: None,
             won_handled: false,
             exit_confirm: false,
+            #[cfg(target_os = "android")]
+            swapchain: None,
+            #[cfg(target_os = "android")]
+            eye_views: Vec::new(),
+            #[cfg(target_os = "android")]
+            eye_width: 0,
+            #[cfg(target_os = "android")]
+            eye_height: 0,
+            #[cfg(target_os = "android")]
+            input: None,
+            #[cfg(target_os = "android")]
+            wgpu: None,
+            #[cfg(target_os = "android")]
+            ctx: None,
+            #[cfg(target_os = "android")]
+            xrsession_state: XRSessionState::Idle,
         };
         match level {
             // Single-level mode boots straight into its session.
@@ -3376,6 +3451,17 @@ impl App {
         self.renderer.as_ref().is_some_and(|r| r.map_view())
     }
 
+    #[cfg(target_os = "android")]
+    fn tick_input(&mut self) -> FlightInput {
+        let input = self
+            .input
+            .as_mut()
+            .unwrap()
+            .poll(&self.ctx.as_mut().unwrap().xr_session);
+        input
+    }
+
+    #[cfg(not(target_os = "android"))]
     fn tick_input(&mut self) -> FlightInput {
         let axis = |neg: bool, pos: bool| (pos as i32 - neg as i32) as f32;
         let k = &self.keys;
@@ -5131,7 +5217,11 @@ impl App {
     /// arm: drain wall time into fixed sim ticks, assemble the
     /// HUD/UI quads, place the camera, render, and request the
     /// next redraw.
-    fn redraw_requested(&mut self, event_loop: &ActiveEventLoop) {
+    fn redraw_requested(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        render: fn(app: &mut App, cam: &CameraView) -> Result<(), wgpu::SurfaceError>,
+    ) {
         let now = std::time::Instant::now();
         // Clamp huge pauses (debugger, suspend) to keep the sim
         // from spiraling through hundreds of catch-up ticks.
@@ -5197,20 +5287,18 @@ impl App {
         // the void (the renderer holds no level).
         if self.screen != Screen::Level || self.session.is_none() {
             self.frontend_frame(dt, event_loop);
-            if let Some(r) = &mut self.renderer {
-                let cam = CameraView {
-                    x: 0.0,
-                    y: 4.0,
-                    z: 0.0,
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    roll: 0.0,
-                    fov_y: FOV_Y,
-                };
-                match r.render(&cam) {
-                    Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
-                    Err(e) => eprintln!("render: {e}"),
-                }
+            let cam = CameraView {
+                x: 0.0,
+                y: 4.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                roll: 0.0,
+                fov_y: FOV_Y,
+            };
+            match render(self, &cam) {
+                Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                Err(e) => eprintln!("render: {e}"),
             }
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -6213,7 +6301,7 @@ impl App {
             if let Some(t) = anim_tick {
                 r.set_anim_turn(t as f32 + alpha);
             }
-            match r.render(&cam) {
+            match render(self, &cam) {
                 Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
                 Err(e) => eprintln!("render: {e}"),
             }
@@ -6222,8 +6310,209 @@ impl App {
             w.request_redraw();
         }
     }
+
+    #[cfg(target_os = "android")]
+    fn render_and_submit(
+        &mut self,
+        display_time: xr::Time,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let views = {
+            let Some(ctx) = &self.ctx else {
+                return Err("XR context is missing".into());
+            };
+            let (_flags, views) = ctx.xr_session.locate_views(
+                xr::ViewConfigurationType::PRIMARY_STEREO,
+                display_time,
+                &ctx.stage_space,
+            )?;
+            views
+        };
+
+        let stereo = self.build_stereo_view(&views);
+
+        let swapchain: &mut openxr::Swapchain<openxr::Vulkan> = self
+            .swapchain
+            .as_mut()
+            .ok_or("Swapchain is not initialized")?;
+
+        let image_index = swapchain.acquire_image()? as usize;
+        swapchain.wait_image(xr::Duration::INFINITE)?;
+        let (left, right) = &self.eye_views[image_index];
+        self.renderer
+            .as_mut()
+            .expect("exist")
+            .render_stereo(&stereo, left, right);
+        swapchain.release_image()?;
+
+        let rect = xr::Rect2Di {
+            offset: xr::Offset2Di { x: 0, y: 0 },
+            extent: xr::Extent2Di {
+                width: self.eye_width as i32,
+                height: self.eye_height as i32,
+            },
+        };
+        let sub_image = |layer: u32| {
+            xr::SwapchainSubImage::new()
+                .swapchain(swapchain)
+                .image_rect(rect)
+                .image_array_index(layer)
+        };
+        let projection_views = [
+            xr::CompositionLayerProjectionView::new()
+                .pose(views[0].pose)
+                .fov(views[0].fov)
+                .sub_image(sub_image(0)),
+            xr::CompositionLayerProjectionView::new()
+                .pose(views[1].pose)
+                .fov(views[1].fov)
+                .sub_image(sub_image(1)),
+        ];
+        if let Some(ctx) = &mut self.ctx {
+            let stage_space = &ctx.stage_space;
+            let env_blend_mode = ctx.env_blend_mode;
+            let frame_stream = &mut ctx.frame_stream;
+
+            let layer = xr::CompositionLayerProjection::new()
+                .space(stage_space)
+                .views(&projection_views);
+            frame_stream.end(display_time, env_blend_mode, &[&*layer])?;
+        } else {
+            return Err("XR context is missing".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn xr_tick(&mut self) -> Result<(), wgpu::SurfaceError> {
+        // ── Process all pending XR events ────────────────────────────────────
+
+        let mut buf = xr::EventDataBuffer::new();
+        while let Some(event) = self
+            .ctx
+            .as_mut()
+            .unwrap()
+            .xr_instance
+            .poll_event(&mut buf)
+            .unwrap_or(None)
+        {
+            match event {
+                xr::Event::SessionStateChanged(e) => {
+                    log::info!("XR session state → {:?}", e.state());
+                    self.handle_session_state(e.state());
+                }
+                xr::Event::InstanceLossPending(_) => {
+                    log::warn!("XR InstanceLossPending — exiting");
+                    self.xrsession_state = XRSessionState::Exiting;
+                }
+                _ => {}
+            }
+        }
+
+        match self.xrsession_state {
+            XRSessionState::Exiting => return Err(wgpu::SurfaceError::Lost),
+            XRSessionState::Stopping | XRSessionState::Idle => return Ok(()),
+            XRSessionState::Running => {}
+        }
+
+        let frame_state = match self.ctx.as_mut().unwrap().frame_waiter.wait() {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("frame_waiter.wait failed: {e}");
+                return Ok(());
+            }
+        };
+
+        self.ctx.as_mut().unwrap().frame_stream.begin().ok();
+
+        if !frame_state.should_render {
+            let ctx = self.ctx.as_mut().unwrap();
+            ctx.frame_stream
+                .end(frame_state.predicted_display_time, ctx.env_blend_mode, &[])
+                .ok();
+            return Ok(());
+        }
+
+        if let Err(e) = self.render_and_submit(frame_state.predicted_display_time) {
+            log::error!("render_and_submit failed: {e}");
+        }
+
+        Ok(())
+    }
+
+    /// Stereo camera: world position from the sim's `flyer` (the
+    /// vehicle), head look composed ON TOP of the vehicle's yaw — like
+    /// sitting in a cockpit that's facing `flyer.yaw`, free to look
+    /// around within it. `head_pos`/`head_yaw` are in OpenXR stage
+    /// space, rotated into world space by the vehicle's current yaw
+    /// before being added to the flyer's world position/orientation.
+    #[cfg(target_os = "android")]
+    fn build_stereo_view(&mut self, views: &[xr::View]) -> StereoView {
+        if self.session.is_none() {
+            log::info!("Self Session is None");
+        }
+        let flyer = if let Some(sess) = self.session.as_deref() {
+            sess.sim.flyer.clone()
+        } else {
+            Flyer {
+                x: 128.0,
+                y: 100.0,
+                z: 128.0,
+                ..Flyer::default()
+            }
+        };
+        //let flyer = &sess.sim.flyer;
+        let (sy, cy) = flyer.yaw.sin_cos();
+        let rotate_by_flyer_yaw =
+            |v: xr::Vector3f| -> [f32; 3] { [v.x * cy - v.z * sy, v.y, v.x * sy + v.z * cy] };
+        let make_eye = |v: &xr::View| -> EyeView {
+            let (head_yaw, pitch, roll) = xr_init::quat_to_ypr(v.pose.orientation);
+            let off = rotate_by_flyer_yaw(v.pose.position);
+            EyeView {
+                x: flyer.x + off[0],
+                y: flyer.y + off[1],
+                z: flyer.z + off[2],
+                yaw: flyer.yaw + head_yaw,
+                pitch,
+                roll,
+                fov_y: v.fov.angle_up - v.fov.angle_down,
+                proj: xr_init::xr_projection_matrix(v.fov, 0.05, 600.0),
+            }
+        };
+        StereoView {
+            left: make_eye(&views[0]),
+            right: make_eye(&views[1]),
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn handle_session_state(&mut self, new_state: xr::SessionState) {
+        if new_state == xr::SessionState::READY {
+            self.ctx
+                .as_ref()
+                .unwrap()
+                .xr_session
+                .begin(xr::ViewConfigurationType::PRIMARY_STEREO)
+                .expect("session begin failed");
+            self.xrsession_state = XRSessionState::Running;
+            log::info!("XR session running");
+        } else if new_state == xr::SessionState::STOPPING {
+            self.ctx
+                .as_ref()
+                .unwrap()
+                .xr_session
+                .end()
+                .expect("session end failed");
+            self.xrsession_state = XRSessionState::Stopping;
+            log::info!("XR session stopped");
+        } else if new_state == xr::SessionState::EXITING
+            || new_state == xr::SessionState::LOSS_PENDING
+        {
+            self.xrsession_state = XRSessionState::Exiting;
+        }
+    }
 }
 
+#[cfg(not(target_os = "android"))]
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -7251,7 +7540,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.redraw_requested(event_loop);
+                fn run_render(this: &mut App, cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
+                    this.renderer.as_mut().unwrap().render(cam)
+                }
+
+                self.redraw_requested(event_loop, run_render);
             }
             _ => {}
         }
@@ -7315,6 +7608,204 @@ impl ApplicationHandler for App {
                 self.mouse.pitch -= dy as f32 * s * sy;
                 self.roll_dx += dx as f32;
             }
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        log::info!("rApp Handler resumed");
+
+        let window = match event_loop.create_window(Window::default_attributes()) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("error: cannot create window: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+
+        let app = event_loop.android_app();
+
+        let ctx = match xr_init::XrContext::new(&app) {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("XrContext init failed: {e}");
+                return;
+            }
+        };
+
+        let wgpu_ctx = match wgpu_share::WgpuContext::from_xr(&ctx) {
+            Ok(w) => w,
+            Err(e) => {
+                log::error!("wgpu device sharing failed: {e}");
+                return;
+            }
+        };
+
+        let input = match InputActions::new(&ctx.xr_instance) {
+            Ok(input) => input,
+            Err(e) => {
+                log::error!("InputActions initialization failed: {e}");
+                return;
+            }
+        };
+        input.attach(&ctx.xr_session).unwrap_or_else(|e| {
+            log::error!("InputActions attach failed: {e}");
+        });
+
+        let (vk_format, format) = match xr_init::pick_swapchain_format(&ctx) {
+            Ok(formats) => formats,
+            Err(e) => {
+                log::error!("Failed to pick swapchain format: {e}");
+                return;
+            }
+        };
+        let view_config = match ctx.xr_instance.enumerate_view_configuration_views(
+            ctx.xr_system,
+            xr::ViewConfigurationType::PRIMARY_STEREO,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("Failed to enumerate view configuration views: {e}");
+                return;
+            }
+        };
+        let width = view_config[0].recommended_image_rect_width;
+        let height = view_config[0].recommended_image_rect_height;
+
+        let swapchain = match ctx.xr_session.create_swapchain(&xr::SwapchainCreateInfo {
+            create_flags: xr::SwapchainCreateFlags::EMPTY,
+            usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
+                | xr::SwapchainUsageFlags::SAMPLED,
+            format: vk_format,
+            sample_count: 1,
+            width,
+            height,
+            face_count: 1,
+            array_size: 2,
+            mip_count: 1,
+        }) {
+            Ok(swapchain) => swapchain,
+            Err(e) => {
+                log::error!("Failed to create swapchain: {e}");
+                return;
+            }
+        };
+
+        let eye_views: Vec<_> = swapchain
+            .enumerate_images()
+            .into_iter()
+            .flat_map(|raw_images| raw_images.into_iter())
+            .map(|raw_image| {
+                xr_init::wrap_swapchain_image(&wgpu_ctx, raw_image, format, width, height)
+            })
+            .collect();
+
+        self.swapchain = Some(swapchain);
+        self.eye_views = eye_views;
+        self.eye_height = height;
+        self.eye_width = width;
+        self.input = Some(input);
+
+        log::info!("rApp Handler configuration setp 1 done");
+
+        match Renderer::for_xr(
+            wgpu_ctx.device.clone(),
+            wgpu_ctx.queue.clone(),
+            format,
+            width,
+            height,
+        ) {
+            Ok(mut renderer) => {
+                // Level assets upload only when a session booted with
+                // the app (single-level mode); a campaign boots into
+                // the frontend, which brings its own atlas — the
+                // first launch's `install_level` uploads the rest.
+                log::info!("rApp Handler configuration setp Inside Renderer Ok");
+                if let Some(sess) = self.session.as_deref() {
+                    log::info!("rApp Handler configuration Inside Renderer Session exists");
+                    let overlay = map_overlay(&sess.level, &self.cfg);
+                    renderer.load_level(&sess.level.view, &overlay);
+                    if let Some((index, atlas)) = &sess.level.sprites {
+                        renderer.load_sprites(index.clone(), atlas);
+                    }
+                    if let Some(assets) = &sess.level.ui {
+                        renderer.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
+                        self.ui_atlas = UiAtlas::Level;
+                    }
+                    renderer.set_billboards(sess.level.billboards.clone());
+                    if let Some(sky) = mc2_sky_srgb(&sess.level) {
+                        renderer.set_sky_color(sky);
+                    }
+                    if self.cfg.render.preference.sky
+                        && let Some(bitmap) = &sess.level.sky
+                    {
+                        renderer.load_sky(bitmap, &sess.level.palette_rgba);
+                    }
+                }
+                renderer.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
+                renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
+                renderer.set_hud_transparent(self.hud_transparent());
+                renderer.set_reflections(self.cfg.render.preference.reflections);
+                renderer.set_vsync(self.cfg.render.preference.vsync);
+                renderer.set_render_scale(self.cfg.render.preference.anti_aliasing.render_scale());
+                // Map-screen topology follows the book surface: no
+                // map book (MC2, or MC1 with spell_selector=mc2) =
+                // the split layout with the stretched live view.
+                renderer.set_map_layout(if self.selector.map_book {
+                    mgc_render::MapScreenLayout::Mc1Book
+                } else {
+                    mgc_render::MapScreenLayout::Mc2Split
+                });
+                self.renderer = Some(renderer);
+            }
+            Err(e) => {
+                eprintln!("error: renderer init: {e}");
+                event_loop.exit();
+                return;
+            }
+        }
+        log::info!("rApp Handler configuration setp 2 done");
+
+        self.wgpu = Some(wgpu_ctx);
+        self.ctx = Some(ctx);
+        window.request_redraw();
+        self.window = Some(window);
+        self.last_frame = std::time::Instant::now();
+
+        log::info!("rApp Handler configuration setupp completed");
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::RedrawRequested => {
+                log::info!("Redraw Requested Start");
+                fn handle_redraw(
+                    this: &mut App,
+                    _cam: &CameraView,
+                ) -> Result<(), wgpu::SurfaceError> {
+                    log::info!("Redraw Requested xr_tick");
+
+                    this.xr_tick()
+                }
+
+                self.redraw_requested(event_loop, handle_redraw);
+                log::info!("Redraw Requested completed");
+            }
+
+            _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if !self.grabbed {
+            return;
         }
     }
 }
@@ -7435,7 +7926,25 @@ struct Args {
     probe_dis: Vec<u16>,
 }
 
+#[cfg(target_os = "android")]
 fn parse_args() -> Result<Args, String> {
+    // TODO: Configure this via a menu option...
+    let mut args = parse_base_args()?;
+    args.campaign = Some(campaign::CampaignId::Mc2);
+    args.slot = 1;
+    args.thrust = Some(config::ThrustModel::Enhanced);
+    if !args.level.starts_with("/") {
+        args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
+    }
+    Ok(args)
+}
+
+#[cfg(not(target_os = "android"))]
+fn parse_args() -> Result<Args, String> {
+    return parse_base_args();
+}
+
+fn parse_base_args() -> Result<Args, String> {
     let mut level = get_baked_directory().join("mc1/level-000.mgcl");
     let mut campaign_id = None;
     let mut slot = None;
@@ -9245,7 +9754,11 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
 /// whole tree by changing one body (the Android shell points it at
 /// the device's shared storage; `saves::saves_root` is its sibling).
 fn get_baked_directory() -> PathBuf {
-    PathBuf::from("baked")
+    if IS_ANDROID {
+        PathBuf::from("/storage/emulated/0/mgcarpet/baked")
+    } else {
+        PathBuf::from("baked")
+    }
 }
 
 #[cfg(test)]
@@ -9312,4 +9825,61 @@ mod ring_tests {
         assert_eq!(ring_next(&ring, &owned, 1, 3, false), Some(3));
         assert_eq!(ring_next(&ring, &owned, 1, 3, true), Some(3));
     }
+}
+
+#[allow(clippy::field_reassign_with_default)]
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(app: AndroidApp) {
+    use winit::{event_loop::EventLoop, platform::android::EventLoopBuilderExtAndroid};
+
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+    );
+    log::info!("mgcarpet VR: android_main entered");
+
+    let event_loop: EventLoop<()> = EventLoop::with_user_event()
+        .with_android_app(app)
+        .build()
+        .unwrap();
+
+    game_main(Some(event_loop));
+
+    /*
+
+    let mut vr_loop = match xr_loop::VrLoop::new(ctx, wgpu_ctx, &baked_root) {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("VrLoop init failed: {e}");
+            return;
+        }
+    };
+    let mut should_exit = false;
+    let mut should_pause = false; */
+
+    /*
+    while !should_exit {
+        // Poll Android lifecycle events (pause/resume/destroy).
+        app.poll_events(Some(std::time::Duration::from_millis(100)), |ev| {
+            if let PollEvent::Main(MainEvent::Destroy) = ev {
+                should_exit = true;
+            }
+            if let PollEvent::Main(MainEvent::Pause) = ev {
+                should_pause = true;
+            }
+            if let PollEvent::Main(MainEvent::Resume { .. }) = ev {
+                should_pause = false;
+            }
+        });
+
+        if should_pause {
+            continue;
+        }
+        if !vr_loop.tick() {
+            break;
+        }
+    }
+    */
+
+    log::info!("mgcarpet VR: exiting");
 }

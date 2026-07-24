@@ -988,6 +988,8 @@ impl Config {
     /// a missing override file simply yields the baseline; a path the
     /// user asked for must exist. Malformed JSON is always an error —
     /// better loud than silently authentic.
+    #[allow(dead_code)]
+    #[cfg(not(target_os = "android"))]
     pub fn load(path: &Path, explicit: bool) -> Result<Self, String> {
         let defaults_path = defaults_path(path);
         ensure_defaults(&defaults_path)?;
@@ -1007,6 +1009,11 @@ impl Config {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         }
         serde_json::from_value(merged).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn load(path: &Path, explicit: bool) -> Result<Self, String> {
+        return Result::<Self, String>::Ok(Self::default());
     }
 }
 
