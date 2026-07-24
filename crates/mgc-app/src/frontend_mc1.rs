@@ -243,6 +243,9 @@ pub struct Mc1Menu {
     globe: Movie,
     timer: Movie,
     sprites: Bank,
+    /// The retail mouse-pointer bank (DATA/POINTERS via the bake's
+    /// `pointer-sprites`); None on an older bake.
+    pointers: Option<Bank>,
     font: Bank,
     /// ×1.30 brightness LUT per palette index (retail sub_504A0).
     bright: Vec<u8>,
@@ -292,6 +295,7 @@ impl Mc1Menu {
         let globe = Movie::load(dir, "globe.bin", "globe-mask.bin", "globe.json")?;
         let timer = Movie::load(dir, "timer.bin", "timer-mask.bin", "timer.json")?;
         let sprites = Bank::load(dir, "menu-sprites.bin", "menu-sprites.json")?;
+        let pointers = Bank::load(dir, "pointer-sprites.bin", "pointer-sprites.json").ok();
         let font = Bank::load(dir, "font.bin", "font.json")?;
         // The ×1.30 brighten LUT: for each palette index find the
         // index whose color best matches the brightened color
@@ -334,6 +338,7 @@ impl Mc1Menu {
             globe,
             timer,
             sprites,
+            pointers,
             font,
             bright,
             white,
@@ -548,6 +553,16 @@ impl Mc1Menu {
 
     /// Compose + resolve this frame's screen; returns the RGBA quad
     /// set (one screen quad; the atlas is re-uploaded by the app).
+    /// Whether the bake carried the retail pointer bank WITH the
+    /// mainmenu-palette hand (entry 7 — the frame then composes the
+    /// cursor itself, no OS/software pointer). Requiring the entry
+    /// keeps a malformed bank from hiding every cursor.
+    pub fn has_pointer(&self) -> bool {
+        self.pointers
+            .as_ref()
+            .is_some_and(|b| b.rects.get(7).copied().flatten().is_some())
+    }
+
     pub fn frame(&mut self, size: (f32, f32), cursor: (f32, f32)) -> (Vec<u8>, Vec<UiQuad>) {
         let (scale, ox, oy) = crate::ui::letterbox(size, W as f32, H as f32);
         let (mx, my) = crate::ui::unletterbox(cursor, size, W as f32, H as f32);
@@ -651,6 +666,17 @@ impl Mc1Menu {
             for (s, x, y) in texts {
                 self.text(&s, x, y, white, &mut buf);
             }
+        }
+        // The retail MENU pointer: the golden pointing HAND, STATIC.
+        // POINTERS bank anatomy (see ui.rs SPR_POINTER_BALL): [1] is
+        // the in-game arrow+mana-ball; [2..=8] are the hand
+        // pre-quantized for the seven menu-screen palettes — [7] is
+        // the MAINMENU.PAL one (settled by rendering each variant
+        // under this screen's palette; the others read as noise
+        // here). Finger tip at the cursor position. Absent on an
+        // older bake — the app's software arrow stands in.
+        if let Some(p) = &self.pointers {
+            p.blit(7, mx as i32, my as i32, &mut buf);
         }
         // Resolve indices → RGBA with the hover brighten (only in
         // the base menu — retail highlights only live hotspots).

@@ -947,6 +947,34 @@ pub fn bake_mc1_menu(src: &GameSource, out_dir: &Path) -> Result<Vec<(String, St
         &serde_json::to_vec_pretty(&packed.index).expect("mmspr index serializes"),
     )?;
 
+    // POINTERS: the retail mouse pointers ([0] = the yellow pointer
+    // with the mana ball — the cursor sub_5C05C installs for the
+    // menus and every view mode, remc1 :42024). The frontend
+    // composes [0] into its screen buffer as its cursor.
+    if src.exists("DATA/POINTERS.DAT") {
+        let pdat = get("DATA/POINTERS.DAT")?;
+        let ptab = get("DATA/POINTERS.TAB")?;
+        let pdec = crate::hspr::decode(&pdat, &ptab).map_err(|e| {
+            BakeError::Level(
+                Path::new("DATA/POINTERS.DAT").to_path_buf(),
+                0,
+                e.to_string(),
+            )
+        })?;
+        let ppacked = sprites::pack(&pdec, UI_ATLAS_WIDTH);
+        emit("pointer-sprites.bin", &ppacked.atlas)?;
+        emit(
+            "pointer-sprites.json",
+            &serde_json::to_vec_pretty(&ppacked.index).expect("pointers index serializes"),
+        )?;
+        for f in ["POINTERS.DAT", "POINTERS.TAB"] {
+            sources.push(BundleSource {
+                file: f.into(),
+                sha256: hex(&Sha256::digest(&get(&format!("DATA/{f}"))?)),
+            });
+        }
+    }
+
     emit("menu-bg.bin", &bg)?;
 
     // GLOBE/TIMER: menu mini-movies. Retail steps ONLY the delta
@@ -1727,8 +1755,26 @@ fn bake_variant(
         let dat_file = format!("{ui}.DAT");
         let dat = source(&dat_file, &mut sources)?;
         let tab = source(&format!("{ui}.TAB"), &mut sources)?;
-        let decoded = crate::hspr::decode(&dat, &tab)
+        let mut decoded = crate::hspr::decode(&dat, &tab)
             .map_err(|e| BakeError::Level(Path::new(&dat_file).to_path_buf(), 0, e.to_string()))?;
+        // MC1: the retail MOUSE POINTERS (DATA/POINTERS, its own tiny
+        // HSPR bank) append at the tail of the UI bank — [87] = the
+        // pointer-with-mana-ball installed for every view mode
+        // (sub_5C05C, remc1 :42024/:49068), [88] = the mode-2 variant
+        // (:49063) — so the in-level surfaces can draw the real
+        // cursor. MC2's cursor is a raw bitmap blob, not a bank
+        // sprite; its atlases are untouched.
+        if spec.game == Game::MagicCarpet1 {
+            let pdat = source("DATA/POINTERS.DAT", &mut sources)?;
+            let ptab = source("DATA/POINTERS.TAB", &mut sources)?;
+            decoded.extend(crate::hspr::decode(&pdat, &ptab).map_err(|e| {
+                BakeError::Level(
+                    Path::new("DATA/POINTERS.DAT").to_path_buf(),
+                    0,
+                    e.to_string(),
+                )
+            })?);
+        }
         let packed = sprites::pack(&decoded, UI_ATLAS_WIDTH);
         emit("ui-sprites.bin", &packed.atlas)?;
         emit(

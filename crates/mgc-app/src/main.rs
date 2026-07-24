@@ -1878,6 +1878,7 @@ impl App {
     fn toggle_fullscreen(&mut self) {
         self.cfg.render.preference.fullscreen = !self.cfg.render.preference.fullscreen;
         self.apply_fullscreen();
+        self.reassert_pointer();
         if let Some(spec) = settings::registry()
             .iter()
             .find(|s| s.cfg_path == "render.preference.fullscreen")
@@ -2123,7 +2124,10 @@ impl App {
                     r.set_vsync(self.cfg.render.preference.vsync);
                 }
             }
-            "render.preference.fullscreen" => self.apply_fullscreen(),
+            "render.preference.fullscreen" => {
+                self.apply_fullscreen();
+                self.reassert_pointer();
+            }
             // The supersample factor is live; MSAA is baked into every
             // pipeline, so it only takes effect next launch. Say so
             // rather than leaving the player wondering why nothing
@@ -3203,6 +3207,16 @@ impl App {
                 None => a.stop_music(),
             }
         }
+        // A level opens IN FLIGHT: fullscreen map closed, pointer
+        // locked for mouse-look. Without this, entry from the MC2
+        // world map inherited the map screen's pointer state
+        // (confined, ungrabbed) and the level started uncaptured
+        // until the in-game map toggle or a click re-grabbed; a
+        // map_view left ON would likewise leak across the load.
+        if let Some(r) = &mut self.renderer {
+            r.set_map_view(false);
+        }
+        self.set_grab(true);
         self.sync_world();
     }
 
@@ -3869,7 +3883,14 @@ impl App {
     fn free_menu_pointer(&mut self) {
         self.grabbed = false;
         if let Some(w) = &self.window {
-            w.set_cursor_grab(CursorGrabMode::None).ok();
+            // Same fullscreen rule as `set_grab(false)`: the invisible
+            // menu pointer must not wander off the covered monitor.
+            let confined = w.fullscreen().is_some()
+                && w.has_focus()
+                && w.set_cursor_grab(CursorGrabMode::Confined).is_ok();
+            if !confined {
+                w.set_cursor_grab(CursorGrabMode::None).ok();
+            }
             w.set_cursor_visible(false);
         }
     }
@@ -4228,6 +4249,7 @@ impl App {
                     self.cursor,
                 ));
             }
+            self.append_software_cursor(&mut quads);
             if let Some(r) = &mut self.renderer {
                 if self.ui_atlas != UiAtlas::FrontendUi
                     && let Some(a) = &self.frontend_ui
@@ -4493,14 +4515,26 @@ impl App {
         };
         menu.tick(dt);
         let action = menu.take_action();
+        let has_pointer = menu.has_pointer();
         let (rgba, quads) = menu.frame(size, cursor);
+        let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+        q.extend(quads);
+        // With the retail pointer bank baked, `frame` composed the
+        // cursor into the screen itself (like the MC2 temple menu):
+        // the OS pointer hides in EVERY window mode. An older bake
+        // falls back to the fullscreen software arrow.
+        if has_pointer {
+            if let Some(w) = &self.window {
+                w.set_cursor_visible(false);
+            }
+        } else {
+            self.append_software_cursor(&mut q);
+        }
         if let Some(r) = &mut self.renderer {
             // The composed screen IS the atlas — re-uploaded per
             // frame (320×200, the animations live in it).
             r.load_ui_atlas(320, 200, &rgba);
             self.ui_atlas = UiAtlas::MenuMc1;
-            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
-            q.extend(quads);
             r.set_ui_quads(q);
         }
         if let Some(a) = action {
@@ -4691,9 +4725,84 @@ impl App {
             window.set_cursor_visible(!ok);
             self.grabbed = ok;
         } else {
-            window.set_cursor_grab(CursorGrabMode::None).ok();
-            window.set_cursor_visible(true);
+            // FREE the pointer for UI use — but in FULLSCREEN "free"
+            // still means CONFINED to the window (cursor visible):
+            // there is no desktop to reach, and an unconfined cursor
+            // is exactly where the platform weirdness lives (an
+            // invisible cursor drifting onto a second monitor, a
+            // click landing outside the borderless window and
+            // unfocusing it, Windows dropping confinement across the
+            // focus bounce). Windowed mode keeps the true release.
+            // (Never while unfocused — alt-tab must keep a normally
+            // free cursor; `Focused(true)` re-asserts on return.)
+            let confined = window.fullscreen().is_some()
+                && window.has_focus()
+                && window.set_cursor_grab(CursorGrabMode::Confined).is_ok();
+            if !confined {
+                window.set_cursor_grab(CursorGrabMode::None).ok();
+            }
+            // Fullscreen also suppresses the OS pointer entirely
+            // (player ruling): the surfaces draw an in-game pointer
+            // instead — the frontends their retail cursor sprites,
+            // everything else `ui::cursor_quads` via
+            // `append_software_cursor`.
+            window.set_cursor_visible(!confined);
             self.grabbed = false;
+        }
+    }
+
+    /// Append the software pointer where the fullscreen rule hides
+    /// the OS one and no retail cursor sprite is drawn (the in-level
+    /// UI, the MC1 menu; the MC2 temple menu and the world map draw
+    /// their own). Windowed mode keeps the OS cursor — no-op. Also
+    /// re-hides the OS cursor as a belt: whichever path freed the
+    /// pointer, the two must never show together.
+    fn append_software_cursor(&self, quads: &mut Vec<mgc_render::UiQuad>) {
+        let Some(w) = &self.window else { return };
+        if w.fullscreen().is_none() || self.grabbed {
+            return;
+        }
+        if matches!(self.screen, Screen::Map | Screen::Movie)
+            || (self.screen == Screen::Menu && self.is_mc2())
+        {
+            return;
+        }
+        w.set_cursor_visible(false);
+        let size = w.inner_size();
+        let s = ui::HudFrame::new(size.width as f32, size.height as f32)
+            .s
+            .max(1.0);
+        // In-level MC1 draws the RETAIL pointer (POINTERS[0], baked
+        // at [87] — the level atlas is bound on this path); MC2's
+        // retail cursor is a raw bitmap blob, not a bank sprite, so
+        // the quad arrow stands in there (and on an older MC1 bake).
+        if self.screen == Screen::Level && !self.is_mc2() {
+            let retail = self
+                .session
+                .as_deref()
+                .and_then(|sess| sess.level.ui.as_ref())
+                .and_then(|a| a.pointer_quad(self.cursor.0, self.cursor.1, s));
+            if let Some(q) = retail {
+                quads.push(q);
+                return;
+            }
+        }
+        quads.extend(ui::cursor_quads(self.cursor.0, self.cursor.1, s));
+    }
+
+    /// Re-assert the pointer mode the current screen wants — the
+    /// fullscreen transition is allowed to drop grabs/confinement on
+    /// several platforms, so every toggle re-applies the active state
+    /// (and picks up the fullscreen-vs-windowed "free" flavor above).
+    fn reassert_pointer(&mut self) {
+        if self.grabbed {
+            self.set_grab(true);
+        } else {
+            match self.screen {
+                Screen::Map => self.confine_map_pointer(),
+                Screen::Menu if self.is_mc2() => self.free_menu_pointer(),
+                _ => self.set_grab(false),
+            }
         }
     }
 }
@@ -5203,6 +5312,14 @@ impl ApplicationHandler for App {
                 self.alt_held = false;
                 self.shift_held = false;
             }
+            // Returning focus re-applies the pointer mode the screen
+            // wants: Windows clears cursor confinement across the
+            // focus bounce (ClipCursor is per-focus), and the loss arm
+            // above intentionally released. Mouse-look is NOT yanked
+            // back (grabbed was cleared on loss) — flight recaptures
+            // on click, as always; this restores the fullscreen
+            // confinement / frontend confinement only.
+            WindowEvent::Focused(true) => self.reassert_pointer(),
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 // Alt latch + Alt+Enter, both BEFORE every other key
@@ -5438,7 +5555,18 @@ impl ApplicationHandler for App {
                 if self.menu.is_some() {
                     return;
                 }
-                if down && event.logical_key == Key::Named(NamedKey::Enter) {
+                // The fullscreen-map toggle is a GAMEPLAY key. Without
+                // the screen gate, ENTER on the MC2 world map with no
+                // parchment dialog open fell through the frontend
+                // blocks above (Screen::Map only consumes Enter into
+                // an open dialog) and landed here — toggling map_view
+                // and releasing/locking the pointer on the startmap
+                // (reported on Windows; reachable on every platform,
+                // it only needs the dialog closed).
+                if down
+                    && self.screen == Screen::Level
+                    && event.logical_key == Key::Named(NamedKey::Enter)
+                {
                     if let Some(r) = &mut self.renderer {
                         let on = !r.map_view();
                         r.set_map_view(on);
@@ -6465,6 +6593,7 @@ impl ApplicationHandler for App {
                         ));
                     }
                     self.hovered = hovered;
+                    self.append_software_cursor(&mut quads);
                     if let Some(r) = &mut self.renderer {
                         r.set_ui_quads(quads);
                     }

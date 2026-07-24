@@ -122,7 +122,12 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    movie), re-indexed into SFONT1's `char - 31` id space with the
 ///    raster normalized to mask value 1 — not SFONT1, whose 14-px
 ///    lines could only stack two rows in the subtitle band.
-pub const BAKE_EPOCH: u32 = 20;
+/// 21: MC1's retail mouse pointers (DATA/POINTERS) — appended at the
+///    tail of the MC1 level UI banks ([87] = the pointer-with-mana-
+///    ball, [88] = the mode-2 variant) and emitted as
+///    `pointer-sprites.{bin,json}` in `assets/mc1-ui` for the
+///    frontend's composed cursor. MC2 banks unchanged.
+pub const BAKE_EPOCH: u32 = 21;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

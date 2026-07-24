@@ -18,9 +18,17 @@ the trigger and small dressing details differ.
   `MenuState = SHOW_MAP_SORCERER_SCORES (7)`; ALT up reverts to state 6.
   The map render path dispatches state 7 to
   `DrawSorcererScores_2D1D0(scale)` (EF:21952-56, def EF:22207).
-  Retail MC2 pauses the sim under any map menu state
-  (`SetPausedMenuOpen_41AF0`, GameUI.cpp:651) — settles the old
-  mc2-walker-wander-ai.md open question ("does the map pause?" → yes).
+  A decompile reading had retail MC2 pausing the sim under any map
+  menu state (`SetPausedMenuOpen_41AF0`, GameUI.cpp:651) — REFUTED by
+  the player's retail recollection (2026-07-24): the MC2 map keeps
+  NORMAL CONTROLS live — you can fly and even cast, HUD-less.
+  Gameplay outranks; see the CONFLICTED note in
+  mc2-walker-wander-ai.md. Retail MC1's map, by contrast, SUSPENDS
+  flight input and turns the pointer into the ball+arrow cursor for
+  book spell-selection. Our port suspends stick input on the map in
+  both games (MC1-faithful); OPEN DESIGN OPTION (player, undecided):
+  the MC2-selector-in-MC1 configuration could adopt MC2's
+  keep-flying map behaviour.
 - **PORT** (player ruling 2026-07-24): both triggers work in BOTH games
   (hover strip = below the map pane bottom, `BOOK_MAP_H` 416 / MC2 400;
   ALT = the existing `alt_held` latch). Deliberate unification —

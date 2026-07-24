@@ -591,6 +591,14 @@ impl UiAssets {
         quads
     }
 
+    /// The retail in-game mouse pointer ([`SPR_POINTER_BALL`], the
+    /// arrow + mana ball) as a cursor quad, arrow tip at (x, y).
+    /// None on an MC2 atlas caller-side (gate by game) and on an
+    /// older MC1 bake (87 sprites — the software arrow stands in).
+    pub fn pointer_quad(&self, x: f32, y: f32, scale: f32) -> Option<UiQuad> {
+        self.sprite_quad(SPR_POINTER_BALL, x, y, scale)
+    }
+
     /// A pre-composited MC2 selector grid tile (see `pane_uv`); None
     /// on MC1 atlases.
     fn pane_tile(&self, spell: usize, variant: usize) -> Option<[f32; 4]> {
@@ -1228,12 +1236,71 @@ pub fn roster_quads(
     quads
 }
 
+/// A quad-built pixel arrow standing in for the OS pointer wherever
+/// the fullscreen rule suppresses it (player ruling: a fullscreen
+/// window keeps the cursor captured at all times, so the OS pointer
+/// never shows). No retail cursor art lives in the LEVEL banks — the
+/// original's in-game pointer is a dedicated low-level bitmap, not a
+/// bank sprite — so this stands in on the surfaces without one (the
+/// in-level UI, the MC1 menu); the MC2 temple menu and the world map
+/// draw their own retail cursor sprites. White fill, black outline,
+/// hotspot at the tip. All solid quads: draws over ANY bound atlas.
+pub fn cursor_quads(x: f32, y: f32, s: f32) -> Vec<UiQuad> {
+    const ROWS: [&str; 17] = [
+        "X",
+        "XX",
+        "X.X",
+        "X..X",
+        "X...X",
+        "X....X",
+        "X.....X",
+        "X......X",
+        "X.......X",
+        "X........X",
+        "X.....XXXX",
+        "X..X..X",
+        "X.X X..X",
+        "XX  X..X",
+        "X    X..X",
+        "      X..X",
+        "       XX",
+    ];
+    const INK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    const FILL: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    let mut quads = Vec::new();
+    for (ry, row) in ROWS.iter().enumerate() {
+        for (rx, b) in row.bytes().enumerate() {
+            let c = match b {
+                b'X' => INK,
+                b'.' => FILL,
+                _ => continue,
+            };
+            quads.push(solid([x + rx as f32 * s, y + ry as f32 * s, s, s], c));
+        }
+    }
+    quads
+}
+
 /// The map-roster tiles, same index in BOTH shipped banks (MC1
 /// begSprTab :27083/:27130; MC2 MSPRD00 `SPELL_TILE`/`SPELL_TILE_MINI`,
 /// GameBitmapIndexes.h:21-22): [85] = the 104×38 head tile (portrait/
 /// name + mana), [86] = the 36×38 kill-matrix cell.
 const SPR_ROSTER_HEAD: usize = 85;
 const SPR_ROSTER_CELL: usize = 86;
+/// The retail mouse pointer — the bake appends MC1's DATA/POINTERS
+/// bank (9 entries) at the tail of the 87-sprite UI bank. Bank
+/// anatomy (settled by rendering under each palette, 2026-07-24):
+/// [0] null sentinel; [1] = the ARROW + MANA BALL, the IN-GAME
+/// cursor (authored for the LEVEL palette — clean orange ball there,
+/// noise elsewhere); [2..=8] = the pointing HAND, the MENU cursor,
+/// pre-quantized SEVEN times for the different menu-screen palettes
+/// ([7] is the MAINMENU.PAL one; the rest map to gconfig/pmulti/
+/// pperf/language/smatitle-family screens). Level atlas indices:
+/// [88] = the ball. STATIC — the "frames" are palette variants, not
+/// animation (cycling them reads as palette flicker). MC1 banks
+/// only; MC2's index 87+ is unrelated MSPRD art — callers gate by
+/// game.
+const SPR_POINTER_BALL: usize = 88;
 
 // Panel sprite ids (remc1 begSprTab). The panel strip is laid out at
 // the original's 640-wide coordinates, scaled to the live resolution.
