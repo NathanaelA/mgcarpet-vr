@@ -17,17 +17,44 @@
 //! these are wired but inert. Left in place so the mapping doesn't need
 //! revisiting when a `World` lands.
 
-use mgc_sim::FlightInput;
+use mgc_sim::{FlightInput, Flyer};
 use openxr as xr;
-use serde::de::Unexpected::Option;
+
+use crate::xr_init;
 
 /// Turn rate at full stick deflection, radians/tick (24 Hz sim) — a
 /// traditional flight-stick feel, independent of head orientation.
 const YAW_RATE_PER_TICK: f32 = 1.5 / mgc_sim::TICK_RATE_HZ as f32; // was 1.2
 const PITCH_RATE_PER_TICK: f32 = 0.8 / mgc_sim::TICK_RATE_HZ as f32;
 
+/// Distance from the head at which the virtual UI panel is placed
+/// (world units).  The pointer ray is intersected against this panel.
+const POINTER_PANEL_DISTANCE: f32 = 0.5;
+/// World units per UI pixel.  This is tuned so the panel is readable
+/// at `POINTER_PANEL_DISTANCE`.
+const POINTER_PANEL_SCALE: f32 = POINTER_PANEL_DISTANCE * 0.0015;
+
+/// Controller-pointer state produced by `InputActions::poll` when
+/// `grabbed == false`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PointerState {
+    /// Pointer position in the same pixel space the UI shader uses
+    /// (top-left origin, physical render-target pixels).
+    pub screen_pos: Option<(f32, f32)>,
+    /// World-space line segment from the controller to the panel hit.
+    pub beam: Option<([f32; 3], [f32; 3])>,
+    /// Whether the pointer hand's trigger is held this frame.
+    pub click: bool,
+}
+
 pub struct InputActions {
     action_set: xr::ActionSet,
+    left_hand: xr::Path,
+    right_hand: xr::Path,
+    left_aim: xr::Action<xr::Posef>,
+    right_aim: xr::Action<xr::Posef>,
+    left_aim_space: Option<xr::Space>,
+    right_aim_space: Option<xr::Space>,
     left_stick: xr::Action<xr::Vector2f>,
     right_stick: xr::Action<xr::Vector2f>,
     trigger_left: xr::Action<f32>,
@@ -48,11 +75,16 @@ pub struct InputActions {
     last_menu: bool,
     last_thumbstick_right_click: bool,
     last_thumbstick_left_click: bool,
+    pointer: PointerState,
 }
 
 impl InputActions {
     pub fn new(instance: &xr::Instance) -> Result<Self, Box<dyn std::error::Error>> {
         let action_set = instance.create_action_set("gameplay", "Gameplay", 0)?;
+        let left_hand = instance.string_to_path("/user/hand/left")?;
+        let right_hand = instance.string_to_path("/user/hand/right")?;
+        let left_aim = action_set.create_action("left_aim", "Left aim", &[left_hand])?;
+        let right_aim = action_set.create_action("right_aim", "Right aim", &[right_hand])?;
         let left_stick = action_set.create_action("left_stick", "Left stick", &[])?;
         let right_stick = action_set.create_action("right_stick", "Right stick", &[])?;
         let trigger_left = action_set.create_action("trigger_left", "Cast left", &[])?;
@@ -72,6 +104,14 @@ impl InputActions {
         instance.suggest_interaction_profile_bindings(
             instance.string_to_path("/interaction_profiles/oculus/touch_controller")?,
             &[
+                xr::Binding::new(
+                    &left_aim,
+                    instance.string_to_path("/user/hand/left/input/aim/pose")?,
+                ),
+                xr::Binding::new(
+                    &right_aim,
+                    instance.string_to_path("/user/hand/right/input/aim/pose")?,
+                ),
                 xr::Binding::new(
                     &left_stick,
                     instance.string_to_path("/user/hand/left/input/thumbstick")?,
@@ -129,6 +169,12 @@ impl InputActions {
 
         Ok(Self {
             action_set,
+            left_hand,
+            right_hand,
+            left_aim,
+            right_aim,
+            left_aim_space: None,
+            right_aim_space: None,
             left_stick,
             right_stick,
             trigger_left,
@@ -149,15 +195,29 @@ impl InputActions {
             last_menu: false,
             last_thumbstick_right_click: false,
             last_thumbstick_left_click: false,
+            pointer: PointerState::default(),
         })
     }
 
     pub fn attach(
-        &self,
+        &mut self,
         session: &xr::Session<xr::Vulkan>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         session.attach_action_sets(&[&self.action_set])?;
+        self.left_aim_space = self
+            .left_aim
+            .create_space(session, self.left_hand, xr::Posef::IDENTITY)
+            .ok();
+        self.right_aim_space = self
+            .right_aim
+            .create_space(session, self.right_hand, xr::Posef::IDENTITY)
+            .ok();
         Ok(())
+    }
+
+    /// The pointer state produced by the most recent `poll`.
+    pub fn pointer(&self) -> &PointerState {
+        &self.pointer
     }
 
     /// Syncs the action set and reads every action; call once per XR
@@ -166,11 +226,77 @@ impl InputActions {
     pub fn poll(
         &mut self,
         session: &xr::Session<xr::Vulkan>,
+        stage_space: &xr::Space,
+        display_time: xr::Time,
+        flyer: &Flyer,
+        screen_size: (f32, f32),
         owned: [bool; 26],
         is_mc2: bool,
         grabbed: bool,
     ) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
+
+        // Controller pointer: when the cursor is free (grabbed == false)
+        // raycast the right-hand aim pose against a virtual UI panel placed
+        // in front of the player's head.
+        self.pointer = PointerState::default();
+        if !grabbed {
+            if let (Ok((_, views)), Some(space)) = (
+                session.locate_views(
+                    xr::ViewConfigurationType::PRIMARY_STEREO,
+                    display_time,
+                    stage_space,
+                ),
+                &self.right_aim_space,
+            ) {
+                if let Some(head) = views.first() {
+                    let panel = compute_panel(head, flyer, screen_size);
+                    if let Ok(loc) = space.locate(stage_space, display_time) {
+                        let needed = xr::SpaceLocationFlags::POSITION_VALID
+                            | xr::SpaceLocationFlags::ORIENTATION_VALID;
+                        if loc.location_flags.contains(needed) {
+                            let pos_stage = loc.pose.position;
+                            let q = loc.pose.orientation;
+                            let fwd_stage = xr_init::quat_rotate(q, [0.0, 0.0, -1.0]);
+
+                            let (sy, cy) = flyer.yaw.sin_cos();
+                            let rot =
+                                |v: [f32; 3]| [v[0] * cy - v[2] * sy, v[1], v[0] * sy + v[2] * cy];
+
+                            let pos_world = add(
+                                [flyer.x, flyer.y, flyer.z],
+                                rot([pos_stage.x, pos_stage.y, pos_stage.z]),
+                            );
+                            let dir_world = rot(fwd_stage);
+
+                            let n = cross(panel.right, panel.up);
+                            let denom = dot(dir_world, n);
+                            if denom.abs() > 1e-6 {
+                                let t = dot(sub(panel.origin, pos_world), n) / denom;
+                                if t >= 0.0 {
+                                    let hit = add(pos_world, scale(dir_world, t));
+                                    let to_hit = sub(hit, panel.origin);
+                                    let ox = dot(to_hit, panel.right);
+                                    let oy = dot(to_hit, panel.up);
+                                    let center_x = screen_size.0 * 0.5;
+                                    let center_y = screen_size.1 * 0.5;
+                                    let px = center_x + ox / POINTER_PANEL_SCALE;
+                                    let py = center_y + oy / POINTER_PANEL_SCALE;
+                                    if px >= 0.0
+                                        && px <= screen_size.0
+                                        && py >= 0.0
+                                        && py <= screen_size.1
+                                    {
+                                        self.pointer.screen_pos = Some((px, py));
+                                        self.pointer.beam = Some((pos_world, hit));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let axis = |a: &xr::Action<xr::Vector2f>| {
             a.state(session, xr::Path::NULL)
@@ -187,6 +313,10 @@ impl InputActions {
                 .map(|s| s.current_state)
                 .unwrap_or(0.0)
         };
+        if !grabbed {
+            self.pointer.click = value(&self.trigger_right) > 0.5;
+        }
+
         let next_spell = |spell: u8| {
             for i in spell + 1..26 {
                 if owned[i as usize] {
@@ -293,4 +423,63 @@ impl InputActions {
             ..Default::default()
         }
     }
+}
+
+struct Panel {
+    origin: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+}
+
+/// Place a virtual UI panel in world space based on the current head pose.
+fn compute_panel(head: &xr::View, flyer: &Flyer, _screen_size: (f32, f32)) -> Panel {
+    let head_pos_stage = head.pose.position;
+    let head_q = head.pose.orientation;
+    let head_fwd_stage = xr_init::quat_rotate(head_q, [0.0, 0.0, -1.0]);
+    let head_right_stage = xr_init::quat_rotate(head_q, [1.0, 0.0, 0.0]);
+    let head_up_stage = xr_init::quat_rotate(head_q, [0.0, 1.0, 0.0]);
+
+    let (sy, cy) = flyer.yaw.sin_cos();
+    let rot = |v: [f32; 3]| [v[0] * cy - v[2] * sy, v[1], v[0] * sy + v[2] * cy];
+
+    let head_pos_world = add(
+        [flyer.x, flyer.y, flyer.z],
+        rot([head_pos_stage.x, head_pos_stage.y, head_pos_stage.z]),
+    );
+    let head_fwd_world = rot(head_fwd_stage);
+    let head_right_world = rot(head_right_stage);
+    let head_up_world = rot(head_up_stage);
+
+    Panel {
+        origin: add(
+            head_pos_world,
+            scale(head_fwd_world, POINTER_PANEL_DISTANCE),
+        ),
+        right: head_right_world,
+        up: [-head_up_world[0], -head_up_world[1], -head_up_world[2]],
+    }
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
 }
