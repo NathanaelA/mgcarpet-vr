@@ -5771,7 +5771,9 @@ impl App {
             // under it, EventsFunctions.cpp:31796; the dialog
             // only owns the input. P still pauses if wanted.)
             self.accumulator = 0.0;
-            let _input = self.tick_input();
+            if IS_ANDROID {
+                let _input = self.tick_input();
+            }
         }
 
         // The toast line decays on WALL time at the authentic
