@@ -5031,6 +5031,997 @@ impl App {
             }
         }
     }
+
+    /// One frame of the shell — the `WindowEvent::RedrawRequested`
+    /// arm: drain wall time into fixed sim ticks, assemble the
+    /// HUD/UI quads, place the camera, render, and request the
+    /// next redraw.
+    fn redraw_requested(&mut self, event_loop: &ActiveEventLoop) {
+        let now = std::time::Instant::now();
+        // Clamp huge pauses (debugger, suspend) to keep the sim
+        // from spiraling through hundreds of catch-up ticks.
+        let raw_dt = (now - self.last_frame).as_secs_f32();
+        let dt = raw_dt.min(0.25);
+        self.last_frame = now;
+        // PROTOTYPE fire clock (advances while paused too).
+        self.effect_time += raw_dt;
+        // FPS-overlay accounting: true wall time (the clamp
+        // above is sim pacing, not measurement), readout
+        // refreshed every half-second. Counts while paused
+        // too — the menu is where you toggle effects to
+        // watch their cost.
+        if self.cfg.render.debug.fps {
+            self.fps_frames += 1;
+            self.fps_elapsed += raw_dt;
+            if self.fps_elapsed >= 0.5 {
+                let ms = 1000.0 * self.fps_elapsed / self.fps_frames as f32;
+                self.fps_text = format!(
+                    "{:.0} fps  {ms:.1} ms",
+                    self.fps_frames as f32 / self.fps_elapsed
+                );
+                self.fps_frames = 0;
+                self.fps_elapsed = 0.0;
+            }
+        } else if !self.fps_text.is_empty() {
+            self.fps_text.clear();
+            self.fps_frames = 0;
+            self.fps_elapsed = 0.0;
+        }
+        // A still-armed boot grab retries every frame until
+        // it STICKS: both the attempt in `resumed` and the
+        // one on the first focus can fail while the WM is
+        // still placing/animating the fresh window (some hold
+        // their own pointer grab through it). Success or any
+        // deliberate free clears the flag inside `set_grab`.
+        if self.boot_grab {
+            // has_focus-gated: an X11 pointer grab can succeed
+            // GLOBALLY, and retrying while alt-tabbed away
+            // would steal the pointer from another app. While
+            // focus has not arrived, briefly keep re-asking
+            // for activation (the `resumed` request races the
+            // WM's async map).
+            if self.window.as_ref().is_some_and(|w| w.has_focus()) {
+                self.set_grab(true);
+            } else if self.boot_focus_asks > 0 {
+                self.boot_focus_asks -= 1;
+                if let Some(w) = &self.window {
+                    w.focus_window();
+                    // Every 15th ask escalates from petition
+                    // to the X11 primitive: by then the map
+                    // has settled, and a WM that ignores
+                    // `_NET_ACTIVE_WINDOW` (compiz FSP) will
+                    // ignore it forever.
+                    if self.boot_focus_asks % 15 == 0 {
+                        x11_force_focus(w);
+                    }
+                }
+            }
+        }
+        // A frontend screen owns the frame: no session, no
+        // sim, no HUD — its own tick + quads, rendered over
+        // the void (the renderer holds no level).
+        if self.screen != Screen::Level || self.session.is_none() {
+            self.frontend_frame(dt, event_loop);
+            if let Some(r) = &mut self.renderer {
+                let cam = CameraView {
+                    x: 0.0,
+                    y: 4.0,
+                    z: 0.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    roll: 0.0,
+                    fov_y: FOV_Y,
+                };
+                match r.render(&cam) {
+                    Ok(())
+                    | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                    Err(e) => eprintln!("render: {e}"),
+                }
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+        // Game speed (retail F3): retail runs the sim step N
+        // times per rendered frame (remc1 :41672 / remc2
+        // EF:31800); our fixed-Hz accumulator expresses the
+        // same multiplier by scaling wall time. Every tick is
+        // bit-identical — only the pacing changes.
+        let speed = self.cfg.sim.options.game_speed.multiplier(self.is_mc2());
+        self.accumulator += dt * speed;
+        if self.paused {
+            // Frozen sim clock: drain the accumulator so
+            // resuming is clean instead of bursting through
+            // missed ticks. (The abandon-confirm dialog does
+            // NOT freeze — retail keeps the world simulating
+            // under it, EventsFunctions.cpp:31796; the dialog
+            // only owns the input. P still pauses if wanted.)
+            self.accumulator = 0.0;
+        }
+
+        // The toast line decays on WALL time at the authentic
+        // 24Hz — retail decrements the message life once per
+        // rendered frame, not per game turn, so the speed
+        // multiplier never parked a SLOW toast forever or
+        // blinked a VERY FAST one. Frozen with the rest of the
+        // clock under P-pause.
+        if !self.paused {
+            self.toast_accumulator += dt;
+            let frames =
+                ((self.toast_accumulator / TICK_DT) as u32).min(u16::MAX as u32) as u16;
+            if frames > 0 {
+                self.toast_accumulator -= f32::from(frames) * TICK_DT;
+                if let Some(w) = sess!(self).sim.world.as_mut() {
+                    w.age_notification(frames);
+                }
+                // The narration subtitle dwells on the same
+                // wall clock (it overtitles a wall-time
+                // voiceover).
+                if let Some((_, t)) = &mut self.subtitle {
+                    *t = t.saturating_sub(frames);
+                    if *t == 0 {
+                        self.subtitle = None;
+                    }
+                }
+            }
+        }
+
+        // Per-frame tick burst cap: at high multipliers a slow
+        // frame must shed sim time instead of spiraling (retail
+        // effectively did the same — its N steps per frame
+        // stretched wall time when frames slowed).
+        let max_ticks = ((2.0 * speed).ceil() as u32).max(4);
+        let mut ran = 0u32;
+        while self.accumulator >= TICK_DT {
+            self.accumulator -= TICK_DT;
+            {
+                let sess = sess!(self);
+                sess.prev_flyer = sess.sim.flyer;
+            }
+            let input = self.tick_input();
+            sess!(self).sim.step(&input);
+            // Smooth-motion snapshot rotation — the entity
+            // analogue of prev_flyer above (entities render
+            // lerped over the same one-tick window).
+            if self.cfg.render.enhancement.smooth_motion {
+                let sess = sess!(self);
+                if let Some(w) = &sess.sim.world {
+                    sess.pose_prev = std::mem::take(&mut sess.pose_cur);
+                    sess.pose_cur = w.live_poses();
+                    // PROTOTYPE fire: track blast drivers (one
+                    // tick per step; dead ones keep aging so
+                    // their smoke choreography finishes).
+                    sess.fire_blasts.update(&w.mc1_blasts(), 1.0);
+                }
+            }
+            // The mixer flush is per-tick like the original's
+            // (fade ramps are tick-denominated).
+            self.audio_tick();
+            ran += 1;
+            if ran >= max_ticks {
+                self.accumulator = 0.0;
+                break;
+            }
+        }
+        // Limit-removing telemetry (ROADMAP "MULTI-GAME
+        // ARCHITECTURE"): the pool fails open like retail,
+        // but every dropped spawn is worth a report — this
+        // is how the catalogue of ceiling-hitting levels
+        // (032's starved trigger, 039's walls) gets built.
+        if let Some(w) = sess!(self).sim.world.as_mut() {
+            // Retail quickselect auto-assign (:64858-67): a
+            // newly acquired spell takes the FIRST FREE quick
+            // key (scan 1→9→0, cap 10, silent when full;
+            // already-bound spells never re-assign). Walking
+            // the book's canonical order (byte_99B88) also
+            // reproduces the level-init pre-seed (:49216-59):
+            // at level start every owned spell diffs in at
+            // once, in that order. MC1-key schemes only —
+            // MC2 controls have no quickselect bank.
+            if self.selector.map_book {
+                let owned = w.loadout().owned;
+                for &s in &SPELL_CANON {
+                    let s = s as usize;
+                    if owned[s]
+                        && !self.prev_owned[s]
+                        && !self.quick_binds.contains(&Some(s as u8))
+                    {
+                        if let Some(slot) =
+                            self.quick_binds.iter_mut().find(|b| b.is_none())
+                        {
+                            *slot = Some(s as u8);
+                        }
+                    }
+                }
+                self.prev_owned = owned;
+            }
+            let dropped = w.take_pool_exhausted();
+            if dropped > 0 {
+                self.pool_dropped_total += dropped;
+                println!(
+                    "ERROR: entity pool exhausted — {dropped} allocation(s) \
+                     dropped this frame, {} this level (fail-open, as retail)",
+                    self.pool_dropped_total
+                );
+            }
+            // The spawn seam's misfit ledger (unknown
+            // (class, model) things degraded gracefully) —
+            // report new entries once.
+            for &(class, model, count) in &w.misfits()[self.misfits_reported..] {
+                println!(
+                    "WARN: misfit thing (class {class}, model {model}) x{count} — \
+                     unknown to the serving spawn column, degraded"
+                );
+                self.misfits_reported += 1;
+            }
+        }
+        self.sync_world();
+        // Castle-less death confirmed → the level restarts
+        // (the original's lost + level-over flow).
+        if sess!(self)
+            .sim
+            .world
+            .as_mut()
+            .is_some_and(|w| w.take_restart())
+        {
+            self.restart_level();
+        }
+
+        let alpha = self.accumulator / TICK_DT;
+        // Stale snapshots die with the toggle; the pass below
+        // re-sets the renderer's drawables at this frame's
+        // lerp fraction (sync_world set the tick-rate ones).
+        if !self.cfg.render.enhancement.smooth_motion {
+            let sess = sess!(self);
+            if !sess.pose_cur.is_empty() {
+                sess.pose_prev = Vec::new();
+                sess.pose_cur = Vec::new();
+            }
+        }
+        self.apply_smooth_motion(alpha);
+        let sess = sess_ref!(self);
+        let (a, b) = (&sess.prev_flyer, &sess.sim.flyer);
+        // Positions may wrap across the 256-tile seam; take the
+        // short way around for interpolation.
+        let lerp_wrap = |p: f32, q: f32| {
+            let mut d = q - p;
+            if d > 128.0 {
+                d -= 256.0;
+            }
+            if d < -128.0 {
+                d += 256.0;
+            }
+            (p + d * alpha).rem_euclid(256.0)
+        };
+        // The knock camera kick (remc1 :52433-37): the view
+        // pitches down ~v_22/8 engine-angle units while a
+        // buffet/knock is live (the kraken drag feedback).
+        let kick = sess
+            .sim
+            .world
+            .as_ref()
+            .map(|w| w.knock_magnitude() as f32 / 8.0 * (std::f32::consts::TAU / 2048.0))
+            .unwrap_or(0.0);
+        // The faithful camera renders at HALF the aim pitch
+        // (remc1 :52434: pitch_8 = u16_329/2) — casts still
+        // aim along the full published pitch.
+        let aim = a.pitch + (b.pitch - a.pitch) * alpha;
+        // The horizon bank. Faithful: the filtered roll stick,
+        // full value (remc1 :52432 — the missing turn cue).
+        // Enhanced: the proportional bank the sim derives from
+        // turn_rate × speed (deliberate deviation) — camera
+        // roll only, the HUD stays screen-space level.
+        let roll = a.roll + (b.roll - a.roll) * alpha;
+        let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
+            config::ThrustModel::Classic => (aim * 0.5, roll),
+            config::ThrustModel::Enhanced => (aim, roll),
+        };
+        let cam = CameraView {
+            x: lerp_wrap(a.x, b.x),
+            y: a.y + (b.y - a.y) * alpha,
+            z: lerp_wrap(a.z, b.z),
+            yaw: a.yaw + (b.yaw - a.yaw) * alpha,
+            pitch: view_pitch - kick,
+            roll: view_roll,
+            fov_y: FOV_Y,
+        };
+        // The overlay fog wall: terrain fully occludes at
+        // 0.95·fog_distance (see terrain.wgsl fog_amount);
+        // world-anchored overlays cut there (`fog_cut`).
+        let fog_wall = 0.95 * self.cfg.render.preference.fog_distance as f32;
+        // Spell UI quads (book grid or in-flight HUD).
+        if let (Some(assets), Some(w)) = (&sess.level.ui, &sess.sim.world) {
+            let size = self
+                .window
+                .as_ref()
+                .map(|win| win.inner_size())
+                .map(|s| (s.width as f32, s.height as f32))
+                .unwrap_or((1280.0, 960.0));
+            let loadout = w.loadout();
+            let vitals = w.vitals();
+            let is_mc2 = matches!(sess.level.game, mgc_sim::ids::GameId::Mc2);
+            let mc2_book = is_mc2.then(|| w.mc2_book_view());
+            // The alert-marble flicker approximates retail's
+            // per-frame [55]/[41] alternation at tick parity.
+            let alert_blink = sess.sim.tick % 2 == 0;
+            let (mut quads, hovered) = if self.book_open() {
+                if self.selector.map_book {
+                    ui::book_quads(
+                        assets,
+                        &loadout,
+                        &self.quick_binds,
+                        size.0,
+                        size.1,
+                        self.cursor,
+                    )
+                } else {
+                    // The MC2-layout map screen has no book
+                    // half — the renderer's split layout shows
+                    // the stretched live view there; the CTRL
+                    // pane below is the selector.
+                    (Vec::new(), None)
+                }
+            } else {
+                (
+                    ui::hud_quads(
+                        assets,
+                        &loadout,
+                        &vitals,
+                        self.hud_transparent(),
+                        alert_blink,
+                        is_mc2,
+                        mc2_book.as_ref(),
+                        self.cfg.gameplay.cheat.dev_spells,
+                        size.0,
+                        size.1,
+                    ),
+                    None,
+                )
+            };
+            // The CTRL selector pane, over flight or the map
+            // screen alike (the original draws the same pane
+            // in both states, remc2 EF:21788/EF:21959).
+            if self.pane_open() {
+                if let Some(pane) = &self.pane {
+                    let n = pane.spell_count();
+                    let mc2 = is_mc2;
+                    let mut owned = [false; 26];
+                    let mut castable = [false; 26];
+                    let mut castable_tier = [[true; 3]; 26];
+                    let mut cost = [0u32; 26];
+                    let mut max_level = [0u8; 26];
+                    let mut sel = [0u8; 26];
+                    let mut xp = [0i32; 26];
+                    let mut xpos = [[0i32; 3]; 26];
+                    let mut ring = [0u8; 26];
+                    let mut bound = [loadout.left, loadout.right];
+                    if mc2 {
+                        // The native spell book: ownership,
+                        // per-spell LEVEL (the
+                        // SpellLevels tier ceiling), selected
+                        // tiers, real GetSpellManaCost costs
+                        // and the quick-slot binds all come
+                        // from the sim's class-15 machinery.
+                        let bv = Some(w.mc2_book_view());
+                        if let Some(bv) = bv {
+                            for s in 0..n {
+                                owned[s] =
+                                    bv.owned[s] || self.cfg.gameplay.cheat.dev_spells;
+                                // Retail's canSummon grey-out
+                                // (EF:22503-08): the selected
+                                // tier's castle-pool prereq.
+                                // The G instrument bypasses
+                                // the afford gate for real,
+                                // so it stays lit under dev.
+                                let dev = self.cfg.gameplay.cheat.dev_spells;
+                                castable[s] = owned[s]
+                                    && (bv.castable[s][bv.sel[s].min(2) as usize] || dev);
+                                if !dev {
+                                    castable_tier[s] = bv.castable[s];
+                                }
+                                cost[s] = bv.cost[s];
+                                // The G instrument keeps all
+                                // tiers exercisable; the
+                                // earned ceiling is the XP
+                                // level.
+                                max_level[s] = if self.cfg.gameplay.cheat.dev_spells {
+                                    pane.levels - 1
+                                } else {
+                                    bv.levels[s]
+                                };
+                                sel[s] = bv.sel[s];
+                                xp[s] = bv.xp[s];
+                                xpos[s] = bv.xpos[s];
+                                ring[s] = bv.ring[s];
+                            }
+                            bound =
+                                [u8::try_from(bv.left).ok(), u8::try_from(bv.right).ok()];
+                            // `spell_levels` is NOT mirrored here
+                            // any more — `sync_world` owns that,
+                            // every frame rather than only while
+                            // the pane happens to be drawn.
+                            self.pane_bound = bound;
+                        }
+                    } else {
+                        for s in 0..n {
+                            owned[s] = loadout.owned[s];
+                            castable[s] = loadout.bindable[s];
+                            castable_tier[s] = [loadout.bindable[s]; 3];
+                            cost[s] = mgc_sim::mc1::spells::SPELLS[s].possess_mana;
+                            max_level[s] = pane.levels - 1;
+                            sel[s] = self.spell_levels[s];
+                            ring[s] = loadout.ring[s];
+                        }
+                    }
+                    let view = ui::SelectorView {
+                        owned: &owned[..n],
+                        castable: &castable[..n],
+                        castable_tier: &castable_tier[..n],
+                        selected_level: &sel[..n],
+                        max_level: &max_level[..n],
+                        bound,
+                        ring: &ring[..n],
+                        mana: loadout.mana,
+                        cost: &cost[..n],
+                        xp: &xp[..n],
+                        xpos: &xpos[..n],
+                    };
+                    let (pq, hover) = ui::selector_quads(
+                        assets,
+                        pane,
+                        &view,
+                        size.0,
+                        size.1,
+                        self.cursor,
+                        self.selector_drag.map(|(s, _)| s),
+                    );
+                    quads.extend(pq);
+                    self.selector_hover = hover;
+                }
+            }
+            // The map-screen wizard scoreboard: name + census
+            // mana total + the kill matrix, one screen shared
+            // by both games (ui::roster_quads). Retail
+            // triggers: MC1 = the cursor over the blank strip
+            // below the map pane (`mouse.y >= 382`, :26838-39);
+            // MC2 = held ALT (PI:951 → MenuState 7 →
+            // DrawSorcererScores_2D1D0). DELIBERATE (player
+            // ruling): BOTH triggers work in BOTH games —
+            // neither input means anything else on the map
+            // screen. Doubles as the mana-conservation
+            // instrument (the census total is base + Σ owned
+            // entity mana, the leak-visible quantity).
+            if self.book_open() {
+                let strip_top =
+                    ui::HudFrame::new(size.0, size.1).by(if self.selector.map_book {
+                        mgc_render::BOOK_MAP_H
+                    } else {
+                        mgc_render::MC2_MAP_VIEW_H
+                    });
+                // The hover trigger needs a LIVE pointer — on
+                // the bookless map the cursor stays grabbed
+                // (its position freezes), so a stale low
+                // position must not pin the roster open; ALT
+                // is that map's trigger.
+                if self.alt_held || (!self.grabbed && self.cursor.1 >= strip_top) {
+                    let colors = entities::roster_team_colors(
+                        sess.level.game,
+                        sess.level.mc2_env,
+                        &sess.level.palette_rgba,
+                    );
+                    let mut rows: [Option<ui::RosterEntry>; 8] = Default::default();
+                    // Slot 0 = the human. Retail's in-play flag
+                    // (+6) drops at the death event, so the row
+                    // exists only while Alive. Name: the
+                    // campaign's entered name (retail overrides
+                    // the slot-0 table name with the player
+                    // string), else the table default.
+                    if vitals.state == mgc_sim::engine::world::LifeState::Alive {
+                        let name = self
+                            .campaign
+                            .as_ref()
+                            .and_then(|c| {
+                                c.save
+                                    .mc1()
+                                    .map(|s| s.name.clone())
+                                    .or_else(|| c.save.mc2().map(|s| s.player_name.clone()))
+                                    .filter(|n| !n.trim().is_empty())
+                            })
+                            .unwrap_or_else(|| {
+                                if is_mc2 {
+                                    mgc_sim::mc2::rivals::MC2_RIVAL_NAMES[0].into()
+                                } else {
+                                    mgc_sim::mc1::rivals::RIVAL_NAMES[0].into()
+                                }
+                            });
+                        rows[0] = Some(ui::RosterEntry {
+                            name,
+                            mana: loadout.mana_max,
+                            kills: w.player_kill_row(),
+                            box_c: colors[0].0,
+                            text_c: colors[0].1,
+                        });
+                    }
+                    for r in w.rival_views() {
+                        let slot = r.slot as usize;
+                        if r.alive && (1..8).contains(&slot) {
+                            rows[slot] = Some(ui::RosterEntry {
+                                name: r.name.to_string(),
+                                mana: r.mana_max,
+                                kills: r.kills,
+                                box_c: colors[slot].0,
+                                text_c: colors[slot].1,
+                            });
+                        }
+                    }
+                    quads.extend(ui::roster_quads(assets, &rows, is_mc2, size.0, size.1));
+                }
+            }
+            if !self.book_open() {
+                // The paralyze WEB overlay (remc2 EF:21668-
+                // 710): the HWEB bank tiled over the view
+                // while the web counter is live — spider
+                // webs + the (9,21) spit. Hard on/off, no
+                // fade, exactly retail.
+                if sess.sim.carpet_mc2.mobilize > 0 && assets.has_web() {
+                    quads.extend(assets.web_quads(size.0, size.1));
+                }
+                // The stagger GREEN tint (`SetPalette
+                // Modification_5C830` subMod 3, EF:31935-
+                // 32002: R and B darkened by 56*count>>8,
+                // count = 171*ms/3+85, green untouched — the
+                // manticore-spit poison cast, distinct from
+                // the subMod-2 red damage flash). An alpha-
+                // blended green quad at the retail
+                // subtraction magnitude (≈12/17/22%) is the
+                // RGBA approximation of the palette edit.
+                let ms = sess.sim.carpet_mc2.move_speed;
+                if ms > 0 {
+                    let count = (171.0 * ms as f32 / 3.0 + 85.0).min(256.0);
+                    let a = count * 56.0 / 65536.0;
+                    quads
+                        .push(ui::solid([0.0, 0.0, size.0, size.1], [0.05, 0.42, 0.08, a]));
+                }
+                quads.extend(ui::vitals_quads(
+                    &vitals,
+                    size.0,
+                    size.1,
+                    (sess.sim.tick / 8) % 2 == 0,
+                    self.cfg.render.debug.grace_meter,
+                ));
+            }
+            if self.paused {
+                // Both views: the book screen is exactly where
+                // paused inspection happens.
+                quads.extend(ui::pause_quads(size.0, size.1));
+            }
+            // The pause mini-menu. It carries no "PAUSED" text
+            // of its own — the retail indicator above is the
+            // pause state, this is the menu.
+            //
+            // Hidden while the options layer is up: the two
+            // panels on screen at once read as clutter, and
+            // the options menu is modal anyway. Esc closes
+            // that layer and this comes straight back.
+            if let (Some(mini), None) = (&self.mini, &self.menu) {
+                quads.extend(minimenu::draw(assets, mini, size.0, size.1, self.cursor));
+            }
+            // The options menu (over everything but the quit
+            // fade).
+            if let Some(st) = &self.menu {
+                quads.extend(menu::draw(
+                    assets,
+                    &self.cfg,
+                    &self.specs,
+                    st,
+                    size.0,
+                    size.1,
+                    self.cursor,
+                ));
+            }
+            // The exit-confirm modal (mutually exclusive
+            // with the options menu — P is swallowed while
+            // it is up; under the quit fade).
+            if self.exit_confirm {
+                quads.extend(ui::exit_confirm_quads(
+                    assets,
+                    EXIT_CONFIRM_TEXT,
+                    size.0,
+                    size.1,
+                    self.cursor,
+                ));
+            }
+            // expose-jar-spells (debug): float each pickable
+            // jar's spell icon over it in the main view (the
+            // map stamps are the other half). No fancy UI —
+            // the raw icon on a dark slab, health-bar style.
+            if self.cfg.render.enhancement.expose_jar_spells && !self.book_open() {
+                if let Some(u) = &sess.level.ui {
+                    for &(x, alt, z, spell) in &self.jar_markers {
+                        // The fog-wall cut: overlays must not
+                        // reveal jars the fog hides. Torus-
+                        // wrapped distance vs the fog's
+                        // full-occlusion point (0.95·D;
+                        // 0 = fog off).
+                        if fog_cut(&cam, x, alt, z, fog_wall) {
+                            continue;
+                        }
+                        let Some(id) = ui::spell_icon_sprite(sess.level.game, spell) else {
+                            continue;
+                        };
+                        let Some(st) = u.map_stamp(id) else { continue };
+                        let Some((sx, sy)) = mgc_render::world_to_screen(
+                            &cam,
+                            size.0,
+                            size.1,
+                            x,
+                            alt + 0.6,
+                            z,
+                        ) else {
+                            continue;
+                        };
+                        let s = ui::HudFrame::new(size.0, size.1).s.max(1.0);
+                        let ih = 12.0 * s;
+                        let iw = ih * st.w as f32 / st.h as f32;
+                        // A dark slab behind the luminous icon
+                        // ramps, for readability over bright sky/
+                        // terrain.
+                        quads.push(mgc_render::UiQuad {
+                            rect: [
+                                sx - iw * 0.5 - s,
+                                sy - ih - s,
+                                iw + 2.0 * s,
+                                ih + 2.0 * s,
+                            ],
+                            uv: [0.0; 4],
+                            tint: [0.0, 0.0, 0.0, 0.45],
+                        });
+                        quads.push(mgc_render::UiQuad {
+                            rect: [sx - iw * 0.5, sy - ih, iw, ih],
+                            uv: st.uv,
+                            tint: [1.0, 1.0, 1.0, 1.0],
+                        });
+                    }
+                }
+            }
+            // The aim crosshair (`render.preference.crosshair`,
+            // C toggles — the gameplay aim cursor, and under
+            // enhanced thrust the chase-steering target) and
+            // the autoaim lock markers (+/x on the target each
+            // hand's equipped spell would acquire this instant;
+            // `render.debug.autoaim_hints`, World::aim_preview
+            // — the pure scan twin). Split options 2026-07-23.
+            let want_cross = self.cfg.render.preference.crosshair;
+            let want_hints = self.cfg.render.debug.autoaim_hints;
+            if (want_cross || want_hints)
+                && !self.book_open()
+                && vitals.state == mgc_sim::engine::world::LifeState::Alive
+            {
+                let f = &sess.sim.flyer;
+                // The aim heading. Enhanced chase steering:
+                // the crosshair sits at the DESIRED heading
+                // (yaw + lead) and the autoaim preview scans
+                // along it — matching the cast pose, which
+                // launches along the crosshair while the hull
+                // is still coming around. The desired heading
+                // is predicted at FRAME rate: mouse motion the
+                // sim has not consumed yet (`self.mouse`, the
+                // per-tick accumulator, already sensitivity-
+                // scaled) is added on top of the tick-rate
+                // lead, re-clamped against the interpolated
+                // camera — otherwise the pointer steps at
+                // 24 Hz while the camera glides (choppy,
+                // player report 2026-07-23).
+                let (neutral_yaw, pose_yaw) = match self.cfg.controls.models.thrust {
+                    config::ThrustModel::Classic => (cam.yaw, f.yaw),
+                    config::ThrustModel::Enhanced => {
+                        let lead = (sess.sim.aim_yaw() + self.mouse.yaw - cam.yaw)
+                            .clamp(-mgc_sim::LEAD_MAX, mgc_sim::LEAD_MAX);
+                        let a = cam.yaw + lead;
+                        (a, a)
+                    }
+                };
+                let (sy, cyaw) = neutral_yaw.sin_cos();
+                let (sp, cp) = aim.sin_cos();
+                // The acquire range: 5120 units = 20 tiles.
+                const AIM_D: f32 = 20.0;
+                let neutral = if want_cross {
+                    mgc_render::world_to_screen(
+                        &cam,
+                        size.0,
+                        size.1,
+                        cam.x + sy * cp * AIM_D,
+                        cam.y + sp * AIM_D,
+                        cam.z - cyaw * cp * AIM_D,
+                    )
+                } else {
+                    None
+                };
+                let locks = if want_hints {
+                    let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
+                        f.x, f.y, f.z, pose_yaw, f.pitch, 0.0,
+                    );
+                    w.aim_preview(pose).map(|l| {
+                        l.and_then(|l| {
+                            // Lock markers honor the fog wall
+                            // too (relevant when fog_distance
+                            // < the 20-tile acquire range).
+                            if fog_cut(&cam, l.x, l.alt, l.z, fog_wall) {
+                                return None;
+                            }
+                            mgc_render::world_to_screen(
+                                &cam, size.0, size.1, l.x, l.alt, l.z,
+                            )
+                        })
+                    })
+                } else {
+                    [None, None]
+                };
+                let blink =
+                    0.5 + 0.5 * (((sess.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
+                ui::crosshair_quads(&mut quads, size.0, size.1, neutral, locks, blink);
+            }
+            // The top-of-screen notification line (retail
+            // `DrawTextPauseEndOfLevel_2CE30`, EF:21787): the
+            // small FONT1 toast, LEFT-aligned, anchored just below
+            // the wizard info-boxes and right of the radar (the
+            // HUD-derived anchor — retail's 320-native literal
+            // doesn't map onto our 640-native HSPR panels). Over
+            // the live view only (not the book/map screen). The
+            // anchor is in 640-native HUD coords (× w/640); FONT1
+            // draws at gameUiScale, so its glyphs scale by w/320.
+            // The white masks are tinted the ink colour (DrawText's
+            // `color`, red for plain toasts).
+            if !self.book_open() && assets.has_font() {
+                if let Some((msg, color)) = w.notification() {
+                    let (ax, ay) = assets.hud_notification_anchor();
+                    // Uniform HUD scale (`ui::HudFrame`): the
+                    // toast rides under the LEFT-anchored panel
+                    // group, so its anchor is native×s. The font
+                    // runs at 2× because FONT1 is 320-native.
+                    let hud_s = ui::HudFrame::new(size.0, size.1).s;
+                    let font_s = 2.0 * hud_s;
+                    let tint = [
+                        color[0] as f32 / 255.0,
+                        color[1] as f32 / 255.0,
+                        color[2] as f32 / 255.0,
+                        1.0,
+                    ];
+                    quads.extend(assets.text_quads(
+                        msg,
+                        ax * hud_s,
+                        ay * hud_s,
+                        tint,
+                        font_s,
+                    ));
+                }
+                // The MC1/HW WIN message (:26480-26505):
+                // while the win flag holds, the two-line
+                // black-ink message persists at the pane top
+                // — ETEXT.DAT entries 60/61. Retail
+                // colour-cycles the ink unless zoomed out —
+                // the static black remap slot [1] is the
+                // baseline.
+                if !is_mc2 && w.completed() && !w.player_dead() {
+                    let (ax, ay) = assets.hud_notification_anchor();
+                    // Uniform HUD scale (`ui::HudFrame`): the
+                    // toast rides under the LEFT-anchored panel
+                    // group, so its anchor is native×s. The font
+                    // runs at 2× because FONT1 is 320-native.
+                    let hud_s = ui::HudFrame::new(size.0, size.1).s;
+                    let font_s = 2.0 * hud_s;
+                    let black = [0.0, 0.0, 0.0, 1.0];
+                    // The two sentences are ETEXT 60/61, read
+                    // from the bundle's baked bank (literal
+                    // fallback when the bank is absent). One
+                    // string — the font's own line height
+                    // spaces the two lines (a manual offset
+                    // overlaps them). A live toast owns the
+                    // anchor row; the win block steps one line
+                    // below it.
+                    let line = |idx: usize, fallback: &str| -> String {
+                        match sess.level.etext.get(idx) {
+                            Some(s) if !s.is_empty() => s.clone(),
+                            _ => fallback.to_string(),
+                        }
+                    };
+                    let msg = format!(
+                        "{}{}\n{}",
+                        if w.notification().is_some() { "\n" } else { "" },
+                        line(60, "World restored."),
+                        line(61, "Press the space bar to continue."),
+                    );
+                    quads.extend(assets.text_quads(
+                        &msg,
+                        ax * hud_s,
+                        ay * hud_s,
+                        black,
+                        font_s,
+                    ));
+                }
+                // The narration subtitle (MC2 objective
+                // voiceover text): word-wrapped, centered,
+                // one line-height below the toast row so the
+                // two never collide. White ink — the
+                // conventional subtitle color (the retail
+                // textbox look is not reproduced; P-class
+                // presentation).
+                if let Some((text, _)) = &self.subtitle {
+                    let (_, ay) = assets.hud_notification_anchor();
+                    // Uniform HUD scale (`ui::HudFrame`): the
+                    // toast rides under the LEFT-anchored panel
+                    // group, so its anchor is native×s. The font
+                    // runs at 2× because FONT1 is 320-native.
+                    let hud_s = ui::HudFrame::new(size.0, size.1).s;
+                    let font_s = 2.0 * hud_s;
+                    let lh = assets.font_line_height();
+                    let white = [1.0, 1.0, 1.0, 1.0];
+                    let max_w = size.0 * 0.8 / font_s;
+                    let mut y = ay * hud_s + 1.5 * lh * font_s;
+                    for line in wrap_font_text(assets, text, max_w) {
+                        let w_px = assets.text_width(&line) * font_s;
+                        let x = (size.0 - w_px) / 2.0;
+                        quads.extend(assets.text_quads(&line, x, y, white, font_s));
+                        y += lh * font_s;
+                    }
+                }
+            }
+            // The end-of-game fadeout: the MC2 ending's
+            // sim-side fade (endGameSeq phase 11) under the
+            // app's own post-victory fade; at full black the
+            // game ends (quit, no stats/menu — deliberate).
+            if w.won() && !self.won_handled {
+                // The victory breadcrumb — and the campaign-
+                // stitching hook consuming the same signal:
+                // record the completion, pick the next step,
+                // persist the slot. Single-level mode still
+                // just fades out. Latched — the fade being
+                // consumed (the map screen) must not refire
+                // it.
+                self.won_handled = true;
+                println!("{} completed", sess.level.label);
+                if let Some(run) = &mut self.campaign {
+                    campaign_complete(run, sess.level.level_number, w);
+                }
+                self.quit_fade = Some(0.0);
+            }
+            let fade = w.end_fade().max(self.quit_fade.unwrap_or(0.0));
+            if fade > 0.0 {
+                quads.push(ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, fade]));
+            }
+            // The FPS overlay (render · debug): bottom-right
+            // corner — clear of the top HUD strip, the
+            // bottom-center grace meter and the left-anchored
+            // toast rows; above the fade (a debug instrument
+            // stays readable). White FONT1 ink.
+            if !self.fps_text.is_empty() && assets.has_font() {
+                let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
+                let pad = 4.0 * font_s;
+                let w_px = assets.text_width(&self.fps_text) * font_s;
+                let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
+                quads.extend(assets.text_quads(
+                    &self.fps_text,
+                    size.0 - w_px - pad,
+                    y,
+                    [1.0, 1.0, 1.0, 1.0],
+                    font_s,
+                ));
+            }
+            // The coordinate overlay (render · debug, K):
+            // bottom-LEFT, across the room from the fps
+            // readout. Engine units — the language the
+            // altitude bands speak (floor 128/256, band
+            // 1024/3072): x/y = the horizontal position on
+            // the sim's wrapping 8.8 axes, z = altitude,
+            // (+E) = elevation over the terrain underneath.
+            // Reads the interpolated camera pose (= the
+            // carpet), so it glides with the picture.
+            if self.cfg.render.debug.coords && assets.has_font() {
+                let g = sess.sim.ground_height(cam.x, cam.z);
+                let xe = (cam.x.rem_euclid(256.0) * 256.0) as u16;
+                let ye = (cam.z.rem_euclid(256.0) * 256.0) as u16;
+                let ze = (cam.y * 256.0).round() as i32;
+                let elev = ze - (g * 256.0).round() as i32;
+                let text = format!("x {xe}, y {ye}, z {ze} ({elev:+})");
+                let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
+                let pad = 4.0 * font_s;
+                let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
+                quads.extend(assets.text_quads(
+                    &text,
+                    pad,
+                    y,
+                    [1.0, 1.0, 1.0, 1.0],
+                    font_s,
+                ));
+            }
+            self.hovered = hovered;
+            self.append_software_cursor(&mut quads);
+            if let Some(r) = &mut self.renderer {
+                r.set_ui_quads(quads);
+            }
+        }
+        if let Some(f) = &mut self.quit_fade {
+            *f += 1.0 / 48.0;
+            if *f >= 1.25 {
+                // A beat of full black; then the campaign
+                // routes onward, or the game leaves.
+                match self.campaign.as_mut().and_then(|c| c.next.take()) {
+                    Some(campaign::NextStep::Level(n)) => {
+                        let mc1 = self
+                            .campaign
+                            .as_ref()
+                            .is_some_and(|c| c.id != campaign::CampaignId::Mc2);
+                        if mc1 {
+                            // The retail transition beat: a
+                            // win plays the congratulation
+                            // movie and returns to the MAIN
+                            // MENU (the score screen is still
+                            // deferred); Continue launches the
+                            // next level.
+                            if let Some(run) = &mut self.campaign {
+                                run.current = n;
+                            }
+                            self.quit_fade = None;
+                            let win = mc1_win_movie();
+                            self.play_movies(&[win], AfterMovie::Menu, event_loop);
+                        } else {
+                            // MC2's direct level chain (the
+                            // demon-mouth secret dive).
+                            self.campaign_switch(n, event_loop);
+                        }
+                    }
+                    Some(campaign::NextStep::MapScreen) => {
+                        self.quit_fade = None;
+                        // MC2 slots a cutscene in front of the
+                        // map after certain levels.
+                        let done = self.campaign.as_ref().map_or(0, |c| c.current);
+                        match self.mc2_cutscene(done) {
+                            Some(cue) => {
+                                self.play_movies(&[cue], AfterMovie::Map, event_loop)
+                            }
+                            None => self.open_map_screen(event_loop),
+                        }
+                    }
+                    Some(campaign::NextStep::Outro) => {
+                        // The campaign's ending movie, then
+                        // out. MC1/HW have a dedicated
+                        // OUTRO.DAT; MC2's ending is the last
+                        // of its six cutscenes.
+                        println!("campaign complete!");
+                        self.quit_fade = None;
+                        // Both endings are unskippable in
+                        // retail (`PlayInfoFmv(0, ..)`).
+                        let outro = if self.is_mc2() { "cut6" } else { "outro" };
+                        self.play_movies(
+                            &[movie::Cue::unskippable(outro)],
+                            AfterMovie::Quit,
+                            event_loop,
+                        );
+                    }
+                    None => event_loop.exit(),
+                }
+            }
+        }
+        // The fade routing above may have torn the session
+        // down (won → menu/map) — the tick clock must come
+        // from whatever session remains, if any.
+        let anim_tick = self.session.as_deref().map(|s| s.sim.tick % 4096);
+        if let Some(r) = &mut self.renderer {
+            // Animation clock: sim ticks are the original's game
+            // turns; wrapped so f32 stays exact (see set_anim_turn).
+            if let Some(t) = anim_tick {
+                r.set_anim_turn(t as f32 + alpha);
+            }
+            match r.render(&cam) {
+                Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
+                Err(e) => eprintln!("render: {e}"),
+            }
+        }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -6060,990 +7051,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let now = std::time::Instant::now();
-                // Clamp huge pauses (debugger, suspend) to keep the sim
-                // from spiraling through hundreds of catch-up ticks.
-                let raw_dt = (now - self.last_frame).as_secs_f32();
-                let dt = raw_dt.min(0.25);
-                self.last_frame = now;
-                // PROTOTYPE fire clock (advances while paused too).
-                self.effect_time += raw_dt;
-                // FPS-overlay accounting: true wall time (the clamp
-                // above is sim pacing, not measurement), readout
-                // refreshed every half-second. Counts while paused
-                // too — the menu is where you toggle effects to
-                // watch their cost.
-                if self.cfg.render.debug.fps {
-                    self.fps_frames += 1;
-                    self.fps_elapsed += raw_dt;
-                    if self.fps_elapsed >= 0.5 {
-                        let ms = 1000.0 * self.fps_elapsed / self.fps_frames as f32;
-                        self.fps_text = format!(
-                            "{:.0} fps  {ms:.1} ms",
-                            self.fps_frames as f32 / self.fps_elapsed
-                        );
-                        self.fps_frames = 0;
-                        self.fps_elapsed = 0.0;
-                    }
-                } else if !self.fps_text.is_empty() {
-                    self.fps_text.clear();
-                    self.fps_frames = 0;
-                    self.fps_elapsed = 0.0;
-                }
-                // A still-armed boot grab retries every frame until
-                // it STICKS: both the attempt in `resumed` and the
-                // one on the first focus can fail while the WM is
-                // still placing/animating the fresh window (some hold
-                // their own pointer grab through it). Success or any
-                // deliberate free clears the flag inside `set_grab`.
-                if self.boot_grab {
-                    // has_focus-gated: an X11 pointer grab can succeed
-                    // GLOBALLY, and retrying while alt-tabbed away
-                    // would steal the pointer from another app. While
-                    // focus has not arrived, briefly keep re-asking
-                    // for activation (the `resumed` request races the
-                    // WM's async map).
-                    if self.window.as_ref().is_some_and(|w| w.has_focus()) {
-                        self.set_grab(true);
-                    } else if self.boot_focus_asks > 0 {
-                        self.boot_focus_asks -= 1;
-                        if let Some(w) = &self.window {
-                            w.focus_window();
-                            // Every 15th ask escalates from petition
-                            // to the X11 primitive: by then the map
-                            // has settled, and a WM that ignores
-                            // `_NET_ACTIVE_WINDOW` (compiz FSP) will
-                            // ignore it forever.
-                            if self.boot_focus_asks % 15 == 0 {
-                                x11_force_focus(w);
-                            }
-                        }
-                    }
-                }
-                // A frontend screen owns the frame: no session, no
-                // sim, no HUD — its own tick + quads, rendered over
-                // the void (the renderer holds no level).
-                if self.screen != Screen::Level || self.session.is_none() {
-                    self.frontend_frame(dt, event_loop);
-                    if let Some(r) = &mut self.renderer {
-                        let cam = CameraView {
-                            x: 0.0,
-                            y: 4.0,
-                            z: 0.0,
-                            yaw: 0.0,
-                            pitch: 0.0,
-                            roll: 0.0,
-                            fov_y: FOV_Y,
-                        };
-                        match r.render(&cam) {
-                            Ok(())
-                            | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
-                            Err(e) => eprintln!("render: {e}"),
-                        }
-                    }
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                    return;
-                }
-                // Game speed (retail F3): retail runs the sim step N
-                // times per rendered frame (remc1 :41672 / remc2
-                // EF:31800); our fixed-Hz accumulator expresses the
-                // same multiplier by scaling wall time. Every tick is
-                // bit-identical — only the pacing changes.
-                let speed = self.cfg.sim.options.game_speed.multiplier(self.is_mc2());
-                self.accumulator += dt * speed;
-                if self.paused {
-                    // Frozen sim clock: drain the accumulator so
-                    // resuming is clean instead of bursting through
-                    // missed ticks. (The abandon-confirm dialog does
-                    // NOT freeze — retail keeps the world simulating
-                    // under it, EventsFunctions.cpp:31796; the dialog
-                    // only owns the input. P still pauses if wanted.)
-                    self.accumulator = 0.0;
-                }
-
-                // The toast line decays on WALL time at the authentic
-                // 24Hz — retail decrements the message life once per
-                // rendered frame, not per game turn, so the speed
-                // multiplier never parked a SLOW toast forever or
-                // blinked a VERY FAST one. Frozen with the rest of the
-                // clock under P-pause.
-                if !self.paused {
-                    self.toast_accumulator += dt;
-                    let frames =
-                        ((self.toast_accumulator / TICK_DT) as u32).min(u16::MAX as u32) as u16;
-                    if frames > 0 {
-                        self.toast_accumulator -= f32::from(frames) * TICK_DT;
-                        if let Some(w) = sess!(self).sim.world.as_mut() {
-                            w.age_notification(frames);
-                        }
-                        // The narration subtitle dwells on the same
-                        // wall clock (it overtitles a wall-time
-                        // voiceover).
-                        if let Some((_, t)) = &mut self.subtitle {
-                            *t = t.saturating_sub(frames);
-                            if *t == 0 {
-                                self.subtitle = None;
-                            }
-                        }
-                    }
-                }
-
-                // Per-frame tick burst cap: at high multipliers a slow
-                // frame must shed sim time instead of spiraling (retail
-                // effectively did the same — its N steps per frame
-                // stretched wall time when frames slowed).
-                let max_ticks = ((2.0 * speed).ceil() as u32).max(4);
-                let mut ran = 0u32;
-                while self.accumulator >= TICK_DT {
-                    self.accumulator -= TICK_DT;
-                    {
-                        let sess = sess!(self);
-                        sess.prev_flyer = sess.sim.flyer;
-                    }
-                    let input = self.tick_input();
-                    sess!(self).sim.step(&input);
-                    // Smooth-motion snapshot rotation — the entity
-                    // analogue of prev_flyer above (entities render
-                    // lerped over the same one-tick window).
-                    if self.cfg.render.enhancement.smooth_motion {
-                        let sess = sess!(self);
-                        if let Some(w) = &sess.sim.world {
-                            sess.pose_prev = std::mem::take(&mut sess.pose_cur);
-                            sess.pose_cur = w.live_poses();
-                            // PROTOTYPE fire: track blast drivers (one
-                            // tick per step; dead ones keep aging so
-                            // their smoke choreography finishes).
-                            sess.fire_blasts.update(&w.mc1_blasts(), 1.0);
-                        }
-                    }
-                    // The mixer flush is per-tick like the original's
-                    // (fade ramps are tick-denominated).
-                    self.audio_tick();
-                    ran += 1;
-                    if ran >= max_ticks {
-                        self.accumulator = 0.0;
-                        break;
-                    }
-                }
-                // Limit-removing telemetry (ROADMAP "MULTI-GAME
-                // ARCHITECTURE"): the pool fails open like retail,
-                // but every dropped spawn is worth a report — this
-                // is how the catalogue of ceiling-hitting levels
-                // (032's starved trigger, 039's walls) gets built.
-                if let Some(w) = sess!(self).sim.world.as_mut() {
-                    // Retail quickselect auto-assign (:64858-67): a
-                    // newly acquired spell takes the FIRST FREE quick
-                    // key (scan 1→9→0, cap 10, silent when full;
-                    // already-bound spells never re-assign). Walking
-                    // the book's canonical order (byte_99B88) also
-                    // reproduces the level-init pre-seed (:49216-59):
-                    // at level start every owned spell diffs in at
-                    // once, in that order. MC1-key schemes only —
-                    // MC2 controls have no quickselect bank.
-                    if self.selector.map_book {
-                        let owned = w.loadout().owned;
-                        for &s in &SPELL_CANON {
-                            let s = s as usize;
-                            if owned[s]
-                                && !self.prev_owned[s]
-                                && !self.quick_binds.contains(&Some(s as u8))
-                            {
-                                if let Some(slot) =
-                                    self.quick_binds.iter_mut().find(|b| b.is_none())
-                                {
-                                    *slot = Some(s as u8);
-                                }
-                            }
-                        }
-                        self.prev_owned = owned;
-                    }
-                    let dropped = w.take_pool_exhausted();
-                    if dropped > 0 {
-                        self.pool_dropped_total += dropped;
-                        println!(
-                            "ERROR: entity pool exhausted — {dropped} allocation(s) \
-                             dropped this frame, {} this level (fail-open, as retail)",
-                            self.pool_dropped_total
-                        );
-                    }
-                    // The spawn seam's misfit ledger (unknown
-                    // (class, model) things degraded gracefully) —
-                    // report new entries once.
-                    for &(class, model, count) in &w.misfits()[self.misfits_reported..] {
-                        println!(
-                            "WARN: misfit thing (class {class}, model {model}) x{count} — \
-                             unknown to the serving spawn column, degraded"
-                        );
-                        self.misfits_reported += 1;
-                    }
-                }
-                self.sync_world();
-                // Castle-less death confirmed → the level restarts
-                // (the original's lost + level-over flow).
-                if sess!(self)
-                    .sim
-                    .world
-                    .as_mut()
-                    .is_some_and(|w| w.take_restart())
-                {
-                    self.restart_level();
-                }
-
-                let alpha = self.accumulator / TICK_DT;
-                // Stale snapshots die with the toggle; the pass below
-                // re-sets the renderer's drawables at this frame's
-                // lerp fraction (sync_world set the tick-rate ones).
-                if !self.cfg.render.enhancement.smooth_motion {
-                    let sess = sess!(self);
-                    if !sess.pose_cur.is_empty() {
-                        sess.pose_prev = Vec::new();
-                        sess.pose_cur = Vec::new();
-                    }
-                }
-                self.apply_smooth_motion(alpha);
-                let sess = sess_ref!(self);
-                let (a, b) = (&sess.prev_flyer, &sess.sim.flyer);
-                // Positions may wrap across the 256-tile seam; take the
-                // short way around for interpolation.
-                let lerp_wrap = |p: f32, q: f32| {
-                    let mut d = q - p;
-                    if d > 128.0 {
-                        d -= 256.0;
-                    }
-                    if d < -128.0 {
-                        d += 256.0;
-                    }
-                    (p + d * alpha).rem_euclid(256.0)
-                };
-                // The knock camera kick (remc1 :52433-37): the view
-                // pitches down ~v_22/8 engine-angle units while a
-                // buffet/knock is live (the kraken drag feedback).
-                let kick = sess
-                    .sim
-                    .world
-                    .as_ref()
-                    .map(|w| w.knock_magnitude() as f32 / 8.0 * (std::f32::consts::TAU / 2048.0))
-                    .unwrap_or(0.0);
-                // The faithful camera renders at HALF the aim pitch
-                // (remc1 :52434: pitch_8 = u16_329/2) — casts still
-                // aim along the full published pitch.
-                let aim = a.pitch + (b.pitch - a.pitch) * alpha;
-                // The horizon bank. Faithful: the filtered roll stick,
-                // full value (remc1 :52432 — the missing turn cue).
-                // Enhanced: the proportional bank the sim derives from
-                // turn_rate × speed (deliberate deviation) — camera
-                // roll only, the HUD stays screen-space level.
-                let roll = a.roll + (b.roll - a.roll) * alpha;
-                let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
-                    config::ThrustModel::Classic => (aim * 0.5, roll),
-                    config::ThrustModel::Enhanced => (aim, roll),
-                };
-                let cam = CameraView {
-                    x: lerp_wrap(a.x, b.x),
-                    y: a.y + (b.y - a.y) * alpha,
-                    z: lerp_wrap(a.z, b.z),
-                    yaw: a.yaw + (b.yaw - a.yaw) * alpha,
-                    pitch: view_pitch - kick,
-                    roll: view_roll,
-                    fov_y: FOV_Y,
-                };
-                // The overlay fog wall: terrain fully occludes at
-                // 0.95·fog_distance (see terrain.wgsl fog_amount);
-                // world-anchored overlays cut there (`fog_cut`).
-                let fog_wall = 0.95 * self.cfg.render.preference.fog_distance as f32;
-                // Spell UI quads (book grid or in-flight HUD).
-                if let (Some(assets), Some(w)) = (&sess.level.ui, &sess.sim.world) {
-                    let size = self
-                        .window
-                        .as_ref()
-                        .map(|win| win.inner_size())
-                        .map(|s| (s.width as f32, s.height as f32))
-                        .unwrap_or((1280.0, 960.0));
-                    let loadout = w.loadout();
-                    let vitals = w.vitals();
-                    let is_mc2 = matches!(sess.level.game, mgc_sim::ids::GameId::Mc2);
-                    let mc2_book = is_mc2.then(|| w.mc2_book_view());
-                    // The alert-marble flicker approximates retail's
-                    // per-frame [55]/[41] alternation at tick parity.
-                    let alert_blink = sess.sim.tick % 2 == 0;
-                    let (mut quads, hovered) = if self.book_open() {
-                        if self.selector.map_book {
-                            ui::book_quads(
-                                assets,
-                                &loadout,
-                                &self.quick_binds,
-                                size.0,
-                                size.1,
-                                self.cursor,
-                            )
-                        } else {
-                            // The MC2-layout map screen has no book
-                            // half — the renderer's split layout shows
-                            // the stretched live view there; the CTRL
-                            // pane below is the selector.
-                            (Vec::new(), None)
-                        }
-                    } else {
-                        (
-                            ui::hud_quads(
-                                assets,
-                                &loadout,
-                                &vitals,
-                                self.hud_transparent(),
-                                alert_blink,
-                                is_mc2,
-                                mc2_book.as_ref(),
-                                self.cfg.gameplay.cheat.dev_spells,
-                                size.0,
-                                size.1,
-                            ),
-                            None,
-                        )
-                    };
-                    // The CTRL selector pane, over flight or the map
-                    // screen alike (the original draws the same pane
-                    // in both states, remc2 EF:21788/EF:21959).
-                    if self.pane_open() {
-                        if let Some(pane) = &self.pane {
-                            let n = pane.spell_count();
-                            let mc2 = is_mc2;
-                            let mut owned = [false; 26];
-                            let mut castable = [false; 26];
-                            let mut castable_tier = [[true; 3]; 26];
-                            let mut cost = [0u32; 26];
-                            let mut max_level = [0u8; 26];
-                            let mut sel = [0u8; 26];
-                            let mut xp = [0i32; 26];
-                            let mut xpos = [[0i32; 3]; 26];
-                            let mut ring = [0u8; 26];
-                            let mut bound = [loadout.left, loadout.right];
-                            if mc2 {
-                                // The native spell book: ownership,
-                                // per-spell LEVEL (the
-                                // SpellLevels tier ceiling), selected
-                                // tiers, real GetSpellManaCost costs
-                                // and the quick-slot binds all come
-                                // from the sim's class-15 machinery.
-                                let bv = Some(w.mc2_book_view());
-                                if let Some(bv) = bv {
-                                    for s in 0..n {
-                                        owned[s] =
-                                            bv.owned[s] || self.cfg.gameplay.cheat.dev_spells;
-                                        // Retail's canSummon grey-out
-                                        // (EF:22503-08): the selected
-                                        // tier's castle-pool prereq.
-                                        // The G instrument bypasses
-                                        // the afford gate for real,
-                                        // so it stays lit under dev.
-                                        let dev = self.cfg.gameplay.cheat.dev_spells;
-                                        castable[s] = owned[s]
-                                            && (bv.castable[s][bv.sel[s].min(2) as usize] || dev);
-                                        if !dev {
-                                            castable_tier[s] = bv.castable[s];
-                                        }
-                                        cost[s] = bv.cost[s];
-                                        // The G instrument keeps all
-                                        // tiers exercisable; the
-                                        // earned ceiling is the XP
-                                        // level.
-                                        max_level[s] = if self.cfg.gameplay.cheat.dev_spells {
-                                            pane.levels - 1
-                                        } else {
-                                            bv.levels[s]
-                                        };
-                                        sel[s] = bv.sel[s];
-                                        xp[s] = bv.xp[s];
-                                        xpos[s] = bv.xpos[s];
-                                        ring[s] = bv.ring[s];
-                                    }
-                                    bound =
-                                        [u8::try_from(bv.left).ok(), u8::try_from(bv.right).ok()];
-                                    // `spell_levels` is NOT mirrored here
-                                    // any more — `sync_world` owns that,
-                                    // every frame rather than only while
-                                    // the pane happens to be drawn.
-                                    self.pane_bound = bound;
-                                }
-                            } else {
-                                for s in 0..n {
-                                    owned[s] = loadout.owned[s];
-                                    castable[s] = loadout.bindable[s];
-                                    castable_tier[s] = [loadout.bindable[s]; 3];
-                                    cost[s] = mgc_sim::mc1::spells::SPELLS[s].possess_mana;
-                                    max_level[s] = pane.levels - 1;
-                                    sel[s] = self.spell_levels[s];
-                                    ring[s] = loadout.ring[s];
-                                }
-                            }
-                            let view = ui::SelectorView {
-                                owned: &owned[..n],
-                                castable: &castable[..n],
-                                castable_tier: &castable_tier[..n],
-                                selected_level: &sel[..n],
-                                max_level: &max_level[..n],
-                                bound,
-                                ring: &ring[..n],
-                                mana: loadout.mana,
-                                cost: &cost[..n],
-                                xp: &xp[..n],
-                                xpos: &xpos[..n],
-                            };
-                            let (pq, hover) = ui::selector_quads(
-                                assets,
-                                pane,
-                                &view,
-                                size.0,
-                                size.1,
-                                self.cursor,
-                                self.selector_drag.map(|(s, _)| s),
-                            );
-                            quads.extend(pq);
-                            self.selector_hover = hover;
-                        }
-                    }
-                    // The map-screen wizard scoreboard: name + census
-                    // mana total + the kill matrix, one screen shared
-                    // by both games (ui::roster_quads). Retail
-                    // triggers: MC1 = the cursor over the blank strip
-                    // below the map pane (`mouse.y >= 382`, :26838-39);
-                    // MC2 = held ALT (PI:951 → MenuState 7 →
-                    // DrawSorcererScores_2D1D0). DELIBERATE (player
-                    // ruling): BOTH triggers work in BOTH games —
-                    // neither input means anything else on the map
-                    // screen. Doubles as the mana-conservation
-                    // instrument (the census total is base + Σ owned
-                    // entity mana, the leak-visible quantity).
-                    if self.book_open() {
-                        let strip_top =
-                            ui::HudFrame::new(size.0, size.1).by(if self.selector.map_book {
-                                mgc_render::BOOK_MAP_H
-                            } else {
-                                mgc_render::MC2_MAP_VIEW_H
-                            });
-                        // The hover trigger needs a LIVE pointer — on
-                        // the bookless map the cursor stays grabbed
-                        // (its position freezes), so a stale low
-                        // position must not pin the roster open; ALT
-                        // is that map's trigger.
-                        if self.alt_held || (!self.grabbed && self.cursor.1 >= strip_top) {
-                            let colors = entities::roster_team_colors(
-                                sess.level.game,
-                                sess.level.mc2_env,
-                                &sess.level.palette_rgba,
-                            );
-                            let mut rows: [Option<ui::RosterEntry>; 8] = Default::default();
-                            // Slot 0 = the human. Retail's in-play flag
-                            // (+6) drops at the death event, so the row
-                            // exists only while Alive. Name: the
-                            // campaign's entered name (retail overrides
-                            // the slot-0 table name with the player
-                            // string), else the table default.
-                            if vitals.state == mgc_sim::engine::world::LifeState::Alive {
-                                let name = self
-                                    .campaign
-                                    .as_ref()
-                                    .and_then(|c| {
-                                        c.save
-                                            .mc1()
-                                            .map(|s| s.name.clone())
-                                            .or_else(|| c.save.mc2().map(|s| s.player_name.clone()))
-                                            .filter(|n| !n.trim().is_empty())
-                                    })
-                                    .unwrap_or_else(|| {
-                                        if is_mc2 {
-                                            mgc_sim::mc2::rivals::MC2_RIVAL_NAMES[0].into()
-                                        } else {
-                                            mgc_sim::mc1::rivals::RIVAL_NAMES[0].into()
-                                        }
-                                    });
-                                rows[0] = Some(ui::RosterEntry {
-                                    name,
-                                    mana: loadout.mana_max,
-                                    kills: w.player_kill_row(),
-                                    box_c: colors[0].0,
-                                    text_c: colors[0].1,
-                                });
-                            }
-                            for r in w.rival_views() {
-                                let slot = r.slot as usize;
-                                if r.alive && (1..8).contains(&slot) {
-                                    rows[slot] = Some(ui::RosterEntry {
-                                        name: r.name.to_string(),
-                                        mana: r.mana_max,
-                                        kills: r.kills,
-                                        box_c: colors[slot].0,
-                                        text_c: colors[slot].1,
-                                    });
-                                }
-                            }
-                            quads.extend(ui::roster_quads(assets, &rows, is_mc2, size.0, size.1));
-                        }
-                    }
-                    if !self.book_open() {
-                        // The paralyze WEB overlay (remc2 EF:21668-
-                        // 710): the HWEB bank tiled over the view
-                        // while the web counter is live — spider
-                        // webs + the (9,21) spit. Hard on/off, no
-                        // fade, exactly retail.
-                        if sess.sim.carpet_mc2.mobilize > 0 && assets.has_web() {
-                            quads.extend(assets.web_quads(size.0, size.1));
-                        }
-                        // The stagger GREEN tint (`SetPalette
-                        // Modification_5C830` subMod 3, EF:31935-
-                        // 32002: R and B darkened by 56*count>>8,
-                        // count = 171*ms/3+85, green untouched — the
-                        // manticore-spit poison cast, distinct from
-                        // the subMod-2 red damage flash). An alpha-
-                        // blended green quad at the retail
-                        // subtraction magnitude (≈12/17/22%) is the
-                        // RGBA approximation of the palette edit.
-                        let ms = sess.sim.carpet_mc2.move_speed;
-                        if ms > 0 {
-                            let count = (171.0 * ms as f32 / 3.0 + 85.0).min(256.0);
-                            let a = count * 56.0 / 65536.0;
-                            quads
-                                .push(ui::solid([0.0, 0.0, size.0, size.1], [0.05, 0.42, 0.08, a]));
-                        }
-                        quads.extend(ui::vitals_quads(
-                            &vitals,
-                            size.0,
-                            size.1,
-                            (sess.sim.tick / 8) % 2 == 0,
-                            self.cfg.render.debug.grace_meter,
-                        ));
-                    }
-                    if self.paused {
-                        // Both views: the book screen is exactly where
-                        // paused inspection happens.
-                        quads.extend(ui::pause_quads(size.0, size.1));
-                    }
-                    // The pause mini-menu. It carries no "PAUSED" text
-                    // of its own — the retail indicator above is the
-                    // pause state, this is the menu.
-                    //
-                    // Hidden while the options layer is up: the two
-                    // panels on screen at once read as clutter, and
-                    // the options menu is modal anyway. Esc closes
-                    // that layer and this comes straight back.
-                    if let (Some(mini), None) = (&self.mini, &self.menu) {
-                        quads.extend(minimenu::draw(assets, mini, size.0, size.1, self.cursor));
-                    }
-                    // The options menu (over everything but the quit
-                    // fade).
-                    if let Some(st) = &self.menu {
-                        quads.extend(menu::draw(
-                            assets,
-                            &self.cfg,
-                            &self.specs,
-                            st,
-                            size.0,
-                            size.1,
-                            self.cursor,
-                        ));
-                    }
-                    // The exit-confirm modal (mutually exclusive
-                    // with the options menu — P is swallowed while
-                    // it is up; under the quit fade).
-                    if self.exit_confirm {
-                        quads.extend(ui::exit_confirm_quads(
-                            assets,
-                            EXIT_CONFIRM_TEXT,
-                            size.0,
-                            size.1,
-                            self.cursor,
-                        ));
-                    }
-                    // expose-jar-spells (debug): float each pickable
-                    // jar's spell icon over it in the main view (the
-                    // map stamps are the other half). No fancy UI —
-                    // the raw icon on a dark slab, health-bar style.
-                    if self.cfg.render.enhancement.expose_jar_spells && !self.book_open() {
-                        if let Some(u) = &sess.level.ui {
-                            for &(x, alt, z, spell) in &self.jar_markers {
-                                // The fog-wall cut: overlays must not
-                                // reveal jars the fog hides. Torus-
-                                // wrapped distance vs the fog's
-                                // full-occlusion point (0.95·D;
-                                // 0 = fog off).
-                                if fog_cut(&cam, x, alt, z, fog_wall) {
-                                    continue;
-                                }
-                                let Some(id) = ui::spell_icon_sprite(sess.level.game, spell) else {
-                                    continue;
-                                };
-                                let Some(st) = u.map_stamp(id) else { continue };
-                                let Some((sx, sy)) = mgc_render::world_to_screen(
-                                    &cam,
-                                    size.0,
-                                    size.1,
-                                    x,
-                                    alt + 0.6,
-                                    z,
-                                ) else {
-                                    continue;
-                                };
-                                let s = ui::HudFrame::new(size.0, size.1).s.max(1.0);
-                                let ih = 12.0 * s;
-                                let iw = ih * st.w as f32 / st.h as f32;
-                                // A dark slab behind the luminous icon
-                                // ramps, for readability over bright sky/
-                                // terrain.
-                                quads.push(mgc_render::UiQuad {
-                                    rect: [
-                                        sx - iw * 0.5 - s,
-                                        sy - ih - s,
-                                        iw + 2.0 * s,
-                                        ih + 2.0 * s,
-                                    ],
-                                    uv: [0.0; 4],
-                                    tint: [0.0, 0.0, 0.0, 0.45],
-                                });
-                                quads.push(mgc_render::UiQuad {
-                                    rect: [sx - iw * 0.5, sy - ih, iw, ih],
-                                    uv: st.uv,
-                                    tint: [1.0, 1.0, 1.0, 1.0],
-                                });
-                            }
-                        }
-                    }
-                    // The aim crosshair (`render.preference.crosshair`,
-                    // C toggles — the gameplay aim cursor, and under
-                    // enhanced thrust the chase-steering target) and
-                    // the autoaim lock markers (+/x on the target each
-                    // hand's equipped spell would acquire this instant;
-                    // `render.debug.autoaim_hints`, World::aim_preview
-                    // — the pure scan twin). Split options 2026-07-23.
-                    let want_cross = self.cfg.render.preference.crosshair;
-                    let want_hints = self.cfg.render.debug.autoaim_hints;
-                    if (want_cross || want_hints)
-                        && !self.book_open()
-                        && vitals.state == mgc_sim::engine::world::LifeState::Alive
-                    {
-                        let f = &sess.sim.flyer;
-                        // The aim heading. Enhanced chase steering:
-                        // the crosshair sits at the DESIRED heading
-                        // (yaw + lead) and the autoaim preview scans
-                        // along it — matching the cast pose, which
-                        // launches along the crosshair while the hull
-                        // is still coming around. The desired heading
-                        // is predicted at FRAME rate: mouse motion the
-                        // sim has not consumed yet (`self.mouse`, the
-                        // per-tick accumulator, already sensitivity-
-                        // scaled) is added on top of the tick-rate
-                        // lead, re-clamped against the interpolated
-                        // camera — otherwise the pointer steps at
-                        // 24 Hz while the camera glides (choppy,
-                        // player report 2026-07-23).
-                        let (neutral_yaw, pose_yaw) = match self.cfg.controls.models.thrust {
-                            config::ThrustModel::Classic => (cam.yaw, f.yaw),
-                            config::ThrustModel::Enhanced => {
-                                let lead = (sess.sim.aim_yaw() + self.mouse.yaw - cam.yaw)
-                                    .clamp(-mgc_sim::LEAD_MAX, mgc_sim::LEAD_MAX);
-                                let a = cam.yaw + lead;
-                                (a, a)
-                            }
-                        };
-                        let (sy, cyaw) = neutral_yaw.sin_cos();
-                        let (sp, cp) = aim.sin_cos();
-                        // The acquire range: 5120 units = 20 tiles.
-                        const AIM_D: f32 = 20.0;
-                        let neutral = if want_cross {
-                            mgc_render::world_to_screen(
-                                &cam,
-                                size.0,
-                                size.1,
-                                cam.x + sy * cp * AIM_D,
-                                cam.y + sp * AIM_D,
-                                cam.z - cyaw * cp * AIM_D,
-                            )
-                        } else {
-                            None
-                        };
-                        let locks = if want_hints {
-                            let pose = mgc_sim::engine::world::PlayerPose::from_tiles(
-                                f.x, f.y, f.z, pose_yaw, f.pitch, 0.0,
-                            );
-                            w.aim_preview(pose).map(|l| {
-                                l.and_then(|l| {
-                                    // Lock markers honor the fog wall
-                                    // too (relevant when fog_distance
-                                    // < the 20-tile acquire range).
-                                    if fog_cut(&cam, l.x, l.alt, l.z, fog_wall) {
-                                        return None;
-                                    }
-                                    mgc_render::world_to_screen(
-                                        &cam, size.0, size.1, l.x, l.alt, l.z,
-                                    )
-                                })
-                            })
-                        } else {
-                            [None, None]
-                        };
-                        let blink =
-                            0.5 + 0.5 * (((sess.sim.tick % 4096) as f32 + alpha) * 0.4).sin();
-                        ui::crosshair_quads(&mut quads, size.0, size.1, neutral, locks, blink);
-                    }
-                    // The top-of-screen notification line (retail
-                    // `DrawTextPauseEndOfLevel_2CE30`, EF:21787): the
-                    // small FONT1 toast, LEFT-aligned, anchored just below
-                    // the wizard info-boxes and right of the radar (the
-                    // HUD-derived anchor — retail's 320-native literal
-                    // doesn't map onto our 640-native HSPR panels). Over
-                    // the live view only (not the book/map screen). The
-                    // anchor is in 640-native HUD coords (× w/640); FONT1
-                    // draws at gameUiScale, so its glyphs scale by w/320.
-                    // The white masks are tinted the ink colour (DrawText's
-                    // `color`, red for plain toasts).
-                    if !self.book_open() && assets.has_font() {
-                        if let Some((msg, color)) = w.notification() {
-                            let (ax, ay) = assets.hud_notification_anchor();
-                            // Uniform HUD scale (`ui::HudFrame`): the
-                            // toast rides under the LEFT-anchored panel
-                            // group, so its anchor is native×s. The font
-                            // runs at 2× because FONT1 is 320-native.
-                            let hud_s = ui::HudFrame::new(size.0, size.1).s;
-                            let font_s = 2.0 * hud_s;
-                            let tint = [
-                                color[0] as f32 / 255.0,
-                                color[1] as f32 / 255.0,
-                                color[2] as f32 / 255.0,
-                                1.0,
-                            ];
-                            quads.extend(assets.text_quads(
-                                msg,
-                                ax * hud_s,
-                                ay * hud_s,
-                                tint,
-                                font_s,
-                            ));
-                        }
-                        // The MC1/HW WIN message (:26480-26505):
-                        // while the win flag holds, the two-line
-                        // black-ink message persists at the pane top
-                        // — ETEXT.DAT entries 60/61. Retail
-                        // colour-cycles the ink unless zoomed out —
-                        // the static black remap slot [1] is the
-                        // baseline.
-                        if !is_mc2 && w.completed() && !w.player_dead() {
-                            let (ax, ay) = assets.hud_notification_anchor();
-                            // Uniform HUD scale (`ui::HudFrame`): the
-                            // toast rides under the LEFT-anchored panel
-                            // group, so its anchor is native×s. The font
-                            // runs at 2× because FONT1 is 320-native.
-                            let hud_s = ui::HudFrame::new(size.0, size.1).s;
-                            let font_s = 2.0 * hud_s;
-                            let black = [0.0, 0.0, 0.0, 1.0];
-                            // The two sentences are ETEXT 60/61, read
-                            // from the bundle's baked bank (literal
-                            // fallback when the bank is absent). One
-                            // string — the font's own line height
-                            // spaces the two lines (a manual offset
-                            // overlaps them). A live toast owns the
-                            // anchor row; the win block steps one line
-                            // below it.
-                            let line = |idx: usize, fallback: &str| -> String {
-                                match sess.level.etext.get(idx) {
-                                    Some(s) if !s.is_empty() => s.clone(),
-                                    _ => fallback.to_string(),
-                                }
-                            };
-                            let msg = format!(
-                                "{}{}\n{}",
-                                if w.notification().is_some() { "\n" } else { "" },
-                                line(60, "World restored."),
-                                line(61, "Press the space bar to continue."),
-                            );
-                            quads.extend(assets.text_quads(
-                                &msg,
-                                ax * hud_s,
-                                ay * hud_s,
-                                black,
-                                font_s,
-                            ));
-                        }
-                        // The narration subtitle (MC2 objective
-                        // voiceover text): word-wrapped, centered,
-                        // one line-height below the toast row so the
-                        // two never collide. White ink — the
-                        // conventional subtitle color (the retail
-                        // textbox look is not reproduced; P-class
-                        // presentation).
-                        if let Some((text, _)) = &self.subtitle {
-                            let (_, ay) = assets.hud_notification_anchor();
-                            // Uniform HUD scale (`ui::HudFrame`): the
-                            // toast rides under the LEFT-anchored panel
-                            // group, so its anchor is native×s. The font
-                            // runs at 2× because FONT1 is 320-native.
-                            let hud_s = ui::HudFrame::new(size.0, size.1).s;
-                            let font_s = 2.0 * hud_s;
-                            let lh = assets.font_line_height();
-                            let white = [1.0, 1.0, 1.0, 1.0];
-                            let max_w = size.0 * 0.8 / font_s;
-                            let mut y = ay * hud_s + 1.5 * lh * font_s;
-                            for line in wrap_font_text(assets, text, max_w) {
-                                let w_px = assets.text_width(&line) * font_s;
-                                let x = (size.0 - w_px) / 2.0;
-                                quads.extend(assets.text_quads(&line, x, y, white, font_s));
-                                y += lh * font_s;
-                            }
-                        }
-                    }
-                    // The end-of-game fadeout: the MC2 ending's
-                    // sim-side fade (endGameSeq phase 11) under the
-                    // app's own post-victory fade; at full black the
-                    // game ends (quit, no stats/menu — deliberate).
-                    if w.won() && !self.won_handled {
-                        // The victory breadcrumb — and the campaign-
-                        // stitching hook consuming the same signal:
-                        // record the completion, pick the next step,
-                        // persist the slot. Single-level mode still
-                        // just fades out. Latched — the fade being
-                        // consumed (the map screen) must not refire
-                        // it.
-                        self.won_handled = true;
-                        println!("{} completed", sess.level.label);
-                        if let Some(run) = &mut self.campaign {
-                            campaign_complete(run, sess.level.level_number, w);
-                        }
-                        self.quit_fade = Some(0.0);
-                    }
-                    let fade = w.end_fade().max(self.quit_fade.unwrap_or(0.0));
-                    if fade > 0.0 {
-                        quads.push(ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, fade]));
-                    }
-                    // The FPS overlay (render · debug): bottom-right
-                    // corner — clear of the top HUD strip, the
-                    // bottom-center grace meter and the left-anchored
-                    // toast rows; above the fade (a debug instrument
-                    // stays readable). White FONT1 ink.
-                    if !self.fps_text.is_empty() && assets.has_font() {
-                        let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
-                        let pad = 4.0 * font_s;
-                        let w_px = assets.text_width(&self.fps_text) * font_s;
-                        let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
-                        quads.extend(assets.text_quads(
-                            &self.fps_text,
-                            size.0 - w_px - pad,
-                            y,
-                            [1.0, 1.0, 1.0, 1.0],
-                            font_s,
-                        ));
-                    }
-                    // The coordinate overlay (render · debug, K):
-                    // bottom-LEFT, across the room from the fps
-                    // readout. Engine units — the language the
-                    // altitude bands speak (floor 128/256, band
-                    // 1024/3072): x/y = the horizontal position on
-                    // the sim's wrapping 8.8 axes, z = altitude,
-                    // (+E) = elevation over the terrain underneath.
-                    // Reads the interpolated camera pose (= the
-                    // carpet), so it glides with the picture.
-                    if self.cfg.render.debug.coords && assets.has_font() {
-                        let g = sess.sim.ground_height(cam.x, cam.z);
-                        let xe = (cam.x.rem_euclid(256.0) * 256.0) as u16;
-                        let ye = (cam.z.rem_euclid(256.0) * 256.0) as u16;
-                        let ze = (cam.y * 256.0).round() as i32;
-                        let elev = ze - (g * 256.0).round() as i32;
-                        let text = format!("x {xe}, y {ye}, z {ze} ({elev:+})");
-                        let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
-                        let pad = 4.0 * font_s;
-                        let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
-                        quads.extend(assets.text_quads(
-                            &text,
-                            pad,
-                            y,
-                            [1.0, 1.0, 1.0, 1.0],
-                            font_s,
-                        ));
-                    }
-                    self.hovered = hovered;
-                    self.append_software_cursor(&mut quads);
-                    if let Some(r) = &mut self.renderer {
-                        r.set_ui_quads(quads);
-                    }
-                }
-                if let Some(f) = &mut self.quit_fade {
-                    *f += 1.0 / 48.0;
-                    if *f >= 1.25 {
-                        // A beat of full black; then the campaign
-                        // routes onward, or the game leaves.
-                        match self.campaign.as_mut().and_then(|c| c.next.take()) {
-                            Some(campaign::NextStep::Level(n)) => {
-                                let mc1 = self
-                                    .campaign
-                                    .as_ref()
-                                    .is_some_and(|c| c.id != campaign::CampaignId::Mc2);
-                                if mc1 {
-                                    // The retail transition beat: a
-                                    // win plays the congratulation
-                                    // movie and returns to the MAIN
-                                    // MENU (the score screen is still
-                                    // deferred); Continue launches the
-                                    // next level.
-                                    if let Some(run) = &mut self.campaign {
-                                        run.current = n;
-                                    }
-                                    self.quit_fade = None;
-                                    let win = mc1_win_movie();
-                                    self.play_movies(&[win], AfterMovie::Menu, event_loop);
-                                } else {
-                                    // MC2's direct level chain (the
-                                    // demon-mouth secret dive).
-                                    self.campaign_switch(n, event_loop);
-                                }
-                            }
-                            Some(campaign::NextStep::MapScreen) => {
-                                self.quit_fade = None;
-                                // MC2 slots a cutscene in front of the
-                                // map after certain levels.
-                                let done = self.campaign.as_ref().map_or(0, |c| c.current);
-                                match self.mc2_cutscene(done) {
-                                    Some(cue) => {
-                                        self.play_movies(&[cue], AfterMovie::Map, event_loop)
-                                    }
-                                    None => self.open_map_screen(event_loop),
-                                }
-                            }
-                            Some(campaign::NextStep::Outro) => {
-                                // The campaign's ending movie, then
-                                // out. MC1/HW have a dedicated
-                                // OUTRO.DAT; MC2's ending is the last
-                                // of its six cutscenes.
-                                println!("campaign complete!");
-                                self.quit_fade = None;
-                                // Both endings are unskippable in
-                                // retail (`PlayInfoFmv(0, ..)`).
-                                let outro = if self.is_mc2() { "cut6" } else { "outro" };
-                                self.play_movies(
-                                    &[movie::Cue::unskippable(outro)],
-                                    AfterMovie::Quit,
-                                    event_loop,
-                                );
-                            }
-                            None => event_loop.exit(),
-                        }
-                    }
-                }
-                // The fade routing above may have torn the session
-                // down (won → menu/map) — the tick clock must come
-                // from whatever session remains, if any.
-                let anim_tick = self.session.as_deref().map(|s| s.sim.tick % 4096);
-                if let Some(r) = &mut self.renderer {
-                    // Animation clock: sim ticks are the original's game
-                    // turns; wrapped so f32 stays exact (see set_anim_turn).
-                    if let Some(t) = anim_tick {
-                        r.set_anim_turn(t as f32 + alpha);
-                    }
-                    match r.render(&cam) {
-                        Ok(()) | Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {}
-                        Err(e) => eprintln!("render: {e}"),
-                    }
-                }
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                self.redraw_requested(event_loop);
             }
             _ => {}
         }
