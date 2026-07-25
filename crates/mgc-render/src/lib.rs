@@ -3950,8 +3950,34 @@ impl Renderer {
         }
     }
 
-    /// Render one frame.
+    /// Render one frame to the renderer's own target: acquire the
+    /// swapchain image (window) or the offscreen color buffer, draw
+    /// into it via [`Self::render_texture`], and present.
     pub fn render(&mut self, cam: &CameraView) -> Result<(), wgpu::SurfaceError> {
+        let frame = match &self.target {
+            Target::Window { surface, .. } => Some(surface.get_current_texture()?),
+            Target::Offscreen { .. } => None,
+        };
+        let surface_view = match (&frame, &self.target) {
+            (Some(f), _) => f.texture.create_view(&Default::default()),
+            (None, Target::Offscreen { color, .. }) => color.create_view(&Default::default()),
+            _ => unreachable!(),
+        };
+        self.render_texture(cam, &surface_view);
+        if let Some(frame) = frame {
+            frame.present();
+        }
+        Ok(())
+    }
+
+    /// Render one frame into `surface_view` — any color view of the
+    /// surface format and current size. This is the whole frame minus
+    /// target acquisition and present, so an embedder can point it at
+    /// its own texture (an XR swapchain image, a capture buffer) and
+    /// keep every downstream feature: the supersample and MSAA passes
+    /// resolve into the given view exactly as they do onto the window
+    /// surface.
+    pub fn render_texture(&mut self, cam: &CameraView, surface_view: &wgpu::TextureView) {
         let (w, hpx) = self.size();
 
         // Book-screen layout (sub_20E60 case 4), native 640×480 scaled to
@@ -4396,18 +4422,8 @@ impl Renderer {
             }
         }
 
-        let frame = match &self.target {
-            Target::Window { surface, .. } => Some(surface.get_current_texture()?),
-            Target::Offscreen { .. } => None,
-        };
         // Everything draws into the supersample buffer when there is
-        // one; the resolve pass at the end of `render` puts it on the
-        // surface.
-        let surface_view = match (&frame, &self.target) {
-            (Some(f), _) => f.texture.create_view(&Default::default()),
-            (None, Target::Offscreen { color, .. }) => color.create_view(&Default::default()),
-            _ => unreachable!(),
-        };
+        // one; the resolve pass at the end puts it on `surface_view`.
         let scene_view = match &self.ssaa {
             Some(ss) => ss.view.clone(),
             None => surface_view.clone(),
@@ -4727,10 +4743,6 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
-        if let Some(frame) = frame {
-            frame.present();
-        }
-        Ok(())
     }
 
     /// Read back the offscreen target as tightly-packed RGBA8 rows.
