@@ -855,6 +855,21 @@ pub(crate) fn solid(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
     }
 }
 
+/// A solid-color quad that draws screen-space even in VR.  Use this for
+/// fullscreen flashes, fades, and backdrops that must cover the whole eye
+/// rather than the world-space HUD panel.
+pub(crate) fn solid_screen(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
+    UiQuad {
+        rect: snap(rect),
+        // Negative uv.w signals the UI shader to bypass the VR panel
+        // transform and draw the quad directly in screen-space NDC.
+        // The screen-space pipeline reads uv.w only for textured quads
+        // (uv.z != 0), so the marker is inert outside a panel mode.
+        uv: [0.0, 0.0, 0.0, -1.0],
+        tint,
+    }
+}
+
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 /// Unowned spell icons: the icon's outer SHAPE used as a mask, filled
 /// with a dark TRANSLUCENT ink so the stone-slab texture shows through,
@@ -1927,7 +1942,7 @@ pub fn vitals_quads(
     // The red hit flash (sub_44BE0(2) — palette row 2 in retail).
     if v.hit_flash > 0 && v.state == LifeState::Alive {
         let a = 0.08 * v.hit_flash as f32;
-        quads.push(solid([0.0, 0.0, w, h], [0.8, 0.05, 0.05, a]));
+        quads.push(solid_screen([0.0, 0.0, w, h], [0.8, 0.05, 0.05, a]));
     }
     // The palette-row flash (sub_44BE0 → +152). Row 3 = Global Death's
     // detonation: retail pushes red +48 and saturates blue while
@@ -1936,17 +1951,17 @@ pub fn vitals_quads(
     // drawn elsewhere or unported.
     if v.pal_flash.0 == 3 && v.state == LifeState::Alive {
         let a = 0.09 * v.pal_flash.1 as f32;
-        quads.push(solid([0.0, 0.0, w, h], [0.55, 0.12, 0.95, a]));
+        quads.push(solid_screen([0.0, 0.0, w, h], [0.55, 0.12, 0.95, a]));
     }
     match v.state {
         // The death fall: a deepening red-out.
         LifeState::Falling => {
-            quads.push(solid([0.0, 0.0, w, h], [0.45, 0.03, 0.03, 0.35]));
+            quads.push(solid_screen([0.0, 0.0, w, h], [0.45, 0.03, 0.03, 0.35]));
         }
         // Dead: the grey screen (palette row 7) + a blinking center
         // strip as the Space prompt (no text renderer yet).
         LifeState::Dead => {
-            quads.push(solid([0.0, 0.0, w, h], [0.22, 0.22, 0.25, 0.55]));
+            quads.push(solid_screen([0.0, 0.0, w, h], [0.22, 0.22, 0.25, 0.55]));
             if blink {
                 let pw = w * 0.30;
                 quads.push(solid(
