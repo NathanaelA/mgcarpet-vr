@@ -72,7 +72,20 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     let px = round(inst.rect.xy + c * inst.rect.zw);
     var out: VsOut;
 
-    if ui.panel_mode == 1u {
+    // Solid quads with a negative uv.w are drawn screen-space even in VR,
+    // so fullscreen flashes/fades cover the whole eye instead of only the
+    // world-space HUD panel.
+    let screen_space = (ui.panel_mode == 0u) || (inst.uv.w < 0.0);
+    if screen_space {
+        // SCREEN-SPACE HUD (flat screen / fullscreen VR flash): Pixel -> NDC
+        // (y down in pixels, up in NDC).
+        out.clip = vec4<f32>(
+            px.x / ui.screen.x * 2.0 - 1.0,
+            1.0 - px.y / ui.screen.y * 2.0,
+            0.0,
+            1.0,
+        );
+    } else {
         // WORLD-SPACE HUD PANEL (VR): each pixel offset from the screen
         // centre is mapped onto a rectangle floating in world space, then
         // projected through the per-eye view-projection matrix.
@@ -82,15 +95,6 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
                   + ui.panel_right * offset.x
                   + ui.panel_up    * offset.y;
         out.clip = ui.view_proj * vec4<f32>(world, 1.0);
-    } else {
-        // SCREEN-SPACE HUD (flat screen): Pixel -> NDC (y down in pixels,
-        // up in NDC).
-        out.clip = vec4<f32>(
-            px.x / ui.screen.x * 2.0 - 1.0,
-            1.0 - px.y / ui.screen.y * 2.0,
-            0.0,
-            1.0,
-        );
     }
 
     // uv.z (width) encodes the draw mode: 0 = solid tint; < 0 = silhouette
