@@ -3409,8 +3409,10 @@ impl World {
             15 => self.g.spawn_zigzag(mx, my, mz),
             // 17 Undead Army (:65927): c9 m11; skeletons at impact.
             17 => self.g.spawn_spell_lob(11, mx, my, mz),
-            // 19 Mana Magnet (:66049): c9 m6; magnet event at impact.
-            19 => self.g.spawn_spell_lob(6, mx, my, mz),
+            // 19 Mana Magnet (:66049): c9 m17 (:66078), sharing
+            // possession's sprite 209; detonation +68/+69 = (10,54)
+            // (:66084-85) — the invisible 14-tile magnet.
+            19 => self.g.spawn_spell_lob(17, mx, my, mz),
             _ => None,
         };
         let Some(pr) = pr else { return };
@@ -3464,6 +3466,14 @@ impl World {
                 e.f44 = 2000;
                 e.f69 = 25;
             }
+            // Mana Magnet (:66084-85): detonation = the (10,54)
+            // magnet — manifests only on a ball STRIKE (a miss
+            // fizzles, proj_explode's m17 gate). (Retail also moves
+            // the pool's +326 recharge meter into the bolt's +26 and
+            // zeroes it (:65072-73) — no consumer of that charge
+            // survives in the reconstruction, so the port doesn't
+            // model it.)
+            19 => e.f69 = 54,
             // Player bolts detonate as the hit flash, like the mob
             // zigzags (:63421- endpoint effect 23).
             15 => e.f69 = 23,
@@ -10475,6 +10485,117 @@ mod tests {
         }
         assert!(w.loadout().castle.is_none(), "the demolish razed it");
         assert_eq!(count(&w, 3, 2), 0, "the entity is gone");
+    }
+
+    /// Mana Magnet (spell 19), the full retail chain: the c9 m17
+    /// bolt (possession's flight, :66078) detonates ON a struck ball
+    /// into the invisible (10,54) magnet (:66084-85) PLUS the
+    /// localized claim of the struck ball only; the magnet's ch4
+    /// mail PULLS the distant ball WITHOUT claiming it; the claim
+    /// arrives when the pulled ball MERGES into the claimed one
+    /// (sub_277D0 :29717, owned-beats-unowned adoption). Also guards
+    /// the old placeholder's regression: no (10,40) grave-model
+    /// event at the impact (it drew as a humanoid).
+    #[test]
+    fn mana_magnet_claims_struck_ball_then_the_rest_by_merge() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        // The DISTANT ball first (lower slot: it will be the merge
+        // survivor, exercising the adoption arm), 6 tiles east.
+        // (f46 zeroed: settled balls, not the spawn-pop — a cast at
+        // loose ground mana is the scenario.)
+        let far = w.g.spawn_mana_ball(146 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[far].f140 = 500;
+        w.g.ent[far].f46 = 0;
+        // The struck ball at the impact point.
+        let near = w.g.spawn_mana_ball(140 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[near].f140 = 300;
+        w.g.ent[near].f46 = 0;
+        // The bolt, parked on the struck ball (speed zeroed so the
+        // first flight tick's ball scan lands the hit in place).
+        let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[p].id24 = PLAYER_TARGET;
+        w.g.ent[p].f126 = 0;
+        w.g.ent[p].f69 = 54; // the cast arm's +69 (:66084-85)
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(count(&w, 10, 54), 1, "the impact spawned THE magnet");
+        assert_eq!(count(&w, 10, 12), 1, "...plus the localized claim flash");
+        assert_eq!(count(&w, 10, 40), 0, "and no grave-model placeholder");
+        let dist = |w: &World| {
+            let e = &w.g.ent[far];
+            crate::engine::features::Gen::dist2_sq(e.x, e.y, 140 << 8, 140 << 8)
+        };
+        let d0 = dist(&w);
+        for _ in 0..10 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.ent[near].f144, PLAYER_TARGET,
+            "the STRUCK ball is claimed at impact"
+        );
+        assert_eq!(
+            w.g.ent[far].f144, 0,
+            "the pulled ball is NOT claimed by the pull"
+        );
+        assert!(
+            dist(&w) < d0,
+            "...but it is streaming toward the magnet ({} -> {})",
+            d0,
+            dist(&w)
+        );
+        for _ in 0..110 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 10, 39), 1, "the balls merged");
+        assert_eq!(
+            w.g.ent[far].f144, PLAYER_TARGET,
+            "the unowned survivor ADOPTED the claimed ball's owner"
+        );
+        assert_eq!(w.g.ent[far].f140, 800, "merge mana is additive");
+    }
+
+    /// A magnet bolt that strikes NOTHING fizzles: no (10,54), no
+    /// claim flash — the magnet manifests only on a ball strike
+    /// (player-verified; a terrain/expiry detonation must not start
+    /// pulling mana toward an empty spot).
+    #[test]
+    fn mana_magnet_bolt_fizzles_without_a_strike() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[p].id24 = PLAYER_TARGET;
+        w.g.ent[p].f69 = 54;
+        // Full flight over empty ground: life 21 + margin.
+        for _ in 0..25 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 9, 17), 0, "the bolt expired");
+        assert_eq!(count(&w, 10, 54), 0, "no free-floating magnet on a miss");
+        assert_eq!(count(&w, 10, 12), 0, "and no claim flash");
+    }
+
+    /// The magnet bolt triggers on MANA BALLS ONLY (player-certified)
+    /// — a grave or a dwelling flag under the bolt is not a strike:
+    /// the bolt flies through and fizzles, leaving both unclaimed.
+    /// (Possession keeps its full ball/grave/house set.)
+    #[test]
+    fn mana_magnet_bolt_ignores_graves_and_dwellings() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let g = w.g.spawn_grave(140 << 8, 140 << 8, 3200).unwrap();
+        let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[p].id24 = PLAYER_TARGET;
+        w.g.ent[p].f126 = 0; // parked ON the grave
+        w.g.ent[p].f69 = 54;
+        for _ in 0..25 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 10, 54), 0, "a grave is not a strike");
+        assert_eq!(count(&w, 10, 40), 1, "the grave still stands");
+        assert_eq!(w.g.ent[g].f144, 0, "...unclaimed");
     }
 
     /// Total castle destruction RELEASES the balloons (sub_46D20

@@ -366,23 +366,34 @@ impl Gen {
     }
 
     /// The player-spell payload projectiles (c9 m1 possess / m2
-    /// earthquake / m4 volcano / m5 crater / m6 magnet / m7 duel /
-    /// m11 undead): fireball-shaped init, state = model, dispatched
-    /// to [`Gen::proj_payload_tick`]. Sprites per the class-9 rows in
-    /// `mc1_entities`. APPROX(original: each model's own flight state
-    /// past remc1's transcribed table).
+    /// earthquake / m4 volcano / m5 crater / m7 duel / m11 undead /
+    /// m17 magnet): fireball-shaped init, state = model, dispatched
+    /// to [`Gen::proj_payload_tick`] — except the MAGNET bolt (m17),
+    /// which runs possession's state-1 flight: its ctor writes state
+    /// 18 (:46371), past remc1's 14-entry class-9 state table, and
+    /// the m1 flight is the behavior-matched stand-in. Inside it the
+    /// m17 bolt diverges from possession twice, both decompile-
+    /// corroborated: NO acquisition (sub_54520 has no model-17 case,
+    /// default return 0 :64185 — it flies straight) and the
+    /// model-39-ONLY contact scan (sub_11C00 :17083, not possession's
+    /// 39/40/45 sub_11AC0).
+    /// Sprites per the class-9 rows in `mc1_entities` — the magnet
+    /// bolt shares possession's sprite 209 (both ctors call
+    /// sub_36FA0(entity, 209), :45916/:46384: distinct models, one
+    /// look). APPROX(original: each model's own flight state past
+    /// remc1's transcribed table).
     pub(crate) fn spawn_spell_lob(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
         let sprite = match model {
-            1 => 209,
+            1 | 17 => 209,
             2 => 211,
             4 => 210,
             5 => 211,
-            6 => 212,
             7 => 213,
             11 => 281,
             _ => return None,
         };
-        self.spawn_projectile(model, model, x, y, z, 384, 21, 0, sprite)
+        let state = if model == 17 { 1 } else { model };
+        self.spawn_projectile(model, state, x, y, z, 384, 21, 0, sprite)
     }
 
     /// Vertical bearing (sub_42180 :52644): the pitch whose polar step
@@ -903,13 +914,40 @@ impl Gen {
                 self.hits += 1;
             }
         }
-        if let Some(fx) = self.spawn_effect(f69, x, y, z) {
-            let e = &mut self.ent[fx];
-            e.id24 = owner;
-            e.f30 = yaw;
-            e.f32 = pitch;
-            if copy_f44 {
-                e.f44 = f44;
+        // Mana Magnet bolt (m17): the magnet manifests ONLY on an
+        // actual ball strike — a bolt that grounds or expires on
+        // nothing fizzles with NO effect (player-verified; the same
+        // law as MC2's possession magnet, which never drops a
+        // free-floating magnet at a terrain detonation).
+        let magnet_bolt = self.ent[i].class64 == 9 && self.ent[i].model65 == 17;
+        if !(magnet_bolt && struck.is_none()) {
+            if let Some(fx) = self.spawn_effect(f69, x, y, z) {
+                let e = &mut self.ent[fx];
+                e.id24 = owner;
+                e.f30 = yaw;
+                e.f32 = pitch;
+                if copy_f44 {
+                    e.f44 = f44;
+                }
+            }
+        }
+        // On a strike, pair the (10,54) with a LOCALIZED possession-
+        // style claim of the struck ball(s). Retail claims what the
+        // bolt hits (player-verified) but the reconstruction lost the
+        // call (the +66=0 flashes neuter sub_120B0's filter, and the
+        // (10,54) tick claims nothing) — the port bridges the gap
+        // with possession's own (10,12) claim flash, filtered to mana
+        // balls only (f66/f67 = 10/39: unlike a possess flash it must
+        // not claim houses or graves — the spell is a mana tool;
+        // APPROX pending retail evidence). The pulled remainder
+        // claims by MERGING into the claimed ball(s) (owned-beats-
+        // unowned, sub_277D0 :29717).
+        if magnet_bolt && struck.is_some() {
+            if let Some(fl) = self.spawn_effect(12, x, y, z) {
+                let e = &mut self.ent[fl];
+                e.id24 = owner;
+                e.f66 = 10;
+                e.f67 = 39;
             }
         }
         let _ = ctx;
@@ -935,8 +973,10 @@ impl Gen {
             // (it used to alias onto 13 and inherit the arrow roll).
             15 => self.proj_boulder_tick(i, ctx),
             17 => self.proj_firewall_tick(i, ctx),
-            // Player-spell payload projectiles (spell track).
-            2 | 4 | 5 | 6 | 7 | 11 => self.proj_payload_tick(i, ctx),
+            // Player-spell payload projectiles (spell track). The
+            // m17 magnet bolt is NOT here — it rides possession's
+            // state-1 flight (see spawn_spell_lob).
+            2 | 4 | 5 | 7 | 11 => self.proj_payload_tick(i, ctx),
             // Beam segment (state 14; remc1's table is truncated here
             // — lifecycle reconstructed from the slot-order life trick
             // :63349-53): kill on the PRE-decrement value so every
@@ -1049,6 +1089,14 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
         };
+        // The Mana Magnet bolt (m17) acquires NOTHING: sub_54520
+        // switches on the bolt's model and has no case for 17 —
+        // default `return 0` (:63977/:64185). The magnet bolt flies
+        // straight; only its contact scan detonates it. (Possession
+        // is case 1: the balls + graves/dwellings lists, :64040-58.)
+        if self.ent[i].model65 == 17 {
+            return;
+        }
         let mut best: Option<(u16, u32, u16, u16)> = None;
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
@@ -1126,12 +1174,17 @@ impl Gen {
 
     /// sub_11AC0 (:17033): the possess victim scan — class-10 models
     /// 39/40/45 only, not the shooter's own or already-claimed, AABB.
+    /// The Mana Magnet bolt (m17) instead gets retail's model-39-ONLY
+    /// sibling scan (sub_11C00 :17083-121) — it must not detonate on
+    /// graves or dwelling flags (player-certified, and the magnet's
+    /// own gather tick filters +65==39 the same way, :31252).
     fn possess_victim_at(&mut self, i: usize, tmp: (u16, u16, i16)) -> Option<usize> {
         let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         self.ent[i].x = tmp.0;
         self.ent[i].y = tmp.1;
         self.ent[i].z = tmp.2;
         let own = self.ent[i].id24;
+        let balls_only = self.ent[i].model65 == 17;
         let mut found = None;
         let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
         'scan: for dy in -r..=r {
@@ -1143,7 +1196,7 @@ impl Gen {
                     let c = &self.ent[j];
                     if c.flags & 8 != 0
                         && c.class64 == 10
-                        && matches!(c.model65, 39 | 40 | 45)
+                        && (c.model65 == 39 || (!balls_only && matches!(c.model65, 40 | 45)))
                         && c.id24 != own
                         && c.f144 != own
                         && self.ent_overlap(i, j)
@@ -1762,7 +1815,7 @@ impl Gen {
     }
 
     /// The player-spell payload flight. APPROX(original: c9 m1/m2/m4/
-    /// m5/m6/m7/m11 have their own states past remc1's transcribed
+    /// m5/m7/m11/m17 have their own states past remc1's transcribed
     /// table): m13-bolt-shaped straight flight at the cast pitch (the
     /// down-arc arrives via the cast's pitch bias); on any end
     /// (victim / ground / expiry) the struck victim takes the row
@@ -1772,7 +1825,7 @@ impl Gen {
         // (sub_52770): re-acquire while untargeted per the sub_54520
         // subtype switch — m4 (volcano) sits in the 0/3/4 creature
         // block; m7/m11 acquire only wizards (block 7/8/B/C — a no-op
-        // until AI wizards land); m2/m5/m6 are default: no acquire.
+        // until AI wizards land); m2/m5/m17 are default: no acquire.
         // All of them home once +146 holds a target.
         if self.ent[i].model65 == 4 && self.ent[i].f146 == 0 {
             self.aim_assist(i, ctx);
@@ -1841,21 +1894,6 @@ impl Gen {
                     self.ent[c].id24 = own;
                 }
             }
-            // Mana Magnet (:66049): a 30-tick puller event at the
-            // impact — balls within 8 tiles stream toward it (merge
-            // handled by ball_tick's contact machinery). APPROX.
-            6 => {
-                if let Some(s) = self.new_event() {
-                    let e = &mut self.ent[s];
-                    e.class64 = 10;
-                    e.model65 = 40; // no retail c10 m40 runtime spawn
-                    e.tick70 = 21;
-                    e.max_life = 30;
-                    e.flags &= !8;
-                    self.link(s, x, y, gz);
-                    self.refill_life(s);
-                }
-            }
             // Duel to the Death (:65620 → (10,26) ctor :47116): the
             // tether follows the homed wizard and broadcasts the ch4
             // grip 200/tick (sub_263C0 :28949). No wizard target →
@@ -1912,39 +1950,6 @@ impl Gen {
             }
             _ => {}
         }
-    }
-
-    /// The Mana Magnet puller (our class-10 state 21; APPROX of the
-    /// original's gather effect): every tick, every loose ball within
-    /// 8 tiles gets its launch velocity pointed at the magnet (the
-    /// ball tick's ±64 clamp and 250/256 friction shape the stream);
-    /// contact merging happens in ball_tick.
-    fn magnet_tick(&mut self, i: usize) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
-            self.ent[i].flags |= 0x400;
-            return false;
-        }
-        let (mx, my) = (self.ent[i].x, self.ent[i].y);
-        for j in 1..self.ent.len() {
-            let c = &self.ent[j];
-            if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
-                continue;
-            }
-            let d2 = Self::dist2_sq(mx, my, c.x, c.y);
-            if d2 > 2048 * 2048 || d2 <= 64 * 64 {
-                continue;
-            }
-            // Mask to 0..2047 — `angle_of` can return 2048 (full-turn
-            // wrap) and SIN/COS are len 2048 (same panic class as the
-            // MC2 magnet, tail.rs).
-            let dir = (Self::angle_between(c.x, c.y, mx, my) & 0x7FF) as usize;
-            let vx = ((64 * crate::mc1::tables::SIN[dir]) >> 16) as i16;
-            let vy = (-((64 * crate::mc1::tables::COS[dir]) >> 16)) as i16;
-            self.ent[j].dest_x = vx as u16;
-            self.ent[j].dest_y = vy as u16;
-        }
-        false
     }
 
     /// sub_25EC0 (:28731): the volcano eruption driver (m18, state
@@ -2425,6 +2430,12 @@ impl Gen {
                 _ => {}
             }
         }
+        // sub_3B970 (:47672): the (10,54) mana MAGNET — reached here
+        // as the Mana Magnet bolt's +69 detonation (:66084-85); the
+        // caller stamps the owner like on every effect.
+        if model == 54 {
+            return self.spawn_mana_magnet(x, y, z, 0);
+        }
         let s = self.new_event()?;
         self.ent[s].class64 = 10;
         self.ent[s].model65 = model;
@@ -2737,7 +2748,6 @@ impl Gen {
             17 => self.blast_ring_tick(i, ctx),
             18 => self.eruption_tick(i, ctx),
             19 => self.plume_tick(i),
-            21 => self.magnet_tick(i),
             23 => self.hit_flash_tick(i, ctx),
             26 => self.duel_tether_tick(i, ctx),
             25 => self.steal_flash_tick(i, ctx),
@@ -3391,9 +3401,30 @@ impl Gen {
                 }
             }
         }
-        // ch4 attract (collection pull) — mana track; acknowledge.
+        // ch4 attract (:29451-62): the (10,54) magnet tagged this
+        // ball (+118 = magnet slot, the ch4 mail source: +114/+118
+        // ARE the channel-4 amount/source pair, +90+6·4/+94+6·4) —
+        // aim at it and add a magnitude-4 impulse onto the velocity
+        // accumulator, then acknowledge. Against the ±64 clamp and
+        // 250/256 friction below this shapes the retail stream. The
+        // pull NEVER claims (the ch4 amount is read by nothing;
+        // player-confirmed): claim = the bolt's localized impact
+        // flash + the merge's owned-beats-unowned adoption.
         if self.ent[i].mail[4].1 != 0 {
+            let m = self.ent[i].mail[4].1 as usize;
             self.ent[i].mail[4] = (0, 0);
+            if m < self.ent.len() {
+                let (bx, by) = (self.ent[i].x, self.ent[i].y);
+                let (mx, my) = (self.ent[m].x, self.ent[m].y);
+                // Mask to 0..2047 — `angle_of` can return 2048 (full-
+                // turn wrap) and SIN/COS are len 2048.
+                let dir = (Self::angle_between(bx, by, mx, my) & 0x7FF) as usize;
+                let ivx = ((4 * crate::mc1::tables::SIN[dir]) >> 16) as i16;
+                let ivy = (-((4 * crate::mc1::tables::COS[dir]) >> 16)) as i16;
+                let e = &mut self.ent[i];
+                e.dest_x = (e.dest_x as i16).wrapping_add(ivx) as u16;
+                e.dest_y = (e.dest_y as i16).wrapping_add(ivy) as u16;
+            }
         }
         // Balloon tether (flag 0x40): the tethered ball rises at its
         // +46=128 lift toward the balloon (+146) instead of ground
@@ -3518,8 +3549,7 @@ impl Gen {
                 // as "the last ball merged"). (Retail breaks the
                 // owned-vs-owned tie on the owner wizards' maxMana; ball
                 // mana is the observable proxy and is what the
-                // single-owner economy levels turn on.) MC1 keeps its
-                // merge (survivor's owner, goldens locked).
+                // single-owner economy levels turn on.)
                 if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
                     let (oi, oj) = (self.ent[i].f144, self.ent[j].f144);
                     let winner = if oi == 0 {
@@ -3532,6 +3562,53 @@ impl Gen {
                         oi
                     };
                     self.ent[i].f144 = winner;
+                } else {
+                    // MC1 owner rule (`sub_277D0` :29700): OWNED BEATS
+                    // UNOWNED — an unowned survivor ADOPTS the absorbed
+                    // ball's owner (:29717; this is how magnet-pulled
+                    // balls become claimed as they coalesce into the
+                    // claimed one). A class-10 owner (a grave's bank
+                    // tag) loses to a real owner (:29734-50); two
+                    // DIFFERENT real owners contest on the owner
+                    // wizards' +136 (:29755-73: strictly larger keeps
+                    // the survivor's owner, else the absorbed side
+                    // wins). Port note: MC1 wizard ents don't carry a
+                    // +136 bank (only castles do) and the human has no
+                    // pool entity, so both sides resolve 0 and the
+                    // contest falls to retail's else-arm (absorbed
+                    // side's owner) — structure faithful, operands
+                    // approximated. Mana is ALWAYS additive: the
+                    // reconstruction's two `*=` branches (:29750,
+                    // :29773) are transcription slips (every sibling
+                    // branch is `+=`).
+                    let (oi, oj) = (self.ent[i].f144, self.ent[j].f144);
+                    let is_c10 = |g: &Self, o: u16| {
+                        o != crate::mc1::mobs::PLAYER_TARGET
+                            && (o as usize) < g.ent.len()
+                            && g.ent[o as usize].class64 == 10
+                    };
+                    let w136 = |g: &Self, o: u16| {
+                        if o != crate::mc1::mobs::PLAYER_TARGET && (o as usize) < g.ent.len() {
+                            g.ent[o as usize].f136
+                        } else {
+                            0
+                        }
+                    };
+                    if oi == 0 {
+                        self.ent[i].f144 = oj;
+                    } else if oj != 0 && oi != oj {
+                        let (ci, cj) = (is_c10(self, oi), is_c10(self, oj));
+                        // Two distinct retail branches that share an
+                        // outcome: the class-10-loses arm and the
+                        // lost +136 contest — kept separate to match
+                        // the trace.
+                        #[allow(clippy::if_same_then_else)]
+                        if ci && !cj {
+                            self.ent[i].f144 = oj;
+                        } else if !ci && !cj && w136(self, oi) <= w136(self, oj) {
+                            self.ent[i].f144 = oj;
+                        }
+                    }
                 }
                 self.ent[i].f140 = fi + fj;
                 self.ent[j].flags |= 0x400;

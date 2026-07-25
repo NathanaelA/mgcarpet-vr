@@ -3761,8 +3761,8 @@ impl Gen {
     /// a level-0/dying castle), thrown as 1..=32 owner-tagged balls
     /// of spill/count each, teleported 15-35 tiles out at random
     /// yaws with an upward pop, plus 4 (10,54) mana magnets at 25
-    /// tiles (their ball-pull is the banked magnet chain; the ch4
-    /// writes land but the pull is inert until it's ported).
+    /// tiles (their ch4 pull/claim runs live via the ball tick's
+    /// ch4 arm).
     fn castle_eject(&mut self, i: usize) {
         let stored = self.ent[i].f140;
         let cap = self.ent[i].f136;
@@ -3819,14 +3819,18 @@ impl Gen {
             let yaw = (lcg32(&mut self.ent[i].rand) & 0x7FF) as u16;
             let mut pos = (cx, cy, cz);
             Self::polar_step(&mut pos, yaw, 0, dist);
-            self.spawn_castle_magnet(pos.0, pos.1, pos.2, own);
+            self.spawn_mana_magnet(pos.0, pos.1, pos.2, own);
         }
     }
 
     /// sub_3B970 (:47672): the (10,54) mana MAGNET — invisible,
     /// 128 ticks, not damageable. Its tick (sub_29920 :31234) stamps
-    /// ch4 attract mail on every mana ball within ~14 tiles.
-    fn spawn_castle_magnet(&mut self, x: u16, y: u16, z: i16, own: u16) -> Option<usize> {
+    /// ch4 attract mail on every mana ball within ~14 tiles. Two
+    /// spawners share it, exactly as in retail: the castle ejector
+    /// (4 magnets at 25 tiles) and the Mana Magnet spell's bolt
+    /// detonation (via `spawn_effect(54)`, the bolt's +68/+69 =
+    /// 10/54, :66084-85 — that caller stamps the owner afterwards).
+    pub(crate) fn spawn_mana_magnet(&mut self, x: u16, y: u16, z: i16, own: u16) -> Option<usize> {
         let s = self.new_event()?;
         {
             let e = &mut self.ent[s];
@@ -3855,11 +3859,11 @@ impl Gen {
 
     /// sub_29920 (:31234), byte70 59: the (10,54) magnet tick — life
     /// runs down, and every m39 ball within dist² < 12845056 (~14
-    /// tiles) gets ch4 mail {100, self} (a direct overwrite,
-    /// :31255-57). The ball-side ch4 consumer is the banked magnet
-    /// chain — the writes land but the pull is inert today (the
-    /// spell-side state-21 APPROX puller is separate; unify when the
-    /// (9,17)→(10,54) chain is traced).
+    /// tiles, no owner filter — enemy balls pull too) gets ch4 mail
+    /// {100, self} (a direct overwrite of +114/+118 = the ch4
+    /// amount/source pair, :31255-57). The ball-side consumer (mc1
+    /// ball_tick's ch4 arm) applies the pull impulse ONLY — pulled
+    /// balls claim by merging, never by the pull.
     pub(crate) fn mana_magnet_tick(&mut self, i: usize) {
         // :31241-43 — PRE-decrement life test: 129 magnet passes over
         // the 128 life, not 128. Quiet, but the same law.
