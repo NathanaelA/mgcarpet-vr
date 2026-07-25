@@ -7185,7 +7185,9 @@ impl App {
                     }
                 }
             }
-            let _input = self.tick_input();
+            if IS_ANDROID {
+                let _input = self.tick_input();
+            }
         }
 
         // The toast line decays on WALL time at the authentic
