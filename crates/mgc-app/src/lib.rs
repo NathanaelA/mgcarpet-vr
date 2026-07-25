@@ -1869,6 +1869,11 @@ struct App {
     #[cfg(target_os = "android")]
     eye_height: u32,
     #[cfg(target_os = "android")]
+    last_display_time: Option<xr::Time>,
+    #[cfg(target_os = "android")]
+    /// World-space controller pointer beam, set when the VR pointer is active.
+    pointer_beam: Option<([f32; 3], [f32; 3])>,
+    #[cfg(target_os = "android")]
     input: Option<InputActions>,
 
     #[cfg(target_os = "android")]
@@ -2045,6 +2050,10 @@ impl App {
             eye_width: 0,
             #[cfg(target_os = "android")]
             eye_height: 0,
+            #[cfg(target_os = "android")]
+            last_display_time: None,
+            #[cfg(target_os = "android")]
+            pointer_beam: None,
             #[cfg(target_os = "android")]
             input: None,
             #[cfg(target_os = "android")]
@@ -3488,15 +3497,34 @@ impl App {
             grabbed = true;
         }
 
+        let flyer = self
+            .session
+            .as_deref()
+            .map(|s| s.sim.flyer.clone())
+            .unwrap_or_default();
+        let session = &self.ctx.as_ref().unwrap().xr_session;
+        let stage_space = &self.ctx.as_ref().unwrap().stage_space;
+        let display_time = self.last_display_time.unwrap_or(xr::Time::from_nanos(0));
+        let screen_size = self.view_size();
         let input = self.input.as_mut().unwrap().poll(
-            &self.ctx.as_mut().unwrap().xr_session,
+            session,
+            stage_space,
+            display_time,
+            &flyer,
+            screen_size,
             owned,
             is_mc2,
             grabbed,
         );
+        let pointer = *self.input.as_ref().unwrap().pointer();
+        self.pointer_beam = pointer.beam;
 
         if !grabbed {
-            // log::info!("!grabbed {} {} {} {}", self.cursor.0, self.cursor.1, input.thrust, input.strafe);
+            //log::info!("!grabbed {} {} {} {}", self.cursor.0, self.cursor.1, input.thrust, input.strafe);
+            if let Some((px, py)) = pointer.screen_pos {
+                self.cursor = (px, py);
+            }
+
             if input.thrust != 0.0 || input.strafe != 0.0 {
                 self.cursor.0 = (self.cursor.0 - input.thrust * 12.0).clamp(0.0, 2400.0); // 1800
                 self.cursor.1 = (self.cursor.1 - input.strafe * 12.0).clamp(0.0, 2000.0);
@@ -3506,7 +3534,7 @@ impl App {
                     let size = self.view_size();
                     if let Some(m) = &mut self.mc1menu {
                         m.click(size, self.cursor);
-                        self.grabbed = true;
+                        // self.grabbed = true;
                     }
                 }
             }
@@ -5174,7 +5202,12 @@ impl App {
     /// pointer, the two must never show together.
     fn append_software_cursor(&self, quads: &mut Vec<mgc_render::UiQuad>) {
         let Some(w) = &self.window else { return };
+        #[cfg(not(target_os = "android"))]
         if w.fullscreen().is_none() || self.grabbed {
+            return;
+        }
+        #[cfg(target_os = "android")]
+        if self.grabbed {
             return;
         }
         if matches!(self.screen, Screen::Map | Screen::Movie)
@@ -6522,6 +6555,7 @@ impl App {
                 return Ok(());
             }
         };
+        self.last_display_time = Some(frame_state.predicted_display_time);
 
         self.ctx.as_mut().unwrap().frame_stream.begin().ok();
 
@@ -7809,7 +7843,7 @@ impl ApplicationHandler for App {
             }
         };
 
-        let input = match InputActions::new(&ctx.xr_instance) {
+        let mut input = match InputActions::new(&ctx.xr_instance) {
             Ok(input) => input,
             Err(e) => {
                 log::error!("InputActions initialization failed: {e}");
