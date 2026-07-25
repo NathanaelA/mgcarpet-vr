@@ -4727,7 +4727,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ssaa-resolve"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
+                    view: surface_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
