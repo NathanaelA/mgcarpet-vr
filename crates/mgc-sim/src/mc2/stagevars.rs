@@ -428,20 +428,32 @@ impl World {
                         // watch-by-model: the referenced subtype extinct
                         self.mc2_model_extinct(v.watch_model)
                     } else {
-                        // The &2-clear "death watch": retail's scan
-                        // dereferences the RAW value pass-3 stored
-                        // (EF:5183-90) — which in the shipped engine
-                        // is never a live entity reference (remc2
-                        // needed a pointer range guard AND the
-                        // `0xae02` bandaid in sub_1D700 to survive
-                        // it), so the garbage reads "dead" and the
-                        // gate fires the first scan after the watched
-                        // thing SPAWNS. Player-replayed on mc2:04
-                        // (2026-07-24): retail's archer flock marches
-                        // at load — the kind-9 row fires immediately
-                        // and chains the flock onto the kind-3 march
-                        // row. Port the observable law: bound ⇒ fired.
-                        v.watch_ent != 0
+                        // The &2-clear DEATH WATCH — the AUTHORED
+                        // semantics (player-ruled 2026-07-25,
+                        // data-faithful): held while unbound (the
+                        // watched thing hasn't spawned; retail
+                        // null-guards, sub_12780 file 0x36F80) or
+                        // while the bound entity lives; fires when it
+                        // dies (retail: life<0 or the dying flag —
+                        // the raw-pointer deref of the pass-3-bound
+                        // entity). Retail campaign play NEVER runs
+                        // this law past the first seconds: a one-shot
+                        // in-level checkpoint autosave (sub_57640)
+                        // serializes the pointer in place and the
+                        // restore is structurally unable to undo it,
+                        // severing the watch into a per-config
+                        // march-at-load-or-never coin. The port
+                        // implements what the level DATA says, not
+                        // the autosave bug — see docs/traces/
+                        // mc2-level004-stagevar-ground-truth.md and
+                        // DEVIATIONS.md.
+                        v.watch_ent != 0 && {
+                            let w = v.watch_ent as usize;
+                            w >= self.g.ent.len()
+                                || self.g.ent[w].class64 != 5
+                                || self.g.ent[w].act_life < 0
+                                || self.g.ent[w].flags & 0x400 != 0
+                        }
                     };
                     if fired {
                         self.mc2_stagevars[s].flags |= 0x04;

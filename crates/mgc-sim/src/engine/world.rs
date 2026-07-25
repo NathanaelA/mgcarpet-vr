@@ -14023,17 +14023,17 @@ mod tests {
         );
     }
 
-    /// The &2-clear "death watch" fires the first scan after the
-    /// watched thing SPAWNS — retail's `sub_12780` dereferences the
-    /// raw value pass-3 stored, which in the shipped engine is never
-    /// a live entity reference (remc2's `//fix` range guard + the
-    /// `0xae02` bandaid exist to suppress it), so the garbage reads
-    /// "dead" immediately. Player-replayed on retail mc2:04
-    /// (2026-07-24): the archer flock marches AT LOAD — its kind-9
-    /// row fires at bind and chains the flock onto the kind-3 march
-    /// row. This is the mc2:04 row shape in miniature.
+    /// The &2-clear "death watch", AUTHORED semantics (player-ruled
+    /// 2026-07-25, data-faithful): held while unbound (null-guarded)
+    /// AND while the bound entity lives; fires when it actually dies,
+    /// then chains. Retail campaign play never runs this law past the
+    /// first seconds — the in-level checkpoint autosave severs the
+    /// pointer (sub_57640/sub_55100 one-way serialize) into a
+    /// per-config march-or-never coin; the port implements the level
+    /// DATA instead (docs/traces/mc2-level004-stagevar-ground-truth.md).
+    /// This is the mc2:04 row shape in miniature.
     #[test]
-    fn mc2_bound_death_watch_fires_at_bind_and_chains() {
+    fn mc2_bound_death_watch_fires_on_death_and_chains() {
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -14079,17 +14079,28 @@ mod tests {
             w.g.ent[a].site_z, 9,
             "unbound watch: the hold stands (NULL pointer, no fire)"
         );
-        // The watched thing spawns → pass-3 binds → the next scan
-        // fires the gate WITHOUT any death, and the chain re-holds
-        // the archer on the kind-3 march row.
+        // The watched thing spawns → pass-3 binds → the hold STANDS
+        // while the bound skeleton lives (the authored law: no fire
+        // without a death).
         let (sx, sy) = mc2_pos(100, 100);
         let s = w.g.mc2_spawn_m9(sx, sy, 0).unwrap();
         w.mc2_stagevar_attach(s, 10);
-        w.tick(pose, PlayerCommand::default());
+        for _ in 0..5 {
+            w.tick(pose, PlayerCommand::default());
+        }
         assert!(w.g.ent[s].act_life >= 0, "the watched skeleton LIVES");
         assert_eq!(
+            w.g.ent[a].site_z, 9,
+            "bound + alive: the hold stands (no fire-at-bind)"
+        );
+        // Kill the watched skeleton → the next scan fires the gate
+        // and the chain re-holds the archer on the kind-3 march row.
+        w.g.ent[s].act_life = -1;
+        w.g.ent[s].flags |= 0x400;
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
             w.g.ent[a].site_z, 3,
-            "the bound watch fired at bind and the chain re-held the archer on slot 1"
+            "the watched death fired the gate and the chain re-held the archer on slot 1"
         );
         assert_eq!(
             w.mc2_sv_held

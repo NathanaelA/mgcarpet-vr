@@ -185,14 +185,17 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     // row), level-014's full table loads: the flagged rows binding
     // kind-1 walkers, kind-4 guardians and kind-6 timer spawns. The
     // kind-9 model-18 hold (THING 334, &2-clear bound watch on
-    // template 6) RELEASES AT BIND — retail's bound "death watch"
-    // fires the first scan after the watched thing spawns (the
-    // garbage-deref law, player-replayed on mc2:04), and thing 6
-    // spawns at load. Pin the census by kind and the release.
+    // template 6) HOLDS at load — the AUTHORED death-watch law
+    // (player-ruled 2026-07-25, data-faithful): thing 6 spawns at
+    // load ALIVE, so the bound watch stands until it actually dies.
+    // (Retail's in-level checkpoint autosave severs the watch into a
+    // per-config coin — see the level-004 ground-truth trace; the
+    // port implements the level data.) Pin the census by kind
+    // including the standing kind-9 hold.
     let held = w.debug_mc2_held();
     assert!(
-        !held.iter().any(|&(_, _, k)| k == 9),
-        "level-014: the kind-9 bound watch fired at bind and released its hold"
+        held.iter().any(|&(_, _, k)| k == 9),
+        "level-014: the kind-9 bound watch HOLDS while the watched thing lives"
     );
     let mut kinds = std::collections::BTreeMap::<u8, usize>::new();
     for &(_, _, k) in &held {
@@ -200,7 +203,9 @@ fn run(root: &std::path::Path) -> Option<(Vec<u64>, Vec<u64>)> {
     }
     assert_eq!(
         kinds,
-        [(1u8, 7usize), (4, 26), (6, 26)].into_iter().collect(),
+        [(1u8, 7usize), (4, 26), (6, 26), (9, 1)]
+            .into_iter()
+            .collect(),
         "level-014 held census by kind (verbatim StageVar rows)"
     );
 
@@ -326,26 +331,28 @@ fn mc2_cave_behaviors_and_goldens() {
     // authors m9 + kind-4/9 holds, so the disposition-storm phase
     // (checkpoint D) plays out differently; A-C hold.
     //
-    // Re-pinned (A-D; load checkpoint holds) for the bound
-    // death-watch fire-at-bind law (retail's sub_12780 &2-clear arm
-    // dereferences a garbage pointer — player-replayed on mc2:04):
-    // level 014's kind-9 model-18 hold releases on tick 1 (its
-    // watched template 6 spawns at load), so the m18 acts from the
-    // first checkpoint on. The load checkpoint holding pins that the
-    // composition itself is unchanged.
-    //
     // Re-pinned (LAST checkpoint only) for the immediate-rescan-on-
     // release nudge (released creatures get f63 = 0 so the acquire
     // scan runs the release tick — the retail-observed mc2:04 worm
     // switch timing): the disposition-storm phase's gate releases
     // now rescan immediately.
+    //
+    // Re-pinned (B-D; load checkpoint holds) for the AUTHORED
+    // death-watch law (player-ruled 2026-07-25, data-faithful,
+    // replacing fire-at-bind): level 014's kind-9 model-18 hold now
+    // STANDS at load (its watched template-6 entity spawns alive),
+    // so the m18 stays held through every later checkpoint. The
+    // shipped-retail behavior is a per-config coin created by the
+    // in-level checkpoint autosave severing the watch pointer — see
+    // docs/traces/mc2-level004-stagevar-ground-truth.md; the port
+    // follows the level data.
     assert_eq!(
         got,
         vec![
             0x50c384f9d62a3dadu64,
-            0xc3f12ba364c17aa5,
-            0xa4073a5b7b3a46ee,
-            0xb46e6b7098c63743,
+            0xeed5009480e93bb9,
+            0x0014e75348e14e62,
+            0xcd26d6652fa654d9,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -367,17 +374,19 @@ fn mc2_cave_behaviors_and_goldens() {
     // move the LAST checkpoint only — real behavior in the
     // disposition-storm phase, same signal as the hash pin above.
     //
-    // The bound-watch fire-at-bind law ALSO moves the last
-    // checkpoint only: the released m18 wanders from tick 1, but its
-    // observable divergence needs the long disposition-storm phase
-    // to accumulate — the earlier state-hash moves are RNG-phase and
-    // hold-table internals, which this projection is blind to by
-    // design.
+    // The bound-watch law moves the last checkpoint only, in BOTH
+    // directions it has taken: under fire-at-bind the released m18
+    // wandered from tick 1; under the AUTHORED death-watch law
+    // (player-ruled 2026-07-25, current) the m18 stays HELD — either
+    // way the observable divergence needs the long disposition-storm
+    // phase to accumulate, and the earlier state-hash moves are
+    // RNG-phase and hold-table internals, which this projection is
+    // blind to by design.
     const OBSERVABLE: [u64; 4] = [
         0x4504aa689dad600c,
         0xf19b104a99371181,
         0x314278800b2eb1b4,
-        0x3e15cfc05d9c958f,
+        0x5f7928d0c96d4e27,
     ];
     assert_eq!(
         obs, OBSERVABLE,
