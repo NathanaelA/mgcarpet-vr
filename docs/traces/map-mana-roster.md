@@ -145,13 +145,23 @@ ALL stored) into owned (10,39) balls the census re-sums. Downgrade
 reset; upgrades never re-charge banked mana.
 
 Two total-death (`!level` arm, :56531-37) facts:
-1. Retail RELEASES the balloon (`sub_46D20(a1, 0)` :55949-75 writes
-   the balloon's state word +48 = 0) and leaves it flying with its
-   cargo. **The port used to despawn balloons here (0x400), erasing
-   in-flight cargo from the census — the destroy/rebuild mana leak,
-   fixed 2026-07-24** (release = drop the work target, dispatcher
-   re-adopts owned (3,3) on rebuild). Pinned by
-   `castle_total_death_releases_balloons_with_cargo`.
+1. GLOSSARY CORRECTED 2026-07-25: `sub_46D20(a1, 0)` is NOT a balloon
+   release — it clears entity `+48` of the slot in wizext +708 =
+   `var_676.var_u16[16]` = the owner's SPELL-16 (Create Castle)
+   MANIFESTATION, i.e. the charge pin (the archived ROADMAP's
+   playtest-5 glossary correction; this trace briefly regressed it).
+   Retail's arm therefore never touches the fleet: the balloons keep
+   flying at the freed castle slot's stale coordinates with cargo
+   intact, forever unless a rebuilt castle's dispatcher re-adopts
+   them. **The port used to despawn balloons here (0x400) with no
+   spill, erasing in-flight cargo from the census — the
+   destroy/rebuild mana leak, fixed 2026-07-24 (release-to-idle),
+   then PLAYER-RULED 2026-07-25: the castle-less quota is zero, so
+   total death now DEMOLISHES the fleet through the cull's spill
+   (`corpse_drop`/sub_27690 — loaded balloons leave an owned ball,
+   empty ones vanish), conserving the census.** Deviation registered
+   in docs/DEVIATIONS.md; pinned by
+   `castle_total_death_demolishes_balloons_spilling_cargo`.
 2. Retail frees the castle WITHOUT a final eject: the residual bank
    (≤ ~90% of the level-1 cap) vanishes — a shipped-engine leak. The
    port deliberately scatters it through the ejector's level-0 rule
@@ -169,8 +179,10 @@ Balloon fate at castle shrink — the full retail law (MC1):
   leaves a ball. (This is why "only loaded balloons persist" is the
   gameplay impression; the release itself has no cargo condition.)
   Ported 2026-07-24; pinned by `balloon_cull_over_quota_spills_the_cargo`.
-- **Total death**: no dispatcher pass follows, so ALL balloons orphan
-  alive — loaded or empty, unconditionally.
+- **Total death**: retail runs no dispatcher pass afterwards, so ALL
+  balloons orphan alive — loaded or empty, unconditionally. The port
+  deviates (player-ruled 2026-07-25): `castle_downgrade`'s !level arm
+  demolishes the fleet with the same spill as the cull.
 - **MC2 differs by design**: MC2 castles never touch this column
   (game-keyed dispatch, world.rs:2133-40); `mc2_castle_destroy`
   converts balloons to mana spheres (`TransformEntityToManaSphere`,

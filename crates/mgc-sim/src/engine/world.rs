@@ -10598,14 +10598,16 @@ mod tests {
         assert_eq!(w.g.ent[g].f144, 0, "...unclaimed");
     }
 
-    /// Total castle destruction RELEASES the balloons (sub_46D20
-    /// :55949-75 writes the balloon's state word to 0 and keeps the
-    /// entity flying) — it must NOT despawn them: a despawn erases
-    /// any in-flight cargo from the per-tick census, shrinking the
-    /// owner's mana total on every destroy/rebuild cycle (the
-    /// reported "disappearing mana" leak).
+    /// Total castle destruction DEMOLISHES the fleet through the
+    /// cull's spill: each owned balloon dies and its cargo drops as
+    /// an owned (10,39) ball, so the census total is conserved
+    /// (player-ruled deviation, docs/DEVIATIONS.md — retail's !level
+    /// arm never touches the fleet, leaving the balloons flying at
+    /// the freed castle slot forever). A bare despawn without the
+    /// spill would erase in-flight cargo from the per-tick census:
+    /// the old destroy/rebuild "disappearing mana" leak.
     #[test]
-    fn castle_total_death_releases_balloons_with_cargo() {
+    fn castle_total_death_demolishes_balloons_spilling_cargo() {
         let mut w = bare_creature_world(2);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
@@ -10629,6 +10631,7 @@ mod tests {
         w.g.move_relink(b, 100 << 8, 100 << 8, 4000);
         w.g.ent[b].f140 = 7_000;
         w.g.ent[b].f146 = 0;
+        let balls_before = count(&w, 10, 39);
         // Demolish: level 1 → total destruction, castle-less.
         w.tick(
             pose,
@@ -10641,12 +10644,11 @@ mod tests {
             w.tick(pose, PlayerCommand::default());
         }
         assert!(w.loadout().castle.is_none(), "the demolish razed it");
-        assert_eq!(
-            w.g.ent[b].flags & 0x400,
-            0,
-            "the balloon was RELEASED, not despawned"
+        assert_eq!(count(&w, 3, 3), 0, "the castle-less fleet is demolished");
+        assert!(
+            count(&w, 10, 39) > balls_before,
+            "the demolished cargo spilled as a ball"
         );
-        assert_eq!(w.g.ent[b].f140, 7_000, "the cargo rides on");
         assert!(
             w.loadout().mana_max >= 7_000 + WIZARD_BASE_MANA,
             "the census keeps the cargo: no destroy/rebuild leak"

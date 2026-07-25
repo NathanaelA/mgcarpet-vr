@@ -3268,9 +3268,10 @@ impl Gen {
         // which spawns nothing for an empty balloon — only loaded
         // culls leave a ball behind). Retail walks its 3-slot
         // register; our scan-order tail stands in (the same
-        // approximation as the retarget re-pick above). Only TOTAL
-        // castle death orphans the fleet alive (sub_47A70's !level
-        // arm frees the castle without another dispatcher pass).
+        // approximation as the retarget re-pick above). TOTAL castle
+        // death runs the same demolition from castle_downgrade
+        // (retail orphans the fleet alive there — see
+        // docs/DEVIATIONS.md).
         while balloons.len() > bq {
             let b = balloons.pop().expect("len > bq >= 0");
             self.corpse_drop(b);
@@ -3722,16 +3723,26 @@ impl Gen {
                     && self.ent[j].id24 == own
                     && self.ent[j].flags & 0x400 == 0
                 {
-                    // RELEASE, not despawn (sub_46D20(a1, 0) :55949-75
-                    // writes the balloon's state word +48 to 0 and
-                    // leaves it flying). The balloon idles in place
-                    // with its CARGO INTACT — the per-tick census
-                    // keeps counting the carried f140, and a rebuilt
-                    // castle's dispatcher re-adopts owned (3,3) slots
-                    // wholesale. Despawning here (the old arm) erased
-                    // any in-flight cargo from the owner's mana total:
-                    // the destroy/rebuild mana leak.
-                    self.ent[j].f146 = 0; // drop the work target → idle
+                    // The castle-less fleet quota is zero: demolish
+                    // every owned balloon through the cull's spill —
+                    // cargo drops as an owned ball (sub_27690 shape,
+                    // nothing for an empty balloon), so the census
+                    // total is conserved. DELIBERATE deviation
+                    // (docs/DEVIATIONS.md): retail's !level arm frees
+                    // the castle without touching the fleet — the
+                    // balloons fly at the freed slot's stale
+                    // coordinates forever, culled only if a rebuilt
+                    // castle's dispatcher re-adopts them. (The
+                    // sub_46D20(a1, 0) call in that arm is the
+                    // spell-16 charge-pin clear on the owner's Create
+                    // Castle manifestation slot — wizext +708 — not a
+                    // balloon release; an earlier port comment
+                    // misglossed it.) Despawning WITHOUT the spill
+                    // (the oldest arm) erased in-flight cargo from
+                    // the owner's mana total: the destroy/rebuild
+                    // mana leak.
+                    self.corpse_drop(j);
+                    self.ent[j].flags |= 0x400;
                 }
             }
             self.ent[i].flags |= 0x400;
