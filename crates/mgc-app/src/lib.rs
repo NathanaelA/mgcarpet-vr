@@ -398,7 +398,7 @@ impl CampaignRun {
 
     /// The baked package path for a level of this campaign.
     fn level_path(&self, level: u32) -> PathBuf {
-        PathBuf::from(format!("baked/{}/level-{level:03}.mgcl", self.id.tag()))
+        get_baked_directory().join(format!("{}/level-{level:03}.mgcl", self.id.tag()))
     }
 
     /// The retail record's bytes, whichever game this is.
@@ -1831,7 +1831,7 @@ impl App {
             let audio_dir = match &level {
                 Some(l) => l.audio_dir.clone(),
                 None => {
-                    let d = PathBuf::from("baked/assets").join(if is_mc2 {
+                    let d = get_baked_directory().join("assets").join(if is_mc2 {
                         "mc2-audio"
                     } else {
                         "mc1-audio"
@@ -2130,7 +2130,7 @@ impl App {
         } else {
             "mc1-temperate"
         };
-        match Bundle::load(&PathBuf::from("baked/assets").join(variant)) {
+        match Bundle::load(&get_baked_directory().join("assets").join(variant)) {
             Ok(bundle) => {
                 self.frontend_ui = bundle.ui_sprites.as_ref().map(|(idx, px)| {
                     ui::UiAssets::build(
@@ -4029,7 +4029,7 @@ impl App {
     /// Load the world-map assets and park the scroll on the next
     /// portal.
     fn load_worldmap(&mut self) -> Result<(), String> {
-        let mut wm = worldmap::WorldMap::load(Path::new("baked/assets/mc2-ui"))?;
+        let mut wm = worldmap::WorldMap::load(&get_baked_directory().join("assets/mc2-ui"))?;
         if let Some(run) = &self.campaign {
             if let Some(save) = run.save.mc2() {
                 wm.enter_visit(save);
@@ -4307,7 +4307,7 @@ impl App {
         self.frontend_music();
         if self.is_mc2() {
             if self.mainmenu.is_none() {
-                match frontend::MainMenu::load(Path::new("baked/assets/mc2-ui")) {
+                match frontend::MainMenu::load(&get_baked_directory().join("assets/mc2-ui")) {
                     Ok(m) => self.mainmenu = Some(m),
                     Err(e) => {
                         eprintln!("note: main menu unavailable: {e}");
@@ -4318,7 +4318,7 @@ impl App {
             self.free_menu_pointer();
         } else {
             if self.mc1menu.is_none() {
-                match frontend_mc1::Mc1Menu::load(Path::new("baked/assets/mc1-ui")) {
+                match frontend_mc1::Mc1Menu::load(&get_baked_directory().join("assets/mc1-ui")) {
                     Ok(m) => self.mc1menu = Some(m),
                     Err(e) => {
                         eprintln!("note: main menu unavailable: {e}");
@@ -4472,17 +4472,12 @@ impl App {
     fn play_movies(&mut self, cues: &[movie::Cue], then: AfterMovie, event_loop: &ActiveEventLoop) {
         let mc2 = self.is_mc2();
         let player = if self.cfg.render.preference.movies {
-            let dir = if mc2 {
-                "baked/assets/mc2-movies"
+            let dir = get_baked_directory().join(if mc2 {
+                "assets/mc2-movies"
             } else {
-                "baked/assets/mc1-movies"
-            };
-            movie::MoviePlayer::new(
-                Path::new(dir),
-                cues,
-                mc2,
-                self.cfg.render.preference.movie_subtitles,
-            )
+                "assets/mc1-movies"
+            });
+            movie::MoviePlayer::new(&dir, cues, mc2, self.cfg.render.preference.movie_subtitles)
         } else {
             None
         };
@@ -4603,7 +4598,7 @@ impl App {
     /// timer + brighten highlight), re-uploaded as the UI atlas.
     fn menu_screen_frame_mc1(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
         if self.mc1menu.is_none() {
-            match frontend_mc1::Mc1Menu::load(Path::new("baked/assets/mc1-ui")) {
+            match frontend_mc1::Mc1Menu::load(&get_baked_directory().join("assets/mc1-ui")) {
                 Ok(m) => {
                     self.mc1menu = Some(m);
                     self.set_grab(false);
@@ -4744,7 +4739,7 @@ impl App {
     /// idle dressing, drain clicks/actions.
     fn menu_screen_frame_mc2(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
         if self.mainmenu.is_none() {
-            match frontend::MainMenu::load(Path::new("baked/assets/mc2-ui")) {
+            match frontend::MainMenu::load(&get_baked_directory().join("assets/mc2-ui")) {
                 Ok(m) => {
                     self.mainmenu = Some(m);
                     self.free_menu_pointer();
@@ -7189,7 +7184,7 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut level = PathBuf::from("baked/mc1/level-000.mgcl");
+    let mut level = get_baked_directory().join("mc1/level-000.mgcl");
     let mut campaign_id = None;
     let mut slot = None;
     let mut new_game = false;
@@ -7252,7 +7247,7 @@ fn parse_args() -> Result<Args, String> {
                 let index: u32 = index
                     .parse()
                     .map_err(|e| format!("--level {spec}: bad level index: {e}"))?;
-                Ok(PathBuf::from(format!("baked/{game}/level-{index:03}.mgcl")))
+                Ok(get_baked_directory().join(format!("{game}/level-{index:03}.mgcl")))
             }
             // A numeric index after an unknown tag is a typo'd
             // shorthand, not a path — fail fast instead of hunting
@@ -8977,6 +8972,14 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS
+}
+
+/// Root of the baked data tree — the single seam every baked lookup
+/// resolves through, so a port or packaging layout relocates the
+/// whole tree by changing one body (the Android shell points it at
+/// the device's shared storage; `saves::saves_root` is its sibling).
+fn get_baked_directory() -> PathBuf {
+    PathBuf::from("baked")
 }
 
 #[cfg(test)]

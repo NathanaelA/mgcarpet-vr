@@ -395,9 +395,16 @@ pub fn native_path(tag: &str, slot: usize) -> PathBuf {
     retail_path(tag, slot).with_extension("mgcs")
 }
 
+/// Root of the saves tree — the relocation seam, sibling to the baked
+/// tree's `get_baked_directory`: the public slot functions below all
+/// resolve through it, so a port moves every save by changing one body.
+fn saves_root() -> PathBuf {
+    PathBuf::from("saves")
+}
+
 /// The retail-format path for a slot, per game.
 pub fn retail_path(tag: &str, slot: usize) -> PathBuf {
-    retail_path_in(Path::new("saves"), tag, slot)
+    retail_path_in(&saves_root(), tag, slot)
 }
 
 /// Slots per game.
@@ -448,7 +455,7 @@ pub struct SlotInfo {
 /// The menu must be able to list a directory of junk without an error
 /// path, and must never present a damaged save as an empty slot.
 pub fn scan_slot(tag: &str, slot: usize) -> SlotInfo {
-    scan_slot_in(Path::new("saves"), tag, slot)
+    scan_slot_in(&saves_root(), tag, slot)
 }
 
 fn scan_slot_in(root: &Path, tag: &str, slot: usize) -> SlotInfo {
@@ -571,7 +578,7 @@ pub fn write_slot(
     slot: usize,
     save: &mgc_formats::mgcs::SavePackage,
 ) -> Result<(), String> {
-    write_slot_in(Path::new("saves"), tag, slot, save)
+    write_slot_in(&saves_root(), tag, slot, save)
 }
 
 fn write_slot_in(
