@@ -5889,6 +5889,20 @@ impl App {
                 let y = size.1 - (assets.font_line_height() + 4.0) * font_s;
                 quads.extend(assets.text_quads(&text, pad, y, [1.0, 1.0, 1.0, 1.0], font_s));
             }
+            // The entity-pool overlay (render · debug): the second
+            // fixed bottom-left line, one above the coordinate
+            // readout — the lines never re-stack when one is off.
+            if self.cfg.render.debug.entities
+                && assets.has_font()
+                && let Some(w) = &sess.sim.world
+            {
+                let (used, cap) = w.debug_entity_pool();
+                let text = format!("ents {used}/{cap}");
+                let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
+                let pad = 4.0 * font_s;
+                let y = size.1 - 2.0 * (assets.font_line_height() + 4.0) * font_s;
+                quads.extend(assets.text_quads(&text, pad, y, [1.0, 1.0, 1.0, 1.0], font_s));
+            }
             self.hovered = hovered;
             self.append_software_cursor(&mut quads);
             if let Some(r) = &mut self.renderer {

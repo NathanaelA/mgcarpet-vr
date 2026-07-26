@@ -478,6 +478,12 @@ pub struct RenderDebug {
     /// instrument (the desired-altitude band language IS engine
     /// units: clearance 128/256, band 1024/3072).
     pub coords: bool,
+    /// The entity-pool overlay: "ents used/capacity" on its own fixed
+    /// line above the coordinate readout (bottom-left). In-use counts
+    /// every allocated pool slot including not-yet-reaped corpses —
+    /// the entity-pressure diagnosis instrument (effect leaks,
+    /// pool-exhaustion anomalies).
+    pub entities: bool,
 }
 
 // ===========================================================================
@@ -978,7 +984,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 16;
+const DEFAULTS_VERSION: u64 = 17;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

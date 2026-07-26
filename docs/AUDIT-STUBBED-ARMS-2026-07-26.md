@@ -45,23 +45,23 @@ One CONFIRMED-REACHABLE gap surfaced whose premise was *honestly stated*
 not a false claim about retail) — logged here because retail behavior is
 demonstrably missing:
 
-- **MC2 (10,19) fire-spray singleton latch — retail writer present,
-  port omits it.** Port site: `mc2/tail.rs:150` (module note + the
-  on-death release), already self-marked OPEN. Claim: "the `word_0x33`
-  singleton latch (EF:23962 registers a new spray and disables the
-  previous from a different action's context) has no ported writer, so
-  the on-death release write is a no-op." Evidence: `word_0x33` is the
-  level-global `D41A0_0.word_0x33` (not an entity field). Retail writers:
-  EF:23962-64 — on a new (10,19) spray it calls
-  `DisableEntityDrawing04_57F10(Entities_EA3E4[word_0x33])` on the
-  PREVIOUS spray, then `word_0x33 = new_spray_index`; release EF:24148
-  (`word_0x33 = 0`); level reset EF:39309. The port ports neither the
-  register nor a live latch, so the release reads 0 and no-ops. Missing
-  retail behavior: casting a second (10,19) spray disables/hides the
-  first (only one live at a time). Reachability: whenever (10,19) is
-  cast twice — needs a playtest to rate how often two coexist.
-  Fix scope: port the register at the (10,19) creation site (write the
-  global, disable the prior) + wire the release. Small, single-column.
+- **MC2 (10,19) fire-spray singleton latch — RESOLVED (entry
+  corrected, then fixed).** This entry's original claim ("the port
+  ports neither the register nor a live latch") was ITSELF stale: the
+  register IS ported — the summit-18 eruption controller
+  (`mc2_summit18_tick`, mc2/morph.rs) latches `plume`/`erupting` (the
+  `word_0x33`/`word_0x31` homes) and kills the previous column,
+  mirroring EF:23962-64; only the (10,19) creation site exists
+  (EF:23957 is retail's sole creator, inside that same controller).
+  What WAS missing: the death release EF:24148 — the spray's tick
+  never cleared `plume`, so a stale latch outlived the spray and the
+  next eruption's "kill the previous column" write soft-killed
+  whatever entity had re-used the slot (a silent arbitrary kill).
+  FIXED: `mc2_fire_spray_tick` death arm now writes `plume = 0`
+  (mc2/tail.rs). Level reset EF:39309 ≡ the fresh `Gen` per level.
+  Lesson for this ledger: port-side dormancy notes go stale too —
+  check ALL columns (the latch lived in morph.rs, the note in
+  tail.rs).
 
 
 ## 3. RE-VERIFIED DORMANT (premise held)

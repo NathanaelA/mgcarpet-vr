@@ -14,10 +14,11 @@
 //! - `sub_6D8B0(id, kind, hits)` spellbook reports ((10,17) kind 9,
 //!   (10,23) kind 7, (10,15)'s spray kind — the spell-XP intake):
 //!   the hit counts are computed and dropped.
-//! - The (10,19) spray's `word_0x33` singleton latch (EF:23962
-//!   registers a new spray and disables the previous one from a
-//!   DIFFERENT action's context) has no ported writer; the release
-//!   write on death is a no-op without it (OPEN).
+//! - The (10,19) spray's `word_0x33` singleton latch IS ported: the
+//!   summit-18 eruption registers each new column and kills the
+//!   previous (`plume`, morph.rs `mc2_summit18_tick` — EF:23962-64),
+//!   and the spray's death releases it (`mc2_fire_spray_tick`,
+//!   EF:24148). The old "no ported writer" note here was stale.
 //! - `AddEvent2_847D0` attached lights/children ((10,23)'s
 //!   (128,9,0)) are presentation, unported (the (10,1) note).
 //! - The (10,54) aura scans retail's `dword_38523` creature list —
@@ -1517,7 +1518,7 @@ impl Gen {
     /// ticks a 4-puff ring of (10,14) smoke (yaw start
     /// `(life/2 & 1) << 8`, step 0x200 to 0x800, id inherited);
     /// z snaps to terrain. On death, release the word_0x33 singleton
-    /// (no ported latch — deliberate; see module doc). `sub_10C80(ch0, 200)`
+    /// (`plume`, latched by morph.rs's summit-18). `sub_10C80(ch0, 200)`
     /// EVERY tick including the despawn tick.
     pub(crate) fn mc2_fire_spray_tick(&mut self, i: usize, ctx: &MobCtx) {
         let life = self.ent[i].act_life;
@@ -1549,8 +1550,15 @@ impl Gen {
             self.ent[i].z = self.ground_z(x, y) as i16;
         } else {
             self.ent[i].flags |= 0x400;
-            // D41A0_0.word_0x33 = 0 — the singleton release (no
-            // ported latch; see the module doc).
+            // `D41A0_0.word_0x33 = 0` (EF:24148) — release the spray
+            // singleton (latched by the summit-18 eruption,
+            // morph.rs). Unconditional like retail: the latch kills
+            // the previous spray on re-latch, so at most one is ever
+            // alive. WITHOUT this, a stale `plume` outlives the
+            // spray, and the next eruption's "kill the previous
+            // column" write lands on whatever entity RE-USED the
+            // slot — a silent arbitrary kill.
+            self.plume = 0;
         }
         let amt = self.ent[i].f140 as u32;
         self.area_write(i, 0, amt, ctx, false, false);

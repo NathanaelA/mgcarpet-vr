@@ -981,6 +981,29 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Render,
+            group: "render · debug",
+            label: "entities",
+            class: Debug,
+            key: None,
+            cli: Some("--entities"),
+            cfg_path: "render.debug.entities",
+            read: toggle!(c => render.debug.entities),
+            desc: "Live entity-pool usage, \"ents used/capacity\", on its \
+                   own line above the coordinate readout (bottom-left). \
+                   In-use counts every allocated slot including corpses \
+                   awaiting the reaper. The entity-pressure diagnosis \
+                   instrument \u{2014} effect leaks, pool-exhaustion \
+                   anomalies.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.debug.entities = v,
+                descs: [
+                    "No entity readout, as retail.",
+                    "Live pool usage above the coordinate line.",
+                ],
+            },
+        },
         // ---- controls · preferences -------------------------------------
         Spec {
             domain: Controls,

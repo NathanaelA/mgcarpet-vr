@@ -8058,6 +8058,16 @@ impl World {
         Some((before, after, freed))
     }
 
+    /// Diagnostic: entity-pool usage `(in_use, capacity)` for the
+    /// entity-count overlay. In-use counts every allocated slot —
+    /// including 0x400-marked entities the reaper hasn't collected
+    /// yet, which are real pool pressure; slot 0 is the scratch
+    /// entity, excluded from both numbers. Read-only, O(1).
+    pub fn debug_entity_pool(&self) -> (usize, usize) {
+        let cap = self.g.ent.len().saturating_sub(1);
+        (cap.saturating_sub(self.g.free.len()), cap)
+    }
+
     /// Pool diagnostics (debug tooling): free slot count + a minimal
     /// live-event view.
     #[doc(hidden)]
