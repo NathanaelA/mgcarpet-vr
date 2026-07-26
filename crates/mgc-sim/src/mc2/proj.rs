@@ -733,63 +733,87 @@ impl Gen {
     }
 
     /// `sub_66750` (EF:58268) — the tier-0 LIGHTNING BEAM: a ONE-TICK
-    /// hitscan, not a traveling ball. Retail walks the aim ray to the
-    /// first blocker and detonates the `(10,23)` blast there the same
-    /// tick. The flyer core already marches, probes, applies the
-    /// terrain/victim law, and detonates the `(10,23)` impact with XP —
-    /// so run it to COMPLETION here (until it despawns or its ~9-step
-    /// reach expires) rather than one step per tick. Net: fire → instant
-    /// flash → gone, re-laid every RAPID tick (the authentic crackle)
-    /// (docs/spell-audit/lightning.md §5.A). The jagged cosmetic trail
-    /// nodes are presentation, omitted (keeps the sim RNG-order stable).
+    /// hitscan, not a traveling ball. Retail re-aims ONCE at launch —
+    /// `sub_66610` (EF:63583-99) runs the one-shot `sub_67CB0`
+    /// acquisition and FULLY SNAPS yaw/pitch onto the pick — then
+    /// walks a dead-STRAIGHT ray to the first blocker (no per-step
+    /// homing anywhere in the beam) and detonates the `(10,23)` blast
+    /// at the terminus, which for a victim hit IS the victim
+    /// (position snap, EF:63604-08). The trail heading is saved AFTER
+    /// the snap (EF:58306-08) — that is what makes the retail flash
+    /// point at the locked target and jump target-to-target as each
+    /// RAPID re-fire re-scans. The flyer core marches, probes, and
+    /// applies the terrain/victim/impact law — run it to COMPLETION
+    /// with the lock CLEARED so it flies straight; victim stamping
+    /// rides the probe like retail's re-probe (EF:58401-21). Net:
+    /// fire → instant aimed flash → gone, re-laid every RAPID tick
+    /// (docs/spell-audit/lightning.md §5.A).
     pub(crate) fn mc2_lightning_beam_tick(&mut self, i: usize, ctx: &MobCtx) {
+        // EF:58303 — the walk runs at minSpeed.
+        self.ent[i].f126 = self.ent[i].f128;
+        // The one-shot acquisition + full snap (`sub_66610`
+        // EF:63586-98). A fresh cast always lands here (the a3==7
+        // dispatch stamps no victim); no target = freeze the facing.
+        if self.ent[i].flags & F_AIMED == 0 {
+            self.ent[i].flags |= F_AIMED;
+            if self.mc2_autoaim(i, ctx) {
+                let e = &mut self.ent[i];
+                e.f30 = e.f34;
+                e.f32 = e.f36;
+            } else {
+                let e = &mut self.ent[i];
+                e.f34 = e.f30;
+                e.f36 = e.f32;
+            }
+        }
         let (sx, sy, sz, yaw, pitch, speed, id) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.f126.max(384), e.id24)
         };
-        // Resolve the whole hitscan THIS tick — the flyer marches,
-        // probes, applies the terrain/victim law, and detonates the
-        // (10,23) impact + XP. maxLife (~9) bounds the reach; the 64 cap
-        // is a pure safety backstop (the flyer always sets 0x400).
+        // Straight march: the beam never homes per-step, so the lock
+        // is held aside for the walk (F_AIMED is latched, so the
+        // flyer neither re-acquires nor steers). maxLife (~9) bounds
+        // the reach; the 64 cap is a pure safety backstop.
+        let lock = self.ent[i].f146;
+        self.ent[i].f146 = 0;
+        let mut steps = 0i32;
         for _ in 0..64 {
+            steps += 1;
             self.mc2_flyer_tick(i, ctx);
             if self.ent[i].flags & 0x400 != 0 {
                 break;
             }
         }
+        self.ent[i].f146 = lock;
         // Lay the VISIBLE jagged flash: `sub_66750`'s cosmetic sprite-216
-        // trail (EF:58320) from the muzzle to the impact. Without it the
-        // one-tick beam despawns before it can render. `i` is despawned
-        // here but its fields are still live.
-        let end = {
-            let e = &self.ent[i];
-            (e.x, e.y, e.z)
-        };
-        self.mc2_lay_lightning_trail(i, (sx, sy, sz), end, yaw, pitch, speed, id);
+        // trail (EF:58320) along the AIMED heading, `steps·8` nodes at
+        // `actSpeed/8` spacing (EF:58321-23) — its end coincides with
+        // the walked terminus by construction. `i` is despawned here
+        // but its fields are still live.
+        self.mc2_lay_lightning_trail(i, (sx, sy, sz), steps, yaw, pitch, speed, id);
     }
 
     /// `sub_66750`'s trail (EF:58320-58399): sprite-216 billboards along
-    /// the beam every `actSpeed/8` (=48) units, jittered by a ±1 random
-    /// walk (amplitude clamp 8, tapering to 0 at the far end). Each node
-    /// is a 1-frame self-despawning class-9/model-9 billboard
-    /// (action 14 = `sub_67410`). These ARE the visible flash.
+    /// the beam every `actSpeed/8` (=48) units — `steps·8` of them, so
+    /// the trail length equals the walked distance (EF:58321) —
+    /// jittered by a ±1 random walk (amplitude clamp 8, tapering to 0
+    /// at the far end). Each node is a 1-frame self-despawning
+    /// class-9/model-9 billboard (action 14 = `sub_67410`). These ARE
+    /// the visible flash.
     #[allow(clippy::too_many_arguments)]
     fn mc2_lay_lightning_trail(
         &mut self,
         src: usize,
         start: (u16, u16, i16),
-        end: (u16, u16, i16),
+        steps: i32,
         yaw: u16,
         pitch: u16,
         speed: i16,
         id: u16,
     ) {
         let (sx, sy, sz) = start;
-        let dx = end.0.wrapping_sub(sx) as i16 as i32;
-        let dy = end.1.wrapping_sub(sy) as i16 as i32;
-        let dist = Self::isqrt((dx * dx + dy * dy) as u32) as i32;
         let spacing = (speed as i32 / 8).max(16); // 48 at actSpeed 384
-        let n = (dist / spacing).clamp(1, 96);
+        let n = (steps * 8).clamp(1, 96);
         let unit = (spacing / 4).max(1) as i16; // 12
         let perp = yaw.wrapping_add(512) & 0x7FF; // +90°
         let (mut wz, mut wp) = (0i32, 0i32);
@@ -798,7 +822,7 @@ impl Gen {
         for k in 1..=n {
             let mut p = (sx, sy, sz);
             Self::polar_step(&mut p, yaw, pitch, (spacing * k) as i16);
-            let amp = (n - k).clamp(0, 8);
+            let amp = ((n - k) / 2).clamp(0, 8);
             let r = self.ent_rand(src);
             wz = jag(wz, amp, r);
             let r = self.ent_rand(src);

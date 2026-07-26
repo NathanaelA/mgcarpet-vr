@@ -271,7 +271,7 @@ pub fn billboards_from_poses(
         if enhanced_fire
             && (p.class == 10
                 && (matches!(p.model, 0 | 1 | 77)
-                    || (matches!(p.model, 6 | 19) && p.fire_life.is_some()))
+                    || (matches!(p.model, 6 | 19 | 23) && p.fire_life.is_some()))
                 || p.class == 9 && matches!(p.model, 0 | 28))
         {
             continue;
@@ -1022,8 +1022,12 @@ pub fn fire_particles_from_poses(
         // and MC2's (10,19) volcano/dome fire spray. Models 6/19 key
         // on the pose carrying fire_life (the world gates model 19
         // off for MC1, where 19 is the volcano smoke plume).
+        // (10,23) = the lightning hit-blast, both games — a small,
+        // quick fire burst at the beam terminus (player-requested
+        // enhancement; the retail sprite is suppressed like the rest).
         let is_impact = c.class == 10
-            && (matches!(c.model, 0 | 1) || (matches!(c.model, 6 | 19) && c.fire_life.is_some()));
+            && (matches!(c.model, 0 | 1)
+                || (matches!(c.model, 6 | 19 | 23) && c.fire_life.is_some()));
         if !is_projectile && !is_impact {
             continue;
         }
@@ -1149,6 +1153,11 @@ pub fn fire_particles_from_poses(
             let boom = match c.model {
                 1 => 1.45f32,
                 6 | 19 => 1.25 * engulf,
+                // The lightning hit-blast is a compact hit marker
+                // (retail extents ~200 units ≈ 0.8 tile), not a
+                // fireball crater — scaled well down so it reads as a
+                // sharp crack at the beam end.
+                23 => 0.65,
                 _ => 1.0,
             };
             // Three licks in place: jittered around the cell, taller

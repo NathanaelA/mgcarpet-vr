@@ -1,5 +1,41 @@
 # Spell Audit — Lightning Bolt (index 7)
 
+> **LANDED 2026-07-27 (visual-aim fix, BOTH GAMES + MC1's `sub_535E0`).**
+> Player report: the visible bolt always fired straight ahead while the
+> damage homed; retail points at the locked target and JUMPS between
+> targets as they die. Two fresh retail traces (verbatim-quoted):
+> - **MC2 `sub_66750`**: retail re-aims ONCE at launch — `sub_66610`
+>   (EF:63583-99) runs the one-shot `sub_67CB0` acquisition and FULLY
+>   SNAPS yaw/pitch (yaw=roll, pitch=fov) — then walks a dead-STRAIGHT
+>   ray (NO per-step homing anywhere in the beam), snapping position to
+>   the victim (EF:63604-08). The trail heading is saved AFTER the snap
+>   (EF:58306-08); trail length = walked steps ×8 nodes at actSpeed/8
+>   (EF:58321-23), so trail end = walk terminus = victim = the (10,23)
+>   blast site (EF:58403). The port had BOTH halves wrong: trail along
+>   the pre-snap cast facing, damage via the per-tick-homing flyer.
+>   `mc2_lightning_beam_tick` now snaps first, marches with the lock
+>   held aside (straight), and lays the trail by step count.
+> - **MC1 `sub_535E0`**: retail runs the FIRST `sub_534C0` flight call
+>   (which performs the one-time aim-assist snap of +30/+32) and only
+>   THEN saves the chain heading (:63312 → :63313-14, restored
+>   :63327-28) — chain and endpoint explosion follow the AIMED heading.
+>   The port captured the heading before the snap; `proj_m9_tick` now
+>   hoists the snap above the capture. Retail fire sites pre-aim
+>   +30/+32 AND pre-lock +146 (:23255-60) — our rival/mob thunks
+>   already do; the player cast leaves f146=0 and the snap aims, same
+>   net heading either way.
+> - Target jumping needs NO new mechanism: each RAPID re-fire is a
+>   fresh bolt re-scanning from scratch (word150==0 at spawn).
+> - Ranges verified correct both games (3456 = 384·9; MC1 3584/384).
+> - Regression tests (lib, non-vacuity proven by bug re-introduction):
+>   `mc2_lightning_beam_trail_points_at_the_locked_target`,
+>   `mc1_lightning_chain_points_at_the_locked_target` (world.rs).
+> - ENHANCEMENT (player-requested): `(10,23)` (both games' lightning
+>   hit-blast) joined the enhanced-fire set — a scaled-down (boom 0.65)
+>   quick fire burst at the beam terminus, retail sprite suppressed
+>   (world.rs fire_life gate + entities.rs impact set). Classic mode
+>   untouched.
+
 Sources: `EF:` = `reference/remc2/remc2/engine/EventsFunctions.cpp`; trace bank
 `docs/traces/mc2-class9-spell-projectiles.md` (class-9 flight states, verbatim);
 port `crates/mgc-sim/src/mc2/cast.rs`, `proj.rs`, `spells.rs`. Recorded gameplay

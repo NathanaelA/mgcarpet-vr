@@ -1429,8 +1429,13 @@ impl World {
                 // `elapsed` is only meaningful as `max_life - elapsed`
                 // = REMAINING life — the fire renderer's standing-fire
                 // law works on that.
+                // (10,23) = the lightning hit-blast in BOTH games
+                // (MC1 bolt hit-flash / MC2 blast23) — every spawner
+                // is lightning-family (bolts, storm rain, Fool's Mana
+                // beam, doomsday vortex bolts), so the model keys the
+                // enhanced-fire explosion wholesale.
                 fire_life: if e.class64 == 10
-                    && (matches!(e.model65, 0 | 1 | 6)
+                    && (matches!(e.model65, 0 | 1 | 6 | 23)
                         || (e.model65 == 19 && self.game == GameId::Mc2))
                     && e.max_life > 0
                 {
@@ -13212,6 +13217,164 @@ mod tests {
         assert_eq!(
             w.g.ent[goat].act_life, full,
             "the start-island flock survives the level start"
+        );
+    }
+
+    /// The tier-0 lightning BEAM's visible trail points at the
+    /// autoaim-acquired target: `sub_66750` re-aims ONCE at launch and
+    /// FULLY SNAPS yaw/pitch (`sub_66610` EF:63589-92) before the
+    /// trail heading is saved (EF:58306-08), so the flash, the straight
+    /// walk, and the (10,23) blast all follow the AIMED heading.
+    /// Regression: the port laid the trail along the pre-snap cast
+    /// facing while the damage homed — "the visual effect seems to be
+    /// always forward, even though something else is taking the
+    /// damage" (player report 2026-07-26).
+    #[test]
+    fn mc2_lightning_beam_trail_points_at_the_locked_target() {
+        let mut w = mc2_flat_world();
+        let (mx, my) = mc2_pos(100, 100);
+        let mz = w.g.ground_z(mx, my) as i16 + 200;
+        // The target: a hive imp ~2048 units out at bearing
+        // cast+90 angle-units (≈15.8° off) — inside the ±113
+        // acquisition cone, far outside the trail's ±96-unit jag.
+        let cast_yaw: u16 = 256;
+        let aim_yaw = (cast_yaw + 90) & 0x7FF;
+        let mut tp = (mx, my, 0i16);
+        Gen::polar_step(&mut tp, aim_yaw, 0, 2048);
+        let t = w.g.mc2_spawn_m9(tp.0, tp.1, 0).expect("imp spawns");
+        // Scan-eligible (awake gate f58 > 0) — 64 like the roster's
+        // own awake stamps; the world tick decrements it, so a bare 1
+        // hits zero before the bolt's slot ticks.
+        w.g.ent[t].f58 = 64;
+        let (tx, ty) = (w.g.ent[t].x, w.g.ent[t].y);
+        let tz = w.g.ent[t].z;
+
+        // The bolt, stamped like `mc2_launch` along the CAST facing.
+        let b =
+            w.g.mc2_spawn_cast_proj(9, mx, my, tz + 100)
+                .expect("bolt spawns");
+        {
+            let e = &mut w.g.ent[b];
+            e.id24 = PLAYER_TARGET;
+            e.f68 = 10;
+            e.f69 = 23;
+            e.f44 = 200;
+            e.f30 = cast_yaw;
+            e.f34 = cast_yaw;
+            e.f32 = 0;
+            e.f36 = 0;
+        }
+        w.tick(away(), PlayerCommand::default());
+
+        // The beam resolved this tick (one-tick hitscan).
+        assert!(
+            w.g.ent[b].flags & 0x400 != 0,
+            "the beam resolves in one tick"
+        );
+        let expected = Gen::angle_between(mx, my, tx, ty);
+        // The trail's FAR nodes ride the aimed ray (the jag amplitude
+        // pinches to zero at the terminus), so the farthest node's
+        // bearing from the muzzle is the beam's true heading.
+        let far = (1..w.g.ent.len())
+            .filter(|&i| {
+                let e = &w.g.ent[i];
+                e.class64 == 9 && e.model65 == 9 && e.tick70 == 14 && e.flags & 0x400 == 0
+            })
+            .max_by_key(|&i| Gen::dist2_sq(mx, my, w.g.ent[i].x, w.g.ent[i].y))
+            .expect("the beam lays a visible trail");
+        let bearing = Gen::angle_between(mx, my, w.g.ent[far].x, w.g.ent[far].y);
+        let err = Gen::arc_err(bearing, expected);
+        assert!(
+            err <= 24,
+            "the trail points at the locked target (bearing err {err} \
+             angle-units; the pre-fix trail sat at the cast facing, 90 off)"
+        );
+        // The (10,23) blast lands ON the victim (the straight ray
+        // terminates with a position snap to the first blocker).
+        let blast = (1..w.g.ent.len())
+            .find(|&i| w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 23)
+            .expect("the beam detonates a (10,23) blast");
+        let bd = Gen::isqrt(Gen::dist2_sq(w.g.ent[blast].x, w.g.ent[blast].y, tx, ty) as u32);
+        assert!(
+            bd <= 300,
+            "the blast coincides with the target ({bd} units away)"
+        );
+    }
+
+    /// The MC1 lightning bolt's visible segment chain (and endpoint
+    /// explosion) follow the AIMED heading: retail `sub_535E0` runs
+    /// the first `sub_534C0` flight step — whose one-time aim assist
+    /// SNAPS the flight yaw/pitch onto the acquired target — and only
+    /// THEN saves the chain heading (:63312 → :63313-14), restoring
+    /// it for the segment walk (:63327-28). Regression: the port
+    /// captured the heading before the snap, so the chain and the
+    /// (10,23) hit-flash drew along the raw cast facing while the
+    /// damage walk homed (player report 2026-07-26).
+    #[test]
+    fn mc1_lightning_chain_points_at_the_locked_target() {
+        let mut w = flat_world();
+        let mx = (100u16 << 8) | 128;
+        let my = (100u16 << 8) | 128;
+        // The target: an archer ~2048 units out at bearing cast+90
+        // angle-units (≈15.8° off) — inside the ±113 acquire cone,
+        // far outside the chain's ±96-unit zigzag.
+        let cast_yaw: u16 = 256;
+        let aim_yaw = (cast_yaw + 90) & 0x7FF;
+        let mut tp = (mx, my, 0i16);
+        Gen::polar_step(&mut tp, aim_yaw, 0, 2048);
+        let gz = w.g.ground_z(tp.0, tp.1) as i16;
+        let t = w.g.spawn_creature(4, tp.0, tp.1, gz).expect("archer");
+        w.g.ent[t].f58 = 64; // awake gate (the world decrements it)
+        let (tx, ty) = (w.g.ent[t].x, w.g.ent[t].y);
+        let tz = w.g.ent[t].z;
+
+        // The bolt, stamped like `cast_projectile` spell 15 along the
+        // CAST facing (f146 = 0: the player cast never pre-locks, the
+        // bolt's own aim-assist snap does the pointing).
+        let b = w.g.spawn_zigzag(mx, my, tz + 150).expect("bolt");
+        {
+            let e = &mut w.g.ent[b];
+            e.id24 = PLAYER_TARGET;
+            e.f30 = cast_yaw;
+            e.f34 = cast_yaw;
+            e.f32 = 0;
+            e.f36 = 0;
+            e.f44 = 500;
+            e.f69 = 23;
+        }
+        w.tick(away(), PlayerCommand::default());
+
+        assert!(
+            w.g.ent[b].flags & 0x400 != 0,
+            "the beam resolves in one tick"
+        );
+        let expected = Gen::angle_between(mx, my, tx, ty);
+        // The far segments ride the aimed heading (the zigzag
+        // amplitude pinches to zero toward the endpoint).
+        let far = (1..w.g.ent.len())
+            .filter(|&i| {
+                let e = &w.g.ent[i];
+                e.class64 == 9 && e.model65 == 9 && e.tick70 == 14 && e.flags & 0x400 == 0
+            })
+            .max_by_key(|&i| Gen::dist2_sq(mx, my, w.g.ent[i].x, w.g.ent[i].y))
+            .expect("the bolt lays a visible segment chain");
+        let bearing = Gen::angle_between(mx, my, w.g.ent[far].x, w.g.ent[far].y);
+        let err = Gen::arc_err(bearing, expected);
+        assert!(
+            err <= 24,
+            "the chain points at the locked target (bearing err {err} \
+             angle-units; the pre-fix chain sat at the cast facing, 90 off)"
+        );
+        // The (10,23) hit-flash lands at the chain end — on the aimed
+        // ray at the victim's range (the walk steps 384 at a time, so
+        // the endpoint overshoots by less than one step).
+        let fx = (1..w.g.ent.len())
+            .find(|&i| w.g.ent[i].class64 == 10 && w.g.ent[i].model65 == 23)
+            .expect("the bolt detonates its (10,23) hit-flash");
+        let fd = Gen::isqrt(Gen::dist2_sq(w.g.ent[fx].x, w.g.ent[fx].y, tx, ty) as u32);
+        assert!(
+            fd <= 500,
+            "the explosion coincides with the target ({fd} units away)"
         );
     }
 

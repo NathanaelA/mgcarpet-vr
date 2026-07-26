@@ -1581,25 +1581,29 @@ impl Gen {
     fn proj_m9_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         self.ent[i].f126 = self.ent[i].f128;
         let spawn = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
-        // Yaw/pitch are saved across the walk and restored for the
-        // segment chain (:63313-14, :63327-28).
+        // sub_534C0 (:63216): one-time aim assist only while
+        // untargeted (+146 == 0 — fire sites that pre-lock +146 also
+        // pre-aim +30/+32 at the target, closing this gate); snap to
+        // the acquired angles, no per-tick easing, no homing ever.
+        // The snap runs inside the FIRST flight call (:63312), BEFORE
+        // the chain heading is saved.
+        if self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
+            self.ent[i].flags |= 2;
+            self.aim_assist(i, ctx);
+            if self.ent[i].f146 != 0 {
+                self.ent[i].f30 = self.ent[i].f34;
+                self.ent[i].f32 = self.ent[i].f36;
+            }
+        }
+        // Yaw/pitch are saved AFTER the snap (:63313-14) and restored
+        // for the segment chain (:63327-28) — the visible chain and
+        // the endpoint explosion follow the AIMED heading, which is
+        // why the retail bolt points at (and lands on) its victim.
         let (yaw0, pitch0) = (self.ent[i].f30, self.ent[i].f32);
         let mut steps: i32 = 0;
         let mut hit: Option<MailTarget> = None;
         loop {
             steps += 1;
-            // sub_534C0 (:63216): one-time aim assist only while
-            // untargeted (+146 == 0 — the kraken target-locks at
-            // spawn, so this arm is for unowned beams); snap to the
-            // acquired angles, no per-tick easing, no homing ever.
-            if self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
-                self.ent[i].flags |= 2;
-                self.aim_assist(i, ctx);
-                if self.ent[i].f146 != 0 {
-                    self.ent[i].f30 = self.ent[i].f34;
-                    self.ent[i].f32 = self.ent[i].f36;
-                }
-            }
             let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
             let (yaw, pitch, speed) = {
                 let e = &self.ent[i];
