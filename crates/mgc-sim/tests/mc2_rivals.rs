@@ -268,6 +268,12 @@ fn mc2_rivals_spawn_brain_objective() {
         "the rival brain is deterministic"
     );
     assert!(!w.completed(), "kill-player stages still open");
+    // The view exports a live altitude (the in-view rival tag's
+    // anchor): a flying carpet sits well above z = 0.
+    assert!(
+        w.rival_views().iter().all(|v| v.alive && v.alt > 0.0),
+        "rival_views carries a live altitude"
+    );
 
     // Eliminate both rivals. They may have BUILT castles during the
     // run (castle rung 0 costs exactly the starting 1000 mana) — a

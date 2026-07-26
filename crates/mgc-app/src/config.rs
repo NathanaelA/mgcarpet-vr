@@ -292,6 +292,9 @@ pub struct RenderPreference {
     /// OFF is that faithful reading; ON forces the strip open, which
     /// also lifts the picture the way retail does to make room.
     pub movie_subtitles: bool,
+    /// The in-view rival wizard name + health-bar tags. See
+    /// [`RivalTags`].
+    pub rival_tags: RivalTags,
 }
 
 /// How the 3D view's jagged edges are smoothed.
@@ -359,6 +362,38 @@ impl Default for RenderPreference {
             movies: true,
             anti_aliasing: AntiAliasing::Off,
             movie_subtitles: false,
+            rival_tags: RivalTags::default(),
+        }
+    }
+}
+
+/// The in-view rival wizard tag — the boxed name + health bar retail
+/// MC2 floats over every visible rival wizard sprite
+/// (`DrawSorcererNameAndHealthBar_2CB30`, remc2 GameRenderHD.cpp:2797,
+/// hooked per drawn class-3 model-0/1 sprite at :5010-17). Retail MC2
+/// ships it ON with a "Player Names" toggle (PlayerInput.cpp:1503);
+/// retail MC1 has no such tag at all.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RivalTags {
+    /// Each game's faithful surface: MC2 tags every visible rival,
+    /// MC1 tags nothing. The authentic default.
+    #[default]
+    Auto,
+    /// Tags in both games — brings the MC2 tag to MC1 as an opt-in
+    /// (deliberate; the bars are simply too useful to leave behind).
+    On,
+    /// No tags anywhere — retail MC2's "Player Names Off".
+    Off,
+}
+
+impl RivalTags {
+    /// Whether tags draw for the running game.
+    pub fn resolve(self, is_mc2: bool) -> bool {
+        match self {
+            RivalTags::Auto => is_mc2,
+            RivalTags::On => true,
+            RivalTags::Off => false,
         }
     }
 }
@@ -984,7 +1019,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 17;
+const DEFAULTS_VERSION: u64 = 18;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

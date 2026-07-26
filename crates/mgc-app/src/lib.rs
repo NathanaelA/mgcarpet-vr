@@ -1578,6 +1578,12 @@ struct App {
     /// main-view icons; rebuilt with the pose snapshot, empty when
     /// `render.enhancement.expose_jar_spells` is off.
     jar_markers: Vec<(f32, f32, f32, u8)>,
+    /// Rival snapshots from the previous and current entity refresh —
+    /// the rival tag's smooth-motion pair (the tag rides the sub-tick
+    /// `alpha` lerp like the sprite it floats over; a raw tick anchor
+    /// steps while the interpolated sprite glides).
+    rival_tags_prev: Vec<mgc_sim::engine::world::RivalView>,
+    rival_tags_cur: Vec<mgc_sim::engine::world::RivalView>,
     /// Ticks since the mouse last moved — the retail MC2 "fly
     /// assistant" (PlayerInput.cpp:2001-09): 0x30 idle polls with no
     /// action pending recenter the cursor, i.e. our virtual stick.
@@ -1874,6 +1880,8 @@ impl App {
             session: None,
             cfg,
             jar_markers: Vec::new(),
+            rival_tags_prev: Vec::new(),
+            rival_tags_cur: Vec::new(),
             stick_idle_ticks: 0,
             subtitle: None,
             pending_full_stop: false,
@@ -2104,6 +2112,8 @@ impl App {
         self.exit_confirm = false;
         self.subtitle = None;
         self.jar_markers = Vec::new();
+        self.rival_tags_prev = Vec::new();
+        self.rival_tags_cur = Vec::new();
         self.castle_pos = None;
         self.last_map_tick = None;
         self.accumulator = 0.0;
@@ -3274,6 +3284,8 @@ impl App {
         self.castle_pos = None;
         self.subtitle = None;
         self.jar_markers = Vec::new();
+        self.rival_tags_prev = Vec::new();
+        self.rival_tags_cur = Vec::new();
         self.last_map_tick = None;
         self.quit_fade = None;
         self.pane_bound = [None; 2];
@@ -3657,10 +3669,13 @@ impl App {
             };
             // Beyond-Sight rival position markers (interim for the
             // retail name labels — DrawText track).
-            level.map_dots.extend(entities::rival_markers(
-                &w.rival_views(),
-                w.beyond_sight_tier(),
-            ));
+            let rival_views = w.rival_views();
+            level
+                .map_dots
+                .extend(entities::rival_markers(&rival_views, w.beyond_sight_tier()));
+            // The rival tag's smooth-motion pair: this snapshot and
+            // the one before it (drawn lerped by the sub-tick alpha).
+            self.rival_tags_prev = std::mem::replace(&mut self.rival_tags_cur, rival_views);
             self.castle_pos = poses
                 .iter()
                 .find(|p| p.class == 3 && p.model == 2 && p.player_owned)
@@ -5660,6 +5675,98 @@ impl App {
                     }
                 }
             }
+            // The rival wizard tags: retail MC2's boxed name +
+            // health bar in the rival's team color, floated over
+            // every VISIBLE rival wizard sprite, always — retail's
+            // "Player Names" toggle ships ON and nothing else gates
+            // it: not damage, not lock, not distance
+            // (DrawSorcererNameAndHealthBar_2CB30 via the sprite-pass
+            // hook, remc2 GameRenderHD.cpp:5010-17 — class 3, model
+            // 0/1 only, so buildings/creatures never tag). "Visible"
+            // = the sprite draws: an invisible rival's sprite is
+            // skipped, and beyond the fog wall nothing draws, hence
+            // the fog cut. MC1 shows these only under the
+            // rival_tags=on opt-in (retail MC1 has no such tag).
+            if self.cfg.render.preference.rival_tags.resolve(is_mc2) && !self.book_open() {
+                if let Some(u) = &sess.level.ui {
+                    if u.has_font() && !self.rival_tags_cur.is_empty() {
+                        let colors = entities::roster_team_colors(
+                            sess.level.game,
+                            sess.level.mc2_env,
+                            &sess.level.palette_rgba,
+                        );
+                        let chrome = entities::rival_tag_chrome(
+                            sess.level.game,
+                            sess.level.mc2_env,
+                            &sess.level.palette_rgba,
+                        );
+                        let s = ui::HudFrame::new(size.0, size.1).s;
+                        // The anchor rides the wizard sprite: its top
+                        // approximated as this much above the entity
+                        // datum (tiles), then retail's 20px lift
+                        // (GameRenderHD.cpp:2841).
+                        const WIZ_TOP: f32 = 0.6;
+                        for r in &self.rival_tags_cur {
+                            if !r.alive || r.invisible {
+                                continue;
+                            }
+                            // Sub-tick lerp against the previous
+                            // snapshot (slot-keyed, torus-wrapped;
+                            // respawn-scale jumps snap, the smooth-
+                            // motion law).
+                            let (mut x, mut alt, mut z) = (r.x, r.alt, r.z);
+                            if let Some(p) = self.rival_tags_prev.iter().find(|p| p.slot == r.slot)
+                            {
+                                let wrap = |d: f32| {
+                                    if d > 128.0 {
+                                        d - 256.0
+                                    } else if d < -128.0 {
+                                        d + 256.0
+                                    } else {
+                                        d
+                                    }
+                                };
+                                let (dx, dz) = (wrap(x - p.x), wrap(z - p.z));
+                                if dx * dx + dz * dz < 4.0 {
+                                    x = (p.x + dx * alpha).rem_euclid(256.0);
+                                    alt = p.alt + (alt - p.alt) * alpha;
+                                    z = (p.z + dz * alpha).rem_euclid(256.0);
+                                }
+                            }
+                            if fog_cut(&cam, x, alt, z, fog_wall) {
+                                continue;
+                            }
+                            let Some((sx, sy)) = mgc_render::world_to_screen(
+                                &cam,
+                                size.0,
+                                size.1,
+                                x,
+                                alt + WIZ_TOP,
+                                z,
+                            ) else {
+                                continue;
+                            };
+                            // Retail bails when the anchor leaves the
+                            // viewport (GameRenderHD.cpp:2842-44).
+                            if sx < 0.0 || sx >= size.0 || sy < 20.0 * s || sy >= size.1 {
+                                continue;
+                            }
+                            ui::rival_tag_quads(
+                                &mut quads,
+                                u,
+                                r.name,
+                                r.life_frac,
+                                colors[(r.slot as usize).min(7)].0,
+                                &chrome,
+                                sx,
+                                sy - 20.0 * s,
+                                s,
+                                size.0,
+                            );
+                        }
+                    }
+                }
+            }
             // The aim crosshair (`render.preference.crosshair`,
             // C toggles — the gameplay aim cursor, and under
             // enhanced thrust the chase-steering target) and
@@ -7147,6 +7254,8 @@ struct Args {
     map_view: bool,
     /// Spell-selector surface override (config `spell_selector`).
     spell_selector: Option<config::SpellSelector>,
+    /// In-view rival tag override (config `render.preference.rival_tags`).
+    rival_tags: Option<config::RivalTags>,
     /// Narration-subtitle override (config `audio.subtitles`).
     subtitles: Option<config::Subtitles>,
     /// Fog view-distance override in tiles (config
@@ -7226,6 +7335,7 @@ fn parse_args() -> Result<Args, String> {
     let mut map_scale = 4u32;
     let mut map_view = false;
     let mut spell_selector = None;
+    let mut rival_tags = None;
     let mut subtitles = None;
     let mut fog_distance = None;
     let mut sky = None;
@@ -7468,6 +7578,14 @@ fn parse_args() -> Result<Args, String> {
                     _ => return Err("--spell-selector needs auto|mc1|mc2|mc1+mc2".into()),
                 });
             }
+            "--rival-tags" => {
+                rival_tags = Some(match it.next().as_deref() {
+                    Some("auto") => config::RivalTags::Auto,
+                    Some("on") => config::RivalTags::On,
+                    Some("off") => config::RivalTags::Off,
+                    _ => return Err("--rival-tags needs auto|on|off".into()),
+                });
+            }
             "--fog-distance" => {
                 let n: u32 = it
                     .next()
@@ -7535,6 +7653,7 @@ fn parse_args() -> Result<Args, String> {
                      [--thrust classic|enhanced] [--altitude classic|enhanced] \
                      [--bindings classic|wasd] \
                      [--spell-selector auto|mc1|mc2|mc1+mc2] \
+                     [--rival-tags auto|on|off] \
                      [--subtitles on|off] [--fog-distance TILES (0 = no fog)] \
                      [--sky|--no-sky] [--reflections|--no-reflections] \
                      [--light-sources|--no-light-sources] \
@@ -7584,6 +7703,7 @@ fn parse_args() -> Result<Args, String> {
         map_scale,
         map_view,
         spell_selector,
+        rival_tags,
         subtitles,
         fog_distance,
         sky,
@@ -8689,6 +8809,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     }
     if let Some(v) = args.spell_selector {
         cfg.gameplay.enhancement.spell_selector = v;
+    }
+    if let Some(v) = args.rival_tags {
+        cfg.render.preference.rival_tags = v;
     }
     if let Some(v) = args.subtitles {
         cfg.audio.subtitles = v;

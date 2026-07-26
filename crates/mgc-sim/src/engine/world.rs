@@ -914,6 +914,9 @@ pub struct RivalView {
     /// Live position, tile units.
     pub x: f32,
     pub z: f32,
+    /// Live altitude, tile units (wizards fly — ground height cannot
+    /// stand in). Anchors the in-view rival tag.
+    pub alt: f32,
     pub mana: u32,
     pub mana_max: u32,
     pub life_frac: f32,
@@ -4722,6 +4725,7 @@ impl World {
                 eliminated: r.eliminated,
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
+                alt: e.z as f32 / 256.0,
                 mana: r.mana,
                 mana_max: r.mana_max,
                 life_frac: if e.max_life > 0 {
@@ -4742,6 +4746,7 @@ impl World {
                 eliminated: r.eliminated,
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
+                alt: e.z as f32 / 256.0,
                 mana: r.mana,
                 mana_max: r.mana_max,
                 life_frac: if e.max_life > 0 {

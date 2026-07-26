@@ -321,6 +321,49 @@ polish track; the sim state is faithful, so no golden is affected.
 
 ---
 
+## MC2 rival wizard tags (name + health bar) — LANDED, with named gaps
+
+**Original.** `DrawSorcererNameAndHealthBar_2CB30` (remc2
+GameRenderHD.cpp:2797-2879, hooked from the sprite pass at :5010-17):
+every drawn class-3 model-0/1 sprite wears a boxed name + 2px health
+row, gated ONLY on the "Player Names" toggle (default ON,
+PlayerInput.cpp:1503) — never on damage, lock or distance. Box =
+8·len+6 × 18 px (640 frame), 2px bevel (map-type chrome
+`str_D94F0_bldgprmbuffer[MapType][{0,2,3}]`), name at left+4, bar at
+top+14 with fill `floor(life·(w−2)/max)`; name ink and fill share the
+team color `playersColors_E88E0x[slot][0]` (identity slot map in
+single player — NOT the art order), empty bar = palette[0]. The tag
+anchors left edge at the sprite's horizontal center, top 20 px above
+the sprite top.
+
+**Port.** `ui::rival_tag_quads` + `entities::rival_tag_chrome` +
+the lib.rs overlay block (anchored via `world_to_screen` on
+`RivalView.{x,alt,z}`), option `render.preference.rival_tags`
+(auto* = per-game faithful / on = MC1 opt-in / off = retail MC2's
+toggle off). The debug `render.debug.health_bars` stays a separate
+instrument.
+
+**Verified.** Retail law traced with full citations (agent sweep
+2026-07-26, all three renderer backends identical); chrome indices
+pinned by `rival_tag_chrome_resolution`; MC2_TEAM_* column-0 tables
+re-checked against the decompile dump.
+
+**Deviations & interims.**
+- FONT1 is proportional where retail reserves monospace 8px cells:
+  the box hugs the true text width; ink drawn at y+3 scaled into the
+  11px interior band (retail's glyph cells carry their own leading).
+- The anchor approximates "sprite top" as entity altitude + 0.6
+  tiles before the retail 20px lift (we project the entity datum,
+  not the rasterized sprite rect) — tune `WIZ_TOP` on playtest.
+- The tag rides the smooth-motion sub-tick lerp (presentation
+  enhancement, matches the sprite it floats over).
+- MC1's opt-in chrome carries Day-row constants pre-sampled from
+  PALD-0.DAT (MC1 levels have no MC2 palette to resolve through).
+- Retail's multiplayer-only `GetTrueWizardNumber` slot remap is not
+  modeled (single-player identity is).
+
+---
+
 ## MC2 worm chain link length — APPROX floor 96 (provenance OPEN)
 
 **Original.** The multipart worm's link spacing derives from the

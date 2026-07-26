@@ -870,6 +870,74 @@ pub(crate) fn solid_screen(rect: [f32; 4], tint: [f32; 4]) -> UiQuad {
     }
 }
 
+/// The rival wizard tag — retail MC2's boxed name + health bar
+/// (`DrawSorcererNameAndHealthBar_2CB30`, remc2 GameRenderHD.cpp:
+/// 2797-2879), drawn over every visible rival wizard sprite. Layout is
+/// retail's, in 640-native units × `s`, anchored like retail: the box's
+/// LEFT edge at the sprite's horizontal center (`(a4>>1) + a2`, :2833),
+/// its top 20 px above the sprite top (:2841). Box = name width + 6
+/// wide × 18 tall over a background fill, with a 2 px bevel (top/left
+/// light, bottom/right dark, :2861-65), the name 4 px in (:2866), and
+/// the 2 px health row at y+14: backdrop then the filled width
+/// `floor(life · (w−2) / max)` in the team color (:2867-74). The name
+/// and the fill share ONE color — the rival's team color. Retail
+/// truncates the name (and box) against the viewport's right edge − 4
+/// (:2848-55); reproduced by dropping tail bytes until the box fits.
+///
+/// Deviations, both forced by the font: retail reserves a monospace
+/// 8 px/char cell where FONT1 is proportional (the box hugs the real
+/// text width), and the ink sits at y+3 scaled to the 11 px interior
+/// band instead of retail's y+0 (retail's glyph cells carry the
+/// leading that lands them inside the bevel; FONT1's masks are tight).
+#[allow(clippy::too_many_arguments)]
+pub fn rival_tag_quads(
+    quads: &mut Vec<UiQuad>,
+    assets: &UiAssets,
+    name: &str,
+    life_frac: f32,
+    team: [f32; 4],
+    chrome: &crate::entities::TagChrome,
+    sx: f32,
+    sy: f32,
+    s: f32,
+    right_edge: f32,
+) {
+    // FONT1 is 320-native; the retail tag is authored in the 640
+    // frame, so glyphs run at 2× — the toast law (`lib.rs` toast
+    // block) — capped so the ink stays inside the 11 px band between
+    // the top bevel and the bar row.
+    let font_s = (11.0 / assets.font_line_height()).min(2.0);
+    let mut name = name;
+    let (mut inner, mut tw);
+    loop {
+        tw = assets.text_width(name) * font_s;
+        inner = tw + 4.0;
+        if name.is_empty() || sx + (inner + 2.0) * s <= right_edge - 4.0 * s {
+            break;
+        }
+        name = &name[..name.len() - 1];
+    }
+    if name.is_empty() {
+        return;
+    }
+    let r = |x: f32, y: f32, w: f32, h: f32| [sx + x * s, sy + y * s, w * s, h * s];
+    // Background, then the bevel frame (top/left light, bottom/right
+    // dark), retail's paint order.
+    quads.push(solid(r(0.0, 0.0, inner + 2.0, 18.0), chrome.bg));
+    quads.push(solid(r(0.0, 0.0, inner + 2.0, 2.0), chrome.bevel_tl));
+    quads.push(solid(r(0.0, 16.0, inner + 2.0, 2.0), chrome.bevel_br));
+    quads.push(solid(r(0.0, 0.0, 2.0, 16.0), chrome.bevel_tl));
+    quads.push(solid(r(inner, 0.0, 2.0, 18.0), chrome.bevel_br));
+    quads.extend(assets.text_quads(name, sx + 4.0 * s, sy + 3.0 * s, team, font_s * s));
+    quads.push(solid(r(2.0, 14.0, inner - 2.0, 2.0), chrome.bar_empty));
+    // Retail's integer fill width, floored in the 640 frame before
+    // scaling (:2870).
+    let fill = (life_frac.clamp(0.0, 1.0) * (inner - 2.0)).floor();
+    if fill > 0.0 {
+        quads.push(solid(r(2.0, 14.0, fill, 2.0), team));
+    }
+}
+
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 /// Unowned spell icons: the icon's outer SHAPE used as a mask, filled
 /// with a dark TRANSLUCENT ink so the stone-slab texture shows through,

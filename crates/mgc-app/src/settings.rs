@@ -732,6 +732,51 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Render,
+            group: "render · preference",
+            label: "rival_tags",
+            // A Preference with a per-game faithful reading: retail
+            // MC2 draws the tag over every visible rival wizard and
+            // ships its "Player Names" toggle ON; retail MC1 has no
+            // tag at all. `auto` IS each game's faithful surface;
+            // `on` deviates only in MC1 (the opt-in), `off` is retail
+            // MC2's own toggle position.
+            class: Preference,
+            key: None,
+            cli: Some("--rival-tags"),
+            cfg_path: "render.preference.rival_tags",
+            read: |c| Val::Choice {
+                cur: match c.render.preference.rival_tags {
+                    crate::config::RivalTags::Auto => 0,
+                    crate::config::RivalTags::On => 1,
+                    crate::config::RivalTags::Off => 2,
+                },
+                faithful: 0,
+                variants: &["auto", "on", "off"],
+            },
+            desc: "The rival wizard tags in the 3D view: each visible rival \
+                   wears a boxed name + health bar in its team color, exactly \
+                   as MC2 draws them. Auto = MC2 only (each game's own retail \
+                   surface); on = MC1 too (an opt-in — retail MC1 never tags \
+                   its rivals); off = no tags (MC2's own Player Names \
+                   toggle, off).",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.render.preference.rival_tags = match i {
+                        1 => crate::config::RivalTags::On,
+                        2 => crate::config::RivalTags::Off,
+                        _ => crate::config::RivalTags::Auto,
+                    }
+                },
+                descs: &[
+                    "MC2 tags its rivals, MC1 doesn't — each game as retail \
+                     shipped it (default).",
+                    "Both games tag their rivals — MC2's tag brought to MC1.",
+                    "No rival tags anywhere.",
+                ],
+            },
+        },
         // ---- render · enhancement ---------------------------------------
         Spec {
             domain: Render,

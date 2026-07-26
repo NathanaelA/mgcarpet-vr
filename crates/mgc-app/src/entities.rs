@@ -1731,25 +1731,7 @@ pub fn roster_team_colors(
     env: Mc2MapEnv,
     palette: &[[u8; 4]; 256],
 ) -> [([f32; 4], [f32; 4]); 8] {
-    // Solid UI tints are written RAW onto the sRGB swapchain (the
-    // shader returns the tint, the surface encodes) — so a palette
-    // byte fed straight through gets gamma-encoded TWICE and washes
-    // out lighter than the retail framebuffer. Decode sRGB→linear
-    // here so the display round-trips back to the palette color.
-    // (Atlas SPRITES are unaffected: their textures are sRGB-typed
-    // and decode on sample.)
-    let lin = |b: u8| {
-        let c = b as f32 / 255.0;
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let rgba = |idx: u8| {
-        let p = palette[idx as usize];
-        [lin(p[0]), lin(p[1]), lin(p[2]), 1.0]
-    };
+    let rgba = |idx: u8| pal_ui_rgba(palette, idx);
     let tab = if game == GameId::Mc2 {
         match env {
             Mc2MapEnv::Day => MC2_TEAM_DAY,
@@ -1765,6 +1747,71 @@ pub fn roster_team_colors(
         TEAM_COLORS
     };
     tab.map(|(a, b)| (rgba(a), rgba(b)))
+}
+
+/// One sRGB byte decoded to linear. Solid UI tints are written RAW
+/// onto the sRGB swapchain (the shader returns the tint, the surface
+/// encodes) — so a palette byte fed straight through gets
+/// gamma-encoded TWICE and washes out lighter than the retail
+/// framebuffer. Decode here so the display round-trips back to the
+/// palette color. (Atlas SPRITES are unaffected: their textures are
+/// sRGB-typed and decode on sample.)
+fn srgb_lin(b: u8) -> f32 {
+    let c = b as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// A palette index as a linear RGBA solid-UI tint (see [`srgb_lin`]).
+fn pal_ui_rgba(palette: &[[u8; 4]; 256], idx: u8) -> [f32; 4] {
+    let p = palette[idx as usize];
+    [srgb_lin(p[0]), srgb_lin(p[1]), srgb_lin(p[2]), 1.0]
+}
+
+/// The rival tag's box chrome (`DrawSorcererNameAndHealthBar_2CB30`,
+/// remc2 GameRenderHD.cpp:2824-32): box background + top/left bevel +
+/// bottom/right bevel come from the map-type building-parameter row
+/// `str_D94F0_bldgprmbuffer[MapType][{0,2,3}]`
+/// (Type_D94F0_Bldgprmbuffer.cpp:3), the empty health-bar backdrop
+/// from palette index 0 (`m_ptrColorPalette[0]`).
+pub struct TagChrome {
+    pub bg: [f32; 4],
+    pub bevel_tl: [f32; 4],
+    pub bevel_br: [f32; 4],
+    pub bar_empty: [f32; 4],
+}
+
+/// Resolve the tag chrome. MC2 resolves the retail indices through
+/// the LIVE level palette (retail reads its active palette buffer).
+/// MC1 has no MC2 palette in reach, so the opt-in tag carries the Day
+/// row pre-sampled from the retail palette (PALD-0.DAT: 0xAA =
+/// (101,101,101), 0x63 = (158,162,178), 0x0D = (32,28,24), index 0 =
+/// black).
+pub fn rival_tag_chrome(game: GameId, env: Mc2MapEnv, palette: &[[u8; 4]; 256]) -> TagChrome {
+    if game == GameId::Mc2 {
+        let (bg, tl, br) = match env {
+            Mc2MapEnv::Day => (0xAA, 0x63, 0x0D),
+            Mc2MapEnv::Night => (0x33, 0x11, 0x3B),
+            Mc2MapEnv::Cave => (0x33, 0x88, 0x3B),
+        };
+        TagChrome {
+            bg: pal_ui_rgba(palette, bg),
+            bevel_tl: pal_ui_rgba(palette, tl),
+            bevel_br: pal_ui_rgba(palette, br),
+            bar_empty: pal_ui_rgba(palette, 0),
+        }
+    } else {
+        let rgb = |r, g, b| [srgb_lin(r), srgb_lin(g), srgb_lin(b), 1.0];
+        TagChrome {
+            bg: rgb(101, 101, 101),
+            bevel_tl: rgb(158, 162, 178),
+            bevel_br: rgb(32, 28, 24),
+            bar_empty: rgb(0, 0, 0),
+        }
+    }
 }
 
 /// Nearest palette entry by squared RGB distance (the engine's
@@ -2075,6 +2122,37 @@ mod tests {
         let any_dims = |_: u16| Some((32u16, 64u16, 0u16));
         let mc1 = resolve_pose_sprite(GameId::Mc1, 43, &any_dims).unwrap();
         assert_eq!(mc1.sprite_base, SPRITE_STATS[43].sprite_base);
+    }
+
+    /// The rival tag chrome: MC2 resolves the retail bldgprmbuffer
+    /// indices through the LIVE level palette (sRGB-decoded — the
+    /// double-encode trap); MC1's opt-in carries the pre-sampled Day
+    /// constants and ignores the palette entirely.
+    #[test]
+    fn rival_tag_chrome_resolution() {
+        let mut pal = [[0u8; 4]; 256];
+        pal[0xAA] = [10, 20, 30, 255];
+        pal[0x63] = [40, 50, 60, 255];
+        pal[0x0D] = [70, 80, 90, 255];
+        pal[0x33] = [1, 2, 3, 255];
+        pal[0] = [255, 255, 255, 255];
+        let day = rival_tag_chrome(GameId::Mc2, Mc2MapEnv::Day, &pal);
+        assert_eq!(day.bg, pal_ui_rgba(&pal, 0xAA));
+        assert_eq!(day.bevel_tl, pal_ui_rgba(&pal, 0x63));
+        assert_eq!(day.bevel_br, pal_ui_rgba(&pal, 0x0D));
+        assert_eq!(
+            day.bar_empty,
+            pal_ui_rgba(&pal, 0),
+            "empty bar = palette[0]"
+        );
+        let night = rival_tag_chrome(GameId::Mc2, Mc2MapEnv::Night, &pal);
+        assert_eq!(night.bg, pal_ui_rgba(&pal, 0x33), "night row selected");
+        let mc1 = rival_tag_chrome(GameId::Mc1, Mc2MapEnv::Day, &pal);
+        assert_eq!(
+            mc1.bg,
+            [srgb_lin(101), srgb_lin(101), srgb_lin(101), 1.0],
+            "MC1 uses the PALD-0.DAT-sampled constants, not the live palette"
+        );
     }
 
     /// Player-start resolution against the real level-000 package
