@@ -637,6 +637,108 @@ pub fn mc2_move(
 
 // ------------------------------------------------------------ snapshot
 
+/// MC2's barrel roll (`sub_55C60`, remc2 EF:38879-969) — the
+/// both-strafes dodge. A seven-phase spring-settle on the VIEW roll:
+/// wind up through a full turn past the live bank, overshoot +68
+/// units, swing back 35, settle forward at |bank|+2048 — plus the
+/// move's one real mechanic, `sub_55EB0`'s homing-lock break, fired
+/// once at phase 1 and once at the finish. The phase targets re-read
+/// the LIVE |bank| every tick: the roll pins the bank stick centered
+/// (retail zeroes `rollDelta` each tick), the carpet auto-levels
+/// underneath, and the settle tracks it — which is also why the exit
+/// is snap-free: the masked rest angle `(|bank|+2048) & 0x7FF` IS the
+/// live bank. Angle units: 2048 = 360°.
+#[derive(Debug, Clone, Copy, Default, Hash, PartialEq, Eq)]
+pub struct BarrelRoll {
+    /// `byte_0x846`: 0 = idle, 1..=7 = the phase walk, 8 = finish
+    /// (never observed across ticks — 8 resolves the same tick).
+    pub phase: u8,
+    /// `byte_0x847`: spin direction, the bank's sign at phase 1.
+    pub dir: i8,
+    /// `word_0x848`: accumulated roll angle (unmasked; the view
+    /// write masks to 0x7FF).
+    pub angle: i16,
+    /// `word_0x84A`: angular velocity, seeded 91, accel-clamped to
+    /// [11, 68], halved at each phase crossing past 3 (unclamped —
+    /// retail's shift runs outside the clamp block).
+    pub vel: i16,
+}
+
+/// What one [`BarrelRoll::tick`] asks of the sim boundary.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BrollOut {
+    /// Fire the homing-lock break (`sub_55EB0`) this tick.
+    pub lock_break: bool,
+    /// The view roll to publish, masked 0..2047; `None` on the
+    /// finishing tick (retail skips the view write there — the
+    /// normal bank-derived roll resumes).
+    pub view: Option<u16>,
+}
+
+impl BarrelRoll {
+    pub fn active(&self) -> bool {
+        self.phase != 0
+    }
+
+    /// The case-6 start gate (EF:37628-29): arm only from idle — a
+    /// roll in progress swallows the command.
+    pub fn arm(&mut self) {
+        if self.phase == 0 {
+            self.phase = 1;
+        }
+    }
+
+    /// One driver tick (`sub_55C60` body, statement order). `bank` =
+    /// the carpet's live bank stick in angle units (retail
+    /// `roll_0x155_341`); `raw_dx` = this tick's raw mouse-X counts —
+    /// retail re-baselines `byteindex_220` every tick past phase 4,
+    /// so its abort test is exactly a per-tick delta > 16.
+    pub fn tick(&mut self, bank: i16, raw_dx: i16) -> BrollOut {
+        let mut out = BrollOut::default();
+        let n1 = (bank as i32).abs();
+        let (p1, p2, p3): (i32, i16, i32) = match self.phase {
+            1 | 2 => (1, -2, 1024),
+            3 => (1, 1, n1 + 2048),
+            4 => (1, -2, n1 + 2116),
+            5 => (-1, 3, n1 + 2048),
+            6 => (-1, -4, n1 + 2013),
+            7 => (1, 5, n1 + 2048),
+            _ => (0, 0, 0),
+        };
+        if self.phase == 1 {
+            self.dir = if bank >= 0 { 1 } else { -1 };
+            self.vel = 91;
+            self.angle = n1 as i16;
+            self.phase = 2;
+            out.lock_break = true;
+        }
+        self.angle += (p1 * self.vel as i32) as i16;
+        if p2 != 0 {
+            self.vel = (self.vel + p2).clamp(11, 68);
+        }
+        let a = self.angle as i32;
+        if (p1 > 0 && a >= p3) || (p1 < 0 && a <= p3) {
+            self.phase += 1;
+            if self.phase > 3 {
+                self.vel >>= 1;
+            }
+        }
+        if self.phase >= 4 && (raw_dx as i32).abs() > 16 {
+            self.phase = 8;
+        }
+        if self.phase == 8 {
+            out.lock_break = true;
+            // Retail clears only the phase; the rest is dead state
+            // until the next arm re-seeds it. Reset it all so idle
+            // compares equal to pristine (the hash-quiet gate).
+            *self = BarrelRoll::default();
+        } else {
+            out.view = Some(((self.angle as i32 * self.dir as i32) & 0x7FF) as u16);
+        }
+        out
+    }
+}
+
 use crate::snapshot::{Reader, Snap, SnapshotError, Writer};
 
 impl Snap for Mc1State {
@@ -709,6 +811,29 @@ impl Snap for Mc2Row {
     }
 }
 
+impl Snap for BarrelRoll {
+    fn put(&self, w: &mut Writer) {
+        let BarrelRoll {
+            phase,
+            dir,
+            angle,
+            vel,
+        } = self;
+        w.put(phase);
+        w.put(dir);
+        w.put(angle);
+        w.put(vel);
+    }
+    fn get(r: &mut Reader) -> Result<Self, SnapshotError> {
+        Ok(BarrelRoll {
+            phase: r.get()?,
+            dir: r.get()?,
+            angle: r.get()?,
+            vel: r.get()?,
+        })
+    }
+}
+
 impl Snap for Mc2Ext {
     fn put(&self, w: &mut Writer) {
         let Mc2Ext {
@@ -757,6 +882,70 @@ mod tests {
 
     fn step(st: &mut Mc1State, inp: &Mc1Input) -> Mc1Moved {
         mc1_move(st, inp, None, None, &flat_ground, &open_gate)
+    }
+
+    /// The barrel roll from level flight: two lock-break pulses (the
+    /// arm tick and the finish), a full tumble through 180°, the
+    /// spring-settle back to rest, and a clean idle state after —
+    /// the retail phase walk end to end (sub_55C60).
+    #[test]
+    fn barrel_roll_full_tumble_and_two_lock_breaks() {
+        let mut br = BarrelRoll::default();
+        assert!(!br.active());
+        br.arm();
+        assert!(br.active());
+        let (mut breaks, mut ticks, mut past_half) = (0u32, 0u32, false);
+        while br.active() {
+            let out = br.tick(0, 0);
+            breaks += u32::from(out.lock_break);
+            if let Some(v) = out.view {
+                assert!(v < 2048, "view is masked to the 11-bit circle");
+                // The tumble visits the inverted band (a real 360°,
+                // not a wobble).
+                past_half |= (900..1150).contains(&v);
+            }
+            ticks += 1;
+            assert!(ticks < 400, "the phase machine must terminate");
+        }
+        assert_eq!(breaks, 2, "lock break at phase 1 AND at the finish");
+        assert!(past_half, "the roll passes through inverted");
+        // 24 Hz ticks: the settle takes a couple of seconds.
+        assert!((20..200).contains(&ticks), "duration sane: {ticks}");
+        assert_eq!(br, BarrelRoll::default(), "idle state is pristine");
+        // Re-arming works from idle only (EF:37628).
+        br.arm();
+        assert_eq!(br.phase, 1);
+        br.arm();
+        assert_eq!(br.phase, 1, "a running roll swallows the command");
+    }
+
+    /// Direction follows the bank's sign at the arm tick; a hard
+    /// mouse grab (>16 raw counts in a tick) past phase 4 aborts
+    /// straight to the finish, still firing the second lock break.
+    #[test]
+    fn barrel_roll_direction_and_mouse_abort() {
+        let mut br = BarrelRoll::default();
+        br.arm();
+        br.tick(-200, 0);
+        assert_eq!(br.dir, -1, "negative bank spins negative");
+        assert_eq!(br.vel, 68, "seed 91 accel-clamps to 68 immediately");
+
+        let mut br = BarrelRoll::default();
+        br.arm();
+        let mut ticks = 0;
+        while br.active() && br.phase < 4 {
+            br.tick(0, 0);
+            ticks += 1;
+            assert!(ticks < 400);
+        }
+        assert!(br.active(), "phase 4 reached while still rolling");
+        // Small drift never aborts; the grab does, on the spot.
+        let out = br.tick(0, 16);
+        assert!(br.active() && !out.lock_break, "16 is under the gate");
+        let out = br.tick(0, 17);
+        assert!(out.lock_break, "the abort fires the finish pulse");
+        assert!(!br.active());
+        assert!(out.view.is_none(), "the finish tick skips the view write");
     }
 
     #[test]

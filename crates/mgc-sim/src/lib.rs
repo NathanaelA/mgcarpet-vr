@@ -134,6 +134,15 @@ pub struct FlightInput {
     pub respawn: bool,
     /// The demolish key (Shift+L; the unique control word 48).
     pub demolish: bool,
+    /// MC2's barrel roll trigger — both strafe keys pressed the same
+    /// tick from neutral (the app's edge detect mirrors retail's
+    /// prev-frame strafe byte, PlayerInput.cpp:2080-97 → command bit
+    /// 0x80). Ignored off-MC2.
+    pub barrel_roll: bool,
+    /// Raw mouse-X counts accumulated this tick (unscaled device
+    /// units) — the roll's abort sense: a per-tick |dx| > 16 means
+    /// the player grabbed the stick (sub_55C60 EF:38951-56).
+    pub raw_dx: i16,
 }
 
 /// The carpet: position in tile units, velocity in tiles/second.
@@ -280,6 +289,10 @@ pub struct Simulation {
     /// ceiling (the level's highest terrain + the 4-tile soft-ceiling
     /// margin) instead of the per-game ground-relative band.
     pub lift_unclamped: bool,
+    /// MC2's barrel roll driver state (`sub_55C60`) — see
+    /// [`flight::BarrelRoll`]. Idle (all-default) off-MC2 and between
+    /// rolls; hash-quiet at rest so pinned goldens stay unmoved.
+    broll: flight::BarrelRoll,
     /// 256x256 height bytes, row-major `y * 256 + x`; empty means flat.
     /// The static fallback when no [`world::World`] is attached.
     terrain_height: Vec<u8>,
@@ -341,6 +354,7 @@ impl Simulation {
             aim_lead,
             lift_desired,
             lift_unclamped,
+            broll,
             terrain_height,
             world: attached,
         } = self;
@@ -370,6 +384,13 @@ impl Simulation {
         aim_lead.to_bits().hash(&mut h);
         lift_desired.hash(&mut h);
         lift_unclamped.hash(&mut h);
+        // Hash-quiet at rest (the transparent-at-pristine law): the
+        // pinned goldens predate the barrel roll; a LIVE roll stamps a
+        // tag byte (aliasing guard) + the driver state.
+        if broll.active() {
+            11u8.hash(&mut h);
+            broll.hash(&mut h);
+        }
         terrain_height.hash(&mut h);
         // Folded, not re-derived: the world keeps its own pinned
         // goldens and this tier adds to them.
@@ -387,6 +408,13 @@ impl Simulation {
             ThrustModel::Enhanced => self.flyer.yaw + self.aim_lead,
             ThrustModel::Mc1 => self.flyer.yaw,
         }
+    }
+
+    /// Whether the MC2 barrel roll is running. The app recenters its
+    /// virtual stick / mouse-yaw accumulator while it is (retail's
+    /// `rollDelta` zero recenters the mouse stick the same way).
+    pub fn barrel_rolling(&self) -> bool {
+        self.broll.active()
     }
 
     /// Ground altitude in tile units at a world position (nearest tile;
@@ -551,6 +579,28 @@ impl Simulation {
         if end_seized {
             input = FlightInput::default();
         }
+
+        // MC2's barrel roll: the case-6 start gate arms only from
+        // idle (EF:37628-29) — a roll in progress swallows the
+        // command — and only on an MC2 world (retail MC1 has no such
+        // move). While a roll runs, the bank stick is pinned centered
+        // (retail zeroes `rollDelta` every driver tick, EF:38957) —
+        // X only, the pitch stick stays live. The START tick's move
+        // still sees the live stick, like retail: the driver's zero
+        // runs after the move.
+        let rolling_before = self.broll.active();
+        if input.barrel_roll
+            && self
+                .world
+                .as_ref()
+                .is_some_and(|w| w.verbs().flight == verbs::FlightVerb::Mc2)
+        {
+            self.broll.arm();
+        }
+        if rolling_before {
+            input.stick_x = 0;
+            input.yaw_delta = 0.0;
+        }
         let input = &input;
 
         // The Accelerate cancel reads the tick's raw thrust input
@@ -608,6 +658,33 @@ impl Simulation {
                 }
             }
             ThrustModel::Enhanced => self.move_enhanced(input),
+        }
+
+        // The barrel-roll driver runs after the move, like retail's
+        // per-player frame tail (sub_57B20 then sub_55C60,
+        // EF:38081-82). The tumble overrides the bank-derived flyer
+        // roll for the frame; the finishing tick skips the write
+        // (retail's phase-8 arm), so the normal bank publish resumes
+        // seam-free — the masked rest angle `(|bank|+2048) & 0x7FF`
+        // IS the live bank.
+        if self.broll.active() {
+            const ROLL_RAD: f32 = std::f32::consts::TAU / 2048.0;
+            let bank = match self.thrust_model {
+                ThrustModel::Mc1 => self.carpet.roll_f,
+                // The enhanced bank is a derived float — feed it back
+                // in angle units so the phase targets track it the
+                // same way.
+                ThrustModel::Enhanced => (self.flyer.roll / ROLL_RAD) as i16,
+            };
+            let out = self.broll.tick(bank, input.raw_dx);
+            if out.lock_break
+                && let Some(w) = &mut self.world
+            {
+                w.mc2_break_player_locks();
+            }
+            if let Some(v) = out.view {
+                self.flyer.roll = v as f32 * ROLL_RAD;
+            }
         }
 
         // The death fall (sub_45FC0 :55466-77): gravity −2/tick²

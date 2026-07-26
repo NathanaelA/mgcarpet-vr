@@ -137,6 +137,18 @@ fn play(s: &mut Simulation) {
             },
         ),
         (60, FlightInput::default()),
+        // Arm the MC2 barrel roll and stop TEN ticks in, so the MC2
+        // snapshot below is taken MID-ROLL and the divergence loop
+        // proves the driver state survives the codec (MC1 worlds
+        // ignore the command — the flight-verb gate).
+        (
+            1,
+            FlightInput {
+                barrel_roll: true,
+                ..Default::default()
+            },
+        ),
+        (10, FlightInput::default()),
     ];
     for (n, input) in legs {
         for _ in 0..n {

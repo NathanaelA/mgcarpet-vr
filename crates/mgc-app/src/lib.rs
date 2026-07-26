@@ -1667,6 +1667,14 @@ struct App {
     keys: HeldKeys,
     mouse: MouseAccum,
     stick: VirtualStick,
+    /// Last tick's (strafe-left, strafe-right) held pair — the MC2
+    /// barrel-roll edge detect (retail's prev-frame strafe byte
+    /// `byteindex_183`, PlayerInput.cpp:2088-97): the roll fires only
+    /// when both go down from NEITHER held.
+    prev_strafe: (bool, bool),
+    /// Raw mouse-X counts accumulated since the last sim tick
+    /// (unscaled device units) — the barrel roll's abort sense.
+    roll_dx: f32,
     /// Left/right button held while grabbed: the two casting hands.
     fire_held: bool,
     fire_right_held: bool,
@@ -1908,6 +1916,8 @@ impl App {
             keys: HeldKeys::default(),
             mouse: MouseAccum::default(),
             stick: VirtualStick::default(),
+            prev_strafe: (false, false),
+            roll_dx: 0.0,
             fire_held: false,
             fire_right_held: false,
             grabbed: false,
@@ -3378,12 +3388,43 @@ impl App {
         // the world keeps running).
         let book = (self.book_open() && self.selector.map_book) || self.exit_confirm;
         let mc1 = self.cfg.controls.models.thrust == config::ThrustModel::Classic;
+        // MC2's barrel roll: both strafe keys down this tick with
+        // NEITHER down the last — retail's edge detect against the
+        // prev-frame strafe byte (PlayerInput.cpp:2088-97; you must
+        // press both from neutral, and holding one and tapping the
+        // other does nothing). The sim's flight-verb gate makes the
+        // command MC2-only; the book map swallows it with the rest of
+        // the movement input.
+        let strafes = (k.left && !book, k.right && !book);
+        let barrel_roll = strafes.0 && strafes.1 && !self.prev_strafe.0 && !self.prev_strafe.1;
+        self.prev_strafe = strafes;
+        // While a roll runs, the virtual stick recenters (retail's
+        // driver zeroes `rollDelta` — the mouse stick — every tick,
+        // EF:38957, so the roll ENDS with the stick centered too; a
+        // parked pre-roll deflection must not snap back). X only, the
+        // pitch axis stays live.
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.sim.barrel_rolling())
+        {
+            self.stick.x = 0.0;
+        }
         // Explicit float up/down is the enhanced-altitude tier; the
         // classic altitude model has no vertical control at all.
         let lift_keys = self.cfg.controls.models.altitude == config::AltitudeModel::Enhanced;
         let mut input = FlightInput {
             thrust: axis(k.back, k.forward),
-            strafe: axis(k.left, k.right),
+            // MC2's decode order makes RIGHT win when both strafes
+            // are held (`sub_5F380` evaluates bit 8 last, EF:60793-96
+            // — the drift a retail barrel-roller feels while both
+            // keys are down). MC1's input module is untranscribed, so
+            // it keeps the neutral cancel.
+            strafe: if k.left && k.right && self.is_mc2() {
+                1.0
+            } else {
+                axis(k.left, k.right)
+            },
             lift: if lift_keys { axis(k.down, k.up) } else { 0.0 },
             yaw_delta: axis(k.turn_left, k.turn_right) * key_turn + self.mouse.yaw,
             pitch_delta: axis(k.pitch_down, k.pitch_up) * key_turn + self.mouse.pitch,
@@ -3406,6 +3447,10 @@ impl App {
             full_stop: std::mem::take(&mut self.pending_full_stop),
             respawn: std::mem::take(&mut self.pending_respawn),
             demolish: std::mem::take(&mut self.pending_demolish),
+            barrel_roll,
+            raw_dx: std::mem::take(&mut self.roll_dx)
+                .round()
+                .clamp(i16::MIN as f32, i16::MAX as f32) as i16,
             ..Default::default()
         };
         if mc1 {
@@ -5316,7 +5361,19 @@ impl App {
         // Enhanced: the proportional bank the sim derives from
         // turn_rate × speed (deliberate deviation) — camera
         // roll only, the HUD stays screen-space level.
-        let roll = a.roll + (b.roll - a.roll) * alpha;
+        // Shortest arc: during a barrel roll the sim publishes the
+        // tumble masked to [0, 2π) (retail's & 0x7FF view write), so
+        // the wrap tick would lerp the long way round without this.
+        // Ordinary banking has |dr| ≈ 0 and is untouched.
+        let roll = {
+            let mut dr = b.roll - a.roll;
+            if dr > std::f32::consts::PI {
+                dr -= std::f32::consts::TAU;
+            } else if dr < -std::f32::consts::PI {
+                dr += std::f32::consts::TAU;
+            }
+            a.roll + dr * alpha
+        };
         let (view_pitch, view_roll) = match self.cfg.controls.models.thrust {
             config::ThrustModel::Classic => (aim * 0.5, roll),
             config::ThrustModel::Enhanced => (aim, roll),
@@ -7178,6 +7235,7 @@ impl ApplicationHandler for App {
                 self.stick.x = (self.stick.x + dx as f32 * s * sx).clamp(-127.0, 127.0);
                 self.stick.y = (self.stick.y - dy as f32 * s * sy).clamp(-127.0, 127.0);
                 self.stick_idle_ticks = 0;
+                self.roll_dx += dx as f32;
             } else {
                 // Mouse-look's native sense is the FPS convention:
                 // flip dy when inverted.
@@ -7185,6 +7243,7 @@ impl ApplicationHandler for App {
                 let s = MOUSE_SENSITIVITY * p.mouse_sensitivity;
                 self.mouse.yaw += dx as f32 * s * sx;
                 self.mouse.pitch -= dy as f32 * s * sy;
+                self.roll_dx += dx as f32;
             }
         }
     }

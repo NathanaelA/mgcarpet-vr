@@ -54,7 +54,7 @@ const MAGIC: u32 = 0x5343_474D;
 /// 4: chase-the-pointer steering replaced the turn-rate damper —
 ///    `turn_grace: u8` left the stream, `aim_lead: f32` joined (any
 ///    v3 saves from the one damper playtest round refuse cleanly).
-pub const SNAPSHOT_VERSION: u32 = 5;
+pub const SNAPSHOT_VERSION: u32 = 6;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,6 +435,7 @@ impl Simulation {
             // Dev config, not game state: re-armed by the app from
             // `dev.lift_unclamped`, never carried through a save.
             lift_unclamped: _,
+            broll,
             terrain_height,
             world,
         } = self;
@@ -462,6 +463,7 @@ impl Simulation {
         w.put(turn_rate);
         w.put(aim_lead);
         w.put(lift_desired);
+        w.put(broll);
         w.put(terrain_height);
         // The world is written inline rather than through `Snap`: it
         // has no `get` side (it cannot be built from the stream, only
@@ -522,6 +524,7 @@ impl Simulation {
         self.turn_rate = r.get()?;
         self.aim_lead = r.get()?;
         self.lift_desired = r.get()?;
+        self.broll = r.get()?;
         self.terrain_height = r.get()?;
         // The world applies onto itself, keeping assets and retile.
         if r.get::<u8>()? != 0 {

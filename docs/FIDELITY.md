@@ -364,6 +364,58 @@ re-checked against the decompile dump.
 
 ---
 
+## MC2 barrel roll — LANDED, with named gaps
+
+**Original.** Both strafe keys pressed the same frame from neutral
+(edge vs the prev-frame strafe byte, PlayerInput.cpp:2080-97) →
+command bit 0x80 → `sub_55C60` (EF:38879-969): a seven-phase
+spring-settle on the VIEW roll only — no displacement, no i-frames,
+no hitbox change (verified negatives; the phase flag has exactly two
+readers engine-wide). The move's one mechanic is `sub_55EB0`
+(EF:38972-98), fired at phase 1 AND the finish: every entity whose
+homing target is the player drops its lock (bucket skip list
+{1, 12..=15, 22..=23}). The driver pins the bank stick centered each
+tick (`rollDelta = 0`), aborts to the finish on a >16-count mouse-X
+grab past phase 4, and holding both keys ALSO strafes right (bit 8
+decodes last, EF:60793-96). MC2 only; the MC1 decompile has no input
+module to check (absence is the faithful default).
+
+**Port.** `flight::BarrelRoll` (verbatim phase machine) driven from
+`Simulation::step` after the move, retail's order; lock-break =
+`World::mc2_break_player_locks` (skip list per entity class over the
+flat pool); trigger + raw-dx + stick recenter in the app's
+`tick_input`/`device_event`; the tumble publishes through
+`flyer.roll` (the renderer's camera basis takes any angle). Gated by
+the MC2 flight verb — no config option (always-on, like retail; a VR
+comfort gate is the VR fork's call). Hash-quiet at rest (TAG 11);
+`SNAPSHOT_VERSION` 5 → 6.
+
+**Verified.** Phase-machine unit tests (full tumble, two lock-break
+pulses, direction from bank sign, seed-91-clamps-to-68, mouse abort);
+lock-break pool test (player locks drop, third-party and skipped-class
+locks survive); end-to-end baked-level tests (MC2 rolls and settles,
+MC1 refuses); the snapshot acceptance now plays its MC2 fixture INTO
+a mid-roll snapshot and holds hash equality 600 ticks after restore.
+Goldens unmoved (hash-quiet at rest; no fixture rolls).
+
+**Deviations & interims.**
+- The abort window is one 24 Hz tick where retail's was one render
+  frame — the 16-count constant is kept, so abort sensitivity scales
+  with the frame/tick ratio. Playtest dial if rolls cut short.
+- The app recenters the virtual stick on every roll tick (retail
+  zeroes its `rollDelta` stick the same way; the visible difference
+  is only that our pre-roll stick deflection cannot be preserved —
+  retail's couldn't either).
+- Enhanced thrust: the derived float bank feeds the phase targets in
+  angle units, and the suppressed steering is the mouse-yaw channel —
+  the enhancement's analog of the bank stick.
+- MC1 keeps the both-strafes neutral cancel (its retail decode order
+  is untranscribed); MC2 now decodes right-wins, as retail.
+- The camera roll lerp takes the shortest arc (presentation; the
+  masked tumble wraps 2047→0 once per revolution).
+
+---
+
 ## MC2 worm chain link length — APPROX floor 96 (provenance OPEN)
 
 **Original.** The multipart worm's link spacing derives from the

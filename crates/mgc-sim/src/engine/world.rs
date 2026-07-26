@@ -7922,6 +7922,24 @@ impl World {
     /// Smite every live (class, model) pool entity — life to -1, the
     /// death paths run normally next tick (test/dev instrument for
     /// exercising kill objectives without marksmanship; a level-grind
+    /// The barrel roll's homing-lock break (`sub_55EB0`, remc2
+    /// EF:38972-98): every entity hunting the PLAYER drops its lock —
+    /// the roll's one real mechanic, fired once at phase 1 and once
+    /// at the finish. Retail walks the per-class list heads 0..28 and
+    /// skips buckets {1, 12..=15, 22..=23}; our pool is flat, so the
+    /// skip list applies per entity class. Not permanent: the
+    /// acquisition scans re-lock next tick if the player is still the
+    /// best target (which is why the manual's "dodge" is a beat of
+    /// grace, not immunity).
+    pub fn mc2_break_player_locks(&mut self) {
+        use crate::mc1::mobs::PLAYER_TARGET;
+        for e in self.g.ent.iter_mut().skip(1) {
+            if e.f146 == PLAYER_TARGET && !matches!(e.class64, 1 | 12..=15 | 22 | 23) {
+                e.f146 = 0;
+            }
+        }
+    }
+
     /// checklist tool). Returns how many were hit.
     #[doc(hidden)]
     pub fn debug_smite(&mut self, class: u8, model: u8) -> usize {
@@ -13080,6 +13098,30 @@ mod tests {
         for k in 0..8u16 {
             assert!(w.aim_preview(pose(k * 256))[1].is_none());
         }
+    }
+
+    /// The barrel roll's homing-lock break (`sub_55EB0`, EF:38972-98):
+    /// entities hunting the PLAYER drop their lock; the retail bucket
+    /// skip list {1, 12..=15, 22..=23} keeps its classes' links
+    /// intact; third-party locks (a slot index) are untouched.
+    #[test]
+    fn mc2_barrel_roll_lock_break_drops_player_locks() {
+        use crate::mc1::mobs::PLAYER_TARGET;
+        let mut w = mc2_flat_world();
+        let a = w.g.mc2_spawn_m9(112 << 8, 110 << 8, 3200).expect("hive");
+        w.g.ent[a].f146 = PLAYER_TARGET;
+        let b = w.g.mc2_spawn_m9(114 << 8, 110 << 8, 3200).expect("hive 2");
+        w.g.ent[b].f146 = a as u16; // hunting a fellow entity
+        let c = w.g.mc2_spawn_m9(116 << 8, 110 << 8, 3200).expect("hive 3");
+        w.g.ent[c].f146 = PLAYER_TARGET;
+        w.g.ent[c].class64 = 14; // a skipped bucket's class
+        w.mc2_break_player_locks();
+        assert_eq!(w.g.ent[a].f146, 0, "the player lock is dropped");
+        assert_eq!(w.g.ent[b].f146, a as u16, "third-party locks survive");
+        assert_eq!(
+            w.g.ent[c].f146, PLAYER_TARGET,
+            "skipped classes keep their links"
+        );
     }
 
     // ---- Phase-4.3 MC2 roster probes ----------------------------------
