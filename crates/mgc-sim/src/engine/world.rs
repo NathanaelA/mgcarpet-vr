@@ -16937,6 +16937,132 @@ mod tests {
         );
     }
 
+    /// The m0 fireball DODGE, full stack (`sub_67CB0` lock →
+    /// `sub_68BD0` arm → `sub_1F0C0` hook + strafe): a player
+    /// fireball that auto-acquires the dragon arms the 32-tick
+    /// alert window; once the bolt enters the radius-4 tile disc
+    /// the head hooks it and strafes `48·timer` units sideways per
+    /// tick — far beyond any idle wander step.
+    #[test]
+    fn mc2_dragon_dodges_a_locked_fireball() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(102, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        let head = w.g.mc2_spawn_m0(x, y, gz).expect("m0 spawns");
+        w.g.ent[head].f58 = 64; // awake — a lock candidate
+        let hz = w.g.ent[head].z;
+        // A player fireball 8 tiles east aimed at the dragon, no
+        // preset target — the first flyer tick auto-acquires.
+        let (bx, by) = (x.wrapping_add(8 * 256), y);
+        let b = w.g.mc2_spawn_bolt(bx, by, hz).expect("bolt spawns");
+        {
+            let aim = Gen::angle_between(bx, by, x, y);
+            let e = &mut w.g.ent[b];
+            e.id24 = PLAYER_TARGET;
+            e.f30 = aim;
+            e.f34 = aim;
+        }
+        assert_eq!(w.g.ent[head].f46, 0, "gate starts cold");
+        let player = away();
+        let (mut hooked, mut strafed) = (false, false);
+        let (mut lx, mut ly) = (x, y);
+        for t in 0..12 {
+            w.tick(player, PlayerCommand::default());
+            if t == 0 {
+                assert!(w.g.ent[head].f46 > 0, "the lock armed the alert window");
+            }
+            if w.g.ent[head].f71 != 0 && w.g.ent[head].f38 == b as u16 {
+                hooked = true;
+            }
+            let (hx, hy) = (w.g.ent[head].x, w.g.ent[head].y);
+            if Gen::dist2_sq(lx, ly, hx, hy) >= 200 * 200 {
+                strafed = true;
+            }
+            (lx, ly) = (hx, hy);
+        }
+        assert!(hooked, "the head hooked the incoming bolt");
+        assert!(strafed, "a >=200-unit strafe tick happened");
+    }
+
+    /// The dodge kinematics, deterministic (`sub_1F0C0`
+    /// EF:11293-11300): first armed call hooks (timer 5), the next
+    /// strafes the HEAD exactly `48·5 = 240` units perpendicular to
+    /// the bolt's heading — side by hooked-index parity, z
+    /// untouched. Cold gate = full no-op.
+    #[test]
+    fn mc2_m0_dodge_strafes_perpendicular_to_the_bolt() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(102, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        let head = w.g.mc2_spawn_m0(x, y, gz).expect("m0 spawns");
+        // A player bolt two tiles east, flying due west at the head.
+        let west = Gen::angle_between(x.wrapping_add(512), y, x, y);
+        let b =
+            w.g.mc2_spawn_bolt(x.wrapping_add(512), y, w.g.ent[head].z)
+                .expect("bolt");
+        w.g.ent[b].id24 = PLAYER_TARGET;
+        w.g.ent[b].f146 = w.g.ent[head].id24;
+        w.g.ent[b].f30 = west;
+        // Cold gate: nothing happens (the sub_68BD0 arm is the only
+        // way in).
+        w.g.m0_dodge(head);
+        assert_eq!(w.g.ent[head].f71, 0, "cold gate = no hook");
+        w.g.ent[head].f46 = 32; // sub_68BD0's arm
+        w.g.m0_dodge(head);
+        assert_eq!(w.g.ent[head].f71, 1, "hooked");
+        assert_eq!(w.g.ent[head].f38, b as u16, "the bolt is the hook");
+        assert_eq!(w.g.ent[head].f44, 5, "5-tick dodge timer");
+        let (hx0, hy0, hz0) = (w.g.ent[head].x, w.g.ent[head].y, w.g.ent[head].z);
+        w.g.m0_dodge(head);
+        let side = if b & 1 != 0 {
+            512u16
+        } else {
+            0u16.wrapping_sub(512)
+        };
+        let yaw = west.wrapping_add(side) & 0x7FF;
+        let mut expect = (hx0, hy0, hz0);
+        Gen::polar_step(&mut expect, yaw, 0, 240);
+        let e = &w.g.ent[head];
+        assert_eq!(
+            (e.x, e.y),
+            (expect.0, expect.1),
+            "48x5 perpendicular strafe"
+        );
+        assert_eq!(e.z, hz0, "pitch 0 — no z component");
+        assert_eq!(e.f44, 4, "timer stepped");
+        assert_eq!(e.f46, 30, "alert window burns per call");
+    }
+
+    /// The kill-credit alias (playtest crash): the hook word
+    /// `word_0x24_36`/f38 doubles as `mc2_state_head`'s death
+    /// latch. A player killing blow writes the out-of-pool
+    /// PLAYER_TARGET sentinel into it while the hook is live, and
+    /// the same-tick dodge must read that as "projectile gone" and
+    /// release — not index the pool with 0xFFFF.
+    #[test]
+    fn mc2_m0_dodge_survives_the_kill_credit_alias() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(102, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        let head = w.g.mc2_spawn_m0(x, y, gz).expect("m0 spawns");
+        w.g.ent[head].f58 = 64;
+        let b =
+            w.g.mc2_spawn_bolt(x.wrapping_add(512), y, w.g.ent[head].z)
+                .expect("bolt");
+        w.g.ent[b].id24 = PLAYER_TARGET;
+        w.g.ent[b].f146 = w.g.ent[head].id24;
+        w.g.ent[head].f46 = 32;
+        w.g.m0_dodge(head);
+        assert_eq!(w.g.ent[head].f71, 1, "hooked");
+        // The killing blow from the out-of-pool human.
+        w.g.ent[head].mail[0] = (1_000_000, PLAYER_TARGET);
+        let player = away();
+        for _ in 0..3 {
+            w.tick(player, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[head].f71, 0, "hook released on the alias");
+    }
+
     /// m22's map spawn grows the (par1/2)-ring spiral tail (signed
     /// offsets ±1..±7, owner-colorized), and a lethal head write
     /// converts the entire chain to mana spheres (state 0xB5).

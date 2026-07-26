@@ -1447,6 +1447,20 @@ impl Gen {
         e.f146 = target;
         e.f34 = yaw;
         e.f36 = pitch;
+        // `sub_68BD0` (EF:55453, called from the lock at EF:54848 —
+        // the big model case only): a lock onto a class-5 model-0
+        // victim arms the dragon's 32-tick dodge-alert window
+        // ([`Gen::m0_dodge`]).
+        if matches!(
+            probe.model,
+            0 | 3 | 4 | 0x12 | 0x13 | 0x16 | 0x1A | 0x1C | 0x1E
+        ) && target != PLAYER_TARGET
+        {
+            let v = target as usize;
+            if self.ent[v].class64 == 5 && self.ent[v].model65 == 0 {
+                self.ent[v].f46 = 32;
+            }
+        }
         if alarm {
             let is_wizard = target == PLAYER_TARGET
                 || (self.ent[target as usize].class64 == 3

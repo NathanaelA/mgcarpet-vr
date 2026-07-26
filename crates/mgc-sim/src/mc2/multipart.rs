@@ -25,17 +25,23 @@
 //!   writhe phase) → f56 — the MC1 worm's own home. The MC2 burn
 //!   mask `byte_0x38_56` (never read at runtime; f28=1 is the
 //!   cross-column admit) is NOT stored for these models.
-//! - `byte_0x46_70` → f71 (m0 hook count · m22 tail length on the
-//!   head / SIGNED ring offset on segments, stored as the u8 cast ·
-//!   m27 branch sub-state).
-//! - `word_0x2C_44` → f44 (m0 orbit timer · m22 spin rate · m27
-//!   speed-mode selector).
+//! - `byte_0x46_70` → f71 (m0 dodge-hook flag · m22 tail length on
+//!   the head / SIGNED ring offset on segments, stored as the u8
+//!   cast · m27 branch sub-state).
+//! - `word_0x2C_44` → f44 (m0 dodge step timer · m22 spin rate ·
+//!   m27 speed-mode selector).
+//! - `fontTypeIndex_0x3D_61` (m0 dodge-alert window) → f46 — the
+//!   effect columns' fontTypeIndex home (flood/tail), free on
+//!   these heads.
 //! - `subSpellIndex_0x2A_42` (m22 serpentine spiral angle) → f46 —
 //!   deviation from the projectile column's f44 home, which m22
 //!   already occupies with `word_0x2C_44`.
 //! - `word_0x24_36` → f38 (m22 rise budget · m27 body exposure
-//!   attacker · m0 lasso ref). Safe: none of these heads run the
-//!   shared inbox that owns f38.
+//!   attacker · m0 hooked-projectile ref). m22/m27 heads never run
+//!   the shared inbox; the m0 head DOES, and its death write
+//!   (`mc2_state_head` kill-credit, retail's own field reuse)
+//!   aliases the hook — [`Gen::m0_dodge`] bounds-guards the read
+//!   (the out-of-pool human sentinel must read as "gone").
 //! - `word_0x96_150` → f146 (m22 head grow timer / segment head-ref
 //!   · m27 branch target). `playerEntityIndex_0x94_148` (the m22
 //!   target player) → dest_x — creatures never carry a portal
@@ -50,15 +56,14 @@
 //!   `animationFrame_0x5C_92` → frame88.
 //!
 //! DELIBERATE APPROXIMATIONS (flagged in place too):
-//! - The m0/m3 tether `sub_1F0C0` is ported WITHOUT its projectile
-//!   lasso body: its gate byte `fontTypeIndex_0x3D_61` is zero from
-//!   the ctor and NO recovered handler ever arms it (trace §1/§8 —
-//!   the lasso is dormant in the recovered retail code). The gate
-//!   check alone is a no-op, so the port omits the whole call.
-//! - m0 state 0x06 / m3 state 0x1E are REAL, table-enabled binary
-//!   functions the decompiler never lifted (trace §0/§3/§4); remc2
-//!   dispatches them as silent no-ops. Held inert — structural
-//!   guess is the flee slot; retail-check banked.
+//! - m0 state 0x06 (`sub_1F2B0`) and its m3 twin state 0x1E
+//!   (`sub_1FA40`) are compiled EMPTY STUBS in the shipped binary
+//!   (files 0x43AB0/0x44240: push ebp/mov ebp,esp/pop ebp/ret —
+//!   docs/AUDIT-STUBBED-ARMS-2026-07-26.md) — the no-op arms are
+//!   FAITHFUL, not guesses. The trace §1/§8 "tether is dormant"
+//!   claim was FALSE — see [`Gen::m0_dodge`]; m3's recovered
+//!   states never call the tether and `sub_68BD0` arms model 0
+//!   only, so m3 keeps no dodge.
 //! - `struct_byte_0xc` group markers (m27 byte[2]/byte[3] bits, the
 //!   m22 byte[2]|=0x20 sound split) are not modeled; the m27
 //!   show/hide of segments (byte[0] bit 0) writes flags bit 0
@@ -418,30 +423,115 @@ impl Gen {
         }
     }
 
-    /// m0 states 0x00-0x07 (docs/traces/mc2-m0-m3-gaps.md §5). The
-    /// tether `sub_1F0C0` is authentically dormant (module doc) —
-    /// only the bob runs beside the primitives.
+    /// `sub_1F0C0` (EF:11259) — the m0 incoming-projectile DODGE.
+    /// Armed on the PROJECTILE side: the class-9 one-shot
+    /// acquisition (`sub_67CB0`) calls `sub_68BD0` (EF:55453),
+    /// which sets the head's alert window `fontTypeIndex_0x3D_61 =
+    /// 32` whenever the lock lands on a class-5 model-0 victim
+    /// (EF:54848 — the only live call site; the trace-bank
+    /// "gate never armed → dormant" claim was wrong). While the
+    /// window runs (decrementing every call, EF:11277-80): with no
+    /// hook, spiral the radius-4 tile disc for a class-9 whose
+    /// homing target is this head and hook it, timer 5
+    /// (EF:11310-42); with a hook live, strafe the HEAD
+    /// perpendicular to the projectile's CURRENT heading — side by
+    /// hooked-index parity, step `48·timer` (240..48, ≈720 units
+    /// total), pitch 0, tile-relinked (EF:11293-11300) — and
+    /// release when the timer expires or the projectile dies
+    /// (EF:11286-89/11304-06). If the window closes mid-dodge the
+    /// hook freezes in place until a fresh arm — retail's own
+    /// residue law.
+    pub(crate) fn m0_dodge(&mut self, i: usize) {
+        let gate = self.ent[i].f46;
+        if gate == 0 {
+            return;
+        }
+        self.ent[i].f46 = gate - 1;
+        if self.ent[i].f71 != 0 {
+            if self.ent[i].f44 == 0 {
+                self.ent[i].f71 = 0;
+                self.ent[i].f38 = 0;
+                return;
+            }
+            // Validity = retail's `v7x <= Entities[0]` gone-check
+            // (EF:11286-89) PLUS an out-of-pool guard: the hook word
+            // word_0x24_36 doubles as the kill-credit latch
+            // (`mc2_state_head` death write, :350 — retail's own
+            // field reuse), and a death tick still reaches this
+            // branch. Retail then reads the KILLER's pool entity
+            // (benign — its player is in-pool); our out-of-pool
+            // human is the PLAYER_TARGET sentinel, which must read
+            // as "gone" → release, not an index.
+            let p = self.ent[i].f38 as usize;
+            if p == 0
+                || p >= self.ent.len()
+                || self.ent[p].act_life < 0
+                || self.ent[p].flags & 0x400 != 0
+            {
+                self.ent[i].f71 = 0;
+                self.ent[i].f38 = 0;
+                return;
+            }
+            let yaw = if self.ent[i].f38 & 1 != 0 {
+                self.ent[p].f30.wrapping_add(512)
+            } else {
+                self.ent[p].f30.wrapping_sub(512)
+            } & 0x7FF;
+            let mut pos = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+            Self::polar_step(&mut pos, yaw, 0, (48 * self.ent[i].f44) as i16);
+            self.move_relink(i, pos.0, pos.1, pos.2);
+            self.ent[i].f44 -= 1;
+        } else {
+            let cx = (self.ent[i].x.wrapping_add(128) >> 8) as u8;
+            let cy = (self.ent[i].y.wrapping_add(128) >> 8) as u8;
+            let my_id = self.ent[i].id24;
+            let mut hooked = 0usize;
+            'scan: for (dx, dy) in self.ring_cells(0, 4) {
+                let t = crate::engine::features::tile(cx.wrapping_add(dx), cy.wrapping_add(dy));
+                let mut j = self.map_entity[t] as usize;
+                while j != 0 {
+                    if self.ent[j].class64 == 9 && self.ent[j].f146 == my_id {
+                        hooked = j;
+                        break 'scan;
+                    }
+                    j = self.ent[j].next20 as usize;
+                }
+            }
+            if hooked != 0 {
+                self.ent[i].f44 = 5;
+                self.ent[i].f71 = self.ent[i].f71.wrapping_add(1);
+                self.ent[i].f38 = hooked as u16;
+            }
+        }
+    }
+
+    /// m0 states 0x00-0x07 (docs/traces/mc2-m0-m3-gaps.md §5):
+    /// primitive → dodge (`sub_1F0C0`) → bob (`sub_1F040`) in
+    /// 0x01/0x02/0x03, per sub_1EF40/1EF70/1EFD0.
     pub(crate) fn m0_tick(&mut self, i: usize, ctx: &MobCtx) {
         match self.ent[i].tick70 - M0_BASE {
             0 => self.mc2_patrol(i, M0_BASE),
             1 => {
                 self.mc2_idle(i, M0_BASE, ctx);
+                self.m0_dodge(i);
                 self.m0_bob(i);
             }
             2 => {
                 if self.mc2_chase_attack(i, M0_BASE, ctx, Self::mc2_atk_bolt) {
                     self.snd(8, i);
                 }
+                self.m0_dodge(i);
                 self.m0_bob(i);
             }
             3 => {
                 self.mc2_pack(i, M0_BASE);
+                self.m0_dodge(i);
                 self.m0_bob(i);
             }
             4 => self.mc2_prekill(i, M0_BASE),
             5 => self.mc2_kill(i),
-            // 0x06 = sub_1F2B0: UNRECOVERED binary function; remc2
-            // dispatches it as a silent no-op (trace §3). Inert.
+            // 0x06 = sub_1F2B0: a compiled EMPTY STUB in the binary
+            // (module doc) — the no-op is faithful.
             6 => {}
             _ => {
                 // 0x07 sub_1F300: 1D5D0 no-op for StageVar2==0, and
@@ -464,7 +554,8 @@ impl Gen {
             3 => self.mc2_pack(i, M3_BASE),
             4 => self.mc2_prekill(i, M3_BASE),
             5 => self.mc2_kill(i),
-            // 0x1E = sub_1FA40: UNRECOVERED (trace §4) — inert.
+            // 0x1E = sub_1FA40: a compiled EMPTY STUB in the binary
+            // (module doc) — the no-op is faithful.
             6 => {}
             _ => {} // 0x1F sub_1FA50: 1D5D0 no-op for StageVar2==0
         }

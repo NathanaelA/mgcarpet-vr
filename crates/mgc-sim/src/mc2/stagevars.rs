@@ -668,17 +668,21 @@ impl World {
         //   CYCLE. Required — the walker's alt law only ever lifts, so
         //   without it a held devil keeps the last high ground's
         //   altitude forever and never hops/cackles.
-        // - m0 (`sub_1F300`: kinds 1-0xA + 0xD/0xE/0x10 tether+bob,
-        //   0x11 bob-only — the tether stays dormant): the VERTICAL
-        //   BOB. Required — retail's floor bounce (+150 below
+        // - m0 (`sub_1F300`: kinds 1-0xA + 0xD/0xE/0x10 dodge+bob,
+        //   0x11 bob-only): the projectile DODGE + the VERTICAL BOB.
+        //   The bob is required — retail's floor bounce (+150 below
         //   ground+256) launches the arc from spawn; without it a held
-        //   dragon hugs the terrain and flies flat, bouncing only after
-        //   release.
+        //   dragon hugs the terrain and flies flat, bouncing only
+        //   after release. The dodge keeps a held dragon evading
+        //   locked-on fireballs like a free one.
         // Other models' +7 tails stay skipped (APPROX, module doc).
         if matches!(kind, 1..=10) && self.g.ent[i].tick70 & 7 == 7 {
             match self.g.ent[i].model65 {
                 21 => self.g.m21_jump(i),
-                0 => self.g.m0_bob(i),
+                0 => {
+                    self.g.m0_dodge(i);
+                    self.g.m0_bob(i);
+                }
                 _ => {}
             }
         }
