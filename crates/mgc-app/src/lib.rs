@@ -3544,8 +3544,8 @@ impl App {
             if !is_mc2 {
                 if input.fire_right || input.fire_left {
 
-                    // The pointer is on the right-hand controller, so we only allow the right click to trigger it.
                     if (self.paused && input.fire_right) {
+                        // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
                        self.mini_click(event_loop);
                         return FlightInput::default();
                     } else if self.screen == Screen::Movie {
@@ -3578,10 +3578,10 @@ impl App {
                             }
                         }
                     } else if input.fire_right {
+                      // The normal main menu pointing is on the right-hand controller, so we only allow the right click to trigger menu items.
                       let size = self.view_size();
                         if let Some(m) = &mut self.mc1menu {
                             m.click(size, self.cursor);
-                            // self.grabbed = true;
                         }
                     }
                 }
@@ -3619,8 +3619,8 @@ impl App {
             }
         }
 
-        // We don't return anything whenwe are paused or in the map view
-        if self.paused || in_mapview {
+        // We don't return anything whenwe are paused or in the map/book view
+        if self.paused || in_bookview {
             return FlightInput::default();
         }
 
@@ -8176,6 +8176,7 @@ fn parse_args() -> Result<Args, String> {
     args.slot = Option::from(1);
     args.fog_distance = Option::from(80);
     args.awake_range = Option::from(80);
+    args.health_bars = Option::from(true);
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
