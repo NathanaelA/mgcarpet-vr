@@ -3476,9 +3476,7 @@ impl App {
     #[cfg(target_os = "android")]
     // On XR the input is polled from the XR session, not the keyboard/mouse.
     // All input from the XR controllers is handled here
-    fn tick_input(&mut self) -> FlightInput {
-        let is_mc2 = self.is_mc2();
-
+    fn tick_input(&mut self, event_loop: &ActiveEventLoop) -> FlightInput {
         let is_mc2 = self.is_mc2();
         let mut grabbed = self.grabbed;
         let mut owned = [false; 26];
@@ -3500,17 +3498,20 @@ impl App {
             };
         }
 
-        // We have to reset grabbed if we are on the map view.
-        let on = if let Some(r) = &mut self.renderer {
+        // We have to reset grabbed if we are on the book/map view (not the MC2 main map screen).
+        let in_bookview = if let Some(r) = &mut self.renderer {
             let on = r.map_view();
             on
         } else {
             false
         };
 
-        // Since our state is  handled a bit differently than the original, we have to make sure that we are grabbing the pointer
-        if on || self.paused {
-            grabbed = true;
+        let mut in_panel = false;
+        // Since our state is handled a bit differently than the original system as we still need inputs
+        // We set a flag if we are in a panel in the game screen
+        if in_bookview || self.paused {
+           // grabbed = true;
+            in_panel = true;
         }
 
         let flyer = self
@@ -3535,29 +3536,67 @@ impl App {
         let pointer = *self.input.as_ref().unwrap().pointer();
         self.pointer_beam = pointer.beam;
 
-        if !grabbed {
+        if !grabbed || in_panel {
             if let Some((px, py)) = pointer.screen_pos {
-                self.cursor = (px, py);
+                self.cursor = (px * 2.0, py * 2.0);
             }
 
             if !is_mc2 {
-                // The  pointer is on the right hand controller, so we only allow the  right click to trigger it.
-                if input.fire_right {
-                    let size = self.view_size();
-                    if let Some(m) = &mut self.mc1menu {
-                        m.click(size, self.cursor);
-                        // self.grabbed = true;
+                if input.fire_right || input.fire_left {
+
+                    // The pointer is on the right-hand controller, so we only allow the right click to trigger it.
+                    if (self.paused && input.fire_right) {
+                       self.mini_click(event_loop);
+                        return FlightInput::default();
+                    } else if self.screen == Screen::Movie {
+                        // Either fire button skips the movie.
+                        if let Some(m) = &mut self.movie {
+                            m.skip();
+                            return FlightInput::default();
+                        }
+                    } else if (in_bookview) {
+                        // Each controller can select its spell.
+                        let owned = self
+                            .session
+                            .as_deref()
+                            .and_then(|s| s.sim.world.as_ref())
+                            .map(|w| w.loadout().owned)
+                            .unwrap_or([false; 24]);
+                        if let Some(spell) = self.hovered {
+                            if owned[spell.0 as usize] {
+                                if input.fire_right {
+                                    self.pending_equip.1 = Some(spell.0);
+                                } else if input.fire_left {
+                                    self.pending_equip.0 = Some(spell.0);
+                                }
+                                if let Some(r) = &mut self.renderer {
+                                    r.set_map_view(false);
+                                }
+                                self.set_grab(true);
+                                self.flush_equip_if_paused();
+                                return FlightInput::default();
+                            }
+                        }
+                    } else if input.fire_right {
+                      let size = self.view_size();
+                        if let Some(m) = &mut self.mc1menu {
+                            m.click(size, self.cursor);
+                            // self.grabbed = true;
+                        }
                     }
                 }
             }
 
-            return FlightInput::default();
+            if (!in_panel) {
+                return FlightInput::default();
+            }
         }
 
         if input.extra_data & 0x02 != 0 {
             // Pause
             self.toggle_menu();
-        } else if input.extra_data & 0x01 != 0 {
+            return FlightInput::default();
+        } else if input.extra_data & 0x01 != 0 && !self.paused {
             // Mini Mab/book
             if let Some(r) = &mut self.renderer {
                 let on = !r.map_view();
@@ -3580,12 +3619,17 @@ impl App {
             }
         }
 
+        // We don't return anything whenwe are paused or in the map view
+        if self.paused || in_mapview {
+            return FlightInput::default();
+        }
+
         input
     }
 
     #[allow(dead_code)]
     #[cfg(not(target_os = "android"))]
-    fn tick_input(&mut self) -> FlightInput {
+    fn tick_input(&mut self, _event_loop: &ActiveEventLoop) -> FlightInput {
         let axis = |neg: bool, pos: bool| (pos as i32 - neg as i32) as f32;
         let k = &self.keys;
         // Keyboard turn rate: radians per tick (enhanced model only).
@@ -5431,7 +5475,7 @@ impl App {
                 Err(e) => eprintln!("render: {e}"),
             }
             if IS_ANDROID {
-                let _input = self.tick_input();
+                let _input = self.tick_input(event_loop);
             }
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -5454,7 +5498,7 @@ impl App {
             // only owns the input. P still pauses if wanted.)
             self.accumulator = 0.0;
             if IS_ANDROID {
-                let _input = self.tick_input();
+                let _input = self.tick_input(event_loop);
             }
         }
 
@@ -5496,7 +5540,7 @@ impl App {
                 let sess = sess!(self);
                 sess.prev_flyer = sess.sim.flyer;
             }
-            let input = self.tick_input();
+            let input = self.tick_input(event_loop);
             sess!(self).sim.step(&input);
             // Smooth-motion snapshot rotation — the entity
             // analogue of prev_flyer above (entities render
