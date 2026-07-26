@@ -5076,7 +5076,6 @@ impl Renderer {
             && self.wave_mode != 0
             && self.ceiling_bind_group.is_none()
             && self.mirror_bind_group.is_some();
-        // && !IS_ANDROID;
         // The mirror pre-pass itself — a full second scene render —
         // only runs when some deep-water tile is within visible
         // reach. With none, no visible fragment can sample the mirror
@@ -5850,8 +5849,12 @@ impl Renderer {
             if self.map_view {
                 // World viewport in the top-right corner: sky fill, then
                 // the terrain, clipped to the rect.
-                let (vx, vy, vw, vh) = view_rect;
+                let (vx, vy, mut vw, mut vh) = view_rect;
                 if vw > 0 && vh > 0 {
+                    if IS_ANDROID {
+                        vw -= 100;
+                        vh -= 100;
+                    }
                     pass.set_viewport(vx as f32, vy as f32, vw as f32, vh as f32, 0.0, 1.0);
                     pass.set_scissor_rect(vx, vy, vw, vh);
                     pass.set_pipeline(&self.fill_pipeline);

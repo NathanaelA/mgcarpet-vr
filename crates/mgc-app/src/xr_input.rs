@@ -343,9 +343,7 @@ impl InputActions {
             extra_data |= 2;
         }
 
-        let pitch_delta = if !grabbed {
-            right.y
-        } else if left.y < 0.0 {
+        let pitch_delta = if left.y < 0.0 {
             0.3
         } else if (left.y > 0.0) {
             -0.3
@@ -411,7 +409,7 @@ impl InputActions {
             thrust: left.y * 4.0,
             strafe: left.x * 4.0,
             yaw_delta: right.x * YAW_RATE_PER_TICK,
-            pitch_delta: pitch_delta, // right.y * PITCH_RATE_PER_TICK,
+            pitch_delta: pitch_delta, 
             fire_left: value(&self.trigger_left) > 0.5,
             fire_right: value(&self.trigger_right) > 0.5,
             respawn: pressed(&self.btn_a),
