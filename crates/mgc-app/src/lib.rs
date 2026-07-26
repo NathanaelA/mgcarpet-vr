@@ -5288,11 +5288,27 @@ impl App {
             let dropped = w.take_pool_exhausted();
             if dropped > 0 {
                 self.pool_dropped_total += dropped;
+                // The (class,model) census at the spike moment is the
+                // forensic: the top occupants name whatever flooded
+                // the pool (player report: exhaustion under dual-hand
+                // lightning with the live count normally modest).
+                let census = w.debug_entity_census(6);
+                let line = census
+                    .iter()
+                    .map(|&(c, m, n)| format!("c{c}m{m}\u{d7}{n}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 println!(
                     "ERROR: entity pool exhausted — {dropped} allocation(s) \
-                     dropped this frame, {} this level (fail-open, as retail)",
+                     dropped this frame, {} this level (fail-open, as retail); \
+                     top occupants: {line}",
                     self.pool_dropped_total
                 );
+                // Name the top occupant's SPAWNER, not just its
+                // species: state / owner / ring-family split.
+                if let Some(&(tc, tm, _)) = census.first() {
+                    println!("       {}", w.debug_entity_drilldown(tc, tm));
+                }
             }
             // The spawn seam's misfit ledger (unknown
             // (class, model) things degraded gracefully) —

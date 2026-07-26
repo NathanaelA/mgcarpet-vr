@@ -8096,6 +8096,82 @@ impl World {
         (cap.saturating_sub(self.g.free.len()), cap)
     }
 
+    /// Live-entity census by `(class, model)`, most-populous first —
+    /// the pool-spike forensic: when the pool exhausts (or the
+    /// entities overlay spikes), the top occupants name the culprit.
+    /// Counts every allocated slot including 0x400-marked entities
+    /// awaiting the reaper (real pool pressure), like
+    /// [`World::debug_entity_pool`].
+    pub fn debug_entity_census(&self, top: usize) -> Vec<(u8, u8, usize)> {
+        let mut counts: std::collections::HashMap<(u8, u8), usize> =
+            std::collections::HashMap::new();
+        for e in self.g.ent.iter().skip(1) {
+            if e.class64 != 0 {
+                *counts.entry((e.class64, e.model65)).or_default() += 1;
+            }
+        }
+        let mut v: Vec<(u8, u8, usize)> = counts.into_iter().map(|((c, m), n)| (c, m, n)).collect();
+        v.sort_by(|a, b| b.2.cmp(&a.2).then((a.0, a.1).cmp(&(b.0, b.1))));
+        v.truncate(top);
+        v
+    }
+
+    /// Drill into one `(class, model)` population: totals by action
+    /// state, by owner, and the ring-family marker count (flag 0x80 —
+    /// blast-ring / spreader / napalm children, vs direct impact
+    /// spawns). Pre-formatted for the exhaustion report so the
+    /// SPAWNER of a flood names itself, not just the species.
+    pub fn debug_entity_drilldown(&self, class: u8, model: u8) -> String {
+        use std::collections::HashMap;
+        let (mut by_state, mut by_owner): (HashMap<u8, usize>, HashMap<u16, usize>) =
+            (HashMap::new(), HashMap::new());
+        let (mut total, mut ring) = (0usize, 0usize);
+        for e in self.g.ent.iter().skip(1) {
+            if e.class64 != class || e.model65 != model {
+                continue;
+            }
+            total += 1;
+            *by_state.entry(e.tick70).or_default() += 1;
+            *by_owner.entry(e.id24).or_default() += 1;
+            if e.flags & 0x80 != 0 {
+                ring += 1;
+            }
+        }
+        let top3 = |m: HashMap<_, usize>| {
+            let mut v: Vec<(String, usize)> = m
+                .into_iter()
+                .map(|(k, n): (u8, usize)| (format!("{k}"), n))
+                .collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.truncate(3);
+            v.into_iter()
+                .map(|(k, n)| format!("{k}\u{d7}{n}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let owners = {
+            let mut v: Vec<(u16, usize)> = by_owner.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.truncate(3);
+            v.into_iter()
+                .map(|(k, n)| {
+                    let who = if k == 0xFFFF {
+                        "player".to_string()
+                    } else {
+                        format!("{k}")
+                    };
+                    format!("{who}\u{d7}{n}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        format!(
+            "c{class}m{model} drilldown: total {total}, ring-family {ring}; \
+             states {}; owners {owners}",
+            top3(by_state)
+        )
+    }
+
     /// Pool diagnostics (debug tooling): free slot count + a minimal
     /// live-event view.
     #[doc(hidden)]
@@ -13218,6 +13294,85 @@ mod tests {
             w.g.ent[goat].act_life, full,
             "the start-island flock survives the level start"
         );
+    }
+
+    /// A sustained DUAL-HAND lightning stream (2 beams per tick, the
+    /// legendary double-handed bolt) has a BOUNDED pool footprint:
+    /// each beam lays ≤ steps·8+1 transient trail segments (freed
+    /// within ~2 ticks by the state-14 pre-decrement law) plus one
+    /// (10,23) blast. Player report 2026-07-27: pool exhaustion
+    /// (hundreds of drops per frame) under double lightning on a
+    /// 3000 pool — this pins the per-stream cost so a regression
+    /// (segment leak, chain runaway) is caught, and documents the
+    /// expected steady-state (~a few hundred entities per game).
+    #[test]
+    fn dual_lightning_stream_pool_footprint_is_bounded() {
+        // ---- MC1: two zigzag bolts per tick, full-length (no
+        // victim — the worst case: max steps, max segments).
+        let mut w = flat_world();
+        let mx = (100u16 << 8) | 128;
+        let my = (100u16 << 8) | 128;
+        let gz = w.g.ground_z(mx, my) as i16;
+        let base = (1..w.g.ent.len())
+            .filter(|&i| w.g.ent[i].class64 != 0)
+            .count();
+        let mut peak = 0usize;
+        for _ in 0..40 {
+            for hand in 0..2u16 {
+                if let Some(b) = w.g.spawn_zigzag(mx + hand * 64, my, gz + 2000) {
+                    let e = &mut w.g.ent[b];
+                    e.id24 = PLAYER_TARGET;
+                    e.f30 = 256 + hand * 32;
+                    e.f34 = e.f30;
+                    e.f44 = 500;
+                    e.f69 = 23;
+                }
+            }
+            w.tick(away(), PlayerCommand::default());
+            let live = (1..w.g.ent.len())
+                .filter(|&i| w.g.ent[i].class64 != 0)
+                .count();
+            peak = peak.max(live);
+        }
+        let footprint = peak - base;
+        assert!(
+            footprint < 700,
+            "MC1 dual stream stays bounded (peak {footprint} above baseline)"
+        );
+        assert_eq!(w.g.exhausted, 0, "no MC1 pool exhaustion in a bare world");
+
+        // ---- MC2: two tier-0 beams per tick, full-length.
+        let mut w = mc2_flat_world();
+        let (mx, my) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(mx, my) as i16;
+        let base = (1..w.g.ent.len())
+            .filter(|&i| w.g.ent[i].class64 != 0)
+            .count();
+        let mut peak = 0usize;
+        for _ in 0..40 {
+            for hand in 0..2u16 {
+                if let Some(b) = w.g.mc2_spawn_cast_proj(9, mx + hand * 64, my, gz + 2000) {
+                    let e = &mut w.g.ent[b];
+                    e.id24 = PLAYER_TARGET;
+                    e.f68 = 10;
+                    e.f69 = 23;
+                    e.f44 = 200;
+                    e.f30 = 256 + hand * 32;
+                    e.f34 = e.f30;
+                }
+            }
+            w.tick(away(), PlayerCommand::default());
+            let live = (1..w.g.ent.len())
+                .filter(|&i| w.g.ent[i].class64 != 0)
+                .count();
+            peak = peak.max(live);
+        }
+        let footprint = peak - base;
+        assert!(
+            footprint < 700,
+            "MC2 dual stream stays bounded (peak {footprint} above baseline)"
+        );
+        assert_eq!(w.g.exhausted, 0, "no MC2 pool exhaustion in a bare world");
     }
 
     /// The tier-0 lightning BEAM's visible trail points at the
