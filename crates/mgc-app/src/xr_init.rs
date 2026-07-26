@@ -45,39 +45,25 @@ pub struct XrContext {
 
 impl XrContext {
     pub fn new(app: &AndroidApp) -> Result<Self, Box<dyn std::error::Error>> {
-        log::info!("XR Init Loading OpenXR runtime new");
+        log::info!("XR Init getting Android activity and JVM pointers");
 
         let activity_ptr: *mut std::ffi::c_void = app.activity_as_ptr();
 
-        log::info!("XR Init Loading OpenXR runtime new 1");
-
         let vm_ptr: *mut std::ffi::c_void = app.vm_as_ptr();
 
-        log::info!("XR Init Loading OpenXR runtime new 2");
-        //let activity_jobject = activity_ptr as jni::sys::jobject;
-
         let platform_info = unsafe { openxr::AndroidPlatformInfo::new(vm_ptr, activity_ptr) };
-
-        log::info!("XR Init Loading OpenXR runtime 2");
 
         // ── 1. Load OpenXR runtime ───────────────────────────────────────────
         log::info!("XR Init Loading OpenXR runtime");
         let xr_entry = unsafe { xr::Entry::load(&platform_info)? };
 
-        log::info!("XR Init Loading OpenXR runtime done");
-
         // ── 2. Create OpenXR instance ────────────────────────────────────────
+        log::info!("XR Init Creating OpenXR instance");
         let mut ext_set = xr::ExtensionSet::default();
 
-        log::info!("XR Init Loading Ext 1");
-
-        // ext_set.khr_vulkan_enable = true;
         ext_set.khr_vulkan_enable2 = true;
-        log::info!("XR Init Loading Ext 2");
 
         ext_set.khr_android_create_instance = true;
-
-        log::info!("XR Init Loading Ext 3");
 
         let xr_instance = xr_entry.create_instance(
             &xr::ApplicationInfo {
@@ -92,56 +78,25 @@ impl XrContext {
             &platform_info,
         )?;
 
-        log::info!("XR Init Loading Create Instance done");
-
         // ── 3. Get the HMD system ────────────────────────────────────────────
         let xr_system = xr_instance.system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)?;
-        log::info!("XR Init Loading Step 3a");
 
         let environment_blend_mode = xr_instance
             .enumerate_environment_blend_modes(xr_system, xr::ViewConfigurationType::PRIMARY_STEREO)
             .unwrap()[0];
 
-        log::info!("XR Init Loading Step 3b");
-
-        //let vk_target_version = vk::make_api_version(0, 1, 1, 0); // Vulkan 1.1 guarantees multiview support
-        //let vk_target_version_xr = xr::Version::new(1, 1, 0);
-
-        log::info!("XR Init Loading Step 3 done");
 
         // ── 4. Validate minimum Vulkan version ───────────────────────────────
         let _vk_reqs = xr_instance.graphics_requirements::<xr::Vulkan>(xr_system)?;
 
-        log::info!("XR Init Loading Step 4");
 
-        /*
-               // ── 5. Query extensions that Vulkan objects must be created with ──────
-               let inst_exts_str = xr_instance.vulkan_legacy_instance_extensions(xr_system)?;
-               log::info!("XR Init Loading Step 5a");
-
-               let dev_exts_str = xr_instance.vulkan_legacy_device_extensions(xr_system)?;
-               log::info!("XR Init Loading Step 5b");
-
-               log::info!("XR VkInstance exts: {inst_exts_str}");
-               log::info!("XR VkDevice exts:   {dev_exts_str}");
-
-               let inst_ext_cstrings = parse_ext_string(&inst_exts_str);
-               let dev_ext_cstrings = parse_ext_string(&dev_exts_str);
-
-               log::info!("XR Init Loading Step 5 done");
-        */
-
-        // ── 6. Create Vulkan instance ────────────────────────────────────────
-
+        // ── 5. Create Vulkan instance ────────────────────────────────────────
         let vk_entry = unsafe { ash::Entry::load()? };
-        log::info!("XR Init Loading Step 6a");
 
         let vk_app_info = vk::ApplicationInfo::default()
             .application_name(c"mgcarpet-vr")
             .application_version(vk::make_api_version(0, 0, 1, 0))
             .api_version(vk::API_VERSION_1_1);
-
-        log::info!("XR Init Loading Step 6b");
 
         let vk_instance = unsafe {
             let vk_instance = xr_instance
@@ -160,16 +115,13 @@ impl XrContext {
             )
         };
 
-        log::info!("XR Init Loading Step 6 done");
-
-        // ── 7. Ask OpenXR which physical device to use ───────────────────────
+        // ── 6. Ask OpenXR which physical device to use ───────────────────────
         let vk_phys_raw = unsafe {
             xr_instance.vulkan_graphics_device(xr_system, vk_instance.handle().as_raw() as _)?
         };
         let vk_physical_device = vk::PhysicalDevice::from_raw(vk_phys_raw as u64);
-        log::info!("XR Init Loading Step 7 done");
 
-        // ── 8. Find a graphics queue family ──────────────────────────────────
+        // ── 7. Find a graphics queue family ──────────────────────────────────
         let queue_family_index = unsafe {
             vk_instance
                 .get_physical_device_queue_family_properties(vk_physical_device)
@@ -180,7 +132,7 @@ impl XrContext {
                 .ok_or("no graphics queue family on XR physical device")?
         };
 
-        // ── 9. Create Vulkan device ───────────────────────────────────────────
+        // ── 8. Create Vulkan device ───────────────────────────────────────────
         let vk_device = unsafe {
             let vk_device = xr_instance
                 .create_vulkan_device(
@@ -205,7 +157,7 @@ impl XrContext {
 
         let vk_queue = unsafe { vk_device.get_device_queue(queue_family_index, 0) };
 
-        // ── 10. Create OpenXR Vulkan session ─────────────────────────────────
+        // ── 9. Create OpenXR Vulkan session ─────────────────────────────────
         let (xr_session, frame_waiter, frame_stream) = unsafe {
             xr_instance.create_session::<xr::Vulkan>(
                 xr_system,
@@ -219,11 +171,11 @@ impl XrContext {
             )?
         };
 
-        // ── 11. Reference space (floor level) ────────────────────────────────
+        // ── 10. Reference space (floor level) ────────────────────────────────
         let stage_space = xr_session
             .create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY)?;
 
-        // ── 12. Environment blend mode ────────────────────────────────────────
+        // ── 11. Environment blend mode ────────────────────────────────────────
         let env_blend_mode = xr_instance
             .enumerate_environment_blend_modes(
                 xr_system,

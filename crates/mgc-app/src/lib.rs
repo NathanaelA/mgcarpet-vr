@@ -24,9 +24,11 @@ mod replay;
 mod saves;
 mod settings;
 mod ui;
+mod worldmap;
+
+
 #[cfg(target_os = "android")]
 mod wgpu_share;
-mod worldmap;
 #[cfg(target_os = "android")]
 mod xr_init;
 #[cfg(target_os = "android")]
@@ -60,12 +62,23 @@ use openxr as xr;
 use winit::platform::android::ActiveEventLoopExtAndroid;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
+#[cfg(target_os = "android")]
+use log::{Level, log};
 
 #[cfg(target_os = "android")]
 const IS_ANDROID: bool = true;
 
 #[cfg(not(target_os = "android"))]
 const IS_ANDROID: bool = false;
+
+#[cfg(target_os = "android")]
+#[macro_export]
+macro_rules! println {
+    ($($arg:tt)*) => {
+        log!(target: "AppEvents", Level::Info, $($arg)*)
+    }
+}
+
 
 const FOV_Y: f32 = 60.0_f32.to_radians();
 const MOUSE_SENSITIVITY: f32 = 0.0022;
@@ -3729,6 +3742,8 @@ impl App {
     }
 
     #[cfg(target_os = "android")]
+    // On XR the input is polled from the XR session, not the keyboard/mouse.
+    // All input from the XR controllers is handled here
     fn tick_input(&mut self) -> FlightInput {
         let is_mc2 = self.is_mc2();
 
@@ -3761,6 +3776,7 @@ impl App {
             false
         };
 
+        // Since our state is  handled a bit differently than the original, we have to make sure that we are grabbing the pointer
         if on || self.paused {
             grabbed = true;
         }
@@ -3788,17 +3804,13 @@ impl App {
         self.pointer_beam = pointer.beam;
 
         if !grabbed {
-            //log::info!("!grabbed {} {} {} {}", self.cursor.0, self.cursor.1, input.thrust, input.strafe);
             if let Some((px, py)) = pointer.screen_pos {
                 self.cursor = (px, py);
             }
 
-            if input.thrust != 0.0 || input.strafe != 0.0 {
-                self.cursor.0 = (self.cursor.0 - input.thrust * 12.0).clamp(0.0, 2400.0); // 1800
-                self.cursor.1 = (self.cursor.1 - input.strafe * 12.0).clamp(0.0, 2000.0);
-            }
             if !is_mc2 {
-                if input.fire_left || input.fire_right {
+                // The  pointer is on the right hand controller, so we only allow the  right click to trigger it.
+                if input.fire_right {
                     let size = self.view_size();
                     if let Some(m) = &mut self.mc1menu {
                         m.click(size, self.cursor);
@@ -3808,7 +3820,6 @@ impl App {
             }
 
             return FlightInput::default();
-            //self.cursor = (100 as f32, 100 as f32);
         }
 
         if input.extra_data & 0x02 != 0 {
@@ -3833,25 +3844,14 @@ impl App {
                     self.fire_right_held = false;
                 } else {
                     self.set_grab(true);
-                    //self.grabbed = true;
                 }
-                // Entering/leaving the fullscreen map fixes
-                // your ORIENTATION but not your velocity in
-                // the original (player ground truth; traced
-                // as EMERGENT — map modes write no input, so
-                // the steering filters decay ~×0.75/tick to
-                // center while the target speed persists,
-                // :49017-20/:49044). We recenter the virtual
-                // stick; the sim's filters decay on their own
-                // because tick_input sends zero stick while
-                // the book is open.
-                self.stick = VirtualStick::default();
             }
         }
 
         input
     }
 
+    #[allow(dead_code)]
     #[cfg(not(target_os = "android"))]
     fn tick_input(&mut self) -> FlightInput {
         let axis = |neg: bool, pos: bool| (pos as i32 - neg as i32) as f32;
@@ -7102,6 +7102,7 @@ impl App {
     }
 }
 
+#[allow(dead_code)]
 #[cfg(not(target_os = "android"))]
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -8571,17 +8572,22 @@ fn parse_args() -> Result<Args, String> {
     // TODO: Configure this via a menu option...
     let mut args = parse_base_args()?;
     args.campaign = Some(campaign::CampaignId::Mc1);
-    args.sky = Option::from(false);
+    args.sky = Option::from(false); // At this point, the sky is not supported on Android.
     args.crosshair = Option::from(false);
-    args.expose_jar_spells = Option::from(true);
-    args.plausible_spellbook = Option::from(true);
-    args.slot = 1;
-    args.dev_spells = Option::from(false);
-    // args.level = PathBuf::from("baked/mc1/level-003.mgcl");
+    args.slot = Option::from(1);
+    args.fog_distance = Option::from(80);
+    args.awake_range = Option::from(80);
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
     }
+
+    // Testing
+    // args.dev_spells = Option::from(false);
+    // args.expose_jar_spells = Option::from(true);
+    // args.plausible_spellbook = Option::from(true);
+
+
     Ok(args)
 }
 
@@ -10670,42 +10676,6 @@ fn android_main(app: AndroidApp) {
         .unwrap();
 
     game_main(Some(event_loop));
-
-    /*
-
-    let mut vr_loop = match xr_loop::VrLoop::new(ctx, wgpu_ctx, &baked_root) {
-        Ok(v) => v,
-        Err(e) => {
-            log::error!("VrLoop init failed: {e}");
-            return;
-        }
-    };
-    let mut should_exit = false;
-    let mut should_pause = false; */
-
-    /*
-    while !should_exit {
-        // Poll Android lifecycle events (pause/resume/destroy).
-        app.poll_events(Some(std::time::Duration::from_millis(100)), |ev| {
-            if let PollEvent::Main(MainEvent::Destroy) = ev {
-                should_exit = true;
-            }
-            if let PollEvent::Main(MainEvent::Pause) = ev {
-                should_pause = true;
-            }
-            if let PollEvent::Main(MainEvent::Resume { .. }) = ev {
-                should_pause = false;
-            }
-        });
-
-        if should_pause {
-            continue;
-        }
-        if !vr_loop.tick() {
-            break;
-        }
-    }
-    */
 
     log::info!("mgcarpet VR: exiting");
 }
