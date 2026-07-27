@@ -956,14 +956,25 @@ impl World {
                     return;
                 }
             }
-            // Possess: an active cast is not re-armed/re-charged,
-            // but the re-press STILL records the firing hand and
-            // runs the invis-break law before bailing (EF:60900-07
-            // calls sub_5F7E0 before LABEL_23). The `byte_0x3C_60 =
-            // 1` release signal stays a banked nuance.
+            // Possess: an active cast is not re-armed/re-charged —
+            // the marker timer never refreshes — but the re-press
+            // records the firing hand, runs the invis-break law
+            // (EF:60900-07 calls sub_5F7E0 before LABEL_23), and
+            // raises the `byte_0x3C_60 = 1` RELEASE SIGNAL (→ f56):
+            // the armed manifestation tick consumes it and fires
+            // ANOTHER bolt. All three possession tiers re-cast
+            // freely while the marker runs (player retail-verified
+            // — the "spell active" marker only suppresses mana
+            // regen); each re-cast still pays the mana gate.
             1 if armed > 0 => {
                 self.g.ent[m].f50 = if right { 512 } else { 256 };
                 self.mc2_arm_invis_break(spell);
+                let cost = self.g.ent[m].max_life;
+                if !self.dev_spells && (self.player.mana as u64) < cost as u64 {
+                    self.g.snd_player(29);
+                    return;
+                }
+                self.g.ent[m].f56 = 1;
                 return;
             }
             // Castle: a re-cast while the ball flies buzzes
@@ -1002,6 +1013,9 @@ impl World {
         // muzzle.
         self.g.ent[m].f26 = self.g.ent[m].f28.max(1) as i16;
         self.g.ent[m].f50 = if right { 512 } else { 256 };
+        // A release signal left over from the marker's last tick
+        // must not refire into the fresh arm.
+        self.g.ent[m].f56 = 0;
         self.mc2_arm_invis_break(spell);
     }
 
@@ -1093,6 +1107,17 @@ impl World {
                 let first = self.g.ent[m].f26 as u16 == self.g.ent[m].f28.max(1);
                 if self.mc2_afford(m) {
                     if first {
+                        self.mc2_spell_fire(spell, m, p, ctx);
+                        let cost = self.g.ent[m].max_life;
+                        self.mana_debit(cost);
+                    } else if self.g.ent[m].f56 != 0 {
+                        // The possess re-press RELEASE SIGNAL
+                        // (byte_0x3C_60, raised by the cast gate's
+                        // model-1 armed arm): fire another bolt
+                        // WITHOUT touching the armed timer — the
+                        // marker is a regen suppressor, not a cast
+                        // lock (player retail-verified, all tiers).
+                        self.g.ent[m].f56 = 0;
                         self.mc2_spell_fire(spell, m, p, ctx);
                         let cost = self.g.ent[m].max_life;
                         self.mana_debit(cost);

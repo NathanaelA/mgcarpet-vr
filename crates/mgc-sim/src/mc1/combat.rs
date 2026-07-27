@@ -822,7 +822,13 @@ impl Gen {
     /// → `f144`, the field both claim intakes write) — a ball or
     /// building the caster already possesses does NOT eat the bolt;
     /// it flies through to the unclaimed field behind. A
-    /// rival-claimed target fails neither half and stays claimable.
+    /// rival-claimed target fails neither half and stays claimable —
+    /// PLAYER RETAIL-CERTIFIED 2026-07-27 for ALL tiers including
+    /// the tier-1 Mana Magnet (a briefly-tried tier-1 carve-out that
+    /// detonated on own-claimed spheres was refuted by the player's
+    /// own retail discriminator run: it does NOT explode on already
+    /// possessed mana; the "sticks to my mana" feel is the aura
+    /// piling the claimed spheres onto the detonation point).
     fn claim_admits(&self, j: usize, own: u16) -> bool {
         let c = &self.ent[j];
         if c.flags & 8 == 0 {
@@ -914,40 +920,41 @@ impl Gen {
                 self.hits += 1;
             }
         }
-        // Mana Magnet bolt (m17): the magnet manifests ONLY on an
-        // actual ball strike — a bolt that grounds or expires on
-        // nothing fizzles with NO effect (player-verified; the same
-        // law as MC2's possession magnet, which never drops a
-        // free-floating magnet at a terrain detonation).
+        // Mana Magnet bolt (m17): the real state-18 handler
+        // sub_542B0_54640 (hw:59951-60035, byte-identical at
+        // :63841-63925 but unwired past remc1's truncated class-9
+        // table) detonates on a ball strike, GROUND CONTACT, or life
+        // expiry alike — a miss still drops the pair (both spawns
+        // are invisible, so an empty-field miss still LOOKS like a
+        // fizzle, but loose mana near the landing spot gets pulled;
+        // this supersedes the earlier fizzle-on-miss reading). The
+        // detonation is a TWO-SPAWN: the (10,12) possession flash
+        // FIRST (hw:59993), then the +68/+69 (10,54) magnet
+        // (hw:60013) — both stamped with the bolt's owner/heading.
+        // The flash is retail's own wildcard possession flash: its
+        // ~8-tick channel-1 AREA claim (sub_25760 → sub_120B0) is
+        // gated by the victims' +28 bit-1 susceptibility, which
+        // admits balls (3) and graves (2) but not houses (33) — the
+        // player's "possesses the struck balls simultaneously with
+        // creating the magnet". The pulled remainder outside the
+        // flash box claims by MERGING (owned-beats-unowned,
+        // sub_277D0 :29717); the ch4 pull itself never claims.
         let magnet_bolt = self.ent[i].class64 == 9 && self.ent[i].model65 == 17;
-        if !(magnet_bolt && struck.is_none()) {
-            if let Some(fx) = self.spawn_effect(f69, x, y, z) {
-                let e = &mut self.ent[fx];
-                e.id24 = owner;
-                e.f30 = yaw;
-                e.f32 = pitch;
-                if copy_f44 {
-                    e.f44 = f44;
-                }
-            }
-        }
-        // On a strike, pair the (10,54) with a LOCALIZED possession-
-        // style claim of the struck ball(s). Retail claims what the
-        // bolt hits (player-verified) but the reconstruction lost the
-        // call (the +66=0 flashes neuter sub_120B0's filter, and the
-        // (10,54) tick claims nothing) — the port bridges the gap
-        // with possession's own (10,12) claim flash, filtered to mana
-        // balls only (f66/f67 = 10/39: unlike a possess flash it must
-        // not claim houses or graves — the spell is a mana tool;
-        // APPROX pending retail evidence). The pulled remainder
-        // claims by MERGING into the claimed ball(s) (owned-beats-
-        // unowned, sub_277D0 :29717).
-        if magnet_bolt && struck.is_some() {
+        if magnet_bolt {
             if let Some(fl) = self.spawn_effect(12, x, y, z) {
                 let e = &mut self.ent[fl];
                 e.id24 = owner;
-                e.f66 = 10;
-                e.f67 = 39;
+                e.f30 = yaw;
+                e.f32 = pitch;
+            }
+        }
+        if let Some(fx) = self.spawn_effect(f69, x, y, z) {
+            let e = &mut self.ent[fx];
+            e.id24 = owner;
+            e.f30 = yaw;
+            e.f32 = pitch;
+            if copy_f44 {
+                e.f44 = f44;
             }
         }
         let _ = ctx;
@@ -1050,6 +1057,43 @@ impl Gen {
         }
         let hit = self.possess_victim_at(i, tmp);
         self.move_relink(i, tmp.0, tmp.1, tmp.2);
+        // RECONSTRUCTION BRIDGE (m17 only): the magnet bolt claims a
+        // dwelling it PASSES THROUGH in flight (player retail-
+        // verified — the pass-through and the exact-flag-hit claims
+        // are one mechanism). The decompiled chain has NO path that
+        // can claim a (10,45) at all: the (10,12) flash writes ch1
+        // and retail dwellings listen on ch0 only (+28 = 33), and an
+        // exhaustive sweep proved every flight call pure (sub_11C00 /
+        // sub_11AC0 / steer / move / the flash "mover" = a frame
+        // counter) — the write was reconstructed away. Bridge: an
+        // in-flight direct ch1 touch on overlapped dwellings, gated
+        // like the possess scan (:17067 — not own by +24 or +144);
+        // the port's built houses carry the ch1 intake.
+        if self.ent[i].model65 == 17 {
+            let own = self.ent[i].id24;
+            let (bx, by) = (self.ent[i].x, self.ent[i].y);
+            for dy in -2i32..=2 {
+                for dx in -2i32..=2 {
+                    let tx = ((bx >> 8) as i32 + dx) as u8;
+                    let ty = ((by >> 8) as i32 + dy) as u8;
+                    let mut j = self.map_entity[tile(tx, ty)] as usize;
+                    while j != 0 {
+                        let c = &self.ent[j];
+                        let next = c.next20 as usize;
+                        if c.class64 == 10
+                            && c.model65 == 45
+                            && c.flags & 8 != 0
+                            && c.id24 != own
+                            && c.f144 != own
+                            && self.ent_overlap(i, j)
+                        {
+                            self.mail_write(MailTarget::Pool(j), 1, 0, own);
+                        }
+                        j = next;
+                    }
+                }
+            }
+        }
         self.ent[i].act_life -= 1;
         if let Some(j) = hit {
             let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
@@ -1089,14 +1133,18 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
         };
-        // The Mana Magnet bolt (m17) acquires NOTHING: sub_54520
-        // switches on the bolt's model and has no case for 17 —
-        // default `return 0` (:63977/:64185). The magnet bolt flies
-        // straight; only its contact scan detonates it. (Possession
-        // is case 1: the balls + graves/dwellings lists, :64040-58.)
-        if self.ent[i].model65 == 17 {
-            return;
-        }
+        // The Mana Magnet bolt (m17) HOMES — sub_54520 case 0x11
+        // (hw:60386-60405; remc1's reconstructed switch is TRUNCATED
+        // past case 9, which read as "no case 17 → straight flight"
+        // until the player's retail playtest refuted it): the
+        // mana-BALL roster only (never graves/dwellings), awake-gated
+        // (+58) and NOTHING else — no team gate, no claim gate, so
+        // caster-claimed balls are homing targets too
+        // (player retail-verified). Same 0x71/0x71 cone + 5120 range
+        // score (sub_54A90) as possession's case 1; possession keeps
+        // its +144-vs-+24 skip (hw:60169-60207) and its second
+        // graves/dwellings list.
+        let magnet = self.ent[i].model65 == 17;
         let mut best: Option<(u16, u32, u16, u16)> = None;
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
@@ -1104,7 +1152,8 @@ impl Gen {
                 continue;
             }
             let candidate = match c.model65 {
-                39 | 40 | 45 => c.f144 != own && c.f58 != 0,
+                39 => c.f58 != 0 && (magnet || c.f144 != own),
+                40 | 45 => !magnet && c.f144 != own && c.f58 != 0,
                 _ => false,
             };
             if !candidate {
@@ -1173,11 +1222,17 @@ impl Gen {
     }
 
     /// sub_11AC0 (:17033): the possess victim scan — class-10 models
-    /// 39/40/45 only, not the shooter's own or already-claimed, AABB.
-    /// The Mana Magnet bolt (m17) instead gets retail's model-39-ONLY
-    /// sibling scan (sub_11C00 :17083-121) — it must not detonate on
-    /// graves or dwelling flags (player-certified, and the magnet's
-    /// own gather tick filters +65==39 the same way, :31252).
+    /// 39/40/45 only, not the shooter's own or already-claimed
+    /// (:17067 gates on BOTH +24 and +144), AABB. The Mana Magnet
+    /// bolt (m17) instead uses retail's balls-only sibling sub_11C00
+    /// (:17109-12, called from the state-18 handler hw:59994): model
+    /// 39 + collidable + overlap and NOTHING else — no owner, team,
+    /// or claim filter. Crucially the bolt therefore strikes balls
+    /// the caster ALREADY CLAIMED — the spell's core economy: strike
+    /// your claimed ball, the pulled wild remainder merges into it
+    /// and adopts the owner. (An earlier port gate excluded
+    /// own-claimed balls — the bolt flew through your pile and
+    /// grounded beyond it.)
     fn possess_victim_at(&mut self, i: usize, tmp: (u16, u16, i16)) -> Option<usize> {
         let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         self.ent[i].x = tmp.0;
@@ -1197,8 +1252,7 @@ impl Gen {
                     if c.flags & 8 != 0
                         && c.class64 == 10
                         && (c.model65 == 39 || (!balls_only && matches!(c.model65, 40 | 45)))
-                        && c.id24 != own
-                        && c.f144 != own
+                        && (balls_only || (c.id24 != own && c.f144 != own))
                         && self.ent_overlap(i, j)
                     {
                         found = Some(j);

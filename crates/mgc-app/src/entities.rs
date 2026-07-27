@@ -655,6 +655,10 @@ pub fn map_dots_from_poses(
                 size = 2;
                 owner_color
             }
+            // The mana magnet: a bright white dot for its whole
+            // 128-tick life (player retail-verified) — the map is the
+            // only place the invisible (10,54) shows at all.
+            (10, 54) => nearest_palette_index(palette, vga(63, 63, 63)),
             // Mana balls: wild = 232; claimed model 39 BLINKS the team
             // pair on the global flash phase (:57282-92). Model 40
             // carries no phase term — it falls through LABEL_32 like

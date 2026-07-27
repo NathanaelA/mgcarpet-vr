@@ -1100,7 +1100,13 @@ fn drawable(game: GameId, class: u16, model: u16) -> bool {
                 // dissolved. Player-reported; the sim-level goldens
                 // could not see it because they count entities, not
                 // poses.
-                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77 | 78 | 79))))
+                || (mc2 && matches!(model, 13 | 14 | 22 | 75 | 77 | 78 | 79))
+                // MC1's (10,54) mana magnet: invisible in-world (no
+                // sprite) but VISIBLE ON THE MAP as a bright white dot
+                // for its 128-tick life (player retail-verified) —
+                // exported as a map-only pose (live_poses_mc1). MC2's
+                // aura stays out pending its own retail check.
+                || (!mc2 && model == 54)))
 }
 
 /// The game-keyed per-entity presentation decisions for
@@ -1479,6 +1485,11 @@ impl World {
         // app's `map_owned_buildings` enhancement is what consumes
         // these poses for MC2-style building markers.
         let unclaimed_house = e.class64 == 10 && e.model65 == 45 && e.f144 == 0;
+        // The (10,54) mana magnet: never a billboard (retail sets no
+        // sprite) — its pose exists solely for the map's white dot
+        // (player retail-verified: bright white for the whole 128-tick
+        // life).
+        let magnet = e.class64 == 10 && e.model65 == 54;
         // Body segments hide from map dots + health bars (the heads
         // carry both) — MC1's state 120.
         let segment = e.class64 == 5 && e.tick70 == 120;
@@ -1511,7 +1522,7 @@ impl World {
             segment,
             life_frac,
             blend: 0,
-            map_only: unclaimed_house,
+            map_only: unclaimed_house || magnet,
         }
     }
 
@@ -10897,12 +10908,15 @@ mod tests {
         assert_eq!(w.g.ent[far].f140, 800, "merge mana is additive");
     }
 
-    /// A magnet bolt that strikes NOTHING fizzles: no (10,54), no
-    /// claim flash — the magnet manifests only on a ball strike
-    /// (player-verified; a terrain/expiry detonation must not start
-    /// pulling mana toward an empty spot).
+    /// A magnet bolt that strikes nothing still DETONATES at
+    /// ground/expiry — the state-18 handler (hw:59951-60035) fires
+    /// the same two-spawn tail on every end: the (10,12) flash and
+    /// the (10,54) magnet. Both are invisible, so an empty-field
+    /// miss still LOOKS like a fizzle — but loose mana near the
+    /// landing spot gets claimed/pulled (supersedes the earlier
+    /// fizzle-on-miss pin).
     #[test]
-    fn mana_magnet_bolt_fizzles_without_a_strike() {
+    fn mana_magnet_miss_still_detonates_the_invisible_pair() {
         let mut w = bare_creature_world(2);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
@@ -10914,30 +10928,154 @@ mod tests {
             w.tick(pose, PlayerCommand::default());
         }
         assert_eq!(count(&w, 9, 17), 0, "the bolt expired");
-        assert_eq!(count(&w, 10, 54), 0, "no free-floating magnet on a miss");
-        assert_eq!(count(&w, 10, 12), 0, "and no claim flash");
+        assert_eq!(count(&w, 10, 54), 1, "the magnet drops at the miss point");
     }
 
-    /// The magnet bolt triggers on MANA BALLS ONLY (player-certified)
-    /// — a grave or a dwelling flag under the bolt is not a strike:
-    /// the bolt flies through and fizzles, leaving both unclaimed.
-    /// (Possession keeps its full ball/grave/house set.)
+    /// The magnet bolt DETONATES ON ALREADY-CLAIMED BALLS — retail's
+    /// strike scan carries no +144 filter (sub_11C00 :17109-12 tests
+    /// only collidable+class+model+overlap; the +24 gate never
+    /// matches a ball's slot-index +24). Casting at your own claimed
+    /// pile is the spell's core use: the pulled wild remainder merges
+    /// into it. The old port gate (f144 != own) made the bolt fly
+    /// THROUGH your claimed balls and fizzle.
     #[test]
-    fn mana_magnet_bolt_ignores_graves_and_dwellings() {
+    fn mana_magnet_strikes_an_already_claimed_ball() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        let b = w.g.spawn_mana_ball(140 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[b].f46 = 0;
+        w.g.ent[b].f144 = PLAYER_TARGET; // already yours
+        let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[p].id24 = PLAYER_TARGET;
+        w.g.ent[p].f126 = 0; // parked on the ball
+        w.g.ent[p].f69 = 54;
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            count(&w, 10, 54),
+            1,
+            "an own-claimed ball IS a strike: the magnet manifests"
+        );
+    }
+
+    /// sub_54520 case 0x11 (hw:60386-405 — restored from the HW
+    /// binary; remc1's switch truncates past case 9): the magnet
+    /// bolt HOMES onto mana balls, claim-agnostic — a caster-claimed
+    /// ball is a homing target (player retail-verified) — and never
+    /// onto graves/dwellings, even awake possession-eligible ones.
+    #[test]
+    fn mana_magnet_bolt_homes_onto_a_claimed_ball() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        // A caster-claimed ball 8 tiles east, one tile off the aim
+        // line (inside the 0x71 cone), awake (spawn f58 = 0x80) —
+        // far enough that the detonation flash's 512 box cannot
+        // reach the grave (the flash inheriting a NEARBY grave is
+        // itself retail, pinned separately).
+        let b = w.g.spawn_mana_ball(148 << 8, 141 << 8, 3200).unwrap();
+        w.g.ent[b].f46 = 0;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        // An awake grave 2 tiles ahead, dead on the aim line — a
+        // POSSESSION candidate the magnet case must ignore.
+        let g = w.g.spawn_grave(142 << 8, 140 << 8, 3200).unwrap();
+        w.g.ent[g].f58 = 64;
+        let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3300).unwrap();
+        w.g.ent[p].id24 = PLAYER_TARGET;
+        w.g.ent[p].f69 = 54; // the cast arm's +69 (:66084-85)
+        // Aim due east (yaw 512), past the grave.
+        w.g.ent[p].f30 = 512;
+        w.g.ent[p].f34 = 512;
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[p].f146, b as u16,
+            "the one-shot acquisition locked the CLAIMED ball, not the grave"
+        );
+        // Homing carries it to a strike: the magnet manifests and the
+        // grave is untouched.
+        for _ in 0..30 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 10, 54), 1, "the homing strike dropped the magnet");
+        assert_eq!(count(&w, 10, 40), 1, "the grave was never a victim");
+    }
+
+    /// The magnet bolt claims a dwelling it PASSES THROUGH in flight
+    /// (player retail-verified) — not only when the detonation flash
+    /// lands at the flag. The bolt here expires ~25 tiles past the
+    /// house, so only the in-flight touch (the reconstruction
+    /// bridge, proj_m1_tick) can be the claimer.
+    #[test]
+    fn mana_magnet_pass_through_claims_a_dwelling() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        // A live neutral dwelling with its footprint extents.
+        let h = w.g.new_event().unwrap();
+        {
+            let e = &mut w.g.ent[h];
+            e.class64 = 10;
+            e.model65 = 45;
+            e.tick70 = 52;
+            e.flags |= 8 | 1;
+            e.f28 = 35; // ch0 + ch1 (built-house contract) + bit 5
+            e.f44 = 2000;
+            e.act_life = 2000;
+            e.f80 = 832;
+            e.f82 = 832;
+            e.f84 = 0x4000;
+        }
+        w.g.link(h, 143 << 8, 140 << 8, 3200);
+        // The magnet bolt flying due east THROUGH the house, nothing
+        // beyond it: it expires far past (the flash box cannot reach
+        // back).
+        let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3300).unwrap();
+        w.g.ent[p].id24 = PLAYER_TARGET;
+        w.g.ent[p].f69 = 54;
+        w.g.ent[p].f30 = 512;
+        w.g.ent[p].f34 = 512;
+        for _ in 0..30 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert_eq!(count(&w, 9, 17), 0, "the bolt flew through and expired");
+        assert_eq!(
+            w.g.ent[h].f144, PLAYER_TARGET,
+            "the pass-through claimed the dwelling"
+        );
+    }
+
+    /// The magnet bolt's strike scan is MANA BALLS ONLY (sub_11C00)
+    /// — a grave under the bolt is not a strike: the bolt flies on
+    /// and detonates on its own expiry. The landing (10,12) flash
+    /// then area-claims by the +28 bit-1 mask like any possession
+    /// flash — a grave inside the box IS claimed (the caster
+    /// inherits its holdings and the grave vanishes, grave_tick).
+    #[test]
+    fn mana_magnet_bolt_ignores_graves_in_flight_but_the_flash_claims() {
         let mut w = bare_creature_world(2);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
         let g = w.g.spawn_grave(140 << 8, 140 << 8, 3200).unwrap();
+        let _ = g;
         let p = w.g.spawn_spell_lob(17, 140 << 8, 140 << 8, 3200).unwrap();
         w.g.ent[p].id24 = PLAYER_TARGET;
         w.g.ent[p].f126 = 0; // parked ON the grave
         w.g.ent[p].f69 = 54;
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            count(&w, 10, 40),
+            1,
+            "no strike: the grave is not a collision victim"
+        );
         for _ in 0..25 {
             w.tick(pose, PlayerCommand::default());
         }
-        assert_eq!(count(&w, 10, 54), 0, "a grave is not a strike");
-        assert_eq!(count(&w, 10, 40), 1, "the grave still stands");
-        assert_eq!(w.g.ent[g].f144, 0, "...unclaimed");
+        assert_eq!(count(&w, 10, 54), 1, "expiry drops the magnet in place");
+        assert_eq!(
+            count(&w, 10, 40),
+            0,
+            "the landing flash possessed the grave (bit-1 mask)"
+        );
     }
 
     /// Total castle destruction DEMOLISHES the fleet through the
@@ -13952,6 +14090,73 @@ mod tests {
         assert!(
             setup(5, 3, 0).1.is_none(),
             "flies through a non-worm creature"
+        );
+    }
+
+    /// PLAYER RETAIL-CERTIFIED 2026-07-27: leveled possession's
+    /// magnet aura manifests ONLY on a mana-sphere hit — a building
+    /// hit still CLAIMS (the pulse fires on any victim) but never
+    /// magnets, and mid-terrain spawns nothing. (A decompile pass
+    /// read EF:59048 as any-victim; the recorded gameplay overrules
+    /// it.)
+    #[test]
+    fn mc2_leveled_possession_magnets_on_spheres_only() {
+        use crate::engine::features::BldgParam;
+        // A tier-1 bolt parked on a candidate; run to detonation and
+        // through the flash's broadcast window.
+        let run = |building: bool| -> (World, usize) {
+            let mut w = mc2_flat_world();
+            w.g.assets.bldgprm = vec![BldgParam {
+                rate: 20,
+                flags: 0x00,
+                chain: 0,
+            }];
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let v = if building {
+                w.g.mc2_spawn_building(x, y, gz, 0)
+                    .expect("the possessable building")
+            } else {
+                w.g.spawn_mana_ball(x, y, gz).expect("the sphere")
+            };
+            w.g.ent[v].id24 = 7; // a foreign owner
+            // Let a building's state-51 build countdown finish — the
+            // claim intake lives in the LIVE state.
+            for _ in 0..40 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            let p = w.g.new_event().expect("projectile slot");
+            {
+                let e = &mut w.g.ent[p];
+                e.class64 = 9;
+                e.model65 = 17;
+                e.tick70 = 18;
+                e.flags |= crate::mc2::proj::F_MC2PROJ;
+                e.id24 = crate::mc1::mobs::PLAYER_TARGET;
+                e.f68 = 10;
+                e.f69 = 54; // Mana Magnet tier
+                e.f126 = 0; // parked on the victim
+                e.act_life = 10;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+            }
+            w.g.link(p, x, y, w.g.ent[v].z);
+            for _ in 0..20 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            (w, v)
+        };
+        // Sphere hit → the aura manifests.
+        let (w, _) = run(false);
+        assert_eq!(count(&w, 10, 54), 1, "a sphere hit spawns the aura");
+        // Building hit → claimed, but NO aura.
+        let (w, v) = run(true);
+        assert_eq!(count(&w, 10, 54), 0, "a building hit never magnets");
+        assert_eq!(
+            w.g.ent[v].f144,
+            crate::mc1::mobs::PLAYER_TARGET,
+            "...but the pulse still claims it"
         );
     }
 
@@ -17268,6 +17473,53 @@ mod tests {
         }
         assert_eq!(w.g.ent[m].f71, 1, "live tier = clamped selection");
         assert_eq!(w.g.ent[m].max_life, 250, "tier-1 cost wired");
+    }
+
+    /// Possession re-casts FREELY while its "spell active" marker
+    /// runs (player retail-verified, all three tiers): the armed
+    /// marker only suppresses mana regen. The re-press raises the
+    /// byte_0x3C_60 release signal (f56) and the armed manifestation
+    /// tick fires another bolt without touching the timer.
+    #[test]
+    fn mc2_possession_recasts_freely_while_the_marker_runs() {
+        let mut w = mc2_flat_world();
+        let m = w.mc2_book.ent[1] as usize;
+        assert!(m != 0, "possess granted at init");
+        // A long marker + a tiny cost, independent of the spells
+        // table shape.
+        w.g.ent[m].f28 = 40;
+        w.g.ent[m].max_life = 10;
+        let pose = PlayerPose::level(100 << 8, 100 << 8, 3712, 0);
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let fire = PlayerCommand {
+            fire_right: true,
+            ..Default::default()
+        };
+        let bolts = |w: &World| {
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 9 && e.model65 == 17 && e.flags & 0x400 == 0)
+                .count()
+        };
+        w.tick(pose, fire);
+        assert_eq!(bolts(&w), 1, "the first cast launched");
+        assert!(w.g.ent[m].f26 > 1, "the marker is running");
+        let timer = w.g.ent[m].f26;
+        // Release, then re-press mid-marker.
+        w.tick(pose, PlayerCommand::default());
+        w.tick(pose, fire);
+        w.tick(pose, PlayerCommand::default());
+        assert_eq!(
+            bolts(&w),
+            2,
+            "the re-press fired another bolt while the marker runs"
+        );
+        assert!(
+            w.g.ent[m].f26 < timer,
+            "the marker timer kept counting, NOT re-armed"
+        );
     }
 
     /// The all-spells (G) instrument keeps EVERY tier exercisable

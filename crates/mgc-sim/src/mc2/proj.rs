@@ -453,31 +453,38 @@ impl Gen {
             // tier's `subSpell` (15/20, CD spells.bin); the ctor
             // default 14 is for authored magnets.
             //
-            // The magnet manifests ONLY when the possession actually
-            // CLAIMS A MANA SPHERE — retail's magnet rides the claimed
-            // ball; a bolt that misses mana must NOT drop a
-            // free-floating magnet at its empty-space / terrain
-            // detonation. Building / worm possession does NOT magnet
-            // either — gate to spheres (deliberate, pending a retail
-            // trace). OPEN (rival track): T2's building-lock bit
-            // (forced claim + `byte[2]&0x20`) and the building-attract
-            // question.
+            // Retail gates BOTH children on an actual probe victim
+            // (`if (v6x)`, EF:59032-59058): a ground stop / expiry
+            // with no victim spawns neither the claim pulse nor the
+            // aura (unlike basic possession's ground-miss pulse).
+            // The claim pulse fires on ANY victim (balls and
+            // dwellings claim alike — player retail-verified); the
+            // AURA manifests ONLY when the victim is a mana sphere —
+            // building/worm possession never magnets, and neither
+            // does mid-terrain (PLAYER RETAIL-CERTIFIED 2026-07-27,
+            // overruling a decompile pass that read EF:59048 as
+            // unconditional inside the victim arm — the recorded
+            // gameplay wins; MC1's magnet differs on BOTH counts:
+            // it drops its pair mid-terrain too, and never magnets
+            // buildings because its scan is balls-only).
             (10, 54) | (10, 69) => {
-                self.area_write(i, 1, dmg as u32, ctx, false, false);
-                let claimed_mana = victim != PLAYER_TARGET
-                    && (victim as usize) < self.ent.len()
-                    && matches!(
+                let struck =
+                    victim != 0 && victim != PLAYER_TARGET && (victim as usize) < self.ent.len();
+                if struck {
+                    self.area_write(i, 1, dmg as u32, ctx, false, false);
+                    let sphere = matches!(
                         (
                             self.ent[victim as usize].class64,
                             self.ent[victim as usize].model65,
                         ),
                         (10, 39) | (10, 40) | (10, 57)
                     );
-                if claimed_mana {
-                    if let Some(a) = self.mc2_spawn_aura(x, y, z) {
-                        self.ent[a].model65 = fm;
-                        self.ent[a].f26 = if fm == 54 { 15 } else { 20 };
-                        self.ent[a].id24 = id;
+                    if sphere {
+                        if let Some(a) = self.mc2_spawn_aura(x, y, z) {
+                            self.ent[a].model65 = fm;
+                            self.ent[a].f26 = if fm == 54 { 15 } else { 20 };
+                            self.ent[a].id24 = id;
+                        }
                     }
                 }
                 None
