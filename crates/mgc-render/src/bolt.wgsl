@@ -18,6 +18,8 @@ struct Globals {
     atlas: vec4<u32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
+    billboard_right: vec4<f32>,
+    billboard_up: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -90,7 +92,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         side = side / sl;
     } else {
         // Segment aimed dead at the camera: any perpendicular works.
-        side = globals.cam_right.xyz;
+        side = globals.billboard_right.xyz;
     }
     let world = mid + side * (c.x * inst.width);
     var out: VsOut;

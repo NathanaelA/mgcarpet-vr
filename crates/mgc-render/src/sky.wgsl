@@ -25,6 +25,10 @@ struct Globals {
     // cam_right.w = horizontal, cam_up.w = vertical.
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
+    // Roll-free billboard basis; unused by the sky pass, but declared
+    // to keep the uniform buffer layout aligned with the Rust struct.
+    billboard_right: vec4<f32>,
+    billboard_up: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;

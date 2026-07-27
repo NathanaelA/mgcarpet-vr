@@ -5,7 +5,6 @@
 
 # Build output
 /target
-/crates/mgc-vr/android/build
 /crates/mgc-app/android/build
 
 # Original game data (bring your own GOG copy) — never committed
@@ -32,3 +31,6 @@
 
 # Python caches
 __pycache__
+
+# Symlinked mgcarpet app for development convenience — never committed
+/mgcarpet
