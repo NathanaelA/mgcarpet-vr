@@ -3842,17 +3842,25 @@ impl App {
                             .unwrap_or([false; 24]);
                         if let Some(spell) = self.hovered {
                             if owned[spell.0 as usize] {
-                                if input.fire_right {
-                                    self.pending_equip.1 = Some(spell.0);
+                                let flight_input : FlightInput = if input.fire_right {
+                                    FlightInput {
+                                        equip_right: Some(mgc_sim::mc1::spells::SpellId(spell.0)),
+                                        ..FlightInput::default()
+                                    }
                                 } else if input.fire_left {
-                                    self.pending_equip.0 = Some(spell.0);
-                                }
+                                    FlightInput {
+                                        equip_left: Some(mgc_sim::mc1::spells::SpellId(spell.0)),
+                                        ..FlightInput::default()
+                                    }
+                                } else {
+                                    FlightInput::default()
+                                };
                                 if let Some(r) = &mut self.renderer {
                                     r.set_map_view(false);
                                 }
                                 self.set_grab(true);
                                 self.flush_equip_if_paused();
-                                return FlightInput::default();
+                                return flight_input;
                             }
                         }
                     } else if input.fire_right {
@@ -3897,8 +3905,8 @@ impl App {
             }
         }
 
-        // We don't return anything whenwe are paused or in the map/book view
-        if self.paused || in_bookview {
+        // We don't return anything whenwe are paused
+        if self.paused {
             return FlightInput::default();
         }
 

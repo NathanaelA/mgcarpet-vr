@@ -32,6 +32,9 @@ struct Globals {
     // to keep the buffer layout aligned with the Rust Globals struct.
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
+    // Roll-free billboard basis — also unused by the terrain pass.
+    billboard_right: vec4<f32>,
+    billboard_up: vec4<f32>,
     // xy = framebuffer size (px); z = 1 when this pass may sample the
     // mirror texture for sea reflections (0 in the mirror pass and
     // with reflections off); w = dynamic light count.

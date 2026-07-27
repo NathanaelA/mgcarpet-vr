@@ -730,8 +730,11 @@ pub struct CameraView {
     /// Camera bank in radians, positive = bank right (the faithful
     /// turn cue — retail renders the roll stick at full value,
     /// remc1 :52432 / remc2 EF:40258). Rolls the whole view basis:
-    /// terrain, billboards and sky bank together, the true-3D
-    /// equivalent of retail's DrawSky/SetBillboards screen rotation.
+    /// terrain and sky bank together, the true-3D equivalent of
+    /// retail's DrawSky/SetBillboards screen rotation.  Billboards are
+    /// normally drawn screen-aligned in this rolled basis (mono), but
+    /// in VR they stay upright while the view rolls so sprites do not
+    /// tilt when the player tilts their head.
     pub roll: f32,
     /// Vertical field of view in radians.
     pub fov_y: f32,
@@ -840,6 +843,27 @@ fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
     (right, up, fwd)
 }
 
+/// Roll-free billboard basis (right, up) derived from yaw and pitch only.
+///
+/// In VR the view matrix carries the head's natural roll, but world
+/// sprites must stay upright relative to the player: if the billboard
+/// expansion rolled with the head, tilting your head sideways would
+/// tilt every sprite.  The mono/desktop path keeps the faithful rolled
+/// basis (the original banks billboards with the view); in stereo the
+/// billboard basis is left unrolled so sprites remain vertical.
+fn billboard_basis(cam: &CameraView) -> ([f32; 3], [f32; 3]) {
+    let (sy, cy) = cam.yaw.sin_cos();
+    let (sp, cp) = cam.pitch.sin_cos();
+    let fwd = [sy * cp, sp, -cy * cp];
+    let right = [cy, 0.0, sy];
+    let up = [
+        right[1] * fwd[2] - right[2] * fwd[1],
+        right[2] * fwd[0] - right[0] * fwd[2],
+        right[0] * fwd[1] - right[1] * fwd[0],
+    ];
+    (right, up)
+}
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct Vertex {
@@ -855,10 +879,16 @@ struct Globals {
     fog_color: [f32; 4],
     /// x = atlas cell count (0 = untextured), y/z/w reserved.
     atlas: [u32; 4],
-    /// Camera basis for billboard expansion (screen-aligned quads);
-    /// the w slots carry tan(fov/2) h/v for the sky ray.
+    /// Camera basis for the sky ray reconstruction and other rolled
+    /// view-space work; the w slots carry tan(fov/2) h/v.
     cam_right: [f32; 4],
     cam_up: [f32; 4],
+    /// Roll-free camera basis for billboard/fire/bar/bolt expansion.
+    /// In mono this is identical to cam_right/cam_up (billboards bank
+    /// with the view like the original); in stereo it is left unrolled
+    /// so sprites stay upright when the player tilts their head.
+    billboard_right: [f32; 4],
+    billboard_up: [f32; 4],
     /// x/y = framebuffer size in pixels, z = sea-sheen flag for this
     /// pass (1 = the main pass runs the mirror/haze blend on water; 0
     /// in the mirror pass itself and when reflections are off — note
@@ -5058,11 +5088,16 @@ impl Renderer {
         let view_proj = proj.unwrap_or_else(|| camera_matrix(cam, aspect));
 
         let sky = self.sky_color_linear();
-        // Camera right/up for billboard expansion (matches
-        // `camera_matrix`'s basis, bank included — billboards stay
-        // screen-aligned in the rolled view like retail's
-        // SetBillboards_3B560(-roll)).
+        // Rolled basis for the view matrix and sky ray reconstruction.
         let (right, up, fwd) = camera_basis(cam);
+        // Billboard basis: roll-free in stereo so sprites stay upright
+        // when the player tilts their head; faithful rolled basis on
+        // desktop (the original banks billboards with the view).
+        let (bb_right, bb_up) = if proj.is_some() {
+            billboard_basis(cam)
+        } else {
+            (right, up)
+        };
         // The basis w slots carry tan(fov/2) h/v — the sky shader's
         // per-pixel ray reconstruction (billboards read .xyz only).
         let tan_v = (cam.fov_y * 0.5).tan();
@@ -5097,6 +5132,8 @@ impl Renderer {
             ],
             cam_right: [right[0], right[1], right[2], tan_h],
             cam_up: [up[0], up[1], up[2], tan_v],
+            billboard_right: [bb_right[0], bb_right[1], bb_right[2], 0.0],
+            billboard_up: [bb_up[0], bb_up[1], bb_up[2], 0.0],
             viewport: [
                 w as f32,
                 hpx as f32,

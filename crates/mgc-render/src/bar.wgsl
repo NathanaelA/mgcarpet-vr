@@ -11,6 +11,8 @@ struct Globals {
     atlas: vec4<u32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
+    billboard_right: vec4<f32>,
+    billboard_up: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -43,8 +45,8 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     );
     let c = corners[vid];
     let world = inst.pos
-        + globals.cam_right.xyz * (c.x * inst.size.x)
-        + globals.cam_up.xyz * (c.y * inst.size.y);
+        + globals.billboard_right.xyz * (c.x * inst.size.x)
+        + globals.billboard_up.xyz * (c.y * inst.size.y);
     var out: VsOut;
     // The fog-wall cut (camera.w = fog view distance in tiles, 0 =
     // fog off; terrain fully occludes at 0.95·D — terrain.wgsl

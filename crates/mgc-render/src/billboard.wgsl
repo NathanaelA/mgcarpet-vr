@@ -14,10 +14,15 @@ struct Globals {
     camera: vec4<f32>,
     fog_color: vec4<f32>,
     atlas: vec4<u32>,
-    // Camera basis for screen-aligned expansion (billboards tilt with
-    // pitch like the original's 2D screen blit).
+    // Camera basis for the sky and other rolled view-space work.
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
+    // Roll-free basis for billboard expansion.  In VR the view matrix
+    // carries head roll, but sprites must stay upright; in mono this
+    // is identical to cam_right/cam_up so billboards still bank with
+    // the view like the original.
+    billboard_right: vec4<f32>,
+    billboard_up: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -76,7 +81,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
     );
     let c = corners[vid];
     var anchor = inst.pos;
-    var up = globals.cam_up.xyz;
+    var up = globals.billboard_up.xyz;
     // The water-reflection MIRROR pass (atlas.w = 2): the sprite's
     // reflection hangs upside-down below the water — flip the ANCHOR
     // about the sea plane and expand DOWN the real camera's up axis.
@@ -93,7 +98,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, inst: Instance) -> VsOut {
         up = -up;
     }
     let world = anchor
-        + globals.cam_right.xyz * (c.x * inst.size.x)
+        + globals.billboard_right.xyz * (c.x * inst.size.x)
         + up * (c.y * inst.size.y);
     var out: VsOut;
     out.clip = globals.view_proj * vec4<f32>(world, 1.0);
