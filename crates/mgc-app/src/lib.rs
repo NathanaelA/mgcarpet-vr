@@ -3748,21 +3748,30 @@ impl App {
         let is_mc2 = self.is_mc2();
         let mut grabbed = self.grabbed;
         let mut owned = [false; 26];
+        let mut bindable = [false; 26];
 
         if grabbed {
-            owned = if let Some(w) = sess!(self).sim.world.as_mut() {
+            (owned, bindable) = if let Some(w) = sess!(self).sim.world.as_mut() {
                 if is_mc2 {
-                    w.mc2_book_view().owned
+                    let castable = w.mc2_book_view().castable;
+                    let mut cast = [false; 26];
+                    for i in 0..26 {
+                        cast[i] = castable[0][i];
+                    }
+                    (w.mc2_book_view().owned, cast)
                 } else {
                     let mut owned = [false; 26];
+                    let mut bindable = [false; 26];
                     let mc1_owned = w.loadout().owned;
+                    let mc1_bindable = w.loadout().bindable;
                     for i in 0..24 {
-                        owned[i] = mc1_owned[i]
+                        owned[i] = mc1_owned[i];
+                        bindable[i] = mc1_bindable[i];
                     }
-                    owned
+                    (owned, bindable)
                 }
             } else {
-                [false; 26]
+                ([false; 26], [false; 26])
             };
         }
 
@@ -3798,6 +3807,7 @@ impl App {
             &flyer,
             screen_size,
             owned,
+            bindable,
             is_mc2,
             grabbed,
         );
@@ -3806,7 +3816,7 @@ impl App {
 
         if !grabbed || in_panel {
             if let Some((px, py)) = pointer.screen_pos {
-                self.cursor = (px * 2.0, py * 2.0);
+                self.cursor = (px , py);
             }
 
             if !is_mc2 {
@@ -8621,6 +8631,7 @@ fn parse_args() -> Result<Args, String> {
     args.slot = Option::from(1);
     args.fog_distance = Option::from(80);
     args.awake_range = Option::from(80);
+    args.pool_slots = Option::from(5000);
     args.health_bars = Option::from(true);
     args.thrust = Some(config::ThrustModel::Enhanced);
     if !args.level.starts_with("/") {
