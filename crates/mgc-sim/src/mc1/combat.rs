@@ -3123,6 +3123,17 @@ impl Gen {
         }
     }
 
+    /// sub_49AA0_49DE0 / sub_49B50_49E90 (:57770/:57805), class-2
+    /// states 3/9 — the standing stone and the bad stone: the static
+    /// draw bit (+18 |= 2), then the per-tick terrain snap that rides
+    /// deforming ground. No water arm — statics stand in the sea
+    /// (only trees splash-die).
+    pub(crate) fn static_snap_tick(&mut self, i: usize) {
+        self.ent[i].flags |= 0x20000;
+        let (x, y) = (self.ent[i].x, self.ent[i].y);
+        self.ent[i].z = self.ground_z(x, y) as i16;
+    }
+
     /// sub_24F60 (:28047): the fire. One ch0 broadcast + terrain
     /// reaction on the first active tick, then flicker/anim out.
     fn fire_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {

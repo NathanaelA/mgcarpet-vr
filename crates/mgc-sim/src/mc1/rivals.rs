@@ -138,7 +138,7 @@ pub(crate) struct Rival {
     /// delta (+132 — cast debits ride it negative).
     pub mana: u32,
     pub mana_max: u32,
-    mana_delta: i32,
+    pub(crate) mana_delta: i32,
     /// Personality (u16_522/524/526).
     agg: u16,
     acc: u16,
@@ -453,22 +453,34 @@ impl World {
         self.rival_movement(ri, i);
 
         // Regen (:17990-18021): mana += delta then recompute; life
-        // regen at the AI's own (faster) rates.
+        // regen at the AI's own (faster) rates. The dolmen-shrine
+        // flag (+17 0x10, our 0x1000 — stamped by the dolmen's
+        // sub_49AD0 sweep) rides the same fast/slow fork as the
+        // own-castle overlap and is consumed (cleared) by the fast
+        // branch (:18002-09).
+        let at_shrine = self.g.ent[i].flags & 0x1000 != 0;
         {
             let r = &mut self.rivals[ri];
             let stepped = r.mana as i64 + r.mana_delta as i64;
             r.mana = stepped.clamp(0, r.mana_max as i64) as u32;
-            r.mana_delta = if at_castle {
+            r.mana_delta = if at_castle || at_shrine {
                 ((r.mana_max / 200) as i32).max(1000)
             } else {
                 ((r.mana_max / 2000) as i32).max(100)
             };
         }
+        if at_castle || at_shrine {
+            self.g.ent[i].flags &= !0x1000;
+        }
         if self.rivals[ri].regen_stall > 0 {
             self.rivals[ri].regen_stall -= 1;
         } else {
             let max = self.g.ent[i].max_life as i32;
-            let heal = if at_castle { max / 200 } else { max / 500 };
+            let heal = if at_castle || at_shrine {
+                max / 200
+            } else {
+                max / 500
+            };
             self.g.ent[i].act_life = (self.g.ent[i].act_life + heal).min(max);
         }
 

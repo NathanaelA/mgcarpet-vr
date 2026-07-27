@@ -310,13 +310,22 @@ fn level_005_golden_state_hashes() {
     // distant filter INSIDE the acquire loop, and one think gate
     // wrapping both arms. Villager walk/absorb streams shift, so B-E
     // move; post-init and A hold (no feeder has thought yet).
+    //
+    // Re-pinned for the class-2 static tick port (sub_49AA0/sub_49AD0/
+    // sub_49B50): stones, dolmens and bad stones now run their retail
+    // per-tick handlers — the terrain snap plus the +18 |= 2 static
+    // draw stamp (and the dolmen's wizard shrine sweep). A-E move,
+    // post-init holds (the stamp first lands on tick 1). Layout-only
+    // by construction: the stamp is the whole delta (disabling it
+    // alone restores the old pins — on this run's static terrain the
+    // snap is an identity write), and OBSERVABLE holds.
     const GOLDEN: [u64; 6] = [
         0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
-        0x06e8a54a916839d7, // A: 32 idle ticks far afield
-        0xbef57a871357f076, // B: crater trigger fired + 120 dig ticks
-        0xd30acf219762c714, // C: ambush disposition fired
-        0xb6889c441c572844, // D: 64 ticks of two-hand fireball combat
-        0x35fa538fba677a83, // E: 100 aftermath ticks
+        0xc55c8c939de6327b, // A: 32 idle ticks far afield
+        0xa8212f2f309b2cd2, // B: crater trigger fired + 120 dig ticks
+        0xa0ea038ef55c3268, // C: ambush disposition fired
+        0xb95aaef263ebfcf8, // D: 64 ticks of two-hand fireball combat
+        0x38b438e8fa10a0d3, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

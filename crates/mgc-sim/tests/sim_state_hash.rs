@@ -155,17 +155,24 @@ fn flight_tier_golden_state_hashes() {
     // anchor drop/acquire swap the act speed (+126 = +130 / +128), and
     // the m14 distant filter runs INSIDE the acquire loop. Post-init
     // holds; A-C move because village feeders think within the window.
+    //
+    // Re-pinned for the class-2 static tick port (sub_49AA0/sub_49AD0/
+    // sub_49B50): stones, dolmens and bad stones now terrain-snap and
+    // stamp the +18 |= 2 static draw bit every tick. Post-init holds
+    // (the stamp first lands on tick 1); A-C move. Layout-only: the
+    // stamp is the whole delta (see the state_hash.rs pin note — the
+    // snap is an identity write on static terrain, OBSERVABLE holds).
     const FAITHFUL: [u64; 4] = [
         0x79529db4487029e4, // post-init
-        0x49ccc9c6ac24f87f, // A: 40 ticks of forward thrust
-        0x6fd7147f48f6b903, // B: 30 ticks of banked turn + strafe
-        0x42c1288dc4d3f1a0, // C: 40 ticks of coast
+        0xeab73b9a3128a411, // A: 40 ticks of forward thrust
+        0x8ad6b46190f2de15, // B: 30 ticks of banked turn + strafe
+        0x5ba11e6bdf99be31, // C: 40 ticks of coast
     ];
     const ENHANCED: [u64; 4] = [
         0x41cd4a0274834665, // post-init
-        0x535a87c149a9a0e8, // A
-        0xcfec99a3d6f2731c, // B
-        0xafdc2085a1b5fdbc, // C
+        0x2b07b970e22dbacd, // A
+        0x43a6cd76bc7a1b87, // B
+        0x30ac310f4d2a51d5, // C
     ];
     assert_eq!(
         (faithful, enhanced),

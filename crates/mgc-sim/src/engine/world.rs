@@ -1682,7 +1682,20 @@ impl World {
             ((player.x.wrapping_sub(e.x) as i16).unsigned_abs() as u16) <= e.f80
                 && ((player.y.wrapping_sub(e.y) as i16).unsigned_abs() as u16) <= e.f82
         });
-        self.player.mana_delta = if at_castle {
+        // The dolmen-shrine leg of the fast fork (MC1 :55407 / MC2
+        // EF:60018 — `at_castle || +17&0x10`, ONE condition driving
+        // both the mana delta here and the life rate below): retail's
+        // dolmen tick (sub_49AD0 / AddDolmen02_02) stamps the flag on
+        // the human's pool entity; ours is a husk, so probe the
+        // dolmens against the live carpet directly.
+        let at_dolmen = (1..self.g.ent.len()).any(|j| {
+            let e = &self.g.ent[j];
+            e.class64 == 2
+                && e.model65 == 2
+                && e.flags & 0x400 == 0
+                && self.g.player_overlap(j, &ctx)
+        });
+        self.player.mana_delta = if at_castle || at_dolmen {
             ((self.player.mana_max / 200) as i32).max(1000)
         } else {
             ((self.player.mana_max / 2000) as i32).max(100)
@@ -2145,6 +2158,12 @@ impl World {
                 // Rival (AI) wizards; level-authored husks with no
                 // rival record stand and render as before.
                 3 if self.g.ent[i].model65 <= 1 => self.rival_entity_tick(i),
+                // The MC2 dolmen (state 6, AddDolmen02_02_65080):
+                // the regen-shrine wizard sweep + snap — same law as
+                // MC1's, so it shares the World arm below.
+                2 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 6 => {
+                    self.dolmen_tick(i)
+                }
                 // The MC2 class-2 tick column (Phase 4.3): the tree
                 // burn ladder, terrain-pinned statics, falling props.
                 2 if matches!(self.game, GameId::Mc2) => self.g.mc2_scenery_tick(i),
@@ -2154,6 +2173,14 @@ impl World {
                 15 if matches!(self.game, GameId::Mc2) => self.mc2_spell_token_tick(i, player),
                 // Trees burn (states 0/1/2 + the standing fire).
                 2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
+                // Standing stone (3) / bad stone (9): the per-tick
+                // terrain snap (sub_49AA0/sub_49B50) — statics ride
+                // deforming ground instead of hanging at spawn z.
+                2 if matches!(self.g.ent[i].tick70, 3 | 9) => self.g.static_snap_tick(i),
+                // The dolmen (state 6): the regen-shrine wizard sweep
+                // + the same snap (sub_49AD0). Marker stones (states
+                // 12/15) fall through — retail's sub_49B70 no-ops.
+                2 if self.g.ent[i].tick70 == 6 => self.dolmen_tick(i),
                 // Spell jars (pickup) and owned-spell manifestations
                 // (burst countdown + continuous effects).
                 12 => self.class12_tick(i, &ctx),
@@ -2287,11 +2314,12 @@ impl World {
             }
             // Health regen (:55381-421): stalled 16 ticks by every
             // processed hit, then maxLife/250 per tick at the own
-            // castle vs maxLife/2000 afield.
+            // castle OR on a dolmen shrine (the same fork as the mana
+            // delta — :55414 / EF:60021) vs maxLife/2000 afield.
             if self.player.regen_delay > 0 {
                 self.player.regen_delay -= 1;
             } else if self.player.life < PLAYER_LIFE_MAX {
-                let rate = if at_castle {
+                let rate = if at_castle || at_dolmen {
                     PLAYER_LIFE_MAX / 250
                 } else {
                     PLAYER_LIFE_MAX / 2000
@@ -2446,6 +2474,40 @@ impl World {
             }
             TargetingVerb::Mc2 => self.g.mc2_proj_tick(i, ctx),
         }
+    }
+
+    /// MC1 sub_49AD0_49E10 (:57781) / MC2 AddDolmen02_02_65080
+    /// (EF:62526), class-2 state 6 — the DOLMEN, a regen shrine in
+    /// BOTH games: sweep every live wizard and stamp the +17 0x10
+    /// "at shrine" bit (our 0x1000) on any whose box overlaps the
+    /// dolmen's (sub_11950/sub_106C0 — the same 3-axis law); the
+    /// wizard regen forks consume it as castle-rate regen. Then the
+    /// terrain snap. The HUMAN leg (retail stamps the human's pool
+    /// entity; sub_45C90 :55407 / EF:60018 consume) lives at the
+    /// world regen split instead — our human entity is a stationary
+    /// husk, so the split probes the dolmens against the live carpet
+    /// directly (same overlap law and rates).
+    fn dolmen_tick(&mut self, i: usize) {
+        match self.game {
+            GameId::Mc2 => {
+                for ri in 0..self.mc2_rivals.len() {
+                    let w = self.mc2_rivals[ri].ent as usize;
+                    if self.g.ent[w].act_life >= 0 && self.g.ent_overlap(w, i) {
+                        self.g.ent[w].flags |= 0x1000;
+                    }
+                }
+            }
+            _ => {
+                for ri in 0..self.rivals.len() {
+                    let w = self.rivals[ri].ent as usize;
+                    if self.g.ent[w].act_life >= 0 && self.g.ent_overlap(w, i) {
+                        self.g.ent[w].flags |= 0x1000;
+                    }
+                }
+            }
+        }
+        let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
+        self.g.ent[i].z = self.g.ground_z(x, y) as i16;
     }
 
     /// The MC2 (10,51) 30-tick building action; a completed build
@@ -8964,6 +9026,163 @@ mod tests {
         assert_eq!(
             w.g.ent[fb].f146, ball as u16,
             "attack spells keep the live homing pre-lock"
+        );
+    }
+
+    /// Class-2 statics ride deforming terrain: retail's state-3/6/9
+    /// handlers (sub_49AA0/sub_49AD0/sub_49B50) snap z to the ground
+    /// every tick — a carve or crater sinking the ground under a
+    /// standing stone drags the stone down with it instead of leaving
+    /// it hanging at spawn altitude. The model-4/5 marker stones are
+    /// retail no-ops (sub_49B70) and deliberately DON'T follow.
+    #[test]
+    fn mc1_statics_ride_deforming_terrain() {
+        let mut w = flat_world();
+        let stone = w.g.spawn_scenery(1, 0x8000, 0x8000, 3200).expect("stone");
+        let dolmen = w.g.spawn_scenery(2, 0x8400, 0x8000, 3200).expect("dolmen");
+        let bad =
+            w.g.spawn_scenery(3, 0x8800, 0x8000, 3200)
+                .expect("bad stone");
+        let marker = w.g.spawn_scenery(4, 0x8C00, 0x8000, 3200).expect("marker");
+        // The ground sinks 50 rows out from under all of them.
+        for h in w.g.t.height.iter_mut() {
+            *h = 50;
+        }
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[stone].z, 1600, "standing stone snapped down");
+        assert_eq!(w.g.ent[dolmen].z, 1600, "dolmen snapped down");
+        assert_eq!(w.g.ent[bad].z, 1600, "bad stone snapped down");
+        assert_eq!(
+            w.g.ent[marker].z, 3200,
+            "marker stone: retail's no-op states stay put"
+        );
+    }
+
+    /// The dolmen is a REGEN SHRINE: retail's sub_49AD0 stamps the
+    /// +17 0x10 flag on every overlapping wizard, and the wizard
+    /// regen forks (:55407 human, :18002 AI) consume it as
+    /// castle-rate regen. Parked on a dolmen the human's mana delta
+    /// is the fast figure; afield it drops back to the slow one.
+    #[test]
+    fn dolmen_shrine_boosts_the_parked_human() {
+        let mut w = flat_world();
+        // away() parks the carpet at tiles (10, 10) — plant the
+        // dolmen under it.
+        w.g.spawn_scenery(2, 2560, 2560, 3200).expect("dolmen");
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.player.mana_delta,
+            ((w.player.mana_max / 200) as i32).max(1000),
+            "parked on the dolmen: castle-rate regen"
+        );
+        let far = PlayerPose::from_tiles(60.0, 105.0 / 8.0, 60.0, 0.0, 0.0, 0.0);
+        w.tick(far, PlayerCommand::default());
+        assert_eq!(
+            w.player.mana_delta,
+            ((w.player.mana_max / 2000) as i32).max(100),
+            "afield: the slow figure — the boost was the dolmen's"
+        );
+    }
+
+    /// The AI leg of the shrine: the dolmen sweep stamps the rival
+    /// wizard's entity (+17 0x10, our 0x1000) and the rival's regen
+    /// fork consumes it next tick as the castle rate.
+    #[test]
+    fn dolmen_shrine_flags_and_boosts_the_parked_rival() {
+        use crate::mc1::rivals::{Rival, RivalConfig};
+        use crate::mc1::spells::SPELL_COUNT;
+        let mut w = flat_world();
+        let wiz = w.g.spawn_class3(1, 0x8000, 0x8000, 3400).expect("wizard");
+        let cfg = RivalConfig {
+            aggression: 128,
+            accuracy: 128,
+            tempo: 128,
+            castle_level: 0,
+            book: [false; SPELL_COUNT],
+            allowed: [false; SPELL_COUNT],
+        };
+        w.rivals.push(Rival::new(1, wiz as u16, &cfg));
+        w.g.spawn_scenery(2, 0x8000, 0x8000, 3200).expect("dolmen");
+
+        // Tick 1: the wizard (lower slot) regens BEFORE the dolmen's
+        // sweep runs — the stamp lands after its regen.
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            w.g.ent[wiz].flags & 0x1000 != 0,
+            "the dolmen sweep stamped the shrine bit"
+        );
+        // Tick 2: the wizard consumes the stamp — castle-rate delta.
+        w.tick(away(), PlayerCommand::default());
+        let max = w.rivals[0].mana_max;
+        assert_eq!(
+            w.rivals[0].mana_delta,
+            ((max / 200) as i32).max(1000),
+            "shrine-parked rival regens at the castle rate"
+        );
+    }
+
+    /// The MC2 dolmen is the SAME regen shrine (AddDolmen02_02_65080
+    /// sweep, consumers EF:5438 AI / EF:60018 human) — the first MC2
+    /// scenery port collapsed it into a bare terrain snap and lost
+    /// the sweep. AI leg: stamp then castle-rate delta.
+    #[test]
+    fn mc2_dolmen_shrine_flags_and_boosts_the_parked_rival() {
+        use crate::mc2::rivals::{MC2_SPELLS, Mc2RivalConfig};
+        let mut w = mc2_flat_world();
+        w.start_markers[1] = Some((128, 128));
+        let mut configs: [Option<Mc2RivalConfig>; 8] = Default::default();
+        configs[1] = Some(Mc2RivalConfig {
+            aggression: 128,
+            perception: 128,
+            reflexes: 128,
+            life: 0,
+            castle_level: 0,
+            start: [false; MC2_SPELLS],
+            start_level: [0; MC2_SPELLS],
+            blocked: [false; MC2_SPELLS],
+        });
+        w.set_mc2_wizards(&configs, 2);
+        let wiz = w.mc2_rivals[0].ent as usize;
+        let (x, y) = mc2_pos(128, 128);
+        w.g.mc2_spawn_dolmen(x, y, 3200).expect("dolmen");
+
+        // Tick 1: the wizard (lower slot) regens before the dolmen's
+        // sweep runs — the stamp lands after.
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            w.g.ent[wiz].flags & 0x1000 != 0,
+            "the MC2 dolmen sweep stamped the shrine bit"
+        );
+        // Tick 2: the wizard consumes the stamp — castle-rate delta.
+        w.tick(away(), PlayerCommand::default());
+        let max = w.mc2_rivals[0].mana_max;
+        assert_eq!(
+            w.mc2_rivals[0].mana_delta,
+            ((max / 200) as i32).max(1000),
+            "shrine-parked MC2 rival regens at the castle rate"
+        );
+    }
+
+    /// The human leg of the MC2 shrine (EF:60018) rides the shared
+    /// world regen split — parked on a dolmen the mana delta is the
+    /// castle figure, afield it falls back.
+    #[test]
+    fn mc2_dolmen_shrine_boosts_the_parked_human() {
+        let mut w = mc2_flat_world();
+        // away() parks the carpet at tiles (10, 10).
+        w.g.mc2_spawn_dolmen(2560, 2560, 3200).expect("dolmen");
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.player.mana_delta,
+            ((w.player.mana_max / 200) as i32).max(1000),
+            "parked on the MC2 dolmen: castle-rate regen"
+        );
+        let far = PlayerPose::from_tiles(60.0, 105.0 / 8.0, 60.0, 0.0, 0.0, 0.0);
+        w.tick(far, PlayerCommand::default());
+        assert_eq!(
+            w.player.mana_delta,
+            ((w.player.mana_max / 2000) as i32).max(100),
+            "afield: the slow figure"
         );
     }
 

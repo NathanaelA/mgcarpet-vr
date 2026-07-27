@@ -198,7 +198,7 @@ pub(crate) struct Mc2Rival {
     /// Carried mana / ceiling / the regen delta the cast debit rides.
     pub mana: u32,
     pub mana_max: u32,
-    mana_delta: i32,
+    pub(crate) mana_delta: i32,
     /// Personality (word_0x242/244/246) + the Life scalar (word_0x24A).
     agg: u16,
     per: u16,
@@ -603,20 +603,31 @@ impl World {
 
         // Regen (EF:5424-5455): delta applied first, then the rate
         // recompute — home /200 (mana min 1000), afield /2000 mana
-        // (min 100) and /500 life.
+        // (min 100) and /500 life. The dolmen-shrine flag (+17 0x10,
+        // our 0x1000 — stamped by AddDolmen02_02's sweep) rides the
+        // same fork and is consumed (cleared) by the fast branch
+        // (EF:5438-45).
+        let at_shrine = self.g.ent[i].flags & 0x1000 != 0;
         {
             let r = &mut self.mc2_rivals[ri];
             let stepped = r.mana as i64 + r.mana_delta as i64;
             r.mana = stepped.clamp(0, r.mana_max as i64) as u32;
-            r.mana_delta = if at_castle {
+            r.mana_delta = if at_castle || at_shrine {
                 ((r.mana_max / 200) as i32).max(1000)
             } else {
                 ((r.mana_max / 2000) as i32).max(100)
             };
         }
+        if at_castle || at_shrine {
+            self.g.ent[i].flags &= !0x1000;
+        }
         {
             let max = self.g.ent[i].max_life as i32;
-            let heal = if at_castle { max / 200 } else { max / 500 };
+            let heal = if at_castle || at_shrine {
+                max / 200
+            } else {
+                max / 500
+            };
             self.g.ent[i].act_life = (self.g.ent[i].act_life + heal).min(max);
         }
 

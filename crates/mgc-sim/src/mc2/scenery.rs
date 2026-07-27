@@ -221,9 +221,13 @@ impl Gen {
         self.mc2_scenery_water(i);
     }
 
-    /// `sub_65110`-family (EF:62536) — statics that snap to terrain
-    /// (models 1-3's shared shape; models 4/5 are the true no-ops).
+    /// `AddStatue02_01_65040` / `sub_65110` (EF:62519/62536) — the
+    /// model-1/3 statics: the byte[2] |= 2 static draw stamp, then the
+    /// terrain snap. The model-2 dolmen is World-routed (its
+    /// `AddDolmen02_02_65080` sweep needs the rival records) and
+    /// stamps nothing; models 4/5 are the true no-ops.
     pub(crate) fn mc2_scenery_snap_tick(&mut self, i: usize) {
+        self.ent[i].flags |= 0x2_0000;
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         self.ent[i].z = self.ground_z(x, y) as i16;
     }
@@ -322,7 +326,9 @@ impl Gen {
             (0, 0) => self.mc2_tree_tick(i),
             (0, 1) => self.mc2_tree_burning_tick(i),
             (0, 2) => self.mc2_tree_stump_tick(i),
-            (1..=3, _) => self.mc2_scenery_snap_tick(i),
+            // Model 2 (the dolmen) never reaches here — the World
+            // dispatch intercepts state 6 for the shrine sweep.
+            (1 | 3, _) => self.mc2_scenery_snap_tick(i),
             (6, 18) => self.mc2_cave_bee_tick(i),
             (6, 19) => self.mc2_bee_snap_water(i),
             (7 | 8, _) => self.mc2_falling_tick(i),

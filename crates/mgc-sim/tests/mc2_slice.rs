@@ -494,13 +494,21 @@ fn mc2_slice_behaviors_and_goldens() {
     // reaped before dis 0, and the load mixer is muted (EF:39364-65/
     // :39430). Every checkpoint moves — the world enters play with
     // different terrain, RNG phase and pool layout by design.
+    //
+    // Re-pinned (E only) for the MC2 class-2 static tick fidelity
+    // pass: AddStatue02_01_65040 / sub_65110 statics now stamp the
+    // byte[2] |= 2 static draw bit every tick (the first port kept
+    // only the snap), and the dolmen runs its AddDolmen02_02 shrine
+    // sweep. A-D hold — no model-1/3 static ticks before the E
+    // window's spawns. Layout-only: disabling the stamp alone
+    // restores the old pin, and OBSERVABLE holds.
     const GOLDEN: [u64; 6] = [
         0x19b2420902423851, // post-init (GenerateEvents + dis 0)
         0x2e8def083bfb72fa, // A: 64 idle ticks afield
         0x93af44c5f972e2d7, // B: the type-5 fly-to latched
         0x7c82f40f6b188c55, // C: goat awake/flee window
         0x916bd529db710797, // D: fireball combat over the goat
-        0x4464467bcaac5649, // E: census + villager/archer provocation
+        0xdf5bd741f65921af, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
