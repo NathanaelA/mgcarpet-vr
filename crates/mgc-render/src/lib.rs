@@ -956,8 +956,11 @@ pub struct CameraView {
     /// Camera bank in radians, positive = bank right (the faithful
     /// turn cue — retail renders the roll stick at full value,
     /// remc1 :52432 / remc2 EF:40258). Rolls the whole view basis:
-    /// terrain, billboards and sky bank together, the true-3D
-    /// equivalent of retail's DrawSky/SetBillboards screen rotation.
+    /// terrain and sky bank together, the true-3D equivalent of
+    /// retail's DrawSky/SetBillboards screen rotation.  Billboards are
+    /// normally drawn screen-aligned in this rolled basis (mono), but
+    /// in VR they stay upright while the view rolls so sprites do not
+    /// tilt when the player tilts their head.
     pub roll: f32,
     /// Vertical field of view in radians.
     pub fov_y: f32,
@@ -1096,6 +1099,27 @@ fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let right = std::array::from_fn(|i| flat_right[i] * cr - flat_up[i] * sr);
     let up = std::array::from_fn(|i| flat_up[i] * cr + flat_right[i] * sr);
     (right, up, fwd)
+}
+
+/// Roll-free billboard basis (right, up) derived from yaw and pitch only.
+///
+/// In VR the view matrix carries the head's natural roll, but world
+/// sprites must stay upright relative to the player: if the billboard
+/// expansion rolled with the head, tilting your head sideways would
+/// tilt every sprite.  The mono/desktop path keeps the faithful rolled
+/// basis (the original banks billboards with the view); in stereo the
+/// billboard basis is left unrolled so sprites remain vertical.
+fn billboard_basis(cam: &CameraView) -> ([f32; 3], [f32; 3]) {
+    let (sy, cy) = cam.yaw.sin_cos();
+    let (sp, cp) = cam.pitch.sin_cos();
+    let fwd = [sy * cp, sp, -cy * cp];
+    let right = [cy, 0.0, sy];
+    let up = [
+        right[1] * fwd[2] - right[2] * fwd[1],
+        right[2] * fwd[0] - right[0] * fwd[2],
+        right[0] * fwd[1] - right[1] * fwd[0],
+    ];
+    (right, up)
 }
 
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -5932,6 +5956,14 @@ impl Renderer {
         // rotates its sprite rasterizer by -roll (SetBillboards_3B560),
         // so sprites stand on the terrain, not the rolled viewport.
         let (bb_right, bb_up, _) = camera_flat_basis(cam);
+        // Billboard basis: roll-free in stereo so sprites stay upright
+        // when the player tilts their head; faithful rolled basis on
+        // desktop (the original banks billboards with the view).
+        let (bb_right, bb_up) = if proj.is_some() {
+            billboard_basis(cam)
+        } else {
+            (right, up)
+        };
         // The basis w slots carry tan(fov/2) h/v — the sky shader's
         // per-pixel ray reconstruction (billboards read .xyz only).
         let tan_v = (cam.fov_y * 0.5).tan();

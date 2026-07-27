@@ -77,7 +77,8 @@ pub struct InputActions {
     last_thumbstick_left_click: bool,
     last_btn_x_click: bool,
     last_btn_y_click: bool,
-    last_btn_b_click: i64,
+    last_btn_b_time: i64,
+    last_btn_b_click: bool,
     pointer: PointerState,
 }
 
@@ -200,7 +201,8 @@ impl InputActions {
             last_thumbstick_left_click: false,
             last_btn_x_click: false,
             last_btn_y_click: false,
-            last_btn_b_click: 0,
+            last_btn_b_click: false,
+            last_btn_b_time: 0,
             pointer: PointerState::default(),
         })
     }
@@ -359,7 +361,7 @@ impl InputActions {
             -0.3
         } else {
             0.0
-        };
+        }; //  right.y * PITCH_RATE_PER_TICK;
 
         let mut equip_left = 128;
         let mut equip_right = 128;
@@ -433,12 +435,12 @@ impl InputActions {
         }
 
 
-        let demolish = if pressed(&self.btn_b) {
-            // 100ms debounce for demolish button, to avoid accidental demolish
-            if self.last_btn_b_click > 0 && display_time.as_nanos() - self.last_btn_b_click < 100_000_000 {
+        let demolish = if pressed(&self.btn_b)&& !self.last_btn_b_click {
+            // 300ms debounce for demolish button, to avoid accidental demolish
+            if self.last_btn_b_time > 0 && display_time.as_nanos() - self.last_btn_b_time < 300_000_000 {
                 true
             } else {
-                self.last_btn_b_click = display_time.as_nanos();
+                self.last_btn_b_time = display_time.as_nanos();
                 false
             }
         } else {
@@ -452,6 +454,7 @@ impl InputActions {
         self.last_thumbstick_left_click = pressed(&self.thumbstick_left_click);
         self.last_btn_x_click = pressed(&self.btn_x);
         self.last_btn_y_click = pressed(&self.btn_y);
+        self.last_btn_b_click = pressed(&self.btn_b);
 
         FlightInput {
             thrust: left.y * 4.0,
