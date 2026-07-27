@@ -168,10 +168,19 @@ fn flight_tier_golden_state_hashes() {
         0x8ad6b46190f2de15, // B: 30 ticks of banked turn + strafe
         0x5ba11e6bdf99be31, // C: 40 ticks of coast
     ];
+    // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
+    // proportional camera bank no longer gates off while strafing — it
+    // follows the forward-velocity projection, which is nonzero in
+    // scenario B (strafe + turn under thrust). ONLY the ENHANCED B hash
+    // moves: `flyer.roll` is the sole differing field, it is camera-only
+    // (never feeds position/velocity), and B is the one snapshot taken
+    // mid-strafe. A/post-init carry no strafe; C recomputes roll with no
+    // strafe held, so its roll — and thus its hash — is unchanged. The
+    // FAITHFUL array is untouched (the Mc1 mover never runs this bank).
     const ENHANCED: [u64; 4] = [
         0x41cd4a0274834665, // post-init
         0x2b07b970e22dbacd, // A
-        0x43a6cd76bc7a1b87, // B
+        0x50d2db3dc70efe40, // B: strafe+turn now banks on forward speed
         0x30ac310f4d2a51d5, // C
     ];
     assert_eq!(

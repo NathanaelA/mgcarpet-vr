@@ -1414,15 +1414,18 @@ impl Simulation {
         // bank ∝ turn_rate × signed forward speed, camera roll only,
         // zero when standing — retail's fixed velocity-independent
         // bank is exactly what the enhanced tier departs from.
-        // Player ruling 2026-07-23: banking is for forward/backward
-        // MOTION only — a strafing turn must stay level, so any
-        // strafe input gates the bank off (the forward projection
-        // alone can't discriminate: at a hard turn the velocity lags
-        // the nose by ~45° whether the motion came from thrust or
-        // strafe).
+        // Player ruling 2026-07-27: banking follows the forward/backward
+        // velocity vector and IGNORES the left/right drift — it must not
+        // switch off just because a strafe key is down. The forward
+        // projection `v·fwd` delivers exactly that: the strafe-aligned
+        // velocity is perpendicular to `fwd`, so it contributes nothing
+        // (the earlier per-strafe gate zeroed the whole bank, which read
+        // as a jarring snap-to-level the instant strafe was tapped mid-
+        // turn, and a snap back on release). A pure strafing turn keeps
+        // a mild bank only insofar as the strafe momentum has genuinely
+        // rotated forward — real forward motion, not the sideways drift.
         let fwd_sp = f.vx * fwd[0] + f.vz * fwd[2];
-        let strafe_gate = (1.0 - input.strafe.abs()).clamp(0.0, 1.0);
-        f.roll = (BANK_SCALE * self.turn_rate * fwd_sp * strafe_gate).clamp(-BANK_MAX, BANK_MAX);
+        f.roll = (BANK_SCALE * self.turn_rate * fwd_sp).clamp(-BANK_MAX, BANK_MAX);
     }
 
     /// The enhanced-altitude band + cap for one arm: `(hi, cap_abs)` —
@@ -2156,20 +2159,62 @@ mod tests {
     }
 
     #[test]
-    fn bank_gates_off_while_strafing() {
-        // Player ruling 2026-07-23: banking is for forward/backward
-        // motion only — a strafing turn (orbiting) stays level.
+    fn strafe_does_not_cancel_the_forward_bank() {
+        // Player ruling 2026-07-27: banking follows the forward/backward
+        // velocity vector, ignoring the left/right drift — pressing a
+        // strafe key mid-turn must NOT snap the view level (the old
+        // per-strafe gate did, which read as a jarring straighten-and-
+        // re-tilt).
         let mut sim = Simulation::new();
         sim.thrust_model = ThrustModel::Enhanced;
-        let strafe_turn = FlightInput {
-            strafe: 1.0,
+        // Establish a forward, banked right turn.
+        let fwd_turn = FlightInput {
+            thrust: 1.0,
             yaw_delta: 0.2,
             ..Default::default()
         };
         for _ in 0..40 {
-            sim.step(&strafe_turn);
+            sim.step(&fwd_turn);
         }
-        assert_eq!(sim.flyer.roll, 0.0, "a strafing turn stays level");
+        let banked = sim.flyer.roll;
+        assert!(banked > 0.1, "forward turn banks right, roll={banked}");
+        // Add strafe: the bank must persist (no snap to level), staying
+        // on the same side and comparable in magnitude.
+        let fwd_turn_strafe = FlightInput {
+            thrust: 1.0,
+            strafe: 1.0,
+            yaw_delta: 0.2,
+            ..Default::default()
+        };
+        for _ in 0..30 {
+            sim.step(&fwd_turn_strafe);
+            assert!(
+                sim.flyer.roll > 0.1,
+                "bank holds while strafing, roll={}",
+                sim.flyer.roll
+            );
+        }
+    }
+
+    #[test]
+    fn strafe_alone_ignores_the_sideways_drift() {
+        // The forward projection `v·fwd` excludes the instantaneous
+        // strafe-aligned velocity, so strafing straight sideways with
+        // no turn keeps the view level.
+        let mut sim = Simulation::new();
+        sim.thrust_model = ThrustModel::Enhanced;
+        let strafe_only = FlightInput {
+            strafe: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..40 {
+            sim.step(&strafe_only);
+        }
+        assert!(
+            sim.flyer.roll.abs() < 0.02,
+            "pure sideways drift does not bank, roll={}",
+            sim.flyer.roll
+        );
     }
 
     #[test]
