@@ -11817,6 +11817,58 @@ mod tests {
     }
 
     #[test]
+    fn balloon_pickup_pulls_an_overhead_ball_down() {
+        // The stuck-pickup case: a claimed ball hovering ABOVE the
+        // balloon's cruise band (a mid-air drop). The tether's z-servo
+        // (:29484-90) must bring the ball DOWN into the hover band so
+        // the absorb overlap fires — the vertical-only rise arm alone
+        // deadlocks with the balloon parked underneath forever.
+        let mut w = flat_world();
+        let c = w.g.spawn_castle(110 << 8, 110 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        // Forge the reported stuck state directly (a free-fall
+        // fixture races the balloon's approach): the fleet balloon
+        // parked 8 tiles out — past the castle's own direct
+        // absorption reach (f80 = 1152) so only the balloon can
+        // collect — with the claimed ball TETHERED 2000 overhead,
+        // outside the absorb window (±412 around balloon z + 400).
+        // Zero the spawn pop (f46) for a parked fixture.
+        let bal = (1..w.g.ent.len())
+            .find(|&j| {
+                w.g.ent[j].class64 == 3 && w.g.ent[j].model65 == 3 && w.g.ent[j].flags & 0x400 == 0
+            })
+            .expect("the fleet balloon spawned");
+        let ground = w.g.ground_z(118 << 8, 110 << 8) as i16;
+        w.g.move_relink(bal, 118 << 8, 110 << 8, ground + 512);
+        let bz = w.g.ent[bal].z;
+        let b = w.g.spawn_mana_ball(118 << 8, 110 << 8, bz + 2000).unwrap();
+        w.g.ent[b].f46 = 0;
+        w.g.ent[b].f144 = PLAYER_TARGET;
+        w.g.ent[b].f146 = bal as u16;
+        w.g.ent[b].flags |= 0x40;
+        let mut stored = 0;
+        for _ in 0..600 {
+            w.tick(away(), PlayerCommand::default());
+            stored = w.loadout().castle.map_or(0, |(s, _, _)| s);
+            if stored >= 512 {
+                break;
+            }
+        }
+        assert!(
+            w.g.ent[b].flags & 0x400 != 0,
+            "the overhead ball was absorbed, not hovered under"
+        );
+        assert!(
+            stored >= 512,
+            "balloon delivered the overhead cargo (stored {stored})"
+        );
+    }
+
+    #[test]
     fn castle_upgrade_costs_the_full_ladder_amount() {
         use crate::mc1::spells::SpellId;
         let mut w = flat_world();

@@ -3451,32 +3451,66 @@ impl Gen {
                 e.dest_y = (e.dest_y as i16).wrapping_add(ivy) as u16;
             }
         }
-        // Balloon tether (flag 0x40): the tethered ball rises at its
-        // +46=128 lift toward the balloon (+146) instead of ground
-        // physics; the balloon clears the bit when the ball strays
-        // past 1024 (:56746). APPROX: vertical-only homing — the
-        // balloon snaps horizontally over the ball, so the original's
-        // hover-band fine detail is not observable-critical.
+        // Balloon tether (flag 0x40): the ball FLIES to the balloon
+        // (+146) instead of ground physics (:29464-90). Every
+        // tethered tick re-arms the +46 lift at 128 (the release pop)
+        // and turns +30 to the balloon; ≥16 out the ball steps
+        // horizontally at 16/tick, under 16 it snaps over the balloon
+        // and z-servos into the hover band [balloon z, +512]:
+        // +32/tick from below, −32/tick from more than 512 ABOVE —
+        // without the descend arm an overhead ball deadlocks the
+        // pickup (the balloon parks under it forever). Ground-
+        // clamped; the band sits inside the absorb window (balloon
+        // half-height 400), so the balloon side's ent_overlap
+        // finishes the pickup. Past 1024 the ball drops the tether
+        // itself; a tethered tick never runs ball physics (retail's
+        // else-if), even on the tick the tether clears.
         if self.ent[i].flags & 0x40 != 0 {
             let b = self.ent[i].f146 as usize;
-            if b != 0
+            let live_balloon = b != 0
                 && self.ent[b].class64 == 3
                 && self.ent[b].model65 == 3
-                && self.ent[b].flags & 0x400 == 0
-            {
-                let bz = self.ent[b].z;
-                let (x, y, z0) = {
+                && self.ent[b].flags & 0x400 == 0;
+            if live_balloon {
+                self.ent[i].f46 = 128;
+                let (bx, by, bz) = {
+                    let e = &self.ent[b];
+                    (e.x, e.y, e.z)
+                };
+                let mut pos = {
                     let e = &self.ent[i];
                     (e.x, e.y, e.z)
                 };
-                if z0 < bz {
-                    let z = z0.saturating_add(128).min(bz);
-                    self.move_relink(i, x, y, z);
+                let yaw = Self::angle_between(pos.0, pos.1, bx, by);
+                self.ent[i].f30 = yaw;
+                let d = Self::isqrt(Self::dist2_sq(pos.0, pos.1, bx, by) as u32) as i32;
+                if d <= 1024 {
+                    if d >= 16 {
+                        Self::polar_step(&mut pos, yaw, 0, 16);
+                    } else {
+                        pos.0 = bx;
+                        pos.1 = by;
+                        if pos.2 as i32 >= bz as i32 {
+                            if pos.2 as i32 > bz as i32 + 512 {
+                                pos.2 -= 32;
+                            }
+                        } else {
+                            pos.2 += 32;
+                        }
+                    }
+                    let ground = self.ground_z(pos.0, pos.1) as i16;
+                    if ground > pos.2 {
+                        pos.2 = ground;
+                    }
+                    self.move_relink(i, pos.0, pos.1, pos.2);
+                } else {
+                    self.ent[i].flags &= !0x40; // strayed: the ball side lets go
                 }
-                self.ball_resize(i);
-                return false;
+            } else {
+                self.ent[i].flags &= !0x40; // dangling tether
             }
-            self.ent[i].flags &= !0x40; // dangling tether
+            self.ball_resize(i);
+            return false;
         }
         let mut vx = self.ent[i].dest_x as i16;
         let mut vy = self.ent[i].dest_y as i16;
