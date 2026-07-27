@@ -2341,10 +2341,12 @@ impl Gen {
             self.ent[i].flags |= 0x400;
             return false;
         }
-        // :28437 — the anim step runs before the ch1 write.
+        // :28437 — the anim step runs before the ch1 write. The ch1
+        // amount carries the claim's FORCE flag (MC2 EF:4200
+        // `dword_0x64_100`; consumers never read a ch1 damage) — the
+        // (10,12) flash is always the weak claim.
         self.anim_advance(i);
-        let amt = self.ent[i].f44 as u32;
-        self.area_write(i, 1, amt, ctx, false, false);
+        self.area_write(i, 1, 0, ctx, false, false);
         false
     }
 
@@ -3465,13 +3467,24 @@ impl Gen {
         // ch1 collection claim (:29439-45): the ball takes the
         // claimant as owner — only on an owner CHANGE (the possess
         // flash re-broadcasts for 8 ticks; the guard keeps the claim
-        // chime single).
+        // chime single). The mail AMOUNT is MC2 retail's
+        // `dword_0x64_100` force flag (the ball twin EF:26069-94,
+        // byte-for-byte the house protocol): a FORCED claim (Mana
+        // Lock's (10,70) pulse) steals unconditionally and sets the
+        // claim lock; a weak claim bounces off a locked ball. MC1 has
+        // no forced writer, so its balls never lock — every MC1 claim
+        // runs the weak arm exactly as before.
         if !is_fool && self.ent[i].mail[1].1 != 0 {
-            let src = self.ent[i].mail[1].1;
+            let (force, src) = self.ent[i].mail[1];
             self.ent[i].mail[1] = (0, 0);
-            if src != self.ent[i].f144 {
+            if src != self.ent[i].f144
+                && (force != 0 || self.ent[i].flags & crate::mc2::mobs::F_CLAIM_LOCK == 0)
+            {
                 self.ent[i].f144 = src;
                 self.ent[i].flags &= !0x40;
+                if force != 0 {
+                    self.ent[i].flags |= crate::mc2::mobs::F_CLAIM_LOCK;
+                }
                 // The chime anchors at the CLAIMANT, not the ball
                 // (:29444 sub_55370(claimant, -1, 4)) — the player-
                 // gated id 4 is heard exactly when YOU claim.
@@ -3675,6 +3688,16 @@ impl Gen {
                         oi
                     };
                     self.ent[i].f144 = winner;
+                    // Mana Lock across merges (EF:26936-40): ONLY the
+                    // unclaimed-survivor arm carries the absorbed
+                    // ball's claim lock — a gathered pile stays
+                    // locked; every other merge arm lets the
+                    // despawned ball's lock die with it (this churn
+                    // is why retail locks LOOK timed in play).
+                    if oi == 0 && oj != 0 && self.ent[j].flags & crate::mc2::mobs::F_CLAIM_LOCK != 0
+                    {
+                        self.ent[i].flags |= crate::mc2::mobs::F_CLAIM_LOCK;
+                    }
                 } else {
                     // MC1 owner rule (`sub_277D0` :29700): OWNED BEATS
                     // UNOWNED — an unowned survivor ADOPTS the absorbed

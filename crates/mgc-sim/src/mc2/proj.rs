@@ -439,9 +439,11 @@ impl Gen {
             // The possession delivery (the (9,17) player cast): the
             // pulse is the ch1 claim mail, not damage — the same
             // writer gate the possess column traced
-            // (docs/traces/mc2-possession-delivery.md).
+            // (docs/traces/mc2-possession-delivery.md). The ch1
+            // amount = retail's force flag (sub_112D0 a2, EF:4200);
+            // (10,12) is the weak pulse.
             (10, 12) => {
-                self.area_write(i, 1, dmg as u32, ctx, false, false);
+                self.area_write(i, 1, 0, ctx, false, false);
                 None
             }
             // Possession tiers 1/2 (docs/spell-audit/possession.md):
@@ -467,11 +469,19 @@ impl Gen {
             // gameplay wins; MC1's magnet differs on BOTH counts:
             // it drops its pair mid-terrain too, and never magnets
             // buildings because its scan is balls-only).
+            // Tier 2 (Mana Lock, model 69) delivers the FORCED claim:
+            // retail's impact spawns the (10,70) steal pulse instead
+            // of (10,12) when xsubtype == 69 (EF:59036-39), whose
+            // action broadcasts force = 1 (sub_32120 → sub_112D0(1),
+            // EF:23559) — the intakes steal unconditionally and set
+            // the byte[2]&0x20 claim lock, which weak claims then
+            // bounce off.
             (10, 54) | (10, 69) => {
                 let struck =
                     victim != 0 && victim != PLAYER_TARGET && (victim as usize) < self.ent.len();
                 if struck {
-                    self.area_write(i, 1, dmg as u32, ctx, false, false);
+                    let force = (fm == 69) as u32;
+                    self.area_write(i, 1, force, ctx, false, false);
                     let sphere = matches!(
                         (
                             self.ent[victim as usize].class64,

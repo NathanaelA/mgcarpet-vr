@@ -14160,6 +14160,152 @@ mod tests {
         );
     }
 
+    /// Mana Lock (possession tier 2,
+    /// docs/traces/mc2-possession-delivery.md §5): a (9,17) impact
+    /// with xsubtype 69 delivers the FORCED claim — retail spawns the
+    /// (10,70) steal pulse (EF:59036-39) whose broadcast carries
+    /// force = 1 (sub_112D0 a2). The intake steals the target
+    /// outright and sets the byte[2]&0x20 claim lock (EF:28026 house
+    /// / EF:26084 ball); a locked target bounces weak claims
+    /// (EF:28031/26085) and only another forced claim steals it back.
+    #[test]
+    fn mc2_mana_lock_forces_the_claim_and_locks_out_weak_steals() {
+        use crate::engine::features::BldgParam;
+        use crate::mc1::mobs::PLAYER_TARGET;
+        use crate::mc2::mobs::F_CLAIM_LOCK;
+        let rival = 7u16;
+        let run = |building: bool| {
+            let mut w = mc2_flat_world();
+            w.g.assets.bldgprm = vec![BldgParam {
+                rate: 20,
+                flags: 0x00,
+                chain: 0,
+            }];
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let v = if building {
+                w.g.mc2_spawn_building(x, y, gz, 0)
+                    .expect("the possessable building")
+            } else {
+                w.g.spawn_mana_ball(x, y, gz).expect("the sphere")
+            };
+            w.g.ent[v].id24 = rival;
+            w.g.ent[v].f144 = rival; // rival-claimed
+            for _ in 0..40 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            // The tier-2 bolt parked on the victim.
+            let p = w.g.new_event().expect("projectile slot");
+            {
+                let e = &mut w.g.ent[p];
+                e.class64 = 9;
+                e.model65 = 17;
+                e.tick70 = 18;
+                e.flags |= crate::mc2::proj::F_MC2PROJ;
+                e.id24 = PLAYER_TARGET;
+                e.f68 = 10;
+                e.f69 = 69; // Mana Lock tier
+                e.f126 = 0; // parked on the victim
+                e.act_life = 10;
+                e.f80 = 256;
+                e.f82 = 256;
+                e.f84 = 256;
+            }
+            w.g.link(p, x, y, w.g.ent[v].z);
+            for _ in 0..20 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            assert_eq!(
+                w.g.ent[v].f144, PLAYER_TARGET,
+                "the forced claim steals the rival's target (building={building})"
+            );
+            assert!(
+                w.g.ent[v].flags & F_CLAIM_LOCK != 0,
+                "...and sets the claim lock (building={building})"
+            );
+            // A weak claim bounces off the lock.
+            w.g.ent[v].mail[1] = (0, rival);
+            w.tick(away(), PlayerCommand::default());
+            assert_eq!(
+                w.g.ent[v].f144, PLAYER_TARGET,
+                "a weak claim bounces off the locked target (building={building})"
+            );
+            // Another forced claim steals even a locked target.
+            w.g.ent[v].mail[1] = (1, rival);
+            w.tick(away(), PlayerCommand::default());
+            assert_eq!(
+                w.g.ent[v].f144, rival,
+                "another forced claim steals the locked target (building={building})"
+            );
+            assert!(
+                w.g.ent[v].flags & F_CLAIM_LOCK != 0,
+                "the lock survives the forced steal (building={building})"
+            );
+        };
+        run(false);
+        run(true);
+    }
+
+    /// The lock across sphere merges (`sub_36D50` EF:26919-90): ONLY
+    /// the unclaimed-survivor arm inherits the absorbed ball's
+    /// `byte[2]&0x20` (EF:26936-40) — a magnet-gathered pile stays
+    /// locked. Every other arm lets the despawned ball's lock die
+    /// with it: retail has NO timed unlock (full byte[2] writer sweep
+    /// 2026-07-27), so this merge churn is the only way a lock
+    /// "expires" in play.
+    ///
+    /// Fixture note: of two balls spawned coincident in the same
+    /// tick, the SECOND ticks with matching z first and absorbs the
+    /// FIRST (launch-pop phase lag: the earlier ball's tick sees the
+    /// later one still 128 below, outside the 50-unit z overlap), so
+    /// the locked ball is spawned first = absorbed.
+    #[test]
+    fn mc2_mana_lock_survives_the_unclaimed_merge_arm_only() {
+        use crate::mc1::mobs::PLAYER_TARGET;
+        use crate::mc2::mobs::F_CLAIM_LOCK;
+        // Spawn the locked player ball, then the survivor-to-be with
+        // the given owner/mana; run the merge; return the survivor.
+        let run = |survivor_owner: u16, survivor_mana: i32| -> (World, usize) {
+            let mut w = mc2_flat_world();
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let locked = w.g.spawn_mana_ball(x, y, gz).expect("locked ball");
+            w.g.ent[locked].f144 = PLAYER_TARGET;
+            w.g.ent[locked].f140 = 10;
+            w.g.ent[locked].flags |= F_CLAIM_LOCK;
+            let s = w.g.spawn_mana_ball(x, y, gz).expect("survivor ball");
+            w.g.ent[s].f144 = survivor_owner;
+            w.g.ent[s].f140 = survivor_mana;
+            for _ in 0..60 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            assert!(
+                w.g.ent[locked].flags & 0x400 != 0 && w.g.ent[s].flags & 0x400 == 0,
+                "the second-spawned ball survives, the locked one is absorbed"
+            );
+            (w, s)
+        };
+        // Unclaimed survivor absorbs the locked ball → adopts owner
+        // AND lock (the EF:26936-40 gather arm).
+        let (w, s) = run(0, 10);
+        assert_eq!(
+            w.g.ent[s].f144, PLAYER_TARGET,
+            "gather arm adopts the owner"
+        );
+        assert!(
+            w.g.ent[s].flags & F_CLAIM_LOCK != 0,
+            "...and inherits the claim lock"
+        );
+        // A rival-claimed survivor (bigger mana keeps the contest)
+        // absorbs the locked ball → the lock dies with it.
+        let (w, s) = run(8, 500);
+        assert_eq!(w.g.ent[s].f144, 8, "contested merge keeps the bigger owner");
+        assert!(
+            w.g.ent[s].flags & F_CLAIM_LOCK == 0,
+            "...and the absorbed ball's lock dies with it"
+        );
+    }
+
     /// The claim probe's accept filter (`sub_108B0` EF:3862-67) is
     /// two-armed: creator (`id_0x1A_26`) AND claim owner
     /// (`playerEntityIndex_0x94_148` → `f144`). A ball or building

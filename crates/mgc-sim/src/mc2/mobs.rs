@@ -31,7 +31,7 @@
 //! arrow-whoosh-played→flags bit 25 · byte[1]&4 disabled→flags
 //! 0x400 (our reap) · byte[1]&8 forced-stop→flags bit 26 · byte[2]&4
 //! blocked-status→flags bit 27 · byte[2]&0x10 no-corpse→flags
-//! bit 28.
+//! bit 28 · byte[2]&0x20 forced-claim lock→flags bit 29.
 //!
 //! Per-wizard fields shared with the MC1 column (same gameplay
 //! semantics, human = out-of-pool):
@@ -80,6 +80,10 @@ pub(crate) const F_WHOOSH: u32 = 1 << 25; // byte[0] & 2 (arrow sound played)
 pub(crate) const F_STOP: u32 = 1 << 26; // byte[1] & 8 (forced stop)
 pub(crate) const F_BLOCKED: u32 = 1 << 27; // byte[2] & 4 (move blocked)
 pub(crate) const F_NO_CORPSE: u32 = 1 << 28; // byte[2] & 0x10
+/// byte[2] & 0x20 — the Mana Lock claim lock (EF:28026/26084): set by
+/// a FORCED claim ((10,70) pulse, possession tier 2); a locked target
+/// ignores weak claims — only another forced claim steals it.
+pub(crate) const F_CLAIM_LOCK: u32 = 1 << 29;
 
 const GOAT_BASE: u8 = 8;
 const ARCHER_BASE: u8 = 32;
@@ -2183,9 +2187,7 @@ impl Gen {
     ///
     /// APPROX register: the mana-sphere production roll (:28040-58,
     /// full enterable houses) and SetMaxDistance_5C8D0 are OPEN
-    /// (economy track); the byte[2]&0x20 strong-claim lock waits
-    /// for the MC2 spell column (all claims run the weak possess
-    /// variant :28035-40). The claimed sprite-row colorize
+    /// (economy track). The claimed sprite-row colorize
     /// (`word_0x5A_90 += color`, :28039) is ported: flag row 177 +
     /// owner color, index shifted AFTER the extent derivation off the
     /// base row (there is no team-tint stage in the billboard pass —
@@ -2240,17 +2242,24 @@ impl Gen {
             let atk = self.ent[i].f40;
             self.mc2_arm_wanted(atk);
         }
-        // The claim intake (:28022-40): possess ch1 → new owner,
+        // The claim intake (:28016-42): possess ch1 → new owner,
         // chime 4 at the claimer, flag bit 0 cleared (the flag
         // FLIES), sprite re-set. Claimability is the DELIVERY's
         // f56-bit-1 gate — stone templates (bldgprm flags & 8) never
-        // set it, so they can never receive this mail.
+        // set it, so they can never receive this mail. The mail
+        // AMOUNT is retail's `dword_0x64_100` force flag: a FORCED
+        // claim (the tier-2 (10,70) pulse) steals unconditionally and
+        // sets the claim lock (`byte[2] |= 0x20`, EF:28026); a weak
+        // claim bounces off a locked building (EF:28031).
         if self.ent[i].mail[1].1 != 0 {
-            let src = self.ent[i].mail[1].1;
+            let (force, src) = self.ent[i].mail[1];
             self.ent[i].mail[1] = (0, 0);
-            if src != self.ent[i].f144 {
+            if src != self.ent[i].f144 && (force != 0 || self.ent[i].flags & F_CLAIM_LOCK == 0) {
                 self.ent[i].f144 = src;
                 self.ent[i].flags &= !1;
+                if force != 0 {
+                    self.ent[i].flags |= F_CLAIM_LOCK;
+                }
                 if src == crate::mc1::mobs::PLAYER_TARGET {
                     self.snd_player(4);
                 }

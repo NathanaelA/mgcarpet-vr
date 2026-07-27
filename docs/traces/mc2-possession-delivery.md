@@ -218,7 +218,7 @@ That is the whole bug for the playtest deviation. Stone templates stay closed on
 
 ### Secondary fidelity notes (follow-ups, not the bug)
 1. `possess_victim_at` does not skip stone buildings the way retail `sub_108B0` does (EF:3853) — our bridged lob will STOP on a stone building and detonate uselessly instead of flying through. Cosmetic under the bridge; belongs to the Phase-4.2 MC2 spell column (which should also add the (5,22) worm and (10,57) probe targets).
-2. The forced/steal tier ((9,17) level-2 → (10,70) pulse → `byte[2]&0x20` lock, §5) has no bridge analogue — banked for the MC2 spell column. Our weak-claim-only interim matches retail's level-0 behaviour.
+2. ~~The forced/steal tier ((9,17) level-2 → (10,70) pulse → `byte[2]&0x20` lock, §5) has no bridge analogue — banked for the MC2 spell column.~~ LANDED 2026-07-27: the tier-2 impact arm (`mc2_proj_impact` (10,69)) broadcasts the claim with force = 1 (the ch1 mail AMOUNT now carries retail's `dword_0x64_100` force flag — no consumer ever read a ch1 damage); both intakes run the retail forced/locked protocol (`F_CLAIM_LOCK` = flags bit 29 mirrors `byte[2]&0x20`). The rival-side direct claim write (`sub_135C0` EF:5849-50) is lock-blind in retail too — kept faithful. Pinned by `mc2_mana_lock_forces_the_claim_and_locks_out_weak_steals`.
 3. Claim chime anchored at the claimer (retail plays it for whichever wizard claims): ours is player-gated `snd_player(4)` (mc2/mobs.rs:2030) — fine until rival wizards possess buildings.
 
 ---
@@ -243,7 +243,7 @@ its parent-tag-only early-return arm (EF:3846). The autoaim lists
 goldens unchanged (they never fire projectiles).
 
 ## OPEN items
-1. **SPELLS.DAT possession rows**: the per-level `life_0x1A` values (0/1/2) and mana costs (`maxMana_0x8C_140` of the class-15 token) were not extracted — pull from the baked spell data when the MC2 cast column lands.
-2. **(10,54)/(10,69) auxiliary tick** (`AddAuxiliary_50500` action 0x3B, EF:36817) — cosmetic shimmer; body not transcribed here.
+1. ~~**SPELLS.DAT possession rows**~~ EXTRACTED 2026-07-27 from the baked CD `spells.bin` row 1: tier `life_0x1A` = **(0, 1, 2)** — tier 2 genuinely selects xsubtype 69 → the (10,70) FORCED pulse; subSpell (10, 15, 20), manaCost (100, 250, 1000), maxManaLimit (0, 1000, 20000).
+2. ~~**(10,54)/(10,69) auxiliary tick**~~ TRANSCRIBED 2026-07-27: action 0x3B = `sub_38D80` (EF:28349) — NOT cosmetic: it is the MAGNET. Life countdown → despawn; per tick, walk the sphere list (dword_38523) and stamp every untagged sphere within `dword_0x10_16` range with the pull mail: `word_0x76_118` = pull magnitude (√dist capped 42), `word_0x7A_122` = the aura's index (the ball mover consumes + clears it, EF:26097-110). **No lock writes** — the aura's 128-tick life does NOT time out the claim lock. Full `byte[2]` writer sweep (whole remc2 tree, 2026-07-27): the 0x20 lock has NO timed clear anywhere — it is entity-lifetime; it "expires" in play only through entity churn (merges — inherited ONLY by sub_36D50's unclaimed-survivor arm EF:26936-40, ported — plus collection/absorb/despawn).
 3. **(10,57) probe target** (EF:3846, parent-gated, no owner filter) — identify the entity (suspected tethered/carried object); not needed for building claims.
 4. **`playerColorIndex_0x38_56` sprite-row offset** — our renderer uses team tint instead of pre-colored row bands (banked APPROX in mc2_house_tick's doc comment); revisit with the HUD/сolor parity track.

@@ -1397,9 +1397,10 @@ impl World {
             // sound 40. Per-tier delivery (docs/spell-audit/
             // possession.md): T0 plain claim `(10,12)`; T1 Mana
             // Magnet — claim + the `(10,54)` attract aura (range 15);
-            // T2 Mana Lock — claim + the `(10,69)` aura (range 20)
-            // (the building lock bit is a follow-up). The impact
-            // model encodes the tier so the aura spawns at landing.
+            // T2 Mana Lock — FORCED claim ((10,70) steal pulse: steals
+            // locked targets and sets the claim lock) + the `(10,69)`
+            // aura (range 20). The impact model encodes the tier so
+            // the aura spawns at landing and tier 2 forces the claim.
             1 => {
                 let tier = self.g.ent[m].f71 as usize;
                 let impact = match tier {
