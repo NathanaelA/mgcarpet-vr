@@ -2043,6 +2043,7 @@ fn bolt_channel(start: [f32; 3], end: [f32; 3], seed: u32, depth: u32) -> Vec<[f
 /// - RETURN STROKE (0.65..1.6): full-brightness core + branches, with
 ///   high-frequency flicker;
 /// - DECAY (1.6..3.6): branches die first, the core thins and fades.
+///
 /// Held RAPID fire lands a fresh strike every tick, so envelopes
 /// overlap — the new leader climbs while the old stroke decays; the
 /// stream stays continuous and dances between re-strikes.

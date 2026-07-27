@@ -8151,7 +8151,7 @@ impl World {
                 .into_iter()
                 .map(|(k, n): (u8, usize)| (format!("{k}"), n))
                 .collect();
-            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.sort_by_key(|e| std::cmp::Reverse(e.1));
             v.truncate(3);
             v.into_iter()
                 .map(|(k, n)| format!("{k}\u{d7}{n}"))
@@ -8160,7 +8160,7 @@ impl World {
         };
         let owners = {
             let mut v: Vec<(u16, usize)> = by_owner.into_iter().collect();
-            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.sort_by_key(|e| std::cmp::Reverse(e.1));
             v.truncate(3);
             v.into_iter()
                 .map(|(k, n)| {
@@ -13397,7 +13397,6 @@ mod tests {
     fn mc2_lightning_beam_trail_points_at_the_locked_target() {
         let mut w = mc2_flat_world();
         let (mx, my) = mc2_pos(100, 100);
-        let mz = w.g.ground_z(mx, my) as i16 + 200;
         // The target: a hive imp ~2048 units out at bearing
         // cast+90 angle-units (≈15.8° off) — inside the ±113
         // acquisition cone, far outside the trail's ±96-unit jag.
