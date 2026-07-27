@@ -789,6 +789,36 @@ pub struct FireParticle {
     pub seed: f32,
 }
 
+/// PROTOTYPE lightning-bolt segment (enhanced lightning) — one thin
+/// glowing ribbon piece of a strike's channel or branch, fed per frame
+/// by the app's bolt ledger.
+#[derive(Debug, Clone, Copy)]
+pub struct BoltSegment {
+    /// World endpoints (x/z tile coords, y altitude), like
+    /// [`FireParticle`].
+    pub p0: [f32; 3],
+    pub p1: [f32; 3],
+    /// World half-width of the ribbon.
+    pub width: f32,
+    /// 0..1 strike energy (return stroke = 1, leader/decay < 1).
+    pub energy: f32,
+    /// 0..1 coverage (envelope fade).
+    pub alpha: f32,
+    /// Per-strike procedural phase (time-rolled flicker seed).
+    pub seed: f32,
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct BoltInstance {
+    p0: [f32; 3],
+    p1: [f32; 3],
+    width: f32,
+    energy: f32,
+    alpha: f32,
+    seed: f32,
+}
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct FireInstance {
@@ -1268,6 +1298,12 @@ pub struct Renderer {
     fire_buf: Option<wgpu::Buffer>,
     fire_capacity: usize,
     fire_particles: Vec<FireParticle>,
+    // PROTOTYPE lightning-bolt pass (enhanced lightning): thin glowing
+    // ribbons, sharing the fire pass's globals bind groups.
+    bolt_pipeline: wgpu::RenderPipeline,
+    bolt_buf: Option<wgpu::Buffer>,
+    bolt_capacity: usize,
+    bolt_segments: Vec<BoltSegment>,
     /// CPU copy of the sprite index for per-frame view selection.
     sprite_index: Option<mgc_formats::bundle::SpriteIndex>,
     sprite_tex: Option<wgpu::Texture>,
@@ -2216,6 +2252,55 @@ impl Renderer {
             cache: None,
         });
 
+        // PROTOTYPE lightning-bolt ribbons: same globals layout and
+        // premultiplied blend as fire, segment-endpoint instances.
+        let bolt_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bolt"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("bolt.wgsl").into()),
+        });
+        let bolt_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bolt"),
+            layout: Some(&fire_layout),
+            vertex: wgpu::VertexState {
+                module: &bolt_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<BoltInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Float32,
+                        4 => Float32, 5 => Float32,
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &bolt_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(premul),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: ms,
+            multiview: None,
+            cache: None,
+        });
+
         // Health-bar overlay: solid-color instanced quads on the same
         // camera basis; own single-binding layout so bars draw even
         // before any sprite atlas is loaded.
@@ -2461,6 +2546,10 @@ impl Renderer {
             fire_bind_group,
             fire_mirror_bind_group,
             fire_buf: None,
+            bolt_pipeline,
+            bolt_buf: None,
+            bolt_capacity: 0,
+            bolt_segments: Vec::new(),
             fire_capacity: 0,
             fire_particles: Vec::new(),
             sprite_index: None,
@@ -3613,6 +3702,12 @@ impl Renderer {
         self.fire_particles = particles;
     }
 
+    /// PROTOTYPE: replace the lightning-bolt segment set (empty =
+    /// no bolts).
+    pub fn set_bolt_segments(&mut self, segments: Vec<BoltSegment>) {
+        self.bolt_segments = segments;
+    }
+
     /// Replace the monster health-bar overlay set (empty = off).
     pub fn set_health_bars(&mut self, bars: Vec<HealthBar>) {
         self.health_bars = bars;
@@ -3786,6 +3881,38 @@ impl Renderer {
                 heat: f.heat,
                 alpha: f.alpha,
                 seed: f.seed,
+            });
+        }
+        out
+    }
+
+    fn bolt_instances(&self, cam: &CameraView) -> Vec<BoltInstance> {
+        let full = MAP_TILES as f32;
+        let wrap = |p: f32, c: f32| {
+            let mut d = p - c;
+            if d > full / 2.0 {
+                d -= full;
+            }
+            if d < -full / 2.0 {
+                d += full;
+            }
+            c + d
+        };
+        // Bolts span ≤ ~15 tiles, far under the half-map wrap window,
+        // so wrapping each endpoint independently never tears a
+        // segment across the seam.
+        let mut out = Vec::with_capacity(self.bolt_segments.len());
+        for s in &self.bolt_segments {
+            if s.alpha <= 0.004 || s.energy <= 0.004 {
+                continue;
+            }
+            out.push(BoltInstance {
+                p0: [wrap(s.p0[0], cam.x), s.p0[1], wrap(s.p0[2], cam.z)],
+                p1: [wrap(s.p1[0], cam.x), s.p1[1], wrap(s.p1[2], cam.z)],
+                width: s.width,
+                energy: s.energy,
+                alpha: s.alpha,
+                seed: s.seed,
             });
         }
         out
@@ -4265,6 +4392,25 @@ impl Renderer {
                 .write_buffer(self.fire_buf.as_ref().unwrap(), 0, bytes);
         }
 
+        // PROTOTYPE lightning-bolt instances.
+        let bolt_insts = self.bolt_instances(cam);
+        let bolt_count = bolt_insts.len() as u32;
+        if !bolt_insts.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(&bolt_insts);
+            let need = bytes.len();
+            if self.bolt_buf.is_none() || self.bolt_capacity < need {
+                self.bolt_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bolt instances"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.bolt_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.bolt_buf.as_ref().unwrap(), 0, bytes);
+        }
+
         // Health-bar instances (wrap-nearest like billboards).
         let full = MAP_TILES as f32;
         let wrapn = |p: f32, c: f32| {
@@ -4572,6 +4718,13 @@ impl Renderer {
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..fire_count);
             }
+            // PROTOTYPE lightning in the reflection.
+            if let (1.., Some(buf)) = (bolt_count, &self.bolt_buf) {
+                pass.set_pipeline(&self.bolt_pipeline);
+                pass.set_bind_group(0, &self.fire_mirror_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..bolt_count);
+            }
         }
         {
             // The book screen: the world viewport fills the top-right,
@@ -4674,6 +4827,14 @@ impl Renderer {
                     pass.set_bind_group(0, &self.fire_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..fire_count);
+                }
+                // PROTOTYPE lightning: additive ribbon bolts over the
+                // world (depth-tested, not written).
+                if let (1.., Some(buf)) = (bolt_count, &self.bolt_buf) {
+                    pass.set_pipeline(&self.bolt_pipeline);
+                    pass.set_bind_group(0, &self.fire_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..bolt_count);
                 }
                 if let (1.., Some(buf)) = (bar_count, &self.bar_buf) {
                     pass.set_pipeline(&self.bar_pipeline);

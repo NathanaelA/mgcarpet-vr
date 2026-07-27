@@ -1033,7 +1033,7 @@ fn load_level(
                     // Load-time set: no fire exists at level start, so
                     // the enhanced-fire sprite suppression is moot here
                     // (sync_world re-derives with the real flag).
-                    entities::billboards_from_poses(game_id, &poses, dims, false),
+                    entities::billboards_from_poses(game_id, &poses, dims, false, false),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
                     // (and the blink phase starts low).
@@ -1480,6 +1480,9 @@ struct Session {
     /// despawn, so the crater fire/smoke choreography outlives the
     /// driver. Updated once per sim tick alongside the pose snapshots.
     fire_blasts: entities::BlastLedger,
+    /// Latched lightning strikes aging across frames (the enhanced-
+    /// lightning envelope). Updated once per sim tick like the blasts.
+    bolts: entities::BoltLedger,
 }
 
 /// Which surface owns the frame: a running level, or one of the
@@ -1736,6 +1739,9 @@ struct App {
     /// must swap sprites/particles immediately, and while paused
     /// neither the tick path nor apply_smooth_motion runs to do it.
     fire_applied: Option<bool>,
+    /// The `enhanced_lightning()` value last applied — same
+    /// paused-flip rebuild law as `fire_applied`.
+    lightning_applied: Option<bool>,
     /// FPS-overlay accounting: frames and wall time since the last
     /// readout refresh, plus the rendered text (recomputed every
     /// half-second so the number is readable, not a blur).
@@ -1938,6 +1944,7 @@ impl App {
             toast_accumulator: 0.0,
             effect_time: 0.0,
             fire_applied: None,
+            lightning_applied: None,
             fps_frames: 0,
             fps_elapsed: 0.0,
             fps_text: String::new(),
@@ -2850,6 +2857,7 @@ impl App {
             sess.pose_prev = Vec::new();
             sess.pose_cur = Vec::new();
             sess.fire_blasts.clear();
+            sess.bolts.clear();
             self.castle_pos = None;
             self.won_handled = false;
         }
@@ -3132,6 +3140,7 @@ impl App {
             sess.pose_prev = Vec::new();
             sess.pose_cur = Vec::new();
             sess.fire_blasts.clear();
+            sess.bolts.clear();
             if let Some(w) = sess.sim.world.as_mut() {
                 w.terrain_dirty = true;
                 w.entities_dirty = true;
@@ -3273,6 +3282,7 @@ impl App {
             pose_prev: Vec::new(),
             pose_cur: Vec::new(),
             fire_blasts: entities::BlastLedger::default(),
+            bolts: entities::BoltLedger::default(),
         }));
         self.screen = Screen::Level;
         // The selection surfaces follow the running game.
@@ -3523,6 +3533,14 @@ impl App {
             && self.cfg.render.enhancement.smooth_motion
     }
 
+    /// Is the procedural lightning active? Same law as
+    /// [`App::enhanced_fire`]: the option, gated on smooth_motion
+    /// (the strike envelope runs on the interpolated timeline).
+    fn enhanced_lightning(&self) -> bool {
+        self.cfg.render.enhancement.lightning == config::LightningEffects::Enhanced
+            && self.cfg.render.enhancement.smooth_motion
+    }
+
     fn apply_smooth_motion(&mut self, alpha: f32) {
         let Some(sess) = self.session.as_deref() else {
             return;
@@ -3535,6 +3553,7 @@ impl App {
             return;
         }
         let enhanced_fire = self.enhanced_fire();
+        let enhanced_lightning = self.enhanced_lightning();
         let Some(r) = &mut self.renderer else { return };
         let poses = entities::lerp_poses(&sess.pose_prev, &sess.pose_cur, alpha.clamp(0.0, 1.0));
         let index = sess.level.sprites.as_ref().map(|(i, _)| i);
@@ -3548,6 +3567,7 @@ impl App {
             &poses,
             dims,
             enhanced_fire,
+            enhanced_lightning,
         ));
         // Enhanced fire: the procedural crater (walls + smoke) goes
         // FIRST so it wins density-cap slots; then the velocity-aware
@@ -3578,6 +3598,17 @@ impl App {
         } else {
             r.set_fire_particles(Vec::new());
         }
+        // PROTOTYPE lightning: the strike envelope + fractal channel,
+        // rebuilt per frame from the ledger (stateless, seed-frozen).
+        if enhanced_lightning {
+            r.set_bolt_segments(entities::bolt_segments(
+                &sess.bolts,
+                alpha.clamp(0.0, 1.0),
+                self.effect_time,
+            ));
+        } else {
+            r.set_bolt_segments(Vec::new());
+        }
         if self.cfg.render.debug.health_bars {
             r.set_health_bars(entities::health_bars_from_poses(
                 sess.level.game,
@@ -3594,11 +3625,15 @@ impl App {
 
     fn sync_world(&mut self) {
         let enhanced_fire = self.enhanced_fire();
-        // A fire-option flip must re-derive the sprite/particle sets
-        // even while PAUSED (no ticks → entities never dirty, and
-        // apply_smooth_motion skips) — treat it as an entities change.
-        let fire_changed = self.fire_applied != Some(enhanced_fire);
+        let enhanced_lightning = self.enhanced_lightning();
+        // A fire/lightning-option flip must re-derive the sprite/
+        // particle sets even while PAUSED (no ticks → entities never
+        // dirty, and apply_smooth_motion skips) — treat it as an
+        // entities change.
+        let fire_changed = self.fire_applied != Some(enhanced_fire)
+            || self.lightning_applied != Some(enhanced_lightning);
         self.fire_applied = Some(enhanced_fire);
+        self.lightning_applied = Some(enhanced_lightning);
         let Some(sess) = self.session.as_deref_mut() else {
             return;
         };
@@ -3679,8 +3714,13 @@ impl App {
                     .and_then(|i| i.sprites.get(id as usize))
                     .map(|s| (s.width, s.height, s.flags))
             };
-            level.billboards =
-                entities::billboards_from_poses(level.game, &poses, dims, enhanced_fire);
+            level.billboards = entities::billboards_from_poses(
+                level.game,
+                &poses,
+                dims,
+                enhanced_fire,
+                enhanced_lightning,
+            );
             if self.cfg.render.debug.health_bars {
                 bars = entities::health_bars_from_poses(level.game, &poses, dims);
             }
@@ -5237,6 +5277,20 @@ impl App {
             // Smooth-motion snapshot rotation — the entity
             // analogue of prev_flyer above (entities render
             // lerped over the same one-tick window).
+            {
+                // PROTOTYPE lightning: drain the sim's strike feed
+                // EVERY tick (even with the effect off, so the
+                // hash-quiet vec never accumulates) and age the
+                // ledger one tick.
+                let sess = sess!(self);
+                let strikes = sess
+                    .sim
+                    .world
+                    .as_mut()
+                    .map(|w| w.take_lightning_bolts())
+                    .unwrap_or_default();
+                sess.bolts.update(strikes, 1.0);
+            }
             if self.cfg.render.enhancement.smooth_motion {
                 let sess = sess!(self);
                 if let Some(w) = &sess.sim.world {

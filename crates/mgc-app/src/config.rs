@@ -414,6 +414,20 @@ pub enum FireEffects {
     Enhanced,
 }
 
+/// Lightning look: retail's sprite-216 zigzag flash vs the procedural
+/// bolt — a fractal main channel with side branches, a leader →
+/// return-stroke → decay envelope per strike, successive strikes
+/// overlapping into a continuous stream. Presentation only: the sim
+/// (trail-node entities, blasts, damage) is identical whichever is
+/// selected. Classic is the default — pending playtesting, like fire.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LightningEffects {
+    #[default]
+    Classic,
+    Enhanced,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RenderEnhancement {
@@ -455,6 +469,10 @@ pub struct RenderEnhancement {
     /// for now. Needs smooth_motion for the frame-rate flame; with
     /// smooth_motion off the classic sprites draw regardless.
     pub fire: FireEffects,
+    /// Procedural lightning (fractal branched bolt with a strike
+    /// envelope) vs the retail zigzag flash sprites. Defaults to
+    /// classic. Needs smooth_motion like fire.
+    pub lightning: LightningEffects,
 }
 
 impl Default for RenderEnhancement {
@@ -466,6 +484,7 @@ impl Default for RenderEnhancement {
             map_owned_buildings: false,
             expose_jar_spells: false,
             fire: FireEffects::default(),
+            lightning: LightningEffects::default(),
         }
     }
 }
@@ -1019,7 +1038,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 18;
+const DEFAULTS_VERSION: u64 = 19;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

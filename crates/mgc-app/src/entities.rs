@@ -12,7 +12,8 @@
 //! renders.
 
 use mgc_formats::{Thing, ThingKind};
-use mgc_render::{Billboard, FireParticle, HealthBar};
+use mgc_render::{Billboard, BoltSegment, FireParticle, HealthBar};
+use mgc_sim::engine::features::BoltStrike;
 use mgc_sim::engine::world::{BlastView, LivePose};
 use mgc_sim::ids::GameId;
 use mgc_sim::mc1::entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
@@ -255,6 +256,7 @@ pub fn billboards_from_poses(
     poses: &[LivePose],
     sprite_dims: impl Fn(u16) -> Option<(u16, u16, u16)>,
     enhanced_fire: bool,
+    enhanced_lightning: bool,
 ) -> Vec<Billboard> {
     let mut out = Vec::new();
     for p in poses {
@@ -274,6 +276,13 @@ pub fn billboards_from_poses(
                     || (matches!(p.model, 6 | 19 | 23) && p.fire_life.is_some()))
                 || p.class == 9 && matches!(p.model, 0 | 28))
         {
+            continue;
+        }
+        // Enhanced lightning: the procedural bolt replaces the
+        // sprite-216 zigzag flash — (9,9) covers the trail/segment
+        // nodes of every beam emitter in both games (the beam entity
+        // itself dies the tick it fires and never poses).
+        if enhanced_lightning && p.class == 9 && p.model == 9 {
             continue;
         }
         let Some(s) = resolve_pose_sprite(game, p.type_index, &sprite_dims) else {
@@ -1887,9 +1896,289 @@ fn ground_height(height: &[u8], x: f32, z: f32) -> f32 {
     top * (1.0 - tz) + bot * tz
 }
 
+// ---- PROTOTYPE enhanced lightning ----------------------------------------
+
+/// One latched strike aging across render frames. Geometry is FROZEN
+/// per strike (a real channel doesn't wander — the stream dances
+/// because each RAPID re-fire is a new strike); only intensity
+/// animates.
+struct LedgerBolt {
+    start: [f32; 3],
+    end: [f32; 3],
+    /// Whole sim ticks since the strike (sub-tick comes from alpha).
+    age: f32,
+    seed: u32,
+}
+
+/// The strike ledger (sibling of [`BlastLedger`]): latches the sim's
+/// hash-quiet [`BoltStrike`] feed each tick and ages strikes across
+/// frames so the envelope (leader → return stroke → decay) can
+/// overlap successive strikes into a continuous stream.
+#[derive(Default)]
+pub struct BoltLedger {
+    bolts: Vec<LedgerBolt>,
+    counter: u32,
+}
+
+/// Total strike life in ticks (24 Hz): leader + stroke + decay.
+const BOLT_LIFE: f32 = 3.6;
+/// Leader phase end — the channel grows muzzle→target until here.
+const BOLT_LEADER_END: f32 = 0.65;
+/// Return-stroke end — full brightness until here, then decay.
+const BOLT_STROKE_END: f32 = 1.6;
+/// Ribbon half-width of the main channel, in tiles.
+const BOLT_CORE_W: f32 = 0.13;
+
+impl BoltLedger {
+    /// One sim tick: age everything, retire the dead, latch the new.
+    pub fn update(&mut self, strikes: Vec<BoltStrike>, steps: f32) {
+        for b in &mut self.bolts {
+            b.age += steps;
+        }
+        self.bolts.retain(|b| b.age < BOLT_LIFE);
+        let conv =
+            |(x, y, z): (u16, u16, i16)| [x as f32 / 256.0, z as f32 / 256.0, y as f32 / 256.0];
+        for s in strikes {
+            self.counter = self.counter.wrapping_add(1);
+            self.bolts.push(LedgerBolt {
+                start: conv(s.start),
+                end: conv(s.end),
+                age: 0.0,
+                seed: self
+                    .counter
+                    .wrapping_mul(0x9E37_79B9)
+                    .wrapping_add(s.owner as u32),
+            });
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.bolts.clear();
+        self.counter = 0;
+    }
+}
+
+/// Deterministic hash → [0,1) (the fire emitter's phase hash).
+fn hash01(a: u32) -> f32 {
+    let mut x = a.wrapping_mul(0x9E37_79B9);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x85EB_CA6B);
+    x ^= x >> 13;
+    (x & 0xFFFF) as f32 / 65536.0
+}
+
+fn v_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn v_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn v_scale(a: [f32; 3], s: f32) -> [f32; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+fn v_len(a: [f32; 3]) -> f32 {
+    (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+fn v_norm(a: [f32; 3]) -> [f32; 3] {
+    let l = v_len(a).max(1e-6);
+    v_scale(a, 1.0 / l)
+}
+fn v_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+fn v_lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+/// Fractal channel: recursive midpoint displacement between two world
+/// points — long straight-ish runs broken by kinks with detail at
+/// every scale, the actual shape of a lightning channel (the retail
+/// ±1 random-walk zigzag is uniform noise by comparison). Offsets are
+/// drawn in the chord's perpendicular plane from the strike seed, so
+/// the shape is FROZEN for the strike's life. Endpoint-pinned: the
+/// bolt genuinely starts at the muzzle and ends on the victim.
+fn bolt_channel(start: [f32; 3], end: [f32; 3], seed: u32, depth: u32) -> Vec<[f32; 3]> {
+    let chord = v_sub(end, start);
+    let clen = v_len(chord);
+    let n = v_norm(chord);
+    // Perpendicular basis (u horizontal-ish, v the other axis).
+    let helper = if n[1].abs() > 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let u = v_norm(v_cross(n, helper));
+    let v = v_cross(n, u);
+    let mut pts = vec![start, end];
+    for d in 0..depth {
+        let amp = clen * 0.16 * 0.5f32.powi(d as i32);
+        let mut next = Vec::with_capacity(pts.len() * 2 - 1);
+        for (i, pair) in pts.windows(2).enumerate() {
+            let ih = (i as u32).wrapping_mul(2_654_435_761);
+            let h1 = hash01(seed ^ (d << 12) ^ ih) - 0.5;
+            let h2 = hash01(seed ^ (d << 12) ^ ih ^ 0x5555) - 0.5;
+            let mid = v_lerp(pair[0], pair[1], 0.5);
+            let off = v_add(v_scale(u, h1 * amp), v_scale(v, h2 * amp * 0.6));
+            next.push(pair[0]);
+            next.push(v_add(mid, off));
+        }
+        next.push(*pts.last().unwrap());
+        pts = next;
+    }
+    pts
+}
+
+/// Build the frame's bolt segments from the ledger: per strike, the
+/// envelope picks the phase —
+/// - LEADER (0..0.65 ticks): a thin dim channel GROWS muzzle→target
+///   (the buildup);
+/// - RETURN STROKE (0.65..1.6): full-brightness core + branches, with
+///   high-frequency flicker;
+/// - DECAY (1.6..3.6): branches die first, the core thins and fades.
+/// Held RAPID fire lands a fresh strike every tick, so envelopes
+/// overlap — the new leader climbs while the old stroke decays; the
+/// stream stays continuous and dances between re-strikes.
+pub fn bolt_segments(ledger: &BoltLedger, alpha: f32, time: f32) -> Vec<BoltSegment> {
+    let mut out = Vec::new();
+    for b in &ledger.bolts {
+        let t = b.age + alpha.clamp(0.0, 1.0);
+        if t >= BOLT_LIFE {
+            continue;
+        }
+        let (energy, width_k, fade, grow, branches) = if t < BOLT_LEADER_END {
+            (0.35, 0.5, 0.9, t / BOLT_LEADER_END, false)
+        } else if t < BOLT_STROKE_END {
+            (1.0, 1.0, 1.0, 1.0, true)
+        } else {
+            let k = 1.0 - (t - BOLT_STROKE_END) / (BOLT_LIFE - BOLT_STROKE_END);
+            (k * k, 0.55 + 0.45 * k, 0.4 + 0.6 * k, 1.0, k > 0.55)
+        };
+        let pts = bolt_channel(b.start, b.end, b.seed, 5);
+        let segs = pts.len() - 1;
+        let drawn = ((segs as f32) * grow).ceil().max(1.0) as usize;
+        let emit = |out: &mut Vec<BoltSegment>, p0: [f32; 3], p1: [f32; 3], w: f32, e: f32, idx| {
+            out.push(BoltSegment {
+                p0,
+                p1,
+                width: w,
+                energy: e,
+                alpha: fade,
+                seed: hash01(b.seed ^ (idx as u32).wrapping_mul(977)) * std::f32::consts::TAU
+                    + time * 6.0,
+            });
+        };
+        for (i, pair) in pts.windows(2).take(drawn).enumerate() {
+            let mut p1 = pair[1];
+            // Partial tip while the leader grows.
+            if i + 1 == drawn && grow < 1.0 {
+                let frac = (segs as f32 * grow) - i as f32;
+                p1 = v_lerp(pair[0], pair[1], frac.clamp(0.05, 1.0));
+            }
+            emit(&mut out, pair[0], p1, BOLT_CORE_W * width_k, energy, i);
+        }
+        if branches {
+            // 2-3 side branches forked off upper-level kinks: dimmer,
+            // thinner, dying with the stroke — the thing that reads
+            // "lightning" instead of "noodle". One level only.
+            let count = 2 + (b.seed & 1) as usize;
+            for k in 0..count {
+                let h = hash01(b.seed ^ (k as u32).wrapping_mul(7919));
+                // Fork in the UPPER part of the channel only (12-45%
+                // along): real side leaders split early and die off;
+                // a branch near the terminus reads as a misfire.
+                let at = ((0.12 + 0.33 * h) * segs as f32) as usize;
+                let p = pts[at.min(pts.len() - 2)];
+                let dir = v_norm(v_sub(pts[at.min(pts.len() - 2) + 1], p));
+                let helper = if dir[1].abs() > 0.9 {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
+                let lat = v_norm(v_cross(dir, helper));
+                let sign = if hash01(b.seed ^ (k as u32).wrapping_mul(104_729)) < 0.5 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                // Veer well OFF the channel heading — a branch that
+                // parallels the main bolt toward the target reads as
+                // a second (missing) bolt.
+                let bdir = v_norm(v_add(
+                    v_scale(dir, 0.4),
+                    v_scale(lat, sign * (0.6 + 0.4 * h)),
+                ));
+                // Short: a fraction of the remaining distance, hard
+                // capped — side leaders exhaust quickly.
+                let blen = (v_len(v_sub(b.end, p)) * (0.10 + 0.10 * h)).min(1.6);
+                let bend = v_add(p, v_scale(bdir, blen));
+                let bpts = bolt_channel(p, bend, b.seed ^ 0xB1A5 ^ (k as u32) << 16, 3);
+                for (i, pair) in bpts.windows(2).enumerate() {
+                    emit(
+                        &mut out,
+                        pair[0],
+                        pair[1],
+                        BOLT_CORE_W * width_k * 0.42,
+                        energy * 0.34,
+                        i + 64 + k * 16,
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The strike envelope: the leader GROWS from the muzzle (partial
+    /// channel, endpoint short of the target), the return stroke is
+    /// full-length and endpoint-pinned on the target, decay fades and
+    /// eventually retires the strike.
+    #[test]
+    fn bolt_envelope_grows_then_pins_then_dies() {
+        let mut led = BoltLedger::default();
+        let strike = BoltStrike {
+            start: (256, 256, 100),
+            end: (2560, 256, 100),
+            owner: 0xFFFF,
+        };
+        led.update(vec![strike], 1.0);
+        // Mid-leader (age 0 + alpha 0.3): channel truncated.
+        let segs = bolt_segments(&led, 0.3, 0.0);
+        assert!(!segs.is_empty(), "the leader draws");
+        let far = segs.iter().map(|s| s.p1[0]).fold(f32::MIN, f32::max);
+        assert!(
+            far < 9.5,
+            "mid-leader the channel has not reached the target (far x {far})"
+        );
+        // Return stroke (age 1 + alpha 0.2): full length, endpoint
+        // pinned on the victim (end x = 2560/256 = 10 tiles).
+        led.update(Vec::new(), 1.0);
+        let segs = bolt_segments(&led, 0.2, 0.0);
+        let far = segs.iter().map(|s| s.p1[0]).fold(f32::MIN, f32::max);
+        assert!(
+            (far - 10.0).abs() < 0.05,
+            "the stroke ends ON the target (far x {far})"
+        );
+        let peak = segs.iter().map(|s| s.energy).fold(0.0f32, f32::max);
+        assert!(peak >= 0.99, "return stroke at full energy");
+        // Past the life: retired.
+        led.update(Vec::new(), 3.0);
+        assert!(
+            bolt_segments(&led, 0.0, 0.0).is_empty(),
+            "the strike retires after its life"
+        );
+    }
 
     fn pose(class: u8, model: u8, owned: bool, type_index: u16) -> LivePose {
         LivePose {

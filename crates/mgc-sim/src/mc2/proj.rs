@@ -785,6 +785,20 @@ impl Gen {
             }
         }
         self.ent[i].f146 = lock;
+        // Enhanced-lightning presentation feed: the resolved strike,
+        // muzzle → walked terminus (hash-silent, drained by the
+        // frontend).
+        let end = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        if self.bolt_fx.0.len() < 256 {
+            self.bolt_fx.0.push(crate::engine::features::BoltStrike {
+                start: (sx, sy, sz),
+                end,
+                owner: id,
+            });
+        }
         // Lay the VISIBLE jagged flash: `sub_66750`'s cosmetic sprite-216
         // trail (EF:58320) along the AIMED heading, `steps·8` nodes at
         // `actSpeed/8` spacing (EF:58321-23) — its end coincides with

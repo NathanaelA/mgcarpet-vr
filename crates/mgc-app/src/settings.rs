@@ -854,6 +854,46 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Render,
             group: "render · enhancement",
+            label: "lightning",
+            // Purely visual, exactly like fire — Preference class.
+            class: Preference,
+            key: None,
+            cli: Some("--lightning"),
+            cfg_path: "render.enhancement.lightning",
+            read: |c| Val::Choice {
+                cur: match c.render.enhancement.lightning {
+                    crate::config::LightningEffects::Classic => 0,
+                    crate::config::LightningEffects::Enhanced => 1,
+                },
+                faithful: 0,
+                variants: &["classic", "enhanced"],
+            },
+            desc: "The lightning look. Classic = the retail zigzag flash \
+                   sprites, exactly as the running game draws them. Enhanced = \
+                   a procedural bolt: a fractal main channel with small side \
+                   branches, each strike playing a leader / return-stroke / \
+                   decay envelope, successive strikes of a held stream \
+                   overlapping into one continuous dancing arc. Presentation \
+                   only — the simulation is identical either way. Needs \
+                   smooth motion; with it off, classic draws regardless.",
+            ctl: Ctl::Choice {
+                set: |c, i| {
+                    c.render.enhancement.lightning = match i {
+                        1 => crate::config::LightningEffects::Enhanced,
+                        _ => crate::config::LightningEffects::Classic,
+                    }
+                },
+                descs: &[
+                    "Retail zigzag flash sprites, as the original drew them \
+                     (default).",
+                    "Procedural fractal bolt with branches and a strike \
+                     envelope.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
             label: "map_owned_buildings",
             class: Enhancement,
             key: None,

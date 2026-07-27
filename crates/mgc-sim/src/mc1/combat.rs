@@ -1715,6 +1715,16 @@ impl Gen {
                 self.hits += 1;
             }
         }
+        // Enhanced-lightning presentation feed: the resolved strike,
+        // muzzle → chain endpoint (hash-silent, drained by the
+        // frontend).
+        if self.bolt_fx.0.len() < 256 {
+            self.bolt_fx.0.push(crate::engine::features::BoltStrike {
+                start: spawn,
+                end: disp,
+                owner,
+            });
+        }
         // The explosion lands at the SEGMENT-WALK endpoint, not the
         // beam's snapped position. Shielded (+17 bit7) class-3
         // victims with mana ≥ +140/4 quarter the payload — no drain,

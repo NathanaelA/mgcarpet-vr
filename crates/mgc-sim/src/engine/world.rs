@@ -8096,6 +8096,15 @@ impl World {
         (cap.saturating_sub(self.g.free.len()), cap)
     }
 
+    /// Drain the lightning-strike presentation feed (enhanced
+    /// lightning): every beam resolved since the last drain, as
+    /// muzzle→terminus strikes in raw sim units. Hash-silent,
+    /// presentation-only — a frontend that never drains loses
+    /// nothing but memory (the vec is cleared here and on load).
+    pub fn take_lightning_bolts(&mut self) -> Vec<crate::engine::features::BoltStrike> {
+        std::mem::take(&mut self.g.bolt_fx.0)
+    }
+
     /// Live-entity census by `(class, model)`, most-populous first —
     /// the pool-spike forensic: when the pool exhausts (or the
     /// entities overlay spikes), the top occupants name the culprit.

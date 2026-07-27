@@ -751,6 +751,13 @@ pub(crate) struct Gen {
     /// human book is world-side — the world tick drains this the
     /// same turn. Hash-transparent while empty.
     pub(crate) mc2_steal_mail: Mc2StealMail,
+    /// Lightning-strike presentation events (the enhanced-lightning
+    /// render feed): every resolved beam pushes its muzzle→terminus
+    /// strike here; the frontend drains it per tick. PURE
+    /// PRESENTATION — hash-SILENT always (the sim state it describes,
+    /// trail nodes + blasts, is the hashed retail state) and never
+    /// saved (cleared on load).
+    pub(crate) bolt_fx: BoltFx,
     /// The mana-magnet aura CLAIM handshake (`word_0x7A_122` on the
     /// ball, EF:28364/28383): ball slot → claiming aura slot. An aura
     /// claims an unclaimed ball for one pull; the ball's own tick
@@ -825,6 +832,26 @@ impl std::hash::Hash for Mc2XpMail {
             self.0.hash(state);
         }
     }
+}
+
+/// One resolved lightning strike (both games): the beam's muzzle and
+/// terminus in raw sim units, plus the owner. Presentation-only —
+/// consumed by the frontend's bolt ledger.
+#[derive(Clone, Copy, Debug)]
+pub struct BoltStrike {
+    pub start: (u16, u16, i16),
+    pub end: (u16, u16, i16),
+    pub owner: u16,
+}
+
+/// See [`Gen::bolt_fx`] — hash-SILENT ALWAYS (the `slot_gen` class of
+/// field: dropping it changes nothing observable to the sim), unlike
+/// the drained-mail wrappers which hash when non-empty.
+#[derive(Default)]
+pub(crate) struct BoltFx(pub Vec<BoltStrike>);
+
+impl std::hash::Hash for BoltFx {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
 }
 
 /// See [`Gen::mc2_steal_mail`] — (wraith slot, hand: 1 = right,
@@ -1040,6 +1067,7 @@ impl Gen {
             mc2_scrolls: Mc2Quiet::default(),
             mc2_spell_tokens: Mc2Quiet::default(),
             mc2_cast_xp: Mc2XpMail::default(),
+            bolt_fx: BoltFx::default(),
             mc2_steal_mail: Mc2StealMail::default(),
             mc2_aura_claim: Mc2SlotMap::default(),
             mc2_wanted: Mc2SlotMap::default(),
@@ -4891,6 +4919,8 @@ impl Gen {
             mc2_scrolls,
             mc2_spell_tokens,
             mc2_cast_xp,
+            // Presentation feed, never saved — a load starts clean.
+            bolt_fx: _,
             mc2_steal_mail,
             mc2_aura_claim,
             mc2_wanted,
@@ -4995,6 +5025,9 @@ impl Gen {
         self.mc2_rebound_precise = r.get()?;
         self.mc2_allied = r.get()?;
         self.mc2_castle_research = r.get()?;
+        // Presentation feed — never saved, never inherited across a
+        // load.
+        self.bolt_fx.0.clear();
         Ok(())
     }
 }
