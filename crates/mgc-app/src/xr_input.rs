@@ -75,6 +75,9 @@ pub struct InputActions {
     last_menu: bool,
     last_thumbstick_right_click: bool,
     last_thumbstick_left_click: bool,
+    last_btn_x_click: bool,
+    last_btn_y_click: bool,
+    last_btn_b_click: i64,
     pointer: PointerState,
 }
 
@@ -188,13 +191,16 @@ impl InputActions {
             menu_click,
             squeeze_left,
             squeeze_right,
-            left_spell: 0,
-            right_spell: 0,
+            left_spell: 0,    // Default it to fireball spell
+            right_spell: 3,   // Default it to mana spell
             last_squeeze_left: false,
             last_squeeze_right: false,
             last_menu: false,
             last_thumbstick_right_click: false,
             last_thumbstick_left_click: false,
+            last_btn_x_click: false,
+            last_btn_y_click: false,
+            last_btn_b_click: 0,
             pointer: PointerState::default(),
         })
     }
@@ -231,6 +237,7 @@ impl InputActions {
         flyer: &Flyer,
         screen_size: (f32, f32),
         owned: [bool; 26],
+        bindable: [bool; 26],
         is_mc2: bool,
         grabbed: bool,
     ) -> FlightInput {
@@ -319,12 +326,12 @@ impl InputActions {
 
         let next_spell = |spell: u8| {
             for i in spell + 1..26 {
-                if owned[i as usize] {
+                if owned[i as usize] && bindable[i as usize] {
                     return i;
                 }
             }
             for i in 0..26 {
-                if owned[i as usize] {
+                if owned[i as usize] && bindable[i as usize] {
                     return i;
                 }
             }
@@ -337,12 +344,15 @@ impl InputActions {
         let mut extra_data = 0;
 
         if pressed(&self.menu_click) && !self.last_menu {
+            // Spell/Book
             extra_data |= 1;
         }
-        if pressed(&self.thumbstick_left_click) && !self.last_thumbstick_left_click {
+        if pressed(&self.btn_y) && !self.last_btn_y_click {
+            // Pause Button
             extra_data |= 2;
         }
 
+        // Pitch Delta would normally be on right.y; but pitch is VERY annoying in vr; so we are fixing it based on moving forward backwards.
         let pitch_delta = if left.y < 0.0 {
             0.3
         } else if (left.y > 0.0) {
@@ -376,6 +386,18 @@ impl InputActions {
                 }
                 mc2_select = Some((self.right_spell, 0, 1));
             }
+            if !self.last_thumbstick_left_click && pressed(&self.thumbstick_left_click) {
+                if self.left_spell == 0 {
+                    self.left_spell = 15; // Lightning
+                } else if self.left_spell == 15 {
+                    self.left_spell = 7 // Meteor
+                } else {
+                    self.left_spell = 0; // Fireball
+                }
+                mc2_select = Some((self.left_spell, 0, 0));
+            }
+
+
         } else {
             equip_left = if !self.last_squeeze_left && value(&self.squeeze_left) > 0.5 {
                 self.left_spell = next_spell(self.left_spell);
@@ -397,23 +419,49 @@ impl InputActions {
                 }
                 equip_right = self.right_spell;
             }
+
+            if !self.last_thumbstick_left_click && pressed(&self.thumbstick_left_click) {
+                if self.left_spell == 0 {
+                    self.left_spell = 15; // Lightning
+                } else if self.left_spell == 15 {
+                    self.left_spell = 7 // Meteor
+                } else {
+                    self.left_spell = 0; // Fireball
+                }
+                equip_left = self.left_spell;
+            }
         }
+
+
+        let demolish = if pressed(&self.btn_b) {
+            // 100ms debounce for demolish button, to avoid accidental demolish
+            if self.last_btn_b_click > 0 && display_time.as_nanos() - self.last_btn_b_click < 100_000_000 {
+                true
+            } else {
+                self.last_btn_b_click = display_time.as_nanos();
+                false
+            }
+        } else {
+            false
+        };
 
         self.last_squeeze_right = value(&self.squeeze_right) > 0.5;
         self.last_squeeze_left = value(&self.squeeze_left) > 0.5;
         self.last_menu = pressed(&self.menu_click);
         self.last_thumbstick_right_click = pressed(&self.thumbstick_right_click);
         self.last_thumbstick_left_click = pressed(&self.thumbstick_left_click);
+        self.last_btn_x_click = pressed(&self.btn_x);
+        self.last_btn_y_click = pressed(&self.btn_y);
 
         FlightInput {
             thrust: left.y * 4.0,
             strafe: left.x * 4.0,
             yaw_delta: right.x * YAW_RATE_PER_TICK,
-            pitch_delta: pitch_delta, 
+            pitch_delta,
             fire_left: value(&self.trigger_left) > 0.5,
             fire_right: value(&self.trigger_right) > 0.5,
             respawn: pressed(&self.btn_a),
-            demolish: pressed(&self.btn_b),
+            demolish,
             equip_left: (equip_left < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_left)),
             equip_right: (equip_right < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_right)),
             mc2_select,
