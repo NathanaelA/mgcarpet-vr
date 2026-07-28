@@ -26,10 +26,15 @@
 //! Interim deviations (ours, flagged inline): the hate feed runs at
 //! damage-intake and homing-acquisition time instead of the
 //! original's per-projectile one-shot ledger scan (sub_16540 —
-//! equivalent inputs, slightly later timing); creatures still target
-//! only the human (OPEN: widen the mob scans to the full wizard
-//! list); the duel pull on the CASTER is applied through the knock
-//! channel (magnitude from the traced formula).
+//! equivalent inputs, slightly later timing); the duel pull on the
+//! CASTER is applied through the knock channel (magnitude from the
+//! traced formula). Creature target scans now walk the full class-3
+//! bucket[0] list (`Gen::nearest_wizard_target`) — carpets, castles
+//! and balloons for the wyvern/crab/mound/guard, carpets-only for the
+//! genie — so wild creatures fight rival wizards, not just the human;
+//! the lone residual is the militia, still gated on the human's
+//! `player_aggro` because per-rival village hostility is not yet
+//! tracked (see docs/DEVIATIONS.md).
 
 use crate::engine::features::Gen;
 use crate::engine::world::{LifeState, World};

@@ -822,6 +822,89 @@ impl Gen {
             && Self::angdist(e.f30, Self::angle_between(e.x, e.y, ctx.px, ctx.py)) < row.v_30 as u16
     }
 
+    /// Scan A (sub_19D70 :21519-42): the nearest bucket[0] body within
+    /// this creature's v_28² range and v_30 facing cone. Retail's
+    /// bucket[0] (`var_u32_36462[0]`, rebuilt at :52253 from every live
+    /// class-3 entity) holds the wizard CARPETS *and* the CASTLES, and
+    /// the shared creature scans carry no +65 body filter — so a castle
+    /// (class 3, model 2) is as valid a chase target as a carpet (the
+    /// m9 mound already hunts castles off this same list, :23752).
+    ///
+    /// bucket[0] holds every LIVE class-3 body regardless of model —
+    /// the case-3 rebuild gate is `actLife>=0 && (flags & 0x10)==0`, and
+    /// 0x10 is a dead bit that nothing ever sets (:52254), so the four
+    /// class-3 models all qualify: 0 human carpet, 1 rival carpet, 2
+    /// castle (:44245, maxLife 40000), 3 mana balloon (:44277, maxLife
+    /// 10000). Retail even extends the m9 mound's attack reach by a
+    /// castle's footprint (:24201) — castle-attacking is deliberate.
+    ///
+    /// The human lives outside the pool, so it is the first candidate
+    /// (via `ctx`, with `player_in_aggro_range`'s invisibility +
+    /// undead-army owner gates); rival carpets, castles and balloons are
+    /// the pool members (model 0 would be a second human body — never
+    /// spawned, since ours is out-of-pool — so it is skipped). A
+    /// creature never targets its own owner or its own castle/balloon
+    /// (the +24 exclusion, verbatim for the m9/m15 scans and a kept
+    /// extension of the port's existing human gate for the rest). A body
+    /// being removed/captured carries the 0x20 bit and is skipped,
+    /// exactly as retail's per-node gate (0x420 folds in the port's
+    /// 0x400 removed/dead bit). Ascending pool index matches bucket[0]'s
+    /// rebuild order for the tie-break; the out-of-pool human, which has
+    /// no index, wins ties by going first. Returns [`PLAYER_TARGET`] or
+    /// a pool entity index; `None` when the cone holds no body.
+    ///
+    /// `bodies_only` is retail's `+65 <= 1` gate: the genie's aggro scan
+    /// (:24487) restricts to wizard CARPETS (model 1), skipping castles
+    /// and balloons; the wyvern/crab/mound/guard scans pass `false` and
+    /// take the whole list.
+    pub(crate) fn nearest_wizard_target(
+        &self,
+        i: usize,
+        ctx: &MobCtx,
+        bodies_only: bool,
+    ) -> Option<u16> {
+        let e = &self.ent[i];
+        let row = &BEHAVIOR[e.row156 as usize];
+        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let cone = row.v_30 as u16;
+        let (ex, ey, ef30, owner) = (e.x, e.y, e.f30, e.id24);
+
+        let mut best: Option<u16> = None;
+        let mut best_d2 = i32::MAX;
+
+        // The human wizard (bucket[0]'s out-of-pool member).
+        if !self.player_invisible && owner != PLAYER_TARGET {
+            let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py);
+            if d2 <= r2 && Self::angdist(ef30, Self::angle_between(ex, ey, ctx.px, ctx.py)) < cone {
+                best = Some(PLAYER_TARGET);
+                best_d2 = d2;
+            }
+        }
+
+        // Pool bodies: any class-3 except the out-of-pool human (model
+        // 0) — rival carpets (1), castles (2), mana balloons (3). Under
+        // `bodies_only` (the genie's +65<=1 gate) only the rival carpets
+        // qualify; castles and balloons are skipped.
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 3 || c.model65 == 0 || (bodies_only && c.model65 != 1) {
+                continue;
+            }
+            if c.act_life < 0 || c.flags & 0x420 != 0 || owner == c.id24 {
+                continue;
+            }
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            if d2 <= r2
+                && d2 < best_d2
+                && Self::angdist(ef30, Self::angle_between(ex, ey, c.x, c.y)) < cone
+            {
+                best = Some(j as u16);
+                best_d2 = d2;
+            }
+        }
+        best
+    }
+
     /// IDLE sub_19B10 (:21311): stationary; every v_26 ticks a pack
     /// scan. (The damage inbox runs in `creature_tick` before
     /// dispatch, as the original's per-handler prologue.)
@@ -856,8 +939,13 @@ impl Gen {
             let sign = if d1 % 157 >= 79 { 1 } else { -1 };
             self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
             if self.ent[i].f58 != 0 {
-                if aggro && self.player_in_aggro_range(i, ctx) {
-                    self.ent[i].f146 = PLAYER_TARGET;
+                let tgt = if aggro {
+                    self.nearest_wizard_target(i, ctx, false)
+                } else {
+                    None
+                };
+                if let Some(t) = tgt {
+                    self.ent[i].f146 = t;
                     self.ent[i].tick70 = base + 2;
                 } else {
                     self.pack_scan(i, base);
@@ -1239,11 +1327,12 @@ impl Gen {
     /// m11 WANDER sub_1DFE0 (:24388) — a full active handler, not a
     /// caster-phase nop: move, then every v_26 the SELF-HEAL
     /// (+maxLife>>6, clamped), the awake- and quarter-life-gated
-    /// wizard scan (range v_28 + cone v_30 + invisibility, owner ≤ 1)
-    /// → AMBUSH BLINK, else eat a mana ball; the standard two-draw
-    /// yaw jitter; and above 3/4 life the MANA HUNT (:24523-46) — the
-    /// first wizard holding ANY mana, no range or cone gate, →
-    /// ambush. (The hit-retaliation lives in the central inbox.)
+    /// wizard scan (range v_28 + cone v_30 + invisibility, model +65<=1
+    /// — human + rival CARPETS, not castles/balloons; the doc's old
+    /// "owner ≤ 1" misread the +65 byte) → AMBUSH BLINK, else eat a
+    /// mana ball; the standard two-draw yaw jitter; and above 3/4 life
+    /// the MANA HUNT (:24523-46) — the first wizard holding ANY mana, no
+    /// range or cone gate, → ambush. (Hit-retaliation is the inbox's.)
     fn genie_wander(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
@@ -1263,9 +1352,12 @@ impl Gen {
                 e.act_life = e.max_life as i32;
             }
         }
+        // Aggro scan (:24485): the nearest wizard BODY — human or rival
+        // carpet (the +65<=1 gate, so no castles/balloons) — within
+        // range+cone → ambush-blink; nothing in reach → eat a mana ball.
         if self.ent[i].f58 != 0 && self.ent[i].act_life > (self.ent[i].max_life >> 2) as i32 {
-            if self.player_in_aggro_range(i, ctx) {
-                self.ent[i].f146 = PLAYER_TARGET;
+            if let Some(t) = self.nearest_wizard_target(i, ctx, true) {
+                self.ent[i].f146 = t;
                 self.genie_ambush(i, base, ctx);
             } else {
                 self.genie_eat_ball(i);
@@ -1276,15 +1368,39 @@ impl Gen {
         let mag = ((d2 & 0xFF) + 85) as i32;
         let sign = if d1 % 157 >= 79 { 1 } else { -1 };
         self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
-        let e = &self.ent[i];
-        if e.act_life > (e.max_life - (e.max_life >> 2)) as i32
-            && ctx.pmana != 0
-            && !self.player_invisible
-            && self.ent[i].id24 != PLAYER_TARGET
-        {
-            self.ent[i].f146 = PLAYER_TARGET;
-            self.genie_ambush(i, base, ctx);
+        // Mana hunt (:24523): above 3/4 life, the FIRST wizard body
+        // (human or rival carpet) holding any mana — no range or cone
+        // gate — becomes the ambush target.
+        if self.ent[i].act_life > (self.ent[i].max_life - (self.ent[i].max_life >> 2)) as i32 {
+            if let Some(t) = self.first_wizard_with_mana(i, ctx) {
+                self.ent[i].f146 = t;
+                self.genie_ambush(i, base, ctx);
+            }
         }
+    }
+
+    /// The genie mana hunt's target pick (:24527): the FIRST wizard body
+    /// (human or rival CARPET, the +65<=1 gate) that is holding mana
+    /// (+140 != 0) and not cloaked/hidden (0x20 clear). No range or cone
+    /// — a genie above 3/4 life blinks straight onto the nearest mana it
+    /// can smell. The out-of-pool human (usually bucket[0]'s lowest
+    /// index) is tested first via `ctx`; rivals follow in pool order.
+    fn first_wizard_with_mana(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
+        if !self.player_invisible && self.ent[i].id24 != PLAYER_TARGET && ctx.pmana != 0 {
+            return Some(PLAYER_TARGET);
+        }
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 == 3
+                && c.model65 == 1
+                && c.act_life >= 0
+                && c.flags & 0x20 == 0
+                && c.f140 != 0
+            {
+                return Some(j as u16);
+            }
+        }
+        None
     }
 
     /// m11 CHASE sub_1E380 (:24554): move; at or above half life the
@@ -1378,8 +1494,8 @@ impl Gen {
         if self.ent[i].act_life >= 0 {
             let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
             if (self.ent[i].f63 as i16) % v26 == 0 {
-                if self.player_in_aggro_range(i, ctx) {
-                    self.ent[i].f146 = PLAYER_TARGET;
+                if let Some(t) = self.nearest_wizard_target(i, ctx, false) {
+                    self.ent[i].f146 = t;
                     self.ent[i].tick70 = base + 2;
                 } else if self.ent[i].f146 != 0 {
                     let t = self.ent[i].f146 as usize;
@@ -1594,6 +1710,12 @@ impl Gen {
         if (self.ent[i].f63 as i16) % (4 * v26) != 0 {
             return;
         }
+        // Kept human-only (unlike the other bucket[0] scans): retail
+        // gates the wizard hit on that wizard's own village-wanted flag
+        // (+160->+528, :22613). We track village hostility only for the
+        // human (`player_aggro`); widening to rivals faithfully needs a
+        // per-rival village-wanted state the port does not yet carry, so
+        // militia stay the human's problem for now (residual OPEN).
         if self.player_aggro != 0 && self.player_in_aggro_range(i, ctx) {
             self.ent[i].f146 = PLAYER_TARGET;
             self.ent[i].tick70 = base + 2;
@@ -2376,9 +2498,11 @@ impl Gen {
         // but out of range falls through here too (no jitter, like
         // the original). Same range/cone/invisibility gates as the
         // shared wander scan.
-        if !chased && self.ent[i].f58 != 0 && self.player_in_aggro_range(i, ctx) {
-            self.ent[i].f146 = PLAYER_TARGET;
-            self.ent[i].tick70 = base + 2;
+        if !chased && self.ent[i].f58 != 0 {
+            if let Some(t) = self.nearest_wizard_target(i, ctx, false) {
+                self.ent[i].f146 = t;
+                self.ent[i].tick70 = base + 2;
+            }
         }
     }
 
@@ -2515,12 +2639,11 @@ impl Gen {
     fn guard_wander(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         self.grid_walk(i, base);
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
-        if (self.ent[i].f63 as i16) % v26 == 0
-            && self.ent[i].f58 != 0
-            && self.player_in_aggro_range(i, ctx)
-        {
-            self.ent[i].f146 = PLAYER_TARGET;
-            self.ent[i].tick70 = base + 2;
+        if (self.ent[i].f63 as i16) % v26 == 0 && self.ent[i].f58 != 0 {
+            if let Some(t) = self.nearest_wizard_target(i, ctx, false) {
+                self.ent[i].f146 = t;
+                self.ent[i].tick70 = base + 2;
+            }
         }
         if self.ent[i].tick70 == base + 2 {
             self.guard_enter_chase(i);

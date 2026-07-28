@@ -8816,6 +8816,69 @@ mod tests {
         PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
     }
 
+    /// Non-vacuity guard for the widened creature target scan
+    /// (`Gen::nearest_wizard_target`, the bucket[0] port): a wild
+    /// creature acquires nearby RIVAL carpets, castles and mana balloons
+    /// off the full class-3 list; the genie's `bodies_only` gate keeps to
+    /// carpets; and a creature never picks its own owner. Before the
+    /// widening the scan saw the out-of-pool human alone, so every
+    /// pool-body assertion here returned `None`.
+    #[test]
+    fn creatures_acquire_rival_carpets_castles_and_balloons() {
+        use crate::mc1::behavior::BEHAVIOR;
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = flat_world();
+        let s = w.g.spawn_creature(16, 100 << 8, 100 << 8, 100).unwrap(); // wyvern
+        w.g.ent[s].id24 = 0; // wild — owned by no wizard
+        let (ex, ey) = (w.g.ent[s].x, w.g.ent[s].y);
+        let v28 = BEHAVIOR[w.g.ent[s].row156 as usize].v_28 as i32;
+        let step = (v28 / 4).max(1) as u16;
+
+        // The human, parked due east but well beyond the aggro radius.
+        let far = MobCtx {
+            px: 200 << 8,
+            py: ey,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+
+        for (model, owner) in [(1u16, 0u16), (2, 7), (3, 7)] {
+            let b = w.g.spawn_class3(model, ex + step, ey, 100).unwrap();
+            if owner != 0 {
+                w.g.ent[b].id24 = owner; // castles/balloons carry no id24
+            }
+            // Aim at where the body actually landed (the castle snaps to
+            // even parity) so it sits dead ahead, inside range and cone.
+            let (bx, by) = (w.g.ent[b].x, w.g.ent[b].y);
+            w.g.ent[s].f30 = Gen::angle_between(ex, ey, bx, by);
+
+            // The wyvern/crab/mound/guard scan takes every class-3 model.
+            assert_eq!(
+                w.g.nearest_wizard_target(s, &far, false),
+                Some(b as u16),
+                "model {model} not acquired by the full scan"
+            );
+            // The genie's bodies-only gate keeps carpets, drops the rest.
+            assert_eq!(
+                w.g.nearest_wizard_target(s, &far, true),
+                if model == 1 { Some(b as u16) } else { None },
+                "model {model} vs the bodies-only gate"
+            );
+            // A creature owned by the body never targets it (+24 gate).
+            w.g.ent[s].id24 = w.g.ent[b].id24;
+            assert_eq!(
+                w.g.nearest_wizard_target(s, &far, false),
+                None,
+                "model {model} owner-exclusion"
+            );
+            w.g.ent[s].id24 = 0;
+            w.g.ent[b].flags |= 0x400; // retire before the next model
+        }
+    }
+
     /// The save row's progress figure. Two things it must get right,
     /// both of which the raw fields get wrong:
     ///
