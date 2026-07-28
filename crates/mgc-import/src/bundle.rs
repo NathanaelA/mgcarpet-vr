@@ -1755,7 +1755,16 @@ fn bake_variant(
         let dat_file = format!("{ui}.DAT");
         let dat = source(&dat_file, &mut sources)?;
         let tab = source(&format!("{ui}.TAB"), &mut sources)?;
-        let mut decoded = crate::hspr::decode(&dat, &tab)
+        // The atlas composite treats palette index 0 as transparent, so
+        // a sprite drawn purely in index 0 (the black-shape map X marker,
+        // HSPR 83) would vanish. Hand the decoder the palette's OPAQUE
+        // black (index 0 carries alpha 0; the first non-zero index whose
+        // RGB is 0,0,0 — MC1 PAL0-0 slot 160) so those drawn pixels move
+        // off the transparent index while the RLE skip runs stay clear.
+        let opaque_black = (1..256)
+            .find(|&i| rgba[i * 4..i * 4 + 3] == [0, 0, 0])
+            .unwrap_or(0) as u8;
+        let mut decoded = crate::hspr::decode_opaque(&dat, &tab, opaque_black)
             .map_err(|e| BakeError::Level(Path::new(&dat_file).to_path_buf(), 0, e.to_string()))?;
         // The retail MOUSE POINTERS (DATA/POINTERS, a tiny HSPR bank
         // BOTH games ship) append at the tail of the UI bank, their

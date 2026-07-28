@@ -7273,24 +7273,29 @@ impl World {
         self.mc2_endseq.map(|s| s.target_model)
     }
 
-    /// The MC2 level-exit map markers' `(x, z, model)` in tile units
-    /// — the (11,12)/(11,31) ENDING TRIP SWITCHES (model 12 = the
-    /// checkpoint-X trigger, 31 = the demon-mouth/secret trigger),
-    /// NOT the (14,3)/(14,4) fly-to portals: retail's minimap plots
-    /// sprites 83/84 at the TRIGGER's location (GameUI.cpp:2049-53,
-    /// runtime class 0x0B models 0x0C/0x1F), unconditionally from
-    /// level start, and the trip
-    /// clears only the map-icon bit (:54701) — mirrored here by
-    /// excluding tripped (0x400) switches.
-    pub fn mc2_exit_marker_poses(&self) -> Vec<(f32, f32, u8)> {
-        if !matches!(self.game, GameId::Mc2) {
-            return Vec::new();
-        }
+    /// The advertised-trigger map markers' `(x, z, model)` in tile
+    /// units — the class-11 trigger volumes retail's minimap plots as
+    /// the HUD-bank X/O sprites 83/84. The draw law is `sub_48710`
+    /// case 0xB (remc1 sub_main.cpp:57386-401): models 9/10/11/12 →
+    /// sprite 83 (the "X"), model 31 → sprite 84 (the "O"), every
+    /// other class-11 model draws nothing. In MC1 this is how Bullfrog
+    /// ADVERTISES the flight-path breadcrumb triggers — a visible
+    /// model-9 X sits ~1 tile from its quiet model-0 twin, so the map
+    /// shows the intended route (the quiet twins stay invisible). MC2
+    /// reuses the same sprites for its (11,12)/(11,31) ending-trip
+    /// switches (GameUI.cpp:2049-53). Plotted unconditionally from
+    /// level start; a trip clears only the map-icon draw bit (:54701),
+    /// mirrored here by excluding tripped (0x400) volumes.
+    pub fn advertised_marker_poses(&self) -> Vec<(f32, f32, u8)> {
+        let is_marker = |m: u8| match self.game {
+            GameId::Mc1 | GameId::Mc1Hw => matches!(m, 9..=12 | 31),
+            GameId::Mc2 => matches!(m, 12 | 31),
+        };
         self.g
             .ent
             .iter()
             .skip(1)
-            .filter(|e| e.class64 == 11 && matches!(e.model65, 12 | 31) && e.flags & 0x400 == 0)
+            .filter(|e| e.class64 == 11 && is_marker(e.model65) && e.flags & 0x400 == 0)
             .map(|e| (e.x as f32 / 256.0, e.y as f32 / 256.0, e.model65))
             .collect()
     }
@@ -7684,6 +7689,14 @@ impl World {
         match self.g.ent[i].f26 {
             0 => self.g.ent[i].f26 = 16,
             1 => {
+                // sub_59E40 (:67495 → the state-13..31 kill-trigger
+                // body, VERIFIED against CARPET.EXE @0x59E9B): on the
+                // slot emptying it plays sound 41 (the same beacon/
+                // "objective reached" chime as the WIN share) BEFORE
+                // firing its disposition and despawning. remc1's
+                // reconstruction dropped this `sub_55370(idx,-1,41)`
+                // call; the raw binary keeps it.
+                self.g.snd(41, i);
                 let dis = self.g.ent[i].id24;
                 self.fire_disposition(dis, true);
                 self.g.ent[i].flags |= 0x400;

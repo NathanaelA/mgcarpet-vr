@@ -41,6 +41,25 @@ impl std::fmt::Display for HsprError {
 /// `SpriteIndex` schema apply unchanged (single frame per sprite,
 /// `group == index`).
 pub fn decode(dat: &[u8], tab: &[u8]) -> Result<Vec<DecodedSprite>, HsprError> {
+    decode_opaque(dat, tab, 0)
+}
+
+/// [`decode`], but with the black-shape rescue: a sprite whose ONLY
+/// drawn (literal) pixels are palette index 0 — a pure-black shape, the
+/// advertised-trigger map X marker (HSPR 83) being the sole MC1 case —
+/// has those literal-0 pixels remapped to `opaque_black`. The engine's
+/// blit draws literal pixels regardless of value and takes transparency
+/// only from the RLE's skip runs; our atlas composite instead keys
+/// transparency off index 0, so a black-in-0 shape would vanish
+/// entirely. Moving just the DRAWN index-0 pixels to an opaque black
+/// index (the skip runs stay transparent) preserves the shape. Passing
+/// `opaque_black == 0` keeps the raw decode (callers that don't need the
+/// rescue, e.g. fonts, and games whose markers are pre-coloured).
+pub fn decode_opaque(
+    dat: &[u8],
+    tab: &[u8],
+    opaque_black: u8,
+) -> Result<Vec<DecodedSprite>, HsprError> {
     if tab.len() % 6 != 0 {
         return Err(HsprError::BadTab(tab.len()));
     }
@@ -61,6 +80,11 @@ pub fn decode(dat: &[u8], tab: &[u8]) -> Result<Vec<DecodedSprite>, HsprError> {
             continue;
         }
         let mut pixels = vec![0u8; w * h];
+        // The black-shape rescue (see `decode_opaque`): remember which
+        // drawn pixels landed on index 0, and whether the sprite drew
+        // any non-zero (coloured) pixel at all.
+        let mut lit0_pos: Vec<usize> = Vec::new();
+        let mut has_colour = false;
         let (mut p, mut row, mut col) = (offset, 0usize, 0usize);
         while row < h {
             let n = *dat.get(p).ok_or(HsprError::BadRle(i))? as i8;
@@ -73,7 +97,15 @@ pub fn decode(dat: &[u8], tab: &[u8]) -> Result<Vec<DecodedSprite>, HsprError> {
                 if col + n > w || p + n > dat.len() {
                     return Err(HsprError::BadRle(i));
                 }
-                pixels[row * w + col..row * w + col + n].copy_from_slice(&dat[p..p + n]);
+                let base = row * w + col;
+                pixels[base..base + n].copy_from_slice(&dat[p..p + n]);
+                for (k, &v) in dat[p..p + n].iter().enumerate() {
+                    if v == 0 {
+                        lit0_pos.push(base + k);
+                    } else {
+                        has_colour = true;
+                    }
+                }
                 p += n;
                 col += n;
             } else {
@@ -81,6 +113,14 @@ pub fn decode(dat: &[u8], tab: &[u8]) -> Result<Vec<DecodedSprite>, HsprError> {
                 if col > w {
                     return Err(HsprError::BadRle(i));
                 }
+            }
+        }
+        // A pure-black shape (drew index 0 and nothing else): move its
+        // drawn pixels off the transparent index so the composite keeps
+        // them. Skip-run pixels stayed 0 and remain transparent.
+        if opaque_black != 0 && !has_colour && !lit0_pos.is_empty() {
+            for pos in lit0_pos {
+                pixels[pos] = opaque_black;
             }
         }
         sprites.push(DecodedSprite {

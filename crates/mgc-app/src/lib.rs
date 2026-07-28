@@ -1241,23 +1241,25 @@ fn load_level(
                     Some(st)
                 })
                 .collect(),
-            // The MC2 exit markers (HUD-bank sprites 83 = red X /
-            // 84 = O), CENTERED like retail's minimap blit
-            // (GameUI.cpp:2166-72). MC2-only by construction.
-            exit_x: (game_id == mgc_sim::ids::GameId::Mc2)
-                .then(|| {
-                    let mut st = ui_assets.as_ref().and_then(|u| u.map_stamp(83))?;
+            // The advertised-trigger markers (HUD-bank sprites 83 =
+            // red X / 84 = O), CENTERED like retail's minimap blit
+            // (GameUI.cpp:2166-72). Sprites 83/84 are baked for BOTH
+            // games (docs/FORMAT.md — MC1-native, reused by MC2), so
+            // load them whenever present rather than gating on game.
+            exit_x: ui_assets
+                .as_ref()
+                .and_then(|u| u.map_stamp(83))
+                .map(|mut st| {
                     st.anchor = [0.5, 0.5];
-                    Some(st)
-                })
-                .flatten(),
-            exit_o: (game_id == mgc_sim::ids::GameId::Mc2)
-                .then(|| {
-                    let mut st = ui_assets.as_ref().and_then(|u| u.map_stamp(84))?;
+                    st
+                }),
+            exit_o: ui_assets
+                .as_ref()
+                .and_then(|u| u.map_stamp(84))
+                .map(|mut st| {
                     st.anchor = [0.5, 0.5];
-                    Some(st)
-                })
-                .flatten(),
+                    st
+                }),
         },
         map_stamps: Vec::new(),
         objective_marks: Vec::new(),
@@ -3741,10 +3743,12 @@ impl App {
                 w.beyond_sight(),
                 self.cfg.render.enhancement.expose_jar_spells,
             );
-            // The MC2 exit X/O: unconditional (hidden markers plot
-            // too — the map shows where the exit WILL be).
+            // The advertised-trigger X/O markers (MC1 flight-path
+            // breadcrumbs + MC2 exit trips): unconditional (untripped
+            // markers plot from level start — the map shows where the
+            // trip WILL be).
             level.map_stamps.extend(entities::exit_marker_stamps(
-                &w.mc2_exit_marker_poses(),
+                &w.advertised_marker_poses(),
                 &level.map_icons,
             ));
             self.jar_markers = if self.cfg.render.enhancement.expose_jar_spells {
@@ -8570,6 +8574,15 @@ fn run_screenshot(
         },
     };
     renderer.load_level(&level.view, &overlay);
+    // The interactive tick rebuilds map_stamps each frame (advertised
+    // trigger X/O markers + pose stamps); the headless capture must do
+    // the same one-shot so a map screenshot matches live play.
+    if let Some(w) = &level.world {
+        level.map_stamps.extend(entities::exit_marker_stamps(
+            &w.advertised_marker_poses(),
+            &level.map_icons,
+        ));
+    }
     renderer.set_map_stamps(level.map_stamps.clone());
     // Objective-guide marks in map-view captures (steady, no blink).
     if let Some(w) = &level.world {

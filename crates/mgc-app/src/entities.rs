@@ -361,8 +361,9 @@ const TEAM0_ODD: u8 = TEAM_COLORS[0].1;
 
 /// Icon patches for the map's UI-sprite markers (cropped from the
 /// composited HSPR atlas): castle = sprite 58+team, balloon = 66+team
-/// (remc1 sub_48710 :57230/:57234); the advertised-trigger X markers
-/// 83/84 join when trigger markers land.
+/// (remc1 sub_48710 :57230/:57234); the advertised-trigger X/O
+/// markers 83/84 (`sub_48710` case 0xB :57386-401) — see `exit_x`/
+/// `exit_o` and `exit_marker_stamps`.
 #[derive(Default)]
 pub struct MapIcons {
     /// Castle stamps 58..=65 by team slot.
@@ -374,10 +375,10 @@ pub struct MapIcons {
     /// expose-jar-spells debug stamps, consumed only when that
     /// option is on.
     pub spell: Vec<Option<mgc_render::MapStamp>>,
-    /// MC2 level-exit map markers: the (14,3) checkpoint red X =
-    /// HUD-bank sprite 83, the (14,4) demon-mouth O = sprite 84
-    /// (remc2 GameUI.cpp:2049-53, drawn centered, colour baked into
-    /// the sprite). None off-MC2.
+    /// Advertised-trigger map markers: the class-11 X = HUD-bank
+    /// sprite 83, the O = sprite 84 (remc1 `sub_48710` case 0xB;
+    /// remc2 GameUI.cpp:2049-53 — drawn centered, colour baked into
+    /// the sprite). Loaded for both games (83/84 baked for each).
     pub exit_x: Option<mgc_render::MapStamp>,
     pub exit_o: Option<mgc_render::MapStamp>,
 }
@@ -751,12 +752,13 @@ pub fn map_stamps_from_poses(
     out
 }
 
-/// The MC2 level-exit map markers from the sim's trigger census
-/// (`mc2_exit_marker_poses` — the (11,12)/(11,31) ending trip
-/// SWITCHES, plotted from level start, gone once tripped): model 12
-/// = checkpoint X trigger → sprite 83, model 31 = secret trigger →
-/// sprite 84. Iteration order puts the O over a co-located X like
-/// retail's entity walk.
+/// The advertised-trigger map markers from the sim's trigger census
+/// (`advertised_marker_poses`, plotted from level start, gone once
+/// tripped): the class-11 X sprite 83 (MC1 flight-path breadcrumb
+/// models 9/10/11/12; MC2's model-12 checkpoint trip) and the O
+/// sprite 84 (model 31 — MC1 advertise-only, MC2's secret trip).
+/// Iteration order puts a co-located O over an X like retail's entity
+/// walk.
 pub fn exit_marker_stamps(
     markers: &[(f32, f32, u8)],
     icons: &MapIcons,
@@ -765,7 +767,7 @@ pub fn exit_marker_stamps(
         .iter()
         .filter_map(|&(x, z, model)| {
             let icon = match model {
-                12 => icons.exit_x.as_ref(),
+                9..=12 => icons.exit_x.as_ref(),
                 31 => icons.exit_o.as_ref(),
                 _ => None,
             }?;
