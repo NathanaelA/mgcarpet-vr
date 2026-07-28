@@ -649,6 +649,14 @@ pub(crate) struct Gen {
     /// decremented once per world tick (:55405-06). m4 militia only
     /// hunt a wizard whose timer is live — the hostility gate.
     pub(crate) player_aggro: i16,
+    /// The RIVAL wizards' village-aggro timers, by player slot 1..=7
+    /// (index 0 is the human, who uses [`Gen::player_aggro`]; kept 0).
+    /// Retail carries this per wizard in the same +528 struct slot; the
+    /// port splits it because the human lives outside the pool. Set to
+    /// 200 by a rival's own village offenses, decremented with
+    /// `player_aggro`; the m4 militia and m8 griffon wanted-gates read
+    /// it through [`Gen::village_wanted`].
+    pub(crate) rival_wanted: [i16; 8],
     /// The player's Invisible cloak (spell 12; the wizard's +16 0x20
     /// bit, :65689-90) mirrored in for the mob-side target gates.
     pub(crate) player_invisible: bool,
@@ -1043,6 +1051,7 @@ impl Gen {
             rival_ents: [0; 8],
             mc2_life_scale: Mc2LifeScale::default(),
             player_aggro: 0,
+            rival_wanted: [0; 8],
             player_invisible: false,
             player_rebound: false,
             kills: 0,
@@ -4059,9 +4068,7 @@ impl Gen {
                 let z = self.ground_z(sx, y) as i16;
                 self.spawn_creature(4, sx, y, z);
             }
-            if src == crate::mc1::mobs::PLAYER_TARGET {
-                self.player_aggro = 200;
-            }
+            self.flag_village_wanted(src);
         }
         if self.ent[i].f63 % 40 == 0 {
             self.ent[i].f140 = (self.ent[i].f26 as i32) << 8;
@@ -4888,6 +4895,7 @@ impl Gen {
             rival_ents,
             mc2_life_scale,
             player_aggro,
+            rival_wanted,
             player_invisible,
             player_rebound,
             kills,
@@ -4949,6 +4957,7 @@ impl Gen {
         w.put(rival_ents);
         w.put(mc2_life_scale);
         w.put(player_aggro);
+        w.put(rival_wanted);
         w.put(player_invisible);
         w.put(player_rebound);
         w.put(kills);
@@ -4997,6 +5006,7 @@ impl Gen {
         self.rival_ents = r.get()?;
         self.mc2_life_scale = r.get()?;
         self.player_aggro = r.get()?;
+        self.rival_wanted = r.get()?;
         self.player_invisible = r.get()?;
         self.player_rebound = r.get()?;
         self.kills = r.get()?;

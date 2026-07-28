@@ -502,13 +502,17 @@ fn mc2_slice_behaviors_and_goldens() {
     // sweep. A-D hold — no model-1/3 static ticks before the E
     // window's spawns. Layout-only: disabling the stamp alone
     // restores the old pin, and OBSERVABLE holds.
+    // Re-pinned (all six, layout-only) for the MC1 `rival_wanted` timers
+    // joining the shared Gen hash: MC2 never flags a rival wanted, so the
+    // delta at every checkpoint is the new all-zero field; OBSERVABLE
+    // holds below.
     const GOLDEN: [u64; 6] = [
-        0x19b2420902423851, // post-init (GenerateEvents + dis 0)
-        0x2e8def083bfb72fa, // A: 64 idle ticks afield
-        0x93af44c5f972e2d7, // B: the type-5 fly-to latched
-        0x7c82f40f6b188c55, // C: goat awake/flee window
-        0x916bd529db710797, // D: fireball combat over the goat
-        0xdf5bd741f65921af, // E: census + villager/archer provocation
+        0x056322f66a56b6d9, // post-init (GenerateEvents + dis 0)
+        0x75ce4c4016131752, // A: 64 idle ticks afield
+        0x280ef6b0adea40af, // B: the type-5 fly-to latched
+        0xa7770838d8a47f0d, // C: goat awake/flee window
+        0x2b67c7f311a5a0ef, // D: fireball combat over the goat
+        0x7f8a81efb5bbd5b7, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,

@@ -800,28 +800,6 @@ impl Gen {
         }
     }
 
-    /// The awake WANDER's wizard scan against the player (list[20] of
-    /// the original — AI wizards are a later track): v_28² range +
-    /// v_30 cone.
-    fn player_in_aggro_range(&self, i: usize, ctx: &MobCtx) -> bool {
-        // Invisible (spell 12, :65689-90 — the +16 0x20 bit): the
-        // wizard scan skips the cloaked player entirely.
-        if self.player_invisible {
-            return false;
-        }
-        // The +24 owner gate (sub_1DCD0 :24242 + the scan-side +24
-        // exclusions): a creature the player OWNS (undead army
-        // skeletons) never targets its owner.
-        if self.ent[i].id24 == PLAYER_TARGET {
-            return false;
-        }
-        let e = &self.ent[i];
-        let row = &BEHAVIOR[e.row156 as usize];
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
-        Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) <= r2
-            && Self::angdist(e.f30, Self::angle_between(e.x, e.y, ctx.px, ctx.py)) < row.v_30 as u16
-    }
-
     /// Scan A (sub_19D70 :21519-42): the nearest bucket[0] body within
     /// this creature's v_28² range and v_30 facing cone. Retail's
     /// bucket[0] (`var_u32_36462[0]`, rebuilt at :52253 from every live
@@ -839,8 +817,10 @@ impl Gen {
     /// castle's footprint (:24201) — castle-attacking is deliberate.
     ///
     /// The human lives outside the pool, so it is the first candidate
-    /// (via `ctx`, with `player_in_aggro_range`'s invisibility +
-    /// undead-army owner gates); rival carpets, castles and balloons are
+    /// (via `ctx`, with the invisibility gate — spell 12's +16 0x20 bit
+    /// mirrored in `player_invisible` — and the undead-army owner gate:
+    /// a creature the human OWNS never targets it); rival carpets,
+    /// castles and balloons are
     /// the pool members (model 0 would be a second human body — never
     /// spawned, since ours is out-of-pool — so it is skipped). A
     /// creature never targets its own owner or its own castle/balloon
@@ -857,11 +837,17 @@ impl Gen {
     /// (:24487) restricts to wizard CARPETS (model 1), skipping castles
     /// and balloons; the wyvern/crab/mound/guard scans pass `false` and
     /// take the whole list.
+    ///
+    /// `wanted_only` is the m4 militia (:22613) / m8 griffon (:23500)
+    /// hostility gate: a wizard is a candidate only while its village-
+    /// wanted timer is live (the human's `player_aggro`, a rival's
+    /// `rival_wanted` slot — see [`Gen::village_wanted`]).
     pub(crate) fn nearest_wizard_target(
         &self,
         i: usize,
         ctx: &MobCtx,
         bodies_only: bool,
+        wanted_only: bool,
     ) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
@@ -873,7 +859,10 @@ impl Gen {
         let mut best_d2 = i32::MAX;
 
         // The human wizard (bucket[0]'s out-of-pool member).
-        if !self.player_invisible && owner != PLAYER_TARGET {
+        if !self.player_invisible
+            && owner != PLAYER_TARGET
+            && (!wanted_only || self.player_aggro > 0)
+        {
             let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py);
             if d2 <= r2 && Self::angdist(ef30, Self::angle_between(ex, ey, ctx.px, ctx.py)) < cone {
                 best = Some(PLAYER_TARGET);
@@ -893,6 +882,9 @@ impl Gen {
             if c.act_life < 0 || c.flags & 0x420 != 0 || owner == c.id24 {
                 continue;
             }
+            if wanted_only && self.village_wanted(c.id24) <= 0 {
+                continue;
+            }
             let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
             if d2 <= r2
                 && d2 < best_d2
@@ -903,6 +895,39 @@ impl Gen {
             }
         }
         best
+    }
+
+    /// The player slot (0 = human, 1..=7 = rival) that owns `id` — an
+    /// owner tag: [`PLAYER_TARGET`] for the human, else a wizard entity
+    /// index (a rival carpet is its own owner tag). `None` if `id` names
+    /// no live wizard.
+    fn wizard_slot_of(&self, id: u16) -> Option<usize> {
+        if id == PLAYER_TARGET {
+            return Some(0);
+        }
+        self.rival_ents.iter().position(|&e| e != 0 && e == id)
+    }
+
+    /// A wizard's village-wanted timer (retail's +528), by owner tag:
+    /// the human reads `player_aggro`, a rival its `rival_wanted` slot.
+    /// 0 for a non-wizard tag.
+    pub(crate) fn village_wanted(&self, id: u16) -> i16 {
+        match self.wizard_slot_of(id) {
+            Some(0) => self.player_aggro,
+            Some(s) => self.rival_wanted[s],
+            None => 0,
+        }
+    }
+
+    /// Flag a wizard village-wanted for 200 ticks (the +528 = 200
+    /// writers): the human raises `player_aggro`, a rival its
+    /// `rival_wanted` slot. A non-wizard tag is a no-op.
+    pub(crate) fn flag_village_wanted(&mut self, id: u16) {
+        match self.wizard_slot_of(id) {
+            Some(0) => self.player_aggro = 200,
+            Some(s) => self.rival_wanted[s] = 200,
+            None => {}
+        }
     }
 
     /// IDLE sub_19B10 (:21311): stationary; every v_26 ticks a pack
@@ -922,11 +947,13 @@ impl Gen {
     /// hunt list :21519-42), falling back to the same-owner pack scan
     /// (Scan B :21546-73) when no wizard is in range/cone. EVERY
     /// awake creature runs both scans — the engine has no per-model
-    /// aggro list; `aggro` exists only for m8's wanted-timer CHASE
-    /// gate (sub_1CA50 :23500). Asleep creatures never scan (getting
-    /// this backwards packs whole distant crowds up onto the unbounded
-    /// pack accel).
-    fn mob_wander(&mut self, i: usize, base: u8, ctx: &MobCtx, aggro: bool) {
+    /// aggro list. The m8 griffon alone gates Scan A on the wanted
+    /// timer (sub_1CA50 :23500): it chases a wizard only while that
+    /// wizard's +528 is live and re-arms it on the pounce (:23503),
+    /// staying peaceful until a village marks the wizard. Asleep
+    /// creatures never scan (getting this backwards packs whole distant
+    /// crowds up onto the unbounded pack accel).
+    fn mob_wander(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return; // walled in — dies via the prologue next tick
@@ -939,14 +966,15 @@ impl Gen {
             let sign = if d1 % 157 >= 79 { 1 } else { -1 };
             self.ent[i].f34 = ((self.ent[i].f34 as i32 + sign * mag) & 0x7FF) as u16;
             if self.ent[i].f58 != 0 {
-                let tgt = if aggro {
-                    self.nearest_wizard_target(i, ctx, false)
-                } else {
-                    None
-                };
-                if let Some(t) = tgt {
+                // m8 alone runs the wanted-gated bodies scan; everyone
+                // else takes the whole class-3 list ungated.
+                let griffon = self.ent[i].model65 == 8;
+                if let Some(t) = self.nearest_wizard_target(i, ctx, griffon, griffon) {
                     self.ent[i].f146 = t;
                     self.ent[i].tick70 = base + 2;
+                    if griffon {
+                        self.flag_village_wanted(t); // re-arm +528, :23503
+                    }
                 } else {
                     self.pack_scan(i, base);
                 }
@@ -1356,7 +1384,7 @@ impl Gen {
         // carpet (the +65<=1 gate, so no castles/balloons) — within
         // range+cone → ambush-blink; nothing in reach → eat a mana ball.
         if self.ent[i].f58 != 0 && self.ent[i].act_life > (self.ent[i].max_life >> 2) as i32 {
-            if let Some(t) = self.nearest_wizard_target(i, ctx, true) {
+            if let Some(t) = self.nearest_wizard_target(i, ctx, true, false) {
                 self.ent[i].f146 = t;
                 self.genie_ambush(i, base, ctx);
             } else {
@@ -1494,7 +1522,7 @@ impl Gen {
         if self.ent[i].act_life >= 0 {
             let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
             if (self.ent[i].f63 as i16) % v26 == 0 {
-                if let Some(t) = self.nearest_wizard_target(i, ctx, false) {
+                if let Some(t) = self.nearest_wizard_target(i, ctx, false, false) {
                     self.ent[i].f146 = t;
                     self.ent[i].tick70 = base + 2;
                 } else if self.ent[i].f146 != 0 {
@@ -1654,9 +1682,7 @@ impl Gen {
                 self.ent[i].tick70 = base;
             } else {
                 self.attack_thunk(i, 4, tgt, tx, ty, tz, 0, 0);
-                if tgt == PLAYER_TARGET {
-                    self.player_aggro = 200;
-                }
+                self.flag_village_wanted(tgt);
             }
         }
     }
@@ -1710,14 +1736,12 @@ impl Gen {
         if (self.ent[i].f63 as i16) % (4 * v26) != 0 {
             return;
         }
-        // Kept human-only (unlike the other bucket[0] scans): retail
-        // gates the wizard hit on that wizard's own village-wanted flag
-        // (+160->+528, :22613). We track village hostility only for the
-        // human (`player_aggro`); widening to rivals faithfully needs a
-        // per-rival village-wanted state the port does not yet carry, so
-        // militia stay the human's problem for now (residual OPEN).
-        if self.player_aggro != 0 && self.player_in_aggro_range(i, ctx) {
-            self.ent[i].f146 = PLAYER_TARGET;
+        // The nearest wizard BODY (human or rival carpet, +65<=1) that
+        // is on that wizard's own village-wanted list (+160->+528,
+        // :22613 — the `bodies_only` + `wanted_only` gates); no such
+        // wizard falls through to the burrower hunt below.
+        if let Some(t) = self.nearest_wizard_target(i, ctx, true, true) {
+            self.ent[i].f146 = t;
             self.ent[i].tick70 = base + 2;
             return;
         }
@@ -2181,9 +2205,7 @@ impl Gen {
                     self.arm_projectile(p, owner, tf66, tf67, tgt, tx, ty, tz, 4000, 23);
                     self.ent[p].row156 = 6;
                     self.snd(38, i); // :23555
-                    if tgt == PLAYER_TARGET {
-                        self.player_aggro = 200;
-                    }
+                    self.flag_village_wanted(tgt);
                 }
             }
             // sub_1AA40 (:21935): m9's bolt — 600 with segments, else
@@ -2499,7 +2521,7 @@ impl Gen {
         // the original). Same range/cone/invisibility gates as the
         // shared wander scan.
         if !chased && self.ent[i].f58 != 0 {
-            if let Some(t) = self.nearest_wizard_target(i, ctx, false) {
+            if let Some(t) = self.nearest_wizard_target(i, ctx, false, false) {
                 self.ent[i].f146 = t;
                 self.ent[i].tick70 = base + 2;
             }
@@ -2640,7 +2662,7 @@ impl Gen {
         self.grid_walk(i, base);
         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
         if (self.ent[i].f63 as i16) % v26 == 0 && self.ent[i].f58 != 0 {
-            if let Some(t) = self.nearest_wizard_target(i, ctx, false) {
+            if let Some(t) = self.nearest_wizard_target(i, ctx, false, false) {
                 self.ent[i].f146 = t;
                 self.ent[i].tick70 = base + 2;
             }
@@ -2796,8 +2818,8 @@ impl Gen {
                 // list (m12 :25291, m13 :25459, m14 :25638, m4's
                 // corpse analog) — and so does killing a griffon
                 // (sub_1CF60 :23578-80): the flock avenges it.
-                if matches!(model, 4 | 8 | 12 | 13 | 14) && self.ent[i].f38 == PLAYER_TARGET {
-                    self.player_aggro = 200;
+                if matches!(model, 4 | 8 | 12 | 13 | 14) {
+                    self.flag_village_wanted(self.ent[i].f38);
                 }
                 self.ent[i].tick70 = base + 4;
                 return;
@@ -2806,8 +2828,8 @@ impl Gen {
                 // The "under attack" mark the m8/12/13/14 families
                 // write instead of chasing (:25057-63) — for the
                 // village families it feeds the wanted timer.
-                if matches!(model, 8 | 12 | 13 | 14) && src == PLAYER_TARGET {
-                    self.player_aggro = 200;
+                if matches!(model, 8 | 12 | 13 | 14) {
+                    self.flag_village_wanted(src);
                 }
                 // m8 DOES retaliate — its IDLE promotes a hit-by-
                 // wizard griffon straight into attack (sub_1CA50
@@ -2897,7 +2919,7 @@ impl Gen {
 
             // -- wanders --
             (0, 1) => {
-                self.mob_wander(i, base, ctx, true);
+                self.mob_wander(i, base, ctx);
                 self.flyer_bob(i);
             }
             // m5, the crab: mana-hunting wander + EAT in the family's
@@ -2918,15 +2940,14 @@ impl Gen {
             (14, 1) => self.feeder_wander(i, base, true),
             // Every remaining model runs the shared awake-gated
             // two-scan — the engine has no per-model aggro list. m8's
-            // CHASE promotion alone is gated on the wanted timer
-            // (sub_1CA50 :23500 — the griffon stays peaceful until
-            // the wizard is marked); m16 layers the house hunt on top
-            // of the shared scans (sub_20710 :26033) when it is still
-            // wandering afterwards.
-            (m, 1) => {
-                let aggro = m != 8 || self.player_aggro != 0;
-                self.mob_wander(i, base, ctx, aggro);
-                if m == 16 && self.ent[i].tick70 == base + 1 {
+            // CHASE promotion is gated on the target wizard's wanted
+            // timer inside `mob_wander` (sub_1CA50 :23500 — the griffon
+            // stays peaceful until a village marks the wizard); m16
+            // layers the house hunt on top of the shared scans
+            // (sub_20710 :26033) when it is still wandering afterwards.
+            (_, 1) => {
+                self.mob_wander(i, base, ctx);
+                if model == 16 && self.ent[i].tick70 == base + 1 {
                     self.wyvern_house_hunt(i, base);
                 }
             }

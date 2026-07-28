@@ -2423,8 +2423,15 @@ impl World {
         }
         // The village-aggro timer runs down once per wizard tick
         // (:55405-06) — ~200 ticks of militia hostility per offense.
+        // The human's lives in `player_aggro`; the rivals' in
+        // `rival_wanted` (slot 0 unused), on the same cadence.
         if self.g.player_aggro > 0 {
             self.g.player_aggro -= 1;
+        }
+        for w in self.g.rival_wanted.iter_mut() {
+            if *w > 0 {
+                *w -= 1;
+            }
         }
         // Pool wizards' wanted timers (word_0x248_584) run down on
         // the same cadence; a drained entry leaves the map so the
@@ -8857,26 +8864,79 @@ mod tests {
 
             // The wyvern/crab/mound/guard scan takes every class-3 model.
             assert_eq!(
-                w.g.nearest_wizard_target(s, &far, false),
+                w.g.nearest_wizard_target(s, &far, false, false),
                 Some(b as u16),
                 "model {model} not acquired by the full scan"
             );
             // The genie's bodies-only gate keeps carpets, drops the rest.
             assert_eq!(
-                w.g.nearest_wizard_target(s, &far, true),
+                w.g.nearest_wizard_target(s, &far, true, false),
                 if model == 1 { Some(b as u16) } else { None },
                 "model {model} vs the bodies-only gate"
             );
             // A creature owned by the body never targets it (+24 gate).
             w.g.ent[s].id24 = w.g.ent[b].id24;
             assert_eq!(
-                w.g.nearest_wizard_target(s, &far, false),
+                w.g.nearest_wizard_target(s, &far, false, false),
                 None,
                 "model {model} owner-exclusion"
             );
             w.g.ent[s].id24 = 0;
             w.g.ent[b].flags |= 0x400; // retire before the next model
         }
+    }
+
+    /// The m4 militia / m8 griffon `wanted_only` gate: a rival is a
+    /// target only while its `rival_wanted` slot is live, and a village
+    /// offense arms that slot through `flag_village_wanted`. Before the
+    /// per-rival timers existed, militia/griffons ignored rivals whole.
+    #[test]
+    fn wanted_gate_tracks_per_rival_village_hostility() {
+        use crate::mc1::behavior::BEHAVIOR;
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = flat_world();
+        let s = w.g.spawn_creature(4, 100 << 8, 100 << 8, 100).unwrap(); // militia
+        w.g.ent[s].id24 = 0;
+        let (ex, ey) = (w.g.ent[s].x, w.g.ent[s].y);
+        let v28 = BEHAVIOR[w.g.ent[s].row156 as usize].v_28 as i32;
+        let step = (v28 / 4).max(1) as u16;
+
+        // A rival carpet dead ahead, registered in the slot map so its
+        // owner tag resolves to a wanted slot.
+        let rival = w.g.spawn_class3(1, ex + step, ey, 100).unwrap();
+        w.g.rival_ents[3] = rival as u16;
+        let tag = w.g.ent[rival].id24;
+        w.g.ent[s].f30 = Gen::angle_between(ex, ey, w.g.ent[rival].x, w.g.ent[rival].y);
+
+        // Human parked far out so only the rival can be the pick.
+        let far = MobCtx {
+            px: 200 << 8,
+            py: ey,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+        };
+
+        // Not yet wanted: the ungated scan sees it, the wanted-gated one
+        // does not.
+        assert_eq!(
+            w.g.nearest_wizard_target(s, &far, true, false),
+            Some(rival as u16)
+        );
+        assert_eq!(w.g.nearest_wizard_target(s, &far, true, true), None);
+
+        // A village offense flags the rival by its owner tag.
+        assert_eq!(w.g.village_wanted(tag), 0);
+        w.g.flag_village_wanted(tag);
+        assert_eq!(w.g.village_wanted(tag), 200);
+
+        // Now the militia acquires it through the wanted gate.
+        assert_eq!(
+            w.g.nearest_wizard_target(s, &far, true, true),
+            Some(rival as u16)
+        );
     }
 
     /// The save row's progress figure. Two things it must get right,

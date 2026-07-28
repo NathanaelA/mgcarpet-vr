@@ -162,11 +162,16 @@ fn flight_tier_golden_state_hashes() {
     // (the stamp first lands on tick 1); A-C move. Layout-only: the
     // stamp is the whole delta (see the state_hash.rs pin note — the
     // snap is an identity write on static terrain, OBSERVABLE holds).
+    // Re-pinned (layout-only) for the `rival_wanted` per-rival village-
+    // wanted timers joining the Gen hash: both arrays move because the
+    // world state hash grew a field, though the faithful trajectory and
+    // the enhanced steering are untouched (no rival is flagged wanted in
+    // this flight fixture — the delta is the zeroed field alone).
     const FAITHFUL: [u64; 4] = [
-        0x79529db4487029e4, // post-init
-        0xeab73b9a3128a411, // A: 40 ticks of forward thrust
-        0x8ad6b46190f2de15, // B: 30 ticks of banked turn + strafe
-        0x5ba11e6bdf99be31, // C: 40 ticks of coast
+        0x0071647b49e89381, // post-init
+        0xc64f86ee789cba68, // A: 40 ticks of forward thrust
+        0x9f2c802dee97ef63, // B: 30 ticks of banked turn + strafe
+        0x337af495058b1f32, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
@@ -178,10 +183,10 @@ fn flight_tier_golden_state_hashes() {
     // strafe held, so its roll — and thus its hash — is unchanged. The
     // FAITHFUL array is untouched (the Mc1 mover never runs this bank).
     const ENHANCED: [u64; 4] = [
-        0x41cd4a0274834665, // post-init
-        0x2b07b970e22dbacd, // A
-        0x50d2db3dc70efe40, // B: strafe+turn now banks on forward speed
-        0x30ac310f4d2a51d5, // C
+        0xe9f7ed2c1cca3ab0, // post-init
+        0xc7619ef31c0e28fe, // A
+        0xb453c3e21ce30c95, // B: strafe+turn now banks on forward speed
+        0xe20343055b85ac80, // C
     ];
     assert_eq!(
         (faithful, enhanced),

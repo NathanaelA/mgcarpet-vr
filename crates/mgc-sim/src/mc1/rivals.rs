@@ -31,10 +31,11 @@
 //! traced formula). Creature target scans now walk the full class-3
 //! bucket[0] list (`Gen::nearest_wizard_target`) — carpets, castles
 //! and balloons for the wyvern/crab/mound/guard, carpets-only for the
-//! genie — so wild creatures fight rival wizards, not just the human;
-//! the lone residual is the militia, still gated on the human's
-//! `player_aggro` because per-rival village hostility is not yet
-//! tracked (see docs/DEVIATIONS.md).
+//! genie — so wild creatures fight rival wizards, not just the human.
+//! The m4 militia and m8 griffon village-wanted gates are per-wizard
+//! too: `Gen::rival_wanted` mirrors `player_aggro` for the rivals
+//! (armed by a rival's own village offenses), so villages turn their
+//! defenders on any hostile wizard (see docs/DEVIATIONS.md).
 
 use crate::engine::features::Gen;
 use crate::engine::world::{LifeState, World};

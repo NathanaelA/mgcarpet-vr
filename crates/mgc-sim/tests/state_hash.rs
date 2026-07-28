@@ -319,13 +319,19 @@ fn level_005_golden_state_hashes() {
     // by construction: the stamp is the whole delta (disabling it
     // alone restores the old pins — on this run's static terrain the
     // snap is an identity write), and OBSERVABLE holds.
+    // Re-pinned for the per-rival village-wanted timers: `rival_wanted`
+    // ([i16; 8]) joined the Gen hash so the m4 militia and m8 griffon
+    // wanted-gates can turn on hostile RIVAL wizards, not only the human.
+    // Layout-only by construction — OBSERVABLE holds byte-for-byte below:
+    // level 005's scripted run flags no rival wanted, so the whole delta
+    // is the new zeroed field entering the hash input.
     const GOLDEN: [u64; 6] = [
-        0xe349dc2d6b1fbd6c, // post-init (feature pass + disposition 0)
-        0xc55c8c939de6327b, // A: 32 idle ticks far afield
-        0xa8212f2f309b2cd2, // B: crater trigger fired + 120 dig ticks
-        0xa0ea038ef55c3268, // C: ambush disposition fired
-        0xb95aaef263ebfcf8, // D: 64 ticks of two-hand fireball combat
-        0x38b438e8fa10a0d3, // E: 100 aftermath ticks
+        0x63df455d85b8d5d4, // post-init (feature pass + disposition 0)
+        0x0e41eba270a335d3, // A: 32 idle ticks far afield
+        0x1be71bd427acc65a, // B: crater trigger fired + 120 dig ticks
+        0xfe576d8ed06bcf60, // C: ambush disposition fired
+        0x370c9aae47ddfe20, // D: 64 ticks of two-hand fireball combat
+        0x72f8f8fda6510afb, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

@@ -346,13 +346,17 @@ fn mc2_cave_behaviors_and_goldens() {
     // in-level checkpoint autosave severing the watch pointer — see
     // docs/traces/mc2-level004-stagevar-ground-truth.md; the port
     // follows the level data.
+    // Re-pinned (all four, layout-only) for the MC1 `rival_wanted`
+    // per-rival village-wanted timers joining the shared Gen hash: MC2
+    // never flags a rival wanted (that mechanism is MC1's), so the delta
+    // at every checkpoint is the new all-zero field in the hash input.
     assert_eq!(
         got,
         vec![
-            0x50c384f9d62a3dadu64,
-            0xeed5009480e93bb9,
-            0x0014e75348e14e62,
-            0xcd26d6652fa654d9,
+            0xd7a30e11eae19f35u64,
+            0xa2b99cdd8e0b8641,
+            0xbe3dafd71ba732ca,
+            0xcc304371af818d61,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
