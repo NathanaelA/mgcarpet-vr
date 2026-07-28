@@ -939,44 +939,61 @@ impl World {
         e.flags & 0x400 == 0 && e.act_life >= 0 && self.target_sig(target) == sig
     }
 
-    /// Castle-site scout (sub_13F00 :18358-402): 4x4-supercell sweep,
-    /// site OK when the nearest foreign castle is > 12288 away.
-    /// (Original walks 2 candidates per supercell from its own cell;
-    /// ours walks the same grid exhaustively — same acceptance rule.)
+    /// Castle-site scout (sub_13F00 :18358-402): walk the 4x4 grid of
+    /// supercells starting at the wizard's OWN cell (inner x, outer y),
+    /// testing two candidates per cell in order — the cell corner, then
+    /// the cell mid (corner + 0x1F00). A candidate is accepted when the
+    /// wizard has no foreign castle, or the one nearest it (toroidal
+    /// squared-Euclidean, sub_15260/sub_42410) sits farther than 12288
+    /// in CHEBYSHEV distance (max|dx|,|dy|; sub_42300). Retail returns
+    /// the FIRST candidate that passes — NOT the one nearest the
+    /// wizard. For a crater-bound wizard the first pass is the corner of
+    /// its home supercell (on the surrounding rim), never the crater
+    /// centre; picking the nearest instead planted dead-centre in the
+    /// crater — more "deliberate"-looking than retail but wrong.
     fn rival_scout_site(&mut self, ri: usize, i: usize) -> bool {
         let me = self.rivals[ri].ent;
         let (sx, sy) = (self.g.ent[i].x, self.g.ent[i].y);
-        let mut best: Option<((u16, u16), i32)> = None;
-        for cell in 0..16u16 {
-            let bx = ((sx >> 14).wrapping_add(cell & 3) & 3) << 14;
-            let by = ((sy >> 14).wrapping_add(cell >> 2) & 3) << 14;
-            for (ox, oy) in [(0u16, 0u16), (0x1F00, 0x1F00)] {
-                let (tx, ty) = (
-                    bx.wrapping_add(ox).wrapping_add(128),
-                    by.wrapping_add(oy).wrapping_add(128),
-                );
-                // Nearest foreign castle.
-                let mut near = i32::MAX;
-                for j in 1..self.g.ent.len() {
-                    let e = &self.g.ent[j];
-                    if e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 != me {
-                        near = near.min(Gen::dist2_sq(tx, ty, e.x, e.y));
+        for dy in 0..4u16 {
+            let by = ((sy >> 14).wrapping_add(dy) & 3) << 14;
+            for dx in 0..4u16 {
+                let bx = ((sx >> 14).wrapping_add(dx) & 3) << 14;
+                for (ox, oy) in [(0u16, 0u16), (0x1F00, 0x1F00)] {
+                    let (tx, ty) = (bx.wrapping_add(ox), by.wrapping_add(oy));
+                    // The foreign castle nearest this candidate by
+                    // toroidal squared-Euclidean (sub_15260, keyed on
+                    // model 2 and excluding our own).
+                    let mut near_xy: Option<(u16, u16)> = None;
+                    let mut near_d2 = i32::MAX;
+                    for j in 1..self.g.ent.len() {
+                        let e = &self.g.ent[j];
+                        if e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 != me
+                        {
+                            let d2 = Gen::dist2_sq(tx, ty, e.x, e.y);
+                            if d2 < near_d2 {
+                                near_d2 = d2;
+                                near_xy = Some((e.x, e.y));
+                            }
+                        }
                     }
-                }
-                if near > 12288 * 12288 {
-                    let d = Gen::dist2_sq(sx, sy, tx, ty);
-                    if best.is_none_or(|(_, bd)| d < bd) {
-                        best = Some(((tx, ty), d));
+                    // Accept when clear, or the nearest castle's
+                    // Chebyshev gap exceeds 12288 (sub_42300).
+                    let ok = match near_xy {
+                        None => true,
+                        Some((cx, cy)) => {
+                            let ddx = (tx.wrapping_sub(cx) as i16 as i32).abs();
+                            let ddy = (ty.wrapping_sub(cy) as i16 as i32).abs();
+                            ddx.max(ddy) > 12288
+                        }
+                    };
+                    if ok {
+                        self.rivals[ri].site = (tx, ty);
+                        return true;
                     }
                 }
             }
         }
-        if let Some(((tx, ty), _)) = best {
-            self.rivals[ri].site = (tx, ty);
-            true
-        } else {
-            false
-        }
+        false
     }
 
     /// Any offense spell owned (sub_16920 :19856: {0,15,8,17,20,7}).

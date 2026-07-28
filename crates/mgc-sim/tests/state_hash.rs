@@ -325,13 +325,23 @@ fn level_005_golden_state_hashes() {
     // Layout-only by construction — OBSERVABLE holds byte-for-byte below:
     // level 005's scripted run flags no rival wanted, so the whole delta
     // is the new zeroed field entering the hash input.
+    // Re-pinned for the rival castle-site scout fix (sub_13F00): the
+    // scout now returns the FIRST grid candidate that clears the 12288
+    // Chebyshev spacing (the wizard's home-supercell corner), not the
+    // candidate nearest the wizard — matching retail, which planted on
+    // the crater rim where our port planted dead-centre. The scouted
+    // `.site` stored in rival state therefore differs, so B-E move in the
+    // layout hash; post-init and A hold (no rival has scouted yet).
+    // Layout-only by construction: OBSERVABLE holds byte-for-byte below —
+    // within this 316-tick window the corrected site changes only the
+    // internal target, not the observable projection.
     const GOLDEN: [u64; 6] = [
         0x63df455d85b8d5d4, // post-init (feature pass + disposition 0)
         0x0e41eba270a335d3, // A: 32 idle ticks far afield
-        0x1be71bd427acc65a, // B: crater trigger fired + 120 dig ticks
-        0xfe576d8ed06bcf60, // C: ambush disposition fired
-        0x370c9aae47ddfe20, // D: 64 ticks of two-hand fireball combat
-        0x72f8f8fda6510afb, // E: 100 aftermath ticks
+        0x67c744e1cac25fef, // B: crater trigger fired + 120 dig ticks
+        0xa9e7699def3613ce, // C: ambush disposition fired
+        0x923bed330e90c9a6, // D: 64 ticks of two-hand fireball combat
+        0xaaf2c0f57d05b5e9, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
