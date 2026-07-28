@@ -60,8 +60,13 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 
     if mg.panel_mode == 1u {
         // WORLD-SPACE HUD PANEL (VR): the rect holds the pixel offset
-        // from the screen centre and the pixel half-extents.
-        let px = mg.rect.xy + c * mg.rect.zw;
+        // from the screen centre and the pixel half-extents. The UI panel
+        // basis treats positive y as screen-down (so regular sprites draw
+        // upright), but this shader's c.y = +1 is the quad TOP. Flip y for
+        // the vertex position only; the fragment keeps c so map north stays
+        // at the top of the texture and the rect stays aligned with the HUD.
+        let c_flip = vec2<f32>(c.x, -c.y);
+        let px = mg.rect.xy + c_flip * mg.rect.zw;
         let world = mg.panel_origin
                   + mg.panel_right * (px.x * mg.panel_scale)
                   + mg.panel_up    * (px.y * mg.panel_scale);
