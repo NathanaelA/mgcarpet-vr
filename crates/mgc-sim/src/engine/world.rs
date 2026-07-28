@@ -7376,6 +7376,20 @@ impl World {
             return false;
         }
         if self.overlap(i, player) == want {
+            // sub_5A090 (:67642, VERIFIED against CARPET.EXE @0x5A0E9):
+            // on the every-8th-tick phase, when a wizard CARPET is in
+            // (want=1) / out of (want=0) the volume, the probe plays
+            // sound 41 — the "switch"/beacon chime — AT THE MATCHED
+            // CARPET, then returns 1 so the handler fires its
+            // disposition. This is the trigger-trip sound: a visible-X
+            // (or its quiet twin) enter trigger sounds on entry, a
+            // leave-polarity twin sounds on exit. Retail walks every
+            // carpet; our out-of-pool human is the only one probed, so
+            // the beacon chime is player-relative. remc1 kept this call
+            // inside sub_5A090; the port's earlier balloon_probe dropped
+            // it (the handlers themselves are silent — the sound lives
+            // in the probe).
+            self.g.snd_player(41);
             return true;
         }
         let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
@@ -10390,9 +10404,19 @@ mod tests {
         let mut w = flat_world();
         // Fly into the volume; the probe is throttled to every 8th
         // tick, so give it a few.
+        let mut heard_switch = false;
         for _ in 0..16 {
             w.tick(at_trigger(), PlayerCommand::default());
+            // The proximity probe (sub_5A090) plays sound 41 — the
+            // "switch"/beacon chime — on the phase-tick overlap match.
+            if w.g.sounds.iter().any(|s| s.id == 41) {
+                heard_switch = true;
+            }
         }
+        assert!(
+            heard_switch,
+            "the proximity probe plays sound 41 (switch) when the carpet is in the volume"
+        );
         let live = w.live_things();
         assert_eq!(live.len(), 1, "the creature spawns via the disposition");
         assert_eq!((live[0].class, live[0].model), (5, 2));
