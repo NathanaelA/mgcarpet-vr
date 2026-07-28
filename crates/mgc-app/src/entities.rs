@@ -1589,6 +1589,43 @@ pub fn shockwave_particles(
 /// sparse flame front and shockwave pass untouched while the dense inner
 /// pile is bounded. The crater cells are stationary and generation order
 /// is deterministic, so the kept set is stable frame-to-frame (no flicker).
+/// DIAGNOSTIC (`MGC_FIRE_DEBUG`): once every ~60 calls, print a
+/// one-line health summary of the assembled fire set — the tool for
+/// catching the sticky, global fire-corruption "tripwire" live. A
+/// poisoned process-lifetime scalar shows up as a non-finite count > 0,
+/// or a `seed`/position/size extreme far outside the normal range
+/// (seed carries `effect_time*4`, so a runaway clock reads as a huge
+/// |seed|; a blown-up finite value reads as a huge pos/size).
+pub fn debug_fire_stats(particles: &[FireParticle], effect_time: f32) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static TICK: AtomicU32 = AtomicU32::new(0);
+    if TICK.fetch_add(1, Ordering::Relaxed) % 60 != 0 {
+        return;
+    }
+    let mut nonfinite = 0usize;
+    let (mut max_pos, mut max_size, mut max_seed, mut max_alpha) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for p in particles {
+        let fields = [p.x, p.y, p.z, p.w, p.h, p.heat, p.alpha, p.seed];
+        if fields.iter().any(|v| !v.is_finite()) {
+            nonfinite += 1;
+        }
+        max_pos = max_pos.max(p.x.abs()).max(p.y.abs()).max(p.z.abs());
+        max_size = max_size.max(p.w.abs()).max(p.h.abs());
+        max_seed = max_seed.max(p.seed.abs());
+        max_alpha = max_alpha.max(p.alpha);
+    }
+    println!(
+        "FIRE n={} t={:.1} nonfinite={} maxpos={:.1} maxsize={:.2} maxseed={:.1} maxalpha={:.2}",
+        particles.len(),
+        effect_time,
+        nonfinite,
+        max_pos,
+        max_size,
+        max_seed,
+        max_alpha,
+    );
+}
+
 pub fn cap_particle_density(particles: Vec<FireParticle>) -> Vec<FireParticle> {
     use std::collections::HashMap;
     use std::sync::OnceLock;

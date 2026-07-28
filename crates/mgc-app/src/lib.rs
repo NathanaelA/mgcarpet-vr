@@ -3596,7 +3596,11 @@ impl App {
                 a,
                 self.effect_time,
             ));
-            r.set_fire_particles(entities::cap_particle_density(fire));
+            let fire = entities::cap_particle_density(fire);
+            if std::env::var("MGC_FIRE_DEBUG").is_ok() {
+                entities::debug_fire_stats(&fire, self.effect_time);
+            }
+            r.set_fire_particles(fire);
         } else {
             r.set_fire_particles(Vec::new());
         }
@@ -3818,7 +3822,11 @@ impl App {
                         1.0,
                         self.effect_time,
                     ));
-                    r.set_fire_particles(entities::cap_particle_density(fire));
+                    let fire = entities::cap_particle_density(fire);
+                    if std::env::var("MGC_FIRE_DEBUG").is_ok() {
+                        entities::debug_fire_stats(&fire, self.effect_time);
+                    }
+                    r.set_fire_particles(fire);
                 } else {
                     r.set_fire_particles(Vec::new());
                 }
