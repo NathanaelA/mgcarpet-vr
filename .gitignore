@@ -17,3 +17,9 @@
 # Per-user authenticity-matrix config: personal overrides + the
 # app-generated faithful baseline
 /mgcarpet.json
+
+# Flight recordings
+/recordings
+
+# Python caches
+__pycache__
