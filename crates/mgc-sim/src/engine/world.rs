@@ -13582,6 +13582,75 @@ mod tests {
         );
     }
 
+    /// The mana-hunt (`sub_14B10` :18650) targets foreign mana-carrying
+    /// CREATURES only — it walks the per-model buckets 0..=19, so loose mana
+    /// balls (model 39) and dwellings (model 45) are NOT hunted (that is the
+    /// Possess/ball-claim path's job) — and only when the rival owns an
+    /// offense spell (`sub_16920` gate :18662). The offense gate is the
+    /// non-vacuous part: pre-fix an offense-less rival still entered HuntMana
+    /// and shadowed the target casting nothing.
+    #[test]
+    fn mana_hunt_targets_creatures_only_and_needs_offense() {
+        use crate::mc1::rivals::RivalConfig;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new(planes, &rival_marker_things(), 1, assets());
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        // Rival owns Fireball only (an offense spell).
+        let mut book = [false; SPELL_COUNT];
+        book[0] = true;
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 0,
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        let rid = w.rivals[0].ent;
+        let (rx, ry) = (w.g.ent[rid as usize].x, w.g.ent[rid as usize].y);
+
+        // A foreign mana-carrying CREATURE dead ahead.
+        let mob = w.g.spawn_creature(16, rx + 4096, ry, 100).unwrap(); // wyvern
+        w.g.ent[mob].id24 = 0; // wild
+        w.g.ent[mob].f140 = 5000;
+
+        // A loose mana ball (class 10 model 39) carrying mana — a NON-creature
+        // holder the mana-hunt must NOT see (higher per-model bucket).
+        let ball = w.g.spawn_creature(5, rx + 2048, ry, 100).unwrap();
+        w.g.ent[ball].class64 = 10;
+        w.g.ent[ball].model65 = 39;
+        w.g.ent[ball].id24 = 0;
+        w.g.ent[ball].f140 = 9000; // richer + nearer than the creature
+
+        // (a) The creature is hunted; the nearer/richer ball is invisible.
+        assert!(
+            w.rival_pick_mana_target(0, rid as usize),
+            "a mana creature must be huntable"
+        );
+        assert_eq!(
+            w.rivals[0].target, mob as u16,
+            "the creature is the target, not the ball"
+        );
+
+        // (b) Strip the rival's offense: the same world now yields NO hunt
+        // (pre-fix it entered HuntMana and cast nothing).
+        w.rivals[0].owned[0] = 0;
+        assert!(!w.rival_has_offense(0), "offense stripped");
+        w.rivals[0].state = crate::mc1::rivals::AiState::Fresh;
+        w.rivals[0].target = 0;
+        assert!(
+            !w.rival_pick_mana_target(0, rid as usize),
+            "an offense-less rival must not enter HuntMana"
+        );
+    }
+
     #[test]
     fn rival_death_scatters_jars_and_castleless_death_eliminates() {
         let mut w = rival_world(false, 0);

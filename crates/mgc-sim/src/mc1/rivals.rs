@@ -1042,7 +1042,7 @@ impl World {
     }
 
     /// Any offense spell owned (sub_16920 :19856: {0,15,8,17,20,7}).
-    fn rival_has_offense(&self, ri: usize) -> bool {
+    pub(crate) fn rival_has_offense(&self, ri: usize) -> bool {
         [0usize, 15, 8, 17, 20, 7]
             .iter()
             .any(|&s| self.rivals[ri].owned[s] != 0)
@@ -1267,9 +1267,26 @@ impl World {
         }
     }
 
-    /// Mana-holder hunt (sub_14B10 :18650): any other-team creature
-    /// with mana, nearest to the own castle (or self), no range cap.
-    fn rival_pick_mana_target(&mut self, ri: usize, i: usize) -> bool {
+    /// Mana-holder hunt (sub_14B10 :18650): the nearest other-team CREATURE
+    /// carrying mana (to the own castle, or self if castle-less), no range
+    /// cap. Gated up-front on owning an offense spell (`sub_16920` :18662):
+    /// a rival with nothing to attack with never enters HuntMana — else it
+    /// shadows a mana creature and casts nothing.
+    ///
+    /// Retail walks the per-MODEL entity buckets `str_36382[+65]` for model
+    /// indices 0..=19 (`i = 0; i != 80; i += 4`) — i.e. the living-creature
+    /// models. Mana BALLS (model 39) and DWELLINGS (model 45) sit in higher
+    /// buckets the loop never reaches, so the mana-hunt does NOT target them
+    /// (balls are the Possess/ball-claim path's job, `rival_pick_ball_target`).
+    /// The port keys this as `class64 == 5`, the faithful creature filter —
+    /// a slight over-approximation of models 0..19 (a class-5 creature with
+    /// model >= 20, e.g. the hydra m27, would be out of retail's scan) that
+    /// is immaterial while such creatures carry no mana.
+    pub(crate) fn rival_pick_mana_target(&mut self, ri: usize, i: usize) -> bool {
+        // sub_16920 gate (:18662): no offense spell → no hunt.
+        if !self.rival_has_offense(ri) {
+            return false;
+        }
         let me = self.rivals[ri].ent;
         let anchor = self
             .rival_castle(me)
