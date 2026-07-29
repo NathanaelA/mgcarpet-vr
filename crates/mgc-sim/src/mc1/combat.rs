@@ -2208,7 +2208,11 @@ impl Gen {
             if vz.abs() <= 28 {
                 vz = 0;
                 // Seed a standing fire at rest if the cell has none
-                // (:28637-47): life 30, 3x the bomb's 200.
+                // (:28637-47): life 30, damage 3× the FRESH fire's own
+                // ctor +44 (50 → 150) — retail reads the just-spawned
+                // fire's +44 (:28642), NOT the bomb's +44 (=200, a dead
+                // store). The bomb dealing no in-flight damage, this is
+                // the lava's only bite.
                 let mut burning = false;
                 let mut j = self.map_entity[tile((x >> 8) as u8, (y >> 8) as u8)] as usize;
                 while j != 0 {
@@ -2223,11 +2227,10 @@ impl Gen {
                 }
                 if !burning {
                     let own = self.ent[i].id24;
-                    let amt = 3 * self.ent[i].f44;
                     if let Some(f) = self.spawn_effect(6, x, y, z) {
                         self.ent[f].id24 = own;
                         self.ent[f].act_life = 30;
-                        self.ent[f].f44 = amt;
+                        self.ent[f].f44 = 3 * self.ent[f].f44;
                     }
                 }
             }
@@ -2535,10 +2538,15 @@ impl Gen {
                 self.refill_life(s);
                 self.set_sprite(s, 41);
             }
-            // The standing fire / ground wave (state 6, sub_252D0):
-            // life 240, 50 ch0 per tick via the /10 writer, sprite
-            // 228 (the flame-size family +86 walks ±1). Tree deaths
-            // override life and set the f46 trunk offset.
+            // The standing fire / ground wave (state 6, sub_3A730 ctor
+            // → sub_252D0 tick): life 240, 50 ch0 per tick via the /10
+            // writer, sprite 228 (the flame-size family +86 walks ±1),
+            // and the damage extents `sub_37130_374F0(272, 1536)`
+            // (:46643) — a ~1-tile-wide, 6-tile-tall AABB so burning
+            // trees/lava actually torch fly-by carpets, creatures and
+            // neighbor trees (WITHOUT it the fire had zero extents and
+            // overlapped nothing → ambient fires dealt no damage). Tree
+            // deaths override life and set the f46 trunk offset.
             6 => {
                 let e = &mut self.ent[s];
                 e.tick70 = 6;
@@ -2549,6 +2557,7 @@ impl Gen {
                 self.link(s, x, y, z);
                 self.refill_life(s);
                 self.set_sprite(s, 228);
+                self.extents(s, 272, 1536);
             }
             // sub_3A6B0 (:46560 region): the water splash. Grounded.
             5 => {

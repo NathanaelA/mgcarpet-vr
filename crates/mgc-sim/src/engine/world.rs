@@ -12305,6 +12305,46 @@ mod tests {
         assert_eq!(count(&w, 10, 6), 0, "the fire burned out");
     }
 
+    /// Retail's standing fire (`sub_3A730`, :46643) is spawned with a
+    /// real damage AABB — `extents(272, 1536)`. MC1's ambient fires
+    /// (burning trees, volcano lava) ARE that entity, so without the
+    /// extents their box is zero, the area writer overlaps nothing, and
+    /// ambient fire deals no damage. Here a carpet hovering ~1 tile from
+    /// a standing fire burns. Non-vacuity: delete the `extents(272,
+    /// 1536)` line in `spawn_effect(6)` and the carpet takes zero (the
+    /// 250-unit gap sits inside the 272+119 reach the extents grant but
+    /// outside the 0+119 a zero-extent fire would have).
+    #[test]
+    fn a_standing_fire_burns_a_nearby_carpet() {
+        use crate::mc1::combat::PLAYER_HW;
+        let mut w = flat_world();
+        let cx = (100u16 << 8) | 128;
+        let cy = (100u16 << 8) | 128;
+        let g = w.g.ground_z(cx, cy) as i16;
+        // The standing fire (burning-tree / lava flame), owned by a
+        // non-player so the carpet is not owner-immune to it.
+        let f =
+            w.g.spawn_effect(6, cx, cy, g)
+                .expect("the standing fire spawns");
+        w.g.ent[f].id24 = 1;
+        let off: u16 = 250;
+        assert!(
+            (off as i32) > PLAYER_HW && (off as i32) < 272 + PLAYER_HW,
+            "the offset discriminates the extents fix"
+        );
+        // Past spawn grace (100 ticks of total immunity that wipes the
+        // player mailbox) so the fire's mail actually lands.
+        w.player.grace = 0;
+        let pose = PlayerPose::level(cx.wrapping_add(off), cy, g, 0);
+        for _ in 0..8 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(
+            w.player_damage_taken() > 0,
+            "the standing fire burns the carpet beside it"
+        );
+    }
+
     #[test]
     fn a_settler_builds_a_second_house_and_settles_as_a_villager() {
         let planes = Planes {
