@@ -642,6 +642,45 @@ pub struct CameraView {
 
 /// The rolled camera basis (right, up, fwd) shared by the view
 /// matrix and the billboard expansion vectors.
+/// Wrap one bolt segment to the camera as a RIGID unit on the `full`-tile
+/// torus. A bolt is a multi-point primitive: resolving each endpoint to its
+/// own nearest-camera image splits the segment a full map-width apart
+/// whenever the two ends straddle the ±half-map seam — a strike sitting near
+/// the camera's antipode (a rival dueling across the map), which read on
+/// screen as a bolt "coming from the opposite side". Instead, resolve the
+/// strike's ONE shared `anchor` (origin) to the camera and translate BOTH
+/// endpoints by that same whole-map offset (∈ {0, ±full}). Every segment and
+/// branch of a bolt carries the same anchor, so the whole channel stays
+/// coherent no matter where the camera is.
+fn wrap_bolt_to_camera(
+    anchor: [f32; 2],
+    p0: [f32; 3],
+    p1: [f32; 3],
+    cam_x: f32,
+    cam_z: f32,
+    full: f32,
+) -> ([f32; 3], [f32; 3]) {
+    // The whole-map shift that carries `a` into the camera's ±half-map
+    // window (0, +full, or -full); the anchor rides along and so do both
+    // endpoints, rigidly.
+    let offset = |a: f32, c: f32| {
+        let mut d = a - c;
+        if d > full / 2.0 {
+            d -= full;
+        }
+        if d < -full / 2.0 {
+            d += full;
+        }
+        (c + d) - a
+    };
+    let ox = offset(anchor[0], cam_x);
+    let oz = offset(anchor[1], cam_z);
+    (
+        [p0[0] + ox, p0[1], p0[2] + oz],
+        [p1[0] + ox, p1[1], p1[2] + oz],
+    )
+}
+
 fn camera_basis(cam: &CameraView) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let (sy, cy) = cam.yaw.sin_cos();
     let (sp, cp) = cam.pitch.sin_cos();
@@ -798,6 +837,13 @@ pub struct BoltSegment {
     /// [`FireParticle`].
     pub p0: [f32; 3],
     pub p1: [f32; 3],
+    /// The parent strike's origin (world x/z), shared by every segment
+    /// of the same bolt. The torus wrap ([`Renderer::bolt_instances`])
+    /// resolves this ONE point to the camera and translates the whole
+    /// segment rigidly by the same whole-map offset — so a bolt sitting
+    /// near the camera's antipode can never be split across the seam
+    /// (wrapping the two endpoints independently would).
+    pub anchor: [f32; 2],
     /// World half-width of the ribbon.
     pub width: f32,
     /// 0..1 strike energy (return stroke = 1, leader/decay < 1).
@@ -3888,27 +3934,15 @@ impl Renderer {
 
     fn bolt_instances(&self, cam: &CameraView) -> Vec<BoltInstance> {
         let full = MAP_TILES as f32;
-        let wrap = |p: f32, c: f32| {
-            let mut d = p - c;
-            if d > full / 2.0 {
-                d -= full;
-            }
-            if d < -full / 2.0 {
-                d += full;
-            }
-            c + d
-        };
-        // Bolts span ≤ ~15 tiles, far under the half-map wrap window,
-        // so wrapping each endpoint independently never tears a
-        // segment across the seam.
         let mut out = Vec::with_capacity(self.bolt_segments.len());
         for s in &self.bolt_segments {
             if s.alpha <= 0.004 || s.energy <= 0.004 {
                 continue;
             }
+            let (p0, p1) = wrap_bolt_to_camera(s.anchor, s.p0, s.p1, cam.x, cam.z, full);
             out.push(BoltInstance {
-                p0: [wrap(s.p0[0], cam.x), s.p0[1], wrap(s.p0[2], cam.z)],
-                p1: [wrap(s.p1[0], cam.x), s.p1[1], wrap(s.p1[2], cam.z)],
+                p0,
+                p1,
                 width: s.width,
                 energy: s.energy,
                 alpha: s.alpha,
@@ -5143,6 +5177,52 @@ mod tests {
         let a = world_to_screen(&cam, w, h, 12.0, 5.0, -10.0).unwrap();
         let b = world_to_screen(&cam, w, h, 12.0, 5.0, 246.0).unwrap();
         assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
+    }
+
+    /// A bolt segment near the camera's antipode must wrap as a RIGID
+    /// unit: both endpoints stay the strike's true short length apart,
+    /// never split a map-width by the ±half-map seam. Non-vacuity: the
+    /// OLD per-endpoint wrap (`wrap(p0,cam)`, `wrap(p1,cam)` independently)
+    /// would put the two ends ~256 tiles apart here, failing the assert.
+    #[test]
+    fn bolt_wraps_as_a_rigid_unit_across_the_seam() {
+        let full = 256.0;
+        // Camera at the origin; the strike sits ~128 tiles away (the
+        // antipode) with its two ends straddling the +128 camera seam:
+        // 127.6 stays put, 128.4 wraps to -127.6 under a per-endpoint wrap.
+        let cam_x = 0.0;
+        let cam_z = 0.0;
+        let p0: [f32; 3] = [127.6, 5.0, 0.0];
+        let p1: [f32; 3] = [128.4, 5.0, 0.0];
+        let anchor: [f32; 2] = [p0[0], p0[2]]; // shared bolt origin
+        let true_len = ((p1[0] - p0[0]).powi(2) + (p1[2] - p0[2]).powi(2)).sqrt();
+        let (w0, w1) = wrap_bolt_to_camera(anchor, p0, p1, cam_x, cam_z, full);
+        let drawn_len = ((w1[0] - w0[0]).powi(2) + (w1[2] - w0[2]).powi(2)).sqrt();
+        // The whole bug in one line: independent per-endpoint wrapping puts
+        // these ~0.8 tiles apart at ~255 tiles apart.
+        assert!(
+            (drawn_len - true_len).abs() < 1e-3,
+            "the segment keeps its true length, not split by the seam \
+             (true {true_len}, drawn {drawn_len})"
+        );
+        // Both ends resolve to (roughly) the camera's half-map window — a
+        // seam-straddling bolt inherently has one end a hair past ±half.
+        assert!(
+            (w0[0] - cam_x).abs() <= full / 2.0 + 1.0 && (w1[0] - cam_x).abs() <= full / 2.0 + 1.0,
+            "both ends resolve near the camera, not a map away"
+        );
+    }
+
+    /// A short bolt near the camera is untouched (offset 0): the rigid
+    /// wrap must not perturb the common case.
+    #[test]
+    fn bolt_near_camera_is_unchanged() {
+        let full = 256.0;
+        let anchor: [f32; 2] = [10.0, 10.0];
+        let p0: [f32; 3] = [10.0, 3.0, 10.0];
+        let p1: [f32; 3] = [12.0, 3.0, 13.0];
+        let (w0, w1) = wrap_bolt_to_camera(anchor, p0, p1, 10.0, 10.0, full);
+        assert_eq!((w0, w1), (p0, p1));
     }
 
     /// The flight FOV law: 4:3 is untouched, wide screens gain

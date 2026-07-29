@@ -1981,11 +1981,30 @@ impl BoltLedger {
         self.bolts.retain(|b| b.age < BOLT_LIFE);
         let conv =
             |(x, y, z): (u16, u16, i16)| [x as f32 / 256.0, z as f32 / 256.0, y as f32 / 256.0];
+        // Resolve `end` to the nearest torus image of `start` (256-tile
+        // wrap on x/z): a strike whose sim coords straddle the map seam
+        // (a beam marching across the u16 edge — `disp` is a wrapping_add)
+        // would otherwise convert to endpoints ~256 tiles apart, and
+        // `bolt_channel` would draw a channel clear across the map. Pinning
+        // `end` beside `start` keeps every bolt a short, coherent primitive
+        // so the renderer's rigid anchor wrap places it correctly.
+        let torus = |start: [f32; 3], mut end: [f32; 3]| {
+            for a in [0usize, 2] {
+                let d = end[a] - start[a];
+                if d > 128.0 {
+                    end[a] -= 256.0;
+                } else if d < -128.0 {
+                    end[a] += 256.0;
+                }
+            }
+            end
+        };
         for s in strikes {
             self.counter = self.counter.wrapping_add(1);
+            let start = conv(s.start);
             self.bolts.push(LedgerBolt {
-                start: conv(s.start),
-                end: conv(s.end),
+                start,
+                end: torus(start, conv(s.end)),
                 age: 0.0,
                 seed: self
                     .counter
@@ -2108,10 +2127,15 @@ pub fn bolt_segments(ledger: &BoltLedger, alpha: f32, time: f32) -> Vec<BoltSegm
         let pts = bolt_channel(b.start, b.end, b.seed, 5);
         let segs = pts.len() - 1;
         let drawn = ((segs as f32) * grow).ceil().max(1.0) as usize;
+        let anchor = [b.start[0], b.start[2]];
         let emit = |out: &mut Vec<BoltSegment>, p0: [f32; 3], p1: [f32; 3], w: f32, e: f32, idx| {
             out.push(BoltSegment {
                 p0,
                 p1,
+                // The strike origin, shared by every segment/branch of
+                // this bolt — the renderer wraps the bolt to the camera
+                // as a rigid unit around it (see `BoltSegment::anchor`).
+                anchor,
                 width: w,
                 energy: e,
                 alpha: fade,
@@ -2222,6 +2246,46 @@ mod tests {
             bolt_segments(&led, 0.0, 0.0).is_empty(),
             "the strike retires after its life"
         );
+    }
+
+    /// A beam whose sim coords straddle the u16 map seam (start at tile
+    /// 255, end at tile 2 — truly ~3 tiles apart across the 256-tile wrap,
+    /// not 253) must resolve `end` beside `start` so the channel stays a
+    /// short coherent primitive. Non-vacuity: without the torus resolution
+    /// in `update`, `bolt_channel` would run 255→2, a span clear across
+    /// the whole map, failing the assert.
+    #[test]
+    fn seam_crossing_strike_stays_a_short_coherent_channel() {
+        let mut led = BoltLedger::default();
+        let strike = BoltStrike {
+            start: (65280, 256, 100), // world x = 255.0
+            end: (512, 256, 100),     // world x = 2.0 raw → 258.0 resolved
+            owner: 7,
+        };
+        led.update(vec![strike], 1.0);
+        // Return stroke (age 1 + alpha): full-length channel.
+        led.update(Vec::new(), 1.0);
+        let segs = bolt_segments(&led, 0.2, 0.0);
+        assert!(!segs.is_empty(), "the stroke draws");
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for s in &segs {
+            for x in [s.p0[0], s.p1[0]] {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+        assert!(
+            hi - lo < 12.0,
+            "the seam-crossing bolt stays short (span {} tiles)",
+            hi - lo
+        );
+        assert!(
+            hi > 250.0,
+            "endpoint pinned beside the start across the seam (max x {hi})"
+        );
+        // The anchor equals the strike origin (tile 255), shared by every
+        // segment — what lets the renderer wrap the bolt as a rigid unit.
+        assert!(segs.iter().all(|s| (s.anchor[0] - 255.0).abs() < 1e-3));
     }
 
     fn pose(class: u8, model: u8, owned: bool, type_index: u16) -> LivePose {
