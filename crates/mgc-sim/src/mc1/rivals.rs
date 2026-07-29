@@ -139,7 +139,7 @@ pub(crate) struct Rival {
     /// AI re-attempt cooldowns (+724, from [`AI_RECAST`]). Slot 16 is
     /// initialized to 4*slot — the per-player castle-build stagger
     /// the decompile shows as "var_756" (:55049).
-    cooldown: [u16; SPELL_COUNT],
+    pub(crate) cooldown: [u16; SPELL_COUNT],
     /// Carried mana (+140) / ceiling (+136, census-owned) / regen
     /// delta (+132 — cast debits ride it negative).
     pub mana: u32,
@@ -227,6 +227,24 @@ impl Rival {
     fn think_period(&self) -> u8 {
         (64 - (self.tempo / 4) as i32).max(1) as u8
     }
+}
+
+/// Read-only snapshot of one rival's AI internals (diagnostics only).
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct RivalAiDebug {
+    pub slot: u8,
+    pub state: String,
+    pub target: u16,
+    pub known: Vec<usize>,
+    pub owned: Vec<usize>,
+    pub allowed: Vec<usize>,
+    pub has_offense: bool,
+    pub mana: u32,
+    pub mana_max: u32,
+    pub poverty: bool,
+    pub burst: i16,
+    pub castle_stored: Option<u32>,
 }
 
 impl World {
@@ -373,6 +391,33 @@ impl World {
             let e = &self.g.ent[j];
             e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.id24 == ent
         })
+    }
+
+    /// Read-only AI diagnostic dump (no state mutation, not hashed) — for
+    /// "follows target, casts nothing" style rival-AI investigations.
+    #[doc(hidden)]
+    pub fn debug_rival_ai(&self) -> Vec<crate::mc1::rivals::RivalAiDebug> {
+        self.rivals
+            .iter()
+            .enumerate()
+            .map(|(ri, r)| {
+                let castle = self.rival_castle(r.ent);
+                RivalAiDebug {
+                    slot: r.slot,
+                    state: format!("{:?}", r.state),
+                    target: r.target,
+                    known: (0..SPELL_COUNT).filter(|&s| r.known[s]).collect(),
+                    owned: (0..SPELL_COUNT).filter(|&s| r.owned[s] != 0).collect(),
+                    allowed: (0..SPELL_COUNT).filter(|&s| r.allowed[s]).collect(),
+                    has_offense: self.rival_has_offense(ri),
+                    mana: r.mana,
+                    mana_max: r.mana_max,
+                    poverty: r.poverty,
+                    burst: r.burst,
+                    castle_stored: castle.map(|c| self.g.ent[c].f140.max(0) as u32),
+                }
+            })
+            .collect()
     }
 
     /// Resolve an owner tag (projectile id24 / claim f144) to a
@@ -1462,7 +1507,7 @@ impl World {
     /// sub_16310 :19559): poverty latch, then the priority walk
     /// 17 → 8 → (anti-rebound 15) → 7 → 20 → 0 → 15. Returns the
     /// spell to cast now; None = hold (save up or poor).
-    fn rival_attack_pick(&mut self, ri: usize, vs_wizard: bool) -> Option<usize> {
+    pub(crate) fn rival_attack_pick(&mut self, ri: usize, vs_wizard: bool) -> Option<usize> {
         // Poverty latch (:19468-91).
         {
             let r = &mut self.rivals[ri];
@@ -1505,11 +1550,20 @@ impl World {
             if self.rival_cast_ready(ri, s) {
                 return Some(s);
             }
-            // Affordable by ceiling but cooling/poor → save up and
-            // WAIT (:19527-40).
-            if self.rivals[ri].mana_max >= self.spells()[s].possess_mana {
-                return None;
+            // WAIT-vs-continue discriminant (sub_15E90 :19497): fall
+            // through to the next spell when this one is unaffordable by
+            // ceiling OR on its recast cooldown; only HOLD (save mana /
+            // settle the aim) when it's affordable-by-ceiling, off
+            // cooldown, and merely short on current mana or unaimed.
+            // (The cooldown escape is what lets a just-fired — or
+            // castle-fizzled — high-priority spell yield to a cheaper
+            // castle-free one like Fireball while it recharges.)
+            if self.rivals[ri].mana_max < self.spells()[s].possess_mana
+                || self.rivals[ri].cooldown[s] != 0
+            {
+                continue;
             }
+            return None;
         }
         None
     }
@@ -1517,9 +1571,16 @@ impl World {
     // ---- the cast arm (readiness sub_15A00 :19219 + executor
     // ---- sub_155F0 :19096) ------------------------------------------
 
-    /// Readiness: owned + cooldown clear + mana covers the cost +
-    /// castle-stored threshold + (aimed groups) the accuracy-scaled
-    /// aim cone.
+    /// Readiness (`sub_15A00` :19219): owned, not busy, cooldown clear,
+    /// CURRENT mana covers the cost, and (for the aimed groups) the
+    /// accuracy-scaled aim cone. The castle-stored unlock ladder is
+    /// deliberately NOT here — retail's readiness has no castle term
+    /// (verified in `sub_15A00`); the ladder is enforced downstream at
+    /// emission ([`World::rival_cast`], mirroring retail's projectile-tick
+    /// fizzle `sub_55DD0` :65049). Folding it into readiness froze rivals: a
+    /// castle-tier spell they own but can't unlock (no big castle) reads as
+    /// affordable-by-ceiling forever, so the picker parked on it and never
+    /// fell through to Fireball.
     fn rival_cast_ready(&self, ri: usize, s: usize) -> bool {
         let r = &self.rivals[ri];
         let m = r.owned[s] as usize;
@@ -1528,15 +1589,6 @@ impl World {
         }
         let def = &self.spells()[s];
         if r.mana < def.possess_mana {
-            return false;
-        }
-        // The castle-stored unlock ladder (sub_55DD0 :64917-19) —
-        // shared with the human.
-        if def.castle_req > 0
-            && !self
-                .rival_castle(r.ent)
-                .is_some_and(|c| self.g.ent[c].f140.max(0) as u32 >= def.castle_req)
-        {
             return false;
         }
         // Aimed groups: the readiness pre-gate cone
@@ -1611,8 +1663,29 @@ impl World {
         if s == 16 {
             return self.rival_cast_castle(ri, i);
         }
-        // Arm the re-attempt cooldown + the manifestation burst.
+        // Arm the re-attempt cooldown FIRST — retail's sub_155F0 sets it
+        // regardless of the castle outcome, and the picker's cooldown
+        // escape (sub_15E90 :19497) relies on it to advance past this
+        // spell next tick.
         self.rivals[ri].cooldown[s] = AI_RECAST[s];
+        // Castle-stored unlock ladder (sub_55DD0 :64917-19), enforced HERE
+        // at emission — retail arms the projectile in sub_155F0, then
+        // fizzles it on its first tick (:65049) when the caster owns no
+        // castle storing >= castle_req. We collapse that: the cooldown is
+        // already consumed above, so bail before arming the manifestation,
+        // debiting, or emitting — a castle-gated spell the rival hasn't
+        // unlocked does no damage and grants no buff, but no longer freezes
+        // the picker on an eternal WAIT. Silent for rivals (retail's buzz 29
+        // would storm at Lightning's 1-tick recast); the human keeps its UI
+        // buzz. Returns true so the caller's post-cast bookkeeping (war-flag
+        // clear) matches retail's sub_155F0 "success".
+        if def.castle_req > 0
+            && !self
+                .rival_castle(self.rivals[ri].ent)
+                .is_some_and(|c| self.g.ent[c].f140.max(0) as u32 >= def.castle_req)
+        {
+            return true;
+        }
         let m = self.rivals[ri].owned[s] as usize;
         self.g.ent[m].f26 = def.count as i16;
         // The debit rides the regen delta (sub_55E80 :64936 — the

@@ -13502,6 +13502,86 @@ mod tests {
         assert_eq!(w.rivals[0].state, crate::mc1::rivals::AiState::AttackWizard);
     }
 
+    /// Regression: the attack-spell picker must not FREEZE on a
+    /// castle-tier spell a rival owns but can't unlock (its castle stores
+    /// less than the spell's castle_req). The bug folded the castle-stored
+    /// gate into cast-readiness, so the picker parked forever (returned
+    /// None) on the affordable-by-ceiling-but-castle-locked spell and never
+    /// fell through to castle-free Fireball — the "follows the target,
+    /// casts nothing" report. Retail keeps the ladder out of the picker
+    /// (`sub_15A00`) and enforces it at emission (`sub_55DD0` :65049,
+    /// fizzle). This exercises the picker directly, in the freeze regime a
+    /// castle-less rival hits with Lightning: cost 1000 == mana_max 1000,
+    /// so `mana_max >= cost` holds while the 25000 castle_req never can.
+    /// Both assertions return None on the pre-fix code (non-vacuous).
+    #[test]
+    fn castle_gated_spell_does_not_freeze_the_picker() {
+        use crate::mc1::mobs::PLAYER_TARGET;
+        use crate::mc1::rivals::RivalConfig;
+        // Castle-less rival (no spell 16 → no castle, mana_max stays 1000)
+        // owning Fireball(0, castle-free) and Lightning(15, castle_req
+        // 25000, cost 1000). acc 255 keeps the aim cone tight and makes the
+        // anti-rebound insert deterministic.
+        let mut book = [false; SPELL_COUNT];
+        book[0] = true;
+        book[15] = true;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new(planes, &rival_marker_things(), 1, assets());
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 0,
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        let rid = w.rivals[0].ent;
+        assert!(w.rival_castle(rid).is_none(), "castle-less by construction");
+        assert!(
+            w.rivals[0].owned[0] != 0 && w.rivals[0].owned[15] != 0,
+            "both spells minted"
+        );
+
+        // Aim the rival dead at a PLAYER target that is REBOUNDING, so
+        // Lightning is spliced high into the pick order (before Fireball).
+        w.rivals[0].target = PLAYER_TARGET;
+        w.rivals[0].mana = 1000;
+        w.rivals[0].mana_max = 1000;
+        w.player.rebound = true;
+        let (ex, ey) = (w.g.ent[rid as usize].x, w.g.ent[rid as usize].y);
+        let (hx, hy) = (ex.wrapping_add(5000), ey);
+        w.human_pose = (hx, hy, w.g.ent[rid as usize].z);
+        w.g.ent[rid as usize].f30 = Gen::angle_between(ex, ey, hx, hy);
+
+        // (a) Lightning is affordable-by-ceiling AND castle-locked. Pre-fix
+        // readiness folded in the castle gate → not-ready → picker parks on
+        // the WAIT and returns None. Post-fix it is ready (no castle term)
+        // and the picker fires it (it will fizzle harmlessly at emission).
+        assert_eq!(
+            w.rival_attack_pick(0, true),
+            Some(15),
+            "castle-locked Lightning must be pickable, not a permanent WAIT"
+        );
+
+        // (b) With Lightning on its recast cooldown, the picker must FALL
+        // THROUGH to castle-free Fireball. Pre-fix it returned None (no
+        // cooldown escape in the WAIT branch); post-fix the escape advances.
+        w.rivals[0].cooldown[15] = 1;
+        assert_eq!(
+            w.rival_attack_pick(0, true),
+            Some(0),
+            "a cooling high-priority spell must yield to Fireball, not freeze"
+        );
+    }
+
     #[test]
     fn rival_death_scatters_jars_and_castleless_death_eliminates() {
         let mut w = rival_world(false, 0);
