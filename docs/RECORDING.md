@@ -154,6 +154,65 @@ Recorders SHOULD emit gap-free streams (lower DOSBox cycles until they
 do). A jump of k>1 in `t` is legal but breaks the fixture pairing
 across it; runners count and report pair coverage.
 
+The known gap mechanism on a tear-gated recorder is a SIM-DOMINATED
+stretch: whenever the guest's cycles are spent inside the entity pass,
+every DOSBox park lands mid-tick and no clean boundary is exposed —
+those ticks are unrecoverable by sampling, whatever the poll rate. Two
+flavors:
+- LOAD-shaped: sim logic swells (ambient spawn storms, heavy combat)
+  or host stalls (audio buffer pressure) eat the budget. Mitigations:
+  raise cycles until the game reaches its frame cap, raise the GAME's
+  render load (its SVGA mode — render cycles never touch the sim
+  struct, so render-bound frames are wide capture windows), bigger
+  mixer buffers or sound off.
+- STRUCTURAL, fixed-length: full-screen flash/fade sequences (big
+  explosions, the level-start fade) draw almost nothing for ~9-10
+  frames, the frame collapses to sim+flip, the game momentarily runs
+  FAST, and the renderer capture window vanishes — a deterministic
+  ~9-tick gap that no cycles/render/sound setting can remove. These
+  are exactly the transition-dense ticks fixtures want; the planned
+  emulator-side tick hook (park the guest once per tick at the
+  tick-top LCG draw) is the structural fix.
+The recorder must classify mid-tick parks (including the early-cursor
+case, where the tick-top LCG has drawn but the +63 mode still reads
+0 — indistinguishable from "same tick" without the RNG check) and
+report the loss LIVE, per pending tick, not only as a bare `t` jump
+discovered afterwards.
+
+## Capture tearing (the inter-tick gate)
+
+Read-consensus (N byte-identical reads of the volatile ranges) proves
+only that the guest was FROZEN — DOSBox regularly parks
+**mid-entity-loop**, so a consensus image can be a mid-tick state:
+entities below the loop cursor already stepped, entities above not,
+and the global LCG possibly not yet drawn. On the first recorded
+corpus ~75% of MC1 snapshots were mid-pass; the artifacts masqueraded
+as sim findings (a "12.5% RNG stall", an "asleep set" of
++63-frozen entities) until the fixture runner proved the stepped
+set always formed one contiguous slot band — the loop cursor.
+
+The MC1/HW law: a snapshot pair is a true inter-tick pair iff every
+persisted entity's `+63` clock advanced by exactly `dv` (retail's
+dispatch table is static; every live state row ticks) AND the global
+LCG advanced exactly `dv` steps (one draw per sub-step). Recorders
+MUST enforce this at emit time (`pair_clean`). Deviant
+discrimination: only steps of exactly `dv±1` count as tear suspects
+(the cursor-band signature — one pass short or long); arbitrary-step
+deviants are ambient spawn CHURN (slot re-use overwrites `+63` with
+the spawn ordinal — constant on HW's weather families, and a flat
+deviant cap starves the recorder there). Headers stamp
+`capture.tear_gate: true`; recordings
+without the stamp carry torn states, and fixture runners MUST
+re-classify their pairs with the same test and exclude torn ones from
+conformance verdicts. MC2 has no per-entity clock; its equivalent
+gate is open work (Turn + LCG-step parity at minimum).
+
+The FIRST record has no pair to gate it, so recorders MUST NOT write
+it unvetted (a mid-tick anchor rejects every later pair against it and
+starves the stream): hold the candidate and flush it only once the
+first clean pair vouches for it, replacing the anchor with the newer
+read whenever a bootstrap pair is rejected.
+
 ## Consumers
 
 - **`--replay <file>`** (the game): port recordings only
@@ -168,15 +227,29 @@ across it; runners count and report pair coverage.
   here: e.g. enhanced-style banking is a pure function of turn rate ×
   forward speed, both recoverable from the pose stream, so a retail
   run can be *shown* banking into its curves without touching physics.
-- **The fixture runner** (dedicated test bin), two modes:
-  - `verify-replay` (port): init from header, feed inputs, compare the
-    hash at every tick.
-  - `verify-deltas` (retail): for each adjacent pair, import the raw
-    `state` at N into a `Session`, tick once, diff the `obs` at N+1 —
-    with a deviations allowlist keyed to DEVIATIONS.md entries, and a
-    **pin-the-human** mode that forces the human carpet's recorded
-    state each tick so world fidelity (AI, monsters, projectiles,
-    regen) verifies with zero dependence on input reconstruction.
+- **The fixture runner** — `mgc-conform` (crates/mgc-conform):
+  - `check-decode` (any recording): re-decode every tick's raw
+    `state` through the Rust decoders (`mgc_formats::mgcr`) and
+    demand value equality with the stored `obs` channel — pins the
+    Rust decode against the recorder's.
+  - `verify-deltas` (retail; MC1/HW wired, MC2 open): for each
+    adjacent tear-gate-clean pair, import the raw `state` at N onto a
+    pristine-built world (`World::retail_import_mc1` — pool
+    slot-for-slot incl. hidden state, the LIVE free-stack order,
+    globals, the human column routed outside the pool), tick once
+    with **pin-the-human** (the recorded carpet pose drives
+    `World::tick`, so world fidelity verifies with zero dependence on
+    input reconstruction), and diff the port's obs projection
+    (`World::obs_project_mc1`) against the recorded `obs` at N+1.
+    Reports: fixture-grade vs torn pair counts, per-tick LCG
+    draw-count histogram, the +63 phase-clock table, entity-set
+    events by (class, model), and per-field mismatch counters with
+    examples. `--pin-pose n|n1`, `--input-delay k` (cast
+    reconstruction from the raw input channel), `--dump t`.
+    A deviations allowlist keyed to DEVIATIONS.md entries is still
+    open work.
+  - `verify-replay` (port): init from header, feed inputs, compare
+    the hash at every tick — not built yet.
 
 ## Cross-model replay (sandbox, not replay)
 

@@ -72,6 +72,8 @@ use crate::verbs::{
 };
 use mgc_formats::{Thing, ThingKind};
 
+pub mod conformance;
+
 /// The player's life ceiling: the human wizard ctor's maxLife 10000
 /// (:44185; skill does NOT scale it — sub_44D30 :55026 resets to max
 /// on every spawn). Heal's 5%-per-tick rate divides it.
@@ -713,6 +715,12 @@ pub struct World {
     /// its next tick, covering both the level-load sweep and the instant
     /// the player gains the spell. Faithful default = OFF.
     pub(crate) prune_owned_jars: bool,
+    /// Strict-retail mode, set by the retail conformance importer:
+    /// deliberate gameplay deviations (the class-12 jar ground-snap)
+    /// are disabled so a replayed retail state evolves under retail
+    /// law exactly. Never set in normal play; config-like, not part
+    /// of the state hash or snapshots.
+    pub(crate) strict_retail: bool,
     /// Last tick's fire-button states — casts are EDGE-triggered (one
     /// cast per press) except the traced hold spells; the edges are
     /// derived sim-side from the held booleans.
@@ -1233,6 +1241,7 @@ impl World {
             completed: false,
             dev_spells: false,
             prune_owned_jars: false,
+            strict_retail: false,
             prev_fire: (false, false),
             accel_veto: (false, false),
             pending_respawn: None,
@@ -2107,6 +2116,8 @@ impl World {
                 10 if matches!(
                     self.g.ent[i].tick70,
                     0 | 1
+                        | 2
+                        | 3
                         | 5
                         | 6
                         | 12
@@ -2952,6 +2963,7 @@ impl World {
             completed,
             dev_spells,
             prune_owned_jars: _,
+            strict_retail: _,
             prev_fire,
             accel_veto: _,
             pending_respawn: _,
@@ -4195,13 +4207,29 @@ impl World {
             }
             return;
         }
-        // A resting jar rides its tile's ground. Retail spawns at
-        // ground (:44005) and never legitimately diverges (jars have
-        // no gravity and terrain writes ignore class 12, :51729) — but
-        // HW's level shaping raised ground over ours (buried) and
-        // destroyed ground left ours hovering. Idempotent snap:
-        // hash-neutral while z already matches, so MC1 goldens only
-        // move where terrain genuinely reshaped under a jar.
+        // Strict-retail (a conformance import): the pool follows
+        // RETAIL's class-12 encoding — tick70 = spell*3 + phase,
+        // phase 0 = a wizard's owned-spell TOKEN (one per acquired
+        // spell, +42 = its wizard, idle unless the +48 duration
+        // counter runs), phases 1/2 = world jars, which rest
+        // forever. The port's own states (DROPPED_JAR=3 decay,
+        // MANIFEST_BASE+spell) are a different encoding: retail
+        // state 3 is the HEAL token, and decaying it reaped rivals'
+        // spell banks one tick after import. Everything rests inert
+        // here; the ACTIVE token effects (heal sub_56270, speed
+        // sub_56380 with its (10,2) puff trail, sub_56510's (9,1)
+        // bolts) are unported — CONFORMANCE-FINDINGS.md.
+        if self.strict_retail {
+            return;
+        }
+        // Jar ground-snap (deliberate deviation — DEVIATIONS.md
+        // "class12_tick jar ground-snap", player-ruled): retail's
+        // reshape walk re-snaps class 2 and kills class 5 only
+        // (:51729), so terrain shaped over/under a jar leaves it
+        // buried or hovering — on HW that makes authored jars
+        // unpickable (release-QA failure). The snap keeps every jar
+        // riding its ground in play; strict-retail replay (above)
+        // keeps retail's frozen-z law instead.
         {
             let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
             let gz = self.g.ground_z(x, y) as i16;
@@ -8656,6 +8684,9 @@ impl World {
             completed,
             dev_spells,
             prune_owned_jars,
+            // Conformance-import mode, never true in a playable world
+            // — a saved game has no business carrying it.
+            strict_retail: _,
             prev_fire,
             accel_veto,
             pending_respawn,
@@ -12610,15 +12641,16 @@ mod tests {
         assert_eq!(w.debug_pool().0, free1);
     }
 
-    /// A resting jar rides its tile's ground — raised terrain must not
-    /// bury it (HW level 00 spawned one below the surface) and
-    /// destroyed ground must not leave it hovering.
-    /// Retail spawns at ground (:44005) and its static z can never
-    /// legitimately diverge (jars have no gravity, terrain writes
-    /// ignore class 12, :51729); the snap is idempotent so it is
-    /// hash-neutral wherever a jar already sits right.
+    /// In play a resting jar rides its tile's ground — the ruled
+    /// deviation (DEVIATIONS.md "class12_tick jar ground-snap"): HW
+    /// authors jars that later shaping buries unpickably, and
+    /// earth-shaping spells would leave jars floating. In
+    /// strict-retail mode (conformance imports) the snap is OFF:
+    /// retail's reshape walk default-skips class 12 (:51729) and the
+    /// HW recordings show a jar holding its z for hundreds of ticks
+    /// over lowered ground — replayed retail state must do the same.
     #[test]
-    fn jars_ride_terrain_changes() {
+    fn jars_ride_terrain_in_play_but_not_under_strict_retail() {
         let planes = Planes {
             height: vec![100; 0x10000],
             tile_type: vec![5; 0x10000],
@@ -12653,8 +12685,7 @@ mod tests {
             "spawns on ground"
         );
 
-        // Raise the ground under it (the HW burial shape): the jar
-        // must ride up, not stay buried.
+        // Raise the ground under it: in play the jar rides up.
         let (tx, ty) = ((x >> 8) as usize, (y >> 8) as usize);
         for dy in 0..2 {
             for dx in 0..2 {
@@ -12665,10 +12696,14 @@ mod tests {
         assert_eq!(
             w.g.ent[jar].z,
             w.g.ground_z(x, y) as i16,
-            "raised ground lifts the jar"
+            "raised ground lifts the jar in play"
         );
+        let riding_z = w.g.ent[jar].z;
 
-        // Destroy the ground: the jar settles down instead of hovering.
+        // Strict-retail (a conformance import replay): the snap is
+        // off — lowering the ground leaves the jar hovering at its
+        // old z, exactly like the retail recordings.
+        w.strict_retail = true;
         for dy in 0..2 {
             for dx in 0..2 {
                 w.g.t.height[(ty + dy) % 256 * 256 + (tx + dx) % 256] = 40;
@@ -12676,10 +12711,68 @@ mod tests {
         }
         w.tick(away, PlayerCommand::default());
         assert_eq!(
+            w.g.ent[jar].z, riding_z,
+            "strict-retail keeps the jar hovering at its old z"
+        );
+
+        // Back in play mode the snap resumes and drops it to ground.
+        w.strict_retail = false;
+        w.tick(away, PlayerCommand::default());
+        assert_eq!(
             w.g.ent[jar].z,
             w.g.ground_z(x, y) as i16,
-            "lowered ground drops the jar"
+            "play mode re-grounds it"
         );
+    }
+
+    /// The jar ground-snap deviation over real content: on baked HW
+    /// level 0 (the original buried-jar offender) every placed jar
+    /// sits AT the shaped ground within one played tick — never
+    /// buried under shaping, never hovering. Self-skips without
+    /// baked data.
+    #[test]
+    fn hw_placed_jars_sit_on_ground_in_play() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
+        let lp = root.join("mc1hw/level-000.mgcl");
+        if !lp.exists() {
+            return;
+        }
+        let pkg: mgc_formats::LevelPackage =
+            mgc_formats::mgcl::read(std::fs::File::open(lp).unwrap()).unwrap();
+        let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc1-arctic")).unwrap();
+        let terrain = pkg.terrain.as_ref().unwrap();
+        let planes = Planes {
+            height: terrain.height.clone(),
+            tile_type: terrain.tile_type.clone(),
+            shading: terrain.shading.clone().unwrap(),
+            angle: terrain.angle.clone().unwrap(),
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets::parse(
+            bundle.search.as_ref().unwrap(),
+            bundle.build_tab.as_ref().unwrap(),
+            bundle.build_dat.as_ref().unwrap(),
+        )
+        .unwrap();
+        let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
+        let mut w = World::new_for_game(planes, &pkg.things.things, seed, assets, GameId::Mc1Hw);
+        let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
+        w.tick(away, PlayerCommand::default());
+        let mut jars = 0;
+        for i in 1..w.g.ent.len() {
+            let e = &w.g.ent[i];
+            if e.class64 == 12 && e.flags & 0x400 == 0 {
+                jars += 1;
+                assert_eq!(
+                    e.z,
+                    w.g.ground_z(e.x, e.y) as i16,
+                    "jar slot {i} at ({}, {}) sits on shaped ground",
+                    e.x,
+                    e.y
+                );
+            }
+        }
+        assert!(jars > 0, "level 0 places jars");
     }
 
     /// With `prune_owned_jars` on, a placed jar whose spell the player

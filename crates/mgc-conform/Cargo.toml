@@ -1,0 +1,15 @@
+[package]
+name = "mgc-conform"
+description = "Conformance fixture runner: verify the port against retail .mgcr recordings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+mgc-formats = { path = "../mgc-formats" }
+mgc-sim = { path = "../mgc-sim" }
+serde_json = "1"
+
+[lints]
+workspace = true

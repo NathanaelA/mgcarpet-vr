@@ -2538,6 +2538,37 @@ impl Gen {
                 self.refill_life(s);
                 self.set_sprite(s, 41);
             }
+            // sub_3A570 (str_255D0C[2]): the ambient puff — life 8,
+            // silent, spriteless and UNLINKED (raw position write, no
+            // grid insert), zero extents. The arctic wizard ambience
+            // emits these constantly on HW; the tick is the bare
+            // family decrement (sub_252B0).
+            2 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 2;
+                e.max_life = 8;
+                e.f26 = 0;
+                e.flags = (e.flags & !0x2_0009) | 0x2_0001;
+                e.x = x;
+                e.y = y;
+                e.z = z;
+                self.refill_life(s);
+            }
+            // sub_3A5D0 (str_255D0C[3]): the smoke puff — life 7,
+            // f44/f26 zeroed, linked, sprite 36, silent, no extents;
+            // tick = the bare family decrement (sub_253F0).
+            3 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 3;
+                e.max_life = 7;
+                e.f44 = 0;
+                e.f26 = 0;
+                e.flags &= !8;
+                e.flags |= 0x20000;
+                self.link(s, x, y, z);
+                self.refill_life(s);
+                self.set_sprite(s, 36);
+            }
             // The standing fire / ground wave (state 6, sub_3A730 ctor
             // → sub_252D0 tick): life 240, 50 ch0 per tick via the /10
             // writer, sprite 228 (the flame-size family +86 walks ±1),
@@ -2801,6 +2832,20 @@ impl Gen {
         match self.ent[i].tick70 {
             0 => self.fire_tick(i, ctx),
             1 => self.spreader_tick(i),
+            // sub_252B0 / sub_253F0 (states 2/3): the ambient and
+            // smoke puffs — the bare family decrement (PRE-decrement
+            // life test like the whole class-10 family), no anim
+            // step, no sound. Without these arms an imported puff
+            // fell through to the terrain-feature dispatch's
+            // self-kill catch-all and died a tick after import.
+            2 | 3 => {
+                let life = self.ent[i].act_life;
+                self.ent[i].act_life = life - 1;
+                if life < 0 {
+                    self.ent[i].flags |= 0x400;
+                }
+                false
+            }
             6 => self.standing_fire_tick(i, ctx),
             5 => {
                 // :28285-87 — PRE-decrement life test (class-10

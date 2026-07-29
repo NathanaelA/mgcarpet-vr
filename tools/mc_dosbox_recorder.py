@@ -1253,6 +1253,10 @@ def build_header(args: argparse.Namespace, layout: Layout, loc: Located,
     hdr["capture"] = (
         {"samples": args.samples, "cmd": cmd} if cmd
         else {"samples": args.samples, "attached_pid": args.pid})
+    # Emitted snapshots passed the inter-tick tear gate (pair_clean);
+    # recordings without this flag predate it and carry mid-pass
+    # states — fixture runners must re-classify their pairs.
+    hdr["capture"]["tear_gate"] = layout.family == "mc1"
     return hdr
 
 
@@ -1374,8 +1378,11 @@ def capture_clean(
     mem: GuestMem, loc: Located, layout: Layout, samples: int, retries: int
 ) -> Optional[bytes]:
     """Return the struct bytes once `samples` consecutive reads agree on
-    the volatile state — proof it stayed quiescent (between ticks) for the
-    whole window, so the image is not torn. None if no stable window was
+    the volatile state. ⚠ Consensus proves only that the guest was
+    FROZEN for the window — DOSBox regularly parks MID-entity-loop, so
+    a consensus image can be a mid-tick state (half the pool stepped).
+    `pair_clean` in the poll loop is the actual inter-tick gate; this
+    alone only rules out READ tearing. None if no stable window was
     caught in `retries` attempts (sim faster than we can snapshot)."""
     for _ in range(retries):
         first = mem.pread(loc.struct_host, layout.struct_size)
@@ -1441,6 +1448,49 @@ def _tick_delta_turn(prev: bytes, cur: bytes, layout: Layout) -> Optional[int]:
     return dv if dv >= 0 else None
 
 
+def pair_clean(prev: bytes, cur: bytes, layout: Layout, dv: int) -> Optional[str]:
+    """Inter-tick TEAR GATE (MC1/HW) — None if clean, else the reason.
+
+    Consensus only proves the guest was FROZEN — DOSBox regularly
+    parks MID-entity-loop, leaving a snapshot whose +63 clocks split
+    into contiguous stepped/unstepped slot bands and whose global LCG
+    may not have drawn yet (proven on the first corpus: the "12.5%
+    RNG stall" and the "asleep set" were both this artifact). A
+    genuine inter-tick pair advances EVERY persisted entity's +63 by
+    exactly dv (retail's dispatch table is static and every live
+    state row ticks, sub_main :52356/:52406) and draws the global LCG
+    exactly dv times (one per sub-step, :52223).
+
+    Deviant discrimination: a TEAR's deviants sit exactly one pass
+    short or long (step == dv∓1 — the cursor bands), while ambient
+    CHURN (spawn re-use overwrites +63 with the spawn ordinal,
+    :43882/:43907 — constant on HW's class-10 weather families) lands
+    on arbitrary values. Churn is unlimited; tear-suspects are capped."""
+    e = layout.ent
+    ps, st = layout.pool_off, layout.ent_stride
+    tear_suspects = 0
+    lo = (dv - 1) & 0xFF
+    hi = (dv + 1) & 0xFF
+    for s in range(1, layout.ent_count):
+        o = ps + s * st
+        c = cur[o + e.class_]
+        if c == 0 or c != prev[o + e.class_]:
+            continue
+        if cur[o + e.model] != prev[o + e.model]:
+            continue
+        step = (cur[o + e.tick_byte] - prev[o + e.tick_byte]) & 0xFF
+        if step != dv & 0xFF and step in (lo, hi):
+            tear_suspects += 1
+            if tear_suspects > 2:
+                return "clock-band"
+    r = _u32(prev, layout.rng_off)
+    for _ in range(dv):
+        r = (9377 * r + 9439) & 0xFFFFFFFF
+    if r != _u32(cur, layout.rng_off):
+        return "rng-parity"
+    return None
+
+
 def poll_loop(
     mem: GuestMem,
     loc: Located,
@@ -1459,8 +1509,57 @@ def poll_loop(
         file=sys.stderr,
     )
     prev: Optional[bytes] = None
+    first_rec: Optional[dict] = None  # deferred tick-0 record (see below)
     tick = 0
-    emitted = gaps = missed = 0
+    emitted = gaps = missed = torn = 0
+    torn_why: dict = {}
+    streak = 0  # consecutive mid-tick rejections against the current prev
+    streak_why: dict = {}
+    warned_dv = 1
+    streak_t0 = 0.0  # host clock at the streak's first rejection
+    streak_wc0: Optional[int] = None  # guest PIT wall clock, ditto
+
+    def streak_span() -> str:
+        """How long the current streak has really lasted — host seconds,
+        and (when the static frame is pinned) guest GAMEPLAY seconds via
+        the ~120 Hz PIT clock. Bootstrap streaks can't count pending
+        ticks (the anchor keeps moving), so this is the only honest
+        measure of what a stall is skipping."""
+        s = f" [{time.monotonic() - streak_t0:.1f}s"
+        wc = read_wallclock(mem, loc, layout)
+        if streak_wc0 is not None and wc is not None:
+            s += f", ~{(wc - streak_wc0) / 120:.1f}s of gameplay"
+        return s + "]"
+
+    def reject(why: str, dv_est: int) -> None:
+        """Count a mid-tick park; report tick LOSS live. One rejection is
+        routine (resample and the boundary usually turns up), but once the
+        +63 mode says a boundary passed while every park was mid-tick, data
+        is being lost NOW — say so, once per newly-pending tick, instead of
+        letting a silent streak surface later as a bare gap."""
+        nonlocal torn, streak, warned_dv, streak_t0, streak_wc0
+        torn += 1
+        streak += 1
+        torn_why[why] = torn_why.get(why, 0) + 1
+        streak_why[why] = streak_why.get(why, 0) + 1
+        if streak == 1:
+            streak_t0 = time.monotonic()
+            streak_wc0 = read_wallclock(mem, loc, layout)
+        if dv_est > warned_dv:
+            warned_dv = dv_est
+            why_s = ", ".join(f"{k}×{v}" for k, v in sorted(streak_why.items()))
+            print(f"! mid-tick parks only — {dv_est - 1} tick(s) pending "
+                  f"after {streak} rejects ({why_s}){streak_span()}. The sim "
+                  f"is saturating the emulated CPU (no inter-tick idle "
+                  f"parks); if this persists, raise DOSBox cycles.",
+                  file=sys.stderr)
+        elif streak % 500 == 0:  # e.g. a bootstrap stall, where dv can't grow
+            why_s = ", ".join(f"{k}×{v}" for k, v in sorted(streak_why.items()))
+            print(f"! {streak} consecutive mid-tick parks ({why_s})"
+                  f"{streak_span()} — no clean boundary caught yet.",
+                  file=sys.stderr)
+
+    wc_poll0 = read_wallclock(mem, loc, layout)  # go-live guest clock
     while args.max_ticks == 0 or emitted < args.max_ticks:
         data = capture_clean(mem, loc, layout, args.samples, args.retries)
         if data is None:
@@ -1471,33 +1570,107 @@ def poll_loop(
                   file=sys.stderr)
             time.sleep(period or 0.005)
             continue
-        if prev is not None:
-            dv = tick_delta(prev, data, layout)
-            if dv is None:  # can't measure — treat any change as +1 tick
-                if volatile_view(prev, layout) == volatile_view(data, layout):
-                    time.sleep(period or 0.001)
-                    continue
-                dv = 1
-            if dv == 0:  # still the same tick; wait for it to advance
+        if prev is None:
+            # The first snapshot has no pair to gate it, and a mid-tick
+            # park recorded unvetted would poison every later pair (the
+            # gate keeps prev on rejection, so a torn anchor starves the
+            # loop for as long as its cursor band persists). Build the
+            # record now — externals/wallclock belong to THIS moment —
+            # but write it only once the first clean pair vouches for it.
+            prev = data
+            first_rec = build_record(0, data, layout, mem, loc,
+                                     not args.no_state)
+            continue
+        dv = tick_delta(prev, data, layout)
+        if dv is None:  # can't measure — treat any change as +1 tick
+            if volatile_view(prev, layout) == volatile_view(data, layout):
                 time.sleep(period or 0.001)
                 continue
-            if dv > 1:
-                gaps += 1
-                missed += dv - 1
-                print(f"! gap: {dv - 1} tick(s) missed before tick "
-                      f"{tick + dv}", file=sys.stderr)
-            tick += dv
+            dv = 1
+        if dv == 0:
+            # The +63 mode says "no tick" — but if the global LCG moved,
+            # the tick-top draw (:52223) already happened and this is a
+            # park EARLY in the entity pass (cursor below slot ~500),
+            # i.e. the same tear as a clock band, not a same-tick wait.
+            # Mistaking it for "still the same tick" is what made whole
+            # rejection streaks silent and uncounted.
+            if (layout.family == "mc1"
+                    and _u32(data, layout.rng_off) != _u32(prev, layout.rng_off)):
+                reject("mid-pass-early", 1)
+                if first_rec is not None:
+                    prev = data  # unvetted anchor — prefer the newer candidate
+                    first_rec = build_record(0, data, layout, mem, loc,
+                                             not args.no_state)
+                time.sleep(period if period else 0)
+                continue
+            # Same tick (rng unchanged). While the anchor is unvetted,
+            # refresh it anyway: a torn anchor read against its OWN
+            # completing boundary also lands here (the splice already
+            # carries the boundary's rng), and the newer read is never
+            # the worse candidate of two same-tick claims.
+            if first_rec is not None:
+                prev = data
+                first_rec = build_record(0, data, layout, mem, loc,
+                                         not args.no_state)
+            time.sleep(period or 0.001)  # wait for the tick to advance
+            continue
+        # Tear gate (MC1/HW): reject mid-pass snapshots — resample
+        # until the frozen window is a true inter-tick boundary.
+        # Retry HOT (yield, not a poll period): during saturation clean
+        # parks are rare, and sleeping past one is how ticks get away.
+        # Rejections that outlive the tick surface as gaps below.
+        if layout.family == "mc1":
+            why = pair_clean(prev, data, layout, dv)
+            if why is not None:
+                reject(why, dv)
+                if first_rec is not None:
+                    # While the anchor is unvetted the blame is ambiguous —
+                    # replace it with the newer candidate so a torn first
+                    # snapshot cannot starve the bootstrap forever.
+                    prev = data
+                    first_rec = build_record(0, data, layout, mem, loc,
+                                             not args.no_state)
+                time.sleep(period if period else 0)
+                continue
+        if first_rec is not None:  # the pair vouches for the anchor: flush it
+            sink.write(first_rec)
+            wc_anchor = first_rec.get("wallclock")
+            if wc_poll0 is not None and wc_anchor is not None:
+                late = (wc_anchor - wc_poll0) / 120
+                if late > 0.5:  # bootstrap burned real gameplay before t=0
+                    print(f"! first verified boundary came ~{late:.1f}s of "
+                          f"gameplay after polling began — that stretch is "
+                          f"NOT in the recording (t=0 anchors here).",
+                          file=sys.stderr)
+            first_rec = None
+            emitted += 1
+        if dv > 1:
+            gaps += 1
+            missed += dv - 1
+            why_s = (" (" + ", ".join(f"{k}×{v}" for k, v in
+                                      sorted(streak_why.items())) + ")"
+                     ) if streak_why else ""
+            print(f"! gap: {dv - 1} tick(s) missed before tick "
+                  f"{tick + dv} — {streak} mid-tick park(s) rejected"
+                  f"{why_s}", file=sys.stderr)
+        tick += dv
         sink.write(build_record(tick, data, layout, mem, loc,
                                 not args.no_state))
         emitted += 1
         prev = data
+        streak = 0
+        streak_why = {}
+        warned_dv = 1
         if emitted % 20 == 0:
-            print(f"  {emitted} snapshots (tick={tick}, missed={missed})",
-                  file=sys.stderr)
+            print(f"  {emitted} snapshots (tick={tick}, missed={missed}, "
+                  f"torn-rejected={torn})", file=sys.stderr)
         if period:
             time.sleep(period)
+    why = (" (" + ", ".join(f"{k}: {v}" for k, v in sorted(torn_why.items()))
+           + ")") if torn_why else ""
     print(f"done: {emitted} snapshots spanning {tick} ticks, "
-          f"{gaps} gap(s) / {missed} missed.", file=sys.stderr)
+          f"{gaps} gap(s) / {missed} missed, {torn} torn snapshot(s) "
+          f"rejected{why}.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------

@@ -64,7 +64,16 @@ menus/FMVs, then waits for the sim to actually be ticking before
 recording. It takes N consecutive byte-identical reads as proof of a
 non-torn, between-ticks snapshot (CONSENSUS), and — since retail has no
 global logic-tick counter — counts elapsed ticks from the mode of the
-per-entity `+63` increment across persistent entities.
+per-entity `+63` increment across persistent entities. Consensus only
+proves the guest was frozen; the inter-tick tear gate then rejects
+mid-pass parks (cursor clock bands, LCG parity, and the early-cursor
+park whose only tell is a moved LCG under a zero +63 mode). When the
+sim saturates the emulated CPU (level-start spawn storms, heavy
+combat) every park is mid-tick and ticks are unrecoverable — the
+recorder reports that loss live per pending tick and folds the streak
+breakdown into the gap line, rather than leaving a silent `t` jump.
+The first record is only written once the first clean pair vouches
+for it (an unvetted mid-tick anchor would starve the whole stream).
 
 ```sh
 # locate + decode ONE clean snapshot, print a sanity census
