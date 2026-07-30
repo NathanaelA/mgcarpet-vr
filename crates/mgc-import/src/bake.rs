@@ -179,7 +179,8 @@ pub fn bake_mc1_archive(
                 entry_sha256,
             },
         );
-        let generated = crate::mc1_terrain::generate(&level.gen_map);
+        let generated =
+            crate::mc1_terrain::generate(&level.gen_map, matches!(game, Game::HiddenWorlds));
         package.terrain = Some(Terrain {
             tile_type: generated.tile_type,
             height: generated.height,

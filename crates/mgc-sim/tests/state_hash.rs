@@ -361,13 +361,35 @@ fn level_005_golden_state_hashes() {
     // mc1l0 corpus pins it), the port re-stamped each segment with
     // its own slot. Layout-only if OBSERVABLE holds (id24 is not a
     // pose lane); also keeps kill credit head-only.
+    // Re-pinned (D and E) for the MC1 tick-top reap law (:52226-31):
+    // 0x400-killed records persist through their death tick's
+    // snapshot and free at the top of the NEXT tick, so combat
+    // kills (D) and aftermath decay (E) carry one-frame death
+    // records and same-tick spawns pop the pre-existing stack
+    // instead of recycling the dying slot. Post-init..C hold —
+    // nothing dies before D in this fixture.
+    // Re-pinned (A-E) for the CASTLE-COLLATERAL round (mc1hwl0 slot
+    // 522, −833/tick napalm collateral, dead t=9457 — the whole
+    // chain corpus-proven): the +78=0xE000 z-center marker (sub_37150
+    // :43798) now written with the extents and re-applied in the
+    // settled tick's every-other-tick block (sub_46DB0 :52083, level
+    // VERBATIM) with the +144 owner echo (:52080); ent_overlap reads
+    // +78 SIGNED (the decompile's uint16 typing is a movsx artifact
+    // — the corpus overlap only reconciles signed); castles join the
+    // homing-acquire candidate list (sub_54520 cases 0/3/4/0x10
+    // branch model 2 to the castle scorer sub_54BD0, raw-z aim); the
+    // explode child carries the victim slot in +146; the (10,53)
+    // cloud joins the class-10 PRE-decrement family (7 burns from a
+    // 6-life cloud). Post-init holds — the authored castles load at
+    // level 0 (the guarded ctor shell); the marker first lands on
+    // each castle's first settled tick inside the window.
     const GOLDEN: [u64; 6] = [
         0x4adb9e3a7dd0638d, // post-init (feature pass + disposition 0)
-        0x3923cdf12395ce8e, // A: 32 idle ticks far afield
-        0xe9207a3d183cd57a, // B: crater trigger fired + 120 dig ticks
-        0xb8178cdc62154233, // C: ambush disposition fired
-        0xc7440cc1a01e71b4, // D: 64 ticks of two-hand fireball combat
-        0x42118e7346f46f85, // E: 100 aftermath ticks
+        0x071d8b3685c82b66, // A: 32 idle ticks far afield
+        0x9e4c1ac9d3bec946, // B: crater trigger fired + 120 dig ticks
+        0xcce9b03e12711c2f, // C: ambush disposition fired
+        0xf97c8fc44afdb796, // D: 64 ticks of two-hand fireball combat
+        0xe772cef1c5a1eb1c, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -421,13 +443,25 @@ fn level_005_golden_state_hashes() {
     // change by design (see the GOLDEN note): -33..-64 impacts no
     // longer hop, so ball rest poses at every checkpoint differ.
     // Post-init holds.
+    // The tick-top reap re-pin moves OBSERVABLE at D-E — a behavior
+    // change by design (the retail reap law, see the GOLDEN note):
+    // every 0x400 kill's record is present for one more snapshot
+    // (poses/populations include the dying frame, as retail draws
+    // it) and same-tick spawns take pre-existing stack slots, so
+    // combat (D) and aftermath (E) pose sets genuinely differ.
+    // Post-init..C hold — nothing dies before D.
+    // The castle-collateral re-pin (marker + acquire + pre-decrement
+    // cloud, see the GOLDEN note) holds OBSERVABLE at EVERY leg:
+    // nothing in this window attacks a castle or casts a napalm
+    // cloud, so the moved layout lanes are the castle +78/+144
+    // fields and the acquire-latch bits alone.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
         0x9ec1a5584565a87e, // A
         0x7dd13ef50ddc4805, // B — settler phase + feeder leash
         0xdb23684a5f1a94c7, // C
-        0x5cb6270c46edecf8, // D
-        0xa7dbb533582b8413, // E
+        0xdde79da8ba8775b9, // D
+        0x0cc6d8b97bc50be3, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

@@ -906,6 +906,24 @@ pub struct RetailWizardMc1 {
     pub kills: u32, // +359
     /// Village-aggro timer (+528).
     pub aggro: i16,
+    // AI brain lanes (rival AI-state reconstruction):
+    /// Brain state byte (+415; dispatch sub_13170 :17847).
+    pub ai_state: u8,
+    /// Fireball/lightning burst counter (+404; negative = lockout
+    /// counting back up, :17936-38).
+    pub burst: i16,
+    /// Mana-poverty latch (+406, :19468-91).
+    pub poverty: u16,
+    /// Hate ledger per player slot (str_456+4 → +460+8j; neutral
+    /// 0x601F).
+    pub hate: [u16; 8],
+    /// War flags per player slot (+462+8j).
+    pub war: [u16; 8],
+    /// Spell-learn countdowns (+628, armed to 200, :19409-12).
+    pub learn: [u16; 24],
+    /// AI per-spell recast cooldowns (+724; [16] = var_756, the
+    /// castle-build stagger).
+    pub cooldown: [u16; 24],
     /// The owned-spell ACQUISITION list (+532, i32[24]): while alive,
     /// manifestation pool slots in pickup order (the death path
     /// rewrites it to model numbers for the respawn re-grant). The
@@ -1027,10 +1045,20 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
     let mut spell_list = [0i32; 24];
     let mut owned_slots = [0u16; 24];
     let mut blue = [0u8; 24];
+    let mut learn = [0u16; 24];
+    let mut cooldown = [0u16; 24];
     for s in 0..24 {
         spell_list[s] = i32_(d, t + 532 + s * 4);
         owned_slots[s] = u16_(d, t + 676 + s * 2);
         blue[s] = u8_(d, t + 916 + s);
+        learn[s] = u16_(d, t + 628 + s * 2);
+        cooldown[s] = u16_(d, t + 724 + s * 2);
+    }
+    let mut hate = [0u16; 8];
+    let mut war = [0u16; 8];
+    for j in 0..8 {
+        hate[j] = u16_(d, t + 460 + j * 8);
+        war[j] = u16_(d, t + 462 + j * 8);
     }
     RetailWizardMc1 {
         status: u16_(d, w + 2),
@@ -1049,6 +1077,13 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
         hits: u32_(d, t + 347),
         kills: u32_(d, t + 359),
         aggro: i16_(d, t + 528),
+        ai_state: u8_(d, t + 415),
+        burst: i16_(d, t + 404),
+        poverty: u16_(d, t + 406),
+        hate,
+        war,
+        learn,
+        cooldown,
         spell_list,
         owned_slots,
         blue,

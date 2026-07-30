@@ -132,7 +132,11 @@ pub const FORMAT_VERSION: u32 = 2;
 ///    (MC2's grey day/night/cave cursor variants included), with its
 ///    start recorded in the new `SpriteIndex::pointer_base` field
 ///    (0 = no bank) instead of hardcoded indices.
-pub const BAKE_EPOCH: u32 = 22;
+/// 23: HW terrain type planes regenerate with HIDDEN.EXE's arctic
+///    class passes (the sub_31C10 snow pass + the steep→1 rock
+///    relabel) — snow ground (type 6) replaces the temperate grass
+///    the old bake painted. MC1/MC2 planes byte-identical.
+pub const BAKE_EPOCH: u32 = 23;
 
 /// Which original game an asset belongs to. Serialized as the short
 /// tags used in `meta.json`.

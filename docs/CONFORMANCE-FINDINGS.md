@@ -18,14 +18,20 @@ Baseline corpus (2026-07-30, the rate-limited `*_REC.EXE` recorder,
 all pairs at `--input-delay 2`):
 - **mc1l0**: a FULL gapless level-0 playthrough, 5330 ticks,
   check-decode 5330/5330 exact, 5329/5329 pairs fixture-grade, 0
-  torn. **59 conforming at capture → 350 conforming after the
-  2026-07-30 fix round** (castle f59 import, ball settle/roll/
-  hard-free, strict-retail jar pickup, tree water gate, regen
-  seed — see Resolved). First divergent pair t=11 → t=58 (an
+  torn. **59 conforming at capture → 350 → 385 conforming after
+  the 2026-07-31 tick-top-reap round** (see Resolved: the reap
+  law fixed 18 pairs with zero regressions on top of the round-3
+  367 baseline). First divergent pair t=11 → t=58 (an
   input-latency cast, entry 4's domain). RNG (1,1) on all 5329.
-- **mc1hwl0**: 2026-07-30 partial HW level-0 take (173MB) — NOT
-  yet triaged; run verify-deltas next (expect entry 7's terrain
-  shortfall plus the same now-fixed families).
+- **mc1hwl0**: the FULL 2026-07-30 window-gated take (259MB,
+  41,497 ticks, `input:"raw"`), **TRIAGED 2026-07-31**: 41,488
+  pairs (8 gaps), 902 torn, 40,586 fixture-grade, **1 conforming
+  (t=0 — the first HW conforming pair)**; RNG (1,1) on 40,539.
+  Terrain closure (entry 2's HW face) puts z rows on ~every pair
+  by construction, so HW port-side progress reads from per-family
+  totals + the story suite `conformance/mc1hwl0.json` (12
+  fixtures). See the MC1HW section below. The reap law + the
+  rival re-anchor collapsed entity-set misses 717,798 → ~33k.
 - **mc2l0**: 2026-07-29 full take, 3641 ticks, 0 gaps, check-decode
   3641/3641 exact. **IMPORTER WIRED + TRIAGED 2026-07-30** (no
   input delay — the take carries no input channel): 3640 pairs,
@@ -34,9 +40,29 @@ all pairs at `--input-delay 2`):
   goat bleat draw). Global LCG near-exact out of the box: 62/3640
   pairs mismatched, draw counts matching pairwise across the whole
   0..16+ histogram.
+- **mc2l4 + mc2l30** (CUT 2026-07-31 from the single 2026-07-30
+  mc2:4 take, raw preserved as `mc2l4-uncut.mgcr`): the take
+  crossed into the hidden level mc2:30 through the secret portal;
+  the embedded level record @0x2FECE flips ATOMICALLY between
+  adjacent ticks 19154→19155 (Turn resets to 0, census 331→82, no
+  tick gap — the tick fn never ran during the load, so there is no
+  torn transition region). Cut: **mc2l4.mgcr** = ticks 0..19154
+  under the original header; **mc2l30.mgcr** = ticks 19155..34583
+  re-based to t=0.. with header level=30 + `capture.cut_from`
+  provenance. Both verify: mc2l4 replays RNG (1,1) exact; mc2l30
+  imports and replays as level 30 (its own triage NOT started —
+  first probe shows retail drawing >16/tick vs port 1, a fresh
+  §rng family for the hidden level's ambient churn). Neither take
+  extracted/suited yet.
 (Triage tooling on the runner: `--csv` per-diff TSV for offline
 clustering, `--dump <t> [--dump-port]`, `dump-state <file> <t>
-<slot…|all>`, `trace <file> <slot> <t0> <t1>`.)
+<slot…|all>` — now also prints both free/recycle stack tails,
+next-pop last — `trace <file> <slot> <t0> <t1>`, `--start <t>`
+windowed triage on the MC1 arm too (announces pairs + the
+free-stack fallback, wired through the MC1 import report), and
+`ground-audit <file> [--dump t]` — retail rest-z vs the port's
+generated plane per (class,model) + 16-tile site, the instrument
+that refuted the HW generator-shortfall hypothesis.)
 (History: the first takes ran 627 pairs / 73 conforming and 417 /
 32; the fix rounds moved the like-for-like take to 34, and the full
 recipe + fixes reached 117.) (History: the
@@ -134,13 +160,22 @@ including the 75%-torn pre-gate corpus.
    MEASURED WORSE (384→377 conforming, both halves independently)
    — MC1's reaper evidently returns slots within the frame, unlike
    MC2's next-frame remove pass; the free-guard comment records the
-   refutation. The cascade stays open as a pool-order lead (~6-17
-   missing high-slot rows/tick through t≈540): trace one pair's
-   pop sequence vs retail's. ALSO from the dig: the port's
+   refutation. ALSO from the dig: the port's
    worm-segment ctor re-stamped id24 with the segment's own slot —
    retail's byte-copy KEEPS the head's +24 (corpus-pinned). Fixed
    (goldens re-pinned layout-only, OBSERVABLE holds); this also
    keeps kill credit head-only in native play.
+   **CASCADE RESOLVED 2026-07-31 — it was the TICK-TOP REAP LAW,
+   not pool order** (see Resolved). The trace showed the pop order
+   was correct all along: retail's castle pop (627) was the
+   stack top BECAUSE the flag-deferred frees land at the top of
+   the next tick, before dispatch. With the reap law landed the
+   worm-window substitutions, the phantom second castle at 475
+   (a delivered (9,10) re-triggering), and the missing same-tick
+   (10,42) painter all cleared. REMAINING (small): the same-tick
+   painter's ctor fields differ (port max_life 30 vs retail 0,
+   chase 627 vs 0, x off-by-one-tile at spawn) — a (10,42) ctor
+   transcription pass vs sub_47020's spawn site is owed.
 4. **Impact cluster around casts** — (9,1) 468/610 missing/extra,
    (10,12) hit-flash, (9,0), and the t=67-style substitution
    clusters: input-latency + unreconstructed aim (control aim_yaw/
@@ -190,19 +225,27 @@ including the 75%-torn pre-gate corpus.
    gap, now FIXED: the genie's (10,0) puff and the sparkle ring
    were missing retail's `+18 |= 1` stamp (:24793-94/:24377-78 —
    our `flags |= 0x10000`).
-7. **HW terrain shortfall + walker drift** (narrowed from "systematic
-   z −64" — the class-12 part is RESOLVED below): the port's HW
-   ground sits below retail's in places (~8 height-bytes ≈ 256
-   z-units around (56,246) on level 0), driving residual z hits
-   (1349/192 pairs after the jar fix, was 5189) and the broad
-   x/y/heading drift on ground-following walkers. Candidates: (a)
-   `mc1_terrain::generate` not bit-exact on HW/DDLEVELS gen-map
-   parameter ranges (validated for temperate only), (b) retail
-   runtime terrain edits (castle/wizard pads) that are non-closure
-   state the importer resets. Also open from the same triage:
-   retail manifestations import with `+70 < 200`, below the port's
-   `MANIFEST_BASE = 200` encoding, so imported manifestations take
-   the resting-jar path instead of `manifestation_tick`.
+7. **HW terrain shortfall — GENERATOR CANDIDATE (a) REFUTED
+   2026-07-31 by the `ground-audit` instrument** (mgc-conform mode:
+   retail entities' rest-z vs the port's generated plane at their
+   coordinates). At t=0 — before any runtime edit exists — every
+   class-2 static and every (10,45) hut on the full HW take sits at
+   **dz = 0 exactly** (99 samples map-wide; the mc1l0 control is
+   identical, its (5,1)+512 rows being balloons at tether
+   altitude). Late-tick audits localize ALL large dz to one
+   contiguous castle-mound region (80-112, 160-208, ~+1000, the
+   (3,2) at +2272) plus battle sites — runtime edits. So the HW z
+   bulk is candidate (b) — TERRAIN CLOSURE (entry 2), capture
+   domain per the standing deferral ruling; no generator fix
+   exists to make, and the one-off live-DOSBox height-plane dump
+   is no longer needed for this question (optional someday as a
+   full-plane certifier — statics only sample where they stand).
+   The old "~256 z around (56,246)" measurement came from the
+   superseded partial take's walker families. Still open from the
+   same triage: retail manifestations import with `+70 < 200`,
+   below the port's `MANIFEST_BASE = 200` encoding, so imported
+   manifestations take the resting-jar path instead of
+   `manifestation_tick`.
 8. **HW stat doubling — DISSOLVED (entity-substitution artifacts)**:
    "life 30 + flags 65536(0x10000)" = the port's (10,42) castle
    build painter occupying a slot it reaped (painter max_life=30,
@@ -212,6 +255,248 @@ including the 75%-torn pre-gate corpus.
    (effect bit17 + active), port 65536 = 0x10000 (painter build
    bit): two different entities, no bit-shift exists. No stat-scale
    fix anywhere; closed into findings 1 and 3.
+
+## MC1HW take-1 (2026-07-31 triage; suite conformance/mc1hwl0.json, 12 story fixtures)
+
+41,488 pairs / 902 torn / 40,586 fixture-grade / 1 conforming (t=0)
+after the reap law + the rival re-anchor. Terrain closure (entry 2's
+HW face — the castle-mound region (80-112,160-208) raised ~+1000 by
+late-run) z-poisons ~every pair, so progress reads from families +
+the story suite. Post-fix field totals: z 1.72M (capture-dominated) ·
+life 613k · flags 428k · x/y ~300k · rand 139k · heading 111k ·
+mana_max 8.7k pairs · player.mana 7.6k · player.life 1.2k.
+
+- **Rival carpet FREEZE — RESOLVED 2026-07-31 (importer defect, not
+  a motion bug)**: `rival_entity_tick` keys on `self.rivals[i].ent`,
+  which `retail_import_mc1` never re-anchored to the imported slots —
+  every imported rival carpet was a frozen husk (obs@1 = state@0
+  verbatim; the first divergence family, every pair). The port's
+  motion law itself is verbatim sub_14EB0 (:18781; hand-computed one
+  tick from state@0 → retail obs@1 EXACTLY: z band-settle quarter-rate
+  −1, polar step sin/cos>>16, ±16/tick speed slew toward Type_160
+  v_12, turn rate angdist/(8+(255−tempo)/16) clamped + overshoot
+  snap). Fix: re-anchor `self.rivals` per pair (ent = play_index) +
+  reseed vdes/jink/grace/mana lanes from the closure. First HW
+  conforming pair.
+- **Rival AI-STATE reconstruction — RESOLVED 2026-07-31** (the
+  freeze entry's REMAINING): the AI record imported as state=Fresh
+  with no target, so the decision cascade re-aimed f34 (target_yaw
+  1477-vs-1825 on ~25k pairs) and cast choices diverged. Retail runs
+  the state HANDLER before the selector (sub_13170 :17847), so state
+  and a `target_alive`-surviving target must import TOGETHER or the
+  tick falls back to Fresh. Decoded (all Type_160-relative, opus dig
+  cited): +415 state byte (dispatch :17847; value map in
+  `AiState::from_retail` — cut states 2/4/5/10 → Fresh), +404 burst
+  (i16, negative lockout :17936-38), +406 poverty latch (:19468-91),
+  +460/+462 hate/war per player slot (str_456, neutral 0x601F),
+  +628 learn countdowns (:19409-12), +724 cooldown[24] (u16;
+  triangulated: [16] = var_756 castle-build stagger). Target + site
+  need NO decode: they ride the already-imported carpet entity
+  (f146 tr-translated by import_ent, dest_x/dest_y); target_sig
+  recomputed = retail's stored +148 exactly (sub_15420 :19041).
+  Implemented as `reanchor_rival_ai` (rivals.rs) called from the
+  importer's re-anchor loop. mc1hwl0: rival (3,1) target_yaw
+  ~25k pairs → 320 rows (top slot 473); target_yaw total 25k→20.6k
+  (rest = creature (5,x) share); rand 139k→128k (cast knock-ons);
+  conforming 1→46; 8/12 story fixtures drifted shrinking (all lost
+  their 3,1:target_yaw atom), promoted; mc1l0 47/47 + mc2l0 24/24
+  unmoved; native goldens untouched.
+- **§weather churn cadence** — the port under/over-spawns the ambient
+  fire/meteor systems: (10,0) 11.6k missing / 1.4k extra (from
+  t=355), (10,13) 9.1k missing (meteor showers, from t=9949), (9,9)
+  3.8k/5.5k, (10,6) 2.7k/4.6k, (9,1) 1.9k/5.0k. Field-row bulk
+  (life/flags/x/y) is the SAME churn as one-tick-offset lifecycle
+  overlaps. Untraced; measure per model before patching.
+- **(10,2) speed-token contrail — sub_56380 UNPORTED** (entry 1
+  residual; 1,304 missing from t=1): the class-12 ACTIVE Accelerate
+  token (state 6). Decoded 2026-07-31 (:65131-99): while +48>0 and
+  `sub_55DD0` admits — owner cmd-speed v_12 = 3×(+128) on the first
+  burst tick (+48==+50, also flags|=0x80 + notify 19) else 2×(+128),
+  +126 = v_12, a (10,2) puff at the owner every 4th TOKEN f63 tick
+  (id24 = owner's id24, act_life ×4), then sub_55E80 (the burst
+  cost). At +48==0: restore v_12 = +128, clear 0x80. Port into the
+  strict class-12 arm (world.rs class12_tick phase 0); sub_55DD0 and
+  the owner Type_160 v_14 clamp lane still need transcription. The
+  heal (sub_56270, state 3) and bolt (sub_56510, state 9 — its (9,1)
+  share) arms ride the same dispatch.
+- **§census 10000-vs-1000** (mana_max 8.7k pairs, from t=72): the
+  claim census under a live rival castle; also rival.castle blink
+  (the (3,2)@522 goes missing on 5-8 pairs — the castle state
+  machine kills it) and one player.mana_max 58938 blowup (t=10705,
+  a census overcount). Entangled with the rival AI-state gap.
+- **§player-vitals**: player.mana 7.6k pairs (e.g. t=435 retail 0
+  port 1000 — the regen floor applies while retail is suppressed
+  mid-drain; the entry-5 clamp misfires on HW's token layout?);
+  player.life 1.2k pairs (ambient damage share).
+- **§token-blink** (t=3001-3013): the port drops the player's whole
+  (12,x) owned-token roster for 13 pairs over the death window —
+  the death path scatters/reaps what retail keeps banked.
+- **Hands**: 61+18 pairs (quickselect law, mc1 entry 6's twin).
+- **PLAYTEST (2026-07-31)**: (1) **HW SNOW GROUND — FIXED same day**
+  (player report "reverted to mc1 plains"): the bundle chain was
+  correct end-to-end (atlas/palette/shade-LUT all arctic; hiding
+  the bundle errors; features switch with --tileset) — the defect
+  was the TYPE-PAINT: the baked HW type plane was 94% type 3
+  (temperate grass). Decompile-corroborated (opus dig): HIDDEN.EXE
+  inserts a SNOW pass `sub_31C10(snlin, snflt)` between rock and
+  majority (remc1hw :35792; height > snlin AND 4-neighbor relief
+  < snflt AND land → class 6 = snow, then the shared basalt edge
+  rule → class 1) AND its rock pass writes steep→class 1 not 6
+  (sub_33570 :37269). CARPET.EXE never reads snlin (the old
+  mc1_terrain.rs:48 claim was temperate-only truth). Ported
+  arctic-gated into mc1_terrain::generate (rock steep param +
+  snow pass; bake threads `Game::HiddenWorlds`); BAKE_EPOCH 22→23;
+  HW:0 histogram flipped 61,452×type-3 → 63,284×type-6 (+80-83
+  snowy-rock transitions), mc1:0 byte-identical, water untouched
+  (snow never visits class 0 — water semantics = type 0 safe).
+  Screenshot-verified snowfield; full workspace tests green;
+  DDLEVELS snlin is a real per-level knob (5 on lvl0 = full snow,
+  135 on lvl20 = peaks only). (2) The HOMING METEOR spell has
+  always been wrong: wrong sprite (renders like a plain meteor)
+  and far-too-weak combat law (retail: 3 guaranteed hits wreck
+  Vodor, only rebound defends; the port's rival outheals it) —
+  **RESOLVED 2026-07-31 (both defects, opus dig cited; PLAYTEST
+  OWED)**. §3c dissolved: the sprite is a CODE LITERAL, not a
+  descriptor-table lookup — HW swaps the m16 ctor sub_3A270
+  (sprite 42, remc1:46353) for sub_3A5F0 (sprite 76 = the big
+  meteor, hw:42451/:42474); SPRITE_STATS row 76's 420x350 extents
+  also size the hitbox, so the port's hard-coded 42 was wrong
+  look AND collision. Damage: the m16 bolt does NO direct damage —
+  the state-17 handler sub_52770_52AB0 copies the bolt's +44 into
+  the (10,53) cloud at delivery (hw:58859), so the cloud burns the
+  ROW damage 5000 over its 6 ticks (833/tick) instead of the ctor
+  3000; the port never copied → ~3000/hit vs Vodor's 10000 with
+  ~20/tick regen between casts = outhealed; 3×5000 with the
+  regen stall (+383=16/hit, hw:51748) = the retail 3-hit wreck.
+  Both fixes HW-gated (spawn_firewall_bolt sprite,
+  proj_firewall_tick copy_f44); test
+  hidden_worlds_firewall_bolt_is_the_meteor_and_copies_damage
+  pins both games; MC1 goldens + all 3 suites unmoved. Rebound
+  uniquely defends because HW adds 53 to the model-53 reflect set
+  {1,17} (hw:58806) — reflect itself still dormant in the port.
+  CORRECTION: the earlier "(9,9) state-14 = meteor" guess was a
+  MISID — that family is the Lightning beam segment swarm
+  (spawn_zigzag one-frame segments, own=472); the meteor lane is
+  (9,16) st17 + (10,53/58) + (10,0). SECOND CORRECTION (player
+  push-back, same day): the meteor is RICHLY PRESENT in the take
+  (3,005 (9,16) + 3,711 (10,53) diff rows from t≈727; first full
+  engagement: cast t=798 slot 546 → homes on creature 183 →
+  delivery t=801, cloud slot 512) — the "absent" reading came
+  from the RUNNER replaying HW takes under base-MC1 law (next
+  entry). CORPUS-CONFIRMED both fixes: bolt type86=76 and
+  f44=5000 at birth; delivered cloud f44=5000 (the hw:58859
+  copy, byte-for-byte). BANKED LEADS from the dig (INFERRED,
+  verify before acting): ① base MC1's cloud should ALSO inherit
+  +44 (=24464→191/tick) via the same sub_52770 copy — remc1's
+  truncated class-9 table hid it; changing it moves MC1 combat
+  balance + goldens, needs its own corpus/playtest pass. ②
+  ~~rival at-castle grace mail-wipe "no retail basis"~~ —
+  **REFUTED 2026-07-31 (the dig read the intake fn and missed
+  the CALLER's gate)**: retail :17971-79 is verbatim the port's
+  law (own-castle overlap sub_11950 → grace +331=2; while grace:
+  memset the 36-byte mailbox, skip the intake). At-castle rival
+  invincibility IS retail. The human's explicit ch0 redirect
+  into the castle (:55353-62) is ported; retail has NO rival
+  analog — a camping rival's castle takes damage as ordinary
+  AREA-blast collateral (player testimony: "the damage is dealt
+  to the castle instead"). See the playtest-round entry below
+  for the REAL lead this resolves into.
+
+## HW-LAW RUNNER FIX 2026-07-31 (the fall-through trap, new shape)
+
+`verify::build_world` built EVERY MC1-family conformance world
+with bare `World::new` = base-MC1 law — the game string selected
+only the ASSET variant. **The whole mc1hwl0 triage to date ran
+without SPELLS_HW, the m16 homing acquire, or the HW napalm
+fork.** Fixed: `new_for_game(GameId::Mc1Hw)` for "mc1hw"
+(verify.rs; serves verify, fixtures, and dump — MC2 has its own
+builder). This is the mc1hw-survey durable-lesson trap in a new
+shape: not an equality gate this time but a DEFAULT CONSTRUCTOR —
+sweep `World::new(` call sites, not just `== Game::` tests, when
+a per-game seam lands. New HW-law family baseline (full re-run):
+z 1.641M · life 596k · flags 412k · x/y ~280k · rand 127k ·
+max_life 112k (−16k) · heading 96.7k (−14k) · model 17.0k
+(−48%: napalm life-6 fork + meteor lifecycles had been graded
+against base law) · target_yaw 20.6k · player.mana 7,567
+(unchanged).
+
+Meteor engagement triage under real HW law (pairs 796-810):
+- **Birth pair 797 now conforms on identity**: the acquire fires
+  (chase 183, latch set, heading/pitch snap — retail 882/134 vs
+  port 890/147; residue = pose-latency muzzle offset, capture
+  domain). At the doctrine input-delay 2 the cast lands 2 ticks
+  late (jitter — cast pairs are inherently capture).
+- **Bolt f140 FIXED (both games)**: retail's emit copies the
+  MANIFESTATION's +140 (hw:62371/:66151) = the ctor's
+  cost-per-shot `a4/count` (:48005) — 5000/26=192 HW, 5000/51=98
+  base; the port stamped the row total 5000. cast_firewall now
+  computes the quotient (manifestations stay f140-unstamped =
+  hash-quiet; nothing ever rewrites class-12 +140 — the castle
+  ladder rewrites +136). Corpus row (mana 192-vs-5000) gone;
+  the wall_of_fire test pins it.
+- **NEW LEAD — cast DEBIT lands one tick late (suspected
+  §player-vitals root)**: retail applies the −possess_mana
+  regen-delta WITHIN the cast tick (obs: player.mana 10000→5000
+  on the cast pair); the port's mana_debit writes mana_delta but
+  the vitals application ran earlier in the tick, so the debit
+  surfaces one pair late. MC1-wide ordering question (every
+  spell, both games) — needs its own round with mc1l0 re-verify;
+  candidate root for a chunk of player.mana 7.6k.
+- **Fixtures**: t=797 (capture, cast story) + t=800 (open,
+  delivery story: cloud delivered same-pair, f44 copy conforms;
+  residue = free-stack allocation order 534-vs-512 + the
+  jittered second cast) added; suite now 14 fixtures, all green;
+  mc1l0 47/47 and mc2l0 24/24 untouched.
+
+## METEOR PLAYTEST ROUND 2 (2026-07-31): mostly certified; the
+## residual "Vodor tougher than retail" TRIAGED to ONE chain
+
+Player: meteor sprite + 3-hit damage feel right; Vodor still
+harder to kill than the retail playthrough ("starts healing
+fast"), possess homing "feels broken" on unclaimed balls, and
+respawn "way faster than retail". Adjudications:
+- **Possess homing — RULED FAITHFUL, don't re-open**: retail's
+  acquire case 1 gates BOTH candidate lists on `+58 != 0`
+  (hw:60176/:60194) — identical to the port filter — and balls
+  SETTLE to +58==0 forever after their 128-tick ballistic
+  window. A settled unclaimed ball is never a homing target in
+  retail either; the lob homes only on fresh still-bouncing
+  balls, and old balls are claimed by aim + the possession
+  flash's area-claim at the blast. Mid-flight steering is fully
+  corpus-graded (every tick of every imported lob).
+- **Respawn law — timer + cadence VERIFIED faithful** (formula
+  32·((255−tempo)>>3)+32 at :55555-57 byte-identical; per-tick
+  countdown + castle check + castle-less elimination :55601-30).
+  The port's "fast respawn" is NOT a timer bug — see the chain.
+- **THE CHAIN — RESOLVED 2026-07-31 (the CASTLE-COLLATERAL round,
+  see Resolved for the fix inventory)**: the corpus lever paid off
+  exactly as banked. Slot 522's record: castle born t=73 at life
+  20000, UNTOUCHED until t=9330, then damage in runs of −833/tick
+  (with −1666 overlap ticks), dead at t=9457 — 833 = 5000/6 = the
+  meteor's (10,53) napalm cloud burn, and each burst is 7×833 per
+  cloud (14 for two overlapped). The retail meteor bolt and cloud
+  both carry chase=522: **the homing acquire locks the CASTLE
+  itself** — that is how player fire aimed at a castle-camping
+  Vodor fell his castle. Four port defects found and fixed (each
+  corpus-validated on the 9325-9345 window; castle life diffs
+  12→1): ① ent_overlap widened +78 UNSIGNED — the castle's 0xE000
+  z-center marker read as +57344 instead of −8192, z-orphaning
+  every castle out of the area-write pre-pass; ② the castle never
+  carried the marker natively (the port skipped sub_37150's
+  +78=0xE000 write *because* of ①); ③ the acquire candidate set
+  lacked castles (retail's list-1 walk branches model 2 to a
+  dedicated castle scorer in cases 0/3/4 AND 0x10); ④ the (10,53)
+  cloud ran post-decrement — retail is class-10 PRE-decrement (7
+  burns from a 6-life cloud, 5831 delivered not 5000). Remaining
+  window rows = capture domain: the pair-9329 birth edge + both
+  chase rows are cast-timing skew (the port's replayed cast fires
+  a pair off, allocating its own bolt), and the 849 acquire miss
+  is the terrain-closure z (port castle at pristine 5600 vs the
+  raised mound's 7168 pushes the pitch bearing ~7 units outside
+  the 0x71 cone). Exemplar fixture t=9331 added (castle intake
+  CONFORMING inside it). Second-order Home/camp cadence: NOT
+  re-checked this round — revisit only if a future take shows a
+  camping-cadence divergence.
 
 ## MC2 take-2 (2026-07-30 re-record; FIX ROUND 1 LANDED 2026-07-30)
 
@@ -357,6 +642,100 @@ heading 764 · life 712.
 
 ## Resolved
 
+- **CASTLE COLLATERAL DAMAGE (the mc1hw playtest-round-2 chain:
+  "Vodor tougher than retail" + "fast respawn")** — RESOLVED
+  2026-07-31, opus decompile dig + corpus (mc1hwl0 slot 522, life
+  20000→dead t=9457 at −833/tick; window 9325-9345 castle-life
+  diffs 12→1 after the round; mc1l0 385 conforming UNCHANGED; all
+  three suites green, L005 GOLDEN re-pinned A-E with OBSERVABLE
+  holding — layout-only in that window). One chain, five laws:
+  1. **+78 is SIGNED** in sub_118C0's z test (`ent_overlap`,
+     `player_overlap`, the app-side `overlap`): the decompile
+     types it `uint16_t` with a 32-bit `abs32` — a movsx artifact;
+     the 0xE000 literal and the corpus overlap only reconcile as
+     −8192. Port previously widened unsigned, so any entity with
+     a negative z-center was orphaned from every AABB test.
+  2. **Castle extents quad** (sub_37150 :43798, HW 40191-203):
+     `+78=0xE000, +80/+82=((dim<<8)+1280)>>1, +84=0x4000` — now
+     written at the level-up commit, the downgrade, castle_extents,
+     AND re-applied in the settled tick's every-other-tick block
+     (sub_46DB0 :52083, level VERBATIM) with the every-settled-tick
+     `+144 = +24` owner echo (:52080). The port had deliberately
+     skipped the marker ("would z-orphan our AABB overlaps" — true
+     only because of defect 1).
+  3. **Castles are homing-acquire candidates**: sub_54520's list-1
+     walk (the significant-entity list: wizard models 0/1 + castle
+     model 2) branches `+65==2` to the dedicated castle scorer
+     sub_54BD0 in the base cases 0/3/4 (cone 0x71) and HW's meteor
+     case 0x10 (cone 0x100) alike. The castle scorer is the
+     generic scorer minus the sub_524C0 z-lift bracket (which
+     itself skips model 2): castles are aimed at the RAW flag
+     position. Ported into aim_assist_mc1_cone + the crosshair
+     preview (Creatures set) + the victim-teleport lift skip +
+     the AimLock alt. NOTE the sub_524C0 guard is MODEL-only (any
+     class's model 2 skips the lift) — ported verbatim.
+  4. **(10,53) cloud joins the class-10 PRE-decrement family**: 7
+     burns from a 6-life cloud (pre-values 6..0), 5831 delivered
+     per cloud — the corpus bursts are 7×833 (14 for two
+     overlapped clouds), and the burst arithmetic is the proof
+     (the decompile's C shows post-decrement; the batch law +
+     corpus overrule it). Terminal act_life = −2, matching every
+     class-10 ghost record in the corpus.
+  5. **The sub_52770 explode stamps the child's +146 with the
+     struck victim's SLOT** (:58859-64 `v20[73]`) — states 3/17
+     ONLY; the m0/m1 explode blocks (:59015/:59092) write
+     owner/yaw/pitch alone. First landed unconditionally, which
+     put a foreign chase lane on (10,0) children of m0 explodes
+     (suite drift caught it at t=355/366) — re-scoped via a
+     stamp_victim parameter. Mechanically inert (no handler reads
+     it; the cloud's damage is pure position overlap) but it is
+     an observable lane.
+  Death chain verified retail-equivalent: demolition clears the
+  owner wizext `var_50` (:52598) where the port's `rival_castle`
+  id24-scan needs no stored binding; the castle-less elimination
+  (:55601-30) was already verified byte-identical. Intake law
+  confirmed: the ch0 castle pre-pass gates ONLY model==2 + owner
+  +24 differs + sub_11950 overlap — NO damageable-flag or
+  +28-mask check for castles — and the general ch0 pass excludes
+  (3,2) (both already ported). Gameplay effect: meteors aimed at
+  a castle-camping rival now lock and fell the castle → castle-
+  less death → ELIMINATION, replacing infinite camp-heal-respawn.
+  PLAYTEST OWED. Banked adjacent leads: retail's list-1 walk also
+  gates candidates on the OWNER's row v_28 rooted range BEFORE the
+  scorer (port keeps only the scorer's 5120 — unexercised by
+  corpus so far); base-MC1 napalm_tick never decrements act_life
+  (retail does — inert under the 15-wave cap, but the obs lane
+  drifts; fold into the banked base-17 +44-copy pass).
+- **MC1 TICK-TOP REAP LAW (the castle-window "pool-order cascade" +
+  the HW linger families)** — RESOLVED 2026-07-31, decompile-
+  corroborated remc1:52226-31 / remc1hw:48276-81: retail has ONE
+  unconditional reap pass at the TOP of every sub-step (after the
+  LCG draw, before the awake build and dispatch) freeing every
+  `class≠0 && flags&0x400` record via sub_41E90. Death paths only
+  SET the flag (single setter sub_41E80 :52508, ~100 callers) or
+  hard-free inline. Consequences that all fall out of the one pass:
+  a record flagged mid-tick persists through that tick's snapshot
+  (the delivered create-castle projectile's 0x406 one-frame linger;
+  there is NO separate delivery latch — reap-before-dispatch IS the
+  latch), corpse records persist MULTIPLE frames because the corpse
+  HANDLER (sub_1A800 :21855-71) gates its own flagging on
+  `f63 & 7 == 0` (the worm lanes), and same-tick spawns pop the
+  PRE-EXISTING stack rather than the dying slots (the castle → 627
+  = stack top, then the same-tick (10,42) painter → 481). The
+  port's same-iteration free lost the linger AND recycled dying
+  slots; the MC2-style next-frame deferral (the refuted 384→377
+  experiment) re-ticked flagged records — the correct move was the
+  FRONT of the tick, not the back. Landed MC1-scoped (native +
+  strict; MC2 keeps its measured next-frame ghost law pending the
+  owed sweep-law port). mc1l0 367→385 conforming (18 fixed, 0
+  regressed; missing (10,0) 735→58, (10,12) 288→57, (9,1) 468→192);
+  mc1hwl0 missing rows 717,798→33,379, phase-clock rows 67,378→
+  2,257 (the (1,9) pattern was linger records vs respawned slots).
+  Native goldens re-pinned as a BEHAVIOR change (flight-tier leg B
+  both models; L005 GOLDEN+OBSERVABLE D-E — death records live one
+  more snapshot and slot reuse shifts; post-init..C hold). The t=136
+  mc1l0 capture fixture flipped conforming; t=470's phantom-castle
+  atoms cleared.
 - **§class15 manifestation aliasing + spellbook import** — RESOLVED
   2026-07-30 (take-2 fix round): `import_ent_mc2` now applies the
   cast.rs class-15 map (EIGHT fields — the ledger's seven plus the

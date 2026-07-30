@@ -204,14 +204,17 @@ impl World {
             })
             .collect();
         let scan_free = pool - 1 - active - 1; // slots minus actives minus the hole
-        if live.len() == scan_free {
+        let stack_fallback = if live.len() == scan_free {
             self.g.free = live;
+            None
         } else {
+            let got = live.len();
             self.g.free = (1..pool as u16)
                 .rev()
                 .filter(|&s| self.g.ent[s as usize].class64 == 0 && s != human_slot)
                 .collect();
-        }
+            Some((got, scan_free))
+        };
 
         // Globals in the closure.
         self.g.rand = st.rand;
@@ -241,6 +244,46 @@ impl World {
             self.g.rival_wanted[i] = st.wizards[i].aggro;
         }
         self.g.rival_ents[0] = 0;
+
+        // Re-anchor the rival AI records to the imported pool. The
+        // records were built for the fresh world's spawn slots, and
+        // rival_entity_tick keys on r.ent — without the rebind every
+        // imported rival carpet is a frozen husk (its motion arm is
+        // verbatim sub_14EB0 and simply never ran; the first HW
+        // divergence family). Flight/economy lanes reseed from the
+        // recorded closure so the one tick integrates from retail's
+        // own state: vdes/jink are the Type_160 v_12/v_16 the motion
+        // arm consumes, grace comes from the record (the fresh-spawn
+        // 100 would wipe the imported mailbox), mana lanes come from
+        // the carpet entity (f132 carries cast debits).
+        for ri in 0..self.rivals.len() {
+            let w = &st.wizards[self.rivals[ri].slot as usize];
+            let r = &mut self.rivals[ri];
+            r.ent = w.play_index;
+            r.eliminated = w.play_index == 0;
+            if r.eliminated {
+                continue;
+            }
+            let e = &st.ents[w.play_index as usize];
+            r.mana = e.f140.max(0) as u32;
+            r.mana_max = e.f136.max(0) as u32;
+            r.mana_delta = e.f132 as i32;
+            r.vdes = w.cmd_speed;
+            r.jink = w.strafe;
+            r.grace = w.grace;
+            // Brain lanes: without these the record imports as Fresh
+            // and the cascade re-aims f34 away from retail's lock.
+            self.reanchor_rival_ai(
+                ri,
+                w.ai_state,
+                w.burst,
+                w.poverty,
+                &w.cooldown,
+                &w.learn,
+                &w.hate,
+                &w.war,
+            );
+        }
 
         // Hands: the raw +940/+944 bytes index the ACQUISITION list,
         // not the spell table — resolve through the manifestation.
@@ -322,7 +365,7 @@ impl World {
             human_slot,
             behavior_base,
             bad_rows,
-            stack_fallback: None,
+            stack_fallback,
         })
     }
 

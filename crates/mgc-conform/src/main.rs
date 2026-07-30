@@ -184,6 +184,7 @@ fn main() {
             .max()
             .unwrap_or(0),
         "dump-state" => dump_state(&args),
+        "ground-audit" => ground_audit(&args),
         "trace" => trace(&args),
         "extract" => args
             .files
@@ -301,6 +302,15 @@ fn dump_state(args: &Args) -> i32 {
                 return 2;
             }
         };
+        // Pop order: retail pops the recycle stack first, each stack
+        // from its END — print both tails, next-pop last.
+        println!(
+            "t={t} free_stack len {} tail {:?}  recycle_stack len {} tail {:?}",
+            st.free_stack.len(),
+            &st.free_stack[st.free_stack.len().saturating_sub(12)..],
+            st.recycle_stack.len(),
+            &st.recycle_stack[st.recycle_stack.len().saturating_sub(12)..],
+        );
         if all {
             for (s, e) in st.ents.iter().enumerate() {
                 if e.class64 == 0 {
@@ -328,6 +338,108 @@ fn dump_state(args: &Args) -> i32 {
         }
         for s in &slots {
             println!("t={t} slot {s}: {:#?}", st.ents[*s as usize]);
+        }
+        return 0;
+    }
+    eprintln!("t={t}: not in recording");
+    2
+}
+
+/// Compare retail entities' rest-z against the port's generated
+/// ground plane at their coordinates (`ground-audit <file.mgcr>
+/// [--dump <t>]`). At t=0 no runtime terrain edit exists yet, so the
+/// grounded statics (trees, standing fires, huts) sample retail's
+/// PRISTINE plane — a generator-fidelity probe that needs no live
+/// DOSBox height dump. Late ticks measure edits + shortfall mixed.
+fn ground_audit(args: &Args) -> i32 {
+    let Some(path) = args.files.first() else {
+        usage()
+    };
+    let t = args.dump.unwrap_or(0);
+    let mut rec = match Recording::open(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}: {e}", path.display());
+            return 2;
+        }
+    };
+    let game = rec.header.game.clone();
+    let Some(level) = rec.header.level else {
+        eprintln!("recording has no level number");
+        return 2;
+    };
+    if rec.header.family() != Ok(mgc_formats::mgcr::Family::Mc1) {
+        eprintln!("ground-audit is MC1/HW-only (class-2 snap law)");
+        return 2;
+    }
+    let (world, _) = match verify::build_world(&args.baked, &game, level) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("build: {e}");
+            return 2;
+        }
+    };
+    while let Some(r) = rec.next_tick() {
+        let tick = match r {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("record error: {e}");
+                return 2;
+            }
+        };
+        if tick.t != t {
+            continue;
+        }
+        let Some(state) = &tick.state else {
+            eprintln!("t={t}: no state channel");
+            return 2;
+        };
+        let st = match mgc_formats::mgcr::decode_retail_mc1(state) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("t={t}: {e}");
+                return 2;
+            }
+        };
+        // Residual histogram per (class, model), plus per-site rows
+        // for anything off by a height byte or more (|dz| >= 32).
+        use std::collections::BTreeMap;
+        let mut fam: BTreeMap<(u8, u8), (u64, i64, i64)> = BTreeMap::new();
+        let mut sites: BTreeMap<(u16, u16), (u64, i64)> = BTreeMap::new();
+        let grounded = |e: &mgc_formats::mgcr::RetailEntMc1| {
+            e.class64 == 2
+                || (e.class64 == 10 && matches!(e.model65, 0 | 45))
+                || (e.class64 == 3 && e.model65 == 2)
+                || e.class64 == 5
+        };
+        for e in st.ents.iter().filter(|e| e.class64 != 0) {
+            if !grounded(e) {
+                continue;
+            }
+            let gz = world.ground_z_engine(e.x, e.y);
+            let dz = e.z as i64 - gz as i64;
+            let f = fam.entry((e.class64, e.model65)).or_default();
+            f.0 += 1;
+            f.1 += dz;
+            f.2 = f.2.max(dz.abs());
+            if dz.abs() >= 32 {
+                let s = sites.entry((e.x >> 8 & !15, e.y >> 8 & !15)).or_default();
+                s.0 += 1;
+                s.1 += dz;
+            }
+        }
+        println!("== ground-audit {} t={t}", path.display());
+        for ((c, m), (n, sum, max)) in &fam {
+            println!(
+                "  ({c},{m}): {n} sampled, mean dz {:+.1}, max |dz| {max}",
+                *sum as f64 / *n as f64
+            );
+        }
+        println!("  sites with |dz| >= 32 (16-tile grid, count, mean dz):");
+        let mut rows: Vec<_> = sites.into_iter().collect();
+        rows.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+        for ((sx, sy), (n, sum)) in rows.into_iter().take(24) {
+            println!("    ({sx},{sy}): {n}  mean {:+.1}", sum as f64 / n as f64);
         }
         return 0;
     }

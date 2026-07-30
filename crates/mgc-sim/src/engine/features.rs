@@ -3080,6 +3080,7 @@ impl Gen {
         if lvl >= 1 {
             let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
             let e = &mut self.ent[i];
+            e.f78 = 0xE000; // sub_37150's z-center marker (signed −8192)
             e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
             e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
             e.f84 = 0x4000;
@@ -3558,6 +3559,12 @@ impl Gen {
                 let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
                 {
                     let e = &mut self.ent[i];
+                    // sub_37150 writes the +78=0xE000 z-center marker
+                    // with the extents: the castle's collision column
+                    // is centered 8192 BELOW the flag, which is how
+                    // ground-level area damage (napalm burns) reaches
+                    // it. ent_overlap reads +78 signed.
+                    e.f78 = 0xE000;
                     e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
                     e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
                     e.f84 = 0x4000;
@@ -3687,11 +3694,30 @@ impl Gen {
                 if self.ent[i].flags & 0x40 != 0 {
                     self.ent[i].f59 = 0;
                 }
+                // Every settled tick echoes the owner into +144
+                // (sub_46DB0 :52080 `+144 = +24`) — the lane ball
+                // claims and the balloon fleet join on.
+                self.ent[i].f144 = self.ent[i].id24;
                 if self.ent[i].f63 & 1 == 0 {
                     // The overflow ejector (sub_47130, called :56016):
                     // banked houses + stored over capacity spill out
                     // as owner-tagged wild-flying balls.
                     self.castle_eject(i);
+                    // sub_37150 re-applied with the ejector every
+                    // other tick (sub_46DB0 :52083, level VERBATIM —
+                    // row 0 included): the extents + the +78=0xE000
+                    // z-center marker self-heal to the current level,
+                    // which keeps imported or stale castles
+                    // collision-correct.
+                    {
+                        let lvl = self.ent[i].f26;
+                        let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
+                        let e = &mut self.ent[i];
+                        e.f78 = 0xE000;
+                        e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
+                        e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
+                        e.f84 = 0x4000;
+                    }
                     self.castle_balloons(i);
                     // Absorption sits inside the every-other-tick
                     // block in the original too (:57023-32).
@@ -3822,6 +3848,7 @@ impl Gen {
         let def = self.assets.build_tab[lvl as usize % self.assets.build_tab.len()];
         {
             let e = &mut self.ent[i];
+            e.f78 = 0xE000; // sub_37150's z-center marker
             e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
             e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
         }

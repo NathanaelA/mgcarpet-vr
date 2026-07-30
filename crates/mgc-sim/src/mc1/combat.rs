@@ -85,13 +85,16 @@ impl Gen {
     }
 
     /// sub_118C0 (:16963) between two pool events: extents SUM per
-    /// axis, z centered by each half-height (+78).
+    /// axis, z centered by each half-height (+78). +78 is SIGNED —
+    /// the castle's 0xE000 z-center marker (sub_37150 :43798) means
+    /// −8192, not 57344; widening it unsigned orphans every castle
+    /// out of the z test.
     pub(crate) fn ent_overlap(&self, a: usize, b: usize) -> bool {
         let (ea, eb) = (&self.ent[a], &self.ent[b]);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
         wd(ea.x, eb.x) < ea.f80 as i32 + eb.f80 as i32
             && wd(ea.y, eb.y) < ea.f82 as i32 + eb.f82 as i32
-            && ((ea.z as i32 + ea.f78 as i32) - (eb.z as i32 + eb.f78 as i32)).abs()
+            && ((ea.z as i32 + ea.f78 as i16 as i32) - (eb.z as i32 + eb.f78 as i16 as i32)).abs()
                 < ea.f84 as i32 + eb.f84 as i32
     }
 
@@ -101,7 +104,7 @@ impl Gen {
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
         wd(e.x, ctx.px) < e.f80 as i32 + PLAYER_HW
             && wd(e.y, ctx.py) < e.f82 as i32 + PLAYER_HW
-            && ((e.z as i32 + e.f78 as i32) - (ctx.pz as i32 + PLAYER_HH)).abs()
+            && ((e.z as i32 + e.f78 as i16 as i32) - (ctx.pz as i32 + PLAYER_HH)).abs()
                 < e.f84 as i32 + PLAYER_HH
     }
 
@@ -354,7 +357,7 @@ impl Gen {
         }
         self.ent[i].act_life -= 1;
         if self.ent[i].act_life < 0 {
-            self.proj_explode(i, ctx, None, true);
+            self.proj_explode(i, ctx, None, true, false);
         }
         false
     }
@@ -517,20 +520,32 @@ impl Gen {
             let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
             consider(tx, ty, tz, j as u16, &mut best);
         }
-        // Rival wizards (class 3, models 0/1): live, not hidden or
-        // cloaked (the shared +16 0x20 bit), not the caster's own.
+        // The significant-entity list (sub_54520 list 1): rival
+        // wizards (models 0/1) AND CASTLES (model 2) — live, not
+        // cloaked (+16 0x20), not the caster's own team. Wizards
+        // score through the generic scorer sub_54A90, whose
+        // sub_524C0 bracket lifts the aim z by +78; castles route
+        // to the dedicated castle scorer sub_54BD0 (:60452 — same
+        // cones/range/score) measured at the RAW position: the +78
+        // lift explicitly skips model 2. Both the base cases 0/3/4
+        // (:60122, cone 0x71) and HW's meteor case 0x10 (:60322,
+        // cone 0x100) branch `+65 == 2` to the castle scorer —
+        // castles are first-class homing candidates, which is how
+        // retail meteors fall a rival's castle out from under a
+        // camping wizard (mc1hwl0 slot 522, chase=522).
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
-            if c.class64 != 3
-                || c.model65 > 1
-                || c.tick70 != 1
-                || c.flags & (0x400 | 0x20) != 0
-                || c.id24 == own
-            {
+            if c.class64 != 3 || c.flags & (0x400 | 0x20) != 0 || c.id24 == own {
                 continue;
             }
-            let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
-            consider(tx, ty, tz, j as u16, &mut best);
+            match c.model65 {
+                0 | 1 if c.tick70 == 1 => {
+                    let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+                    consider(tx, ty, tz, j as u16, &mut best);
+                }
+                2 => consider(c.x, c.y, c.z, j as u16, &mut best),
+                _ => {}
+            }
         }
         // Invisible (spell 12, :65689-90 — the +16 0x20 bit): the
         // cloaked player is skipped by mob-side target acquisition.
@@ -640,6 +655,24 @@ impl Gen {
                 continue;
             }
             consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+        }
+        // Castles ride the GENERAL acquire only (sub_54520 cases
+        // 0/3/4/0x10 walk the significant list's model-2 members
+        // through the castle scorer; the wizard-only cases 7/8/B/C
+        // scan models 0/1 alone). Mirrors aim_assist_mc1_cone:
+        // measured at the RAW position — no +78 lift for model 2.
+        if set == AimPreviewSet::Creatures {
+            for j in 1..self.ent.len() {
+                let c = &self.ent[j];
+                if c.class64 != 3
+                    || c.model65 != 2
+                    || c.flags & (0x400 | 0x20) != 0
+                    || c.id24 == own
+                {
+                    continue;
+                }
+                consider(c.x, c.y, c.z, j as u16);
+            }
         }
         best.map(|(slot, _)| slot)
     }
@@ -905,7 +938,14 @@ impl Gen {
     /// generic sub_52770 path (:62759-72) also copies +44 and the
     /// victim; sub_52B30 (fireball) does NOT (:62928-30) — the fire's
     /// own 400 is the fireball's real damage.
-    fn proj_explode(&mut self, i: usize, ctx: &MobCtx, struck: Option<MailTarget>, copy_f44: bool) {
+    fn proj_explode(
+        &mut self,
+        i: usize,
+        ctx: &MobCtx,
+        struck: Option<MailTarget>,
+        copy_f44: bool,
+        stamp_victim: bool,
+    ) {
         let (x, y, z, owner, yaw, pitch, f44, f69) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24, e.f30, e.f32, e.f44, e.f69)
@@ -953,6 +993,18 @@ impl Gen {
             e.id24 = owner;
             e.f30 = yaw;
             e.f32 = pitch;
+            // The child carries the struck victim's SLOT in +146
+            // — sub_52770's explode block ONLY (:58859-64 `v20[73] =
+            // victim`, the states-3/17 generic family); the m0/m1
+            // explode (:59015/:59092) writes owner/yaw/pitch alone.
+            // Provenance only — no effect handler reads it — but it
+            // is an observable lane (the mc1hwl0 clouds carry
+            // chase=522).
+            if stamp_victim {
+                if let Some(MailTarget::Pool(j)) = struck {
+                    e.f146 = j as u16;
+                }
+            }
             if copy_f44 {
                 e.f44 = f44;
             }
@@ -1020,7 +1072,7 @@ impl Gen {
         } else {
             self.home(i, ctx);
         }
-        self.proj_move_and_hit(i, ctx, false)
+        self.proj_move_and_hit(i, ctx, false, false)
     }
 
     /// sub_52ED0 (:62937): the POSSESS lob (c9 m1). Its flight z is
@@ -1098,9 +1150,9 @@ impl Gen {
         if let Some(j) = hit {
             let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
             self.move_relink(i, jx, jy, jz);
-            self.proj_explode(i, ctx, Some(MailTarget::Pool(j)), false);
+            self.proj_explode(i, ctx, Some(MailTarget::Pool(j)), false, false);
         } else if self.ent[i].act_life < 0 {
-            self.proj_explode(i, ctx, None, false);
+            self.proj_explode(i, ctx, None, false, false);
         }
         false
     }
@@ -1333,17 +1385,26 @@ impl Gen {
     }
 
     /// sub_3A270 (:46330): the Wall of Fire bolt (c9 m16, state 17)
-    /// — fireball sprite 42, speed 384, life 21. remc1's state table
-    /// is truncated before 17; the flight is the sub_53B50 shape =
-    /// straight at the aim (the +150 target sits ON the aim line),
-    /// exploding into +68/+69 WITHOUT the +44 copy.
+    /// — fireball sprite 42, speed 384, life 21. HW swaps the ctor
+    /// for sub_3A5F0 (hw:42451), byte-identical except sprite 76
+    /// (hw:42474) — the big meteor bitmap. The sprite literal also
+    /// sizes the hitbox: SPRITE_STATS row 76 is 420x350 vs 42's
+    /// 88x100, so the swap is look AND collision.
     pub(crate) fn spawn_firewall_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
-        self.spawn_projectile(16, 17, x, y, z, 384, 21, 0, 42)
+        let sprite = if self.is_hidden_worlds() { 76 } else { 42 };
+        self.spawn_projectile(16, 17, x, y, z, 384, 21, 0, sprite)
     }
 
     /// The m16 firewall flight (state 17): generic ease + move, no
-    /// fire trail, NO +44 copy into the explosion (the napalm keeps
-    /// its own 100).
+    /// fire trail. The state-17 handler sub_52770_52AB0 copies the
+    /// bolt's +44 into the +68/+69 explosion (hw:58859) — ported
+    /// HW-only: the (10,53) cloud burns the ROW damage (5000 over
+    /// its 6 ticks ≈ 833/tick — 3 hits beat a rival's 10000 with
+    /// regen stalled, the "3 guaranteed hits" law; only the HW
+    /// model-53 rebound reflect defends, hw:58806). Base MC1 keeps
+    /// the cloud's own ctor 100 — remc1's truncated class-9 table
+    /// hid the copy there and the goldens pin today's behavior; the
+    /// base +44-copy question stays banked.
     fn proj_firewall_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let e = &mut self.ent[i];
         e.f126 += (e.f128 - e.f126).clamp(-2, 2);
@@ -1373,7 +1434,8 @@ impl Gen {
         if self.ent[i].f146 != 0 {
             self.home(i, ctx);
         }
-        self.proj_move_and_hit(i, ctx, false)
+        let copy_f44 = self.is_hidden_worlds();
+        self.proj_move_and_hit(i, ctx, copy_f44, true)
     }
 
     /// sub_53980/sub_53B50 (:63453/:63525): the castle ball's flight
@@ -1576,7 +1638,7 @@ impl Gen {
                 self.ent[s].id24 = owner;
             }
         }
-        self.proj_move_and_hit(i, ctx, true)
+        self.proj_move_and_hit(i, ctx, true, true)
     }
 
     /// sub_530C0 (:63048): m11's bolt — explodes ONLY on wizard-family
@@ -1602,7 +1664,7 @@ impl Gen {
             };
             self.move_relink(i, tmp.0, tmp.1, tmp.2);
             if wizard {
-                self.proj_explode(i, ctx, Some(v), true);
+                self.proj_explode(i, ctx, Some(v), true, false);
             } else {
                 self.ent[i].flags |= 0x400;
             }
@@ -1845,7 +1907,7 @@ impl Gen {
         self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
         self.ent[i].act_life -= 1;
         if hit.is_some() || grounded || self.ent[i].act_life < 0 {
-            self.proj_explode(i, ctx, hit, true);
+            self.proj_explode(i, ctx, hit, true, false);
         }
         false
     }
@@ -2356,7 +2418,13 @@ impl Gen {
     /// Move + hit scan + terrain shared by m0/m3/m9 (:62842-932).
     /// Returns terrain_dirty (always false here — craters come from
     /// the explosion).
-    fn proj_move_and_hit(&mut self, i: usize, ctx: &MobCtx, copy_f44: bool) -> bool {
+    fn proj_move_and_hit(
+        &mut self,
+        i: usize,
+        ctx: &MobCtx,
+        copy_f44: bool,
+        stamp_victim: bool,
+    ) -> bool {
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
             let e = &self.ent[i];
@@ -2420,10 +2488,18 @@ impl Gen {
             // Teleport onto the victim, explode there (:62852-55).
             match v {
                 MailTarget::Pool(j) => {
+                    // The +78 aim lift skips castles (sub_524C0's
+                    // model-2 guard): a castle strike lands at the
+                    // flag, not 8192 under the mound.
+                    let lift = if self.ent[j].model65 == 2 {
+                        0
+                    } else {
+                        self.ent[j].f78 as i16
+                    };
                     let (jx, jy, jz) = (
                         self.ent[j].x,
                         self.ent[j].y,
-                        self.ent[j].z.wrapping_add(self.ent[j].f78 as i16),
+                        self.ent[j].z.wrapping_add(lift),
                     );
                     self.move_relink(i, jx, jy, jz);
                 }
@@ -2431,7 +2507,7 @@ impl Gen {
                     self.move_relink(i, ctx.px, ctx.py, ctx.pz);
                 }
             }
-            self.proj_explode(i, ctx, Some(v), copy_f44);
+            self.proj_explode(i, ctx, Some(v), copy_f44, stamp_victim);
             return false;
         }
         let ground = self.ground_z(tmp.0, tmp.1) as i16;
@@ -2439,12 +2515,12 @@ impl Gen {
             self.move_relink(i, tmp.0, tmp.1, tmp.2);
             self.ent[i].act_life -= 1;
             if self.ent[i].act_life < 0 {
-                self.proj_explode(i, ctx, None, copy_f44); // midair expiry
+                self.proj_explode(i, ctx, None, copy_f44, stamp_victim); // midair expiry
             }
         } else if self.on_water_pub(tmp.0, tmp.1) {
             self.splash_and_die(i); // :62916-21, no explosion/crater
         } else {
-            self.proj_explode(i, ctx, None, copy_f44); // terrain hit (pre-move pos)
+            self.proj_explode(i, ctx, None, copy_f44, stamp_victim); // terrain hit (pre-move pos)
         }
         false
     }
@@ -3073,8 +3149,14 @@ impl Gen {
     /// spell-20 spawns a napalm cloud at all beside the homing meteor.
     /// This handler is faithful for any params; only the trigger is open.
     fn napalm_tick_hw(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        // Class-10 PRE-decrement family (the sub_24F60..sub_26D20
+        // batch law): the life test reads the value BEFORE the
+        // decrement, so a 6-life cloud burns SEVEN ticks (pre-values
+        // 6..0) — corpus-pinned on mc1hwl0 slot 522: every napalm
+        // burst is 7 × 833 = 5831 per cloud, not 6 × 833.
+        let pre = self.ent[i].act_life;
+        self.ent[i].act_life = pre - 1;
+        if pre < 0 {
             self.ent[i].flags |= 0x400;
             return false;
         }

@@ -33,7 +33,7 @@ fn main() {
         level.gen_map
     };
     println!("params: {g:?}");
-    let t = mgc_import::mc1_terrain::generate(g);
+    let t = mgc_import::mc1_terrain::generate(g, false);
 
     let water = t.height.iter().filter(|&&h| h == 0).count();
     let max_h = t.height.iter().max().unwrap();

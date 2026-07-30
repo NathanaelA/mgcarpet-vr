@@ -114,6 +114,25 @@ pub(crate) enum AiState {
     Cruise,
 }
 
+impl AiState {
+    /// Retail +415 byte → variant (dispatch sub_13170 :17847). The cut
+    /// states 2/4/5/10 fall to Fresh — no selector ever sets them.
+    pub(crate) fn from_retail(v: u8) -> Self {
+        match v {
+            1 => AiState::Upgrade,
+            3 => AiState::Build,
+            6 => AiState::Possess,
+            7 => AiState::RaidCastle,
+            8 => AiState::AttackWizard,
+            9 => AiState::RaidBalloon,
+            0xB => AiState::Home,
+            0xC => AiState::Cruise,
+            0xD => AiState::HuntMana,
+            _ => AiState::Fresh,
+        }
+    }
+}
+
 /// One live rival: the Type_160 subset the AI machinery needs. The
 /// wizard's position/yaw/life/speed live on its pool entity (class 3
 /// model 1); carried mana rides the entity's f140 mirror for the
@@ -168,9 +187,9 @@ pub(crate) struct Rival {
     /// Scouted castle site (+150).
     site: (u16, u16),
     /// Lateral dodge velocity (v_16; impulse 80, decay 4/tick).
-    jink: i16,
+    pub(crate) jink: i16,
     /// Desired speed (v_12) toward which f126 accelerates 16/tick.
-    vdes: i16,
+    pub(crate) vdes: i16,
     /// Spawn grace (u16_331): mailbox discarded while > 0.
     pub(crate) grace: u16,
     /// Post-hit regen stall (u32_383).
@@ -474,8 +493,13 @@ impl World {
         self.rival_hate_decay(ri);
 
         // At own castle: grace 2 + the mailbox is DISCARDED — the
-        // AI's damage does NOT forward into the castle (:17971-79;
-        // asymmetry vs the human's redirect, retail-check owed).
+        // AI's damage does NOT forward into the castle. VERIFIED
+        // verbatim (:17971-79: overlap test sub_11950 → +331=2;
+        // while +331: memset(+90,0,36), no intake). The asymmetry
+        // vs the human's explicit redirect (:55353-62) is retail's
+        // own; the castle still takes AREA-blast collateral through
+        // its normal ch0 mail, which is how a camping rival's
+        // castle falls in retail.
         let castle = self.rival_castle(self.rivals[ri].ent);
         let at_castle = castle.is_some_and(|c| {
             let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
@@ -949,6 +973,45 @@ impl World {
             self.set_rival_state(ri, AiState::Home, 0);
         } else {
             self.rivals[ri].state = AiState::Cruise;
+        }
+    }
+
+    /// Conformance import: reconstruct the retail AI lanes so the
+    /// imported rival resumes mid-decision. The state handler runs
+    /// BEFORE the selector (sub_13170 :17847), so state and a target
+    /// that survives `target_alive` must arrive together — a Fresh
+    /// import re-runs the cascade and re-aims f34 off retail's lock.
+    /// Target and site ride the already-imported carpet entity (+146
+    /// tr-translated by import_ent, +150/+152); the signature is
+    /// recomputed, which reproduces retail's stored +148 exactly.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reanchor_rival_ai(
+        &mut self,
+        ri: usize,
+        ai_state: u8,
+        burst: i16,
+        poverty: u16,
+        cooldown: &[u16; SPELL_COUNT],
+        learn: &[u16; SPELL_COUNT],
+        hate: &[u16; 8],
+        war: &[u16; 8],
+    ) {
+        let e = &self.g.ent[self.rivals[ri].ent as usize];
+        let target = e.f146;
+        let site = (e.dest_x, e.dest_y);
+        let sig = self.target_sig(target);
+        let r = &mut self.rivals[ri];
+        r.state = AiState::from_retail(ai_state);
+        r.target = target;
+        r.target_sig = sig;
+        r.burst = burst;
+        r.poverty = poverty != 0;
+        r.cooldown = *cooldown;
+        r.learn = *learn;
+        r.site = site;
+        r.hate = *hate;
+        for (w, &v) in r.war.iter_mut().zip(war) {
+            *w = v != 0;
         }
     }
 

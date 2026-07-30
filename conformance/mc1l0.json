@@ -57,11 +57,7 @@
     },
     {
       "t": 136,
-      "status": "capture",
-      "sig": "abe1340dbb9ef369",
-      "atoms": [
-        "extra:10,12"
-      ],
+      "status": "conforming",
       "note": "cast/impact input latency (ledger entry 4)"
     },
     {
@@ -171,13 +167,10 @@
     {
       "t": 470,
       "status": "open",
-      "sig": "b5493a19ed283cf6",
+      "sig": "ecf104049ed8ab17",
       "atoms": [
-        "extra:3,2",
         "field:3,0:mana",
-        "field:player.castle",
-        "field:player.mana",
-        "field:wizard0.castle"
+        "field:player.mana"
       ],
       "note": "castle build window (ledger entry 3)"
     },
@@ -205,10 +198,9 @@
     {
       "t": 909,
       "status": "open",
-      "sig": "8a5e8d0b4e51f726",
+      "sig": "85b61e945da26986",
       "atoms": [
-        "field:10,39:heading",
-        "missing:10,54"
+        "field:10,39:heading"
       ],
       "note": "mana magnet (10,54) lifecycle + ball pull — untriaged"
     },

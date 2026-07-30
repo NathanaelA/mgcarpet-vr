@@ -185,10 +185,17 @@ fn flight_tier_golden_state_hashes() {
     // Re-pinned (all legs) for the worm-segment id24 fix: segments
     // keep the head's +24 through the byte-copy (corpus-pinned);
     // layout-only — the L005 OBSERVABLE companion holds.
+    // Re-pinned (leg B only, both models) for the MC1 tick-top reap
+    // law (:52226-31): a record killed via the 0x400 flag now
+    // persists through its death tick's snapshot and frees at the
+    // top of the next tick. A transient dies inside leg B's window,
+    // so B's pool bytes carry the one-frame death record; C holds
+    // because the linger never re-ticks and no allocation raced the
+    // freed slot — the trajectory is untouched.
     const FAITHFUL: [u64; 4] = [
         0x66111d2420b92e5c, // post-init
         0x539ec568f1d72b58, // A: 40 ticks of forward thrust
-        0x3648c720bd987056, // B: 30 ticks of banked turn + strafe
+        0x90eb747848f7e76f, // B: 30 ticks of banked turn + strafe
         0x0b58012de265f594, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
@@ -203,7 +210,7 @@ fn flight_tier_golden_state_hashes() {
     const ENHANCED: [u64; 4] = [
         0x5510cd23ecac11a5, // post-init
         0x8f2d2681f2e0386a, // A
-        0x66d0c97893744992, // B: strafe+turn now banks on forward speed
+        0xb6f2108185d7a2e5, // B: strafe+turn now banks on forward speed
         0xe0acf5fc3c1ae852, // C
     ];
     assert_eq!(

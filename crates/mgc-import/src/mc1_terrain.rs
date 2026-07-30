@@ -38,16 +38,22 @@ pub struct Mc1Terrain {
     pub angle: Vec<u8>,
 }
 
-/// Generate terrain for one MC1 level from its GEN_MAP parameters.
+/// Generate terrain for one MC1/HW level from its GEN_MAP parameters.
 ///
 /// Original pass order (sub_31AA0_31AE0): fractal, normalize, rivers,
 /// water flattening, vegetation, low-flat revert, boundary dirt, beach
-/// interior, rock, majority smoothing, type clear, land smoothing, shore
-/// zeroing, texture selection, deep-water flag, shading.
+/// interior, rock, [arctic: snow], majority smoothing, type clear, land
+/// smoothing, shore zeroing, texture selection, deep-water flag, shading.
 ///
-/// `snlin` is consumed by nothing (MC1 has no snow pass; snow is the
-/// arctic tileset's textures) and `pre_header` is not a generator input.
-pub fn generate(g: &GenMap) -> Mc1Terrain {
+/// The two binaries share every height pass byte-for-byte; HIDDEN.EXE
+/// differs in exactly two CLASS passes (remc1hw :35775-800): its rock
+/// pass writes steep land to class 1 instead of 6 (sub_33570 :37269),
+/// and it inserts a SNOW pass (`sub_31C10(snlin, snflt)`, :35792)
+/// between rock and majority — class 6 in the arctic tileset is the
+/// snow texture, painted where the land is high (height > snlin) and
+/// flat (4-neighborhood relief < snflt). CARPET.EXE never reads snlin.
+/// `pre_header` is not a generator input in either binary.
+pub fn generate(g: &GenMap, arctic: bool) -> Mc1Terrain {
     let mut state = Gen {
         field: vec![0i16; GRID],
         height: vec![0u8; GRID],
@@ -64,7 +70,10 @@ pub fn generate(g: &GenMap) -> Mc1Terrain {
     state.low_flat(g.bhlin as u8, g.bhflt as u8);
     state.boundary_dirt();
     state.beach_interior(g.bhlin as u8, g.bhflt as u8);
-    state.rock(g.rkste as u8);
+    state.rock(g.rkste as u8, if arctic { 1 } else { 6 });
+    if arctic {
+        state.snow(g.snlin as u8, g.snflt as u8);
+    }
     state.majority();
     state.types.fill(0);
     state.smooth_land();
@@ -503,11 +512,15 @@ impl Gen {
         }
     }
 
-    /// Rock pass (`sub_33180`, param rkste, UNSCALED): land steeper
-    /// than the cut over the 4-neighborhood becomes brown rock (6);
-    /// rock adjacent to mixed terrain (vegetation plus anything, sand,
-    /// or default-land-plus-dirt) becomes dark basalt (1).
-    fn rock(&mut self, rkste: u8) {
+    /// Rock pass (`sub_33180` temperate / `sub_33570` arctic, param
+    /// rkste, UNSCALED): land steeper than the cut over the
+    /// 4-neighborhood becomes `steep` — brown rock (6) in the
+    /// temperate binary, arctic rock (1) in HIDDEN.EXE (:37269) —
+    /// then steep cells adjacent to mixed terrain (vegetation plus
+    /// anything, sand, or default-land-plus-dirt) become dark basalt
+    /// (1). With steep = 1 the relabel is a faithful no-op, exactly
+    /// as HIDDEN's block 2 runs.
+    fn rock(&mut self, rkste: u8, steep: u8) {
         self.types.copy_from_slice(&self.class);
         for i in 0..=0xFFFFu16 {
             let mut min = self.height[i as usize];
@@ -518,6 +531,60 @@ impl Gen {
                 max = max.max(h);
             }
             if self.class[i as usize] != 0 && max as i32 - min as i32 >= rkste as i32 {
+                self.class[i as usize] = steep;
+            }
+        }
+        for i in 0..=0xFFFFu16 {
+            if self.class[i as usize] != steep {
+                continue;
+            }
+            if self.basalt_edge(i) {
+                self.class[i as usize] = 1;
+            }
+        }
+    }
+
+    /// The shared rock/snow edge rule: a cell whose 8-neighborhood
+    /// mixes vegetation with anything, has sand, or pairs default
+    /// land with dirt, relabels to dark basalt (1).
+    fn basalt_edge(&self, i: u16) -> bool {
+        let (mut c3, mut c2, mut c5, mut c4) = (0, 0, 0, 0);
+        for &(dx, dy) in &N8 {
+            match self.class[cell(i, dx, dy)] {
+                3 => c3 += 1,
+                2 => c2 += 1,
+                5 => c5 += 1,
+                4 => c4 += 1,
+                _ => {}
+            }
+        }
+        if c3 > 0 {
+            c2 > 0 || c5 > 0 || c4 > 0
+        } else {
+            c2 > 0 || (c5 > 0 && c4 > 0)
+        }
+    }
+
+    /// Arctic snow pass (`sub_31C10`, HIDDEN.EXE only, :35808-963):
+    /// the rock pass's mirror — land HIGHER than the snow line
+    /// (height > snlin, :35829) and FLATTER than the flurry cut
+    /// (4-neighborhood relief < snflt, :35861) becomes snow (6);
+    /// snow bordering mixed terrain relabels to arctic rock via the
+    /// same basalt rule (:35956). Never touches water (class 0).
+    fn snow(&mut self, snlin: u8, snflt: u8) {
+        self.types.copy_from_slice(&self.class);
+        for i in 0..=0xFFFFu16 {
+            if self.height[i as usize] <= snlin {
+                continue;
+            }
+            let mut min = self.height[i as usize];
+            let mut max = min;
+            for &(dx, dy) in &PLUS4 {
+                let h = self.height[cell(i, dx, dy)];
+                min = min.min(h);
+                max = max.max(h);
+            }
+            if self.class[i as usize] != 0 && (max as i32 - min as i32) < snflt as i32 {
                 self.class[i as usize] = 6;
             }
         }
@@ -525,22 +592,7 @@ impl Gen {
             if self.class[i as usize] != 6 {
                 continue;
             }
-            let (mut c3, mut c2, mut c5, mut c4) = (0, 0, 0, 0);
-            for &(dx, dy) in &N8 {
-                match self.class[cell(i, dx, dy)] {
-                    3 => c3 += 1,
-                    2 => c2 += 1,
-                    5 => c5 += 1,
-                    4 => c4 += 1,
-                    _ => {}
-                }
-            }
-            let basalt = if c3 > 0 {
-                c2 > 0 || c5 > 0 || c4 > 0
-            } else {
-                c2 > 0 || (c5 > 0 && c4 > 0)
-            };
-            if basalt {
+            if self.basalt_edge(i) {
                 self.class[i as usize] = 1;
             }
         }

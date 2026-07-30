@@ -1614,6 +1614,28 @@ impl World {
         // One global LCG draw per tick, before any handler (:52223).
         lcg32(&mut self.g.rand);
 
+        // MC1's reap pass (:52226-31): every 0x400-flagged record is
+        // freed at the TOP of the tick, BEFORE dispatch. Death paths
+        // only SET the flag, so a record flagged mid-tick persists
+        // through that tick's snapshot (the delivered projectile's
+        // one-frame 0x406 linger, the corpse's f63&7-gated wait — the
+        // gate lives in the corpse HANDLER, the reap is unconditional)
+        // and its slot returns before this tick's spawns pop the
+        // stack. Freeing later (same-iteration, or a next-frame
+        // remove pass — tried, measured worse 384→377) either lets
+        // the dying slot be recycled by same-tick spawns or lets the
+        // flagged record re-tick (a delivered create-castle projectile
+        // re-delivers: phantom castle). MC1-only: MC2's remove pass
+        // is next-frame by measurement (the ghost-record law), and
+        // its native timing rides the owed sweep-law port.
+        if matches!(self.game, GameId::Mc1 | GameId::Mc1Hw) {
+            for i in 1..self.g.ent.len() {
+                if self.g.ent[i].class64 != 0 && self.g.ent[i].flags & 0x400 != 0 {
+                    self.free_slot(i);
+                }
+            }
+        }
+
         // Broad-phase bucket counts for the kill triggers: class-5
         // events by model, excluding state 120 (multipart body
         // segments in the original; :52246 list building).
@@ -2299,21 +2321,23 @@ impl World {
             {
                 self.g.ent[i].f63 = self.g.ent[i].f63.wrapping_add(1);
             }
-            // An entity disabled during ITS OWN dispatch keeps its
-            // record through the frame under strict-retail — retail's
-            // pool bytes persist past the disable (the free stack
-            // gets the slot at once, but nothing zeroes the record),
-            // so the recorded obs carries the death record for one
-            // more tick and the projection must too. Native play
-            // keeps the immediate free (slot-reuse timing is not
-            // hash-observable; ghost records would be). MC1 keeps
-            // the immediate free under strict TOO — extending MC2's
-            // deferral to MC1 was tried 2026-07-30 for the worm
-            // mass-death window and MEASURED WORSE (384→377
-            // conforming): MC1's reaper evidently returns slots
-            // within the frame, unlike MC2's next-frame remove pass.
-            if self.g.ent[i].flags & 0x400 != 0
-                && !(self.strict_retail && matches!(self.game, GameId::Mc2))
+            // MC1 never frees here: retail's reap is the tick-TOP
+            // pass (:52226-31, see tick()'s reap) — a record flagged
+            // during its own dispatch persists through this tick's
+            // snapshot and frees before next tick's dispatch. (The
+            // old same-iteration free lost the one-frame linger and
+            // let same-tick spawns recycle the dying slot; the
+            // next-frame deferral tried before it re-ticked flagged
+            // records — 384→377. The tick-top reap makes both
+            // measured behaviors fall out.) MC2 native keeps the
+            // immediate free until the owed sweep-law port settles
+            // its timing; MC2 strict keeps the record through the
+            // frame — retail's pool bytes persist past the disable
+            // and the recorded obs carries the death record, so the
+            // projection must too (the ghost-record law).
+            if matches!(self.game, GameId::Mc2)
+                && !self.strict_retail
+                && self.g.ent[i].flags & 0x400 != 0
             {
                 self.free_slot(i);
             }
@@ -4233,14 +4257,25 @@ impl World {
     /// (fireball sprite, straight at the aim), detonating into the
     /// (10,53) NAPALM cloud — 15 waves of standing flames climbing
     /// 128 units/wave over the impact (the rising fire curtain).
-    /// The row's 24464 stays dead weight (sub_53B50 does not copy
-    /// +44; the flames' inherited 100/tick is the payload).
+    /// In base MC1 the row's 24464 stays dead weight in the port
+    /// (the flames' inherited 100/tick is the payload; the state-17
+    /// handler's +44 copy is banked — see proj_firewall_tick). In
+    /// HW the same cast is the HOMING METEOR: sprite 76 ctor swap +
+    /// the +44 copy make the row's 5000 the cloud's burn.
     fn cast_firewall(&mut self, p: PlayerPose, right: bool) {
         let (mx, my, mz) = self.muzzle(p, right);
         let Some(pr) = self.g.spawn_firewall_bolt(mx, my, mz) else {
             return;
         };
+        // The emit copies the MANIFESTATION's +140 onto the bolt
+        // (:66151, hw:62371): the ctor's cost-per-shot (a4/count,
+        // :48005) — NOT the row's total cost. Nothing ever rewrites
+        // a manifestation's +140 (the castle ladder rewrites +136),
+        // so the computed quotient equals the live copy; the port
+        // grant deliberately leaves manifestation f140 unstamped
+        // (hash-quiet).
         let def = &self.spells()[20];
+        let per_shot = (def.possess_mana / def.count.max(1) as u32) as i32;
         let e = &mut self.g.ent[pr];
         e.f126 += p.speed;
         e.f128 = e.f126;
@@ -4250,7 +4285,7 @@ impl World {
         e.f32 = p.pitch;
         e.f36 = p.pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
-        e.f140 = def.possess_mana as i32;
+        e.f140 = per_shot;
         e.f68 = 10;
         e.f69 = 53;
         self.entities_dirty = true;
@@ -4606,11 +4641,13 @@ impl World {
             let (mx, my, mz) = self.muzzle(p, right);
             let slot = self.g.aim_preview_scan(mx, my, mz, p.heading, pitch, set)?;
             let e = &self.g.ent[slot as usize];
+            // The acquire aims at the +78 half-height point — except
+            // castles (sub_524C0's model-2 guard aims at the flag).
+            let lift = if e.model65 == 2 { 0 } else { e.f78 as i16 };
             Some(AimLock {
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
-                // The acquire aims at the +78 half-height point.
-                alt: e.z.wrapping_add(e.f78 as i16) as f32 / 256.0,
+                alt: e.z.wrapping_add(lift) as f32 / 256.0,
             })
         };
         [hand(false), hand(true)]
@@ -7569,7 +7606,7 @@ impl World {
         };
         wrap_d(p.x, e.x) < e.f80 as i32 + PW
             && wrap_d(p.y, e.y) < e.f82 as i32 + PW
-            && ((e.z as i32 + e.f78 as i32) - (p.z as i32 + PH)).abs() < e.f84 as i32 + PH
+            && ((e.z as i32 + e.f78 as i16 as i32) - (p.z as i32 + PH)).abs() < e.f84 as i32 + PH
     }
 
     fn one_shot(&mut self, i: usize, player: PlayerPose, want: bool) {
@@ -10445,6 +10482,60 @@ mod tests {
         assert!(
             !acquires(GameId::Mc1),
             "base MC1 firewall child flies straight (no case 16)"
+        );
+    }
+
+    #[test]
+    fn hidden_worlds_firewall_bolt_is_the_meteor_and_copies_damage() {
+        // The HW ctor swap (sub_3A5F0, hw:42474) gives the m16 bolt
+        // the meteor sprite 76 (base sub_3A270 :46353 = fireball 42),
+        // and the state-17 explode copies the bolt's +44 into the
+        // (10,53) cloud (hw:58859) — HW-only; base MC1's cloud keeps
+        // its ctor 100 (the banked base +44-copy question).
+        fn sprite_and_cloud_f44(game: GameId) -> (u16, u16) {
+            let planes = Planes {
+                height: vec![0; 0x10000],
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            };
+            let mut w = World::new_for_game(planes, &[], 1, assets(), game);
+            let (bx, by, bz) = (100u16 << 8, 100u16 << 8, 1000i16);
+            let bolt = w.g.spawn_firewall_bolt(bx, by, bz).expect("bolt slot");
+            let sprite = w.g.ent[bolt].type86;
+            {
+                let e = &mut w.g.ent[bolt];
+                e.id24 = PLAYER_TARGET;
+                e.f44 = 5000;
+                e.f68 = 10;
+                e.f69 = 53;
+                e.act_life = 0; // expire on the next flight tick
+            }
+            let ctx = MobCtx {
+                px: 10 << 8,
+                py: 10 << 8,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pdead: false,
+                strict: false,
+            };
+            w.g.proj_tick(bolt, &ctx);
+            let cloud = (1..w.g.ent.len())
+                .find(|&j| w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 53)
+                .expect("napalm cloud spawned");
+            (sprite, w.g.ent[cloud].f44)
+        }
+        assert_eq!(
+            sprite_and_cloud_f44(GameId::Mc1Hw),
+            (76, 5000),
+            "HW: meteor sprite, row damage copied into the cloud"
+        );
+        assert_eq!(
+            sprite_and_cloud_f44(GameId::Mc1),
+            (42, 100),
+            "base MC1: fireball sprite, cloud keeps its ctor 100"
         );
     }
 
@@ -13376,6 +13467,13 @@ mod tests {
             },
         );
         assert_eq!(count(&w, 9, 16), 1, "the firewall bolt launched");
+        let bolt = find_slot(&w, 9, 16);
+        let def = &crate::mc1::spells::SPELLS[20];
+        assert_eq!(
+            w.g.ent[bolt].f140,
+            (def.possess_mana / def.count as u32) as i32,
+            "the bolt carries the manifestation's cost-per-shot (:48005/:66151)"
+        );
         let (mut saw_cloud, mut saw_flames) = (false, false);
         for _ in 0..80 {
             w.tick(p, PlayerCommand::default());

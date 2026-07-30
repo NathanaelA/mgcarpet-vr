@@ -117,7 +117,13 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         cmd_ring.push_back(sampled);
         let cmd = cmd_ring.pop_front().unwrap_or_default();
         if let Some((pt, pst, pcmd)) = prev.take() {
-            if tick.t == pt + 1 {
+            if args.start.is_some_and(|s| pt < s) {
+                // Before the triage window — keep the pairing chain
+                // and the input ring warm, execute nothing.
+            } else if tick.t == pt + 1 {
+                if args.start.is_some() {
+                    eprintln!("pair {pt}");
+                }
                 stats.pairs += 1;
                 // Capture-tear gate: a consensus snapshot can land
                 // MID-entity-loop (DOSBox frozen inside the tick), in
@@ -133,6 +139,11 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         .retail_import_mc1(&pst)
                         .map_err(|e| format!("t={pt}: import: {e}"))?;
                     world.set_prev_fire(prev_cmd.fire_left, prev_cmd.fire_right);
+                    if args.start.is_some()
+                        && let Some((got, want)) = report.stack_fallback
+                    {
+                        eprintln!("  free-stack fallback: live {got} != scan {want}");
+                    }
                     if !printed_import {
                         printed_import = true;
                         println!(
@@ -382,10 +393,14 @@ pub(crate) fn build_world(
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
         mgc_formats::mgcl::read(file).map_err(|e| format!("{}: {e}", lp.display()))?;
-    let variant = if game == "mc1hw" {
-        "mc1-arctic"
+    // The HW fall-through trap: a bare World::new here replayed HW
+    // takes under BASE-MC1 law (SPELLS not SPELLS_HW, no m16 homing
+    // acquire, base napalm fork) — the game string must select the
+    // verb column, not just the asset variant.
+    let (variant, game_id) = if game == "mc1hw" {
+        ("mc1-arctic", mgc_sim::ids::GameId::Mc1Hw)
     } else {
-        "mc1-temperate"
+        ("mc1-temperate", mgc_sim::ids::GameId::Mc1)
     };
     let bundle = mgc_formats::bundle::Bundle::load(&baked.join("assets").join(variant))
         .map_err(|e| format!("bundle {variant}: {e}"))?;
@@ -409,7 +424,7 @@ pub(crate) fn build_world(
         assets = assets.with_spells(sp)?;
     }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
-    let mut w = World::new(planes, &pkg.things.things, seed, assets);
+    let mut w = World::new_for_game(planes, &pkg.things.things, seed, assets, game_id);
     if let Some(f) = pkg.gen_params.as_ref().and_then(|g| g.footer) {
         w.set_win_pct(f[0]);
     }
