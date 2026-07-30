@@ -2876,7 +2876,7 @@ impl Gen {
             26 => self.duel_tether_tick(i, ctx),
             25 => self.steal_flash_tick(i, ctx),
             40 => self.storm_cloud_tick(i, ctx),
-            41 => self.ball_tick(i),
+            41 => self.ball_tick(i, ctx),
             42 => {
                 self.grave_tick(i);
                 false
@@ -3477,7 +3477,7 @@ impl Gen {
     /// sub_27030 (:29416): the mana ball — claim intake, launch-arc
     /// physics (gravity 16, quarter-bounce, 250/256 friction, ±64
     /// clamp), merge on overlap (sub_277D0 :29700).
-    fn ball_tick(&mut self, i: usize) -> bool {
+    fn ball_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         // A ball absorbed by an earlier slot THIS tick is already
         // despawning — without this guard two coincident balls merge
         // into each other mutually and the mana vanishes (retail's
@@ -3545,6 +3545,10 @@ impl Gen {
                 if src == crate::mc1::mobs::PLAYER_TARGET {
                     self.snd_player(4);
                 }
+                // A settled ball (+58 == 0) never reaches the tick's
+                // re-derive below, so the intake recolors in place —
+                // retail re-derives every tick (:29569).
+                self.ball_resize(i);
             }
         }
         // ch4 attract (:29451-62): the (10,54) magnet tagged this
@@ -3638,9 +3642,15 @@ impl Gen {
         // anim pass sub_54F00_55430 → sub_54F80 (:64318-20) steps down
         // once per tick, so a ball runs physics — gravity, downhill
         // roll, and the grounded MERGE scan — for its first 128 ticks
-        // and then freezes at rest for good (the corpus pins it: a
-        // ball settles at spawn+128 and then ignores overlapping live
-        // neighbors indefinitely). The port folds the pass's decrement
+        // and then freezes WHEREVER IT IS for good (the corpus pins
+        // it: a ball settles at spawn+128 and then ignores
+        // overlapping live neighbors indefinitely). A ball still
+        // mid-hop on a long slope at expiry hangs in the AIR — in
+        // retail too (the whole body is behind the +58 gate and the
+        // anim pass :64318 only decrements; no ground snap ever
+        // reaches an expired ball). Player-observed on worm-death
+        // balls down a hillside 2026-07-30: FAITHFUL, not a
+        // deviation. The port folds the pass's decrement
         // into the ball's own tick; the orders differ only at the 1→0
         // edge. Byte semantics: retail reads +58 as a raw byte (the
         // import widens i8, so 0x80 arrives as -128). MC1-scoped: the
@@ -3649,6 +3659,17 @@ impl Gen {
         if !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
             let settle = (self.ent[i].f58 & 0xFF) as u8;
             if settle == 0 {
+                // Settled balls TRACK the ground (deliberate,
+                // player-ruled — DEVIATIONS.md): retail's freeze
+                // leaves a mid-hop ball hanging in the air forever
+                // and lets terrain edits (volcano, castle stamps)
+                // BURY a grounded one. Both directions on purpose.
+                // Off under conformance replay.
+                if !ctx.strict {
+                    let (x, y) = (self.ent[i].x, self.ent[i].y);
+                    let g = self.ground_z(x, y) as i16;
+                    self.ent[i].z = g;
+                }
                 return false;
             }
             self.ent[i].f58 = (settle - 1) as i16;
@@ -3676,8 +3697,17 @@ impl Gen {
         if z <= ground {
             z = ground;
             grounded = true;
+            // MC1 bounce = -impact/4, ZEROED at <= 16 (:29538-49's
+            // `if (f46 <= 16) f46 = 0`) — rebound only past -64.
+            // MC2's sphere twin is untraced and keeps the old -32
+            // floor (its cave golden pins it).
             let v = self.ent[i].f46;
-            self.ent[i].f46 = if v < -32 { -v / 4 } else { 0 };
+            let floor = if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                -32
+            } else {
+                -64
+            };
+            self.ent[i].f46 = if v < floor { -v / 4 } else { 0 };
         }
         // Downhill roll + friction — GROUNDED only, both games (MC1
         // sub_27030's `tempV13 == z` branch :29556-64 via

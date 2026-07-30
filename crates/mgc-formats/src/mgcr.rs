@@ -1222,6 +1222,13 @@ pub struct RetailMc2 {
     /// `(ptr_a0 − base160)/34 + 59` (retail's own load fixup,
     /// Level.cpp:1255-57).
     pub base160: u32,
+    /// The LIVE StageVar table `StageVars2_0x365F4[11]` (LS:249), raw
+    /// 8-byte rows: [kind, flags, chain, cadence, payload×4]. Runtime
+    /// lanes (FIRED &4, kind-7 arm &0x18, the cadence counter, kind-6
+    /// timer) mutate here; on &2-clear watch rows the payload can
+    /// become a bound-entity guest POINTER (EF:4740) — consumers must
+    /// range-guard before reading it as a value.
+    pub stagevars: [[u8; 8]; 11],
 }
 
 pub fn decode_retail_ent_mc2(d: &[u8], slot: u16) -> RetailEntMc2 {
@@ -1368,6 +1375,13 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
         recycle_stack: mc2_stack(d, 0x11E6, 0x11EA),
         level: u16_(d, m2::POOL + m2::ENT_COUNT * m2::ENT_STRIDE + 2),
         base160: u32_(d, 0x36DF6),
+        stagevars: {
+            let mut sv = [[0u8; 8]; 11];
+            for (i, row) in sv.iter_mut().enumerate() {
+                row.copy_from_slice(&d[0x365F4 + i * 8..0x365F4 + i * 8 + 8]);
+            }
+            sv
+        },
     })
 }
 

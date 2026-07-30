@@ -70,6 +70,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         std::iter::repeat_n(PlayerCommand::default(), args.input_delay as usize + 1).collect();
     let mut stats = Stats::default();
     let mut printed_import = false;
+    let mut boundary_seeded = false;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
         let Some(state) = &tick.state else {
@@ -81,7 +82,22 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
-        cmd_ring.push_back(sample_cmd_mc2(tick.input.as_ref()));
+        let sample = sample_cmd_mc2(tick.input.as_ref());
+        if !boundary_seeded && tick.input.is_some() {
+            boundary_seeded = true;
+            // A button already held on the recording's FIRST frame has
+            // no press edge inside the capture (retail latched it
+            // before t=0), but the ring's default pre-fill reads
+            // "released" and manufactures one — the t≈3 (9,17)-vs-
+            // smoke misfire was the right button held across the
+            // level boundary. Extend the first frame's held state
+            // backward instead.
+            for c in cmd_ring.iter_mut() {
+                *c = sample;
+            }
+            prev_cmd = sample;
+        }
+        cmd_ring.push_back(sample);
         let cmd = cmd_ring.pop_front().unwrap_or_default();
         if let Some((pt, pst, pcmd)) = prev.take() {
             if args.start.is_some_and(|s| pt < s) {

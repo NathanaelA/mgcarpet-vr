@@ -344,13 +344,30 @@ fn level_005_golden_state_hashes() {
     // instead of soft-killing to the sweep. A behavior change by
     // design: every loose ball's trajectory and rest position shifts,
     // so A-E move in BOTH hashes; post-init holds (no ball has ticked).
+    // Re-pinned B-E for the SETTLED-BALL GROUND SNAP (player-ruled
+    // deviation, DEVIATIONS.md): a settled ball tracks the live
+    // ground each tick. OBSERVABLE holds below — in this window the
+    // snapped z deltas (balls frozen a hair off their resting
+    // ground) sit under the pose projection's notice, so the moved
+    // legs are the layout z lanes alone.
+    // Re-pinned for the MC1 ball bounce floor (:29538-49): retail
+    // zeroes any rebound <= 16 (`if (f46 <= 16) f46 = 0`) — rebound
+    // only past impact -64; the port kept 8..16-unit hops from
+    // -33..-64 impacts. MC1-scoped (the MC2 sphere twin keeps -32).
+    // Post-init holds; A-E move with every loose ball's settle
+    // trajectory.
+    // Re-pinned (ALL legs incl post-init) for the worm-segment id24
+    // fix: retail's segment byte-copy KEEPS the head's +24 (the
+    // mc1l0 corpus pins it), the port re-stamped each segment with
+    // its own slot. Layout-only if OBSERVABLE holds (id24 is not a
+    // pose lane); also keeps kill credit head-only.
     const GOLDEN: [u64; 6] = [
-        0x63df455d85b8d5d4, // post-init (feature pass + disposition 0)
-        0x5e8e6f8b0fb7ca40, // A: 32 idle ticks far afield
-        0xb46a64844c36d4ea, // B: crater trigger fired + 120 dig ticks
-        0x95dc5d11a3e6dfaf, // C: ambush disposition fired
-        0x10ccc4a974f79b75, // D: 64 ticks of two-hand fireball combat
-        0x2cab3bb0e4ff4bb5, // E: 100 aftermath ticks
+        0x4adb9e3a7dd0638d, // post-init (feature pass + disposition 0)
+        0x3923cdf12395ce8e, // A: 32 idle ticks far afield
+        0xe9207a3d183cd57a, // B: crater trigger fired + 120 dig ticks
+        0xb8178cdc62154233, // C: ambush disposition fired
+        0xc7440cc1a01e71b4, // D: 64 ticks of two-hand fireball combat
+        0x42118e7346f46f85, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -400,13 +417,17 @@ fn level_005_golden_state_hashes() {
     // their 128-tick ballistic window, roll downhill while grounded,
     // and merge only on grounded ticks, so ball poses and populations
     // at every checkpoint genuinely differ. Post-init holds.
+    // The bounce-floor re-pin moves OBSERVABLE at A-E — a behavior
+    // change by design (see the GOLDEN note): -33..-64 impacts no
+    // longer hop, so ball rest poses at every checkpoint differ.
+    // Post-init holds.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
-        0x7499b2cebf66c6d0, // A
-        0xec45df97cfd4159b, // B — settler phase + feeder leash
-        0xeab36b776f2699a5, // C
-        0x7c2560d3cab77d2d, // D
-        0x42f996815fbb8a52, // E
+        0x9ec1a5584565a87e, // A
+        0x7dd13ef50ddc4805, // B — settler phase + feeder leash
+        0xdb23684a5f1a94c7, // C
+        0x5cb6270c46edecf8, // D
+        0xa7dbb533582b8413, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

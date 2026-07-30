@@ -29,12 +29,7 @@
     },
     {
       "t": 59,
-      "status": "open",
-      "sig": "ecf104049ed8ab17",
-      "atoms": [
-        "field:3,0:mana",
-        "field:player.mana"
-      ],
+      "status": "conforming",
       "note": "human regen cadence (ledger entry 5)"
     },
     {
@@ -49,15 +44,13 @@
     {
       "t": 89,
       "status": "open",
-      "sig": "f01bfe901db2a98d",
+      "sig": "4b4d7cebf24da4af",
       "atoms": [
-        "field:3,0:mana",
         "field:9,1:flags",
         "field:9,1:life",
         "field:9,1:x",
         "field:9,1:y",
         "field:9,1:z",
-        "field:player.mana",
         "missing:10,12"
       ],
       "note": "projectile flags bit13 (ledger entry 9)"
@@ -173,15 +166,17 @@
         "field:player.mana",
         "missing:9,10"
       ],
-      "note": "castle cast latency \u2014 (9,10) transform ball (ledger entries 3/4)"
+      "note": "castle cast latency — (9,10) transform ball (ledger entries 3/4)"
     },
     {
       "t": 470,
       "status": "open",
-      "sig": "12cf53a16a3dd866",
+      "sig": "b5493a19ed283cf6",
       "atoms": [
         "extra:3,2",
+        "field:3,0:mana",
         "field:player.castle",
+        "field:player.mana",
         "field:wizard0.castle"
       ],
       "note": "castle build window (ledger entry 3)"
@@ -215,7 +210,7 @@
         "field:10,39:heading",
         "missing:10,54"
       ],
-      "note": "mana magnet (10,54) lifecycle + ball pull \u2014 untriaged"
+      "note": "mana magnet (10,54) lifecycle + ball pull — untriaged"
     },
     {
       "t": 910,
@@ -244,7 +239,7 @@
       "atoms": [
         "extra:9,10"
       ],
-      "note": "castle cast latency \u2014 (9,10) transform ball (ledger entries 3/4)"
+      "note": "castle cast latency — (9,10) transform ball (ledger entries 3/4)"
     },
     {
       "t": 977,

@@ -21,14 +21,12 @@
     {
       "t": 39,
       "status": "open",
-      "sig": "122f48ea1039a040",
+      "sig": "19162ff60126404d",
       "atoms": [
         "extra:10,12",
         "extra:10,14",
-        "field:10,14:life",
         "field:10,14:rand",
         "field:10,14:speed",
-        "field:10,14:y",
         "field:10,14:z"
       ],
       "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
@@ -73,14 +71,10 @@
     {
       "t": 1133,
       "status": "open",
-      "sig": "7b348e686472b924",
+      "sig": "43d2108041d2e15c",
       "atoms": [
         "extra:10,13",
-        "field:10,13:life",
         "field:10,13:rand",
-        "field:10,13:speed",
-        "field:10,13:y",
-        "field:10,13:z",
         "field:10,45:z"
       ],
       "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
@@ -88,14 +82,10 @@
     {
       "t": 1153,
       "status": "open",
-      "sig": "3dbf1be4f3ee2bf7",
+      "sig": "8804634a769d002f",
       "atoms": [
         "extra:10,13",
-        "field:10,13:life",
         "field:10,13:rand",
-        "field:10,13:speed",
-        "field:10,13:y",
-        "field:10,13:z",
         "field:10,45:z",
         "field:5,13:x"
       ],

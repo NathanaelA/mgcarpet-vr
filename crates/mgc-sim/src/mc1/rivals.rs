@@ -1410,6 +1410,9 @@ impl World {
                     );
                     if cast && facing <= 28 {
                         self.g.ent[t].f144 = self.rivals[ri].ent;
+                        // Settled balls never re-run the tick's
+                        // re-derive — recolor at the claim.
+                        self.g.ball_resize(t);
                         self.g.snd(4, t); // the claim chime (:29444)
                         self.rivals[ri].state = AiState::Fresh;
                     }
@@ -1971,9 +1974,12 @@ impl World {
         if let Some(gv) = self.g.spawn_grave(cx, cy, gz) {
             let me = self.rivals[ri].ent;
             for j in 1..self.g.ent.len() {
-                let e = &mut self.g.ent[j];
+                let e = &self.g.ent[j];
                 if e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0 && e.f144 == me {
-                    e.f144 = gv as u16;
+                    self.g.ent[j].f144 = gv as u16;
+                    // Settled balls never re-run the tick's re-derive
+                    // — the grave owner reads neutral in place.
+                    self.g.ball_resize(j);
                 }
             }
         }

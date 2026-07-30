@@ -103,23 +103,73 @@ including the 75%-torn pre-gate corpus.
    (sub_47BD0's mound arm :56561-66 — the slot-28 mana_max
    10000-vs-1000 rows, now only 129 hits), and the ball-economy
    cap-fill (sub_47130 :56160). ~100 pairs.
+   **FIX ROUND 2026-07-30 (opus dig + port)**: the "mound" = the
+   player's CREATE-CASTLE MANIFESTATION (class 12 m16, ctor
+   sub_3C060 → sub_3BF70 :48026: +136=1000, +140=1000/101, +50=101
+   the divisor). sub_47DD0 (:56617-73) refreshes it EVERY tick from
+   the wizard handler while a castle is bound: +136=cap[level],
+   +140=cap/101 — now ported at the castle dispatch site
+   (world.rs, strict-retail scoped, f144-owner join; the imported
+   manifestation encodes +70<MANIFEST_BASE and never reaches
+   manifestation_tick, so a manifestation-side fix is dead under
+   conformance). castle_eject also gained retail's pool-headroom
+   count cap `min(free+1, clamp(spill/1000,1,32))` (:56194-205) and
+   continue-on-failed-alloc (:56213). Slot-28 mana_max 129→21 hits;
+   350→384 conforming with the entry-5 clamp. wizext+50/+416: +416
+   is WRITE-ONLY (no reader — no port action); the 627-vs-475
+   binding is an allocation-order SYMPTOM of the remaining window
+   divergence, not a missing write.
+   **WORM-WINDOW DIG RESOLVED 2026-07-30 (opus agent + corpus
+   A/B)**: the "(5,3) per-tick segment emission" hypothesis was
+   WRONG — no emission law exists. The window is a WORM MASS-DEATH:
+   heads 61/97 die at t≈472 (state 22), the death handler corpses
+   the whole +54 chain in ONE tick (sub_1A6C0 :21828-39), and the
+   corpses free one-per-phase-lane (`f63&7==0`, two lanes per worm
+   8 slots apart = the four descending lanes). The port's death/
+   corpse/segment handlers are faithful; the divergence is
+   POOL-ORDER: the port frees 0x400 slots at once and its corpse
+   ball-drops recycle the just-freed low slots, where retail
+   allocates high (633+) and keeps low-ghost records. ⚠ EXTENDING
+   MC2's strict-retail ghost/free deferral to MC1 was TRIED and
+   MEASURED WORSE (384→377 conforming, both halves independently)
+   — MC1's reaper evidently returns slots within the frame, unlike
+   MC2's next-frame remove pass; the free-guard comment records the
+   refutation. The cascade stays open as a pool-order lead (~6-17
+   missing high-slot rows/tick through t≈540): trace one pair's
+   pop sequence vs retail's. ALSO from the dig: the port's
+   worm-segment ctor re-stamped id24 with the segment's own slot —
+   retail's byte-copy KEEPS the head's +24 (corpus-pinned). Fixed
+   (goldens re-pinned layout-only, OBSERVABLE holds); this also
+   keeps kill credit head-only in native play.
 4. **Impact cluster around casts** — (9,1) 468/610 missing/extra,
    (10,12) hit-flash, (9,0), and the t=67-style substitution
    clusters: input-latency + unreconstructed aim (control aim_yaw/
    aim_pitch). Same ruling as before: partially mitigated by
    `--input-delay 2`; consider recording the control slot mid-tick.
    This is now the FIRST divergence family (t=58).
-5. **Human mana regen cadence — OPEN, port regens 3-4× retail**:
-   retail's human +100 regen quanta land at drifting ~3-4-tick
-   intervals (trace t=1200-1240: mostly period 4 with adjacent
-   doubles; NOT f63%4-clocked — the phase walks). The port applies
-   `mana_delta` every tick (long-standing gameplay law, goldens
-   locked). The wizard tick's `mana += +132` (:55385) sits behind
-   only the pause gate (var_u8_2 bit0), so the cadence source is
-   elsewhere (a timer-domain clock? the walk's class-3 rate nibble?
-   kill/collect +100s interleaved?). ~1276 player.mana pairs
-   (−100/−150/−300 compounds with cast latency). Needs its own
-   decompile pass before touching the gameplay regen.
+5. **Human mana regen cadence — RESOLVED 2026-07-30: THERE IS NO
+   REGEN CLOCK.** Retail applies `mana += +132` EVERY frame behind
+   only the pause gate, then recomputes +132 to its +100/+1000
+   floor (:55385, :55407-21); the "drifting 3-4-tick cadence" is
+   the NET of that regen against firing-driven suppression + costs:
+   every live MID-burst spell event zeroes the caster's +132 before
+   the next apply (sub_55E80 :64956 — the first burst tick,
+   +48==+50, does not; remc2's twin sub_68DE0 runs the same shape
+   with the cost stamp live), and the +90 mailbox debits land the
+   same frame. Manifestation slots fall before/after the carpet's
+   slot 630 as they churn, so suppression lands same-frame or
+   next-frame — a one-frame stamp-then-apply jitter beating against
+   the ~4-tick fire rhythm (the MC2 @0x88 "survives one frame" twin
+   is the same phenomenon). Timer-domain and f63%4 hypotheses
+   REFUTED (five consecutive +100 frames at t=121-125). **The
+   port's every-tick regen is CORRECT — the long-standing "port
+   regens 3-4× retail" concern is DISSOLVED; do not throttle it.**
+   The conformance residual was import-side: the recorder samples
+   +132 AFTER the recompute, so the importer seeded +100 on frames
+   retail had suppressed — retail_import_mc1 now clamps the seed to
+   0 when a live mid-burst manifestation exists (f48≠0, ≠f50,
+   human-owned). player.mana 1276→580 pairs; the remainder is
+   cast-latency compounds (capture) + the entry-3 window.
 6. **wizard0 hand residuals** — 4 pairs: t=310 retail Some(3) port
    Some(16), t=409 hand_right Some(3) vs None. Pickup RESOLUTION
    differences (which jar/hand a mid-level acquisition lands in),
@@ -129,9 +179,17 @@ including the 75%-torn pre-gate corpus.
    0x2006-vs-0x6 (bit13, ~176 rows); (2,0) tree missing residue 53
    rows at exactly t=1056(×6)/t=1100(×47) — the hut-completion
    retile edge ticks; (10,39) flags 12→4 (port ball loses the 0x8
-   default bit on some spawn path, 177 rows); wizard Path-A ball
-   collection (sub_1E810 instant absorb) still unported — the
-   mana-economy track's (10,0) puff + ball-removal rows ride on it.
+   default bit on some spawn path, 177 rows — likely the entry-3
+   substitution family, see the worm-segment note there).
+   **CORRECTED 2026-07-30: sub_1E810 is NOT a wizard path** — it is
+   the GENIE's (m11) ball eat, called only from genie states
+   0x43/0x44 (:24512/:24643), and it was ALREADY PORTED
+   (`genie_eat_ball`). No retail wizard-flyover ball absorb exists;
+   the wizard economy is the castle path (entry 3). mc1l0 has no
+   genie, so nothing here rode on it. The dig did surface one real
+   gap, now FIXED: the genie's (10,0) puff and the sparkle ring
+   were missing retail's `+18 |= 1` stamp (:24793-94/:24377-78 —
+   our `flags |= 0x10000`).
 7. **HW terrain shortfall + walker drift** (narrowed from "systematic
    z −64" — the class-12 part is RESOLVED below): the port's HW
    ground sits below retail's in places (~8 height-bytes ≈ 256
@@ -192,22 +250,60 @@ the full file under `ulimit -v` — see the pair-9074 note):
   emitters, (10,12) hit-flash), (10,1) explosion cluster fields.
   Measure per model — the two-wrongs trap is real (the activation-bit
   fix EXPOSED the f44 aliasing; totals briefly rose).
-- **§casts misfire**: the port casts when retail does not (t≈3: port
-  spawns (9,17) into slot 208 where retail has smoke; `mana: port 50`
-  = `mc2_spawn_cast_proj`). Suspect: `sample_cmd_mc2` maps raw
-  buttons with no PANE hit-test (clicks on the control pane are UI,
-  not casts — the input frame carries cursor + cursor-at-press for
-  exactly this). The input-delay re-sweep 0..3 is UNBLOCKED now
-  (class-15 noise gone) and owed after the pane fix.
-- **Cross-pair StageVar leak** (suite self-drift): still owed —
-  import the live StageVars2 rows @0x365F4 (in the closure) per
-  pair. The BOOK half of the leak is fixed (str_611 imports).
+  **SWEEP SLOT-ORDER LAW LANDED 2026-07-30 — the smoke families
+  collapsed.** The universal "newborns never tick" gate was the t=0
+  special case: retail's frame pass (EF:40116) is a bare ascending
+  pointer walk — a mid-pass spawn ticks the SAME pass iff its slot
+  lies ahead of the cursor. The chimney corpus pins it (9 births/
+  tick, lives 31..−1, NO life-32 record ever). Gate removed; the
+  natural loop serves both native and strict (DEVIATIONS.md entry
+  updated — the dome guard is faithful, not a deviation). t<751:
+  total rows 47.8k→34.1k, (10,14) life 6,060→308, y 6,029→1,061,
+  (10,13) life/y gone. REMAINING smoke rows are capture-domain:
+  newborn rand/actSpeed derive from the reused slot's STALE seed
+  (SetSmoke4 steps the slot's leftover rand once; the slot's last
+  ghost obs is 1-2 frames before the pair) and newborn drift reads
+  stale yaw — not reachable from a single-pair closure. The extras
+  (~9/pair) are the newborn capture tear (born after the recorder's
+  window passes the slot; present in port's end-of-tick obs,
+  absent from retail's mid-frame one).
+- **§casts misfire — FIXED 2026-07-30 (the pane theory was WRONG)**:
+  the recorded cursor sits dead-center (320,199) — no pane click.
+  The real cause: the RIGHT BUTTON is already HELD on the
+  recording's first frame (a hold crossing the level boundary), and
+  the harness ring's default pre-fill read "released" →
+  manufactured a press edge → the t≈3 phantom (9,17). verify_mc2
+  now extends the first input frame's held state backward (retail
+  latched the press before t=0; its first real edge is the t=5
+  re-press). The substitution rows cleared. The --input-delay
+  re-sweep 0..3 ran FLAT (<0.2% — this window barely casts);
+  delay 2 stands.
+- **Cross-pair StageVar leak — FIXED 2026-07-30**: the live
+  StageVars2 rows @0x365F4 now decode (`RetailMc2::stagevars`, raw
+  8-byte rows [kind, flags, chain, cadence, payload]) and overlay
+  the port table's RUNTIME lanes per pair (kind/flags/chain/
+  cadence + kind-6/7 param; loader-derived hold/watch fields stay
+  from the build — the &2-clear payload can be a bound-entity
+  guest POINTER (EF:4740), which the sv1 lanes already rebuild).
+  The t=726 sv1/sv2 self-drift pair is now FULLY conforming. Note:
+  mc2l0's recorded rows are byte-identical t=0..751+, so this
+  overlay = a per-pair reset; a take with live trigger churn will
+  exercise the lanes for real.
 - **player.mana regen cadence — narrowed**: the pending delta @0x88
   applies mana@N+1 = mana@N + d88@N on almost every pair, EXCEPT a
   freshly-stamped −100 survives ONE extra frame before applying
   (measured pairs 0→1 and 16→17; the port applies immediately →
-  ±100 on ~232 pairs). Needs the EF wizard-regen/castle-drain order
-  trace (the MC2 twin of the mc1 entry-5 cadence).
+  ±100 on ~232 pairs). The MC1 entry-5 resolution EXPLAINS the
+  mechanism (slot-order jitter between the stamping spell event and
+  the carpet's apply — remc2's sub_68DE0 cost stamp is LIVE, so
+  MC2 stamps −cost then applies next frame when the event's slot
+  follows the carpet's). RE-MEASURED 2026-07-30: the stamp pends
+  TWO recorded frames (d88=−100 at obs 0 AND 1, manifestation
+  timer FROZEN between them = the recorder's mid-frame window
+  catching pre-apply state), so a single-pair import cannot
+  distinguish the hold from the apply — an f2e-first-tick clamp
+  bought exactly one pair and was reverted. Reclassify toward
+  capture unless a cleaner discriminator appears.
 - **mana_max residual** (599 rows): the claim census within the tick
   — retail's t=64→65 jump (+187) lands mid-frame (a ball absorb the
   port's census sees one tick late?). Same family: owner retail-152

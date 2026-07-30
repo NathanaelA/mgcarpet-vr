@@ -176,11 +176,20 @@ fn flight_tier_golden_state_hashes() {
     // hard-free (sub_41E90) instead of soft-killing to the sweep.
     // Post-init holds; A-C move because the level's authored balls
     // follow the new rest law inside the window.
+    // Re-pinned for the MC1 ball bounce floor (:29538-49): retail
+    // zeroes any rebound <= 16 (`if (f46 <= 16) f46 = 0`), so a ball
+    // rebounds only past impact -64; the port kept 8..16-unit hops
+    // from -33..-64 impacts. MC1-scoped (the MC2 sphere twin is
+    // untraced and keeps -32). Post-init holds; A-C move with the
+    // authored balls' settle trajectories.
+    // Re-pinned (all legs) for the worm-segment id24 fix: segments
+    // keep the head's +24 through the byte-copy (corpus-pinned);
+    // layout-only — the L005 OBSERVABLE companion holds.
     const FAITHFUL: [u64; 4] = [
-        0x0071647b49e89381, // post-init
-        0x9d04a9fbbea0521d, // A: 40 ticks of forward thrust
-        0xbe7f9e852e7b8011, // B: 30 ticks of banked turn + strafe
-        0xd9923ed0b4fdaa3d, // C: 40 ticks of coast
+        0x66111d2420b92e5c, // post-init
+        0x539ec568f1d72b58, // A: 40 ticks of forward thrust
+        0x3648c720bd987056, // B: 30 ticks of banked turn + strafe
+        0x0b58012de265f594, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
@@ -192,10 +201,10 @@ fn flight_tier_golden_state_hashes() {
     // strafe held, so its roll — and thus its hash — is unchanged. The
     // FAITHFUL array is untouched (the Mc1 mover never runs this bank).
     const ENHANCED: [u64; 4] = [
-        0xe9f7ed2c1cca3ab0, // post-init
-        0x29a07da0c5dfc23c, // A
-        0xd62c2545838fa99f, // B: strafe+turn now banks on forward speed
-        0x40aec172853ca1c4, // C
+        0x5510cd23ecac11a5, // post-init
+        0x8f2d2681f2e0386a, // A
+        0x66d0c97893744992, // B: strafe+turn now banks on forward speed
+        0xe0acf5fc3c1ae852, // C
     ];
     assert_eq!(
         (faithful, enhanced),

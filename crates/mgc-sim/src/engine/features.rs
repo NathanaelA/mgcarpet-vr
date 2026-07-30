@@ -3852,7 +3852,12 @@ impl Gen {
         if spill <= 0 {
             return;
         }
-        let count = (spill / 1000).clamp(1, 32);
+        // :56194-205 — the throw count is ALSO capped by the pool
+        // headroom (sub_37710_37AD0 = free slots + 1). The empty-pool
+        // arm (:56196, reaper + retry at 8) is approximated by the
+        // fail-open spawns below — the port frees eagerly, so its
+        // stack never carries reapable soft-kills.
+        let count = (spill / 1000).clamp(1, 32).min(self.free.len() as i32 + 1);
         let mut share = spill / count;
         let (cx, cy, cz, own) = {
             let e = &self.ent[i];
@@ -3861,7 +3866,7 @@ impl Gen {
         let ground = self.ground_z(cx, cy) as i16;
         for _ in 0..count {
             let Some(b) = self.spawn_mana_ball(cx, cy, cz) else {
-                break;
+                continue; // :56213 — a failed alloc skips the ball, not the loop
             };
             self.ent[b].f140 = share;
             self.ent[b].f144 = own;
@@ -3996,6 +4001,11 @@ impl Gen {
                 for j in 1..self.ent.len() {
                     if self.ent[j].f144 == i as u16 && self.ent[j].class64 != 0 {
                         self.ent[j].f144 = claimant;
+                        // Settled balls never re-run the tick's
+                        // re-derive — recolor at the claim.
+                        if self.ent[j].class64 == 10 && self.ent[j].model65 == 39 {
+                            self.ball_resize(j);
+                        }
                     }
                 }
             }
@@ -5460,6 +5470,7 @@ mod tests {
             pyaw: 0,
             pmana: 1000,
             pdead: false,
+            strict: false,
         }
     }
 

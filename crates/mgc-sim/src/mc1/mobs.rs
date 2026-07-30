@@ -49,6 +49,11 @@ pub(crate) struct MobCtx {
     /// other; our player lives outside the pool, so followers get
     /// the state through the ctx).
     pub(crate) pdead: bool,
+    /// Conformance replay (`World::strict_retail`): deliberate
+    /// gameplay deviations switch off (DEVIATIONS.md law). Carried
+    /// here so Gen-side ticks can gate without a Gen field (which
+    /// would drag the snapshot codec and the state hash along).
+    pub(crate) strict: bool,
 }
 
 /// Animation frame counts by sprite draw type (`byte_90AD8`, :2716):
@@ -1272,6 +1277,7 @@ impl Gen {
                 let py = y.wrapping_add(40 * (k / 3));
                 if let Some(p) = self.spawn_effect(1, px, py, z) {
                     self.ent[p].id24 = id;
+                    self.ent[p].flags |= 0x10000; // +18 |= 1 (:24377-78)
                 }
             }
             self.ent[i].f26 = 1;
@@ -1347,6 +1353,7 @@ impl Gen {
             let id = self.ent[i].id24;
             if let Some(p) = self.spawn_effect(0, bx, by, bz) {
                 self.ent[p].id24 = id;
+                self.ent[p].flags |= 0x10000; // +18 |= 1 (:24793-94)
             }
             self.snd(11, i);
         }
@@ -3044,11 +3051,12 @@ impl Gen {
         let mut prev = head;
         for si in 0..seg_count {
             let Some(seg) = self.new_event() else { break };
-            // qmemcpy(seg, head, 164) — then the alloc identity fields
-            // the copy must not clobber are re-established.
-            let slot_id = seg as u16;
+            // qmemcpy(seg, head, 164) — retail re-establishes only the
+            // chain/anim fields below; +24 KEEPS the head's id (the
+            // mc1l0 corpus: every segment carries the head slot),
+            // which is also what keeps the kill credit head-only
+            // (mob_death's `id24 == own slot` test).
             self.ent[seg] = self.ent[head];
-            self.ent[seg].id24 = slot_id;
             self.ent[seg].flags &= !4; // not yet placed
             self.ent[seg].f52 = prev as u16;
             self.ent[prev].f54 = seg as u16;

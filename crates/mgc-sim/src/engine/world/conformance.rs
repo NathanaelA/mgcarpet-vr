@@ -264,7 +264,22 @@ impl World {
             // pair ticked with delta 0 and missed retail's +100 floor
             // (or the +1000 castle-boost arm) — the two biggest
             // player.mana families in the corpus.
-            mana_delta: carpet.f132 as i32,
+            //
+            // The recorder samples +132 AFTER the recompute, so the
+            // closure always reads the refreshed floor — but every
+            // live MID-burst spell event zeroes it again before the
+            // next apply (sub_55E80 :64956; the first burst tick,
+            // +48 == +50, does not). Re-derive the suppression or
+            // every hold-fire pair over-regens one quantum (there is
+            // no regen clock — the drifting cadence IS this
+            // suppression beating against slot order).
+            mana_delta: if st.ents.iter().any(|e| {
+                e.class64 == 12 && e.f144 == 0 && e.f48 != 0 && e.f48 as i32 != e.f50 as i32
+            }) {
+                0
+            } else {
+                carpet.f132 as i32
+            },
             life: carpet.act_life,
             state: match carpet.f66 {
                 2 => LifeState::Falling,
@@ -573,9 +588,28 @@ impl World {
 
         // StageVar held bindings: retail keeps `StageVar1_0x48_72` +
         // the `word_0x4A_74` timer ON the entity; the port's side-vec
-        // rebuilds from them. The live var table itself stays as the
-        // level build seeded it (`set_mc2_stagevars`) — its runtime
-        // FIRED/cadence bits are an accepted approximation for now.
+        // rebuilds from them.
+        //
+        // The live var table's RUNTIME lanes overlay from the recorded
+        // rows @0x365F4 each pair (kind/flags/chain/cadence, and the
+        // kind-6/7 param word) — without this the port's table carried
+        // its own FIRED/cadence mutations across pairs (the suite's
+        // self-drift). Loader-DERIVED fields (hold_word/subtypes/
+        // watch_template) stay from the level build: the &2-clear
+        // watch payload can be a bound-entity guest pointer in the
+        // raw row (EF:4740), which the sv1 lanes already reconstruct.
+        for (i, raw) in st.stagevars.iter().enumerate() {
+            let Some(v) = self.mc2_stagevars.get_mut(i) else {
+                break;
+            };
+            v.kind = raw[0] & 0xF;
+            v.flags = raw[1];
+            v.chain = raw[2];
+            v.cadence = raw[3];
+            if matches!(v.kind, 6 | 7) {
+                v.param = u16::from_le_bytes([raw[4], raw[5]]);
+            }
+        }
         self.mc2_sv_held.clear();
         self.mc2_sv_deferred.clear();
         for slot in 1..n {
@@ -631,7 +665,14 @@ impl World {
             // The pending regen/debit delta (@0x88, the applied-then-
             // recomputed pipeline both engines share) — the tick
             // applies it before recomputing, same seed law as MC1's
-            // f132 import.
+            // f132 import. KNOWN RESIDUAL (~232 pairs): a freshly
+            // stamped −cost pends TWO recorded frames (t=0/1 both
+            // show d88=−100 with the manifestation timer FROZEN
+            // between them — the recorder's mid-frame window catches
+            // the pre-apply state), so a single-pair import cannot
+            // tell "stamped, applies next tick" from "stamped after
+            // the apply, holds a frame"; an f2e-first-tick clamp was
+            // tried 2026-07-30 and bought exactly one pair.
             mana_delta: carpet.d88,
             life: carpet.life,
             state: LifeState::Alive,

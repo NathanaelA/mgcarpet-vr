@@ -1641,6 +1641,7 @@ impl World {
             pyaw: player.heading,
             pmana: self.player.mana,
             pdead: self.player.state != LifeState::Alive,
+            strict: self.strict_retail,
         };
         self.human_pose = (player.x, player.y, player.z);
 
@@ -1843,31 +1844,21 @@ impl World {
             }
         }
 
-        // Retail's MC2 sweep never runs a NEWBORN: the phase byte
-        // @0x3E is stamped at spawn to the current sweep, so an
-        // entity created mid-pass first acts on the NEXT tick (the
-        // tear law's step-1 clock; measured — a fresh emitter smoke
-        // particle surfaces at t+1 with life 32 and its spawn z/speed
-        // untouched). The port pops free slots that can sit AHEAD of
-        // the dispatch cursor, so gate on the live set at pass start.
-        // Conformance-scoped for now (strict_retail): the NATIVE MC2
-        // dome/eruption chain relies on the same-pass tick (the
-        // (10,19) summit column dies unspawned without it — its
-        // finalize timing was compressed against the old sweep), so
-        // porting the law to native play is owed together with that
-        // timing fix. MC1 shows the same spawn-edge signature (the
-        // 12-stray-tick family).
-        let newborn_gate = self.strict_retail && matches!(self.game, GameId::Mc2);
-        let live_at_start: Vec<bool> = if newborn_gate {
-            self.g.ent.iter().map(|e| e.class64 != 0).collect()
-        } else {
-            Vec::new()
-        };
+        // Retail's MC2 frame pass (EF:40116) is a bare ascending
+        // pointer walk with no birth tracking: a mid-pass spawn ticks
+        // THIS pass iff its slot lies ahead of the cursor, and keeps
+        // its spawn state untouched iff it landed behind. The
+        // mc2l0 corpus pins the ahead case — the chimney emitters
+        // (slots 113-121) spawn 9 particles/tick into higher slots
+        // and NO life-32 record ever appears in the recording (every
+        // newborn surfaces at 31, one rise step in). The natural
+        // loop below reproduces both arms as long as the spawn pop
+        // order is faithful (free-FIRST + recycle fallback, imported
+        // per pair) — an earlier universal "newborns never tick"
+        // gate here was the t=0 special case (those landed BELOW
+        // their spawners) overfit to the opening columns.
         for i in 1..self.g.ent.len() {
             if self.g.ent[i].class64 == 0 {
-                continue;
-            }
-            if newborn_gate && !live_at_start[i] {
                 continue;
             }
             // Retail's MC2 disable (byte[1] |= 4) unlinks the entity
@@ -2209,7 +2200,42 @@ impl World {
                 3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 3 => {
                     self.g.mc2_balloon_tick(i)
                 }
-                3 if self.g.ent[i].model65 == 2 => self.g.castle_tick(i),
+                3 if self.g.ent[i].model65 == 2 => {
+                    // sub_47DD0 (:56617-73), run every tick from the
+                    // wizard handler whenever a castle is bound
+                    // (wizext+50): the owner's Create-Castle
+                    // MANIFESTATION mirrors the capacity ladder —
+                    // +136 = cap[level], +140 = cap / 101 (the
+                    // ctor's +50 divisor, sub_3BF70 :47996).
+                    // Castle-side because the imported manifestation
+                    // encodes +70 < MANIFEST_BASE and never reaches
+                    // manifestation_tick; joined on the f144 owner
+                    // lane (0 = the human on BOTH under import;
+                    // retail's real binding, wizext+708, is outside
+                    // the closure — a dropped (12,16) ground jar
+                    // could alias, accepted). Conformance-scoped:
+                    // native manifestations keep golden-pinned
+                    // f136/f140 until a re-pinned pass adopts the
+                    // law there.
+                    if self.strict_retail {
+                        let own = self.g.ent[i].f144;
+                        let lvl = self.g.ent[i].f26;
+                        let cap = crate::engine::features::Gen::CASTLE_CAP[(lvl as usize).min(7)];
+                        for j in 1..self.g.ent.len() {
+                            let c = &self.g.ent[j];
+                            if c.class64 == 12
+                                && c.model65 == 16
+                                && c.f144 == own
+                                && c.flags & 0x400 == 0
+                            {
+                                self.g.ent[j].f136 = cap;
+                                self.g.ent[j].f140 = cap / 101;
+                                break;
+                            }
+                        }
+                    }
+                    self.g.castle_tick(i)
+                }
                 3 if self.g.ent[i].model65 == 3 => self.g.balloon_tick(i),
                 // MC2 rival (AI) wizards — the MC2-native brain
                 // column (mc2::rivals); husks with no record stand.
@@ -2280,7 +2306,12 @@ impl World {
             // so the recorded obs carries the death record for one
             // more tick and the projection must too. Native play
             // keeps the immediate free (slot-reuse timing is not
-            // hash-observable; ghost records would be).
+            // hash-observable; ghost records would be). MC1 keeps
+            // the immediate free under strict TOO — extending MC2's
+            // deferral to MC1 was tried 2026-07-30 for the worm
+            // mass-death window and MEASURED WORSE (384→377
+            // conforming): MC1's reaper evidently returns slots
+            // within the frame, unlike MC2's next-frame remove pass.
             if self.g.ent[i].flags & 0x400 != 0
                 && !(self.strict_retail && matches!(self.game, GameId::Mc2))
             {
@@ -2796,6 +2827,9 @@ impl World {
                     && self.g.ent[j].f144 == PLAYER_TARGET
                 {
                     self.g.ent[j].f144 = gv as u16;
+                    // Settled balls never re-run the tick's re-derive
+                    // — the grave owner reads neutral in place.
+                    self.g.ball_resize(j);
                 }
             }
         }
@@ -5152,6 +5186,7 @@ impl World {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: self.strict_retail,
         };
         for _ in 0..1024 {
             let mut live = false;
@@ -5369,6 +5404,7 @@ impl World {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: self.strict_retail,
         };
         while self.g.ent[b].flags & 0x400 == 0 {
             self.g.mc2_load_beam_tick(b, &ctx);
@@ -9003,6 +9039,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
 
         for (model, owner) in [(1u16, 0u16), (2, 7), (3, 7)] {
@@ -9070,6 +9107,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
 
         // Not yet wanted: the ungated scan sees it, the wanted-gated one
@@ -9497,6 +9535,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         // Empty cone: the latch arms, no target is found.
         w.g.proj_tick(lob, &ctx);
@@ -9547,6 +9586,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         w.g.proj_tick(lob, &ctx);
         assert_eq!(
@@ -9599,6 +9639,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         // Fly until impact (life is 21 ticks; the house overlap ends
         // it long before).
@@ -10392,6 +10433,7 @@ mod tests {
                 pyaw: 0,
                 pmana: 0,
                 pdead: false,
+                strict: false,
             };
             w.g.proj_tick(bolt, &ctx);
             w.g.ent[bolt].f146 != 0
@@ -13176,6 +13218,73 @@ mod tests {
         );
     }
 
+    /// A ball claimed AFTER its 128-tick settle window must still swap
+    /// to the owner color row: the settle-freeze skips the tick's
+    /// every-turn `ball_resize`, so the claim intakes recolor in place.
+    #[test]
+    fn a_ball_claimed_after_settling_recolors_to_the_owner_row() {
+        let mut w = flat_world();
+        let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
+        for _ in 0..140 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the ball settled");
+        let before = w.g.ent[b].type86;
+        assert!(
+            (52..60).contains(&before),
+            "unowned = the neutral 52 family (was {before})"
+        );
+        w.g.ent[b].mail[1] = (0, PLAYER_TARGET);
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[b].f144, PLAYER_TARGET, "the claim took");
+        let after = w.g.ent[b].type86;
+        assert!(
+            (105..113).contains(&after),
+            "a settled ball recolors at the claim intake (was {after})"
+        );
+    }
+
+    /// Player-ruled deviation (DEVIATIONS.md): a SETTLED ball tracks
+    /// the ground both ways — a terrain edit beneath it (volcano,
+    /// castle stamp) must not bury it, and a ball frozen mid-hop
+    /// must land. Off under strict-retail replay.
+    #[test]
+    fn a_settled_ball_tracks_the_ground_instead_of_freezing() {
+        let mut w = flat_world();
+        let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
+        for _ in 0..140 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the ball settled");
+        // Bury it: raise the surrounding tile corners by 4 height
+        // bytes (~128 z units).
+        let (tx, ty) = ((bx >> 8) as u8, (by >> 8) as u8);
+        for dx in 0..2u8 {
+            for dy in 0..2u8 {
+                let t = crate::engine::features::tile(tx.wrapping_add(dx), ty.wrapping_add(dy));
+                w.g.t.height[t] += 4;
+            }
+        }
+        let raised = w.g.ground_z(bx, by) as i16;
+        assert!(raised > gz, "the edit raised the ground");
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[b].z, raised, "a buried ball surfaces");
+        // Hovering: park it in the air; the settled snap lands it.
+        w.g.ent[b].z = raised + 500;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[b].z, raised, "a hovering ball lands");
+        // Strict-retail replay keeps retail's freeze (the deviation
+        // switches off).
+        w.strict_retail = true;
+        w.g.ent[b].z = raised + 500;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[b].z, raised + 500, "strict keeps the freeze");
+    }
+
     #[test]
     fn possess_claims_a_neutral_house() {
         use crate::mc1::spells::SpellId;
@@ -15846,6 +15955,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         w.g.area_write(fire, 0, 400, &ctx, false, false);
         assert!(
@@ -17287,6 +17397,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         for _ in 0..60 {
             if w.g.ent[m].flags & 0x400 != 0 {
@@ -17362,6 +17473,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         let mut rmax = 0i16;
         let mut rmin = i16::MAX;
@@ -17406,6 +17518,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         w.g.mc2_fire_orb_tick(h, &ctx);
         assert_eq!(w.g.ent[h].f71, 1, "alive while the leader lives");
@@ -17926,6 +18039,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         // First homing tick: the steer target is the BOX CENTER.
         w.g.mc2_flyer_tick(m, &ctx);
@@ -18021,6 +18135,7 @@ mod tests {
             pyaw: 0,
             pmana: 0,
             pdead: false,
+            strict: false,
         };
         // First homing tick: the steer target is the player's BOX
         // CENTER, not the pose z.
