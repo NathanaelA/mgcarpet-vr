@@ -56,7 +56,11 @@ Common fields:
 
 `source:"retail"` adds: `"build":"A|B"` (CARPET.EXE / HIDDEN.EXE
 address half), plus free-form capture provenance (DOSBox version,
-cycles).
+cycles). The `capture` object also carries `tear_gate` (bool: emit-time
+inter-tick gating ran) and, for a tick-patched exe,
+`window_gated: true` with `exe_patch: {mailbox_guest, spin_period_counts}`
+(see "Tick-patched capture") — where each `t` is the stub's
+authoritative sub-step counter.
 
 `source:"port"` adds `"sim"`, the **sim-config closure** — everything
 that feeds the state hash, pinned so `--replay` can refuse (or
@@ -170,14 +174,16 @@ flavors:
   frames, the frame collapses to sim+flip, the game momentarily runs
   FAST, and the renderer capture window vanishes — a deterministic
   ~9-tick gap that no cycles/render/sound setting can remove. These
-  are exactly the transition-dense ticks fixtures want; the planned
-  emulator-side tick hook (park the guest once per tick at the
-  tick-top LCG draw) is the structural fix.
+  are exactly the transition-dense ticks fixtures want. The structural
+  fix is the tick-patched exe (below): it makes the game pace itself,
+  so a quiescent window exists every sub-step regardless of render
+  load, closing both gap flavors at once.
 The recorder must classify mid-tick parks (including the early-cursor
 case, where the tick-top LCG has drawn but the +63 mode still reads
 0 — indistinguishable from "same tick" without the RNG check) and
 report the loss LIVE, per pending tick, not only as a bare `t` jump
-discovered afterwards.
+discovered afterwards. (A tick-patched exe removes the guesswork —
+see "Tick-patched capture".)
 
 ## Capture tearing (the inter-tick gate)
 
@@ -212,6 +218,61 @@ it unvetted (a mid-tick anchor rejects every later pair against it and
 starves the stream): hold the candidate and flush it only once the
 first clean pair vouches for it, replacing the anchor with the newer
 read whenever a bootstrap pair is rejected.
+
+## Tick-patched capture (windowed)
+
+The tear gate is a *reconstruction* — it infers, after the fact,
+whether a frozen snapshot happened to land between ticks. The exe
+tick-patch (`tools/mc_exe_tickpatch.py`) removes the inference by
+making the game cooperate. It installs a ~167-byte wrapper stub around
+the per-sub-step tick function (remc1 `sub_41780_41AC0`) of a COPY of the
+binary — `CARPET_REC.EXE` / `HIDDEN_REC.EXE`, never the pristine
+gamedata — by redirecting the tick fn's callers (rewriting each
+gameSpeed-fanout `call`'s 4-byte rel32) so they enter the stub, which
+paces, then `call`s the original untouched tick fn and `ret`s. The
+function entry stays byte-for-byte intact (an earlier version overwrote
+the entry with a detour, which decoded as a wild `add eax,[eax]` when
+the dynamic recompiler picked the region up misaligned). Every sub-step
+the stub does two things:
+
+1. **Paces to a wall-clock deadline.** It spins on the game's own PIT
+   counter (measured live at ~480 Hz) until one period (default 5 counts)
+   has elapsed since the last release. The default game speed runs the
+   tick fn 4× per rendered frame, so `fps = 480 / (4 × period)` ≈ **24 fps**
+   at period 5 — the authentic Magic Carpet rate — regardless of how high
+   DOSBox `cycles` is set; the excess cycles are burned in the spin. (Both
+   obj1's cave and obj3's mailbox must be page-aligned via their `vsize`
+   fields, or the tail is outside the segment limit — the code cave won't
+   execute and the mailbox writes won't persist.) This is the frame cap
+   retail never had; it
+   is a *presentation* throttle only. MC1's sim is wall-clock
+   independent (its lockstep multiplayer proves it: the PIT counter
+   feeds render/animation timing, never sim state), so pacing changes
+   *when* sub-steps run, never *what* they compute — the recorded tick
+   sequence is byte-identical to an unpaced run.
+
+2. **Publishes a mailbox** in obj3's committed tail (guest-linear
+   `0x132c40`, same address in both builds; the stub derives obj3's real
+   runtime base from the game's own relocated struct pointer so its writes
+   stay in obj3 and never corrupt game memory): an 8-byte magic
+   (`MGCTTIK1`), a monotonic sub-step counter (`+8`), and an
+   `in_window` flag (`+0xC`) raised for the whole spin. The spin *is*
+   the quiescent window — the world struct is fully settled from the
+   previous sub-step and the current one's LCG draw has not begun — and
+   it is proportional to the spare cycle budget, so on a fast host it is
+   ~7 ms wide on *every* sub-step, bursts included.
+
+A recorder that finds the magic switches to **windowed capture**: take
+the struct only while `in_window==1`, require the counter and struct to
+stay put across the consensus reads, and use the counter's delta as
+continuity. This is strictly stronger than the tear gate (a
+between-tick window is guaranteed by construction, not inferred) and
+`t` is the stub's authoritative sub-step index, not a `+63`-mode
+estimate. Such recordings stamp `capture.window_gated: true` and
+`capture.exe_patch: {mailbox_guest, spin_period_counts}`; consumers may
+treat window-gated snapshots as tear-free without re-running
+`pair_clean`. The tear gate remains the path for unpatched exes and for
+MC2 (which is already `Turn`-throttled and gap-free).
 
 ## Consumers
 

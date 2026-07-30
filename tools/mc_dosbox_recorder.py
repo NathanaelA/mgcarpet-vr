@@ -292,6 +292,24 @@ MC1_BUILDS = (
 MC1_STATIC_NEEDLE = bytes((0xB7, 0x71, 0x7D, 0x7A, 0x9D, 0x9A, 0x07, 0x5A,
                            0x1D, 0x1B, 0xDD, 0xDA, 0x3C, 0x39, 0x10, 0x0E))
 
+# --- EXE tick-patch mailbox (tools/mc_exe_tickpatch.py) ---------------------
+# When a *_REC.EXE (a tick-patched copy) is running, its stub keeps a mailbox
+# in obj3's committed BSS tail. The recorder auto-detects it and switches to
+# the windowed capture path: the stub raises `in_window` for the whole
+# quiescent spin (the world struct is settled and untouched), and `tick` is a
+# monotonic sub-step counter — so a capture taken while in_window==1 is
+# guaranteed between-tick, and continuity is the counter's delta (no +63
+# heuristic, no tear gate). The guest-linear address is the same in both
+# builds (obj3 loads at 0x90000; mailbox at obj3+0xa2c40). The stub derives
+# obj3's real runtime base from the game's own relocated struct pointer, and
+# static_base (anchored to obj3's needle) maps the same address host-side.
+# Keep in lockstep with tools/mc_exe_tickpatch.py's MB_* constants.
+EXE_MB_BASE = 0x132C40  # guest-linear addr of the mailbox (obj3 tail)
+EXE_MB_MAGIC = b"MGCTTIK1"  # 8 bytes the stub writes once, on first tick
+EXE_MB_TICK = 0x08  # u32 monotonic sub-step counter
+EXE_MB_INWIN = 0x0C  # u32 1 while parked in the quiescent spin
+EXE_MB_PERIOD = 0x18  # u32 configured spin period (PIT counts)
+
 # MC1 / MC1HW — identical engine + struct (save doc: "HW byte-identical").
 LAYOUT_MC1 = Layout(
     name="mc1",
@@ -617,6 +635,8 @@ class Located:
     static_base: Optional[int] = None  # base of the STATIC-globals frame
     struct_guest: Optional[int] = None  # struct's guest linear address
     build: Optional[BuildVariant] = None  # which retail build is running
+    mailbox_host: Optional[int] = None  # host addr of the EXE tick-patch mailbox
+    mailbox_period: Optional[int] = None  # its configured spin period (PIT counts)
 
 
 def locate_struct(
@@ -1257,6 +1277,16 @@ def build_header(args: argparse.Namespace, layout: Layout, loc: Located,
     # recordings without this flag predate it and carry mid-pass
     # states — fixture runners must re-classify their pairs.
     hdr["capture"]["tear_gate"] = layout.family == "mc1"
+    # When a tick-patched exe is running, snapshots are window-gated (taken
+    # while the stub's in_window flag is raised) — strictly stronger than
+    # the tear gate, and each `t` is the stub's authoritative sub-step
+    # counter rather than a +63-mode estimate.
+    if loc.mailbox_host is not None:
+        hdr["capture"]["window_gated"] = True
+        hdr["capture"]["exe_patch"] = {
+            "mailbox_guest": EXE_MB_BASE,
+            "spin_period_counts": loc.mailbox_period,
+        }
     return hdr
 
 
@@ -1489,6 +1519,160 @@ def pair_clean(prev: bytes, cur: bytes, layout: Layout, dv: int) -> Optional[str
     if r != _u32(cur, layout.rng_off):
         return "rng-parity"
     return None
+
+
+# ---------------------------------------------------------------------------
+# EXE tick-patch mailbox: detection + windowed capture path
+# ---------------------------------------------------------------------------
+def find_mailbox(mem: GuestMem, loc: Located, layout: Layout) -> None:
+    """Detect a *_REC.EXE tick-patch mailbox and pin it onto `loc`.
+
+    Tries the deterministic address first (static_base + EXE_MB_BASE — the
+    stub's mailbox lives at a fixed guest-linear addr and DOS4GW maps the
+    static objects affinely from that base), then falls back to a magic
+    scan. Leaves `loc.mailbox_host` None if no patched exe is running — the
+    recorder then uses the legacy +63 tear-gate path unchanged."""
+    if layout.family != "mc1":  # MC2 is Turn-throttled already; not patched
+        return
+    if loc.static_base is not None:
+        host = loc.static_base + EXE_MB_BASE
+        sig = mem.pread(host, len(EXE_MB_MAGIC))
+        if sig == EXE_MB_MAGIC:
+            loc.mailbox_host = host
+    if loc.mailbox_host is None:  # fallback: scan for the magic
+        for r in rw_regions(mem.pid, 1 << 16):
+            blob = mem.read_region(r)
+            if blob is None:
+                continue
+            i = blob.find(EXE_MB_MAGIC)
+            if i >= 0:
+                loc.mailbox_host = r.lo + i
+                break
+    if loc.mailbox_host is not None:
+        pv = mem.pread(loc.mailbox_host + EXE_MB_PERIOD, 4)
+        if pv is not None:
+            loc.mailbox_period = struct.unpack("<I", pv)[0]
+
+
+def read_mailbox(mem: GuestMem, loc: Located) -> Optional[tuple[int, int]]:
+    """(tick_counter, in_window) from the mailbox, or None on a read fault."""
+    v = mem.pread(loc.mailbox_host + EXE_MB_TICK, 8)  # tick @+8, inwin @+0xC
+    if v is None:
+        return None
+    tick, inwin = struct.unpack("<II", v)
+    return tick, inwin
+
+
+def capture_windowed(
+    mem: GuestMem, loc: Located, layout: Layout, samples: int, retries: int
+) -> Optional[tuple[bytes, int]]:
+    """Capture the struct DURING a quiescent spin, keyed to the mailbox.
+
+    Returns (struct_bytes, tick_counter) once a read lands with in_window==1
+    and stays there — same tick counter, byte-stable struct — across
+    `samples` reads. This is strictly stronger than `capture_clean`: the
+    stub only raises in_window when the previous sub-step has fully settled
+    and the next one's LCG draw has not begun, so the window is provably
+    between-tick (no mid-pass tear possible). None if no window was caught
+    in `retries` attempts (recorder starved, or the game is paused)."""
+    for _ in range(retries):
+        mb = read_mailbox(mem, loc)
+        if mb is None:
+            return None
+        tick, inwin = mb
+        if inwin != 1:
+            continue  # between windows — the ~1 ms compute; try again at once
+        data = mem.pread(loc.struct_host, layout.struct_size)
+        if data is None:
+            return None
+        vfirst = volatile_view(data, layout)
+        stable = True
+        for _ in range(samples - 1):
+            mb2 = read_mailbox(mem, loc)
+            if mb2 is None or mb2 != (tick, 1):
+                stable = False  # window closed / advanced mid-read
+                break
+            nxt = mem.pread(loc.struct_host, layout.struct_size)
+            if nxt is None:
+                return None
+            if volatile_view(nxt, layout) != vfirst:
+                stable = False
+                break
+        if stable:
+            return data, tick
+    return None
+
+
+def poll_loop_windowed(
+    mem: GuestMem,
+    loc: Located,
+    layout: Layout,
+    sink: RecordSink,
+    args: argparse.Namespace,
+    launch_root: int,
+    child: Optional[subprocess.Popen],
+) -> None:
+    """Capture loop for a tick-patched exe. Every snapshot is window-clean
+    by construction and the sub-step counter is authoritative, so this is
+    the +63 tear-gate loop with the guesswork removed: continuity is the
+    counter delta, and there is no first-record deferral (the anchor is
+    already vouched-for)."""
+    period = 1.0 / args.poll_hz if args.poll_hz > 0 else 0.0
+    print(
+        f"polling (windowed / exe-patch mailbox): samples={args.samples} "
+        f"build={loc.build.name if loc.build else '?'} "
+        f"spin-period={loc.mailbox_period} counts",
+        file=sys.stderr,
+    )
+    base: Optional[int] = None  # counter value mapped to t=0
+    prev_ctr: Optional[int] = None
+    emitted = gaps = missed = starved = 0
+    while args.max_ticks == 0 or emitted < args.max_ticks:
+        cap = capture_windowed(mem, loc, layout, args.samples, args.retries)
+        if cap is None:
+            if not ensure_attached(mem, launch_root, child):
+                print("dosbox exited — stopping.", file=sys.stderr)
+                break
+            starved += 1
+            if starved % 50 == 0:
+                print("! no quiescent window caught — game paused, or the "
+                      "recorder is being starved.", file=sys.stderr)
+            time.sleep(period or 0.001)
+            continue
+        starved = 0
+        data, ctr = cap
+        if prev_ctr is None:
+            base, prev_ctr = ctr, ctr
+            sink.write(build_record(0, data, layout, mem, loc, not args.no_state))
+            emitted += 1
+            continue
+        dv = ctr - prev_ctr
+        if dv == 0:
+            time.sleep(period or 0.0005)  # still the same tick's window
+            continue
+        if dv < 0:  # counter reset — a level change moved the world; stop
+            print(f"! sub-step counter went backwards ({prev_ctr}→{ctr}) — a "
+                  f"level change reset the mailbox; stopping.", file=sys.stderr)
+            break
+        if dv > 1:
+            gaps += 1
+            missed += dv - 1
+            print(f"! gap: {dv - 1} sub-step(s) missed before tick "
+                  f"{ctr - base} (window not caught in time — raise --retries "
+                  f"or lower --poll-hz)", file=sys.stderr)
+        sink.write(build_record(ctr - base, data, layout, mem, loc,
+                                not args.no_state))
+        emitted += 1
+        prev_ctr = ctr
+        if emitted % 20 == 0:
+            print(f"  {emitted} snapshots (tick={ctr - base}, missed={missed})",
+                  file=sys.stderr)
+        if period:
+            time.sleep(period)
+    print(f"done: {emitted} snapshots spanning "
+          f"{0 if prev_ctr is None else prev_ctr - base} sub-steps, "
+          f"{gaps} gap(s) / {missed} missed (window-gated, no tears possible).",
+          file=sys.stderr)
 
 
 def poll_loop(
@@ -1823,8 +2007,20 @@ def main() -> None:
     if not args.no_wait_live:
         wait_until_live(mem, loc, layout, args.wait_timeout, launch_root, child)
 
+    # Detect a tick-patched exe (CARPET_REC.EXE / HIDDEN_REC.EXE): its stub
+    # exposes a mailbox once the sim has ticked once, so probe AFTER go-live.
+    find_mailbox(mem, loc, layout)
+    if loc.mailbox_host is not None:
+        print(f"exe tick-patch detected: mailbox @host 0x{loc.mailbox_host:x} "
+              f"(spin-period {loc.mailbox_period} counts) — windowed capture, "
+              f"tear gate not needed.", file=sys.stderr)
+
     if args.once:
-        data = capture_clean(mem, loc, layout, args.samples, args.retries)
+        if loc.mailbox_host is not None:
+            cap = capture_windowed(mem, loc, layout, args.samples, args.retries)
+            data = cap[0] if cap else None
+        else:
+            data = capture_clean(mem, loc, layout, args.samples, args.retries)
         if data is None:
             raise SystemExit("could not get a stable (non-torn) snapshot")
         rec = build_record(0, data, layout, mem, loc, not args.no_state)
@@ -1836,7 +2032,10 @@ def main() -> None:
 
     sink.write(build_header(args, layout, loc, cmd))
     try:
-        poll_loop(mem, loc, layout, sink, args, launch_root, child)
+        if loc.mailbox_host is not None:
+            poll_loop_windowed(mem, loc, layout, sink, args, launch_root, child)
+        else:
+            poll_loop(mem, loc, layout, sink, args, launch_root, child)
     except KeyboardInterrupt:
         print("\ninterrupted.", file=sys.stderr)
     finally:

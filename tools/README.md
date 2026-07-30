@@ -119,7 +119,75 @@ waits for it. Games:
 ```
 
 If capture reports missed-tick gaps, lower DOSBox `cycles` (or raise the
-resolution) so the sim runs slow enough to snapshot every tick.
+resolution) so the sim runs slow enough to snapshot every tick — or,
+better, record against a tick-patched exe (below), which removes gaps by
+construction.
+
+## mc_exe_tickpatch.py
+
+Patches a COPY of `CARPET.EXE` / `HIDDEN.EXE` so the recorder can capture
+every sub-step cleanly, and so the game runs at a steady ~24 fps no
+matter how high DOSBox `cycles` is cranked. It installs a ~183-byte
+wrapper stub around the per-sub-step tick function (remc1
+`sub_41780_41AC0`) by redirecting the tick fn's callers (the 3
+gameSpeed-fanout `call`s — rewriting only their 4-byte rel32) so they
+enter the stub, which paces, then `call`s the original untouched tick fn
+and `ret`s. The function entry is left byte-for-byte intact (a first
+version detoured the entry, which decoded as a wild `add eax,[eax]` under
+the dynamic recompiler's misaligned decode). The stub
+(1) spins on the game's own PIT counter (~480 Hz, measured live) until one
+period elapses — pacing every sub-step, so at the 4×/frame default speed
+`fps = 480/(4·period)` ≈ 24 fps at the default period 5, and the *spare*
+cycles become a wide quiescent window — and
+(2) keeps a mailbox (magic + monotonic sub-step counter + `in_window`
+flag) in obj3's committed tail, addressed via a runtime-derived obj3 base
+(read from the game's own relocated struct pointer, since DOS/4GW loads
+each object at an independent base — assuming a uniform delta made the
+stub write into game memory and crash). **Both obj1 (code cave) and obj3
+(mailbox) have their `vsize` page-aligned so those tails are inside the
+segment limit — else the cave won't execute and the mailbox writes won't
+persist (the pacing deadline resets every call).** The recorder auto-detects the mailbox and
+switches to windowed capture (`docs/RECORDING.md` → "Tick-patched
+capture"): no tear gate, no `+63` guessing, gap-free by construction.
+The sim is unaffected — MC1's lockstep multiplayer proves per-tick logic
+is wall-clock independent, so pacing changes only *when* ticks run.
+
+**gamedata/ stays pristine GOG** — the tool writes a `*_REC.EXE`
+alongside the input and never touches the original. The stub lives in
+obj1's zero code cave; the mailbox in obj3's zero BSS tail; nothing else
+in the binary changes (verified by byte-diff: only the two `vsize` fields
+(obj1 + obj3, page-aligned), the three call-site rel32s, and the cave —
+the tick fn entry stays byte-identical). Diagnostics: `--inert` writes the
+stub but wires no call site (proved the cave is safe); `--passthrough`
+wires a bare `call tickfn;ret` (proved execution was the issue);
+`--no-extend` skips the `vsize` page-align (reproduces the crash).
+
+```sh
+# produce the patched copies (~24 fps, the authentic rate)
+python3 tools/mc_exe_tickpatch.py CARPET.EXE          # -> CARPET_REC.EXE
+python3 tools/mc_exe_tickpatch.py HIDDEN.EXE          # -> HIDDEN_REC.EXE
+#   --period 4     ~30 fps ;  --period 6  ~20 fps  (fps = 480/(4·period))
+#   --verify-only PATCHED.EXE   re-disassemble the hook + stub and check
+
+# record against the patched exe — recorder detects the mailbox itself
+./tools/mc_dosbox_recorder.py --game mc1 --level 3 --out run.mgcr \
+    --max-ticks 0 -- dosbox -conf … CARPET_REC.EXE
+# the header then stamps capture.window_gated + capture.exe_patch
+```
+
+Live-run checklist (what a real recording session should confirm):
+
+1. `mgcarpet.json` / DOSBox mount points at the patched `*_REC.EXE`.
+2. On go-live the recorder prints `exe tick-patch detected: mailbox …` —
+   if not, the stub never ran (still in a menu) or the magic scan failed.
+3. In-game feel is a steady ~24 fps even with `cycles=max` (period 5);
+   raising cycles widens the window (longer spin), never speeds the game.
+4. `done: … window-gated, no tears possible` with 0 gaps across a full
+   playthrough, including level-start fades and big explosions (the
+   structural gaps the tear-gate recorder could not close).
+5. Sim parity: a windowed recording of a fixed level should decode the
+   same tick sequence as the tear-gated recorder for the ticks both
+   captured (pacing must not perturb sim state).
 
 ## MC1 oracle (planned)
 

@@ -7,16 +7,23 @@ several may resolve into capture caveats or DEVIATIONS.md entries.
 Add new findings here as runs are triaged; move resolved ones to a
 `RESOLVED` section with the outcome.
 
-Baseline corpus: tear-gated recordings — **0 torn snapshots**. mc1l0
-takes: 627 pairs / **73 conforming**, then 417 pairs / 32 conforming
-(34 after the 2026-07-29 HW fixes; half cycles; both at
-`--input-delay 2`). mc1hwl0 (churn-refined gate): **192/192 pairs
-fixture-grade**, 1 gap (a saturation streak — see RECORDING.md
-"Gaps"), 0 conforming. **mc1hwl0-test** (pinned cycles, saturation-
-aware recorder): 290 ticks, **0 gaps, 289/289 fixture-grade** — the
-certification-grade HW take; still 0 conforming pending the
-remaining entries below (the walker x/y/z drift of entry 7 touches
-nearly every pair). (History: the
+Baseline corpus (2026-07-29 late, recorded at fixed 150k cycles +
+in-game SVGA + sound off — the certified recipe): **0 torn
+snapshots anywhere, all pairs at `--input-delay 2`.**
+- **mc1l0**: a FULL end-to-end level-0 playthrough, 6903 records
+  t=0..6904, two single-tick gaps (catch-up bursts at t≈6520/6533 —
+  ticks with zero or all-mid-loop parks; only the emulator tick
+  hook can capture those). check-decode 6903/6903 exact;
+  **6900/6900 pairs fixture-grade, 117 conforming**.
+- **mc1hwl0-test**: 290 ticks, 0 gaps, 289/289 fixture-grade, 0
+  conforming — blocked by the open entries below (entry 7's walker
+  x/y/z drift touches nearly every pair). mc1hwl0 (192 pairs, one
+  9-tick flash-window gap) kept as the earlier take.
+- **mc2l0**: 3641 ticks, 0 gaps — complete, awaiting the MC2
+  importer.
+(History: the first takes ran 627 pairs / 73 conforming and 417 /
+32; the fix rounds moved the like-for-like take to 34, and the full
+recipe + fixes reached 117.) (History: the
 first flat-tolerance gate starved HW — ambient spawn churn rewrites
 +63 with spawn ordinals every tick and was read as tearing, 85-tick
 rejection streaks; the gate now counts only `dv±1` steps as tear
