@@ -506,13 +506,18 @@ fn mc2_slice_behaviors_and_goldens() {
     // joining the shared Gen hash: MC2 never flags a rival wanted, so the
     // delta at every checkpoint is the new all-zero field; OBSERVABLE
     // holds below.
+    // Re-pinned (A-E; post-init holds) for the held goat's idle BLEAT
+    // draw (`AddGoat05_01_1F5B0` :11452): the phase-7 wrapper rolls the
+    // per-entity u16 stream once EVERY held tick — the mc2l0 retail
+    // corpus measured the missing draw as 95% of all per-entity rand
+    // divergence. Behavior change toward retail by design.
     const GOLDEN: [u64; 6] = [
         0x056322f66a56b6d9, // post-init (GenerateEvents + dis 0)
-        0x75ce4c4016131752, // A: 64 idle ticks afield
-        0x280ef6b0adea40af, // B: the type-5 fly-to latched
-        0xa7770838d8a47f0d, // C: goat awake/flee window
-        0x2b67c7f311a5a0ef, // D: fireball combat over the goat
-        0x7f8a81efb5bbd5b7, // E: census + villager/archer provocation
+        0xd1829705cadb4577, // A: 64 idle ticks afield
+        0xf93d68ca7f771c0d, // B: the type-5 fly-to latched
+        0xb4c3eadfc5d393a1, // C: goat awake/flee window
+        0xe4774fb00597a41c, // D: fireball combat over the goat
+        0x24da1a489a823255, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -524,13 +529,17 @@ fn mc2_slice_behaviors_and_goldens() {
     // survives hashed-layout re-pins; moves ONLY with real behavior.
     // The ApplyEvents load settle moves all six — REAL behavior by
     // design (pre-dug craters, shifted load RNG phase).
+    // Re-pinned (A-E) with the held goat's idle BLEAT draw — a REAL
+    // behavior change toward retail (the per-entity stream feeds
+    // every later flee/combat roll), certified by the mc2l0 retail
+    // corpus (rand family 86947 → 7522 hits, first conforming pairs).
     const OBSERVABLE: [u64; 6] = [
         0x5951c95adf7436f9,
-        0xe88b1fcbe36c032a,
-        0x9cc70e1767ea069b,
-        0xa82971be678ddf25,
-        0x1d73602e3d7898ec,
-        0x836c6bfc1f4094c7,
+        0x2124a10a9bacce39,
+        0x756d1d917904a64b,
+        0xe4320d63211b640a,
+        0x2f46b6a4f09c1fe2,
+        0xfdaf76fbc6350fb1,
     ];
     assert_eq!(
         obs, OBSERVABLE,

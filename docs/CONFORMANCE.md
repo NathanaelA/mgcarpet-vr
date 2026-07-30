@@ -121,6 +121,7 @@ take:
 | manifest | take | fixtures | statuses at last commit |
 |---|---|---|---|
 | `conformance/mc1l0.json` | recordings/mc1l0.mgcr (2026-07-30, gapless 5329 pairs) | 47 | 35 conforming / 8 open / 4 capture |
+| `conformance/mc2l0.json` | recordings/mc2l0.mgcr (2026-07-30 take-2: 11,524 ticks gapless, input `raw`, spell upgrades + level completion; 7,762 fixture-grade of 11,523) | 24 | 0 conforming / 23 open / 1 capture — BANKED untriaged (fix-first: the class-15 aliasing, ledger §class15) |
 
 Runtime: ~8 s per suite (only selected pairs execute; the stream
 decode dominates). The cargo hook is

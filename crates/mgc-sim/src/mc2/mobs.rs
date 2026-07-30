@@ -1145,7 +1145,7 @@ impl Gen {
     }
 
     /// The screech roll: one LCG, sound 46 on `% modulus == 0`.
-    fn goat_snd(&mut self, i: usize, modulus: u32) {
+    pub(crate) fn goat_snd(&mut self, i: usize, modulus: u32) {
         if self.mc2_rand(i) % modulus == 0 {
             self.snd(46, i);
         }

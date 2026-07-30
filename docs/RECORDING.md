@@ -102,13 +102,24 @@ checks against record N+1.
   Recording both encodings keeps the stream *mechanically* feedable to
   either thrust model (see Cross-model replay below).
 - Retail (`channels.input:"raw"`): the persistent externals sampled at
-  the tick boundary — held scancodes, mouse cursor, held buttons
-  (MC1/HW), or the persistent steering state (MC2, which exposes no
-  raw input registers). This is an **approximation**: the in-struct
-  10-byte control command is consumed and zeroed mid-tick, so a click
-  shorter than one tick can be missed or land ±1 tick. Raw input is
-  advisory; retail recordings are validated by state, never by
-  replaying input.
+  the tick boundary — held scancodes, mouse cursor and held buttons.
+  On MC1/HW they live in the separate static frame; on MC2 they are
+  the `ReadGameUserInputs` register block in the struct's own data
+  image (held state = the "2" registers @0x18074C/0x18074A, press
+  LATCHES @0x180746/0x180744, live cursor @0xE3760, the game's own
+  cursor-at-press snapshot @0xE375C, `pressedKeys` ×128 — remc2 named
+  VAs; the runtime frame sits at −0xB0E98 from them, anchored on the
+  located struct and validated by the control-mode word + keybind
+  table; see the recorder's `MC2_BUILDS`). MC2's `ext` adds
+  `latch_b64` and `press_b64` to the four standard register blobs.
+  This is an **approximation**: the in-struct 10-byte control command
+  is consumed and zeroed mid-tick, so a click shorter than one tick
+  can be missed or land ±1 tick — MC2's press latch narrows this (it
+  is set at the press edge and survives to the release), and the
+  press-position pair records the aim the cast actually used. Raw
+  input is advisory; retail recordings are validated by state, never
+  by replaying input. (MC2 takes recorded before 2026-07-30 predate
+  the MC2 register map and carry `input:"none"`.)
 
 Retail's own multiplayer lockstep puts exactly the per-tick 10-byte
 control commands on the wire — the "consumed command per player per
@@ -210,8 +221,25 @@ deviant cap starves the recorder there). Headers stamp
 `capture.tear_gate: true`; recordings
 without the stamp carry torn states, and fixture runners MUST
 re-classify their pairs with the same test and exclude torn ones from
-conformance verdicts. MC2 has no per-entity clock; its equivalent
-gate is open work (Turn + LCG-step parity at minimum).
+conformance verdicts.
+
+The MC2 law (measured on the mc2l0 corpus, 2026-07-30) is different:
+neither Turn continuity nor LCG-step parity discriminates. Retail's
+frame order is `PlayerEvents` (Turn++) → `UpdateEntities` (one
+unconditional LCG top-draw, then the slot-order dispatch), so a
+DOSBox park between the two yields a snapshot whose Turn has advanced
+but whose entities have not — Turn delta is +1 on EVERY adjacent
+pair, torn or not, and the draw count per tick is activity-dependent
+(0..16+, mode 1) with most frozen pairs still showing one draw. The
+working discriminator is the per-entity phase byte `byte_0x3E_62`
+(incremented once per handler run, per entity, per pass): a true
+inter-tick pair is **step-1 dominant** over the entities live at both
+ends (`d1 ≥ max(d0, d2)`, deltas taken mod 256 with values outside
+{0,1,2} ignored as animation wraps). A Turn-side park produces an
+all-0 pair (positions frozen; measured moved-fraction 0.04) followed
+by an all-2 pair — ~30% of mc2l0's pairs. The runner applies this
+gate from the raw states (`mgc-conform`'s `capture_clean_mc2`);
+recorder-side emit gating for MC2 is still open work.
 
 The FIRST record has no pair to gate it, so recorders MUST NOT write
 it unvetted (a mid-tick anchor rejects every later pair against it and
@@ -272,7 +300,9 @@ estimate. Such recordings stamp `capture.window_gated: true` and
 `capture.exe_patch: {mailbox_guest, spin_period_counts}`; consumers may
 treat window-gated snapshots as tear-free without re-running
 `pair_clean`. The tear gate remains the path for unpatched exes and for
-MC2 (which is already `Turn`-throttled and gap-free).
+MC2 (gap-free thanks to its own throttle, but ~30% of pairs park
+between Turn++ and the entity pass — the phase-byte law above; an MC2
+tick-patch would close that the same way).
 
 ## Consumers
 
@@ -293,15 +323,18 @@ MC2 (which is already `Turn`-throttled and gap-free).
     `state` through the Rust decoders (`mgc_formats::mgcr`) and
     demand value equality with the stored `obs` channel — pins the
     Rust decode against the recorder's.
-  - `verify-deltas` (retail; MC1/HW wired, MC2 open): for each
+  - `verify-deltas` (retail; MC1/HW and MC2 wired): for each
     adjacent tear-gate-clean pair, import the raw `state` at N onto a
-    pristine-built world (`World::retail_import_mc1` — pool
-    slot-for-slot incl. hidden state, the LIVE free-stack order,
-    globals, the human column routed outside the pool), tick once
-    with **pin-the-human** (the recorded carpet pose drives
-    `World::tick`, so world fidelity verifies with zero dependence on
-    input reconstruction), and diff the port's obs projection
-    (`World::obs_project_mc1`) against the recorded `obs` at N+1.
+    pristine-built world (`World::retail_import_mc1` /
+    `World::retail_import_mc2` — pool slot-for-slot incl. hidden
+    state, the LIVE free-stack order, globals, the human column
+    routed outside the pool), tick once with **pin-the-human** (the
+    recorded carpet pose drives `World::tick`, so world fidelity
+    verifies with zero dependence on input reconstruction), and diff
+    the port's obs projection (`World::obs_project_mc1` /
+    `obs_project_mc2`) against the recorded `obs` at N+1. The MC2
+    arm additionally excludes per-entity-torn slots (phase-byte
+    delta ≠ 1 inside an accepted pair) from field comparison.
     Reports: fixture-grade vs torn pair counts, per-tick LCG
     draw-count histogram, the +63 phase-clock table, entity-set
     events by (class, model), and per-field mismatch counters with

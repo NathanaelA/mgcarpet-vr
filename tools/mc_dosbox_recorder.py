@@ -193,6 +193,14 @@ class BuildVariant:
     mouse_cursor_guest: int  # mouse_9AD90 {i16 x, i16 y}: absolute aim source
     mouse_lbtn_guest: int  # mouseLeftButton2 (held) — fire-left
     mouse_rbtn_guest: int  # mouseRightButton2 (held) — fire-right
+    # Optional extras (0 = absent; MC2 has them, MC1 does not):
+    # the press LATCHES (set on the press edge, cleared when the held
+    # state drops — catches clicks shorter than one poll) and the
+    # cursor position SNAPSHOT taken by the game at the press (the aim
+    # the cast actually used, free of poll-timing skew).
+    mouse_latchl_guest: int = 0
+    mouse_latchr_guest: int = 0
+    press_pos_guest: int = 0
 
 
 @dataclass(frozen=True)
@@ -291,6 +299,50 @@ MC1_BUILDS = (
 # for it and dereferencing the struct pointer reaches the REAL struct.
 MC1_STATIC_NEEDLE = bytes((0xB7, 0x71, 0x7D, 0x7A, 0x9D, 0x9A, 0x07, 0x5A,
                            0x1D, 0x1B, 0xDD, 0xDA, 0x3C, 0x39, 0x10, 0x0E))
+
+# --- MC2 external input frame ----------------------------------------------
+# MC2's raw input globals (what ReadGameUserInputs_89D10 reads) live in
+# the SAME contiguous data image as D41A0_0, at a constant offset from
+# it — but remc2's NAMED VAs are the decompiler's segment mapping, which
+# is shifted −0xB0E98 against the D41A0-anchored runtime frame. The
+# delta was measured by scanning two independent live dumps for the
+# CONFIG.DAT keybind bytes (x_BYTE_EB39E_keys landed at frame VA 0x3A506
+# in BOTH runs) and semantically confirmed: the cursor pair read
+# (320,197) = dead-center 640x400 in the resting dump and (314,203)
+# mid-steer, and the control-mode word read a stable 7.
+#
+# So every address below = remc2 named VA − 0xB0E98, and the frame base
+# = struct_host − 0xD41A0 (the struct is itself a static at VA 0xD41A0,
+# so no pointer chase and no separate needle — see pin_externals).
+#
+# Registers (EventsFunctions.cpp:51460-51500 = the driver intake):
+# held state = the "2" registers @0x18074C/0x18074A (set while pressed,
+# cleared on the release event); @0x180746/0x180744 are press LATCHES
+# (set once at the press edge); @0xE375C/E = the cursor AT the press
+# (the aim snapshot); @0xE3760 = the live cursor; pressedKeys_180664 =
+# the 128-cell scancode array (same shape as MC1's).
+MC2_DATA_DELTA = -0xB0E98
+MC2_BUILDS = (
+    BuildVariant("gog",
+                 struct_ptr_guest=0,  # struct is static — no pointer chase
+                 wallclock_guest=0,  # not mapped (unused off-MC1)
+                 pressed_keys_guest=0x180664 + MC2_DATA_DELTA,
+                 static_needle_guest=0,  # frame anchors on the struct
+                 mouse_cursor_guest=0xE3760 + MC2_DATA_DELTA,
+                 mouse_lbtn_guest=0x18074C + MC2_DATA_DELTA,  # held left
+                 mouse_rbtn_guest=0x18074A + MC2_DATA_DELTA,  # held right
+                 mouse_latchl_guest=0x180746 + MC2_DATA_DELTA,
+                 mouse_latchr_guest=0x180744 + MC2_DATA_DELTA,
+                 press_pos_guest=0xE375C + MC2_DATA_DELTA),
+)
+# Frame validation anchors (pin_externals): the control-mode word
+# x_WORD_1805C2_joystick (a small nonzero constant; 7 on the GOG
+# install) and the keybind table x_BYTE_EB39E_keys (CONFIG.DAT
+# scancodes — arrows 0x48/0x50/0x4B/0x4D on a stock config; we require
+# plausibility, not exact values, so remapped keys still validate).
+MC2_CTRLMODE_GUEST = 0x1805C2 + MC2_DATA_DELTA
+MC2_KEYBIND_GUEST = 0xEB39E + MC2_DATA_DELTA
+MC2_STRUCT_VA = 0xD41A0
 
 # --- EXE tick-patch mailbox (tools/mc_exe_tickpatch.py) ---------------------
 # When a *_REC.EXE (a tick-patched copy) is running, its stub keeps a mailbox
@@ -407,8 +459,8 @@ LAYOUT_MC2 = Layout(
     wiz_type160_off=0,  # MC1-only; MC2 uses the pp_* offsets below
     t160_hand_left_off=0,
     t160_hand_right_off=0,
-    build_variants=(),  # MC2 keeps its externals in-struct — no static frame
-    pressed_keys_len=0,
+    build_variants=MC2_BUILDS,  # struct-anchored input frame (see above)
+    pressed_keys_len=128,
     # Compare everything up to (not including) the in-struct mouse: that
     # covers all decoded sim state (header, per-player blocks, control
     # array, entity pool, level record, StageVars) while leaving out the
@@ -1339,6 +1391,8 @@ def read_wallclock(mem: GuestMem, loc: Located, layout: Layout) -> Optional[int]
     as a liveness / ordering signal. Lives in the static frame."""
     if loc.static_base is None or loc.build is None:
         return None
+    if loc.build.wallclock_guest == 0:  # not mapped (MC2)
+        return None
     v = mem.pread(loc.static_base + loc.build.wallclock_guest, 4)
     return None if v is None else struct.unpack("<I", v)[0]
 
@@ -1384,6 +1438,23 @@ def read_externals(
         }
         raw["lbtn_b64"] = _b64(lb)
         raw["rbtn_b64"] = _b64(rb)
+    # MC2 extras: the press LATCHES (edge-set, catch sub-poll clicks)
+    # and the game's own cursor-at-press snapshot (the cast's aim).
+    if b.mouse_latchl_guest and b.mouse_latchr_guest:
+        ll = mem.pread(sb + b.mouse_latchl_guest, 2)
+        lr = mem.pread(sb + b.mouse_latchr_guest, 2)
+        if ll is not None and lr is not None:
+            ext["mouse_clicks"] = {
+                "left": struct.unpack("<h", ll)[0] != 0,
+                "right": struct.unpack("<h", lr)[0] != 0,
+            }
+            raw["latch_b64"] = _b64(ll + lr)
+    if b.press_pos_guest:
+        pp = mem.pread(sb + b.press_pos_guest, 4)
+        if pp is not None:
+            x, y = struct.unpack("<hh", pp)
+            ext["mouse_press_pos"] = {"x": x, "y": y}
+            raw["press_b64"] = _b64(pp)
     return ext or None, raw or None
 
 
@@ -1992,8 +2063,10 @@ def main() -> None:
     # Attach the separate STATIC-globals frame (wall clock + raw input).
     pin_externals(mem, loc, layout)
     if loc.static_base is not None:
-        print(f"externals: build {loc.build.name}, struct guest 0x"
-              f"{loc.struct_guest:x}, static base host 0x{loc.static_base:x}",
+        sg = (f"struct guest 0x{loc.struct_guest:x}, "
+              if loc.struct_guest is not None else "")
+        print(f"externals: build {loc.build.name}, {sg}"
+              f"static base host 0x{loc.static_base:x}",
               file=sys.stderr)
     else:
         print("externals (wall clock / raw input) unavailable — the "
@@ -2051,7 +2124,23 @@ def pin_externals(mem: GuestMem, loc: Located, layout: Layout) -> None:
     non-affinely), so it is found by its own landmark; see
     :func:`find_static_base`. Leaves externals unavailable if not found —
     the core recorder (struct + pool + in-struct control slot) is
-    unaffected."""
+    unaffected.
+
+    MC2: `D41A0_0` is itself a static at VA 0xD41A0, so the input frame
+    is the struct's own frame — base = struct_host − 0xD41A0, validated
+    by the control-mode word + keybind-table plausibility (the anchors
+    documented at MC2_BUILDS). No needle scan, no pointer chase."""
+    if layout.family == "mc2":
+        if not layout.build_variants:
+            return
+        base = loc.struct_host - MC2_STRUCT_VA
+        if base < 0 or not _mc2_input_frame_ok(mem, base):
+            print("mc2 input frame did not validate — recording without "
+                  "the input channel", file=sys.stderr)
+            return
+        loc.static_base = base
+        loc.build = layout.build_variants[0]
+        return
     if not (layout.static_needle and layout.build_variants):
         return
     data = mem.pread(loc.struct_host, layout.struct_size)
@@ -2060,6 +2149,25 @@ def pin_externals(mem: GuestMem, loc: Located, layout: Layout) -> None:
     found = find_static_base(mem, layout, data)
     if found is not None:
         loc.static_base, loc.build, loc.struct_guest = found
+
+
+def _mc2_input_frame_ok(mem: GuestMem, base: int) -> bool:
+    """Sanity-gate the MC2 input frame before trusting it: the control
+    mode is a small nonzero constant and the keybind table holds
+    plausible scancodes (< 0x80, first four nonzero — the UP/DOWN/LEFT/
+    RIGHT bindings; a remapped config still passes)."""
+    mode = mem.pread(base + MC2_CTRLMODE_GUEST, 2)
+    kb = mem.pread(base + MC2_KEYBIND_GUEST, 10)
+    if mode is None or kb is None:
+        return False
+    m = struct.unpack("<h", mode)[0]
+    if not 1 <= m <= 15:
+        return False
+    if any(b == 0 or b >= 0x80 for b in kb[:4]):
+        return False
+    print(f"mc2 input frame validated (mode {m}, "
+          f"keybinds {list(kb[:4])})", file=sys.stderr)
+    return True
 
 
 def print_sanity(rec: dict) -> None:

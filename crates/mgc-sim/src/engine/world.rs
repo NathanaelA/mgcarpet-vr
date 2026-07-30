@@ -1843,8 +1843,47 @@ impl World {
             }
         }
 
+        // Retail's MC2 sweep never runs a NEWBORN: the phase byte
+        // @0x3E is stamped at spawn to the current sweep, so an
+        // entity created mid-pass first acts on the NEXT tick (the
+        // tear law's step-1 clock; measured — a fresh emitter smoke
+        // particle surfaces at t+1 with life 32 and its spawn z/speed
+        // untouched). The port pops free slots that can sit AHEAD of
+        // the dispatch cursor, so gate on the live set at pass start.
+        // Conformance-scoped for now (strict_retail): the NATIVE MC2
+        // dome/eruption chain relies on the same-pass tick (the
+        // (10,19) summit column dies unspawned without it — its
+        // finalize timing was compressed against the old sweep), so
+        // porting the law to native play is owed together with that
+        // timing fix. MC1 shows the same spawn-edge signature (the
+        // 12-stray-tick family).
+        let newborn_gate = self.strict_retail && matches!(self.game, GameId::Mc2);
+        let live_at_start: Vec<bool> = if newborn_gate {
+            self.g.ent.iter().map(|e| e.class64 != 0).collect()
+        } else {
+            Vec::new()
+        };
         for i in 1..self.g.ent.len() {
             if self.g.ent[i].class64 == 0 {
+                continue;
+            }
+            if newborn_gate && !live_at_start[i] {
+                continue;
+            }
+            // Retail's MC2 disable (byte[1] |= 4) unlinks the entity
+            // from the live chain at once — a record disabled in an
+            // earlier frame (or by another handler this pass) never
+            // runs again, though its pool bytes persist until slot
+            // reuse (measured: the (10,1) death record sits one frame
+            // with life −2 and the disable bit before its slot is
+            // reallocated). Conformance-scoped with the newborn gate
+            // (native keeps the old run-then-free sweep untouched);
+            // the ghost record survives for the projection and the
+            // next import rebuilds the pool.
+            if self.strict_retail
+                && matches!(self.game, GameId::Mc2)
+                && self.g.ent[i].flags & 0x400 != 0
+            {
                 continue;
             }
             match self.g.ent[i].class64 {
@@ -2234,7 +2273,17 @@ impl World {
             {
                 self.g.ent[i].f63 = self.g.ent[i].f63.wrapping_add(1);
             }
-            if self.g.ent[i].flags & 0x400 != 0 {
+            // An entity disabled during ITS OWN dispatch keeps its
+            // record through the frame under strict-retail — retail's
+            // pool bytes persist past the disable (the free stack
+            // gets the slot at once, but nothing zeroes the record),
+            // so the recorded obs carries the death record for one
+            // more tick and the projection must too. Native play
+            // keeps the immediate free (slot-reuse timing is not
+            // hash-observable; ghost records would be).
+            if self.g.ent[i].flags & 0x400 != 0
+                && !(self.strict_retail && matches!(self.game, GameId::Mc2))
+            {
                 self.free_slot(i);
             }
         }

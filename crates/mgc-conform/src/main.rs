@@ -15,6 +15,7 @@
 mod fixtures;
 mod jsondiff;
 mod verify;
+mod verify_mc2;
 
 use mgc_formats::mgcr::{Obs, Recording};
 use std::path::PathBuf;
@@ -76,6 +77,10 @@ pub struct Args {
     /// consume pipeline shows ~2-3 ticks of latency vs the sampled
     /// externals).
     pub input_delay: u64,
+    /// verify-deltas: skip pairs before this tick (windowed triage;
+    /// executed pairs are announced on stderr so an aborting pair
+    /// self-incriminates).
+    pub start: Option<u64>,
 }
 
 fn parse_args() -> Args {
@@ -95,6 +100,7 @@ fn parse_args() -> Args {
         max_open: 24,
         promote: false,
         input_delay: 0,
+        start: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -130,6 +136,13 @@ fn parse_args() -> Args {
                     .next()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| usage())
+            }
+            "--start" => {
+                a.start = Some(
+                    it.next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| usage()),
+                )
             }
             "--input-delay" => {
                 a.input_delay = it
@@ -206,6 +219,7 @@ fn dump_state(args: &Args) -> i32 {
             return 2;
         }
     };
+    let mc2 = rec.header.family() == Ok(mgc_formats::mgcr::Family::Mc2);
     while let Some(r) = rec.next_tick() {
         let tick = match r {
             Ok(t) => t,
@@ -221,6 +235,65 @@ fn dump_state(args: &Args) -> i32 {
             eprintln!("t={t}: no state channel");
             return 2;
         };
+        if mc2 {
+            let st = match mgc_formats::mgcr::decode_retail_mc2(state) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("t={t}: {e}");
+                    return 2;
+                }
+            };
+            if all {
+                if let Some(p) = st.players.get(st.local_player as usize) {
+                    for s in 0..26 {
+                        if p.spell_ent[s] == 0 && p.xp_vol[s] == 0 && p.xp_bank[s] == 0 {
+                            continue;
+                        }
+                        println!(
+                            "t={t} book spell {s}: ent={} lvl={} sel={} ring={} \
+                             xp={}+{}",
+                            p.spell_ent[s],
+                            p.levels[s],
+                            p.sel[s],
+                            p.ring[s],
+                            p.xp_vol[s],
+                            p.xp_bank[s]
+                        );
+                    }
+                }
+                for (s, e) in st.ents.iter().enumerate() {
+                    if e.class3f == 0 {
+                        continue;
+                    }
+                    println!(
+                        "t={t} slot {s}: cm=({},{}) act={} flags={:#x} life={}/{} \
+                         pos=({:.2},{:.2},{}) mana={}/{} own={} id={} pe={} \
+                         sv=({},{}) tgt={}",
+                        e.class3f,
+                        e.model40,
+                        e.action45,
+                        e.flags,
+                        e.life,
+                        e.max_life,
+                        e.x as f64 / 256.0,
+                        e.y as f64 / 256.0,
+                        e.z,
+                        e.mana,
+                        e.mana_max,
+                        e.owner28,
+                        e.f1a,
+                        e.player_ent,
+                        e.sv1,
+                        e.sv2,
+                        e.target96
+                    );
+                }
+            }
+            for s in &slots {
+                println!("t={t} slot {s}: {:#?}", st.ents[*s as usize]);
+            }
+            return 0;
+        }
         let st = match mgc_formats::mgcr::decode_retail_mc1(state) {
             Ok(s) => s,
             Err(e) => {
@@ -282,6 +355,7 @@ fn trace(args: &Args) -> i32 {
             return 2;
         }
     };
+    let mc2 = rec.header.family() == Ok(mgc_formats::mgcr::Family::Mc2);
     let mut prev_mana: Option<i32> = None;
     while let Some(r) = rec.next_tick() {
         let Ok(tick) = r else { return 2 };
@@ -292,6 +366,43 @@ fn trace(args: &Args) -> i32 {
             break;
         }
         let Some(state) = &tick.state else { continue };
+        if mc2 {
+            let Ok(st) = mgc_formats::mgcr::decode_retail_mc2(state) else {
+                return 2;
+            };
+            let e = &st.ents[slot as usize];
+            println!(
+                "t={} cm=({},{}) act={} b46={} life={}/{} z={} yaw={} \
+                 a=({},{}) spd={} f2a={} f2c={} f2e={} f30={} f36={} \
+                 b3b={} d88={} mmax={} mana={} rand={:#06x} ph={} \
+                 flags={:#x}",
+                tick.t,
+                e.class3f,
+                e.model40,
+                e.action45,
+                e.b46,
+                e.life,
+                e.max_life,
+                e.z,
+                e.yaw,
+                e.ayaw,
+                e.apitch,
+                e.speed,
+                e.f2a,
+                e.f2c,
+                e.f2e,
+                e.f30,
+                e.f36,
+                e.b3b,
+                e.d88,
+                e.mana_max,
+                e.mana,
+                e.rand,
+                e.phase3e,
+                e.flags
+            );
+            continue;
+        }
         let Ok(st) = mgc_formats::mgcr::decode_retail_mc1(state) else {
             return 2;
         };

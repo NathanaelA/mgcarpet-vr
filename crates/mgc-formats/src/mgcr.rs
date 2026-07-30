@@ -1075,6 +1075,335 @@ impl RetailMc1 {
     }
 }
 
+// --------------------------------------- full retail closure, MC2 (import)
+
+/// One fully-decoded MC2 pool entity (`type_shadow_str_0x6E8E`, 168 B,
+/// remc2 LevelStructs.h) — every field, by retail offset. Field names
+/// here are RETAIL-offset flavored (hex offsets); the conformance
+/// importer translates them onto the port's [`Ent`] via the SEMANTIC
+/// alias table (mc2/mobs.rs) — MC2 offsets do NOT line up with the
+/// port's MC1-numbered fields.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RetailEntMc2 {
+    pub next0: u32,     // +0x00 (list link)
+    pub max_life: i32,  // +0x04 (header comment says LIVE; live-dump verified MAX)
+    pub life: i32,      // +0x08
+    pub flags: u32,     // +0x0C (dw_w_b flag dword)
+    pub scratch10: i32, // +0x10 (dword_0x10_16 — scratch/invis)
+    pub rand: u16,      // +0x14 (u16 LCG stream)
+    pub f16: u16,       // +0x16
+    pub next18: u16,    // +0x18 (tile-chain next entity)
+    pub f1a: u16,       // +0x1A
+    pub yaw: i16,       // +0x1C (world yaw — the live facing)
+    pub pitch: i16,     // +0x1E
+    pub roll: i16,      // +0x20 (target-yaw channel)
+    pub f22: i16,       // +0x22
+    pub f24: i16,       // +0x24 (killer)
+    pub f26: i16,       // +0x26 (hit source)
+    pub owner28: u16,   // +0x28 (parentId — WHO OWNS ME)
+    pub f2a: u16,       // +0x2A (subSpellIndex)
+    pub f2c: i16,       // +0x2C
+    pub f2e: i16,       // +0x2E
+    pub f30: u16,       // +0x30
+    pub f32: u16,       // +0x32 (pack leader)
+    pub f34: u16,       // +0x34 (subentity chain)
+    pub f36: u16,       // +0x36
+    pub b38: i8,        // +0x38
+    pub b39: i8,        // +0x39 (awake; 0xFA dead sentinel)
+    pub b3a: i8,        // +0x3A (wake delay)
+    pub b3b: i8,        // +0x3B
+    pub b3c: i8,        // +0x3C
+    pub b3d: i8,        // +0x3D
+    pub phase3e: u8,    // +0x3E (per-handler-run phase byte)
+    pub class3f: u8,    // +0x3F (0 = free slot)
+    pub model40: u8,    // +0x40
+    pub b41: i8,        // +0x41 (xtype)
+    pub b42: i8,        // +0x42 (xsubtype)
+    pub b43: i8,        // +0x43
+    pub b44: i8,        // +0x44
+    pub action45: u8,   // +0x45 (state/actionIndex)
+    pub b46: i8,        // +0x46
+    pub b47: i8,        // +0x47
+    pub sv1: i8,        // +0x48 (StageVar1)
+    pub sv2: i8,        // +0x49 (StageVar2)
+    pub sv_timer: i16,  // +0x4A
+    pub x: u16,         // +0x4C (8.8)
+    pub y: u16,         // +0x4E
+    pub z: i16,         // +0x50
+    pub ayaw: i16,      // +0x52 (applied yaw)
+    pub apitch: i16,    // +0x54
+    pub aroll: i16,     // +0x56
+    pub afov: i16,      // +0x58
+    pub f5a: i16,       // +0x5A (sprite-param index)
+    pub b5c: i8,        // +0x5C (anim frame)
+    pub b5d: i8,        // +0x5D
+    /// Damage mailboxes +0x5E..0x82: six {i32 amount, u16 source}
+    /// (type_str_0x5E_94 — same 36-byte 6-channel shape as MC1's).
+    pub mail: [(i32, u16); 6],
+    pub speed: i16,      // +0x82
+    pub min_speed: i16,  // +0x84
+    pub max_speed: i16,  // +0x86
+    pub d88: i32,        // +0x88 (mana regen)
+    pub mana_max: i32,   // +0x8C
+    pub mana: i32,       // +0x90
+    pub player_ent: u16, // +0x94
+    pub target96: u16,   // +0x96
+    pub f98: u16,        // +0x98
+    pub dest_x: u16,     // +0x9A (axis_0x9A_154x)
+    pub dest_y: u16,     // +0x9C
+    pub dest_z: i16,     // +0x9E
+    /// Guest pointer `dword_0xA0_160x` (special settings / str_160).
+    pub ptr_a0: u32,
+    /// Guest pointer `dword_0xA4_164x` (str_164).
+    pub ptr_a4: u32,
+}
+
+/// One decoded MC2 per-player block (`type_str_0x2BDE`, 2124 B) — the
+/// slice the conformance importer consumes.
+#[derive(Debug, Clone, Copy)]
+pub struct RetailPlayerMc2 {
+    pub flags: u32,      // +0x00
+    pub is_ai: bool,     // +0x09
+    pub play_index: u16, // +0x0A (carpet entity slot)
+    pub turn: i32,       // +0x12 (per-frame counter; local player only)
+    pub castle: i16,     // +1080 (CastleEntityIndex, block-relative)
+    pub cmd_speed: i16,  // type_str_164 (+998) +12
+    pub strafe: i16,     // +998 +16
+    /// Invulnerability-reset countdown (`word_0x159_345`, +998+345).
+    pub invuln: i16,
+    /// The WANTED timer (`word_0x248_584`, +998+584) — village aggro.
+    pub wanted: i16,
+    pub hand_left: i16,  // +2103 (SpellIndexLeft; -1 = empty)
+    pub hand_right: i16, // +2105
+    /// The str_611 spellbook block (block-relative offsets from the
+    /// remc2 `_2BDE` comments): banked XP `SpellExperience_0x263`
+    /// @+0x649, volatile XP `spellsExperience_0x2CB` @+0x6B1,
+    /// manifestation pool slots `SpellsEnabled_0x333` @+0x719 (u16,
+    /// 0 = not learned), cycle rings `array_0x3B5` @+0x79B, levels
+    /// `SpellLevels_0x41D` @+0x803, selected tiers `array_0x437`
+    /// @+0x81D. All keyed by spell index 0..25.
+    pub xp_bank: [i32; 26],
+    pub xp_vol: [i32; 26],
+    pub spell_ent: [u16; 26],
+    pub ring: [u8; 26],
+    pub levels: [u8; 26],
+    pub sel: [u8; 26],
+}
+
+/// The typed MC2 retail closure the conformance importer consumes.
+#[derive(Debug, Clone)]
+pub struct RetailMc2 {
+    pub rand: u32,
+    pub local_player: u16,
+    pub player_count: u16,
+    /// Per-model spawn ordinals (`array_0x10`, struct +0x10..0x2D) —
+    /// the phase stagger MC2 class-5 ctors store into `byte_0x3E_62`.
+    pub spawn_ord: [u8; 29],
+    pub players: Vec<RetailPlayerMc2>,
+    /// All 1000 pool records, indexed by slot (slot 0 included).
+    pub ents: Vec<RetailEntMc2>,
+    /// The LIVE free-slot stack: top index `dword_0x35` (−1 = empty;
+    /// NOT the dead `dword_0x242`), pointer cells @+0x246. Retail pops
+    /// `cells[top--]` (`NewEvent_4A050`, Events.cpp:561) and the load
+    /// rebuild pushes by DESCENDING slot scan 999→1 (`sub_49F90`), so
+    /// the top is the lowest-numbered free slot. Bottom-up here; the
+    /// LAST element is the next allocation.
+    pub free_stack: Vec<u16>,
+    /// The recycle-victim stack (live but sacrificable entities,
+    /// `flags byte[2] & 2`): top `dword_0x11E6`, cells @+0x11EA.
+    /// Popped only when the free stack is EXHAUSTED (free-first —
+    /// the opposite of MC1's recycle-first order).
+    pub recycle_stack: Vec<u16>,
+    /// Level id from the embedded level record (+0x2FED0).
+    pub level: u16,
+    /// The saved `type_str_160* dword_0x36DF6` — points at the
+    /// behavior table's default row `&str_D7BD6[59]` at save time, so
+    /// an entity's absolute behavior row is
+    /// `(ptr_a0 − base160)/34 + 59` (retail's own load fixup,
+    /// Level.cpp:1255-57).
+    pub base160: u32,
+}
+
+pub fn decode_retail_ent_mc2(d: &[u8], slot: u16) -> RetailEntMc2 {
+    let o = m2::POOL + slot as usize * m2::ENT_STRIDE;
+    let mut mail = [(0i32, 0u16); 6];
+    for (ch, m) in mail.iter_mut().enumerate() {
+        *m = (i32_(d, o + 0x5E + ch * 6), u16_(d, o + 0x62 + ch * 6));
+    }
+    RetailEntMc2 {
+        next0: u32_(d, o),
+        max_life: i32_(d, o + 0x04),
+        life: i32_(d, o + 0x08),
+        flags: u32_(d, o + 0x0C),
+        scratch10: i32_(d, o + 0x10),
+        rand: u16_(d, o + 0x14),
+        f16: u16_(d, o + 0x16),
+        next18: u16_(d, o + 0x18),
+        f1a: u16_(d, o + 0x1A),
+        yaw: i16_(d, o + 0x1C),
+        pitch: i16_(d, o + 0x1E),
+        roll: i16_(d, o + 0x20),
+        f22: i16_(d, o + 0x22),
+        f24: i16_(d, o + 0x24),
+        f26: i16_(d, o + 0x26),
+        owner28: u16_(d, o + 0x28),
+        f2a: u16_(d, o + 0x2A),
+        f2c: i16_(d, o + 0x2C),
+        f2e: i16_(d, o + 0x2E),
+        f30: u16_(d, o + 0x30),
+        f32: u16_(d, o + 0x32),
+        f34: u16_(d, o + 0x34),
+        f36: u16_(d, o + 0x36),
+        b38: i8_(d, o + 0x38),
+        b39: i8_(d, o + 0x39),
+        b3a: i8_(d, o + 0x3A),
+        b3b: i8_(d, o + 0x3B),
+        b3c: i8_(d, o + 0x3C),
+        b3d: i8_(d, o + 0x3D),
+        phase3e: u8_(d, o + 0x3E),
+        class3f: u8_(d, o + 0x3F),
+        model40: u8_(d, o + 0x40),
+        b41: i8_(d, o + 0x41),
+        b42: i8_(d, o + 0x42),
+        b43: i8_(d, o + 0x43),
+        b44: i8_(d, o + 0x44),
+        action45: u8_(d, o + 0x45),
+        b46: i8_(d, o + 0x46),
+        b47: i8_(d, o + 0x47),
+        sv1: i8_(d, o + 0x48),
+        sv2: i8_(d, o + 0x49),
+        sv_timer: i16_(d, o + 0x4A),
+        x: u16_(d, o + 0x4C),
+        y: u16_(d, o + 0x4E),
+        z: i16_(d, o + 0x50),
+        ayaw: i16_(d, o + 0x52),
+        apitch: i16_(d, o + 0x54),
+        aroll: i16_(d, o + 0x56),
+        afov: i16_(d, o + 0x58),
+        f5a: i16_(d, o + 0x5A),
+        b5c: i8_(d, o + 0x5C),
+        b5d: i8_(d, o + 0x5D),
+        mail,
+        speed: i16_(d, o + 0x82),
+        min_speed: i16_(d, o + 0x84),
+        max_speed: i16_(d, o + 0x86),
+        d88: i32_(d, o + 0x88),
+        mana_max: i32_(d, o + 0x8C),
+        mana: i32_(d, o + 0x90),
+        player_ent: u16_(d, o + 0x94),
+        target96: u16_(d, o + 0x96),
+        f98: u16_(d, o + 0x98),
+        dest_x: u16_(d, o + 0x9A),
+        dest_y: u16_(d, o + 0x9C),
+        dest_z: i16_(d, o + 0x9E),
+        ptr_a0: u32_(d, o + 0xA0),
+        ptr_a4: u32_(d, o + 0xA4),
+    }
+}
+
+fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
+    let b = m2::PLAYERS + i as usize * m2::PLAYER_STRIDE;
+    let t = b + m2::PP_FLIGHT;
+    let mut xp_bank = [0i32; 26];
+    let mut xp_vol = [0i32; 26];
+    let mut spell_ent = [0u16; 26];
+    let mut ring = [0u8; 26];
+    let mut levels = [0u8; 26];
+    let mut sel = [0u8; 26];
+    for s in 0..26 {
+        xp_bank[s] = i32_(d, b + 0x649 + s * 4);
+        xp_vol[s] = i32_(d, b + 0x6B1 + s * 4);
+        spell_ent[s] = u16_(d, b + 0x719 + s * 2);
+        ring[s] = u8_(d, b + 0x79B + s);
+        levels[s] = u8_(d, b + 0x803 + s);
+        sel[s] = u8_(d, b + 0x81D + s);
+    }
+    RetailPlayerMc2 {
+        flags: u32_(d, b),
+        is_ai: u8_(d, b + m2::PP_ISAI) != 0,
+        play_index: u16_(d, b + m2::PP_PLAYINDEX),
+        turn: i32_(d, b + m2::PP_TURN),
+        castle: i16_(d, b + m2::PP_CASTLE),
+        cmd_speed: i16_(d, t + 12),
+        strafe: i16_(d, t + 16),
+        invuln: i16_(d, t + 345),
+        wanted: i16_(d, t + 584),
+        hand_left: i16_(d, b + m2::PP_HAND_L),
+        hand_right: i16_(d, b + m2::PP_HAND_R),
+        xp_bank,
+        xp_vol,
+        spell_ent,
+        ring,
+        levels,
+        sel,
+    }
+}
+
+/// Decode the full MC2 retail closure from a raw struct image.
+pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
+    if d.len() != MC2_STRUCT_SIZE {
+        return Err(format!(
+            "MC2 struct image is {} bytes, want {MC2_STRUCT_SIZE}",
+            d.len()
+        ));
+    }
+    // Entity stacks: pointer cells → slots. D41A0_0 is a static
+    // global, so the guest base is recovered from any live cell's
+    // pool-stride residue rather than hardcoded per build.
+    let pcount = u16_(d, m2::LOCAL_PLAYER + 2);
+    let mut spawn_ord = [0u8; 29];
+    spawn_ord.copy_from_slice(&d[0x10..0x10 + 29]);
+    Ok(RetailMc2 {
+        rand: u32_(d, m2::RNG),
+        local_player: u16_(d, m2::LOCAL_PLAYER),
+        player_count: pcount,
+        spawn_ord,
+        players: (0..pcount.min(8))
+            .map(|i| decode_retail_player_mc2(d, i))
+            .collect(),
+        ents: (0..m2::ENT_COUNT as u16)
+            .map(|s| decode_retail_ent_mc2(d, s))
+            .collect(),
+        free_stack: mc2_stack(d, 0x35, 0x246),
+        recycle_stack: mc2_stack(d, 0x11E6, 0x11EA),
+        level: u16_(d, m2::POOL + m2::ENT_COUNT * m2::ENT_STRIDE + 2),
+        base160: u32_(d, 0x36DF6),
+    })
+}
+
+/// Decode an MC2 entity stack (top dword + guest-pointer cells into
+/// the pool). `D41A0_0` is a static global, but DOS/4GW's load delta
+/// makes the guest base run-specific — recover it from the cells:
+/// the pool base is `cells[0] − s·168` for the (unique) `s` under
+/// which EVERY cell lands on a stride boundary inside the pool.
+/// Validated against mc2l0: top@0x35 == free-census − 1 and the
+/// decoded set is exactly the class-0 slots. Returns slots bottom-up
+/// (last = next allocation).
+fn mc2_stack(d: &[u8], top_off: usize, cells_off: usize) -> Vec<u16> {
+    let top = i32_(d, top_off) as i64;
+    if !(0..1000).contains(&top) {
+        return Vec::new();
+    }
+    let stride = m2::ENT_STRIDE as u32;
+    let cells: Vec<u32> = (0..=top as usize)
+        .map(|i| u32_(d, cells_off + i * 4))
+        .collect();
+    let base = (0..1000u32)
+        .rev()
+        .map(|s| cells[0].wrapping_sub(s * stride))
+        .find(|&cand| {
+            cells.iter().all(|&p| {
+                let rel = p.wrapping_sub(cand);
+                rel % stride == 0 && (rel / stride) < 1000
+            })
+        });
+    let Some(base) = base else { return Vec::new() };
+    cells
+        .iter()
+        .map(|&p| (p.wrapping_sub(base) / stride) as u16)
+        .collect()
+}
+
 /// Decode the full MC1 retail closure from a raw struct image.
 pub fn decode_retail_mc1(d: &[u8]) -> Result<RetailMc1, String> {
     if d.len() != MC1_STRUCT_SIZE {

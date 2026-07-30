@@ -1193,6 +1193,14 @@ impl Gen {
             return None;
         };
         let idx = idx as usize;
+        // A reallocated slot must leave any tile chain BEFORE its
+        // record resets — a stale linked record (an imported ghost,
+        // or any future free path that forgets) would otherwise leave
+        // a dangling chain pointer, and the chain walk cycles once
+        // the slot relinks on the same tile (unbounded victim lists).
+        if self.ent[idx].flags & 4 != 0 {
+            self.unlink(idx);
+        }
         // New occupant → new presentation generation (hash-silent).
         self.slot_gen.0[idx] = self.slot_gen.0[idx].wrapping_add(1);
         // The aura claim lives ON the entity in retail — slot reuse

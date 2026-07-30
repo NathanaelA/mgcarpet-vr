@@ -56,8 +56,9 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     };
     let mut rec = Recording::open(path)?;
     let game = rec.header.game.clone();
-    if rec.header.family()? != mgc_formats::mgcr::Family::Mc1 {
-        return Err("verify-deltas: only mc1/mc1hw wired so far".into());
+    if rec.header.family()? == mgc_formats::mgcr::Family::Mc2 {
+        drop(rec);
+        return crate::verify_mc2::run(path, args);
     }
     let level = rec.header.level.ok_or("recording has no level number")?;
     println!(
@@ -611,19 +612,19 @@ pub(crate) fn compare(retail: &ObsMc1, port: &ObsMc1, human_slot: u16) -> PairDi
 // ------------------------------------------------------------ aggregation
 
 #[derive(Default)]
-struct FieldStat {
+pub(crate) struct FieldStat {
     count: u64,
     pairs: u64,
     example: Option<(u64, Option<u16>, String, String)>,
 }
 
 #[derive(Default)]
-struct Stats {
-    pairs: u64,
-    gaps: u64,
+pub(crate) struct Stats {
+    pub(crate) pairs: u64,
+    pub(crate) gaps: u64,
     /// Pairs rejected by the capture-tear gate (mid-pass snapshots).
-    torn: u64,
-    clean_pairs: u64,
+    pub(crate) torn: u64,
+    pub(crate) clean_pairs: u64,
     rng_only_pairs: u64,
     rng_mismatch: u64,
     missing: u64,
@@ -632,7 +633,7 @@ struct Stats {
     /// with a first-seen example tick+slot.
     set_rows: BTreeMap<(u8, u8), (u64, u64, u64, u16)>,
     fields: BTreeMap<&'static str, FieldStat>,
-    first_diff: Option<u64>,
+    pub(crate) first_diff: Option<u64>,
     first_render: String,
     /// Global-LCG draws per tick: (retail steps, port steps) → pairs.
     /// Steps are recovered by walking `9377x+9439` from rand@N to
@@ -658,7 +659,7 @@ fn lcg_steps(from: u32, to: u32) -> u8 {
 }
 
 impl Stats {
-    fn absorb_rng(&mut self, prev: u32, retail: u32, port: u32) {
+    pub(crate) fn absorb_rng(&mut self, prev: u32, retail: u32, port: u32) {
         let kr = lcg_steps(prev, retail);
         let kp = lcg_steps(prev, port);
         *self.rng_hist.entry((kr, kp)).or_default() += 1;
@@ -694,7 +695,7 @@ impl Stats {
         }
     }
 
-    fn absorb(&mut self, t: u64, pd: PairDiff, args: &Args) {
+    pub(crate) fn absorb(&mut self, t: u64, pd: PairDiff, args: &Args) {
         if pd.clean() {
             self.clean_pairs += 1;
             return;
@@ -733,7 +734,7 @@ impl Stats {
         }
     }
 
-    fn render(&self, args: &Args) -> String {
+    pub(crate) fn render(&self, args: &Args) -> String {
         let mut s = String::new();
         let fixture = self.pairs - self.torn;
         let _ = writeln!(

@@ -696,6 +696,18 @@ impl World {
         // keep their spawn speed while held (APPROX — their tails
         // differ per model and stay skipped with the sound rolls,
         // module doc).
+        //
+        // The goat's tail also rolls the idle BLEAT on EVERY wrapper
+        // run (`AddGoat05_01_1F5B0` :11452: one unconditional
+        // per-entity draw before the speed refresh, sound 46 on
+        // `% 0x4D`). The draw is SIM state — the u16 stream feeds
+        // combat rolls after release — and the mc2l0 corpus measures
+        // it: 95% of all per-entity rand divergence was held goats
+        // missing this draw. Other models' sound rolls stay skipped
+        // (their wrappers differ per model; APPROX, module doc).
+        if self.g.ent[i].model65 == 1 {
+            self.g.goat_snd(i, 0x4D);
+        }
         if BEHAVIOR[self.g.ent[i].row156 as usize].flags & Mc2BehaviorRow::FLEE != 0 {
             let e = &mut self.g.ent[i];
             if e.tick70 == base.wrapping_add(6) {

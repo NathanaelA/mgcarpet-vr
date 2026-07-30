@@ -16,7 +16,7 @@
 
 use crate::Args;
 use crate::verify::{self, PairDiff};
-use mgc_formats::mgcr::{EntObsMc1, ObsMc1, Recording, RetailMc1, decode_retail_mc1};
+use mgc_formats::mgcr::{ObsMc1, Recording, RetailMc1, decode_retail_mc1};
 use mgc_sim::engine::world::PlayerCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -65,9 +65,9 @@ pub struct Manifest {
 /// `field:c,m:name` (entity fields, class/model from the retail obs)
 /// and `field:name` (wizard/player scalars). Stable across runs and
 /// across small positional drifts; changes when the STORY of the
-/// failure changes.
-pub(crate) fn signature(pd: &PairDiff, retail: &ObsMc1) -> Vec<String> {
-    let rmap: BTreeMap<u16, &EntObsMc1> = retail.entities.iter().map(|e| (e.slot, e)).collect();
+/// failure changes. `classes` = the retail obs slot → (class, model)
+/// map (family-neutral).
+pub(crate) fn signature(pd: &PairDiff, classes: &BTreeMap<u16, (u8, u8)>) -> Vec<String> {
     let mut atoms: Vec<String> = Vec::new();
     if pd.rng_want != pd.rng_got {
         atoms.push("rng".into());
@@ -79,14 +79,24 @@ pub(crate) fn signature(pd: &PairDiff, retail: &ObsMc1) -> Vec<String> {
         atoms.push(format!("extra:{c},{m}"));
     }
     for f in &pd.fields {
-        match f.slot.and_then(|s| rmap.get(&s)) {
-            Some(e) => atoms.push(format!("field:{},{}:{}", e.class, e.model, f.field)),
+        match f.slot.and_then(|s| classes.get(&s)) {
+            Some((c, m)) => atoms.push(format!("field:{c},{m}:{}", f.field)),
             None => atoms.push(format!("field:{}", f.field)),
         }
     }
     atoms.sort();
     atoms.dedup();
     atoms
+}
+
+/// Slot → (class, model) from an MC1 obs (the MC2 twin lives in
+/// `verify_mc2::class_map_mc2`).
+fn class_map_mc1(retail: &ObsMc1) -> BTreeMap<u16, (u8, u8)> {
+    retail
+        .entities
+        .iter()
+        .map(|e| (e.slot, (e.class, e.model)))
+        .collect()
 }
 
 pub(crate) fn sig_hash(atoms: &[String]) -> String {
@@ -103,21 +113,23 @@ pub(crate) fn sig_hash(atoms: &[String]) -> String {
 }
 
 /// Stream `path`, hand every fixture-grade pair to `f` as
-/// `(t, pair-diff, retail obs@N+1)`. `select` limits execution to the
-/// listed pair ticks (the input ring is fed on every tick regardless,
-/// so a sparse selection still sees the right delayed commands).
+/// `(t, pair-diff, retail slot → (class, model))`. `select` limits
+/// execution to the listed pair ticks (the input ring is fed on every
+/// tick regardless, so a sparse selection still sees the right
+/// delayed commands).
 fn for_each_pair(
     path: &Path,
     baked: &Path,
     input_delay: u64,
     pin_n1: bool,
     select: Option<&std::collections::BTreeSet<u64>>,
-    mut f: impl FnMut(u64, PairDiff, &ObsMc1) -> Result<(), String>,
+    mut f: impl FnMut(u64, PairDiff, &BTreeMap<u16, (u8, u8)>) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut rec = Recording::open(path)?;
     let game = rec.header.game.clone();
-    if rec.header.family()? != mgc_formats::mgcr::Family::Mc1 {
-        return Err("fixtures: only mc1/mc1hw wired so far".into());
+    if rec.header.family()? == mgc_formats::mgcr::Family::Mc2 {
+        drop(rec);
+        return for_each_pair_mc2(path, baked, input_delay, pin_n1, select, f);
     }
     let level = rec.header.level.ok_or("recording has no level number")?;
     let (mut world, pristine) = verify::build_world(baked, &game, level)?;
@@ -159,8 +171,62 @@ fn for_each_pair(
                         &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
-                    f(pt, pd, &obs)?;
+                    f(pt, pd, &class_map_mc1(&obs))?;
                 }
+            }
+        }
+        if let Some((_, _, c)) = &prev {
+            prev_cmd = *c;
+        }
+        prev = Some((tick.t, st, cmd));
+    }
+    Ok(())
+}
+
+/// The MC2 twin of [`for_each_pair`]: phase-byte tear gate from the
+/// RAW states; casts from the MC2 raw externals when the take carries
+/// them (held ∥ latch through the same delay ring), default commands
+/// otherwise.
+fn for_each_pair_mc2(
+    path: &Path,
+    baked: &Path,
+    input_delay: u64,
+    pin_n1: bool,
+    select: Option<&std::collections::BTreeSet<u64>>,
+    mut f: impl FnMut(u64, PairDiff, &BTreeMap<u16, (u8, u8)>) -> Result<(), String>,
+) -> Result<(), String> {
+    use mgc_formats::mgcr::{ObsMc2, RetailMc2, decode_retail_mc2};
+    let mut rec = Recording::open(path)?;
+    let level = rec.header.level.ok_or("recording has no level number")?;
+    let (mut world, pristine) = crate::verify_mc2::build_world_mc2(baked, level)?;
+
+    let mut prev: Option<(u64, RetailMc2, PlayerCommand)> = None;
+    let mut prev_cmd = PlayerCommand::default();
+    let mut cmd_ring: std::collections::VecDeque<PlayerCommand> =
+        std::iter::repeat_n(PlayerCommand::default(), input_delay as usize + 1).collect();
+    while let Some(r) = rec.next_tick() {
+        let tick = r?;
+        let Some(state) = &tick.state else {
+            prev = None;
+            continue;
+        };
+        let st = decode_retail_mc2(state)?;
+        cmd_ring.push_back(crate::verify_mc2::sample_cmd_mc2(tick.input.as_ref()));
+        let cmd = cmd_ring.pop_front().unwrap_or_default();
+        if let Some((pt, pst, pcmd)) = prev.take() {
+            let wanted = select.is_none_or(|s| s.contains(&pt));
+            if tick.t == pt + 1 && wanted && crate::verify_mc2::capture_clean_mc2(&pst, &st) {
+                let obs: ObsMc2 = match &tick.obs {
+                    Some(v) => {
+                        serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?
+                    }
+                    None => return Err(format!("t={}: no obs channel", tick.t)),
+                };
+                let (pd, _, _) = crate::verify_mc2::exec_pair_mc2(
+                    &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
+                )
+                .map_err(|e| format!("t={pt}: {e}"))?;
+                f(pt, pd, &crate::verify_mc2::class_map_mc2(&obs))?;
             }
         }
         if let Some((_, _, c)) = &prev {
@@ -204,14 +270,14 @@ fn extract_inner(path: &Path, args: &Args, out: &Path) -> Result<(), String> {
         args.input_delay,
         args.pin_pose == "n1",
         None,
-        |t, pd, obs| {
+        |t, pd, classes| {
             pairs += 1;
             if pd.clean() {
                 conforming.push(t);
                 return Ok(());
             }
             failing += 1;
-            let atoms = signature(&pd, obs);
+            let atoms = signature(&pd, classes);
             let sig = sig_hash(&atoms);
             let n = atoms.len();
             let e = best.entry(sig).or_insert((usize::MAX, 0, Vec::new()));
@@ -365,11 +431,11 @@ pub fn run_one(manifest_path: &Path, args: &Args) -> Result<SuiteReport, String>
         manifest.input_delay,
         manifest.pin_pose == "n1",
         Some(&select),
-        |t, pd, obs| {
+        |t, pd, classes| {
             let atoms = if pd.clean() {
                 Vec::new()
             } else {
-                signature(&pd, obs)
+                signature(&pd, classes)
             };
             results.insert(t, atoms);
             Ok(())
