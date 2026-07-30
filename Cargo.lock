@@ -1116,6 +1116,7 @@ version = "0.1.0"
 dependencies = [
  "mgc-formats",
  "mgc-sim",
+ "serde",
  "serde_json",
 ]
 

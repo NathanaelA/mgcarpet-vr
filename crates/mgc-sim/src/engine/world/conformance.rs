@@ -236,6 +236,13 @@ impl World {
         self.player = Player {
             mana: carpet.f140.max(0) as u32,
             mana_max: carpet.f136.max(0) as u32,
+            // The pending regen amount (+132, applied-then-recomputed
+            // by the wizard tick :55390/:55415-21 — the port keeps the
+            // same one-tick pipeline). Left unseeded, every imported
+            // pair ticked with delta 0 and missed retail's +100 floor
+            // (or the +1000 castle-boost arm) — the two biggest
+            // player.mana families in the corpus.
+            mana_delta: carpet.f132 as i32,
             life: carpet.act_life,
             state: match carpet.f66 {
                 2 => LifeState::Falling,
@@ -462,6 +469,29 @@ fn zero_control(player: u16) -> ControlMc1 {
 /// (flags & 4) is cleared — the caller relinks through `Gen::link` so
 /// the tile lists stay consistent.
 fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
+    // The castle (3,2) keeps its macro-state in retail's JOB byte +70
+    // (4 = settled, 5 = transforming, 6 = full build — sub_46DB0
+    // :55978 / sub_46F10 :56043) with the transform sub-state in +48;
+    // the port's `castle_tick` fuses both into f59 (0 = level-up
+    // commit, 1/6 = painter/leveler waits, 2/3/5 = finish/repaint/
+    // handoff, 4 = settled). Retail's +59 byte is dead for castles —
+    // importing it verbatim parked every settled castle in f59 = 0 and
+    // re-upgraded it one level per tick (the phantom-upgrade family,
+    // docs/CONFORMANCE-FINDINGS.md entry 3). Retail's pure-wait +48
+    // values 1 and 4 both land on the port's painter-wait state 1.
+    let f59 = if r.class64 == 3 && r.model65 == 2 {
+        match r.f70 {
+            4 => 4,
+            5 => match r.f48 {
+                1 | 4 => 1,
+                s => (s as u8).min(6),
+            },
+            6 => 0,
+            _ => 4,
+        }
+    } else {
+        r.f59
+    };
     Ent {
         rand: r.rand,
         max_life: r.max_life,
@@ -491,7 +521,7 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         f54: tr(r.f54),
         f56: r.f56,
         f58: r.f58 as i16,
-        f59: r.f59,
+        f59,
         f63: r.f63,
         class64: r.class64,
         model65: r.model65,

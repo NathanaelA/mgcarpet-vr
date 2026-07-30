@@ -12,6 +12,7 @@
 //!   once, diff the port's obs projection against the recorded obs at
 //!   N+1 (adjacent pairs only; gaps break pairing, never the run).
 
+mod fixtures;
 mod jsondiff;
 mod verify;
 
@@ -25,16 +26,33 @@ fn usage() -> ! {
          modes:\n\
            check-decode <file.mgcr>…      re-decode state, compare vs stored obs\n\
            verify-deltas <file.mgcr>      import state@N, tick, diff obs@N+1\n\
+           dump-state <file.mgcr> <t> <slot>…   print raw retail fields of\n\
+                                          the given slots at tick t\n\
+           extract <file.mgcr> --out <manifest.json>   lift a fixture-suite\n\
+                                          manifest (docs/CONFORMANCE.md)\n\
+           fixtures <manifest.json>…      run a fixture suite, enforcing\n\
+                                          expected statuses\n\
          \n\
          common flags:\n\
            --max-diffs <n>   mismatch paths printed per tick (default 8)\n\
            --limit <n>       stop after n tick records / pairs (default: all)\n\
+         extract flags:\n\
+           --out <path>          manifest destination (required)\n\
+           --sample-every <n>    conforming-pair sampling stride (default 10)\n\
+           --max-open <n>        open-exemplar cap (default 24; the suite\n\
+                                 doctrine curates further — CONFORMANCE.md)\n\
+         fixtures flags:\n\
+           --promote         accept fixed fixtures (status → conforming) and\n\
+                             refresh drifted signatures, rewriting the manifest\n\
          verify-deltas flags:\n\
            --baked <dir>     baked tree root (default: baked)\n\
            --pin-pose n|n1   drive the human with the pre- or post-tick\n\
                              recorded pose (default n1, the app's phase)\n\
            --dump <t>        print the full diff of pair t→t+1\n\
-           --dump-first      print the first divergent pair in full"
+           --dump-first      print the first divergent pair in full\n\
+           --csv <path>      write every per-pair diff as a TSV row\n\
+                             (t, kind, slot, class, model, field, want,\n\
+                             got, x, y, z — for offline triage)"
     );
     std::process::exit(2);
 }
@@ -48,6 +66,12 @@ pub struct Args {
     pub pin_pose: String,
     pub dump: Option<u64>,
     pub dump_first: bool,
+    pub dump_port: bool,
+    pub csv: Option<PathBuf>,
+    pub out: Option<PathBuf>,
+    pub sample_every: u64,
+    pub max_open: usize,
+    pub promote: bool,
     /// Feed the input channel k ticks late (retail's mouse→control→
     /// consume pipeline shows ~2-3 ticks of latency vs the sampled
     /// externals).
@@ -64,6 +88,12 @@ fn parse_args() -> Args {
         pin_pose: "n1".into(),
         dump: None,
         dump_first: false,
+        dump_port: false,
+        csv: None,
+        out: None,
+        sample_every: 10,
+        max_open: 24,
+        promote: false,
         input_delay: 0,
     };
     let mut it = std::env::args().skip(1);
@@ -83,8 +113,24 @@ fn parse_args() -> Args {
                 )
             }
             "--baked" => a.baked = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
+            "--csv" => a.csv = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--pin-pose" => a.pin_pose = it.next().unwrap_or_else(|| usage()),
             "--dump-first" => a.dump_first = true,
+            "--dump-port" => a.dump_port = true,
+            "--promote" => a.promote = true,
+            "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
+            "--sample-every" => {
+                a.sample_every = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| usage())
+            }
+            "--max-open" => {
+                a.max_open = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| usage())
+            }
             "--input-delay" => {
                 a.input_delay = it
                     .next()
@@ -124,9 +170,147 @@ fn main() {
             .map(|f| verify::verify_deltas(f, &args))
             .max()
             .unwrap_or(0),
+        "dump-state" => dump_state(&args),
+        "trace" => trace(&args),
+        "extract" => args
+            .files
+            .iter()
+            .map(|f| fixtures::extract(f, &args))
+            .max()
+            .unwrap_or(0),
+        "fixtures" => fixtures::run(&args.files, &args),
         _ => usage(),
     };
     std::process::exit(code);
+}
+
+/// Print the raw retail pool fields of the requested slots at one
+/// tick — the triage microscope for divergent pairs (`dump-state
+/// <file> <t> <slot>…`).
+fn dump_state(args: &Args) -> i32 {
+    let (path, rest) = match args.files.split_first() {
+        Some(p) => p,
+        None => usage(),
+    };
+    let all = rest.iter().any(|p| p.to_str() == Some("all"));
+    let mut it = rest.iter().filter_map(|p| p.to_str()?.parse::<u64>().ok());
+    let Some(t) = it.next() else { usage() };
+    let slots: Vec<u64> = it.collect();
+    if slots.is_empty() && !all {
+        usage();
+    }
+    let mut rec = match Recording::open(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}: {e}", path.display());
+            return 2;
+        }
+    };
+    while let Some(r) = rec.next_tick() {
+        let tick = match r {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("record error: {e}");
+                return 2;
+            }
+        };
+        if tick.t != t {
+            continue;
+        }
+        let Some(state) = &tick.state else {
+            eprintln!("t={t}: no state channel");
+            return 2;
+        };
+        let st = match mgc_formats::mgcr::decode_retail_mc1(state) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("t={t}: {e}");
+                return 2;
+            }
+        };
+        if all {
+            for (s, e) in st.ents.iter().enumerate() {
+                if e.class64 == 0 {
+                    continue;
+                }
+                println!(
+                    "t={t} slot {s}: cm=({},{}) st={} flags={:#x} life={}/{} \
+                     pos=({:.2},{:.2},{}) mana={}/{} own={} id={} chase={}",
+                    e.class64,
+                    e.model65,
+                    e.f70,
+                    e.flags,
+                    e.act_life,
+                    e.max_life,
+                    e.x as f64 / 256.0,
+                    e.y as f64 / 256.0,
+                    e.z,
+                    e.f140,
+                    e.f136,
+                    e.f144,
+                    e.id24,
+                    e.f146
+                );
+            }
+        }
+        for s in &slots {
+            println!("t={t} slot {s}: {:#?}", st.ents[*s as usize]);
+        }
+        return 0;
+    }
+    eprintln!("t={t}: not in recording");
+    2
+}
+
+/// Trace one slot's economy fields across a tick range in a single
+/// pass (`trace <file> <slot> <t0> <t1>`): per tick — mana(+140),
+/// regen(+132), life(+12), f63, flags. Divergence-cadence microscope.
+fn trace(args: &Args) -> i32 {
+    let (path, rest) = match args.files.split_first() {
+        Some(p) => p,
+        None => usage(),
+    };
+    let nums: Vec<u64> = rest
+        .iter()
+        .filter_map(|p| p.to_str()?.parse::<u64>().ok())
+        .collect();
+    let [slot, t0, t1] = nums[..] else { usage() };
+    let mut rec = match Recording::open(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}: {e}", path.display());
+            return 2;
+        }
+    };
+    let mut prev_mana: Option<i32> = None;
+    while let Some(r) = rec.next_tick() {
+        let Ok(tick) = r else { return 2 };
+        if tick.t < t0 {
+            continue;
+        }
+        if tick.t > t1 {
+            break;
+        }
+        let Some(state) = &tick.state else { continue };
+        let Ok(st) = mgc_formats::mgcr::decode_retail_mc1(state) else {
+            return 2;
+        };
+        let e = &st.ents[slot as usize];
+        let d = prev_mana.map(|p| e.f140 - p).unwrap_or(0);
+        prev_mana = Some(e.f140);
+        println!(
+            "t={} mana={} d={:+} f132={} life={} f63={} f63%4={} flags={:#x}",
+            tick.t,
+            e.f140,
+            d,
+            e.f132,
+            e.act_life,
+            e.f63,
+            e.f63 % 4,
+            e.flags
+        );
+    }
+    0
 }
 
 /// Re-decode every tick's raw struct image and compare against the

@@ -1,0 +1,271 @@
+{
+  "recording": "../recordings/mc1l0.mgcr",
+  "input_delay": 2,
+  "pin_pose": "n1",
+  "fixtures": [
+    {
+      "t": 0,
+      "status": "conforming"
+    },
+    {
+      "t": 10,
+      "status": "conforming"
+    },
+    {
+      "t": 20,
+      "status": "conforming"
+    },
+    {
+      "t": 30,
+      "status": "conforming"
+    },
+    {
+      "t": 40,
+      "status": "conforming"
+    },
+    {
+      "t": 50,
+      "status": "conforming"
+    },
+    {
+      "t": 59,
+      "status": "open",
+      "sig": "ecf104049ed8ab17",
+      "atoms": [
+        "field:3,0:mana",
+        "field:player.mana"
+      ],
+      "note": "human regen cadence (ledger entry 5)"
+    },
+    {
+      "t": 61,
+      "status": "capture",
+      "sig": "97af2825376ed0d9",
+      "atoms": [
+        "extra:9,1"
+      ],
+      "note": "cast/impact input latency (ledger entry 4)"
+    },
+    {
+      "t": 89,
+      "status": "open",
+      "sig": "f01bfe901db2a98d",
+      "atoms": [
+        "field:3,0:mana",
+        "field:9,1:flags",
+        "field:9,1:life",
+        "field:9,1:x",
+        "field:9,1:y",
+        "field:9,1:z",
+        "field:player.mana",
+        "missing:10,12"
+      ],
+      "note": "projectile flags bit13 (ledger entry 9)"
+    },
+    {
+      "t": 136,
+      "status": "capture",
+      "sig": "abe1340dbb9ef369",
+      "atoms": [
+        "extra:10,12"
+      ],
+      "note": "cast/impact input latency (ledger entry 4)"
+    },
+    {
+      "t": 147,
+      "status": "conforming"
+    },
+    {
+      "t": 255,
+      "status": "conforming"
+    },
+    {
+      "t": 271,
+      "status": "conforming"
+    },
+    {
+      "t": 281,
+      "status": "conforming"
+    },
+    {
+      "t": 291,
+      "status": "conforming"
+    },
+    {
+      "t": 301,
+      "status": "conforming"
+    },
+    {
+      "t": 312,
+      "status": "conforming"
+    },
+    {
+      "t": 322,
+      "status": "conforming"
+    },
+    {
+      "t": 332,
+      "status": "conforming"
+    },
+    {
+      "t": 342,
+      "status": "conforming"
+    },
+    {
+      "t": 352,
+      "status": "conforming"
+    },
+    {
+      "t": 362,
+      "status": "conforming"
+    },
+    {
+      "t": 372,
+      "status": "conforming"
+    },
+    {
+      "t": 382,
+      "status": "conforming"
+    },
+    {
+      "t": 392,
+      "status": "conforming"
+    },
+    {
+      "t": 403,
+      "status": "conforming"
+    },
+    {
+      "t": 409,
+      "status": "open",
+      "sig": "a1a1758349b40a12",
+      "atoms": [
+        "field:wizard0.hand_right"
+      ],
+      "note": "hand resolution (ledger entry 6)"
+    },
+    {
+      "t": 418,
+      "status": "conforming"
+    },
+    {
+      "t": 428,
+      "status": "conforming"
+    },
+    {
+      "t": 438,
+      "status": "conforming"
+    },
+    {
+      "t": 448,
+      "status": "conforming"
+    },
+    {
+      "t": 458,
+      "status": "conforming"
+    },
+    {
+      "t": 468,
+      "status": "capture",
+      "sig": "0c2c3ab87c8eb80f",
+      "atoms": [
+        "field:3,0:mana",
+        "field:player.mana",
+        "missing:9,10"
+      ],
+      "note": "castle cast latency \u2014 (9,10) transform ball (ledger entries 3/4)"
+    },
+    {
+      "t": 470,
+      "status": "open",
+      "sig": "12cf53a16a3dd866",
+      "atoms": [
+        "extra:3,2",
+        "field:player.castle",
+        "field:wizard0.castle"
+      ],
+      "note": "castle build window (ledger entry 3)"
+    },
+    {
+      "t": 471,
+      "status": "capture",
+      "sig": "8163248d28644622",
+      "atoms": [
+        "field:3,2:z"
+      ],
+      "note": "terrain closure (ledger entry 2)"
+    },
+    {
+      "t": 611,
+      "status": "open",
+      "sig": "c9e3e8b357b71850",
+      "atoms": [
+        "field:10,39:heading",
+        "field:10,39:mana",
+        "field:10,39:z",
+        "missing:10,39"
+      ],
+      "note": "ball collection unported (ledger entry 9)"
+    },
+    {
+      "t": 909,
+      "status": "open",
+      "sig": "8a5e8d0b4e51f726",
+      "atoms": [
+        "field:10,39:heading",
+        "missing:10,54"
+      ],
+      "note": "mana magnet (10,54) lifecycle + ball pull \u2014 untriaged"
+    },
+    {
+      "t": 910,
+      "status": "conforming"
+    },
+    {
+      "t": 920,
+      "status": "conforming"
+    },
+    {
+      "t": 934,
+      "status": "conforming"
+    },
+    {
+      "t": 948,
+      "status": "conforming"
+    },
+    {
+      "t": 960,
+      "status": "conforming"
+    },
+    {
+      "t": 965,
+      "status": "capture",
+      "sig": "2cc0dc3d30b5e9b3",
+      "atoms": [
+        "extra:9,10"
+      ],
+      "note": "castle cast latency \u2014 (9,10) transform ball (ledger entries 3/4)"
+    },
+    {
+      "t": 977,
+      "status": "conforming"
+    },
+    {
+      "t": 987,
+      "status": "conforming"
+    },
+    {
+      "t": 1000,
+      "status": "conforming"
+    },
+    {
+      "t": 1013,
+      "status": "capture",
+      "sig": "958db938e2703495",
+      "atoms": [
+        "field:5,14:z"
+      ],
+      "note": "terrain closure (ledger entry 2)"
+    }
+  ]
+}

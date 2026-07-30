@@ -309,6 +309,12 @@ MC2 (which is already `Turn`-throttled and gap-free).
     reconstruction from the raw input channel), `--dump t`.
     A deviations allowlist keyed to DEVIATIONS.md entries is still
     open work.
+  - `extract` / `fixtures` — the FIXTURE SUITE (docs/CONFORMANCE.md):
+    lift triaged pairs into a committed manifest
+    (`conformance/*.json`, expected status per pair) and replay them
+    as an automated expected-status test on every `cargo test`
+    (crates/mgc-conform/tests/suite.rs; skips when the recording or
+    baked tree is absent).
   - `verify-replay` (port): init from header, feed inputs, compare
     the hash at every tick — not built yet.
 

@@ -68,6 +68,18 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
 
     let (mut world, pristine) = build_world(&args.baked, &game, level)?;
 
+    let mut csv: Option<std::io::BufWriter<std::fs::File>> = match &args.csv {
+        Some(p) => {
+            let f = std::fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()))?;
+            let mut w = std::io::BufWriter::new(f);
+            use std::io::Write as _;
+            writeln!(w, "t\tkind\tslot\tclass\tmodel\tfield\twant\tgot\tx\ty\tz")
+                .map_err(|e| e.to_string())?;
+            Some(w)
+        }
+        None => None,
+    };
+
     // Stream pairs.
     let mut prev: Option<(u64, RetailMc1, PlayerCommand)> = None;
     let mut prev_cmd = PlayerCommand::default();
@@ -143,33 +155,11 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     stats.absorb_rng(pst.rand, obs.rng, port.rng);
                     stats.absorb_phase(&pst, &obs, &port, report.human_slot);
                     let mut pd = compare(&obs, &port, report.human_slot);
-                    // Hands compare in INTERNAL-spell space: the recorded
-                    // raw value indexes the acquisition list (resolved
-                    // through state@N+1); the port emits spell ids.
-                    let pw = &port.wizards[pst.local_player as usize];
-                    for (side, raw, got) in [
-                        (
-                            "wizard0.hand_left",
-                            st.wizards[pst.local_player as usize].hand_left,
-                            pw.hand_left,
-                        ),
-                        (
-                            "wizard0.hand_right",
-                            st.wizards[pst.local_player as usize].hand_right,
-                            pw.hand_right,
-                        ),
-                    ] {
-                        let want = st.hand_spell(pst.local_player as usize, raw).map(u16::from);
-                        if want != got {
-                            pd.fields.push(FieldDiff {
-                                slot: None,
-                                field: side,
-                                want: format!("{want:?}"),
-                                got: format!("{got:?}"),
-                            });
-                        }
-                    }
+                    append_hand_diffs(&mut pd, &st, &port, pst.local_player as usize);
                     let pd = pd;
+                    if let Some(w) = csv.as_mut() {
+                        emit_csv(w, pt, &pd, &obs, &port).map_err(|e| e.to_string())?;
+                    }
                     let dump = args.dump == Some(pt)
                         || (args.dump_first && !pd.clean() && stats.first_diff.is_none());
                     stats.absorb(pt, pd, args);
@@ -177,6 +167,25 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         // Re-diff for the full print (absorb consumed it).
                         let pd = compare(&obs, &port, report.human_slot);
                         print!("{}", pd.render(pt, usize::MAX));
+                        if args.dump_port {
+                            for e in &port.entities {
+                                println!(
+                                    "    port slot {}: cm=({},{}) flags={:#x} life={}/{} \
+                                     pos=({:.2},{:.2},{}) mana={} own_ptr={:#x}",
+                                    e.slot,
+                                    e.class,
+                                    e.model,
+                                    e.flags,
+                                    e.life,
+                                    e.max_life,
+                                    e.x,
+                                    e.y,
+                                    e.z,
+                                    e.mana,
+                                    e.owner_ptr
+                                );
+                            }
+                        }
                     }
                 }
             } else {
@@ -197,6 +206,59 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     Ok(stats.clean_pairs == stats.pairs)
 }
 
+/// One TSV row per diff event: field mismatches carry the retail
+/// entity's (class, model, x, y, z) as spatial context (falling back
+/// to the port's for extra-in-port slots) so offline triage can
+/// cluster divergence geographically (e.g. crater sites).
+fn emit_csv(
+    w: &mut impl std::io::Write,
+    t: u64,
+    pd: &PairDiff,
+    retail: &ObsMc1,
+    port: &ObsMc1,
+) -> std::io::Result<()> {
+    let rmap: BTreeMap<u16, &EntObsMc1> = retail.entities.iter().map(|e| (e.slot, e)).collect();
+    let pmap: BTreeMap<u16, &EntObsMc1> = port.entities.iter().map(|e| (e.slot, e)).collect();
+    let ctx = |slot: u16| -> (String, String, String, String, String) {
+        match rmap.get(&slot).or_else(|| pmap.get(&slot)) {
+            Some(e) => (
+                e.class.to_string(),
+                e.model.to_string(),
+                format!("{}", e.x),
+                format!("{}", e.y),
+                e.z.to_string(),
+            ),
+            None => Default::default(),
+        }
+    };
+    for (slot, c, m) in &pd.missing {
+        let (_, _, x, y, z) = ctx(*slot);
+        writeln!(w, "{t}\tmissing\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}")?;
+    }
+    for (slot, c, m) in &pd.extra {
+        let (_, _, x, y, z) = ctx(*slot);
+        writeln!(w, "{t}\textra\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}")?;
+    }
+    for d in &pd.fields {
+        match d.slot {
+            Some(slot) => {
+                let (c, m, x, y, z) = ctx(slot);
+                writeln!(
+                    w,
+                    "{t}\tfield\t{slot}\t{c}\t{m}\t{}\t{}\t{}\t{x}\t{y}\t{z}",
+                    d.field, d.want, d.got
+                )?;
+            }
+            None => writeln!(
+                w,
+                "{t}\tfield\t\t\t\t{}\t{}\t{}\t\t\t",
+                d.field, d.want, d.got
+            )?,
+        }
+    }
+    Ok(())
+}
+
 /// Is the pair fixture-grade? A clean inter-tick pair advances every
 /// persisted entity's +63 clock by exactly 1 (retail's dispatch steps
 /// every registered row per pass — the data10 gate is static and all
@@ -207,7 +269,75 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
 /// ordinal; constant on HW's weather families) lands on arbitrary
 /// values and must not starve the classifier (mirrors the recorder's
 /// `pair_clean`).
-fn capture_clean(pst: &RetailMc1, retail: &ObsMc1) -> bool {
+/// Hands compare in INTERNAL-spell space: the recorded raw value
+/// indexes the acquisition list (resolved through state@N+1); the
+/// port emits spell ids.
+pub(crate) fn append_hand_diffs(pd: &mut PairDiff, st: &RetailMc1, port: &ObsMc1, local: usize) {
+    let pw = &port.wizards[local];
+    for (side, raw, got) in [
+        (
+            "wizard0.hand_left",
+            st.wizards[local].hand_left,
+            pw.hand_left,
+        ),
+        (
+            "wizard0.hand_right",
+            st.wizards[local].hand_right,
+            pw.hand_right,
+        ),
+    ] {
+        let want = st.hand_spell(local, raw).map(u16::from);
+        if want != got {
+            pd.fields.push(FieldDiff {
+                slot: None,
+                field: side,
+                want: format!("{want:?}"),
+                got: format!("{got:?}"),
+            });
+        }
+    }
+}
+
+/// One fixture-grade pair, executed on a prepared world: restore
+/// pristine planes, import state@N, tick with the pinned pose, and
+/// diff the port projection against the recorded obs@N+1. The single
+/// implementation behind both `verify-deltas` and the fixture suite.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn exec_pair(
+    world: &mut World,
+    pristine: &Planes,
+    pst: &RetailMc1,
+    st: &RetailMc1,
+    obs: &ObsMc1,
+    cmd: PlayerCommand,
+    prev_cmd: PlayerCommand,
+    pin_n1: bool,
+) -> Result<(PairDiff, ObsMc1, u16), String> {
+    world.restore_planes(pristine);
+    let report = world
+        .retail_import_mc1(pst)
+        .map_err(|e| format!("import: {e}"))?;
+    world.set_prev_fire(prev_cmd.fire_left, prev_cmd.fire_right);
+    let pose_src = if pin_n1 {
+        &st.ents[report.human_slot as usize]
+    } else {
+        &pst.ents[report.human_slot as usize]
+    };
+    let pose = carpet_pose(pose_src);
+    world.tick(pose, cmd);
+    let pin = PinnedMc1 {
+        slot: report.human_slot,
+        local: pst.local_player,
+        player_count: pst.player_count,
+        pose,
+    };
+    let port = world.obs_project_mc1(&pin);
+    let mut pd = compare(obs, &port, report.human_slot);
+    append_hand_diffs(&mut pd, st, &port, pst.local_player as usize);
+    Ok((pd, port, report.human_slot))
+}
+
+pub(crate) fn capture_clean(pst: &RetailMc1, retail: &ObsMc1) -> bool {
     let mut tear_suspects = 0u32;
     for re in &retail.entities {
         let prev = &pst.ents[re.slot as usize];
@@ -228,7 +358,7 @@ fn capture_clean(pst: &RetailMc1, retail: &ObsMc1) -> bool {
 
 /// The recorded carpet's raw fields as the pinned pose (heading @30,
 /// pitch @32, speed @126 — engine units throughout).
-fn carpet_pose(e: &RetailEntMc1) -> PlayerPose {
+pub(crate) fn carpet_pose(e: &RetailEntMc1) -> PlayerPose {
     PlayerPose {
         x: e.x,
         y: e.y,
@@ -242,7 +372,11 @@ fn carpet_pose(e: &RetailEntMc1) -> PlayerPose {
 /// The golden-test world recipe (tests/state_hash.rs `build_world`),
 /// parameterized by game + level. Returns the world and a pristine
 /// copy of the planes for the per-pair terrain reset.
-fn build_world(baked: &std::path::Path, game: &str, level: u32) -> Result<(World, Planes), String> {
+pub(crate) fn build_world(
+    baked: &std::path::Path,
+    game: &str,
+    level: u32,
+) -> Result<(World, Planes), String> {
     let lp = baked.join(game).join(format!("level-{level:03}.mgcl"));
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
@@ -320,33 +454,33 @@ fn rival_configs(wizards: Option<&mgc_formats::Wizards>) -> ([Option<RivalConfig
 // ------------------------------------------------------------- comparison
 
 /// One field mismatch on one entity (or a top-level scalar).
-struct FieldDiff {
-    slot: Option<u16>,
-    field: &'static str,
-    want: String,
-    got: String,
+pub(crate) struct FieldDiff {
+    pub(crate) slot: Option<u16>,
+    pub(crate) field: &'static str,
+    pub(crate) want: String,
+    pub(crate) got: String,
 }
 
 #[derive(Default)]
-struct PairDiff {
-    rng_want: u32,
-    rng_got: u32,
+pub(crate) struct PairDiff {
+    pub(crate) rng_want: u32,
+    pub(crate) rng_got: u32,
     /// Slots retail has that the port lacks (slot, class, model).
-    missing: Vec<(u16, u8, u8)>,
+    pub(crate) missing: Vec<(u16, u8, u8)>,
     /// Slots the port has that retail lacks.
-    extra: Vec<(u16, u8, u8)>,
-    fields: Vec<FieldDiff>,
+    pub(crate) extra: Vec<(u16, u8, u8)>,
+    pub(crate) fields: Vec<FieldDiff>,
 }
 
 impl PairDiff {
-    fn clean(&self) -> bool {
+    pub(crate) fn clean(&self) -> bool {
         self.rng_want == self.rng_got
             && self.missing.is_empty()
             && self.extra.is_empty()
             && self.fields.is_empty()
     }
 
-    fn render(&self, t: u64, cap: usize) -> String {
+    pub(crate) fn render(&self, t: u64, cap: usize) -> String {
         let mut s = String::new();
         let _ = writeln!(s, "  pair {t}→{}:", t + 1);
         if self.rng_want != self.rng_got {
@@ -401,7 +535,7 @@ macro_rules! cmp_field {
 /// - the pinned human slot compares presence + life/mana only (its
 ///   pose fields are runner INPUTS, not predictions).
 /// - wizard `flight` is skipped (input-reconstruction domain).
-fn compare(retail: &ObsMc1, port: &ObsMc1, human_slot: u16) -> PairDiff {
+pub(crate) fn compare(retail: &ObsMc1, port: &ObsMc1, human_slot: u16) -> PairDiff {
     let mut out = PairDiff {
         rng_want: retail.rng,
         rng_got: port.rng,

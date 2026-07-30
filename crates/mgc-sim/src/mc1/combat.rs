@@ -2230,7 +2230,7 @@ impl Gen {
                     if let Some(f) = self.spawn_effect(6, x, y, z) {
                         self.ent[f].id24 = own;
                         self.ent[f].act_life = 30;
-                        self.ent[f].f44 = 3 * self.ent[f].f44;
+                        self.ent[f].f44 *= 3;
                     }
                 }
             }
@@ -3171,7 +3171,7 @@ impl Gen {
     /// (83→226, 84→227). All states follow the ground and splash-die
     /// on water. (Pool-full fire spawn skips the draw and retries
     /// next tick, as the original.)
-    pub(crate) fn tree_tick(&mut self, i: usize) {
+    pub(crate) fn tree_tick(&mut self, i: usize, splash_water: bool) {
         match self.ent[i].tick70 {
             0 => {
                 self.ent[i].flags |= 0x20000; // +18 |= 2 (:57674)
@@ -3199,7 +3199,7 @@ impl Gen {
                         }
                     }
                 }
-                self.tree_ground_water(i);
+                self.tree_ground_water(i, splash_water);
             }
             1 => {
                 self.ent[i].act_life -= 1;
@@ -3211,19 +3211,19 @@ impl Gen {
                         _ => {}
                     }
                 }
-                self.tree_ground_water(i);
+                self.tree_ground_water(i, splash_water);
             }
-            _ => self.tree_ground_water(i),
+            _ => self.tree_ground_water(i, splash_water),
         }
     }
 
     /// The tree handlers' shared tail (:57703-11): z follows the live
     /// ground; water under the trunk → splash (owner passed on) and
     /// despawn.
-    fn tree_ground_water(&mut self, i: usize) {
+    fn tree_ground_water(&mut self, i: usize, splash_water: bool) {
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         self.ent[i].z = self.ground_z(x, y) as i16;
-        if self.on_water_pub(x, y) {
+        if splash_water && self.on_water_pub(x, y) {
             let owner = self.ent[i].id24;
             let z = self.ent[i].z;
             if let Some(s) = self.spawn_effect(5, x, y, z) {
@@ -3633,6 +3633,26 @@ impl Gen {
             self.ball_resize(i);
             return false;
         }
+        // The ballistic arm is `else if (+58)` (sub_27030 :29518): +58
+        // is the fresh-spawn countdown (ctor 0x80) that the global
+        // anim pass sub_54F00_55430 → sub_54F80 (:64318-20) steps down
+        // once per tick, so a ball runs physics — gravity, downhill
+        // roll, and the grounded MERGE scan — for its first 128 ticks
+        // and then freezes at rest for good (the corpus pins it: a
+        // ball settles at spawn+128 and then ignores overlapping live
+        // neighbors indefinitely). The port folds the pass's decrement
+        // into the ball's own tick; the orders differ only at the 1→0
+        // edge. Byte semantics: retail reads +58 as a raw byte (the
+        // import widens i8, so 0x80 arrives as -128). MC1-scoped: the
+        // MC2 sphere twin (EF's mover with the apocalypse decay tail)
+        // is untraced for +58 and keeps its always-on physics.
+        if !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            let settle = (self.ent[i].f58 & 0xFF) as u8;
+            if settle == 0 {
+                return false;
+            }
+            self.ent[i].f58 = (settle - 1) as i16;
+        }
         let mut vx = self.ent[i].dest_x as i16;
         let mut vy = self.ent[i].dest_y as i16;
         vx = vx.clamp(-64, 64);
@@ -3659,33 +3679,27 @@ impl Gen {
             let v = self.ent[i].f46;
             self.ent[i].f46 = if v < -32 { -v / 4 } else { 0 };
         }
-        if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
-            // MC2 downhill roll + friction — GROUNDED only (retail
-            // `sub_58030` inside `TransformArcherToMana`'s `v22 == z`
-            // branch): a resting ball takes the terrain gradient onto
-            // its velocity, so balls stream down the island's slopes
-            // into the low basin where the 14-tile magnet aura finishes
-            // the merge (on level-001 the aura alone cannot pull them:
-            // arm balls spawn 22–44 tiles out, the aura reaches only
-            // 14). `sub_58030` is a RAW-heightmap forward difference
-            // over the ball's 2×2 tile quad, added un-divided (a height
-            // byte ≈ 32 world units), then the 250/256 friction.
-            // Airborne balls keep their velocity.
-            if grounded {
-                let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
-                let h = |dx: u8, dy: u8| {
-                    self.t.height[tile(tx.wrapping_add(dx), ty.wrapping_add(dy))] as i32
-                };
-                let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
-                let sy = h(0, 0) + h(1, 0) - h(0, 1) - h(1, 1);
-                vx = ((vx as i32 + sx) * 250 / 256) as i16;
-                vy = ((vy as i32 + sy) * 250 / 256) as i16;
-            }
-        } else {
-            // MC1: unconditional friction, no slope roll — the
-            // original ball physics (goldens locked).
-            vx = (vx as i32 * 250 / 256) as i16;
-            vy = (vy as i32 * 250 / 256) as i16;
+        // Downhill roll + friction — GROUNDED only, both games (MC1
+        // sub_27030's `tempV13 == z` branch :29556-64 via
+        // sub_41F50_42290 :52547; MC2 `sub_58030` inside
+        // `TransformArcherToMana`'s `v22 == z` branch): a resting ball
+        // takes the terrain gradient onto its velocity, so balls
+        // stream down slopes and pool in basins. The helper is the
+        // same RAW-heightmap forward difference over the ball's 2×2
+        // tile quad in both binaries, added un-divided (a height byte
+        // ≈ 32 world units), then the 250/256 friction. Airborne balls
+        // keep their velocity. (An earlier port arm gave MC1
+        // unconditional friction and no roll — contradicted by its own
+        // source cite and by the retail corpus's rolling balls.)
+        if grounded {
+            let (tx, ty) = ((x >> 8) as u8, (y >> 8) as u8);
+            let h = |dx: u8, dy: u8| {
+                self.t.height[tile(tx.wrapping_add(dx), ty.wrapping_add(dy))] as i32
+            };
+            let sx = h(0, 0) - h(1, 0) + h(0, 1) - h(1, 1);
+            let sy = h(0, 0) + h(1, 0) - h(0, 1) - h(1, 1);
+            vx = ((vx as i32 + sx) * 250 / 256) as i16;
+            vy = ((vy as i32 + sy) * 250 / 256) as i16;
         }
         self.ent[i].dest_x = vx as u16;
         self.ent[i].dest_y = vy as u16;
@@ -3703,8 +3717,15 @@ impl Gen {
         // it, which is retail's own mana-retention loophole (magnet/
         // balloon consolidation into a permanent sphere).
         let decaying = self.ent[i].flags & 0x2000 != 0;
+        // MC1 scans for a partner only inside the grounded branch
+        // (`tempV13 == z`, :29552-55) — an airborne or arcing ball
+        // never initiates a merge (a kill's spawn scatter coalesces
+        // only as the balls land, one merge per grounded tick). MC2's
+        // sphere twin is untraced for this gate and keeps the
+        // always-scan.
+        let mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
         for j in 1..self.ent.len() {
-            if decaying {
+            if decaying || (!grounded && !mc2) {
                 break;
             }
             // Fool's-Mana traps never merge — the six decoys stay
@@ -3801,7 +3822,20 @@ impl Gen {
                     }
                 }
                 self.ent[i].f140 = fi + fj;
-                self.ent[j].flags |= 0x400;
+                // MC1's sub_277D0 frees the absorbed ball through
+                // sub_41E90_421D0 (:52514-20) — the HARD free (unlink,
+                // class 0, slot straight back on the stack), not the
+                // 0x400 soft-kill: the donor is gone from the very
+                // snapshot the merge lands in (pair 11→12 of the mc1l0
+                // corpus: retail's 485 absorbs 479 and 479 is absent
+                // at t=12; a soft-killed donor lingers to the sweep
+                // and reads as extra-in-port). MC2's twin free is
+                // untraced; it keeps the soft-kill.
+                if mc2 {
+                    self.ent[j].flags |= 0x400;
+                } else {
+                    self.free_entity(j);
+                }
                 break;
             }
         }

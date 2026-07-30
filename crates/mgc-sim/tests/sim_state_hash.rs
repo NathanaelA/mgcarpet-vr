@@ -167,11 +167,20 @@ fn flight_tier_golden_state_hashes() {
     // world state hash grew a field, though the faithful trajectory and
     // the enhanced steering are untouched (no rival is flagged wanted in
     // this flight fixture — the delta is the zeroed field alone).
+    // Re-pinned for the MC1 ball-physics conformance fixes (sub_27030
+    // :29518-64): the ballistic arm now gates on the +58 settle
+    // countdown (128 ticks, then frozen at rest), applies friction and
+    // the downhill terrain roll only while GROUNDED (the old MC1 arm
+    // ran friction unconditionally and never rolled — contradicted by
+    // its own source cite and the retail corpus), and merge donors
+    // hard-free (sub_41E90) instead of soft-killing to the sweep.
+    // Post-init holds; A-C move because the level's authored balls
+    // follow the new rest law inside the window.
     const FAITHFUL: [u64; 4] = [
         0x0071647b49e89381, // post-init
-        0xc64f86ee789cba68, // A: 40 ticks of forward thrust
-        0x9f2c802dee97ef63, // B: 30 ticks of banked turn + strafe
-        0x337af495058b1f32, // C: 40 ticks of coast
+        0x9d04a9fbbea0521d, // A: 40 ticks of forward thrust
+        0xbe7f9e852e7b8011, // B: 30 ticks of banked turn + strafe
+        0xd9923ed0b4fdaa3d, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
@@ -184,9 +193,9 @@ fn flight_tier_golden_state_hashes() {
     // FAITHFUL array is untouched (the Mc1 mover never runs this bank).
     const ENHANCED: [u64; 4] = [
         0xe9f7ed2c1cca3ab0, // post-init
-        0xc7619ef31c0e28fe, // A
-        0xb453c3e21ce30c95, // B: strafe+turn now banks on forward speed
-        0xe20343055b85ac80, // C
+        0x29a07da0c5dfc23c, // A
+        0xd62c2545838fa99f, // B: strafe+turn now banks on forward speed
+        0x40aec172853ca1c4, // C
     ];
     assert_eq!(
         (faithful, enhanced),

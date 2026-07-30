@@ -2194,7 +2194,19 @@ impl World {
                 // MC2 class-15 spell tokens (the jar pickup states).
                 15 if matches!(self.game, GameId::Mc2) => self.mc2_spell_token_tick(i, player),
                 // Trees burn (states 0/1/2 + the standing fire).
-                2 if self.g.ent[i].model65 == 0 => self.g.tree_tick(i),
+                // Strict-retail suppresses the water splash-die
+                // (:57703-11, tile_type == 0): the recording has no
+                // terrain channel, and retail's village construction
+                // PAINTS tile types under trees (sub_27D30's
+                // paint pass) — on the replay's pristine planes those
+                // tiles still read water and every imported village
+                // tree drowned in one tick (the (2,0) missing family,
+                // CONFORMANCE-FINDINGS.md). Capture-domain, same
+                // pattern as the class-12 frozen-z law.
+                2 if self.g.ent[i].model65 == 0 => {
+                    let splash = !self.strict_retail;
+                    self.g.tree_tick(i, splash)
+                }
                 // Standing stone (3) / bad stone (9): the per-tick
                 // terrain snap (sub_49AA0/sub_49B50) — statics ride
                 // deforming ground instead of hanging at spawn z.
@@ -4211,15 +4223,49 @@ impl World {
         // RETAIL's class-12 encoding — tick70 = spell*3 + phase,
         // phase 0 = a wizard's owned-spell TOKEN (one per acquired
         // spell, +42 = its wizard, idle unless the +48 duration
-        // counter runs), phases 1/2 = world jars, which rest
-        // forever. The port's own states (DROPPED_JAR=3 decay,
-        // MANIFEST_BASE+spell) are a different encoding: retail
-        // state 3 is the HEAL token, and decaying it reaped rivals'
-        // spell banks one tick after import. Everything rests inert
-        // here; the ACTIVE token effects (heal sub_56270, speed
-        // sub_56380 with its (10,2) puff trail, sub_56510's (9,1)
-        // bolts) are unported — CONFORMANCE-FINDINGS.md.
+        // counter runs), phases 1/2 = world jars. The port's own
+        // states (DROPPED_JAR=3 decay, MANIFEST_BASE+spell) are a
+        // different encoding: retail state 3 is the HEAL token, and
+        // decaying it reaped rivals' spell banks one tick after
+        // import. Tokens rest inert here; the ACTIVE token effects
+        // (heal sub_56270, speed sub_56380 with its (10,2) puff
+        // trail, sub_56510's (9,1) bolts) are unported —
+        // CONFORMANCE-FINDINGS.md.
+        //
+        // Placed jars (phases 1/2) run retail's own pickup poll,
+        // sub_55A40_55F70 (:64729-64872): only every 4th tick
+        // ((+63 & 3) == 0, :64772-77); a jar whose spell the local
+        // player already owns stamps its own bit0 — the sticky
+        // "already known" marker (:64789-97) — and an AABB overlap
+        // otherwise GRANTS: the jar converts in place into the
+        // owned token (+70 = spell*3, bit0 set), joins the owned
+        // list, auto-equips LEFT, sound 18 (:64843-67). An
+        // already-owned overlap is a pure no-op — retail has no
+        // jar→mana path at all.
         if self.strict_retail {
+            let t = self.g.ent[i].tick70 as usize;
+            let (spell, phase) = (t / 3, t % 3);
+            if spell >= SPELL_COUNT || phase == 0 {
+                return; // owned tokens idle (active arms unported)
+            }
+            if self.g.ent[i].f63 & 3 != 0 {
+                return;
+            }
+            if self.player.owned[spell] != 0 {
+                if self.g.ent[i].flags & 1 == 0 {
+                    self.g.ent[i].flags |= 1;
+                    self.entities_dirty = true;
+                }
+                return;
+            }
+            if self.player.state == LifeState::Alive && self.g.player_overlap(i, ctx) {
+                self.g.ent[i].flags |= 1;
+                self.g.ent[i].tick70 = (spell * 3) as u8;
+                self.player.owned[spell] = i as u16;
+                self.player.left = Some(SpellId(spell as u8));
+                self.g.snd_player(18);
+                self.entities_dirty = true;
+            }
             return;
         }
         // Jar ground-snap (deliberate deviation — DEVIATIONS.md

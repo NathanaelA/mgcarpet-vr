@@ -335,13 +335,22 @@ fn level_005_golden_state_hashes() {
     // Layout-only by construction: OBSERVABLE holds byte-for-byte below —
     // within this 316-tick window the corrected site changes only the
     // internal target, not the observable projection.
+    // Re-pinned for the MC1 ball-physics conformance fixes (sub_27030
+    // :29518-64): balls now gate their ballistic arm on the +58 settle
+    // countdown (ballistic 128 ticks, then frozen at rest), run
+    // friction and the downhill terrain roll only while GROUNDED (the
+    // old arm ran friction unconditionally and never rolled), merge
+    // only on grounded ticks, and merge donors hard-free (sub_41E90)
+    // instead of soft-killing to the sweep. A behavior change by
+    // design: every loose ball's trajectory and rest position shifts,
+    // so A-E move in BOTH hashes; post-init holds (no ball has ticked).
     const GOLDEN: [u64; 6] = [
         0x63df455d85b8d5d4, // post-init (feature pass + disposition 0)
-        0x0e41eba270a335d3, // A: 32 idle ticks far afield
-        0x67c744e1cac25fef, // B: crater trigger fired + 120 dig ticks
-        0xa9e7699def3613ce, // C: ambush disposition fired
-        0x923bed330e90c9a6, // D: 64 ticks of two-hand fireball combat
-        0xaaf2c0f57d05b5e9, // E: 100 aftermath ticks
+        0x5e8e6f8b0fb7ca40, // A: 32 idle ticks far afield
+        0xb46a64844c36d4ea, // B: crater trigger fired + 120 dig ticks
+        0x95dc5d11a3e6dfaf, // C: ambush disposition fired
+        0x10ccc4a974f79b75, // D: 64 ticks of two-hand fireball combat
+        0x2cab3bb0e4ff4bb5, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -386,13 +395,18 @@ fn level_005_golden_state_hashes() {
     // a behavior change by design: villagers steer home instead of
     // diffusing, walk in the door in different ticks, and the act
     // speeds they wear differ. Post-init and A hold.
+    // The MC1 ball-physics re-pin moves OBSERVABLE at A-E — a behavior
+    // change by design (see the GOLDEN note): loose balls settle after
+    // their 128-tick ballistic window, roll downhill while grounded,
+    // and merge only on grounded ticks, so ball poses and populations
+    // at every checkpoint genuinely differ. Post-init holds.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
-        0x203eb5b24d0ab0e0, // A
-        0x5fb716e8a43f6e32, // B — settler phase + feeder leash
-        0xdea926f4c8033595, // C
-        0x028118efca7bae5f, // D
-        0x9f172a5c5b77dd57, // E
+        0x7499b2cebf66c6d0, // A
+        0xec45df97cfd4159b, // B — settler phase + feeder leash
+        0xeab36b776f2699a5, // C
+        0x7c2560d3cab77d2d, // D
+        0x42f996815fbb8a52, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

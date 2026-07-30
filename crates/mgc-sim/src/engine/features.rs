@@ -3195,6 +3195,10 @@ impl Gen {
             {
                 self.ent[i].f140 += self.ent[j].f140;
                 self.ent[j].flags |= 0x400;
+                // :56030-42 — retail returns after the FIRST absorbed
+                // ball: one ball per (every-other) settled tick, not a
+                // same-tick vacuum of the whole pile.
+                return;
             }
         }
     }
@@ -3513,6 +3517,10 @@ impl Gen {
             // the m42 painter, and the capacity ladder (sub_47C60 →
             // sub_47DD0 :56617).
             0 => {
+                // The commit consumes the upgrade request (:56475) —
+                // without the clear, the settled tick's flag check
+                // re-launches the level-up forever.
+                self.ent[i].flags &= !0x40;
                 self.castle_upgrade_preclear(i);
                 if self.ent[i].f26 > 0 && !self.castle_upgrade_space_ok(i) {
                     self.ent[i].f59 = 2;
@@ -3657,8 +3665,19 @@ impl Gen {
                     let sender = self.ent[i].mail[5].1;
                     self.ent[i].mail[5] = (0, 0);
                     if sender == self.ent[i].id24 && self.ent[i].f26 < 7 {
-                        self.ent[i].f59 = 0;
+                        // sub_47EC0 :56707-11 — the inbox arms the
+                        // upgrade-request BIT (+16 |= 0x40), and the
+                        // settled tick's own check below launches it.
+                        self.ent[i].flags |= 0x40;
                     }
+                }
+                // sub_46DB0 :56007-11 — the request bit sends the
+                // settled castle into the level-up; the commit clears
+                // it (:56475). Checked as a FLAG (not a direct state
+                // write off the mail) so an imported castle captured
+                // between request and commit resumes correctly.
+                if self.ent[i].flags & 0x40 != 0 {
+                    self.ent[i].f59 = 0;
                 }
                 if self.ent[i].f63 & 1 == 0 {
                     // The overflow ejector (sub_47130, called :56016):

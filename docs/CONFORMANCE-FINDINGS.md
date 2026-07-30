@@ -7,20 +7,30 @@ several may resolve into capture caveats or DEVIATIONS.md entries.
 Add new findings here as runs are triaged; move resolved ones to a
 `RESOLVED` section with the outcome.
 
-Baseline corpus (2026-07-29 late, recorded at fixed 150k cycles +
-in-game SVGA + sound off — the certified recipe): **0 torn
-snapshots anywhere, all pairs at `--input-delay 2`.**
-- **mc1l0**: a FULL end-to-end level-0 playthrough, 6903 records
-  t=0..6904, two single-tick gaps (catch-up bursts at t≈6520/6533 —
-  ticks with zero or all-mid-loop parks; only the emulator tick
-  hook can capture those). check-decode 6903/6903 exact;
-  **6900/6900 pairs fixture-grade, 117 conforming**.
-- **mc1hwl0-test**: 290 ticks, 0 gaps, 289/289 fixture-grade, 0
-  conforming — blocked by the open entries below (entry 7's walker
-  x/y/z drift touches nearly every pair). mc1hwl0 (192 pairs, one
-  9-tick flash-window gap) kept as the earlier take.
-- **mc2l0**: 3641 ticks, 0 gaps — complete, awaiting the MC2
-  importer.
+Enforcement lives in the FIXTURE SUITE (docs/CONFORMANCE.md,
+`conformance/*.json`): triaged pairs replay on every `cargo test` with
+expected statuses (`conforming`/`open`/`capture`); fixture notes cite
+the entries below. Fixing an entry flips its fixtures — promote them
+(`mgc-conform fixtures … --promote`) in the same change that moves the
+entry to Resolved.
+
+Baseline corpus (2026-07-30, the rate-limited `*_REC.EXE` recorder,
+all pairs at `--input-delay 2`):
+- **mc1l0**: a FULL gapless level-0 playthrough, 5330 ticks,
+  check-decode 5330/5330 exact, 5329/5329 pairs fixture-grade, 0
+  torn. **59 conforming at capture → 350 conforming after the
+  2026-07-30 fix round** (castle f59 import, ball settle/roll/
+  hard-free, strict-retail jar pickup, tree water gate, regen
+  seed — see Resolved). First divergent pair t=11 → t=58 (an
+  input-latency cast, entry 4's domain). RNG (1,1) on all 5329.
+- **mc1hwl0**: 2026-07-30 partial HW level-0 take (173MB) — NOT
+  yet triaged; run verify-deltas next (expect entry 7's terrain
+  shortfall plus the same now-fixed families).
+- **mc2l0**: 2026-07-29 full take, 0 gaps — complete, awaiting the
+  MC2 importer.
+(Triage tooling on the runner: `--csv` per-diff TSV for offline
+clustering, `--dump <t> [--dump-port]`, `dump-state <file> <t>
+<slot…|all>`, `trace <file> <slot> <t0> <t1>`.)
 (History: the first takes ran 627 pairs / 73 conforming and 417 /
 32; the fix rounds moved the like-for-like take to 34, and the full
 recipe + fixes reached 117.) (History: the
@@ -62,34 +72,60 @@ including the 75%-torn pre-gate corpus.
    39 (10,2) from the UNPORTED active speed-token emitter
    (`sub_56380`, puff every 4th token-tick); a few (9,1) from the
    spell-3 bolt token (`sub_56510`).
-2. **Mana-ball merge** — mc1l0 first divergent clean pair t=26:
-   port merges balls (slot 627 mana 512→1024, slot 484 flagged dead
-   0x400) where retail keeps both at 512. Merge-condition law
-   differs (distance? owner? tick phase?).
-3. **Castle upgrade window (t≈605-632)** — a cluster: port's (10,42)
-   build painter persists across ticks where retail's never appears
-   at a snapshot boundary (29 extra entity-ticks — possibly retail
-   spawns+works+frees it within one tick); castle max_life retail 8
-   vs port 21 (36 pairs); the port's castle-binding scan picks slot
-   475 vs retail's 629; slot-28 mound mana_max 10000 vs 1000. The
-   whole castle build/upgrade path needs a trace-backed pass.
-4. **Impact cluster around casts** — (10,12) hit-flash and (9,1)
-   fireball timing jitter, consistent with the ±2-3 tick input
-   latency (retail mouse ISR → control command → consume) that cast
-   reconstruction cannot see. Partially mitigated by
-   `--input-delay 2` (9→12 conforming pairs). Aim (control aim_yaw/
-   aim_pitch) is not reconstructed at all — projectile trajectories
-   diverge accordingly. Consider recording-side capture of the
-   control slot mid-tick, or accept as input-domain noise.
-5. **Residual creature motion noise** — x: 313 / y: 160 / z: 212
-   entity-ticks over 153 clean pairs (was ~34k before the tear gate;
-   the bulk was tearing). What remains clusters around combat/impact
-   ticks; re-measure on a tear-gated corpus before reading laws into
-   it.
-6. **wizard0 hand flicker** — a few pairs per run where retail's
-   hand reads empty (0xFFFF) while the port holds the equip. Retail
-   appears to blank the hand transiently (book UI? cast window?).
-   Harmless-looking; not modeled.
+2. **TERRAIN CLOSURE — the dominant residual family** (proven on
+   the 2026-07-30 mc1l0 corpus): the recording has no terrain
+   channel and every pair replays on pristine planes, so retail's
+   runtime terrain edits are invisible. The z diffs cluster at
+   event sites with CONSTANT per-entity offsets from an onset tick
+   to end-of-run: fireball craters (t=109+, −1..−4), a large edit
+   field around (112,88) from t=472, the rival castle raise at
+   (44,40) +256 from t≈1028, and the village regrade at
+   (152-164,44-56) from t≈992-1139 (heights AND tile TYPES — the
+   construction paint pass, sub_27D30 :30184-248). After the fix
+   round this family is z 134k hits / 4801 pairs plus the walker
+   x/y/heading knock-on — roughly all remaining bulk noise. Fix
+   direction: a terrain channel in recording format v2 (height +
+   type planes, delta-coded or hashed-with-keyframes), or replay
+   the edit events in the importer.
+3. **Castle build WINDOW + economy** (narrowed from the old "castle
+   column" entry — the settled-castle half is RESOLVED below): the
+   t≈469-513 initial-build window still diverges (transform ball
+   slots, (10,39)/(10,0)/(10,1) around the build, castle binding
+   retail 627 vs port 475, upgrade mana lumps −5000/−10000). Known
+   unported pieces: the wizard's castle slot binding (retail
+   player+50, sub_47960 :56484), the mound-mana write at level-up
+   (sub_47BD0's mound arm :56561-66 — the slot-28 mana_max
+   10000-vs-1000 rows, now only 129 hits), and the ball-economy
+   cap-fill (sub_47130 :56160). ~100 pairs.
+4. **Impact cluster around casts** — (9,1) 468/610 missing/extra,
+   (10,12) hit-flash, (9,0), and the t=67-style substitution
+   clusters: input-latency + unreconstructed aim (control aim_yaw/
+   aim_pitch). Same ruling as before: partially mitigated by
+   `--input-delay 2`; consider recording the control slot mid-tick.
+   This is now the FIRST divergence family (t=58).
+5. **Human mana regen cadence — OPEN, port regens 3-4× retail**:
+   retail's human +100 regen quanta land at drifting ~3-4-tick
+   intervals (trace t=1200-1240: mostly period 4 with adjacent
+   doubles; NOT f63%4-clocked — the phase walks). The port applies
+   `mana_delta` every tick (long-standing gameplay law, goldens
+   locked). The wizard tick's `mana += +132` (:55385) sits behind
+   only the pause gate (var_u8_2 bit0), so the cadence source is
+   elsewhere (a timer-domain clock? the walk's class-3 rate nibble?
+   kill/collect +100s interleaved?). ~1276 player.mana pairs
+   (−100/−150/−300 compounds with cast latency). Needs its own
+   decompile pass before touching the gameplay regen.
+6. **wizard0 hand residuals** — 4 pairs: t=310 retail Some(3) port
+   Some(16), t=409 hand_right Some(3) vs None. Pickup RESOLUTION
+   differences (which jar/hand a mid-level acquisition lands in),
+   not the old flicker; revisit with the quickselect-assign law
+   (docs/traces/mc1-quickselect-assign-law.md).
+9. **Small new families** (post-fix corpus): (9,0)/(9,1) flags
+   0x2006-vs-0x6 (bit13, ~176 rows); (2,0) tree missing residue 53
+   rows at exactly t=1056(×6)/t=1100(×47) — the hut-completion
+   retile edge ticks; (10,39) flags 12→4 (port ball loses the 0x8
+   default bit on some spawn path, 177 rows); wizard Path-A ball
+   collection (sub_1E810 instant absorb) still unported — the
+   mana-economy track's (10,0) puff + ball-removal rows ride on it.
 7. **HW terrain shortfall + walker drift** (narrowed from "systematic
    z −64" — the class-12 part is RESOLVED below): the port's HW
    ground sits below retail's in places (~8 height-bytes ≈ 256
@@ -114,6 +150,64 @@ including the 75%-torn pre-gate corpus.
    fix anywhere; closed into findings 1 and 3.
 
 ## Resolved
+
+- **Castle phantom upgrade (the settled-castle half of old entry
+  3)** — RESOLVED 2026-07-30: retail castles keep their macro-state
+  in the JOB byte +70 (4 settled / 5 transforming / 6 building,
+  sub_46DB0/sub_46F10) with the transform sub-state in +48; the
+  importer wrote retail's dead +59 byte into the port's fused `f59`
+  machine, parking every settled castle in f59=0 = the level-up
+  commit — one phantom upgrade per pair (stats one level ahead,
+  1612 extra (10,42) painters, castle life reset). Importer now
+  maps (3,2) f59 from (+70,+48); `castle_tick` case 4 additionally
+  honors the retail upgrade-request bit (+16 & 0x40, :56007-11,
+  cleared at commit :56475) and `castle_absorb` takes ONE ball per
+  absorb tick (:56030-42). max_life hits 5736 → 695, mana_max
+  3627 → 129, (10,42) extra 1612 → 11. The retail ladder
+  (CASTLE_HP/CASTLE_CAP) was already correct. Retail castles have
+  NO life regen (only the ladder snap + damage) — confirmed, and
+  the port's case 4 has none either.
+- **Mana-ball laws (old entry 2 + the slot-103 insta-kill)** —
+  RESOLVED 2026-07-30 from sub_27030 (:29416-571) + sub_54F80
+  (:64318-20): a ball is ballistic — gravity, grounded downhill
+  roll (sub_41F50 = the 2×2 forward difference), 250/256 friction,
+  and the grounded-only MERGE scan — only while its +58 settle
+  countdown (ctor 0x80, −1/tick via the global anim pass) is
+  nonzero; at 0 it freezes at rest FOREVER (no TTL — max_life 300
+  is inert). Retail's merge donor is HARD-freed (sub_41E90), gone
+  from the same snapshot. The port merged/rolled resting balls
+  forever (a settled ball beside the castle was re-merged on every
+  pair for 3000 ticks, timeline-matching spawn+128), ran MC1
+  friction unconditionally with no roll (contradicted by its own
+  cite), and soft-killed donors into extra-in-port rows. All
+  MC1-scoped; MC2's sphere twin untraced and untouched. Ball x/y
+  hits 56k/62k → 9.7k/9.7k, (10,39) missing 1621 → 315. MC1
+  goldens re-pinned (behavior change by design; OBSERVABLE moved
+  A-E, post-init holds).
+- **Jar pickup under strict_retail (the t=11 first divergence)** —
+  RESOLVED 2026-07-30: the strict arm was fully inert, so retail's
+  jar-pickup poll (sub_55A40 :64729-872 — every-4th-tick, AABB,
+  grant = in-place convert to the owned token + LEFT auto-equip +
+  the jar's own bit0 stamp; already-owned = pure no-op, NO
+  jar→mana path exists) never ran. Ported into the strict arm with
+  retail's encoding (tick70 = spell*3). The old "port converts
+  pickup to a mana ball" reading was wrong — the extra (10,39) at
+  t=11 was retail's grounded ball-merge hard-free (see above).
+- **Village-tree reap ("(2,0) hut" family)** — RESOLVED 2026-07-30:
+  the reaped entities are TREES (class-2 model-0; retail huts are
+  class-10 model-45, ctor sub_3B690 :47501-18). Retail's village
+  construction PAINTS tile types under them (sub_27D30 :30184-248);
+  on pristine replay planes those tiles still read water and the
+  tree's own splash-die (:57703-11) fired in one tick. Strict-retail
+  now suppresses the tree water arm (capture-domain, same pattern
+  as the class-12 frozen-z law). 1960 rows → 53 (the completion
+  retile edges, entry 9). Gameplay unchanged.
+- **player.mana regen seed** — RESOLVED-as-import 2026-07-30: the
+  importer now seeds `player.mana_delta` from the carpet's +132
+  (the applied-then-recomputed pipeline both engines share). The
+  remaining divergence is entry 5's cadence gap (port every-tick vs
+  retail ~every-4th) — the family flipped sign from +100 (missing
+  regen) to −100 (over-regen).
 
 - **(10,2)/(10,3) puff reaping (the bulk of old entry 1)** — RESOLVED
   2026-07-29: ctors (`str_255D0C[2/3]` = `sub_3A570`/`sub_3A5D0`) and
