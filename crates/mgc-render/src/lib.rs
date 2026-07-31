@@ -5886,18 +5886,17 @@ impl Renderer {
             if self.map_view {
                 // World viewport in the top-right corner: sky fill, then
                 // the terrain, clipped to the rect.
-                let (vx, vy, mut vw, mut vh) = view_rect;
+                let (mut vx, mut vy, mut vw, mut vh) = view_rect;
                 if vw > 0 && vh > 0 {
-                    if IS_ANDROID {
-                        vw -= 100;
-                        vh -= 100;
+                    if !IS_ANDROID {
+                        pass.set_viewport(vx as f32, vy as f32, vw as f32, vh as f32, 0.0, 1.0);
+                        pass.set_scissor_rect(vx, vy, vw, vh);
                     }
-                    pass.set_viewport(vx as f32, vy as f32, vw as f32, vh as f32, 0.0, 1.0);
-                    pass.set_scissor_rect(vx, vy, vw, vh);
                     pass.set_pipeline(&self.fill_pipeline);
                     pass.set_bind_group(0, &self.fill_bind_group, &[]);
                     pass.draw(0..3, 0..1);
                     draw_world(&mut pass);
+                    // TODO: Reset eye projection after this so the rest of the hud map pane is correct
                     pass.set_viewport(0.0, 0.0, w as f32, hpx as f32, 0.0, 1.0);
                     pass.set_scissor_rect(0, 0, w, hpx);
                 }
