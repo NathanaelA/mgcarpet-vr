@@ -511,11 +511,13 @@ The re-recorded mc2l0: **11,524 ticks gapless, check-decode exact,
 arrow keybinds), spell upgrades + end-to-end level completion. 11,523
 pairs → 7,762 fixture-grade (33% torn). Suite re-extracted per doctrine
 (`conformance/mc2l0.json`, 24 exemplars, 23 open / 1 capture; sigs
-re-promoted after the fix round). **Still 0 conforming — by
-construction**: the §terraform capture family (village growth regrades
+re-promoted after the fix round). Post-triage it sat at 0 conforming
+by construction: the §terraform capture family (village growth regrades
 the hill at ~t=751; house z re-snaps both sides, ours to the pristine
 plane) puts (10,45) z rows on every later pair — 186k of the 249k
-remaining z hits. Port-side conformance now lives in the t<751 window
+then-remaining z hits. **The 2026-07-31 kinematics round moved it to
+11 conforming + 8 rng-only** (total diff rows 329.9k → 300.2k).
+Port-side conformance now lives in the t<751 window
 and in the per-family totals, which the fix round moved hard:
 player.mana 5,894→232 pairs · player.mana_max 5,939→458 · entity
 mana_max 6,296→599 · player_ent_idx 6,759→out of top-20 · owner
@@ -619,10 +621,13 @@ heading 764 · life 712.
   9-draw bursts, (10,60) draws 3/tick — measure per model before
   patching effects.rs). Entry point: `mc2_smoke_particle_tick` /
   `mc2_smoke_emitter_tick` vs EF:35618-35700.
-- **§wander — (5,1)/(5,13) turn law** (t=1705/1587): heading ±22
-  and ±45 step families on grazing goats and villagers — a turn-step
-  or turn-cadence mismatch in the held graze/walk legs, NOT rand
-  (their streams now match post-bleat-fix).
+- **§wander — (5,1)/(5,13) turn law: RE-RULED 2026-07-31** (see
+  Resolved: KINEMATICS ROUND rulings): the law is byte-exact; the
+  isolated ±22/±45 blips self-heal (capture). The REAL residual is
+  the **held-state split**: on the sustained ±341 runs retail parks
+  the goat in action 15 (+7 controlled, sv2=2) while the port
+  wanders at 9 — the StageVar hold-gate isn't latching that
+  creature (slot 81 exemplar, t≈2380-3096). Port lead, own dig.
 - **§balloon — (3,3) extra-in-port** (t=1913): 549 extra balloons
   from t=1807 — the port's castle dispatches balloons retail does
   not send here (likely gated on economy state the importer seeds
@@ -671,19 +676,13 @@ post-fix).
   standing §terraform/terrain-channel remedy. The sv1/sv2 rows
   nearby are the SEPARATE mc2:04 death-watch/hold choreography;
   (9,13) arrow churn is part guard-downstream, part cast-timing.
-- **§sphere — (10,39) mana-sphere mover UNPORTED: PORT-LAW** (the
-  largest fixable residual: ~13k z rows/244 slots l4; ~37k z+x+y
-  rows l30). (10,39) is not a static: retail's
-  `TransformArcherToMana_35940` (EF:26015) flies it ballistically —
-  `z += word_0x2C_44` (the z-velocity @0x2C), gravity −16/tick
-  floored −128, ground bounce `−v/4` (zeroed ≤16, EF:26251),
-  `axis_0x9A` ±64 horizontal + `sub_58030` downhill roll + 250/256
-  friction. The port routes tick70==41 into the MC1-shaped
-  `ball_tick`, whose MC2 arm skips the settle block and reads f46
-  (=@0x2E=0) as z-velocity → spheres sit at bare ground. FIX SPEC:
-  import @0x2C for (10,39) (the class-15 f44←f2c precedent) + port
-  EF:26015 as a dedicated `mc2_sphere_tick` ahead of the shared
-  effect band.
+- **§sphere — RESOLVED 2026-07-31** (see Resolved: KINEMATICS ROUND
+  fix 4): the settle law (`byte@0x39 || kick`) + @0x2C z-vel import
+  + latch imports + exact bounce/merge/rotation landed in the
+  shared `ball_tick` MC2 arm. l4 (10,39) 37.9k → ~3.8k rows;
+  residual = terrain-closure z + birth edges. The l30 sphere z bulk
+  (−1169/−542 constants) was always the cave mound/plateau terrain
+  closure — capture.
 - **§l30-churn residual — the coupled fire/smoke draw+lifecycle
   family (PORT-LAW, two specs banked)**: after the cave-tail fix
   (Resolved) ~22% of l30 pairs still mismatch rng, all
@@ -707,7 +706,10 @@ post-fix).
   plateau. OWED: check whether the plateau is load-time (the dis-0
   (10,64) riser raise — then the port's conformance world-build
   skips a load-time raise = fixable) or runtime-terraformed (pure
-  capture). (5,4) XP-scroll z, (14,3) −16, (15,19) token-fall
+  capture). The l4 face of the same question: the (5,4) ARCHER
+  family walks at a CONSTANT −192 z from t=0 (slot 210, byte-
+  identical dynamics) — a pristine-plane datum gap at its site,
+  present before any runtime edit can exist. (5,4) XP-scroll z, (14,3) −16, (15,19) token-fall
   (slot 92: port clamps up to its pristine 1296 floor while retail
   falls to 288) are the same terrain-closure story.
 - **§castle follow-ups** (split from the resolved phantom-upgrade
@@ -721,10 +723,14 @@ post-fix).
   tile this tick — build-window timing; (d) player.mana_max
   claim-census within-tick (the standing mc2l0 lead, NOT a castle
   ripple — the mc2l4 castles are rival-owned).
-- **§wander-drift residual — (5,0)/(5,3) after the bob fix**:
-  smooth ±1..6 heading / ~±25 z accumulated drift on the worm and
-  multipart-flyer chains — a wander/bob phase detail, not the
-  dead-bob class; likely collapses with the §wander turn law.
+- **§wander-drift residual — (5,0)/(5,3): RE-RULED 2026-07-31**
+  (see Resolved: KINEMATICS ROUND rulings): the walker turn law is
+  byte-exact — the smooth heading drift is capture (chaotic
+  amplification, rand-matched). The remaining PORT lead here is the
+  **flyer z-bob** (±8..56 airborne altitude offset on the multipart
+  chains) — the M0/M3 altitude source, untraced, own item; plus the
+  l4 t=17954 mass spawn-wave divergence (dozens of slots at once,
+  unexamined).
 - **§drip placement — (10,86)/(10,87) residual**: at the best
   cadence anchor (turn0&7==0, phase-scanned) the drip still lands
   9 missing/56 extra per 2000 pairs — the target-tile walk consumes
@@ -736,6 +742,110 @@ post-fix).
   resolved, see Resolved).
 
 ## Resolved
+
+- **KINEMATICS ROUND 2026-07-31 (the banked coordinate+speed
+  deep-dive) — four port/import fixes + three capture rulings.**
+  Fixes (all decompile-corroborated, corpus-A/B'd; mc1l0 385
+  conforming UNCHANGED, all five suites 0 regressions / 9 drifted
+  sigs promoted; mc2l0 7 → 11 conforming + 8 rng-only):
+  1. **Class-9 spurious speed ramp (the retail-+2 family, ~14k rows
+     across takes)**: retail states 0 (`sub_65C20` EF:63126), 1
+     (`CastPosses_65F60` EF:63261) and 29 (`sub_65B50` EF:63023 — a
+     charged-impact wrapper over the state-0 body) fly at CONSTANT
+     actSpeed; only the shared `sub_65820` core ramps ±2 toward
+     minSpeed (EF:62923-31). The port's `mc2_flyer_tick` ramped
+     every state toward 384 — the corpus proof was the delta sign
+     flipping exactly at 384 and (9,0) (whose launcher floors speed
+     at 384, EF:44224) being 100% one-signed. Gated out for
+     tick70 0|1|29 (proj.rs). mc2l0 class-9 speed 6,426 → 342 rows,
+     l4 ±2 rows 10,055 → 289 — residue = birth-pair cast-timing
+     (the slots are free in retail at state-N). The original
+     "ramp one step out of phase" hypothesis was WRONG — order was
+     always right; the ramp itself was spurious.
+  2. **(3,3) balloon ceiling-walk latch (the l30 retail-+48
+     family)**: `sub_60D50` walks the cave ceiling at actSpeed 96
+     with `byte[0]|=1` (EF:61896/61903) vs 48 flying (EF:61905),
+     ceiling clamp flying-only (EF:61921) — the port law was
+     verbatim (castle.rs) but the importer dropped bit 0, so every
+     imported walker re-took the flying branch each pair. (3,3)-
+     scoped bit-0 import (port bit 0 is per-class overloaded).
+     l30 954 speed rows → 0 + the z/x/y cascade.
+  3. **(3,1) = the MC2 RIVAL WIZARD, replayed as a frozen husk**
+     (NOT a balloon — the banked label was a misID): every (3,1)
+     field satisfied got(t)=want(t−1) for the wizard's whole life —
+     the ±16 "dither" was a one-tick lag on retail's ±16/tick speed
+     slew (EF:6484, port-verbatim rivals.rs). `retail_import_mc2`
+     never re-anchored `self.mc2_rivals` (the MC1 rival-freeze
+     twin); `reanchor_mc2_rival` now points the brain at the
+     imported slot + reseeds vdes/strafe/grace/mana lanes from the
+     closure. l4 (3,1) rows 46.6k → 24.3k; the REMAINDER is the
+     AI decision-lane reconstruction (state/target/hate/burst —
+     needs the MC2 wizard-ext decode; the same split as MC1's fix).
+  4. **(10,39) sphere mover — the ledger's §sphere spec, ported**
+     (TransformArcherToMana EF:26015; behavior change toward
+     retail, cave + slice GOLDEN&OBSERVABLE re-pinned, post-init/A
+     hold): the MC2 settle law is MC1's shape at different homes —
+     moving only while `byte@0x39 || fresh-kick` (EF:26173; ctor
+     seeds 128, EF:36617; corpus: b39 counts ~1/tick to 0, f2c
+     parks at −16, frozen forever) with z-velocity @0x2C. The port
+     had opted the MC2 arm out of the settle gate entirely →
+     always-on physics dropped every authored sphere to bare
+     ground (the l4 z family) and re-rolled/merged settled spheres
+     forever. Landed: settle gate (f58 was already imported from
+     b39), f46 ← @0x2C import, absorb-chase (b0&0x40) + decay
+     (b1&0x20 → bit-13 tail) + stall-skip (b1&8 → bit 26) latch
+     imports, unconditional moving-mode gravity, the EXACT bounce
+     `−impact/4 zeroed at ≤16` (EF:26244-52, replacing the
+     untraced −32 floor), grounded-ONLY merge (EF:26265-69 —
+     the always-scan was port invention), and the per-size
+     ROTATION quad on re-sprite (EF:26744-77: 14·(size+1), 13 at
+     size 0 — the port stamped MC1 art extents into the applied
+     lanes instead: the 16k applied_yaw/pitch family). l4 (10,39)
+     37.9k rows → ~3.8k (residual = terrain-closure z + birth
+     edges); applied 16,004 → 270. MC1 arm byte-untouched.
+     OPEN note: retail l4 renders a RIVAL-claimed sphere in the
+     NEUTRAL family (sprite 56 with live class-3 owner 298) while
+     mc2l0's human spheres color 105+size — the wizard spawn
+     stamps ext color = slot for both (EF:43710), so the neutral
+     mechanism is unresolved; conformance-invisible (sprite lane
+     uncompared, rotation is size-only), port keeps team colors
+     natively pending a colored-rival-sphere take.
+  Rulings from the same round:
+  - **§wander turn law = BYTE-EXACT, capture** (opus dig): turn
+    clamp `sub_58350`, alt core `sub_580E0`, polar step, wander
+    nudge, block-retry chain incl. the precedence quirk, move-
+    then-nudge order, goat per-tick sound draw — all verified
+    verbatim. The ±v_2/±341 heading blips are self-healing chaotic
+    amplification through position-fed branches (rand streams
+    match); the hypothesized 24-31-unit "binary branch divergence"
+    DOES NOT EXIST (torus wraps + one t=17954 spawn wave). Two
+    real leads split out: the HELD-STATE SPLIT (retail parks a
+    goat in action 15 = +7 controlled, port wanders at 9 — a
+    StageVar hold-gate miss, drives the sustained ±341 runs) and
+    the (5,0)/(5,3) FLYER Z-BOB (±8..56 airborne offset — the
+    multipart altitude source, untraced; NOT the walker path).
+  - **§effects (10,0)/(10,6)/(10,14) = CAPTURE** (opus dig +
+    substitution-split measurement): every fire/smoke motion law
+    verified byte-exact (smoke `actSpeed−4 clamp[64,128]`, fire
+    flicker `rand%0x41−32`, emitter `rand%0x4D` bonus). The
+    "64-quantum" was the SHARED clamp; the one-sided spikes were
+    100% slot-substitution rows. The standing "sub_580E0 alt-core
+    arg order?" lead is CLOSED — exact, dead a4 correctly dropped.
+  - **The lightning-trail TESTS were stale, not the law**: the two
+    mc2_spell_channels lightning tests asserted live end-of-tick
+    (9,9) nodes — under the certified born-dead law the trail
+    decays within the cast tick (which node survives is pool-
+    layout noise; they failed at the PRIOR commit too, hidden by
+    cargo's per-bin fail-fast — run `--no-fail-fast` for truth).
+    Re-asserted on laid RECORDS. ⚠ presentation question for the
+    playtest: retail's crackle renders from the mid-frame draw;
+    the port draws end-of-tick — verify lightning still reads
+    visually.
+  - NEW LEAD (out of family): the l4 (5,4) ARCHER walks at a
+    CONSTANT −192 z from t=0 with byte-identical dynamics — a
+    pristine-plane datum gap at its site, i.e. the LOAD-TIME
+    terrain-edit question (the (14,5) plateau entry's l4 face),
+    not an entity law.
 
 - **MC2 CAVE AMBIENT RAND TAIL + the turn anchor (the mc2l30
   ">16 draws/tick" banked lead)** — RESOLVED 2026-07-31. Level 30
@@ -1116,6 +1226,51 @@ post-fix).
   evolve by retail's frozen-z law. Tests pin both behaviors;
   goldens unmoved; HW z hits 5189 → 1349 (all class-12 diffs gone;
   the rest is entry 7's terrain shortfall).
+
+## The known-deviation roster (2026-07-31)
+
+`conformance/known-deviations.json` + `verify-deltas` classification
+(docs/CONFORMANCE.md §roster): every diff row is tagged against
+scoped, ledger-cited rules (capture / deviation / open) and the
+report's headline is the UNEXPLAINED residue + per-rule hit counts;
+`--csv` carries the rule id per row (`--no-roster` = raw). Seeded
+from this ledger's ruled families (33 rules). The player-stated
+goal: a fully triaged take runs to unexplained = 0 — everything
+conforming or known. Baseline at seeding (2026-07-31, post-
+kinematics-round): mc2l0 **5,242 of 7,762 pairs conforming-or-
+explained**, 7,512 unexplained rows (gross was ~300k); mc2l4
+8,398/12,786 + 14,136; mc2l30 3,434/10,021 + 13,878; mc1l0
+1,196/5,329 + 44,523 (the walker x/y/heading terrain knock-on is
+DELIBERATELY unexplained until a terrain channel exists — only the
+direct z family carries the ledger's whole-take ruling); mc1hwl0
+800/40,586 + 2.17M (only the z closure seeded — the §weather/
+token/census families await their own triage rounds). Notable: the
+roster instantly SIZED the undug (3,3) balloon-z lead at 40k rows
+on l4 / 19k on l30 (tagged open, not hidden).
+
+**Capture-window clarification (player question, same day)**: the
+read-consensus scheme (N byte-identical neighboring reads ⇒ the
+guest is between ticks) IS the recorder's mechanism — but identical
+reads prove only that the guest was FROZEN, and DOSBox regularly
+parks MID-entity-loop, so a perfectly stable consensus image can be
+a mid-tick state (RECORDING.md "Capture tearing" — the original 75%-
+torn corpus). Higher snapshot frequency cannot fix this (it is an
+alignment problem, not a sampling-rate problem); the by-construction
+fix is the tickpatch MAILBOX window (`in_window` raised during the
+pacing spin = a guaranteed quiescent window), which is why mc1l0
+runs 0 torn. The MC2 takes run the pacer but not the windowed
+mailbox — they fall back to the phase-byte tear gate (~33% torn,
+plus the per-entity torn-slot exclusion). **The owed MC2 tickpatch
+mailbox/emit gate would reclaim those pairs the same way —
+PLAYER-APPROVED 2026-07-31 as the next session's headline ("the
+final piece for proper recording"): a NETHERW_REC.EXE arm hooking
+MC2's OWN frame limiter (no pacer needed) at the true frame
+boundary — after the post-pass ApplyEvents baseline draw, before
+the next PlayerEvents Turn++ — so the Turn++-park tear mode
+becomes unobservable by construction. New mailbox magic + its own
+window-open counter (Turn advances mid-frame, unusable as a
+continuity token); recorder grows the MC2 windowed path. Pays on
+re-recorded takes only.**
 
 ## Capture caveats (not port bugs)
 

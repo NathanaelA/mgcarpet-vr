@@ -128,3 +128,42 @@ take:
 Runtime: ~8 s per suite (only selected pairs execute; the stream
 decode dominates). The cargo hook is
 `crates/mgc-conform/tests/suite.rs`.
+
+## The known-deviation roster
+
+`conformance/known-deviations.json` (loaded by `verify-deltas` unless
+`--no-roster`) classifies every diff row into NAMED, ledger-tracked
+families so the run's headline is the UNEXPLAINED residue, not the
+gross row count. The goal state on a fully triaged take: unexplained
+= 0 — everything either conforming or matched to a rule.
+
+Rules carry `status`:
+- `capture` — a closure limitation of the recording (terrain channel,
+  input latency, mid-frame window); not a port bug.
+- `deviation` — intentional port behavior registered in
+  docs/DEVIATIONS.md.
+- `open` — a real, ledger-tracked port lead awaiting its fix round
+  (known ≠ resolved; these are the working backlog).
+
+Rules match first-hit in order and scope on take stem, row kind
+(field/missing/extra), class, model, field name, pair-tick window,
+tile rect and slot list. Every rule's `note` MUST cite its
+CONFORMANCE-FINDINGS.md entry — a rule without provenance is a
+suppression, not a classification, and does not belong in the file.
+
+Guard rails:
+- The runner prints per-rule hit counts (rows / pairs) on every run;
+  a rule whose count jumps an order of magnitude is the regression
+  signal — the roster surfaces it rather than hiding it.
+- The `--csv` output carries the matched rule id in its final `rule`
+  column (empty = unexplained), so offline triage can both filter
+  known families and audit what a rule actually swallowed.
+- The FIXTURE suite ignores the roster entirely: signatures stay raw
+  so drift detection keeps full resolution.
+- When a fix or closure lands, retire or re-scope the rules it
+  obsoletes in the same change (the ledger's Resolved entry is the
+  cue), exactly like fixture promotion.
+
+Report lines: `N pairs fully explained (conforming + explained = M)`
+is the roster-aware conformance tier; `UNEXPLAINED rows: F field,
+M missing, E extra` is the number a triage session works to zero.

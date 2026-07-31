@@ -988,8 +988,16 @@ impl Gen {
                 }
             }
         }
-        // Speed ramp toward minSpeed (EF:62923-31).
-        {
+        // Speed ramp toward minSpeed (EF:62923-31) — the shared
+        // `sub_65820` core only. States 0 (`sub_65C20`, moves at
+        // actSpeed verbatim EF:63126), 1 (`CastPosses_65F60`,
+        // EF:63261) and 29 (`sub_65B50` = a charged-impact wrapper
+        // over the state-0 body, EF:63023) have NO ramp line;
+        // folding them into this tick must not synthesize one.
+        // Corpus: retail (9,0)/(9,1) speed holds constant across
+        // whole flights while the ramp pulled the port toward 384
+        // (the mc2 takes' +2/−2 speed family, sign = speed vs 384).
+        if !matches!(self.ent[i].tick70, 0 | 1 | 29) {
             let e = &mut self.ent[i];
             if e.f126 < e.f128 {
                 e.f126 += 2;

@@ -14,6 +14,7 @@
 
 mod fixtures;
 mod jsondiff;
+mod roster;
 mod verify;
 mod verify_mc2;
 
@@ -53,7 +54,9 @@ fn usage() -> ! {
            --dump-first      print the first divergent pair in full\n\
            --csv <path>      write every per-pair diff as a TSV row\n\
                              (t, kind, slot, class, model, field, want,\n\
-                             got, x, y, z — for offline triage)"
+                             got, x, y, z, rule — for offline triage)\n\
+           --no-roster       skip conformance/known-deviations.json\n\
+                             (raw, unclassified report — docs/CONFORMANCE.md)"
     );
     std::process::exit(2);
 }
@@ -81,6 +84,8 @@ pub struct Args {
     /// executed pairs are announced on stderr so an aborting pair
     /// self-incriminates).
     pub start: Option<u64>,
+    /// Skip the known-deviation roster (raw, unclassified report).
+    pub no_roster: bool,
 }
 
 fn parse_args() -> Args {
@@ -97,6 +102,7 @@ fn parse_args() -> Args {
         csv: None,
         out: None,
         sample_every: 10,
+        no_roster: false,
         max_open: 24,
         promote: false,
         input_delay: 0,
@@ -123,6 +129,7 @@ fn parse_args() -> Args {
             "--pin-pose" => a.pin_pose = it.next().unwrap_or_else(|| usage()),
             "--dump-first" => a.dump_first = true,
             "--dump-port" => a.dump_port = true,
+            "--no-roster" => a.no_roster = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--sample-every" => {

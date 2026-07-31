@@ -696,6 +696,34 @@ impl World {
             }
         }
         self.g.rival_ents[local] = 0;
+        // MC2 rival re-anchor — the MC1 rival-freeze twin: the
+        // class-3 dispatch keys on `mc2_rivals[ri].ent`, which the
+        // world-build seeded with fresh spawn slots, so every
+        // imported rival carpet replayed as a frozen husk (the mc2l4
+        // (3,1) family: obs@1 == state@0 verbatim for the wizard's
+        // whole life — the motion law itself is verbatim EF:6484).
+        // Motion/economy lanes only; the AI decision-lane decode is
+        // still owed (the same split as the MC1 fix).
+        for ri in 0..self.mc2_rivals.len() {
+            let slot = self.mc2_rivals[ri].slot as usize;
+            match st.players.get(slot) {
+                Some(p) if slot != local && p.play_index != 0 => {
+                    let ent = tr(p.play_index);
+                    let e = &st.ents[p.play_index as usize];
+                    self.reanchor_mc2_rival(
+                        ri,
+                        ent,
+                        p.cmd_speed,
+                        p.strafe,
+                        p.invuln.max(0) as u16,
+                        e.mana.max(0) as u32,
+                        e.mana_max.max(0) as u32,
+                        e.d88,
+                    );
+                }
+                _ => self.reanchor_mc2_rival(ri, 0, 0, 0, 0, 0, 0, 0),
+            }
+        }
         self.g.player_aggro = ply.wanted;
         self.g.player_danger = carpet.f36 as i16;
         self.g.player_mail = carpet.mail.map(|(a, s)| (a.max(0) as u32, tr(s)));
@@ -1193,6 +1221,31 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
     if r.class3f == 10 && matches!(r.model40, 0 | 6) {
         e.f140 = r.f2a as i32;
         e.f44 = r.f2c as u16;
+    }
+    // The (10,39)/(10,57) mana sphere keeps its z-velocity in
+    // `word_0x2C_44` (TransformArcherToMana EF:26188-91; the uniform
+    // @0x2E home is dead on spheres) — the ball tick's z-vel lane is
+    // f46. The uniform flag map also drops two mover latches: byte0
+    // & 0x40 = the absorb-chase mode (EF:26111), byte1 & 0x20 = the
+    // decay channel (EF:26289 — the port's bit-13 tail). The settle
+    // countdown @0x39 already rides the generic f58 ← b39 map.
+    if r.class3f == 10 && matches!(r.model40, 39 | 57) {
+        e.f46 = r.f2c;
+        if b0 & 0x40 != 0 {
+            e.flags |= 0x40;
+        }
+        if b1 & 0x20 != 0 {
+            e.flags |= 0x2000;
+        }
+    }
+    // Balloon ceiling-walk latch (sub_60D50 EF:61896/61905/61921,
+    // byte0 & 1): actSpeed 96 walking / 48 flying, ceiling clamp
+    // flying-only. Port bit 0 is overloaded per class, so the import
+    // stays (3,3)-scoped (mc2/castle.rs is the sole reader); without
+    // it every imported ceiling-walker re-took the flying branch —
+    // the mc2l30 (3,3) retail-+48 speed family.
+    if r.class3f == 3 && r.model40 == 3 && b0 & 1 != 0 {
+        e.flags |= 1;
     }
     e
 }

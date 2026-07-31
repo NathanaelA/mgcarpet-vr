@@ -559,6 +559,41 @@ impl World {
         }
     }
 
+    /// Conformance re-anchor (the MC1 rival-freeze fix's MC2 twin,
+    /// engine/world/conformance.rs): point the brain record at the
+    /// imported carpet slot and reseed the motion/economy lanes the
+    /// per-tick arms consume — without this every imported rival
+    /// carpet was a frozen husk (the dispatch above keys on `ent`,
+    /// which the world-build seeded with fresh spawn slots). The AI
+    /// decision lanes (state, target, hate/war, burst, cooldowns)
+    /// keep their world-build defaults: their closure decode is
+    /// still owed, exactly the split the MC1 fix made.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reanchor_mc2_rival(
+        &mut self,
+        ri: usize,
+        ent: u16,
+        vdes: i16,
+        strafe: i16,
+        grace: u16,
+        mana: u32,
+        mana_max: u32,
+        mana_delta: i32,
+    ) {
+        let r = &mut self.mc2_rivals[ri];
+        r.ent = ent;
+        r.eliminated = ent == 0;
+        if ent == 0 {
+            return;
+        }
+        r.vdes = vdes;
+        r.strafe = strafe;
+        r.grace = grace;
+        r.mana = mana;
+        r.mana_max = mana_max;
+        r.mana_delta = mana_delta;
+    }
+
     /// Housekeeping `sub_12A70` (EF:5320) + the state dispatch.
     fn mc2_rival_alive(&mut self, ri: usize, i: usize) {
         // Burst lockout recovery (EF:5357).

@@ -57,12 +57,17 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             let f = std::fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()))?;
             let mut w = std::io::BufWriter::new(f);
             use std::io::Write as _;
-            writeln!(w, "t\tkind\tslot\tclass\tmodel\tfield\twant\tgot\tx\ty\tz")
-                .map_err(|e| e.to_string())?;
+            writeln!(
+                w,
+                "t\tkind\tslot\tclass\tmodel\tfield\twant\tgot\tx\ty\tz\trule"
+            )
+            .map_err(|e| e.to_string())?;
             Some(w)
         }
         None => None,
     };
+    let roster = crate::verify::load_roster(args)?;
+    let take = crate::verify::take_stem(path);
 
     let mut prev: Option<(u64, RetailMc2, PlayerCommand)> = None;
     let mut prev_cmd = PlayerCommand::default();
@@ -128,12 +133,25 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         );
                     }
                     stats.absorb_rng(pst.rand, obs.rng, port.rng);
+                    let tags = roster.as_ref().map(|r| {
+                        let rmap: BTreeMap<u16, &EntObsMc2> =
+                            obs.entities.iter().map(|e| (e.slot, e)).collect();
+                        let pmap: BTreeMap<u16, &EntObsMc2> =
+                            port.entities.iter().map(|e| (e.slot, e)).collect();
+                        let ctx = |slot: u16| {
+                            rmap.get(&slot)
+                                .or_else(|| pmap.get(&slot))
+                                .map(|e| (e.class, e.model, e.x, e.y))
+                        };
+                        crate::verify::classify_pair(r, &take, pt, &pd, &ctx)
+                    });
                     if let Some(w) = csv.as_mut() {
-                        emit_csv_mc2(w, pt, &pd, &obs, &port).map_err(|e| e.to_string())?;
+                        emit_csv_mc2(w, pt, &pd, &obs, &port, roster.as_ref(), tags.as_ref())
+                            .map_err(|e| e.to_string())?;
                     }
                     let dump = args.dump == Some(pt)
                         || (args.dump_first && !pd.clean() && stats.first_diff.is_none());
-                    stats.absorb(pt, pd, args);
+                    stats.absorb(pt, pd, tags.as_ref(), roster.as_ref(), args);
                     if dump {
                         let (pd, port, _) = exec_pair_mc2(
                             &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
@@ -174,7 +192,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             }
         }
     }
-    print!("{}", stats.render(args));
+    print!("{}", stats.render(args, roster.as_ref()));
     Ok(stats.clean_pairs == stats.pairs)
 }
 
@@ -547,27 +565,44 @@ fn emit_csv_mc2(
     pd: &PairDiff,
     retail: &ObsMc2,
     port: &ObsMc2,
+    roster: Option<&crate::roster::Roster>,
+    tags: Option<&crate::roster::RuleTags>,
 ) -> std::io::Result<()> {
     let rmap: BTreeMap<u16, &EntObsMc2> = retail.entities.iter().map(|e| (e.slot, e)).collect();
     let pmap: BTreeMap<u16, &EntObsMc2> = port.entities.iter().map(|e| (e.slot, e)).collect();
     // One rng row per pair (even when equal) — offline solvers need
     // the full retail stream, not just the mismatches.
-    writeln!(w, "{t}\trng\t\t\t\t\t{}\t{}\t\t\t", retail.rng, port.rng)?;
+    writeln!(w, "{t}\trng\t\t\t\t\t{}\t{}\t\t\t\t", retail.rng, port.rng)?;
     let ctx = |slot: u16| -> (String, String, String) {
         match rmap.get(&slot).or_else(|| pmap.get(&slot)) {
             Some(e) => (format!("{}", e.x), format!("{}", e.y), e.z.to_string()),
             None => Default::default(),
         }
     };
-    for (slot, c, m) in &pd.missing {
+    let rule_id = |lane: fn(&crate::roster::RuleTags) -> &Vec<Option<usize>>, i: usize| -> &str {
+        match (roster, tags) {
+            (Some(r), Some(tg)) => lane(tg)[i].map_or("", |k| r.rules[k].id.as_str()),
+            _ => "",
+        }
+    };
+    for (i, (slot, c, m)) in pd.missing.iter().enumerate() {
         let (x, y, z) = ctx(*slot);
-        writeln!(w, "{t}\tmissing\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}")?;
+        let rid = rule_id(|t| &t.missing, i);
+        writeln!(
+            w,
+            "{t}\tmissing\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}\t{rid}"
+        )?;
     }
-    for (slot, c, m) in &pd.extra {
+    for (i, (slot, c, m)) in pd.extra.iter().enumerate() {
         let (x, y, z) = ctx(*slot);
-        writeln!(w, "{t}\textra\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}")?;
+        let rid = rule_id(|t| &t.extra, i);
+        writeln!(
+            w,
+            "{t}\textra\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}\t{rid}"
+        )?;
     }
-    for d in &pd.fields {
+    for (i, d) in pd.fields.iter().enumerate() {
+        let rid = rule_id(|t| &t.fields, i);
         match d.slot {
             Some(slot) => {
                 let (c, m) = rmap
@@ -577,13 +612,13 @@ fn emit_csv_mc2(
                 let (x, y, z) = ctx(slot);
                 writeln!(
                     w,
-                    "{t}\tfield\t{slot}\t{c}\t{m}\t{}\t{}\t{}\t{x}\t{y}\t{z}",
+                    "{t}\tfield\t{slot}\t{c}\t{m}\t{}\t{}\t{}\t{x}\t{y}\t{z}\t{rid}",
                     d.field, d.want, d.got
                 )?;
             }
             None => writeln!(
                 w,
-                "{t}\tfield\t\t\t\t{}\t{}\t{}\t\t\t",
+                "{t}\tfield\t\t\t\t{}\t{}\t{}\t\t\t\t{rid}",
                 d.field, d.want, d.got
             )?,
         }

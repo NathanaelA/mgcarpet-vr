@@ -86,6 +86,19 @@ fn count(w: &World, class: u8, model: u8) -> usize {
         .count()
 }
 
+/// Pool RECORDS regardless of life — the lightning trail's (9,9)
+/// billboards are born on the DEAD side of the born-dead law
+/// (`maxLife = (node_slot >= beam_slot) - 1`, EF:58341) and are
+/// already decaying by end-of-tick; retail's crackle renders from the
+/// mid-frame draw, not from a surviving record.
+fn records(w: &World, class: u8, model: u8) -> usize {
+    w.debug_pool()
+        .1
+        .iter()
+        .filter(|e| e.class == class && e.model == model)
+        .count()
+}
+
 #[test]
 fn mc2_possession_magnet_needs_a_mana_claim() {
     // Mana Magnet (Possession T1) must NOT drop a free-floating magnet
@@ -446,7 +459,11 @@ fn mc2_lightning_l0_is_a_one_tick_beam() {
     // billboards from the muzzle to the impact THIS frame (the
     // crackle). Without them the one-tick beam despawns before it can
     // render.
-    let flash = count(&w, 9, 9);
+    // Counted as RECORDS: the born-dead law (EF:58341) has every
+    // node at/behind the beam decaying within the cast tick — which
+    // node survives to end-of-tick depends on pool slot order, so
+    // the live count is layout-noise. The LAID line is the law.
+    let flash = records(&w, 9, 9);
     assert!(
         flash > 1,
         "the beam lays a sprite-216 trail flash ({flash} nodes)"
@@ -1093,12 +1110,13 @@ fn mc2_fools_mana_tier2_retaliates_with_lightning() {
     );
     let slot = w.debug_mc2_claim_fool_sphere(12345);
     assert!(slot != 0, "a decoy is present to be claimed");
-    let (fb0, lb0) = (count(&w, 9, 0), count(&w, 9, 9));
+    let (fb0, lb0) = (count(&w, 9, 0), records(&w, 9, 9));
     w.tick(pose, PlayerCommand::default());
     // The thunder bolt (subtype 9) fires the L0 beam, which flashes a
     // trail of (9,9) billboards — a large jump uniquely marks lightning.
+    // Records, not live: the trail is born-dead (see `records`).
     assert!(
-        count(&w, 9, 9) > lb0,
+        records(&w, 9, 9) > lb0,
         "the tier-2 decoy answers with a lightning bolt (flash), not silence"
     );
     assert_eq!(count(&w, 9, 0), fb0, "tier 2 does NOT fire a fireball");

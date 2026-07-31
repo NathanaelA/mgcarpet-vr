@@ -2880,9 +2880,18 @@ impl Gen {
         // slot order; MC2's sphere families are authored in Transform
         // order (GetManaSphereIndexFromId EF:26800 routes through
         // TransformPlayerColorIndex — crate::mc2::COLOR_ART).
+        let mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
+        // OPEN (mc2l4 corpus): a RIVAL-claimed sphere renders the
+        // NEUTRAL family in retail (sprite 56 = 52+4 with a live
+        // class-3 owner in +148) while the human's spheres color
+        // 105+size (mc2l0) — the wizard spawn stamps ext color =
+        // slot for BOTH (EF:43710), so the neutral derive's
+        // mechanism is unresolved. Conformance-invisible: the
+        // sprite lane isn't compared and the rotation quad below
+        // depends only on SIZE. The port keeps team colors.
         let base = match self.owner_team(self.ent[i].f144) {
             Some(team) => {
-                let art = if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+                let art = if mc2 {
                     crate::mc2::color_art(team)
                 } else {
                     team
@@ -2894,7 +2903,20 @@ impl Gen {
         let ty = (base + size) as u16;
         if self.ent[i].type86 != ty {
             self.set_sprite(i, ty);
-            if size != 0 {
+            if mc2 {
+                // SetManaSphereColorAndRot (EF:26744-77): every MC2
+                // re-sprite overwrites the applied quad with the
+                // per-size ROTATION constant — 14·(size+1), except
+                // 13 at size 0 — replacing the art extents the
+                // sprite setter derives.
+                const ROT: [u16; 8] = [13, 28, 42, 56, 70, 84, 98, 112];
+                let r = ROT[size.min(7)];
+                let e = &mut self.ent[i];
+                e.f78 = r;
+                e.f80 = r;
+                e.f82 = r;
+                e.f84 = r;
+            } else if size != 0 {
                 let e = &mut self.ent[i];
                 e.f80 /= 2;
                 e.f82 /= 2;
@@ -3567,6 +3589,15 @@ impl Gen {
         if self.ent[i].flags & 0x400 != 0 {
             return false;
         }
+        let mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
+        // MC2 stall skip (retail byte[1] & 8 → import bit 26,
+        // EF:26062-65): a one-shot whole-tick skip — intakes, modes
+        // and the decay tail included. Native MC2 never arms it on
+        // spheres; the conformance import carries it.
+        if mc2 && self.ent[i].flags & (1 << 26) != 0 {
+            self.ent[i].flags &= !(1 << 26);
+            return false;
+        }
         // MC2 Fool's Mana trap (docs/spell-audit/fools-mana.md): a
         // neutral sphere carrying a trap OWNER in f52 is one of the six
         // fake-mana decoys `sub_6C870` throws. A NON-owner possession
@@ -3642,9 +3673,13 @@ impl Gen {
         // pull NEVER claims (the ch4 amount is read by nothing;
         // player-confirmed): claim = the bolt's localized impact
         // flash + the merge's owned-beats-unowned adoption.
+        let mut kicked = false;
         if self.ent[i].mail[4].1 != 0 {
             let m = self.ent[i].mail[4].1 as usize;
             self.ent[i].mail[4] = (0, 0);
+            // Retail MC2's ch4 intake (w7A, EF:26097-110) forces one
+            // moving tick even on a settled sphere (the v35 latch).
+            kicked = true;
             if m < self.ent.len() {
                 let (bx, by) = (self.ent[i].x, self.ent[i].y);
                 let (mx, my) = (self.ent[m].x, self.ent[m].y);
@@ -3738,15 +3773,15 @@ impl Gen {
         // import widens i8, so 0x80 arrives as -128). MC1-scoped: the
         // MC2 sphere twin (EF's mover with the apocalypse decay tail)
         // is untraced for +58 and keeps its always-on physics.
-        if !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
-            let settle = (self.ent[i].f58 & 0xFF) as u8;
+        let settle = (self.ent[i].f58 & 0xFF) as u8;
+        if !mc2 {
             if settle == 0 {
                 // Settled balls TRACK the ground (deliberate,
                 // player-ruled — DEVIATIONS.md): retail's freeze
                 // leaves a mid-hop ball hanging in the air forever
                 // and lets terrain edits (volcano, castle stamps)
                 // BURY a grounded one. Both directions on purpose.
-                // Off under conformance replay.
+                // Off under conformance replay. MC1-native only.
                 if !ctx.strict {
                     let (x, y) = (self.ent[i].x, self.ent[i].y);
                     let g = self.ground_z(x, y) as i16;
@@ -3755,6 +3790,28 @@ impl Gen {
                 return false;
             }
             self.ent[i].f58 = (settle - 1) as i16;
+        } else {
+            // The MC2 settle law is the SAME shape at a different
+            // home: TransformArcherToMana's whole moving body sits
+            // behind `byte_0x39_57 || fresh-kick` (EF:26173), the
+            // ctor seeds @0x39 = 128 (CreateManaSphere EF:36617 —
+            // the port ctor's f58 = 0x80), an external pass steps
+            // it ~1/tick to 0 (mc2l4 corpus: b39 36→0, then f2c
+            // parks at −16 and the sphere never moves again), and
+            // nothing ever re-arms it. The port previously ran
+            // always-on physics here, dropping every authored
+            // economy sphere to the pristine ground (the mc2l4
+            // (10,39) z family). No ground-track deviation for MC2:
+            // frozen means frozen, both modes. A settled decaying
+            // sphere still runs the decay tail (EF:26289 sits
+            // outside the mode branch).
+            if settle == 0 && !kicked {
+                self.ball_decay_tail(i);
+                return false;
+            }
+            if settle != 0 {
+                self.ent[i].f58 = (settle - 1) as i16;
+            }
         }
         let mut vx = self.ent[i].dest_x as i16;
         let mut vy = self.ent[i].dest_y as i16;
@@ -3772,24 +3829,32 @@ impl Gen {
         // settled balls oscillate 16 units).
         let mut z = z0;
         let mut grounded = false;
-        if z > ground || self.ent[i].f46 > 0 {
+        // MC1 gates gravity on airborne-or-launched (a ball at rest
+        // stays at rest); MC2's mover applies it unconditionally in
+        // the moving branch (EF:26188-91 — the settle gate above is
+        // what keeps resting spheres still; the obs z round-trips
+        // because the ground clamp lands the same tick).
+        if mc2 || z > ground || self.ent[i].f46 > 0 {
             z = z.wrapping_add(self.ent[i].f46);
             self.ent[i].f46 = (self.ent[i].f46 - 16).max(-128);
         }
         if z <= ground {
             z = ground;
             grounded = true;
-            // MC1 bounce = -impact/4, ZEROED at <= 16 (:29538-49's
-            // `if (f46 <= 16) f46 = 0`) — rebound only past -64.
-            // MC2's sphere twin is untraced and keeps the old -32
-            // floor (its cave golden pins it).
             let v = self.ent[i].f46;
-            let floor = if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
-                -32
+            self.ent[i].f46 = if mc2 {
+                // MC2 exact transcription (EF:26244-52): rebound =
+                // −impact/4 truncating, then zeroed at ≤ 16. (The
+                // old −32 floor predated the mover's trace.)
+                let nb = -(v / 4);
+                if nb <= 16 { 0 } else { nb }
+            } else if v < -64 {
+                // MC1 bounce = -impact/4, ZEROED at <= 16 (:29538-49's
+                // `if (f46 <= 16) f46 = 0`) — rebound only past -64.
+                -v / 4
             } else {
-                -64
+                0
             };
-            self.ent[i].f46 = if v < floor { -v / 4 } else { 0 };
         }
         // Downhill roll + friction — GROUNDED only, both games (MC1
         // sub_27030's `tempV13 == z` branch :29556-64 via
@@ -3829,15 +3894,14 @@ impl Gen {
         // it, which is retail's own mana-retention loophole (magnet/
         // balloon consolidation into a permanent sphere).
         let decaying = self.ent[i].flags & 0x2000 != 0;
-        // MC1 scans for a partner only inside the grounded branch
-        // (`tempV13 == z`, :29552-55) — an airborne or arcing ball
-        // never initiates a merge (a kill's spawn scatter coalesces
-        // only as the balls land, one merge per grounded tick). MC2's
-        // sphere twin is untraced for this gate and keeps the
-        // always-scan.
-        let mc2 = matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
+        // BOTH games scan for a partner only inside the grounded
+        // branch: MC1 `tempV13 == z` (:29552-55), MC2 `v22 ==
+        // predicted.z` (EF:26265-69 — `sub_10A50` + `sub_36D50` sit
+        // inside the rest-contact arm). An airborne or arcing ball
+        // never initiates a merge; a kill's spawn scatter coalesces
+        // only as the balls land, one merge per grounded tick.
         for j in 1..self.ent.len() {
-            if decaying || (!grounded && !mc2) {
+            if decaying || !grounded {
                 break;
             }
             // Fool's-Mana traps never merge — the six decoys stay
@@ -3952,30 +4016,42 @@ impl Gen {
             }
         }
         // Size re-derivation every tick (:29569) — merged/claimed
-        // balls visibly grow/recolor in the original.
-        self.ball_resize(i);
-        // The apocalypse-rain DECAY channel (`byte[1] |= 0x20` — port
-        // flag bit 13; the MC2 sphere mover's tail, EF:26289-307):
-        // the timed sphere counts its life down — at 12 the 67%
-        // death-fade bit (24) arms, at 6 it swaps to the bit-23
-        // ghost, at 0 it expires. Only the doomsday mana rain sets
-        // the bit (mc2::morph summit91), so MC1 and ordinary spheres
-        // never enter; a balloon tether returns before this tail,
-        // reproducing retail's pickup-retains-the-ball behavior.
-        if decaying {
-            self.ent[i].act_life -= 1;
-            let l = self.ent[i].act_life;
-            if l < 6 {
-                if l == 0 {
-                    self.ent[i].flags |= 0x400;
-                }
-            } else if l == 6 {
-                self.ent[i].flags = (self.ent[i].flags | 1 << 23) & !(1 << 24);
-            } else if l == 12 {
-                self.ent[i].flags |= 1 << 24;
-            }
+        // balls visibly grow/recolor in the original. MC2's derive
+        // is gated off while decaying (EF:26286 `!(byte[1] & 0x20)`;
+        // the owner-change intake above recolors regardless — the
+        // v36 arm).
+        if !(mc2 && decaying) {
+            self.ball_resize(i);
         }
+        self.ball_decay_tail(i);
         false
+    }
+
+    /// The apocalypse-rain DECAY channel (`byte[1] |= 0x20` — port
+    /// flag bit 13; the MC2 sphere mover's tail, EF:26289-307): the
+    /// timed sphere counts its life down — at 12 the 67% death-fade
+    /// bit (24) arms, at 6 it swaps to the bit-23 ghost, at 0 it
+    /// expires. Only the doomsday mana rain (mc2::morph summit91)
+    /// and the conformance import set the bit, so MC1 and ordinary
+    /// spheres never enter; a balloon tether returns before this
+    /// tail, reproducing retail's pickup-retains-the-ball behavior.
+    /// Runs for SETTLED spheres too — retail's tail sits outside the
+    /// mode branch.
+    fn ball_decay_tail(&mut self, i: usize) {
+        if self.ent[i].flags & 0x2000 == 0 {
+            return;
+        }
+        self.ent[i].act_life -= 1;
+        let l = self.ent[i].act_life;
+        if l < 6 {
+            if l == 0 {
+                self.ent[i].flags |= 0x400;
+            }
+        } else if l == 6 {
+            self.ent[i].flags = (self.ent[i].flags | 1 << 23) & !(1 << 24);
+        } else if l == 12 {
+            self.ent[i].flags |= 1 << 24;
+        }
     }
 
     // ---- corpse pipeline ----------------------------------------------------

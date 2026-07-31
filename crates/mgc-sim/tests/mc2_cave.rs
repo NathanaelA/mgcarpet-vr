@@ -350,13 +350,22 @@ fn mc2_cave_behaviors_and_goldens() {
     // per-rival village-wanted timers joining the shared Gen hash: MC2
     // never flags a rival wanted (that mechanism is MC1's), so the delta
     // at every checkpoint is the new all-zero field in the hash input.
+    // Re-pinned (all four) for the traced MC2 sphere mover
+    // (TransformArcherToMana EF:26015, kinematics round): spheres now
+    // SETTLE (the @0x39 countdown freeze — the ctor's f58 = 0x80 was
+    // always seeded, the tick previously ignored it under MC2), the
+    // ground rebound is the exact −impact/4-zeroed-at-≤16 law
+    // (EF:26244-52, replacing the untraced −32 floor), merges are
+    // grounded-only (EF:26265-69), and every re-sprite writes the
+    // per-size rotation quad (EF:26744-77). Behavior change toward
+    // retail by design.
     assert_eq!(
         got,
         vec![
-            0xd7a30e11eae19f35u64,
-            0xa2b99cdd8e0b8641,
-            0xbe3dafd71ba732ca,
-            0xcc304371af818d61,
+            0x585c4cd25ad5702du64,
+            0xf0aec068e03f3917,
+            0xdfdbff17a368b19c,
+            0x9b50a1611d5f481a,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -386,11 +395,16 @@ fn mc2_cave_behaviors_and_goldens() {
     // phase to accumulate, and the earlier state-hash moves are
     // RNG-phase and hold-table internals, which this projection is
     // blind to by design.
+    // The traced sphere mover (see the golden pin above) moves B-D
+    // and HOLDS the load checkpoint: settled spheres freeze at their
+    // landing pose (no eternal re-merge/re-roll), the rebound zeroes
+    // at ≤16, and the rotation quad stamps on re-sprite — all
+    // observable sphere state downstream of ~a settle window.
     const OBSERVABLE: [u64; 4] = [
         0x4504aa689dad600c,
-        0xf19b104a99371181,
-        0x314278800b2eb1b4,
-        0x5f7928d0c96d4e27,
+        0x212e4f7324f787b0,
+        0x407d427caacc3b05,
+        0xb36f6999e24bda63,
     ];
     assert_eq!(
         obs, OBSERVABLE,

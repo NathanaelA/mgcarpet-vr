@@ -23,6 +23,9 @@ fn conformance_suite() {
         Ok(rd) => rd
             .filter_map(|e| Some(e.ok()?.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            // The known-deviation roster lives beside the suite
+            // manifests (docs/CONFORMANCE.md) but is not one.
+            .filter(|p| p.file_name().is_none_or(|n| n != "known-deviations.json"))
             .collect(),
         Err(_) => {
             println!("SKIP: no conformance/ manifest dir");

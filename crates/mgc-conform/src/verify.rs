@@ -74,12 +74,17 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             let f = std::fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()))?;
             let mut w = std::io::BufWriter::new(f);
             use std::io::Write as _;
-            writeln!(w, "t\tkind\tslot\tclass\tmodel\tfield\twant\tgot\tx\ty\tz")
-                .map_err(|e| e.to_string())?;
+            writeln!(
+                w,
+                "t\tkind\tslot\tclass\tmodel\tfield\twant\tgot\tx\ty\tz\trule"
+            )
+            .map_err(|e| e.to_string())?;
             Some(w)
         }
         None => None,
     };
+    let roster = load_roster(args)?;
+    let take = take_stem(path);
 
     // Stream pairs.
     let mut prev: Option<(u64, RetailMc1, PlayerCommand)> = None;
@@ -169,12 +174,25 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     let mut pd = compare(&obs, &port, report.human_slot);
                     append_hand_diffs(&mut pd, &st, &port, pst.local_player as usize);
                     let pd = pd;
+                    let tags = roster.as_ref().map(|r| {
+                        let rmap: BTreeMap<u16, &EntObsMc1> =
+                            obs.entities.iter().map(|e| (e.slot, e)).collect();
+                        let pmap: BTreeMap<u16, &EntObsMc1> =
+                            port.entities.iter().map(|e| (e.slot, e)).collect();
+                        let ctx = |slot: u16| {
+                            rmap.get(&slot)
+                                .or_else(|| pmap.get(&slot))
+                                .map(|e| (e.class, e.model, e.x, e.y))
+                        };
+                        classify_pair(r, &take, pt, &pd, &ctx)
+                    });
                     if let Some(w) = csv.as_mut() {
-                        emit_csv(w, pt, &pd, &obs, &port).map_err(|e| e.to_string())?;
+                        emit_csv(w, pt, &pd, &obs, &port, roster.as_ref(), tags.as_ref())
+                            .map_err(|e| e.to_string())?;
                     }
                     let dump = args.dump == Some(pt)
                         || (args.dump_first && !pd.clean() && stats.first_diff.is_none());
-                    stats.absorb(pt, pd, args);
+                    stats.absorb(pt, pd, tags.as_ref(), roster.as_ref(), args);
                     if dump {
                         // Re-diff for the full print (absorb consumed it).
                         let pd = compare(&obs, &port, report.human_slot);
@@ -214,20 +232,102 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             }
         }
     }
-    print!("{}", stats.render(args));
+    print!("{}", stats.render(args, roster.as_ref()));
     Ok(stats.clean_pairs == stats.pairs)
+}
+
+/// The default committed roster path (docs/CONFORMANCE.md): loaded
+/// unless `--no-roster`; a missing file is not an error.
+pub(crate) fn load_roster(args: &Args) -> Result<Option<crate::roster::Roster>, String> {
+    if args.no_roster {
+        return Ok(None);
+    }
+    crate::roster::Roster::load(std::path::Path::new("conformance/known-deviations.json"))
+}
+
+/// The take name rules scope on: the recording's file stem.
+pub(crate) fn take_stem(path: &std::path::Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Tag every row of a pair's diff against the roster. `ctx` resolves
+/// a slot to (class, model, x, y) with `emit_csv`'s convention: the
+/// retail entity's, falling back to the port's for extra-in-port
+/// slots. Shared by the MC1 and MC2 arms.
+pub(crate) fn classify_pair(
+    roster: &crate::roster::Roster,
+    take: &str,
+    t: u64,
+    pd: &PairDiff,
+    ctx: &dyn Fn(u16) -> Option<(u8, u8, f64, f64)>,
+) -> crate::roster::RuleTags {
+    use crate::roster::{RowCtx, RowKind, RuleTags};
+    let pos = |slot: u16| ctx(slot).map(|(_, _, x, y)| (x, y));
+    let mut tags = RuleTags::default();
+    for (slot, c, m) in &pd.missing {
+        tags.missing.push(roster.classify(
+            take,
+            t,
+            &RowCtx {
+                kind: RowKind::Missing,
+                slot: Some(*slot),
+                class: *c,
+                model: *m,
+                field: None,
+                pos: pos(*slot),
+            },
+        ));
+    }
+    for (slot, c, m) in &pd.extra {
+        tags.extra.push(roster.classify(
+            take,
+            t,
+            &RowCtx {
+                kind: RowKind::Extra,
+                slot: Some(*slot),
+                class: *c,
+                model: *m,
+                field: None,
+                pos: pos(*slot),
+            },
+        ));
+    }
+    for d in &pd.fields {
+        let (c, m, p) = match d.slot.and_then(&ctx) {
+            Some((c, m, x, y)) => (c, m, Some((x, y))),
+            None => (0, 0, None),
+        };
+        tags.fields.push(roster.classify(
+            take,
+            t,
+            &RowCtx {
+                kind: RowKind::Field,
+                slot: d.slot,
+                class: c,
+                model: m,
+                field: Some(d.field),
+                pos: p,
+            },
+        ));
+    }
+    tags
 }
 
 /// One TSV row per diff event: field mismatches carry the retail
 /// entity's (class, model, x, y, z) as spatial context (falling back
 /// to the port's for extra-in-port slots) so offline triage can
-/// cluster divergence geographically (e.g. crater sites).
+/// cluster divergence geographically (e.g. crater sites). The last
+/// column is the matched roster rule id (empty = unexplained).
 fn emit_csv(
     w: &mut impl std::io::Write,
     t: u64,
     pd: &PairDiff,
     retail: &ObsMc1,
     port: &ObsMc1,
+    roster: Option<&crate::roster::Roster>,
+    tags: Option<&crate::roster::RuleTags>,
 ) -> std::io::Result<()> {
     let rmap: BTreeMap<u16, &EntObsMc1> = retail.entities.iter().map(|e| (e.slot, e)).collect();
     let pmap: BTreeMap<u16, &EntObsMc1> = port.entities.iter().map(|e| (e.slot, e)).collect();
@@ -243,27 +343,42 @@ fn emit_csv(
             None => Default::default(),
         }
     };
-    for (slot, c, m) in &pd.missing {
+    let rule_id = |lane: fn(&crate::roster::RuleTags) -> &Vec<Option<usize>>, i: usize| -> &str {
+        match (roster, tags) {
+            (Some(r), Some(tg)) => lane(tg)[i].map_or("", |k| r.rules[k].id.as_str()),
+            _ => "",
+        }
+    };
+    for (i, (slot, c, m)) in pd.missing.iter().enumerate() {
         let (_, _, x, y, z) = ctx(*slot);
-        writeln!(w, "{t}\tmissing\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}")?;
+        let rid = rule_id(|t| &t.missing, i);
+        writeln!(
+            w,
+            "{t}\tmissing\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}\t{rid}"
+        )?;
     }
-    for (slot, c, m) in &pd.extra {
+    for (i, (slot, c, m)) in pd.extra.iter().enumerate() {
         let (_, _, x, y, z) = ctx(*slot);
-        writeln!(w, "{t}\textra\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}")?;
+        let rid = rule_id(|t| &t.extra, i);
+        writeln!(
+            w,
+            "{t}\textra\t{slot}\t{c}\t{m}\t\t\t\t{x}\t{y}\t{z}\t{rid}"
+        )?;
     }
-    for d in &pd.fields {
+    for (i, d) in pd.fields.iter().enumerate() {
+        let rid = rule_id(|t| &t.fields, i);
         match d.slot {
             Some(slot) => {
                 let (c, m, x, y, z) = ctx(slot);
                 writeln!(
                     w,
-                    "{t}\tfield\t{slot}\t{c}\t{m}\t{}\t{}\t{}\t{x}\t{y}\t{z}",
+                    "{t}\tfield\t{slot}\t{c}\t{m}\t{}\t{}\t{}\t{x}\t{y}\t{z}\t{rid}",
                     d.field, d.want, d.got
                 )?;
             }
             None => writeln!(
                 w,
-                "{t}\tfield\t\t\t\t{}\t{}\t{}\t\t\t",
+                "{t}\tfield\t\t\t\t{}\t{}\t{}\t\t\t\t{rid}",
                 d.field, d.want, d.got
             )?,
         }
@@ -654,6 +769,15 @@ pub(crate) struct Stats {
     /// Steps are recovered by walking `9377x+9439` from rand@N to
     /// rand@N+1 (17 = "more than 16").
     rng_hist: BTreeMap<(u8, u8), u64>,
+    /// Roster classification: rule index → (rows, pairs touched).
+    rule_rows: BTreeMap<usize, (u64, u64)>,
+    /// Pairs whose every diff row matched a rule (rng clean): the
+    /// "conforming net of known deviations" tier.
+    explained_pairs: u64,
+    /// Unexplained residue (rows no rule matched).
+    unknown_fields: u64,
+    unknown_missing: u64,
+    unknown_extra: u64,
     /// Phase-clock disagreements: retail steps +63 only through state
     /// rows with a live handler. Keyed (class, model, state)@N →
     /// {(retail step, port step) → count}.
@@ -710,10 +834,43 @@ impl Stats {
         }
     }
 
-    pub(crate) fn absorb(&mut self, t: u64, pd: PairDiff, args: &Args) {
+    pub(crate) fn absorb(
+        &mut self,
+        t: u64,
+        pd: PairDiff,
+        tags: Option<&crate::roster::RuleTags>,
+        roster: Option<&crate::roster::Roster>,
+        args: &Args,
+    ) {
+        let _ = roster;
         if pd.clean() {
             self.clean_pairs += 1;
             return;
+        }
+        if let Some(tg) = tags {
+            let mut touched: std::collections::BTreeSet<usize> = Default::default();
+            for (lane, unknown) in [
+                (&tg.missing, &mut self.unknown_missing),
+                (&tg.extra, &mut self.unknown_extra),
+                (&tg.fields, &mut self.unknown_fields),
+            ] {
+                for tag in lane {
+                    match tag {
+                        Some(k) => {
+                            let e = self.rule_rows.entry(*k).or_default();
+                            e.0 += 1;
+                            touched.insert(*k);
+                        }
+                        None => *unknown += 1,
+                    }
+                }
+            }
+            for k in touched {
+                self.rule_rows.entry(k).or_default().1 += 1;
+            }
+            if pd.rng_want == pd.rng_got && tg.all_known() {
+                self.explained_pairs += 1;
+            }
         }
         let rng_bad = pd.rng_want != pd.rng_got;
         if rng_bad {
@@ -749,7 +906,7 @@ impl Stats {
         }
     }
 
-    pub(crate) fn render(&self, args: &Args) -> String {
+    pub(crate) fn render(&self, args: &Args, roster: Option<&crate::roster::Roster>) -> String {
         let mut s = String::new();
         let fixture = self.pairs - self.torn;
         let _ = writeln!(
@@ -765,6 +922,28 @@ impl Stats {
             self.rng_only_pairs,
             fixture - self.clean_pairs - self.rng_only_pairs
         );
+        if let Some(r) = roster {
+            let _ = writeln!(
+                s,
+                "   roster (conformance/known-deviations.json): {} pairs fully explained \
+                 (conforming + explained = {}); UNEXPLAINED rows: {} field, {} missing, \
+                 {} extra",
+                self.explained_pairs,
+                self.clean_pairs + self.explained_pairs,
+                self.unknown_fields,
+                self.unknown_missing,
+                self.unknown_extra
+            );
+            if !self.rule_rows.is_empty() {
+                let _ = writeln!(s, "   rule hits (rows / pairs):");
+                let mut rows: Vec<_> = self.rule_rows.iter().collect();
+                rows.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+                for (k, (n, p)) in rows {
+                    let rule = &r.rules[*k];
+                    let _ = writeln!(s, "     [{:9}] {}: {n} / {p}", rule.status.tag(), rule.id);
+                }
+            }
+        }
         let _ = writeln!(
             s,
             "   rng: {} / {} pairs mismatched; draws/tick (retail, port) → pairs:",

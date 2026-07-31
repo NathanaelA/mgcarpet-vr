@@ -1,276 +1,271 @@
 {
- "recording": "../recordings/mc2l30.mgcr",
- "input_delay": 2,
- "pin_pose": "n1",
- "fixtures": [
-  {
-   "t": 1,
-   "status": "open",
-   "sig": "7ae84f218311c7f1",
-   "atoms": [
-    "extra:10,64",
-    "field:10,45:life",
-    "field:10,45:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7riser-reap, \u00a7terraform, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 2,
-   "status": "capture",
-   "sig": "0c4b3a965bc7e7bf",
-   "atoms": [
-    "field:10,45:life",
-    "field:10,45:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform"
-  },
-  {
-   "t": 3,
-   "status": "capture",
-   "sig": "32f08f62d73c1967",
-   "atoms": [
-    "field:10,45:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform"
-  },
-  {
-   "t": 6,
-   "status": "conforming"
-  },
-  {
-   "t": 7,
-   "status": "open",
-   "sig": "aa892c1ff46fb1ea",
-   "atoms": [
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7l30-churn/rng"
-  },
-  {
-   "t": 8,
-   "status": "open",
-   "sig": "b4818d3a125bc598",
-   "atoms": [
-    "field:10,45:life",
-    "field:10,45:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 13,
-   "status": "open",
-   "sig": "a636c192a20b6a00",
-   "atoms": [
-    "field:10,45:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 16,
-   "status": "open",
-   "sig": "3fe4133ae154c0ef",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 17,
-   "status": "open",
-   "sig": "3ade3b1f17bee43c",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:heading",
-    "field:5,4:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 19,
-   "status": "capture",
-   "sig": "f1acd41e43ba5b74",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 21,
-   "status": "capture",
-   "sig": "6b422581f8c643fc",
-   "atoms": [
-    "field:10,45:life",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 22,
-   "status": "open",
-   "sig": "ad3b1890eb857d29",
-   "atoms": [
-    "field:10,45:life",
-    "field:10,45:z",
-    "field:14,2:life",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 29,
-   "status": "capture",
-   "sig": "8ca7dc0997343384",
-   "atoms": [
-    "field:10,45:action",
-    "field:10,45:life",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 37,
-   "status": "capture",
-   "sig": "e7809022bb541e5d",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:sv1",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 43,
-   "status": "open",
-   "sig": "8e08f170739abd78",
-   "atoms": [
-    "field:10,0:z",
-    "field:10,39:z",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7l30-churn, \u00a7sphere, \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 52,
-   "status": "open",
-   "sig": "0df7f6932982ccce",
-   "atoms": [
-    "extra:10,0",
-    "field:10,39:z",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7l30-churn, \u00a7sphere, \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 53,
-   "status": "open",
-   "sig": "8e654edbb1457380",
-   "atoms": [
-    "field:10,39:z",
-    "field:10,45:z",
-    "field:5,4:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7sphere, \u00a7terraform, \u00a7terraform-scroll, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 55,
-   "status": "open",
-   "sig": "02db9a7e80404ae7",
-   "atoms": [
-    "field:10,39:z",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7sphere, \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 78,
-   "status": "open",
-   "sig": "fcdad818b318efd9",
-   "atoms": [
-    "extra:9,10",
-    "field:10,39:z",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7sphere, \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 88,
-   "status": "open",
-   "sig": "9de98ddc0a21c235",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:z",
-    "missing:10,86"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll, \u00a7drip"
-  },
-  {
-   "t": 92,
-   "status": "capture",
-   "sig": "b34bddb2b7b9d17b",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:heading",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 111,
-   "status": "open",
-   "sig": "594ae38c53e6c87a",
-   "atoms": [
-    "field:10,45:z",
-    "field:5,4:z",
-    "missing:10,86",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll, \u00a7drip, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 119,
-   "status": "open",
-   "sig": "8dd9c3d64a74b869",
-   "atoms": [
-    "field:5,4:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform-scroll, \u00a7l30-churn/rng"
-  },
-  {
-   "t": 122,
-   "status": "open",
-   "sig": "e55ed62f7d73e7d7",
-   "atoms": [
-    "extra:10,86",
-    "field:10,45:z",
-    "field:5,4:z"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7drip, \u00a7terraform, \u00a7terraform-scroll"
-  },
-  {
-   "t": 15396,
-   "status": "open",
-   "sig": "557e88edff14078b",
-   "atoms": [
-    "field:14,3:z",
-    "field:5,15:z",
-    "rng"
-   ],
-   "note": "ledger mc2l4+mc2l30 triage: \u00a7l30-terrain, \u00a7l4-guard-terrain, \u00a7l30-churn/rng"
-  }
- ]
+  "recording": "../recordings/mc2l30.mgcr",
+  "input_delay": 2,
+  "pin_pose": "n1",
+  "fixtures": [
+    {
+      "t": 1,
+      "status": "open",
+      "sig": "7ae84f218311c7f1",
+      "atoms": [
+        "extra:10,64",
+        "field:10,45:life",
+        "field:10,45:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §riser-reap, §terraform, §l30-churn/rng"
+    },
+    {
+      "t": 2,
+      "status": "capture",
+      "sig": "0c4b3a965bc7e7bf",
+      "atoms": [
+        "field:10,45:life",
+        "field:10,45:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform"
+    },
+    {
+      "t": 3,
+      "status": "capture",
+      "sig": "32f08f62d73c1967",
+      "atoms": [
+        "field:10,45:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform"
+    },
+    {
+      "t": 6,
+      "status": "conforming"
+    },
+    {
+      "t": 7,
+      "status": "open",
+      "sig": "aa892c1ff46fb1ea",
+      "atoms": [
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §l30-churn/rng"
+    },
+    {
+      "t": 8,
+      "status": "open",
+      "sig": "b4818d3a125bc598",
+      "atoms": [
+        "field:10,45:life",
+        "field:10,45:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §l30-churn/rng"
+    },
+    {
+      "t": 13,
+      "status": "open",
+      "sig": "a636c192a20b6a00",
+      "atoms": [
+        "field:10,45:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §l30-churn/rng"
+    },
+    {
+      "t": 16,
+      "status": "open",
+      "sig": "3fe4133ae154c0ef",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §l30-churn/rng"
+    },
+    {
+      "t": 17,
+      "status": "open",
+      "sig": "3ade3b1f17bee43c",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:heading",
+        "field:5,4:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §l30-churn/rng"
+    },
+    {
+      "t": 19,
+      "status": "capture",
+      "sig": "f1acd41e43ba5b74",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll"
+    },
+    {
+      "t": 21,
+      "status": "capture",
+      "sig": "6b422581f8c643fc",
+      "atoms": [
+        "field:10,45:life",
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll"
+    },
+    {
+      "t": 22,
+      "status": "open",
+      "sig": "ad3b1890eb857d29",
+      "atoms": [
+        "field:10,45:life",
+        "field:10,45:z",
+        "field:14,2:life",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll"
+    },
+    {
+      "t": 29,
+      "status": "capture",
+      "sig": "8ca7dc0997343384",
+      "atoms": [
+        "field:10,45:action",
+        "field:10,45:life",
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll"
+    },
+    {
+      "t": 37,
+      "status": "capture",
+      "sig": "e7809022bb541e5d",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:sv1",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll"
+    },
+    {
+      "t": 43,
+      "status": "open",
+      "sig": "653a2cad451ad547",
+      "atoms": [
+        "field:10,0:z",
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §l30-churn, §sphere, §terraform, §terraform-scroll"
+    },
+    {
+      "t": 52,
+      "status": "open",
+      "sig": "5199cefd2c6a9a29",
+      "atoms": [
+        "extra:10,0",
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §l30-churn, §sphere, §terraform, §terraform-scroll"
+    },
+    {
+      "t": 53,
+      "status": "open",
+      "sig": "3fe4133ae154c0ef",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §sphere, §terraform, §terraform-scroll, §l30-churn/rng"
+    },
+    {
+      "t": 55,
+      "status": "open",
+      "sig": "f1acd41e43ba5b74",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §sphere, §terraform, §terraform-scroll"
+    },
+    {
+      "t": 78,
+      "status": "open",
+      "sig": "8106ab19c295c362",
+      "atoms": [
+        "extra:9,10",
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §sphere, §terraform, §terraform-scroll"
+    },
+    {
+      "t": 88,
+      "status": "open",
+      "sig": "9de98ddc0a21c235",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:z",
+        "missing:10,86"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §drip"
+    },
+    {
+      "t": 92,
+      "status": "capture",
+      "sig": "b34bddb2b7b9d17b",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:heading",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll"
+    },
+    {
+      "t": 111,
+      "status": "open",
+      "sig": "594ae38c53e6c87a",
+      "atoms": [
+        "field:10,45:z",
+        "field:5,4:z",
+        "missing:10,86",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §drip, §l30-churn/rng"
+    },
+    {
+      "t": 119,
+      "status": "open",
+      "sig": "8dd9c3d64a74b869",
+      "atoms": [
+        "field:5,4:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §terraform-scroll, §l30-churn/rng"
+    },
+    {
+      "t": 122,
+      "status": "open",
+      "sig": "e55ed62f7d73e7d7",
+      "atoms": [
+        "extra:10,86",
+        "field:10,45:z",
+        "field:5,4:z"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §drip, §terraform, §terraform-scroll"
+    },
+    {
+      "t": 15396,
+      "status": "open",
+      "sig": "557e88edff14078b",
+      "atoms": [
+        "field:14,3:z",
+        "field:5,15:z",
+        "rng"
+      ],
+      "note": "ledger mc2l4+mc2l30 triage: §l30-terrain, §l4-guard-terrain, §l30-churn/rng"
+    }
+  ]
 }

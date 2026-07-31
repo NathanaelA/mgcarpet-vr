@@ -788,8 +788,8 @@ mod tests {
 
     #[test]
     fn generation_is_deterministic() {
-        let a = generate(&sample_params());
-        let b = generate(&sample_params());
+        let a = generate(&sample_params(), false);
+        let b = generate(&sample_params(), false);
         assert_eq!(a.tile_type, b.tile_type);
         assert_eq!(a.height, b.height);
         assert_eq!(a.shading, b.shading);
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn output_invariants() {
-        let t = generate(&sample_params());
+        let t = generate(&sample_params(), false);
         assert!(t.height.iter().all(|&h| h <= 196), "heights clamp to 196");
         assert!(
             t.tile_type.iter().all(|&ty| ty < 148),

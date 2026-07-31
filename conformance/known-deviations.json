@@ -1,0 +1,408 @@
+{
+  "_doc": "The KNOWN-DEVIATION ROSTER (docs/CONFORMANCE.md). Every rule cites its docs/CONFORMANCE-FINDINGS.md entry; status: capture = recording-closure limitation, deviation = DEVIATIONS.md-registered behavior, open = ledger-tracked port lead awaiting its fix. Rules match first-hit in order \u2014 keep specific rules above general ones. The runner prints per-rule hit counts every run: a rule whose count jumps an order of magnitude is a signal, not a mask.",
+  "rules": [
+    {
+      "id": "mc2-terraform-houses",
+      "status": "capture",
+      "note": "\u00a7terraform: village growth regrades the hill (main wave ~t=751, first edits ~t=500); (10,45) house z ground-snaps both sides, the port to the pristine plane (ledger MC2 take-2). A house's z has no source but terrain \u2014 any (10,45) z diff is closure by mechanism.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 10,
+      "model": 45,
+      "field": "z"
+    },
+    {
+      "id": "mc2-guard-terrain",
+      "status": "capture",
+      "note": "\u00a7l4-guard-terrain: (5,15) castle guards walk a runtime-terraformed mound the pristine replay lacks \u2014 z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand. One root, all lanes; port laws verified faithful line-by-line (ledger mc2l4+mc2l30 triage).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 5,
+      "model": 15
+    },
+    {
+      "id": "mc2l30-plateau-markers",
+      "status": "capture",
+      "note": "\u00a7l30-terrain: the (14,x) markers sit on the retail 2176 plateau the port heightfield lacks (12 of 14 exactly -1664). Load-time-vs-runtime check still owed \u2014 flip to open if the load-time raise proves portable.",
+      "takes": [
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 14,
+      "field": "z"
+    },
+    {
+      "id": "mc2-archer-ground-z",
+      "status": "open",
+      "note": "(5,4) archers ground-snap to a pristine plane that reads a different datum than retail's (l4: constant -192 from t=0). The LOAD-TIME terrain-edit check is the owed verdict (ledger (14,5) entry, l4 face).",
+      "takes": [
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 5,
+      "model": 4,
+      "field": "z"
+    },
+    {
+      "id": "mc2-token-fall-z",
+      "status": "capture",
+      "note": "(15,19) token falls to retail's excavated 288 while the port clamps at its pristine 1296 floor (ledger \u00a7l30-terrain).",
+      "takes": [
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 15,
+      "model": 19,
+      "field": "z"
+    },
+    {
+      "id": "mc2-rival-ai-lanes",
+      "status": "open",
+      "note": "The (3,1) rival-wizard remainder after the freeze fix: AI decision lanes (state/target/hate/burst/cooldowns) import as world-build defaults pending the MC2 wizard-ext decode (ledger KINEMATICS ROUND fix 3).",
+      "takes": [
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 3,
+      "model": 1
+    },
+    {
+      "id": "mc2-sphere-terrain-z",
+      "status": "capture",
+      "note": "(10,39) sphere z residual after the mover port: spheres rest on terrain the closure cannot reproduce (l30 cave mound constants; l4 event sites) plus birth-edge jitter (ledger KINEMATICS ROUND fix 4).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 10,
+      "model": 39,
+      "field": "z"
+    },
+    {
+      "id": "mc2-fire-smoke-churn",
+      "status": "capture",
+      "note": "\u00a7effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 14
+    },
+    {
+      "id": "mc2-fire-churn-m13",
+      "status": "capture",
+      "note": "See mc2-fire-smoke-churn \u2014 the (10,13) emitter face.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 13
+    },
+    {
+      "id": "mc2-fire-churn-m0",
+      "status": "capture",
+      "note": "See mc2-fire-smoke-churn \u2014 the (10,0) fire face (flicker band + substitution).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 0
+    },
+    {
+      "id": "mc2-fire-churn-m6",
+      "status": "capture",
+      "note": "See mc2-fire-smoke-churn \u2014 the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 6
+    },
+    {
+      "id": "mc2-cast-timing-missing",
+      "status": "capture",
+      "note": "Class-9 projectiles missing-in-port: the human's replayed cast fires a pair off retail's (input latency, --input-delay 2 doctrine; ledger entry 4 / \u00a7casts / \u00a7lightning residual).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "missing",
+      "class": 9
+    },
+    {
+      "id": "mc2-cast-timing-extra",
+      "status": "capture",
+      "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "extra",
+      "class": 9
+    },
+    {
+      "id": "mc2-lightning-blast-churn",
+      "status": "capture",
+      "note": "(10,23) lightning blasts ride the cast-timing skew (ledger \u00a7lightning residual).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 23
+    },
+    {
+      "id": "mc1l0-village-regrade",
+      "status": "capture",
+      "note": "TERRAIN CLOSURE (ledger entry 2): the village regrade at (152-164,44-56) from t~992 \u2014 heights AND tile types (the construction paint pass).",
+      "takes": [
+        "mc1l0"
+      ],
+      "t_min": 985,
+      "rect": [
+        150.0,
+        42.0,
+        166.0,
+        58.0
+      ]
+    },
+    {
+      "id": "mc1l0-cast-impacts",
+      "status": "capture",
+      "note": "Ledger entry 4: the impact cluster around casts \u2014 class-9 missing/extra + (10,12) hit-flash churn = input latency + unreconstructed aim; partially mitigated by --input-delay 2.",
+      "takes": [
+        "mc1l0"
+      ],
+      "kind": "missing",
+      "class": 9
+    },
+    {
+      "id": "mc1l0-cast-impacts-extra",
+      "status": "capture",
+      "note": "See mc1l0-cast-impacts \u2014 the extra-in-port side.",
+      "takes": [
+        "mc1l0"
+      ],
+      "kind": "extra",
+      "class": 9
+    },
+    {
+      "id": "mc1l0-hit-flash",
+      "status": "capture",
+      "note": "See mc1l0-cast-impacts \u2014 the (10,12) hit-flash slot-mismatch face.",
+      "takes": [
+        "mc1l0"
+      ],
+      "class": 10,
+      "model": 12
+    },
+    {
+      "id": "mc1hwl0-terrain-z",
+      "status": "capture",
+      "note": "TERRAIN CLOSURE, HW face (ledger MC1HW section): the castle-mound region raised ~+1000 by late-run puts z rows on ~every pair by construction; the ground-audit instrument proved the pristine plane exact at t=0. Whole-take z rule \u2014 HW progress reads from the other lanes.",
+      "takes": [
+        "mc1hwl0"
+      ],
+      "kind": "field",
+      "field": "z"
+    },
+    {
+      "id": "mc2l0-static-75-218",
+      "status": "capture",
+      "note": "One (2,1) static (slot 126) at site (75.5,218.5): constant z -113 from onset t=1821 to end of take \u2014 the terrain-closure diagnostic shape (constant per-entity offset from an edit onset).",
+      "takes": [
+        "mc2l0"
+      ],
+      "kind": "field",
+      "class": 2,
+      "model": 1,
+      "field": "z",
+      "t_min": 1800,
+      "rect": [
+        73.0,
+        216.0,
+        78.0,
+        221.0
+      ]
+    },
+    {
+      "id": "mc2l0-castle-z",
+      "status": "open",
+      "note": "Ledger \u00a7castle (mc2l0 open lead): the (3,2) castle's z datum + sphere-owner lane drift late in the run; undug.",
+      "takes": [
+        "mc2l0"
+      ],
+      "class": 3,
+      "model": 2
+    },
+    {
+      "id": "mc2-balloon-z",
+      "status": "open",
+      "note": "(3,3) balloon z drift \u2014 the castle follow-up (b) '-128 post-rise residual' + undug balloon altitude law (walk-bit speed fixed in the KINEMATICS ROUND; z lane still owed).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 3,
+      "model": 3,
+      "field": "z"
+    },
+    {
+      "id": "mc2-flyer-drift-m3",
+      "status": "open",
+      "note": "\u00a7wander-drift re-ruling: the (5,3) multipart flyer's z-bob (+/-8..56 airborne offset) + downstream x/y/heading/pitch drift \u2014 the untraced M3 altitude source (KINEMATICS ROUND rulings).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 5,
+      "model": 3
+    },
+    {
+      "id": "mc2-flyer-drift-m0",
+      "status": "open",
+      "note": "See mc2-flyer-drift-m3 \u2014 the (5,0) worm-chain face.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 5,
+      "model": 0
+    },
+    {
+      "id": "mc2-cast-timing-fields",
+      "status": "capture",
+      "note": "Class-9 field rows: post-ramp-fix residue measured as birth pairs (the retail slot is FREE at state-N) + slot substitutions riding the cast-timing skew (KINEMATICS ROUND fix 1 residue note).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 9
+    },
+    {
+      "id": "mc1l0-terrain-z",
+      "status": "capture",
+      "note": "TERRAIN CLOSURE (ledger entry 2, whole-family ruling): craters, castle pads, regrades invisible to pristine-plane replay; z clusters at event sites with constant per-entity offsets from onset. The walker x/y/heading knock-on stays UNexplained until a terrain channel exists.",
+      "takes": [
+        "mc1l0"
+      ],
+      "kind": "field",
+      "field": "z"
+    },
+    {
+      "id": "mc2-castle-pad-z",
+      "status": "capture",
+      "note": "(3,2) castle z on l4/l30: the castle stands ON the runtime-terraformed mound the pristine replay lacks (the guard-terrain root; ledger \u00a7l4-guard-terrain).",
+      "takes": [
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 3,
+      "model": 2,
+      "field": "z"
+    },
+    {
+      "id": "mc2-walker-ground-z",
+      "status": "capture",
+      "note": "Class-5 walker z ground-snap on terraformed sites (the guard/mound/regrade roots) \u2014 placed after the specific class-5 rules; x/y/heading knock-on stays unexplained.",
+      "takes": [
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 5,
+      "field": "z"
+    },
+    {
+      "id": "mc2-claim-census-player",
+      "status": "open",
+      "note": "player.mana_max claim-census-within-tick (ledger mc2l0 open lead / \u00a7castle follow-up (d)).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "field": "player.mana_max"
+    },
+    {
+      "id": "mc2-claim-census-wizard",
+      "status": "open",
+      "note": "Wizard-body mana_max rows \u2014 the same claim-census lead.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "kind": "field",
+      "class": 3,
+      "model": 0,
+      "field": "mana_max"
+    },
+    {
+      "id": "mc2-claim-census-manifest",
+      "status": "open",
+      "note": "(15,2) possession-manifestation mana lanes \u2014 census/upkeep within-tick (undug).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 15,
+      "model": 2
+    },
+    {
+      "id": "mc2-splash-churn",
+      "status": "capture",
+      "note": "(10,5) splash lifecycle churn downstream of cast-timing skew.",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 5
+    },
+    {
+      "id": "mc2-hit-flash-churn",
+      "status": "capture",
+      "note": "(10,12) hit-flash slot churn downstream of cast-timing skew (the MC1 entry-4 twin).",
+      "takes": [
+        "mc2l0",
+        "mc2l4",
+        "mc2l30"
+      ],
+      "class": 10,
+      "model": 12
+    }
+  ]
+}
