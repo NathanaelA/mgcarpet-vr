@@ -65,6 +65,7 @@ import argparse
 import struct
 import sys
 from dataclasses import dataclass
+from typing import Optional
 
 # --------------------------------------------------------------------------
 # Mailbox layout. The mailbox and the wall clock both live in obj3 (the data
@@ -91,6 +92,57 @@ MAGIC1 = 0x314B4954  # "TIK1"
 
 GUARD_ITERS = 0x04000000  # spin bail-out (~1 s emulated); never hit if ISR live
 RESYNC_COUNTS = 30  # >250 ms behind schedule -> resync instead of catch-up burst
+
+# --------------------------------------------------------------------------
+# MC2 / NETHERW.EXE arm. MC2 already frame-limits itself (InGameLoop_47320's
+# native ~24 fps spin), so its takes are gap-free -- but ~33% are TORN: DOSBox
+# can park the guest between PlayerEvents (per-player Turn++) and the entity
+# pass, a settled-looking-but-mid-frame state. So the MC2 arm is SIGNAL-ONLY:
+# no pacer, no spin, no wall clock. It wraps the frame-driver call and raises
+# an `in_window` flag for exactly the interval when the frame is fully settled
+# (post-draw) and the NEXT frame's Turn++ has not begun -- i.e. across MC2's
+# own native limiter spin. The recorder captures only while in_window==1, so
+# the Turn++-park tear is unobservable by construction.
+#
+# The hook is InGameLoop_47320's sole `call DrawAndEventsInGame_47560`:
+#     mov esi,[GameTimerTurn]      ; esi = timer before the frame
+#     call DrawAndEventsInGame     ; <-- redirected to the stub
+#     add esi,5                    ; frame period = 5 timer ticks
+#   spin:
+#     cmp esi,[GameTimerTurn]      ; native frame-limiter busy-wait
+#     ja spin                      ; <-- in_window is raised across THIS spin
+# The stub: derive obj3 base, clear in_window (frame about to mutate), call the
+# real frame driver, then bump a monotonic frame counter and set in_window=1.
+# Continuity is that counter's delta -- NOT the per-player Turn, which advances
+# mid-frame (inside PlayerEvents) by design and so can't gate the tear.
+MB2_OBJ3 = 0xB42C0  # obj3-relative mailbox base == obj3.vsize (page-align lifts
+#                     the segment limit over it; see patch_mc2). Guest 0x1842c0.
+MB2_MAGIC0 = MB2_OBJ3 + 0x00  # 'MGCT'
+MB2_MAGIC1 = MB2_OBJ3 + 0x04  # 'TIK2'
+MB2_TICK = MB2_OBJ3 + 0x08  # u32 monotonic per-FRAME counter (bumped once/frame)
+MB2_INWIN = MB2_OBJ3 + 0x0C  # u32 1 while parked in the settled inter-frame gap
+OBJ3_BASE_MC2 = 0xD0000  # obj3 LINK base
+MB2_GUEST = OBJ3_BASE_MC2 + MB2_OBJ3  # 0x1842c0 -- the guest-LINK addr
+
+MAGIC2_1 = 0x324B4954  # "TIK2" (MC2 magic tail; MAGIC0 'MGCT' is shared)
+
+# InGameLoop_47320 frame-limiter signature. Locates the hook without hardcoding
+# any VA: the `mov esi,[obj3ref]` / `call rel32` / `add esi,5` / `cmp esi,[same
+# obj3ref]` / `ja $-6` shape is unique. group 1 = the GameTimerTurn obj3-disp
+# (read at runtime to derive obj3's real base), group 2 = the frame-driver
+# rel32. The two disps must be identical (same GameTimerTurn global).
+import re as _re
+
+MC2_LIMITER_SIG = _re.compile(
+    rb"\x8b\x35(....)"      # mov esi,[GameTimerTurn]   (obj3-rel disp32)
+    rb"\xe8(....)"          # call DrawAndEventsInGame   (rel32 -> frame driver)
+    rb"\x83\xc6."           # add esi,imm8               (frame period; --pace
+    #                         rewrites the imm8, so wildcard it -- else a paced
+    #                         exe stops being recognised as MC2)
+    rb"\x3b\x35(....)"      # cmp esi,[GameTimerTurn]
+    rb"\x77\xf8",           # ja $-6                     (native limiter spin)
+    _re.S,
+)
 
 WALLCLOCK_FROM_STRUCTPTR = 0x1E2C  # wallclock obj3-offset = structptr_off - this
 
@@ -265,6 +317,9 @@ class Asm:
 
     def pop_edx(self):
         self.raw(b"\x5a")
+
+    def push_edx(self):
+        self.raw(b"\x52")
 
     def sub_edx_imm(self, imm):
         self.raw(b"\x81\xea" + struct.pack("<I", imm & 0xFFFFFFFF))
@@ -535,9 +590,273 @@ def verify(path: str, period: int, inert: bool = False, passthrough: bool = Fals
             print("   ", ln)
 
 
+# --------------------------------------------------------------------------
+# MC2 / NETHERW.EXE: locate the frame-limiter hook, build the signal stub,
+# patch, verify. Signal-only (no pacer), so the stub is tiny and the MC1 path
+# stays untouched.
+# --------------------------------------------------------------------------
+@dataclass
+class BuildMC2:
+    name: str
+    call_site: int  # VA of `call DrawAndEventsInGame_47560` we redirect
+    frame_fn: int  # VA of the frame driver (the stub calls the original)
+    cave_va: int
+    obj3ref_va: int  # VA of a fixed-up obj3 disp32 (the GameTimerTurn ref) whose
+    #                  runtime value = obj3_base + obj3ref_off -- read to recover
+    #                  obj3's real load base, exactly as the MC1 stub does.
+    obj3ref_off: int  # obj3-relative offset that disp holds
+    period_va: int  # VA of the `add esi,N` immediate byte (the native frame
+    #                 period in 100 Hz ticks; default 5 = ~20 fps). Widening it
+    #                 with --pace guarantees a wide capture window on heavy
+    #                 frames whose compute would otherwise eat the native spin.
+    period_now: int  # the current period byte (5 on a pristine NETHERW)
+
+
+def find_build_mc2(le: LE) -> BuildMC2:
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    code = bytes(le.data[code_off : code_off + o1.npages * 0x1000])
+
+    # Double-patch guard: the limiter signature wildcards the call rel32, so it
+    # still matches an already-patched exe -- but the stub's preamble is unique
+    # and only present once we've patched. Refuse cleanly.
+    if b"\xe8\x00\x00\x00\x00\x5a\x81\xea" in code:
+        raise SystemExit("already patched (stub preamble present) -- refusing")
+
+    hits = list(MC2_LIMITER_SIG.finditer(code))
+    if len(hits) == 0:
+        raise SystemExit(
+            "MC2 frame-limiter signature not found (0 hits). Not a pristine "
+            "NETHERW.EXE -- already patched, or an unexpected build."
+        )
+    if len(hits) != 1:
+        raise SystemExit(f"expected exactly 1 MC2 limiter signature, found {len(hits)}")
+    m = hits[0]
+    ref1 = struct.unpack("<I", m.group(1))[0]
+    ref2 = struct.unpack("<I", m.group(3))[0]
+    if ref1 != ref2:
+        raise SystemExit("MC2 limiter: the two GameTimerTurn disps differ")
+    # Layout inside the match: mov esi,[disp](6) | call rel32(5) |
+    #                          add esi,imm8(3: 83 c6 NN) | cmp(6) | ja(2).
+    call_site = o1.vbase + m.start() + 6
+    rel = struct.unpack("<I", m.group(2))[0]
+    frame_fn = (call_site + 5 + rel) & 0xFFFFFFFF
+    obj3ref_va = o1.vbase + m.start() + 2  # the disp32 field of `mov esi,[..]`
+    obj3ref_off = ref1
+    period_va = o1.vbase + m.start() + 13  # the imm8 of `add esi,N`
+    period_now = code[m.start() + 13]
+
+    # obj3 must hold GameTimerTurn (the disp is an obj3-relative offset).
+    obj3 = le.objs[2]
+    if obj3.vbase != OBJ3_BASE_MC2:
+        raise ValueError(f"obj3 vbase {obj3.vbase:#x} != {OBJ3_BASE_MC2:#x}")
+    if not (0 <= obj3ref_off < obj3.vsize):
+        raise ValueError(f"GameTimerTurn obj3-off {obj3ref_off:#x} outside obj3")
+
+    # Cave = obj1's zero tail past vsize (in-limit after patch_mc2 page-aligns).
+    cave_va = o1.vbase + o1.vsize
+    cave_off = code_off + o1.vsize
+    cave_end = code_off + o1.npages * 0x1000
+    if any(le.data[cave_off:cave_end]):
+        raise ValueError("obj1 tail cave is not zero-filled")
+
+    # Mailbox in obj3's committed BSS tail (page-align lifts the DS limit over
+    # it). MB2_OBJ3 sits at obj3.vsize, so page-aligning vsize covers it.
+    committed = (obj3.vsize + 0xFFF) & ~0xFFF
+    if not (obj3.vsize <= MB2_OBJ3 and MB2_OBJ3 + 0x10 <= committed):
+        raise ValueError(
+            f"mailbox obj3-off {MB2_OBJ3:#x} not in obj3 tail "
+            f"[vsize {obj3.vsize:#x}, page {committed:#x})"
+        )
+    return BuildMC2("NETHERW", call_site, frame_fn, cave_va, obj3ref_va,
+                    obj3ref_off, period_va, period_now)
+
+
+def build_stub_mc2(b: BuildMC2) -> bytes:
+    """Signal-only wrapper. On each frame:
+      1. derive obj3's real runtime base (read the game's own fixed-up
+         GameTimerTurn disp, minus its obj3 offset -- delta-safe like MC1);
+      2. clear in_window (the frame driver is about to mutate the world);
+      3. call the ORIGINAL frame driver (Turn++, entity pass, draw);
+      4. bump a monotonic per-frame counter and raise in_window.
+    in_window is therefore up from just after the draw, across MC2's native
+    limiter spin, until the next frame's mutation -- a settled window keyed by
+    the counter. Touches only eax/edx (caller-clobber; esi=turn and ebx=loop
+    counter, which InGameLoop reads after the call, are preserved); the frame
+    driver saves/restores its own callee-saved regs."""
+    a = Asm(b.cave_va)
+    # --- derive obj3 base into edx ---
+    a.call_next()  # push EIP of pop
+    a.pop_edx()  # edx = runtime(pop)
+    a.sub_edx_imm(b.cave_va + 5)  # edx = obj1 load delta (link of pop = cave+5)
+    a.mov_eax_m(b.obj3ref_va)  # eax = [delta + refVA] = obj3_base + obj3ref_off
+    a.sub_eax_imm(b.obj3ref_off)  # eax = obj3_base (runtime)
+    a.mov_edx_eax()  # edx = obj3_base for all mailbox refs
+
+    # --- one-time init (magic-gated; robust to a non-zero tail) ---
+    a.mov_eax_m(MB2_MAGIC0)
+    a.cmp_eax_imm(MAGIC0)
+    a.br8(0x74, "after_init")  # je after_init
+    a.mov_m_imm(MB2_MAGIC1, MAGIC2_1)
+    a.mov_m_imm(MB2_TICK, 0)
+    a.mov_m_imm(MB2_INWIN, 0)
+    a.mov_m_imm(MB2_MAGIC0, MAGIC0)  # magic LAST -> mailbox is atomic-ish
+    a.label("after_init")
+
+    # --- close the window: the frame is about to mutate the world ---
+    a.mov_m_imm(MB2_INWIN, 0)
+    head = a.assemble()
+
+    # --- call the ORIGINAL frame driver, preserving obj3 base across it ---
+    # push edx ; call frame_fn ; pop edx. The original call site pushed no
+    # argument (turn is passed in esi), so the extra push is invisible to the
+    # callee (it reads no stack arg) and the stack stays balanced.
+    push_pos = len(head)  # `push edx` (1 byte) then `call` (5 bytes)
+    call_pos = push_pos + 1
+    rel = b.frame_fn - (b.cave_va + call_pos + 5)
+    mid = b"\x52" + b"\xe8" + struct.pack("<i", rel) + b"\x5a"  # push edx;call;pop edx
+
+    # --- open the window: frame settled; native limiter spin follows ---
+    tail = (
+        b"\xff\x82" + struct.pack("<I", MB2_TICK)  # inc dword [edx+MB2_TICK]
+        + b"\xc7\x82" + struct.pack("<I", MB2_INWIN) + struct.pack("<I", 1)  # mov [inwin],1
+        + b"\xc3"  # ret
+    )
+    return head + mid + tail
+
+
+def patch_mc2(le: LE, b: BuildMC2, wire: bool = True, extend: bool = True,
+              pace: Optional[int] = None) -> bytes:
+    o1 = le.objs[0]
+
+    # Optional: widen the native frame period so a heavy frame's compute can't
+    # eat the whole limiter spin (the capture window). One byte -- the imm8 of
+    # `add esi,N`. Purely a real-time pacing change: the sim still runs one
+    # PlayerEvents (Turn++) + one entity pass per frame, so the recorded frame
+    # sequence is byte-identical, just held longer. N in 1..127 (higher = lower
+    # fps, wider window). This is the definitive zero-gap fix for graphics-heavy
+    # levels; without it, signal-only relies on compute fitting the ~50 ms budget.
+    if pace is not None:
+        if not (1 <= pace <= 127):
+            raise ValueError("--pace must be in 1..127 (imm8 frame period)")
+        poff = va_to_file(le, b.period_va)
+        if le.data[poff - 2 : poff] != b"\x83\xc6":  # `add esi,` guard
+            raise ValueError(f"period byte @ {b.period_va:#x} is not an `add esi,imm8`")
+        le.data[poff] = pace
+
+    stub = build_stub_mc2(b)
+    cave_off = va_to_file(le, b.cave_va)
+    if cave_off + len(stub) > obj_file_off(le, o1) + o1.npages * 0x1000:
+        raise ValueError("stub overflows the cave")
+    le.data[cave_off : cave_off + len(stub)] = stub
+
+    # Page-align obj1.vsize (so the code cave is inside the CS limit and will
+    # execute) and obj3.vsize (so the mailbox is inside the DS limit and its
+    # writes persist) -- the same two lifts the MC1 arm needs.
+    if extend:
+        objtab = struct.unpack_from("<I", le.data, le.lx + 0x40)[0]
+        new1 = (o1.vsize + 0xFFF) & ~0xFFF
+        if b.cave_va + len(stub) > o1.vbase + new1:
+            raise ValueError("stub crosses the page boundary; extend by another page")
+        struct.pack_into("<I", le.data, le.lx + objtab + 0 * 24, new1)
+        o1.vsize = new1
+
+        o3 = le.objs[2]
+        new3 = (o3.vsize + 0xFFF) & ~0xFFF
+        if MB2_OBJ3 + 0x10 > new3:
+            raise ValueError("mailbox past obj3's page-aligned vsize")
+        struct.pack_into("<I", le.data, le.lx + objtab + 2 * 24, new3)
+        o3.vsize = new3
+
+    if not wire:
+        return stub  # --inert
+
+    off = va_to_file(le, b.call_site)
+    if le.data[off] != 0xE8:
+        raise ValueError(f"call site {b.call_site:#x} is not an E8 call")
+    rel = b.cave_va - (b.call_site + 5)
+    le.data[off + 1 : off + 5] = struct.pack("<i", rel)
+    return stub
+
+
+def verify_mc2(path: str, inert: bool = False) -> None:
+    import shutil
+
+    data = open(path, "rb").read()
+    le = parse_le(data)
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    code = data[code_off : code_off + o1.npages * 0x1000]
+
+    # The stub preamble is distinctive: E8 00000000 5A 81 EA (call/pop/sub).
+    idx = code.find(b"\xe8\x00\x00\x00\x00\x5a\x81\xea")
+    if idx < 0:
+        raise SystemExit("VERIFY FAIL: MC2 stub preamble not found in obj1")
+    cave_va = o1.vbase + idx
+
+    # The stub's `push edx ; call frame_fn ; pop edx` is the only `52 E8.. 5A`.
+    rel = cave_va - o1.vbase
+    j = next(
+        (k for k in range(0, 400)
+         if code[rel + k] == 0x52 and code[rel + k + 1] == 0xE8 and code[rel + k + 6] == 0x5A),
+        None,
+    )
+    if j is None:
+        raise SystemExit("VERIFY FAIL: no `push edx ; call frame_fn ; pop edx`")
+    frame_fn = cave_va + j + 6 + struct.unpack_from("<i", code, rel + j + 2)[0]
+    stub_len = j + 7 + 6 + 10 + 1  # push+call+pop(7), inc(6), mov dword(10), ret(1)
+    aligned = "page-aligned" if o1.vsize % 0x1000 == 0 else f"NOT page-aligned ({o1.vsize:#x})"
+
+    redirected = 0
+    call_site = None
+    if not inert:
+        for i in range(len(code) - 5):
+            if code[i] == 0xE8:
+                t = o1.vbase + i + 5 + struct.unpack_from("<i", code, i + 1)[0]
+                if t == cave_va:
+                    redirected += 1
+                    call_site = i
+        if redirected != 1:
+            raise SystemExit(f"VERIFY FAIL: expected 1 redirected call, found {redirected}")
+
+    if inert:
+        print(f"VERIFY {path}: OK (INERT)")
+        print(f"  MC2 stub @ {cave_va:#x} but NO call site targets it; obj1.vsize {aligned}")
+        return
+    # The native frame period is the `add esi,N` imm8 right after the call.
+    period = code[call_site + 7] if code[call_site + 5 : call_site + 7] == b"\x83\xc6" else None
+    per = (f"; frame period {period} (~{100 / period:.1f} fps @ 100 Hz)"
+           if period else "")
+    print(f"VERIFY {path}: OK")
+    print(f"  1 call site -> stub @ {cave_va:#x}; stub -> frame driver @ {frame_fn:#x}; "
+          f"mailbox guest {MB2_GUEST:#x} (MGCTTIK2); obj1.vsize {aligned}; entry untouched{per}")
+    if shutil.which("ndisasm"):
+        import subprocess
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tf:
+            tf.write(code[rel : rel + stub_len])
+            tmp = tf.name
+        out = subprocess.run(
+            ["ndisasm", "-b", "32", "-o", hex(cave_va), tmp], capture_output=True, text=True
+        ).stdout
+        print("  --- stub disassembly ---")
+        for ln in out.strip().splitlines():
+            print("   ", ln)
+
+
+def is_mc2(le: LE) -> bool:
+    """A NETHERW.EXE has the MC2 limiter signature; CARPET/HIDDEN have the MC1
+    tick-fn prologue. Peek for the former."""
+    o1 = le.objs[0]
+    code_off = obj_file_off(le, o1)
+    code = bytes(le.data[code_off : code_off + o1.npages * 0x1000])
+    return MC2_LIMITER_SIG.search(code) is not None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("exe", help="CARPET.EXE or HIDDEN.EXE (a pristine copy)")
+    ap.add_argument("exe", help="CARPET.EXE / HIDDEN.EXE (MC1) or NETHERW.EXE (MC2), a pristine copy")
     ap.add_argument("-o", "--out", help="output path (default: <NAME>_REC.EXE)")
     ap.add_argument(
         "--period",
@@ -546,6 +865,18 @@ def main(argv=None):
         help="sub-step period in ~480 Hz PIT counts. fps = 480 / (4 substeps * "
              "period): default 5 -> ~24 fps; 4 -> ~30 fps; 6 -> ~20 fps "
              "(measured live: period 30 gave ~4 fps).",
+    )
+    ap.add_argument(
+        "--pace",
+        type=int,
+        default=None,
+        metavar="N",
+        help="MC2 only: widen the native frame period to N 100 Hz ticks "
+             "(default 5 = ~20 fps). Higher N = lower fps but a WIDER capture "
+             "window, guaranteeing a quiescent spin even on graphics-heavy "
+             "frames whose compute would otherwise eat the window (the cause of "
+             "sporadic missed frames). Sim-neutral: the recorded frame sequence "
+             "is byte-identical, just paced slower. Try 10-15 for heavy levels.",
     )
     ap.add_argument("--verify-only", metavar="PATCHED", help="just re-verify an already-patched exe")
     ap.add_argument(
@@ -572,11 +903,48 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.verify_only:
-        verify(args.verify_only, args.period, inert=args.inert, passthrough=args.passthrough)
+        vdata = open(args.verify_only, "rb").read()
+        if is_mc2(parse_le(vdata)):
+            verify_mc2(args.verify_only, inert=args.inert)
+        else:
+            verify(args.verify_only, args.period, inert=args.inert, passthrough=args.passthrough)
         return 0
 
     data = open(args.exe, "rb").read()
     le = parse_le(data)
+
+    def _out_path():
+        if args.out:
+            return args.out
+        import os
+
+        base = os.path.basename(args.exe)
+        stem, ext = os.path.splitext(base)
+        return os.path.join(os.path.dirname(args.exe) or ".", f"{stem}_REC{ext or '.EXE'}")
+
+    # --- MC2 / NETHERW: signal-only (no pacer), optional frame-period widen. ---
+    if is_mc2(le):
+        if args.passthrough:
+            raise SystemExit("--passthrough is an MC1-only diagnostic")
+        b2 = find_build_mc2(le)
+        mode = "  [INERT: stub written, NOT wired]" if args.inert else ""
+        mode += "  [--no-extend: vsize NOT page-aligned]" if args.no_extend else ""
+        pace_note = (f"  [--pace {args.pace}: period {b2.period_now}->{args.pace}, "
+                     f"~{100 / max(args.pace, 1):.1f} fps]" if args.pace is not None else "")
+        print(f"build={b2.name}  hook(call)={b2.call_site:#x}  frame_fn={b2.frame_fn:#x}  "
+              f"cave={b2.cave_va:#x}  mailbox={MB2_GUEST:#x}{mode}{pace_note}")
+        stub = patch_mc2(le, b2, wire=not args.inert, extend=not args.no_extend,
+                         pace=args.pace)
+        out = _out_path()
+        with open(out, "wb") as f:
+            f.write(le.data)
+        tag = ", INERT" if args.inert else ""
+        pace_tag = f", pace={args.pace}" if args.pace is not None else ", signal-only"
+        print(f"wrote {out}  (stub {len(stub)} B{pace_tag}{tag})")
+        verify_mc2(out, inert=args.inert)
+        return 0
+
+    # --- MC1 / CARPET / HIDDEN: pacer + mailbox. ---
     b_ = find_build(le)
     mode = ("  [INERT: stub written, NOT wired]" if args.inert
             else "  [PASSTHROUGH: bare call/ret trampoline]" if args.passthrough else "")
@@ -586,13 +954,7 @@ def main(argv=None):
     stub = patch(le, b_, args.period, wire=not args.inert, passthrough=args.passthrough,
                  extend=not args.no_extend)
 
-    out = args.out
-    if not out:
-        import os
-
-        base = os.path.basename(args.exe)
-        stem, ext = os.path.splitext(base)
-        out = os.path.join(os.path.dirname(args.exe) or ".", f"{stem}_REC{ext or '.EXE'}")
+    out = _out_path()
     with open(out, "wb") as f:
         f.write(le.data)
     tag = ", INERT" if args.inert else ", PASSTHROUGH" if args.passthrough else ""

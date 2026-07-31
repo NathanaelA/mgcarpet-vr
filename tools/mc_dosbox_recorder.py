@@ -362,6 +362,17 @@ EXE_MB_TICK = 0x08  # u32 monotonic sub-step counter
 EXE_MB_INWIN = 0x0C  # u32 1 while parked in the quiescent spin
 EXE_MB_PERIOD = 0x18  # u32 configured spin period (PIT counts)
 
+# MC2 / NETHERW_REC.EXE mailbox. MC2 needs no pacer (it frame-limits itself),
+# so its stub is SIGNAL-ONLY: same tick(+8)/in_window(+0xC) layout, a distinct
+# magic, and no period field. in_window is raised across MC2's own native
+# limiter spin -- state fully settled, next frame's Turn++ not begun -- so the
+# ~33% Turn++-park tear is unobservable. The counter is per-FRAME (bumped once
+# a frame), so continuity is its delta, not the per-player Turn (which advances
+# mid-frame by design). Guest addr = obj3 tail; the recorder maps it off the
+# same static base it derives for the MC2 input frame (struct_host - 0xD41A0).
+EXE_MB2_BASE = 0x1842C0  # guest-linear addr of the MC2 mailbox (obj3 tail)
+EXE_MB2_MAGIC = b"MGCTTIK2"  # 8 bytes the MC2 stub writes once, on first frame
+
 # MC1 / MC1HW — identical engine + struct (save doc: "HW byte-identical").
 LAYOUT_MC1 = Layout(
     name="mc1",
@@ -1336,8 +1347,8 @@ def build_header(args: argparse.Namespace, layout: Layout, loc: Located,
     if loc.mailbox_host is not None:
         hdr["capture"]["window_gated"] = True
         hdr["capture"]["exe_patch"] = {
-            "mailbox_guest": EXE_MB_BASE,
-            "spin_period_counts": loc.mailbox_period,
+            "mailbox_guest": EXE_MB2_BASE if layout.family == "mc2" else EXE_MB_BASE,
+            "spin_period_counts": loc.mailbox_period,  # null for MC2 (signal-only)
         }
     return hdr
 
@@ -1598,28 +1609,37 @@ def pair_clean(prev: bytes, cur: bytes, layout: Layout, dv: int) -> Optional[str
 def find_mailbox(mem: GuestMem, loc: Located, layout: Layout) -> None:
     """Detect a *_REC.EXE tick-patch mailbox and pin it onto `loc`.
 
-    Tries the deterministic address first (static_base + EXE_MB_BASE — the
-    stub's mailbox lives at a fixed guest-linear addr and DOS4GW maps the
-    static objects affinely from that base), then falls back to a magic
-    scan. Leaves `loc.mailbox_host` None if no patched exe is running — the
-    recorder then uses the legacy +63 tear-gate path unchanged."""
-    if layout.family != "mc1":  # MC2 is Turn-throttled already; not patched
+    Tries the deterministic address first (static_base + the build's mailbox
+    guest addr — the stub's mailbox lives at a fixed guest-linear addr and
+    DOS4GW maps the static objects affinely from that base), then falls back
+    to a magic scan. Leaves `loc.mailbox_host` None if no patched exe is
+    running — the recorder then uses the legacy tear-gate path unchanged.
+
+    MC1 (CARPET/HIDDEN_REC): magic MGCTTIK1 @ 0x132C40, has a spin period.
+    MC2 (NETHERW_REC): magic MGCTTIK2 @ 0x1842C0, signal-only (no period);
+    the same static base the MC2 input frame uses (struct_host - 0xD41A0)
+    maps it, since struct + mailbox are both in obj3 (contiguous)."""
+    if layout.family == "mc2":
+        magic, mb_base, has_period = EXE_MB2_MAGIC, EXE_MB2_BASE, False
+    elif layout.family == "mc1":
+        magic, mb_base, has_period = EXE_MB_MAGIC, EXE_MB_BASE, True
+    else:
         return
     if loc.static_base is not None:
-        host = loc.static_base + EXE_MB_BASE
-        sig = mem.pread(host, len(EXE_MB_MAGIC))
-        if sig == EXE_MB_MAGIC:
+        host = loc.static_base + mb_base
+        sig = mem.pread(host, len(magic))
+        if sig == magic:
             loc.mailbox_host = host
     if loc.mailbox_host is None:  # fallback: scan for the magic
         for r in rw_regions(mem.pid, 1 << 16):
             blob = mem.read_region(r)
             if blob is None:
                 continue
-            i = blob.find(EXE_MB_MAGIC)
+            i = blob.find(magic)
             if i >= 0:
                 loc.mailbox_host = r.lo + i
                 break
-    if loc.mailbox_host is not None:
+    if loc.mailbox_host is not None and has_period:
         pv = mem.pread(loc.mailbox_host + EXE_MB_PERIOD, 4)
         if pv is not None:
             loc.mailbox_period = struct.unpack("<I", pv)[0]
@@ -1689,16 +1709,36 @@ def poll_loop_windowed(
     counter delta, and there is no first-record deferral (the anchor is
     already vouched-for)."""
     period = 1.0 / args.poll_hz if args.poll_hz > 0 else 0.0
+    # Between windows we only re-read the 8-byte mailbox (the peek gate above),
+    # so polling is cheap — spin tight to avoid sleeping through a window that
+    # collapsed to a sliver (a heavy frame overran MC2's ~50 ms budget, leaving
+    # little or no native spin). `--poll-hz N` sets this to 1/N; unthrottled
+    # (the default) floors at 0.1 ms, ~5x the old default.
+    idle = period if period else 0.0001
+    signal_only = loc.mailbox_period is None
+    pacing = "signal-only (native limiter)" if signal_only else \
+        f"spin-period={loc.mailbox_period} counts"
     print(
         f"polling (windowed / exe-patch mailbox): samples={args.samples} "
-        f"build={loc.build.name if loc.build else '?'} "
-        f"spin-period={loc.mailbox_period} counts",
+        f"build={loc.build.name if loc.build else '?'} {pacing} idle={idle*1e3:.2f}ms",
         file=sys.stderr,
     )
     base: Optional[int] = None  # counter value mapped to t=0
     prev_ctr: Optional[int] = None
     emitted = gaps = missed = starved = 0
     while args.max_ticks == 0 or emitted < args.max_ticks:
+        # Cheap gate: one 8-byte mailbox read decides whether a full 224 KB
+        # struct scan is even worth it. Only pull the struct when we are in a
+        # FRESH window — in_window==1 AND the frame counter has advanced past
+        # the last emitted frame. The window spans many ms and gets polled
+        # repeatedly, so this skips the redundant scan of an already-captured
+        # frame (the counter itself tells us nothing changed).
+        peek = read_mailbox(mem, loc)
+        if peek is not None:
+            ptick, pin = peek
+            if pin != 1 or (prev_ctr is not None and ptick == prev_ctr):
+                time.sleep(idle)
+                continue
         cap = capture_windowed(mem, loc, layout, args.samples, args.retries)
         if cap is None:
             if not ensure_attached(mem, launch_root, child):
@@ -1719,7 +1759,7 @@ def poll_loop_windowed(
             continue
         dv = ctr - prev_ctr
         if dv == 0:
-            time.sleep(period or 0.0005)  # still the same tick's window
+            time.sleep(idle)  # still the same frame's window
             continue
         if dv < 0:  # counter reset — a level change moved the world; stop
             print(f"! sub-step counter went backwards ({prev_ctr}→{ctr}) — a "
@@ -1728,9 +1768,14 @@ def poll_loop_windowed(
         if dv > 1:
             gaps += 1
             missed += dv - 1
-            print(f"! gap: {dv - 1} sub-step(s) missed before tick "
-                  f"{ctr - base} (window not caught in time — raise --retries "
-                  f"or lower --poll-hz)", file=sys.stderr)
+            hint = ("a heavy frame ate MC2's native limiter spin — reduce "
+                    "in-game detail (smaller viewport / flat shading / lower "
+                    "res) or re-patch with a wider frame budget "
+                    "(mc_exe_tickpatch.py --pace N, N>5); raising --poll-hz "
+                    "helps only at the margin" if signal_only
+                    else "raise --poll-hz or --retries")
+            print(f"! gap: {dv - 1} frame(s) missed before tick {ctr - base} "
+                  f"(window not caught in time — {hint})", file=sys.stderr)
         sink.write(build_record(ctr - base, data, layout, mem, loc,
                                 not args.no_state))
         emitted += 1
@@ -2080,13 +2125,15 @@ def main() -> None:
     if not args.no_wait_live:
         wait_until_live(mem, loc, layout, args.wait_timeout, launch_root, child)
 
-    # Detect a tick-patched exe (CARPET_REC.EXE / HIDDEN_REC.EXE): its stub
-    # exposes a mailbox once the sim has ticked once, so probe AFTER go-live.
+    # Detect a tick-patched exe (CARPET/HIDDEN_REC.EXE or NETHERW_REC.EXE): its
+    # stub exposes a mailbox once the sim has ticked once, so probe AFTER go-live.
     find_mailbox(mem, loc, layout)
     if loc.mailbox_host is not None:
+        pacing = (f"spin-period {loc.mailbox_period} counts"
+                  if loc.mailbox_period is not None else "signal-only")
         print(f"exe tick-patch detected: mailbox @host 0x{loc.mailbox_host:x} "
-              f"(spin-period {loc.mailbox_period} counts) — windowed capture, "
-              f"tear gate not needed.", file=sys.stderr)
+              f"({pacing}) — windowed capture, tear gate not needed.",
+              file=sys.stderr)
 
     if args.once:
         if loc.mailbox_host is not None:

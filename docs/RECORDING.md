@@ -299,10 +299,36 @@ between-tick window is guaranteed by construction, not inferred) and
 estimate. Such recordings stamp `capture.window_gated: true` and
 `capture.exe_patch: {mailbox_guest, spin_period_counts}`; consumers may
 treat window-gated snapshots as tear-free without re-running
-`pair_clean`. The tear gate remains the path for unpatched exes and for
-MC2 (gap-free thanks to its own throttle, but ~30% of pairs park
-between Turn++ and the entity pass — the phase-byte law above; an MC2
-tick-patch would close that the same way).
+`pair_clean`. To avoid re-scanning a window it has already captured, the
+recorder reads only the 8-byte mailbox first and pulls the full struct
+only when `in_window==1` **and** the counter has advanced past the last
+emitted frame.
+
+### MC2 / NETHERW arm (signal-only)
+
+MC2 already frame-limits itself — `InGameLoop_47320` runs the whole frame
+(`DrawAndEventsInGame_47560`: `PlayerEvents`→ entity pass → draw) then
+spins `while (before+5 > GameTimerTurn)` until 5 timer ticks elapse. So
+MC2 takes are gap-free, but ~33 % are **torn**: DOSBox can park the guest
+between `PlayerEvents` (`Turn++`) and the entity pass — a settled-looking
+but mid-frame state (the phase-byte law above). The `NETHERW_REC.EXE` arm
+therefore adds **no pacer**; it only *signals* the true boundary. It
+redirects the loop's sole `call DrawAndEventsInGame_47560` to a wrapper
+that clears `in_window` (the frame is about to mutate), calls the original
+frame driver, then bumps a monotonic **per-frame** counter and raises
+`in_window`. The flag is thus up from just after the draw, across MC2's
+native limiter spin, until the next frame's `Turn++` — a settled window,
+so the `Turn++`-park tear is unobservable by construction. The mailbox
+(magic `MGCTTIK2`, counter `+8`, `in_window` `+0xC`; **no period field**)
+sits in obj3's committed BSS tail (guest `0x1842c0`); the stub derives
+obj3's real base by reading the game's own fixed-up `GameTimerTurn` disp,
+and both `vsize`s are page-aligned (same segment-limit requirement as
+MC1). Continuity is the counter's delta — **never** the per-player `Turn`,
+which advances mid-frame inside `PlayerEvents` and so cannot gate the
+tear. Window-gated MC2 recordings stamp `spin_period_counts: null`. Old
+tear-gated MC2 takes are unaffected; only RE-RECORDED takes get the
+window (retiring the per-entity torn-slot exclusion). The tear gate
+remains the path for any unpatched exe.
 
 ## Consumers
 

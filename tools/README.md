@@ -125,9 +125,63 @@ construction.
 
 ## mc_exe_tickpatch.py
 
-Patches a COPY of `CARPET.EXE` / `HIDDEN.EXE` so the recorder can capture
-every sub-step cleanly, and so the game runs at a steady ~24 fps no
-matter how high DOSBox `cycles` is cranked. It installs a ~183-byte
+Patches a COPY of a retail exe so the recorder can capture every sub-step
+cleanly. Two arms, auto-selected from the binary:
+
+* **MC1 — `CARPET.EXE` / `HIDDEN.EXE` (pacer + mailbox).** MC1's tick loop
+  was never frame-capped, so at high DOSBox `cycles` every host-park lands
+  mid-entity-loop and ticks are lost. This arm paces the sim to ~24 fps and
+  exposes a window. Details below.
+* **MC2 — `NETHERW.EXE` (signal-only, no pacer).** MC2 already frame-limits
+  itself (`InGameLoop_47320`'s native `while (before+5 > GameTimerTurn)`
+  spin), so its takes are gap-free — but ~33 % are **torn**: DOSBox can park
+  the guest between `PlayerEvents` (per-player `Turn++`) and the entity pass,
+  a settled-looking but mid-frame state that passes read-consensus. This arm
+  adds no pacer; it just wraps the sole `call DrawAndEventsInGame_47560` in
+  the loop and raises an `in_window` flag for exactly the interval when the
+  frame is fully settled (post-draw) and the next frame's `Turn++` has not
+  begun — i.e. across MC2's own native limiter spin. The recorder captures
+  only while `in_window==1`, so the `Turn++`-park tear is unobservable by
+  construction. The mailbox (magic `MGCTTIK2` + a monotonic **per-frame**
+  counter + `in_window`) lives in obj3's committed BSS tail (guest
+  `0x1842c0`); the stub derives obj3's real base by reading the game's own
+  fixed-up `GameTimerTurn` disp (delta-safe, exactly like the MC1 arm), and
+  both `vsize`s are page-aligned so the cave executes and the mailbox writes
+  persist. Continuity is that counter's delta — never the per-player `Turn`,
+  which advances mid-frame inside `PlayerEvents` and so can't gate the tear.
+
+  ```sh
+  python3 tools/mc_exe_tickpatch.py NETHERW.EXE     # -> NETHERW_REC.EXE
+  #   --verify-only NETHERW_REC.EXE   re-disassemble the stub and check
+  #   --inert / --no-extend           the same isolation diagnostics
+  # then record — the recorder detects MGCTTIK2 and window-gates MC2:
+  ./tools/mc_dosbox_recorder.py --game mc2 --level 0 --out mc2run.mgcr \
+      --max-ticks 0 -- dosbox -conf … NETHERW_REC.EXE
+  ```
+
+  Because MC2 has no pacer, `--period` is ignored for it and the header
+  stamps `spin_period_counts: null`. The recorder gates each capture on a
+  cheap 8-byte mailbox read: it only pulls the full 224 KB struct when
+  `in_window==1` **and** the per-frame counter has advanced past the last
+  captured frame, so an already-recorded window is never re-scanned.
+
+  **Missed frames on graphics-heavy levels.** MC2's capture window *is* its
+  native limiter spin, whose real-time width is `budget − compute` where the
+  budget is 5 ticks of the 100 Hz PIT (≈50 ms, real-time-locked, independent
+  of DOSBox `cycles`). A frame whose compute approaches the budget leaves an
+  almost-zero window that no poll rate can catch — the cause of sporadic 1–2
+  frame gaps. Fixes, in order of leverage: (1) **`--pace N`** re-patches the
+  frame-period byte (`add esi,5`→`add esi,N`, N>5) so a wide window exists on
+  *every* frame regardless of load — sim-neutral (one `Turn`+entity pass per
+  frame either way; the recorded frame sequence is byte-identical, just paced
+  slower); try `--pace 12` (~8.3 fps) for heavy levels. (2) Reduce in-game
+  detail (smaller viewport via `[`/`]`, flat shading, lower res) to shrink
+  compute. (3) Raise DOSBox `cycles` if the host has headroom (more cycles →
+  compute finishes sooner → wider window; note this is the *opposite* of the
+  tear-gate path's "lower cycles" advice). `--poll-hz` helps only at the
+  margin — the windowed loop already polls at a 0.1 ms floor by default.
+
+The MC1 arm installs a ~183-byte
 wrapper stub around the per-sub-step tick function (remc1
 `sub_41780_41AC0`) by redirecting the tick fn's callers (the 3
 gameSpeed-fanout `call`s — rewriting only their 4-byte rel32) so they
@@ -180,14 +234,20 @@ Live-run checklist (what a real recording session should confirm):
 1. `mgcarpet.json` / DOSBox mount points at the patched `*_REC.EXE`.
 2. On go-live the recorder prints `exe tick-patch detected: mailbox …` —
    if not, the stub never ran (still in a menu) or the magic scan failed.
-3. In-game feel is a steady ~24 fps even with `cycles=max` (period 5);
-   raising cycles widens the window (longer spin), never speeds the game.
+   MC1 reports a `spin-period`; MC2 reports `signal-only`.
+3. **MC1 only:** in-game feel is a steady ~24 fps even with `cycles=max`
+   (period 5); raising cycles widens the window (longer spin), never speeds
+   the game. **MC2** keeps its own native rate (no pacing was added).
 4. `done: … window-gated, no tears possible` with 0 gaps across a full
    playthrough, including level-start fades and big explosions (the
    structural gaps the tear-gate recorder could not close).
 5. Sim parity: a windowed recording of a fixed level should decode the
    same tick sequence as the tear-gated recorder for the ticks both
-   captured (pacing must not perturb sim state).
+   captured (the signal/pacing must not perturb sim state).
+6. **MC2 specifically:** re-record a level whose old tear-gated take had
+   many torn pairs (mc2l0/l4/l30) and confirm the torn-slot exclusions
+   drop out — the whole point of the arm. Old MC2 takes stay tear-gated;
+   only RE-RECORDED takes get the window.
 
 ## MC1 oracle (planned)
 
