@@ -244,8 +244,10 @@ the `sub_66FD0` override.
   the first terrain/entity blocker, counting steps `n`; then `n *= 8`.
 - Lay `n` cosmetic class-9 model-9 trail nodes (sprite 216) along a per-node ±1
   RNG jag (`rand=9377*rand+9439`, 2 draws/node: z-jag then xy-jag, EF:58359/
-  58373) — these are visual segments, life 1, self-despawning; presentation may
-  approximate them.
+  58373) — visual segments born DEAD: `maxLife = (node_slot >= beam_slot) - 1`
+  (EF:58341, so 0 or −1), life copied from maxLife, disabled by the pre-decrement
+  action-14 tick within a frame (the mc2l4 corpus refuted the earlier "life 1,
+  self-despawning" reading); presentation may approximate them.
 - At the beam end: probe `sub_10780`, spawn impact `(byte_0x43,byte_0x44)` =
   **(10,23)** → existing `mc2_spawn_blast23`, copy id/yaw/pitch/subSpell, award
   lightning XP `(id, 7, 1)`; despawn the beam THIS tick. No water splash, no

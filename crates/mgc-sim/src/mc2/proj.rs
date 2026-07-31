@@ -860,23 +860,27 @@ impl Gen {
             wp = jag(wp, amp, r);
             p.2 = p.2.wrapping_add((wz as i16).wrapping_mul(unit));
             Self::polar_step(&mut p, perp, 0, (wp as i16).wrapping_mul(unit));
-            if let Some(nn) = self.mc2_spawn_lightning_node(p.0, p.1, p.2) {
+            if let Some(nn) = self.mc2_spawn_lightning_node(p.0, p.1, p.2, src) {
                 self.ent[nn].id24 = id;
-                self.ent[nn].f30 = yaw;
             }
         }
     }
 
     /// One `sub_66750` trail billboard: class-9 model-9 sprite-216,
-    /// action 14 (`sub_67410` = pure life-- decay), ~1-frame life.
-    fn mc2_spawn_lightning_node(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+    /// action 14 (`sub_67410` = pure life-- decay). Born DEAD by the
+    /// slot compare `maxLife = (node >= beam) - 1` (EF:58341): a node
+    /// ahead of the beam's slot gets 0 (the ascending frame pass
+    /// still ticks it this frame), one behind gets -1 — either way
+    /// the disabled bit lands within a frame and the slot recycles
+    /// on retail's schedule. No yaw write — the ctor leaves @0x1C 0.
+    fn mc2_spawn_lightning_node(&mut self, x: u16, y: u16, z: i16, beam: usize) -> Option<usize> {
         let i = self.new_event()?;
         {
             let e = &mut self.ent[i];
             e.class64 = 9;
             e.model65 = 9;
             e.tick70 = 14;
-            e.max_life = 1;
+            e.max_life = if i >= beam { 0 } else { (-1i32) as u32 };
             e.flags = (e.flags & !8) | F_MC2PROJ;
         }
         self.link(i, x, y, z);
@@ -889,9 +893,8 @@ impl Gen {
     /// pure `life--`, despawn at `< 0`. No flight, no logic.
     pub(crate) fn mc2_lightning_node_tick(&mut self, i: usize) {
         // EF:58910-12 — the life test reads the PRE-decrement value.
-        // The spawn seeds life 1, so retail draws the node for TWO
-        // ticks; the post-decrement form drew it for one and halved
-        // every lightning trail.
+        // Nodes are born at 0/-1 (the EF:58341 slot compare), so the
+        // flash lives ~one frame before the disabled bit lands.
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
         if life < 0 {

@@ -517,6 +517,14 @@ impl World {
         }
         let tr = |v: u16| if v == human_slot { PLAYER_TARGET } else { v };
 
+        // Anchor the per-tick counter to the recording: it feeds the
+        // cave-drip 8-turn cadence AND the cave carpet-tail rand
+        // perturbation (World::tick). Retail resets it at level load,
+        // so the local player's Turn is its exact value. The carpet's
+        // byte[1]&8 one-shot (EF:59616) arms the tail skip.
+        self.mc2_turn = ply.turn.max(0) as u32;
+        self.mc2_carpet_stall = carpet.flags & 0x800 != 0;
+
         let n = pool.min(st.ents.len());
         let mut active = 0usize;
         let mut bad_rows = 0usize;
@@ -1077,10 +1085,14 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         // link length (@0x36) rides f56; everything else keeps @0x38
         // there. Class-15 manifestations override eight of these
         // below (the cast.rs field map).
-        f26: if r.class3f == 5 {
-            r.f2e
-        } else {
-            r.scratch10 as i16
+        f26: match (r.class3f, r.model40) {
+            // The m0 worm/hydra keeps its BOB VELOCITY in @0x10
+            // (multipart ctor seed + sub_1F040's home); importing
+            // the charm lane left the bob dead — the whole chain
+            // sank instead of undulating (mc2l4 corpus, slot 2).
+            (5, 0) => r.scratch10 as i16,
+            (5, _) => r.f2e,
+            _ => r.scratch10 as i16,
         },
         f28: r.b38 as u8 as u16,
         f30: r.yaw as u16,
@@ -1100,7 +1112,17 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
             r.f36
         },
         f58: r.b39 as i16,
-        f59: r.b3a as u8,
+        // The (3,2) castle's BUILD SUB-STATE lives in @0x2E
+        // (word_0x2E_46 → f59, docs/traces/mc2-castle-builder.md §2);
+        // @0x3A is dead for castles, and importing its 0 parked every
+        // castle in the level-up state — one phantom upgrade + one
+        // phantom (10,42) painter per pair, z frozen for the tick
+        // (the MC2 twin of MC1's phantom-upgrade family).
+        f59: if r.class3f == 3 && r.model40 == 2 {
+            r.f2e as u8
+        } else {
+            r.b3a as u8
+        },
         f63: r.phase3e,
         class64: r.class3f,
         model65: r.model40,

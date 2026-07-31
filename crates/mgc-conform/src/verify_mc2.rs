@@ -550,6 +550,9 @@ fn emit_csv_mc2(
 ) -> std::io::Result<()> {
     let rmap: BTreeMap<u16, &EntObsMc2> = retail.entities.iter().map(|e| (e.slot, e)).collect();
     let pmap: BTreeMap<u16, &EntObsMc2> = port.entities.iter().map(|e| (e.slot, e)).collect();
+    // One rng row per pair (even when equal) — offline solvers need
+    // the full retail stream, not just the mismatches.
+    writeln!(w, "{t}\trng\t\t\t\t\t{}\t{}\t\t\t", retail.rng, port.rng)?;
     let ctx = |slot: u16| -> (String, String, String) {
         match rmap.get(&slot).or_else(|| pmap.get(&slot)) {
             Some(e) => (format!("{}", e.x), format!("{}", e.y), e.z.to_string()),

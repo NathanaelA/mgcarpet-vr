@@ -50,10 +50,16 @@ all pairs at `--input-delay 2`):
   under the original header; **mc2l30.mgcr** = ticks 19155..34583
   re-based to t=0.. with header level=30 + `capture.cut_from`
   provenance. Both verify: mc2l4 replays RNG (1,1) exact; mc2l30
-  imports and replays as level 30 (its own triage NOT started —
-  first probe shows retail drawing >16/tick vs port 1, a fresh
-  §rng family for the hidden level's ambient churn). Neither take
-  extracted/suited yet.
+  imports and replays as level 30. **BOTH TRIAGED + SUITED
+  2026-07-31** (see the mc2l4+mc2l30 section below): mc2l4 =
+  19,154 pairs, 6,368 torn, 12,786 fixture-grade, RNG near-exact
+  (653 mismatched); mc2l30 = 15,428 pairs, 5,407 torn, 10,021
+  fixture-grade, 2 rng-only, and the confirmed fresh §l30-ambient
+  rand family (retail >16 draws/tick vs port 1-3 on ~9.6k pairs).
+  Suites: `conformance/mc2l4.json` + `conformance/mc2l30.json`.
+  The triage round landed two fixes (Resolved: the m0 worm-bob
+  f26 import lane, the lightning trail-node born-dead law) that
+  collapsed mc2l4's dominant families before extraction.
 (Triage tooling on the runner: `--csv` per-diff TSV for offline
 clustering, `--dump <t> [--dump-port]`, `dump-state <file> <t>
 <slot…|all>` — now also prints both free/recycle stack tails,
@@ -640,7 +646,195 @@ heading 764 · life 712.
   mappings (conformance.rs `import_ent_mc2` doc) — f56 ← @0x36 was
   A/B-tested (the b38 mapping poisoned kinematics +14%).
 
+## MC2 mc2l4 + mc2l30 triage (2026-07-31)
+
+The first-cut triage of the two takes cut from the 2026-07-30 mc2:4
+session. Four fixes landed during the round (Resolved below: worm-bob
+import lane, lightning trail nodes, castle phantom-upgrade lane, the
+cave ambient rand tail + turn anchor); the families here are what
+remains, each with its dive verdict. Suites:
+`conformance/mc2l4.json` + `conformance/mc2l30.json` (re-extracted
+post-fix).
+
+- **§l4-guard-terrain — the (5,15) castle-guard family (BOTH takes'
+  #1 residual, ~170k rows l4 / ~130k l30): CAPTURE (terrain
+  closure)**. (5,15) = the wizard-manager-spawned defensive archer
+  guard (`sub_5FF50` EF:61488-502 stamps yaw=roll=512 + terrain-alt
+  spawn z; behavior row 83 grounds it to `getTerrainAlt` every tick
+  via the ported `mc2_alt_core`). Retail's guards walk up a
+  runtime-terraformed castle-mound ramp (+15 z per +30 x, 512/544
+  plateaus); the `.mgcr` has no terrain channel, so the port replays
+  on pristine planes — z tracks the missing mound, the pristine tile
+  TYPE trips the wander die-gate → action 121→124 (prekill), and the
+  die-gate's early return freezes the guard's rand. One root, three
+  fields; port laws verified faithful line-by-line. Rides the
+  standing §terraform/terrain-channel remedy. The sv1/sv2 rows
+  nearby are the SEPARATE mc2:04 death-watch/hold choreography;
+  (9,13) arrow churn is part guard-downstream, part cast-timing.
+- **§sphere — (10,39) mana-sphere mover UNPORTED: PORT-LAW** (the
+  largest fixable residual: ~13k z rows/244 slots l4; ~37k z+x+y
+  rows l30). (10,39) is not a static: retail's
+  `TransformArcherToMana_35940` (EF:26015) flies it ballistically —
+  `z += word_0x2C_44` (the z-velocity @0x2C), gravity −16/tick
+  floored −128, ground bounce `−v/4` (zeroed ≤16, EF:26251),
+  `axis_0x9A` ±64 horizontal + `sub_58030` downhill roll + 250/256
+  friction. The port routes tick70==41 into the MC1-shaped
+  `ball_tick`, whose MC2 arm skips the settle block and reads f46
+  (=@0x2E=0) as z-velocity → spheres sit at bare ground. FIX SPEC:
+  import @0x2C for (10,39) (the class-15 f44←f2c precedent) + port
+  EF:26015 as a dedicated `mc2_sphere_tick` ahead of the shared
+  effect band.
+- **§l30-churn residual — the coupled fire/smoke draw+lifecycle
+  family (PORT-LAW, two specs banked)**: after the cave-tail fix
+  (Resolved) ~22% of l30 pairs still mismatch rng, all
+  count-mismatches on churn-heavy ticks. Two mechanisms: (a) the
+  MC2 per-tick reap lag — retail's fire/riser disable
+  (`DisableEntityDrawing04` byte[1]|=4) is class-zeroed within the
+  SAME tick by the ApplyEvents fallthrough (Events.cpp:548 →
+  sub_57F20), the port frees next-tick → +1 extra-in-port per fire
+  death (the bulk of (10,0) 8.7k extras + the 3 (10,64) riser
+  extras at t=1) — the MC2 face of the MC1 tick-top-reap law; (b)
+  the per-ENTITY `rand_0x14 += counter` sites (EF:13140/13220/
+  20521), unmodeled (multipart.rs/doomsday.rs notes) — now
+  implementable since the counter is anchored. Downstream of (a)+
+  (b): divergent `new_event` seeds → the (10,0)/(10,14)
+  missing-in-port spawns.
+- **§l30-terrain — the (14,5) flat-512 plateau (CAPTURE, with a
+  port-side check owed)**: 12 of the 14 (14,5) markers sit exactly
+  −1664 (retail 2176 plateau at tiles (160-171,194-205), port flat
+  512); nearby slots track terrain within ±32. Both sides ground-
+  snap faithfully — the port's mc2:30 heightfield simply lacks the
+  plateau. OWED: check whether the plateau is load-time (the dis-0
+  (10,64) riser raise — then the port's conformance world-build
+  skips a load-time raise = fixable) or runtime-terraformed (pure
+  capture). (5,4) XP-scroll z, (14,3) −16, (15,19) token-fall
+  (slot 92: port clamps up to its pristine 1296 floor while retail
+  falls to 288) are the same terrain-closure story.
+- **§castle follow-ups** (split from the resolved phantom-upgrade
+  lane): (a) the (10,42) painter's parent @0x28 is NOT projected by
+  `obs_project_mc2` (owner retail-297-vs-0 rows; the "@0x28 nonzero
+  only on class-15" comment is wrong for painters) — obs-schema
+  gap; (b) the (3,3) stage-piece −128 z residual post-rise —
+  re-measure now that the phantom upgrade is gone; (c) the (5,1)
+  at slot 92 killed at t=0 by `mc2_building_clear_tile` (build
+  footprint clear) while retail's construction hasn't cleared that
+  tile this tick — build-window timing; (d) player.mana_max
+  claim-census within-tick (the standing mc2l0 lead, NOT a castle
+  ripple — the mc2l4 castles are rival-owned).
+- **§wander-drift residual — (5,0)/(5,3) after the bob fix**:
+  smooth ±1..6 heading / ~±25 z accumulated drift on the worm and
+  multipart-flyer chains — a wander/bob phase detail, not the
+  dead-bob class; likely collapses with the §wander turn law.
+- **§drip placement — (10,86)/(10,87) residual**: at the best
+  cadence anchor (turn0&7==0, phase-scanned) the drip still lands
+  9 missing/56 extra per 2000 pairs — the target-tile walk consumes
+  the global stream, so any upstream rng divergence relocates the
+  drip; expected to shrink with §l30-churn.
+- **§lightning residual — (9,9)/(10,23) extras+missing**: the
+  input-delay-2 cast-timing skew + retail's parked ghost husks vs
+  the port's free-list reuse — capture-domain (the field families
+  resolved, see Resolved).
+
 ## Resolved
+
+- **MC2 CAVE AMBIENT RAND TAIL + the turn anchor (the mc2l30
+  ">16 draws/tick" banked lead)** — RESOLVED 2026-07-31. Level 30
+  is a CAVE (`map_type: "cave"` + ceiling plane), and retail's
+  carpet handler `sub_5D530` runs a cave-only tail (EF:59800-08):
+  `rand_0x8 = 9377·rand + 9439 + counter` — a NON-LCG perturbation
+  of the GLOBAL stream, once per carpet, which the port omitted
+  (the runner bucketed the unreachable values as ">16 draws";
+  they are a small step count + an additive). Three
+  corpus-solved laws beyond the decompile: (1) the addend is the
+  FULL per-tick counter (= the local player's Turn, reset at level
+  load) — solved s=304/305/309/310 at ticks 304/305/309/310;
+  remc2's `uint8_t setting_30` typing is refuted (the counter
+  passes 255); (2) intra-tick op order solved from the recorded
+  stream: [cave-drip draws (8th ticks)] → [carpet tail] → [frame
+  pass draws] → [baseline ApplyEvents draw] — the human carpet
+  updates in a PRE-pass phase (tail-first fits r=k−1 on ~all
+  solved ticks; drip ticks fit (k=4,r=1)), so the MC2 baseline
+  draw moved post-pass (count-preserving on non-cave takes —
+  mc2l0/mc2l4 parity untouched, suites green); (3) the drip
+  cadence anchors on the TICK-ENTRY counter (turn0&7==0; phase
+  scan 442-vs-535+ rng mismatches per 2000). Wiring: the importer
+  anchors `mc2_turn` from the recorded player Turn (also fixing
+  the drip cadence which previously re-anchored to 0 every pair)
+  and arms the carpet's byte[1]&8 one-shot stall skip (EF:59616 —
+  the handler early-return that also skips the tail; the retail
+  (1,1) stall pairs pinned it). mc2l30 rng mismatches 63% → ~22%
+  (all residuals = churn-tick count mismatches, §l30-churn), first
+  fully-conforming mc2l30 pairs appeared (t=6 promoted FIXED).
+  Runner tooling: `--csv` now emits a per-pair `rng` row (retail,
+  port) — the offline solver's input. ⚠ the ambient-loop SOUND
+  gate (%0x83<5) reads the perturbed value without stepping it —
+  presentation, owed to the audio layer, NOT the sim `sounds` vec.
+- **MC2 m0 worm/hydra DEAD-BOB import lane** — RESOLVED 2026-07-31
+  (the mc2l4 triage round's dominant family: 2.6M diff rows —
+  (5,0) z/pitch/x/y/heading on 140 slots, every pair). The class-5
+  arm of `import_ent_mc2` mapped port f26 ← retail @0x2E (the
+  charm/armed lane, the mc2l0-era A/B choice), but the m0
+  worm/hydra keeps its BOB VELOCITY in @0x10 (`dword_0x10_16`:
+  the multipart ctor seeds it, `sub_1F040` integrates z += f26,
+  f26 −= 5/tick, bounce +150 at terrain+256) — so every imported
+  worm head had a dead bob and sank while retail undulated
+  (corpus: slot 2 climbs +136/tick to ~2400, ~60-tick arcs, rand
+  FROZEN — pure deterministic ballistics; the port's bob law
+  already reproduced the arc exactly once seeded). Fix: the f26
+  import is model-aware — (5,0) takes scratch10 (@0x10), other
+  class-5 keep @0x2E (conformance.rs). mc2l4 z 899k→340k, x
+  596k→100k, y 594k→98k, pitch 556k→51k, heading 516k→75k rows;
+  all three prior suites green. RESIDUAL (5,0)/(5,3): smooth
+  ±1..6 heading / ~±25 z accumulated drift (wander/bob phase
+  detail, own open entry below). ⚠ the f26 dual-homing is
+  per-MODEL, not per-class — m2's attack countdown and the
+  doomsday timers are ALSO @0x10-homed in the port; if their
+  families surface in a future corpus, extend the match arm, do
+  not re-litigate the class-wide A/B.
+- **MC2 castle PHANTOM-UPGRADE import lane (the mc2l4 build-out
+  block)** — RESOLVED 2026-07-31, the MC2 twin of MC1's
+  phantom-upgrade family. `import_ent_mc2` filled f59 from @0x3A —
+  DEAD for (3,2) castles, whose build sub-state lives in @0x2E
+  (`word_0x2E_46` → f59, docs/traces/mc2-castle-builder.md §2) —
+  so every imported castle sat in f59=0 (level-up commit) and the
+  port re-ran `mc2_castle_upgrade` each pair: level 1→2 → the
+  HP/CAP ladder one level high (max_life 9375-vs-4687 = exactly
+  `40000·Life60>>8` vs `20000·Life60>>8`; mana_max 18000-vs-8500 =
+  CAP[2] vs CAP[1]), z frozen for the tick (the upgrade path never
+  writes z → the rigid one-step rise lag on (3,2)), and one
+  phantom (10,42) painter spawned per pair (the slot-304 squat
+  where retail spawns a second rival castle head at t=5). One
+  model-aware import remap (conformance.rs f59 ← @0x2E for (3,2))
+  cleared max_life/mana_max/model/class/player.mana_max and the
+  painter extras from the pairs-0..300 window; suites green.
+  FOLLOW-UPS split out as their own entries (below): the (10,42)
+  painter's parent @0x28 is NOT projected by obs_project_mc2
+  (owner retail-297-vs-0 — the "@0x28 nonzero only on class-15"
+  comment is false for painters), and the (3,3) stage-piece
+  −128 z residual + the player.mana_max claim census are separate
+  families to re-measure post-fix.
+- **MC2 lightning trail-node born-dead law + phantom yaw stamp**
+  — RESOLVED 2026-07-31 (the mc2l4 (9,9) window t=2517..8494:
+  34k extra-in-port + 16k max_life + 14k life + 14k heading
+  rows). The (9,9) swarm is the tier-0 Lightning beam's cosmetic
+  trail (sub_66750 lays steps·8 sprite-216 billboards per cast,
+  action 14 = sub_67410 pure pre-decrement decay). Retail births
+  each node DEAD: `maxLife = (node_slot >= beam_slot) - 1`
+  (EF:58341, so 0 ahead of the beam / −1 behind; life copied
+  from maxLife; the ascending frame pass drives both to the
+  disabled bit within a frame) and never writes the node's yaw.
+  The port hardcoded max_life=1 (born-alive → 3 enabled frames →
+  slot-recycle skew accumulating extras) and stamped the beam
+  yaw into f30 (the heading family, retail 0). Both fixed in
+  proj.rs (max_life encodes −1 as wrapped u32 — refill_life and
+  the obs projection both cast through i32). Window t=2517+200:
+  max_life 972→154, life 1087→273, yaw-stamp heading family
+  gone; suites green. RESIDUAL (9,9)/(10,23) extras+missing =
+  the input-delay-2 cast-timing skew + retail's parked ghost
+  husks vs the port's free-list reuse — capture-domain, rides
+  the standing input-latency + free-stack rulings.
+  (docs/spell-audit/lightning.md §trail updated — the old "life
+  1, self-despawning" note was the refuted reading.)
 
 - **CASTLE COLLATERAL DAMAGE (the mc1hw playtest-round-2 chain:
   "Vodor tougher than retail" + "fast respawn")** — RESOLVED

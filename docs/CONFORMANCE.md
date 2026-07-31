@@ -121,7 +121,9 @@ take:
 | manifest | take | fixtures | statuses at last commit |
 |---|---|---|---|
 | `conformance/mc1l0.json` | recordings/mc1l0.mgcr (2026-07-30, gapless 5329 pairs) | 47 | 35 conforming / 8 open / 4 capture |
-| `conformance/mc2l0.json` | recordings/mc2l0.mgcr (2026-07-30 take-2: 11,524 ticks gapless, input `raw`, spell upgrades + level completion; 7,762 fixture-grade of 11,523) | 24 | 0 conforming / 23 open / 1 capture — BANKED untriaged (fix-first: the class-15 aliasing, ledger §class15) |
+| `conformance/mc2l0.json` | recordings/mc2l0.mgcr (2026-07-30 take-2: 11,524 ticks gapless, input `raw`, spell upgrades + level completion; 7,762 fixture-grade of 11,523) | 24 | 0 conforming / 23 open / 1 capture — sigs re-promoted 2026-07-31 after the mc2l4 fix round |
+| `conformance/mc2l4.json` | recordings/mc2l4.mgcr (2026-07-31 cut of the 2026-07-30 mc2:4 take; 19,154 pairs, 12,786 fixture-grade) | 24 | 0 conforming / 20 open / 4 capture — ledger §mc2l4+mc2l30 triage |
+| `conformance/mc2l30.json` | recordings/mc2l30.mgcr (2026-07-31 cut, the hidden cave level; 15,428 pairs, 10,021 fixture-grade) | 25 | 1 conforming / 17 open / 7 capture — first conforming MC2 hidden-level pair (t=6, the cave-tail fix) |
 
 Runtime: ~8 s per suite (only selected pairs execute; the stream
 decode dominates). The cargo hook is

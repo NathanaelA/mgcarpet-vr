@@ -624,6 +624,11 @@ pub struct World {
     /// count; its effects reach the hash through the spawns it
     /// makes.
     mc2_turn: u32,
+    /// The carpet handler's one-shot skip (retail byte[1]&8,
+    /// EF:59616: early-return that also skips the cave tail; the bit
+    /// clears on consume). Imported per pair from the human carpet
+    /// record; live play leaves it false. HASH-EXCLUDED.
+    mc2_carpet_stall: bool,
     /// The doomsday HUD meter `x_BYTE_D9F50[0x87a]` (0..1200),
     /// driven by the pyramid's bit-5 ramp — banked for the 4.9 HUD
     /// track (hash-transparent while 0, like the latch).
@@ -1230,6 +1235,7 @@ impl World {
             mc2_speech_cue: None,
             mc2_apocalypse: false,
             mc2_turn: 0,
+            mc2_carpet_stall: false,
             mc2_doom_meter: 0,
             mc2_doom_level: false,
             terrain_dirty: false,
@@ -1610,9 +1616,41 @@ impl World {
     /// One game turn (`sub_41780_41AC0`, :52197). `player` feeds the
     /// trigger volume probes, creature awake checks and aggro scans;
     /// `cmd` is the rest of the player's tick input (fire).
-    pub fn tick(&mut self, player: PlayerPose, cmd: PlayerCommand) {
-        // One global LCG draw per tick, before any handler (:52223).
+    /// `sub_5D530`'s cave-ambient tail (EF:59800-08): each carpet's
+    /// handler steps the GLOBAL rand once and adds the per-tick
+    /// counter — `rand = 9377·rand + 9439 + turn`. The remc2 header
+    /// types the addend u8 (`setting_30`); the mc2l30 corpus refutes
+    /// that (solved s = 304/305/309/310 at ticks 304/305/309/310 —
+    /// the FULL counter). Retail's one-shot byte[1]&8 early-return
+    /// (EF:59616) skips the whole handler INCLUDING the tail and
+    /// clears the bit — mirrored via mc2_carpet_stall. The %0x83<5
+    /// ambient-loop sound gate reads the perturbed value without
+    /// stepping it (presentation; owed to the audio layer).
+    fn mc2_cave_carpet_tail(&mut self, turn: u32) {
+        if self.mc2_carpet_stall {
+            self.mc2_carpet_stall = false;
+            return;
+        }
         lcg32(&mut self.g.rand);
+        self.g.rand = self.g.rand.wrapping_add(turn);
+    }
+
+    pub fn tick(&mut self, player: PlayerPose, cmd: PlayerCommand) {
+        // The tick-entry turn value: the cave carpet tail adds THIS
+        // (the corpus solves s = the pre-increment counter), while
+        // the drip/objective cadences key on the incremented one.
+        let turn0 = self.mc2_turn;
+
+        // One global LCG draw per tick, before any handler (:52223).
+        // MC2 draws it AFTER the frame pass instead: the mc2l30 cave
+        // corpus pins the carpet tail as the tick's FIRST global-rand
+        // op on quiet ticks (nothing precedes slot 83), so retail's
+        // baseline ApplyEvents draw follows the dispatch walk. The
+        // move is count-preserving on non-cave takes (pure LCG steps
+        // commute), so mc2l0/mc2l4 parity is unchanged.
+        if self.game != GameId::Mc2 {
+            lcg32(&mut self.g.rand);
+        }
 
         // MC1's reap pass (:52226-31): every 0x400-flagged record is
         // freed at the TOP of the tick, BEFORE dispatch. Death paths
@@ -1835,9 +1873,12 @@ impl World {
         // = the FIRST row's column offset (zeroed for later rows,
         // retail v17 = 0), draw #2 = the row offset; columns step
         // 11; the first empty (type 0) non-sealed tile gets the
-        // drip (roster trace §4).
+        // drip (roster trace §4). Cadence anchor: the TICK-ENTRY
+        // counter (turn0 & 7 == 0) — the mc2l30 phase scan picked it
+        // over the post-increment value (rng mismatches 442 vs 535+
+        // per 2000 pairs, drip extras lowest).
         self.mc2_turn = self.mc2_turn.wrapping_add(1);
-        if self.g.is_cave() && self.mc2_turn & 7 == 0 {
+        if self.g.is_cave() && turn0 & 7 == 0 {
             let mut probe = (player.x, player.y, player.z);
             Gen::polar_step(&mut probe, player.heading, 0, 2560);
             let ox = ((probe.0.wrapping_add(128) >> 8) as u8).wrapping_sub(10);
@@ -1866,6 +1907,17 @@ impl World {
             }
         }
 
+        // The MC2 cave carpet tail — AFTER the drip block, BEFORE the
+        // frame pass: the mc2l30 stream solves retail's op order as
+        // [drip draws (8th ticks)] → [tail] → [pass draws] →
+        // [baseline] (quiet ticks fit (k=2, r=1) = tail-first;
+        // drip ticks fit (k=4, r=1) = two draws ahead of the tail).
+        // The human carpet updates in retail's pre-pass player phase,
+        // not at its pool slot.
+        if self.game == GameId::Mc2 && self.g.is_cave() {
+            self.mc2_cave_carpet_tail(turn0);
+        }
+
         // Retail's MC2 frame pass (EF:40116) is a bare ascending
         // pointer walk with no birth tracking: a mid-pass spawn ticks
         // THIS pass iff its slot lies ahead of the cursor, and keeps
@@ -1880,6 +1932,9 @@ impl World {
         // gate here was the t=0 special case (those landed BELOW
         // their spawners) overfit to the opening columns.
         for i in 1..self.g.ent.len() {
+            // The out-of-pool human carpet's dispatch position: the
+            // CAVE ambient rand tail fires exactly when the walk
+            // crosses its reserved slot (mc2_cave_carpet_tail).
             if self.g.ent[i].class64 == 0 {
                 continue;
             }
@@ -2341,6 +2396,11 @@ impl World {
             {
                 self.free_slot(i);
             }
+        }
+        // The MC2 baseline global draw, post-pass (see the tick-top
+        // comment).
+        if self.game == GameId::Mc2 {
+            lcg32(&mut self.g.rand);
         }
         if any_creature || any_transient {
             // Creatures/projectiles/effects move: poses refresh.
@@ -3063,6 +3123,7 @@ impl World {
             mc2_doom_meter,
             mc2_doom_level,
             mc2_turn: _,
+            mc2_carpet_stall: _,
             table,
             terrain_dirty: _,
             entities_dirty: _,
@@ -8855,6 +8916,7 @@ impl World {
             // Conformance-import mode, never true in a playable world
             // — a saved game has no business carrying it.
             strict_retail: _,
+            mc2_carpet_stall: _,
             prev_fire,
             accel_veto,
             pending_respawn,
