@@ -210,3 +210,31 @@ Guard rails:
 Report lines: `N pairs fully explained (conforming + explained = M)`
 is the roster-aware conformance tier; `UNEXPLAINED rows: F field,
 M missing, E extra` is the number a triage session works to zero.
+
+## The pose-phase classifier
+
+Retail's player pose is TWO-VALUED within a tick: the carpet moves at
+its pool slot in the middle of the entity pass, so handlers at slots
+below it read the pre-move pose and handlers above it the post-move
+pose. The recording holds ONE sample per tick, so whichever
+`--pin-pose` drives a pair, one side of the carpet-slot boundary sees
+a pose that is one tick removed from what retail's same-slot handler
+saw — aim yaw/pitch and pose-reactive steps diverge by exactly that
+skew.
+
+`verify-deltas` therefore re-runs every dirty pair under the OTHER
+pose sample (`--no-pose-alt` disables): a row that is clean in either
+run is tagged `pose-phase` — capture, not a lead. Row-level
+either-matching is deliberately the union of both phases, which is
+the slot-split semantics without needing the split point (below-slot
+rows match the `n` run, above-slot rows the `n1` run).
+
+Wiring mirrors the roster: `pose-phase` rows leave the UNEXPLAINED
+headline and count toward `pairs fully explained`; the `--csv` rule
+column carries the literal `pose-phase`; the report prints the
+reclassified row/pair totals; FIXTURE signatures stay raw. The tag is
+runner-built (no roster entry, no ledger rule) because it is derived
+per pair from the recording itself, not from a triaged family. The
+button channel is out of scope — cast-consume latency is genuinely
+unobservable and stays `--input-delay`-modeled with cast-edge pairs
+bucketed capture.

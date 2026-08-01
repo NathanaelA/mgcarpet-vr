@@ -175,19 +175,41 @@ impl Roster {
     }
 }
 
+/// One diff row's classification.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tag {
+    /// Needs investigation — matched by nothing.
+    Unexplained,
+    /// Matched roster rule (index into `Roster::rules`).
+    Rule(usize),
+    /// The row is clean in the port run driven by the OTHER
+    /// `--pin-pose` sample. Retail's player pose changes mid-tick at
+    /// the carpet's pool slot, so handlers on the two sides of that
+    /// slot saw different poses — the once-per-tick capture holds
+    /// only one of them, and every pinned run is wrong for one side.
+    /// Runner-built (no roster provenance), reported separately.
+    PosePhase,
+}
+
+impl Tag {
+    pub fn known(self) -> bool {
+        self != Tag::Unexplained
+    }
+}
+
 /// Per-row rule tags for one pair, index-aligned with the PairDiff's
 /// missing / extra / fields vectors.
 #[derive(Default)]
 pub struct RuleTags {
-    pub missing: Vec<Option<usize>>,
-    pub extra: Vec<Option<usize>>,
-    pub fields: Vec<Option<usize>>,
+    pub missing: Vec<Tag>,
+    pub extra: Vec<Tag>,
+    pub fields: Vec<Tag>,
 }
 
 impl RuleTags {
     pub fn all_known(&self) -> bool {
-        self.missing.iter().all(|t| t.is_some())
-            && self.extra.iter().all(|t| t.is_some())
-            && self.fields.iter().all(|t| t.is_some())
+        self.missing.iter().all(|t| t.known())
+            && self.extra.iter().all(|t| t.known())
+            && self.fields.iter().all(|t| t.known())
     }
 }

@@ -133,7 +133,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         );
                     }
                     stats.absorb_rng(pst.rand, obs.rng, port.rng);
-                    let tags = roster.as_ref().map(|r| {
+                    let mut tags = (roster.is_some() || !args.no_pose_alt).then(|| {
                         let rmap: BTreeMap<u16, &EntObsMc2> =
                             obs.entities.iter().map(|e| (e.slot, e)).collect();
                         let pmap: BTreeMap<u16, &EntObsMc2> =
@@ -143,8 +143,20 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .or_else(|| pmap.get(&slot))
                                 .map(|e| (e.class, e.model, e.x, e.y))
                         };
-                        crate::verify::classify_pair(r, &take, pt, &pd, &ctx)
+                        crate::verify::classify_pair(roster.as_ref(), &take, pt, &pd, &ctx)
                     });
+                    // Pose-phase pass — see verify.rs (the MC1 twin).
+                    if !args.no_pose_alt
+                        && !pd.clean()
+                        && let Some(tg) = tags.as_mut()
+                    {
+                        let (alt, _, _) = exec_pair_mc2(
+                            &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, !pin_n1,
+                        )
+                        .map_err(|e| format!("t={pt}: pose-alt: {e}"))?;
+                        crate::verify::pose_reclassify(tg, &pd, &alt);
+                    }
+                    let tags = tags;
                     if let Some(w) = csv.as_mut() {
                         emit_csv_mc2(w, pt, &pd, &obs, &port, roster.as_ref(), tags.as_ref())
                             .map_err(|e| e.to_string())?;
@@ -579,12 +591,17 @@ fn emit_csv_mc2(
             None => Default::default(),
         }
     };
-    let rule_id = |lane: fn(&crate::roster::RuleTags) -> &Vec<Option<usize>>, i: usize| -> &str {
-        match (roster, tags) {
-            (Some(r), Some(tg)) => lane(tg)[i].map_or("", |k| r.rules[k].id.as_str()),
-            _ => "",
-        }
-    };
+    let rule_id =
+        |lane: fn(&crate::roster::RuleTags) -> &Vec<crate::roster::Tag>, i: usize| -> &str {
+            match tags {
+                Some(tg) => match lane(tg)[i] {
+                    crate::roster::Tag::Rule(k) => roster.map_or("", |r| r.rules[k].id.as_str()),
+                    crate::roster::Tag::PosePhase => "pose-phase",
+                    crate::roster::Tag::Unexplained => "",
+                },
+                None => "",
+            }
+        };
     for (i, (slot, c, m)) in pd.missing.iter().enumerate() {
         let (x, y, z) = ctx(*slot);
         let rid = rule_id(|t| &t.missing, i);

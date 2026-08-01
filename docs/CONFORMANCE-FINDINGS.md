@@ -58,8 +58,14 @@ at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
   select-dependence, warning-grade); re-promoted to the
   suite-stable signature.
 (Triage tooling on the runner: `--csv` per-diff TSV for offline
-clustering, `--dump <t> [--dump-port]`, `dump-state <file> <t>
-<slot…|all>` — now also prints both free/recycle stack tails,
+clustering, the POSE-PHASE classifier (2026-08-01, docs/CONFORMANCE.md
+§pose-phase: every dirty pair re-runs under the other `--pin-pose`
+sample; rows clean in either run tag `pose-phase` = within-tick pose
+capture, leave the UNEXPLAINED headline, CSV rule column literal;
+`--no-pose-alt` disables — mc1l0 claims 987 field rows/288 pairs,
+mostly (5,x)/(9,0) aim+step; the (9,1)/(9,0) aim families that match
+NEITHER pose stay open), `--dump <t> [--dump-port]`, `dump-state
+<file> <t> <slot…|all>` — now also prints both free/recycle stack tails,
 next-pop last — `trace <file> <slot> <t0> <t1>`, `--start <t>`
 windowed triage on the MC1 arm too (announces pairs + the
 free-stack fallback, wired through the MC1 import report), and
@@ -748,6 +754,26 @@ post-fix).
   resolved, see Resolved).
 
 ## Resolved
+
+- **SPAWN-ARM f34 MIRROR — RULED DEVIATION (player, 2026-08-01).**
+  The post-pose-filter mc1l0 target_yaw residue splits two ways: the
+  (9,0)/(9,1) rows are both-sides-nonzero aim skew (targets that
+  themselves diverged + cast latency — capture-flavored, stays
+  open), but (10,0)+170 / (10,39)+73 / (10,1)+22 rows have retail
+  +52 == 0 on EVERY row with the port nonzero — all BIRTH pairs.
+  Mechanism: the port's spawn arms (`arm_projectile`, `corpse_drop`,
+  payload/eruption/storm) mirror `f34/f36 = f30/f32` on every spawn;
+  retail writes +52 only on homing paths, so corpse balls and
+  Wall-of-Fire bolts (and the standing fires they convert into
+  in-place) are born 0. The lane is WRITE-ONLY for those families in
+  the port (readers: class-9 homing `proj_tick`, class-5 multipart)
+  — no gameplay bearing; un-stamping would mean splitting the shared
+  arm per-spell and risking the faithful homing paths. Ruled a
+  deliberate deviation: DEVIATIONS.md "spawn arms (universal f34/f36
+  target mirror)" + roster rules `mc1-spawn-arm-f34-{fire,ball,
+  flame}` (status deviation). Guard: the rules' hit counts are
+  birth-pair-bounded — a jump means a NEW divergence hiding behind
+  the lane, re-triage.
 
 - **MC2 CAVE RAND STRUCTURE, ROUND 2 (2026-08-01) — the mc2l30
   headline closed: rng mismatches 9,328 → 202 of 9,337 pairs.**

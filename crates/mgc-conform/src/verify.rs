@@ -174,7 +174,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     let mut pd = compare(&obs, &port, report.human_slot);
                     append_hand_diffs(&mut pd, &st, &port, pst.local_player as usize);
                     let pd = pd;
-                    let tags = roster.as_ref().map(|r| {
+                    let mut tags = (roster.is_some() || !args.no_pose_alt).then(|| {
                         let rmap: BTreeMap<u16, &EntObsMc1> =
                             obs.entities.iter().map(|e| (e.slot, e)).collect();
                         let pmap: BTreeMap<u16, &EntObsMc1> =
@@ -184,8 +184,29 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .or_else(|| pmap.get(&slot))
                                 .map(|e| (e.class, e.model, e.x, e.y))
                         };
-                        classify_pair(r, &take, pt, &pd, &ctx)
+                        classify_pair(roster.as_ref(), &take, pt, &pd, &ctx)
                     });
+                    // The pose-phase pass: re-run the pair under the
+                    // other pose sample; rows clean there are capture
+                    // (retail's mixed within-tick pose), not leads.
+                    if !args.no_pose_alt
+                        && !pd.clean()
+                        && let Some(tg) = tags.as_mut()
+                    {
+                        let (alt, _, _) = exec_pair(
+                            &mut world,
+                            &pristine,
+                            &pst,
+                            &st,
+                            &obs,
+                            pcmd,
+                            prev_cmd,
+                            !matches!(pin_pose, PinPose::N1),
+                        )
+                        .map_err(|e| format!("t={pt}: pose-alt: {e}"))?;
+                        pose_reclassify(tg, &pd, &alt);
+                    }
+                    let tags = tags;
                     if let Some(w) = csv.as_mut() {
                         emit_csv(w, pt, &pd, &obs, &port, roster.as_ref(), tags.as_ref())
                             .map_err(|e| e.to_string())?;
@@ -255,64 +276,87 @@ pub(crate) fn take_stem(path: &std::path::Path) -> String {
 /// Tag every row of a pair's diff against the roster. `ctx` resolves
 /// a slot to (class, model, x, y) with `emit_csv`'s convention: the
 /// retail entity's, falling back to the port's for extra-in-port
-/// slots. Shared by the MC1 and MC2 arms.
+/// slots. Shared by the MC1 and MC2 arms. With no roster every row
+/// starts `Unexplained` (the pose-phase pass may still claim it).
 pub(crate) fn classify_pair(
-    roster: &crate::roster::Roster,
+    roster: Option<&crate::roster::Roster>,
     take: &str,
     t: u64,
     pd: &PairDiff,
     ctx: &dyn Fn(u16) -> Option<(u8, u8, f64, f64)>,
 ) -> crate::roster::RuleTags {
-    use crate::roster::{RowCtx, RowKind, RuleTags};
+    use crate::roster::{RowCtx, RowKind, RuleTags, Tag};
     let pos = |slot: u16| ctx(slot).map(|(_, _, x, y)| (x, y));
+    let tag = |row: &RowCtx| -> Tag {
+        roster
+            .and_then(|r| r.classify(take, t, row))
+            .map_or(Tag::Unexplained, Tag::Rule)
+    };
     let mut tags = RuleTags::default();
     for (slot, c, m) in &pd.missing {
-        tags.missing.push(roster.classify(
-            take,
-            t,
-            &RowCtx {
-                kind: RowKind::Missing,
-                slot: Some(*slot),
-                class: *c,
-                model: *m,
-                field: None,
-                pos: pos(*slot),
-            },
-        ));
+        tags.missing.push(tag(&RowCtx {
+            kind: RowKind::Missing,
+            slot: Some(*slot),
+            class: *c,
+            model: *m,
+            field: None,
+            pos: pos(*slot),
+        }));
     }
     for (slot, c, m) in &pd.extra {
-        tags.extra.push(roster.classify(
-            take,
-            t,
-            &RowCtx {
-                kind: RowKind::Extra,
-                slot: Some(*slot),
-                class: *c,
-                model: *m,
-                field: None,
-                pos: pos(*slot),
-            },
-        ));
+        tags.extra.push(tag(&RowCtx {
+            kind: RowKind::Extra,
+            slot: Some(*slot),
+            class: *c,
+            model: *m,
+            field: None,
+            pos: pos(*slot),
+        }));
     }
     for d in &pd.fields {
         let (c, m, p) = match d.slot.and_then(&ctx) {
             Some((c, m, x, y)) => (c, m, Some((x, y))),
             None => (0, 0, None),
         };
-        tags.fields.push(roster.classify(
-            take,
-            t,
-            &RowCtx {
-                kind: RowKind::Field,
-                slot: d.slot,
-                class: c,
-                model: m,
-                field: Some(d.field),
-                pos: p,
-            },
-        ));
+        tags.fields.push(tag(&RowCtx {
+            kind: RowKind::Field,
+            slot: d.slot,
+            class: c,
+            model: m,
+            field: Some(d.field),
+            pos: p,
+        }));
     }
     tags
+}
+
+/// Reclassify still-unexplained rows that are CLEAN in the port run
+/// driven by the other `--pin-pose` sample: retail's within-tick pose
+/// is two-valued (the carpet moves at its pool slot mid-pass), so a
+/// row that conforms under either sample is pose-phase capture, not a
+/// lead. Row identity: missing/extra by (slot, class, model), fields
+/// by (slot, field). Roster rules take precedence.
+pub(crate) fn pose_reclassify(tags: &mut crate::roster::RuleTags, pd: &PairDiff, alt: &PairDiff) {
+    use crate::roster::Tag;
+    use std::collections::BTreeSet;
+    let alt_missing: BTreeSet<_> = alt.missing.iter().collect();
+    let alt_extra: BTreeSet<_> = alt.extra.iter().collect();
+    let alt_fields: BTreeSet<_> = alt.fields.iter().map(|d| (d.slot, d.field)).collect();
+    for (i, row) in pd.missing.iter().enumerate() {
+        if tags.missing[i] == Tag::Unexplained && !alt_missing.contains(row) {
+            tags.missing[i] = Tag::PosePhase;
+        }
+    }
+    for (i, row) in pd.extra.iter().enumerate() {
+        if tags.extra[i] == Tag::Unexplained && !alt_extra.contains(row) {
+            tags.extra[i] = Tag::PosePhase;
+        }
+    }
+    for (i, d) in pd.fields.iter().enumerate() {
+        if tags.fields[i] == Tag::Unexplained && !alt_fields.contains(&(d.slot, d.field)) {
+            tags.fields[i] = Tag::PosePhase;
+        }
+    }
 }
 
 /// One TSV row per diff event: field mismatches carry the retail
@@ -343,12 +387,17 @@ fn emit_csv(
             None => Default::default(),
         }
     };
-    let rule_id = |lane: fn(&crate::roster::RuleTags) -> &Vec<Option<usize>>, i: usize| -> &str {
-        match (roster, tags) {
-            (Some(r), Some(tg)) => lane(tg)[i].map_or("", |k| r.rules[k].id.as_str()),
-            _ => "",
-        }
-    };
+    let rule_id =
+        |lane: fn(&crate::roster::RuleTags) -> &Vec<crate::roster::Tag>, i: usize| -> &str {
+            match tags {
+                Some(tg) => match lane(tg)[i] {
+                    crate::roster::Tag::Rule(k) => roster.map_or("", |r| r.rules[k].id.as_str()),
+                    crate::roster::Tag::PosePhase => "pose-phase",
+                    crate::roster::Tag::Unexplained => "",
+                },
+                None => "",
+            }
+        };
     for (i, (slot, c, m)) in pd.missing.iter().enumerate() {
         let (_, _, x, y, z) = ctx(*slot);
         let rid = rule_id(|t| &t.missing, i);
@@ -778,6 +827,12 @@ pub(crate) struct Stats {
     unknown_fields: u64,
     unknown_missing: u64,
     unknown_extra: u64,
+    /// Rows clean under the alternate `--pin-pose` run (pose-phase
+    /// capture) and the pairs touched by any such row.
+    pose_fields: u64,
+    pose_missing: u64,
+    pose_extra: u64,
+    pose_pairs: u64,
     /// Phase-clock disagreements: retail steps +63 only through state
     /// rows with a live handler. Keyed (class, model, state)@N →
     /// {(retail step, port step) → count}.
@@ -849,24 +904,36 @@ impl Stats {
         }
         if let Some(tg) = tags {
             let mut touched: std::collections::BTreeSet<usize> = Default::default();
-            for (lane, unknown) in [
-                (&tg.missing, &mut self.unknown_missing),
-                (&tg.extra, &mut self.unknown_extra),
-                (&tg.fields, &mut self.unknown_fields),
+            let mut pose_touched = false;
+            for (lane, unknown, pose) in [
+                (
+                    &tg.missing,
+                    &mut self.unknown_missing,
+                    &mut self.pose_missing,
+                ),
+                (&tg.extra, &mut self.unknown_extra, &mut self.pose_extra),
+                (&tg.fields, &mut self.unknown_fields, &mut self.pose_fields),
             ] {
                 for tag in lane {
                     match tag {
-                        Some(k) => {
+                        crate::roster::Tag::Rule(k) => {
                             let e = self.rule_rows.entry(*k).or_default();
                             e.0 += 1;
                             touched.insert(*k);
                         }
-                        None => *unknown += 1,
+                        crate::roster::Tag::PosePhase => {
+                            *pose += 1;
+                            pose_touched = true;
+                        }
+                        crate::roster::Tag::Unexplained => *unknown += 1,
                     }
                 }
             }
             for k in touched {
                 self.rule_rows.entry(k).or_default().1 += 1;
+            }
+            if pose_touched {
+                self.pose_pairs += 1;
             }
             if pd.rng_want == pd.rng_got && tg.all_known() {
                 self.explained_pairs += 1;
@@ -922,26 +989,40 @@ impl Stats {
             self.rng_only_pairs,
             fixture - self.clean_pairs - self.rng_only_pairs
         );
-        if let Some(r) = roster {
+        if roster.is_some() || !args.no_pose_alt {
+            let src = match (roster.is_some(), !args.no_pose_alt) {
+                (true, true) => "roster + pose-phase",
+                (true, false) => "roster (conformance/known-deviations.json)",
+                _ => "pose-phase",
+            };
             let _ = writeln!(
                 s,
-                "   roster (conformance/known-deviations.json): {} pairs fully explained \
-                 (conforming + explained = {}); UNEXPLAINED rows: {} field, {} missing, \
-                 {} extra",
+                "   {src}: {} pairs fully explained (conforming + explained = {}); \
+                 UNEXPLAINED rows: {} field, {} missing, {} extra",
                 self.explained_pairs,
                 self.clean_pairs + self.explained_pairs,
                 self.unknown_fields,
                 self.unknown_missing,
                 self.unknown_extra
             );
-            if !self.rule_rows.is_empty() {
-                let _ = writeln!(s, "   rule hits (rows / pairs):");
-                let mut rows: Vec<_> = self.rule_rows.iter().collect();
-                rows.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
-                for (k, (n, p)) in rows {
-                    let rule = &r.rules[*k];
-                    let _ = writeln!(s, "     [{:9}] {}: {n} / {p}", rule.status.tag(), rule.id);
-                }
+        }
+        if self.pose_pairs > 0 {
+            let _ = writeln!(
+                s,
+                "   pose-phase (row clean under the other --pin-pose sample): \
+                 {} field, {} missing, {} extra rows across {} pairs",
+                self.pose_fields, self.pose_missing, self.pose_extra, self.pose_pairs
+            );
+        }
+        if let Some(r) = roster
+            && !self.rule_rows.is_empty()
+        {
+            let _ = writeln!(s, "   rule hits (rows / pairs):");
+            let mut rows: Vec<_> = self.rule_rows.iter().collect();
+            rows.sort_by_key(|(_, (n, _))| std::cmp::Reverse(*n));
+            for (k, (n, p)) in rows {
+                let rule = &r.rules[*k];
+                let _ = writeln!(s, "     [{:9}] {}: {n} / {p}", rule.status.tag(), rule.id);
             }
         }
         let _ = writeln!(

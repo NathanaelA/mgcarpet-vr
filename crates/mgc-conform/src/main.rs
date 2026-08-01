@@ -56,6 +56,11 @@ fn usage() -> ! {
                              (t, kind, slot, class, model, field, want,\n\
                              got, x, y, z, rule — for offline triage)\n\
            --no-roster       skip conformance/known-deviations.json\n\
+           --no-pose-alt     skip the pose-phase pass (each dirty pair\n\
+                             re-runs under the other --pin-pose sample;\n\
+                             rows clean there tag `pose-phase` — retail's\n\
+                             within-tick pose is two-valued and the\n\
+                             capture holds one sample)\n\
                              (raw, unclassified report — docs/CONFORMANCE.md)"
     );
     std::process::exit(2);
@@ -86,6 +91,7 @@ pub struct Args {
     pub start: Option<u64>,
     /// Skip the known-deviation roster (raw, unclassified report).
     pub no_roster: bool,
+    pub no_pose_alt: bool,
 }
 
 fn parse_args() -> Args {
@@ -103,6 +109,7 @@ fn parse_args() -> Args {
         out: None,
         sample_every: 10,
         no_roster: false,
+        no_pose_alt: false,
         max_open: 24,
         promote: false,
         input_delay: 0,
@@ -130,6 +137,7 @@ fn parse_args() -> Args {
             "--dump-first" => a.dump_first = true,
             "--dump-port" => a.dump_port = true,
             "--no-roster" => a.no_roster = true,
+            "--no-pose-alt" => a.no_pose_alt = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--sample-every" => {
