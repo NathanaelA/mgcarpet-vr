@@ -442,6 +442,26 @@
    "class": 10,
    "model": 1,
    "field": "target_yaw"
+  },
+  {
+   "id": "mc1-guard-terrain",
+   "status": "capture",
+   "note": "Resolved \"MC1 (5,15) CASTLE-GUARD FAMILY\" (2026-08-01): the MC1 twin of mc2-guard-terrain. Guards are terrain-locked to castle-pad tiles (row 24 v_20=0x20000); the pristine replay reads the pre-regrade tile type, trips the grid_walk die-gate (sub_20480 :25934-40) and draws ZERO where retail runs the 4-draw quadrant vote + move coin. rand/heading(+-512k)/x/y = one root, proven by 0-LCG-step port values on vote ticks + 154/154 heading-rand co-location + one-castle-site clustering. Port laws byte-identical; remedy = the deferred terrain channel.",
+   "takes": [
+    "mc1l0"
+   ],
+   "class": 5,
+   "model": 15
+  },
+  {
+   "id": "mc2-walker-drown-terrain",
+   "status": "capture",
+   "note": "Resolved \"MC2 (5,13) VILLAGER FAMILY\" (2026-08-01): village-growth construction paint terraforms the eastern approach (154-173, 206-227) to land at runtime; the pristine replay reads deep water, so the faithful all-four-blocked die law (mobs.rs:318-24 = EF:8855-62) drowns villagers retail keeps alive - life alive->-1, chaotic heading = blocked-retry yaw, x/y/rand/speed/extra downstream. The +44 heading slice rides the ruled wander-blip capture (hypothesis-grade within this rule - a hit-count jump means re-triage). Port laws faithful line-by-line; remedy = terrain channel.",
+   "takes": [
+    "mc2l0"
+   ],
+   "class": 5,
+   "model": 13
   }
  ]
 }

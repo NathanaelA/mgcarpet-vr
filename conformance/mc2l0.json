@@ -18,48 +18,37 @@
     },
     {
       "t": 32,
-      "status": "capture",
-      "sig": "abda300dbb98cdef",
-      "atoms": [
-        "extra:10,14"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
     },
     {
       "t": 33,
       "status": "open",
-      "sig": "7d3653d304f77e19",
+      "sig": "4f85992551d6903b",
       "atoms": [
-        "extra:10,14",
         "field:5,1:heading"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
     },
     {
       "t": 50,
-      "status": "capture",
-      "sig": "97af2825376ed0d9",
-      "atoms": [
-        "extra:9,1"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra"
     },
     {
       "t": 58,
       "status": "open",
-      "sig": "8799258033371327",
+      "sig": "abda300dbb98cdef",
       "atoms": [
-        "extra:10,14",
-        "field:10,45:applied_pitch"
+        "extra:10,14"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
     },
     {
       "t": 60,
       "status": "open",
-      "sig": "8fd4356121999bc4",
+      "sig": "edfe1a199c19d9a6",
       "atoms": [
-        "extra:10,14",
         "field:5,13:heading"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
@@ -71,9 +60,8 @@
     {
       "t": 77,
       "status": "open",
-      "sig": "c580057466e7c17b",
+      "sig": "abda300dbb98cdef",
       "atoms": [
-        "extra:10,12",
         "extra:10,14"
       ],
       "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
@@ -90,49 +78,34 @@
     {
       "t": 79,
       "status": "capture",
-      "sig": "acc392d0fa2b0a23",
+      "sig": "406e343f90760e15",
       "atoms": [
-        "extra:10,14",
         "field:9,1:life"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn, mc2-cast-timing-fields"
     },
     {
       "t": 92,
-      "status": "capture",
-      "sig": "6b117311e91b3c2d",
-      "atoms": [
-        "extra:10,12",
-        "extra:9,1"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn, mc2-cast-timing-extra"
     },
     {
       "t": 97,
-      "status": "capture",
-      "sig": "abe1340dbb9ef369",
-      "atoms": [
-        "extra:10,12"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn"
     },
     {
       "t": 115,
       "status": "capture",
-      "sig": "30b6d3255fdc05f9",
+      "sig": "406e343f90760e15",
       "atoms": [
-        "extra:10,12",
         "field:9,1:life"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn, mc2-cast-timing-fields"
     },
     {
       "t": 138,
-      "status": "capture",
-      "sig": "abda300dbb98cdef",
-      "atoms": [
-        "extra:10,14"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
     },
     {
@@ -147,21 +120,15 @@
     {
       "t": 167,
       "status": "capture",
-      "sig": "c3d8c096eacff769",
+      "sig": "406e343f90760e15",
       "atoms": [
-        "extra:9,1",
         "field:9,1:life"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra, mc2-cast-timing-fields"
     },
     {
       "t": 223,
-      "status": "open",
-      "sig": "c5671b9384d8dbbd",
-      "atoms": [
-        "extra:9,1",
-        "field:10,45:applied_pitch"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra; 1 row(s) unexplained"
     },
     {
@@ -171,20 +138,15 @@
     {
       "t": 278,
       "status": "open",
-      "sig": "a5cfeef5c95863f7",
+      "sig": "7f4db788e3cad083",
       "atoms": [
-        "field:10,45:applied_pitch",
         "missing:10,12"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn; 1 row(s) unexplained"
     },
     {
       "t": 291,
-      "status": "open",
-      "sig": "999145680d2a7cb1",
-      "atoms": [
-        "field:10,45:applied_pitch"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {
@@ -214,8 +176,12 @@
     },
     {
       "t": 737,
-      "status": "conforming",
-      "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m13"
+      "status": "capture",
+      "sig": "7f49b988e3c6eb12",
+      "atoms": [
+        "missing:10,13"
+      ],
+      "note": "fire-churn newborn (10,13) into recorded-free slot 464: stale-slot-seed capture (mc2-fire-churn-m13); conformed pre-reap only via the ghost-law extra masking it — re-statused when the MC2 same-tick reap landed (ledger: MC2 SAME-TICK REAP)"
     },
     {
       "t": 777,
@@ -247,11 +213,7 @@
     },
     {
       "t": 968,
-      "status": "open",
-      "sig": "cea78d23482265d4",
-      "atoms": [
-        "extra:11,32"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {
@@ -273,11 +235,7 @@
     },
     {
       "t": 1002,
-      "status": "capture",
-      "sig": "9d8bbc9e56ed93f8",
-      "atoms": [
-        "extra:10,0"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m0"
     },
     {

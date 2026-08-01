@@ -243,10 +243,9 @@
     {
       "t": 620,
       "status": "open",
-      "sig": "f26028f5b5544cf1",
+      "sig": "ab9e1b1de5436f36",
       "atoms": [
-        "field:10,39:z",
-        "field:9,1:target_yaw"
+        "field:10,39:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
     },
@@ -356,10 +355,9 @@
     {
       "t": 1158,
       "status": "open",
-      "sig": "d3198b8d1dffc695",
+      "sig": "8163248d28644622",
       "atoms": [
-        "field:3,2:z",
-        "field:9,1:target_yaw"
+        "field:3,2:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
     },

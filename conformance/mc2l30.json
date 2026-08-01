@@ -82,12 +82,16 @@
     {
       "t": 39,
       "status": "open",
-      "sig": "8e08f170739abd78",
+      "sig": "b25ffc2853fd6ab2",
       "atoms": [
+        "field:10,0:rand",
+        "field:10,0:x",
+        "field:10,0:y",
         "field:10,0:z",
         "field:10,39:z",
         "field:10,45:z",
-        "field:5,4:z"
+        "field:5,4:z",
+        "missing:10,0"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0, mc2-sphere-terrain-z; rng"
     },
@@ -105,9 +109,8 @@
     {
       "t": 42,
       "status": "open",
-      "sig": "a53abfce8c550dbb",
+      "sig": "653a2cad451ad547",
       "atoms": [
-        "extra:10,1",
         "field:10,0:z",
         "field:10,45:z",
         "field:5,4:z"
@@ -117,9 +120,8 @@
     {
       "t": 49,
       "status": "open",
-      "sig": "5199cefd2c6a9a29",
+      "sig": "f1acd41e43ba5b74",
       "atoms": [
-        "extra:10,0",
         "field:10,45:z",
         "field:5,4:z"
       ],
@@ -216,9 +218,8 @@
     {
       "t": 150,
       "status": "open",
-      "sig": "73a3e4d580347896",
+      "sig": "f1acd41e43ba5b74",
       "atoms": [
-        "extra:10,87",
         "field:10,45:z",
         "field:5,4:z"
       ],
@@ -239,9 +240,8 @@
     {
       "t": 227,
       "status": "open",
-      "sig": "872e4de97772c933",
+      "sig": "e9855e15c1edb2c5",
       "atoms": [
-        "extra:9,21",
         "field:10,45:z",
         "field:5,19:z",
         "field:5,4:z"
@@ -251,9 +251,8 @@
     {
       "t": 228,
       "status": "open",
-      "sig": "c739055df2eb3afd",
+      "sig": "f1acd41e43ba5b74",
       "atoms": [
-        "extra:10,66",
         "field:10,45:z",
         "field:5,4:z"
       ],

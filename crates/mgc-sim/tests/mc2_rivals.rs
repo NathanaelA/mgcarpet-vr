@@ -26,11 +26,10 @@ fn load(level: &str) -> Option<(World, LevelPackage)> {
     )
     .ok()?
     .with_bldgprm(bundle.bldgprm.as_deref().unwrap_or_default());
-    let assets = match bundle.sprites.as_ref() {
-        Some((sidx, _)) => {
-            let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
-            assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims))
-        }
+    // Day-sourced extents (Bundle::mc2_extent_dims — the boot-time
+    // TMAPS0-0 law), whichever bank the level renders.
+    let assets = match bundle.mc2_extent_dims(&root.join("assets")) {
+        Some(dims) => assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims)),
         None => assets,
     };
     let assets = match bundle.spells.as_deref() {

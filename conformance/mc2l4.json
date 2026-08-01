@@ -73,9 +73,8 @@
     {
       "t": 436,
       "status": "open",
-      "sig": "1f5677c1048e103b",
+      "sig": "8253776aabe7f586",
       "atoms": [
-        "extra:9,13",
         "field:10,45:z",
         "field:3,1:z",
         "field:3,2:z",
@@ -100,12 +99,15 @@
     {
       "t": 449,
       "status": "open",
-      "sig": "8253776aabe7f586",
+      "sig": "9a8266b63b60a312",
       "atoms": [
+        "field:10,0:x",
+        "field:10,0:y",
         "field:10,45:z",
         "field:3,1:z",
         "field:3,2:z",
-        "field:3,3:z"
+        "field:3,3:z",
+        "missing:10,0"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m0, mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses"
     },
@@ -125,9 +127,8 @@
     {
       "t": 451,
       "status": "open",
-      "sig": "7834cde5cdbe3651",
+      "sig": "dd7343efbc957e1d",
       "atoms": [
-        "extra:10,1",
         "field:10,0:z",
         "field:10,45:z",
         "field:3,1:z",
@@ -139,9 +140,8 @@
     {
       "t": 486,
       "status": "open",
-      "sig": "091829ec61167c7c",
+      "sig": "0959da6df17f4c30",
       "atoms": [
-        "extra:9,1",
         "field:10,45:z",
         "field:15,19:z",
         "field:3,1:z",
@@ -180,9 +180,8 @@
     {
       "t": 508,
       "status": "open",
-      "sig": "3e41110e3bd7eb8c",
+      "sig": "0959da6df17f4c30",
       "atoms": [
-        "extra:10,12",
         "field:10,45:z",
         "field:15,19:z",
         "field:3,1:z",
@@ -291,13 +290,14 @@
     {
       "t": 3449,
       "status": "open",
-      "sig": "e9d28b0904d09015",
+      "sig": "f2d6670e9adc5fff",
       "atoms": [
         "field:10,45:z",
         "field:15,19:z",
         "field:3,2:z",
         "field:3,3:z",
         "field:5,15:z",
+        "missing:10,12",
         "missing:9,1"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-cast-timing-missing, mc2-terraform-houses, mc2-token-fall-z"

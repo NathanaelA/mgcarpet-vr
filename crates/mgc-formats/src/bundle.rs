@@ -354,6 +354,27 @@ impl Bundle {
     /// Load a bundle directory. Optional members (atlas, sprites,
     /// feature data) load as `None` when absent; the manifest, palette
     /// and color LUTs are required.
+    /// The (w,h)-per-sprite list feeding the MC2 extents derivation:
+    /// DAY-sourced — retail computes its particle-param table once
+    /// at boot against TMAPS0-0 (`sub_71410_process_tmaps`' sole
+    /// caller is Initialize, EF:42885; the boot-active tmaps file is
+    /// the day bank, TextureMaps.cpp:595; the per-level TAB swap
+    /// never recomputes it), so night/cave/fog levels run day-art
+    /// extents while rendering their own banks (the banks ship
+    /// genuinely different dims — sprite 96 is 38 wide day, 36
+    /// night/cave). Falls back to this render bundle's own index
+    /// when the day variant isn't baked.
+    pub fn mc2_extent_dims(&self, assets_dir: &Path) -> Option<Vec<(u16, u16)>> {
+        fn dims(s: &SpriteIndex) -> Vec<(u16, u16)> {
+            s.sprites.iter().map(|e| (e.width, e.height)).collect()
+        }
+        std::fs::read(assets_dir.join("mc2-day").join("sprites.json"))
+            .ok()
+            .and_then(|d| serde_json::from_slice::<SpriteIndex>(&d).ok())
+            .map(|s| dims(&s))
+            .or_else(|| self.sprites.as_ref().map(|(s, _)| dims(s)))
+    }
+
     pub fn load(dir: &Path) -> Result<Self, BundleError> {
         let read = |name: &str| -> Result<Vec<u8>, BundleError> {
             let p = dir.join(name);

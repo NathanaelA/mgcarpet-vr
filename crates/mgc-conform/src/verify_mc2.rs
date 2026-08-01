@@ -372,8 +372,11 @@ pub(crate) fn build_world_mc2(
         bundle.build_dat.as_ref().ok_or("bundle: no build dat")?,
     )?
     .with_bldgprm(bundle.bldgprm.as_deref().unwrap_or_default());
-    if let Some((sidx, _)) = bundle.sprites.as_ref() {
-        let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+    // Day-sourced extents whatever the render variant — retail's
+    // particle-param table is computed once at boot against TMAPS0-0
+    // (Bundle::mc2_extent_dims holds the law; sprite 96's 38-vs-36
+    // width is the dwelling f80 194-vs-184 family).
+    if let Some(dims) = bundle.mc2_extent_dims(&baked.join("assets")) {
         assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
     }
     if let Some(sp) = bundle.spells.as_deref() {

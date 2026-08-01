@@ -1271,6 +1271,11 @@ impl Gen {
         let ty_ = Self::turn_step(e.f30, yaw, 34);
         e.f30 = (e.f30 as i32 + ty_ as i32) as u16 & 0x7FF;
         e.f32 = pitch;
+        // The shared homer stamps the raw target yaw/pitch into
+        // +34/+36 every tick (:62543-46); write-only for the lob
+        // (proj_m1_tick reads only f30/f32/f126).
+        e.f34 = yaw;
+        e.f36 = pitch;
     }
 
     /// sub_11AC0 (:17033): the possess victim scan — class-10 models

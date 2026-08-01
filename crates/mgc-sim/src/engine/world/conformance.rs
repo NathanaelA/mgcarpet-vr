@@ -601,11 +601,13 @@ impl World {
         // slot ends on top.
         // Ghost slots are NOT in the recorded stacks: retail's
         // disable leaves the record and the slot in limbo until the
-        // NEXT frame's remove pass unlinks and pushes it (measured:
-        // the t=1 snapshot's stack is exactly the ghost count short,
-        // and the reused slots pop highest-first = an ascending push
-        // scan). Mirror it — recorded stack first, ghosts appended
-        // ascending so the LIFO pop takes them first, descending.
+        // NEXT frame's top reap (UpdateEntities EF:39948-56) unlinks,
+        // class-zeroes and pushes it (measured: the t=1 snapshot's
+        // stack is exactly the ghost count short, and the reused
+        // slots pop highest-first = an ascending push scan). tick()'s
+        // top reap performs that push for strict MC2 — the import
+        // only counts ghosts for the census; appending them here too
+        // would double-push the slots.
         let ghost_slots: Vec<u16> = (1..n as u16)
             .filter(|&s| {
                 let e = &self.g.ent[s as usize];

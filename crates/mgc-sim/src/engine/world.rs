@@ -1675,10 +1675,17 @@ impl World {
         // remove pass — tried, measured worse 384→377) either lets
         // the dying slot be recycled by same-tick spawns or lets the
         // flagged record re-tick (a delivered create-castle projectile
-        // re-delivers: phantom castle). MC1-only: MC2's remove pass
-        // is next-frame by measurement (the ghost-record law), and
-        // its native timing rides the owed sweep-law port.
-        if matches!(self.game, GameId::Mc1 | GameId::Mc1Hw) {
+        // re-delivers: phantom castle). MC2 shares the law:
+        // UpdateEntities reaps every disabled record at its top
+        // pre-walk (EF:39948-56 → sub_57F20 = tile-unlink +
+        // class-zero + free-push, ascending), which IS the measured
+        // ghost law — the death record survives exactly one snapshot,
+        // then vanishes before the next dispatch. Strict-scoped for
+        // MC2: native keeps the in-loop free until the sweep-law
+        // port settles its timing (the dome summit-column trap).
+        if matches!(self.game, GameId::Mc1 | GameId::Mc1Hw)
+            || (self.game == GameId::Mc2 && self.strict_retail)
+        {
             for i in 1..self.g.ent.len() {
                 if self.g.ent[i].class64 != 0 && self.g.ent[i].flags & 0x400 != 0 {
                     self.free_slot(i);

@@ -60,8 +60,9 @@ fn build_world_level(
     if let Some(sp) = bundle.spells.as_deref() {
         assets = assets.with_spells(sp).unwrap();
     }
-    if let Some((sidx, _)) = bundle.sprites.as_ref() {
-        let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+    // Day-sourced extents (Bundle::mc2_extent_dims — the boot-time
+    // TMAPS0-0 law), whichever bank the level renders.
+    if let Some(dims) = bundle.mc2_extent_dims(&root.join("assets")) {
         assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
     }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
@@ -367,13 +368,18 @@ fn mc2_cave_behaviors_and_goldens() {
     // keyed on the incremented turn. Behavior change toward retail
     // by design — the mc2l30 corpus fits 9,079 of 9,337 pairs
     // exactly under this stream.
+    // Re-pinned (all four) for day-sourced sprite extents
+    // (Bundle::mc2_extent_dims): retail derives its particle-param
+    // table once at boot against TMAPS0-0, so cave levels run
+    // day-art collision boxes/pitches (52 param rows shift vs the
+    // cave bank). Behavior change toward retail by design.
     assert_eq!(
         got,
         vec![
-            0x585c4cd25ad5702du64,
-            0x7c4ca38e044e6ab1,
-            0x67cd77ae1a8d7654,
-            0xd89eda64de856bf0,
+            0x782c32f9fb57405eu64,
+            0x442d3d02b5e110ec,
+            0x8f70ff0ae39ed8b5,
+            0x8e3e1dcd5365a147,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );

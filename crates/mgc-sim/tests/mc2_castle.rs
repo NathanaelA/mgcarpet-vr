@@ -43,8 +43,9 @@ fn build_world(root: &std::path::Path) -> Option<World> {
     if let Some(sp) = bundle.spells.as_deref() {
         assets = assets.with_spells(sp).unwrap();
     }
-    if let Some((sidx, _)) = bundle.sprites.as_ref() {
-        let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+    // Day-sourced extents (Bundle::mc2_extent_dims — the boot-time
+    // TMAPS0-0 law), whichever bank the level renders.
+    if let Some(dims) = bundle.mc2_extent_dims(&root.join("assets")) {
         assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
     }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);

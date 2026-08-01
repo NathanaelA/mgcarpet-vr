@@ -21,10 +21,11 @@ at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
 `carry_curation.py` + `classify_fixtures.py`):
 - **mc1l0**: gapless full level-0 playthrough, 5,874 ticks, 5,873
   pairs, 0 torn, all fixture-grade, **450 conforming** (440 before
-  the wake-law round); RNG (1,1) on every pair. Roster-aware:
-  3,042 conforming-or-explained, UNEXPLAINED 17,246 field / 124
-  missing / 260 extra rows. (The `mc1l0-village-regrade` rule hit
-  0 rows — its t/rect scope was the OLD take's regrade event;
+  the wake-law round); RNG (1,1) on every pair. Roster-aware
+  (post guard-terrain rule + the (9,1) f34/f36 fix, 2026-08-01):
+  **4,150 conforming-or-explained**, UNEXPLAINED 13,155 field /
+  124 missing / 259 extra rows. (The `mc1l0-village-regrade` rule
+  hit 0 rows — its t/rect scope was the OLD take's regrade event;
   retire or re-scope on the next roster pass.)
 - **mc1hwl0**: full HW take under meteor weather, ticks 0..39,800
   with 15 gaps (69 frames — heavy-animation skips; a skip-free HW
@@ -37,22 +38,28 @@ at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
   not the pair headline).
 - **mc2l0**: gapless 8,627 ticks, 8,626 pairs, **0 torn** (take-2
   on the rate-limited recorder tore 1,105 of 3,640), all
-  fixture-grade, **240 conforming** (167 before the cave-rand
-  round-2 tick-top draw); rng mismatch on 3 pairs only.
-  Roster-aware: 5,508 conforming-or-explained, UNEXPLAINED 8,846
-  field / 70 missing / 281 extra.
+  fixture-grade, **466 conforming** (167 → 240 cave-rand round 2 →
+  452 same-tick reap → 466 day-bank extents, 2026-08-01); rng
+  mismatch on **2 pairs only** (was 3 — reap-aligned seeds).
+  Roster-aware: **6,064 conforming-or-explained**, UNEXPLAINED
+  6,832 field / 123 missing / 22 extra (the reap converted most
+  ghost-alias extras: gross extras 3,761 → 1,389, unexplained
+  extras 198 → 22; gross missing 431 → 1,095 — dominated by
+  re-labeled slot-alias rows, see the reap Resolved entry).
 - **mc2l4 + mc2l30** (CUT 2026-08-01 from the single conjoined
   `mc2l4,30.mgcr` take at t=17713; the take's SINGLE frame skip
   17711→17713 is exactly the level transition — the tick fn never
   ran during the load — so both cuts are internally gapless, and
   the embedded level record flips at the cut as before): mc2l4 =
   17,711 pairs, 0 torn, all fixture-grade, 0 conforming raw but
-  **13,330 of 17,711 pairs roster-explained (75%)**, rng mismatch
-  on 160; mc2l30 = 9,337 pairs, 0 torn, all fixture-grade, rng
-  mismatch **202 of 9,337 pairs** (9,328 before the cave-rand
-  structure round 2 — see Resolved; the residual is churn-tick
-  draw-count skew riding §l30-churn), **6,320 pairs
-  roster-explained** (was 1). Suite note: one mc2l4 exemplar's signature differed
+  **13,698 of 17,711 pairs roster-explained (77%)** post-reap,
+  rng mismatch on 163; mc2l30 = 9,337 pairs, 0 torn, all
+  fixture-grade, rng mismatch **202 of 9,337 pairs** (9,328
+  before the cave-rand structure round 2 — see Resolved; the 202
+  survive the reap UNCHANGED, so the residual is the per-entity
+  `rand_0x14 += counter` sites, §l30-churn (b), not reap churn),
+  **6,658 pairs roster-explained** (was 1, then 6,320; reap
+  collapsed the (10,0)/(10,14) extra side 5,590→346 / 917→36). Suite note: one mc2l4 exemplar's signature differed
   between the full extract pass and the sparse suite pass (the
   shared world instance leaks a trace of which pairs ran before —
   select-dependence, warning-grade); re-promoted to the
@@ -106,6 +113,28 @@ including the 75%-torn pre-gate corpus.
   both sides).
 
 ## Open leads (port vs retail, unfixed by ruling 2026-07-29)
+
+0. **ENTITY-SET MISSING SIDE (post-reap map, 2026-08-01).** The
+   MC2 same-tick reap LANDED (see Resolved — the extra side
+   collapsed: l30 (10,0) 5,590→346, (10,14) 917→36; mc2l0
+   unexplained extras 198→22) and the missing side is now the
+   dominant entity-set lead. Post-reap gross missing (mostly
+   roster-explained cast-timing, but the big non-(9,x) families
+   are real): **mc2l30 (10,0) 1,693 + (10,14) 984** and **mc2l4
+   (10,0) 2,005 + (10,14) 890 + (10,12) 717** — retail fire/riser
+   spawns the port never makes (churn spawn cadence, likely the
+   per-entity `rand_0x14 += counter` sites §l30-churn (b) feeding
+   spawn rolls — the l30 202 rng-mismatch pairs survived the reap
+   unchanged, same mechanism); mc2l0 (10,13) 45 missing / 81
+   extra (newborn churn into recycled slots — fixture t=737
+   re-statused capture `mc2-fire-churn-m13`). Genuinely
+   independent missing families still queued: **mc1l0 (10,0)
+   fires 57 missing / 210 extra — MC1 has no reap excuse, fire
+   spawn/expiry CADENCE, a real family**; mc1l0 (10,39)
+   ball-merge edges (50/31); mc2l0 (2,0) trees 18 missing;
+   (10,45) houses 7 missing (= §castle follow-up (c)
+   build-window). Slot-mismatch stays MINOR (15 rows mc1l0 / 0
+   mc2l0).
 
 1. **HW ambient-family population loss — ROOT-CAUSED, mostly fixed**
    (see Resolved; residuals on the 289-pair mc1hwl0-test take): the
@@ -696,20 +725,17 @@ post-fix).
   (−1169/−542 constants) was always the cave mound/plateau terrain
   closure — capture.
 - **§l30-churn residual — the coupled fire/smoke draw+lifecycle
-  family (PORT-LAW, two specs banked)**: after the cave-tail fix
-  (Resolved) ~22% of l30 pairs still mismatch rng, all
-  count-mismatches on churn-heavy ticks. Two mechanisms: (a) the
-  MC2 per-tick reap lag — retail's fire/riser disable
-  (`DisableEntityDrawing04` byte[1]|=4) is class-zeroed within the
-  SAME tick by the ApplyEvents fallthrough (Events.cpp:548 →
-  sub_57F20), the port frees next-tick → +1 extra-in-port per fire
-  death (the bulk of (10,0) 8.7k extras + the 3 (10,64) riser
-  extras at t=1) — the MC2 face of the MC1 tick-top-reap law; (b)
-  the per-ENTITY `rand_0x14 += counter` sites (EF:13140/13220/
-  20521), unmodeled (multipart.rs/doomsday.rs notes) — now
-  implementable since the counter is anchored. Downstream of (a)+
-  (b): divergent `new_event` seeds → the (10,0)/(10,14)
-  missing-in-port spawns.
+  family**: after the cave-tail fix ~22% of l30 pairs still
+  mismatch rng, all count-mismatches on churn-heavy ticks. Two
+  mechanisms: (a) ~~the MC2 per-tick reap lag~~ **RESOLVED
+  2026-08-01 — the same-tick reap landed (see Resolved); the
+  extra side collapsed but the 202 rng pairs survived UNCHANGED,
+  so the rng residual is entirely (b)**; (b) the per-ENTITY
+  `rand_0x14 += counter` sites (EF:13140/13220/20521), unmodeled
+  (multipart.rs/doomsday.rs notes) — implementable since the
+  counter is anchored, and now ALSO the lead suspect for the
+  (10,0)/(10,14) missing-in-port spawns (divergent per-entity
+  spawn rolls → churn spawns the port never makes).
 - **§l30-terrain — the (14,5) flat-512 plateau (CAPTURE, with a
   port-side check owed)**: 12 of the 14 (14,5) markers sit exactly
   −1664 (retail 2176 plateau at tiles (160-171,194-205), port flat
@@ -754,6 +780,187 @@ post-fix).
   resolved, see Resolved).
 
 ## Resolved
+
+- **MC2 SAME-TICK REAP — LANDED 2026-08-01 (session 3; the
+  player-chosen top lever, opus dig corroborated).** Retail MC2's
+  death path only SETS the disable bit (`DisableEntityDrawing04`
+  EF:40332-35 = `byte[1] |= 4`, nothing else); the reap is
+  `sub_57F20` (Events.cpp:5209-39: tile-unlink → recycle-list
+  scrub if byte[2]&2 → class-zero → free-stack push, atomic) and
+  the per-tick site is the TOP of `UpdateEntities_57730`
+  (EF:39948-56): after the single global LCG draw (EF:39947), one
+  unconditional ascending pass frees every record already
+  disabled at tick entry, BEFORE bucketing and dispatch. (The
+  ledger's old "Events.cpp:548" cite is `ApplyEvents_498A0` —
+  LOAD-TIME only, sole caller GenerateEvents; it shows the same
+  disable→sub_57F20 idiom but is not the per-tick mechanism.) So
+  a record disabled during tick T's dispatch survives EXACTLY ONE
+  end-of-tick snapshot and is gone before T+1's dispatch — the
+  measured ghost law and the MC1 tick-top reap are the SAME LAW
+  seen from the two ends. Slot reuse: earliest at T+1 dispatch
+  (NewEvent pops free-FIRST, LIFO; reap pushes ascending →
+  reused slots pop highest-first). Disabled-but-unreaped records
+  draw NO rand (already dispatched their death tick, skipped
+  after). PORT (strict-scoped; native MC2 keeps its in-loop free
+  pending the native sweep-law port — DEVIATIONS.md updated): ①
+  world.rs `tick()` tick-top reap gate extended to
+  `Mc2 && strict_retail` (runs after the tick-top draw, before
+  bucket counts — ghosts stop inflating class buckets); ② the
+  importer's ghost free-stack pre-push DELETED
+  (conformance.rs — the reap owns the push now; keeping both
+  would double-push; `ghost_slots` stays for the census, ghosts
+  still import class≠0/unlinked = retail's end-of-T state).
+  NUMBERS (A/B on identical build): mc2l0 conforming 240→452,
+  gross extras 3,761→1,389, unexplained extras 198→22, rng
+  mismatch 3→2 pairs; mc2l30 (10,0) extras 5,590→346, (10,14)
+  917→36, roster-explained 6,320→6,658; mc2l4 explained
+  13,330→13,698. The l30 202 rng pairs survived UNCHANGED ⇒ the
+  rng residual is entirely §l30-churn (b) per-entity rand sites.
+  Two-wrongs exposure measured and accepted: mc2l0 unexplained
+  field +232 rows ((10,39)/(10,1) slot-occupancy collateral,
+  model co-diverges — different entity in the slot) and gross
+  missing 431→1,095 (mostly re-labeling: slots that used to hold
+  a port ghost aliasing retail's record now sit empty = cleaner
+  missing atoms). Fixture t=737 re-statused conforming→capture
+  (`mc2-fire-churn-m13`: a newborn (10,13) churn spawn into
+  recorded-free slot 464 — pre-reap it "conformed" only because
+  the ghost extra masked the family). 7 mc2l0 fixtures FIXED
+  (several were mis-bucketed capture — they rode the reap), all
+  suites promoted green, sim tests green, native goldens
+  UNMOVED (strict-scoped).
+
+- **MC2 +0x54 `applied_pitch` STATICS FAMILY — SPLIT 2026-08-01
+  (opus dig): one real ASSET-BAKE lead + two downstream slices;
+  no f80-law bug anywhere.** +0x54 = `array_0x52_82.pitch` (port
+  f80) and means different things per family:
+  ① **(10,45) dwellings, 41 rows, retail 194 → port 184 —
+  RESOLVED 2026-08-01 (opus dig + fix landed): NOT a bake trim.
+  The night/cave art is GENUINELY 36 wide** (RNC-decompressed
+  payload headers read straight from the retail files: TMAPS0-0
+  day = (38,39), TMAPS1-0 night/night-fog = (36,39), TMAPS2-0
+  cave = (36,39); 240 of 504 entries differ across banks, in
+  both directions — no uniform trim exists, and the port's
+  decode/bake reads the header dims verbatim). The REAL law:
+  retail derives `particlesParameters` ONCE AT BOOT from the DAY
+  bank — `sub_71410_process_tmaps`' sole caller is Initialize
+  (EF:42885), the boot-active tmaps file is TMAPS0-0
+  (TextureMaps.cpp:595), and the per-level TAB swap
+  (ReadAndDecompress.cpp:55/110/137) never recomputes the table —
+  so night/cave levels run day-art extents session-wide. The port
+  re-derived per level from the level's own bundle. FIX:
+  `Bundle::mc2_extent_dims` (mgc-formats bundle.rs) day-sources
+  the dims for ALL MC2 extents derivations (app loader,
+  conformance runner, every test/example world recipe — 11
+  sites); rendering stays on the level's variant bank; no rebake,
+  BAKE_EPOCH unchanged. 52 SPRITE_PARAMS rows shift on
+  night/cave/fog levels; mc2_cave + mc2_slice STATE goldens
+  re-pinned as behavior (OBSERVABLE goldens HELD). mc2l0 452→466
+  conforming, the 41-row family gone, fixtures t=223/t=291
+  promoted.
+  ② **(10,39) spheres, 123 rows = DOWNSTREAM of the open sphere
+  mana economy; rotation law CONFIRMED byte-exact** (thresholds
+  BALL_SIZES + ROT quads match retail's own values 140→13,
+  300→28, 1028→56, 2250→70; re-sprite gate EF:26742 ==
+  combat.rs:2904). 28 rows are slot-occupancy mismatches, 92
+  co-diverge on f140 mana (death-burst fractionation: port slots
+  carry 280=2·140, 420=3·140 where retail dropped 140-mana
+  balls). No sphere fix here — rides the open l4/l30 sphere
+  economy + AI-lane work. Size-threshold-off-by-one REJECTED.
+  ③ **(10,1)/(10,42), ~38 rows = pure slot-occupancy collateral**
+  (model co-diverges on every row — different entities in the
+  slot; comparing +0x54 is meaningless). Rides the population/
+  timeline divergence; no per-family fix.
+
+- **MC2 (5,13) VILLAGER FAMILY — TERRAIN-CLOSURE CAPTURE, RULED
+  2026-08-01 (opus dig).** Model 13 = the Townie/Villager
+  (`AddVilliger_4BF40` EF:34037, behavior row 100, flags 0x9 =
+  die-on-water + flee-on-hit). The dominant mc2l0 unexplained
+  creature family (575 heading + 530 x + 503 y + 255 life + 55
+  rand + 26 speed + 22 extra) splits in two, both capture:
+  ① **the DROWN family** — every life row is retail-alive →
+  port-dead(−1); the dying slots cluster on the EASTERN approach
+  (154-173, 206-227), exactly the region MC2's village-growth
+  construction paint terraforms to land at runtime (ledger
+  §terraform); the pristine replay reads deep water there, so the
+  port's FAITHFUL all-four-blocked die law (`mc2_move_core`
+  mobs.rs:318-24 = EF:8855-62, row flag bit 0) drowns them —
+  confirmed live at pair 1473 (slot 76: retail life 1000, port −1,
+  port heading 1918 = the blocked-retry-yaw signature). Per-pair
+  reseeding re-imports the live villager and re-drowns it every
+  tick (slot 76 alone = 171 rows). Zero deaths on the stamped
+  y=212 causeway strip — the load-time stamp is fine; the missing
+  edits are the RUNTIME house-cluster regrades. Chaotic heading/
+  x/y/rand/speed/extra = downstream of the deaths. ② **the +44
+  family** (39 heading rows, got = want+44 ≈ 2× the v_2=22 turn
+  cap, alive west-side villagers) — rides the RULED-byte-exact
+  wander law's ±22/±45 blip capture (hypothesis-grade within an
+  established ruling). Port walker/move/drown/retile/stamp laws
+  verified faithful line-by-line — do NOT touch. Disposition:
+  roster rule `mc2-walker-drown-terrain` (capture, mirrors
+  mc2-guard-terrain); real remedy = the deferred terrain channel.
+
+- **MC1 CLASS-9 AIM SKEW — SPLIT 2026-08-01 (opus dig); the (9,1)
+  slice was a LAW BUG — FIX LANDED 2026-08-01 (session 3).**
+  Refines the SPAWN-ARM entry's "aim skew stays open": (9,0) =
+  fireball, (9,1) = the POSSESS LOB (`spawn_spell_lob(1)`,
+  combat.rs:388). Split of the post-pose class-9 residue:
+  (c) **LAW BUG, FIXED — (9,1) target_yaw, 525 rows → 0**:
+  retail's possess handler `sub_52ED0` (:62970) homes through the
+  SHARED `sub_52550_52890` (:62534) which writes +34 =
+  angle_between and +36 = pitch_toward EVERY tick
+  (:62543/:62546); the port's separate `home_possess`
+  (combat.rs:1251) updated only f30/f32 and never wrote f34/f36.
+  Proven by the one-tick-lag signature under the re-seed runner:
+  361/363 rows-with-predecessor were exact got[t]==want[t-1].
+  LANDED: `e.f34 = yaw; e.f36 = pitch;` in home_possess per
+  :62543-46 — write-only for the lob (proj_m1_tick reads only
+  f30/f32/f126), zero gameplay change, no golden moved (goldens
+  never fire the lob); mc1l0 fixtures t=620/t=1158 signatures
+  promoted (the target_yaw atom vanished); mc1l0
+  conforming-or-explained 4,026 → 4,150. LATENT
+  (decompile-corroborated, invisible on this corpus, do NOT
+  bundle): home_possess hardcodes yaw cap 34 vs retail row-0
+  v_2=56, and snaps f32=pitch instantly vs retail's v_6=22
+  turn-step — the pitch one WOULD move trajectory if pitch ever
+  steps >22/tick; separate behavior change with its own re-verify.
+  (a) **(9,0) fireball = TARGET-DRIVEN, law faithful**: 229/250
+  target_yaw rows co-flag `chase` (port acquires a different
+  target — 152 port-acquires/94 reverse; exemplar slot 555 retail
+  flew straight f146=0 while port acquired the pose-phase creature
+  556); same-target cases show ±1-3 noise only. Stays
+  open/capture-leaning; optional roster rule "target_yaw co-flags
+  chase+heading ⇒ homing a divergent target".
+  (a2) (9,1) pitch 144 rows = target BALL z via terrain-z —
+  re-triage after the f34 fix. (b) ~56 (slot,t) slot-alias records
+  (port holds a different class/model — lob born a tick off) ride
+  mc1l0-cast-impacts. The (9,x) flags bit13 lead stays its own
+  item.
+
+- **MC1 (5,15) CASTLE-GUARD FAMILY — TERRAIN-CLOSURE CAPTURE,
+  RULED 2026-08-01 (opus dig; the MC1 twin of §l4-guard-terrain).**
+  Model 15 = the castle guard (behavior row 24, `v_20 = 0x20000` —
+  terrain-locked to castle-pad tile types 21/22/24 + 13/14). The
+  whole post-pose unexplained family (1,288 rand + 154 heading +
+  547 x + 374 y rows on mc1l0) is ONE root: `grid_walk`'s vote-tick
+  die-gate (`sub_20480` :25934-40, port mobs.rs:2600-04) reads
+  `cap_bit & !v_20` — on retail's recording the castle build had
+  regraded those tiles to pad type, so retail runs the 4-draw
+  quadrant vote + 1-draw move coin (5 per-entity LCG steps,
+  measured); the pristine-plane replay reads the original tile
+  type, trips the die-return, and draws ZERO (proven: port rand
+  `got` == seed on vote ticks, incl. the unaligned t=3415 case
+  that disproves any phase/order theory). Heading = pure ±512
+  knock-on (the vote's candidates are f30 + 512k, :25945-71 — a
+  frozen +30 vs a re-vote); x/y = the movement knock-on; 154/154
+  heading rows co-locate with a rand row (zero heading-alone → the
+  uniform vote-weight stand-in contributes nothing here). All six
+  diverging slots cluster in one tile box x17-26/y19-28 = one
+  castle site, co-tiled with `mc1l0-terrain-z` want-512/got-256
+  rows. Port laws verified byte-identical line-by-line — do NOT
+  touch grid_walk. Disposition: roster rule `mc1-guard-terrain`
+  (capture, mirrors `mc2-guard-terrain`); real remedy = the
+  deferred terrain channel, which retires both games' guard
+  families at once.
 
 - **SPAWN-ARM f34 MIRROR — RULED DEVIATION (player, 2026-08-01).**
   The post-pose-filter mc1l0 target_yaw residue splits two ways: the

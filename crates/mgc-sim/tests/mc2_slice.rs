@@ -50,8 +50,9 @@ fn build_world(root: &std::path::Path) -> Option<World> {
     if let Some(sp) = bundle.spells.as_deref() {
         assets = assets.with_spells(sp).unwrap();
     }
-    if let Some((sidx, _)) = bundle.sprites.as_ref() {
-        let dims: Vec<(u16, u16)> = sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+    // Day-sourced extents (Bundle::mc2_extent_dims — the boot-time
+    // TMAPS0-0 law), whichever bank the level renders.
+    if let Some(dims) = bundle.mc2_extent_dims(&root.join("assets")) {
         assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
     }
     let seed = pkg.gen_params.as_ref().map_or(0, |g| g.seed);
@@ -525,13 +526,19 @@ fn mc2_slice_behaviors_and_goldens() {
     // non-cave levels like this slice shift by exactly that one
     // draw. Behavior change toward retail by design (mc2l0
     // conforming pairs 167 → 240 under the same change).
+    // Re-pinned (ALL SIX, post-init included) for day-sourced
+    // sprite extents (Bundle::mc2_extent_dims): retail's particle
+    // params derive once at boot from TMAPS0-0, so this night level
+    // runs day-art extents (sprite 96 stamps f80 194 not 184; 52
+    // param rows shift). Load-time stamps move post-init too.
+    // Behavior change toward retail by design.
     const GOLDEN: [u64; 6] = [
-        0x056322f66a56b6d9, // post-init (GenerateEvents + dis 0)
-        0xd1829705cadb4577, // A: 64 idle ticks afield
-        0xf93d68ca7f771c0d, // B: the type-5 fly-to latched
-        0xb4c3eadfc5d393a1, // C: goat awake/flee window
-        0xe4774fb00597a41c, // D: fireball combat over the goat
-        0x24da1a489a823255, // E: census + villager/archer provocation
+        0x95c8d53f76cff370, // post-init (GenerateEvents + dis 0)
+        0x2c8e32df19c6e2c2, // A: 64 idle ticks afield
+        0x28f959769992d134, // B: the type-5 fly-to latched
+        0x67b1d7ebbe971a10, // C: goat awake/flee window
+        0x5d908d6bf51032ed, // D: fireball combat over the goat
+        0x73540a38c187e4fe, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,

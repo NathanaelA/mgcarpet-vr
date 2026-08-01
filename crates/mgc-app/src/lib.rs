@@ -882,9 +882,10 @@ fn load_level(
                 // (remc2 EF:44870-44910): collision boxes come from
                 // the sprite bitmaps' aspect — the static param
                 // table alone leaves most speed_6 at 0 (zero-box).
-                if is_mc2 && let Some((sidx, _)) = bundle.sprites.as_ref() {
-                    let dims: Vec<(u16, u16)> =
-                        sidx.sprites.iter().map(|e| (e.width, e.height)).collect();
+                // Day-sourced whatever the level's render variant
+                // (Bundle::mc2_extent_dims holds the boot-time
+                // TMAPS0-0 law).
+                if is_mc2 && let Some(dims) = bundle.mc2_extent_dims(&baked_root.join("assets")) {
                     assets = assets.with_mc2_sprite_ext(mgc_sim::mc2::derive_sprite_extents(&dims));
                 }
                 let seed = package.gen_params.as_ref().map_or(0, |g| g.seed);
