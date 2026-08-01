@@ -21,6 +21,7 @@ use crate::xr_init::XrContext;
 
 type Vulkan = hal::api::Vulkan;
 
+#[allow(unused)]
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
