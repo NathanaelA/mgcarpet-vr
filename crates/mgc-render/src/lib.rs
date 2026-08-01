@@ -5033,7 +5033,7 @@ impl Renderer {
         // The map pane: origin at the screen corner, right edge receding
         // by BOOK_GAP from the column (the vertical bar of the "T").
         let mut map_pane = (
-            BOOK_MAP_X,
+            BOOK_MAP_X - 100.0,
             BOOK_MAP_Y,
             (col_x - f.len(BOOK_GAP)).max(0.0),
             pane_bottom,
@@ -5043,8 +5043,8 @@ impl Renderer {
         // world-space mode; it is allowed to overlap the world viewport
         // because the map view is the point of this screen.
         if self.ui_panel_mode == 1 {
-            map_pane.2 = (map_pane.2 * 2.0).min(f.w - map_pane.0);
-            map_pane.3 = (map_pane.3 * 2.0).min(f.h - map_pane.1);
+            map_pane.2 = (map_pane.2 * 3.0); // .min(f.w - map_pane.0);
+            map_pane.3 = (map_pane.3 * 2.0); //.min(f.h - map_pane.1);
         }
 
         let aspect = if self.map_view {
@@ -5889,6 +5889,7 @@ impl Renderer {
                 let (mut vx, mut vy, mut vw, mut vh) = view_rect;
                 if vw > 0 && vh > 0 {
                     if !IS_ANDROID {
+                        // We disable this on VR because  it  is totally broken
                         pass.set_viewport(vx as f32, vy as f32, vw as f32, vh as f32, 0.0, 1.0);
                         pass.set_scissor_rect(vx, vy, vw, vh);
                     }
@@ -5896,7 +5897,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.fill_bind_group, &[]);
                     pass.draw(0..3, 0..1);
                     draw_world(&mut pass);
-                    // TODO: Reset eye projection after this so the rest of the hud map pane is correct
+
                     pass.set_viewport(0.0, 0.0, w as f32, hpx as f32, 0.0, 1.0);
                     pass.set_scissor_rect(0, 0, w, hpx);
                 }

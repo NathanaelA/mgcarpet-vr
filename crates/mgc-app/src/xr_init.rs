@@ -22,6 +22,7 @@ use wgpu::hal;
 use winit::platform::android::activity::AndroidApp;
 
 /// All XR and Vulkan state for the lifetime of the session.
+#[allow(unused)]
 pub struct XrContext {
     // ── OpenXR ──────────────────────────────────────────────────────────────
     pub xr_instance: xr::Instance,

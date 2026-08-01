@@ -3810,6 +3810,7 @@ impl App {
             bindable,
             is_mc2,
             grabbed,
+            in_panel,
         );
         let pointer = *self.input.as_ref().unwrap().pointer();
         self.pointer_beam = pointer.beam;
@@ -3822,9 +3823,61 @@ impl App {
             if !is_mc2 {
                 if input.fire_right || input.fire_left {
 
-                    if (self.paused && input.fire_right) {
+                    if self.paused && input.fire_right {
                         // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
-                       self.mini_click(event_loop);
+                        // If the mini-menu is open, it handles and return true
+                       if !self.mini_click(event_loop) {
+                           // If the mini-menu did not handle the click, we check if the options menu is open and handle it.
+                           if self.menu.is_some() {
+                               // The options menu owns the pointer while open.
+                               let size = self.view_size();
+                               if let Some(assets) = ui_assets!(self) {
+                                   let st = self.menu.as_ref().unwrap();
+                                   match menu::hit_test(
+                                       assets,
+                                       &self.specs,
+                                       st,
+                                       size.0,
+                                       size.1,
+                                       self.cursor,
+                                   ) {
+                                       menu::Hit::Tab(t) => {
+                                           self.menu.as_mut().unwrap().set_tab(t);
+                                       }
+                                       menu::Hit::ScrollTo(row) => {
+                                           self.menu.as_mut().unwrap().scroll_to(row);
+                                       }
+                                       menu::Hit::Widget(i) => {
+                                           let changed = menu::pointer_apply(
+                                               assets,
+                                               &mut self.cfg,
+                                               &self.specs,
+                                               self.menu.as_mut().unwrap(),
+                                               size.0,
+                                               size.1,
+                                               self.cursor,
+                                               i,
+                                               true,
+                                           );
+                                           let path = self.specs[i].cfg_path;
+                                           if changed {
+                                               self.apply_option(path);
+                                           }
+                                           // Click widgets persist
+                                           // immediately; sliders persist
+                                           // on release (not per motion
+                                           // event).
+                                           if changed && self.menu.as_ref().unwrap().drag.is_none() {
+                                               self.persist_option(&self.specs[i]);
+                                           }
+                                       }
+                                       menu::Hit::None => {}
+                                   }
+                               }
+                           } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
+                               self.persist_option(&self.specs[i]);
+                           }
+                       }
                         return FlightInput::default();
                     } else if self.screen == Screen::Movie {
                         // Either fire button skips the movie.
@@ -3832,7 +3885,7 @@ impl App {
                             m.skip();
                             return FlightInput::default();
                         }
-                    } else if (in_bookview) {
+                    } else if in_bookview {
                         // Each controller can select its spell.
                         let owned = self
                             .session
@@ -3873,7 +3926,7 @@ impl App {
                 }
             }
 
-            if (!in_panel) {
+            if !in_panel {
                 return FlightInput::default();
             }
         }

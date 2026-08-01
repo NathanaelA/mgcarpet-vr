@@ -19,6 +19,7 @@ use mgc_sim::ids::GameId;
 use mgc_sim::mc1::entities::{Mc1TypePick, SpawnRng, mc1_entity_parts, mc1_entity_type};
 use mgc_sim::mc1::sprite_stats::SPRITE_STATS;
 use mgc_sim::{HEIGHT_SCALE, MAP_TILES};
+use crate::IS_ANDROID;
 
 /// Engine fixed-point units per tile.
 const UNITS_PER_TILE: f32 = 256.0;
@@ -724,7 +725,7 @@ pub fn map_dots_from_poses(
         }
         let team = p.team.map(|t| TEAM_COLORS[(t as usize).min(7)]);
         let owner_color = team.map(|(v, _)| v).unwrap_or(wild_magenta);
-        let mut size = 1u8;
+        let mut size = if IS_ANDROID { 2u8 } else { 1u8 };
         let color = match (p.class, p.model) {
             // Charred trees leave the map (v29 stays 0, :57219).
             (2, 0) if matches!(p.type_index, 226 | 227) => continue,
