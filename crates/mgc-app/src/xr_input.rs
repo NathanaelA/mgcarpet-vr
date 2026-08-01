@@ -19,7 +19,7 @@
 
 use mgc_sim::{FlightInput, Flyer};
 use openxr as xr;
-
+use winit::platform::android::activity::ndk_sys::sin;
 use crate::xr_init;
 
 /// Turn rate at full stick deflection, radians/tick (24 Hz sim) — a
@@ -79,6 +79,9 @@ pub struct InputActions {
     last_btn_y_click: bool,
     last_btn_b_time: i64,
     last_btn_b_click: bool,
+    last_right_trigger: bool,
+    last_left_trigger: bool,
+    consume_triggers: bool,
     pointer: PointerState,
 }
 
@@ -194,6 +197,8 @@ impl InputActions {
             squeeze_right,
             left_spell: 0,    // Default it to fireball spell
             right_spell: 3,   // Default it to mana spell
+            last_left_trigger: false,
+            last_right_trigger: false,
             last_squeeze_left: false,
             last_squeeze_right: false,
             last_menu: false,
@@ -203,6 +208,7 @@ impl InputActions {
             last_btn_y_click: false,
             last_btn_b_click: false,
             last_btn_b_time: 0,
+            consume_triggers: false,
             pointer: PointerState::default(),
         })
     }
@@ -242,6 +248,7 @@ impl InputActions {
         bindable: [bool; 26],
         is_mc2: bool,
         grabbed: bool,
+        consume_click: bool,
     ) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
 
@@ -447,6 +454,32 @@ impl InputActions {
             false
         };
 
+
+        let mut trigger_left_value = value(&self.trigger_left) > 0.5;
+        let mut trigger_right_value = value(&self.trigger_right) > 0.5;
+
+        // We have to consume primary trigger clicks until we no longer have any triggers held down
+        if self.consume_triggers && !consume_click {
+            if (!trigger_left_value && !trigger_right_value) {
+                self.consume_triggers = false;
+            } else {
+                trigger_left_value = false;
+                trigger_right_value = false;
+            }
+        }
+
+        if consume_click && (trigger_left_value || trigger_right_value) {
+            self.consume_triggers = true;
+            if self.last_left_trigger {
+                trigger_left_value = false;
+            }
+            if self.last_right_trigger {
+                trigger_right_value = false;
+            }
+        }
+
+        self.last_left_trigger = value(&self.trigger_left) > 0.5;
+        self.last_right_trigger = value(&self.trigger_right) > 0.5;
         self.last_squeeze_right = value(&self.squeeze_right) > 0.5;
         self.last_squeeze_left = value(&self.squeeze_left) > 0.5;
         self.last_menu = pressed(&self.menu_click);
@@ -461,8 +494,8 @@ impl InputActions {
             strafe: left.x * 4.0,
             yaw_delta: right.x * YAW_RATE_PER_TICK,
             pitch_delta,
-            fire_left: value(&self.trigger_left) > 0.5,
-            fire_right: value(&self.trigger_right) > 0.5,
+            fire_left: trigger_left_value,
+            fire_right: trigger_right_value,
             respawn: pressed(&self.btn_a),
             demolish,
             equip_left: (equip_left < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_left)),
