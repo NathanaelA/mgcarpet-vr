@@ -518,13 +518,20 @@ fn mc2_slice_behaviors_and_goldens() {
     // (EF:26244-52), merges go grounded-only (EF:26265-69), and each
     // re-sprite stamps the per-size rotation quad (EF:26744-77).
     // Behavior change toward retail by design.
+    // Re-pinned (A-E; post-init holds) for the corpus-solved cave
+    // rand structure (see mc2_cave.rs): the MC2 baseline draw moved
+    // to the tick top (retiring the post-pass draw), so every
+    // mid-pass global-stream consumer sees the retail phase —
+    // non-cave levels like this slice shift by exactly that one
+    // draw. Behavior change toward retail by design (mc2l0
+    // conforming pairs 167 → 240 under the same change).
     const GOLDEN: [u64; 6] = [
         0x056322f66a56b6d9, // post-init (GenerateEvents + dis 0)
-        0xc413fb39b1144d4d, // A: 64 idle ticks afield
-        0x666443f8f8c93ad8, // B: the type-5 fly-to latched
-        0xd4cd1344b37e37aa, // C: goat awake/flee window
-        0x4d03fe31b03ec563, // D: fireball combat over the goat
-        0xc9fc59be64bc552b, // E: census + villager/archer provocation
+        0xd1829705cadb4577, // A: 64 idle ticks afield
+        0xf93d68ca7f771c0d, // B: the type-5 fly-to latched
+        0xb4c3eadfc5d393a1, // C: goat awake/flee window
+        0xe4774fb00597a41c, // D: fireball combat over the goat
+        0x24da1a489a823255, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -543,13 +550,17 @@ fn mc2_slice_behaviors_and_goldens() {
     // Re-pinned (A-E; post-init holds) with the traced sphere mover
     // (see the GOLDEN note above) — settled spheres freeze, rebound
     // and merge law changed, rotation quad observable.
+    // Re-pinned (A-E; post-init holds) with the corpus-solved cave
+    // rand structure (see the GOLDEN note above) — the tick-top
+    // baseline draw re-phases every mid-pass stream consumer, a
+    // REAL behavior change toward retail.
     const OBSERVABLE: [u64; 6] = [
         0x5951c95adf7436f9,
-        0xb663a0443f9eafd4,
-        0x537d37512f2dd8b1,
-        0xdaf2a235327179b5,
-        0x0cdb5a78ea2d7c56,
-        0xd423c4ca2e580d28,
+        0x2124a10a9bacce39,
+        0x756d1d917904a64b,
+        0xe4320d63211b640a,
+        0x2f46b6a4f09c1fe2,
+        0xfdaf76fbc6350fb1,
     ];
     assert_eq!(
         obs, OBSERVABLE,

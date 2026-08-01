@@ -383,13 +383,20 @@ fn level_005_golden_state_hashes() {
     // 6-life cloud). Post-init holds — the authored castles load at
     // level 0 (the guarded ctor shell); the marker first lands on
     // each castle's first settled tick inside the window.
+    // Re-pinned (B-E; post-init + A hold — no ball sits in the
+    // far-afield radius) for the mana-ball WAKE law (sub_54F80
+    // :64352-66, corpus-proven on mc1hwl0): settled balls within
+    // 24 tiles of the human re-arm +58 = 16 on the awake pass's
+    // 17-tick cycle, and the ballistic gate reads the
+    // post-maintenance value (retail's handler order). Behavior
+    // change toward retail by design.
     const GOLDEN: [u64; 6] = [
         0x4adb9e3a7dd0638d, // post-init (feature pass + disposition 0)
         0x071d8b3685c82b66, // A: 32 idle ticks far afield
-        0x9e4c1ac9d3bec946, // B: crater trigger fired + 120 dig ticks
-        0xcce9b03e12711c2f, // C: ambush disposition fired
-        0xf97c8fc44afdb796, // D: 64 ticks of two-hand fireball combat
-        0xe772cef1c5a1eb1c, // E: 100 aftermath ticks
+        0x3d5a668cb81fd619, // B: crater trigger fired + 120 dig ticks
+        0x3bf082db33b6bf14, // C: ambush disposition fired
+        0x5695358f797dd440, // D: 64 ticks of two-hand fireball combat
+        0x4f3399d1bb98bc68, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -455,13 +462,18 @@ fn level_005_golden_state_hashes() {
     // nothing in this window attacks a castle or casts a napalm
     // cloud, so the moved layout lanes are the castle +78/+144
     // fields and the acquire-latch bits alone.
+    // The mana-ball WAKE law (see the GOLDEN note) moves B-E — REAL
+    // behavior: near-wizard settled balls resume rolling on the
+    // 17-tick duty cycle, so ball rest poses from the dig window on
+    // differ. Post-init + A hold (no ball inside the far-afield
+    // radius).
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
         0x9ec1a5584565a87e, // A
-        0x7dd13ef50ddc4805, // B — settler phase + feeder leash
-        0xdb23684a5f1a94c7, // C
-        0xdde79da8ba8775b9, // D
-        0x0cc6d8b97bc50be3, // E
+        0x49fe1375dca7f4b2, // B — settler phase + feeder leash
+        0x6af5efcdd6081eb8, // C
+        0x412ee018eed41006, // D
+        0x1ecb55e0cb28e550, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

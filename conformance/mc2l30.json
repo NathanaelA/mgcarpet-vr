@@ -6,294 +6,267 @@
     {
       "t": 0,
       "status": "open",
-      "sig": "a636c192a20b6a00",
+      "sig": "32f08f62d73c1967",
       "atoms": [
-        "field:10,45:z",
-        "rng"
+        "field:10,45:z"
       ],
-      "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7l30-churn/rng"
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §l30-churn/rng"
     },
     {
       "t": 13,
       "status": "open",
-      "sig": "3fe4133ae154c0ef",
+      "sig": "f1acd41e43ba5b74",
       "atoms": [
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
-      "note": "ledger mc2l4+mc2l30 triage: \u00a7sphere, \u00a7terraform, \u00a7terraform-scroll, \u00a7l30-churn/rng"
+      "note": "ledger mc2l4+mc2l30 triage: §sphere, §terraform, §terraform-scroll, §l30-churn/rng"
     },
     {
       "t": 15,
       "status": "open",
-      "sig": "3ade3b1f17bee43c",
+      "sig": "b34bddb2b7b9d17b",
       "atoms": [
         "field:10,45:z",
         "field:5,4:heading",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
-      "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll, \u00a7l30-churn/rng"
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §l30-churn/rng"
     },
     {
       "t": 19,
       "status": "open",
-      "sig": "d0f6ca6b765bfb2e",
+      "sig": "34d957e43d890581",
       "atoms": [
         "field:10,45:z",
         "field:14,2:life",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 27,
       "status": "open",
-      "sig": "9f00057c78379617",
+      "sig": "6b422581f8c643fc",
       "atoms": [
         "field:10,45:life",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 2 row(s) unexplained; rng"
     },
     {
       "t": 30,
       "status": "open",
-      "sig": "3f465bda9c091f41",
+      "sig": "eec56fa65e1fef22",
       "atoms": [
         "field:10,45:z",
         "field:5,4:heading",
         "field:5,4:x",
         "field:5,4:y",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 3 row(s) unexplained; rng"
     },
     {
       "t": 34,
       "status": "open",
-      "sig": "aa48b1431ce66102",
+      "sig": "e7809022bb541e5d",
       "atoms": [
         "field:10,45:z",
         "field:5,4:sv1",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 39,
       "status": "open",
-      "sig": "dd37ca228253e3bf",
+      "sig": "8e08f170739abd78",
       "atoms": [
-        "field:10,0:rand",
         "field:10,0:z",
         "field:10,39:z",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0, mc2-sphere-terrain-z; rng"
     },
     {
       "t": 40,
       "status": "open",
-      "sig": "9a90f4bb5cb459e0",
+      "sig": "653a2cad451ad547",
       "atoms": [
         "field:10,0:z",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0; rng"
     },
     {
       "t": 42,
       "status": "open",
-      "sig": "b602cd930d795d7c",
+      "sig": "a53abfce8c550dbb",
       "atoms": [
         "extra:10,1",
         "field:10,0:z",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0; 1 row(s) unexplained; rng"
     },
     {
       "t": 49,
       "status": "open",
-      "sig": "e7346ec9da962396",
+      "sig": "5199cefd2c6a9a29",
       "atoms": [
         "extra:10,0",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0; rng"
     },
     {
       "t": 55,
       "status": "open",
-      "sig": "8e654edbb1457380",
+      "sig": "02db9a7e80404ae7",
       "atoms": [
         "field:10,39:z",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-sphere-terrain-z; rng"
     },
     {
       "t": 76,
       "status": "open",
-      "sig": "efebcdfa46648e93",
+      "sig": "50c6005a80b1b240",
       "atoms": [
         "field:10,45:z",
         "field:5,19:rand",
         "field:5,19:speed",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 2 row(s) unexplained; rng"
     },
     {
       "t": 81,
       "status": "open",
-      "sig": "19879730d49bc421",
+      "sig": "3d58bada827b9002",
       "atoms": [
         "field:10,45:z",
         "field:5,19:rand",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 86,
       "status": "open",
-      "sig": "ca82e2feade358f0",
+      "sig": "f1acd41e43ba5b74",
       "atoms": [
-        "extra:10,86",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 101,
       "status": "open",
-      "sig": "e5b56ab3262d858a",
+      "sig": "e9855e15c1edb2c5",
       "atoms": [
         "field:10,45:z",
         "field:5,19:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-walker-ground-z; rng"
     },
     {
       "t": 117,
       "status": "open",
-      "sig": "594ae38c53e6c87a",
+      "sig": "9de98ddc0a21c235",
       "atoms": [
         "field:10,45:z",
         "field:5,4:z",
-        "missing:10,86",
-        "rng"
+        "missing:10,86"
       ],
-      "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-scroll, \u00a7drip, \u00a7l30-churn/rng"
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §drip, §l30-churn/rng"
     },
     {
       "t": 139,
       "status": "open",
-      "sig": "cb915518e60341a3",
+      "sig": "e8c41b7a475362d0",
       "atoms": [
         "field:10,45:z",
         "field:5,4:z",
-        "field:player0.hand_left",
-        "rng"
+        "field:player0.hand_left"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 141,
       "status": "open",
-      "sig": "be69c586d678d281",
+      "sig": "8106ab19c295c362",
       "atoms": [
         "extra:9,10",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-cast-timing-extra; rng"
     },
     {
       "t": 150,
       "status": "open",
-      "sig": "4b2779abbc8106bd",
+      "sig": "73a3e4d580347896",
       "atoms": [
         "extra:10,87",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 213,
       "status": "open",
-      "sig": "b15c8b4b5e77e1bb",
+      "sig": "a6cc35b0447bbac8",
       "atoms": [
         "field:10,45:z",
         "field:5,4:z",
         "field:9,21:pitch",
-        "field:9,21:z",
-        "rng"
+        "field:9,21:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-cast-timing-fields; rng"
     },
     {
       "t": 227,
       "status": "open",
-      "sig": "fbbbb55acde41d94",
+      "sig": "872e4de97772c933",
       "atoms": [
         "extra:9,21",
         "field:10,45:z",
         "field:5,19:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-cast-timing-extra, mc2-walker-ground-z; rng"
     },
     {
       "t": 228,
       "status": "open",
-      "sig": "701abd70777b11a2",
+      "sig": "c739055df2eb3afd",
       "atoms": [
         "extra:10,66",
         "field:10,45:z",
-        "field:5,4:z",
-        "rng"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
     },
     {
       "t": 243,
       "status": "open",
-      "sig": "638ab3e8f2e92884",
+      "sig": "4f06b78e13bd18a2",
       "atoms": [
         "field:10,45:z",
         "field:5,4:z",
-        "field:9,21:pitch",
-        "field:9,21:rand",
-        "rng"
+        "field:9,21:pitch"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-cast-timing-fields; rng"
     }

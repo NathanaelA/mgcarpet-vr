@@ -20,36 +20,39 @@ clock on both games, so the MC2 Turn++-park tear is GONE; all pairs
 at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
 `carry_curation.py` + `classify_fixtures.py`):
 - **mc1l0**: gapless full level-0 playthrough, 5,874 ticks, 5,873
-  pairs, 0 torn, all fixture-grade, **440 conforming**; RNG (1,1)
-  on every pair. Roster-aware: 2,888 conforming-or-explained,
-  UNEXPLAINED 17,936 field / 125 missing / 260 extra rows. (The
-  `mc1l0-village-regrade` rule hit 0 rows — its t/rect scope was
-  the OLD take's regrade event; retire or re-scope on the next
-  roster pass.)
+  pairs, 0 torn, all fixture-grade, **450 conforming** (440 before
+  the wake-law round); RNG (1,1) on every pair. Roster-aware:
+  3,042 conforming-or-explained, UNEXPLAINED 17,246 field / 124
+  missing / 260 extra rows. (The `mc1l0-village-regrade` rule hit
+  0 rows — its t/rect scope was the OLD take's regrade event;
+  retire or re-scope on the next roster pass.)
 - **mc1hwl0**: full HW take under meteor weather, ticks 0..39,800
   with 15 gaps (69 frames — heavy-animation skips; a skip-free HW
   run is not achievable) + 517 torn, 39,199 of 39,716 pairs
-  fixture-grade, **46 conforming**; RNG (1,1) on 39,171 pairs,
-  retail >16-draw bursts on 28. Terrain closure still owns ~every
-  pair (`mc1hwl0-terrain-z` explains 2.12M rows / 39,133 pairs;
-  2.29M field rows unexplained — HW progress keeps reading from
-  per-family totals + the story suite, not the pair headline).
+  fixture-grade, **48 conforming** (46 before the wake-law round);
+  RNG (1,1) on 39,171 pairs, retail >16-draw bursts on 28. Terrain
+  closure still owns ~every pair (`mc1hwl0-terrain-z` explains
+  2.12M rows / 39,133 pairs; 2.28M field rows unexplained — HW
+  progress keeps reading from per-family totals + the story suite,
+  not the pair headline).
 - **mc2l0**: gapless 8,627 ticks, 8,626 pairs, **0 torn** (take-2
   on the rate-limited recorder tore 1,105 of 3,640), all
-  fixture-grade, **167 conforming**; rng mismatch on 3 pairs only.
-  Roster-aware: 5,508 conforming-or-explained, UNEXPLAINED 9,344
-  field / 71 missing / 281 extra.
+  fixture-grade, **240 conforming** (167 before the cave-rand
+  round-2 tick-top draw); rng mismatch on 3 pairs only.
+  Roster-aware: 5,508 conforming-or-explained, UNEXPLAINED 8,846
+  field / 70 missing / 281 extra.
 - **mc2l4 + mc2l30** (CUT 2026-08-01 from the single conjoined
   `mc2l4,30.mgcr` take at t=17713; the take's SINGLE frame skip
   17711→17713 is exactly the level transition — the tick fn never
   ran during the load — so both cuts are internally gapless, and
   the embedded level record flips at the cut as before): mc2l4 =
   17,711 pairs, 0 torn, all fixture-grade, 0 conforming raw but
-  **13,325 of 17,711 pairs roster-explained (75%)**, rng mismatch
-  on 162; mc2l30 = 9,337 pairs, 0 torn, all fixture-grade,
-  §l30-churn/rng mismatches rng on **9,328 of 9,337 pairs** (the
-  cave rand-perturbation lead, now measured tear-free), 1 pair
-  explained. Suite note: one mc2l4 exemplar's signature differed
+  **13,330 of 17,711 pairs roster-explained (75%)**, rng mismatch
+  on 160; mc2l30 = 9,337 pairs, 0 torn, all fixture-grade, rng
+  mismatch **202 of 9,337 pairs** (9,328 before the cave-rand
+  structure round 2 — see Resolved; the residual is churn-tick
+  draw-count skew riding §l30-churn), **6,320 pairs
+  roster-explained** (was 1). Suite note: one mc2l4 exemplar's signature differed
   between the full extract pass and the sparse suite pass (the
   shared world instance leaks a trace of which pairs ran before —
   select-dependence, warning-grade); re-promoted to the
@@ -746,6 +749,77 @@ post-fix).
 
 ## Resolved
 
+- **MC2 CAVE RAND STRUCTURE, ROUND 2 (2026-08-01) — the mc2l30
+  headline closed: rng mismatches 9,328 → 202 of 9,337 pairs.**
+  The clean corpus offline-solve (recordings→`--csv` rng rows,
+  scratch solver) fits `R' = LCG^k(R) + (turn+1)` — the additive
+  lands AFTER every draw of the carpet's position, and the counter
+  is the POST-increment Turn (solved s = recorded-turn@t + 1 on
+  every fitting pair): k=2 on quiet ticks (6,806), k=4 exactly on
+  drip ticks t≡5 mod 8 (1,001), +1 activity draw variants (846),
+  367 "sandwich" pairs with draws after the additive (activity in
+  slots ABOVE the carpet — proving the tail runs AT the carpet's
+  pool slot inside the frame walk, not pre/post-pass), and 258
+  pure-LCG pairs with NO tail at all: t=3257-3267 (possession
+  holds the byte[1]&8 stall every tick, carpet flags 0x1000_0A0D)
+  and t=9090..end (carpet action45 = 12, the level-end arm — the
+  mover `sub_5D530` is only called from the flying arm EF:59994
+  and the death-test arm EF:60074). Source-corroborated: exactly
+  ONE unconditional global draw/tick at the frame-function top
+  (EF:39947; the parked-carpet window measures precisely one
+  draw), the drip reads the post-Turn++ player Turn (&7,
+  EF:40501), the tail is `sub_5D530`'s late body (EF:59800-08).
+  Port restructure (world.rs): tick-top draw unconditional for MC2
+  (post-pass baseline deleted), drip gate → incremented mc2_turn,
+  tail moved INTO the frame walk at the imported carpet slot (new
+  `mc2_carpet_slot`; native = post-pass fallback), additive =
+  post-increment counter, importer folds the mover-less action
+  arms into `mc2_carpet_stall`. SUPERSEDES round 1's
+  [drip→tail→pass→baseline] order and the tick-entry drip anchor
+  (both fit on the TORN corpus under the wrong additive position).
+  Numbers: mc2l30 roster-explained pairs 1 → 6,320, rng residual
+  202 pairs (all churn-tick draw-count skew — rides §l30-churn);
+  mc2l0 167 → **240 conforming** (the tick-top draw re-phases
+  every mid-pass stream consumer on non-cave levels too); mc2l4
+  roster-explained 13,325 → 13,330, rng 162 → 160; mc1/HW
+  untouched. Goldens re-pinned as behavior (mc2_cave B-D + obs D,
+  mc2_slice A-E + obs A-E); suites 0 regressions (mc2l0 t=737
+  fixed, all mc2l30 sigs re-promoted).
+
+- **MANA-BALL WAKE LAW (2026-08-01) — the ⓪b banked lead, ported
+  verbatim; "mana rolls away downhill when approached" is now port
+  behavior (PLAYTEST OWED).** Decompile dig closed every open
+  question: the writer of 16 into +58 is `sub_54F80` :64361 — the
+  SAME per-tick maintenance pass that decrements (:64321), called
+  from the bucket walk `sub_54F00_55430` :64266. Law: +58 nonzero
+  → decrement, mirror down the +54 chain; else if +59 nonzero →
+  decrement it (DEAD branch — nothing ever writes +59 > 0); else
+  2D squared distance (sub_42410 :52748, x/y only) to the LOCAL
+  HUMAN's wizard entity (:64352 — single scalar index, rivals
+  never wake balls) `< 37748736` (= 6144² = 24.0 tiles, strict) →
+  +58 = 16, chain members 18 (:64364), +48 stamped with an
+  isqrt-of-index artifact (not ported — flagged low-load-bearing).
+  The corpus 17-tick period is emergent: 16 decrements + 1
+  observe-zero re-arm tick (duty 16/17). Ctor 128 = `sub_3B5A0`
+  :47465; HW twin `sub_554B0` byte-identical (hw:60542/:60576/
+  :60582). Retail has NO class gate in the pass (bucket membership
+  beyond balls/creatures = open); the port scopes to the
+  corpus-proven rows: balls (10, state 41) now ride
+  `mob_awake_pass` alongside class-5 (mobs.rs — counter handled as
+  a raw BYTE, the i8-import −128 trap), and ball_tick's private
+  decrement fold is REMOVED: the ballistic gate reads the
+  post-maintenance value (retail handler order — this also fixes
+  the old 1→0-edge quirk: a fresh ball's window ends at the
+  counted zero, and each wake cycle moves 16 / freezes 1).
+  Native + strict both (retail law); the settled-ball ground-track
+  deviation still applies to out-of-radius balls only. Acceptance:
+  `settled_ball_wakes_within_24_tiles_on_a_17_tick_cycle`
+  (features.rs) pins the strict boundary + exact period. Corpus:
+  mc1l0 440 → **450 conforming** ((10,39) fixture x/y atoms gone,
+  t=882 fixture now conforming), mc1hwl0 46 → 48. Goldens
+  re-pinned as behavior (flight A-C both modes, L005 B-E + obs
+  B-E); suites 0 regressions, drifts promoted.
+
 - **KINEMATICS ROUND 2026-07-31 (the banked coordinate+speed
   deep-dive) — four port/import fixes + three capture rulings.**
   Fixes (all decompile-corroborated, corpus-A/B'd; mc1l0 385
@@ -851,7 +925,14 @@ post-fix).
     not an entity law.
 
 - **MC2 CAVE AMBIENT RAND TAIL + the turn anchor (the mc2l30
-  ">16 draws/tick" banked lead)** — RESOLVED 2026-07-31. Level 30
+  ">16 draws/tick" banked lead)** — RESOLVED 2026-07-31.
+  ⚠ PARTIALLY SUPERSEDED by "MC2 CAVE RAND STRUCTURE, ROUND 2"
+  above: the tail's EXISTENCE, LCG constants and full-counter
+  addend stand, but this round's tick ORDER
+  ([drip→tail→pass→baseline]), the pre-increment additive/drip
+  anchor, and the "s = t" solve were artifacts of the TORN corpus
+  — the clean re-record pins additive-last at the carpet's slot
+  with the POST-increment counter. Level 30
   is a CAVE (`map_type: "cave"` + ceiling plane), and retail's
   carpet handler `sub_5D530` runs a cave-only tail (EF:59800-08):
   `rand_0x8 = 9377·rand + 9439 + counter` — a NON-LCG perturbation

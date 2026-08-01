@@ -2749,10 +2749,26 @@ impl Gen {
     /// :52748 reads only x/y; altitude never gates waking. remc2's
     /// sub_68C70 uses the same 2D distance, corroborated by the
     /// synchronized remc1 body).
+    ///
+    /// MANA BALLS ride the same pass (retail's bucket walk has NO
+    /// class gate — sub_54F80 maintains every live bucket entity):
+    /// a settled ball within the same 24-tile radius of the HUMAN
+    /// (:64352 reads the single local-player index; rivals never
+    /// wake balls) re-arms +58 = 16 (:64361), so near-wizard mana
+    /// rolls downhill in a 16-of-17-tick duty cycle — "the mana
+    /// runs away when approached" is retail law. Corpus: mc1hwl0
+    /// full-take scan, 7,571 re-arm events, all writing exactly 16,
+    /// per-slot period exactly 17, hard cutoff at 24.0 tiles.
+    /// (Whether other bucket classes also wake is open; the port
+    /// scopes the pass to the corpus-proven rows.) +58 is a raw
+    /// BYTE in retail — the import widens i8 (a fresh ball's 0x80
+    /// arrives −128), so the countdown masks.
     pub(crate) fn mob_awake_pass(&mut self, ctx: &MobCtx) {
         for i in 1..self.ent.len() {
             let e = &self.ent[i];
-            if e.class64 != 5 || e.tick70 == 120 {
+            let creature = e.class64 == 5 && e.tick70 != 120;
+            let ball = e.class64 == 10 && e.tick70 == 41;
+            if !creature && !ball {
                 continue;
             }
             if e.act_life < 0 {
@@ -2760,12 +2776,13 @@ impl Gen {
                 self.ent[i].f59 = 0;
                 continue;
             }
-            if e.f58 > 0 {
-                self.ent[i].f58 -= 1;
-                let v = self.ent[i].f58;
+            let v = (e.f58 & 0xFF) as u8;
+            if v > 0 {
+                let v = v - 1;
+                self.ent[i].f58 = v as i16;
                 let mut s = self.ent[i].f54 as usize;
                 while s != 0 {
-                    self.ent[s].f58 = v;
+                    self.ent[s].f58 = v as i16;
                     s = self.ent[s].f54 as usize;
                 }
             } else if e.f59 > 0 {

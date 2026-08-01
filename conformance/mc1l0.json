@@ -282,9 +282,8 @@
     {
       "t": 704,
       "status": "open",
-      "sig": "6c840ed36f61a8d6",
+      "sig": "ab9e1b1de5436f36",
       "atoms": [
-        "field:10,39:y",
         "field:10,39:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
@@ -292,9 +291,8 @@
     {
       "t": 770,
       "status": "open",
-      "sig": "351a1ad9a83c6f33",
+      "sig": "ab9e1b1de5436f36",
       "atoms": [
-        "field:10,39:x",
         "field:10,39:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
@@ -302,20 +300,15 @@
     {
       "t": 873,
       "status": "open",
-      "sig": "ab97171de53d49bc",
+      "sig": "ab9e1b1de5436f36",
       "atoms": [
-        "field:10,39:x"
+        "field:10,39:z"
       ],
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {
       "t": 882,
-      "status": "open",
-      "sig": "351018d9a8341748",
-      "atoms": [
-        "field:10,39:x",
-        "field:10,39:y"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: 2 row(s) unexplained"
     },
     {
@@ -344,9 +337,9 @@
     {
       "t": 935,
       "status": "open",
-      "sig": "ab9a1d1de53f89c5",
+      "sig": "ab9e1b1de5436f36",
       "atoms": [
-        "field:10,39:y"
+        "field:10,39:z"
       ],
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
@@ -383,9 +376,8 @@
     {
       "t": 1195,
       "status": "open",
-      "sig": "ba351874ed8b15c2",
+      "sig": "8163248d28644622",
       "atoms": [
-        "field:10,39:y",
         "field:3,2:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
@@ -397,7 +389,7 @@
       "atoms": [
         "field:10,39:heading"
       ],
-      "note": "mana magnet (10,54) lifecycle + ball pull \u2014 untriaged"
+      "note": "mana magnet (10,54) lifecycle + ball pull — untriaged"
     },
     {
       "t": 1559,

@@ -359,13 +359,21 @@ fn mc2_cave_behaviors_and_goldens() {
     // grounded-only (EF:26265-69), and every re-sprite writes the
     // per-size rotation quad (EF:26744-77). Behavior change toward
     // retail by design.
+    // Re-pinned (B-D; load checkpoint holds) for the corpus-solved
+    // cave rand structure: one unconditional tick-top draw (the
+    // post-pass baseline retired), the carpet tail's additive = the
+    // POST-increment turn landing after every draw at the carpet's
+    // position (post-pass in native play), and the drip cadence
+    // keyed on the incremented turn. Behavior change toward retail
+    // by design — the mc2l30 corpus fits 9,079 of 9,337 pairs
+    // exactly under this stream.
     assert_eq!(
         got,
         vec![
             0x585c4cd25ad5702du64,
-            0xf0aec068e03f3917,
-            0xdfdbff17a368b19c,
-            0x9b50a1611d5f481a,
+            0x7c4ca38e044e6ab1,
+            0x67cd77ae1a8d7654,
+            0xd89eda64de856bf0,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -400,11 +408,15 @@ fn mc2_cave_behaviors_and_goldens() {
     // landing pose (no eternal re-merge/re-roll), the rebound zeroes
     // at ≤16, and the rotation quad stamps on re-sprite — all
     // observable sphere state downstream of ~a settle window.
+    // The corpus-solved cave rand structure (see the golden pin
+    // above) moves the LAST checkpoint only: the re-phased stream
+    // needs the disposition-storm phase for its spawn/motion
+    // downstream to reach the projection.
     const OBSERVABLE: [u64; 4] = [
         0x4504aa689dad600c,
         0x212e4f7324f787b0,
         0x407d427caacc3b05,
-        0xb36f6999e24bda63,
+        0x3bb2a66fa3ddf890,
     ];
     assert_eq!(
         obs, OBSERVABLE,

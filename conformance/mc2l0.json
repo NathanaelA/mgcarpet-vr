@@ -129,10 +129,9 @@
     {
       "t": 138,
       "status": "capture",
-      "sig": "dbe01f058470adba",
+      "sig": "abda300dbb98cdef",
       "atoms": [
-        "extra:10,14",
-        "field:10,14:rand"
+        "extra:10,14"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
     },
@@ -215,11 +214,7 @@
     },
     {
       "t": 737,
-      "status": "capture",
-      "sig": "e6938530ebb08f19",
-      "atoms": [
-        "field:10,13:rand"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m13"
     },
     {
@@ -296,7 +291,7 @@
       "atoms": [
         "field:10,45:z"
       ],
-      "note": "TERRAIN CLOSURE: village-terraform z re-snap (same story as take-1; ledger mc2l0 \u00a7terraform)"
+      "note": "TERRAIN CLOSURE: village-terraform z re-snap (same story as take-1; ledger mc2l0 §terraform)"
     }
   ]
 }

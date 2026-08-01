@@ -3767,12 +3767,15 @@ impl Gen {
         // anim pass :64318 only decrements; no ground snap ever
         // reaches an expired ball). Player-observed on worm-death
         // balls down a hillside 2026-07-30: FAITHFUL, not a
-        // deviation. The port folds the pass's decrement
-        // into the ball's own tick; the orders differ only at the 1→0
-        // edge. Byte semantics: retail reads +58 as a raw byte (the
-        // import widens i8, so 0x80 arrives as -128). MC1-scoped: the
-        // MC2 sphere twin (EF's mover with the apocalypse decay tail)
-        // is untraced for +58 and keeps its always-on physics.
+        // deviation. MC1's decrement lives in mob_awake_pass (the
+        // sub_54F00 port — which also RE-ARMS a settled ball to 16
+        // near the human, the wake law): this handler gates on the
+        // post-maintenance value exactly like retail's else-if, so
+        // each 17-tick wake cycle moves 16 and freezes 1. Byte
+        // semantics: retail reads +58 as a raw byte (the import
+        // widens i8, so 0x80 arrives as -128). MC2 keeps the local
+        // decrement fold (its sphere maintenance twin is untraced;
+        // nothing re-arms an MC2 sphere — mc2l4 corpus).
         let settle = (self.ent[i].f58 & 0xFF) as u8;
         if !mc2 {
             if settle == 0 {
@@ -3789,7 +3792,6 @@ impl Gen {
                 }
                 return false;
             }
-            self.ent[i].f58 = (settle - 1) as i16;
         } else {
             // The MC2 settle law is the SAME shape at a different
             // home: TransformArcherToMana's whole moving body sits

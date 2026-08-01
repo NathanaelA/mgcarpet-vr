@@ -192,11 +192,19 @@ fn flight_tier_golden_state_hashes() {
     // so B's pool bytes carry the one-frame death record; C holds
     // because the linger never re-ticks and no allocation raced the
     // freed slot — the trajectory is untouched.
+    // Re-pinned (A-C, both modes; post-init holds) for the mana-ball
+    // WAKE law (sub_54F80 :64352-66, corpus-proven on mc1hwl0):
+    // settled balls near the human re-arm +58 = 16 on the awake
+    // pass's exact 17-tick cycle, and the ballistic gate now reads
+    // the post-maintenance value (retail's handler order — a ball
+    // freezes for the 1 observe-zero tick per cycle and its fresh
+    // window ends at the counted zero, not one tick later).
+    // Behavior change toward retail by design.
     const FAITHFUL: [u64; 4] = [
         0x66111d2420b92e5c, // post-init
-        0x539ec568f1d72b58, // A: 40 ticks of forward thrust
-        0x90eb747848f7e76f, // B: 30 ticks of banked turn + strafe
-        0x0b58012de265f594, // C: 40 ticks of coast
+        0x6ee1467ef2185a6b, // A: 40 ticks of forward thrust
+        0x547f1e776d75582b, // B: 30 ticks of banked turn + strafe
+        0xcba224eabd8d7e6e, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
@@ -209,9 +217,9 @@ fn flight_tier_golden_state_hashes() {
     // FAITHFUL array is untouched (the Mc1 mover never runs this bank).
     const ENHANCED: [u64; 4] = [
         0x5510cd23ecac11a5, // post-init
-        0x8f2d2681f2e0386a, // A
-        0xb6f2108185d7a2e5, // B: strafe+turn now banks on forward speed
-        0xe0acf5fc3c1ae852, // C
+        0xabf6995acf0d103f, // A
+        0x554fa2a78babb5d2, // B: strafe+turn now banks on forward speed
+        0xa7623fe2e09ced03, // C
     ];
     assert_eq!(
         (faithful, enhanced),

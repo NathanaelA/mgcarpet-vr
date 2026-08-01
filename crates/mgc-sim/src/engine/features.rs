@@ -5530,6 +5530,49 @@ mod tests {
         assert_eq!(run(i32::MAX), 16, "always-awake override arms f58");
     }
 
+    /// The mana-ball WAKE law (sub_54F80 :64352-66): a settled ball
+    /// within 24.0 tiles of the HUMAN re-arms +58 = 16 on the same
+    /// maintenance pass that decrements it, giving the corpus-measured
+    /// exact 17-tick per-slot cycle (16 counted down + 1 observed-zero
+    /// re-arm tick); the radius compare is strict (dist² < 6144²), and
+    /// an out-of-radius ball stays frozen forever.
+    #[test]
+    fn settled_ball_wakes_within_24_tiles_on_a_17_tick_cycle() {
+        let mut g = Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        let b = g.spawn_mana_ball(0, 0, 0).unwrap();
+        g.ent[b].f58 = 0; // settled (128 ticks elapsed)
+
+        // Boundary exactness: exactly 6144 units = NOT eligible.
+        g.mob_awake_pass(&ctx_at(6144, 0, 0));
+        assert_eq!(g.ent[b].f58, 0, "24.0 tiles exactly stays frozen");
+        // One unit inside re-arms to 16 (altitude never gates).
+        g.mob_awake_pass(&ctx_at(6143, 0, 32767));
+        assert_eq!(g.ent[b].f58, 16, "inside the radius re-arms 16");
+
+        // Cadence: with the player parked nearby, the value returns
+        // to 16 every 17 passes — 16 decrements, one zero-observe.
+        let mut rearms = Vec::new();
+        for t in 1..=34 {
+            g.mob_awake_pass(&ctx_at(100, 0, 0));
+            if g.ent[b].f58 == 16 {
+                rearms.push(t);
+            }
+        }
+        assert_eq!(rearms, vec![17, 34], "exact 17-tick wake period");
+
+        // Far away again: the countdown drains and never re-arms.
+        for _ in 0..40 {
+            g.mob_awake_pass(&ctx_at(0x7000, 0x7000, 0));
+        }
+        assert_eq!(g.ent[b].f58, 0, "out of radius, frozen for good");
+    }
+
     /// The m9 mound's state-55 wizard scan (sub_1D060 :23796-23833):
     /// an awake surfaced mound with no castle chase targets the
     /// player and pops up into CHASE; an asleep one never scans (the

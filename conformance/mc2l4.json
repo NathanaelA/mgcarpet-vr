@@ -48,14 +48,13 @@
     {
       "t": 385,
       "status": "open",
-      "sig": "8efe457442427a6d",
+      "sig": "0be91b9a01ffecbd",
       "atoms": [
         "field:10,39:z",
         "field:10,45:z",
         "field:3,1:z",
         "field:3,2:z",
-        "field:3,3:z",
-        "field:9,13:rand"
+        "field:3,3:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-cast-timing-fields, mc2-sphere-terrain-z"
     },
@@ -101,9 +100,8 @@
     {
       "t": 449,
       "status": "open",
-      "sig": "4f481e0a4341a5aa",
+      "sig": "8253776aabe7f586",
       "atoms": [
-        "field:10,0:rand",
         "field:10,45:z",
         "field:3,1:z",
         "field:3,2:z",
@@ -260,7 +258,7 @@
         "field:3,3:z",
         "field:5,15:z"
       ],
-      "note": "ledger mc2l4+mc2l30 triage: \u00a7terraform, \u00a7terraform-token, \u00a7castle-stage-z, \u00a7l4-guard-terrain"
+      "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-token, §castle-stage-z, §l4-guard-terrain"
     },
     {
       "t": 3407,

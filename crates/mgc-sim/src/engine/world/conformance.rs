@@ -519,11 +519,18 @@ impl World {
 
         // Anchor the per-tick counter to the recording: it feeds the
         // cave-drip 8-turn cadence AND the cave carpet-tail rand
-        // perturbation (World::tick). Retail resets it at level load,
-        // so the local player's Turn is its exact value. The carpet's
-        // byte[1]&8 one-shot (EF:59616) arms the tail skip.
+        // perturbation (World::tick) — both key on its POST-increment
+        // value. Retail resets it at level load, so the local
+        // player's Turn is its exact value. The carpet's byte[1]&8
+        // one-shot (EF:59616) arms the tail skip, and so do the
+        // action arms that never call the mover `sub_5D530`: only
+        // flying (0, EF:59994) and the death-test arm (2, EF:60074)
+        // reach it — the level-end arm (12, mc2l30 t=9090..) parks
+        // the tail entirely, and possession holds byte[1]&8 across
+        // its whole window (t=3257-3267).
         self.mc2_turn = ply.turn.max(0) as u32;
-        self.mc2_carpet_stall = carpet.flags & 0x800 != 0;
+        self.mc2_carpet_slot = human_slot;
+        self.mc2_carpet_stall = carpet.flags & 0x800 != 0 || !matches!(carpet.action45, 0 | 2);
 
         let n = pool.min(st.ents.len());
         let mut active = 0usize;
