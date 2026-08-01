@@ -14,52 +14,46 @@ the entries below. Fixing an entry flips its fixtures — promote them
 (`mgc-conform fixtures … --promote`) in the same change that moves the
 entry to Resolved.
 
-Baseline corpus (2026-07-30, the rate-limited `*_REC.EXE` recorder,
-all pairs at `--input-delay 2`):
-- **mc1l0**: a FULL gapless level-0 playthrough, 5330 ticks,
-  check-decode 5330/5330 exact, 5329/5329 pairs fixture-grade, 0
-  torn. **59 conforming at capture → 350 → 385 conforming after
-  the 2026-07-31 tick-top-reap round** (see Resolved: the reap
-  law fixed 18 pairs with zero regressions on top of the round-3
-  367 baseline). First divergent pair t=11 → t=58 (an
-  input-latency cast, entry 4's domain). RNG (1,1) on all 5329.
-- **mc1hwl0**: the FULL 2026-07-30 window-gated take (259MB,
-  41,497 ticks, `input:"raw"`), **TRIAGED 2026-07-31**: 41,488
-  pairs (8 gaps), 902 torn, 40,586 fixture-grade, **1 conforming
-  (t=0 — the first HW conforming pair)**; RNG (1,1) on 40,539.
-  Terrain closure (entry 2's HW face) puts z rows on ~every pair
-  by construction, so HW port-side progress reads from per-family
-  totals + the story suite `conformance/mc1hwl0.json` (12
-  fixtures). See the MC1HW section below. The reap law + the
-  rival re-anchor collapsed entity-set misses 717,798 → ~33k.
-- **mc2l0**: 2026-07-29 full take, 3641 ticks, 0 gaps, check-decode
-  3641/3641 exact. **IMPORTER WIRED + TRIAGED 2026-07-30** (no
-  input delay — the take carries no input channel): 3640 pairs,
-  1105 torn by the MC2 phase-byte gate (see the MC2 section below),
-  2535 fixture-grade, **7 conforming** after the first fix (the
-  goat bleat draw). Global LCG near-exact out of the box: 62/3640
-  pairs mismatched, draw counts matching pairwise across the whole
-  0..16+ histogram.
-- **mc2l4 + mc2l30** (CUT 2026-07-31 from the single 2026-07-30
-  mc2:4 take, raw preserved as `mc2l4-uncut.mgcr`): the take
-  crossed into the hidden level mc2:30 through the secret portal;
-  the embedded level record @0x2FECE flips ATOMICALLY between
-  adjacent ticks 19154→19155 (Turn resets to 0, census 331→82, no
-  tick gap — the tick fn never ran during the load, so there is no
-  torn transition region). Cut: **mc2l4.mgcr** = ticks 0..19154
-  under the original header; **mc2l30.mgcr** = ticks 19155..34583
-  re-based to t=0.. with header level=30 + `capture.cut_from`
-  provenance. Both verify: mc2l4 replays RNG (1,1) exact; mc2l30
-  imports and replays as level 30. **BOTH TRIAGED + SUITED
-  2026-07-31** (see the mc2l4+mc2l30 section below): mc2l4 =
-  19,154 pairs, 6,368 torn, 12,786 fixture-grade, RNG near-exact
-  (653 mismatched); mc2l30 = 15,428 pairs, 5,407 torn, 10,021
-  fixture-grade, 2 rng-only, and the confirmed fresh §l30-ambient
-  rand family (retail >16 draws/tick vs port 1-3 on ~9.6k pairs).
-  Suites: `conformance/mc2l4.json` + `conformance/mc2l30.json`.
-  The triage round landed two fixes (Resolved: the m0 worm-bob
-  f26 import lane, the lightning trail-node born-dead law) that
-  collapsed mc2l4's dominant families before extraction.
+Baseline corpus (2026-07-31 re-records on the MONOTONIC-frame-counter
+`*_REC.EXE` recorder — the tickpatch mailbox latches the per-frame
+clock on both games, so the MC2 Turn++-park tear is GONE; all pairs
+at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
+`carry_curation.py` + `classify_fixtures.py`):
+- **mc1l0**: gapless full level-0 playthrough, 5,874 ticks, 5,873
+  pairs, 0 torn, all fixture-grade, **440 conforming**; RNG (1,1)
+  on every pair. Roster-aware: 2,888 conforming-or-explained,
+  UNEXPLAINED 17,936 field / 125 missing / 260 extra rows. (The
+  `mc1l0-village-regrade` rule hit 0 rows — its t/rect scope was
+  the OLD take's regrade event; retire or re-scope on the next
+  roster pass.)
+- **mc1hwl0**: full HW take under meteor weather, ticks 0..39,800
+  with 15 gaps (69 frames — heavy-animation skips; a skip-free HW
+  run is not achievable) + 517 torn, 39,199 of 39,716 pairs
+  fixture-grade, **46 conforming**; RNG (1,1) on 39,171 pairs,
+  retail >16-draw bursts on 28. Terrain closure still owns ~every
+  pair (`mc1hwl0-terrain-z` explains 2.12M rows / 39,133 pairs;
+  2.29M field rows unexplained — HW progress keeps reading from
+  per-family totals + the story suite, not the pair headline).
+- **mc2l0**: gapless 8,627 ticks, 8,626 pairs, **0 torn** (take-2
+  on the rate-limited recorder tore 1,105 of 3,640), all
+  fixture-grade, **167 conforming**; rng mismatch on 3 pairs only.
+  Roster-aware: 5,508 conforming-or-explained, UNEXPLAINED 9,344
+  field / 71 missing / 281 extra.
+- **mc2l4 + mc2l30** (CUT 2026-08-01 from the single conjoined
+  `mc2l4,30.mgcr` take at t=17713; the take's SINGLE frame skip
+  17711→17713 is exactly the level transition — the tick fn never
+  ran during the load — so both cuts are internally gapless, and
+  the embedded level record flips at the cut as before): mc2l4 =
+  17,711 pairs, 0 torn, all fixture-grade, 0 conforming raw but
+  **13,325 of 17,711 pairs roster-explained (75%)**, rng mismatch
+  on 162; mc2l30 = 9,337 pairs, 0 torn, all fixture-grade,
+  §l30-churn/rng mismatches rng on **9,328 of 9,337 pairs** (the
+  cave rand-perturbation lead, now measured tear-free), 1 pair
+  explained. Suite note: one mc2l4 exemplar's signature differed
+  between the full extract pass and the sparse suite pass (the
+  shared world instance leaks a trace of which pairs ran before —
+  select-dependence, warning-grade); re-promoted to the
+  suite-stable signature.
 (Triage tooling on the runner: `--csv` per-diff TSV for offline
 clustering, `--dump <t> [--dump-port]`, `dump-state <file> <t>
 <slot…|all>` — now also prints both free/recycle stack tails,
@@ -71,7 +65,16 @@ generated plane per (class,model) + 16-tile site, the instrument
 that refuted the HW generator-shortfall hypothesis.)
 (History: the first takes ran 627 pairs / 73 conforming and 417 /
 32; the fix rounds moved the like-for-like take to 34, and the full
-recipe + fixes reached 117.) (History: the
+recipe + fixes reached 117.) (History, 2026-07-30 corpus on the
+rate-limited recorder, retired by the monotonic re-records: mc1l0
+5,329 pairs / 385 conforming after the tick-top-reap round; mc1hwl0
+40,586 fixture-grade / 1 conforming, entity-set misses 717,798 →
+~33k after reap + rival re-anchor; mc2l0 take-2 7,762 fixture-grade
+of 11,523 with 3,761 torn / 7→11 conforming, 5,242
+conforming-or-explained; mc2l4 12,786 grade of 19,154 with 6,368
+torn, mc2l30 10,021 grade of 15,428 with 5,407 torn — the per-take
+triage sections below cite THAT corpus's tick numbers and counts.)
+(History: the
 first flat-tolerance gate starved HW — ambient spawn churn rewrites
 +63 with spawn ordinals every tick and was read as tearing, 85-tick
 rejection streaks; the gate now counts only `dv±1` steps as tear

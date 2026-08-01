@@ -11,12 +11,26 @@ becomes an enforced expectation.
 
 ## Shape
 
-A **fixture** is a reference, not a copy: `(recording, pair t)`. The
-`.mgcr` tick records are self-contained (RECORDING.md), so the runner
-streams the source recording once and replays exactly the manifest's
-pairs — import state@t, tick once, diff obs@t+1 — through the same
-core as `verify-deltas` (`verify::exec_pair`; one implementation, by
-construction).
+A **fixture** IS its pair of retail states — two consecutive tick
+records out of a recording. Because takes get re-recorded (and a
+superseded take must not orphan its curated suite), each manifest's
+pairs are **frozen**: copied verbatim into a self-contained bundle
+`conformance/fixtures/<take>-fixtures.mgcr` that the manifest's
+`recording` field points at. The bundle is an ordinary `.mgcr` — per
+fixture it carries the tick window `t-(input_delay+2) .. t+1` (the
+leading lines warm the input-delay ring; window boundaries are
+ordinary gaps), so the runner is unchanged: it streams the bundle
+and replays exactly the manifest's pairs — import state@t, tick
+once, diff obs@t+1 — through the same core as `verify-deltas`
+(`verify::exec_pair`; one implementation, by construction).
+
+Bundles are COMMITTED, via git-lfs (`.gitattributes` tracks
+`conformance/fixtures/*.mgcr`) — a few hundred KB to a couple MB per
+suite — so `conformance/` is self-contained: manifest + evidence
+travel together and survive any re-record. Fullsize recordings NEVER
+enter git — too large, and useless in their entirety; `/recordings`
+stays ignored. The full take remains the source for `verify-deltas`
+runs and re-extraction.
 
 A **manifest** (`conformance/<take>.json`, committed) records per
 fixture:
@@ -37,9 +51,11 @@ fixture:
   incidental drift.
 - `note` — free-form triage pointer (ledger entry, family name).
 
-Recordings and `baked/` stay local corpus data (like the goldens'
-baked tree); the cargo test SKIPS with a printed note when either is
-absent, so CI without the corpus stays green and honest.
+Fullsize recordings and `baked/` stay local corpus data (like the
+goldens' baked tree); the fixture bundles are repo artifacts. The
+cargo test SKIPS with a printed note when the baked tree (or a
+bundle, e.g. an LFS-less checkout with pointer stubs) is absent, so
+CI without the corpus stays green and honest.
 
 ## Verdicts
 
@@ -91,16 +107,37 @@ take:
    `capture`, write notes citing ledger entries. Statuses are
    ledger-governed; the manifest is the enforcement, the ledger is
    the argument.
-3. **Fix** — a port fix flips its fixtures to FIXED; run with
+3. **Freeze** — after curation:
+   `conformance/freeze_fixtures.py conformance/mc1l0.json` copies
+   every fixture's pair window out of the take into
+   `conformance/fixtures/<take>-fixtures.mgcr` and repoints the
+   manifest; commit the bundle (git-lfs) with the manifest. It
+   verifies line coverage itself (the suite reports an unreachable
+   pair as "not reached" WITHOUT failing, so an incomplete bundle
+   must fail at freeze time). Adding a fixture by hand later? Run
+   freeze again — it prefers the full take automatically and
+   accepts it as an explicit second argument.
+4. **Fix** — a port fix flips its fixtures to FIXED; run with
    `--promote` and commit the manifest with the fix.
-4. **Append** — a NEW failure found later (a playtest report, a new
+5. **Append** — a NEW failure found later (a playtest report, a new
    verify-deltas family) gets its exemplar added by hand: run
    `verify-deltas --dump <t>` to pick the minimal pair, add the
    entry with status `open` and the measured signature (run the
    suite once; it will report the drift/signature to record — or
    add with an empty `sig` and let `--promote` fill it).
-5. **Re-extract** — when a recording is superseded. Signatures make
-   the old and new manifests comparable.
+6. **Re-extract** — when a recording is superseded. The frozen
+   bundle keeps the OLD suite fully replayable even after its take
+   is deleted — archive the manifest+bundle pair if its exemplars
+   are still earning their keep. Signatures make the old and new
+   manifests comparable:
+   `conformance/carry_curation.py` ports statuses + notes onto the
+   fresh extract by exact signature match (and prints the new/vanished
+   story reconciliation); `conformance/classify_fixtures.py` then
+   auto-triages the still-noteless fixtures from the verify-deltas
+   `--csv` rule column (all rows capture-explained → `capture`, else
+   `open`, note = matched rule ids). Recording-side utilities
+   (gap scan, level-transition boundary finder, conjoined-take cutter)
+   live in `recordings/*.py`.
 
 ## Rules
 
@@ -118,12 +155,18 @@ take:
 
 ## Current suites
 
+All five takes are 2026-07-31 re-records with the monotonic-frame-
+counter recorder (tickpatch mailbox on both games) — MC2 tearing is
+GONE (0 torn frames on every MC2 take; the 2026-07-30 generation lost
+a third of its pairs to the Turn++ park).
+
 | manifest | take | fixtures | statuses at last commit |
 |---|---|---|---|
-| `conformance/mc1l0.json` | recordings/mc1l0.mgcr (2026-07-30, gapless 5329 pairs) | 47 | 35 conforming / 8 open / 4 capture |
-| `conformance/mc2l0.json` | recordings/mc2l0.mgcr (2026-07-30 take-2: 11,524 ticks gapless, input `raw`, spell upgrades + level completion; 7,762 fixture-grade of 11,523) | 24 | 0 conforming / 23 open / 1 capture — sigs re-promoted 2026-07-31 after the mc2l4 fix round |
-| `conformance/mc2l4.json` | recordings/mc2l4.mgcr (2026-07-31 cut of the 2026-07-30 mc2:4 take; 19,154 pairs, 12,786 fixture-grade) | 24 | 0 conforming / 20 open / 4 capture — ledger §mc2l4+mc2l30 triage |
-| `conformance/mc2l30.json` | recordings/mc2l30.mgcr (2026-07-31 cut, the hidden cave level; 15,428 pairs, 10,021 fixture-grade) | 25 | 1 conforming / 17 open / 7 capture — first conforming MC2 hidden-level pair (t=6, the cave-tail fix) |
+| `conformance/mc1l0.json` | recordings/mc1l0.mgcr (2026-07-31, gapless; 5,873 pairs, all fixture-grade) | 68 | 44 conforming / 14 open / 10 capture |
+| `conformance/mc1hwl0.json` | recordings/mc1hwl0.mgcr (2026-07-31; 39,716 pairs, 15 gaps + 517 torn under the meteor storms, 39,199 fixture-grade) | 29 | 5 conforming / 21 open / 3 capture |
+| `conformance/mc2l0.json` | recordings/mc2l0.mgcr (2026-07-31, gapless; 8,626 pairs, all fixture-grade) | 41 | 17 conforming / 9 open / 15 capture |
+| `conformance/mc2l4.json` | recordings/mc2l4.mgcr (2026-08-01 cut of the 2026-07-31 mc2:4→30 take at t=17713 — the take's single frame skip IS the level transition; 17,711 pairs, all fixture-grade) | 24 | 0 conforming / 24 open |
+| `conformance/mc2l30.json` | recordings/mc2l30.mgcr (2026-08-01 cut, the hidden cave level, rebased t=0; gapless 9,337 pairs, all fixture-grade) | 24 | 0 conforming / 24 open — §l30-churn/rng mismatches rng on 9,328 of 9,337 pairs |
 
 Runtime: ~8 s per suite (only selected pairs execute; the stream
 decode dominates). The cargo hook is

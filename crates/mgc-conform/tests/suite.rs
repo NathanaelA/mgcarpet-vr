@@ -1,9 +1,10 @@
 //! The conformance suite as a cargo test (docs/CONFORMANCE.md): every
 //! committed manifest under `conformance/` replays its fixture pairs
-//! against the current sim and enforces the expected statuses. Skips
-//! — with a printed note, mirroring the golden tests' baked-data
-//! skip — when the manifests, the source recordings, or the baked
-//! tree are absent (they are local corpus data, not repo artifacts).
+//! — frozen pair bundles under `conformance/fixtures/`, committed via
+//! git-lfs — against the current sim and enforces the expected
+//! statuses. Skips — with a printed note, mirroring the golden tests'
+//! baked-data skip — when the baked tree is absent (local corpus
+//! data), or a bundle is missing/an un-hydrated LFS pointer.
 
 use std::path::{Path, PathBuf};
 
@@ -51,8 +52,20 @@ fn conformance_suite() {
         let Some(rec) = rec else {
             panic!("{}: unreadable manifest", m.display());
         };
-        if !m.parent().unwrap().join(&rec).exists() {
+        let rec_path = m.parent().unwrap().join(&rec);
+        if !rec_path.exists() {
             println!("SKIP {}: recording {rec} not present", m.display());
+            continue;
+        }
+        // A checkout without git-lfs materializes bundles as pointer
+        // stubs — skip, don't choke on non-zstd bytes.
+        let stub =
+            std::fs::read(&rec_path).is_ok_and(|b| b.starts_with(b"version https://git-lfs"));
+        if stub {
+            println!(
+                "SKIP {}: recording {rec} is an un-hydrated git-lfs pointer",
+                m.display()
+            );
             continue;
         }
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_mgc-conform"))

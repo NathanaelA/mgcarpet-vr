@@ -1,25 +1,75 @@
 {
-  "recording": "../recordings/mc2l0.mgcr",
+  "recording": "fixtures/mc2l0-fixtures.mgcr",
   "input_delay": 2,
   "pin_pose": "n1",
   "fixtures": [
     {
-      "t": 27,
-      "status": "open",
-      "sig": "43180716172da378",
-      "atoms": [
-        "extra:10,14",
-        "extra:9,17",
-        "field:9,1:life",
-        "field:9,1:x",
-        "field:9,1:y",
-        "field:9,1:z",
-        "rng"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
+      "t": 25,
+      "status": "conforming"
     },
     {
-      "t": 39,
+      "t": 28,
+      "status": "capture",
+      "sig": "ae22eab9f400d5cf",
+      "atoms": [
+        "missing:9,1"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-missing"
+    },
+    {
+      "t": 32,
+      "status": "capture",
+      "sig": "abda300dbb98cdef",
+      "atoms": [
+        "extra:10,14"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
+    },
+    {
+      "t": 33,
+      "status": "open",
+      "sig": "7d3653d304f77e19",
+      "atoms": [
+        "extra:10,14",
+        "field:5,1:heading"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
+    },
+    {
+      "t": 50,
+      "status": "capture",
+      "sig": "97af2825376ed0d9",
+      "atoms": [
+        "extra:9,1"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra"
+    },
+    {
+      "t": 58,
+      "status": "open",
+      "sig": "8799258033371327",
+      "atoms": [
+        "extra:10,14",
+        "field:10,45:applied_pitch"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
+    },
+    {
+      "t": 60,
+      "status": "open",
+      "sig": "8fd4356121999bc4",
+      "atoms": [
+        "extra:10,14",
+        "field:5,13:heading"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
+    },
+    {
+      "t": 69,
+      "status": "conforming"
+    },
+    {
+      "t": 77,
       "status": "open",
       "sig": "c580057466e7c17b",
       "atoms": [
@@ -29,251 +79,224 @@
       "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
     },
     {
-      "t": 465,
-      "status": "open",
-      "sig": "29d2f67f3db1a755",
+      "t": 78,
+      "status": "capture",
+      "sig": "406e343f90760e15",
       "atoms": [
-        "extra:10,13",
-        "extra:10,14",
-        "rng"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 993,
-      "status": "open",
-      "sig": "e5f59cacbeba5dbf",
-      "atoms": [
-        "extra:10,0",
-        "extra:10,13",
-        "field:10,13:action",
-        "field:10,13:applied_pitch",
-        "field:10,13:applied_yaw",
-        "field:10,13:class",
-        "field:10,13:heading",
-        "field:10,13:life",
-        "field:10,13:mana",
-        "field:10,13:max_life",
-        "field:10,13:model",
-        "field:10,13:pitch",
-        "field:10,13:rand",
-        "field:10,13:speed",
-        "field:10,13:x",
-        "field:10,13:y",
-        "field:10,13:z",
-        "field:10,45:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1133,
-      "status": "open",
-      "sig": "eca5f07020a0272e",
-      "atoms": [
-        "extra:10,13",
-        "field:10,45:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1153,
-      "status": "open",
-      "sig": "5f11147033d2ebb5",
-      "atoms": [
-        "extra:10,13",
-        "field:10,45:z",
-        "field:5,13:x"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1156,
-      "status": "open",
-      "sig": "ac0590b8a7202e95",
-      "atoms": [
-        "extra:10,13",
-        "field:10,45:z",
-        "rng"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1296,
-      "status": "open",
-      "sig": "ff22442a7057436f",
-      "atoms": [
-        "extra:10,12",
-        "field:10,45:z",
         "field:9,1:life"
       ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
+      "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-fields"
     },
     {
-      "t": 1426,
-      "status": "open",
-      "sig": "0d75e531989f86e0",
+      "t": 79,
+      "status": "capture",
+      "sig": "acc392d0fa2b0a23",
       "atoms": [
-        "field:10,45:z",
-        "field:5,13:x",
-        "field:5,13:y"
+        "extra:10,14",
+        "field:9,1:life"
       ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn, mc2-cast-timing-fields"
     },
     {
-      "t": 1428,
+      "t": 92,
+      "status": "capture",
+      "sig": "6b117311e91b3c2d",
+      "atoms": [
+        "extra:10,12",
+        "extra:9,1"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn, mc2-cast-timing-extra"
+    },
+    {
+      "t": 97,
+      "status": "capture",
+      "sig": "abe1340dbb9ef369",
+      "atoms": [
+        "extra:10,12"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn"
+    },
+    {
+      "t": 115,
+      "status": "capture",
+      "sig": "30b6d3255fdc05f9",
+      "atoms": [
+        "extra:10,12",
+        "field:9,1:life"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn, mc2-cast-timing-fields"
+    },
+    {
+      "t": 138,
+      "status": "capture",
+      "sig": "dbe01f058470adba",
+      "atoms": [
+        "extra:10,14",
+        "field:10,14:rand"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
+    },
+    {
+      "t": 156,
+      "status": "capture",
+      "sig": "7f4db788e3cad083",
+      "atoms": [
+        "missing:10,12"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn"
+    },
+    {
+      "t": 167,
+      "status": "capture",
+      "sig": "c3d8c096eacff769",
+      "atoms": [
+        "extra:9,1",
+        "field:9,1:life"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra, mc2-cast-timing-fields"
+    },
+    {
+      "t": 223,
+      "status": "open",
+      "sig": "c5671b9384d8dbbd",
+      "atoms": [
+        "extra:9,1",
+        "field:10,45:applied_pitch"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra; 1 row(s) unexplained"
+    },
+    {
+      "t": 260,
+      "status": "conforming"
+    },
+    {
+      "t": 278,
+      "status": "open",
+      "sig": "a5cfeef5c95863f7",
+      "atoms": [
+        "field:10,45:applied_pitch",
+        "missing:10,12"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn; 1 row(s) unexplained"
+    },
+    {
+      "t": 291,
+      "status": "open",
+      "sig": "999145680d2a7cb1",
+      "atoms": [
+        "field:10,45:applied_pitch"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 309,
+      "status": "conforming"
+    },
+    {
+      "t": 346,
+      "status": "open",
+      "sig": "edfe1a199c19d9a6",
+      "atoms": [
+        "field:5,13:heading"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 459,
+      "status": "conforming"
+    },
+    {
+      "t": 557,
+      "status": "conforming"
+    },
+    {
+      "t": 710,
+      "status": "conforming"
+    },
+    {
+      "t": 737,
+      "status": "capture",
+      "sig": "e6938530ebb08f19",
+      "atoms": [
+        "field:10,13:rand"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m13"
+    },
+    {
+      "t": 777,
+      "status": "conforming"
+    },
+    {
+      "t": 805,
+      "status": "conforming"
+    },
+    {
+      "t": 926,
+      "status": "conforming"
+    },
+    {
+      "t": 936,
+      "status": "conforming"
+    },
+    {
+      "t": 946,
+      "status": "conforming"
+    },
+    {
+      "t": 956,
+      "status": "conforming"
+    },
+    {
+      "t": 966,
+      "status": "conforming"
+    },
+    {
+      "t": 968,
+      "status": "open",
+      "sig": "cea78d23482265d4",
+      "atoms": [
+        "extra:11,32"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 978,
+      "status": "conforming"
+    },
+    {
+      "t": 988,
+      "status": "conforming"
+    },
+    {
+      "t": 992,
+      "status": "capture",
+      "sig": "b6f54402d020e196",
+      "atoms": [
+        "field:10,0:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m0"
+    },
+    {
+      "t": 1002,
+      "status": "capture",
+      "sig": "9d8bbc9e56ed93f8",
+      "atoms": [
+        "extra:10,0"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m0"
+    },
+    {
+      "t": 1011,
+      "status": "conforming"
+    },
+    {
+      "t": 1064,
       "status": "capture",
       "sig": "32f08f62d73c1967",
       "atoms": [
         "field:10,45:z"
       ],
-      "note": "TERRAIN CLOSURE: village-terraform z re-snap (same story as take-1; ledger mc2l0 §terraform)"
-    },
-    {
-      "t": 1432,
-      "status": "open",
-      "sig": "28e7df9640a83622",
-      "atoms": [
-        "field:10,45:z",
-        "field:5,13:x"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1458,
-      "status": "open",
-      "sig": "13854ed72dbe346d",
-      "atoms": [
-        "field:10,45:z",
-        "field:3,0:mana_max",
-        "field:player.mana_max"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1491,
-      "status": "open",
-      "sig": "3a25fc667a16f33e",
-      "atoms": [
-        "extra:11,1",
-        "field:10,45:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1553,
-      "status": "open",
-      "sig": "a636c192a20b6a00",
-      "atoms": [
-        "field:10,45:z",
-        "rng"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1590,
-      "status": "open",
-      "sig": "347ffd5934fac654",
-      "atoms": [
-        "field:10,0:z",
-        "field:10,45:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1607,
-      "status": "open",
-      "sig": "ce91ea0c5db12866",
-      "atoms": [
-        "field:10,45:z",
-        "field:5,13:sv1",
-        "field:5,13:sv2"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1615,
-      "status": "open",
-      "sig": "0c4b3a965bc7e7bf",
-      "atoms": [
-        "field:10,45:life",
-        "field:10,45:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1852,
-      "status": "open",
-      "sig": "4ca57b70566437fd",
-      "atoms": [
-        "field:10,39:z",
-        "field:10,45:z",
-        "field:2,1:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 1853,
-      "status": "open",
-      "sig": "db33d73fd9c06bf4",
-      "atoms": [
-        "field:10,39:z",
-        "field:10,45:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 2183,
-      "status": "open",
-      "sig": "1f844a9683078c96",
-      "atoms": [
-        "field:10,39:z",
-        "field:10,45:z",
-        "field:5,1:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 2226,
-      "status": "open",
-      "sig": "7a3efa11906e817f",
-      "atoms": [
-        "field:10,45:z",
-        "field:player.mana"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 2257,
-      "status": "open",
-      "sig": "38abb220456fb5be",
-      "atoms": [
-        "field:10,45:z",
-        "field:2,1:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 2258,
-      "status": "open",
-      "sig": "65ac00483b83f71b",
-      "atoms": [
-        "field:10,39:x",
-        "field:10,39:y",
-        "field:10,45:z",
-        "field:2,1:z"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
-    },
-    {
-      "t": 4064,
-      "status": "open",
-      "sig": "645791c5c67f46e8",
-      "atoms": [
-        "extra:10,42",
-        "field:10,45:z",
-        "field:player.mana"
-      ],
-      "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
+      "note": "TERRAIN CLOSURE: village-terraform z re-snap (same story as take-1; ledger mc2l0 \u00a7terraform)"
     }
   ]
 }

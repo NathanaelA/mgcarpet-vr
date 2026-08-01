@@ -1,5 +1,5 @@
 {
-  "recording": "../recordings/mc1l0.mgcr",
+  "recording": "fixtures/mc1l0-fixtures.mgcr",
   "input_delay": 2,
   "pin_pose": "n1",
   "fixtures": [
@@ -28,104 +28,52 @@
       "status": "conforming"
     },
     {
-      "t": 59,
-      "status": "conforming",
-      "note": "human regen cadence (ledger entry 5)"
+      "t": 60,
+      "status": "conforming"
     },
     {
-      "t": 61,
-      "status": "capture",
-      "sig": "97af2825376ed0d9",
-      "atoms": [
-        "extra:9,1"
-      ],
-      "note": "cast/impact input latency (ledger entry 4)"
+      "t": 70,
+      "status": "conforming"
     },
     {
-      "t": 89,
+      "t": 80,
+      "status": "conforming"
+    },
+    {
+      "t": 90,
+      "status": "conforming"
+    },
+    {
+      "t": 100,
+      "status": "conforming"
+    },
+    {
+      "t": 111,
+      "status": "conforming"
+    },
+    {
+      "t": 112,
       "status": "open",
-      "sig": "4b4d7cebf24da4af",
+      "sig": "edfe1a199c19d9a6",
       "atoms": [
-        "field:9,1:flags",
-        "field:9,1:life",
-        "field:9,1:x",
-        "field:9,1:y",
-        "field:9,1:z",
-        "missing:10,12"
+        "field:5,13:heading"
       ],
-      "note": "projectile flags bit13 (ledger entry 9)"
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {
-      "t": 136,
-      "status": "conforming",
-      "note": "cast/impact input latency (ledger entry 4)"
+      "t": 124,
+      "status": "conforming"
+    },
+    {
+      "t": 134,
+      "status": "conforming"
+    },
+    {
+      "t": 144,
+      "status": "conforming"
     },
     {
       "t": 147,
-      "status": "conforming"
-    },
-    {
-      "t": 255,
-      "status": "conforming"
-    },
-    {
-      "t": 271,
-      "status": "conforming"
-    },
-    {
-      "t": 281,
-      "status": "conforming"
-    },
-    {
-      "t": 291,
-      "status": "conforming"
-    },
-    {
-      "t": 301,
-      "status": "conforming"
-    },
-    {
-      "t": 312,
-      "status": "conforming"
-    },
-    {
-      "t": 322,
-      "status": "conforming"
-    },
-    {
-      "t": 332,
-      "status": "conforming"
-    },
-    {
-      "t": 342,
-      "status": "conforming"
-    },
-    {
-      "t": 352,
-      "status": "conforming"
-    },
-    {
-      "t": 362,
-      "status": "conforming"
-    },
-    {
-      "t": 372,
-      "status": "conforming"
-    },
-    {
-      "t": 382,
-      "status": "conforming"
-    },
-    {
-      "t": 392,
-      "status": "conforming"
-    },
-    {
-      "t": 403,
-      "status": "conforming"
-    },
-    {
-      "t": 409,
       "status": "open",
       "sig": "a1a1758349b40a12",
       "atoms": [
@@ -134,48 +82,157 @@
       "note": "hand resolution (ledger entry 6)"
     },
     {
-      "t": 418,
-      "status": "conforming"
-    },
-    {
-      "t": 428,
-      "status": "conforming"
-    },
-    {
-      "t": 438,
-      "status": "conforming"
-    },
-    {
-      "t": 448,
-      "status": "conforming"
-    },
-    {
-      "t": 458,
-      "status": "conforming"
-    },
-    {
-      "t": 468,
+      "t": 151,
       "status": "capture",
-      "sig": "0c2c3ab87c8eb80f",
+      "sig": "97af2825376ed0d9",
       "atoms": [
-        "field:3,0:mana",
-        "field:player.mana",
-        "missing:9,10"
+        "extra:9,1"
       ],
-      "note": "castle cast latency — (9,10) transform ball (ledger entries 3/4)"
+      "note": "cast/impact input latency (ledger entry 4)"
     },
     {
-      "t": 470,
+      "t": 159,
+      "status": "conforming"
+    },
+    {
+      "t": 176,
+      "status": "capture",
+      "sig": "58362133705f10c0",
+      "atoms": [
+        "field:10,12:flags"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-hit-flash"
+    },
+    {
+      "t": 178,
       "status": "open",
-      "sig": "ecf104049ed8ab17",
+      "sig": "d56800507fc7fc0f",
       "atoms": [
-        "field:3,0:mana",
-        "field:player.mana"
+        "extra:9,1",
+        "field:5,12:heading"
       ],
-      "note": "castle build window (ledger entry 3)"
+      "note": "auto-triage vs known-deviations: roster: mc1l0-cast-impacts-extra; 1 row(s) unexplained"
     },
     {
-      "t": 471,
+      "t": 224,
+      "status": "conforming"
+    },
+    {
+      "t": 250,
+      "status": "conforming"
+    },
+    {
+      "t": 283,
+      "status": "conforming"
+    },
+    {
+      "t": 294,
+      "status": "conforming"
+    },
+    {
+      "t": 321,
+      "status": "conforming"
+    },
+    {
+      "t": 334,
+      "status": "conforming"
+    },
+    {
+      "t": 344,
+      "status": "conforming"
+    },
+    {
+      "t": 354,
+      "status": "conforming"
+    },
+    {
+      "t": 364,
+      "status": "conforming"
+    },
+    {
+      "t": 374,
+      "status": "conforming"
+    },
+    {
+      "t": 382,
+      "status": "open",
+      "sig": "a76fadafae6542b4",
+      "atoms": [
+        "field:12,16:flags",
+        "field:wizard0.hand_left"
+      ],
+      "note": "auto-triage vs known-deviations: 2 row(s) unexplained"
+    },
+    {
+      "t": 385,
+      "status": "conforming"
+    },
+    {
+      "t": 395,
+      "status": "conforming"
+    },
+    {
+      "t": 405,
+      "status": "conforming"
+    },
+    {
+      "t": 415,
+      "status": "conforming"
+    },
+    {
+      "t": 425,
+      "status": "conforming"
+    },
+    {
+      "t": 435,
+      "status": "conforming"
+    },
+    {
+      "t": 445,
+      "status": "conforming"
+    },
+    {
+      "t": 455,
+      "status": "conforming"
+    },
+    {
+      "t": 465,
+      "status": "conforming"
+    },
+    {
+      "t": 476,
+      "status": "conforming"
+    },
+    {
+      "t": 487,
+      "status": "conforming"
+    },
+    {
+      "t": 498,
+      "status": "conforming"
+    },
+    {
+      "t": 508,
+      "status": "conforming"
+    },
+    {
+      "t": 519,
+      "status": "conforming"
+    },
+    {
+      "t": 529,
+      "status": "conforming"
+    },
+    {
+      "t": 539,
+      "status": "conforming"
+    },
+    {
+      "t": 549,
+      "status": "conforming"
+    },
+    {
+      "t": 563,
       "status": "capture",
       "sig": "8163248d28644622",
       "atoms": [
@@ -184,75 +241,172 @@
       "note": "terrain closure (ledger entry 2)"
     },
     {
-      "t": 611,
+      "t": 620,
       "status": "open",
-      "sig": "c9e3e8b357b71850",
+      "sig": "f26028f5b5544cf1",
       "atoms": [
-        "field:10,39:heading",
-        "field:10,39:mana",
         "field:10,39:z",
-        "missing:10,39"
+        "field:9,1:target_yaw"
       ],
-      "note": "ball collection unported (ledger entry 9)"
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
     },
     {
-      "t": 909,
+      "t": 641,
+      "status": "capture",
+      "sig": "fea42506aecd63ca",
+      "atoms": [
+        "extra:9,1",
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z, mc1l0-cast-impacts-extra"
+    },
+    {
+      "t": 645,
+      "status": "capture",
+      "sig": "ab9e1b1de5436f36",
+      "atoms": [
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z"
+    },
+    {
+      "t": 654,
+      "status": "capture",
+      "sig": "1da3ff91e3a3e357",
+      "atoms": [
+        "field:10,12:flags",
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z, mc1l0-hit-flash"
+    },
+    {
+      "t": 704,
+      "status": "open",
+      "sig": "6c840ed36f61a8d6",
+      "atoms": [
+        "field:10,39:y",
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 770,
+      "status": "open",
+      "sig": "351a1ad9a83c6f33",
+      "atoms": [
+        "field:10,39:x",
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 873,
+      "status": "open",
+      "sig": "ab97171de53d49bc",
+      "atoms": [
+        "field:10,39:x"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 882,
+      "status": "open",
+      "sig": "351018d9a8341748",
+      "atoms": [
+        "field:10,39:x",
+        "field:10,39:y"
+      ],
+      "note": "auto-triage vs known-deviations: 2 row(s) unexplained"
+    },
+    {
+      "t": 891,
+      "status": "conforming"
+    },
+    {
+      "t": 914,
+      "status": "open",
+      "sig": "91c5d9b7855c33bf",
+      "atoms": [
+        "field:wizard0.hand_left"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 919,
+      "status": "capture",
+      "sig": "3540fa8205111528",
+      "atoms": [
+        "extra:9,10",
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z, mc1l0-cast-impacts-extra"
+    },
+    {
+      "t": 935,
+      "status": "open",
+      "sig": "ab9a1d1de53f89c5",
+      "atoms": [
+        "field:10,39:y"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 1038,
+      "status": "capture",
+      "sig": "e3a73b9d39473049",
+      "atoms": [
+        "field:10,39:z",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z"
+    },
+    {
+      "t": 1158,
+      "status": "open",
+      "sig": "d3198b8d1dffc695",
+      "atoms": [
+        "field:3,2:z",
+        "field:9,1:target_yaw"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 1170,
+      "status": "capture",
+      "sig": "90e1739f00ba5ef6",
+      "atoms": [
+        "extra:9,1",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-cast-impacts-extra, mc1l0-terrain-z"
+    },
+    {
+      "t": 1195,
+      "status": "open",
+      "sig": "ba351874ed8b15c2",
+      "atoms": [
+        "field:10,39:y",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 1349,
       "status": "open",
       "sig": "85b61e945da26986",
       "atoms": [
         "field:10,39:heading"
       ],
-      "note": "mana magnet (10,54) lifecycle + ball pull — untriaged"
+      "note": "mana magnet (10,54) lifecycle + ball pull \u2014 untriaged"
     },
     {
-      "t": 910,
-      "status": "conforming"
-    },
-    {
-      "t": 920,
-      "status": "conforming"
-    },
-    {
-      "t": 934,
-      "status": "conforming"
-    },
-    {
-      "t": 948,
-      "status": "conforming"
-    },
-    {
-      "t": 960,
-      "status": "conforming"
-    },
-    {
-      "t": 965,
+      "t": 1559,
       "status": "capture",
-      "sig": "2cc0dc3d30b5e9b3",
+      "sig": "93500ac4a9e33925",
       "atoms": [
-        "extra:9,10"
+        "field:2,0:z"
       ],
-      "note": "castle cast latency — (9,10) transform ball (ledger entries 3/4)"
-    },
-    {
-      "t": 977,
-      "status": "conforming"
-    },
-    {
-      "t": 987,
-      "status": "conforming"
-    },
-    {
-      "t": 1000,
-      "status": "conforming"
-    },
-    {
-      "t": 1013,
-      "status": "capture",
-      "sig": "958db938e2703495",
-      "atoms": [
-        "field:5,14:z"
-      ],
-      "note": "terrain closure (ledger entry 2)"
+      "note": "auto-triage vs known-deviations: roster: mc1l0-terrain-z"
     }
   ]
 }

@@ -1,0 +1,5 @@
+# Conformance fixture bundles: small frozen .mgcr pair windows
+# (docs/CONFORMANCE.md "Freeze") — committed via git-lfs so the
+# suite is self-contained. Fullsize recordings never enter git
+# (/recordings is ignored).
+conformance/fixtures/*.mgcr filter=lfs diff=lfs merge=lfs -text

@@ -1,433 +1,277 @@
 {
-  "recording": "../recordings/mc1hwl0.mgcr",
+  "recording": "fixtures/mc1hwl0-fixtures.mgcr",
   "input_delay": 2,
   "pin_pose": "n1",
   "fixtures": [
     {
-      "t": 0,
-      "status": "conforming",
-      "note": "rival carpet flight integration — speed ramp/turn step (HW ledger §rival-flight)"
-    },
-    {
-      "t": 1,
+      "t": 4,
       "status": "open",
       "sig": "b939614d68a6b798",
       "atoms": [
         "missing:10,2"
       ],
-      "note": "speed-token (10,2) contrail — sub_56380 unported (ledger entry 1 residual)"
+      "note": "speed-token (10,2) contrail \u2014 sub_56380 unported (ledger entry 1 residual)"
     },
     {
-      "t": 72,
+      "t": 5,
       "status": "open",
-      "sig": "9c5855a4b27d4de3",
+      "sig": "e3a85545c0dca03f",
+      "atoms": [
+        "field:10,39:x",
+        "field:10,39:y",
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 2 row(s) unexplained"
+    },
+    {
+      "t": 7,
+      "status": "conforming"
+    },
+    {
+      "t": 21,
+      "status": "conforming"
+    },
+    {
+      "t": 34,
+      "status": "conforming"
+    },
+    {
+      "t": 47,
+      "status": "conforming"
+    },
+    {
+      "t": 61,
+      "status": "conforming"
+    },
+    {
+      "t": 69,
+      "status": "open",
+      "sig": "568a23eb93a2edb6",
+      "atoms": [
+        "field:3,1:speed",
+        "field:3,1:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 70,
+      "status": "open",
+      "sig": "d62b2e060c979044",
+      "atoms": [
+        "field:3,1:mana",
+        "field:3,1:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 83,
+      "status": "open",
+      "sig": "d77b356e581d5a47",
       "atoms": [
         "field:12,16:mana",
         "field:12,16:mana_max",
-        "field:3,1:chase",
-        "field:3,1:mana",
-        "field:rival.castle",
-        "missing:10,42",
-        "missing:3,2"
+        "field:3,2:z"
       ],
-      "note": "claim census 10000-vs-1000 + rival castle binding/blink (HW ledger §census)"
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 2 row(s) unexplained"
     },
     {
       "t": 97,
       "status": "open",
-      "sig": "959b7aa983683750",
+      "sig": "4d14afb4fe9665d4",
       "atoms": [
         "field:12,16:mana",
-        "field:12,16:mana_max",
+        "field:12,16:mana_max"
+      ],
+      "note": "auto-triage vs known-deviations: 2 row(s) unexplained"
+    },
+    {
+      "t": 123,
+      "status": "open",
+      "sig": "6f72301572ea28f2",
+      "atoms": [
         "field:3,2:z",
-        "field:wizard0.hand_left",
+        "field:3,3:chase",
+        "field:3,3:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 124,
+      "status": "open",
+      "sig": "0758a9036d1f6edd",
+      "atoms": [
+        "field:10,39:y",
+        "field:3,2:z",
         "missing:10,2"
       ],
-      "note": "hand resolution — quickselect law (mc1 ledger entry 6)"
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 2 row(s) unexplained"
     },
     {
-      "t": 355,
-      "status": "open",
-      "sig": "b09622996594f78d",
-      "atoms": [
-        "field:10,0:x",
-        "field:10,0:y",
-        "field:10,0:z",
-        "field:3,1:pitch",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:9,0:chase",
-        "field:9,0:flags",
-        "field:9,0:heading",
-        "field:9,0:mana",
-        "field:9,0:pitch",
-        "field:9,0:target_yaw",
-        "field:9,0:x",
-        "field:9,0:y",
-        "field:9,0:z"
-      ],
-      "note": "ambient fire churn — (10,0) spawn cadence (HW ledger §weather)"
-    },
-    {
-      "t": 366,
-      "status": "open",
-      "sig": "0d138c0fe18f38c1",
-      "atoms": [
-        "field:3,0:life",
-        "field:3,1:mana",
-        "field:3,1:pitch",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:5,8:x",
-        "field:5,8:y",
-        "field:5,8:z",
-        "field:player.life"
-      ],
-      "note": "player.life drift — ambient damage/regen share (HW ledger §player-vitals)"
-    },
-    {
-      "t": 435,
-      "status": "open",
-      "sig": "f9bf01759086445f",
-      "atoms": [
-        "field:3,0:life",
-        "field:3,0:mana",
-        "field:3,1:pitch",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:heading",
-        "field:3,3:x",
-        "field:3,3:y",
-        "field:3,3:z",
-        "field:9,0:class",
-        "field:9,0:flags",
-        "field:9,0:heading",
-        "field:9,0:life",
-        "field:9,0:mana",
-        "field:9,0:max_life",
-        "field:9,0:pitch",
-        "field:9,0:rand",
-        "field:9,0:speed",
-        "field:9,0:target_yaw",
-        "field:9,0:x",
-        "field:9,0:y",
-        "field:9,0:z",
-        "field:9,10:chase",
-        "field:9,10:flags",
-        "field:9,10:heading",
-        "field:9,10:id",
-        "field:9,10:mana",
-        "field:9,10:model",
-        "field:9,10:pitch",
-        "field:9,10:speed",
-        "field:9,10:target_yaw",
-        "field:9,10:x",
-        "field:9,10:y",
-        "field:9,10:z",
-        "field:player.life",
-        "field:player.mana",
-        "missing:10,0"
-      ],
-      "note": "player.mana retail 0 port 1000 — regen floor misapplied while drained (HW ledger §player-vitals)"
-    },
-    {
-      "t": 797,
+      "t": 125,
       "status": "capture",
-      "sig": "864a8f50d90ea7a5",
+      "sig": "8163248d28644622",
       "atoms": [
-        "field:2,1:z",
-        "field:3,0:mana",
-        "field:3,1:mana",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,3:heading",
-        "field:5,3:pitch",
-        "field:5,3:x",
-        "field:5,3:y",
-        "field:5,3:z",
-        "field:9,16:chase",
-        "field:9,16:flags",
-        "field:9,16:heading",
-        "field:9,16:id",
-        "field:9,16:mana",
-        "field:9,16:model",
-        "field:9,16:pitch",
-        "field:9,16:speed",
-        "field:9,16:target_yaw",
-        "field:9,16:x",
-        "field:9,16:y",
-        "field:9,16:z",
-        "field:player.mana",
-        "missing:10,0"
+        "field:3,2:z"
       ],
-      "note": "homing meteor CAST story (player spell-20 at creature 183): cast-tick attribution is input-latency jitter (capture) — at delay 0 the port cast aligns and sprite/f44-copy/f140/acquire all match retail; at the suite delay 2 the cast lands late. Real port lead recorded in the ledger: the cast DEBIT applies one tick late (retail applies the -5000 via +132 within the cast tick)."
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
     },
     {
-      "t": 800,
-      "status": "open",
-      "sig": "546468d92bfe729c",
+      "t": 126,
+      "status": "capture",
+      "sig": "0ed6bd85e74a39e8",
       "atoms": [
-        "extra:10,53",
-        "field:10,0:chase",
-        "field:10,0:class",
-        "field:10,0:flags",
-        "field:10,0:heading",
-        "field:10,0:id",
-        "field:10,0:life",
-        "field:10,0:mana",
-        "field:10,0:max_life",
-        "field:10,0:pitch",
-        "field:10,0:speed",
-        "field:10,0:target_yaw",
-        "field:10,0:x",
-        "field:10,0:y",
-        "field:10,0:z",
-        "field:10,53:chase",
-        "field:10,53:class",
-        "field:10,53:flags",
-        "field:10,53:heading",
-        "field:10,53:life",
-        "field:10,53:mana",
-        "field:10,53:max_life",
-        "field:10,53:model",
-        "field:10,53:pitch",
-        "field:10,53:speed",
-        "field:10,53:target_yaw",
-        "field:10,53:x",
-        "field:10,53:y",
-        "field:10,53:z",
-        "field:2,1:z",
-        "field:3,1:mana",
         "field:3,2:z",
-        "field:3,3:z",
-        "field:5,3:heading",
-        "field:5,3:pitch",
-        "field:5,3:target_yaw",
-        "field:5,3:x",
-        "field:5,3:y",
-        "field:5,3:z",
-        "field:9,16:pitch",
-        "field:9,16:x",
-        "field:9,16:y",
-        "field:9,16:z"
+        "field:3,3:z"
       ],
-      "note": "homing meteor DELIVERY story: the imported bolt (f146=183) homes and detonates on the same pair as retail; the (10,53) cloud f44 copy (5000) conforms — residue is the free-stack allocation order (port cloud slot 534 vs retail 512) + the input-jittered second cast occupying 512."
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
     },
     {
-      "t": 3001,
+      "t": 128,
       "status": "open",
-      "sig": "3e2fb2f4c1e7e337",
+      "sig": "acfaab78c8b39ca7",
       "atoms": [
-        "field:10,34:z",
-        "field:10,39:z",
-        "field:12,0:class",
-        "field:12,0:flags",
-        "field:12,0:heading",
-        "field:12,0:id",
-        "field:12,0:life",
-        "field:12,0:mana",
-        "field:12,0:mana_max",
-        "field:12,0:max_life",
-        "field:12,0:model",
-        "field:12,0:pitch",
-        "field:12,0:sclass",
-        "field:12,0:speed",
-        "field:12,0:target_yaw",
-        "field:12,0:x",
-        "field:12,0:y",
-        "field:12,0:z",
-        "field:12,10:life",
-        "field:12,11:life",
-        "field:12,12:life",
-        "field:12,13:life",
-        "field:12,14:life",
-        "field:12,15:life",
-        "field:12,16:life",
-        "field:12,17:life",
-        "field:12,18:life",
-        "field:12,19:life",
-        "field:12,1:life",
-        "field:12,20:life",
-        "field:12,21:life",
-        "field:12,23:life",
-        "field:12,2:life",
-        "field:12,3:life",
-        "field:12,4:life",
-        "field:12,5:life",
-        "field:12,7:life",
+        "field:3,2:z",
+        "field:3,3:z",
+        "missing:10,2"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 150,
+      "status": "open",
+      "sig": "0780f1273945eb85",
+      "atoms": [
+        "field:3,1:mana",
+        "field:3,2:z",
+        "field:3,3:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 156,
+      "status": "open",
+      "sig": "2872d6bebe17ec80",
+      "atoms": [
+        "field:10,12:flags",
+        "field:3,1:mana",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 2 row(s) unexplained"
+    },
+    {
+      "t": 157,
+      "status": "open",
+      "sig": "9ec074c435a5f6ab",
+      "atoms": [
+        "field:10,39:flags",
+        "field:3,1:mana",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 2 row(s) unexplained"
+    },
+    {
+      "t": 158,
+      "status": "open",
+      "sig": "ef9af4a87337c4b7",
+      "atoms": [
         "field:3,1:mana",
         "field:3,1:mana_max",
-        "field:3,1:speed",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z",
-        "field:9,1:chase",
-        "field:9,1:heading",
-        "field:9,1:pitch",
-        "field:9,1:target_yaw",
-        "field:9,1:x",
-        "field:9,1:y",
-        "field:9,1:z",
-        "missing:12,1",
-        "missing:12,10",
-        "missing:12,11",
-        "missing:12,12",
-        "missing:12,13",
-        "missing:12,14",
-        "missing:12,15",
-        "missing:12,16",
-        "missing:12,17",
-        "missing:12,18",
-        "missing:12,19",
-        "missing:12,2",
-        "missing:12,20",
-        "missing:12,21",
-        "missing:12,23",
-        "missing:12,3",
-        "missing:12,4",
-        "missing:12,5",
-        "missing:12,7"
+        "field:3,2:z"
       ],
-      "note": "(12,x) owned-token roster blink over the player death window (HW ledger §token-blink)"
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 2 row(s) unexplained"
     },
     {
-      "t": 9331,
+      "t": 159,
       "status": "open",
-      "sig": "f2b46eeb0c9d06b0",
+      "sig": "685c0220956ac133",
       "atoms": [
-        "field:10,0:x",
-        "field:10,0:y",
-        "field:10,0:z",
-        "field:10,34:z",
-        "field:10,53:rand",
-        "field:12,0:life",
-        "field:12,13:life",
-        "field:12,14:life",
-        "field:12,15:life",
-        "field:12,16:life",
-        "field:12,1:life",
-        "field:12,2:life",
-        "field:12,3:life",
-        "field:12,5:life",
-        "field:3,1:life",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:5,15:z",
-        "field:5,3:z",
-        "field:9,16:flags",
-        "field:9,16:pitch",
-        "field:9,16:x",
-        "field:9,16:y",
-        "field:9,16:z",
-        "missing:10,0"
-      ],
-      "note": "castle-collateral exemplar: napalm cloud burns Vodor's castle (slot 522) -833/tick — intake CONFORMS since the +78/pre-decrement round; residual = 522 z (terrain closure), at-castle wipe z knock-on (473 life), ring x/y rand skew, cast-timing bolt lanes (ledger §castle-collateral)"
-    },
-    {
-      "t": 9949,
-      "status": "open",
-      "sig": "8db17eed520c146c",
-      "atoms": [
-        "field:10,12:mana_max",
-        "field:10,34:z",
-        "field:2,0:z",
-        "field:3,0:mana",
         "field:3,1:mana",
-        "field:3,2:z",
-        "field:5,15:rand",
-        "field:5,15:y",
-        "field:5,15:z",
-        "field:5,8:x",
-        "field:5,8:y",
-        "field:5,8:z",
-        "field:9,1:heading",
-        "field:9,1:life",
-        "field:9,1:mana",
-        "field:9,1:max_life",
-        "field:9,1:speed",
-        "field:9,1:target_yaw",
-        "field:9,1:x",
-        "field:9,1:y",
-        "field:9,1:z",
-        "field:player.mana",
-        "missing:10,13"
+        "field:3,2:z"
       ],
-      "note": "meteor-shower onset — (10,13) emitter under-spawn (HW ledger §weather)"
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
     },
     {
-      "t": 25000,
-      "status": "capture",
-      "sig": "1f7ae10940033e9a",
-      "atoms": [
-        "field:10,34:z",
-        "field:10,40:mana_max",
-        "field:12,0:life",
-        "field:12,10:life",
-        "field:12,11:life",
-        "field:12,12:life",
-        "field:12,13:life",
-        "field:12,14:life",
-        "field:12,15:life",
-        "field:12,16:life",
-        "field:12,17:life",
-        "field:12,18:life",
-        "field:12,19:life",
-        "field:12,1:life",
-        "field:12,20:life",
-        "field:12,21:life",
-        "field:12,23:life",
-        "field:12,2:life",
-        "field:12,3:life",
-        "field:12,4:life",
-        "field:12,5:life",
-        "field:12,7:life",
-        "field:2,0:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:rand",
-        "field:5,15:x",
-        "field:5,15:y",
-        "field:5,15:z"
-      ],
-      "note": "terrain closure — castle-mound region z (mc1 ledger entry 2; generator refuted by ground-audit)"
-    },
-    {
-      "t": 30000,
+      "t": 164,
       "status": "open",
-      "sig": "780b903f0cf4f08d",
+      "sig": "347eb93a95a1a0f8",
       "atoms": [
-        "field:10,34:z",
-        "field:2,0:z",
-        "field:2,3:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:heading",
-        "field:5,15:rand",
-        "field:5,15:x",
-        "field:5,15:y",
-        "field:5,15:z",
-        "field:5,8:z",
-        "field:9,1:z"
+        "field:3,1:mana_max",
+        "field:3,2:z"
       ],
-      "note": "meteor-storm peak — (9,9)/(10,13) churn cadence (HW ledger §weather)"
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
     },
     {
-      "t": 41000,
+      "t": 173,
       "status": "capture",
-      "sig": "95b1b36619d61326",
+      "sig": "6cd626a4b2ce531a",
       "atoms": [
-        "field:10,34:z",
-        "field:2,3:z",
-        "field:3,2:z",
-        "field:5,15:heading",
-        "field:5,15:rand",
-        "field:5,15:x",
-        "field:5,15:y",
-        "field:5,15:z"
+        "field:3,1:z",
+        "field:3,2:z"
       ],
-      "note": "terrain closure late-run — mound + battle sites (mc1 ledger entry 2)"
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
+    },
+    {
+      "t": 194,
+      "status": "open",
+      "sig": "90e1739f00ba5ef6",
+      "atoms": [
+        "extra:9,1",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 198,
+      "status": "open",
+      "sig": "42cdea7c0dc18f92",
+      "atoms": [
+        "field:10,39:flags",
+        "field:3,1:z",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 214,
+      "status": "open",
+      "sig": "5db8623afac5d8b7",
+      "atoms": [
+        "field:3,1:mana",
+        "field:3,1:z",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 280,
+      "status": "open",
+      "sig": "c7ce147c1e33f8f5",
+      "atoms": [
+        "field:3,1:z",
+        "field:3,2:z",
+        "missing:10,2"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 637,
+      "status": "open",
+      "sig": "7fcdbfe5622786c1",
+      "atoms": [
+        "field:3,1:speed",
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 783,
+      "status": "open",
+      "sig": "b68cfe8212fc5415",
+      "atoms": [
+        "field:3,2:z",
+        "field:5,8:heading"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
     }
   ]
 }
