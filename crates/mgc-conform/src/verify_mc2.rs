@@ -523,7 +523,23 @@ pub(crate) fn compare_mc2_gated(
         cmp_field!(out, s, "x", re.x, pe.x);
         cmp_field!(out, s, "y", re.y, pe.y);
         cmp_field!(out, s, "z", re.z, pe.z);
-        cmp_field!(out, s, "heading", re.heading, pe.heading);
+        // Class-15 manifestations repurpose the world-yaw lane (@0x1C)
+        // for the subSpellIndex payload (f30), so the port has no field
+        // for a manifestation's facing and `obs_project_mc2` projects
+        // heading 0 (conformance.rs). Retail's recorded obs still
+        // carries the real facing: a DETACHED spell jar (model 0,
+        // action 78) rests at its fling yaw indefinitely (mc2l24 slot
+        // 73 holds ~1634 for 20k ticks; 25,334 class-15 heading rows in
+        // that take, port 0 in all but 4). The facing is cosmetic —
+        // cast direction reads f30/f34, never the world yaw — so it is
+        // UNMODELED, not a prediction miss. The port's one-sided zeroing
+        // intended this exclusion but the recorded side kept the value;
+        // skip class-15 here to complete it (twin of the human
+        // applied_yaw/applied_pitch skip). Other classes' heading is a
+        // live motion prediction and stays compared.
+        if re.class != 15 {
+            cmp_field!(out, s, "heading", re.heading, pe.heading);
+        }
         cmp_field!(out, s, "pitch", re.pitch, pe.pitch);
         cmp_field!(out, s, "applied_yaw", re.applied_yaw, pe.applied_yaw);
         cmp_field!(out, s, "applied_pitch", re.applied_pitch, pe.applied_pitch);

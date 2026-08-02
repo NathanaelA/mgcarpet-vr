@@ -2,13 +2,89 @@
  "_doc": "The KNOWN-DEVIATION ROSTER (docs/CONFORMANCE.md). Every rule cites its docs/CONFORMANCE-FINDINGS.md entry; status: capture = recording-closure limitation, deviation = DEVIATIONS.md-registered behavior, open = ledger-tracked port lead awaiting its fix. Rules match first-hit in order \u2014 keep specific rules above general ones. The runner prints per-rule hit counts every run: a rule whose count jumps an order of magnitude is a signal, not a mask.",
  "rules": [
   {
+   "id": "mc2l24-ball-terrain-roll",
+   "status": "capture",
+   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4: (10,39) bulk = terrain-closure capture + spawn free-list slot desync - balls rest/roll on the doomsday-terraformed mound the pristine replay lacks (x 99.8% within 1 tile, z 88% within 16); early/mid rows = terrain-roll (worm-death mana + wake-law downhill). Ball laws proven byte-exact (TTL/arc/bounce/friction to the unit). Covers all lanes incl. the m39 player_ent_idx owner echo.",
+   "takes": [
+    "mc2l24"
+   ],
+   "class": 10,
+   "model": 39
+  },
+  {
+   "id": "mc2l24-static-terrain-z",
+   "status": "capture",
+   "note": "Open-leads 2 (terrain closure): class-2 statics on the final level sit on volcano/doomsday-edited ground the pristine replay lacks. Measured signature: (2,3) all 7 slots hold a CONSTANT per-slot z delta from onset (t=23411); the single (2,2) slot tracks the growing doomsday mound (progressive edit, dig F fountain-terrain cite). Statics have no z source but terrain.",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "class": 2,
+   "field": "z"
+  },
+  {
+   "id": "mc2l24-hydra-residual",
+   "status": "capture",
+   "note": "Resolved 'MC2 HYDRA (5,27) - FOUR IMPORT FIELD-HOME BUGS' (2026-08-02) ruled-out list: post-fix residual = terrain-crater z on the ground-walking bodies (x/y match, z tracks cratered-vs-pristine planes), 64-tick body-brain wander phase drift (chaotic amplification class), and mass spawn/death-tick free-stack slot desync (t=40565). A hit-count jump here = hydra law regression signal (the suite's raw-sig fixtures are the hard guard).",
+   "takes": [
+    "mc2l24"
+   ],
+   "class": 5,
+   "model": 27
+  },
+  {
+   "id": "mc2l24-player-mana-regen",
+   "status": "capture",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.mana drift = regen-cadence capture - the stored +132/lifeRegen deltas live in the un-recorded wizext, so the port derives them; suppression beats slot order (conformance.rs:304-325 mechanism). Death machine itself RULED FAITHFUL (14/14 respawns agree at t+1).",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "field": "player.mana"
+  },
+  {
+   "id": "mc2l24-player-life-regen",
+   "status": "capture",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): player.life = same wizext regen-derivation class - retail holds post-damage life ~16 ticks then +5/tick (lifeRegen_0x163_355, EF:5427-49); port regens one quantum early, transient 9900-vs-9905 heals at cap.",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "field": "player.life"
+  },
+  {
+   "id": "mc2l24-wizard-mana-regen",
+   "status": "capture",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's mana lane is the recorded twin of player.mana - same wizext regen-derivation capture (identical 24,465-pair count).",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "class": 3,
+   "model": 0,
+   "field": "mana"
+  },
+  {
+   "id": "mc2l24-wizard-life-regen",
+   "status": "capture",
+   "note": "Resolved 'MC2 PLAYER DEATH/RESPAWN' (2026-08-02): the (3,0) wizard entity's life lane, twin of player.life - retail holds post-damage ~16 ticks then +5/tick from the un-recorded wizext lifeRegen; port regens one quantum early, heals at cap.",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "class": 3,
+   "model": 0,
+   "field": "life"
+  },
+  {
    "id": "mc2-terraform-houses",
    "status": "capture",
    "note": "\u00a7terraform: village growth regrades the hill (main wave ~t=751, first edits ~t=500); (10,45) house z ground-snaps both sides, the port to the pristine plane (ledger MC2 take-2). A house's z has no source but terrain \u2014 any (10,45) z diff is closure by mechanism.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "field",
    "class": 10,
@@ -22,7 +98,8 @@
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 5,
    "model": 15
@@ -82,7 +159,8 @@
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "field",
    "class": 10,
@@ -92,11 +170,12 @@
   {
    "id": "mc2-fire-smoke-churn",
    "status": "capture",
-   "note": "\u00a7effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes.",
+   "note": "\u00a7effects RULED capture (KINEMATICS ROUND): fire/smoke laws verified byte-exact; residue = newborn stale-slot seeds, RNG-stream flicker (rand%0x41-32), slot substitution, late-run drift. Models 0/6/13/14 all lanes. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 14
@@ -104,11 +183,12 @@
   {
    "id": "mc2-fire-churn-m13",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,13) emitter face.",
+   "note": "See mc2-fire-smoke-churn \u2014 the (10,13) emitter face. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 13
@@ -116,11 +196,12 @@
   {
    "id": "mc2-fire-churn-m0",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,0) fire face (flicker band + substitution).",
+   "note": "See mc2-fire-smoke-churn \u2014 the (10,0) fire face (flicker band + substitution). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 0
@@ -128,11 +209,12 @@
   {
    "id": "mc2-fire-churn-m6",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init).",
+   "note": "See mc2-fire-smoke-churn \u2014 the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 6
@@ -144,7 +226,8 @@
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "missing",
    "class": 9
@@ -152,11 +235,12 @@
   {
    "id": "mc2-cast-timing-extra",
    "status": "capture",
-   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse.",
+   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the hydra (9,9) heavy-bolt trail under-fire + the possession fresh-arm input-reconstruction extras (ledger Resolved 'MC2L24 LIGHTNING (9,9)' + session-4 possession ruling).",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "extra",
    "class": 9
@@ -168,7 +252,8 @@
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 23
@@ -264,7 +349,8 @@
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "field",
    "class": 3,
@@ -302,7 +388,8 @@
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "field",
    "class": 9
@@ -323,7 +410,8 @@
    "note": "(3,2) castle z on l4/l30: the castle stands ON the runtime-terraformed mound the pristine replay lacks (the guard-terrain root; ledger \u00a7l4-guard-terrain).",
    "takes": [
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "field",
    "class": 3,
@@ -336,7 +424,8 @@
    "note": "Class-5 walker z ground-snap on terraformed sites (the guard/mound/regrade roots) \u2014 placed after the specific class-5 rules; x/y/heading knock-on stays unexplained.",
    "takes": [
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "kind": "field",
    "class": 5,
@@ -383,11 +472,12 @@
   {
    "id": "mc2-splash-churn",
    "status": "capture",
-   "note": "(10,5) splash lifecycle churn downstream of cast-timing skew.",
+   "note": "(10,5) splash lifecycle churn downstream of cast-timing skew. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 5
@@ -395,11 +485,12 @@
   {
    "id": "mc2-hit-flash-churn",
    "status": "capture",
-   "note": "(10,12) hit-flash slot churn downstream of cast-timing skew (the MC1 entry-4 twin).",
+   "note": "(10,12) hit-flash slot churn downstream of cast-timing skew (the MC1 entry-4 twin). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
    "takes": [
     "mc2l0",
     "mc2l4",
-    "mc2l30"
+    "mc2l30",
+    "mc2l24"
    ],
    "class": 10,
    "model": 12

@@ -167,6 +167,7 @@ a third of its pairs to the Turn++ park).
 | `conformance/mc2l0.json` | recordings/mc2l0.mgcr (2026-07-31, gapless; 8,626 pairs, all fixture-grade) | 41 | 17 conforming / 9 open / 15 capture |
 | `conformance/mc2l4.json` | recordings/mc2l4.mgcr (2026-08-01 cut of the 2026-07-31 mc2:4→30 take at t=17713 — the take's single frame skip IS the level transition; 17,711 pairs, all fixture-grade) | 24 | 0 conforming / 24 open |
 | `conformance/mc2l30.json` | recordings/mc2l30.mgcr (2026-08-01 cut, the hidden cave level, rebased t=0; gapless 9,337 pairs, all fixture-grade) | 24 | 0 conforming / 24 open — §l30-churn/rng mismatches rng on 9,328 of 9,337 pairs |
+| `conformance/mc2l24.json` | recordings/mc2l24.mgcr (2026-08-01; the complete final-level playthrough, 69,221 ticks, 13 gaps + 1,816 torn under the endgame frenzy, 67,391 fixture-grade) | 17 | 0 conforming / 12 open / 5 capture — curated per story at intake (session-5 dig round); no raw-conforming pairs exist (near-universal balloon-z + terrain families), so there is no sampled generic corpus yet |
 
 Runtime: ~8 s per suite (only selected pairs execute; the stream
 decode dominates). The cargo hook is

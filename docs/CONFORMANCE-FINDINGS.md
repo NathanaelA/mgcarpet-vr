@@ -144,6 +144,24 @@ including the 75%-torn pre-gate corpus.
    build-window). Slot-mismatch stays MINOR (15 rows mc1l0 / 0
    mc2l0).
 
+0b. **MC2L24 SCRIPTED CREATURE WAVES — SPAWN, BUT SLOT-DESYNCED
+   (2026-08-02; dig B's "unported trigger" claim CORRECTED by the
+   fixture signatures).** Two level-scripted spawn waves fire at
+   t≈3569 ((5,3) worms + (14,1)×3 + (10,63) + (5,9) + (5,26)) and
+   t≈13330 ((11,x) triggers + (5,17)/(5,20)/(5,26) + (10,71) +
+   more). The t=3569/13330 fixture sigs show EXTRA and MISSING of
+   the SAME models in the same pair, and whole-take totals are
+   balanced ((5,3) 63/60, (14,1) 4/4, (5,9) 6/8) — the port DOES
+   spawn the waves, at desynced slots: the ruled free-list
+   slot-order infrastructure limit at mass-spawn ticks, not a
+   missing trigger. Residual genuinely-one-sided families to
+   re-census after the slot story: (10,75) 128/31, (10,25) 37/0.
+   Knock-on: mass-tick slot skew feeds the 52-63k epoch churn
+   asymmetry and the lone rng residual at t=51556. Also small, same
+   umbrella: (5,0) hydra-segment `owner` obs-schema gap (@0x28
+   projected only for class-15/(5,10); retail carries 7 —
+   16,333 constant rows); class-15 detach state machine (slot 73
+   pitch 5→0 / action 78→1, real unmodeled state).
 1. **HW ambient-family population loss — ROOT-CAUSED, mostly fixed**
    (see Resolved; residuals on the 289-pair mc1hwl0-test take): the
    port lacked generic MC1 handlers that HW's content exercises. The
@@ -805,6 +823,152 @@ post-fix).
 
 ## Resolved
 
+- **MC2 HYDRA (5,27) — FOUR IMPORT FIELD-HOME BUGS froze the whole
+  machine — LANDED 2026-08-02 (session 5 mc2l24 intake, dig A).**
+  The m27 hydra branch machine homes four struct words where the
+  uniform MC2 importer spent other lanes. remc2 `sub_2AD40`
+  (EF:20770-800) writes `fov_0x22_34`; the branch integrator
+  `sub_2A340` (EF:20233) switches on `word_0x2C_44` and reads
+  `dword_0x10_16`; the branch index / body live-branch gauge is
+  `byte_0x3B_59`. `import_ent_mc2` had the uniform homes: `f36:0`
+  (dropped @0x22), `f44:@0x2A`, `f50:@0x30`, `f26:@0x2E`. Corpus
+  proof (dump-state slot 16, t=0→1): `m27_integrate` mode 0 =
+  roll+73 / fov+62 / speed+16 verbatim (2461→2534, 1433→1495,
+  160→176). f36←@0x22 = per-branch spline PITCH
+  (1433/2595/1709/1905/1985 — imported 0 collapsed all 5 branch
+  heads to one z=2951); f44←@0x2C = integrate MODE (@0x2A=100 hit
+  the no-op arm → roll/fov/speed frozen; branch 46 mode-1 −64+−16
+  =−80 = the "|speed|=port+16" symptom); f50←@0x3B = branch index
+  0..4 + body gauge 5 (@0x30=0 collapsed every branch onto
+  `D404C[0]`); f26←@0x10 = whip counter (steps 1→2→3→4 in lockstep
+  with crack speeds −192/−130/−23/192 @ t=180 slot 46; the m0
+  `(5,0)` arm extended to `(5,0|27)`). Fix conformance-only in
+  `import_ent_mc2`, (5,27)-scoped; native spawn untouched.
+  Numbers ((5,27) rows): t=0..2000 **34,923→1,180 (−96.6%)**
+  (speed 7357→0); t=40000..41500 **67,269→19,012 (−71.7%)**
+  (speed 13356→3); non-(5,27) rows +0.06% (noise). RULED not-bugs:
+  death-window z residual 11,110 = terrain-crater non-closure
+  (bodies are ground-walkers, `m27_move` z=`ground_z`; x/y match,
+  z differs ~370); t=40565 missing 78/extra 58 = free-stack
+  slot-order desync on a mass spawn/death tick; window-1 residual
+  ~1,180 = body-brain wander phase drift (shared move-core).
+  NEXT: m0/m3/m22 siblings likely need the same f44/f26 homes if
+  their families ever surface — extend the arms, don't re-derive.
+- **MC2 DOOMSDAY PYRAMID — RNG LEAK + owner FIELD-MAP — LANDED
+  2026-08-02 (session 5, dig B).** The `got[t]==want[t+4]` rng
+  window t=51751-70 SOLVED, and the "blind-landed perturb arm
+  draws global" hypothesis REFUTED: retail's (10,14) ring-rock
+  ctor DOES draw the global LCG; the window was the port failing
+  to SUPPRESS the ring. The importer restored the pyramid's `f26`
+  from @0x2E (charm lane ≈0) instead of `dword_0x10_16`/@0x10, so
+  the 0..1200 doom-meter reset to 0 every pair, re-ramped to only
+  30, and never crossed the 600 gate (`sub_21490` EF:13031) that
+  stops the `for k in 0..4` (10,14) spawn ring (EF:13070-90) — 4
+  spurious global draws/tick. Fix: `f26` match `+ (5,10) =>
+  r.scratch10`. rng 51500-52100: 21→1 (window 20→0); whole-file
+  32→~12; death window 0/100. ALSO: the pyramid repurposes
+  `parentId_0x28` as its ring-spin angle (+96 & 0x7FF per
+  un-suppressed tick, EF:13072) — imported f36=0 mis-angled the
+  ring and pinned the `owner` obs at 0 (11,721 rows); fix =
+  import `f36 (5,10)←owner28`, project `owner (5,10)←f36`
+  (owner diffs 51500-52100: 874→334, all in-window pyramid rows
+  gone). `sub_21030` case 0xF verified ALREADY PORTED
+  (doomsday.rs:432-453, session 4) and faithful to EF:12857-80 —
+  retail reaches state 0xF at t≈63289 and the apocalypse window
+  grades clean. Pyramid heading (6,969 rows) = pose-phase noise.
+- **MC2 PLAYER DEATH/RESPAWN — RULED FAITHFUL (first player-death
+  corpus) + class-15 heading gate — 2026-08-02 (session 5, dig
+  C).** mc2l24 holds 14 human deaths (respawns t=2609/4462/6093/
+  8977/11243/34931/39200/39895/41232/43087/46127/54046/60451/
+  61490). Every respawn re-inits in ONE tick (trace slot 116
+  t=2608→2609): life→maxLife via `CopyMaxLifeToLife_49A20`
+  (template `AddPlayer_4A920` EF:33317-38), mana→full refill,
+  z→respawn pad, scratch d88→1000, action 3→0, flags clear
+  0x1020, class-15 spellbook (slots 161-191) re-granted — and
+  both sides AGREE at t+1 at every death. Residual death-window
+  rows (1-tick mana/spellbook/life/hand blips + 7 slot-79 swaps
+  at t=2608 = transient slot-alloc of the 22 re-granted book
+  records) are the input-delay-2 boundary, NOT a port bug; no
+  native change needed. FIXED: 25,334 class-15 `heading`
+  false-divergences → 0 — the port repurposes the class-15
+  world-yaw lane @0x1C for the subSpellIndex payload and projects
+  heading 0 (conformance.rs:890-94); the "@0x1C dead on
+  manifestations" premise is REFUTED (a detached spell jar, model
+  0 action 78, slot 73, holds its fling yaw ~1634 for 20k ticks);
+  facing is cosmetic (cast reads f30/f34) → skip class-15 heading
+  in `compare_mc2_gated` (verify_mc2.rs), twin of the human
+  applied_yaw skip. RULED capture: player.mana 24,465 +
+  player.life 4,667 = regen-cadence drift (the stored
+  `lifeRegen_0x163_355`/+132 deltas live in the un-recorded
+  wizext; life onset t=299: retail holds post-damage ~16 ticks
+  then +5/tick, port regens one quantum early, heals at cap);
+  mana_max 5,053 + player_ent_idx 1,462 = class-10 effects/
+  slot-desync lanes, not vitals. OPEN: class-15 detach state
+  machine (slot 73 pitch 5→0, action 78→1 — real unmodeled state
+  diff, still compared).
+- **MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL — 2026-08-02
+  (session 5, dig F).** ① BALLOON-REFUSAL LAW PORTED (the
+  player-observed law): retail's balloon sphere-acquisition scan
+  `sub_5F810` (EF:60994-61023) skips any (10,39) carrying the
+  decay channel `byte[1]&0x20` (port flag 0x2000) — fountain/
+  mana-rain spheres are 140-tick TTL and carry it, so retail
+  balloons never take off for temporary mana. Port scan omitted
+  the gate; fixed in `mc2_castle_roster` (castle.rs:737,
+  `|| e.flags & 0x2000 != 0`), MC2-only by construction, pinned
+  by non-vacuous test `mc2_balloon_refuses_a_decaying_fountain_
+  sphere`. Faithful port, NOT a deviation. ② NATIVE FOUNTAIN ARC
+  fixed: `mc2_summit91_tick` discarded the apex
+  (`word_0x2C_44=(rand&0x7F)+128`, EF:24052) → balls sprayed
+  flat; now `e.f46 = apex` (morph.rs:563); conformance-neutral.
+  ③ TEMP-BALL TTL LAW PROVEN already byte-exact: source
+  `AddManaRain` sub_32CF0 (EF:24007, 3 spheres/tick, 5-draw
+  arming [speed/apex/color r%9−1/mana/yaw], maxLife=140,
+  byte[1]|0x20, z=ground+96); mover `TransformArcherToMana`
+  (EF:26173-307: z+=v, v−=16 clamp≥−128, bounce −v/4 zero≤16,
+  roll+friction 250/256, decay tail fade@12/ghost@6/expire@0);
+  corpus slots 133/168 match to the unit. ④ (10,39) FOUNTAIN BULK
+  (2.5M rows) RULED terrain-closure capture + slot desync: x
+  diffs 99.8% ≤1 tile, z 88% ≤16 — balls rest on the
+  doomsday-terraformed mound the pristine replay lacks; early/mid
+  rows = terrain-roll (worm-death mana + wake-law downhill).
+  Ball laws byte-exact throughout. NOTE: the retail minimap draws
+  ALL fountain balls ORANGE (player-observed retail one-off hack)
+  — port colors by logic; standing map-presentation deviation
+  ruling applies, never "fix" toward retail. HANDOFF: (5,0) on
+  this take = HYDRA SEGMENTS (not balloons); their owner rows
+  (16,333, constant want=7 got=0) = obs-schema gap (@0x28
+  projected only for class-15 and (5,10)) — open lead.
+- **MC2L24 LIGHTNING (9,9) 46k-MISSING — RULED CAPTURE 2026-08-02
+  (session 5, dig D; mechanism fully proven, no code landed).**
+  The take's #1 missing family — (9,9) 46,241 missing / 1,967
+  extra (42% of all missing), max_life 64,987 rows (63,865 =
+  want −1 got 0). Caster identified: the HYDRA (dump-state 10703
+  id=15, (5,27), 1e6 life) — the trail is its (9,9) heavy bolt
+  (`mc2_spawn_bolt9` = `sub_4D860`/`sub_1D260`, EF:9883/34942,
+  impact (10,23) id=15); the seven (9,0) id=116 are the PLAYER's
+  bolts, a separate no-trail family — don't conflate. Born-dead
+  law CONFIRMED byte-correct (EF:58341 ≡ proj.rs:883; ahead node
+  lives 2 recorded frames, behind 1); "reaped a tick early"
+  REFUTED (import census t=10703→05: nodes 81→162→162, disabled
+  0→81→81 = retail exactly); node-cap REFUTED (clamp 96/beam,
+  beams ~80; retail's 326-node frames are multi-volley stacking).
+  Residual = two capture mechanisms: ① UNDER-FIRING — port lays
+  18 trails vs retail ~38 birth-ticks per 500; the hydra's
+  multi-head barrage cadence comes up ~half (the attack GATE is
+  faithful: `sub_27E00` EF:18297 ≡ roster.rs:2877-87; divergence
+  is upstream head-state/rand); ② maxLife −1/0 — both engines
+  pop a LIFO free stack; a sustained barrage drifts the beam
+  slot upward (measured 160→183→254 across t=10703/04/05) so
+  retail's steady nodes fall below the beam; per-pair replay
+  cannot reproduce multi-frame free-stack drift. Both = the
+  cast-timing-skew + free-list-reuse class already ruled
+  capture; l24 amplifies the mc2l4 residual ~30×. (10,23) 826/5
+  shares the root. Windows: 10650-11150 = 1529/94; 43100-43600
+  = 1686/0. NEXT-LEAD: trace the hydra multipart bolt path
+  (multipart.rs:1732) at t=10704/05 for any PORTABLE
+  head-state bug under the capture noise — note dig A's
+  field-home fixes landed mid-measurement; the post-fix cadence
+  may already differ, re-measure before digging.
 - **MC2 SUMMIT RE-ERUPTION TRIO — LANDED 2026-08-02 (session 4,
   opus dig; complements the fire-spray ring loop).** Retail law
   (EF cites): the (10,18) summit vortex controller (`sub_32A70`

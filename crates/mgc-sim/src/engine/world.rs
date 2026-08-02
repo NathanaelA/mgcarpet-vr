@@ -15573,6 +15573,75 @@ mod tests {
         );
     }
 
+    /// The balloon fleet REFUSES temporary (decaying) fountain
+    /// spheres. Retail's acquisition scan (`sub_5F810` EF:61009) skips
+    /// any (10,39) carrying the decay channel `byte[1] & 0x20` (port
+    /// flag 0x2000). The doomsday mana-rain / corpse-fountain balls
+    /// are TTL-timed window dressing, so a balloon never takes off for
+    /// them — even after they are claimed for the fleet owner (player
+    /// retail-observed on mc2l24). The sibling MC1 test
+    /// `balloon_collects_claimed_mana_to_the_castle` proves the fleet
+    /// DOES fetch an ordinary claimed sphere — the 0x2000 flag is the
+    /// sole discriminator here (the DECAYING sphere is placed NEARER,
+    /// so nearest-wins would pick it absent the gate).
+    #[test]
+    fn mc2_balloon_refuses_a_decaying_fountain_sphere() {
+        let mut w = mc2_flat_world();
+        let (cx, cy) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(cx, cy) as i16;
+        // A level-1 player castle: fleet quota 1, capacity wide open.
+        let castle = w.g.new_event().expect("castle");
+        {
+            let e = &mut w.g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.f26 = 1; // level 1 → (1 balloon, 0 guards)
+            e.f136 = 100_000; // maxMana (bank far below → never "full")
+            e.f140 = 0;
+            e.f63 = 0; // stagger phase: 0 % 1 == 0 → the retarget fires
+        }
+        w.g.link(castle, cx, cy, gz);
+        // One fleet balloon, empty, parked by the castle.
+        let bal = w.g.new_event().expect("balloon");
+        {
+            let e = &mut w.g.ent[bal];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.tick70 = 9;
+            e.id24 = PLAYER_TARGET;
+            e.f144 = PLAYER_TARGET;
+            e.f136 = 10_000;
+            e.f140 = 0;
+            e.act_life = 10_000;
+        }
+        let (bx, by) = mc2_pos(101, 100);
+        w.g.link(bal, bx, by, gz + 0x700);
+        // A CLAIMED decaying fountain sphere ONE tile from the balloon
+        // (the nearest candidate) and a CLAIMED ordinary sphere three
+        // tiles out. Nearest-wins would pick the decaying one.
+        let (dx, dy) = mc2_pos(102, 100);
+        let decaying = w.g.spawn_mana_ball(dx, dy, gz).expect("decaying sphere");
+        w.g.ent[decaying].f144 = PLAYER_TARGET;
+        w.g.ent[decaying].f140 = 500;
+        w.g.ent[decaying].flags |= 0x2000; // the TTL decay channel
+        let (ox, oy) = mc2_pos(104, 100);
+        let ordinary = w.g.spawn_mana_ball(ox, oy, gz).expect("ordinary sphere");
+        w.g.ent[ordinary].f144 = PLAYER_TARGET;
+        w.g.ent[ordinary].f140 = 500;
+
+        w.g.mc2_castle_roster(castle);
+
+        assert_eq!(
+            w.g.ent[bal].f146, ordinary as u16,
+            "the balloon skips the nearer DECAYING sphere for the ordinary one"
+        );
+        assert_ne!(
+            w.g.ent[bal].f146, decaying as u16,
+            "a temporary fountain sphere is refused (EF:61009 byte[1]&0x20)"
+        );
+    }
+
     /// The m26 wraith SPELL-STEAL round trip (`sub_69300` EF:55792 +
     /// `sub_59DC0` EF:41199 + the `sub_68FF0` hand-hint re-pickup):
     /// the equipped jar is yanked (book unlearned, hand emptied,

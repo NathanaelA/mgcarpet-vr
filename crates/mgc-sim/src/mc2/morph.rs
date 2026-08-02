@@ -506,11 +506,12 @@ impl Gen {
     /// step from the summit and dropped at ground + 96. Never
     /// despawns itself (retail relies on the endgame teardown, OPEN).
     ///
-    /// APPROX register: the launch velocity rides the ball tick's
-    /// native `dest_x/dest_y` throw deltas (retail stores the same
-    /// delta on `axis_0x9A`; the ±64/tick clamp and the apex term
-    /// `word_0x2C_44` are the shared-ball-machinery APPROX of
-    /// mobs.rs); the color-variant sprite roll keeps its draw but
+    /// APPROX register: the horizontal launch velocity rides the ball
+    /// tick's native `dest_x/dest_y` throw deltas (retail stores the
+    /// same delta on `axis_0x9A`, ±64/tick clamped in the mover); the
+    /// VERTICAL launch is faithful — `word_0x2C_44` → f46 (the ball
+    /// tick's z-vel lane), so the sphere arcs up then falls; the
+    /// color-variant sprite roll keeps its draw but
     /// the neutral ball family renders (ball_resize); retail expires
     /// its spheres via `byte[1] |= 0x20` + life 140 — the decay
     /// channel (ball_tick's decay tail, flag bit 13 — fade bits
@@ -528,7 +529,13 @@ impl Gen {
                 (e.x, e.y, e.z)
             };
             let speed = (self.ent_rand(i) % 0x300).clamp(64, 768) as i16;
-            let _apex = (self.ent_rand(i) & 0x7F) as u16 + 128;
+            // The apex = the sphere's VERTICAL launch velocity
+            // `word_0x2C_44 = (rand & 0x7F) + 128` (EF:24052): the ball
+            // tick reads it as the z-velocity lane (f46 — the sphere
+            // import maps word_0x2C_44 → f46), so the sphere ARCS up
+            // ~128..255/tick then falls under −16/tick gravity. Without
+            // it the rain sprayed flat along the ground.
+            let apex = (self.ent_rand(i) & 0x7F) as i16 + 128;
             let _color = self.ent_rand(i) % 9; // the variant roll (draw kept)
             let mana = (self.ent_rand(i) % 0xA00) as i32 + 1;
             let yaw = (self.ent_rand(i) & 0x7FF) as u16;
@@ -553,6 +560,7 @@ impl Gen {
                 e.flags |= 0x2000;
                 e.f140 = mana;
                 e.f144 = 0;
+                e.f46 = apex; // vertical launch (word_0x2C_44, EF:24052)
                 e.dest_x = lp.0.wrapping_sub(x); // the throw velocity delta
                 e.dest_y = lp.1.wrapping_sub(y);
                 self.ball_resize(s);

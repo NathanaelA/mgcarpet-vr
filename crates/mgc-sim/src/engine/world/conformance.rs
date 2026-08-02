@@ -865,14 +865,19 @@ impl World {
                 speed: e.f126,
                 mana: e.f140,
                 mana_max: e.f136,
-                // Retail's parentId @0x28 is nonzero ONLY on class-15
-                // manifestations (mc2l0 census); every other class
-                // carries its owner in the id lane @0x1A, which is
-                // fused into id24 and not part of the obs schema. A
-                // DETACHED manifestation (spell steal) has id24 ==
-                // slot and projects 0 like everything else.
+                // Retail's parentId @0x28 is nonzero on class-15
+                // manifestations (mc2l0 census) AND on the (5,10)
+                // DOOMSDAY PYRAMID, which repurposes @0x28 as its
+                // (10,14) rock-ring spin angle (`f36` port-side; +96 &
+                // 0x7FF per un-suppressed tick). Every other class
+                // carries its owner in the id lane @0x1A, fused into
+                // id24 and not part of the obs schema. A DETACHED
+                // manifestation (spell steal) has id24 == slot and
+                // projects 0 like everything else.
                 owner: if e.class64 == 15 && e.id24 != slot {
                     untr(e.id24)
+                } else if e.class64 == 5 && e.model65 == 10 {
+                    e.f36
                 } else {
                     0
                 },
@@ -1102,6 +1107,17 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
     if r.class3f == 9 && r.model40 != 13 {
         flags = (flags & !8) | crate::mc2::proj::F_MC2PROJ;
     }
+    // The m27 HYDRA reuses three struct words the uniform MC2 map
+    // spends elsewhere (the branch machine's own field homes,
+    // docs/traces/mc2-m27-branch-machine.md): the spline pitch angle
+    // `fov_0x22_34` → f36, the speed-mode selector `word_0x2C_44` →
+    // f44 (NOT the projectile column's `subSpellIndex_0x2A_42`), and
+    // the branch index / body live-branch gauge `byte_0x3B_59` → f50
+    // (NOT the uniform @0x30 lane). Importing the uniform homes froze
+    // the whole hydra: every branch head collapsed onto one z, the
+    // integrator hit its no-op arm (roll/fov/speed never advanced),
+    // and all five branches read D404C[0] with the body gauge at 0.
+    let m27 = r.class3f == 5 && r.model40 == 27;
     let mut e = Ent {
         rand: r.rand as u32,
         max_life: r.max_life.max(0) as u32,
@@ -1135,8 +1151,26 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
             // The m0 worm/hydra keeps its BOB VELOCITY in @0x10
             // (multipart ctor seed + sub_1F040's home); importing
             // the charm lane left the bob dead — the whole chain
-            // sank instead of undulating (mc2l4 corpus, slot 2).
-            (5, 0) => r.scratch10 as i16,
+            // sank instead of undulating (mc2l4 corpus, slot 2). The
+            // m27 hydra shares the @0x10 home: the body's wander/
+            // emerge phase seed AND the branch machine's whip counter
+            // (sub_2A340 mode-3/4 reads it — mc2l24 t=180 slot 46:
+            // @0x10 steps 1→2→3→4 in lockstep with the crack speeds
+            // -192/-130/-23/192; the @0x2E charm lane stays 0 and
+            // parked the port one step behind).
+            (5, 0 | 27) => r.scratch10 as i16,
+            // The (5,10) DOOMSDAY PYRAMID drives its whole 16-state
+            // machine off `dword_0x10_16` (@0x10 = scratch10): the
+            // per-state countdown AND the 0..1200 doom-meter ramp
+            // (`sub_21030`/`sub_21490`). Importing the @0x2E charm lane
+            // (0) reset the doom-meter to 0 every pair, so it re-ramped
+            // to only 30 and NEVER crossed the 600 gate that suppresses
+            // the (10,14) rock ring — the port then spawned 4 rocks/tick
+            // (each a global-LCG draw) while retail, suppressed, drew
+            // none: the got[t]==want[t+4] rng window t=51751-70 (mc2l24;
+            // retail `owner`/parentId spin freezes at 192 there, the
+            // suppression tell) plus the epoch's isolated (1,5) pairs.
+            (5, 10) => r.scratch10 as i16,
             (5, _) => r.f2e,
             _ => r.scratch10 as i16,
         },
@@ -1144,12 +1178,26 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         f30: r.yaw as u16,
         f32: r.pitch as u16,
         f34: r.roll as u16,
-        f36: 0,
+        // The (5,10) pyramid keeps its ring-spin angle in
+        // `parentId_0x28` (@0x28 = owner28; the RENDERER-arm exception
+        // to "@0x28 is class-15 only"). The ring driver steps it
+        // `+96 & 0x7FF` per un-suppressed tick (EF:13072), so it must
+        // be RESTORED each pair — importing 0 both mis-angled the
+        // (10,14) rock ring and left the `owner` obs (which captures
+        // @0x28) reading retail's spin vs the port's 0 on every active
+        // tick.
+        f36: if m27 {
+            r.f22 as u16
+        } else if r.class3f == 5 && r.model40 == 10 {
+            r.owner28 as u16
+        } else {
+            0
+        },
         f38: tr(r.f24 as u16),
         f40: tr(r.f26 as u16),
-        f44: r.f2a,
+        f44: if m27 { r.f2c as u16 } else { r.f2a },
         f46: if r.class3f == 5 { r.b3d as i16 } else { r.f2e },
-        f50: r.f30 as i16,
+        f50: if m27 { r.b3b as i16 } else { r.f30 as i16 },
         f52: tr(r.f32),
         f54: tr(r.f34),
         f56: if matches!(r.class3f, 2 | 10) {

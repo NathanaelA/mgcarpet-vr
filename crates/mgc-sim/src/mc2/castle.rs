@@ -657,7 +657,7 @@ impl Gen {
     /// downgraded castle sheds fleet). Guard respawn: one per pass,
     /// 16-tick cooldown (f44 — retail word_0x2C_44), placed in the
     /// courtyard at (x+128, y+640) facing 512.
-    fn mc2_castle_roster(&mut self, i: usize) {
+    pub(crate) fn mc2_castle_roster(&mut self, i: usize) {
         let own = self.ent[i].id24;
         let lvl = self.ent[i].f26;
         let (bq, gq) = mc2_castle_quota(lvl);
@@ -718,13 +718,25 @@ impl Gen {
                 continue; // cargo full → home
             }
             // sub_5F810 (EF:60994): nearest own unclaimed sphere no
-            // sibling is on.
+            // sibling is on. Retail SKIPS spheres carrying the decay
+            // channel `byte[1] & 0x20` (EF:61009 — port flag bit 13,
+            // 0x2000): the doomsday mana-rain / corpse-fountain spheres
+            // are TEMPORARY (140-tick TTL) and a balloon refuses them —
+            // it will not even take off for fountain mana (player
+            // retail-observed on mc2l24). A fountain sphere only reaches
+            // this scan once claimed (f144 set to the fleet owner); the
+            // decay gate is what keeps the fleet grounded.
             let (bx, by) = (self.ent[b].x, self.ent[b].y);
             let mut best = 0usize;
             let mut best_d = i32::MAX;
             for j in 1..self.ent.len() {
                 let e = &self.ent[j];
-                if e.class64 != 10 || e.model65 != 39 || e.flags & 0x400 != 0 || e.f144 != own {
+                if e.class64 != 10
+                    || e.model65 != 39
+                    || e.flags & 0x400 != 0
+                    || e.flags & 0x2000 != 0
+                    || e.f144 != own
+                {
                     continue;
                 }
                 if alive
