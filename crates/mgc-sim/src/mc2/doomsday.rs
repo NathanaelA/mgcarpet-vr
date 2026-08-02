@@ -46,7 +46,8 @@
 //!   (the app owns the pose; same observable: violent outward
 //!   displacement, 944 units on the first push decaying to 10).
 //! - The `rand += setting_30` LCG perturb after the two pick rolls
-//!   is unmodeled — the project-wide convention (multipart.rs:71).
+//!   is modeled ([`Gen::mc2_rand_perturb`], `MobCtx::mc2_turn` —
+//!   the counter law lives at the multipart module doc).
 //! - `word_0x36548` (set case 0, cleared case 0xF) has NO reader in
 //!   retail (savegame/debug only) — not carried.
 
@@ -702,13 +703,18 @@ impl World {
             }
         } else {
             self.g.ent[i].f44 |= 2;
-            // bit7: the post-opening escalation forces roll 1 to 0 —
-            // straight to the projectile roll (EF:13141-45).
+            // Retail draws UNCONDITIONALLY (EF:13137-39) with the
+            // setting_30 perturb (:13140); bit7 — the post-opening
+            // escalation — only overrides the ROLL to 0 afterwards
+            // (:13141-45), straight to the projectile roll. The
+            // stream steps either way.
+            let d = self.g.ent_rand(i) % 0x46;
+            self.g.mc2_rand_perturb(i, self.mc2_turn);
             let v4 = if self.g.ent[i].f44 & 0x80 != 0 {
                 self.g.ent[i].f44 &= 0x7F;
                 0
             } else {
-                self.g.ent_rand(i) % 0x46
+                d
             };
             let creature_writes = |w: &mut Self, f38: i16, f50: i16| {
                 w.g.ent[i].f26 = 8;
@@ -744,7 +750,10 @@ impl World {
                 _ => {}
             }
             if picked.is_none() && !laser {
-                match self.g.ent_rand(i) % 0x1D {
+                // Roll 2 carries the same perturb (EF:13218-20).
+                let d2 = self.g.ent_rand(i) % 0x1D;
+                self.g.mc2_rand_perturb(i, self.mc2_turn);
+                match d2 {
                     0..=7 => {
                         picked = Some(1);
                         self.g.ent[i].f38 = 10;

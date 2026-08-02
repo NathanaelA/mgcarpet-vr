@@ -3448,30 +3448,41 @@ impl Gen {
             self.ent[i].flags |= 2;
             self.snd(3, i); // :28152
         }
-        let (x, y, z, owner, radius, inherit) = {
+        let (x, y, z, owner, aim, radius, inherit) = {
             let e = &self.ent[i];
             (
                 e.x,
                 e.y,
                 e.z,
                 e.id24,
+                e.f30,
                 e.f26.max(0) as i32,
                 e.flags & 0x10000,
             )
         };
         let cells = self.ring_cells_pub(radius, radius);
         for (dx, dy) in cells {
-            let skip = self.ent_rand(i) & 1 != 0; // 50% skip draw
-            let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
-            let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
-            if skip {
+            // :28161-63 — the per-cell draw is the SKIP TEST alone: spawn
+            // iff `2·(v5 % 0x9D / 79) − 1 > 0`, i.e. `v5 % 157 >= 79`
+            // (~50%). The `& 1` low-bit test picked a DIFFERENT set of
+            // cells even for the same rand value.
+            let s = self.ent_rand(i);
+            if s % 0x9D < 79 {
                 continue;
             }
+            // :28165-70 — the jitter pair is drawn ONLY on the spawn
+            // branch. Rolling it unconditionally (once per skipped cell
+            // too) desynced the ring's rand stream, so every downstream
+            // cell's skip decision — and the corpse-flame fire SET —
+            // diverged from retail (57 missing / 210 extra (10,0)).
+            let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
             // x - 96 + 192·dx + jitter (:28167-70), 2x2-center recenter.
             let fx = x.wrapping_add((192 * dx as i32 + j1 - 96) as u16);
             let fy = y.wrapping_add((192 * dy as i32 + j2 - 96) as u16);
             if let Some(f) = self.spawn_effect(0, fx, fy, z) {
                 self.ent[f].id24 = owner;
+                self.ent[f].f30 = aim; // :28176 — inherit the spreader's f30
                 self.ent[f].flags |= 0x80 | inherit;
             }
         }

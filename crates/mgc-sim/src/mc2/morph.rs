@@ -382,7 +382,27 @@ impl Gen {
     /// 1-in-100 roll (only while no vortex is latched) restarts or
     /// despawns it; a pulse at `t >= 127` despawns and releases the
     /// latch. Deals NO damage itself — the children carry it.
-    pub(crate) fn mc2_summit18_tick(&mut self, i: usize) {
+    ///
+    /// `strict` (conformance replay, `World::strict_retail`) engages the
+    /// FROZEN-Z law: the pristine-plane replay has no cave heightfield,
+    /// so `ground_z` returns the flat baseline, not retail's raised-
+    /// summit `getTerrainAlt`. Comparing the imported (cave) z against
+    /// that baseline reports a phantom terrain-move and disables the
+    /// controller before it can re-erupt — the (10,19) column, the
+    /// (10,16) boulders, and their (10,14) smoke (each a GLOBAL-rng
+    /// draw, `mc2_spawn_smoke_particle_for`) then never spawn, which is
+    /// the mc2l30 rng residual. Retail's summit sits on a stable plateau
+    /// (`getTerrainAlt` == the stored z for the whole recording — slot
+    /// 134 lives t=275..8330+), so under strict the terrain is treated
+    /// as frozen: no re-snap, no ground-move despawn, children born at
+    /// the frozen z (a z-capture mismatch, per docs/CONFORMANCE). Native
+    /// play keeps the exact retail check (the port raises its OWN
+    /// terrain, so z == ground_z on stable ground and a genuine
+    /// re-shape still despawns). The over-eruption the un-latched port
+    /// would otherwise do (every >2500 roll where retail holds
+    /// word_0x31) is fenced by importing the captured latch into
+    /// `erupting` (conformance.rs / mgcr word_0x31).
+    pub(crate) fn mc2_summit18_tick(&mut self, i: usize, strict: bool) {
         if self.ent[i].f26 > 2500 {
             let r = self.ent_rand(i);
             if r % 0x64 == 0 && self.erupting == 0 {
@@ -390,11 +410,13 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.x, e.y, e.z)
                 };
-                let gz = self.ground_z(x, y) as i16;
-                self.ent[i].z = gz;
-                if z != gz {
-                    self.ent[i].flags |= 0x400;
-                    return;
+                if !strict {
+                    let gz = self.ground_z(x, y) as i16;
+                    self.ent[i].z = gz;
+                    if z != gz {
+                        self.ent[i].flags |= 0x400;
+                        return;
+                    }
                 }
                 self.ent[i].f26 = 0;
             }
@@ -406,9 +428,15 @@ impl Gen {
                 let e = &self.ent[i];
                 (e.x, e.y, e.z, e.id24)
             };
-            let gz = self.ground_z(x, y) as i16;
+            // Frozen z under strict (see the method doc) — the imported
+            // summit z IS retail's getTerrainAlt on the real plateau.
+            let gz = if strict {
+                z
+            } else {
+                self.ground_z(x, y) as i16
+            };
             self.ent[i].z = gz;
-            if z != gz {
+            if !strict && z != gz {
                 self.ent[i].flags |= 0x400;
                 self.erupting = 0;
                 return;
@@ -433,22 +461,25 @@ impl Gen {
                 let seed = self.ent_rand(i);
                 self.ent[tw].rand = seed;
             }
-            let yaw = self.ent[i].f30.wrapping_add(1280) & 0x7FF;
+            // `a1x->yaw_0x1C_28 += 1280` is UNMASKED (i16 wrap); only
+            // the bolt copy is folded to 11 bits (`HIBYTE(v11) &= 7`).
+            let yaw = self.ent[i].f30.wrapping_add(1280);
             self.ent[i].f30 = yaw;
             if t == 0
                 && let Some(b) = self.mc2_spawn_bolt(x, y, gz)
             {
+                let byaw = yaw & 0x7FF; // HIBYTE(v11) &= 7 (EF:23987)
                 let e = &mut self.ent[b];
                 e.id24 = id;
                 e.f32 = (-386i16) as u16; // steep upward pitch
                 e.f68 = 10;
                 e.f69 = 17; // impact = the (10,17) meteor
                 e.act_life = 1;
-                e.f30 = yaw;
-                e.f34 = yaw;
+                e.f30 = byaw;
+                e.f34 = byaw;
                 e.f36 = e.f32;
                 let mut aim = (x, y, gz);
-                Self::polar_step(&mut aim, yaw, 0, 1536);
+                Self::polar_step(&mut aim, byaw, 0, 1536);
                 e.dest_x = aim.0;
                 e.dest_y = aim.1;
             }

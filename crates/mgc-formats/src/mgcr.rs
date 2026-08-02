@@ -1229,6 +1229,17 @@ pub struct RetailPlayerMc2 {
 #[derive(Debug, Clone)]
 pub struct RetailMc2 {
     pub rand: u32,
+    /// `D41A0_0.word_0x31` (+0x31) — the active volcano-vortex
+    /// singleton: the slot of the live (10,18) eruption controller that
+    /// currently holds the latch (0 = none). A controller's >2500-tick
+    /// re-eruption reset (`sub_32A70`, EF:23924) only fires while this
+    /// is clear, so it must be imported (it is NOT reconstructable from
+    /// entity state — the same idle controller reads it 0 before its
+    /// re-eruption and its own slot after).
+    pub vortex: u16,
+    /// `D41A0_0.word_0x33` (+0x33) — the active (10,19) fire-spray
+    /// column singleton (0 = none); a new eruption kills the prior one.
+    pub fire_col: u16,
     pub local_player: u16,
     pub player_count: u16,
     /// Per-model spawn ordinals (`array_0x10`, struct +0x10..0x2D) —
@@ -1397,6 +1408,8 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
     spawn_ord.copy_from_slice(&d[0x10..0x10 + 29]);
     Ok(RetailMc2 {
         rand: u32_(d, m2::RNG),
+        vortex: u16_(d, 0x31),
+        fire_col: u16_(d, 0x33),
         local_player: u16_(d, m2::LOCAL_PLAYER),
         player_count: pcount,
         spawn_ord,

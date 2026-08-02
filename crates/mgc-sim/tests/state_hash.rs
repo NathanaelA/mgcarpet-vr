@@ -395,8 +395,8 @@ fn level_005_golden_state_hashes() {
         0x071d8b3685c82b66, // A: 32 idle ticks far afield
         0x3d5a668cb81fd619, // B: crater trigger fired + 120 dig ticks
         0x3bf082db33b6bf14, // C: ambush disposition fired
-        0x5695358f797dd440, // D: 64 ticks of two-hand fireball combat
-        0x4f3399d1bb98bc68, // E: 100 aftermath ticks
+        0x979ad50de88891eb, // D: 64 ticks of two-hand fireball combat
+        0xc6fb9c6f97e21f84, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -441,6 +441,11 @@ fn level_005_golden_state_hashes() {
     // a behavior change by design: villagers steer home instead of
     // diffusing, walk in the door in different ticks, and the act
     // speeds they wear differ. Post-init and A hold.
+    // The corpse-flame spreader re-pin (sub_25130: skip law
+    // `v5 % 157 >= 79`, jitter drawn only on the spawn branch, f30
+    // inherit) moves GOLDEN+OBSERVABLE at D-E only — kills → corpse
+    // flames live in the combat/aftermath stages; post-init/A/B/C
+    // hold byte-for-byte. Behavior change toward retail by design.
     // The MC1 ball-physics re-pin moves OBSERVABLE at A-E — a behavior
     // change by design (see the GOLDEN note): loose balls settle after
     // their 128-tick ballistic window, roll downhill while grounded,
@@ -472,8 +477,8 @@ fn level_005_golden_state_hashes() {
         0x9ec1a5584565a87e, // A
         0x49fe1375dca7f4b2, // B — settler phase + feeder leash
         0x6af5efcdd6081eb8, // C
-        0x412ee018eed41006, // D
-        0x1ecb55e0cb28e550, // E
+        0x1a46b7b10b791429, // D
+        0x6c2dad8070d10599, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

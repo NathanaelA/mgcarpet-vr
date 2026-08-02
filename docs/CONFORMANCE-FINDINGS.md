@@ -22,15 +22,16 @@ at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
 - **mc1l0**: gapless full level-0 playthrough, 5,874 ticks, 5,873
   pairs, 0 torn, all fixture-grade, **450 conforming** (440 before
   the wake-law round); RNG (1,1) on every pair. Roster-aware
-  (post guard-terrain rule + the (9,1) f34/f36 fix, 2026-08-01):
-  **4,150 conforming-or-explained**, UNEXPLAINED 13,155 field /
-  124 missing / 259 extra rows. (The `mc1l0-village-regrade` rule
+  (post corpse-flame spreader fix, 2026-08-02): **4,152
+  conforming-or-explained**, UNEXPLAINED 12,129 field /
+  98 missing / 211 extra rows. (The `mc1l0-village-regrade` rule
   hit 0 rows — its t/rect scope was the OLD take's regrade event;
   retire or re-scope on the next roster pass.)
 - **mc1hwl0**: full HW take under meteor weather, ticks 0..39,800
   with 15 gaps (69 frames — heavy-animation skips; a skip-free HW
   run is not achievable) + 517 torn, 39,199 of 39,716 pairs
-  fixture-grade, **48 conforming** (46 before the wake-law round);
+  fixture-grade, **49 conforming** (46 → 48 wake-law round → 49
+  corpse-flame spreader 2026-08-02);
   RNG (1,1) on 39,171 pairs, retail >16-draw bursts on 28. Terrain
   closure still owns ~every pair (`mc1hwl0-terrain-z` explains
   2.12M rows / 39,133 pairs; 2.28M field rows unexplained — HW
@@ -38,11 +39,12 @@ at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
   not the pair headline).
 - **mc2l0**: gapless 8,627 ticks, 8,626 pairs, **0 torn** (take-2
   on the rate-limited recorder tore 1,105 of 3,640), all
-  fixture-grade, **466 conforming** (167 → 240 cave-rand round 2 →
-  452 same-tick reap → 466 day-bank extents, 2026-08-01); rng
+  fixture-grade, **479 conforming** (167 → 240 cave-rand round 2 →
+  452 same-tick reap → 466 day-bank extents → 479 possession
+  tier-0 gate + shared spreader, 2026-08-02); rng
   mismatch on **2 pairs only** (was 3 — reap-aligned seeds).
-  Roster-aware: **6,064 conforming-or-explained**, UNEXPLAINED
-  6,832 field / 123 missing / 22 extra (the reap converted most
+  Roster-aware: **6,066 conforming-or-explained**, UNEXPLAINED
+  6,829 field / 123 missing / 21 extra (the reap converted most
   ghost-alias extras: gross extras 3,761 → 1,389, unexplained
   extras 198 → 22; gross missing 431 → 1,095 — dominated by
   re-labeled slot-alias rows, see the reap Resolved entry).
@@ -52,14 +54,19 @@ at `--input-delay 2`; suites refreshed 2026-08-01 via fresh extract +
   ran during the load — so both cuts are internally gapless, and
   the embedded level record flips at the cut as before): mc2l4 =
   17,711 pairs, 0 torn, all fixture-grade, 0 conforming raw but
-  **13,698 of 17,711 pairs roster-explained (77%)** post-reap,
-  rng mismatch on 163; mc2l30 = 9,337 pairs, 0 torn, all
-  fixture-grade, rng mismatch **202 of 9,337 pairs** (9,328
-  before the cave-rand structure round 2 — see Resolved; the 202
-  survive the reap UNCHANGED, so the residual is the per-entity
-  `rand_0x14 += counter` sites, §l30-churn (b), not reap churn),
-  **6,658 pairs roster-explained** (was 1, then 6,320; reap
-  collapsed the (10,0)/(10,14) extra side 5,590→346 / 917→36). Suite note: one mc2l4 exemplar's signature differed
+  **13,698 of 17,711 pairs roster-explained (77%)**,
+  rng mismatch **13** (163 before the fire-spray ring loop,
+  2026-08-02); mc2l30 = 9,337 pairs, 0 torn, all
+  fixture-grade, rng mismatch **19 of 9,337 pairs** (9,328 →
+  cave-rand structure round 2 → 202 → 19 fire-spray ring loop +
+  summit latch/frozen-z, 2026-08-02; session 4 REFUTED
+  the per-entity `rand_0x14` hypothesis — the residual WAS the
+  VOLCANO-CASCADE, §l30-churn (b) as re-written; of the last 19,
+  one is the t=274 dome-import eruption-timing pair, 18 ride the
+  slot-desync fire cascade), **6,686 pairs roster-explained**
+  (was 1 → 6,320 → 6,658; reap collapsed the (10,0)/(10,14)
+  extra side 5,590→346 / 917→36; UNEXPLAINED now 14,007 field /
+  188 missing / 87 extra). Suite note: one mc2l4 exemplar's signature differed
   between the full extract pass and the sparse suite pass (the
   shared world instance leaks a trace of which pairs ran before —
   select-dependence, warning-grade); re-promoted to the
@@ -122,10 +129,11 @@ including the 75%-torn pre-gate corpus.
    roster-explained cast-timing, but the big non-(9,x) families
    are real): **mc2l30 (10,0) 1,693 + (10,14) 984** and **mc2l4
    (10,0) 2,005 + (10,14) 890 + (10,12) 717** — retail fire/riser
-   spawns the port never makes (churn spawn cadence, likely the
-   per-entity `rand_0x14 += counter` sites §l30-churn (b) feeding
-   spawn rolls — the l30 202 rng-mismatch pairs survived the reap
-   unchanged, same mechanism); mc2l0 (10,13) 45 missing / 81
+   spawns the port never makes (churn spawn cadence — the
+   rand_0x14 suspicion is REFUTED, see §l30-churn (b): on l30 the
+   family is the VOLCANO-CASCADE fire spread + summit re-erupt
+   cadence; the l30 202 rng-mismatch pairs cluster exactly on the
+   eruption windows); mc2l0 (10,13) 45 missing / 81
    extra (newborn churn into recycled slots — fixture t=737
    re-statused capture `mc2-fire-churn-m13`). Genuinely
    independent missing families still queued: **mc1l0 (10,0)
@@ -730,12 +738,28 @@ post-fix).
   mechanisms: (a) ~~the MC2 per-tick reap lag~~ **RESOLVED
   2026-08-01 — the same-tick reap landed (see Resolved); the
   extra side collapsed but the 202 rng pairs survived UNCHANGED,
-  so the rng residual is entirely (b)**; (b) the per-ENTITY
-  `rand_0x14 += counter` sites (EF:13140/13220/20521), unmodeled
-  (multipart.rs/doomsday.rs notes) — implementable since the
-  counter is anchored, and now ALSO the lead suspect for the
-  (10,0)/(10,14) missing-in-port spawns (divergent per-entity
-  spawn rolls → churn spawns the port never makes).
+  so the rng residual is entirely (b)**; (b) ~~the per-ENTITY
+  `rand_0x14 += counter` sites~~ **REFUTED as the l30/l4 driver
+  2026-08-01 session 4** (the three sites EF:13140/13220/20521
+  belong to the (5,10) doomsday pyramid and the (5,27) hydra
+  branch bolt — NEITHER model exists on l30 or l4, censused
+  across the takes; the perturb law itself LANDED anyway, see
+  Resolved). The REAL (b) = the **VOLCANO CASCADE**: the human
+  map-casts Volcano (spell 18) at t≈258-262 at (67.5,110.5) and
+  (111.5,10.5) → (10,9) domes (both sides spawn them, ±2 ticks
+  cast latency, slot-skewed) → dome life==3 beat → (10,18)
+  summit controller (retail slot 134 @274) → (10,19) column +
+  (10,16) + (9,0) + 4×(10,14) smoke ring → (10,0) fire cascade
+  spreading tick-by-tick. The 202 rng pairs cluster EXACTLY on
+  the eruption windows (274-468, 478-518, 2536-2776 — the SAME
+  site re-erupting — plus singles 4359/4834/4866/6314-22/6490/
+  7642-50/7762-78/7810/7934/7954/7970/8114-22/8330; a third site
+  (201-206,0-11) at 2530-2537 emits (10,0)+(9,3)). The port
+  erupts ONCE (under-sized cascade — gross missing 1,693 (10,0)
+  vs 346 extras) and NEVER re-erupts. Two port bugs indicted:
+  the (10,0) fire-entity spread law (also feeds l4's 2,005
+  missing — no volcano there, combat ignitions) and the summit
+  column re-erupt cadence. Dig round launched same session.
 - **§l30-terrain — the (14,5) flat-512 plateau (CAPTURE, with a
   port-side check owed)**: 12 of the 14 (14,5) markers sit exactly
   −1664 (retail 2176 plateau at tiles (160-171,194-205), port flat
@@ -780,6 +804,159 @@ post-fix).
   resolved, see Resolved).
 
 ## Resolved
+
+- **MC2 SUMMIT RE-ERUPTION TRIO — LANDED 2026-08-02 (session 4,
+  opus dig; complements the fire-spray ring loop).** Retail law
+  (EF cites): the (10,18) summit vortex controller (`sub_32A70`
+  EF:23906) is a PERSISTENT invisible singleton latched by the
+  GLOBAL `D41A0.word_0x31` (the (10,19) column latches
+  `word_0x33`); tick-0 eruption spawns column + one (9,0) bolt
+  (impact (10,17)) + one (10,16) boulder, controller yaw +=1280
+  UNMASKED (only the bolt copy gets the &7FF mask, EF:23976-87);
+  pulse rolls (`dword<128 && dword&0xF && rand%5==0`) each spawn
+  a (10,16); despawn ONLY on ground-move (`z != getTerrainAlt`)
+  or dword>=127, releasing the latch. RE-ERUPTION CADENCE
+  (EF:23921-35): at dword>2500, a 1-in-100 per-tick roll resets
+  dword=0 — ONLY while `word_0x31==0` (latch free). mc2l30
+  corroborated tick-exact: site-118's controller (slot 134)
+  erupts t=274, site-114's (slot 195) steals the latch t=279 and
+  despawns t=281 (its still-growing dome moved the ground under
+  it), slot 134 idles to dword=2507 and re-erupts EXACTLY at
+  t=2536 (roll r1=28800 %100==0), then holds the latch forever —
+  no further re-eruptions (recorded word_0x31 stream matches:
+  0@2535, 134@2537+). THREE port bugs fixed: ① PHANTOM
+  GROUND-MOVE DESPAWN — the port compared the imported plateau z
+  (3296) against pristine ground_z (1232) and killed the
+  controller; strict-gated FROZEN-Z law (no re-snap/despawn
+  under replay; native keeps the exact check) + regression test
+  `mc2_summit_vortex_frozen_z_under_strict`; ② controller yaw
+  wrongly &0x7FF-masked (heading 512-vs-2560); ③ the eruption
+  LATCH was not imported → over-eruption (~13 phantom eruptions
+  5037-8330 once frozen-z landed) — `word_0x31`/`word_0x33` ARE
+  in the recorded D41A0 header: decoded as `RetailMc2.vortex`/
+  `fire_col` (mgcr.rs, additive) and imported into erupting/
+  plume (conformance.rs). Both halves load-bearing (frozen-z
+  without the latch import regresses to 37 rng / 1,152 extra).
+  Net on current tree: l30 rng 20→19, missing −28 (the recovered
+  t=2536 re-eruption records), extras flat, mc2l0/l4 provably
+  inert (no (10,18) there). Goldens unmoved (dome-trap
+  mc2_slice passes); check-decode clean ×3. Residual 19 rng: 1 =
+  t=274 dome-import eruption-timing (open, dome life decrement
+  on import), 18 = the slot-desync fire cascade (ruled, fire
+  entry).
+
+- **MC2 FIRE-SPRAY RING LOOP — LANDED 2026-08-01/02 (session 4,
+  opus dig; closes the l30/l4 RNG residual).** Retail's (10,19)
+  ground-fire-spray column tick `sub_32F40` (EF:24095) wraps its
+  (10,14) smoke emission in a walk of the RING-0 SPLAT TEMPLATE
+  (`while (sub_10130(AddE7EE0x_10080(0,0)) == 1)`, EF:24112-40)
+  — ring 0 has 4 cells (baked search.bin value-0 count), last
+  dropped as the stop code ⇒ THREE emission cells per tick, each
+  with the ~50% gate roll (`2*((r%0x9D)/79)-1 > 0`), 2 jitter
+  draws offset `192*(dx,dy)`, and the odd-life 4-puff (10,14)
+  ring. The port's `mc2_fire_spray_tick` (mc2/tail.rs) emitted
+  ONCE (no ring loop) → ~1/3 the smoke AND under-drew the GLOBAL
+  stream (each smoke ctor draws lcg32 — retail-matching), which
+  WAS the l30 rng residual. Fix: ring_cells(0,0) loop, native+
+  strict (unconditional retail law). Numbers: mc2l30 rng
+  **202→19** pairs, (10,14) missing 990→390; mc2l4 rng
+  **163→13**, (10,14) missing 873→326; mc2l0 untouched (479
+  conforming — no volcano, fix inert); extras FLAT everywhere
+  (no over-production); no golden moved. Same dig VERIFIED
+  BYTE-FAITHFUL (no fix): (10,0) fire tick sub_30D50 (fire does
+  NOT spread — one damage pulse + burn + flicker + z + anim),
+  (10,6) sub_31760 incl. 1/7 smoke-on-shrink, (10,17) meteor
+  ring-seeding sub_32880, (10,1) big-explosion sub_30F60,
+  meteor-shot spark sub_66180, (10,16) boulder→(10,6) sub_32600,
+  and the ring template mapping. Port re-eruptions CONFIRMED
+  PRESENT and matched at t>2400 (the "never re-erupts" reading
+  of the missing rows was wrong). RULED on the residual: the (10,0)
+  missing/extra bulk (l30 1,659, l4 1,975) = FREE-LIST
+  SLOT-ORDER DESYNC, not law — proven at l4 t=9082: missing and
+  extra fires have IDENTICAL x/y, differing only in slot (and
+  hence flicker/z, since rand_0x14 seeds from slot+global_rand)
+  — single-snapshot import can't recover retail's within-tick
+  free-then-reuse LIFO order; matcher pairs by slot. NEW LEAD
+  banked: (10,12) missing 313 (l30) / 779 (l4) = possession
+  WEAK-PULSE family (cast lane, not fire).
+
+- **MC1 CORPSE-FLAME SPREADER CADENCE — LANDED 2026-08-01
+  (session 4, opus dig; the "mc1l0 (10,0) fires 57/210" family).**
+  The (10,0) ground-fire family is rung out by the (10,1)
+  fire-spreader (`sub_25130`, sub_main:28161-70): per ring cell
+  ONE draw is the skip test — spawn iff `v5 % 157 >= 79` (~50%) —
+  and the x/y jitter PAIR is drawn only on the SPAWN branch (a
+  skipped cell costs a single draw). Spawned fire inherits id24
+  (:28175), f30 (:28176), `flags |= 0x80 | (spreader & 0x10000)`
+  (:28177-79). Port bugs (mc1/combat.rs `spreader_tick`): skip
+  test was `rand & 1`, and both jitter draws ran on EVERY cell —
+  the 3-draws-vs-1 skew desynced the spreader's per-entity stream
+  so the whole ring's fire SET diverged (the free-stack census
+  passes on every pair, so this was a genuine tick-law bug, not
+  drift). Fixed + f30 inherit. mc1l0 (10,0) 57/211 → 32/166 (the
+  t=564-583 worm-death burst ~130 rows → 1); mc1hwl0 48→49
+  conforming, (10,0) 2754/1571 → 2455/1222, (10,1) 385/691 →
+  261/586. Residual = within-tick slot substitution (fires
+  faithful in pose+tick but landing in different slots at
+  free/reuse boundaries) = capture, matching the MC2 ruling.
+  L005 GOLDEN+OBSERVABLE re-pinned D-E ONLY (post-init/A/B/C
+  hold byte-for-byte — behavior change localized to the combat/
+  aftermath stages, by design). ⚠ SHARED TICK: `spreader_tick`
+  dispatches for BOTH games (engine/world.rs effect_tick) — the
+  MC1 law also collapsed MC2 corpse flames: mc2l0 fixtures t=58
+  and t=77 flipped open→conforming (promoted same session). If
+  MC2's retail spreader ever proves a different skip law, split
+  per-game then — empirically the MC1 law fits MC2.
+
+- **MC2 (9,17) POSSESSION RE-FIRE — LANDED 2026-08-01 (session
+  4, opus dig; the biggest EXTRA family, mis-swept under
+  `mc2-cast-timing-extra`).** The port's `mc2_cast_gate`
+  re-pressed an already-armed possess manifestation into a FULL
+  new (9,17) delivery bolt + mana debit every press, all tiers.
+  Retail law: the armed-possess press only sets `byte_0x3C_60`
+  (sub_5F660 case 1, EF:60902) and the consumer `sub_68DE0`
+  (EF:55987-56013) is TIER-gated — tier 0 just CLEARS the signal
+  (no bolt, no debit); only tiers 1/2 spawn (a different class-9
+  subtype-1 via sub_69900, 3-tick cadence, untraced/unexercised).
+  Corpus proof: MISSING (9,17)=0 vs EXTRA=452 — symmetric timing
+  skew would balance; retail emits exactly ONE bolt per arm.
+  The old cast.rs "//player retail-verified, all tiers" comment
+  was a misreading (likely a higher-tier Mana-Magnet
+  observation). Port: cast.rs re-press gated on `f71 > 0`;
+  test renamed → `mc2_possession_tier0_does_not_refire_...`.
+  Numbers: mc2l0 466→479 conforming ((9,17) extras 445→312);
+  mc2l30 extras 452→355, rng 202 UNCHANGED (the residual rides
+  the volcano windows, not casts); mc2l4 (9,17) 1393→1208. The
+  remaining fresh-arm extras are genuine input-reconstruction
+  skew (the recorded held-register toggles per frame; retail
+  arms ~1 tick before the recorded button) — correctly
+  roster-swept, NOT a sim bug; don't chase them into the input
+  decode, changing it regresses the other takes.
+
+- **PER-ENTITY `rand_0x14 += setting_30` PERTURB — LANDED
+  2026-08-01 (session 4), corpus-invisible by census.** Retail
+  has exactly THREE per-entity perturb sites (whole-tree grep):
+  the pyramid pick rolls (sub_21850, EF:13140/13220) and the m27
+  branch bolt (sub_2A7F0, EF:20521); pattern = LCG → modulo draw
+  → `rand_0x14 += setting_30` (next roll starts shifted). The
+  counter: `setting_30` increments beside `Turn++` in
+  `PlayerEvents_51BB0` (EF:37557) and zeroes at level init
+  (EF:31290/38455/39339/43327) → during the entity pass it
+  EQUALS the post-increment turn — the same value the cave
+  carpet tail's corpus solve anchored (EF:59803 is the one
+  GLOBAL-stream perturb site, already ported). remc2's
+  `uint8_t setting_30` typing and Level.cpp:340's "0x3D after
+  load" are both remc2 artifacts (the latter is their own debug
+  reseed `//fix`), not retail law. Port: `Gen::mc2_rand_perturb`
+  (mc2/mobs.rs) + `MobCtx::mc2_turn` (the sanctioned no-Gen-field
+  channel, same rationale as `strict`); applied at the three
+  sites. BONUS FIX found in the same read: the port short-
+  circuited pyramid roll 1 under the bit7 escalation — retail
+  draws UNCONDITIONALLY (EF:13137-39) and only overrides the
+  ROLL to 0 (:13141-45); the draw+perturb now always land.
+  Zero corpus effect (no (5,10)/(5,27) on any graded take — this
+  is why the old "top lever" claim was wrong); prepares future
+  doomsday/hydra takes. Suites green, goldens unmoved.
 
 - **MC2 SAME-TICK REAP — LANDED 2026-08-01 (session 3; the
   player-chosen top lever, opus dig corroborated).** Retail MC2's

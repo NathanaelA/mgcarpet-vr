@@ -101,6 +101,17 @@ impl Gen {
         self.ent_rand(i)
     }
 
+    /// The `rand_0x14 += setting_30` per-entity stream perturb —
+    /// retail's ONLY three sites: the pyramid's two pick rolls
+    /// (EF:13140/13220) and the m27 branch bolt (EF:20521). Applied
+    /// AFTER the modulo draw, so the current roll reads the clean
+    /// LCG value and the NEXT roll starts from the shifted seed.
+    /// `turn` = `MobCtx::mc2_turn` (the post-increment counter the
+    /// cave carpet tail's corpus solve anchored, EF:59803).
+    pub(crate) fn mc2_rand_perturb(&mut self, i: usize, turn: u32) {
+        self.ent[i].rand = self.ent[i].rand.wrapping_add(turn) & 0xFFFF;
+    }
+
     /// `SetEntityIndexAndRot_49CD0` (:32837): store the sprite-param
     /// row and derive the rot/extent quad from it (/2). No RNG.
     pub(crate) fn mc2_set_sprite(&mut self, i: usize, idx: u16) {

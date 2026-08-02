@@ -37,11 +37,7 @@
     },
     {
       "t": 58,
-      "status": "open",
-      "sig": "abda300dbb98cdef",
-      "atoms": [
-        "extra:10,14"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
     },
     {
@@ -59,11 +55,7 @@
     },
     {
       "t": 77,
-      "status": "open",
-      "sig": "abda300dbb98cdef",
-      "atoms": [
-        "extra:10,14"
-      ],
+      "status": "conforming",
       "note": "take-2 UNTRIAGED (banked 2026-07-30; ledger mc2l0 take-2)"
     },
     {

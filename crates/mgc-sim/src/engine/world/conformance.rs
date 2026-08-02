@@ -640,11 +640,20 @@ impl World {
         // Globals in the closure.
         self.g.rand = st.rand;
         self.g.mc2_spawn_ord.0[..29].copy_from_slice(&st.spawn_ord);
-        // Outside the closure (same as MC1: retile LCG + the volcano
-        // singleton registers live in statics retail never saves).
+        // Outside the closure: the retile LCG (pseudo) has no capture.
         self.g.pseudo = 0;
-        self.g.erupting = 0;
-        self.g.plume = 0;
+        // The volcano-vortex / fire-column singletons (D41A0 word_0x31
+        // / word_0x33, header +0x31/+0x33) ARE captured for MC2. The
+        // (10,18) re-eruption reset (`sub_32A70`, EF:23924) gates on
+        // word_0x31 being clear, and it is NOT reconstructable from
+        // entity state: the persistent controller reads it 0 before
+        // re-erupting and its own slot afterwards, with an identical
+        // entity record either way. A forced 0 makes it re-erupt on
+        // every >2500 roll where retail actually holds the latch
+        // (mc2l30 slot 134 after t=2536, ~13 phantom eruptions). Both
+        // are 0 on non-volcano levels, so mc2l0/l4 are unaffected.
+        self.g.erupting = st.vortex;
+        self.g.plume = st.fire_col;
 
         // StageVar held bindings: retail keeps `StageVar1_0x48_72` +
         // the `word_0x4A_74` timer ON the entity; the port's side-vec

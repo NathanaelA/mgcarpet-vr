@@ -1513,30 +1513,39 @@ impl Gen {
     }
 
     /// `sub_32F40` (EF:24095) — the (10,19) ground-fire-spray tick:
-    /// while alive, walk the radius-0 splat template (the center
-    /// cell): a ~50% gate roll, two jitter rolls, and on ODD life
-    /// ticks a 4-puff ring of (10,14) smoke (yaw start
-    /// `(life/2 & 1) << 8`, step 0x200 to 0x800, id inherited);
-    /// z snaps to terrain. On death, release the word_0x33 singleton
-    /// (`plume`, latched by morph.rs's summit-18). `sub_10C80(ch0, 200)`
-    /// EVERY tick including the despawn tick.
+    /// while alive, walk the radius-0 splat TEMPLATE — retail loops
+    /// `AddE7EE0x_10080(0, 0)` = ring 0 (4 cells, last dropped as the
+    /// stop code → 3 emission cells; EF:24112-40), NOT a single center
+    /// cell. For EACH cell: a ~50% gate roll, two jitter rolls (offset
+    /// by the cell's `192 * (dx, dy)`), and on ODD life ticks a 4-puff
+    /// ring of (10,14) smoke (yaw start `(life/2 & 1) << 8`, step 0x200
+    /// to 0x800, id inherited); z snaps to terrain. On death, release
+    /// the word_0x33 singleton (`plume`, latched by morph.rs's
+    /// summit-18). `sub_10C80(ch0, 200)` EVERY tick including the
+    /// despawn tick. The single-cell port formerly under-produced the
+    /// column's smoke by ~3x — the volcano (10,14) missing family.
     pub(crate) fn mc2_fire_spray_tick(&mut self, i: usize, ctx: &MobCtx) {
         let life = self.ent[i].act_life;
         self.ent[i].act_life -= 1;
         if life >= 0 {
             self.ent[i].f26 = 0;
-            let d = self.ent_rand(i);
-            if 2 * ((d % 0x9D) as i32 / 79) - 1 > 0 {
-                let (px, py, pz, id) = {
-                    let e = &self.ent[i];
-                    (e.x, e.y, e.z, e.id24)
-                };
+            let (px, py, pz, id) = {
+                let e = &self.ent[i];
+                (e.x, e.y, e.z, e.id24)
+            };
+            let odd = self.ent[i].act_life & 1 == 1;
+            let v10_start = ((self.ent[i].act_life / 2) & 1) << 8;
+            for (dx, dy) in self.ring_cells(0, 0) {
                 let d = self.ent_rand(i);
-                let jx = (px as i32 - 96 - 64 + (d % 0x81) as i32) as u16;
+                if 2 * ((d % 0x9D) as i32 / 79) - 1 <= 0 {
+                    continue;
+                }
                 let d = self.ent_rand(i);
-                let jy = (py as i32 - 96 + (d % 0x81) as i32 - 64) as u16;
-                if self.ent[i].act_life & 1 == 1 {
-                    let mut v10 = ((self.ent[i].act_life / 2) & 1) << 8;
+                let jx = (px as i32 - 96 + 192 * (dx as i8) as i32 + (d % 0x81) as i32 - 64) as u16;
+                let d = self.ent_rand(i);
+                let jy = (py as i32 - 96 + 192 * (dy as i8) as i32 + (d % 0x81) as i32 - 64) as u16;
+                if odd {
+                    let mut v10 = v10_start;
                     while v10 < 0x800 {
                         if let Some(p) = self.mc2_spawn_smoke_particle_for(14, jx, jy, pz) {
                             self.ent[p].id24 = id;

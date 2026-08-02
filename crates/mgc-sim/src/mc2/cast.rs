@@ -1112,15 +1112,29 @@ impl World {
                         self.mana_debit(cost);
                     } else if self.g.ent[m].f56 != 0 {
                         // The possess re-press RELEASE SIGNAL
-                        // (byte_0x3C_60, raised by the cast gate's
-                        // model-1 armed arm): fire another bolt
-                        // WITHOUT touching the armed timer — the
-                        // marker is a regen suppressor, not a cast
-                        // lock (player retail-verified, all tiers).
+                        // (`byte_0x3C_60`, raised by the cast gate's
+                        // model-1 armed arm). Its effect-state consumer
+                        // (`sub_68DE0` EF:55987-56013) is TIER-GATED on
+                        // `byte_0x46_70`: for TIER 0 (plain possession)
+                        // the signal is simply CLEARED — NO second bolt,
+                        // NO mana debit — while the marker runs; only
+                        // the higher tiers (Mana Magnet/Lock) re-spawn
+                        // (`sub_69900`, on a 3-tick counter). Recorded
+                        // retail (mc2l30/l0/l4, all tier-0 possess)
+                        // fires exactly ONE delivery bolt per arm and
+                        // none while armed — the earlier "re-cast
+                        // freely, all tiers" reading over-fired (the
+                        // (9,17) re-press family, no retail counterpart
+                        // at any input latency: mc2l30 452->355, mc2l0
+                        // 445->312, mc2l4 1393->1208). Tier 1/2 keep the
+                        // coarse full-delivery re-fire below (`sub_69900`
+                        // spawn untraced; not in the current corpus).
                         self.g.ent[m].f56 = 0;
-                        self.mc2_spell_fire(spell, m, p, ctx);
-                        let cost = self.g.ent[m].max_life;
-                        self.mana_debit(cost);
+                        if self.g.ent[m].f71 > 0 {
+                            self.mc2_spell_fire(spell, m, p, ctx);
+                            let cost = self.g.ent[m].max_life;
+                            self.mana_debit(cost);
+                        }
                     }
                 } else {
                     // Can't afford mid-cast → collapse to one tick

@@ -77,9 +77,12 @@
 //!   renderer-side and unmodeled; the particle-row recolor lands in
 //!   type86 + the f78 spin only.
 //! - m27 `sub_2A7F0`'s low-power path perturbs the branch LCG by
-//!   the global `setting_30` (a game-loop counter, 0x3D after load
-//!   — Level.cpp:340, EF:37557/38455 writers). Unmodeled: our
-//!   branch stream diverges from retail after the first bolt roll.
+//!   the global `setting_30` counter — the post-increment turn
+//!   (incremented beside `Turn++` in PlayerEvents, EF:37557;
+//!   `MobCtx::mc2_turn` carries it). Modeled via
+//!   [`Gen::mc2_rand_perturb`], like the pyramid's two pick rolls.
+//!   (Level.cpp:340's "0x3D after load" is remc2's own debug
+//!   reseed `//fix`, not retail law.)
 //! - m27 `sub_2A940`'s `x_DWORD_E9BA8` freeze gate (writer
 //!   untraced, likely pause/debug) reads as 0 — the normal path.
 //! - The m27 emerge/teleport probe folds `sub_102D0(_, _, 4)` (the
@@ -1700,10 +1703,11 @@ impl Gen {
     /// `sub_2A7F0` (EF:20507): the branch bolt — (9,0) low / (9,9)
     /// high keyed on manaRegen (f136), subSpell 850, sounds 15/23
     /// at the BODY. The a3=0 re-fire path spawns only at regen 2.
-    /// (The `+= setting_30` LCG perturb is unmodeled — module doc.)
     fn m27_branch_bolt(&mut self, br: usize, target: u16, low: bool, ctx: &MobCtx) {
         if low {
             let d = self.mc2_rand(br);
+            // The `+= setting_30` perturb after the roll (EF:20521).
+            self.mc2_rand_perturb(br, ctx.mc2_turn);
             self.ent[br].f136 = ((d % 12 > 7) as i32) + 1;
         }
         let regen = self.ent[br].f136;

@@ -623,7 +623,7 @@ pub struct World {
     /// (Rec.par3 precedent): a pure function of the tick() call
     /// count; its effects reach the hash through the spawns it
     /// makes.
-    mc2_turn: u32,
+    pub(crate) mc2_turn: u32,
     /// The carpet handler's one-shot skip (retail byte[1]&8,
     /// EF:59616: early-return that also skips the cave tail; the bit
     /// clears on consume). Imported per pair from the human carpet
@@ -1721,6 +1721,7 @@ impl World {
             pmana: self.player.mana,
             pdead: self.player.state != LifeState::Alive,
             strict: self.strict_retail,
+            mc2_turn: self.mc2_turn,
         };
         self.human_pose = (player.x, player.y, player.z);
 
@@ -2127,7 +2128,7 @@ impl World {
                 // ground-vortex eruption controller (shadows MC1's
                 // state 18), 98 = the apocalypse mana rain.
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 18 => {
-                    self.g.mc2_summit18_tick(i)
+                    self.g.mc2_summit18_tick(i, self.strict_retail)
                 }
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 98 => {
                     self.g.mc2_summit91_tick(i)
@@ -5305,6 +5306,7 @@ impl World {
             pmana: 0,
             pdead: false,
             strict: self.strict_retail,
+            mc2_turn: self.mc2_turn,
         };
         for _ in 0..1024 {
             let mut live = false;
@@ -5523,6 +5525,7 @@ impl World {
             pmana: 0,
             pdead: false,
             strict: self.strict_retail,
+            mc2_turn: self.mc2_turn,
         };
         while self.g.ent[b].flags & 0x400 == 0 {
             self.g.mc2_load_beam_tick(b, &ctx);
@@ -9160,6 +9163,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
 
         for (model, owner) in [(1u16, 0u16), (2, 7), (3, 7)] {
@@ -9228,6 +9232,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
 
         // Not yet wanted: the ungated scan sees it, the wanted-gated one
@@ -9656,6 +9661,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         // Empty cone: the latch arms, no target is found.
         w.g.proj_tick(lob, &ctx);
@@ -9707,6 +9713,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         w.g.proj_tick(lob, &ctx);
         assert_eq!(
@@ -9760,6 +9767,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         // Fly until impact (life is 21 ticks; the house overlap ends
         // it long before).
@@ -10554,6 +10562,7 @@ mod tests {
                 pmana: 0,
                 pdead: false,
                 strict: false,
+                mc2_turn: 0,
             };
             w.g.proj_tick(bolt, &ctx);
             w.g.ent[bolt].f146 != 0
@@ -10603,6 +10612,7 @@ mod tests {
                 pmana: 0,
                 pdead: false,
                 strict: false,
+                mc2_turn: 0,
             };
             w.g.proj_tick(bolt, &ctx);
             let cloud = (1..w.g.ent.len())
@@ -16137,6 +16147,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         w.g.area_write(fire, 0, 400, &ctx, false, false);
         assert!(
@@ -17341,6 +17352,56 @@ mod tests {
         assert_eq!(w.g.ent[v].flags & 0x400, 0, "the idle vortex stays live");
     }
 
+    /// FROZEN-Z law (conformance replay): a re-imported vortex carries
+    /// retail's raised-summit z, which the pristine plane's `ground_z`
+    /// can't reproduce. Under `strict_retail` the ground-move despawn
+    /// must NOT read that structural offset as a terrain-move — the
+    /// vortex stays live and erupts (else the (10,19) column / (10,16)
+    /// boulders / (10,14) smoke, each a global-rng draw, vanish, which
+    /// is the mc2l30 re-eruption rng residual). Native play keeps the
+    /// real ground-move despawn. (Regression guard: this exact gate was
+    /// reverted once during development.)
+    #[test]
+    fn mc2_summit_vortex_frozen_z_under_strict() {
+        let live = |w: &World, c: u8, m: u8| {
+            w.g.ent
+                .iter()
+                .any(|e| e.class64 == c && e.model65 == m && e.flags & 0x400 == 0)
+        };
+        let erupt = |strict: bool| {
+            let mut w = mc2_flat_world();
+            let (x, y) = mc2_pos(140, 200);
+            let gz = w.g.ground_z(x, y) as i16;
+            let v = w.g.mc2_spawn_summit18(x, y, gz).expect("vortex");
+            // Retail's plateau z sits far above the pristine floor.
+            w.g.ent[v].z = gz + 1000;
+            w.strict_retail = strict;
+            w.tick(away(), PlayerCommand::default());
+            (w, v)
+        };
+        // Strict: the terrain is frozen, so the phantom move is ignored
+        // — the vortex survives and its tick-0 eruption fires.
+        let (ws, vs) = erupt(true);
+        assert_eq!(
+            ws.g.ent[vs].flags & 0x400,
+            0,
+            "strict: the vortex survives the phantom terrain-move"
+        );
+        assert!(live(&ws, 10, 19), "strict: the fire-spray column rose");
+        assert_eq!(ws.g.erupting, vs as u16, "strict: the vortex latch seized");
+        // Native: a genuine z-vs-ground mismatch still despawns it.
+        let (wn, vn) = erupt(false);
+        assert_ne!(
+            wn.g.ent[vn].flags & 0x400,
+            0,
+            "native: the moved vortex despawns"
+        );
+        assert!(
+            !live(&wn, 10, 19),
+            "native: no column when the ground moved under it"
+        );
+    }
+
     /// The (10,91) apocalypse mana rain (sub_32CF0, mc2::morph):
     /// three thrown (10,39) spheres per tick, mana 1..=2560 (the
     /// 5-draw arming order), riding the ball machinery.
@@ -17579,6 +17640,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         for _ in 0..60 {
             if w.g.ent[m].flags & 0x400 != 0 {
@@ -17655,6 +17717,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         let mut rmax = 0i16;
         let mut rmin = i16::MAX;
@@ -17700,6 +17763,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         w.g.mc2_fire_orb_tick(h, &ctx);
         assert_eq!(w.g.ent[h].f71, 1, "alive while the leader lives");
@@ -18221,6 +18285,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         // First homing tick: the steer target is the BOX CENTER.
         w.g.mc2_flyer_tick(m, &ctx);
@@ -18317,6 +18382,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         };
         // First homing tick: the steer target is the player's BOX
         // CENTER, not the pose z.
@@ -18454,16 +18520,22 @@ mod tests {
         assert_eq!(w.g.ent[m].max_life, 250, "tier-1 cost wired");
     }
 
-    /// Possession re-casts FREELY while its "spell active" marker
-    /// runs (player retail-verified, all three tiers): the armed
-    /// marker only suppresses mana regen. The re-press raises the
-    /// byte_0x3C_60 release signal (f56) and the armed manifestation
-    /// tick fires another bolt without touching the timer.
+    /// TIER-0 possession fires exactly ONE delivery bolt per arm — a
+    /// re-press WHILE the "spell active" marker runs does NOT launch a
+    /// second bolt. Retail's re-press path (`sub_5F660` case 1 →
+    /// `byte_0x3C_60 = 1`, consumed in the effect state `sub_68DE0`
+    /// EF:55987-56013) is TIER-GATED on `byte_0x46_70`: for tier 0 the
+    /// signal is simply cleared (regen stays suppressed, the timer
+    /// keeps counting, but no bolt); only the higher tiers re-spawn.
+    /// Corroborated by the recorded corpus (mc2l30/l0/l4 all fire
+    /// tier-0 possession and the port's per-tick re-fire had NO retail
+    /// counterpart at any input latency — the (9,17) re-press family).
     #[test]
-    fn mc2_possession_recasts_freely_while_the_marker_runs() {
+    fn mc2_possession_tier0_does_not_refire_while_the_marker_runs() {
         let mut w = mc2_flat_world();
         let m = w.mc2_book.ent[1] as usize;
         assert!(m != 0, "possess granted at init");
+        assert_eq!(w.g.ent[m].f71, 0, "default possess is tier 0");
         // A long marker + a tiny cost, independent of the spells
         // table shape.
         w.g.ent[m].f28 = 40;
@@ -18486,14 +18558,14 @@ mod tests {
         assert_eq!(bolts(&w), 1, "the first cast launched");
         assert!(w.g.ent[m].f26 > 1, "the marker is running");
         let timer = w.g.ent[m].f26;
-        // Release, then re-press mid-marker.
+        // Release, then re-press mid-marker: no second bolt for tier 0.
         w.tick(pose, PlayerCommand::default());
         w.tick(pose, fire);
         w.tick(pose, PlayerCommand::default());
         assert_eq!(
             bolts(&w),
-            2,
-            "the re-press fired another bolt while the marker runs"
+            1,
+            "tier-0 re-press launches NO second bolt while the marker runs"
         );
         assert!(
             w.g.ent[m].f26 < timer,

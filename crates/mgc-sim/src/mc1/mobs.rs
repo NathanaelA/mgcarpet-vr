@@ -54,6 +54,15 @@ pub(crate) struct MobCtx {
     /// here so Gen-side ticks can gate without a Gen field (which
     /// would drag the snapshot codec and the state hash along).
     pub(crate) strict: bool,
+    /// MC2's `setting_30` game-loop counter (engine_support.h:229):
+    /// zeroed at level init, incremented in `PlayerEvents_51BB0`
+    /// beside `Turn++` (EF:37557) — during the entity pass it equals
+    /// the post-increment turn, i.e. `World::mc2_turn` (the cave
+    /// carpet tail's corpus-proven additive reads the same value,
+    /// EF:59803). The per-entity `rand_0x14 += setting_30` perturb
+    /// sites consume it; remc2's `uint8_t` typing is false — the
+    /// counter is full-width. Same MobCtx rationale as `strict`.
+    pub(crate) mc2_turn: u32,
 }
 
 /// Animation frame counts by sprite draw type (`byte_90AD8`, :2716):

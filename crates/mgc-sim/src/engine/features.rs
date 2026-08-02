@@ -5498,6 +5498,7 @@ mod tests {
             pmana: 1000,
             pdead: false,
             strict: false,
+            mc2_turn: 0,
         }
     }
 
