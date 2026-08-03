@@ -154,14 +154,15 @@ including the 75%-torn pre-gate corpus.
    balanced ((5,3) 63/60, (14,1) 4/4, (5,9) 6/8) — the port DOES
    spawn the waves, at desynced slots: the ruled free-list
    slot-order infrastructure limit at mass-spawn ticks, not a
-   missing trigger. Residual genuinely-one-sided families to
-   re-census after the slot story: (10,75) 128/31, (10,25) 37/0.
+   missing trigger. **SESSION-6 UPDATE (2026-08-03): the ruling is
+   now the computed `slot-desync` roster rule (dig F, see
+   Resolved), and the re-census is DONE — (10,25) 37/0 and
+   (10,75) 110/13 post-absorption are REAL unported-spawn leads
+   (doomsday-pyramid effect + tail-drag chain); the (5,0) owner
+   rows and the class-15 detach machine are RESOLVED (digs E + D —
+   note (5,0) = pyramid-summoned worms, NOT hydra segments).**
    Knock-on: mass-tick slot skew feeds the 52-63k epoch churn
-   asymmetry and the lone rng residual at t=51556. Also small, same
-   umbrella: (5,0) hydra-segment `owner` obs-schema gap (@0x28
-   projected only for class-15/(5,10); retail carries 7 —
-   16,333 constant rows); class-15 detach state machine (slot 73
-   pitch 5→0 / action 78→1, real unmodeled state).
+   asymmetry and the lone rng residual at t=51556.
 1. **HW ambient-family population loss — ROOT-CAUSED, mostly fixed**
    (see Resolved; residuals on the 289-pair mc1hwl0-test take): the
    port lacked generic MC1 handlers that HW's content exercises. The
@@ -783,20 +784,19 @@ post-fix).
   −1664 (retail 2176 plateau at tiles (160-171,194-205), port flat
   512); nearby slots track terrain within ±32. Both sides ground-
   snap faithfully — the port's mc2:30 heightfield simply lacks the
-  plateau. OWED: check whether the plateau is load-time (the dis-0
-  (10,64) riser raise — then the port's conformance world-build
-  skips a load-time raise = fixable) or runtime-terraformed (pure
-  capture). The l4 face of the same question: the (5,4) ARCHER
+  plateau. ~~OWED: load-time vs runtime~~ **ANSWERED 2026-08-03
+  (session 6, dig C): RUNTIME-terraformed — `mc2_dome_tick`/
+  `sub_31940` (EF:23193) direct heightmap writes; pure capture,
+  nothing portable.** The l4 face of the same question: the (5,4) ARCHER
   family walks at a CONSTANT −192 z from t=0 (slot 210, byte-
   identical dynamics) — a pristine-plane datum gap at its site,
   present before any runtime edit can exist. (5,4) XP-scroll z, (14,3) −16, (15,19) token-fall
   (slot 92: port clamps up to its pristine 1296 floor while retail
   falls to 288) are the same terrain-closure story.
 - **§castle follow-ups** (split from the resolved phantom-upgrade
-  lane): (a) the (10,42) painter's parent @0x28 is NOT projected by
-  `obs_project_mc2` (owner retail-297-vs-0 rows; the "@0x28 nonzero
-  only on class-15" comment is wrong for painters) — obs-schema
-  gap; (b) the (3,3) stage-piece −128 z residual post-rise —
+  lane): (a) ~~painter @0x28 owner projection~~ **RESOLVED
+  2026-08-03 (session 6, dig E — parent castle lane landed; see
+  Resolved owner entry)**; (b) the (3,3) stage-piece −128 z residual post-rise —
   re-measure now that the phantom upgrade is gone; (c) the (5,1)
   at slot 92 killed at t=0 by `mc2_building_clear_tile` (build
   footprint clear) while retail's construction hasn't cleared that
@@ -806,9 +806,12 @@ post-fix).
 - **§wander-drift residual — (5,0)/(5,3): RE-RULED 2026-07-31**
   (see Resolved: KINEMATICS ROUND rulings): the walker turn law is
   byte-exact — the smooth heading drift is capture (chaotic
-  amplification, rand-matched). The remaining PORT lead here is the
-  **flyer z-bob** (±8..56 airborne altitude offset on the multipart
-  chains) — the M0/M3 altitude source, untraced, own item; plus the
+  amplification, rand-matched). **SESSION-6 NOTE: the (3,3)
+  BALLOON altitude half is RESOLVED (dig A — row-base import +
+  sub_580E0 servo; see Resolved).** The remaining PORT lead here is
+  the **multipart flyer z-bob** (±8..56 airborne altitude offset on
+  the multipart chains) — the M0/M3 altitude source, untraced
+  (re-measure on l4 post-servo before digging); plus the
   l4 t=17954 mass spawn-wave divergence (dozens of slots at once,
   unexamined).
 - **§drip placement — (10,86)/(10,87) residual**: at the best
@@ -822,6 +825,169 @@ post-fix).
   resolved, see Resolved).
 
 ## Resolved
+
+- **MC2 BALLOON ALTITUDE — the l24 balloon-z lever = TWO STACKED
+  BUGS, not terrain — LANDED 2026-08-03 (session 6, dig A).** The
+  near-universal (3,3) z family (66,845 of 67,391 pairs, the reason
+  l24 had zero raw-conforming pairs) clustered position-independent
+  → not terrain. ① IMPORT: `mc2_balloon_tick` is the ONE MC2 tick
+  that indexes its servo row RELATIVE to `ROW_BASE`
+  (`BEHAVIOR[ROW_BASE + row156]`; native spawn sets row156=9 → abs
+  68). Retail's ctor `sub_4ABA0` pins `&str_D7BD6[68]` (EF:33422),
+  so the generic import produced row156=68 and the tick read
+  `BEHAVIOR[127]` — v14=−128 — sinking every imported balloon
+  128/tick (= the whole original histogram: floor +128, climb
+  +258/+353, descent +112). Fixed conformance-import-scoped,
+  (3,3)-only row rebase (conformance.rs:558-579). ② NATIVE LAW: the
+  port reused MC1's 3-branch `alt_clamp` (25%·v14 through the band);
+  retail MC2 uses `sub_580E0` (EF:40372) — 2-branch, `z>ground →
+  z+=v14; floor at ground+v12`, ceiling arg DEAD → open-sky descent
+  −4 vs retail −16 = the −12 residual. Fixed both branches
+  (castle.rs:910-924), decompile-proven; ZERO goldens moved.
+  Numbers: balloon-z rows 163,717→52,517 (−68%), afflicted pairs
+  66,845→31,430; windows mid(t20k) −84%, late(t58k) −95%; **l24
+  raw-conforming 0→4 (first ever)**; rng untouched. Residual 52.5k
+  = balloon DOCKED over the terraformed castle pad (retail floor
+  pad≈1536+512=2048; pristine replay descends one servo step) —
+  capture, roster `mc2-balloon-z` flipped open→capture with the fix
+  provenance. Non-vacuous test
+  `mc2_balloon_servo_descends_full_v14_in_band`. EF: sub_4ABA0
+  :33422, sub_580E0 :40372, AddBallon_60AB0 :61857-61, sub_60D50
+  :61933-35. **PLAYTEST OWED (native hover rate now retail).**
+- **MC2 (10,79) "ENDGAME MOVER" = the CASTLE DEFENDER PIECE, eleven
+  import mis-homes — LANDED 2026-08-03 (session 6, dig B).** Ctor
+  `sub_508E0` (EF:36987), tick `sub_3AF00` (EF:30106): max_life
+  100000, action 0x56, sprite 66; 4 pieces per castle upgrade in a
+  2×2 grid, three cohorts on l24 (t=15288..69273, ~8-12 live). The
+  port already had the FULL machine (mc2/castle.rs) — the ~730k-row
+  family was pure import: the piece is minted with a fresh layout
+  and the uniform alias table mis-read ELEVEN homes. Killer: recoil
+  `f68 ← @0x43` (part-type, nonzero) instead of @0x44 → every
+  imported piece re-applied a 115-unit launch displacement per pair
+  (slot 619 t=30000: y retail 173.0 vs port 173.449 = 115/256
+  exact) = the entire y family. Fixed homes: f44←@0x10, f30←@0x2C,
+  f69←@0x3D, f68←@0x44, f54←@0x36, f28←@0x96, f34←@0x1C, f36←@0x1E,
+  f26←@0x4A, f67←@0x43; + obs override: (10,79) heading projects
+  from f34 (f30 now holds the fire-mode selector). All
+  conformance-import scoped, no native change, no golden. Full-take:
+  y 335,570→534, heading 593→22, x 1,263→541, **total 732,243→
+  368,779 (−49.6%)**, zero collateral. Residual z ~367k = terrain
+  closure (pieces on terraformed mounds; want/got bob in lockstep,
+  constant per-slot ~16) → rule `mc2l24-castle-piece-terrain-z`.
+  Test `mc2_castle_piece_import_field_homes`.
+- **MC2 (10,57) FROZEN FALLING SPHERE + VOLCANO-LANE z + the
+  l30-terrain RULING — LANDED 2026-08-03 (session 6, dig C).**
+  ① The fixture's "z+16 constant" was a pair-0 artifact; real diff =
+  −f2c(retail@t): the port FROZE a falling sphere. (10,57) = the
+  random-value mana sphere (`sub_50130` EF:36631, action 0x3E=62);
+  its tick `sub_35FB0` (EF:26318, settle EF:26526-46, bounce
+  EF:26567-77) is byte-identical to the (10,39) ball law ball_tick
+  already serves. Importer was ALREADY right — the class-10
+  effect-tick whitelist just never listed action 62, so imported
+  spheres fell to the terrain catch-all. Fix: `| 62` in the effect
+  gate (world.rs:2270) + `62 => ball_tick` (mc1/combat.rs:2999);
+  native-inert (native spawns m57 as model-39/action-41). t=0..500:
+  (10,57) z 1438→22, all rows 5233→72 (−98.6%); whole-window
+  unexplained field 10,175→1,753. ② (10,16) boulder vz home:
+  `sub_32600` EF:23765 reads vz from @0x2C; uniform import homed
+  f44←@0x2A (=200 always) → +200 relaunch per pair; scoped
+  f44←f2c block (conformance.rs:1373). ③ (10,19) column z-snap
+  strict-gated frozen-z (tail.rs:1578), mirroring summit18.
+  ④ **RULING — the §l30-terrain OWED check is ANSWERED: the summit
+  plateau is RUNTIME-terraformed, pure capture.** `mc2_dome_tick`/
+  `sub_31940` (EF:23193) writes the heightmap directly
+  (`mc2_dome_cap` EF:23300-18); decisive: at t=0 exactly one dome
+  exists mid-grow at a DIFFERENT site while the summit already
+  reads 2624 — an earlier finalized dome the recording's
+  entity channel cannot carry. Nothing further portable; rules
+  `mc2-summit-fire6-z-capture` + boulder/column re-eruption landed.
+  BANKED: extending frozen-z-under-strict to the shared
+  `standing_fire_tick` would recover summit-slope (10,6) fires but
+  touches MC1 terrain goldens — own dig. Tests ×2, non-vacuous.
+- **MC2 (5,19) FIREBUG LUNGE + CLASS-15 DETACHED-JAR ARC — LANDED
+  2026-08-03 (session 6, dig D).** ① (5,19) = the FIREBUG; retail
+  oscillates actSpeed 76↔8 with the `byte_0x46` sub-state and rolls
+  the entity LCG only on the fast leg. `HitFirebug_25610` case 1
+  (EF:16386-16407) sets b46=2 and RETURNS; case 2's drop to
+  maxSpeed + its own roll (EF:16409-16416) run the NEXT tick. The
+  port's `continue` fell through into case 2 SAME-tick → speed
+  dropped a tick early AND the LCG double-advanced. One-word fix
+  `continue`→`break` (mc2/roster.rs:2119-28); native change, NO
+  golden moved. t=1960+1500: speed 109→8, rand 129→28; fixture
+  sigs dropped 5,19:rand+speed in TWO corpora (mc2l24 t=2157 AND
+  mc2l4 t=76). Residual heading/x/y = ruled wander-turn capture.
+  ② Class-15 detach: the lead's premise CORRECTED — slot 73's
+  20k-tick idle is FAITHFUL (0 rows, not torn); the family is a
+  ~15-tick FLING at t=15080-95: the m26-wraith spell-steal jar is
+  a moving projectile (z 251→344→0, action 78/pitch 5) the port
+  dropped on frame 1. Retail arc `sub_59DC0` (EF:41198-41243) runs
+  off homes the class-15 import never mapped: arc counter
+  dword@0x10 (`sub_69300` EF:55807 zeroes it at the steal) + wraith
+  slot word@0x26. Fix: `action45 == 78` arm in the class-15 import
+  (conformance.rs:1359) + 1-line native pitch-copy each rising tick
+  (EF:41216-18; world.rs:6911). t=14990+130: 64→12 rows,
+  unexplained 64→0 (residual = pre-existing pose-phase). Tests ×2,
+  non-vacuous, no re-pin.
+- **MC2 `owner` OBS-SCHEMA GAP + the (5,0) identity CORRECTION —
+  LANDED 2026-08-03 (session 6, dig E).** Per-class @0x28 truth
+  table (EF cites): (10,42) build painter @0x28 = parent CASTLE
+  (repaint `sub_5FBD0` EF:61192-93; level-up `sub_60480`
+  EF:61596-97); (5,{0,19,21,25}) pyramid-SUMMONED creatures @0x28 =
+  the PYRAMID (summon EF:13420/13413); (5,10) = ring-spin angle
+  (f36 arm intact); class-15 = wizard (unchanged). ⚠ PREMISE
+  CORRECTIONS: the session-5 "(5,0) = hydra segments" handoff was
+  WRONG — on l24 the hydra is (5,27); the (5,0) owner=7 family is
+  the pyramid's summoned WORMS in the apocalypse window t≈52-68k.
+  And the pyramid was POISONING its own children: its repurposed
+  @0x28 (spin angle) was fused into id24, which the summon copies —
+  excluding (5,10) from the fusion makes pyramid id24 = @0x1A = its
+  own index, the identity that makes retail parentId ≡ port own_id.
+  ⚠ TRAP (the transient mid-session `field:5,0:owner` atom): model
+  0 is ALSO the generic worm body whose id24 is its body slot — a
+  naive `id24 != slot` guard over-projected 261,555 wild rows; the
+  final discriminator is "referenced entity IS a live (5,10)
+  pyramid". Numbers: whole-file owner mismatches **47,083→143
+  (−99.7%)**; painter window t=10060-70 →0; apocalypse t=52000-500
+  →0 with 2,509 summoned-creature rows present; non-owner rows
+  byte-identical before/after (no ripple); exactly ONE sig atom
+  changed anywhere (mc2l24 t=10062 lost 10,42:owner). Residue: 29
+  class-15 want=116 rows (one per spellbook model — adjacent lead).
+  Tests ×2 (gate non-vacuity proven).
+- **SLOT-DESYNC CLASSIFIER + village-regrade RETIREMENT + WAVE
+  RE-CENSUS — LANDED 2026-08-03 (session 6, dig F).** The
+  session-4 free-list ruling + open-leads 0b are now a COMPUTED
+  roster rule (literal id `slot-desync`, pose-phase mechanism;
+  `--no-slot-desync` opt-out): within one pair, still-unexplained
+  missing/extra of the same (class,model) pair up by nearest x/y,
+  tagging only min(missing,extra) per side — one-sided residue
+  stays open. Ordering is LOAD-BEARING: runs after the roster,
+  BEFORE pose-phase (at a wave the port extras are pose-phase but
+  the retail missing are not; pose-first orphans the balanced
+  family). Field rows untouched — proven byte-identical OFF/ON on
+  all four takes. Fires on l24 at 236/67,391 pairs (0.35%),
+  exactly the two scripted waves + the apocalypse epoch. Impact
+  (missing unexplained): l24 1,688→1,209, l30 188→126, l4 249→199,
+  mc1l0 98→83. `mc1l0-village-regrade` RETIRED (0 hits post
+  re-record; region absorbed by mc1l0-terrain-z). **RE-CENSUS
+  VERDICTS — both REAL unported-spawn leads:** (10,25) 37 missing
+  / 0 extra, 100% one-sided — a short-lived doomsday-pyramid
+  effect (action 25, life 7/8) the port never spawns; (10,75) 128/31
+  → post-absorption **110 missing / 13 extra** — the doomsday
+  TAIL-DRAG segment chain (tail.rs:448 model65=75) under-produced.
+  Small one-sided residues: (5,3)+3, (5,26)+2, (14,1)+2 missing.
+- **SESSION-6 CLOSE-OUT (2026-08-03).** Post-six-digs full l24:
+  unexplained field 1.58M→**771,218** (−51%), missing 1,721→1,209,
+  extra 6,432→6,067; pairs fully explained 4,517→**11,127**;
+  conforming 0→**4**; rng 12 singles unchanged. All six suite
+  manifests promoted green, 0 regressions (l24: 1 fixed + 12
+  drifted-improved; fixes propagated to l4 balloon atoms + l30
+  firebug atoms). Workspace sweep 42 bins green --no-fail-fast,
+  fmt clean. Roster 48 rules. **Hydra bolt-cadence RE-MEASURE
+  (the dig-D-session-5 NEXT-LEAD precondition): t=10650-11150
+  reads 1,529/94 — BYTE-IDENTICAL to the mid-fix session-5
+  measurement ⇒ the barrage under-fire is independent of the
+  import homes; the portable head-state slice (multipart.rs:1732)
+  is a LIVE dig.**
 
 - **MC2 HYDRA (5,27) — FOUR IMPORT FIELD-HOME BUGS froze the whole
   machine — LANDED 2026-08-02 (session 5 mc2l24 intake, dig A).**

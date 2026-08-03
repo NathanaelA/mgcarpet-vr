@@ -189,6 +189,14 @@ pub enum Tag {
     /// only one of them, and every pinned run is wrong for one side.
     /// Runner-built (no roster provenance), reported separately.
     PosePhase,
+    /// A missing/extra atom paired with a same-(class,model) atom of
+    /// the opposite kind WITHIN the pair: the port emits the entity,
+    /// but in a different pool slot than retail. See
+    /// [`RuleTags::slot_desync`] for the ruled basis (session-4
+    /// free-list slot-order desync + open-leads 0b mass-spawn waves).
+    /// Runner-built (computed per pair, no roster provenance),
+    /// reported separately.
+    SlotDesync,
 }
 
 impl Tag {
@@ -211,5 +219,114 @@ impl RuleTags {
         self.missing.iter().all(|t| t.known())
             && self.extra.iter().all(|t| t.known())
             && self.fields.iter().all(|t| t.known())
+    }
+
+    /// The SLOT-DESYNC classifier — a COMPUTED rule (literal id
+    /// `slot-desync`), the missing/extra twin of the pose-phase pass.
+    ///
+    /// Ruled basis (cite both):
+    ///   • Session-4 ruling "MC2 FIRE-SPRAY RING LOOP … RULED on the
+    ///     residual: the (10,0) missing/extra bulk = FREE-LIST
+    ///     SLOT-ORDER DESYNC, not law — proven at l4 t=9082: missing
+    ///     and extra fires have IDENTICAL x/y, differing only in slot"
+    ///     (docs/CONFORMANCE-FINDINGS.md, Resolved). A single-snapshot
+    ///     import cannot recover retail's within-tick free-then-reuse
+    ///     LIFO order, so the port emits the SAME entity at the SAME
+    ///     place in a different pool slot; the presence matcher (keyed
+    ///     by slot) reports it as one missing + one extra.
+    ///   • Open-leads 0b "MC2L24 SCRIPTED CREATURE WAVES — SPAWN, BUT
+    ///     SLOT-DESYNCED": a mass-spawn wave lands its creatures in
+    ///     desynced slots — BALANCED extra+missing of the SAME
+    ///     (class,model) in the same pair (whole-take totals balance:
+    ///     (5,3) 63/60, (14,1) 4/4, (5,9) 6/8). The port DOES spawn
+    ///     the waves; the free-list slot-order infrastructure limit at
+    ///     mass-spawn ticks is not a missing trigger.
+    ///
+    /// CONSERVATIVE by construction: within a SINGLE pair, only atoms
+    /// of the same (class,model) whose missing and extra counts can be
+    /// PAIRED are tagged, and only `min(missing, extra)` per side.
+    /// Genuinely one-sided COUNT residue — a real unported spawn or
+    /// despawn — stays `Unexplained`, so the rule never swallows a
+    /// lead. Pairing iterates the SMALLER side and greedily takes the
+    /// nearest x/y partner on the larger side (a desynced atom rests at
+    /// the SAME place, so its slot-shifted twin is the nearest one):
+    /// the count residue left over is therefore the genuinely-unmatched
+    /// extreme, not an arbitrary slot-order pick. Absent coordinates
+    /// fall back to count-matching (INF distance, first-unused).
+    ///
+    /// Runs on the residue AFTER the roster pass and BEFORE the
+    /// pose-phase pass (only rows still `Unexplained` are considered),
+    /// so it claims nothing another family explained; running it before
+    /// pose-phase is required — at a spawn wave the port-side EXTRA
+    /// rows are pose-phase (their exact slot differs under the other
+    /// pose) while the retail-side MISSING rows are not, so a
+    /// pose-first order would strip the extras and leave the balanced
+    /// missing family orphaned. FIELD rows are out of the ruled scope
+    /// (missing/extra only) and untouched.
+    pub fn slot_desync(
+        &mut self,
+        missing: &[(u16, u8, u8)],
+        extra: &[(u16, u8, u8)],
+        pos: &dyn Fn(u16) -> Option<(f64, f64)>,
+    ) {
+        use std::collections::BTreeMap;
+        // Group still-unexplained row indices by (class, model), one
+        // side at a time.
+        let mut miss: BTreeMap<(u8, u8), Vec<usize>> = BTreeMap::new();
+        let mut ext: BTreeMap<(u8, u8), Vec<usize>> = BTreeMap::new();
+        for (i, (_, c, m)) in missing.iter().enumerate() {
+            if self.missing[i] == Tag::Unexplained {
+                miss.entry((*c, *m)).or_default().push(i);
+            }
+        }
+        for (i, (_, c, m)) in extra.iter().enumerate() {
+            if self.extra[i] == Tag::Unexplained {
+                ext.entry((*c, *m)).or_default().push(i);
+            }
+        }
+        for (key, mi) in &miss {
+            let Some(ei) = ext.get(key) else { continue };
+            // (row index, position) for each side of this family.
+            let mvec: Vec<(usize, Option<(f64, f64)>)> =
+                mi.iter().map(|&i| (i, pos(missing[i].0))).collect();
+            let evec: Vec<(usize, Option<(f64, f64)>)> =
+                ei.iter().map(|&i| (i, pos(extra[i].0))).collect();
+            // Iterate the smaller side so the unmatched count residue
+            // stays on the larger (one-sided) side, untagged.
+            let miss_smaller = mvec.len() <= evec.len();
+            let (small, large) = if miss_smaller {
+                (&mvec, &evec)
+            } else {
+                (&evec, &mvec)
+            };
+            let mut used = vec![false; large.len()];
+            for &(sidx, sp) in small {
+                let mut best: Option<(usize, f64)> = None;
+                for (li, &(_, lp)) in large.iter().enumerate() {
+                    if used[li] {
+                        continue;
+                    }
+                    let d = match (sp, lp) {
+                        (Some((ax, ay)), Some((bx, by))) => (ax - bx).hypot(ay - by),
+                        _ => f64::INFINITY,
+                    };
+                    match best {
+                        Some((_, bd)) if bd <= d => {}
+                        _ => best = Some((li, d)),
+                    }
+                }
+                if let Some((li, _)) = best {
+                    used[li] = true;
+                    let lidx = large[li].0;
+                    if miss_smaller {
+                        self.missing[sidx] = Tag::SlotDesync;
+                        self.extra[lidx] = Tag::SlotDesync;
+                    } else {
+                        self.extra[sidx] = Tag::SlotDesync;
+                        self.missing[lidx] = Tag::SlotDesync;
+                    }
+                }
+            }
+        }
     }
 }

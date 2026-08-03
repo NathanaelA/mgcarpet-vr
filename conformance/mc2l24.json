@@ -5,20 +5,17 @@
   "fixtures": [
     {
       "t": 0,
-      "status": "open",
-      "sig": "1bbe5ecff1b1535e",
-      "atoms": [
-        "field:10,57:z"
-      ],
+      "status": "conforming",
       "note": "NEW LEAD: (10,57) statics z +16 constant offset from pair 0 (story-B slots 67-87) - un-dug import/ctor quantum"
     },
     {
       "t": 453,
       "status": "open",
-      "sig": "1d9ca4b76b008cfd",
+      "sig": "0e8f42f36cd1f6e8",
       "atoms": [
+        "extra:10,6",
         "field:10,16:z",
-        "field:10,19:z",
+        "field:10,57:x",
         "field:10,6:z"
       ],
       "note": "volcano lanes (10,16)/(10,19)/(10,6) z on the growing volcano - terrain-leaning, un-ruled (l24 twin of the l30 summit terrain)"
@@ -36,12 +33,10 @@
     {
       "t": 2157,
       "status": "open",
-      "sig": "9e4b4b14b0e7f8ae",
+      "sig": "0ed6bd85e74a39e8",
       "atoms": [
         "field:3,2:z",
-        "field:3,3:z",
-        "field:5,19:rand",
-        "field:5,19:speed"
+        "field:3,3:z"
       ],
       "note": "(5,19) creature kinematics (rand/speed lanes) - un-dug walker family"
     },
@@ -60,13 +55,12 @@
     {
       "t": 2608,
       "status": "capture",
-      "sig": "87b064ff48d733ff",
+      "sig": "dfe3f623f5c75880",
       "atoms": [
         "extra:10,14",
         "extra:10,16",
         "extra:10,6",
         "field:10,16:z",
-        "field:10,19:z",
         "field:10,6:z",
         "field:14,1:heading",
         "field:14,1:mana",
@@ -134,10 +128,9 @@
     {
       "t": 3326,
       "status": "open",
-      "sig": "85c9f4dfbbe6782c",
+      "sig": "ec42e82d80e8780a",
       "atoms": [
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,27:z"
       ],
       "note": "hydra body z (terrain-crater capture per dig A) riding the balloon-z open lead - REGRESSION GUARD for the m27 import-home fix: sig must stay free of (5,27) x/y/speed atoms"
@@ -145,18 +138,17 @@
     {
       "t": 3559,
       "status": "open",
-      "sig": "645018d5e0c5178d",
+      "sig": "dc67d5e1117f0e0b",
       "atoms": [
         "extra:10,0",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,2:z"
       ],
       "note": "wave-1 tick fire churn (extra:10,0) - rides open-leads 0b pool under-population"
     },
     {
       "t": 3569,
       "status": "open",
-      "sig": "46a47939b3bc1c94",
+      "sig": "5c74589c2cf042ba",
       "atoms": [
         "extra:10,63",
         "extra:11,30",
@@ -190,7 +182,6 @@
         "field:10,63:z",
         "field:14,1:life",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,3:action",
         "field:5,3:applied_pitch",
         "field:5,3:applied_yaw",
@@ -233,29 +224,26 @@
     {
       "t": 3588,
       "status": "capture",
-      "sig": "aec4ec53b09841d2",
+      "sig": "65133a7025425f4c",
       "atoms": [
         "field:2,2:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,2:z"
       ],
       "note": "(2,2) static z = the growing doomsday/volcano mound (mc2l24-static-terrain-z; measured constant/progressive per-slot deltas)"
     },
     {
       "t": 10062,
       "status": "open",
-      "sig": "55d976470c124947",
+      "sig": "947a06d654655237",
       "atoms": [
-        "field:10,42:owner",
-        "field:2,2:z",
-        "field:3,3:z"
+        "field:2,2:z"
       ],
       "note": "(10,42) painter owner obs projection (class-10 @0x28) - the banked painter-owner lead surfacing in this corpus"
     },
     {
       "t": 13330,
       "status": "open",
-      "sig": "4a70cc88ca80d0e5",
+      "sig": "d0b977ff2155d697",
       "atoms": [
         "extra:10,0",
         "extra:10,39",
@@ -362,7 +350,6 @@
         "field:2,2:z",
         "field:3,0:mana",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,15:z",
         "field:5,17:action",
         "field:5,17:applied_pitch",
@@ -472,7 +459,7 @@
     {
       "t": 51556,
       "status": "open",
-      "sig": "5fd69d9aabce9600",
+      "sig": "b437e85fd11c48ee",
       "atoms": [
         "extra:10,0",
         "extra:10,14",
@@ -482,13 +469,11 @@
         "field:10,0:y",
         "field:10,0:z",
         "field:10,17:applied_pitch",
-        "field:10,79:y",
         "field:10,79:z",
         "field:2,2:z",
         "field:2,3:z",
         "field:3,0:mana",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,10:action",
         "field:5,10:applied_pitch",
         "field:5,10:applied_yaw",
@@ -532,14 +517,13 @@
     {
       "t": 51751,
       "status": "open",
-      "sig": "573f06238ba11c12",
+      "sig": "e40e648b01c79bbe",
       "atoms": [
         "extra:10,16",
         "extra:11,12",
         "extra:14,3",
         "field:10,18:heading",
         "field:10,18:rand",
-        "field:10,79:y",
         "field:10,79:z",
         "field:2,2:z",
         "field:2,3:z",
@@ -555,7 +539,7 @@
     {
       "t": 64000,
       "status": "capture",
-      "sig": "2bed0a09898db75e",
+      "sig": "94c4499d93734798",
       "atoms": [
         "extra:10,39",
         "field:10,18:heading",
@@ -564,13 +548,11 @@
         "field:10,39:x",
         "field:10,39:y",
         "field:10,39:z",
-        "field:10,79:y",
         "field:10,79:z",
         "field:2,2:z",
         "field:2,3:z",
         "field:3,0:mana",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,15:action",
         "field:5,15:rand",
         "field:5,15:z",

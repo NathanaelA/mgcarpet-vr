@@ -6,12 +6,11 @@
     {
       "t": 193,
       "status": "open",
-      "sig": "293c1b953bca6254",
+      "sig": "e46d54710bb9aae6",
       "atoms": [
         "field:10,45:z",
         "field:3,1:mana",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,1:z",
         "field:5,2:z"
       ],
@@ -20,12 +19,11 @@
     {
       "t": 217,
       "status": "open",
-      "sig": "350259d0211af2c5",
+      "sig": "a26e7d8ec24c45fb",
       "atoms": [
         "field:10,45:z",
         "field:3,1:z",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,1:z",
         "field:5,2:z"
       ],
@@ -34,13 +32,12 @@
     {
       "t": 293,
       "status": "open",
-      "sig": "1cf2bc3c69f6c501",
+      "sig": "ef605363a406370b",
       "atoms": [
         "field:10,39:z",
         "field:10,45:z",
         "field:3,1:z",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,9:sv1"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-sphere-terrain-z, mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses; 4 row(s) unexplained"
@@ -235,12 +232,11 @@
     {
       "t": 3375,
       "status": "open",
-      "sig": "f7d1ab222bb19e7c",
+      "sig": "f86a3352dfa15042",
       "atoms": [
         "field:10,45:z",
         "field:15,19:z",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,15:z",
         "field:5,4:z"
       ],
@@ -276,13 +272,12 @@
     {
       "t": 3440,
       "status": "open",
-      "sig": "819b0083b40f1349",
+      "sig": "c95c2e11b291d197",
       "atoms": [
         "field:10,45:z",
         "field:15,19:z",
         "field:3,2:applied_yaw",
         "field:3,2:z",
-        "field:3,3:z",
         "field:5,15:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z; 2 row(s) unexplained"

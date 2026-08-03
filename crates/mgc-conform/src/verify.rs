@@ -184,7 +184,18 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .or_else(|| pmap.get(&slot))
                                 .map(|e| (e.class, e.model, e.x, e.y))
                         };
-                        classify_pair(roster.as_ref(), &take, pt, &pd, &ctx)
+                        let mut tg = classify_pair(roster.as_ref(), &take, pt, &pd, &ctx);
+                        // SLOT-DESYNC pass (computed rule, roster.rs):
+                        // balanced same-(class,model) missing/extra
+                        // residue = free-list slot-order desync. Runs
+                        // BEFORE the pose-phase pass by construction —
+                        // see RuleTags::slot_desync for why the order
+                        // is load-bearing.
+                        if !args.no_slot_desync {
+                            let pos = |slot: u16| ctx(slot).map(|(_, _, x, y)| (x, y));
+                            tg.slot_desync(&pd.missing, &pd.extra, &pos);
+                        }
+                        tg
                     });
                     // The pose-phase pass: re-run the pair under the
                     // other pose sample; rows clean there are capture
@@ -393,6 +404,7 @@ fn emit_csv(
                 Some(tg) => match lane(tg)[i] {
                     crate::roster::Tag::Rule(k) => roster.map_or("", |r| r.rules[k].id.as_str()),
                     crate::roster::Tag::PosePhase => "pose-phase",
+                    crate::roster::Tag::SlotDesync => "slot-desync",
                     crate::roster::Tag::Unexplained => "",
                 },
                 None => "",
@@ -833,6 +845,12 @@ pub(crate) struct Stats {
     pose_missing: u64,
     pose_extra: u64,
     pose_pairs: u64,
+    /// Missing/extra rows claimed by the computed slot-desync rule
+    /// (balanced same-(class,model) atoms = free-list slot-order
+    /// desync) and the pairs touched.
+    slotdesync_missing: u64,
+    slotdesync_extra: u64,
+    slotdesync_pairs: u64,
     /// Phase-clock disagreements: retail steps +63 only through state
     /// rows with a live handler. Keyed (class, model, state)@N →
     /// {(retail step, port step) → count}.
@@ -905,14 +923,29 @@ impl Stats {
         if let Some(tg) = tags {
             let mut touched: std::collections::BTreeSet<usize> = Default::default();
             let mut pose_touched = false;
-            for (lane, unknown, pose) in [
+            let mut slotdesync_touched = false;
+            // Fields are out of the slot-desync ruled scope — a throw-
+            // away sink keeps the lane loop uniform (never incremented).
+            let mut fld_sd_sink = 0u64;
+            for (lane, unknown, pose, slotdesync) in [
                 (
                     &tg.missing,
                     &mut self.unknown_missing,
                     &mut self.pose_missing,
+                    &mut self.slotdesync_missing,
                 ),
-                (&tg.extra, &mut self.unknown_extra, &mut self.pose_extra),
-                (&tg.fields, &mut self.unknown_fields, &mut self.pose_fields),
+                (
+                    &tg.extra,
+                    &mut self.unknown_extra,
+                    &mut self.pose_extra,
+                    &mut self.slotdesync_extra,
+                ),
+                (
+                    &tg.fields,
+                    &mut self.unknown_fields,
+                    &mut self.pose_fields,
+                    &mut fld_sd_sink,
+                ),
             ] {
                 for tag in lane {
                     match tag {
@@ -925,6 +958,10 @@ impl Stats {
                             *pose += 1;
                             pose_touched = true;
                         }
+                        crate::roster::Tag::SlotDesync => {
+                            *slotdesync += 1;
+                            slotdesync_touched = true;
+                        }
                         crate::roster::Tag::Unexplained => *unknown += 1,
                     }
                 }
@@ -935,6 +972,10 @@ impl Stats {
             if pose_touched {
                 self.pose_pairs += 1;
             }
+            if slotdesync_touched {
+                self.slotdesync_pairs += 1;
+            }
+            let _ = fld_sd_sink;
             if pd.rng_want == pd.rng_got && tg.all_known() {
                 self.explained_pairs += 1;
             }
@@ -1012,6 +1053,15 @@ impl Stats {
                 "   pose-phase (row clean under the other --pin-pose sample): \
                  {} field, {} missing, {} extra rows across {} pairs",
                 self.pose_fields, self.pose_missing, self.pose_extra, self.pose_pairs
+            );
+        }
+        if self.slotdesync_pairs > 0 {
+            let _ = writeln!(
+                s,
+                "   slot-desync (balanced same-(class,model) missing/extra = free-list \
+                 slot-order; ledger session-4 + open-leads 0b): \
+                 {} missing, {} extra rows across {} pairs",
+                self.slotdesync_missing, self.slotdesync_extra, self.slotdesync_pairs
             );
         }
         if let Some(r) = roster

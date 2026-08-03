@@ -554,7 +554,9 @@ impl World {
             // Behavior row: `ptr_a0` points into `str_D7BD6[]`;
             // retail's own load fixup is `(ptr − base160)/34 + 59`
             // (Level.cpp:1255-57; base160 = the saved `&str_D7BD6[59]`).
-            let row156 = {
+            // This ABSOLUTE `str_D7BD6` index is what every MC2 tick
+            // reads via `BEHAVIOR[row156]`.
+            let mut row156 = {
                 let d = r.ptr_a0.wrapping_sub(st.base160) as i32;
                 let steps = d / 34;
                 if d % 34 == 0 && (-59..98).contains(&steps) {
@@ -564,6 +566,18 @@ impl World {
                     59
                 }
             };
+            // (3,3) balloon exception: `mc2_balloon_tick` (castle.rs)
+            // is the ONE tick that indexes RELATIVE to `ROW_BASE`
+            // (`BEHAVIOR[ROW_BASE + row156]`), matching its native
+            // `mc2_spawn_balloon` (`row156 = 9` → abs 68). The retail
+            // ctor `sub_4ABA0` pins `&str_D7BD6[68]` (EF:33422), so
+            // the generic absolute import (68) double-offset to
+            // `BEHAVIOR[127]` (v_12=0, v_14=−128) — sinking every
+            // imported balloon 128/tick (the mc2-balloon-z lever).
+            // Hand it the relative index the balloon tick expects.
+            if r.class3f == 3 && r.model40 == 3 {
+                row156 = row156.saturating_sub(crate::mc2::behavior::ROW_BASE as u8);
+            }
             self.g.ent[slot] = import_ent_mc2(r, slot as u16, row156, &tr);
         }
         for slot in n..pool {
@@ -865,19 +879,48 @@ impl World {
                 speed: e.f126,
                 mana: e.f140,
                 mana_max: e.f136,
-                // Retail's parentId @0x28 is nonzero on class-15
-                // manifestations (mc2l0 census) AND on the (5,10)
-                // DOOMSDAY PYRAMID, which repurposes @0x28 as its
-                // (10,14) rock-ring spin angle (`f36` port-side; +96 &
-                // 0x7FF per un-suppressed tick). Every other class
-                // carries its owner in the id lane @0x1A, fused into
-                // id24 and not part of the obs schema. A DETACHED
-                // manifestation (spell steal) has id24 == slot and
-                // projects 0 like everything else.
+                // Retail's parentId @0x28 (the recorded `owner` lane) is
+                // live on FOUR families on this corpus — the old
+                // "class-15 only" premise is REFUTED (mc2l24 whole-file
+                // owner census: 47k+ rows). Each is recovered per family:
+                //   • class-15 manifestations — parentId = wizard, fused
+                //     into id24 (@0x28 != 0 branch); `id24 != slot`
+                //     excludes a detached manifestation (projects 0).
+                //   • (5,10) DOOMSDAY PYRAMID — @0x28 is REPURPOSED as
+                //     the (10,14) rock-ring spin angle (`f36` port-side,
+                //     +96 & 0x7FF per un-suppressed tick), from f36.
+                //   • (10,42) build painter — parentId = the owning
+                //     castle entity (fixture t=10062 slot 162: @0x28=426
+                //     = the (3,2) castle slot; a wizard-owned variant
+                //     stamps 116). No wild (10,42) exists, so the fused
+                //     id24 = tr(@0x28) recovers it directly.
+                //   • (5,{0,19,21,25}) pyramid-summoned creatures — the
+                //     apocalypse summon (EF:13420) stamps parentId = the
+                //     pyramid (entity 7 = the (5,10) here) into both @0x28
+                //     and @0x1A, so id24 = tr(7). CAUTION: model 0 is ALSO
+                //     the generic worm / multipart body, whose id24 points
+                //     at its BODY slot, not a parent (261k wild rows if
+                //     read blindly). The discriminator that survives both
+                //     import AND the native summon (`own_id = pyramid.id24`
+                //     = 7, doomsday.rs, once the importer stops fusing the
+                //     pyramid's spin-angle @0x28 into its id24) is: the
+                //     referenced entity IS a live (5,10) pyramid. A wild
+                //     body points at a (5,0)/(5,27) segment → projects 0.
                 owner: if e.class64 == 15 && e.id24 != slot {
                     untr(e.id24)
                 } else if e.class64 == 5 && e.model65 == 10 {
                     e.f36
+                } else if e.class64 == 10 && e.model65 == 42 && e.id24 != slot {
+                    untr(e.id24)
+                } else if e.class64 == 5
+                    && matches!(e.model65, 0 | 19 | 21 | 25)
+                    && self
+                        .g
+                        .ent
+                        .get(untr(e.id24) as usize)
+                        .is_some_and(|p| p.class64 == 5 && p.model65 == 10)
+                {
+                    untr(e.id24)
                 } else {
                     0
                 },
@@ -901,6 +944,18 @@ impl World {
             // from @0x2A); retail's @0x90 mana lane is dead 0.
             if e.class64 == 10 && matches!(e.model65, 0 | 6) {
                 row.mana = 0;
+            }
+            // The (10,79) castle defender piece keeps its world-yaw
+            // (@0x1C, the obs heading lane) in f34 — the piece brain's
+            // firing-yaw home (import_ent_mc2's (10,79) block,
+            // mc2_castle_piece_tick) — not the uniform f30, which now
+            // holds the @0x2C fire-mode selector. (Pitch stays on the
+            // uniform f32=@0x1E copy: the piece's live @0x1E lives in
+            // f36 but projecting it there only trades the static-copy
+            // capture residual for the firing-elevation one, both
+            // terrain-closure, so leave f32.)
+            if e.class64 == 10 && e.model65 == 79 {
+                row.heading = e.f34 as i16;
             }
             entities.push(row);
         }
@@ -1129,9 +1184,19 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         // `parentId_0x28` into id24. @0x1A is the LIVE owner-or-self
         // lane (mc2l0 census): the caster on projectiles, the owning
         // wizard on castles/balloons/charmed creatures, the watch
-        // target on class-11 triggers, self everywhere else. @0x28
-        // is nonzero only on class-15 manifestations.
-        id24: if r.owner28 != 0 {
+        // target on class-11 triggers, self everywhere else. @0x28 is a
+        // live parentId on class-15 manifestations, (10,42) painters,
+        // and the pyramid-summoned (5,{0,19,21,25}) creatures — all
+        // recovered by `obs_project_mc2` from this fused lane.
+        // EXCEPTION: the (5,10) DOOMSDAY PYRAMID repurposes @0x28 as its
+        // ring-spin angle (imported to f36), NOT a parent — fusing it
+        // here stamped a garbage id24 (= the spin angle) that the
+        // apocalypse summon then copied onto every child creature
+        // (`own_id = pyramid.id24`, doomsday.rs), so their `owner` obs
+        // read the spin angle instead of the pyramid id. Take @0x1A (the
+        // pyramid's own id) for it, matching the retail summon which
+        // stamps the child's parentId = the pyramid entity index.
+        id24: if r.owner28 != 0 && !(r.class3f == 5 && r.model40 == 10) {
             tr(r.owner28)
         } else if r.f1a != 0 {
             tr(r.f1a)
@@ -1278,6 +1343,23 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         e.f46 = 0;
         e.f50 = 0;
         e.f56 = 0;
+        // The DETACHED spell-jar (action 78) — the m26-wraith steal's
+        // fling/homing arc `sub_59DC0` (EF:41198-41243) — abandons the
+        // dormant-manifestation homes above. Its arc runs off DIFFERENT
+        // fields: the arc counter `dword_0x10_16` (@0x10 = scratch10,
+        // steps 0..5 rising then homing) → f26, and the wraith slot
+        // `word_0x26_38` (@0x26) → f38 (`Entities[word_0x26_38]` is the
+        // homing target, EF:41224). `sub_69300` (EF:55807) zeroes @0x10
+        // at the steal; the parent (@0x28 = the caster/player) drives the
+        // rising leg. Without these homes `mc2_stolen_arc` read the armed
+        // timer as the counter (n≫5 → straight to the homing branch),
+        // found no wraith in f38, and dropped the jar in place with
+        // action 3M+1 on frame 1 (mc2l24 slot 73 t=15080-95: action
+        // 78→1, the arc frozen a tick behind retail).
+        if r.action45 == 78 {
+            e.f26 = r.scratch10 as i16;
+            e.f38 = tr(r.f26 as u16);
+        }
     }
     // Class-10 fires keep the area amount in `subSpellIndex_0x2A`
     // (→ the port's f140 amount home, sub_30D50's sub_10C80 call /
@@ -1286,6 +1368,18 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
     // `obs_project_mc2`).
     if r.class3f == 10 && matches!(r.model40, 0 | 6) {
         e.f140 = r.f2a as i32;
+        e.f44 = r.f2c as u16;
+    }
+    // The (10,16) volcano boulder keeps its VERTICAL VELOCITY in
+    // `word_0x2C_44` (`sub_32600` EF:23765 reads it as vz, gravity
+    // −28 clamp [−384,256]) — the port's `mc2_boulder16_tick` vz lane
+    // is f44. The uniform map homes f44 ← `subSpellIndex_0x2A` (=200
+    // on every boulder), so an imported boulder re-launched at vz=200
+    // each pair: pz = z + 200 (mc2l24 (10,16) z = retail + 200 —
+    // resting summit boulders 173/329/447/574/626 and mid-roll
+    // 428/449/623). The tick never reads f140, so leaving f140 ← mana
+    // is inert; only f44 matters.
+    if r.class3f == 10 && r.model40 == 16 {
         e.f44 = r.f2c as u16;
     }
     // The (10,39)/(10,57) mana sphere keeps its z-velocity in
@@ -1303,6 +1397,38 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         if b1 & 0x20 != 0 {
             e.flags |= 0x2000;
         }
+    }
+    // The (10,79) castle DEFENDER PIECE (ctor sub_508E0 EF:36987,
+    // tick sub_3AF00 EF:30106) is minted with a FRESH field layout —
+    // the piece never carried any prior class's homes, so the uniform
+    // alias table mis-reads eleven of them (mc2/castle.rs
+    // mc2_castle_piece_tick lists the homes). The killer is
+    // recoil f68: the uniform map reads @0x43 (part-type, nonzero) as
+    // the recoil step, so every imported piece re-applies a 115-unit
+    // (0.449-tile) launch displacement each pair — the whole 335k-row
+    // y family. Restore all eleven from their retail offsets (f63 tick
+    // counter @0x3E, f71 state @0x46, and the @0x9A/@0x9C/@0x9E home
+    // anchor are already uniform-correct):
+    //   dwell/windup  f44 ← dword_0x10_16 (scratch10)
+    //   fire mode     f30 ← word_0x2C_44  (f2c)
+    //   burst count   f69 ← fontTypeIndex_0x3D_61 (b3d)
+    //   recoil step   f68 ← byte_0x44_68  (b44)
+    //   windup z-boost f54 ← word_0x36_54 (f36)
+    //   target slot   f28 ← word_0x96_150 (target96)
+    //   firing yaw    f34 ← yaw_0x1C, pitch f36 ← pitch_0x1E
+    //   level tag     f26 ← word_0x4A_74  (sv_timer → z height offset)
+    //   part-type     f67 ← byte_0x43_67  (b43)
+    if r.class3f == 10 && r.model40 == 79 {
+        e.f26 = r.sv_timer;
+        e.f28 = tr(r.target96);
+        e.f30 = r.f2c as u16;
+        e.f34 = r.yaw as u16;
+        e.f36 = r.pitch as u16;
+        e.f44 = r.scratch10 as u16;
+        e.f54 = r.f36;
+        e.f67 = r.b43 as u8;
+        e.f68 = r.b44 as u8;
+        e.f69 = r.b3d as u8;
     }
     // Balloon ceiling-walk latch (sub_60D50 EF:61896/61905/61921,
     // byte0 & 1): actSpeed 96 walking / 48 flying, ceiling clamp
@@ -1420,5 +1546,235 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         dest_x: r.dest_x,
         dest_y: r.dest_y,
         site_z: r.site_z,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The (10,79) castle DEFENDER PIECE (ctor sub_508E0 / tick
+    /// sub_3AF00) invents a fresh field layout the uniform alias map
+    /// mis-reads on import — most damagingly f68 (recoil) off the
+    /// part-type byte @0x43, which re-applies a 115-unit launch
+    /// displacement every pair (the mc2l24 335k-row y family). Pin
+    /// each home to its retail offset. Distinct sentinels make this
+    /// non-vacuous: reverting the import block reads f68←@0x43(=2),
+    /// f26←@0x10(=42), f34←@0x20(=0), f69←@0x44(=251 from b44), f28←0,
+    /// so each assert below flips.
+    #[test]
+    fn mc2_castle_piece_import_field_homes() {
+        let r = RetailEntMc2 {
+            class3f: 10,
+            model40: 79,
+            scratch10: 42, // @0x10 dwell/windup → f44
+            yaw: 300,      // @0x1C firing yaw + obs heading → f34
+            pitch: 111,    // @0x1E firing pitch + obs pitch → f36
+            roll: 0,       // @0x20 (uniform f34) — kept distinct from yaw
+            f2c: 3,        // @0x2C fire mode → f30
+            f36: 160,      // @0x36 windup z-boost → f54
+            b3d: 6,        // @0x3D burst count → f69
+            phase3e: 251,  // @0x3E tick counter → f63 (already uniform)
+            b43: 2,        // @0x43 part-type → f67
+            b44: -5,       // @0x44 recoil step → f68
+            b46: 3,        // @0x46 state → f71 (already uniform)
+            sv_timer: 6,   // @0x4A level tag → f26 (z height offset)
+            target96: 77,  // @0x96 latched target → f28
+            dest_x: 1000,  // @0x9A/@0x9C/@0x9E home anchor → dest/site
+            dest_y: 2000,
+            dest_z: 1760,
+            ..Default::default()
+        };
+        let e = import_ent_mc2(&r, 619, 79, &|v| v);
+        assert_eq!(e.class64, 10);
+        assert_eq!(e.model65, 79);
+        assert_eq!(e.f44, 42, "dwell @0x10");
+        assert_eq!(e.f34, 300, "firing yaw / obs heading @0x1C");
+        assert_eq!(e.f36, 111, "firing pitch / obs pitch @0x1E");
+        assert_eq!(e.f30, 3, "fire mode @0x2C");
+        assert_eq!(e.f54, 160, "windup z-boost @0x36");
+        assert_eq!(e.f69, 6, "burst @0x3D");
+        assert_eq!(e.f63, 251, "tick counter @0x3E");
+        assert_eq!(e.f67, 2, "part-type @0x43");
+        assert_eq!(e.f68, (-5i8) as u8, "recoil @0x44 (NOT part-type @0x43)");
+        assert_eq!(e.f71, 3, "state @0x46");
+        assert_eq!(e.f26, 6, "level tag @0x4A");
+        assert_eq!(e.f28, 77, "latched target @0x96");
+        assert_eq!(e.dest_x, 1000);
+        assert_eq!(e.dest_y, 2000);
+        assert_eq!(e.site_z, 1760);
+    }
+
+    /// The `owner` obs lane = retail parentId @0x28. The importer must
+    /// feed it correctly for the two families that carry a live parent,
+    /// and must NOT let the (5,10) pyramid pollute id24 with its
+    /// repurposed @0x28 (mc2l24 owner census, 47k rows):
+    ///  • (10,42) build painter: @0x28 = the owning castle → fused into
+    ///    id24 (the `owner28 != 0` branch) so `obs_project_mc2` recovers
+    ///    it directly.
+    ///  • (5,0) pyramid-summoned creature: @0x28 = @0x1A = the pyramid
+    ///    (entity 7) → id24 = tr(7).
+    ///  • (5,10) DOOMSDAY PYRAMID: @0x28 is the (10,14) ring-SPIN ANGLE
+    ///    (→ f36), NOT a parent. It must NOT reach id24, or the
+    ///    apocalypse summon (`own_id = pyramid.id24`) copies the spin
+    ///    angle onto every child; id24 falls through to @0x1A (own id).
+    /// Non-vacuous: reverting the (5,10) id24 exclusion makes the last
+    /// assert read 288 (the spin angle) instead of 7.
+    #[test]
+    fn mc2_owner_import_field_homes() {
+        let tr = |v: u16| v;
+        // (10,42) painter: parent castle @0x28=426, @0x1A=116 (wizard).
+        let painter = RetailEntMc2 {
+            class3f: 10,
+            model40: 42,
+            owner28: 426,
+            f1a: 116,
+            ..Default::default()
+        };
+        assert_eq!(
+            import_ent_mc2(&painter, 162, 0, &tr).id24,
+            426,
+            "painter id24 = @0x28 castle"
+        );
+        // (5,0) summoned creature: @0x28 = @0x1A = 7 (the pyramid).
+        let summoned = RetailEntMc2 {
+            class3f: 5,
+            model40: 0,
+            owner28: 7,
+            f1a: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            import_ent_mc2(&summoned, 917, 0, &tr).id24,
+            7,
+            "summoned creature id24 = pyramid @0x28"
+        );
+        // (5,10) pyramid: @0x28=288 (spin angle), @0x1A=7 (own id).
+        let pyramid = RetailEntMc2 {
+            class3f: 5,
+            model40: 10,
+            owner28: 288,
+            f1a: 7,
+            ..Default::default()
+        };
+        let pe = import_ent_mc2(&pyramid, 7, 0, &tr);
+        assert_eq!(
+            pe.id24, 7,
+            "pyramid id24 = @0x1A own id, NOT the @0x28 spin angle"
+        );
+        assert_eq!(
+            pe.f36, 288,
+            "pyramid ring-spin angle still carried in f36 (arm untouched)"
+        );
+    }
+
+    /// End-to-end owner-lane projection: the pyramid-summon
+    /// discriminator. `obs_project_mc2` must recover retail parentId
+    /// @0x28 for a pyramid-summoned creature (id24 → the (5,10) pyramid)
+    /// WITHOUT firing on a WILD worm of the same model 0 — whose id24
+    /// points at its multipart BODY, not a parent (the 261k-row
+    /// over-projection trap). Also the (10,42) painter (id24 → castle)
+    /// and the pyramid's own spin-angle owner (from f36). Non-vacuous:
+    /// dropping the "id24 refs a (5,10)" gate makes the wild worm
+    /// project its body slot (30), and dropping the (10,42) arm makes
+    /// the painter project 0.
+    #[test]
+    fn mc2_owner_projection_pyramid_gated() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // Minimal build assets (mirrors world.rs `tests::assets`): a
+        // diamond search grid (needs a ring-0 cell) + flat build tab.
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc2);
+
+        let put = |w: &mut World, slot: usize, class: u8, model: u8, id24: u16, f36: u16| {
+            let e = &mut w.g.ent[slot];
+            *e = Ent::default();
+            e.class64 = class;
+            e.model65 = model;
+            e.id24 = id24;
+            e.f36 = f36;
+            e.max_life = 100;
+            e.act_life = 100;
+        };
+        put(&mut w, 7, 5, 10, 7, 288); // pyramid: own id in id24, spin in f36
+        put(&mut w, 20, 5, 0, 7, 0); // summoned m0 → id24 refs pyramid 7
+        put(&mut w, 30, 5, 0, 30, 0); // wild worm body (id24 = self)
+        put(&mut w, 31, 5, 0, 30, 0); // wild worm segment → id24 refs a (5,0) body
+        put(&mut w, 40, 3, 2, 40, 0); // castle
+        put(&mut w, 41, 10, 42, 40, 0); // painter → id24 refs castle 40
+
+        let pin = PinnedMc2 {
+            slot: 1,
+            local: 0,
+            player_count: 1,
+            pose: PlayerPose {
+                x: 0,
+                y: 0,
+                z: 0,
+                heading: 0,
+                pitch: 0,
+                speed: 0,
+            },
+            castles: [0; 8],
+        };
+        let obs = w.obs_project_mc2(&pin);
+        let owner_of = |slot: u16| {
+            obs.entities
+                .iter()
+                .find(|e| e.slot == slot)
+                .map(|e| e.owner)
+        };
+        assert_eq!(
+            owner_of(20),
+            Some(7),
+            "pyramid-summoned m0 owner = the pyramid (id24 refs a (5,10))"
+        );
+        assert_eq!(
+            owner_of(31),
+            Some(0),
+            "wild worm owner = 0 (id24 refs a (5,0) body, NOT a pyramid)"
+        );
+        assert_eq!(
+            owner_of(30),
+            Some(0),
+            "wild worm body owner = 0 (id24 = self)"
+        );
+        assert_eq!(
+            owner_of(41),
+            Some(40),
+            "painter owner = the referenced castle"
+        );
+        assert_eq!(
+            owner_of(7),
+            Some(288),
+            "pyramid own owner = ring-spin angle from f36"
+        );
     }
 }

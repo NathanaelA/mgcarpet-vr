@@ -907,14 +907,25 @@ impl Gen {
             if step {
                 Self::polar_step(&mut pos, yaw, self.ent[i].f32, speed);
             }
-            // The servo (sub_580E0 with the row's v_10/v_12/v_14).
+            // The MC2 altitude servo `sub_580E0` (EF:40372): descend by
+            // the row's v_14 whenever ABOVE ground, then floor at
+            // ground+v_12. The call site passes v_12/v_10/v_14
+            // (EF:61857-61 surface / EF:61933-35 cave sub_60D50) but
+            // sub_580E0's a4 (= v_10) is DEAD — MC2 has NO ceiling
+            // band and NO 25% intermediate step. MC1's `alt_clamp`
+            // is a DIFFERENT 3-branch function; reusing it here sank
+            // the balloon only 25%·v_14 through the v_12..v_10 band,
+            // leaving the port 12 units high per tick over open sky
+            // (the mc2-balloon-z −12 field residual).
             let ground = self.ground_z(pos.0, pos.1) as i16;
             let mut z = pos.2;
-            let r1 = crate::mc1::behavior::BehaviorRow {
-                v_10: row.v_10,
-                v_12: row.v_12,
-                v_14: row.v_14,
-                ..crate::mc1::behavior::BEHAVIOR[9]
+            let servo = |z: &mut i16| {
+                if *z > ground {
+                    *z = z.wrapping_add(row.v_14);
+                }
+                if *z <= ground.wrapping_add(row.v_12) {
+                    *z = ground.wrapping_add(row.v_12);
+                }
             };
             if self.is_cave() {
                 // The CEILING WALK (`sub_60D50` EF:61872, called from
@@ -950,7 +961,7 @@ impl Gen {
                     self.snd(22, i);
                     self.ent[i].f71 = 32;
                 }
-                Self::alt_clamp(&mut z, ground, &r1);
+                servo(&mut z);
                 if self.ent[i].flags & 1 == 0 {
                     let c = (self.ceiling_z(pos.0, pos.1) as i16 as i32 - self.ent[i].f84 as i32)
                         as i16;
@@ -959,7 +970,7 @@ impl Gen {
                     }
                 }
             } else {
-                Self::alt_clamp(&mut z, ground, &r1);
+                servo(&mut z);
             }
             self.move_relink(i, pos.0, pos.1, z);
         }
@@ -1869,6 +1880,59 @@ mod tests {
         // Must not panic on `10 * i32::MAX`.
         g.mc2_castle_downgrade(i);
         assert_eq!(g.ent[i].f26, 6, "one level off, no overflow");
+    }
+
+    /// The MC2 balloon altitude servo is `sub_580E0` (EF:40372), a
+    /// 2-branch servo: descend by the row's v_14 whenever ABOVE
+    /// ground, floor at ground+v_12. Its a4 (= v_10) is DEAD — there
+    /// is NO ceiling band and NO 25% intermediate step. Reusing MC1's
+    /// 3-branch `alt_clamp` sank the balloon only 25%·v_14 through the
+    /// v_12..v_10 band (−4 vs −16 for row 68), the mc2-balloon-z −12
+    /// open-sky field residual. Balloon row 68 = v_10 1536 / v_12 512
+    /// / v_14 −16.
+    #[test]
+    fn mc2_balloon_servo_descends_full_v14_in_band() {
+        let mut g = flat_gen(); // flat height 100 → ground 3200, surface (no ceiling)
+        let ground = g.ground_z(100 << 8, 100 << 8) as i16;
+        assert_eq!(ground, 3200, "flat_gen ground datum");
+        // A live (10,39) ball NOT ours: the tick takes step=false
+        // (skips the move), so the servo alone touches z.
+        let ball = g.new_event().expect("ball slot");
+        {
+            let e = &mut g.ent[ball];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.act_life = 100;
+            e.f144 = 999; // not the balloon's owner
+        }
+        g.link(ball, 120 << 8, 100 << 8, ground);
+        // Balloon parked mid-band (ground+512 < z < ground+1536), no
+        // pitch so the (skipped) move would not touch z anyway.
+        let bal = g.new_event().expect("balloon slot");
+        {
+            let e = &mut g.ent[bal];
+            e.class64 = 3;
+            e.model65 = 3;
+            e.tick70 = 9;
+            e.row156 = 9; // native abs 68 = ROW_BASE + 9
+            e.f126 = 48;
+            e.f32 = 0; // pitch 0
+            e.id24 = 1;
+            e.f144 = 1;
+            e.act_life = 10000;
+            e.max_life = 10000;
+            e.f146 = ball as u16;
+        }
+        let z0 = ground + 1024; // 4224: mid v_12..v_10 band
+        g.link(bal, 100 << 8, 100 << 8, z0);
+        g.mc2_balloon_tick(bal);
+        // 2-branch: z > ground → z += v_14(−16). MC1's alt_clamp
+        // would take the 25% band step (−4 → 4220) here.
+        assert_eq!(
+            g.ent[bal].z,
+            z0 - 16,
+            "descends the FULL v_14 above ground (2-branch sub_580E0), not the 3-branch 25% step"
+        );
     }
 
     /// flat_gen + a synthetic BUILD00 (rows 0/1 = 3×3, row 2 = 5×5,

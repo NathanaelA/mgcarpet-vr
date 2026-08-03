@@ -77,6 +77,55 @@
    "field": "life"
   },
   {
+   "id": "mc2l24-castle-piece-terrain-z",
+   "status": "capture",
+   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z ~367k rows = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick and retail pieces stand on doomsday/castle-mound terraformed ground the pristine replay lacks (constant per-slot delta ~16, want/got bobbing in lockstep). Hit-count jump = piece-law regression signal.",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 79,
+   "field": "z"
+  },
+  {
+   "id": "mc2-summit-fire6-z-capture",
+   "status": "capture",
+   "note": "(10,6) standing fire on the RUNTIME-raised volcano summit (2026-08-03 dig C; ledger l30-terrain question ANSWERED: summit plateau = mc2_dome_tick/sub_31940 EF:23193 direct heightmap writes, runtime-terraform, NOT load-time): standing_fire_tick snaps z = ground_z + f46 and the conformance replay's heightfield is the pristine baseline (retail_import_mc2 never reconstructs terrain), so summit-slope fires read low; compounded by the ruled fire-cascade free-list slot-order desync. Shared MC1/MC2 tick, deliberately NOT strict-gated (banked: frozen-z-under-strict extension needs its own dig + golden re-pin).",
+   "takes": [
+    "mc2l24",
+    "mc2l30"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 6,
+   "field": "z"
+  },
+  {
+   "id": "mc2l24-boulder-reeruption-z",
+   "status": "capture",
+   "note": "Re-eruption-window (10,16) boulder z residual after the f44 vz field-home fix (2026-08-03 dig C): eruption-timing + free-list slot-order desync on the fire cascade, ~3 rows per re-eruption window (t=2536..2560 exemplar). NOT law. (10,0)/(10,14) z rows in the same windows are DELIBERATELY unseeded - they ride the open fire-churn story.",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 16,
+   "field": "z"
+  },
+  {
+   "id": "mc2l24-column-reeruption-z",
+   "status": "capture",
+   "note": "Re-eruption-window (10,19) summit-column z residual after the strict frozen-z gate (2026-08-03 dig C): eruption-timing skew, ~1 row per window. A hit-count jump = frozen-z gate regression signal.",
+   "takes": [
+    "mc2l24"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 19,
+   "field": "z"
+  },
+  {
    "id": "mc2-terraform-houses",
    "status": "capture",
    "note": "\u00a7terraform: village growth regrades the hill (main wave ~t=751, first edits ~t=500); (10,45) house z ground-snaps both sides, the port to the pristine plane (ledger MC2 take-2). A house's z has no source but terrain \u2014 any (10,45) z diff is closure by mechanism.",
@@ -259,21 +308,6 @@
    "model": 23
   },
   {
-   "id": "mc1l0-village-regrade",
-   "status": "capture",
-   "note": "TERRAIN CLOSURE (ledger entry 2): the village regrade at (152-164,44-56) from t~992 \u2014 heights AND tile types (the construction paint pass).",
-   "takes": [
-    "mc1l0"
-   ],
-   "t_min": 985,
-   "rect": [
-    150.0,
-    42.0,
-    166.0,
-    58.0
-   ]
-  },
-  {
    "id": "mc1l0-cast-impacts",
    "status": "capture",
    "note": "Ledger entry 4: the impact cluster around casts \u2014 class-9 missing/extra + (10,12) hit-flash churn = input latency + unreconstructed aim; partially mitigated by --input-delay 2.",
@@ -344,8 +378,8 @@
   },
   {
    "id": "mc2-balloon-z",
-   "status": "open",
-   "note": "(3,3) balloon z drift \u2014 the castle follow-up (b) '-128 post-rise residual' + undug balloon altitude law (walk-bit speed fixed in the KINEMATICS ROUND; z lane still owed).",
+   "status": "capture",
+   "note": "(3,3) balloon docked over the terraformed castle pad: retail floors at pad(~1536)+512=2048; the pristine-plane replay (ground=0) descends one servo step (+16/tick below). Terrain-closure twin of mc2-castle-pad-z. The two LAW bugs FIXED 2026-08-03 dig A (ledger 'MC2 BALLOON ALTITUDE'): behavior-row double-offset on import (balloon tick indexes BEHAVIOR relative to ROW_BASE; generic import fed absolute row 68 -> foreign servo v14=-128) + MC1 3-branch alt_clamp replaced by retail's 2-branch sub_580E0 servo (EF:40372, full v14 descent, floor ground+v12, ceiling arg dead). A hit-count jump here = servo/import regression signal.",
    "takes": [
     "mc2l0",
     "mc2l4",

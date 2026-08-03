@@ -1555,8 +1555,30 @@ impl Gen {
                     }
                 }
             }
-            let (x, y) = (self.ent[i].x, self.ent[i].y);
-            self.ent[i].z = self.ground_z(x, y) as i16;
+            // Frozen z under strict (conformance replay): the
+            // pristine-plane heightfield lacks the runtime-raised
+            // summit, so `ground_z` returns the un-erupted baseline
+            // while retail's `getTerrainAlt` is the raised plateau
+            // (== the imported z for the whole recording). Re-snapping
+            // drops the column ~624 below retail (mc2l24 (10,19) slot
+            // 181: port 2000 vs retail 2624) and pulls its (10,14)
+            // smoke down with it. Same frozen-z law as
+            // `mc2_summit18_tick`; native keeps the exact retail
+            // re-snap to its own (real) heightfield.
+            // Frozen z under strict (conformance replay): the
+            // pristine-plane heightfield lacks the runtime-raised
+            // summit, so `ground_z` returns the un-erupted baseline
+            // while retail's `getTerrainAlt` is the raised plateau
+            // (== the imported z for the whole recording). Re-snapping
+            // drops the column ~624 below retail (mc2l24 (10,19) slot
+            // 181: port 2000 vs retail 2624) and pulls its (10,14)
+            // smoke down with it. Same frozen-z law as
+            // `mc2_summit18_tick`; native keeps the exact retail
+            // re-snap to its own (real) heightfield.
+            if !ctx.strict {
+                let (x, y) = (self.ent[i].x, self.ent[i].y);
+                self.ent[i].z = self.ground_z(x, y) as i16;
+            }
         } else {
             self.ent[i].flags |= 0x400;
             // `D41A0_0.word_0x33 = 0` (EF:24148) — release the spray

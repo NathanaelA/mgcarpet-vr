@@ -141,11 +141,9 @@
     {
       "t": 76,
       "status": "open",
-      "sig": "50c6005a80b1b240",
+      "sig": "f1acd41e43ba5b74",
       "atoms": [
         "field:10,45:z",
-        "field:5,19:rand",
-        "field:5,19:speed",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 2 row(s) unexplained; rng"

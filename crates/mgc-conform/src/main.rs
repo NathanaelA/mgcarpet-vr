@@ -61,6 +61,10 @@ fn usage() -> ! {
                              rows clean there tag `pose-phase` — retail's\n\
                              within-tick pose is two-valued and the\n\
                              capture holds one sample)\n\
+           --no-slot-desync  skip the slot-desync pass (balanced same-\n\
+                             (class,model) missing/extra within a pair =\n\
+                             free-list slot-order desync at mass-spawn\n\
+                             ticks; ledger session-4 + open-leads 0b)\n\
                              (raw, unclassified report — docs/CONFORMANCE.md)"
     );
     std::process::exit(2);
@@ -92,6 +96,9 @@ pub struct Args {
     /// Skip the known-deviation roster (raw, unclassified report).
     pub no_roster: bool,
     pub no_pose_alt: bool,
+    /// Skip the computed slot-desync pass (balanced same-(class,model)
+    /// missing/extra = free-list slot-order desync).
+    pub no_slot_desync: bool,
 }
 
 fn parse_args() -> Args {
@@ -110,6 +117,7 @@ fn parse_args() -> Args {
         sample_every: 10,
         no_roster: false,
         no_pose_alt: false,
+        no_slot_desync: false,
         max_open: 24,
         promote: false,
         input_delay: 0,
@@ -138,6 +146,7 @@ fn parse_args() -> Args {
             "--dump-port" => a.dump_port = true,
             "--no-roster" => a.no_roster = true,
             "--no-pose-alt" => a.no_pose_alt = true,
+            "--no-slot-desync" => a.no_slot_desync = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--sample-every" => {

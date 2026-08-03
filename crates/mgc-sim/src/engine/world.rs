@@ -2260,6 +2260,14 @@ impl World {
                         | 58
                         | 59
                         | 60
+                        // Action 0x3E = the (10,57) random-value mana
+                        // sphere (`sub_35FB0`); its gravity/bounce
+                        // physics is serviced by `ball_tick` exactly
+                        // like the (10,39) ball's 0x29. Imported m57
+                        // spheres carry action 62; without this gate
+                        // they fell to the terrain catch-all and
+                        // froze mid-fall (mc2l24 slots 67-87 z).
+                        | 62
                         | 85
                 ) =>
                 {
@@ -6899,6 +6907,14 @@ impl World {
                 384,
             );
             self.g.move_relink(i, pos.0, pos.1, pos.2);
+            // Retail copies the parent's facing onto the jar every rising
+            // tick (`sub_59DC0` EF:41216-41218: a1x->yaw = parent yaw,
+            // a1x->pitch = parent pitch) — the move uses pitch-16n but the
+            // STORED pitch is the parent's. The port keeps a class-15
+            // jar's pitch in f32 (@0x1E), so mirror it (yaw @0x1C has no
+            // port home on a manifestation — f30 carries the subSpell
+            // payload — and its obs heading projects 0, so it is skipped).
+            self.g.ent[i].f32 = player.pitch;
             self.g.ent[i].f26 = n + 1;
             return false;
         }
@@ -17430,6 +17446,75 @@ mod tests {
     /// is the mc2l30 re-eruption rng residual). Native play keeps the
     /// real ground-move despawn. (Regression guard: this exact gate was
     /// reverted once during development.)
+    /// The (10,57) random-value mana sphere is IMPORTED carrying its
+    /// retail action 0x3E (62); its gravity/bounce physics is the same
+    /// core the (10,39) ball's action 0x29 runs, serviced by
+    /// `ball_tick`. The class-10 effect dispatch gate MUST whitelist
+    /// action 62 — otherwise the imported sphere falls to the terrain
+    /// catch-all (`10 => self.g.tick`) and FREEZES mid-fall (the
+    /// mc2l24 slots 67-87 z family, ~1,438 z rows over t=0..500).
+    /// Regression guard: reverting the `| 62` in the effect gate makes
+    /// this assert fail (the sphere stays at z0).
+    #[test]
+    fn mc2_m57_random_sphere_falls_under_gravity() {
+        let mut w = mc2_flat_world();
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        // Simulate the imported m57: model 57, action 62, a nonzero
+        // settle counter (@0x39 → f58) so the moving branch runs, and
+        // a downward z-velocity (word_0x2C_44 → f46). Airborne so the
+        // fall is unclamped.
+        let s = w.g.spawn_mana_ball(x, y, gz + 500).expect("sphere");
+        {
+            let e = &mut w.g.ent[s];
+            e.model65 = 57;
+            e.tick70 = 62;
+            e.f58 = 100;
+            e.f46 = -16;
+            e.f140 = 512;
+        }
+        let z0 = w.g.ent[s].z;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[s].z,
+            z0 - 16,
+            "the m57 sphere fell by its z-velocity (ball_tick gravity via the action-62 gate)"
+        );
+    }
+
+    /// The (10,19) ground-fire-spray column re-snaps its z to
+    /// `ground_z` every tick (native — it tracks the real, runtime-
+    /// raised summit heightfield). Under conformance replay the
+    /// heightfield is the pristine baseline (the recording carries no
+    /// terrain), so the snap drops the column ~624 below retail's
+    /// plateau (mc2l24 (10,19) slot 181: port 2000 vs retail 2624).
+    /// The frozen-z law (same as the summit controller) keeps the
+    /// imported z under strict. Regression guard: reverting the
+    /// `if !ctx.strict` gate makes the strict case snap to ground.
+    #[test]
+    fn mc2_fire_spray_column_frozen_z_under_strict() {
+        let run = |strict: bool| {
+            let mut w = mc2_flat_world();
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let c = w.g.mc2_spawn_fire_spray(x, y, gz + 500).expect("column");
+            w.strict_retail = strict;
+            w.tick(away(), PlayerCommand::default());
+            (w.g.ent[c].z, gz)
+        };
+        let (z_strict, gz) = run(true);
+        assert_eq!(
+            z_strict,
+            gz + 500,
+            "strict: the column keeps its imported (raised-summit) z, no pristine re-snap"
+        );
+        let (z_native, gz) = run(false);
+        assert_eq!(
+            z_native, gz,
+            "native: the column re-snaps to the real ground each tick"
+        );
+    }
+
     #[test]
     fn mc2_summit_vortex_frozen_z_under_strict() {
         let live = |w: &World, c: u8, m: u8| {
@@ -19204,6 +19289,89 @@ mod tests {
         assert!(
             ball_mana >= 20000,
             "the body's 20000 mana lands in the scatter (got {ball_mana})"
+        );
+    }
+
+    /// `HitFirebug_25610` case 1 (EF:16386-16407): reaching the flank
+    /// point sets `byte_0x46 = 2` and RETURNS — actSpeed stays at
+    /// minSpeed for that tick, and case 2's drop to maxSpeed (plus its
+    /// own rand roll) runs only on the NEXT tick. The port collapsed
+    /// the two ticks into one (`continue` into case 2), so the m19
+    /// lunge dropped 76→8 a tick early and double-advanced the
+    /// entity LCG. mc2l24 slots 5-11 hold f128=76 / f130=8 and retail
+    /// oscillates actSpeed 76↔8; the port sat pinned at 8.
+    #[test]
+    fn mc2_m19_holds_min_speed_through_the_flank_handoff() {
+        let mut w = mc2_flat_world();
+        let c = w.g.mc2_spawn_m19(112 << 8, 110 << 8, 3200).expect("m19");
+        {
+            let e = &mut w.g.ent[c];
+            e.tick70 = 154; // M19_BASE + 2 — the attack-run machine
+            e.f71 = 1; // the flank-approach sub-state
+            e.f146 = PLAYER_TARGET;
+            e.f58 = 0; // skip the staggered wake
+        }
+        assert_eq!((w.g.ent[c].f128, w.g.ent[c].f130), (76, 8));
+        let p = PlayerPose::level(112 << 8, 110 << 8, 3200, 0);
+        // Run until the machine takes the flank handoff (1 → 2).
+        let mut handoff = None;
+        for _ in 0..600 {
+            if w.g.ent[c].tick70 != 154 {
+                break;
+            }
+            w.tick(p, PlayerCommand::default());
+            if w.g.ent[c].f71 == 2 {
+                handoff = Some(w.g.ent[c].f126);
+                break;
+            }
+        }
+        let speed_at_handoff = handoff.expect("the m19 reaches its flank point");
+        assert_eq!(
+            speed_at_handoff, 76,
+            "case 1 RETURNS after arming case 2 — actSpeed is still minSpeed \
+             this tick (a same-tick fall-through would already read 8)"
+        );
+        // The drop to maxSpeed belongs to the NEXT tick (case 2).
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[c].f126, 8,
+            "case 2 runs one tick later and takes actSpeed to maxSpeed"
+        );
+    }
+
+    /// `sub_59DC0` (EF:41216-18) — the m26-wraith steal's detached jar
+    /// (class 15, action 78) copies the PARENT's facing onto itself on
+    /// every rising-arc tick, while the move itself uses `pitch - 16n`.
+    /// The port stepped the position but never stored the pitch, so a
+    /// detached jar read pitch 0 against retail's parent pitch
+    /// (mc2l24 slot 73, t=15080).
+    #[test]
+    fn mc2_detached_jar_carries_the_casters_pitch() {
+        let mut w = mc2_flat_world();
+        let j = w.g.new_event().expect("jar slot");
+        {
+            let e = &mut w.g.ent[j];
+            e.class64 = 15;
+            e.model65 = 0;
+            e.tick70 = 78; // the shared class-15 detach action
+            e.f26 = 0; // the arc counter (@0x10) at the steal
+            e.f32 = 0; // pitch home — retail overwrites it each tick
+            e.act_life = 0;
+        }
+        w.g.link(j, 112 << 8, 110 << 8, 3200);
+        let pitch = 300u16;
+        let p = PlayerPose::level(112 << 8, 110 << 8, 3200, 0);
+        let p = PlayerPose { pitch, ..p };
+        w.human_pose = (p.x, p.y, p.z);
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[j].f32, pitch,
+            "the rising arc stores the caster's pitch on the jar"
+        );
+        assert_eq!(w.g.ent[j].f26, 1, "the arc counter (@0x10) steps once");
+        assert_eq!(
+            w.g.ent[j].tick70, 78,
+            "the jar stays in the detach action while the arc rises"
         );
     }
 }

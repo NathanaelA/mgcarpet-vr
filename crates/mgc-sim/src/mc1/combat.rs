@@ -2980,6 +2980,23 @@ impl Gen {
             25 => self.steal_flash_tick(i, ctx),
             40 => self.storm_cloud_tick(i, ctx),
             41 => self.ball_tick(i, ctx),
+            // Action 0x3E = the (10,57) RANDOM-VALUE mana sphere
+            // (`sub_35FB0` EF:26318). Its physics core — the settle
+            // gate `byte_0x39_57`, gravity `word_0x2C_44 -= 16` clamp
+            // −128, the −impact/4 terrain bounce zeroed at ≤16, and
+            // the grounded downhill-roll damping — is byte-identical
+            // to the (10,39) ball's action 0x29 handler
+            // (`TransformArcherToMana_35940` EF:26015), which the port
+            // already services via `ball_tick`. The two retail handlers
+            // differ only in the collection path (m57 has the
+            // `word_0x68_104` spawn-(10,0) despawn branch, the ball has
+            // the owner-transfer/sound-4 code) — neither runs while the
+            // sphere is falling. Only imported m57 spheres ever carry
+            // this action (native spawns them with 0x29 via
+            // `spawn_mana_ball`); action 62 is m57-exclusive in the
+            // corpus, so routing it here services the level-start
+            // gravity fall without touching any native golden.
+            62 => self.ball_tick(i, ctx),
             42 => {
                 self.grave_tick(i);
                 false

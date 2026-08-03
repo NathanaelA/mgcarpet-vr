@@ -143,7 +143,17 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 .or_else(|| pmap.get(&slot))
                                 .map(|e| (e.class, e.model, e.x, e.y))
                         };
-                        crate::verify::classify_pair(roster.as_ref(), &take, pt, &pd, &ctx)
+                        let mut tg =
+                            crate::verify::classify_pair(roster.as_ref(), &take, pt, &pd, &ctx);
+                        // SLOT-DESYNC pass (computed rule, roster.rs) —
+                        // the MC2 face of the wave slot-order desync
+                        // (open-leads 0b). BEFORE pose-phase; see
+                        // RuleTags::slot_desync.
+                        if !args.no_slot_desync {
+                            let pos = |slot: u16| ctx(slot).map(|(_, _, x, y)| (x, y));
+                            tg.slot_desync(&pd.missing, &pd.extra, &pos);
+                        }
+                        tg
                     });
                     // Pose-phase pass — see verify.rs (the MC1 twin).
                     if !args.no_pose_alt
@@ -616,6 +626,7 @@ fn emit_csv_mc2(
                 Some(tg) => match lane(tg)[i] {
                     crate::roster::Tag::Rule(k) => roster.map_or("", |r| r.rules[k].id.as_str()),
                     crate::roster::Tag::PosePhase => "pose-phase",
+                    crate::roster::Tag::SlotDesync => "slot-desync",
                     crate::roster::Tag::Unexplained => "",
                 },
                 None => "",

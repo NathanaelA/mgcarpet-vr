@@ -2117,8 +2117,15 @@ impl Gen {
                     };
                     let e = &self.ent[i];
                     if Self::mc2_dist3((e.x, e.y, e.z), p) <= 0x500 {
+                        // Retail case 1 (EF:16386-88) sets byte_0x46=2 and
+                        // RETURNS (:16407) — the flank roll has already fired,
+                        // actSpeed is left at minSpeed, and case 2 (which drops
+                        // to maxSpeed + rolls again) runs only NEXT tick. A
+                        // `continue` here would collapse that two-tick
+                        // transition into one, dropping actSpeed to maxSpeed a
+                        // tick early and double-rolling rand.
                         self.ent[i].f71 = 2;
-                        continue;
+                        break;
                     }
                     let e = &self.ent[i];
                     self.ent[i].f34 = Self::angle_between(e.x, e.y, p.0, p.1);
