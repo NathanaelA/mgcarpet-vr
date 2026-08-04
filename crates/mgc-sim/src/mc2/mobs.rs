@@ -2528,10 +2528,15 @@ impl Gen {
     /// `sub_1E580` (EF:10689), StageVar2 == 16 — the pyramid-summon
     /// HOME slot: case 13's Summon-Army twin WITHOUT the per-tick
     /// life decrement (EF:10703-06 — pyramid summons persist while
-    /// the pyramid lives; the life home is the spawn block's `f46`).
-    /// Parent death zeroes the life → expire with a fire puff.
+    /// the pyramid lives; the life home is the spawn block's `f26`).
+    /// Parent death zeroes the life → expire with a fire puff. The
+    /// latch's home is **f26** — the class-5 @0x2E lane (the same home
+    /// the StageVar2-13 Summon-Army twin counts down and the same one
+    /// the conformance importer restores); it used to ride f46, which
+    /// on a creature is `fontTypeIndex_0x3D_61` (the m0 dodge window)
+    /// and has no @0x2E import, so replayed summons puffed on sight.
     /// Otherwise the `sub_1E700` core runs: mailbox intake (a KILL
-    /// leaves the corpse standing at f46 = 1 until the pyramid's
+    /// leaves the corpse standing at @0x2E = 1 until the pyramid's
     /// death expires it, EF:10864-67 verbatim), a hit re-targets the
     /// attacker — never the parent or a same-species peer; flee rows
     /// hand to +6, others +2 (the retail parent-XP `sub_6D8B0` award
@@ -2549,9 +2554,9 @@ impl Gen {
             e.class64 == 5 && e.model65 == 10 && e.flags & 0x400 == 0 && e.act_life >= 0
         });
         if parent.is_none() {
-            self.ent[i].f46 = 0;
+            self.ent[i].f26 = 0;
         }
-        if self.ent[i].f46 <= 0 {
+        if self.ent[i].f26 <= 0 {
             let (x, y, z) = {
                 let e = &self.ent[i];
                 (e.x, e.y, e.z)
@@ -2574,7 +2579,7 @@ impl Gen {
         }
         if target == 0 {
             // Parentward drift + fast decay while unlocked
-            // (EF:10725-31: aim the move at the parent, f46 -= 4).
+            // (EF:10725-31: aim the move at the parent, @0x2E -= 4).
             if let Some(p) = parent {
                 let (mx, my) = (self.ent[i].x, self.ent[i].y);
                 let (px, py) = (self.ent[p].x, self.ent[p].y);
@@ -2583,13 +2588,13 @@ impl Gen {
             if self.mc2_state_head(i) != 2 {
                 self.mc2_move_core(i);
             }
-            self.ent[i].f46 -= 4;
+            self.ent[i].f26 -= 4;
             return;
         }
         // The `sub_1E700` core.
         match self.mc2_state_head(i) {
             2 => {
-                self.ent[i].f46 = 1;
+                self.ent[i].f26 = 1;
                 return;
             }
             1 => {
@@ -2899,12 +2904,15 @@ impl Gen {
             self.mc2_awake_one(i, ctx);
         }
         // sub_68BF0's SECOND loop (EF:55489-90): dword_38523 = the
-        // mana-sphere family (10, 39/40) awake-ticks too — spheres
-        // near the player arm their f58 like creatures do. No dead
-        // reset here (retail's sphere loop is unconditional).
+        // mana-sphere family awake-ticks too — spheres near the
+        // player arm their f58 like creatures do. No dead reset here
+        // (retail's sphere loop is unconditional), and NO model test:
+        // the chain itself is the filter, and it is built from models
+        // 39, 40 AND 57 (EF:40023-40062), so a fool's sphere wakes
+        // exactly like a real one.
         for i in 1..self.ent.len() {
             let e = &self.ent[i];
-            if e.class64 == 10 && matches!(e.model65, 39 | 40) && e.flags & 0x400 == 0 {
+            if e.class64 == 10 && matches!(e.model65, 39 | 40 | 57) && e.flags & 0x400 == 0 {
                 self.mc2_awake_one(i, ctx);
             }
         }
@@ -2945,5 +2953,63 @@ impl Gen {
             }
         }
         self.ent[i].f59 = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::features::Gen;
+
+    /// **THE 180° TURN TIE-BREAK IS SIGNED, NOT WRAPPED.** Retail's
+    /// `sub_582F0` (Sound.cpp:6580; MC1's `sub_42240_42580` :52664 is
+    /// the same body, marked SYNCHRONIZED) takes the plain integer
+    /// difference of the two masked angles and unwraps it only when
+    /// `abs(v3) > 1024` — STRICTLY greater. An exact half-turn keeps
+    /// the raw sign, so a target numerically BELOW the current heading
+    /// turns negative and one above turns positive; every other delta
+    /// agrees with the wrapped form.
+    ///
+    /// The two rows this pins are the mc2l24 (5,23) dweller's, both on
+    /// slot 363, the residue the riser-replay dig left behind. The move
+    /// core's THIRD retry is the antipode (`yaw0 + 0x400`, EF:8846),
+    /// and the dweller's wander target (`roll_0x20_32`) still equals
+    /// its pre-retry heading, so the commit turn lands exactly on the
+    /// tie every time that leg fires:
+    ///
+    /// | pair | yaw0 = target | retry-3 leg | retail | wrapped form |
+    /// |---|---|---|---|---|
+    /// | t=15044 | 437 | 1461 | **1205** | 1717 |
+    /// | t=15129 | 519 | 1543 | **1287** | 1799 |
+    ///
+    /// Non-vacuous: `MGC_NO_TURN_TIE=1` restores the wrapped sign and
+    /// this test fails on the first assert.
+    #[test]
+    fn turn_step_breaks_the_exact_half_turn_toward_the_lower_angle() {
+        // The recorded (5,23) pairs, row 91's turn cap = 256.
+        for (yaw0, leg, want) in [(437u16, 1461u16, 1205i32), (519, 1543, 1287)] {
+            assert_eq!(
+                yaw0.wrapping_add(0x400) & (0x700 + (yaw0 & 0xFF)),
+                leg,
+                "retry 3 is the antipode for this yaw"
+            );
+            let turned = leg as i32 + Gen::turn_step(leg, yaw0, 256) as i32;
+            assert_eq!(turned & 0x7FF, want, "half-turn back onto the target");
+        }
+        // The sign is the RAW difference's, both ways round the tie.
+        assert_eq!(Gen::turn_sign(1461, 437), -1, "target below → negative");
+        assert_eq!(Gen::turn_sign(437, 1461), 1, "target above → positive");
+        // ...and every non-tie delta is unchanged by the law.
+        for (cur, tgt) in [(0u16, 1u16), (0, 2047), (0, 1023), (0, 1025), (100, 1500)] {
+            let wrapped = if tgt.wrapping_sub(cur) & 0x7FF <= 1024 {
+                1
+            } else {
+                -1
+            };
+            assert_eq!(
+                Gen::turn_sign(cur, tgt),
+                wrapped,
+                "only the exact half-turn moves ({cur} → {tgt})"
+            );
+        }
     }
 }

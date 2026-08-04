@@ -5,19 +5,14 @@
   "fixtures": [
     {
       "t": 0,
-      "status": "open",
-      "sig": "32f08f62d73c1967",
-      "atoms": [
-        "field:10,45:z"
-      ],
+      "status": "conforming",
       "note": "ledger mc2l4+mc2l30 triage: §terraform, §l30-churn/rng"
     },
     {
       "t": 13,
       "status": "open",
-      "sig": "f1acd41e43ba5b74",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "ledger mc2l4+mc2l30 triage: §sphere, §terraform, §terraform-scroll, §l30-churn/rng"
@@ -25,10 +20,8 @@
     {
       "t": 15,
       "status": "open",
-      "sig": "b34bddb2b7b9d17b",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
-        "field:5,4:heading",
         "field:5,4:z"
       ],
       "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-scroll, §l30-churn/rng"
@@ -36,9 +29,8 @@
     {
       "t": 19,
       "status": "open",
-      "sig": "34d957e43d890581",
+      "sig": "17230bde1e3be4ab",
       "atoms": [
-        "field:10,45:z",
         "field:14,2:life",
         "field:5,4:z"
       ],
@@ -47,10 +39,9 @@
     {
       "t": 27,
       "status": "open",
-      "sig": "6b422581f8c643fc",
+      "sig": "ebaa302cc68b4722",
       "atoms": [
         "field:10,45:life",
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 2 row(s) unexplained; rng"
@@ -58,9 +49,8 @@
     {
       "t": 30,
       "status": "open",
-      "sig": "eec56fa65e1fef22",
+      "sig": "e2c72e60ac0bac04",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:heading",
         "field:5,4:x",
         "field:5,4:y",
@@ -71,9 +61,8 @@
     {
       "t": 34,
       "status": "open",
-      "sig": "e7809022bb541e5d",
+      "sig": "502174709cfd83c7",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:sv1",
         "field:5,4:z"
       ],
@@ -82,26 +71,20 @@
     {
       "t": 39,
       "status": "open",
-      "sig": "b25ffc2853fd6ab2",
+      "sig": "c1c309d2e14fdc8e",
       "atoms": [
-        "field:10,0:rand",
-        "field:10,0:x",
-        "field:10,0:y",
         "field:10,0:z",
         "field:10,39:z",
-        "field:10,45:z",
-        "field:5,4:z",
-        "missing:10,0"
+        "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0, mc2-sphere-terrain-z; rng"
     },
     {
       "t": 40,
       "status": "open",
-      "sig": "653a2cad451ad547",
+      "sig": "c7f9d98742b56629",
       "atoms": [
         "field:10,0:z",
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0; rng"
@@ -109,10 +92,9 @@
     {
       "t": 42,
       "status": "open",
-      "sig": "653a2cad451ad547",
+      "sig": "c7f9d98742b56629",
       "atoms": [
         "field:10,0:z",
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0; 1 row(s) unexplained; rng"
@@ -120,9 +102,8 @@
     {
       "t": 49,
       "status": "open",
-      "sig": "f1acd41e43ba5b74",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-fire-churn-m0; rng"
@@ -130,10 +111,9 @@
     {
       "t": 55,
       "status": "open",
-      "sig": "02db9a7e80404ae7",
+      "sig": "cb842841dc173c49",
       "atoms": [
         "field:10,39:z",
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-sphere-terrain-z; rng"
@@ -141,9 +121,8 @@
     {
       "t": 76,
       "status": "open",
-      "sig": "f1acd41e43ba5b74",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 2 row(s) unexplained; rng"
@@ -151,9 +130,8 @@
     {
       "t": 81,
       "status": "open",
-      "sig": "3d58bada827b9002",
+      "sig": "253ba0c96f2650bc",
       "atoms": [
-        "field:10,45:z",
         "field:5,19:rand",
         "field:5,4:z"
       ],
@@ -162,9 +140,8 @@
     {
       "t": 86,
       "status": "open",
-      "sig": "f1acd41e43ba5b74",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
@@ -172,9 +149,8 @@
     {
       "t": 101,
       "status": "open",
-      "sig": "e9855e15c1edb2c5",
+      "sig": "6a1627c5b7a3dd0f",
       "atoms": [
-        "field:10,45:z",
         "field:5,19:z",
         "field:5,4:z"
       ],
@@ -183,9 +159,8 @@
     {
       "t": 117,
       "status": "open",
-      "sig": "9de98ddc0a21c235",
+      "sig": "9d22dd98179c8ce3",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z",
         "missing:10,86"
       ],
@@ -194,9 +169,8 @@
     {
       "t": 139,
       "status": "open",
-      "sig": "e8c41b7a475362d0",
+      "sig": "6f0f42281fa810f2",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z",
         "field:player0.hand_left"
       ],
@@ -205,10 +179,8 @@
     {
       "t": 141,
       "status": "open",
-      "sig": "8106ab19c295c362",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "extra:9,10",
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses, mc2-cast-timing-extra; rng"
@@ -216,9 +188,8 @@
     {
       "t": 150,
       "status": "open",
-      "sig": "f1acd41e43ba5b74",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
@@ -226,9 +197,8 @@
     {
       "t": 213,
       "status": "open",
-      "sig": "a6cc35b0447bbac8",
+      "sig": "d8ff86ed9763d4f6",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z",
         "field:9,21:pitch",
         "field:9,21:z"
@@ -238,9 +208,8 @@
     {
       "t": 227,
       "status": "open",
-      "sig": "e9855e15c1edb2c5",
+      "sig": "6a1627c5b7a3dd0f",
       "atoms": [
-        "field:10,45:z",
         "field:5,19:z",
         "field:5,4:z"
       ],
@@ -249,9 +218,8 @@
     {
       "t": 228,
       "status": "open",
-      "sig": "f1acd41e43ba5b74",
+      "sig": "9e41345db0f8ddaa",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-archer-ground-z, mc2-terraform-houses; 1 row(s) unexplained; rng"
@@ -259,9 +227,8 @@
     {
       "t": 243,
       "status": "open",
-      "sig": "4f06b78e13bd18a2",
+      "sig": "39e36ad6fd6fdfd0",
       "atoms": [
-        "field:10,45:z",
         "field:5,4:z",
         "field:9,21:pitch"
       ],

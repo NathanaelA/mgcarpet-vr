@@ -44,6 +44,29 @@ pub const MAP_TILES: usize = 256;
 /// Altitude of one height-byte step in tile units (engine: 32/256).
 pub const HEIGHT_SCALE: f32 = 1.0 / 8.0;
 
+/// THE EYE LIFT — the wizard's eye rides 128 engine units (half a
+/// tile) above the carpet entity's own z. RETAIL LAW, and the same
+/// literal in both games: the world draw is handed
+/// `axis.z + 128`, never the raw carpet z —
+/// MC2 `DrawWorld_411A0` (remc2 EventsFunctions.cpp:21575, mirrored
+/// at :21606/:21868/:21899) and MC1 `DrawWorld_30D90_30DD0` (remc1
+/// sub_main.cpp:26406, :26589). The per-frame view record itself is a
+/// verbatim copy of the entity position (EF:40250-54 — it even calls
+/// `getTerrainAlt_10C40` and discards the result), so 128 is the
+/// entire head offset; nothing else lifts the camera.
+///
+/// It matters most where the ground is close: the faithful movers
+/// floor the carpet at `ground + clearance` (MC2 256, MC1 128), so a
+/// carpet parked on its castle pad renders from `pad_top + 384` in
+/// MC2 and `pad_top + 256` in MC1 — the port rendering from the
+/// carpet plane instead sat a full half-tile low (player report
+/// 2026-08-05: "docked at your own castle the port is consistently
+/// lower than retail"). [`Flyer::y`] stays the CARPET plane — it
+/// round-trips through [`Simulation::sync_carpet_from_flyer`] and
+/// feeds the world its pose — so the lift belongs to whoever builds
+/// the camera, never to the pose.
+pub const EYE_LIFT: f32 = 128.0 / 256.0;
+
 /// The thrust/steering model — the G-class flight-control tier
 /// (ROADMAP "Flight-control tiers"). Selected once at the sim
 /// boundary; replays must record it.

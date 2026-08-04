@@ -174,9 +174,10 @@ fn for_each_pair(
                     f(pt, pd, &class_map_mc1(&obs))?;
                 }
             }
-        }
-        if let Some((_, _, c)) = &prev {
-            prev_cmd = *c;
+            // See the MC2 twin below: the old `&prev` read landed
+            // after `prev.take()` had emptied it, so the cast EDGE
+            // degenerated to the raw HELD level.
+            prev_cmd = pcmd;
         }
         prev = Some((tick.t, st, cmd));
     }
@@ -198,12 +199,12 @@ fn for_each_pair_mc2(
     use mgc_formats::mgcr::{ObsMc2, RetailMc2, decode_retail_mc2};
     let mut rec = Recording::open(path)?;
     let level = rec.header.level.ok_or("recording has no level number")?;
-    let (mut world, pristine) = crate::verify_mc2::build_world_mc2(baked, level)?;
+    let (mut world, pristine, things) = crate::verify_mc2::build_world_mc2(baked, level)?;
 
+    let _ = input_delay; // superseded by the latch-aligned cast phase
     let mut prev: Option<(u64, RetailMc2, PlayerCommand)> = None;
-    let mut prev_cmd = PlayerCommand::default();
-    let mut cmd_ring: std::collections::VecDeque<PlayerCommand> =
-        std::iter::repeat_n(PlayerCommand::default(), input_delay as usize + 1).collect();
+    let mut prev_latch = (false, false);
+    let mut prev_press: Option<(i16, i16)> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
         let Some(state) = &tick.state else {
@@ -211,8 +212,23 @@ fn for_each_pair_mc2(
             continue;
         };
         let st = decode_retail_mc2(state)?;
-        cmd_ring.push_back(crate::verify_mc2::sample_cmd_mc2(tick.input.as_ref()));
-        let cmd = cmd_ring.pop_front().unwrap_or_default();
+        // THE LATCH-ALIGNED CAST PHASE — `verify_mc2::align_cmd_mc2` is
+        // the law and its doc-comment the derivation. The suite MUST
+        // reconstruct input exactly like `verify-deltas` or its
+        // signatures drift from the triage run, so this loop carries no
+        // `--input-delay` ring either.
+        let (held, latch) = crate::verify_mc2::raw_input_mc2(tick.input.as_ref());
+        let mut cmd = crate::verify_mc2::align_cmd_mc2(held, latch, prev_latch);
+        // The cursor-AT-PRESS A/B (`verify_mc2::press_edge_mc2`) must be
+        // reconstructed here too or a suite run under the toggle would
+        // disagree with the triage run it is meant to pin.
+        let press = crate::verify_mc2::press_pos_mc2(tick.input.as_ref());
+        if std::env::var_os("MGC_PRESS_EDGE").is_some() {
+            let moved = matches!((prev_press, press), (Some(a), Some(b)) if a != b);
+            cmd = crate::verify_mc2::press_edge_mc2(cmd, held, latch, moved);
+        }
+        prev_press = press.or(prev_press);
+        prev_latch = latch;
         if let Some((pt, pst, pcmd)) = prev.take() {
             let wanted = select.is_none_or(|s| s.contains(&pt));
             if tick.t == pt + 1 && wanted && crate::verify_mc2::capture_clean_mc2(&pst, &st) {
@@ -222,15 +238,15 @@ fn for_each_pair_mc2(
                     }
                     None => return Err(format!("t={}: no obs channel", tick.t)),
                 };
+                // The pair IS frame pt+1's transition, so it takes THIS
+                // record's aligned command, with the pair's START record
+                // as the edge predecessor.
                 let (pd, _, _) = crate::verify_mc2::exec_pair_mc2(
-                    &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
+                    &mut world, &pristine, &things, &pst, &st, &obs, cmd, pcmd, pin_n1,
                 )
                 .map_err(|e| format!("t={pt}: {e}"))?;
                 f(pt, pd, &crate::verify_mc2::class_map_mc2(&obs))?;
             }
-        }
-        if let Some((_, _, c)) = &prev {
-            prev_cmd = *c;
         }
         prev = Some((tick.t, st, cmd));
     }

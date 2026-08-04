@@ -598,6 +598,10 @@ pub(crate) struct Gen {
     pub(crate) slot_gen: SlotGens,
     /// Free stack; built 999→1 so allocation pops 1, 2, 3, …
     pub(crate) free: Vec<u16>,
+    /// MC2's recycle-victim stack — the allocator's FALLBACK once
+    /// `free` is dry (see [`Mc2Recycle`]). Empty on MC1, whose
+    /// allocator has the opposite priority.
+    pub(crate) mc2_recycle: Mc2Recycle,
     /// Global LCG (`rand_4`), = the level seed at scan time.
     pub(crate) rand: u32,
     /// Terrain-retile LCG (`pseudoRand`), u16 stream.
@@ -911,6 +915,45 @@ impl std::hash::Hash for Mc2LifeScale {
     }
 }
 
+/// MC2's recycle-victim stack (`D41A0_0.dword_0x11EA` cells, top
+/// `dword_0x11e6`; −1 = empty): LIVE but expendable entities the
+/// allocator sacrifices when the free stack is dry.
+///
+/// `sub_49F90` (Level.cpp:1271-1302) rebuilds it from scratch by a
+/// DESCENDING pool scan 999→1, pushing every live record whose
+/// `struct_byte_0xc_12_15.byte[2] & 2` (our `flags & 0x2_0000`) is
+/// set — so the stack TOP is the LOWEST-numbered victim and pops
+/// climb. `stack` mirrors it bottom-up: the LAST element pops first.
+///
+/// `refill` = "rebuild the list on demand when it runs dry" — the
+/// NATIVE arm. Retail refreshes at `sub_49F90`'s own call sites (level
+/// generate EF:39396, the mid-game arms EF:60101/61278 — the last of
+/// which is literally "free stack empty ⇒ rebuild ⇒ retry"), a cadence
+/// the port does not model; the strict-conformance import instead
+/// hands over the RECORDED snapshot with `refill` clear, so replay
+/// sacrifices exactly the victims retail had ranked and fails exactly
+/// where retail's list ran out.
+///
+/// Hash-quiet while empty (the [`Mc2Ord`] pattern): MC1 and every
+/// never-full MC2 run hash exactly as they did before the field.
+#[derive(Default)]
+pub(crate) struct Mc2Recycle {
+    pub(crate) stack: Vec<u16>,
+    pub(crate) refill: bool,
+    /// Victims seized so far (the `exhausted` counter's twin —
+    /// observability, not behavior; the original keeps no such count).
+    pub(crate) seized: u32,
+}
+
+impl std::hash::Hash for Mc2Recycle {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // `refill` is a MODE and `seized` telemetry — hash-silent.
+        if !self.stack.is_empty() {
+            self.stack.hash(state);
+        }
+    }
+}
+
 /// A counter that hashes to NOTHING at zero (see [`Mc2Ord`]). The
 /// const TAG (unique per field) disambiguates ADJACENT quiet fields:
 /// without it, (drain=5, scrolls=0) and (drain=0, scrolls=5) feed
@@ -1039,6 +1082,7 @@ impl Gen {
             ent: vec![Ent::default(); chassis.pool_slots],
             slot_gen: SlotGens(vec![0; chassis.pool_slots]),
             free: (1..chassis.pool_slots as u16).rev().collect(),
+            mc2_recycle: Mc2Recycle::default(),
             rand: seed,
             pseudo,
             spawn_count: [0; 20],
@@ -1182,15 +1226,22 @@ impl Gen {
     /// life 300, flags 8, +126 = 16, +44 = 100, +24 = own slot,
     /// +58 = 0xFA, +66 = +67 = 0xFF, +68 = 10 (:43879), +156 = row 0.
     pub(crate) fn new_event(&mut self) -> Option<usize> {
-        let Some(idx) = self.free.pop() else {
-            // Fail-open like the original (alloc returns null, the
-            // spawn silently vanishes — map 032's starved trigger),
-            // but COUNTED: the limit-removing register (ROADMAP
-            // "MULTI-GAME ARCHITECTURE") wants a playtest catalogue
-            // of the levels that hit the pool ceiling before any
-            // bumped-pool option exists.
-            self.exhausted = self.exhausted.saturating_add(1);
-            return None;
+        // MC2 pops the free stack FIRST and only then sacrifices a
+        // recycle victim (`NewEvent_4A050`, Events.cpp:561-608 — the
+        // free arm at :563, the victim arm at :581). MC1's allocator
+        // has no such fallback, and its stack stays empty.
+        let idx = match self.free.pop().or_else(|| self.mc2_recycle_pop()) {
+            Some(i) => i,
+            None => {
+                // Fail-open like the original (alloc returns null, the
+                // spawn silently vanishes — map 032's starved trigger),
+                // but COUNTED: the limit-removing register (ROADMAP
+                // "MULTI-GAME ARCHITECTURE") wants a playtest catalogue
+                // of the levels that hit the pool ceiling before any
+                // bumped-pool option exists.
+                self.exhausted = self.exhausted.saturating_add(1);
+                return None;
+            }
         };
         let idx = idx as usize;
         // A reallocated slot must leave any tile chain BEFORE its
@@ -1224,6 +1275,67 @@ impl Gen {
         };
         e.f63 = idx as u8;
         Some(idx)
+    }
+
+    /// The MC2 allocator's fallback (`NewEvent_4A050` :581-605): with
+    /// the free stack dry, SACRIFICE the top-ranked recycle victim.
+    ///
+    /// Retail's arm is a bare seizure, NOT a death — `SetMapEntity_57E50`
+    /// (tile unlink), `class = 0`, then the same 168-byte memset +
+    /// defaults the free arm runs. No damage, no kill credit, no corpse,
+    /// no parent notify, and the slot never visits the free stack. Our
+    /// caller performs exactly that teardown (`unlink` on the link bit,
+    /// then `Ent::default()`), so this only has to choose the slot.
+    ///
+    /// Cells that are no longer live victims are skipped rather than
+    /// seized: retail's `sub_57F20` pulls a dying victim out of the
+    /// stack (see [`Gen::free_entity`]), but an IMPORTED snapshot can
+    /// still name a slot the port has since freed.
+    fn mc2_recycle_pop(&mut self) -> Option<u16> {
+        let mut refilled = false;
+        loop {
+            while let Some(s) = self.mc2_recycle.stack.pop() {
+                let Some(e) = self.ent.get(s as usize) else {
+                    continue;
+                };
+                if s != 0 && e.class64 != 0 {
+                    self.mc2_recycle.seized = self.mc2_recycle.seized.saturating_add(1);
+                    return Some(s);
+                }
+            }
+            // Retail's own "free stack empty ⇒ `sub_49F90` ⇒ retry"
+            // idiom (EF:61275-79), moved to the allocator because the
+            // port does not model the refresh call sites. OFF under
+            // the strict-conformance import, whose stack is retail's
+            // recorded snapshot — running dry there is retail running
+            // dry. Terminates: each seizure clears the victim's
+            // sacrificable bit (the record is wiped), so a rebuild
+            // scan is strictly shorter every time.
+            if refilled || !self.mc2_recycle.refill {
+                return None;
+            }
+            refilled = true;
+            self.mc2_rebuild_recycle();
+        }
+    }
+
+    /// `sub_49F90`'s victim half (Level.cpp:1284-1301): a DESCENDING
+    /// 999→1 pool scan pushing every live record flagged sacrificable
+    /// (`byte[2] & 2` = our `flags & 0x2_0000`), so the stack top — the
+    /// next sacrifice — is the LOWEST-numbered victim.
+    ///
+    /// The free half of that rebuild is deliberately not mirrored: our
+    /// free stack is maintained incrementally and never leaks a
+    /// class-0 slot, and this runs only with the pool FULL, where
+    /// retail's own scan finds no free record either.
+    pub(crate) fn mc2_rebuild_recycle(&mut self) {
+        self.mc2_recycle.stack = (1..self.ent.len() as u16)
+            .rev()
+            .filter(|&s| {
+                let e = &self.ent[s as usize];
+                e.class64 != 0 && e.flags & 0x2_0000 != 0
+            })
+            .collect();
     }
 
     /// One draw of this event's own LCG (`rand_29799_4`, the stream
@@ -1292,8 +1404,20 @@ impl Gen {
     }
 
     /// sub_41E90 (:52514): unlink, clear, return the slot (LIFO).
+    /// MC2's twin `sub_57F20` (Events.cpp:5209-39) adds one step
+    /// between the unlink and the class clear: a sacrificable entity
+    /// that dies normally must LEAVE the recycle stack, or the
+    /// allocator would later seize a slot that is already free (a
+    /// double allocation of one slot). Retail's removal is a linear
+    /// search then a swap-with-top (:5232), which does NOT preserve
+    /// the ranking below the hole — mirrored exactly.
     pub(crate) fn free_entity(&mut self, i: usize) {
         self.unlink(i);
+        if self.ent[i].flags & 0x2_0000 != 0 && !self.mc2_recycle.stack.is_empty() {
+            if let Some(at) = self.mc2_recycle.stack.iter().position(|&s| s as usize == i) {
+                self.mc2_recycle.stack.swap_remove(at);
+            }
+        }
         self.ent[i].class64 = 0;
         self.free.push(i as u16);
     }
@@ -4999,6 +5123,13 @@ impl Gen {
             mc2_rebound_precise,
             mc2_allied,
             mc2_castle_research,
+            // NEVER saved, and that IS the retail law: every load path
+            // rebuilds the pool lists and then empties this one
+            // outright (`sub_49F90(); D41A0_0.dword_0x11e6 = -1;` —
+            // Level.cpp:304-305 / :423-424, EF:38829, :38874, :39467).
+            // A restored world simply has no ranked victims until the
+            // list next refreshes.
+            mc2_recycle: _,
         } = self;
         w.put(t);
         w.put(map_entity);
@@ -5102,6 +5233,8 @@ impl Gen {
         // Presentation feed — never saved, never inherited across a
         // load.
         self.bolt_fx.0.clear();
+        // Retail's load empties the victim list (see `snap_write`).
+        self.mc2_recycle.stack.clear();
         Ok(())
     }
 }

@@ -200,11 +200,16 @@ fn flight_tier_golden_state_hashes() {
     // freezes for the 1 observe-zero tick per cycle and its fresh
     // window ends at the counted zero, not one tick later).
     // Behavior change toward retail by design.
+    // Re-pinned (B-C both banks) for the 180° TURN TIE-BREAK law
+    // (Gen::turn_sign, mc1/mobs.rs — see the L005 GOLDEN note):
+    // ambient creatures whose wander target sits at the exact antipode
+    // now turn in retail's direction. Behavior change toward retail by
+    // design; post-init + A hold (no tie occurs that early).
     const FAITHFUL: [u64; 4] = [
         0x66111d2420b92e5c, // post-init
         0x6ee1467ef2185a6b, // A: 40 ticks of forward thrust
-        0x547f1e776d75582b, // B: 30 ticks of banked turn + strafe
-        0xcba224eabd8d7e6e, // C: 40 ticks of coast
+        0x50b8c009621ea405, // B: 30 ticks of banked turn + strafe
+        0x07dd31af7cf5ab71, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
@@ -218,8 +223,8 @@ fn flight_tier_golden_state_hashes() {
     const ENHANCED: [u64; 4] = [
         0x5510cd23ecac11a5, // post-init
         0xabf6995acf0d103f, // A
-        0x554fa2a78babb5d2, // B: strafe+turn now banks on forward speed
-        0xa7623fe2e09ced03, // C
+        0xdfac5c815dabd329, // B: strafe+turn now banks on forward speed
+        0x3620c23254eef464, // C
     ];
     assert_eq!(
         (faithful, enhanced),

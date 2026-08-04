@@ -5461,9 +5461,17 @@ impl App {
             config::ThrustModel::Classic => (aim * 0.5, roll),
             config::ThrustModel::Enhanced => (aim, roll),
         };
+        // The carpet plane, and the EYE half a tile over it: retail
+        // hands its world draw `axis.z + 128` in both games, never the
+        // raw carpet z (mgc_sim::EYE_LIFT — remc2 EF:21575, remc1
+        // sub_main.cpp:26406). Rendering from the carpet plane put the
+        // view a half tile low everywhere, which reads as "docked at
+        // the castle you sit lower than retail" wherever the ground is
+        // close enough to judge (player report 2026-08-05).
+        let carpet_y = a.y + (b.y - a.y) * alpha;
         let cam = CameraView {
             x: lerp_wrap(a.x, b.x),
-            y: a.y + (b.y - a.y) * alpha,
+            y: carpet_y + mgc_sim::EYE_LIFT,
             z: lerp_wrap(a.z, b.z),
             yaw: a.yaw + (b.yaw - a.yaw) * alpha,
             pitch: view_pitch - kick,
@@ -6122,13 +6130,16 @@ impl App {
             // 1024/3072): x/y = the horizontal position on
             // the sim's wrapping 8.8 axes, z = altitude,
             // (+E) = elevation over the terrain underneath.
-            // Reads the interpolated camera pose (= the
-            // carpet), so it glides with the picture.
+            // Reads the interpolated camera pose, so it glides
+            // with the picture — but reports the CARPET plane,
+            // backing out the eye lift the camera rides
+            // (`mgc_sim::EYE_LIFT`): the floor/band numbers this
+            // readout speaks in are carpet-relative.
             if self.cfg.render.debug.coords && assets.has_font() {
                 let g = sess.sim.ground_height(cam.x, cam.z);
                 let xe = (cam.x.rem_euclid(256.0) * 256.0) as u16;
                 let ye = (cam.z.rem_euclid(256.0) * 256.0) as u16;
-                let ze = (cam.y * 256.0).round() as i32;
+                let ze = ((cam.y - mgc_sim::EYE_LIFT) * 256.0).round() as i32;
                 let elev = ze - (g * 256.0).round() as i32;
                 let text = format!("x {xe}, y {ye}, z {ze} ({elev:+})");
                 let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
@@ -8745,6 +8756,7 @@ fn run_screenshot(
             blend: 0,
             map_only: false,
             flame_scale: 1.0,
+            sprite_h_units: None,
         };
         let mut prev = Vec::new();
         let mut cur = Vec::new();

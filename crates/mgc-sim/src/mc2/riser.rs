@@ -87,6 +87,82 @@ impl Gen {
         }
     }
 
+    /// CONFORMANCE IMPORT ONLY — re-apply the terrain an ALREADY-RUN
+    /// riser wrote before the imported tick. `.mgcr` carries no
+    /// terrain channel (docs/RECORDING.md), so a mid-take import
+    /// lands the pool onto PRISTINE heights while retail's map still
+    /// carries every riser's cumulative write. The write is a pure
+    /// function of the riser's own imported state — cell (position),
+    /// `f71` orientation, `f26` length, `act_life` phase, `f44`
+    /// progress — so it can be replayed:
+    /// - every riser's history opens with the ctor's `life = 0`
+    ///   INSTANT build (+48 over the whole 2xL strip, EF:41470); the
+    ///   two animated phases only ever touch rows `3..L-3`
+    ///   (EF:41938-41955 / 42159-42203), so the strip's 3-row
+    ///   **ENDCAPS stand at +48 for the rest of the level** no matter
+    ///   how often it is raised and lowered afterwards. Those endcaps
+    ///   are the residual wall that fences retail's ground walkers
+    ///   (and the m23 dwellers) out of a lowered compound.
+    /// - `act_life == 3` — idle built: the instant build alone.
+    /// - `act_life == 4` — idle removed: build + the full 48-tick
+    ///   life-2 lower (which also runs the terrain-type restore).
+    /// - `act_life == 2` — mid-lower with `48 - f44` ticks already
+    ///   run: build + that many lower ticks.
+    /// - `act_life == 1` — mid-RAISE with `f44` ticks run. `f44 < 48`
+    ///   is only reachable through a completed lower (the build and
+    ///   the raise both leave `f44 == 48`, and a raise trigger on a
+    ///   `f44 >= 0x30` riser is a no-op, EF:41934/42133), so the
+    ///   history is forced: build + full lower + `f44` raise ticks.
+    ///
+    /// `f26` is imported POST-increment (the life-0 pass already ran
+    /// its `++`, EF:41481), so the build helpers are called directly
+    /// rather than through [`Self::riser_instant`].
+    pub(crate) fn mc2_riser_reconstruct(&mut self, i: usize) {
+        let life = self.ent[i].act_life;
+        if !(1..=4).contains(&life) {
+            return;
+        }
+        let l = self.ent[i].f26 as i32;
+        let orient = self.ent[i].f71;
+        let c = self.riser_cell(i);
+        // Junk orientations write no terrain (EF:41487).
+        if orient > 1 {
+            return;
+        }
+        // The replayed phases re-request the loop sound 47 — a replay
+        // artifact, not a sound the imported tick emitted.
+        let sounds = self.sounds.len();
+        let progress = self.ent[i].f44;
+        match orient {
+            1 => self.riser_build_y(b(c, 0, -1), l),
+            _ => self.riser_build_x(b(c, -1, 0), l),
+        }
+        // Lower ticks already run before the imported tick: none at
+        // life 3, the partial run at life 2, the full 48 otherwise.
+        let lower = match life {
+            3 => 0,
+            2 => 48 - progress.clamp(0, 48),
+            _ => 48,
+        };
+        if lower > 0 {
+            self.ent[i].act_life = 2;
+            self.ent[i].f44 = 48;
+            for _ in 0..lower {
+                self.mc2_riser_tick(i);
+            }
+        }
+        if life == 1 {
+            self.ent[i].act_life = 1;
+            self.ent[i].f44 = 0;
+            for _ in 0..progress.clamp(0, 48) {
+                self.mc2_riser_tick(i);
+            }
+        }
+        self.ent[i].act_life = life;
+        self.ent[i].f44 = progress;
+        self.sounds.truncate(sounds);
+    }
+
     /// LIFE 0 — instant build (EF:41470-41796): `++length` (so an
     /// instant-built riser is par2+1 long forever — §2 lifecycle
     /// nuance), one-shot +48 build, then `sub = 48; life = 3` for ANY
@@ -625,5 +701,110 @@ impl Gen {
             self.ent[r].act_life = if raise { 1 } else { 2 };
         }
         self.ent[i].flags |= 0x400;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::chassis::ChassisParams;
+    use crate::engine::features::{FeatureAssets, Gen, Planes, tile};
+    use crate::verbs::VerbSet;
+
+    /// Flat 100-height OPEN (non-cave) world.
+    fn flat_gen() -> Gen {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets {
+            rings: (0..32).map(|_| vec![(15u8, 15u8)]).collect(),
+            build_tab: Vec::new(),
+            build_dat: Vec::new(),
+            bldgprm: Vec::new(),
+            spells: Vec::new(),
+            mc2_sprite_ext: Vec::new(),
+        };
+        Gen::new(planes, assets, 1, ChassisParams::MC2, VerbSet::MC2)
+    }
+
+    /// A (14,1) riser parked at a tile CENTRE (the THING spawn pose
+    /// the `+128` round-to-nearest cell derivation assumes).
+    fn place_riser(g: &mut Gen, tx: u16, ty: u16, orient: u8, par2: i16) -> usize {
+        let i = g.new_event().expect("riser slot");
+        let e = &mut g.ent[i];
+        e.class64 = 14;
+        e.model65 = 1;
+        e.x = tx * 256 + 128;
+        e.y = ty * 256 + 128;
+        e.act_life = 0;
+        e.f26 = par2;
+        e.f71 = orient;
+        e.f44 = 0;
+        i
+    }
+
+    /// THE ENDCAP-WALL LAW + its conformance-import replay. A riser
+    /// that is built (life 0) and then lowered (life 2 → 4) does NOT
+    /// return the map to pristine: the lower only sinks rows
+    /// `3..L-3` (EF:42159-42203), so the strip's 3-row ENDCAPS stand
+    /// at +48 for the rest of the level. `mc2_riser_reconstruct` must
+    /// rebuild exactly that map from the riser's terminal state alone
+    /// — a `.mgcr` import lands on pristine heights and would
+    /// otherwise let creatures walk straight through retail's wall.
+    #[test]
+    fn riser_reconstruct_rebuilds_the_endcap_wall_a_lowered_riser_leaves() {
+        // (a) the LIVE history: build, then the (10,63) lower trigger.
+        let mut live = flat_gen();
+        let i = place_riser(&mut live, 122, 104, 1, 14);
+        live.mc2_riser_tick(i);
+        assert_eq!(live.ent[i].act_life, 3, "life 0 → instant build");
+        assert_eq!(live.ent[i].f26, 15, "length = par2 + 1");
+        live.ent[i].act_life = 2; // sub_34390, the LOWER trigger
+        for _ in 0..49 {
+            live.mc2_riser_tick(i);
+        }
+        assert_eq!(live.ent[i].act_life, 4, "idle-removed");
+        assert_eq!(live.ent[i].f44, 0);
+
+        // (b) the IMPORT: pristine heights + the terminal riser state.
+        let mut imported = flat_gen();
+        let j = place_riser(&mut imported, 122, 104, 1, live.ent[i].f26);
+        imported.ent[j].act_life = 4;
+        imported.ent[j].f44 = 0;
+        let pristine = imported.t.height.clone();
+        imported.mc2_riser_reconstruct(j);
+
+        assert_eq!(
+            imported.t.height, live.t.height,
+            "reconstructed heights must equal the lived-through map"
+        );
+        assert_eq!(imported.t.tile_type, live.t.tile_type, "type restore");
+        assert_eq!(imported.ent[j].act_life, 4, "riser state left untouched");
+        assert_eq!(imported.ent[j].f44, 0);
+
+        // (c) NON-VACUITY: the map is NOT pristine — base cell
+        // (123,104), 2 columns {123,122} x 15 rows 104..118. Rows
+        // 104-106 and 116-118 are the endcaps the lower never sinks.
+        assert_ne!(
+            imported.t.height, pristine,
+            "a no-op reconstruction would leave the map pristine"
+        );
+        for (tx, ty) in [(122u8, 104u8), (123, 105), (122, 118), (123, 116)] {
+            assert_eq!(
+                imported.t.height[tile(tx, ty)],
+                148,
+                "endcap ({tx},{ty}) stands at +48"
+            );
+        }
+        for ty in 107u8..=115 {
+            assert_eq!(
+                imported.t.height[tile(122, ty)],
+                100,
+                "interior row {ty} sank back to the flank level"
+            );
+        }
     }
 }

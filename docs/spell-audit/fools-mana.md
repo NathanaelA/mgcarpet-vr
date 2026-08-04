@@ -1,12 +1,16 @@
 # Spell Audit — Fool's Mana (index 22 / 0x16)
 
-**Verdict: PORT IS WRONG.** The current port casts ONE real, collectible
-mana sphere that adds to the pool. Retail casts a SHOTGUN SPREAD of SIX
-neutral FAKE-mana spheres that, when an enemy wizard tries to possess
-one, DETONATE against the possessor (fireball / repeated fireballs /
-lightning by tier) and vanish. The trap mechanic is entirely absent from
-the port, and the one thing the port does spawn (a genuine pool-adding
-sphere) is the opposite of the intended effect.
+**Verdict (original): PORT IS WRONG.** The port cast ONE real,
+collectible mana sphere that added to the pool. Retail casts a SHOTGUN
+SPREAD of SIX neutral FAKE-mana spheres that, when an enemy wizard tries
+to possess one, DETONATE against the possessor (fireball / repeated
+fireballs / lightning by tier) and vanish.
+
+**STATUS: LANDED.** The cast burst landed 2026-08-02; the TRAP TICK —
+and with it the AUTHORED ground spheres — landed 2026-08-03 (session 7).
+See §3 for the port as it now stands and §6/OPEN-2 for the resolution
+that turned this from "a spell-22 decoy feature" into "the (10,57)
+tick's own law".
 
 Citations: `EF:` = `reference/remc2/remc2/engine/EventsFunctions.cpp`,
 `EV:` = `Events.cpp`, `L:` = `Level.cpp`. Port cites = `crates/…`.
@@ -170,67 +174,108 @@ So the retaliation projectile **hunts the possessor**, carrying the
 tier's damage. XP (`sub_6D8B0(parentId, 22, 1)`) credits the CASTER when
 the trap is sprung.
 
-*(Ambiguity worth flagging: the SAME `sub_36680` path runs for ANY
-(10,57) claim, including the authored ground spheres from `sub_50130`
-whose `byte_0x46_70` is the NewEvent default. If that default is 0, an
-authored ground sphere would ALSO fire a fireball when possessed — which
-would contradict the m57 trace's "collectible mana" reading. Resolve by
-checking the NewEvent default of `byte_0x46_70` and whether authored
-spheres are ever possessed vs only AI-flown home. OPEN-2.)*
+**OPEN-2 — RESOLVED 2026-08-03, and the answer is YES.** The SAME
+`sub_36680` path runs for ANY (10,57) claim, including the authored
+ground spheres from `sub_50130`, and their `byte_0x46_70` NewEvent
+default IS 0 — so **every authored ground sphere is a live TIER-0 trap.**
+Corpus proof (mc2l24, the level whose start spheres are ALL fool's mana —
+player-reported and now pinned):
+
+- t=0 census: 21 authored (10,57), slots 67-87, every one
+  `own=0 pe=0 act=62 flags=0x2000c`, mana 34..1931, and raw
+  **`b46 = 0`, `owner28 = 0`, `f2a = 100`** (the NewEvent
+  `subSpellIndex` default), `scratch10 = 0`.
+- All 21 die in t=0..1836, and **every single one dies by the trap**:
+  the tick before each death the sphere's ch1 mail source
+  (`word_0x68_104`) flips to 116 = the human, stamped by a co-located
+  `(10,12)` possess pulse (`PossesHitMana_320E0` EF:22726, whose
+  `sub_112D0` EF:4199 writes the latch); the next state shows the sphere
+  with `flags |= 0x400` (`DisableEntityDrawing04`), life untouched at
+  300/300, a **(10,0) poof at its exact position**, and a **(9,0)
+  fireball with `word_0x96_150 = 116`** — homing the player. No sphere on
+  this take is ever collected, damaged to death, or handed over.
+- Per-sphere (slot → last m57 tick → poof slot / fireball slot):
+  67→1322→569/589 · 68→1355→489/589 · 69→1358→622/402 ·
+  70→1422→589/75 · 71→1402→75/622 · 72→406→539/627 · 73→854→524,618 ·
+  74→294→524/599 · 75→786→430/524 · 76→1132→432/620 · 77→998→145/144 ·
+  78→1452→75,179 · 79→1531→228/271 · 80→1649→280,340 · 81→1718→326/342 ·
+  82→1700→345/363 · 83→1693→161/285 · 84→1573→155,322 · 85→1515→310/363 ·
+  86→1835→469/478 · 87→959→609/73. (The four with two co-located poofs
+  sit inside a busier neighbourhood; the poof-at-position and the
+  0x400-with-full-life signature are unambiguous in all 21.)
+
+The m57 trace's "collectible mana" reading was the gap: the sphere LOOKS
+collectible (the AI-avoidance gate `word_0x244_580` even makes rivals
+sometimes skip it), but any actual claim detonates it.
 
 ---
 
-## 3. CURRENT PORT — what it actually does
+## 3. THE PORT (as landed 2026-08-03)
 
-`mc2_spell_fire`, arm `0x16` (`crates/mgc-sim/src/mc2/cast.rs:805-811`):
+The trap is a property of the **(10,57) TICK**, not of the cast — which
+is the whole point of OPEN-2's resolution. Two rounds:
 
-```rust
-0x16 => {
-    let (mx, my) = (p.x, p.y);
-    let z = self.g.ground_z(mx, my) as i16;
-    self.g.mc2_spawn_mana_sphere(57, mx, my, z);   // ONE sphere, at the player's feet
-    self.mc2_award_xp(PLAYER_TARGET, 22, 1);
-    self.g.snd_player(11);
-}
-```
+**Round 1 (2026-08-02) — the cast.** `mc2_cast_fools_mana`
+(`crates/mgc-sim/src/mc2/cast.rs`) throws the SIX-sphere ±85 yaw fan
+modelled on `sub_6C870`, each sphere neutral (`f144 = 0`) with a random
+disguise mana value, and `mc2_fools_retaliate` / `mc2_fools_bolt` port
+`sub_36680` / `sub_36770` / `sub_36850`. Cast sound 11; XP moved off the
+cast onto the trap's spend points.
 
-`mc2_spawn_mana_sphere(57, …)`
-(`crates/mgc-sim/src/mc2/effects.rs:160-176`) rides `spawn_mana_ball`
-(the MC1 ball machinery), grants `f140 = rand % 0x7D0` (0..1999) mana,
-sets `f144 = 0` (neutral), `ball_resize`. The (10,57) sphere then uses
-the **MC1 ball tick**, whose claim/possession path transfers ownership
-(`id24`/`f144`) and makes it a **genuine collectible mana** that credits
-the pool when flown to a castle (effects.rs:154-159 doc admits the
-0x29/0x3E tick columns are unported/APPROX).
+**Round 2 (2026-08-03, session 7) — the tick, and the authored spheres.**
+The round-1 gate was `is_fool = Mc2 && f52 != 0` — a CAST-DECOY marker.
+Retail has no such gate, so the authored ground spheres (f52 = 0) fell
+through to the (10,39) ball's ownership-transfer arm and were handed
+over as legit mana. Landed:
 
-**Divergences from retail, all present:**
-1. Spawns **1** sphere, not 6.
-2. At the player's feet with no launch (`actSpeed`/spread), not a
-   ±85° fan of 6 thrown spheres.
-3. Never sets `subSpellIndex` payload or `byte_0x46_70` retaliation tier.
-4. `parentId` is left neutral (from `spawn_mana_ball`), not the caster —
-   so even the ownership/trap identity is missing.
-5. **No `sub_36680` retaliation** anywhere — the sphere is a real,
-   pool-adding, freely collectible mana ball. This is the exact bug the
-   player described.
+- **`ball_tick` gate** (`crates/mgc-sim/src/mc1/combat.rs`) is now the
+  (10,57) identity — `model65 == 57 || tick70 == 62` — and the arm is
+  retail's shape: claim latch set → `mc2_fools_retaliate`; on `true`
+  spawn the **(10,0) consume poof** (`mc2_spawn_fire`) and soft-kill with
+  `flags |= 0x400` (EF:26363-65); either way the claimed sphere runs NO
+  physics that tick (retail's `else if`).
+- **The field homes are retail's, so the conformance importer already
+  carries them**: parentId → `id24` (@0x28 fused), tier `byte_0x46_70` →
+  `f71` (@0x46), payload `subSpellIndex_0x2A_42` → `f44` (@0x2A), counter
+  `dword_0x10_16` → `f26` (@0x10), and the claim latch `word_0x68_104`
+  IS the ch1 mail SOURCE (`mail[1].1`, @0x68) — never cleared except on
+  the owner arm, exactly like retail. (Round 1 used port-private lanes
+  f52/f50/f136/f146/f56, none of which the importer feeds; `f136` is the
+  observed `mana_max` lane and `f146` is the balloon tether target, so
+  they were actively harmful.)
+- **Tier > 3** falls out with no trap and no transfer (EF:26665's
+  fallthrough): the sphere freezes claimed forever.
+- **Native discriminator.** `sub_50130` gives its sphere **action 0x3E**
+  where every other sphere ctor takes 0x29; `mc2_spawn_mana_sphere(57, …)`
+  now stamps `tick70 = 62` so a natively-spawned (10,57) is recognisable.
+  It still carries the port's `model65 = 39` sphere-family model (the
+  pre-existing simplification in `spawn_mana_ball`); the action is the
+  load-bearing lane, and the model residual is listed in §6 as OPEN-6.
+- **Census.** The world-mana denominator excludes CAST decoys only (an
+  action-62 sphere whose `id24` is a real caster); authored ground
+  spheres keep counting exactly as they did.
 
 ---
 
-## 4. GAP
+## 4. GAP (closed)
 
-| Aspect | Retail | Port | Gap |
+| Aspect | Retail | Port | Status |
 |---|---|---|---|
-| Sphere count | 6 | 1 | missing 5 |
-| Launch | ±85° fan, speed 140..407 | dropped at feet | missing spread/throw |
-| Owner (`parentId`) | caster | neutral | trap identity lost |
-| Fake flag | `playerEntityIndex=0`, neutral | neutral (but real pool value) | looks right, behaves wrong |
-| Payload | `subSpellIndex_2` on each | none | no retaliation damage |
-| Retaliation tier | `byte_0x46_70 = life` | none | no branch selector |
-| Possession → | detonate + despawn | collect + add to pool | **inverted mechanic** |
-| L1 | 1 fireball | — | missing |
-| L2 | repeated fireballs | — | missing |
-| L3 | lightning | — | missing |
-| Caster XP | on trap sprung | on cast | timing wrong (minor) |
+| Sphere count | 6 | 6 | ✔ |
+| Launch | ±85° fan, speed 140..407 | ±85 fan, short outward toss | ✔ shape (APPROX speed) |
+| Owner (`parentId`) | caster | `id24` = caster | ✔ |
+| Fake flag | `playerEntityIndex=0`, neutral | `f144 = 0` | ✔ |
+| Payload | `subSpellIndex_2` on each | `f44` | ✔ |
+| Retaliation tier | `byte_0x46_70 = life` | `f71` | ✔ |
+| Possession → | detonate + despawn + (10,0) | detonate + despawn + (10,0) | ✔ |
+| AUTHORED ground sphere | tier-0 trap for everyone | tier-0 trap for everyone | ✔ (2026-08-03) |
+| L1 | 1 fireball | 1 fireball | ✔ |
+| L2 | repeated fireballs | repeated fireballs | ✔ |
+| L3 | lightning | lightning | ✔ |
+| Caster XP | on trap sprung | on trap sprung | ✔ |
+| Bolt launch z | `+= array_0x52_82.fov` | `+= f84` | ✔ (2026-08-03, session 8 — OPEN-5 CLOSED) |
+| Sphere model | 57 | 57 on both paths | ✔ (2026-08-05, OPEN-6 CLOSED — §7) |
+| Bolt aim at HUMAN claimer | `sub_655C0` at the claimer entity | ctx-pose aim (out-of-pool sentinel) | ✔ (2026-08-03, player-reported "wrong direction"; test `fools_trap_fireball_aims_at_the_human_claimer`) |
 
 ---
 
@@ -312,8 +357,8 @@ into the projectile's xtype/xsubtype.
 **Confidence: HIGH** on the mechanic. `sub_6C870` (cast, 6 spheres,
 neutral, payload+tier) and `sub_36680` (tier-branched fireball / repeated
 fireballs / lightning retaliation homing the possessor) are transcribed
-verbatim and match the player's tier-by-tier report exactly. The port's
-single-real-sphere behavior is confirmed at cast.rs:805 + effects.rs:160.
+verbatim and match the player's tier-by-tier report exactly, and the
+mc2l24 corpus pins the authored half of the mechanic end to end (§2b).
 
 **Open questions:**
 1. **SPELLS.DAT row 22 `life_0x1A` per tier** — inferred {0,1,2} from the
@@ -321,27 +366,164 @@ single-real-sphere behavior is confirmed at cast.rs:805 + effects.rs:160.
    row 22 (and whether tier 2 is life 2 or 3 — the retaliation branch
    `v1 <= 3` and the cast's `life >= 3` owned/colored path diverge only
    at exactly 3).
-2. **(10,57) `byte_0x46_70` NewEvent default** — decides whether the
-   AUTHORED ground spheres (`sub_50130`, m57 trace) also retaliate when
-   possessed, or are inert. This determines whether the retaliation path
-   must be gated on "was cast by fool's mana" vs universal to (10,57).
-3. **`subSpellIndex_0x2A_42` field mapping on the sphere** — ensure the
-   payload rides a field distinct from the sphere's mana (`f140`); the
-   port's mana-sphere ctor currently owns `f140` for the mana value.
+2. ~~**(10,57) `byte_0x46_70` NewEvent default**~~ — **RESOLVED
+   2026-08-03: the default is 0 and the authored ground spheres DO
+   retaliate.** The retaliation is universal to (10,57), not gated on
+   "was cast by fool's mana". See §2b.
+3. ~~**`subSpellIndex_0x2A_42` field mapping on the sphere**~~ —
+   **RESOLVED: `f44`** (the port's uniform @0x2A home, `new_event`
+   default 100 = retail's NewEvent default, corpus-confirmed `f2a=100`).
+   Distinct from `f140` (mana) and from `f136` (the observed `mana_max`
+   lane, which round 1 wrongly used).
 4. **The `dword_0x35 > 6` capacity gate** — port equivalent (free-slot
    count) vs safe-omit; only matters under entity-budget pressure.
-5. **Homing/`word_0x96_150` + `sub_655C0` aim** onto the claimer in the
-   port — confirm the port's mana-sphere/possession fields expose a
-   homing-target slot the retaliation can write.
+5. ~~**Bolt launch z (`position.z += array_0x52_82.fov`, EF:26688/26718)**~~
+   — **LANDED 2026-08-03 (session 8, bolt-launch-lanes dig).** `a1x`
+   there is the SPHERE, so the lift is the LAUNCHER's own box fov —
+   the same law shape as the possession cast's `position.z +=
+   a2x->array_0x52_82.fov` (EF:56054 / EF:55969) with the wizard as
+   launcher. Ported as `e.z + e.f84` in `mc2_fools_bolt`. Worth ~42
+   units on a full-size sphere (mc2l24 t=1322: sphere z=846 afov=42,
+   retail fireball z=898).
 
-**Suggested test:** In a level with a rival wizard, cast Fool's Mana at
-tier 1 near the rival's mana-collection path. Assert: (a) 6 neutral
-(10,57) spheres appear in a fan, NOT 1; (b) the player's mana pool does
-NOT increase and the spheres are NOT collectible-to-pool by the player;
-(c) when the rival's collector/possess touches a sphere, a fireball
-spawns homing the rival and the sphere despawns; (d) tier 0 → single
-fireball, tier 2 → a lightning bolt instead. Add a sim-level regression:
-cast tier 0, inject a possession claim onto one sphere, assert exactly
-one class-9 subtype-0 projectile spawns owned by the caster and the
-sphere is gone; repeat tier 2 asserting a subtype-9 (impact 10,23)
-projectile. Golden re-pin: MC2 state-hash only (MC1 untouched).
+   **The victim-probe half is settled, and it was never a probe
+   filter.** `sub_10780` (EF:3739-71) has NO launcher exclusion at
+   all — it filters on `byte[0]&8`, the xtype/xsubtype narrowing, and
+   `a1x->id_0x1A_26 != v5x->id_0x1A_26`. What keeps retail's bolt off
+   its own sphere is two things neither of which the port has:
+   (a) the sprung tier-0 sphere is UNMAPPED and class-zeroed **inside
+   its own tick** — the entity walk runs `sub_57F20` (Events.cpp:551;
+   body :5209 = `SetMapEntity_57E50` + `class = 0` + free-stack push)
+   the instant `DisableEntityDrawing04_57F10` latches `byte[1] & 4`,
+   so no later entity can see it; and (b) retail probes exactly ONCE,
+   at the END of a full 384-unit step (`sub_65C20` EF:63126-29:
+   MoveEntity → CopyEntityPosition → `sub_10780`). Our soft kill
+   (`flags |= 0x400`) leaves the sphere linked until the tick-top
+   reap, and our anti-tunnel chord march probes 128-unit sub-steps
+   retail never visits. The exclusion therefore has to come from the
+   OWNER gate, and it already does: `mc2_fools_bolt` stamps
+   `id24 = sphere.id24`, and `victim_scan`'s `c.id24 != id` (the port's
+   twin of EF:3769) drops the launcher for both an authored sphere
+   (id24 = its own slot, the NewEvent default on both sides) and a
+   cast decoy (id24 = the caster). Pinned, with the contrast arm, by
+   `fools_trap_bolt_leaves_from_the_sphere_box_top_and_clears_its_own_muzzle`
+   (world.rs) — a same-muzzle bolt with a FOREIGN owner still
+   detonates on the sphere, which is the port's chord-march residual
+   and is listed as OPEN-7.
+6. ~~**Sphere model on native spawns**~~ — **LANDED 2026-08-05
+   (session 9).** `mc2_spawn_mana_sphere` now puts retail's model back
+   (`model65 = 57`, `mc2/effects.rs`); the action-62 stamp stays as
+   belt-and-braces. The audit of every `model65 == 39` sphere gate is
+   §7 below — retail's own laws split cleanly, and the port was on the
+   wrong side of four of them.
+7. ~~**Chord-march muzzle admission**~~ — **LANDED 2026-08-05
+   (session 9), and it was NOT latent.** See §8.
+
+---
+
+## 7. THE SPHERE-MODEL GATE AUDIT (OPEN-6, 2026-08-05)
+
+The organising fact is retail's class-10 scan chain `dword_38523`,
+built at EF:40023-40062 from models **39, 40 AND 57**. Every sphere law
+is either "walk the chain" (m57 included) or "walk the chain and test
+`model == 39`" (m57 excluded) — and the census is a third thing, a
+model switch that drops 57 outright.
+
+| Law | Retail | m57? | Port |
+|---|---|---|---|
+| awake pass `sub_68BF0` | chain, no model test (EF:55489) | **YES** | `mc2_awake_pass` — 57 ADDED |
+| mana-magnet aura | chain, no model test (EF:28362) | **YES** | `mc2_aura_tick` — 57 ADDED |
+| Vissuluth ritual broadcasts | chain, no model test (EF:12848/13049) | **YES** | already `39\|40\|57` |
+| rival mana hunt `sub_148E0` | chain; 39/40 first, then 57 under a Perception break (EF:6544-49) | **YES** | already two-pass; the native m57 was in the WRONG pass |
+| m23 siphon find/validate | `model == 39` (EF:18396) | no | unchanged |
+| balloon fleet target | `model == 39` (EF:61011) | no | unchanged |
+| castle absorb | `model == 39` (EF:61105) | no | **native m57 used to be absorbed** |
+| dead-wizard sphere re-point | `model == 39` (EF:60174) | no | unchanged |
+| ball merge | `+66/+67` = (10,39) from the ball ctor | no | unchanged (`is_fool` also short-circuits) |
+| world-mana census `sub_61F50` | model switch: 39 and 58 count, 45 banks, **everything else falls through** (EF:62012-35) | **NO** | census special-case DELETED — the model list is the filter |
+| possess whitelist `sub_108B0` | `(10,57)` arm gated on `parentId_0x28 != caster` (EF:3846) | own only | **lane fixed**: `f40` (@0x26) → `id24` (@0x28) |
+| map dot | fool mana must look like real mana | — | `(10, 39 \| 57)` share the arm |
+
+Two of these were live port bugs the model stamp exposes:
+
+- **Castle absorb.** A native fool's sphere overlapping a castle was
+  eaten as real mana. Retail's `while` filters `model != 39` and moves
+  on (EF:61105).
+- **The census.** The port kept authored ground spheres in the
+  world-mana denominator and dropped only cast decoys. Retail drops the
+  whole model — the type-0 castle-share objective never sees a (10,57)
+  at all. The old reasoning ("an uncollectable share dilutes the goal")
+  was right; it just did not go far enough.
+
+And one lane bug the stamp exposes by re-routing native spheres onto
+retail's own `(10,57)` claim arm: that arm read `f40` (retail `@0x26`)
+where retail reads `parentId_0x28`, whose port home is `id24`. Harmless
+while only IMPORTED spheres reached it (both lanes read 0), fatal for a
+CAST decoy — the caster's own possess bolt would have detonated on his
+own trap. Fixed in `claim_admits` (`mc1/combat.rs`).
+
+Corpus: **zero movement** on mc2l0 0+2000 and mc2l24 51500+600
+(byte-identical), which is the expected result — `verify-deltas`
+rebuilds entities from the recording, where an m57 already carried
+model 57, so only NATIVE play is affected. Tests: the three fool's-mana
+channel tests now count `(10,57)`, and
+`mc2_authored_ground_sphere_is_a_tier0_trap` asserts the native model
+directly.
+
+---
+
+## 8. MUZZLE ADMISSION (OPEN-7, 2026-08-05) — the latent class was live
+
+Retail's flight states probe the victim test ONCE, at the END of a full
+step (`sub_65C20` EF:63126-29: MoveEntity → CopyEntityPosition →
+`sub_10780`). The port marches the chord in ≤128-unit sub-steps and
+probed every one from the muzzle out.
+
+**The law, as landed** (`mc2/proj.rs`, `mc2_flyer_tick` + the
+`mc2_hit_covers` helper): a victim whose box already contains the
+step's START is admitted only at `k == n` — retail's own probe point.
+Anything the projectile ENTERS mid-chord still detonates at the
+sub-step, so the anti-tunnelling the march exists for is untouched.
+
+This was chosen over "skip `k == 1`" precisely because a PARKED
+projectile's only probe IS the endpoint, and retail detonates that one.
+Hence the pinned test's contrast arm
+(`fools_trap_bolt_leaves_from_the_sphere_box_top_and_clears_its_own_muzzle`)
+keeps its assertion: it pins retail's endpoint law, not the residual.
+The residual gets its own test,
+`a_projectile_born_inside_a_foreign_box_flies_clear_of_its_muzzle`
+(world.rs) — a foreign-owned bolt born inside a fat sphere at speed 130
+(sub-steps 65 / 130) now clears, while a bolt ENTERING the same sphere
+mid-chord still detonates. Non-vacuity: `MGC_NO_MUZZLE_ADMISSION=1`
+restores the old march and the first arm fails.
+
+**The audit's "nothing is broken today" was wrong.** The corpus
+exercises it. mc2l0 t=618 slot 165, a (9,1) possession bolt: the port
+detonated it at its own muzzle (life 2 vs retail 3, position frozen at
+82/180/3616 instead of retail's 84.57/181.94/3335) and spawned a
+phantom (10,12) possess flash at slot 123. All five diff rows vanish,
+none appear; mc2l0 0+2000 goes 1703 → **1704 conforming**. On mc2l24
+51500+600 a (9,3) at t=51500 stops self-detonating (slot 720 life/x/y/z
+now retail's) and three phantom (10,0) impact puffs go away; pair
+verdicts are unchanged and the row detail reshuffles by the free-list
+(±8 field rows) in an epoch already dominated by slot desync.
+
+**Tests** (`crates/mgc-sim/tests/mc2_spell_channels.rs`):
+`mc2_fools_mana_throws_six_decoys_that_trap_the_possessor` (six spheres,
+tier-0 spring = one fireball, decoy consumed),
+`mc2_fools_mana_tier2_retaliates_with_lightning`,
+`mc2_fools_mana_decoys_do_not_count_toward_world_mana`, and
+`mc2_authored_ground_sphere_is_a_tier0_trap` — an AUTHORED ownerless
+sphere: owner reclaim is a no-op, a non-owner claim fires exactly one
+fireball, leaves the (10,0) poof on the sphere's tile, and consumes the
+sphere. Non-vacuity proven: restoring the `f52 != 0` gate fails the last
+one with 0 fireballs.
+
+Plus, in `crates/mgc-sim/src/engine/world.rs` lib tests (2026-08-03,
+OPEN-5): `fools_trap_bolt_leaves_from_the_sphere_box_top_and_clears_its_own_muzzle`
+— the bolt's launch z is the sphere's `z + f84`, and a PARKED bolt
+(speed 0, so the chord march probes exactly the launch point) survives
+its first flight tick while a second parked bolt at the same muzzle with
+a FOREIGN owner is consumed by the same sphere on the same tick.
+Non-vacuity: removing the lift fails the z assert; the contrast arm is
+the probe half's own control.

@@ -253,9 +253,23 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             } else {
                 stats.gaps += 1;
             }
-        }
-        if let Some((_, _, c)) = &prev {
-            prev_cmd = *c;
+            // THE PAIR'S OWN COMMAND IS THE NEXT PAIR'S PREDECESSOR.
+            // This used to read `if let Some((_, _, c)) = &prev` AFTER
+            // `prev.take()` had already emptied it — a dead lane, so
+            // `prev_cmd` never left its seed and the port's cast EDGE
+            // (`cmd.fire && !prev_fire`, world.rs) degenerated to the
+            // raw HELD level for the whole run: a held button re-cast
+            // every time the imported cast timer read 0. Both engines
+            // gate the click-only spell families on a CONSUMED press
+            // latch, never on the held level (MC2:
+            // `HandleMouseButtons_18F80` PI:2043-49 + the frame-tail
+            // latch clear PI:1049-52). mc1l0 0+4000: 450 → 501
+            // conforming, unexplained field 7,440 → 6,524, extra rows
+            // 1,029 → 401. `MGC_NO_FIRE_EDGE=1` restores the old
+            // behaviour for A/B.
+            if std::env::var_os("MGC_NO_FIRE_EDGE").is_none() {
+                prev_cmd = pcmd;
+            }
         }
         prev = Some((tick.t, st, cmd));
         if let Some(limit) = args.limit {

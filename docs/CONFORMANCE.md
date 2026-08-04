@@ -236,6 +236,11 @@ column carries the literal `pose-phase`; the report prints the
 reclassified row/pair totals; FIXTURE signatures stay raw. The tag is
 runner-built (no roster entry, no ledger rule) because it is derived
 per pair from the recording itself, not from a triaged family. The
-button channel is out of scope — cast-consume latency is genuinely
-unobservable and stays `--input-delay`-modeled with cast-edge pairs
-bucketed capture.
+button channel is derived the same way on MC2 — cast-consume latency
+is NOT unobservable there: the recorded press LATCH says per press
+whether retail's poll had already taken it at snapshot time, so the
+MC2 arm reconstructs the cast phase exactly and ignores
+`--input-delay` (`verify_mc2::align_cmd_mc2`; ledger §"THE RECORDER'S
+SNAPSHOT STRADDLES RETAIL'S INPUT POLL"). MC1 has no latch register
+and stays `--input-delay`-modeled with cast-edge pairs bucketed
+capture.

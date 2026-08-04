@@ -1220,6 +1220,89 @@ mod tests {
         assert_eq!(st.z, 256, "the floor clamp holds");
     }
 
+    /// THE DOCKED-AT-YOUR-CASTLE VIEW HEIGHT — the whole chain the
+    /// player judges when the carpet parks on its own castle mound:
+    /// pad top → carpet floor → EYE.
+    ///
+    /// RETAIL MEASUREMENT (recordings/mc2l0.mgcr, the human's own
+    /// (3,2) castle at tile (48,34)): the BUILD00 painter walks the
+    /// castle entity's z 1644 → 2336 over t=2564..2583 and it holds
+    /// there for the rest of the take — the castle re-pins to live
+    /// ground every tick, so 2336 = 73 height bytes × 32 IS the pad
+    /// top. The mover then floors the carpet at `pad + clearance`
+    /// (EF:59768) and the world draw is handed `carpet + 128`
+    /// (EF:21575), so retail's eye over that mound is 2720. MC1 halves
+    /// the clearance (:55151, row `v_12`) and keeps the same +128 eye
+    /// (remc1 sub_main.cpp:26406) — 2592 over the same mound.
+    ///
+    /// The corpus pins both clearances independently: the mc2l0 spawn
+    /// pose sits at z 5024 over a 149-byte cell (149·32 + 256) and the
+    /// human parks at z 256 over sea-level ground through
+    /// t=5683..5758; the mc1l0 spawn pose sits at z 2080 over a
+    /// 61-byte cell (61·32 + 128).
+    #[test]
+    fn docked_on_a_castle_pad_floors_and_lifts_the_eye() {
+        // The measured mc2l0 mound: 73 height bytes.
+        const PAD: i16 = 73 * 32;
+        let pad_ground = |_: u16, _: u16| -> i16 { PAD };
+        let eye = |carpet: i16| (carpet as f32 / 256.0 + crate::EYE_LIFT) * 256.0;
+
+        // MC2: clearance 256 (row 66). Approach from below — the floor
+        // clamp is the unconditional else-arm, so one commit settles it.
+        let mut st = Mc1State {
+            z: 0,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        let idle = Mc1Input::default();
+        mc2_move(
+            &mut st,
+            &mut ext,
+            &idle,
+            None,
+            None,
+            &pad_ground,
+            &no_ceiling,
+            &open_gate2,
+            &never_stuck,
+        );
+        assert_eq!(st.z, PAD + 256, "MC2 carpet floors on the pad top");
+        assert_eq!(eye(st.z), 2720.0, "MC2 eye = pad + clearance + 128");
+        // It HOLDS there — the row-0xe buoyancy must not sink through
+        // the pad on the ticks that follow (a docked carpet is parked,
+        // not settling).
+        for _ in 0..32 {
+            mc2_move(
+                &mut st,
+                &mut ext,
+                &idle,
+                None,
+                None,
+                &pad_ground,
+                &no_ceiling,
+                &open_gate2,
+                &never_stuck,
+            );
+        }
+        assert_eq!(st.z, PAD + 256, "the dock holds against the sink");
+
+        // MC1: half the clearance, same eye lift.
+        let mut st1 = Mc1State {
+            z: 0,
+            ..Default::default()
+        };
+        mc1_move(&mut st1, &idle, None, None, &pad_ground, &open_gate);
+        assert_eq!(st1.z, PAD + 128, "MC1 carpet floors at half the band");
+        assert_eq!(eye(st1.z), 2592.0, "MC1 eye = pad + clearance + 128");
+
+        // NON-VACUITY: the eye is genuinely ABOVE the carpet plane —
+        // a dropped lift would put both games back on the carpet.
+        assert_eq!(eye(st.z) - st.z as f32, 128.0);
+        assert_eq!(eye(st1.z) - st1.z as f32, 128.0);
+        // …and the two games really do dock at different heights.
+        assert_ne!(st.z, st1.z);
+    }
+
     #[test]
     fn mc2_cave_band_triples_climb_ceiling() {
         let aim_up = Mc1Input {

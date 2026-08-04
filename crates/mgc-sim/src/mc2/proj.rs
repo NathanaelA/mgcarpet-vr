@@ -42,6 +42,14 @@ pub(crate) const F_MC2PROJ: u32 = 1 << 29;
 /// byte[0] bit 1 — the flyer's "aim acquired" latch (EF:62904).
 pub(crate) const F_AIMED: u32 = 2;
 
+/// A/B toggle for the chord march's muzzle admission (OPEN-7): set
+/// `MGC_NO_MUZZLE_ADMISSION` to restore the pre-dig behaviour, where
+/// every sub-step from the muzzle out could detonate the shot.
+fn no_muzzle_admission() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_MUZZLE_ADMISSION").is_some())
+}
+
 /// The virtual projectile the acquisition scan scores from — either
 /// a live flyer on its first tick (`mc2_autoaim`) or the crosshair
 /// instrument's would-be launch (`World::mc2_aim_preview`).
@@ -429,21 +437,38 @@ impl Gen {
     /// effects apply the damage directly (deliberate) and count the
     /// misfit.
     fn mc2_proj_impact(&mut self, i: usize, victim: u16, ctx: &MobCtx) {
-        let (fc, fm, x, y, z, id, yaw, dmg) = {
+        let (fc, fm, x, y, z, id, yaw, pitch, dmg) = {
             let e = &self.ent[i];
-            (e.f68, e.f69, e.x, e.y, e.z, e.id24, e.f30, e.f44)
+            (e.f68, e.f69, e.x, e.y, e.z, e.id24, e.f30, e.f32, e.f44)
         };
         let spawned = match (fc, fm) {
             (10, 0) => self.mc2_spawn_fire(x, y, z),
             (10, 1) => self.mc2_spawn_big_explosion(x, y, z),
-            // The possession delivery (the (9,17) player cast): the
-            // pulse is the ch1 claim mail, not damage — the same
-            // writer gate the possess column traced
-            // (docs/traces/mc2-possession-delivery.md). The ch1
-            // amount = retail's force flag (sub_112D0 a2, EF:4200);
-            // (10,12) is the weak pulse.
+            // The possession delivery (the basic `(9,1)` bolt's
+            // payload): retail does NOT write the claim from the
+            // bolt — it spawns a separate (10,12) CLAIM PULSE entity
+            // (`_4A190(&pos, byte_0x43, byte_0x44)`, EF:63306-19 /
+            // EF:59053-58) that broadcasts the ch1 channel from its
+            // own 9-tick action (docs/traces/mc2-possession-delivery
+            // .md §1-§2). The bolt then copies its id/yaw/pitch onto
+            // it (EF:63315-17) — the claim's OWNER lane rides the
+            // pulse's `id_0x1A_26`, so the pulse must carry the
+            // caster or every intake reads the pulse's own slot.
+            //
+            // The port used to fold the broadcast into a single
+            // `area_write` from the bolt: that dropped the entity
+            // (the mc2l4 (10,12) 279-row missing family in the first
+            // 4,000 pairs, l30 313, l4 779 full-take) AND narrowed
+            // the claim to the bolt's own box for one tick instead of
+            // the pulse's 512³ box for nine — retail's near-miss
+            // claims come from exactly that reach.
             (10, 12) => {
-                self.area_write(i, 1, 0, ctx, false, false);
+                if let Some(p) = self.mc2_spawn_claim_pulse(x, y, z, false) {
+                    let e = &mut self.ent[p];
+                    e.id24 = id;
+                    e.f30 = yaw;
+                    e.f32 = pitch;
+                }
                 None
             }
             // Possession tiers 1/2 (docs/spell-audit/possession.md):
@@ -480,8 +505,18 @@ impl Gen {
                 let struck =
                     victim != 0 && victim != PLAYER_TARGET && (victim as usize) < self.ent.len();
                 if struck {
-                    let force = (fm == 69) as u32;
-                    self.area_write(i, 1, force, ctx, false, false);
+                    // EF:59036-45 — the pulse spawns FIRST (it takes
+                    // the lower pool slot; the l24 `want=12 got=54`
+                    // rows were the whole aura column shifted by this
+                    // one missing allocation), model chosen by the
+                    // PAYLOAD: (10,70) forced when the payload is
+                    // (10,69), (10,12) weak otherwise.
+                    if let Some(p) = self.mc2_spawn_claim_pulse(x, y, z, fm == 69) {
+                        let e = &mut self.ent[p];
+                        e.id24 = id;
+                        e.f30 = yaw;
+                        e.f32 = pitch;
+                    }
                     let sphere = matches!(
                         (
                             self.ent[victim as usize].class64,
@@ -919,6 +954,30 @@ impl Gen {
     /// The water test is NESTED inside the contact branch
     /// (EF:62956/63141): only a projectile flying AT the water
     /// surface splashes; flight over water never runs it.
+    /// Would projectile `i`, standing at `at`, already be overlapping
+    /// the victim the chord march just found? The muzzle-admission
+    /// test (OPEN-7) — see the march in [`Self::mc2_flyer_tick`].
+    fn mc2_hit_covers(
+        &mut self,
+        i: usize,
+        at: (u16, u16, i16),
+        h: MailTarget,
+        ctx: &MobCtx,
+    ) -> bool {
+        let old = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
+        self.ent[i].x = at.0;
+        self.ent[i].y = at.1;
+        self.ent[i].z = at.2;
+        let v = match h {
+            MailTarget::Pool(j) => self.ent_overlap(i, j),
+            MailTarget::Player => self.player_overlap(i, ctx),
+        };
+        self.ent[i].x = old.0;
+        self.ent[i].y = old.1;
+        self.ent[i].z = old.2;
+        v
+    }
+
     pub(crate) fn mc2_flyer_tick(&mut self, i: usize, ctx: &MobCtx) {
         // Homing / acquisition (EF:62902-21).
         match self.mc2_target(self.ent[i].f146, ctx) {
@@ -1013,16 +1072,24 @@ impl Gen {
         // 340 speed_6 = 0). March the chord in ≤128-unit sub-steps
         // and probe each; the movement itself stays the single polar
         // step (trajectory unchanged).
-        // Possession (action 18) rides the CLAIM probe `sub_108B0`
+        // Possession rides the CLAIM probe `sub_108B0`
         // (`claim_victim_scan`) instead of the generic `sub_10780` —
         // it detonates only on claimable targets (mana spheres,
         // possessable buildings, worms) and flies through everything
         // else (the un-possessable factory sinks / spires). Every
         // other spell uses the generic any-solid probe. This is the
-        // ONE player spell with the whitelist behavior (sub_108B0 has
-        // exactly two callers, both possession — CastPosses_65F60 +
-        // sub_674C0).
-        let is_possess = self.ent[i].tick70 == 18;
+        // ONE player spell with the whitelist behavior, and
+        // `sub_108B0` has exactly TWO callers, both possession:
+        // `CastPosses_65F60` (action **1**, the basic (9,1) bolt,
+        // EF:63285) and `sub_674C0` (action 18, the leveled (9,17),
+        // EF:59003). Action 1 was missing from this gate, so every
+        // basic possession bolt — including the (9,1)s the corpus
+        // importer replays — ran the generic any-solid probe and
+        // detonated on the first thing it grazed: the mc2l30 (10,12)
+        // claim-pulse family came out 714 extra against retail's 258
+        // (and the port's bolt skipped the skim clamp below, so its
+        // z ran high the whole flight).
+        let is_possess = matches!(self.ent[i].tick70, 1 | 18);
         let e = &self.ent[i];
         let start = (e.x, e.y, e.z);
         let mut pos = start;
@@ -1032,6 +1099,24 @@ impl Gen {
         let dz = (pos.2 as i32) - (start.2 as i32);
         let dist = Self::isqrt((dx * dx + dy * dy) as u32) as i32;
         let n = ((dist + 127) / 128).max(1);
+        // MUZZLE ADMISSION (fools-mana.md OPEN-7). The march is ours,
+        // not retail's, and it can see something retail's single
+        // end-of-step probe never can: an entity the projectile is
+        // ALREADY inside at the START of the step. Retail resolves
+        // such an entity at the step's END or not at all — if it had
+        // been overlapping at the end of the PREVIOUS step, the
+        // previous probe would have consumed the shot — so a victim
+        // that already contains the launch point is admitted only at
+        // `k == n`, retail's own probe point (EF:63126-29: MoveEntity
+        // → CopyEntityPosition → sub_10780, once). Everything the
+        // projectile ENTERS mid-chord still detonates at the sub-step,
+        // which is the whole point of the anti-tunnel march.
+        //
+        // Nothing in the corpus exercises this: every launcher stamps
+        // an owner the probe's `id24` gate already drops. It closes a
+        // latent class — a projectile born co-located with a
+        // targetable entity it does not own detonating on tick 1.
+        let admit_muzzle = !no_muzzle_admission();
         let mut scanned = None;
         for k in 1..=n {
             let sub = (
@@ -1039,11 +1124,19 @@ impl Gen {
                 start.1.wrapping_add((dy * k / n) as u16),
                 (start.2 as i32 + dz * k / n) as i16,
             );
-            scanned = if is_possess {
+            let found = if is_possess {
                 self.claim_victim_scan_at(i, sub)
             } else {
                 self.victim_scan_at(i, sub, ctx)
             };
+            if admit_muzzle
+                && k < n
+                && let Some(h) = found
+                && self.mc2_hit_covers(i, start, h, ctx)
+            {
+                continue; // retail probes this one at the endpoint
+            }
+            scanned = found;
             if scanned.is_some() {
                 pos = sub;
                 break;
@@ -1068,7 +1161,17 @@ impl Gen {
                 }
             }
         }
-        let hit = self.mc2_proj_filter(i, scanned);
+        // The xtype/xsubtype narrowing is retail's, but it lives
+        // INSIDE `sub_10780` (EF:3765-68) — `sub_108B0` has no such
+        // filter (EF:3820-70, whitelist only). The basic (9,1) bolt
+        // carries `xtype = 10` from its ctor (EF:34775), so running
+        // the generic filter over a CLAIM hit would swallow worm
+        // (5,22) and building (10,45) claims retail delivers.
+        let hit = if is_possess {
+            scanned
+        } else {
+            self.mc2_proj_filter(i, scanned)
+        };
         // The Rebound gate (EF:62939): a shielded victim throws the
         // bolt back at its shooter — no impact, it flies on reversed.
         if let Some(h) = hit

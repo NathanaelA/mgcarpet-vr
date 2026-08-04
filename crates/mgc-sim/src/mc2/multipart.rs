@@ -51,7 +51,11 @@
 //!   countdown never runs on MC2 creatures).
 //! - `byte_0x43_67`/`byte_0x44_68` (m27 whip counters) → f68/f69 —
 //!   the projectile impact pair is meaningless on creatures.
-//! - `manaRegen_0x88_136` (m27 bolt power 1|2) → f136.
+//! - `manaRegen_0x88_136` (m27 bolt power 1|2) → f136. The uniform
+//!   MC2 import spends f136 on @0x8C, so `import_ent_mc2` carries a
+//!   (5,27) home for it (@0x8C is dead 0 on the family) — without it
+//!   every replayed pair re-read the power as 0 and the four a3=0
+//!   RE-FIRES of each whip no-opped (one (9,9) arc per whip, not five).
 //! - `word_0x5A_90` (particle/sprite row) → type86;
 //!   `animationFrame_0x5C_92` → frame88.
 //!

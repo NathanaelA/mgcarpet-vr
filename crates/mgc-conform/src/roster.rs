@@ -242,6 +242,16 @@ impl RuleTags {
     ///     the waves; the free-list slot-order infrastructure limit at
     ///     mass-spawn ticks is not a missing trigger.
     ///
+    /// RE-SCOPED DOMAIN (2026-08-04 housekeeping): the session-9
+    /// pool-base decode fix ELIMINATED the late-take desync at its
+    /// root (`free-stack fallback` 14k pairs → 0; the rule's l24 rows
+    /// went from 124+ to the low 200s take-wide, all in the EARLY-WAVE
+    /// region t=3569/13330, which predates the first shifted snapshot
+    /// at t=54932 and has its own un-dug cause). The rule's remaining
+    /// LEGITIMATE domain is that early-wave family; a hit-count rise
+    /// anywhere ELSE is a regression signal (allocator, importer
+    /// stacks, or the mgcr pool-base recovery), not comfort.
+    ///
     /// CONSERVATIVE by construction: within a SINGLE pair, only atoms
     /// of the same (class,model) whose missing and extra counts can be
     /// PAIRED are tagged, and only `min(missing, extra)` per side.

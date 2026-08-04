@@ -226,6 +226,16 @@ pub fn lerp_poses(prev: &[LivePose], cur: &[LivePose], alpha: f32) -> Vec<LivePo
             else {
                 return out;
             };
+            // The retail self-modifying sprite height (the Vissuluth
+            // growth ramp) steps once per SIM TICK — the player's
+            // retail footage shows the discrete mid-step images.
+            // Player-requested presentation polish: lerp it on the
+            // same frame alpha as the transforms so the port's growth
+            // is continuous. Deliberate deviation, render-path only —
+            // the sim keeps retail's +30/tick step exactly.
+            if let (Some(pa), Some(pb)) = (a.sprite_h_units, b.sprite_h_units) {
+                out.sprite_h_units = Some(pa + (pb - pa) * alpha);
+            }
             let (dx, dz, dalt) = (wrap_delta(a.x, b.x), wrap_delta(a.z, b.z), b.alt - a.alt);
             if dx * dx + dz * dz + dalt * dalt > SNAP_TILES * SNAP_TILES {
                 return out; // teleport: snap, never streak
@@ -296,7 +306,14 @@ pub fn billboards_from_poses(
             sprite_base: s.sprite_base,
             draw_type: s.draw_type,
             frame: p.frame,
-            world_h: s.world_h,
+            // A sprite-param row retail patched IN PLACE overrides the
+            // baked `rot_speed_8` (the Vissuluth wait-phase shrink +
+            // growth ramp — see `LivePose::sprite_h_units`). Retail's
+            // projected height is `projScale * rotSpeed_8 / depth`
+            // (GameRenderOriginal.cpp:3770-72), so swapping the field
+            // is the whole law; the renderer re-derives width from the
+            // frame's pixel aspect exactly as retail does.
+            world_h: p.sprite_h_units.map_or(s.world_h, |u| u / UNITS_PER_TILE),
             blend: p.blend,
         });
     }
@@ -664,7 +681,13 @@ pub fn map_dots_from_poses(
             // pair on the global flash phase (:57282-92). Model 40
             // carries no phase term — it falls through LABEL_32 like
             // any other class-10 (steady even entry / wild magenta).
-            (10, 39) => {
+            //
+            // MC2's (10,57) fool's-mana sphere plots on the SAME arm:
+            // the whole spell is that a decoy is indistinguishable
+            // from neutral ground mana, so it must not get its own
+            // tell. (Native m57 wore model 39 until the OPEN-6 fix, so
+            // this arm is where it already drew — the 57 keeps that.)
+            (10, 39 | 57) => {
                 if let Some((v, b)) = team {
                     if blink { v } else { b }
                 } else {
@@ -2308,6 +2331,7 @@ mod tests {
             blend: 0,
             map_only: false,
             flame_scale: 1.0,
+            sprite_h_units: None,
         }
     }
 

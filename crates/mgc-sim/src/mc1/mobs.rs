@@ -29,6 +29,15 @@ use crate::mc1::tables::{COS, SIN};
 /// chases a class-3 pool entity; our player lives outside the pool).
 pub(crate) const PLAYER_TARGET: u16 = 0xFFFF;
 
+/// `MGC_NO_TURN_TIE=1` restores the pre-dig wrapped-delta turn sign
+/// (`(tgt − cur) & 0x7FF <= 1024`), which turns the WRONG way on the
+/// exact 180° tie — see [`Gen::turn_sign`]. Kept so one binary can be
+/// A/B'd; read once, a whole-process arm.
+fn no_turn_tie_fix() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("MGC_NO_TURN_TIE").is_some())
+}
+
 /// Per-tick context the creature handlers need: the player's position
 /// in engine units (the wizard list of the original, reduced to the
 /// one human player until AI wizards land).
@@ -633,6 +642,36 @@ impl Gen {
         if d > 1024 { 2048 - d } else { d }
     }
 
+    /// sub_42240_42580 (:52664, MC2's twin `sub_582F0` Sound.cpp:6580 —
+    /// identical bodies): which WAY to turn from `cur` toward `tgt`,
+    /// −1/0/+1.
+    ///
+    /// THE 180° TIE-BREAK IS NOT SYMMETRIC. Retail takes the plain
+    /// integer difference of the two masked angles and only unwraps it
+    /// when `abs(v3) > 1024` — **strictly** greater. So a target exactly
+    /// 1024 (180°) away keeps the RAW sign: `tgt` numerically below
+    /// `cur` turns NEGATIVE, above turns POSITIVE. Deriving the sign
+    /// from the wrapped delta instead (`(tgt−cur) & 0x7FF <= 1024`)
+    /// agrees everywhere except that one tie, where it turns the wrong
+    /// way by a full `2·cap` (CONFORMANCE-FINDINGS.md §"THE (5,23)
+    /// RETRY-LEG PAIR IS THE 180° TURN TIE-BREAK") — the antipodal move
+    /// -core retry (`yaw0 + 0x400`) lands on it every time it fires
+    /// against a creature already facing its wander target.
+    pub(crate) fn turn_sign(cur: u16, tgt: u16) -> i16 {
+        if no_turn_tie_fix() {
+            return if tgt.wrapping_sub(cur) & 0x7FF <= 1024 {
+                1
+            } else {
+                -1
+            };
+        }
+        let mut v3 = (tgt & 0x7FF) as i32 - (cur & 0x7FF) as i32;
+        if v3.abs() > 1024 {
+            v3 -= if v3 >= 0 { 2048 } else { -2048 };
+        }
+        i16::from(v3 > 0) - i16::from(v3 < 0)
+    }
+
     /// sub_422A0_425E0 (:52689): rate-limited turn from `cur` toward
     /// `tgt`, capped at the row's v_2 (v_4 is passed but dead).
     pub(crate) fn turn_step(cur: u16, tgt: u16, cap: i16) -> i16 {
@@ -640,12 +679,7 @@ impl Gen {
             return 0;
         }
         let d = Self::angdist(cur, tgt) as i16;
-        let s = if tgt.wrapping_sub(cur) & 0x7FF <= 1024 {
-            1
-        } else {
-            -1
-        };
-        s * d.min(cap)
+        Self::turn_sign(cur, tgt) * d.min(cap)
     }
 
     /// One candidate probe of the movement core: clamp + step from the

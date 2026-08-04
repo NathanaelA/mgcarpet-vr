@@ -725,7 +725,13 @@ impl Gen {
             // it will not even take off for fountain mana (player
             // retail-observed on mc2l24). A fountain sphere only reaches
             // this scan once claimed (f144 set to the fleet owner); the
-            // decay gate is what keeps the fleet grounded.
+            // decay gate is what keeps the fleet grounded. The scanned
+            // list (`dword_38523`) also carries the (10,57) FOOL'S-MANA
+            // spheres (:40018-63 files models 39, 40 and 57 into it)
+            // and the `model == 39` filter is what keeps a balloon off
+            // them. Since OPEN-6 a NATIVE m57 carries model 57 too, so
+            // the model test is the filter on both paths; the action
+            // test is kept as belt-and-braces.
             let (bx, by) = (self.ent[b].x, self.ent[b].y);
             let mut best = 0usize;
             let mut best_d = i32::MAX;
@@ -733,6 +739,7 @@ impl Gen {
                 let e = &self.ent[j];
                 if e.class64 != 10
                     || e.model65 != 39
+                    || e.tick70 == 62
                     || e.flags & 0x400 != 0
                     || e.flags & 0x2000 != 0
                     || e.f144 != own

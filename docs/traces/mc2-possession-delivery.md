@@ -242,6 +242,49 @@ its parent-tag-only early-return arm (EF:3846). The autoaim lists
 `mc2_possession_probe_skips_caster_claimed_targets` (world.rs);
 goldens unchanged (they never fire projectiles).
 
+## Addendum 2026-08-03 — the TIER-0 bolt is (9,1), and the port was launching (9,17) for every tier
+
+§0.1's tier gate is not just a payload switch: it selects a different
+ENTITY. `life_0x1A == 0` routes to `sub_69900` (EF:56039), whose
+creator is `SummonManaPosession_4D3B0` (EF:34764) = class **9 model 1**,
+**action 1**, speed/minSpeed 384, `maxLife = 4096/384 = 10`, mana 50,
+row `str_D7BD6[61]`, `xtype_0x41_65 = 10`, sprite 209, and — the one
+lane that separates it from its leveled twin —
+`SetEntityShiftRot_49EA0(2*pitch, **5*fov/2**)` where `sub_4DDD0`
+(EF:35132, the (9,17)) uses `2*fov`. Only `life_0x1A` 1..3 take the
+inline (9,17) arm (EF:55950); `life > 3` casts NOTHING (the `<= 3`
+gate).
+
+`sub_69900`'s tail, field by field (EF:56047-68), verified against
+mc2l4 t=13 slot 303 (`dump-state`):
+
+| retail | value there | port home |
+|---|---|---|
+| `actSpeed += a2x->actSpeed` (EF:56048, **no clamp**) | 336 = 384 − 48 | f126 |
+| `sub_68E50` muzzle placement | — | `World::muzzle` |
+| `byte_0x43_67 / byte_0x44_68` | 10 / 12 | f68 / f69 |
+| `word_0x26_38` = the TOKEN's slot | 267 | @0x26 → f40 (port spends f40 on the spell index — see the ledger) |
+| `id_0x1A_26` = the caster | 265 | id24 (PLAYER_TARGET) |
+| `position.z += a2x->array_0x52_82.fov` | — | already in `muzzle` (pose z + PLAYER_HH) |
+| `mana_0x90_144` = the TOKEN's mana | **33** | f140 (ctor default 50 overwritten) |
+| `dword_0x10_16 = 200` | 200 | @0x10 → f26 |
+| `wizext.byte_0x154_340 = 0` | — | unported (input-latch reset) |
+| `axis_0x9A_154x` = caster pos moved 10240 along the aim | (402, 6608, −1411) | unported (not a compared lane) |
+| yaw/pitch = `wizext.nextEntity_0x18_24 + yaw` / `entityIndex2_0x1A_26 + pitch` | 36 / 121 | p.heading / p.pitch — **the head offsets are NOT recorded**, see the ledger's recorder lead |
+| `PrepareEventSound_6E450(proj, -1, 40)` | — | `snd_player(40)` |
+
+The **speed clamp** is the trap here: `sub_6DCA0`'s `[384, 0x2000]`
+clamp (EF:44226-31) is that dispatcher's alone. Both possession arms
+add the carpet boost RAW, so a REVERSING carpet genuinely launches a
+sub-384 bolt.
+
+Ported 2026-08-03 (session 8, bolt-launch-lanes dig): `CREATORS` gained
+the subtype-1 row, `mc2_spawn_cast_proj` gained the possession pair's
+`SetEntityShiftRot`, and `mc2_spell_fire`'s spell-1 arm + the rival
+emitter (`mc2_rival_emit`, which hardcoded 17) both pick the entity off
+`life_0x1A`. Pinned by
+`mc2_tier0_possession_launches_the_basic_bolt_with_sub_69900s_tail`.
+
 ## OPEN items
 1. ~~**SPELLS.DAT possession rows**~~ EXTRACTED 2026-07-27 from the baked CD `spells.bin` row 1: tier `life_0x1A` = **(0, 1, 2)** — tier 2 genuinely selects xsubtype 69 → the (10,70) FORCED pulse; subSpell (10, 15, 20), manaCost (100, 250, 1000), maxManaLimit (0, 1000, 20000).
 2. ~~**(10,54)/(10,69) auxiliary tick**~~ TRANSCRIBED 2026-07-27: action 0x3B = `sub_38D80` (EF:28349) — NOT cosmetic: it is the MAGNET. Life countdown → despawn; per tick, walk the sphere list (dword_38523) and stamp every untagged sphere within `dword_0x10_16` range with the pull mail: `word_0x76_118` = pull magnitude (√dist capped 42), `word_0x7A_122` = the aura's index (the ball mover consumes + clears it, EF:26097-110). **No lock writes** — the aura's 128-tick life does NOT time out the claim lock. Full `byte[2]` writer sweep (whole remc2 tree, 2026-07-27): the 0x20 lock has NO timed clear anywhere — it is entity-lifetime; it "expires" in play only through entity churn (merges — inherited ONLY by sub_36D50's unclaimed-survivor arm EF:26936-40, ported — plus collection/absorb/despawn).

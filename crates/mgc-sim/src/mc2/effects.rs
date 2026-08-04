@@ -142,6 +142,75 @@ impl Gen {
         Some(i)
     }
 
+    /// `NewAdd0A0C_4E8C0` / `NewAdd0A46_4E950` (EF:35573/:35595) —
+    /// the POSSESSION CLAIM PULSE: byte-identical ctors under two
+    /// models, (10,12) action 12 = the WEAK claim and (10,70) action
+    /// 0x4D = the FORCED steal. This is the entity that actually
+    /// DELIVERS possession (docs/traces/mc2-possession-delivery.md
+    /// §2): the bolt only spawns it, and the pulse then broadcasts
+    /// the claim channel from its own tick over its whole 9-tick
+    /// window (life 8 under the class-10 pre-decrement).
+    ///
+    /// `subSpellIndex_0x2A_42` = 64000 (f44), sprite 41, box 512³ via
+    /// `SetEntityShiftRot_49EA0(512, 512)` — that box is what gives
+    /// `sub_112D0` its ±2-tile cell scan, so a near miss still
+    /// claims. `byte[0] = (b & 0xF6) | 1` clears the targetable bit
+    /// and sets bit 0; the map link then ors bit 2 (recorded flags =
+    /// 5). No RNG draw.
+    ///
+    /// Ordering matters for the field lanes: `SetEntityIndexAndRot_
+    /// 49CD0(41)` runs BEFORE the ShiftRot, so the row-41 half
+    /// rot-speed survives in the applied_yaw lane (@0x52) while
+    /// pitch/roll/fov take 512 — the recorded fingerprint (mc2l4
+    /// t=23 slot 309: ayaw 125, apitch/aroll/afov 512, max_life 8,
+    /// @0x2A 64000, flags 5, sprite 41).
+    pub(crate) fn mc2_spawn_claim_pulse(
+        &mut self,
+        x: u16,
+        y: u16,
+        z: i16,
+        forced: bool,
+    ) -> Option<usize> {
+        let i = self.new_event()?;
+        {
+            let e = &mut self.ent[i];
+            e.class64 = 10;
+            e.model65 = if forced { 70 } else { 12 };
+            e.tick70 = if forced { 0x4D } else { 12 };
+            e.max_life = 8;
+            e.f44 = 64000; // subSpellIndex_0x2A_42
+            e.flags = (e.flags & !9) | 1;
+        }
+        self.link(i, x, y, z);
+        self.refill_life(i);
+        self.mc2_set_sprite(i, 41);
+        self.mc2_shift_rot(i, 512, 512);
+        Some(i)
+    }
+
+    /// `sub_32120` (EF:23559, action 0x4D) — the (10,70) FORCED claim
+    /// pulse's tick: `PossesHitMana_320E0`'s twin, differing only in
+    /// `sub_112D0`'s force flag (1 = steal past the `byte[2]&0x20`
+    /// claim lock and set it). Body order is load-bearing and shared
+    /// with the weak pulse: the @0x10 counter bumps BEFORE the life
+    /// test (so it counts on the death tick too), then the class-10
+    /// pre-decrement, then anim + broadcast. The weak (10,12) pulse
+    /// rides the shared `possess_flash_tick` (mc1/combat.rs) — the
+    /// same law with force 0 — via the class-10 action-12 dispatch.
+    pub(crate) fn mc2_steal_pulse_tick(&mut self, i: usize, ctx: &MobCtx) {
+        self.ent[i].f26 = self.ent[i].f26.wrapping_add(1);
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
+            self.ent[i].flags |= 0x400;
+            return;
+        }
+        self.anim_advance(i);
+        // EF:4200 — the ch1 mail AMOUNT carries retail's
+        // `dword_0x64_100` force flag; no consumer reads a ch1 damage.
+        self.area_write(i, 1, 1, ctx, false, false);
+    }
+
     /// `CreateManaSphere512_50080` / `CreateManaSphere2560_500A0`
     /// (EF:36595/:36601, both thunks into `CreateManaSphere_500C0`
     /// EF:36607) — the authored ground mana economy: (10,39) = the
@@ -170,6 +239,38 @@ impl Gen {
             57 => (self.ent_rand(i) % 0x7D0) as i32,
             _ => 512,
         };
+        if model == 57 {
+            // `sub_50130` builds its OWN entity: model **57** with
+            // action **0x3E**, where every other sphere ctor takes
+            // model 39 / action 0x29 (m57 trace §1.2 / the strA0 row
+            // 62 → `sub_35FB0` EF:26318). `spawn_mana_ball` stamps
+            // the (10,39) family for the whole sphere line, so the
+            // m57 arm has to put its own model back — retail's
+            // per-model sphere gates all key on it:
+            //
+            // - the class-10 scan chain `dword_38523` is built from
+            //   models 39, 40 AND 57 (EF:40023-40062), so every
+            //   consumer that walks it without a model test sees an
+            //   m57 (awake pass EF:55489, the aura pull EF:28362, the
+            //   Vissuluth ritual broadcasts EF:12848/13049);
+            // - the consumers that DO test `model == 39` are exactly
+            //   the ones a fool's sphere must dodge: castle absorb
+            //   (EF:61105), the balloon fleet target (EF:61011), the
+            //   m23 siphon's find/validate (EF:18396), the dead
+            //   wizard's sphere re-point (EF:60174);
+            // - the census admits 39/45/58 and drops 57 outright
+            //   (EF:62012-62035);
+            // - the rival mana hunt walks 39/40 FIRST and the 57s in
+            //   a second pass, where a Perception roll breaks the
+            //   whole walk (EF:6544-49).
+            //
+            // With the model native the action is belt-and-braces
+            // (an IMPORTED m57 has always carried model 57), but it
+            // stays: `ball_tick`'s trap gate accepts either lane and
+            // the action is what the m57 physics column keys on.
+            self.ent[i].model65 = 57;
+            self.ent[i].tick70 = 62;
+        }
         self.ent[i].f144 = 0;
         self.ball_resize(i);
         Some(i)

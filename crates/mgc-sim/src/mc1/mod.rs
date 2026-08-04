@@ -30,8 +30,10 @@ pub(crate) fn known_thing(class: u16, model: u16) -> bool {
         // classes 7/9 park inert, class-12 models are jar variants.
         7 | 9 | 12 => true,
         10 => model <= 61,
-        // Trigger volumes: model = the trigger state machine
-        // (0..=30 dispatched; 31 = the advertised X-marker family).
+        // Trigger volumes: model = the trigger state machine. All 32
+        // states are live table entries, but state 31's retail handler
+        // is a bare `ret` (CARPET.EXE 0x5A080) — it is the map-"O"
+        // marker family and nothing else; see `World::trigger_tick`.
         11 => model <= 31,
         _ => false,
     }

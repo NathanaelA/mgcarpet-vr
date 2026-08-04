@@ -9,25 +9,17 @@
     },
     {
       "t": 28,
-      "status": "capture",
-      "sig": "ae22eab9f400d5cf",
-      "atoms": [
-        "missing:9,1"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-missing"
     },
     {
       "t": 32,
       "status": "conforming",
-      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
+      "note": "re-statused open 2026-08-04: ghost double-push fix unmasked a real (10,14) over-spawn the duplicate slot used to swallow (session-8 lead)"
     },
     {
       "t": 33,
-      "status": "open",
-      "sig": "4f85992551d6903b",
-      "atoms": [
-        "field:5,1:heading"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
     },
     {
@@ -42,11 +34,7 @@
     },
     {
       "t": 60,
-      "status": "open",
-      "sig": "edfe1a199c19d9a6",
-      "atoms": [
-        "field:5,13:heading"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn; 1 row(s) unexplained"
     },
     {
@@ -60,20 +48,12 @@
     },
     {
       "t": 78,
-      "status": "capture",
-      "sig": "406e343f90760e15",
-      "atoms": [
-        "field:9,1:life"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-fields"
     },
     {
       "t": 79,
-      "status": "capture",
-      "sig": "406e343f90760e15",
-      "atoms": [
-        "field:9,1:life"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn, mc2-cast-timing-fields"
     },
     {
@@ -88,34 +68,26 @@
     },
     {
       "t": 115,
-      "status": "capture",
-      "sig": "406e343f90760e15",
-      "atoms": [
-        "field:9,1:life"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn, mc2-cast-timing-fields"
     },
     {
       "t": 138,
-      "status": "conforming",
-      "note": "auto-triage vs known-deviations: roster: mc2-fire-smoke-churn"
+      "status": "open",
+      "sig": "a79218e1ceda514f",
+      "atoms": [
+        "field:9,1:z"
+      ],
+      "note": "re-statused open 2026-08-04: cast-edge fix + pad replay re-phased the (9,1) bolt; z rides the +/-1 input-phase family"
     },
     {
       "t": 156,
-      "status": "capture",
-      "sig": "7f4db788e3cad083",
-      "atoms": [
-        "missing:10,12"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn"
     },
     {
       "t": 167,
-      "status": "capture",
-      "sig": "406e343f90760e15",
-      "atoms": [
-        "field:9,1:life"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra, mc2-cast-timing-fields"
     },
     {
@@ -129,17 +101,13 @@
     },
     {
       "t": 278,
-      "status": "open",
-      "sig": "7f4db788e3cad083",
-      "atoms": [
-        "missing:10,12"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-hit-flash-churn; 1 row(s) unexplained"
     },
     {
       "t": 291,
       "status": "conforming",
-      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+      "note": "re-statused open 2026-08-04: +/-1 cast-phase quantization (edge fix; port arms one tick off retail on ~half the casts; input-delay-3 absorbs it, corpus-wide knob not landed)"
     },
     {
       "t": 309,
@@ -147,11 +115,7 @@
     },
     {
       "t": 346,
-      "status": "open",
-      "sig": "edfe1a199c19d9a6",
-      "atoms": [
-        "field:5,13:heading"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {
@@ -168,11 +132,7 @@
     },
     {
       "t": 737,
-      "status": "capture",
-      "sig": "7f49b988e3c6eb12",
-      "atoms": [
-        "missing:10,13"
-      ],
+      "status": "conforming",
       "note": "fire-churn newborn (10,13) into recorded-free slot 464: stale-slot-seed capture (mc2-fire-churn-m13); conformed pre-reap only via the ghost-law extra masking it — re-statused when the MC2 same-tick reap landed (ledger: MC2 SAME-TICK REAP)"
     },
     {
@@ -218,11 +178,7 @@
     },
     {
       "t": 992,
-      "status": "capture",
-      "sig": "b6f54402d020e196",
-      "atoms": [
-        "field:10,0:z"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m0"
     },
     {
@@ -236,11 +192,7 @@
     },
     {
       "t": 1064,
-      "status": "capture",
-      "sig": "32f08f62d73c1967",
-      "atoms": [
-        "field:10,45:z"
-      ],
+      "status": "conforming",
       "note": "TERRAIN CLOSURE: village-terraform z re-snap (same story as take-1; ledger mc2l0 §terraform)"
     }
   ]

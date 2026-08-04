@@ -106,17 +106,40 @@ pub struct TickRecord {
     pub wallclock: Option<u64>,
 }
 
-/// The MC1/HW static-frame input registers (same ±1-tick attribution
-/// caveat as the `input` channel — see RECORDING.md).
+/// The static-frame input registers (same ±1-tick attribution caveat as
+/// the `input` channel — see RECORDING.md). MC1/HW fill the first four;
+/// MC2 takes recorded from 2026-07-30 on also carry [`Ext::latch`] and
+/// [`Ext::press`].
 #[derive(Debug, Clone, Default)]
 pub struct Ext {
     /// 128 pressed-scancode cells (0 = up).
     pub keys: Option<Vec<u8>>,
-    /// Mouse cursor {i16 x, i16 y}.
+    /// LIVE mouse cursor {i16 x, i16 y} (MC2 `x_WORD_E3760`). This — not
+    /// [`Ext::press`] — is the aim/attitude source: retail's poll copies
+    /// it to `x_DWORD_1805B0` and `ComputeMousePlayerMovement_17060`
+    /// (PI:2100-41) turns it into the input frame's roll/pitch.
     pub cursor: Option<(i16, i16)>,
     /// Held mouse buttons (nonzero i16 = held).
     pub lbtn: Option<i16>,
     pub rbtn: Option<i16>,
+    /// MC2 press LATCHES `(x_WORD_180746 left, x_WORD_180744 right)` —
+    /// set by the ISR on the press edge, cleared when the poll consumes
+    /// them. The decoded twin of the `input.mouse_clicks` booleans;
+    /// `verify_mc2::align_cmd_mc2` is the law that reads them.
+    pub latch: Option<(i16, i16)>,
+    /// MC2 cursor-AT-PRESS `(x_WORD_E375C, x_WORD_E375E)` — the ISR
+    /// snapshots the cursor on each press edge (EF:51478-97) and nothing
+    /// clears it.
+    ///
+    /// ⚠ **NOT the cast's aim** (the recorder field map's old gloss).
+    /// The poll copies it to `unk_18058C.x_DWORD_1805B8/1805BC`
+    /// (EF:49664-65/49703-04/49750-51/50423-24) and its ONLY consumer is
+    /// `sub_1A7A0_fly_asistant` (PI:1988-2013), the fly-assistant
+    /// idle-recentre watchdog: 0x30 frames with the in-struct mouse
+    /// unmoved and no pending action → `HandleButtonClick_191B0(39, 0)`.
+    /// The cast gate `sub_5F660` (EF:60874) takes no aim argument at
+    /// all — direction comes off the caster entity's own pose.
+    pub press: Option<(i16, i16)>,
 }
 
 fn b64_field(v: &serde_json::Value, key: &str) -> Result<Option<Vec<u8>>, String> {
@@ -146,18 +169,25 @@ impl TickRecord {
                 let ext = match st.get("ext") {
                     None => None,
                     Some(e) => {
-                        let cursor = b64_field(e, "cursor_b64")?.map(|b| {
-                            (
-                                i16::from_le_bytes([b[0], b[1]]),
-                                i16::from_le_bytes([b[2], b[3]]),
-                            )
-                        });
+                        // Every one of these lanes is a 4-byte pair of
+                        // little-endian i16s (`latch_b64` is the two
+                        // one-word latch registers concatenated).
+                        let pair = |b: Option<Vec<u8>>| {
+                            b.filter(|b| b.len() >= 4).map(|b| {
+                                (
+                                    i16::from_le_bytes([b[0], b[1]]),
+                                    i16::from_le_bytes([b[2], b[3]]),
+                                )
+                            })
+                        };
                         let btn = |b: Option<Vec<u8>>| b.map(|b| i16::from_le_bytes([b[0], b[1]]));
                         Some(Ext {
                             keys: b64_field(e, "keys_b64")?,
-                            cursor,
+                            cursor: pair(b64_field(e, "cursor_b64")?),
                             lbtn: btn(b64_field(e, "lbtn_b64")?),
                             rbtn: btn(b64_field(e, "rbtn_b64")?),
+                            latch: pair(b64_field(e, "latch_b64")?),
+                            press: pair(b64_field(e, "press_b64")?),
                         })
                     }
                 };
@@ -523,7 +553,20 @@ mod m2 {
     pub const PP_PLAYINDEX: usize = 0xA;
     pub const PP_TURN: usize = 0x12;
     pub const PP_NAME: usize = 0x39F;
+    /// WRONG LANE, kept for recorder lockstep: the real
+    /// `CastleEntityIndex_0x3A_58` sits at `PP_FLIGHT + 58` = 1056
+    /// (verified on mc2l4 — +1056 tracks the live (3,2) slots 297/304
+    /// and follows raze/rebuild, +1080 is dead 0 on every player of
+    /// every sampled tick of every take). The recorder captures this
+    /// same offset, so the stored `obs.players[].castle` is a constant
+    /// 0 and `verify_mc2` PINS the port's projection from it — a
+    /// conformance blind spot, not a false positive. Moving it here
+    /// would break `check-decode` against the whole corpus; the fix
+    /// belongs in the recorder + a re-record (see [`PP_CASTLE_TRUE`]).
     pub const PP_CASTLE: usize = 1_080;
+    /// The real castle-index lane, for consumers that are NOT the
+    /// recorder-lockstep obs projection.
+    pub const PP_CASTLE_TRUE: usize = PP_FLIGHT + 58;
     pub const PP_HAND_L: usize = 2_103;
     pub const PP_HAND_R: usize = 2_105;
     pub const PP_FLIGHT: usize = 998; // type_str_164
@@ -1195,21 +1238,42 @@ pub struct RetailEntMc2 {
 
 /// One decoded MC2 per-player block (`type_str_0x2BDE`, 2124 B) — the
 /// slice the conformance importer consumes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RetailPlayerMc2 {
     pub flags: u32,      // +0x00
     pub is_ai: bool,     // +0x09
     pub play_index: u16, // +0x0A (carpet entity slot)
     pub turn: i32,       // +0x12 (per-frame counter; local player only)
-    pub castle: i16,     // +1080 (CastleEntityIndex, block-relative)
-    pub cmd_speed: i16,  // type_str_164 (+998) +12
-    pub strafe: i16,     // +998 +16
+    /// The recorder-lockstep (DEAD, always 0) castle lane — see
+    /// [`m2::PP_CASTLE`]. `verify_mc2` pins the port's obs projection
+    /// from it, so it must keep tracking the recorder, not the truth.
+    pub castle: i16,
+    /// `CastleEntityIndex_0x3A_58` for real (+998+58): the pool slot
+    /// of the wizard's own (3,2) castle, 0 = castle-less. Retail's AI
+    /// READS this stored index (21 sites in the brain, EF:5396 down)
+    /// where the port re-derives it by owner scan (`rival_castle`).
+    pub castle_ent: i16,
+    pub cmd_speed: i16, // type_str_164 (+998) +12
+    pub strafe: i16,    // +998 +16
     /// Invulnerability-reset countdown (`word_0x159_345`, +998+345).
     pub invuln: i16,
     /// The WANTED timer (`word_0x248_584`, +998+584) — village aggro.
     pub wanted: i16,
     pub hand_left: i16,  // +2103 (SpellIndexLeft; -1 = empty)
     pub hand_right: i16, // +2105
+    /// `MenuState_0x3DF_2BE4_12221` (+0x3DF) — the input dispatcher's
+    /// top-level switch (PI:494): 0/4 = flying, 1 = the pause overlay,
+    /// **5/8 = the CTRL spell-ring pane**, 6/7 = the map, 9/0xB the
+    /// options menu. Only 5/8 can raise the ring-cast bit 0x40.
+    pub menu_state: u8,
+    /// `byte_0x457_1111` (+998+1111) — the ring pane's pending EQUIP:
+    /// 0 = idle (a click picks a category), 1 = a left-hand equip is
+    /// mid-flight, 2 = right (PI:806-91).
+    pub hand_pending: u8,
+    /// `spellIndex_0x458_1112` (+998+1112) — the ring pane's CATEGORY
+    /// cursor. `spellIndex_D94FF[]` (GameUI.cpp:59, identity over
+    /// 0..25) maps it to the spell the 0x40 lane casts.
+    pub ring_cursor: u8,
     /// The str_611 spellbook block (block-relative offsets from the
     /// remc2 `_2BDE` comments): banked XP `SpellExperience_0x263`
     /// @+0x649, volatile XP `spellsExperience_0x2CB` @+0x6B1,
@@ -1223,6 +1287,48 @@ pub struct RetailPlayerMc2 {
     pub ring: [u8; 26],
     pub levels: [u8; 26],
     pub sel: [u8; 26],
+    /// The AI brain state `byte_0x1C1_449` (+998+449) — the value the
+    /// per-tick dispatch `sub_12910` switches on (EF:5252): 0 fresh,
+    /// 1 upgrade, 3 build, 4/6 possess, 7 castle raid, 8 wizard, 9
+    /// balloon, 0xB home, 0xC cruise, 0xD hunt-mana, 0xE defense.
+    /// The rival's TARGET rides the wizard ENTITY (`word_0x96_150` +
+    /// the signature `word_0x98_152`, EF:6114-15), not this block.
+    pub ai_state: u8,
+    /// Fireball-family burst counter `word_0x1A2_418` (+418): counts
+    /// shots up, then goes NEGATIVE for the lockout the combat arm
+    /// gates on (`>= 0`, EF:5947) and `sub_12A70` walks back up
+    /// one per tick (EF:5358-59).
+    pub burst: i16,
+    /// Poverty latch `word_0x1A4_420` (+420) — mana below max/4 stops
+    /// attack casting until max/4 + 6000.
+    pub poverty: i16,
+    /// Per-color hate ledger `array_0x1FC_508[4c+4]` (+516+8c) and its
+    /// war flag `[4c+5]` (+518+8c) — 8 colors, 8-byte records. 0x601F
+    /// (24607) is NEUTRAL: `sub_12A70` walks below-neutral up by
+    /// aggression+1 and above-neutral down by 256-aggression unless
+    /// the war flag pins it (EF:5375-93).
+    pub hate: [u16; 8],
+    pub war: [u16; 8],
+    /// AI recast cooldowns `str_611.array_0x367_871x` (+871, 26 u16,
+    /// one per spell) — decremented while > 0 every AI tick
+    /// (EF:5364-70). Distinct from `spell_ent` (+819), the
+    /// manifestation table; the AI arms this on each cast.
+    pub cooldown: [u16; 26],
+    /// Personality `word_0x242_578` (aggression), `word_0x244_580`
+    /// (perception), `word_0x246_582` (reflexes) and the Life scalar
+    /// `word_0x24A_586`.
+    pub aggression: i16,
+    pub perception: i16,
+    pub reflexes: i16,
+    pub life_scale: i16,
+    /// The combat-weave micro-FSM: committed direction
+    /// `str_611_byte_0x45C_1116` (+1116) and the phase counter
+    /// `str_611_byte_0x45D_1117` (+1117); then the water-steer FSM
+    /// `byte_0x45E_1118` (+1118) and its chosen exit (+1119).
+    pub weave_dir: i8,
+    pub weave: i8,
+    pub avoid: i8,
+    pub avoid_exit: i8,
 }
 
 /// The typed MC2 retail closure the conformance importer consumes.
@@ -1363,6 +1469,7 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
     let mut ring = [0u8; 26];
     let mut levels = [0u8; 26];
     let mut sel = [0u8; 26];
+    let mut cooldown = [0u16; 26];
     for s in 0..26 {
         xp_bank[s] = i32_(d, b + 0x649 + s * 4);
         xp_vol[s] = i32_(d, b + 0x6B1 + s * 4);
@@ -1370,6 +1477,17 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         ring[s] = u8_(d, b + 0x79B + s);
         levels[s] = u8_(d, b + 0x803 + s);
         sel[s] = u8_(d, b + 0x81D + s);
+        cooldown[s] = u16_(d, t + 871 + s * 2);
+    }
+    // The hate ledger is 8 EIGHT-BYTE colour records based at +516 —
+    // retail indexes it `array_0x1FC_508[4*c + 4]` off a base 8 bytes
+    // lower, so the value word lands at +516+8c and its war flag at
+    // +518+8c (EF:5377-92 the decay, EF:6201/6257/7363 the readers).
+    let mut hate = [0u16; 8];
+    let mut war = [0u16; 8];
+    for c in 0..8 {
+        hate[c] = u16_(d, t + 516 + c * 8);
+        war[c] = u16_(d, t + 518 + c * 8);
     }
     RetailPlayerMc2 {
         flags: u32_(d, b),
@@ -1377,18 +1495,36 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         play_index: u16_(d, b + m2::PP_PLAYINDEX),
         turn: i32_(d, b + m2::PP_TURN),
         castle: i16_(d, b + m2::PP_CASTLE),
+        castle_ent: i16_(d, b + m2::PP_CASTLE_TRUE),
         cmd_speed: i16_(d, t + 12),
         strafe: i16_(d, t + 16),
         invuln: i16_(d, t + 345),
         wanted: i16_(d, t + 584),
         hand_left: i16_(d, b + m2::PP_HAND_L),
         hand_right: i16_(d, b + m2::PP_HAND_R),
+        menu_state: u8_(d, b + 0x3DF),
+        hand_pending: u8_(d, t + 1111),
+        ring_cursor: u8_(d, t + 1112),
         xp_bank,
         xp_vol,
         spell_ent,
         ring,
         levels,
         sel,
+        ai_state: u8_(d, t + 449),
+        burst: i16_(d, t + 418),
+        poverty: i16_(d, t + 420),
+        hate,
+        war,
+        cooldown,
+        aggression: i16_(d, t + 578),
+        perception: i16_(d, t + 580),
+        reflexes: i16_(d, t + 582),
+        life_scale: i16_(d, t + 586),
+        weave_dir: i8_(d, t + 1116),
+        weave: i8_(d, t + 1117),
+        avoid: i8_(d, t + 1118),
+        avoid_exit: i8_(d, t + 1119),
     }
 }
 
@@ -1400,9 +1536,11 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
             d.len()
         ));
     }
-    // Entity stacks: pointer cells → slots. D41A0_0 is a static
-    // global, so the guest base is recovered from any live cell's
-    // pool-stride residue rather than hardcoded per build.
+    // Entity stacks: pointer cells → slots, off ONE pool base
+    // recovered from the snapshot's own pool image (`mc2_pool_base`)
+    // — both stacks index the same pool, and a per-stack guess is
+    // ambiguous by construction.
+    let pool_base = mc2_pool_base(d);
     let pcount = u16_(d, m2::LOCAL_PLAYER + 2);
     let mut spawn_ord = [0u8; 29];
     spawn_ord.copy_from_slice(&d[0x10..0x10 + 29]);
@@ -1419,8 +1557,8 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
         ents: (0..m2::ENT_COUNT as u16)
             .map(|s| decode_retail_ent_mc2(d, s))
             .collect(),
-        free_stack: mc2_stack(d, 0x35, 0x246),
-        recycle_stack: mc2_stack(d, 0x11E6, 0x11EA),
+        free_stack: mc2_stack(d, 0x35, 0x246, pool_base),
+        recycle_stack: mc2_stack(d, 0x11E6, 0x11EA, pool_base),
         level: u16_(d, m2::POOL + m2::ENT_COUNT * m2::ENT_STRIDE + 2),
         base160: u32_(d, 0x36DF6),
         stagevars: {
@@ -1433,36 +1571,111 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
     })
 }
 
-/// Decode an MC2 entity stack (top dword + guest-pointer cells into
-/// the pool). `D41A0_0` is a static global, but DOS/4GW's load delta
-/// makes the guest base run-specific — recover it from the cells:
-/// the pool base is `cells[0] − s·168` for the (unique) `s` under
-/// which EVERY cell lands on a stride boundary inside the pool.
-/// Validated against mc2l0: top@0x35 == free-census − 1 and the
-/// decoded set is exactly the class-0 slots. Returns slots bottom-up
-/// (last = next allocation).
-fn mc2_stack(d: &[u8], top_off: usize, cells_off: usize) -> Vec<u16> {
+/// A stack's live pointer cells (`top` = index of the last cell,
+/// −1 = empty). Raw guest pointers — see [`mc2_pool_base`].
+fn mc2_stack_cells(d: &[u8], top_off: usize, cells_off: usize) -> Vec<u32> {
     let top = i32_(d, top_off) as i64;
-    if !(0..1000).contains(&top) {
+    if !(0..m2::ENT_COUNT as i64).contains(&top) {
         return Vec::new();
     }
-    let stride = m2::ENT_STRIDE as u32;
-    let cells: Vec<u32> = (0..=top as usize)
+    (0..=top as usize)
         .map(|i| u32_(d, cells_off + i * 4))
-        .collect();
-    let base = (0..1000u32)
-        .rev()
-        .map(|s| cells[0].wrapping_sub(s * stride))
-        .find(|&cand| {
-            cells.iter().all(|&p| {
-                let rel = p.wrapping_sub(cand);
-                rel % stride == 0 && (rel / stride) < 1000
-            })
-        });
+        .collect()
+}
+
+fn mc2_class_at(d: &[u8], slot: usize) -> u8 {
+    d[m2::POOL + slot * m2::ENT_STRIDE + m2::ENT_CLASS]
+}
+
+/// The one base under which every cell of `cells` decodes to a slot in
+/// `1..1000` whose pool record is free (`want_free`) — or occupied,
+/// for the recycle stack's live victims. `None` when the cells are
+/// unaligned, when nothing validates, or when the answer is NOT
+/// unique (callers then keep the stack empty and let the consumer's
+/// own free-list census take over).
+fn mc2_base_from_cells(d: &[u8], cells: &[u32], want_free: bool) -> Option<u32> {
+    let stride = m2::ENT_STRIDE as i64;
+    let first = *cells.first()? as i64;
+    // Cell k's slot is `delta_k + s` for one unknown `s` (cell 0's own
+    // slot). Alignment does not depend on `s`, so every in-range
+    // candidate is stride-clean and they form ONE contiguous interval
+    // — only the pool image discriminates inside it.
+    let mut deltas = Vec::with_capacity(cells.len());
+    for &p in cells {
+        let rel = p as i64 - first;
+        if rel % stride != 0 {
+            return None;
+        }
+        deltas.push(rel / stride);
+    }
+    // Slot 0 is the reserved null record and is never stacked.
+    let lo = 1 - deltas.iter().copied().min()?;
+    let hi = (m2::ENT_COUNT as i64 - 1) - deltas.iter().copied().max()?;
+    let mut found = None;
+    for s in lo..=hi {
+        let hit = deltas
+            .iter()
+            .all(|&k| (mc2_class_at(d, (k + s) as usize) == 0) == want_free);
+        if hit {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(s);
+        }
+    }
+    u32::try_from(first - found? * stride).ok()
+}
+
+/// The guest address of the MC2 entity pool. `D41A0_0` is a static
+/// global, but DOS/4GW's load delta makes the guest base run-specific,
+/// so it is recovered per snapshot — VALIDATED AGAINST THE POOL IMAGE.
+///
+/// Geometry alone does NOT pin it: every candidate `cells[0] − s·168`
+/// keeps every cell stride-aligned (they are all pool pointers), so
+/// the only constraint the pointers give is "max index < 1000", i.e.
+/// the highest cell ↦ slot 999. The moment the TOP pool slots are in
+/// use — and therefore absent from the free stack — that guess
+/// inflates EVERY decoded slot by a constant shift (measured on
+/// mc2l24: 14,219 of 69,221 snapshots, shifts 1..993, up to 43% of the
+/// cells landing on live records). The pool image pins it instead:
+/// retail's frame-top reap zeroes `class` before pushing
+/// (`sub_57F20`), so every free-stack cell must land on a `class == 0`
+/// record. That base is unique on every MC2 snapshot in the corpus
+/// (104,824 across mc2l0/l4/l30/l24) and the decoded set is then
+/// EXACTLY the class-0 slots minus slot 0 on all of them. Independent
+/// corroboration: the recovered base is `base160 + 736_026` in every
+/// one of those snapshots (both are statics in the same image, so
+/// their distance is a build constant) — a cross-check, not the
+/// recovery, since the constant is per-build.
+///
+/// The recycle stack shares this base: its cells are LIVE victims, so
+/// they validate against occupied records instead (never a class-0
+/// one, corpus-wide) — recovering it per-stack decoded mc2l4's
+/// recycle cells onto bogus free slots.
+fn mc2_pool_base(d: &[u8]) -> Option<u32> {
+    let free = mc2_stack_cells(d, 0x35, 0x246);
+    if let Some(b) = mc2_base_from_cells(d, &free, true) {
+        return Some(b);
+    }
+    // Pool full (empty free stack): the live-victim stack is the only
+    // pointer set left. Never needed on the current corpus.
+    let recycle = mc2_stack_cells(d, 0x11E6, 0x11EA);
+    mc2_base_from_cells(d, &recycle, false)
+}
+
+/// Decode an MC2 entity stack (top dword + guest-pointer cells into
+/// the pool) against a recovered pool `base` ([`mc2_pool_base`]).
+/// Returns slots bottom-up (last = next allocation).
+fn mc2_stack(d: &[u8], top_off: usize, cells_off: usize, base: Option<u32>) -> Vec<u16> {
+    let stride = m2::ENT_STRIDE as u32;
     let Some(base) = base else { return Vec::new() };
-    cells
+    mc2_stack_cells(d, top_off, cells_off)
         .iter()
-        .map(|&p| (p.wrapping_sub(base) / stride) as u16)
+        .filter_map(|&p| {
+            let rel = p.wrapping_sub(base);
+            (rel % stride == 0 && rel / stride < m2::ENT_COUNT as u32)
+                .then_some((rel / stride) as u16)
+        })
         .collect()
 }
 
@@ -1511,4 +1724,146 @@ pub fn decode_retail_mc1(d: &[u8]) -> Result<RetailMc1, String> {
         recycle_stack,
         level: u16_(d, 232_707),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A zeroed MC2 snapshot with a synthetic pool: every slot LIVE
+    /// (class 1) except `free`, and the two stacks written as guest
+    /// pointers off `base`.
+    fn mc2_snapshot(base: u32, free: &[u16], stack: &[u16], recycle: &[u16]) -> Vec<u8> {
+        let mut d = vec![0u8; MC2_STRUCT_SIZE];
+        for slot in 1..m2::ENT_COUNT {
+            d[m2::POOL + slot * m2::ENT_STRIDE + m2::ENT_CLASS] = 1;
+        }
+        for &s in free {
+            d[m2::POOL + s as usize * m2::ENT_STRIDE + m2::ENT_CLASS] = 0;
+        }
+        let mut put = |top_off: usize, cells_off: usize, cells: &[u16]| {
+            let top = cells.len() as i32 - 1;
+            d[top_off..top_off + 4].copy_from_slice(&top.to_le_bytes());
+            for (i, &s) in cells.iter().enumerate() {
+                let p = base + s as u32 * m2::ENT_STRIDE as u32;
+                d[cells_off + i * 4..cells_off + i * 4 + 4].copy_from_slice(&p.to_le_bytes());
+            }
+        };
+        put(0x35, 0x246, stack);
+        put(0x11E6, 0x11EA, recycle);
+        d
+    }
+
+    /// The pool base comes from the POOL IMAGE, not from "the highest
+    /// stacked cell is slot 999": with the top of the pool in use, the
+    /// old max-index guess inflated every decoded slot by a constant.
+    #[test]
+    fn mc2_pool_base_is_pinned_by_the_free_records_not_the_max_index() {
+        const BASE: u32 = 0x0012_0000;
+        let free = [5u16, 100, 101, 700];
+        // Retail pushes by descending scan, so the stack reads
+        // bottom-up 700, 101, 100, 5 (5 pops next).
+        let stack = [700u16, 101, 100, 5];
+        let d = mc2_snapshot(BASE, &free, &stack, &[]);
+        assert_eq!(mc2_pool_base(&d), Some(BASE));
+        let st = decode_retail_mc2(&d).unwrap();
+        assert_eq!(st.free_stack, stack);
+        // Non-vacuity: the pre-fix recovery mapped the highest cell
+        // (700) to slot 999, i.e. everything +299.
+        let legacy: Vec<u16> = stack.iter().map(|s| s + 299).collect();
+        assert_ne!(st.free_stack, legacy);
+    }
+
+    /// The recycle stack holds LIVE victims, so it can never be
+    /// base-recovered on its own the way the free stack can — it rides
+    /// the free stack's base (per-stack recovery decoded mc2l4's
+    /// victims onto bogus free slots).
+    #[test]
+    fn mc2_recycle_stack_rides_the_free_stack_pool_base() {
+        const BASE: u32 = 0x0012_0000;
+        let d = mc2_snapshot(BASE, &[5, 100, 101, 700], &[700, 101, 100, 5], &[900, 950]);
+        let st = decode_retail_mc2(&d).unwrap();
+        assert_eq!(st.free_stack, [700, 101, 100, 5]);
+        assert_eq!(st.recycle_stack, [900, 950]);
+        // Non-vacuity: recovering the recycle base from its own cells
+        // would have mapped 950 to slot 999 (everything +49).
+        assert_ne!(st.recycle_stack, [949, 999]);
+    }
+
+    /// No unique base (here: an empty pool makes every candidate
+    /// validate) ⇒ empty stacks, so the consumer's own free-slot
+    /// census takes over instead of importing a shifted list.
+    #[test]
+    fn mc2_ambiguous_pool_base_yields_no_stack() {
+        const BASE: u32 = 0x0012_0000;
+        let all: Vec<u16> = (1..m2::ENT_COUNT as u16).collect();
+        let d = mc2_snapshot(BASE, &all, &[42], &[]);
+        assert_eq!(mc2_pool_base(&d), None);
+        let st = decode_retail_mc2(&d).unwrap();
+        assert!(st.free_stack.is_empty());
+    }
+
+    /// The wizard-extension AI lanes come off `type_str_164`, which is
+    /// EMBEDDED in the per-player block at +998 — every lane's offset
+    /// is the decimal in its remc2 name. Stamps player 1's lanes with
+    /// distinct values and reads them back; the hate/war pair is the
+    /// one that is easy to get wrong (8-byte colour records based at
+    /// +516, i.e. retail's `array_0x1FC_508[4c+4]`, NOT a flat array
+    /// at +508), so it gets a per-colour signature.
+    #[test]
+    fn mc2_wizard_ext_ai_lanes_decode_off_str_164() {
+        let mut d = vec![0u8; MC2_STRUCT_SIZE];
+        d[m2::LOCAL_PLAYER + 2..m2::LOCAL_PLAYER + 4].copy_from_slice(&2u16.to_le_bytes());
+        let b = m2::PLAYERS + m2::PLAYER_STRIDE;
+        let t = b + m2::PP_FLIGHT;
+        let mut put16 = |o: usize, v: i16| d[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        put16(t + 449, 13); // ai_state (a byte lane; 450 stays 0)
+        put16(t + 418, -27); // burst lockout
+        put16(t + 420, 1); // poverty
+        put16(t + 578, 243); // aggression
+        put16(t + 580, 73); // perception
+        put16(t + 582, 50); // reflexes
+        put16(t + 586, 60); // Life scalar
+        put16(b + m2::PP_CASTLE_TRUE, 297);
+        for c in 0..8 {
+            put16(t + 516 + c * 8, 24607 + c as i16);
+            put16(t + 518 + c * 8, (c as i16) & 1);
+        }
+        for s in 0..26 {
+            put16(t + 871 + s * 2, 100 + s as i16);
+        }
+        d[t + 1116] = 2;
+        d[t + 1117] = 16;
+        d[t + 1118] = 3;
+        d[t + 1119] = 4;
+
+        let p = decode_retail_player_mc2(&d, 1);
+        assert_eq!(p.ai_state, 13, "byte_0x1C1_449 = the dispatch switch");
+        assert_eq!((p.burst, p.poverty), (-27, 1));
+        assert_eq!(
+            (p.aggression, p.perception, p.reflexes, p.life_scale),
+            (243, 73, 50, 60)
+        );
+        assert_eq!(p.castle_ent, 297, "CastleEntityIndex is at +998+58");
+        assert_eq!(p.castle, 0, "the recorder-lockstep lane stays dead");
+        assert_eq!(
+            p.hate,
+            [24607, 24608, 24609, 24610, 24611, 24612, 24613, 24614]
+        );
+        assert_eq!(p.war, [0, 1, 0, 1, 0, 1, 0, 1]);
+        assert_eq!(p.cooldown[0], 100);
+        assert_eq!(p.cooldown[25], 125);
+        assert_eq!((p.weave_dir, p.weave, p.avoid, p.avoid_exit), (2, 16, 3, 4));
+        // Non-vacuity: player 0's block is untouched, so a decode that
+        // ignored the per-player stride would report player 1's lanes
+        // for it too.
+        let p0 = decode_retail_player_mc2(&d, 0);
+        assert_eq!((p0.ai_state, p0.burst, p0.hate[1]), (0, 0, 0));
+        // Non-vacuity for the record stride: reading hate as a FLAT
+        // array at +508 would have shifted every colour by four words.
+        let flat: Vec<u16> = (0..8)
+            .map(|c| u16_(&d, t + 508 + c * 2))
+            .collect::<Vec<_>>();
+        assert_ne!(flat, p.hate.to_vec());
+    }
 }

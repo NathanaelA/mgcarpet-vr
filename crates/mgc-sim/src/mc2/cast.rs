@@ -191,8 +191,14 @@ pub(crate) struct DispatchArm {
 /// str_D7BD6 index — a 255 would panic the BEHAVIOR lookup),
 /// sprite). model = subtype throughout except 0x1C (model 28 rides
 /// the fireball body). All creators: mana 50, no RNG.
-const CREATORS: [(u8, u8, i16, u32, u8, u16); 18] = [
-    (0, 0, 384, 21, 64, 340),   // fireball (SummonFireball_4D2E0 EF:34729)
+const CREATORS: [(u8, u8, i16, u32, u8, u16); 19] = [
+    (0, 0, 384, 21, 64, 340), // fireball (SummonFireball_4D2E0 EF:34729)
+    // The BASIC possession bolt (`SummonManaPosession_4D3B0` EF:34764)
+    // — tier `life_0x1A` 0 only, launched by `sub_69900` (EF:56039).
+    // Same speed/life/row/sprite as its leveled (9,17) twin; the two
+    // differ ONLY in action (1 vs 18) and in the ShiftRot fov factor
+    // (5/2 vs 2 — see `mc2_spawn_cast_proj`).
+    (1, 1, 384, 10, 61, 209),
     (2, 2, 384, 21, 60, 211),   // earthquake shot (sub_4D470 EF:34788)
     (3, 3, 384, 21, 60, 76),    // meteor shot (sub_4D500 EF:34810)
     (4, 4, 384, 21, 60, 210),   // volcano shot (sub_4D590 EF:34832)
@@ -238,35 +244,79 @@ impl Gen {
             e.max_life = life;
             e.row156 = row;
             e.flags = (e.flags & !8) | super::proj::F_MC2PROJ;
+            // The BASIC possession bolt is the one class-9 creator
+            // that narrows `xtype_0x41_65` off the NewEvent −1
+            // wildcard: `SummonManaPosession_4D3B0` stamps 10
+            // (EF:34775; the leveled (9,17) `sub_4DDD0` does NOT).
+            // Retail's own possession probe `sub_108B0` never reads
+            // it — the lane only bites if the bolt ever runs the
+            // generic `sub_10780` — so `mc2_flyer_tick` skips
+            // `mc2_proj_filter` on the claim arm to keep it inert
+            // exactly like retail (worm/building claims survive).
+            if subtype == 1 {
+                e.f66 = 10;
+            }
         }
         self.link(i, x, y, z);
         self.refill_life(i);
         self.mc2_set_sprite(i, sprite);
+        // The POSSESSION pair alone re-boxes after the sprite set
+        // (`SetEntityShiftRot_49EA0`): the basic (9,1) takes
+        // `(2*pitch, 5*fov/2)` (EF:34781) and the leveled (9,17)
+        // `(2*pitch, 2*fov)` (EF:35148). Sprite 209's row is
+        // (speed_6 0, rotSpeed_8 150) → pitch/roll 0 either way, fov
+        // 187 vs 150 — the z half-extent the claim probe and the cave
+        // ceiling glide both read. Every other class-9 creator stops
+        // at `SetEntityIndexAndRot_49CD0`.
+        if matches!(subtype, 1 | 17) {
+            let e = &self.ent[i];
+            let shift = e.f80.wrapping_mul(2);
+            let fov = if subtype == 1 {
+                5 * e.f84 / 2
+            } else {
+                2 * e.f84
+            };
+            self.mc2_shift_rot(i, shift, fov);
+        }
         Some(i)
     }
 
-    /// Fool's Mana retaliation (`sub_36680` EF:26615), run from the
-    /// decoy sphere's own tick once a NON-owner possession has claimed
-    /// it (mc1/combat.rs `ball_tick`). Reads the trap fields f50 (tier),
-    /// f136 (payload), f146 (latched claimer), f56 (per-sphere counter).
-    /// Returns true when the sphere is spent and must despawn. Per tier:
-    /// tier 0 → one fireball at the possessor, done; tier 1 → a fireball
-    /// every other tick, up to 8, then done; tier 2/3 → one lightning
-    /// bolt, then despawn after two ticks. The projectile homes the
+    /// Fool's Mana retaliation (`sub_36680` EF:26615), run from a
+    /// (10,57) sphere's own tick while the ch1 claim latch
+    /// (`word_0x68_104` → the ch1 mail SOURCE, @0x68) is set —
+    /// mc1/combat.rs `ball_tick`. Retail field homes, all imported:
+    /// parentId = id24 (@0x28), tier = f71 (@0x46), payload = f44
+    /// (@0x2A), counter = f26 (@0x10). Returns true when the sphere is
+    /// spent and must be consumed. The ONLY no-trap arm is
+    /// `parentId == claimer` (EF:26623) — it clears the channel and the
+    /// sphere lives on; there is no "is this a cast decoy" gate, which
+    /// is why the AUTHORED ground spheres (parentId 0, tier 0) trap
+    /// every possessor. Per tier: 0 → one fireball at the possessor,
+    /// done; 1 → a fireball every other tick, up to 8, then done; 2/3 →
+    /// one lightning bolt, then despawn after two ticks; >3 → nothing,
+    /// ever (retail's fallthrough returns 0 and never clears the latch,
+    /// so the sphere freezes claimed). The projectile homes the
     /// possessor (docs/spell-audit/fools-mana.md §2b).
-    pub(crate) fn mc2_fools_retaliate(&mut self, i: usize) -> bool {
-        let (tier, claimer) = (self.ent[i].f50, self.ent[i].f146);
+    pub(crate) fn mc2_fools_retaliate(&mut self, i: usize, ctx: &MobCtx) -> bool {
+        let claimer = self.ent[i].mail[1].1;
+        if self.ent[i].id24 == claimer {
+            // EF:26623-27: the owner cannot be fooled by its own —
+            // clear the channel (amount and source) and carry on.
+            self.ent[i].mail[1] = (0, 0);
+            return false;
+        }
+        let tier = self.ent[i].f71;
         match tier {
             0 => {
-                self.mc2_fools_bolt(i, 0, (10, 0), claimer);
+                self.mc2_fools_bolt(i, 0, (10, 0), claimer, ctx);
                 // XP lands when the trap SPRINGS (EF:26636), not on
                 // the cast.
                 self.mc2_fools_award(i);
                 true
             }
             1 => {
-                let c = self.ent[i].f56;
-                self.ent[i].f56 = c.wrapping_add(1);
+                let c = self.ent[i].f26;
+                self.ent[i].f26 = c.wrapping_add(1);
                 if c >= 8 {
                     self.mc2_fools_award(i); // after the 8th (EF:26646)
                     return true;
@@ -274,15 +324,15 @@ impl Gen {
                 // The fireball fires when the POST-increment counter
                 // is even = old counter ODD (EF:26648 `!(++c & 1)`).
                 if c & 1 != 0 {
-                    self.mc2_fools_bolt(i, 0, (10, 0), claimer);
+                    self.mc2_fools_bolt(i, 0, (10, 0), claimer, ctx);
                 }
                 false
             }
-            _ => {
-                let c = self.ent[i].f56;
-                self.ent[i].f56 = c.wrapping_add(1);
+            2 | 3 => {
+                let c = self.ent[i].f26;
+                self.ent[i].f26 = c.wrapping_add(1);
                 if c == 0 {
-                    self.mc2_fools_bolt(i, 9, (10, 23), claimer);
+                    self.mc2_fools_bolt(i, 9, (10, 23), claimer, ctx);
                     return false;
                 }
                 // Despawn at old counter 2 (`v3+1 > 2`, EF:26661).
@@ -292,13 +342,20 @@ impl Gen {
                 }
                 done
             }
+            // Tier > 3 falls out of `sub_36680` with v5 = 0 (EF:26665):
+            // no trap, no transfer, and the latch is never cleared —
+            // the sphere is claimed forever and never moves again.
+            _ => false,
         }
     }
 
     /// `sub_6D8B0(parentId, 0x16, 1)` at the trap's SPEND points —
     /// via the XP mail (this is `Gen`; the book lives on `World`).
+    /// parentId rides id24 (@0x28); an AUTHORED sphere carries its own
+    /// slot there (retail: 0), so the level's bait credits nobody —
+    /// which is what `sub_6D8B0(0, …)` does.
     fn mc2_fools_award(&mut self, i: usize) {
-        let owner = self.ent[i].f52;
+        let owner = self.ent[i].id24;
         if owner == PLAYER_TARGET {
             self.mc2_cast_xp.0.push((owner, 22, 1));
         }
@@ -307,22 +364,63 @@ impl Gen {
     /// Spawn one Fool's-Mana retaliation projectile from the sphere,
     /// homing the possessor: fireball (`sub_36770`, subtype 0, impact
     /// (10,0), sound 9) or thunder bolt (`sub_36850`, subtype 9, impact
-    /// (10,23)). Owner = the trap's caster (f52) so the flyer's autoaim
-    /// never turns it on the caster; the tier's damage payload rides f44.
-    /// A pool-entity claimer is aimed at directly; the human sentinel
-    /// falls back to the sphere's launch heading and the flyer's autoaim
-    /// re-acquires (the owner is a rival there, so it seeks the human).
-    fn mc2_fools_bolt(&mut self, i: usize, subtype: u8, impact: (u8, u8), claimer: u16) {
+    /// (10,23)). Owner = the trap's parentId (id24) so the flyer's
+    /// autoaim never turns it on the caster; the tier's damage payload
+    /// (`subSpellIndex_0x2A_42` → f44) rides onto the projectile's own
+    /// f44 (EF:26691/26722). Retail's `sub_655C0` aims at the CLAIMER
+    /// entity — the human wizard included (retail humans are in-pool);
+    /// our out-of-pool human resolves through the ctx pose, the same
+    /// sentinel resolution every creature attack aim uses
+    /// ([`Gen::mc2_target`]). A reaped pool claimer falls back to the
+    /// sphere's launch heading.
+    fn mc2_fools_bolt(
+        &mut self,
+        i: usize,
+        subtype: u8,
+        impact: (u8, u8),
+        claimer: u16,
+        ctx: &MobCtx,
+    ) {
         let (x, y, z, owner, payload, heading) = {
             let e = &self.ent[i];
-            // DEFERRED: retail lifts the launch z by the box fov
-            // (`position.z += array_0x52_82.fov`, EF:26688/26718) —
-            // centering the bolt on the sphere. Applying it verbatim
-            // self-detonates the trap here: OUR generic victim probe
-            // (victim_scan_at) admits the launcher sphere, retail's
-            // sub_10780 evidently does not. Needs the sphere-
-            // admission trace before the lift can land.
-            (e.x, e.y, e.z, e.f52, e.f136, e.f30)
+            // The MUZZLE LIFT (`position.z += array_0x52_82.fov`,
+            // EF:26688 fireball / EF:26718 lightning): the bolt leaves
+            // from the TOP of the launcher's own box, not its origin.
+            // `a1x` there is the SPHERE, so the fov is the sphere's —
+            // exactly the same law shape as the possession cast's
+            // `position.z += a2x->array_0x52_82.fov` (EF:56054 /
+            // EF:55969), where the launcher is the wizard. mc2l24
+            // t=1322: retail's fireball leaves at z=898 off a z=846
+            // sphere with afov 42.
+            //
+            // The self-detonation this was deferred over is NOT a
+            // probe-filter gap: retail's `sub_10780` (EF:3739) has no
+            // launcher exclusion at all. What keeps the bolt off its
+            // own sphere is (a) the tier-0 sphere is UNMAPPED and
+            // class-zeroed at the end of its OWN tick — the entity
+            // walk runs `sub_57F20` (Events.cpp:551, :5209:
+            // `SetMapEntity_57E50` + `class = 0` + free-stack push)
+            // the instant `DisableEntityDrawing04_57F10` latches
+            // byte[1]&4 — and (b) retail probes ONCE, at the END of a
+            // full 384-unit step (`sub_65C20` EF:63126-29: MoveEntity,
+            // CopyEntityPosition, THEN `sub_10780`). Our soft kill
+            // leaves the sphere linked until the tick-top reap, and
+            // our anti-tunnel chord march probes sub-steps the retail
+            // probe never visits — so the launcher is excluded here,
+            // at the source, by owner identity: the bolt inherits the
+            // sphere's `id24`, and `victim_scan`'s `c.id24 != id`
+            // (retail's `a1x->id_0x1A_26 != v5x->id_0x1A_26`,
+            // EF:3769) then drops it, together with the co-located
+            // (10,0) consume poof once that inherits the owner too.
+            let lift = e.f84 as i16;
+            (
+                e.x,
+                e.y,
+                e.z.wrapping_add(lift),
+                e.id24,
+                e.f44 as i32,
+                e.f30,
+            )
         };
         let Some(pr) = self.mc2_spawn_cast_proj(subtype, x, y, z) else {
             return;
@@ -336,8 +434,12 @@ impl Gen {
                 self.snd(27, s);
             }
         }
-        let (yaw, pitch) = if claimer != PLAYER_TARGET
-            && (claimer as usize) < self.ent.len()
+        let (yaw, pitch) = if claimer == PLAYER_TARGET {
+            let (tx, ty, tz) = (ctx.px, ctx.py, ctx.pz);
+            let yaw = Self::angle_between(x, y, tx, ty);
+            let dh = Self::isqrt(Self::dist2_sq(x, y, tx, ty) as u32) as i32;
+            (yaw, Self::pitch_toward(z, tz, dh))
+        } else if (claimer as usize) < self.ent.len()
             && self.ent[claimer as usize].flags & 0x400 == 0
         {
             let t = &self.ent[claimer as usize];
@@ -907,10 +1009,22 @@ impl World {
     /// `sub_5F380`'s per-button dispatch (EF:60748) under the
     /// press/hold law (docs/traces/mc2-cast-input.md §1-2): the fire
     /// bits are EDGE-triggered per press
-    /// (`HandleMouseButtons_18F80`, PI:2037-76); a HELD button
-    /// re-fires only when the bound tier is RAPID (`byte_0x3B_59 ==
-    /// 0`) and its cast window is live — that is the whole
+    /// (`HandleMouseButtons_18F80`, PI:2027-76); a HELD button
+    /// re-fires only when the bound tier is RAPID (`byte_0x3B_59 !=
+    /// 1`) and its cast window is live — that is the whole
     /// click-vs-Repeat-Fireball difference.
+    ///
+    /// The two retail registers behind `edge`/`held` are the two
+    /// halves of `MouseButtonState_18059C`, rebuilt every poll at
+    /// EF:49675-83: bit 0/1 = the ISR PRESS LATCH
+    /// (`x_WORD_180746`/`180744`), bit 2/3 = the HELD state
+    /// (`x_WORD_18074C`/`18074A`). `HandleMouseButtons_18F80` fires a
+    /// non-rapid spell off bit 0 ALONE and clears it (PI:2043-49),
+    /// and the frame tail clears the global latch whenever bit 0 is
+    /// down (PI:1049-52) — hence exactly ONE cast per physical click,
+    /// however long the button is held. Measured on mc2l4 0+4000: 409
+    /// recorded press edges, 404 retail possession arms, and the port
+    /// (once its edge lane was alive) 408.
     pub(crate) fn mc2_cast_input(&mut self, edge: (bool, bool), held: (bool, bool)) {
         if self.player.state != LifeState::Alive {
             return;
@@ -923,7 +1037,10 @@ impl World {
             if m == 0 {
                 return false;
             }
-            edge || (held && w.g.ent[m].f59 == 0 && w.g.ent[m].f26 > 0)
+            // `byte_0x3B_59 == 1` is the CLICK-ONLY family; every
+            // other value takes the repeat arm (PI:2043 vs PI:2050 —
+            // the test is `== 1`, not `!= 0`).
+            edge || (held && w.g.ent[m].f59 != 1 && w.g.ent[m].f26 > 0)
         };
         if fires(self, self.mc2_book.left, edge.0, held.0) {
             self.mc2_cast_gate(self.mc2_book.left as usize, false);
@@ -958,23 +1075,20 @@ impl World {
             }
             // Possess: an active cast is not re-armed/re-charged —
             // the marker timer never refreshes — but the re-press
-            // records the firing hand, runs the invis-break law
-            // (EF:60900-07 calls sub_5F7E0 before LABEL_23), and
-            // raises the `byte_0x3C_60 = 1` RELEASE SIGNAL (→ f56):
-            // the armed manifestation tick consumes it and fires
-            // ANOTHER bolt. All three possession tiers re-cast
-            // freely while the marker runs (player retail-verified
-            // — the "spell active" marker only suppresses mana
-            // regen); each re-cast still pays the mana gate.
+            // raises the `byte_0x3C_60 = 1` RELEASE SIGNAL (→ f56),
+            // records the firing hand, and runs the invis-break law,
+            // IN THAT ORDER and with NO mana gate: retail's arm is
+            // `byte_0x3C_60 = 1; byte[1] &= 0xFC; dword |= v3;
+            // sub_5F7E0(); v7 = 1; goto LABEL_23` (EF:60900-07) —
+            // LABEL_23 buzzes only on `v6`, which this path never
+            // sets, so a broke wizard re-pressing possession gets the
+            // signal and NO sound 29. The tier-0 consumer discards
+            // the signal (`sub_69640` EF:56013); the higher tiers
+            // spend it on a re-fire.
             1 if armed > 0 => {
+                self.g.ent[m].f56 = 1;
                 self.g.ent[m].f50 = if right { 512 } else { 256 };
                 self.mc2_arm_invis_break(spell);
-                let cost = self.g.ent[m].max_life;
-                if !self.dev_spells && (self.player.mana as u64) < cost as u64 {
-                    self.g.snd_player(29);
-                    return;
-                }
-                self.g.ent[m].f56 = 1;
                 return;
             }
             // Castle: a re-cast while the ball flies buzzes
@@ -1081,6 +1195,23 @@ impl World {
             if m == 0 {
                 continue;
             }
+            self.mc2_manifestation_tick(spell, m, p, ctx);
+        }
+    }
+
+    /// ONE manifestation's effect state — the body of
+    /// [`World::mc2_cast_tick`]'s loop, split out because retail runs it
+    /// as the class-15 entity's OWN action at its OWN pool slot, not
+    /// from the caster's dispatch (see
+    /// [`World::mc2_manifestation_pass`]).
+    pub(crate) fn mc2_manifestation_tick(
+        &mut self,
+        spell: usize,
+        m: usize,
+        p: PlayerPose,
+        ctx: &MobCtx,
+    ) {
+        {
             // CASTLE (2) is not a timed cast — its "active" window is an
             // UPGRADE LOCK driven by the castle's transform, exactly like
             // retail's `sub_69AB0`/`sub_5F890` (the manifestation timer is
@@ -1094,7 +1225,7 @@ impl World {
                 if self.g.ent[m].f54 > 0 {
                     self.g.ent[m].f54 -= 1;
                 }
-                continue;
+                return;
             }
             if self.g.ent[m].f26 > 0 {
                 // `sub_68DE0` (EF:55569) has two halves keyed on the
@@ -1407,35 +1538,93 @@ impl World {
 
         // The direct-effect band (§2.2).
         match spell {
-            // posses: class-9 subtype 17 via _4A190 (EF:55915),
-            // sound 40. Per-tier delivery (docs/spell-audit/
-            // possession.md): T0 plain claim `(10,12)`; T1 Mana
-            // Magnet — claim + the `(10,54)` attract aura (range 15);
-            // T2 Mana Lock — FORCED claim ((10,70) steal pulse: steals
-            // locked targets and sets the claim lock) + the `(10,69)`
-            // aura (range 20). The impact model encodes the tier so
-            // the aura spawns at landing and tier 2 forces the claim.
+            // posses (`sub_69640` EF:55915), sound 40. The tier gate is
+            // the SUBSPELL's `life_0x1A`, and it picks a different
+            // ENTITY, not just a different payload (EF:55946-49):
+            //
+            //   life 0    → `sub_69900` (EF:56039) spawns the BASIC
+            //               **(9,1)** bolt, impact (10,12);
+            //   life 1..3 → the inline arm spawns **(9,17)**
+            //               (EF:55950), `byte_0x44_68` = 54 (life 1) /
+            //               69 (life 2) / the NewEvent 0 (life 3);
+            //   life > 3  → the `<= 3` gate fails: NOTHING is cast.
+            //
+            // Per-tier delivery (docs/spell-audit/possession.md): T0
+            // plain claim `(10,12)`; T1 Mana Magnet — claim + the
+            // `(10,54)` attract aura (range 15); T2 Mana Lock — FORCED
+            // claim ((10,70) steal pulse) + the `(10,69)` aura
+            // (range 20).
+            //
+            // Row 1's `life` column IS (0,1,2) on the baked CD, so the
+            // tier index stands in when there is no SPELLS row at all
+            // (unit fixtures) — the port used to key on the tier index
+            // ALONE and always launched (9,17): full-take mc2l24 read
+            // (9,1) 362 missing / 0 extra.
             1 => {
                 let tier = self.g.ent[m].f71 as usize;
-                let impact = match tier {
-                    0 => (10, 12),
-                    1 => (10, 54),
-                    _ => (10, 69),
+                let life = row.map_or(tier as i8, |_| sub.life);
+                let arm = match life {
+                    0 => Some((1u8, (10u8, 12u8))),
+                    1 => Some((17, (10, 54))),
+                    2 => Some((17, (10, 69))),
+                    3 => Some((17, (10, 0))),
+                    _ => None,
                 };
-                if self
-                    .mc2_launch(
+                if let Some((subtype, impact)) = arm
+                    && let Some(i) = self.mc2_launch(
                         spell,
                         m,
                         &DispatchArm {
-                            subtype: 17,
+                            subtype,
                             impact,
                             charge: false,
                         },
                         sub,
                         p,
                     )
-                    .is_some()
                 {
+                    // `sub_69900`'s launch tail (EF:56050-67) — the
+                    // (9,17) arm writes the same lanes
+                    // (EF:55956/55966/55968), so both share it:
+                    //   `mana_0x90_144` = the TOKEN's mana (@0x90 →
+                    //     f140, a COMPARED lane; the class-9 ctor
+                    //     default 50 is overwritten — the l24 corpus
+                    //     records 33),
+                    //   `dword_0x10_16` = 200 on the basic bolt (@0x10
+                    //     → f26); the leveled arm instead squares the
+                    //     token's `subSpellIndex << 8`.
+                    // The `position.z += caster fov` of EF:56054 /
+                    // EF:55969 is already carried by `muzzle`, which
+                    // launches at pose z + PLAYER_HH.
+                    // DELIBERATE: retail also stamps `word_0x26_38` =
+                    // the token's SLOT (@0x26 → f40), but the port
+                    // spends f40 on the spell INDEX — the impact XP
+                    // back-ref (`mc2_proj_impact`), which retail
+                    // hard-codes per handler (`sub_6D8B0(id, 1, 1)`,
+                    // EF:63314/59052). The lane is not compared; the
+                    // XP wiring wins.
+                    let token_mana = self.g.ent[m].f140;
+                    let token_sub = self.g.ent[m].f30 as i32;
+                    {
+                        let e = &mut self.g.ent[i];
+                        e.f140 = token_mana;
+                        e.f26 = if subtype == 1 {
+                            200
+                        } else {
+                            let v = token_sub << 8;
+                            (v.wrapping_mul(v)) as i16
+                        };
+                        // BOTH possession arms take the carpet boost
+                        // RAW — `v2x->actSpeed += a2x->actSpeed`
+                        // (EF:56048 / EF:55953) with no clamp. The
+                        // [384, 0x2000] clamp `mc2_launch` applies is
+                        // `sub_6DCA0`'s alone (EF:44226-31), and it
+                        // both floors a REVERSING carpet's bolt at
+                        // 384 and drops the negative term outright.
+                        // mc2l4 t=13 slot 303 records speed **336** =
+                        // 384 − 48 on a backing carpet.
+                        e.f126 = 384i32.saturating_add(p.speed as i32) as i16;
+                    }
                     // Sound 40 only on a successful spawn.
                     self.g.snd_player(40);
                 }
@@ -1613,17 +1802,22 @@ impl World {
     /// 0x2000 — EF:44226-31), and the local-player muzzle sprite 42.
     /// `sub_6C870` (EF:57868) — Fool's Mana: throw SIX neutral
     /// FAKE-mana spheres from the caster's hand in a ±85 yaw cone. Each
-    /// carries a random mana value (the disguise) but is a TRAP — owner
-    /// (f52) = caster, tier (f50) = `life`, damage payload (f136) =
-    /// `subSpellIndex`, colour neutral (f144 = 0). When a NON-owner
-    /// possession claims one, the sphere's tick springs the tier
-    /// retaliation (mc1/combat.rs `ball_tick` → [`Gen::mc2_fools_retaliate`])
-    /// instead of handing over the mana (docs/spell-audit/fools-mana.md).
+    /// carries a random mana value (the disguise) but is a TRAP — the
+    /// retail homes verbatim: parentId (id24) = caster (EF:57905), tier
+    /// `byte_0x46_70` (f71) = `life` (EF:57907), damage payload
+    /// `subSpellIndex_0x2A_42` (f44) = `subSpellIndex_2` (EF:57906),
+    /// colour neutral `playerEntityIndex` (f144) = 0 (EF:57908). When a
+    /// NON-owner possession claims one, the sphere's tick springs the
+    /// tier retaliation (mc1/combat.rs `ball_tick` →
+    /// [`Gen::mc2_fools_retaliate`]) instead of handing over the mana
+    /// (docs/spell-audit/fools-mana.md). The trap machinery is the
+    /// (10,57) TICK's, not a cast flag: the authored ground spheres run
+    /// the identical path off their NewEvent defaults.
     fn mc2_cast_fools_mana(&mut self, m: usize, p: PlayerPose, sub: Mc2SubSpell) -> bool {
         let right = self.g.ent[m].f50 == 512;
         let (mx, my, _mz) = self.muzzle(p, right);
-        let payload = sub.sub_spell.max(0);
-        let tier = sub.life.clamp(0, 3) as i16;
+        let payload = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
+        let tier = sub.life.clamp(0, 3) as u8;
         let mut spawned = false;
         for _ in 0..6 {
             let z = self.g.ground_z(mx, my) as i16;
@@ -1637,9 +1831,9 @@ impl World {
             let mut pos = (mx, my, z);
             Gen::polar_step(&mut pos, yaw, 0, 96);
             let e = &mut self.g.ent[s];
-            e.f52 = PLAYER_TARGET; // trap owner (skip-gate + discriminator)
-            e.f50 = tier; // retaliation tier {0,1,2}
-            e.f136 = payload; // subSpellIndex damage payload
+            e.id24 = PLAYER_TARGET; // parentId = caster (the skip-gate)
+            e.f71 = tier; // byte_0x46_70 retaliation tier {0,1,2}
+            e.f44 = payload; // subSpellIndex damage payload
             e.f144 = 0; // NEUTRAL — no owner colour (the "fool")
             e.f30 = yaw; // launch heading (fallback retaliation aim)
             e.dest_x = pos.0.wrapping_sub(mx);
@@ -1791,6 +1985,10 @@ impl World {
         let subtype = Self::mc2_dispatch_arm(spell, life)
             .map(|a| a.subtype)
             .or(match spell {
+                // Possession picks its ENTITY off the tier's life:
+                // 0 → the basic (9,1), 1..3 → the leveled (9,17)
+                // (EF:55946-49). Both share the model-1/0x11 aim list.
+                1 if life == 0 => Some(1),
                 1 => Some(17),
                 0x13 => Some(24),
                 0x17 => Some(29),

@@ -390,13 +390,19 @@ fn level_005_golden_state_hashes() {
     // 17-tick cycle, and the ballistic gate reads the
     // post-maintenance value (retail's handler order). Behavior
     // change toward retail by design.
+    // Re-pinned (B-E) for the 180° TURN TIE-BREAK law (sub_582F0
+    // Sound.cpp:6580 / MC1 twin :52664 SYNCHRONIZED, corpus-proven
+    // both games all takes): retail unwraps the turn delta only when
+    // strictly > 1024, so an EXACT half-turn keeps the raw sign; the
+    // port's wrapped-delta sign turned the other way (Gen::turn_sign,
+    // mc1/mobs.rs). Behavior change toward retail by design.
     const GOLDEN: [u64; 6] = [
         0x4adb9e3a7dd0638d, // post-init (feature pass + disposition 0)
         0x071d8b3685c82b66, // A: 32 idle ticks far afield
-        0x3d5a668cb81fd619, // B: crater trigger fired + 120 dig ticks
-        0x3bf082db33b6bf14, // C: ambush disposition fired
-        0x979ad50de88891eb, // D: 64 ticks of two-hand fireball combat
-        0xc6fb9c6f97e21f84, // E: 100 aftermath ticks
+        0xa847e571eb557a52, // B: crater trigger fired + 120 dig ticks
+        0xdc57979495c6c7e1, // C: ambush disposition fired
+        0xb85142c2898aaa4c, // D: 64 ticks of two-hand fireball combat
+        0x232383063229f207, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -472,13 +478,17 @@ fn level_005_golden_state_hashes() {
     // 17-tick duty cycle, so ball rest poses from the dig window on
     // differ. Post-init + A hold (no ball inside the far-afield
     // radius).
+    // The 180° TURN TIE-BREAK law (see the GOLDEN note) moves B-E —
+    // REAL behavior: a creature whose wander target sits at the exact
+    // antipode now commits its capped turn in retail's direction, so
+    // wander poses diverge from the first half-turn tie on.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
         0x9ec1a5584565a87e, // A
-        0x49fe1375dca7f4b2, // B — settler phase + feeder leash
-        0x6af5efcdd6081eb8, // C
-        0x1a46b7b10b791429, // D
-        0x6c2dad8070d10599, // E
+        0x2156af8d3ce3a001, // B — settler phase + feeder leash
+        0xd08a4b83f1335789, // C
+        0xce680146dcefdc7b, // D
+        0x93c2d36af0a83b89, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

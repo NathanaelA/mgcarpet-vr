@@ -1624,7 +1624,15 @@ impl Gen {
         let (ax, ay) = (self.ent[i].x, self.ent[i].y);
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
-            if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
+            // Retail walks `dword_38523` with NO model test
+            // (EF:28362-64), and that chain carries models 39, 40 and
+            // 57 (EF:40023-40062) — so a fool's sphere is dragged by
+            // the magnet exactly like real mana, which is precisely
+            // the disguise the spell is selling. (Model 40, the claim
+            // totem, rides retail's chain too; the port has never
+            // pulled it and this dig does not change that — a
+            // separate, pre-existing residual.)
+            if c.class64 != 10 || !matches!(c.model65, 39 | 57) || c.flags & 0x400 != 0 {
                 continue;
             }
             // The claim handshake (EF:28364): only an UNCLAIMED ball

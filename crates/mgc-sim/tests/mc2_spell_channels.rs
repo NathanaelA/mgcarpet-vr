@@ -1052,7 +1052,11 @@ fn mc2_fools_mana_throws_six_decoys_that_trap_the_possessor() {
     let (cx, cy) = open_spot(&w);
     let pose = pose_at(&w, cx, cy);
 
-    let base = count(&w, 10, 39); // all mana spheres are model 39 in the port
+    // A fool's sphere is its OWN model — `sub_50130` builds a (10,57),
+    // not a (10,39) (fools-mana.md OPEN-6). Real mana is counted apart
+    // so the cast can be shown not to make any.
+    let base = count(&w, 10, 57);
+    let real_mana = count(&w, 10, 39);
     w.mc2_select_spell(22, 0, 0); // Fool's Mana tier 0, left hand
     w.tick(
         pose,
@@ -1062,9 +1066,14 @@ fn mc2_fools_mana_throws_six_decoys_that_trap_the_possessor() {
         },
     );
     assert_eq!(
-        count(&w, 10, 39),
+        count(&w, 10, 57),
         base + 6,
         "the cast throws six fake-mana decoys, not one real sphere"
+    );
+    assert_eq!(
+        count(&w, 10, 39),
+        real_mana,
+        "…and not one of them is a collectible (10,39) ball"
     );
 
     // A rival (a non-owner id) possession-claims one decoy → it springs.
@@ -1078,9 +1087,92 @@ fn mc2_fools_mana_throws_six_decoys_that_trap_the_possessor() {
         "the claimed decoy fires exactly one fireball at the possessor"
     );
     assert_eq!(
-        count(&w, 10, 39),
+        count(&w, 10, 57),
         base + 5,
         "the sprung (tier-0) decoy despawns after its single fireball"
+    );
+}
+
+#[test]
+fn mc2_authored_ground_sphere_is_a_tier0_trap() {
+    // The AUTHORED (10,57) ground spheres are fool's mana too — retail's
+    // `sub_36680` (EF:26615) has NO "was this cast" gate: its only
+    // no-trap arm is `parentId == claimer`, and a level-load sphere
+    // carries the NewEvent defaults parentId 0 / `byte_0x46_70` 0, i.e.
+    // a live TIER-0 trap for every possessor. mc2l24 pins it: all 21
+    // authored start spheres die the tick after the human's possess
+    // pulse stamps the ch1 latch, each leaving a co-located (10,0) poof
+    // and a (9,0) fireball homing the player (word_0x96_150 = 116).
+    // Player-reported: the port handed them over as legit mana.
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    let (cx, cy) = open_spot(&w);
+    let pose = pose_at(&w, cx, cy);
+    let slot = w.debug_mc2_spawn_ground_sphere((cx << 8) | 128, (cy << 8) | 128);
+    assert!(slot != 0, "the authored ground sphere spawned");
+    let spheres = count(&w, 10, 57);
+    // OPEN-6: the sphere wears retail's own model, and that model is
+    // what keeps it off every collection law — the m23 siphon
+    // (EF:18396), the balloon fleet (EF:61011), the castle absorb
+    // (EF:61105) and the ball merge all test `model == 39`.
+    assert_eq!(
+        w.debug_pool().1.iter().filter(|e| e.slot == slot).count(),
+        1,
+        "the authored sphere is in the pool"
+    );
+    assert!(
+        w.debug_pool()
+            .1
+            .iter()
+            .any(|e| e.slot == slot && e.class == 10 && e.model == 57),
+        "a NATIVE fool's sphere reads (10,57), not the (10,39) family"
+    );
+
+    // The level's own ambient fires make a global (10,0) census noisy —
+    // count the poof on the SPHERE'S TILE only.
+    let poofs = |w: &World| {
+        w.debug_pool()
+            .1
+            .iter()
+            .filter(|e| e.class == 10 && e.model == 0 && e.tx == cx as u8 && e.ty == cy as u8)
+            .count()
+    };
+
+    // (a) an OWNER reclaim is a no-op: an authored sphere's parentId is
+    //     its own slot, so claiming as that id takes retail's skip arm.
+    let (fb0, poof0) = (count(&w, 9, 0), poofs(&w));
+    w.debug_mc2_claim_sphere_at(slot, slot as u16);
+    w.tick(pose, PlayerCommand::default());
+    assert_eq!(count(&w, 9, 0), fb0, "the owner cannot spring its own trap");
+    assert_eq!(poofs(&w), poof0, "an owner reclaim poofs nothing");
+    assert_eq!(count(&w, 10, 57), spheres, "the sphere survives its owner");
+
+    // (b) a NON-owner claim springs the tier-0 trap: exactly one
+    //     fireball at the possessor, one (10,0) consume poof, and the
+    //     sphere is gone — it is never handed over.
+    let (fb0, poof0) = (count(&w, 9, 0), poofs(&w));
+    w.debug_mc2_claim_sphere_at(slot, 12345);
+    w.tick(pose, PlayerCommand::default());
+    assert_eq!(
+        count(&w, 9, 0),
+        fb0 + 1,
+        "the claimed ground sphere fires ONE fireball back at the claimer"
+    );
+    assert_eq!(
+        poofs(&w),
+        poof0 + 1,
+        "the consumed sphere leaves retail's (10,0) poof (EF:26363)"
+    );
+    assert_eq!(
+        count(&w, 10, 57),
+        spheres - 1,
+        "the sprung ground sphere is CONSUMED, not handed to the claimer"
     );
 }
 
@@ -1296,7 +1388,7 @@ fn mc2_fools_mana_decoys_do_not_count_toward_world_mana() {
         },
     );
     w.tick(pose, PlayerCommand::default()); // recompute the census
-    let decoys = count(&w, 10, 39);
+    let decoys = count(&w, 10, 57);
     assert!(decoys >= 6, "six decoys exist, got {decoys}");
     let after = w.loadout().world_mana;
     // Six decoys carry up to 6×1999 ≈ 12000 fake mana; excluded, the

@@ -980,7 +980,9 @@ by offset, never by our field name.
   spell 19 blocked on (10,72); placed Magic-Mine variant (spell 23);
   meteor charge-tiered fuse (proj.rs TODO); quake subtype-23 wrapper
   unverified; mana-regen mid-burst suppression branch; steal-mana
-  wizard-gate decision; fools-mana OPEN-1/2; base-MC1 spell-20 multi-bolt
+  wizard-gate decision; fools-mana OPEN-1 (OPEN-2 RESOLVED 2026-08-03:
+  authored default b46=0, authored spheres DO retaliate — audit doc §2b);
+  base-MC1 spell-20 multi-bolt
   spray.
 - Starting-spell level-file source undecoded (1042-byte reserved block
   @0x30); jar spell-id-from-model65 unverified; blue-seed cross-level

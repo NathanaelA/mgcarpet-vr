@@ -373,13 +373,30 @@ fn mc2_cave_behaviors_and_goldens() {
     // table once at boot against TMAPS0-0, so cave levels run
     // day-art collision boxes/pitches (52 param rows shift vs the
     // cave bank). Behavior change toward retail by design.
+    // Re-pinned (B-D; the load checkpoint holds) for the mana-sphere
+    // MERGE law: the partner search is retail's map-tile RING walk
+    // (`sub_10A50` EF:3876 / MC1 `sub_11D10` :17127 — rounded base
+    // tile, `(applied_pitch + 255) >> 8` rings) instead of a
+    // whole-pool scan, and MC2's absorbed donor now takes the HARD
+    // free every `sub_36D50` arm ends in (`sub_57F20`) instead of a
+    // one-tick soft-kill. Both shift which cave drips coalesce and
+    // when their slots return to the stack. Behavior change toward
+    // retail by design — mc2l24's fountain window loses 112 of its
+    // 662 extra spheres and mc2l30 0+2000 loses 36 of 149 extras.
+    // Re-pinned (B-D; the load checkpoint holds) for the 180° TURN
+    // TIE-BREAK law (Gen::turn_sign, mc1/mobs.rs — retail keeps the
+    // raw sign on an EXACT half-turn, sub_582F0 Sound.cpp:6580 /
+    // MC1 twin :52664 SYNCHRONIZED): cave creatures at an antipodal
+    // wander target now commit the capped turn in retail's
+    // direction. Behavior change toward retail by design —
+    // mc1l0 0+2000 +5 conforming, mc2l0 0+2000 +25 conforming.
     assert_eq!(
         got,
         vec![
             0x782c32f9fb57405eu64,
-            0x442d3d02b5e110ec,
-            0x8f70ff0ae39ed8b5,
-            0x8e3e1dcd5365a147,
+            0x146ee5c2bebe7753,
+            0x393afd4eda53bef1,
+            0x6713772ef6317796,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -418,11 +435,20 @@ fn mc2_cave_behaviors_and_goldens() {
     // above) moves the LAST checkpoint only: the re-phased stream
     // needs the disposition-storm phase for its spawn/motion
     // downstream to reach the projection.
+    // The merge law (see the golden pin above) moves B-D and HOLDS the
+    // load checkpoint: which drips coalesce is observable sphere
+    // state, and the donor's slot returning a tick earlier re-phases
+    // every later spawn in the pool — the load checkpoint predates any
+    // merge.
+    // The 180° turn tie-break law (see the golden pin above) moves
+    // B-D and HOLDS the load checkpoint: an antipodal wander turn now
+    // commits in retail's direction, and creature poses diverge from
+    // the first tie on — real behavior, not layout.
     const OBSERVABLE: [u64; 4] = [
         0x4504aa689dad600c,
-        0x212e4f7324f787b0,
-        0x407d427caacc3b05,
-        0x3bb2a66fa3ddf890,
+        0xb3905db935bc77b7,
+        0x630c14c484a20ddc,
+        0x092eb7a230a57c42,
     ];
     assert_eq!(
         obs, OBSERVABLE,

@@ -176,6 +176,61 @@ pub(crate) enum Mc2AiState {
     Defense,
 }
 
+impl Mc2AiState {
+    /// The retail `byte_0x1C1_449` value the dispatch switches on
+    /// (EF:5252-5310). State 4 (`sub_131F0`) is the possess APPROACH
+    /// arm — a target-alive check plus the 256/2048 close, no cast —
+    /// and shares this port state with 6 (`sub_135C0`, the arm that
+    /// casts); 2, 5 and 10 are the decompile's `_nmemneed` stubs and
+    /// 15+ never appear, all of which fall through to the bare
+    /// selector call — the port's Fresh.
+    pub(crate) fn from_retail(v: u8) -> Self {
+        match v {
+            1 => Mc2AiState::Upgrade,
+            3 => Mc2AiState::Build,
+            4 | 6 => Mc2AiState::Possess,
+            7 => Mc2AiState::RaidCastle,
+            8 => Mc2AiState::AttackWizard,
+            9 => Mc2AiState::RaidBalloon,
+            0xB => Mc2AiState::Home,
+            0xC => Mc2AiState::Cruise,
+            0xD => Mc2AiState::HuntMana,
+            0xE => Mc2AiState::Defense,
+            _ => Mc2AiState::Fresh,
+        }
+    }
+}
+
+/// The retail AI decision lanes for one wizard, as the conformance
+/// importer lifts them — the wizard extension's (`type_str_164`)
+/// brain half plus the two lanes that ride the wizard ENTITY. Kept
+/// as a record because the re-anchor seats fourteen of them.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Mc2RivalAi {
+    /// `byte_0x1C1_449`, raw — mapped by [`Mc2AiState::from_retail`].
+    pub state: u8,
+    /// Entity `word_0x96_150`, already translated to the port's
+    /// out-of-pool [`PLAYER_TARGET`] convention for the human.
+    pub target: u16,
+    /// Entity `word_0x98_152`, the stored target signature.
+    pub target_sig: u16,
+    /// Entity `axis_0x9A_154x` — the scouted castle site.
+    pub site: (u16, u16),
+    pub burst: i16,
+    pub poverty: i16,
+    pub cooldown: [u16; MC2_SPELLS],
+    pub hate: [u16; 8],
+    pub war: [u16; 8],
+    pub weave: u8,
+    pub weave_dir: u8,
+    pub avoid: u8,
+    pub avoid_exit: u8,
+    pub aggression: u16,
+    pub perception: u16,
+    pub reflexes: u16,
+    pub life_scale: u16,
+}
+
 /// One live MC2 rival: the player-extension subset the AI machinery
 /// needs. Position/yaw/life live on the pool entity (class 3 model 1).
 #[derive(Hash)]
@@ -194,7 +249,7 @@ pub(crate) struct Mc2Rival {
     pub known: [bool; MC2_SPELLS],
     /// AI recast cooldowns (`SpellEnabled` doubles as the cooldown
     /// counter in retail, EF:5361-63; ours is a separate array).
-    cooldown: [u16; MC2_SPELLS],
+    pub(crate) cooldown: [u16; MC2_SPELLS],
     /// Carried mana / ceiling / the regen delta the cast debit rides.
     pub mana: u32,
     pub mana_max: u32,
@@ -564,10 +619,7 @@ impl World {
     /// imported carpet slot and reseed the motion/economy lanes the
     /// per-tick arms consume — without this every imported rival
     /// carpet was a frozen husk (the dispatch above keys on `ent`,
-    /// which the world-build seeded with fresh spawn slots). The AI
-    /// decision lanes (state, target, hate/war, burst, cooldowns)
-    /// keep their world-build defaults: their closure decode is
-    /// still owed, exactly the split the MC1 fix made.
+    /// which the world-build seeded with fresh spawn slots).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn reanchor_mc2_rival(
         &mut self,
@@ -592,6 +644,73 @@ impl World {
         r.mana = mana;
         r.mana_max = mana_max;
         r.mana_delta = mana_delta;
+    }
+
+    /// Conformance re-anchor, decision half: reconstruct the wizard-
+    /// extension AI lanes so the imported rival resumes mid-decision
+    /// instead of re-deciding from a world-build default. The retail
+    /// dispatch reads `byte_0x1C1_449` FIRST and the selector writes
+    /// it LAST (EF:5252 vs :5517-70), so an un-imported state re-runs
+    /// the whole cascade on the pair's tick and the replayed rival
+    /// makes its OWN decision — the residue the freeze fix left.
+    ///
+    /// The target and the scouted site ride the wizard ENTITY
+    /// (`word_0x96_150`/`word_0x98_152` and `axis_0x9A_154x`,
+    /// EF:6114-15), already imported by `import_ent`; everything else
+    /// lives in the player block's `type_str_164` (+998) — see
+    /// [`mgc_formats::mgcr::RetailPlayerMc2`] for the lane map.
+    ///
+    /// The signature is imported RAW rather than recomputed: it is
+    /// retail's staleness detector (`sub_14C60` fails the target when
+    /// the stored word no longer matches the slot's id+model+class,
+    /// EF:6701), so recomputing would silently revive a target retail
+    /// had already dropped. The human's carpet is out-of-pool here, so
+    /// its target takes the port's [`PLAYER_TARGET`] convention on
+    /// both lanes (the alive test ignores the signature for it).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reanchor_mc2_rival_ai(
+        &mut self,
+        ri: usize,
+        ai: &Mc2RivalAi,
+        book: &Mc2Spellbook,
+    ) {
+        let r = &mut self.mc2_rivals[ri];
+        if r.eliminated {
+            return;
+        }
+        r.state = Mc2AiState::from_retail(ai.state);
+        r.target = ai.target;
+        r.target_sig = if ai.target == PLAYER_TARGET {
+            PLAYER_TARGET
+        } else {
+            ai.target_sig
+        };
+        r.site = ai.site;
+        r.burst = ai.burst;
+        r.poverty = ai.poverty != 0;
+        r.cooldown = ai.cooldown;
+        r.hate = ai.hate;
+        for (w, &v) in r.war.iter_mut().zip(ai.war.iter()) {
+            *w = v != 0;
+        }
+        r.weave = ai.weave;
+        r.weave_dir = ai.weave_dir;
+        r.avoid = ai.avoid;
+        r.avoid_exit = ai.avoid_exit;
+        r.agg = ai.aggression;
+        r.per = ai.perception;
+        r.refl = ai.reflexes;
+        r.life_scale = ai.life_scale;
+        // The book: `SpellsEnabled_0x333` is the live manifestation
+        // slot, and DEATH rewrites every owned entry to the boolean
+        // marker 1 (EF:60147) — imported verbatim, quirk included,
+        // because retail's own dead-window reads index the pool with
+        // that 1. `known` is the nonzero test, which is exactly what
+        // the marker encodes.
+        r.book = *book;
+        for s in 0..MC2_SPELLS {
+            r.known[s] = book.ent[s] != 0;
+        }
     }
 
     /// Housekeeping `sub_12A70` (EF:5320) + the state dispatch.
@@ -706,6 +825,33 @@ impl World {
 
     /// Hate regression toward neutral (EF:5377-93): below rises by
     /// agg+1, above decays by 256-agg — the war flag pins it.
+    ///
+    /// FROM-BINARY CORROBORATED (NETHERW.EXE `sub_12A70`, linear
+    /// 0x12A70 = file 0x37270 by the banked LE recipe `0x34800 +
+    /// (linear − 0x10000)`). remc2's transcription reads
+    /// `array_0x1FC_508[4·i]` on the right-hand side while writing
+    /// `[4·i+4]` — an eight-byte-shifted accumulator
+    /// (`hate[p] = agg + 1 + hate[p−1]`) that would make the ladder
+    /// leak across pairs. **It is a decompiler artifact.** The shipped
+    /// loop reads and writes the SAME element:
+    ///
+    /// ```text
+    ///   lea  esi,[ecx+eax]          ; esi = playerRec + 8·i
+    ///   mov  cx,[esi+0x204]         ; READ hate[i]
+    ///   cmp  cx,0x601f
+    ///   jnc  .above                 ; unsigned >= neutral
+    ///   mov  ax,[eax+0x242]         ; aggression (per-PLAYER, not indexed)
+    ///   inc  eax
+    ///   add  ecx,eax                ; hate[i] + agg + 1
+    ///   mov  [esi+0x204],cx         ; WRITE hate[i]
+    /// ```
+    ///
+    /// …then `cmp/jna` clamps down to 0x601F; the `.above` arm tests
+    /// `word [esi+0x206]` (the war flag, the pair record's second
+    /// word) and only on zero does `sub [esi+0x204],ax` with
+    /// `ax = 0x100 − agg`, clamping back UP to 0x601F. Both
+    /// comparisons are UNSIGNED and strict — exactly the per-player
+    /// form below. No port change owed.
     fn mc2_rival_hate_decay(&mut self, ri: usize) {
         let (agg, war) = (self.mc2_rivals[ri].agg, self.mc2_rivals[ri].war);
         for (p, h) in self.mc2_rivals[ri].hate.iter_mut().enumerate() {
@@ -2616,11 +2762,17 @@ impl World {
             sub.sub_spell /= sub.life as i32;
         }
         // The would-be projectile subtype: the sub_6DCA0 band + the
-        // direct class-9 arms (possess 17 / summon 24 / mine 29 /
-        // alliance 25).
+        // direct class-9 arms (possess 1/17 / summon 24 / mine 29 /
+        // alliance 25). Rivals run the SAME `sub_69640` machine as the
+        // human, so possession picks its entity off the tier's
+        // `life_0x1A` too: 0 → the basic **(9,1)** (`sub_69900`
+        // EF:56039), 1..3 → the leveled (9,17) (EF:55950). Hardcoding
+        // 17 left 49 (9,17)-extra rows on the mc2l4 0+4000 window
+        // after the human's arm was fixed.
         let arm = World::mc2_dispatch_arm(s, sub.life)
             .map(|a| (a.subtype, a.impact, a.charge))
             .or(match s {
+                1 if sub.life == 0 => Some((1u8, (10u8, 12u8), false)),
                 1 => Some((17u8, (10u8, 12u8), false)),
                 0x13 => Some((24, (10, 0), false)),
                 0x17 => Some((29, (10, 0), false)),
@@ -2641,11 +2793,17 @@ impl World {
         if let Some(id) = snd {
             self.g.snd(id, i);
         }
-        // Fools-mana conjures the (10,57) random sphere in place.
+        // Fools-mana conjures the (10,57) random sphere in place. The
+        // sphere is a TRAP (`sub_36680` EF:26615, the (10,57) tick's
+        // own law — docs/spell-audit/fools-mana.md), so it must carry
+        // the caster as parentId (`sub_6C870` EF:57905): that is the
+        // ONLY skip arm, and without it the rival springs its own bait.
         if s == 0x16 {
             let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
             let z = self.g.ground_z(px, py) as i16;
-            self.g.mc2_spawn_mana_sphere(57, px, py, z);
+            if let Some(sp) = self.g.mc2_spawn_mana_sphere(57, px, py, z) {
+                self.g.ent[sp].id24 = self.g.ent[i].id24;
+            }
             return;
         }
         let Some((subtype, impact, charge)) = arm else {

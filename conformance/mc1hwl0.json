@@ -259,10 +259,9 @@
     {
       "t": 783,
       "status": "open",
-      "sig": "b68cfe8212fc5415",
+      "sig": "8163248d28644622",
       "atoms": [
-        "field:3,2:z",
-        "field:5,8:heading"
+        "field:3,2:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
     }

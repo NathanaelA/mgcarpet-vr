@@ -196,8 +196,8 @@ class BuildVariant:
     # Optional extras (0 = absent; MC2 has them, MC1 does not):
     # the press LATCHES (set on the press edge, cleared when the held
     # state drops — catches clicks shorter than one poll) and the
-    # cursor position SNAPSHOT taken by the game at the press (the aim
-    # the cast actually used, free of poll-timing skew).
+    # cursor position SNAPSHOT taken by the game at the press (sole
+    # retail consumer: the fly-assistant idle-recentre watchdog).
     mouse_latchl_guest: int = 0
     mouse_latchr_guest: int = 0
     press_pos_guest: int = 0
@@ -319,7 +319,8 @@ MC1_STATIC_NEEDLE = bytes((0xB7, 0x71, 0x7D, 0x7A, 0x9D, 0x9A, 0x07, 0x5A,
 # held state = the "2" registers @0x18074C/0x18074A (set while pressed,
 # cleared on the release event); @0x180746/0x180744 are press LATCHES
 # (set once at the press edge); @0xE375C/E = the cursor AT the press
-# (the aim snapshot); @0xE3760 = the live cursor; pressedKeys_180664 =
+# (fly-assistant watchdog datum, NOT the aim); @0xE3760 = the live
+# cursor (the aim/attitude source); pressedKeys_180664 =
 # the 128-cell scancode array (same shape as MC1's).
 MC2_DATA_DELTA = -0xB0E98
 MC2_BUILDS = (
@@ -1450,7 +1451,8 @@ def read_externals(
         raw["lbtn_b64"] = _b64(lb)
         raw["rbtn_b64"] = _b64(rb)
     # MC2 extras: the press LATCHES (edge-set, catch sub-poll clicks)
-    # and the game's own cursor-at-press snapshot (the cast's aim).
+    # and the game's own cursor-at-press snapshot (fly-assistant
+    # watchdog datum; the aim source is the live cursor @0xE3760).
     if b.mouse_latchl_guest and b.mouse_latchr_guest:
         ll = mem.pread(sb + b.mouse_latchl_guest, 2)
         lr = mem.pread(sb + b.mouse_latchr_guest, 2)

@@ -121,6 +121,21 @@ checks against record N+1.
   by replaying input. (MC2 takes recorded before 2026-07-30 predate
   the MC2 register map and carry `input:"none"`.)
 
+  **MC2 phase caveat — the snapshot straddles retail's poll, and the
+  latch resolves it.** The recorder parks in the settled tail of frame
+  `r` (after the entity pass, before frame `r+1`'s `PlayerEvents`), so
+  a press visible at record `r` may have been consumed by frame `r`'s
+  own poll *or* still be pending for frame `r+1`. The press LATCH is
+  cleared the instant `HandleMouseButtons_18F80` consumes it, so a
+  latch still up at the snapshot means "not yet polled": the input
+  frame `r` actually consumed is
+  `held(r) && !latch(r) || latch(r-1)`, and THAT is the stream a
+  consumer must feed to the tick that advances `r-1` → `r`. Measured
+  against retail's own arm ticks over the whole MC2 corpus: 4,814 of
+  4,815 right-hand casts land on its rising edge with zero offset
+  (`mgc-conform`'s `verify_mc2::align_cmd_mc2`). Consumers of the MC1
+  `input` channel have no latch register and keep the ±1 caveat.
+
 Retail's own multiplayer lockstep puts exactly the per-tick 10-byte
 control commands on the wire — the "consumed command per player per
 tick" unit is retail's own canon, and this channel is deliberately
@@ -365,7 +380,9 @@ remains the path for any unpatched exe.
     draw-count histogram, the +63 phase-clock table, entity-set
     events by (class, model), and per-field mismatch counters with
     examples. `--pin-pose n|n1`, `--input-delay k` (cast
-    reconstruction from the raw input channel), `--dump t`.
+    reconstruction from the raw input channel — MC1 only; the MC2
+    arm derives the cast phase from the press latch instead, see
+    below), `--dump t`.
     A deviations allowlist keyed to DEVIATIONS.md entries is still
     open work.
   - `extract` / `fixtures` — the FIXTURE SUITE (docs/CONFORMANCE.md):

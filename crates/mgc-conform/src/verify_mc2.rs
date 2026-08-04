@@ -24,16 +24,18 @@
 //! (`channels.input: "none"`) — commands stay default and human casts
 //! surface as capture families. Newer takes carry the MC2 raw
 //! externals (held mouse buttons + the press LATCHES + cursor —
-//! RECORDING.md); casts reconstruct like MC1's, through the
-//! `--input-delay` ring, with `fire = held || latch` (the latch is
-//! set at the press edge, so a click shorter than one poll still
-//! lands).
+//! RECORDING.md), and the cast phase is not modelled by a delay knob
+//! at all: the press latch says, per press, which side of retail's
+//! own input poll the snapshot landed on. [`align_cmd_mc2`] is the
+//! law and carries the derivation + the corpus measurement;
+//! `--input-delay` is ignored on this arm (`MGC_CAST_RING=1` restores
+//! the legacy ring for A/B).
 
 use crate::Args;
 use crate::verify::{FieldDiff, PairDiff, Stats};
 use mgc_formats::mgcr::{EntObsMc2, ObsMc2, Recording, RetailEntMc2, RetailMc2, decode_retail_mc2};
 use mgc_sim::engine::features::{FeatureAssets, Planes};
-use mgc_sim::engine::world::conformance::PinnedMc2;
+use mgc_sim::engine::world::conformance::{PinnedMc2, ThingTable};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use std::collections::BTreeMap;
 
@@ -50,7 +52,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         path.display(),
         args.pin_pose
     );
-    let (mut world, pristine) = build_world_mc2(&args.baked, level)?;
+    let (mut world, pristine, things) = build_world_mc2(&args.baked, level)?;
 
     let mut csv: Option<std::io::BufWriter<std::fs::File>> = match &args.csv {
         Some(p) => {
@@ -71,8 +73,30 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
 
     let mut prev: Option<(u64, RetailMc2, PlayerCommand)> = None;
     let mut prev_cmd = PlayerCommand::default();
+    // A/B escape hatch for the fire-edge revival below (ledger
+    // §"THE PORT'S CAST EDGE WAS DEAD IN THE HARNESS"): with this set
+    // the predecessor never advances, i.e. the pre-fix behaviour.
+    // Ring mode only — the aligned arm carries no such lane.
+    let freeze_prev_cmd = std::env::var_os("MGC_NO_FIRE_EDGE").is_some();
+    // The latch-aligned cast phase (see [`align_cmd_mc2`]) is the law;
+    // `MGC_CAST_RING=1` restores the legacy `--input-delay` ring for
+    // A/B. Aligned mode ignores `--input-delay` (it has no free knob:
+    // the recorder's own latch says which side of retail's poll each
+    // press landed on).
+    let ring_mode = std::env::var_os("MGC_CAST_RING").is_some();
     let mut cmd_ring: std::collections::VecDeque<PlayerCommand> =
         std::iter::repeat_n(PlayerCommand::default(), args.input_delay as usize + 1).collect();
+    let mut prev_latch = (false, false);
+    // The cursor-AT-PRESS lane. `press_edge_mc2` documents the A/B and
+    // its measurement; the detector below is always fed so the run can
+    // report the lane's traffic even with the fold off.
+    let press_edge_mode = std::env::var_os("MGC_PRESS_EDGE").is_some();
+    let mut prev_press: Option<(i16, i16)> = None;
+    let mut press_moves = 0u64;
+    // The cycle-ring cast lane (`ring_cast_mc2`): unreachable on today's
+    // corpus, LOUD if a take ever trips it.
+    let ring_bit_off = std::env::var_os("MGC_NO_HAND_BIT").is_some();
+    let mut ring_casts = 0u64;
     let mut stats = Stats::default();
     let mut printed_import = false;
     let mut boundary_seeded = false;
@@ -87,8 +111,31 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
-        let sample = sample_cmd_mc2(tick.input.as_ref());
-        if !boundary_seeded && tick.input.is_some() {
+        let (held, latch) = raw_input_mc2(tick.input.as_ref());
+        let mut aligned = align_cmd_mc2(held, latch, prev_latch);
+        let press = press_pos_mc2(tick.input.as_ref());
+        let moved = matches!((prev_press, press), (Some(a), Some(b)) if a != b);
+        press_moves += u64::from(moved);
+        if press_edge_mode {
+            aligned = press_edge_mc2(aligned, held, latch, moved);
+        }
+        prev_press = press.or(prev_press);
+        if !ring_bit_off
+            && let Some(p) = st.players.get(st.local_player as usize)
+            && let Some(spell) = ring_cast_mc2(p, latch)
+        {
+            ring_casts += 1;
+            eprintln!(
+                "  t={}: CYCLE-RING CAST (0x40) spell {spell} — the port has no \
+                 such lane (verify_mc2::ring_cast_mc2)",
+                tick.t
+            );
+        }
+        prev_latch = latch;
+        let sample = ring_mode
+            .then(|| sample_cmd_mc2(tick.input.as_ref()))
+            .unwrap_or_default();
+        if ring_mode && !boundary_seeded && tick.input.is_some() {
             boundary_seeded = true;
             // A button already held on the recording's FIRST frame has
             // no press edge inside the capture (retail latched it
@@ -96,15 +143,31 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             // "released" and manufactures one — the t≈3 (9,17)-vs-
             // smoke misfire was the right button held across the
             // level boundary. Extend the first frame's held state
-            // backward instead.
+            // backward instead. (Aligned mode needs no seed: its
+            // predecessor is the previous RECORD's own level.)
             for c in cmd_ring.iter_mut() {
                 *c = sample;
             }
             prev_cmd = sample;
         }
-        cmd_ring.push_back(sample);
-        let cmd = cmd_ring.pop_front().unwrap_or_default();
+        let cmd = if ring_mode {
+            cmd_ring.push_back(sample);
+            cmd_ring.pop_front().unwrap_or_default()
+        } else {
+            aligned
+        };
         if let Some((pt, pst, pcmd)) = prev.take() {
+            // THE PAIR'S COMMAND AND ITS PREDECESSOR. Aligned mode reads
+            // the pair's END record (this iteration's `aligned`) — that
+            // is the input frame pt+1 polled, and the pair IS frame
+            // pt+1's transition ([`align_cmd_mc2`]). The legacy ring
+            // instead hands the pair the delayed sample stored with its
+            // START record.
+            let (pair_cmd, pair_prev) = if ring_mode {
+                (pcmd, prev_cmd)
+            } else {
+                (cmd, pcmd)
+            };
             if args.start.is_some_and(|s| pt < s) {
                 // Before the triage window — keep the pairing chain
                 // and the input ring warm, execute nothing.
@@ -113,17 +176,39 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                 if announce {
                     eprintln!("pair {pt}");
                 }
+                if std::env::var_os("MGC_CAST_TRACE").is_some()
+                    && ((pair_cmd.fire_right && !pair_prev.fire_right)
+                        || (pair_cmd.fire_left && !pair_prev.fire_left))
+                {
+                    eprintln!(
+                        "CASTEDGE pair {pt} L{} R{}",
+                        u8::from(pair_cmd.fire_left && !pair_prev.fire_left),
+                        u8::from(pair_cmd.fire_right && !pair_prev.fire_right)
+                    );
+                }
                 stats.pairs += 1;
                 if !capture_clean_mc2(&pst, &st) {
                     stats.torn += 1;
                 } else {
                     let (pd, port, report) = exec_pair_mc2(
-                        &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
+                        &mut world, &pristine, &things, &pst, &st, &obs, pair_cmd, pair_prev,
+                        pin_n1,
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
                     let human_slot = report.human_slot;
                     if announce && let Some((got, want)) = report.stack_fallback {
                         eprintln!("  free-stack fallback: live {got} != scan {want}");
+                    }
+                    // The full-pool allocator arm: `NewEvent_4A050`
+                    // sacrifices a ranked recycle victim rather than
+                    // dropping the spawn. Both counters together say
+                    // what a full pool actually did on this pair.
+                    let (seized, dropped) =
+                        (world.take_recycle_seized(), world.take_pool_exhausted());
+                    if seized != 0 || dropped != 0 {
+                        eprintln!(
+                            "  pair {pt}: {seized} recycle victim(s), {dropped} spawn(s) dropped"
+                        );
                     }
                     if !printed_import {
                         printed_import = true;
@@ -161,7 +246,8 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         && let Some(tg) = tags.as_mut()
                     {
                         let (alt, _, _) = exec_pair_mc2(
-                            &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, !pin_n1,
+                            &mut world, &pristine, &things, &pst, &st, &obs, pair_cmd, pair_prev,
+                            !pin_n1,
                         )
                         .map_err(|e| format!("t={pt}: pose-alt: {e}"))?;
                         crate::verify::pose_reclassify(tg, &pd, &alt);
@@ -176,7 +262,8 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     stats.absorb(pt, pd, tags.as_ref(), roster.as_ref(), args);
                     if dump {
                         let (pd, port, _) = exec_pair_mc2(
-                            &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
+                            &mut world, &pristine, &things, &pst, &st, &obs, pair_cmd, pair_prev,
+                            pin_n1,
                         )
                         .map_err(|e| format!("t={pt}: {e}"))?;
                         print!("{}", pd.render(pt, usize::MAX));
@@ -203,9 +290,20 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             } else {
                 stats.gaps += 1;
             }
-        }
-        if let Some((_, _, c)) = &prev {
-            prev_cmd = *c;
+            // THE PAIR'S OWN COMMAND IS THE NEXT PAIR'S PREDECESSOR.
+            // This used to read `if let Some((_, _, c)) = &prev` AFTER
+            // `prev.take()` had already emptied it — a dead lane, so
+            // `prev_cmd` stayed frozen at its boundary seed and the
+            // port's cast EDGE (`cmd.fire && !prev_fire`, world.rs)
+            // degenerated to the raw HELD level for the whole run.
+            // Retail's non-rapid spells (`byte_0x3B_59 == 1`, e.g.
+            // possession) fire ONLY off the consumed press latch
+            // (`HandleMouseButtons_18F80`, PlayerInput.cpp:2043-49 +
+            // the frame-end latch clear at PI:1049-52) — one cast per
+            // click — so the level trigger over-fired every hold.
+            if !freeze_prev_cmd {
+                prev_cmd = pcmd;
+            }
         }
         prev = Some((tick.t, st, cmd));
         if let Some(limit) = args.limit {
@@ -215,6 +313,19 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         }
     }
     print!("{}", stats.render(args, roster.as_ref()));
+    // Both counters cover the whole STREAM, not just `--start`'s
+    // window: the input chain is fed from t=0 regardless, and the ring
+    // lane is a "did this take ever trip it" question.
+    println!(
+        "   cast input (whole stream): {press_moves} press-position move(s) [fold {}], \
+         {ring_casts} cycle-ring (0x40) cast(s) [{}]",
+        if press_edge_mode { "ON" } else { "off" },
+        if ring_bit_off {
+            "detector off"
+        } else {
+            "detector on"
+        },
+    );
     Ok(stats.clean_pairs == stats.pairs)
 }
 
@@ -238,6 +349,172 @@ pub(crate) fn sample_cmd_mc2(input: Option<&serde_json::Value>) -> PlayerCommand
         fire_right: get("mouse_buttons", "right") || get("mouse_clicks", "right"),
         ..Default::default()
     }
+}
+
+/// The two recorded MC2 mouse registers, UNMERGED:
+/// `((held_l, held_r), (latch_l, latch_r))` — the ISR held state
+/// (`mouse_buttons`, `x_WORD_18074C`/`18074A`) and the one-shot press
+/// LATCH (`mouse_clicks`, `x_WORD_180746`/`180744`).
+pub(crate) fn raw_input_mc2(input: Option<&serde_json::Value>) -> ((bool, bool), (bool, bool)) {
+    let Some(i) = input else {
+        return ((false, false), (false, false));
+    };
+    let get = |obj: &str, key: &str| {
+        i.get(obj)
+            .and_then(|b| b.get(key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+    (
+        (get("mouse_buttons", "left"), get("mouse_buttons", "right")),
+        (get("mouse_clicks", "left"), get("mouse_clicks", "right")),
+    )
+}
+
+/// THE CAST-PHASE LAW (session 9, ±1 cast-phase dig — ledger
+/// §"THE RECORDER'S SNAPSHOT STRADDLES RETAIL'S INPUT POLL").
+///
+/// Retail's frame is `PlayerEvents` (input poll → `Turn++` → the cast
+/// chain) → the entity pass → draw → the native limiter spin, and the
+/// recorder parks in that settled tail: record `r`'s registers are read
+/// AFTER frame `r`'s poll and BEFORE frame `r+1`'s. A press therefore
+/// shows up in the recording either already consumed (frame `r` cast
+/// it) or still pending (frame `r+1` will) — and retail says WHICH:
+/// the press LATCH is set by the ISR and cleared the moment
+/// `HandleMouseButtons_18F80` consumes it (PlayerInput.cpp:2043-49 +
+/// the frame-tail drop at PI:1049-52), so a latch that is still up at
+/// the snapshot means the poll has NOT run yet.
+///
+/// So the input frame `r` actually polled is
+///
+/// ```text
+///   aligned(r) = (held(r) && !latch(r))   // already polled by frame r
+///             || latch(r-1)               // pending at r-1 ⇒ frame r takes it
+/// ```
+///
+/// and the pair `(r-1 → r)` — which IS frame `r`'s transition — is the
+/// one that must carry it. MEASURED (probe over the raw states, no port
+/// involved): retail's own arm records (the hand manifestation's
+/// `word_0x2E_46` 0 → nonzero) land on an `aligned` RISING EDGE with
+/// delta 0 on 403/404 mc2l4 right-hand casts, 412/412 mc2l0, 256/256
+/// mc2l24, 39/39 + 54/57 + 36/36 left-hand. The raw held edge alone
+/// splits 308/95 (mc2l4) between "same record" and "one record early" —
+/// that split IS the latch bit, and no uniform `--input-delay` can
+/// model it.
+pub(crate) fn align_cmd_mc2(
+    held: (bool, bool),
+    latch: (bool, bool),
+    prev_latch: (bool, bool),
+) -> PlayerCommand {
+    PlayerCommand {
+        fire_left: (held.0 && !latch.0) || prev_latch.0,
+        fire_right: (held.1 && !latch.1) || prev_latch.1,
+        ..Default::default()
+    }
+}
+
+/// The recorded cursor-AT-PRESS `(x, y)` — `input.mouse_press_pos`,
+/// raw twin `state.ext.press_b64` ([`mgc_formats::mgcr::Ext::press`]).
+///
+/// **It is NOT the cast's aim.** The ISR snapshots it on every press
+/// edge (EF:51478-97) and the poll copies it to
+/// `unk_18058C.x_DWORD_1805B8/1805BC` (EF:49664-65 and the three
+/// sibling control-mode arms), but the ONLY consumer downstream is
+/// `sub_1A7A0_fly_asistant` (PI:1988-2013) — the fly-assistant
+/// idle-recentre watchdog. The player's aim/attitude command (input
+/// bytes 3/4, `playerInputs.roll`/`pitch`) is computed from the LIVE
+/// cursor `x_DWORD_1805B0_mouse` ← `x_WORD_E3760` by
+/// `ComputeMousePlayerMovement_17060` (PI:643/1007 → PI:2100-41), and
+/// the cast gate `sub_5F660` (EF:60874) takes no aim argument at all:
+/// its three call sites pass (caster, manifestation, hand flag) and the
+/// launch direction comes off the caster entity's own pose — which the
+/// harness already pins from the recording ([`carpet_pose_mc2`]).
+pub(crate) fn press_pos_mc2(input: Option<&serde_json::Value>) -> Option<(i16, i16)> {
+    let p = input?.get("mouse_press_pos")?;
+    let g = |k: &str| p.get(k).and_then(|v| v.as_i64()).map(|v| v as i16);
+    Some((g("x")?, g("y")?))
+}
+
+/// `MGC_PRESS_EDGE=1` A/B lane: fold a cursor-AT-PRESS CHANGE into the
+/// aligned rising edge, attributed to whichever button the record shows
+/// down. The ISR writes the snapshot only on a press edge and nothing
+/// ever clears it, so a change between two records proves a press
+/// happened in between — including one that the poll both latched and
+/// consumed inside the gap, which the latch lane cannot see.
+///
+/// MEASURED (mc2l0, full 8,626-pair take, against retail's own arm
+/// oracle = the equipped hand manifestation's `word_0x2E_46` going
+/// 0 → nonzero): 731 retail arms; the landed latch law catches
+/// **728/731** with 201 armless edges, the press-position edge catches
+/// **480/731** with **354** changes that arm nothing (UI clicks, the
+/// ring pane, mana-refused casts, possess re-presses that raise
+/// `byte_0x3C_60` instead of the timer). It is strictly worse, so it
+/// stays OFF; the lane exists to keep that result reproducible and to
+/// stand as the fallback if a recorder change ever costs us the latch.
+pub(crate) fn press_edge_mc2(
+    cmd: PlayerCommand,
+    held: (bool, bool),
+    latch: (bool, bool),
+    moved: bool,
+) -> PlayerCommand {
+    if !moved {
+        return cmd;
+    }
+    let (l, r) = (held.0 || latch.0, held.1 || latch.1);
+    PlayerCommand {
+        // Ambiguous records (the press already released, so no button
+        // reads down) can only be attributed to a hand by guessing;
+        // retail's own registers say nothing, so both fire.
+        fire_left: cmd.fire_left || l || !(l || r),
+        fire_right: cmd.fire_right || r || !(l || r),
+        ..cmd
+    }
+}
+
+/// THE CYCLE-RING CAST LANE (`entityIndex_0x6E3E_byte5 & 0x40`) —
+/// the third cast bit beside the two hands, and the one the port does
+/// not model.
+///
+/// PROVEN SEMANTICS. The carpet's dispatch tail fires three lanes off
+/// `str_164->entityIndex_0x0` (EF:60851-62):
+///
+/// ```text
+///   & 0x10 → sub_5F660(carpet, SpellEnabled[SpellIndexLeft ], 256)
+///   & 0x20 → sub_5F660(carpet, SpellEnabled[SpellIndexRight], 512)
+///   & 0x40 → sub_5F660(carpet,
+///              SpellEnabled[spellIndex_D94FF[spellIndex_0x458_1112]], 256)
+/// ```
+///
+/// So 0x40 is NOT "which hand" — it casts the RING PANE's category
+/// cursor through the LEFT hand-slot flag (256), consulting neither
+/// equipped hand. It is raised at exactly one site (PI:880-84): the
+/// spell-ring pane (`MenuState` 5 or 8, PI:806) with no equip pending
+/// (`byte_0x457_1111 == 0`, PI:836/842), no SHIFT (PI:856), and BOTH
+/// press latches up (`MouseButtonState & 1 && & 2` — bits 0/1 are the
+/// ISR latches `x_WORD_180746`/`180744`, EF:49676-79). The dispatcher
+/// writes `spellIndex_0x458_1112 = byte1` first (EF:37626-27), so the
+/// cast reads the cursor the click just selected — the shortcut that
+/// casts a ring spell without equipping it.
+///
+/// CORPUS: unreachable. Both press latches are NEVER up in the same
+/// record in any MC2 take — mc2l0 0/8,626, mc2l4 0/17,711,
+/// mc2l24 0/69,220, mc2l30 0/9,337 (both buttons are not even HELD
+/// together except 10 mc2l24 records, all outside the pane). The ring
+/// pane IS visited (201/277/93 records with the cursor moving), so the
+/// gate is live code that this corpus simply never trips. This detector
+/// exists so the day a take DOES trip it, the run says so instead of
+/// silently dropping a cast. `MGC_NO_HAND_BIT=1` disables it.
+pub(crate) fn ring_cast_mc2(
+    p: &mgc_formats::mgcr::RetailPlayerMc2,
+    latch: (bool, bool),
+) -> Option<u8> {
+    if !(latch.0 && latch.1) || !matches!(p.menu_state, 5 | 8) || p.hand_pending != 0 {
+        return None;
+    }
+    // `spellIndex_D94FF` (GameUI.cpp:59) is the identity over 0..25;
+    // the three tail cells (26..28 → 0, 3, 0) are pane-layout padding
+    // the cursor never lands on.
+    (p.ring_cursor <= 25).then_some(p.ring_cursor)
 }
 
 /// Is the pair fixture-grade? See the module doc: step-1 dominance of
@@ -275,6 +552,7 @@ pub(crate) fn capture_clean_mc2(pst: &RetailMc2, st: &RetailMc2) -> bool {
 pub(crate) fn exec_pair_mc2(
     world: &mut World,
     pristine: &Planes,
+    things: &ThingTable,
     pst: &RetailMc2,
     st: &RetailMc2,
     obs: &ObsMc2,
@@ -290,6 +568,7 @@ pub(crate) fn exec_pair_mc2(
     String,
 > {
     world.restore_planes(pristine);
+    world.restore_thing_table(things);
     let report = world
         .retail_import_mc2(pst)
         .map_err(|e| format!("import: {e}"))?;
@@ -354,7 +633,7 @@ pub(crate) fn carpet_pose_mc2(e: &RetailEntMc2) -> PlayerPose {
 pub(crate) fn build_world_mc2(
     baked: &std::path::Path,
     level: u32,
-) -> Result<(World, Planes), String> {
+) -> Result<(World, Planes, ThingTable), String> {
     let lp = baked.join("mc2").join(format!("level-{level:03}.mgcl"));
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
@@ -427,7 +706,13 @@ pub(crate) fn build_world_mc2(
     let (wizards, player_count) = mc2_rival_configs(pkg.wizards.as_ref(), header);
     w.set_mc2_wizards(&wizards, player_count);
     let pristine = w.planes_clone();
-    Ok((w, pristine))
+    // The authored THING records: a one-shot disposition ZEROES the
+    // records it releases, and that consumption is not part of the
+    // captured `D41A0_0` closure — so it must be re-imprinted per
+    // pair alongside the terrain, or one mis-timed trip disarms the
+    // disposition for the whole rest of the run.
+    let things = w.thing_table_clone();
+    Ok((w, pristine, things))
 }
 
 /// wizards.json + header → per-color MC2 rival configs (the app's
@@ -680,4 +965,167 @@ pub(crate) fn class_map_mc2(retail: &ObsMc2) -> BTreeMap<u16, (u8, u8)> {
         .iter()
         .map(|e| (e.slot, (e.class, e.model)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One recorded input frame: held + latch, as the recorder writes
+    /// them (`mouse_buttons` / `mouse_clicks`).
+    fn frame(held: bool, latch: bool) -> serde_json::Value {
+        serde_json::json!({
+            "mouse_buttons": {"left": false, "right": held},
+            "mouse_clicks": {"left": false, "right": latch},
+        })
+    }
+
+    /// Feed a register trace through the latch-aligned law and return
+    /// the aligned fire level per record.
+    fn aligned(trace: &[(bool, bool)]) -> Vec<bool> {
+        let mut prev_latch = (false, false);
+        let mut out = Vec::new();
+        for &(h, l) in trace {
+            let v = frame(h, l);
+            let (held, latch) = raw_input_mc2(Some(&v));
+            out.push(align_cmd_mc2(held, latch, prev_latch).fire_right);
+            prev_latch = latch;
+        }
+        out
+    }
+
+    /// The pre-2026-08-04 mapping: held ∥ latch, merged (the phase then
+    /// came from a uniform `--input-delay` ring, which cannot model a
+    /// per-press split).
+    fn legacy(trace: &[(bool, bool)]) -> Vec<bool> {
+        trace
+            .iter()
+            .map(|&(h, l)| sample_cmd_mc2(Some(&frame(h, l))).fire_right)
+            .collect()
+    }
+
+    fn edges(level: &[bool]) -> Vec<usize> {
+        (1..level.len())
+            .filter(|&i| level[i] && !level[i - 1])
+            .collect()
+    }
+
+    /// A press the recorder caught with the latch STILL UP was not yet
+    /// consumed at snapshot time: retail polls it on the NEXT frame, so
+    /// the aligned edge is one record later than the raw held edge.
+    /// (The legacy merge puts it on the raw record — this is the whole
+    /// ±1 cast-phase split, and the assert fails under it.)
+    #[test]
+    fn mc2_pending_latch_defers_the_cast_one_record() {
+        // r:      0        1       2       3       4
+        let trace = [
+            (false, false),
+            (true, true),
+            (true, false),
+            (true, false),
+            (false, false),
+        ];
+        assert_eq!(edges(&aligned(&trace)), vec![2]);
+        assert_eq!(edges(&legacy(&trace)), vec![1]);
+    }
+
+    /// A press already CONSUMED by the snapshot's own frame (latch down
+    /// on the record where held first reads 1) casts on that record —
+    /// here the two mappings agree, which is why no uniform delay can
+    /// serve both cases.
+    #[test]
+    fn mc2_consumed_press_casts_on_its_own_record() {
+        let trace = [(false, false), (true, false), (true, false), (false, false)];
+        assert_eq!(edges(&aligned(&trace)), vec![1]);
+        assert_eq!(edges(&legacy(&trace)), vec![1]);
+    }
+
+    /// One cast per physical click, however long the hold — the level
+    /// stays up for the whole hold (the repeat family reads it) but
+    /// rises exactly once.
+    #[test]
+    fn mc2_long_hold_is_one_aligned_edge() {
+        let mut trace = vec![(false, false), (true, true)];
+        trace.extend(std::iter::repeat_n((true, false), 20));
+        trace.push((false, false));
+        let a = aligned(&trace);
+        assert_eq!(edges(&a), vec![2]);
+        assert!(a[2..22].iter().all(|&v| v), "the hold must stay armed");
+    }
+
+    /// A click shorter than the recorder's poll (latch caught, held
+    /// already released at the next record) still casts — once, on the
+    /// frame that consumed the latch. The legacy merge fires it a
+    /// record early instead.
+    #[test]
+    fn mc2_sub_poll_click_casts_once_on_the_consuming_record() {
+        let trace = [(false, false), (true, true), (false, false), (false, false)];
+        assert_eq!(edges(&aligned(&trace)), vec![2]);
+        assert_eq!(edges(&legacy(&trace)), vec![1]);
+    }
+
+    /// The cursor-AT-PRESS lane is decoded from the recorded frame, and
+    /// it is the LIVE cursor that must never be mistaken for it.
+    #[test]
+    fn mc2_press_position_decodes_from_the_recorded_frame() {
+        let v = serde_json::json!({
+            "mouse": {"x": 396, "y": 185},
+            "mouse_press_pos": {"x": 392, "y": 185},
+        });
+        assert_eq!(press_pos_mc2(Some(&v)), Some((392, 185)));
+        assert_eq!(press_pos_mc2(Some(&serde_json::json!({}))), None);
+        assert_eq!(press_pos_mc2(None), None);
+    }
+
+    /// The `MGC_PRESS_EDGE` fold turns a press-position CHANGE into a
+    /// cast on the record that carries it, attributed to the button the
+    /// record shows down — the sub-poll press the latch lane cannot
+    /// see. Neutering the fold (`moved = false`) leaves the aligned
+    /// command untouched, which is the default the corpus measurement
+    /// picked (see [`press_edge_mc2`]).
+    #[test]
+    fn mc2_press_move_can_carry_a_cast_the_latch_missed() {
+        let quiet = PlayerCommand::default();
+        let folded = press_edge_mc2(quiet, (false, true), (false, false), true);
+        assert!(folded.fire_right && !folded.fire_left);
+        // Same record, no press-position move: nothing is manufactured.
+        let same = press_edge_mc2(quiet, (false, true), (false, false), false);
+        assert!(!same.fire_right && !same.fire_left);
+        // Fully released at the snapshot: retail's registers cannot
+        // attribute the press, so both hands take it.
+        let both = press_edge_mc2(quiet, (false, false), (false, false), true);
+        assert!(both.fire_left && both.fire_right);
+    }
+
+    fn ring_player(menu: u8, pending: u8, cursor: u8) -> mgc_formats::mgcr::RetailPlayerMc2 {
+        mgc_formats::mgcr::RetailPlayerMc2 {
+            menu_state: menu,
+            hand_pending: pending,
+            ring_cursor: cursor,
+            ..Default::default()
+        }
+    }
+
+    /// The 0x40 gate, per PI:806/836/880-84: the ring pane open, no
+    /// equip pending, and BOTH press latches up. Every neutered
+    /// coordinate must refuse — the whole point is that the lane is
+    /// narrow enough for the corpus to never reach it.
+    #[test]
+    fn mc2_ring_cast_bit_needs_the_pane_and_both_latches() {
+        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (true, true)), Some(9));
+        // MenuState 8 is the pane's second face.
+        assert_eq!(ring_cast_mc2(&ring_player(8, 0, 0), (true, true)), Some(0));
+        // Flying (0) / map (6): the pane is closed, PI:880 is not even
+        // in the executed branch.
+        assert_eq!(ring_cast_mc2(&ring_player(0, 0, 9), (true, true)), None);
+        assert_eq!(ring_cast_mc2(&ring_player(6, 0, 9), (true, true)), None);
+        // A pending equip takes the OTHER branch (PI:816-42).
+        assert_eq!(ring_cast_mc2(&ring_player(5, 1, 9), (true, true)), None);
+        // One latch alone selects a category / equips a hand instead.
+        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (true, false)), None);
+        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (false, true)), None);
+        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 9), (false, false)), None);
+        // The cursor's three padding cells are not spells.
+        assert_eq!(ring_cast_mc2(&ring_player(5, 0, 27), (true, true)), None);
+    }
 }

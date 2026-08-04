@@ -2729,11 +2729,18 @@ impl Gen {
     }
 
     /// `sub_28000` (:18384): nearest live (10,39) mana sphere.
+    ///
+    /// The scanned list (`dword_38523`) carries class-10 models 39,
+    /// 40 AND 57 (:40018-63 builds it), and the scan filters
+    /// `model == 39` — the (10,57) FOOL'S-MANA sphere is deliberately
+    /// NOT siphonable. Since OPEN-6 a NATIVE m57 carries model 57 too
+    /// (mc2/effects.rs), so the model test alone is the filter on both
+    /// paths; the action test is kept as belt-and-braces.
     fn m23_find_node(&self, i: usize) -> Option<u16> {
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
         let mut best: Option<(usize, i32)> = None;
         for (j, c) in self.ent.iter().enumerate().skip(1) {
-            if c.class64 == 10 && c.model65 == 39 && c.flags & 0x400 == 0 {
+            if c.class64 == 10 && c.model65 == 39 && c.tick70 != 62 && c.flags & 0x400 == 0 {
                 let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
                 if best_d2(&best, d2) {
                     best = Some((j, d2));
@@ -2743,13 +2750,15 @@ impl Gen {
         best.map(|(j, _)| j as u16)
     }
 
-    /// `sub_28420` (:18603): the locked node must still be a (10,39).
+    /// `sub_28420` (:18603): the locked node must still be a (10,39)
+    /// (same fool's-mana exclusion as [`Self::m23_find_node`]).
     fn m23_node_ok(&self, i: usize) -> bool {
         let t = self.ent[i].f146 as usize;
         t != 0
             && t < self.ent.len()
             && self.ent[t].class64 == 10
             && self.ent[t].model65 == 39
+            && self.ent[t].tick70 != 62
             && self.ent[t].flags & 0x400 == 0
     }
 
@@ -2766,6 +2775,78 @@ impl Gen {
             }
             _ => {}
         }
+    }
+
+    /// `sub_28390` (:18580) — the landing servo, and the gate that
+    /// starts the siphon. Two independent axes, each with its own
+    /// tolerance, and "settled" means BOTH are in band:
+    ///   - 2-D reach 128 (`EuclideanDistXYZ_58490` is XY-only,
+    ///     utilities/Maths.cpp:738): outside it, turn to the node and
+    ///     walk (`sub_1B8C0`); inside it, hold — retail does NOT run
+    ///     the mover once aligned.
+    ///   - station-keeping 640 ABOVE the node within ±64, stepping
+    ///     32/tick.
+    /// Corpus (mc2l24, 14 siphon entries between t=14512 and t=15648):
+    /// every dweller enters the siphon with `dz` in [588, 701] and
+    /// 2-D gap ≤ 121 — the 640±64 band and the 128 reach exactly.
+    fn m23_station_keep(&mut self, i: usize, t: usize) -> bool {
+        let mut settled = true;
+        let (sp, tp) = {
+            let e = &self.ent[i];
+            let s = &self.ent[t];
+            ((e.x, e.y), (s.x, s.y, s.z))
+        };
+        if Self::isqrt(Self::dist2_sq(sp.0, sp.1, tp.0, tp.1) as u32) as i32 > 128 {
+            settled = false;
+            self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
+            self.mc2_move_core(i);
+        }
+        // Read z AFTER the move commit — retail's servo reads the
+        // post-`sub_1B8C0` position.
+        let gap = self.ent[i].z as i32 - (tp.2 as i32 + 640);
+        if gap.abs() > 64 {
+            settled = false;
+            let step = if gap <= 0 { 32 } else { -32 };
+            self.ent[i].z = self.ent[i].z.wrapping_add(step);
+        }
+        settled
+    }
+
+    /// `sub_28060` (:18415): a descending dweller stacked on a
+    /// packmate LIFTS 16 and aborts the approach — only the HIGHER of
+    /// the pair moves, and the box is 2·pitch in x/y, 2·fov in z (its
+    /// own extents both times). Retail walks the live per-model
+    /// bucket, same gates as [`Gen::mc2_avoid_packmate`].
+    fn m23_lift_off_packmate(&mut self, i: usize) -> bool {
+        let (ex, ey, ez, span, zspan, model, id) = {
+            let e = &self.ent[i];
+            (
+                e.x,
+                e.y,
+                e.z,
+                2 * e.f80 as i32,
+                2 * e.f84 as i32,
+                e.model65,
+                e.id24,
+            )
+        };
+        for c in self.ent.iter().skip(1) {
+            if c.class64 == 5
+                && c.model65 == model
+                && c.id24 != id
+                && c.act_life >= 0
+                && !matches!(c.tick70, 0xB4 | 0xE8 | 0xEA)
+                && c.flags & 0x400 == 0
+                && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < span
+                && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < span
+                && (ez as i32 - c.z as i32).abs() < zspan
+                && ez >= c.z
+            {
+                self.ent[i].z = ez.wrapping_add(16);
+                return true;
+            }
+        }
+        false
     }
 
     /// The altitude-keeping z step of `sub_27950` (:18052).
@@ -2809,20 +2890,28 @@ impl Gen {
                     }
                     _ => {
                         if self.m23_node_ok(i) {
-                            let t = self.ent[i].f146 as usize;
-                            let (sp, tp) = {
-                                let e = &self.ent[i];
-                                let s = &self.ent[t];
-                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
-                            };
-                            self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
-                            // 2-D (EF:18144 — `EuclideanDistXYZ`
-                            // never reads z): the leviathan flies
-                            // far above its node, so a 3-D read would
-                            // stall the descend transition.
-                            if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32) < 768
-                            {
-                                self.m23_mode(i, M23_BASE + 1, 0, 500);
+                            // :18140 — the re-aim AND the range test
+                            // ride the 4-tick cadence byte; testing
+                            // every tick hands the descend over up to
+                            // 3 ticks early (mc2l24 slot 230, the
+                            // residual `action 184 vs 185` rows).
+                            if self.ent[i].f63 & 3 == 0 {
+                                let t = self.ent[i].f146 as usize;
+                                let (sp, tp) = {
+                                    let e = &self.ent[i];
+                                    let s = &self.ent[t];
+                                    ((e.x, e.y, e.z), (s.x, s.y, s.z))
+                                };
+                                self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
+                                // 2-D (EF:18144 — `EuclideanDistXYZ`
+                                // never reads z): the leviathan flies
+                                // far above its node, so a 3-D read
+                                // would stall the descend transition.
+                                if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32)
+                                    < 768
+                                {
+                                    self.m23_mode(i, M23_BASE + 1, 0, 500);
+                                }
                             }
                         } else {
                             self.m23_mode(i, M23_BASE, 1, 0);
@@ -2832,43 +2921,42 @@ impl Gen {
                 self.m23_post(i);
             }
             1 => {
-                // sub_27B20 — descend/land onto the node.
+                // sub_27B20 (:18250) — descend/land onto the node.
                 match self.ent[i].f71 {
                     0 => {
                         self.ent[i].f126 = self.ent[i].f128;
-                        self.ent[i].f26 -= 1;
-                        if self.m23_node_ok(i) {
+                        // PRE-decrement: retail stores `--v2` and
+                        // tests the NEW value (:18186-88).
+                        self.ent[i].f26 = self.ent[i].f26.wrapping_sub(1);
+                        // The abort trio is evaluated BEFORE the
+                        // approach servo and short-circuits in this
+                        // order: timer, node still a (10,39), and the
+                        // anti-stack lift.
+                        let approach = self.ent[i].f26 != 0
+                            && self.m23_node_ok(i)
+                            && !self.m23_lift_off_packmate(i);
+                        if approach {
                             let t = self.ent[i].f146 as usize;
-                            let (sp, tp) = {
-                                let e = &self.ent[i];
-                                let s = &self.ent[t];
-                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
-                            };
-                            // Aligned-over-node = close in 2D
-                            // (deliberate: for sub_28390/sub_28060).
-                            self.ent[i].f34 = Self::angle_between(sp.0, sp.1, tp.0, tp.1);
-                            self.mc2_move_core(i);
-                            let dz = (tp.2 as i32 - sp.2 as i32).clamp(-32, 32);
-                            self.ent[i].z = self.ent[i].z.wrapping_add(dz as i16);
-                            if Self::dist2_sq(sp.0, sp.1, tp.0, tp.1) < 256 * 256 {
+                            if self.m23_station_keep(i, t) {
                                 self.m23_mode(i, M23_BASE + 3, 0, 0);
-                            } else if self.ent[i].f26 <= 0 {
-                                self.m23_mode(i, M23_BASE + 1, 1, 0);
                             }
                         } else {
                             self.m23_mode(i, M23_BASE + 1, 1, 0);
                         }
                     }
-                    _ => {
+                    1 => {
                         if self.ent[i].z >= 0x2000 {
                             // No f44 write (EF:18174-84 leaves the
                             // stale value — it governs the NEXT
                             // descent's target).
                             self.m23_mode(i, M23_BASE, 0, 80);
                         } else {
-                            self.ent[i].z += 32;
+                            self.ent[i].z = self.ent[i].z.wrapping_add(32);
                         }
                     }
+                    // :18173 acts on sub 1 alone; anything higher is
+                    // a bare post pass.
+                    _ => {}
                 }
                 self.m23_post(i);
             }
@@ -2901,80 +2989,110 @@ impl Gen {
                 }
             }
             3 => {
-                // sub_27C10 — the siphon.
+                // sub_27C10 — the siphon. Retail's control flow is a
+                // FALL-THROUGH, not a switch: sub 0 seeds the rise
+                // step and the 64-tick timer and then runs the siphon
+                // body in that same tick (:18226-40 has no return —
+                // only sub >= 2 jumps past the body to LABEL_24). So
+                // the grab, the +10 ramp and the swallow test all
+                // start on the ARRIVAL tick, and an arrival onto a
+                // ball another dweller already holds still steals the
+                // grab on its way out (v9 is set, the body runs).
                 self.snd(59, i);
+                let mut abort = false; // v9  → re-hunt   (base+3 sub 3)
+                let mut lost = false; // v10 → climb-out (base+1 sub 1)
+                let mut body = true;
                 match self.ent[i].f71 {
                     0 => {
-                        if self.m23_node_ok(i) {
+                        let free = self.m23_node_ok(i) && {
                             let t = self.ent[i].f146 as usize;
-                            if self.ent[t].flags & 0x40 == 0 {
-                                self.ent[i].f44 = 18;
-                                self.m23_mode(i, M23_BASE + 3, 1, 64);
-                            } else {
-                                self.m23_mode(i, M23_BASE + 3, 3, 0);
-                            }
+                            self.ent[t].flags & 0x40 == 0
+                        };
+                        if free {
+                            // `word_0x2C_44 = 18` (:18238) — the rise
+                            // step the GRABBED BALL reads off its
+                            // collector every tick (mc1/combat.rs
+                            // `ball_tick`, EF:26120), ramped +10 per
+                            // siphon tick below.
+                            self.ent[i].f44 = 18;
+                            self.m23_mode(i, M23_BASE + 3, 1, 64);
                         } else {
-                            self.m23_mode(i, M23_BASE + 3, 3, 0);
+                            abort = true;
                         }
                     }
-                    1 => {
-                        // The siphon runs the 64-tick f26 timeout
-                        // (seeded by the sub-1 entry): decrement
-                        // INSIDE the node-ok arm (retail's `v3x &&
-                        // (--f26)` short-circuit, EF:18261-86) — an
-                        // unreachable ball aborts to re-hunt instead
-                        // of siphoning forever.
-                        if self.m23_node_ok(i) {
-                            self.ent[i].f26 -= 1;
-                            if self.ent[i].f26 != 0 {
-                                let t = self.ent[i].f146 as usize;
-                                self.ent[t].flags |= 0x40; // grabbed
-                                self.ent[t].f146 = i as u16;
-                                self.ent[i].f44 += 10;
+                    1 => {}
+                    _ => {
+                        // :18242-59 — sub 2 is a bare no-op; only sub
+                        // 3 re-hunts. Both skip the siphon body.
+                        body = false;
+                        if self.ent[i].f71 == 3 {
+                            self.ent[i].f146 = 0;
+                            if let Some(n) = self.m23_find_node(i) {
+                                let t = n as usize;
+                                // :18249 assigns the target INSIDE the
+                                // condition, BEFORE the range test —
+                                // an out-of-reach node still latches
+                                // (it is what the next descend reads).
+                                self.ent[i].f146 = n;
                                 let (sp, tp) = {
                                     let e = &self.ent[i];
                                     let s = &self.ent[t];
                                     ((e.x, e.y, e.z), (s.x, s.y, s.z))
                                 };
-                                if Self::mc2_dist3(sp, tp) < 256 || tp.2 > sp.2 {
-                                    // Swallow: steal the mana, consume it.
-                                    self.ent[i].f140 += self.ent[t].f140;
-                                    self.ent[t].flags |= 0x400;
-                                    self.m23_mode(i, M23_BASE + 3, 3, 0);
+                                // 2-D (EF:18250 — `EuclideanDistXYZ`
+                                // never reads z).
+                                if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32)
+                                    <= 3584
+                                {
+                                    self.m23_mode(i, M23_BASE + 1, 0, 500);
+                                } else {
+                                    lost = true;
                                 }
                             } else {
-                                self.m23_mode(i, M23_BASE + 3, 3, 0);
+                                lost = true;
                             }
-                        } else {
-                            self.m23_mode(i, M23_BASE + 3, 3, 0);
                         }
                     }
-                    // Retail sub 2 is a NO-OP (the EF:18261 gate is
-                    // strictly `== 1`); it was folded into 1 before.
-                    2 => {}
-                    _ => {
-                        self.ent[i].f146 = 0;
-                        if let Some(n) = self.m23_find_node(i) {
-                            let t = n as usize;
-                            let (sp, tp) = {
-                                let e = &self.ent[i];
-                                let s = &self.ent[t];
-                                ((e.x, e.y, e.z), (s.x, s.y, s.z))
-                            };
-                            // 2-D (EF:18250 — `EuclideanDistXYZ`
-                            // never reads z).
-                            if crate::mc2::morph::dist2d(sp.0, sp.1, tp.0 as i32, tp.1 as i32)
-                                <= 3584
-                            {
-                                self.ent[i].f146 = n;
-                                self.m23_mode(i, M23_BASE + 1, 0, 500);
-                            } else {
-                                self.m23_mode(i, M23_BASE + 1, 1, 0);
+                }
+                if body {
+                    // :18261-86. The 64-tick f26 timeout decrements
+                    // INSIDE the node-ok arm (retail's `v3x &&
+                    // (--f26)` short-circuit) — an unreachable ball
+                    // aborts to re-hunt instead of siphoning forever.
+                    if self.ent[i].f146 != 0 {
+                        let held = self.m23_node_ok(i) && {
+                            self.ent[i].f26 = self.ent[i].f26.wrapping_sub(1);
+                            self.ent[i].f26 != 0
+                        };
+                        if held {
+                            let t = self.ent[i].f146 as usize;
+                            self.ent[t].flags |= 0x40; // grabbed
+                            self.ent[t].f146 = i as u16;
+                            self.ent[i].f44 = self.ent[i].f44.wrapping_add(10);
+                            // :18271 is the 3-axis extent overlap
+                            // `sub_106C0` (NOT a radius) — with the
+                            // leviathan's 384 half-extents the ball is
+                            // swallowed well before it reaches the
+                            // body, and the `ball.z > self.z` half
+                            // catches the ball that overshoots.
+                            if self.ent_overlap(i, t) || self.ent[t].z > self.ent[i].z {
+                                // Swallow: steal the mana, consume it.
+                                self.ent[i].f140 += self.ent[t].f140;
+                                self.ent[t].flags |= 0x400;
+                                abort = true;
                             }
                         } else {
-                            self.m23_mode(i, M23_BASE + 1, 1, 0);
+                            abort = true;
                         }
+                    } else {
+                        lost = true;
                     }
+                    if abort {
+                        self.m23_mode(i, M23_BASE + 3, 3, 0);
+                    }
+                }
+                if lost {
+                    self.m23_mode(i, M23_BASE + 1, 1, 0);
                 }
                 self.m23_post(i);
             }

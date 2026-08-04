@@ -79,6 +79,10 @@ pub struct PinnedMc2 {
     pub castles: [i16; 8],
 }
 
+/// An opaque snapshot of the level's authored THING record table
+/// ([`World::thing_table_clone`]).
+pub struct ThingTable(Vec<crate::engine::features::Rec>);
+
 impl World {
     /// The live terrain planes, cloned — the runner captures them
     /// right after the level build (POST feature pass: the load-time
@@ -92,6 +96,26 @@ impl World {
             angle: self.g.t.angle.clone(),
             ceiling: self.g.t.ceiling.clone(),
         }
+    }
+
+    /// The post-build THING record table, cloned — the twin of
+    /// [`World::planes_clone`] for the level's authored records. A
+    /// one-shot disposition ZEROES the records it releases
+    /// (`sub_4A1E0(id, 1)`), and that consumption is NOT part of the
+    /// `D41A0_0` closure the recording captures, so it cannot be
+    /// re-imported per pair: a single mis-timed trip anywhere in a run
+    /// silently disarms the disposition for every later pair. The
+    /// runner captures the table right after the level build and
+    /// re-imprints it via [`World::restore_thing_table`].
+    pub fn thing_table_clone(&self) -> ThingTable {
+        ThingTable(self.table.clone())
+    }
+
+    /// Re-imprint the post-build THING record table
+    /// ([`World::thing_table_clone`]).
+    pub fn restore_thing_table(&mut self, table: &ThingTable) {
+        self.table.clear();
+        self.table.extend_from_slice(&table.0);
     }
 
     /// Re-imprint the pristine terrain planes (the map file's blocks
@@ -649,7 +673,44 @@ impl World {
                 .collect();
             Some((got, scan_free))
         };
-        self.g.free.extend(ghost_slots);
+        // The recycle-victim stack rides along, order preserved, so a
+        // full-pool spawn sacrifices the SAME live entity retail's
+        // `NewEvent_4A050` fallback would (:581). `refill` stays clear:
+        // the recorded stack is retail's own snapshot, and running it
+        // dry is retail returning null, not a cue to re-rank the pool.
+        // Ghosts are excluded — they are still class-bearing here, but
+        // `tick()`'s top reap pushes them onto the FREE stack, and a
+        // slot on both stacks could be handed out twice.
+        //
+        // `MGC_NO_RECYCLE_VICTIM=1` is the A/B toggle: it leaves the
+        // stack empty, i.e. the pre-dig port that simply fails every
+        // full-pool spawn. The runner's measurements are taken unset.
+        self.g.mc2_recycle.refill = false;
+        let no_victims = std::env::var_os("MGC_NO_RECYCLE_VICTIM").is_some();
+        self.g.mc2_recycle.stack = st
+            .recycle_stack
+            .iter()
+            .copied()
+            .filter(|&s| {
+                if no_victims {
+                    return false;
+                }
+                let live = (s as usize) < pool && s != human_slot && s != 0;
+                live && {
+                    let e = &self.g.ent[s as usize];
+                    e.class64 != 0 && e.flags & 0x400 == 0
+                }
+            })
+            .collect();
+
+        // NO ghost push here — see the census note above: `tick()`'s
+        // strict-MC2 top reap is the ONE pusher (measured 2026-08-03,
+        // mc2l24 pair 53808: the extra `extend` left the pyramid's
+        // 17-slot worm chain popping [905, 837, 813, 796, 727, 690]
+        // TWICE, so the second pop of 905 re-`NewEvent`ed the chain's
+        // own HEAD — `Ent::default()` over a live record — and the
+        // whole chain projected as class 0. Retail's stack is exactly
+        // the recorded 716 + the 6 ghosts the reap pushes.)
 
         // Globals in the closure.
         self.g.rand = st.rand;
@@ -734,8 +795,21 @@ impl World {
         // imported rival carpet replayed as a frozen husk (the mc2l4
         // (3,1) family: obs@1 == state@0 verbatim for the wizard's
         // whole life — the motion law itself is verbatim EF:6484).
-        // Motion/economy lanes only; the AI decision-lane decode is
-        // still owed (the same split as the MC1 fix).
+        // The DECISION half follows in `reanchor_mc2_rival_ai`: the
+        // wizard-extension brain lanes plus the two that ride the
+        // wizard entity, so the replayed rival resumes retail's
+        // decision instead of re-running the cascade.
+        //
+        // `SpellIndexLeft/Right` are DIRECT spell indices in MC2 (-1 =
+        // empty) — shared by the rival books here and the human's
+        // below.
+        let book_hand = |raw: i16| {
+            if (0..26).contains(&raw) {
+                raw as i8
+            } else {
+                -1
+            }
+        };
         for ri in 0..self.mc2_rivals.len() {
             let slot = self.mc2_rivals[ri].slot as usize;
             match st.players.get(slot) {
@@ -752,6 +826,36 @@ impl World {
                         e.mana_max.max(0) as u32,
                         e.d88,
                     );
+                    let ai = crate::mc2::rivals::Mc2RivalAi {
+                        state: p.ai_state,
+                        target: tr(e.target96),
+                        target_sig: e.f98,
+                        site: (e.dest_x, e.dest_y),
+                        burst: p.burst,
+                        poverty: p.poverty,
+                        cooldown: p.cooldown,
+                        hate: p.hate,
+                        war: p.war,
+                        weave: p.weave.max(0) as u8,
+                        weave_dir: p.weave_dir.max(0) as u8,
+                        avoid: p.avoid.max(0) as u8,
+                        avoid_exit: p.avoid_exit.max(0) as u8,
+                        aggression: p.aggression.max(0) as u16,
+                        perception: p.perception.max(0) as u16,
+                        reflexes: p.reflexes.max(0) as u16,
+                        life_scale: p.life_scale.max(0) as u16,
+                    };
+                    let book = crate::mc2::cast::Mc2Spellbook {
+                        ent: p.spell_ent,
+                        xp_vol: p.xp_vol,
+                        xp_bank: p.xp_bank,
+                        levels: p.levels,
+                        sel: p.sel,
+                        left: book_hand(p.hand_left),
+                        right: book_hand(p.hand_right),
+                        ring: p.ring,
+                    };
+                    self.reanchor_mc2_rival_ai(ri, &ai, &book);
                 }
                 _ => self.reanchor_mc2_rival(ri, 0, 0, 0, 0, 0, 0, 0),
             }
@@ -802,13 +906,6 @@ impl World {
         // seeding is cross-pair state, so rebuild from the closure.
         // Without this the cast machinery ticks whatever slots the
         // level build assigned, not the imported manifestations.
-        let book_hand = |raw: i16| {
-            if (0..26).contains(&raw) {
-                raw as i8
-            } else {
-                -1
-            }
-        };
         self.mc2_book = crate::mc2::cast::Mc2Spellbook {
             ent: ply.spell_ent,
             xp_vol: ply.xp_vol,
@@ -819,6 +916,68 @@ impl World {
             right: book_hand(ply.hand_right),
             ring: ply.ring,
         };
+
+        // TERRAIN REPLAY. `.mgcr` has no terrain channel, so the pool
+        // lands on PRISTINE heights while retail's map still carries
+        // every already-run (14,1) riser's write. That write is a
+        // pure function of the riser's own imported state, so replay
+        // it (mc2::riser::mc2_riser_reconstruct) — a removed riser's
+        // 3-row endcaps stand at +48 forever and are what fences the
+        // walkers/dwellers retail keeps out of the walled compounds.
+        // The BUILD00 pad stampers (mc2::pads) are the same shape and
+        // dominate the residual: a (3,2) castle's cumulative (10,42)
+        // painter pad and a village building's own action-51 terrace
+        // both end at an ABSOLUTE `pad + datum`, and the recording
+        // carries every input (cell, BUILD00 row, `site_z` datum). The
+        // world build already settles the AUTHORED stamps, so both
+        // replays are no-ops there and only recover what the take
+        // itself built or levelled up. Castles first: a castle build
+        // purges the buildings inside its footprint, so a surviving
+        // building never overlaps a castle pad.
+        //
+        // `MGC_NO_PAD_REPLAY` is the terrain-replay A/B toggle:
+        // `1`/`all` disables both arms, `castle`/`building` one of
+        // them. The runner's own measurements are taken with it unset.
+        let off = std::env::var("MGC_NO_PAD_REPLAY").unwrap_or_default();
+        let off = |arm: &str| off == "1" || off == "all" || off == arm;
+        if !off("castle") {
+            for i in 0..self.g.ent.len() {
+                if self.g.ent[i].class64 == 3 && self.g.ent[i].model65 == 2 {
+                    self.g.mc2_castle_pad_reconstruct(i);
+                }
+            }
+        }
+        if !off("building") {
+            for i in 0..self.g.ent.len() {
+                if self.g.ent[i].class64 == 10 && matches!(self.g.ent[i].tick70, 51 | 52) {
+                    self.g.mc2_building_pad_reconstruct(i);
+                }
+            }
+        }
+        for i in 0..self.g.ent.len() {
+            if self.g.ent[i].class64 == 14 && self.g.ent[i].model65 == 1 {
+                self.g.mc2_riser_reconstruct(i);
+            }
+        }
+        // The STATIC GROUND PROBES run LAST (mc2::probes): the three
+        // class-2 snap laws pin `z` to the interpolated ground every
+        // tick on an entity that never moves, so each prop's imported
+        // `z` is a terrain SAMPLE the recorder captured without
+        // knowing it — the only handle the format gives on ground the
+        // take dug with edits whose casters are long gone (fire
+        // scorch, craters). Inverting the sampler over the ≤4 cells it
+        // reads is the last pass, so a prop standing on a replayed
+        // pad/riser sees the finished map and solves to a no-op.
+        // `MGC_NO_STATIC_TERRAIN_REPLAY=1` is its A/B toggle.
+        if std::env::var("MGC_NO_STATIC_TERRAIN_REPLAY").unwrap_or_default() != "1" {
+            let cost = self.g.mc2_ground_reader_cost();
+            let mut claimed = std::collections::BTreeSet::new();
+            for i in 0..self.g.ent.len() {
+                if self.g.mc2_is_ground_probe(i) {
+                    self.g.mc2_static_ground_reconstruct(i, &mut claimed, &cost);
+                }
+            }
+        }
 
         // Cross-pair latches, same wipe as the MC1 arm.
         self.human_pose = (carpet.x, carpet.y, carpet.z);
@@ -944,6 +1103,14 @@ impl World {
             // from @0x2A); retail's @0x90 mana lane is dead 0.
             if e.class64 == 10 && matches!(e.model65, 0 | 6) {
                 row.mana = 0;
+            }
+            // The m27 HYDRA keeps its bolt power (@0x88) in f136
+            // (import_ent_mc2's `m27` arm); retail's @0x8C mana_max
+            // lane is dead 0 across the whole family (mc2l24 census,
+            // 87,210 rows), so the obs lane re-zeroes rather than
+            // reporting the power.
+            if e.class64 == 5 && e.model65 == 27 {
+                row.mana_max = 0;
             }
             // The (10,79) castle defender piece keeps its world-yaw
             // (@0x1C, the obs heading lane) in f34 — the piece brain's
@@ -1173,6 +1340,17 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
     // integrator hit its no-op arm (roll/fov/speed never advanced),
     // and all five branches read D404C[0] with the body gauge at 0.
     let m27 = r.class3f == 5 && r.model40 == 27;
+    // The m23 DWELLER is the second such model: its whole machine
+    // runs on `word_0x2C_44` — the cruise altitude 0x2000 (ctor
+    // EF:34474, servo :18081-86) and then the SIPHON RISE STEP the
+    // grabbed sphere reads off it (:18238 seeds 18, :18270 ramps +10,
+    // TransformArcherToMana EF:26120 consumes it). Its
+    // `subSpellIndex_0x2A_42` (500) has no reader on our side — the
+    // (9,9) bolt launcher stamps its own payload (mc2/proj.rs
+    // `mc2_atk_heavy9`). Importing the uniform @0x2A home made every
+    // imported dweller lift its sphere by a flat 500/tick instead of
+    // the ramp (mc2l24 t=14519-14523: retail +98/+108/+118/+128).
+    let ramp2c = m27 || (r.class3f == 5 && r.model40 == 23);
     let mut e = Ent {
         rand: r.rand as u32,
         max_life: r.max_life.max(0) as u32,
@@ -1222,8 +1400,14 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
             // (sub_2A340 mode-3/4 reads it — mc2l24 t=180 slot 46:
             // @0x10 steps 1→2→3→4 in lockstep with the crack speeds
             // -192/-130/-23/192; the @0x2E charm lane stays 0 and
-            // parked the port one step behind).
-            (5, 0 | 27) => r.scratch10 as i16,
+            // parked the port one step behind). EXCEPT in the pyramid's
+            // release chain: a StageVar2 16/17 summon (mc2::doomsday's
+            // spawn block, EF:13419) has `word_0x2E_46` as its LIFE
+            // LATCH, and mobs.rs's `mc2_doom_summon_*` expire it the
+            // moment it reads <= 0 — an m0 worm summon imported with the
+            // bob velocity there puffs itself on the first replayed
+            // tick. The latch wins for exactly those two slots.
+            (5, 0 | 27) if !matches!(r.sv2, 16 | 17) => r.scratch10 as i16,
             // The (5,10) DOOMSDAY PYRAMID drives its whole 16-state
             // machine off `dword_0x10_16` (@0x10 = scratch10): the
             // per-state countdown AND the 0..1200 doom-meter ramp
@@ -1260,9 +1444,25 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         },
         f38: tr(r.f24 as u16),
         f40: tr(r.f26 as u16),
-        f44: if m27 { r.f2c as u16 } else { r.f2a },
+        f44: if ramp2c { r.f2c as u16 } else { r.f2a },
         f46: if r.class3f == 5 { r.b3d as i16 } else { r.f2e },
-        f50: if m27 { r.b3b as i16 } else { r.f30 as i16 },
+        // The (5,10) DOOMSDAY PYRAMID keeps its SUMMON-RING STRIDE in
+        // `word_0x4A_74` (@0x4A = sv_timer): `sub_21850` stamps
+        // 682 (creatures) / 256 (the m19 swarm) with the pick
+        // (EF:13160/13173/13186/13199) and `sub_21AB0` fans the ring at
+        // `stride * repeat + yaw` (EF:13364). @0x30 is dead for the
+        // pyramid, so the uniform import parked the stride at 0 and
+        // every replayed summon spawned stacked on the pyramid's own
+        // bearing instead of fanning (mc2l24 t=53808: retail x 7616 vs
+        // port 7936). The pyramid is never a StageVar hold (sv1 = 0),
+        // so @0x4A is free for it.
+        f50: if m27 {
+            r.b3b as i16
+        } else if r.class3f == 5 && r.model40 == 10 {
+            r.sv_timer
+        } else {
+            r.f30 as i16
+        },
         f52: tr(r.f32),
         f54: tr(r.f34),
         f56: if matches!(r.class3f, 2 | 10) {
@@ -1305,7 +1505,17 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
         f126: r.speed,
         f128: r.min_speed,
         f130: r.max_speed,
-        f136: r.mana_max,
+        // The m27 HYDRA's BOLT POWER is `manaRegen_0x88_136` (@0x88 —
+        // `sub_2A7F0` EF:20513-16 rolls it `(rand%12 > 7) + 1` on the
+        // a3=1 shot and every a3=0 RE-FIRE reads it back, EF:20518-40),
+        // and the port's `m27_branch_bolt` keeps it in f136. The
+        // uniform map spends f136 on @0x8C, so every pair re-imported
+        // the branch's power as 0 and the four re-fires of each whip
+        // hit the `_ => return` arm: one arc per whip instead of five.
+        // Retail's @0x8C is DEAD 0 on the whole (5,27) family (mc2l24
+        // census, 87,210 rows: @0x8C 0×87,210; @0x88 0/1/2), so the
+        // lane is free — the obs `mana_max` projection re-zeroes it.
+        f136: if m27 { r.d88 } else { r.mana_max },
         f140: r.mana,
         f144: tr(r.player_ent),
         f146: tr(r.target96),
@@ -1668,6 +1878,41 @@ mod tests {
         );
     }
 
+    /// The m27 HYDRA's field homes. The four dig-A words plus the BOLT
+    /// POWER `manaRegen_0x88_136` (@0x88 → f136): `sub_2A7F0`
+    /// (EF:20513-16) rolls it on the a3=1 shot and the four a3=0
+    /// re-fires only read it back, so the uniform f136←@0x8C home
+    /// silenced 4/5 of every heavy barrage on replay. @0x8C is dead 0
+    /// across the whole (5,27) family (mc2l24 census, 87,210 rows), so
+    /// the lane is free. Non-vacuous: the sentinels are all distinct —
+    /// reverting the arm reads f136←@0x8C(=999), f36←0, f44←@0x2A(=7),
+    /// f50←@0x30(=8), f26←@0x2E(=9).
+    #[test]
+    fn mc2_m27_import_field_homes() {
+        let r = RetailEntMc2 {
+            class3f: 5,
+            model40: 27,
+            scratch10: 4,  // @0x10 whip counter → f26
+            f22: 1433,     // @0x22 spline pitch → f36
+            f2a: 7,        // @0x2A (uniform f44) — kept distinct
+            f2c: 3,        // @0x2C integrate mode → f44
+            f2e: 9,        // @0x2E charm lane (uniform f26) — distinct
+            f30: 8,        // @0x30 (uniform f50) — distinct
+            b3b: 2,        // @0x3B branch index → f50
+            d88: 2,        // @0x88 bolt power → f136
+            mana_max: 999, // @0x8C — the uniform f136 home, dead on m27
+            mana: 20000,   // @0x90 → f140 (the body's carried mana)
+            ..Default::default()
+        };
+        let e = import_ent_mc2(&r, 26, 103, &|v| v);
+        assert_eq!(e.f26, 4, "whip counter @0x10");
+        assert_eq!(e.f36, 1433, "spline pitch @0x22");
+        assert_eq!(e.f44, 3, "integrate mode @0x2C");
+        assert_eq!(e.f50, 2, "branch index @0x3B");
+        assert_eq!(e.f136, 2, "bolt power @0x88 (NOT the @0x8C lane)");
+        assert_eq!(e.f140, 20000, "carried mana @0x90");
+    }
+
     /// End-to-end owner-lane projection: the pyramid-summon
     /// discriminator. `obs_project_mc2` must recover retail parentId
     /// @0x28 for a pyramid-summoned creature (id24 → the (5,10) pyramid)
@@ -1776,5 +2021,279 @@ mod tests {
             Some(288),
             "pyramid own owner = ring-spin angle from f36"
         );
+    }
+
+    /// The (5,10) DOOMSDAY PYRAMID's SUMMON-RING STRIDE lives in
+    /// `word_0x4A_74` (@0x4A), not the uniform @0x30 lane: `sub_21850`
+    /// stamps 682 with every creature pick (EF:13160/13173/13186) and
+    /// `sub_21AB0` fans the ring at `stride * repeat + yaw`
+    /// (EF:13364). Non-vacuous: the two sentinels differ, so the
+    /// uniform import reads f50 = 3 and every replayed summon stacks
+    /// on the pyramid's own bearing.
+    #[test]
+    fn mc2_pyramid_import_keeps_the_summon_stride() {
+        let pyr = RetailEntMc2 {
+            class3f: 5,
+            model40: 10,
+            f30: 3,        // @0x30 — dead for the pyramid
+            sv_timer: 682, // @0x4A — the summon stride
+            ..Default::default()
+        };
+        assert_eq!(
+            import_ent_mc2(&pyr, 7, 107, &|v| v).f50,
+            682,
+            "summon stride @0x4A (NOT @0x30)"
+        );
+        let worm = RetailEntMc2 {
+            class3f: 5,
+            model40: 0,
+            f30: 3,
+            sv_timer: 682,
+            ..Default::default()
+        };
+        assert_eq!(
+            import_ent_mc2(&worm, 8, 71, &|v| v).f50,
+            3,
+            "every other creature keeps the uniform @0x30 home"
+        );
+    }
+
+    /// The import must NOT push a GHOST slot onto the free stack. The
+    /// recorded stack is retail's PRE-reap image; `tick()`'s
+    /// strict-MC2 top pass (UpdateEntities EF:39948-56 → `sub_57F20`,
+    /// which class-zeroes and pushes) is the ONE pusher. Pushing here
+    /// too double-listed every ghost, so any spawn burst deeper than
+    /// the ghost count re-`NewEvent`ed a slot it had just filled:
+    /// mc2l24 pair 53808 lost the doomsday pyramid's whole 17-record
+    /// worm chain that way — the free list popped
+    /// [905, 837, 813, 796, 727, 690] TWICE and the second pop of 905
+    /// reset the chain's own live HEAD to `Ent::default()` (class 0 =
+    /// invisible to the projection).
+    /// Non-vacuous: restoring the `free.extend(ghost_slots)` appends
+    /// slot 3 and both asserts below fail.
+    #[test]
+    fn mc2_import_leaves_the_ghost_free_push_to_the_tick_reap() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc2);
+        let pool = w.g.ent.len();
+
+        let live = |class3f: u8, flags: u32| RetailEntMc2 {
+            class3f,
+            model40: 0,
+            flags,
+            max_life: 100,
+            life: 100,
+            ..Default::default()
+        };
+        let mut ents = vec![RetailEntMc2::default(); pool];
+        ents[1] = live(3, 0); // the human carpet (the reserved hole)
+        ents[2] = live(5, 0); // one live creature
+        ents[3] = live(5, 0x400); // one GHOST (retail byte[1] & 4)
+        // Retail's stack at capture: every genuinely free slot, ghost
+        // NOT among them (retail pushes it at the next frame's top).
+        let stack: Vec<u16> = (4..pool as u16).collect();
+        let st = RetailMc2 {
+            rand: 1,
+            vortex: 0,
+            fire_col: 0,
+            local_player: 0,
+            player_count: 1,
+            spawn_ord: [0; 29],
+            players: vec![mgc_formats::mgcr::RetailPlayerMc2 {
+                flags: 0,
+                is_ai: false,
+                play_index: 1,
+                turn: 0,
+                castle: 0,
+                cmd_speed: 0,
+                strafe: 0,
+                invuln: 0,
+                wanted: 0,
+                hand_left: -1,
+                hand_right: -1,
+                ..Default::default()
+            }],
+            ents,
+            free_stack: stack.clone(),
+            recycle_stack: Vec::new(),
+            level: 1,
+            base160: 0,
+            stagevars: [[0u8; 8]; 11],
+        };
+        let report = w.retail_import_mc2(&st).expect("import");
+        assert_eq!(
+            report.stack_fallback, None,
+            "the census must accept the recorded stack (else the test is vacuous)"
+        );
+        assert_eq!(
+            w.g.free, stack,
+            "the imported free list IS the recorded stack, verbatim"
+        );
+        assert!(
+            !w.g.free.contains(&3),
+            "the ghost's push belongs to tick()'s top reap, not the import"
+        );
+    }
+
+    /// A FULL MC2 pool still spawns: `NewEvent_4A050` (:581) falls
+    /// through to the recycle stack and SACRIFICES the top-ranked live
+    /// victim — bare seizure, no death. The import must carry the
+    /// recorded ranking verbatim so replay sacrifices retail's victims
+    /// in retail's order, and must stop where retail's list stops
+    /// (`refill` off: the snapshot IS the law under strict replay).
+    /// Non-vacuous: clearing `w.g.mc2_recycle.stack` — the pre-dig
+    /// port, i.e. `MGC_NO_RECYCLE_VICTIM=1` — makes the very first
+    /// `new_event` return None instead of slot 300.
+    #[test]
+    fn mc2_full_pool_sacrifices_the_recorded_recycle_victims_in_order() {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for _ in 0..4 {
+            dat.push(4u8);
+            dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            dat.push(0);
+        }
+        let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc2);
+        let pool = w.g.ent.len();
+
+        // Every slot occupied: the free stack is EMPTY, exactly the 74
+        // mc2l24 snapshots that motivated the arm.
+        let mut ents = vec![RetailEntMc2::default(); pool];
+        for (s, e) in ents.iter_mut().enumerate().skip(1) {
+            *e = RetailEntMc2 {
+                class3f: if s == 1 { 3 } else { 5 },
+                model40: 0,
+                flags: 0,
+                max_life: 100,
+                life: 100,
+                ..Default::default()
+            };
+        }
+        // Retail's ranking, bottom-up: 300 pops first, then 500, 700.
+        let victims: Vec<u16> = vec![700, 500, 300];
+        let st = RetailMc2 {
+            rand: 1,
+            vortex: 0,
+            fire_col: 0,
+            local_player: 0,
+            player_count: 1,
+            spawn_ord: [0; 29],
+            players: vec![mgc_formats::mgcr::RetailPlayerMc2 {
+                flags: 0,
+                is_ai: false,
+                play_index: 1,
+                turn: 0,
+                castle: 0,
+                cmd_speed: 0,
+                strafe: 0,
+                invuln: 0,
+                wanted: 0,
+                hand_left: -1,
+                hand_right: -1,
+                ..Default::default()
+            }],
+            ents,
+            free_stack: Vec::new(),
+            recycle_stack: victims.clone(),
+            level: 1,
+            base160: 0,
+            stagevars: [[0u8; 8]; 11],
+        };
+        let report = w.retail_import_mc2(&st).expect("import");
+        assert_eq!(
+            report.stack_fallback, None,
+            "the census must accept the empty free stack (else the test is vacuous)"
+        );
+        assert!(w.g.free.is_empty(), "a full pool has no free slot");
+        assert_eq!(
+            w.g.mc2_recycle.stack, victims,
+            "the recorded ranking rides across verbatim"
+        );
+
+        // Seizure order = retail's pop order, and the seized record is
+        // a fresh `NewEvent` (id24 = own slot, maxLife 300), NOT a
+        // corpse: the victim never reaches the free stack.
+        assert_eq!(w.g.new_event(), Some(300), "the stack TOP is sacrificed");
+        assert_eq!(
+            w.g.ent[300].id24, 300,
+            "the seized slot was re-`NewEvent`ed"
+        );
+        assert_eq!(w.g.ent[300].max_life, 300, "…with the allocator defaults");
+        assert!(
+            w.g.free.is_empty(),
+            "a sacrifice is not a death — the slot skips the free stack"
+        );
+        assert_eq!(w.g.new_event(), Some(500), "then the next-ranked victim");
+        assert_eq!(w.g.new_event(), Some(700), "then the last");
+        assert_eq!(
+            w.g.new_event(),
+            None,
+            "retail's list ran out, so the port's does too (refill is off \
+             under the strict import)"
+        );
+        assert_eq!(w.take_recycle_seized(), 3, "three victims, counted");
+
+        // A victim that dies normally must LEAVE the stack
+        // (`sub_57F20` :5215-34), or the allocator would hand its slot
+        // out twice — once from the free stack, once as a sacrifice.
+        w.g.mc2_recycle.stack = vec![700, 500, 300];
+        w.g.ent[500].flags |= 0x2_0000;
+        w.g.free_entity(500);
+        assert_eq!(
+            w.g.mc2_recycle.stack,
+            vec![700, 300],
+            "retail's removal swaps the TOP into the hole"
+        );
+        assert_eq!(w.g.free, vec![500], "the dying victim went free, once");
     }
 }

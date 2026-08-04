@@ -26,8 +26,9 @@
 //! - Sprites 343/344/345 auto-size their state timer to the
 //!   animation length (`sub_221F0` EF:13661 via the sprite params
 //!   and the frame table); the sim doesn't carry TMAPS frame counts,
-//!   so the states' seeded timers (16/32) stand, a cadence-only
-//!   deviation.
+//!   so the three counts are PINNED FROM THE CORPUS instead — see
+//!   [`ANIM_FRAMES_343`]. (Before that pin the cases' pre-override
+//!   seeds 16/16/32 stood, and the death animation looped.)
 //! - `sub_5C800` palette flashes (case-7 beam flash 6) are
 //!   presentation (docs/traces/mc2-class10-tail-helper-closure.md
 //!   §4) — skipped like every flash before.
@@ -59,6 +60,32 @@ use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 /// pyramid is an anti-magic zone eating incoming spell projectiles;
 /// subtype 10 (the castle-build projectile) has its own branch.
 const DEVOUR_SUBTYPES: [u8; 7] = [2, 4, 5, 0x16, 0x17, 0x19, 30];
+
+/// `sub_221F0` (EF:13662-73) — the pyramid's sprite setter. For the
+/// THREE ANIMATED rows 343..=345 (0x157..0x159 — the wind-up, the
+/// recover and the DEATH) it primes the FLC stream and then OVERWRITES
+/// the state timer with that animation's frame count
+/// (`GetAnimationByIndex_724F0(...)+16` = `CountOfFrames_16`), so each
+/// of those states lasts EXACTLY ONE animation cycle. Rows 341/342
+/// (0x155/0x156) fall outside the band and keep the case's own seed.
+///
+/// The sim carries no TMAPS frame table, so the three counts are
+/// PINNED FROM THE CORPUS (recordings/mc2l24.mgcr, slot 7 — the state
+/// is the recorded `byte_0x46_70`, sampled at the head of each tick):
+/// - 343 → 5: states 6+7 span t=51778..51782 (again 51838..51842,
+///   51890..51894, 63138..63142).
+/// - 344 → 15: states 0xA+0xB span t=51793..51807 (again
+///   51851..51865, 51903..51917, 63114..63128).
+/// - 345 → 20: state 0xE spans t=63201..63220 — the corpse then
+///   hides (`byte[0] |= 1`) and state 0xF runs its 60 ticks
+///   (63221..63280) INVISIBLE before the despawn at 63281.
+///
+/// Before this the port kept the cases' pre-override seeds (16/16/32),
+/// which stretched the death animation past one cycle and let it loop
+/// (player-reported 2026-08-03) and ran the wind-up 3x too long.
+const ANIM_FRAMES_343: i16 = 5;
+const ANIM_FRAMES_344: i16 = 15;
+const ANIM_FRAMES_345: i16 = 20;
 
 impl Gen {
     /// `sub_4BD00` (EF:33965) — the pyramid ctor MINUS the map gate
@@ -100,6 +127,19 @@ impl Gen {
         self.ent[i].f78 = 512; // array yaw
         self.mc2_shift_rot(i, 1024, 1280);
         Some(i)
+    }
+
+    /// `sub_221F0` (EF:13662) — set the pyramid sprite, applying the
+    /// animated rows' state-timer override (see [`ANIM_FRAMES_343`]).
+    pub(crate) fn mc2_pyramid_sprite(&mut self, i: usize, idx: u16) {
+        self.mc2_set_sprite(i, idx);
+        let frames = match idx {
+            343 => ANIM_FRAMES_343,
+            344 => ANIM_FRAMES_344,
+            345 => ANIM_FRAMES_345,
+            _ => return,
+        };
+        self.ent[i].f26 = frames;
     }
 
     /// `sub_22490` (EF:13814) — the activation footprint wipe: over
@@ -307,7 +347,7 @@ impl World {
                     self.g.ent[i].f71 = 3;
                     self.g.ent[i].f69 = 0;
                     self.g.ent[i].f46 = 22;
-                    self.g.mc2_set_sprite(i, 341);
+                    self.g.mc2_pyramid_sprite(i, 341);
                     fall = true;
                 }
                 3 => {
@@ -345,7 +385,7 @@ impl World {
                     self.g.ent[i].f26 = 16;
                     self.g.ent[i].f69 = 0;
                     self.g.ent[i].f46 = 113;
-                    self.g.mc2_set_sprite(i, 343);
+                    self.g.mc2_pyramid_sprite(i, 343);
                     fall = true;
                 }
                 7 => {
@@ -359,7 +399,7 @@ impl World {
                     self.g.ent[i].f26 = 0;
                     self.g.ent[i].f69 = 3;
                     self.g.ent[i].f46 = 22;
-                    self.g.mc2_set_sprite(i, 342);
+                    self.g.mc2_pyramid_sprite(i, 342);
                     self.mc2_pyramid_pick_summon(i);
                     fall = true; // the pick AND the first shot same tick
                 }
@@ -374,7 +414,7 @@ impl World {
                     self.g.ent[i].f71 = 11;
                     self.g.ent[i].f26 = 16;
                     self.g.ent[i].f46 = 22;
-                    self.g.mc2_set_sprite(i, 344);
+                    self.g.mc2_pyramid_sprite(i, 344);
                     fall = true;
                 }
                 0xB => {
@@ -402,7 +442,7 @@ impl World {
                     if self.g.ent[i].f26 <= 0 {
                         self.g.ent[i].f71 = 14;
                         self.g.ent[i].f26 = 32;
-                        self.g.mc2_set_sprite(i, 345);
+                        self.g.mc2_pyramid_sprite(i, 345);
                     }
                 }
                 0xE => {
@@ -612,14 +652,39 @@ impl World {
                 self.g.ent[i].f26 = 0;
                 self.g.ent[i].f44 &= !0x40;
             } else if bits & 0x40 != 0 {
+                // The wake gate (EF:13010):
+                // `EuclideanDistXYZ_58490(&player.pos, &self.pos) >=
+                // 0xA00`. The NAME LIES — Maths.cpp:738's body is
+                // `radix = (int16)(dx)² + (int16)(dy)²` and nothing
+                // else: **Z is never read**, so the gate is a flat 2-D
+                // circle of radius 0xA00 (10 tiles) around the boss,
+                // not a sphere and not a Manhattan diamond. The return
+                // is `sub_7277A_radix_3d(radix)` (Maths.cpp:744) — a
+                // Heron integer sqrt seeded from `x_WORD_727B0[bsr]`
+                // that terminates on `radix / i >= i`, i.e. an exact
+                // FLOOR sqrt. `floor(sqrt(r)) >= 0xA00` and
+                // `r >= 0xA00²` are therefore the same predicate, so
+                // the squared form below IS retail's metric, boundary
+                // included. (Widened to i64 for the same reason retail
+                // accumulates into a `uint32_t`: two i16 legs can sum
+                // to 2³¹ and the i32 form wrapped negative there.)
                 let (ex, ey) = (self.g.ent[i].x, self.g.ent[i].y);
-                let dx = (_ctx.px as i32 - ex as i32) as i16 as i32;
-                let dy = (_ctx.py as i32 - ey as i32) as i16 as i32;
-                if dx * dx + dy * dy >= 0xA00i32.pow(2) {
+                let dx = (_ctx.px as i32 - ex as i32) as i16 as i64;
+                let dy = (_ctx.py as i32 - ey as i32) as i16 as i64;
+                if dx * dx + dy * dy >= 0xA00i64.pow(2) {
                     self.g.ent[i].f44 &= !0x40;
                 } else {
                     self.g.ent[i].f26 = 30;
                     self.g.ent[i].f44 = (self.g.ent[i].f44 | 0x20) & !0x10;
+                    // `byte[2] &= 0x7F` (EF:13024), verbatim: the boss
+                    // drops the ctor's raster-mode bit (flags bit 23)
+                    // as the doom meter starts ramping — the DORMANT
+                    // sprite draws through the special colour path
+                    // (rotIdx 2, GameRenderOriginal.cpp:3798-3805) and
+                    // the ACTIVE one through the plain descriptor.
+                    // Corpus: mc2l24 slot 7 flags 0x4880000c →
+                    // 0x4800000c at exactly t=51732.
+                    self.g.ent[i].flags &= !(1 << 23);
                 }
             }
         } else if bits & 0x20 != 0 {
@@ -863,7 +928,18 @@ impl World {
                     e.f146 = PLAYER_TARGET;
                     e.id24 = own_id;
                     e.site_z = 17; // StageVar2_0x49_73
-                    e.f46 = 250;
+                    // `word_0x2E_46 = 250` (EF:13419) — the release
+                    // chain's LIFE LATCH. Its class-5 home is f26 (the
+                    // creature column's @0x2E charm/armed lane,
+                    // conformance.rs's class-5 import), NOT f46: f46 is
+                    // `fontTypeIndex_0x3D_61` on a creature, which for
+                    // the selector-3 (5,0) worm IS the projectile-dodge
+                    // alert window (`m0_dodge`, multipart.rs) — stamping
+                    // 250 there armed 250 ticks of phantom dodging AND
+                    // left the latch with no import home, so every
+                    // imported pyramid summon read f46 ≈ 0 and puffed
+                    // itself on its first replayed tick.
+                    e.f26 = 250;
                     e.f126 = 320;
                     // `parentId_0x28_40 = pyramid` is unmodeled: the
                     // port has no creature parent-link home (f40 is

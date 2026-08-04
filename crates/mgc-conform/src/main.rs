@@ -268,6 +268,16 @@ fn dump_state(args: &Args) -> i32 {
                     return 2;
                 }
             };
+            // Pop order: MC2 pops the FREE stack first and sacrifices a
+            // recycle victim only when it is dry (`NewEvent_4A050`) —
+            // print both tails, next-pop last.
+            println!(
+                "t={t} free_stack len {} tail {:?}  recycle_stack len {} tail {:?}",
+                st.free_stack.len(),
+                &st.free_stack[st.free_stack.len().saturating_sub(12)..],
+                st.recycle_stack.len(),
+                &st.recycle_stack[st.recycle_stack.len().saturating_sub(12)..],
+            );
             if all {
                 if let Some(p) = st.players.get(st.local_player as usize) {
                     for s in 0..26 {

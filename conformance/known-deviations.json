@@ -4,7 +4,7 @@
   {
    "id": "mc2l24-ball-terrain-roll",
    "status": "capture",
-   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4: (10,39) bulk = terrain-closure capture + spawn free-list slot desync - balls rest/roll on the doomsday-terraformed mound the pristine replay lacks (x 99.8% within 1 tile, z 88% within 16); early/mid rows = terrain-roll (worm-death mana + wake-law downhill). Ball laws proven byte-exact (TTL/arc/bounce/friction to the unit). Covers all lanes incl. the m39 player_ent_idx owner echo.",
+   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced — ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
    "takes": [
     "mc2l24"
    ],
@@ -14,7 +14,7 @@
   {
    "id": "mc2l24-static-terrain-z",
    "status": "capture",
-   "note": "Open-leads 2 (terrain closure): class-2 statics on the final level sit on volcano/doomsday-edited ground the pristine replay lacks. Measured signature: (2,3) all 7 slots hold a CONSTANT per-slot z delta from onset (t=23411); the single (2,2) slot tracks the growing doomsday mound (progressive edit, dig F fountain-terrain cite). Statics have no z source but terrain.",
+   "note": "RECONSTRUCTED 2026-08-04 (landing round, ledger Resolved prop-z inversion): mc2/probes.rs inverts the class-2 statics' own terrain samples at import (the meteor-fire scorches that dug their ground are lost by construction, but the props ARE terrain samplers). Family 2400→0 mid/late windows, 1512→12 at the t=23411 onset. ⚠ The arm recovers the very field this rule grades — the count is NOT independent evidence; the rule survives ONLY as a regression sensor for the inversion (a jump = the arm stopped firing).",
    "takes": [
     "mc2l24"
    ],
@@ -79,7 +79,7 @@
   {
    "id": "mc2l24-castle-piece-terrain-z",
    "status": "capture",
-   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z ~367k rows = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick and retail pieces stand on doomsday/castle-mound terraformed ground the pristine replay lacks (constant per-slot delta ~16, want/got bobbing in lockstep). Hit-count jump = piece-law regression signal.",
+   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick on terraformed ground the pristine replay lacks. RE-NOTED 2026-08-04: the BUILD00 pad replay collapsed this 367k→804 rows (post-replay residual only). Hit-count jump = piece-law OR pad-replay regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -128,7 +128,7 @@
   {
    "id": "mc2-terraform-houses",
    "status": "capture",
-   "note": "\u00a7terraform: village growth regrades the hill (main wave ~t=751, first edits ~t=500); (10,45) house z ground-snaps both sides, the port to the pristine plane (ledger MC2 take-2). A house's z has no source but terrain \u2014 any (10,45) z diff is closure by mechanism.",
+   "note": "\u00a7terraform: village growth regrades the hill; (10,45) house z ground-snaps both sides. WAS pristine-plane closure; the BUILD00 village-terrace replay (ledger Resolved 'BUILD00 PAD REPLAYS', 2026-08-04) now rebuilds the terrace at import \u2014 residue 1 row corpus-wide. REGRESSION SENSOR: a hit-count jump means the terrace replay stopped firing.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -143,11 +143,8 @@
   {
    "id": "mc2-guard-terrain",
    "status": "capture",
-   "note": "\u00a7l4-guard-terrain: (5,15) castle guards walk a runtime-terraformed mound the pristine replay lacks \u2014 z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand. One root, all lanes; port laws verified faithful line-by-line (ledger mc2l4+mc2l30 triage).",
+   "note": "\u00a7l4-guard-terrain: (5,15) castle guards walk runtime-terraformed ground the pristine replay lacks \u2014 z tracks the missing ramp, the tile type trips the die-gate (action), the early return freezes rand; port laws verified line-by-line (ledger mc2l4+mc2l30 triage). NARROWED to mc2l24 (2026-08-04 housekeeping): the BUILD00 pad replay ENDED the castle-mound family everywhere (1.81M corpus rows \u2192 1,199, all l24); the residue clusters on DOOMSDAY/volcano ground (the static-terrain-z family, not the mound) \u2014 re-triage owed post prop-inversion. Hit-count jump = pad-replay regression signal.",
    "takes": [
-    "mc2l0",
-    "mc2l4",
-    "mc2l30",
     "mc2l24"
    ],
    "class": 5,
@@ -191,12 +188,35 @@
    "field": "z"
   },
   {
-   "id": "mc2-rival-ai-lanes",
-   "status": "open",
-   "note": "The (3,1) rival-wizard remainder after the freeze fix: AI decision lanes (state/target/hate/burst/cooldowns) import as world-build defaults pending the MC2 wizard-ext decode (ledger KINEMATICS ROUND fix 3).",
+   "id": "mc2-rival-terrain-z",
+   "status": "capture",
+   "note": "SPLIT from mc2-rival-ai-lanes per the session-9 re-attribution (ledger 'RIVAL AI-LANE MAP DECODED'): ~80% of the post-decode (3,1) remainder is the rival hovering its OWN castle pad — z tracks the runtime-terraformed pad the pristine replay lacks (the guard-terrain root). l30 dropped from scope: only mc2l4 has rival wizards (session-9 corpus fact).",
    "takes": [
-    "mc2l4",
-    "mc2l30"
+    "mc2l4"
+   ],
+   "kind": "field",
+   "class": 3,
+   "model": 1,
+   "field": "z"
+  },
+  {
+   "id": "mc2-rival-mana-mirror",
+   "status": "open",
+   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~14%): retail keeps wizard mana ON THE ENTITY (f140/f136, +regen at castle EF:5423); the port keeps it in Mc2Rival, so the obs mana lane freezes at its import value. One mirror closes the family but MOVES GOLDENS (native) — PLAYER DECISION OWED (ledger session-9 item 4①).",
+   "takes": [
+    "mc2l4"
+   ],
+   "kind": "field",
+   "class": 3,
+   "model": 1,
+   "field": "mana"
+  },
+  {
+   "id": "mc2-rival-ai-residual",
+   "status": "open",
+   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~11%): genuine decision divergence surviving the wizard-ext AI-lane decode+import (reanchor_mc2_rival_ai, rivals.rs:671) — state/target choices drift where hate/war inputs diverge mid-take. l30 dropped: only mc2l4 has rivals.",
+   "takes": [
+    "mc2l4"
    ],
    "class": 3,
    "model": 1
@@ -271,7 +291,7 @@
   {
    "id": "mc2-cast-timing-missing",
    "status": "capture",
-   "note": "Class-9 projectiles missing-in-port: the human's replayed cast fires a pair off retail's (input latency, --input-delay 2 doctrine; ledger entry 4 / \u00a7casts / \u00a7lightning residual).",
+   "note": "Class-9 projectiles missing-in-port: the human's replayed cast fires a pair off retail's. RE-SCOPED 2026-08-05 (ledger 'THE PORT FIRED EVERY MC2 CAST ONE TICK EARLY'): the launch-PHASE family is FIXED (arm at the carpet slot, launch at the manifestation's own slot in the same walk) \u2014 this rule now carries only genuine press-reconstruction skew; the l24 40k residue (24 (9,0) rows) is the RAPID FIREBALL STREAM, a separate un-dug story. One-sided growth here = a real bug hiding again (see the -extra twin's symmetry warning).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -284,7 +304,7 @@
   {
    "id": "mc2-cast-timing-extra",
    "status": "capture",
-   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the hydra (9,9) heavy-bolt trail under-fire + the possession fresh-arm input-reconstruction extras (ledger Resolved 'MC2L24 LIGHTNING (9,9)' + session-4 possession ruling).",
+   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the possession fresh-arm input-reconstruction extras (session-4 ruling; the hydra (9,9) under-fire since FIXED, session-7 f136<-d88 — residual is beam geometry/terrain). ⚠ RE-NOTED 2026-08-04: check SYMMETRY before trusting this rule — the (9,17) possession re-fire bug (452 extra vs 0 missing) AND the one-tick launch-phase bug (24 extra vs 0 missing, fixed 2026-08-05 manifestation-slot order) both hid under it; balanced ± = latency skew, ONE-SIDED counts = a real port bug hiding here.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -393,8 +413,8 @@
   },
   {
    "id": "mc2-flyer-drift-m3",
-   "status": "open",
-   "note": "\u00a7wander-drift re-ruling: the (5,3) multipart flyer's z-bob (+/-8..56 airborne offset) + downstream x/y/heading/pitch drift \u2014 the untraced M3 altitude source (KINEMATICS ROUND rulings).",
+   "status": "capture",
+   "note": "Session-7 scout RULING: no M3 altitude source exists \u2014 retail heads clamp to ground+v_12 EVERY tick (free-descent 0%, sub_1B8C0:8804 servo args + MoveEntity pitch literal 0 at :8805; row 74 v_12=0 so head z==ground_z), m3 has no bob state, m0 bob sub_1F040 ported byte-equivalent. ~93% of z rows carry same-tick x/y (wander capture drift sampling terrain, |dz| monotone in |dpos|); byte-identical-position residue = pristine-plane terrain datum gap (same family as mc2-walker-ground-z / mc2-guard-terrain).",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -405,8 +425,8 @@
   },
   {
    "id": "mc2-flyer-drift-m0",
-   "status": "open",
-   "note": "See mc2-flyer-drift-m3 \u2014 the (5,0) worm-chain face.",
+   "status": "capture",
+   "note": "See mc2-flyer-drift-m3 \u2014 the (5,0) worm-chain face. Its 1-4-tick z bursts are the sub_1F040 bounce (gate ground+256) firing a tick apart across the terrain datum gap, not an altitude law.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -441,7 +461,7 @@
   {
    "id": "mc2-castle-pad-z",
    "status": "capture",
-   "note": "(3,2) castle z on l4/l30: the castle stands ON the runtime-terraformed mound the pristine replay lacks (the guard-terrain root; ledger \u00a7l4-guard-terrain).",
+   "note": "(3,2) castle z: WAS the terraformed-mound closure (\u00a7l4-guard-terrain); the BUILD00 castle-mound replay (ledger Resolved 'BUILD00 PAD REPLAYS', 2026-08-04) now rebuilds player-built mounds at import \u2014 l24 residue 17 rows (off-footprint fence edges) = REGRESSION SENSOR for the replay. l4 carries 166 further rows (2026-08-05 close): RIVAL authored-castle pads, which BUILD00 replay does not cover \u2014 genuine remaining terrain closure, keyframe-channel territory.",
    "takes": [
     "mc2l4",
     "mc2l30",

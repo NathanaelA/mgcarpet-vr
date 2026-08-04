@@ -2,6 +2,14 @@
 
 All citations to `/home/rain/projects/mgcarpet/reference/remc2/remc2/engine/` (EF = `EventsFunctions.cpp`, EV = `Events.cpp`). Trace date 2026-07-11.
 
+> ⚠ **2026-08-03 correction (fool's-mana dig)**: this trace's "collectible
+> mana" reading is only skin-deep — a (10,57) *looks* collectible, but ANY
+> possession claim by a non-owner runs `sub_36680` (EF:26615) and the
+> authored/ctor default `byte_0x46_70 = 0` makes it a TIER-0 TRAP (fireball
+> at the claimer, sphere consumed). See `docs/spell-audit/fools-mana.md`
+> §2b (OPEN-2 resolved) — the retaliation half of the m57 tick was not
+> covered here.
+
 **Headline finding (read before porting):**
 Class-10 model **57 (0x39)** IS a mana-sphere-family object — the context hypothesis is correct. It is the **random-value ground mana sphere**: creator `sub_50130` (EF:36631) is a near-twin of the mana ball's `CreateManaSphere_500C0` (EF:36607) but grants a **random `rand % 0x7D0` = 0..1999 mana** instead of a fixed 512/2560, uses a **different action index (0x3E vs 0x29)**, sets **`byte_0x39_57 = -128`** (the ball uses +128), and sets two extra flag bytes (`byte_0x43_67 = 10`, `byte_0x44_68 = 1`) plus the reclaimable-effect bit `byte[2] |= 2`. It shares the mana-sphere list `dword_38523`, the color/size sprite routine `SetManaSphereColorAndRot_36920`, the sphere-merge routine `sub_36F30`, and the class-10 shove family, with the 0x27/0x28 balls.
 

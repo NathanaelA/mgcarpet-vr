@@ -532,13 +532,20 @@ fn mc2_slice_behaviors_and_goldens() {
     // runs day-art extents (sprite 96 stamps f80 194 not 184; 52
     // param rows shift). Load-time stamps move post-init too.
     // Behavior change toward retail by design.
+    // Re-pinned (A-E; post-init holds) for the 180° TURN TIE-BREAK
+    // law (Gen::turn_sign, mc1/mobs.rs — retail keeps the raw sign
+    // on an EXACT half-turn, sub_582F0 Sound.cpp:6580 / MC1 twin
+    // :52664 SYNCHRONIZED): the slice's goats/villagers commit
+    // antipodal wander turns in retail's direction. Behavior change
+    // toward retail by design — mc1l0 0+2000 +5 conforming, mc2l0
+    // 0+2000 +25 conforming.
     const GOLDEN: [u64; 6] = [
         0x95c8d53f76cff370, // post-init (GenerateEvents + dis 0)
-        0x2c8e32df19c6e2c2, // A: 64 idle ticks afield
-        0x28f959769992d134, // B: the type-5 fly-to latched
-        0x67b1d7ebbe971a10, // C: goat awake/flee window
-        0x5d908d6bf51032ed, // D: fireball combat over the goat
-        0x73540a38c187e4fe, // E: census + villager/archer provocation
+        0x44ae93c94c1978b2, // A: 64 idle ticks afield
+        0x08a482fcbb41e1a4, // B: the type-5 fly-to latched
+        0x858258c14dd451a7, // C: goat awake/flee window
+        0x92a47b7d605a919a, // D: fireball combat over the goat
+        0x75c1e0bc3d8878a5, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,
@@ -561,13 +568,17 @@ fn mc2_slice_behaviors_and_goldens() {
     // rand structure (see the GOLDEN note above) — the tick-top
     // baseline draw re-phases every mid-pass stream consumer, a
     // REAL behavior change toward retail.
+    // Re-pinned (A-E; post-init holds) for the 180° turn tie-break
+    // law (see the GOLDEN note): antipodal wander turns now commit
+    // in retail's direction — creature poses diverge from the first
+    // tie on, real behavior, not layout.
     const OBSERVABLE: [u64; 6] = [
         0x5951c95adf7436f9,
-        0x2124a10a9bacce39,
-        0x756d1d917904a64b,
-        0xe4320d63211b640a,
-        0x2f46b6a4f09c1fe2,
-        0xfdaf76fbc6350fb1,
+        0x85ecf48b01aea7d4,
+        0xdfad9efeef19c845,
+        0x4916d9a44be021d0,
+        0xe5055dd460ec724b,
+        0xb5e88fd57bd138fb,
     ];
     assert_eq!(
         obs, OBSERVABLE,
@@ -909,4 +920,202 @@ fn mc2_doomsday_pyramid_extinction_script() {
         h(100, 100),
         h(101, 101)
     );
+}
+
+/// THE VISSULUTH SIZE LAW (player retail footage, 2026-08-04). The
+/// (5,10) doomsday boss rewrites its own sprite-parameter row's height
+/// field: `D951C[341].rotSpeed_8 := 60` at the ritual start (EF:12700)
+/// — a 20x linear shrink off the authored 1200, "a tiny handful of
+/// pixels" — then `:= the doom meter` every tick of the ramp the 0xA00
+/// proximity wake arms (EF:13041), stepping +30/tick from 30 up to
+/// exactly the authored 1200. The boss therefore sits invisibly small
+/// through the wait, grows in discrete tick steps for 40 ticks, and
+/// stays full size for the rest of the fight. It ALSO carries raster
+/// bit 23 (ctor `|= 0x48800001`, EF:33980 → mode 2, 33% blend,
+/// GRO:3798-3805) which the same wake clears (EF:13024). All three
+/// legs are asserted, so neutering any of them fails the test.
+#[test]
+fn mc2_doomsday_is_tiny_until_the_proximity_wake_then_grows_to_full_size() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked mc2 data not present");
+        return;
+    };
+    let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc2-night")).unwrap();
+    let assets = FeatureAssets::parse(
+        bundle.search.as_ref().unwrap(),
+        bundle.build_tab.as_ref().unwrap(),
+        bundle.build_dat.as_ref().unwrap(),
+    )
+    .unwrap();
+    let planes = Planes {
+        height: vec![50; 65536],
+        tile_type: vec![2; 65536],
+        shading: vec![32; 65536],
+        angle: vec![0; 65536],
+        ceiling: Vec::new(),
+    };
+    let things = [mgc_formats::Thing {
+        slot: 1,
+        kind: mgc_formats::ThingKind::Entity,
+        class: 5,
+        model: 10,
+        x: 100,
+        y: 100,
+        dis_id: 0,
+        swi_sz: 0,
+        swi_id: 0,
+        parent: 0,
+        child: 0,
+        par3: None,
+    }];
+    let idle = PlayerCommand::default();
+    let mut w = World::new_for_game(planes, &things, 1, assets, GameId::Mc2);
+    w.set_mc2_doom_level(true);
+
+    // The boss's exported (blend, patched sprite height) — None while
+    // it is hidden (the ctor's byte[0] bit 0 holds the whole opening
+    // ritual out of the billboard pass).
+    let boss = |w: &World| {
+        w.live_poses()
+            .into_iter()
+            .find(|p| p.class == 5 && p.model == 10)
+            .map(|p| (p.blend, p.sprite_h_units))
+    };
+
+    // Wait phase: hover far away (well outside 0xA00 = 10 tiles) until
+    // the ritual's hide bit clears and the body becomes drawable.
+    let mut revealed = None;
+    for _ in 0..400 {
+        hover(&mut w, 220.0, 220.0, 1, idle);
+        if let Some(b) = boss(&w) {
+            revealed = Some(b);
+            break;
+        }
+    }
+    assert_eq!(
+        revealed,
+        Some((2, Some(60.0))),
+        "the revealed boss is 33%-ghosted AND shrunk to 60/1200 of its \
+         authored sprite height through the wait phase"
+    );
+    // And it holds that state while the player keeps his distance.
+    hover(&mut w, 220.0, 220.0, 60, idle);
+    assert_eq!(boss(&w), Some((2, Some(60.0))), "still tiny at range");
+
+    // Close to ~4 tiles: the wake drops bit 23 (opaque) and arms the
+    // meter ramp. Sample the exported height every tick.
+    // The export stops once the state machine swaps the sprite row
+    // (341 → 343 for the attack): rows 342-345 are never patched, so
+    // they always draw the authored full size — that IS retail.
+    let mut sizes = Vec::new();
+    let mut blend_after_wake = None;
+    for _ in 0..200 {
+        hover(&mut w, 103.5, 103.5, 1, idle);
+        let Some((bl, h)) = boss(&w) else { continue };
+        if bl == 0 {
+            blend_after_wake = Some(bl);
+            match h {
+                Some(h) => sizes.push(h),
+                None if !sizes.is_empty() => break, // attack row: unpatched
+                None => {}
+            }
+        }
+    }
+    assert_eq!(
+        blend_after_wake,
+        Some(0),
+        "closing inside 10 tiles turns the demon opaque"
+    );
+    // Retail's ramp: +30 per tick, monotonic, ending exactly on the
+    // authored 1200 and then holding there (the meter's later reuse as
+    // a state timer must NOT shrink the boss again).
+    assert!(
+        sizes.windows(2).all(|w| w[1] >= w[0]),
+        "the growth ramp never goes backwards: {sizes:?}"
+    );
+    assert!(
+        sizes.iter().any(|&h| h > 60.0 && h < 1200.0),
+        "the ramp is STEPPED — mid-growth samples exist: {sizes:?}"
+    );
+    assert_eq!(
+        sizes.last().copied(),
+        Some(1200.0),
+        "the ramp settles at the authored full size and stays: {sizes:?}"
+    );
+}
+
+/// The growth ramp's render smoothing (player-requested presentation
+/// deviation): consecutive tick snapshots straddle a `sprite_h_units`
+/// step, which is what lets the app's `lerp_poses` interpolate the
+/// scale on the frame alpha instead of popping once per tick.
+#[test]
+fn mc2_doomsday_growth_ramp_exports_lerpable_size_steps() {
+    let Some(root) = baked_root() else {
+        common::golden_skip("baked mc2 data not present");
+        return;
+    };
+    let bundle = mgc_formats::bundle::Bundle::load(&root.join("assets/mc2-night")).unwrap();
+    let assets = FeatureAssets::parse(
+        bundle.search.as_ref().unwrap(),
+        bundle.build_tab.as_ref().unwrap(),
+        bundle.build_dat.as_ref().unwrap(),
+    )
+    .unwrap();
+    let planes = Planes {
+        height: vec![50; 65536],
+        tile_type: vec![2; 65536],
+        shading: vec![32; 65536],
+        angle: vec![0; 65536],
+        ceiling: Vec::new(),
+    };
+    let things = [mgc_formats::Thing {
+        slot: 1,
+        kind: mgc_formats::ThingKind::Entity,
+        class: 5,
+        model: 10,
+        x: 100,
+        y: 100,
+        dis_id: 0,
+        swi_sz: 0,
+        swi_id: 0,
+        parent: 0,
+        child: 0,
+        par3: None,
+    }];
+    let idle = PlayerCommand::default();
+    let mut w = World::new_for_game(planes, &things, 1, assets, GameId::Mc2);
+    w.set_mc2_doom_level(true);
+    let boss_h = |w: &World| {
+        w.live_poses()
+            .into_iter()
+            .find(|p| p.class == 5 && p.model == 10)
+            .and_then(|p| p.sprite_h_units)
+    };
+    // Run the ritual out at range, then close and capture the first
+    // strictly-growing tick pair.
+    for _ in 0..400 {
+        hover(&mut w, 220.0, 220.0, 1, idle);
+        if boss_h(&w).is_some() {
+            break;
+        }
+    }
+    let mut step = None;
+    let mut prev = boss_h(&w);
+    for _ in 0..200 {
+        hover(&mut w, 103.5, 103.5, 1, idle);
+        let cur = boss_h(&w);
+        if let (Some(a), Some(b)) = (prev, cur) {
+            if b > a {
+                step = Some((a, b));
+                break;
+            }
+        }
+        prev = cur;
+    }
+    let (a, b) = step.expect("the ramp produces a growing tick pair to lerp across");
+    assert_eq!(b - a, 30.0, "retail's step is exactly +30 units/tick");
+    // The half-frame the renderer would draw sits strictly between the
+    // two tick values — that IS the smoothing.
+    let mid = a + (b - a) * 0.5;
+    assert!(a < mid && mid < b, "a frame alpha of 0.5 lands mid-step");
 }

@@ -20,6 +20,8 @@ pub(crate) mod flood;
 pub(crate) mod mobs;
 pub(crate) mod morph;
 pub(crate) mod multipart;
+pub(crate) mod pads;
+pub(crate) mod probes;
 pub(crate) mod proj;
 pub(crate) mod riser;
 pub mod rivals;

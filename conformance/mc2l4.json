@@ -6,11 +6,9 @@
     {
       "t": 193,
       "status": "open",
-      "sig": "e46d54710bb9aae6",
+      "sig": "c25ed6d88b118ecb",
       "atoms": [
-        "field:10,45:z",
         "field:3,1:mana",
-        "field:3,2:z",
         "field:5,1:z",
         "field:5,2:z"
       ],
@@ -19,25 +17,19 @@
     {
       "t": 217,
       "status": "open",
-      "sig": "a26e7d8ec24c45fb",
+      "sig": "08a0d38fa8b37beb",
       "atoms": [
-        "field:10,45:z",
         "field:3,1:z",
-        "field:3,2:z",
-        "field:5,1:z",
-        "field:5,2:z"
+        "field:5,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-walker-ground-z, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-rival-ai-lanes"
     },
     {
       "t": 293,
       "status": "open",
-      "sig": "ef605363a406370b",
+      "sig": "5591be04e31ff0d1",
       "atoms": [
-        "field:10,39:z",
-        "field:10,45:z",
         "field:3,1:z",
-        "field:3,2:z",
         "field:5,9:sv1"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-sphere-terrain-z, mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses; 4 row(s) unexplained"
@@ -45,49 +37,36 @@
     {
       "t": 385,
       "status": "open",
-      "sig": "0be91b9a01ffecbd",
+      "sig": "cc61b0843551088d",
       "atoms": [
-        "field:10,39:z",
-        "field:10,45:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-cast-timing-fields, mc2-sphere-terrain-z"
     },
     {
       "t": 414,
       "status": "open",
-      "sig": "8253776aabe7f586",
+      "sig": "cc61b0843551088d",
       "atoms": [
-        "field:10,45:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses"
     },
     {
       "t": 436,
       "status": "open",
-      "sig": "8253776aabe7f586",
+      "sig": "cc61b0843551088d",
       "atoms": [
-        "field:10,45:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-extra, mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses"
     },
     {
       "t": 438,
       "status": "open",
-      "sig": "96ed8e085bade1c0",
+      "sig": "eb520005fdc28549",
       "atoms": [
-        "field:10,45:z",
         "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z",
         "field:5,4:rand",
         "field:5,4:speed"
       ],
@@ -96,148 +75,108 @@
     {
       "t": 449,
       "status": "open",
-      "sig": "9a8266b63b60a312",
+      "sig": "cc61b0843551088d",
       "atoms": [
-        "field:10,0:x",
-        "field:10,0:y",
-        "field:10,45:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "missing:10,0"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-fire-churn-m0, mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses"
     },
     {
       "t": 450,
       "status": "open",
-      "sig": "dd7343efbc957e1d",
+      "sig": "b0bf3bac9ac7bc1e",
       "atoms": [
         "field:10,0:z",
-        "field:10,45:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-fire-churn-m0"
     },
     {
       "t": 451,
       "status": "open",
-      "sig": "dd7343efbc957e1d",
+      "sig": "b0bf3bac9ac7bc1e",
       "atoms": [
         "field:10,0:z",
-        "field:10,45:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-fire-churn-m0; 1 row(s) unexplained"
     },
     {
       "t": 486,
       "status": "open",
-      "sig": "0959da6df17f4c30",
+      "sig": "19ffd4b309cb4cdf",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-castle-pad-z, mc2-balloon-z, mc2-cast-timing-extra, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes"
     },
     {
       "t": 490,
       "status": "open",
-      "sig": "0959da6df17f4c30",
+      "sig": "1c92c41a1d3054cb",
       "atoms": [
-        "field:10,45:z",
-        "field:15,19:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:15,19:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes"
     },
     {
       "t": 491,
       "status": "open",
-      "sig": "6394b48840c42305",
+      "sig": "1c92c41a1d3054cb",
       "atoms": [
-        "extra:9,17",
-        "field:10,45:z",
-        "field:15,19:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:15,19:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-castle-pad-z, mc2-balloon-z, mc2-cast-timing-extra, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes"
     },
     {
       "t": 508,
       "status": "open",
-      "sig": "0959da6df17f4c30",
+      "sig": "19ffd4b309cb4cdf",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-castle-pad-z, mc2-balloon-z, mc2-hit-flash-churn, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes"
     },
     {
       "t": 520,
       "status": "open",
-      "sig": "625f904bec06d22e",
+      "sig": "8ea9bcf6a879cc69",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
         "field:3,1:z",
-        "field:3,2:applied_yaw",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,2:applied_yaw"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes; 1 row(s) unexplained"
     },
     {
       "t": 590,
       "status": "open",
-      "sig": "8b80568cbef7c669",
+      "sig": "afd6ffd2fd89c46e",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
         "field:3,1:mana",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-rival-ai-lanes, mc2-castle-pad-z, mc2-balloon-z, mc2-terraform-houses, mc2-token-fall-z"
     },
     {
       "t": 1584,
       "status": "open",
-      "sig": "f58aa31f0ec05067",
+      "sig": "19ffd4b309cb4cdf",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z"
+        "field:3,1:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes"
     },
     {
       "t": 3375,
       "status": "open",
-      "sig": "f86a3352dfa15042",
+      "sig": "d0036f57c84c4858",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,2:z",
-        "field:5,15:z",
         "field:5,4:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z, mc2-archer-ground-z"
@@ -245,68 +184,49 @@
     {
       "t": 3401,
       "status": "open",
-      "sig": "0cf0481452678a3f",
+      "sig": "18d6d8a15f4ae6cd",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z"
+        "field:3,3:z"
       ],
       "note": "ledger mc2l4+mc2l30 triage: §terraform, §terraform-token, §castle-stage-z, §l4-guard-terrain"
     },
     {
       "t": 3407,
       "status": "open",
-      "sig": "649b871be58053fc",
+      "sig": "18d6d8a15f4ae6cd",
       "atoms": [
-        "extra:9,17",
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z"
+        "field:3,3:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-cast-timing-extra, mc2-terraform-houses, mc2-token-fall-z"
     },
     {
       "t": 3440,
       "status": "open",
-      "sig": "c95c2e11b291d197",
+      "sig": "e97dc72500edf70d",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,2:applied_yaw",
-        "field:3,2:z",
-        "field:5,15:z"
+        "field:3,2:applied_yaw"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z; 2 row(s) unexplained"
     },
     {
       "t": 3449,
       "status": "open",
-      "sig": "f2d6670e9adc5fff",
+      "sig": "18d6d8a15f4ae6cd",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z",
-        "missing:10,12",
-        "missing:9,1"
+        "field:3,3:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-cast-timing-missing, mc2-terraform-houses, mc2-token-fall-z"
     },
     {
       "t": 4103,
       "status": "open",
-      "sig": "f35daf107e64d722",
+      "sig": "820df38a569e0786",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z",
         "field:5,2:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z, mc2-walker-ground-z"
@@ -314,15 +234,10 @@
     {
       "t": 4233,
       "status": "open",
-      "sig": "8447ecc6afe7b094",
+      "sig": "9737088dec1edfe6",
       "atoms": [
-        "field:10,45:z",
         "field:15,19:z",
-        "field:3,1:mana",
-        "field:3,1:z",
-        "field:3,2:z",
-        "field:3,3:z",
-        "field:5,15:z"
+        "field:3,1:mana"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z, mc2-rival-ai-lanes"
     }
