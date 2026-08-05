@@ -2832,6 +2832,14 @@ impl World {
                 if cmd.respawn && self.completed && !matches!(self.game, GameId::Mc2) {
                     self.won = true;
                 }
+                // A respawn that landed on a starved pool left bank
+                // entries behind; keep retrying until every
+                // remembered spell has its manifestation back
+                // (deviation — retail's loop is one-shot and eats
+                // the spell; see death_regrant).
+                if self.player.death_owned.iter().any(|&b| b) {
+                    self.death_regrant();
+                }
             }
         }
         // The village-aggro timer runs down once per wizard tick
@@ -3176,17 +3184,39 @@ impl World {
         // jars stay out in the world until they expire. Hand equips
         // survive death untouched (the original never clears
         // var_940/944 on respawn).
+        self.death_regrant();
+    }
+
+    /// Drain the death bank into owned manifestations. A starved
+    /// grant (full pool — the endgame crowd plus the player's own
+    /// still-decaying scattered jars) keeps its bank entry, and the
+    /// wizard tick retries while alive: the bank forgets a spell only
+    /// when the manifestation actually exists.
+    ///
+    /// DEVIATION (docs/DEVIATIONS.md): retail's loop is one-shot and
+    /// its alloc-failure branch zeroes the banked model id (:54917,
+    /// HW :50985) — permanent silent loss. Retail affords that
+    /// because the respawn first rebuilds both free lists (:54842)
+    /// and its allocator sacrifices recycle victims before failing
+    /// (:43910); our MC1 allocator does neither, so the one-shot
+    /// loop ate spells far more often than retail — the intermittent
+    /// hand-spell eater (mc1:49 + mc1hw:0): grants run in spell-id
+    /// order, so a partial starve ate the high-id late-book spells,
+    /// exactly the ones a veteran keeps equipped.
+    fn death_regrant(&mut self) {
         for s in 0..SPELL_COUNT {
-            if self.player.death_owned[s] {
-                self.player.death_owned[s] = false;
-                let blue = std::mem::take(&mut self.player.death_owned_blue[s]);
-                let m = self.grant_spell(SpellId(s as u8));
-                if let (Some(m), true) = (m, blue) {
-                    // :54908-12 — the re-grant restores blue: the
-                    // unrestricted marker + the blue sprite type.
-                    self.g.ent[m].flags |= BLUE_SPELL;
-                    self.g.ent[m].type86 = 280;
-                }
+            if !self.player.death_owned[s] {
+                continue;
+            }
+            let Some(m) = self.grant_spell(SpellId(s as u8)) else {
+                continue;
+            };
+            self.player.death_owned[s] = false;
+            if std::mem::take(&mut self.player.death_owned_blue[s]) {
+                // :54908-12 — the re-grant restores blue: the
+                // unrestricted marker + the blue sprite type.
+                self.g.ent[m].flags |= BLUE_SPELL;
+                self.g.ent[m].type86 = 280;
             }
         }
     }
@@ -11515,6 +11545,68 @@ mod tests {
         assert!(!w.take_restart(), "no restart with a castle standing");
         let owned_after = w.loadout().owned.iter().filter(|&&o| o).count();
         assert!(owned_after >= 24, "the spell inventory re-instantiated");
+    }
+
+    /// The intermittent hand-spell eater (player report mc1:49 +
+    /// mc1hw:0): respawning on an exhausted pool must not turn a
+    /// failed re-instantiation into a permanent loss — the death bank
+    /// keeps remembering the model until a manifestation slot exists.
+    #[test]
+    fn respawn_on_an_exhausted_pool_never_eats_the_inventory() {
+        let mut w = bare_creature_world(2);
+        w.set_dev_spells(true);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let c =
+            w.g.spawn_castle((140 << 8) + 128, (140 << 8) + 128)
+                .unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..60 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+
+        w.player.grace = 0;
+        hit_player(&mut w, 30000, 1);
+        w.tick(firing_line(), PlayerCommand::default());
+        w.tick(grounded_line(), PlayerCommand::default());
+        assert_eq!(w.vitals().state, LifeState::Dead);
+
+        // The endgame crowd: every free slot is taken the moment the
+        // player presses Space (the scattered jars still hold their
+        // own slots, so the re-grant loop starves).
+        let mut hogs = Vec::new();
+        while let Some(h) = w.g.new_event() {
+            hogs.push(h);
+        }
+        // Respawn AT THE CASTLE, far from the corpse — the scattered
+        // jars are out of pickup range and will decay unseen (the
+        // report's "no jars left behind either").
+        let castle_air = PlayerPose::level((140 << 8) + 128, (140 << 8) + 128, 3360, 0);
+        w.tick(
+            castle_air,
+            PlayerCommand {
+                respawn: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(w.vitals().state, LifeState::Alive);
+        let held = w.loadout().owned.iter().filter(|&&o| o).count();
+        assert!(held < 24, "the starved grants really did fail");
+
+        // The crowd thins and every scattered jar runs out its
+        // 200-289-tick fuse; the remembered models must still return.
+        for &h in &hogs {
+            w.g.free_entity(h);
+        }
+        for _ in 0..320 {
+            w.tick(castle_air, PlayerCommand::default());
+        }
+        let recovered = w.loadout().owned.iter().filter(|&&o| o).count();
+        assert!(
+            recovered >= 24,
+            "the pool freed but only {recovered}/24 spells came back — \
+             the respawn grant failure ate the rest"
+        );
     }
 
     #[test]

@@ -1228,8 +1228,14 @@ impl Gen {
     pub(crate) fn new_event(&mut self) -> Option<usize> {
         // MC2 pops the free stack FIRST and only then sacrifices a
         // recycle victim (`NewEvent_4A050`, Events.cpp:561-608 — the
-        // free arm at :563, the victim arm at :581). MC1's allocator
-        // has no such fallback, and its stack stays empty.
+        // free arm at :563, the victim arm at :581). MC1's
+        // `NewEvent_372C0` has the same two-stack shape (:43900-10),
+        // but its recycle stack is only ever populated inside the
+        // respawn window (`sub_44D30` rebuilds both lists at :54842
+        // and empties the victims again at :55056) — normal play
+        // allocates from `free` alone, as here. The port skips the
+        // respawn-window sacrifice; `World::death_regrant` covers
+        // the consequence (docs/DEVIATIONS.md).
         let idx = match self.free.pop().or_else(|| self.mc2_recycle_pop()) {
             Some(i) => i,
             None => {
