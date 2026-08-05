@@ -1065,23 +1065,23 @@ impl World {
                 //     pyramid's spin-angle @0x28 into its id24) is: the
                 //     referenced entity IS a live (5,10) pyramid. A wild
                 //     body points at a (5,0)/(5,27) segment → projects 0.
-                owner: if e.class64 == 15 && e.id24 != slot {
-                    untr(e.id24)
-                } else if e.class64 == 5 && e.model65 == 10 {
+                owner: if e.class64 == 5 && e.model65 == 10 {
                     e.f36
-                } else if e.class64 == 10 && e.model65 == 42 && e.id24 != slot {
-                    untr(e.id24)
-                } else if e.class64 == 5
-                    && matches!(e.model65, 0 | 19 | 21 | 25)
-                    && self
-                        .g
-                        .ent
-                        .get(untr(e.id24) as usize)
-                        .is_some_and(|p| p.class64 == 5 && p.model65 == 10)
-                {
-                    untr(e.id24)
                 } else {
-                    0
+                    // The three translated-owner lanes (class-15
+                    // manifestation → wizard, (10,42) painter →
+                    // parent castle, live-pyramid summon → pyramid)
+                    // all project the same way; everything else 0.
+                    let translated = (e.class64 == 15 && e.id24 != slot)
+                        || (e.class64 == 10 && e.model65 == 42 && e.id24 != slot)
+                        || (e.class64 == 5
+                            && matches!(e.model65, 0 | 19 | 21 | 25)
+                            && self
+                                .g
+                                .ent
+                                .get(untr(e.id24) as usize)
+                                .is_some_and(|p| p.class64 == 5 && p.model65 == 10));
+                    if translated { untr(e.id24) } else { 0 }
                 },
                 action: e.tick70,
                 sv1: held.get(&slot).map_or(0, |h| h.slot),

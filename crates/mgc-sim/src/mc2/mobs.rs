@@ -2497,16 +2497,30 @@ impl Gen {
     /// while decelerating `f126 -= 8`/tick and turning onto its
     /// target; at ≤ 16 it takes the per-model cruise (m0 → 30,
     /// m19 → 76, m21 → 96, m25 unchanged, EF:10588-601) and drops to
-    /// the StageVar2-16 homing slot. Damage is live from the first
-    /// tick (`sub_1B8C0` intake; life < 0 despawns outright, no
-    /// puff); an invalid target skips straight to slot 16 with the
-    /// speed untouched (the `goto LABEL_14`).
+    /// the StageVar2-16 homing slot. An invalid target skips straight
+    /// to slot 16 with the speed untouched (the `goto LABEL_14`).
+    ///
+    /// The head is the MOVE CORE ONLY, then a BARE life test
+    /// (EF:10572-76) — `sub_1B8C0` is `mc2_move_core`, not the damage
+    /// intake, and MC2 damage reaches an entity solely through the
+    /// accumulate-mailbox that a state handler's head drains
+    /// (EF:4023-25 and twins; `Gen::mail_write`). So retail applies
+    /// NOTHING during the ~37-tick launch flight: a hit taken in
+    /// flight stays QUEUED and is consumed on the first slot-16 tick,
+    /// where it becomes either the `v2==1` retarget (the creature
+    /// leaves the summon lane at once) or the `v2==2` husk. Draining
+    /// the mailbox here instead swallowed that first hit — a
+    /// non-fatal one lost retail's tick-1 retarget-out and left the
+    /// creature in the husk-prone lane longer, and a fatal one made
+    /// it vanish outright with no death animation and no puff. The
+    /// life test is therefore unreachable in practice, exactly as in
+    /// retail; it is kept because retail keeps it.
     fn mc2_doom_summon_spinup_tick(&mut self, i: usize, ctx: &MobCtx) {
-        if self.mc2_state_head(i) == 2 {
+        self.mc2_move_core(i);
+        if self.ent[i].act_life < 0 {
             self.ent[i].flags |= 0x400;
             return;
         }
-        self.mc2_move_core(i);
         let target = self.ent[i].f146;
         if let Some((tx, ty, _)) = self.mc2_doom_target_pos(target, ctx) {
             let (mx, my) = (self.ent[i].x, self.ent[i].y);
@@ -2536,16 +2550,26 @@ impl Gen {
     /// on a creature is `fontTypeIndex_0x3D_61` (the m0 dodge window)
     /// and has no @0x2E import, so replayed summons puffed on sight.
     /// Otherwise the `sub_1E700` core runs: mailbox intake (a KILL
-    /// leaves the corpse standing at @0x2E = 1 until the pyramid's
-    /// death expires it, EF:10864-67 verbatim), a hit re-targets the
+    /// stamps @0x2E = 1 and freezes the body — no move, no state
+    /// change, EF:10864-66), a hit re-targets the
     /// attacker — never the parent or a same-species peer; flee rows
     /// hand to +6, others +2 (the retail parent-XP `sub_6D8B0` award
     /// is a wizard-only no-op for the pyramid) — and the quiet path
     /// aims at the target on the 8-tick throttle with the 64-tick
     /// wander jink and the same-model crowd steer-away (EF:10814-40).
-    /// Both live paths end in the engage check: 3-D reach inside the
-    /// row's `v_28` hands to the model's +2 attack (site_z stays 16,
-    /// as retail leaves StageVar2). Parent link: the level authors
+    /// ALL THREE arms then end in the engage check — the dead one
+    /// included, because `sub_1E700` never returns early: 3-D reach
+    /// inside the row's `v_28` hands to the model's +2 attack
+    /// (site_z stays 16, as retail leaves StageVar2). That is how a
+    /// husk leaves the lane: the frozen corpse keeps testing the
+    /// reach on the `f63 & 7` throttle, converts to `8m+2`, and the
+    /// model handler's own head turns `life < 0` into `8m+4` — the
+    /// ordinary death animation. Corpus (mc2l24): NO doom summon
+    /// anywhere in the take dies in `8m+7` — slot 573 (5,0) leaves
+    /// via the `v2==1` retarget one tick into the lane (t=60142),
+    /// slots 772/820 (5,19) leave via this engage check at FULL life
+    /// (t=60153/60161) and are one-shot later in `8m+2`, each with a
+    /// full 8-tick `8m+4`→`8m+5` death. Parent link: the level authors
     /// exactly ONE (5,10), scan-resolved (`parentId_0x28_40` has no
     /// entity home — the spawn-block APPROX).
     fn mc2_doom_summon_home_tick(&mut self, i: usize, ctx: &MobCtx) {
@@ -2585,17 +2609,37 @@ impl Gen {
                 let (px, py) = (self.ent[p].x, self.ent[p].y);
                 self.ent[i].f34 = Self::angle_between(mx, my, px, py);
             }
-            if self.mc2_state_head(i) != 2 {
+            // Retail runs the FULL `sub_1E700` core here (with
+            // `word_0x96_150 = parentId`), THEN reads the latch back
+            // and subtracts 4 (EF:10727-30) — so a summon that died
+            // on this very tick reads the core's `= 1` and lands on
+            // −3, expiring next tick, instead of draining its live
+            // latch by 4s for ~62 ticks. APPROX: the port keeps the
+            // manual parent-aim above and skips the core's wander
+            // jink / crowd steer / `v2==1` retarget (whose
+            // `word_0x96_150` lock retail clobbers back to 0 two
+            // lines later anyway, EF:10729).
+            if self.mc2_state_head(i) == 2 {
+                self.ent[i].f26 = 1;
+            } else {
                 self.mc2_move_core(i);
             }
             self.ent[i].f26 -= 4;
             return;
         }
-        // The `sub_1E700` core.
+        // The `sub_1E700` core. NOTE the dead arm does NOT return:
+        // retail's `else if (v2 == 2)` stamps the latch and falls off
+        // the end of `sub_1E700` (EF:10864-66), so control lands back
+        // on the caller's engage check at EF:10735 — a DEAD husk
+        // keeps testing the reach and converts to the model's `+2`
+        // the moment it is inside `v_28`, whereupon that handler's
+        // own head sees `life < 0` and hands to `+4`, the ordinary
+        // death animation. Returning here stranded the husk in
+        // `8m+7` until the pyramid itself died (player-reported
+        // "frozen forever", 2026-08-05).
         match self.mc2_state_head(i) {
             2 => {
                 self.ent[i].f26 = 1;
-                return;
             }
             1 => {
                 self.mc2_move_core(i);

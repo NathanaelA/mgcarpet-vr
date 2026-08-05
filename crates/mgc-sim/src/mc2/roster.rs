@@ -2786,6 +2786,7 @@ impl Gen {
     ///     the mover once aligned.
     ///   - station-keeping 640 ABOVE the node within ±64, stepping
     ///     32/tick.
+    ///
     /// Corpus (mc2l24, 14 siphon entries between t=14512 and t=15648):
     /// every dweller enters the siphon with `dz` in [588, 701] and
     /// 2-D gap ≤ 121 — the 640±64 band and the 128 reach exactly.

@@ -1548,7 +1548,7 @@ impl World {
                 sprite_h_units: (self.game == GameId::Mc2
                     && e.type86 == 341
                     && self.mc2_doom_meter > 0)
-                    .then(|| self.mc2_doom_meter as f32),
+                    .then_some(self.mc2_doom_meter as f32),
             });
         }
         out
@@ -12451,9 +12451,13 @@ mod tests {
     /// (without them the summons freeze, unkillable, into a "barrier").
     /// The chain: spin-up decelerates 320 → the per-model cruise
     /// (m21 = 96) and drops to slot 16; slot 16 MOVES the creature and
-    /// takes damage (a kill leaves the corpse standing at @0x2E = 1,
-    /// EF:10864-67); the pyramid's death expires every summon with a
-    /// fire puff.
+    /// takes damage (a kill stamps @0x2E = 1 and freezes the body,
+    /// EF:10864-66 — the corpse only STAYS frozen while it is outside
+    /// the row's engage reach, which is the case here: the test player
+    /// sits ~90 tiles off, far beyond m21's `v_28` 4608. The in-reach
+    /// conversion is pinned separately by
+    /// `mc2_doom_husk_converts_to_the_death_handoff_in_reach`); the
+    /// pyramid's death expires every summon with a fire puff.
     #[test]
     fn mc2_pyramid_summons_release_fight_and_expire() {
         let planes = Planes {
@@ -12546,6 +12550,286 @@ mod tests {
                 "the summon died through its model machine"
             );
         }
+    }
+
+    /// A pyramid-summon world with ONE hand-planted summon: the level's
+    /// single (5,10) plus a (5,`model`) stamped exactly as the case-3..6
+    /// exec stamps it (doomsday.rs summon block). `dt` places the summon
+    /// `dt` tiles from the player pose the caller will drive, so a test
+    /// can sit it inside or outside the row's `v_28` engage reach.
+    fn mc2_doom_summon_fixture(model: u8, ptile: (u16, u16), dt: u16) -> (World, usize, usize) {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 1,
+            kind: ThingKind::Entity,
+            class: 5,
+            model: 10,
+            x: 100,
+            y: 100,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new_for_game(planes, &things, 1, assets(), GameId::Mc2);
+        w.set_mc2_doom_level(true);
+        w.tick(away(), PlayerCommand::default());
+        let p = find_slot(&w, 5, 10);
+        let (sx, sy) = mc2_pos(ptile.0 + dt, ptile.1);
+        let gz = w.g.ground_z(sx, sy) as i16;
+        let s = match model {
+            19 => w.g.mc2_spawn_m19(sx, sy, gz + 768),
+            21 => w.g.mc2_spawn_m21(sx, sy, gz + 768),
+            _ => w.g.mc2_spawn_m0(sx, sy, gz + 768),
+        }
+        .expect("summon");
+        let own = w.g.ent[p].id24;
+        let e = &mut w.g.ent[s];
+        e.f146 = PLAYER_TARGET;
+        e.id24 = own;
+        e.f26 = 250;
+        e.f126 = 320;
+        e.site_z = 17;
+        e.tick70 = model.wrapping_mul(8).wrapping_add(7);
+        (w, p, s)
+    }
+
+    /// **THE HUSK ESCAPE HATCH — `sub_1E700`'s dead arm FALLS THROUGH
+    /// to the caller's engage check.** `else if (v2 == 2) {
+    /// word_0x2E_46 = 1; }` (EF:10864-66) stamps the latch, changes no
+    /// state and returns normally, so control lands back on
+    /// `sub_1E580`'s EF:10735-39 reach test — a DEAD husk keeps
+    /// probing on the `byte_0x3E_62 & 7` throttle and converts to the
+    /// model's `+2` the moment it is inside `v_28` (5120 = 20 tiles
+    /// for the (5,19) firefly), whereupon that handler's own head
+    /// turns `life < 0` into `+4`, the ordinary death animation. The
+    /// port used to `return` out of the dead arm, stranding the husk
+    /// in `8m+7` until the pyramid itself died — the player-reported
+    /// "frozen husks forever" (2026-08-05). Corpus (mc2l24): no doom
+    /// summon in the whole take dies in `8m+7`; slots 772/820 (5,19)
+    /// leave via this very check at FULL life (t=60153/60161).
+    #[test]
+    fn mc2_doom_husk_converts_to_the_death_handoff_in_reach() {
+        use crate::mc1::combat::MailTarget;
+        // The firefly's engage reach is `v_28` = 5120 = 20 tiles; sit
+        // it 6 tiles from the player so the reach test passes, and
+        // drive the player pose to match.
+        let ptile = (100u16, 100u16);
+        let pose = PlayerPose::from_tiles(
+            ptile.0 as f32 + 0.5,
+            105.0 / 8.0,
+            ptile.1 as f32 + 0.5,
+            0.0,
+            0.0,
+            0.0,
+        );
+        let (mut w, _p, s) = mc2_doom_summon_fixture(19, ptile, 6);
+        // Ride the spin-up down into the StageVar2-16 home slot.
+        let mut released = false;
+        for _ in 0..60 {
+            w.tick(pose, PlayerCommand::default());
+            if w.g.ent[s].site_z == 16 {
+                released = true;
+                break;
+            }
+        }
+        assert!(released, "the spin-up drops to the homing slot");
+        // Park it in the summon lane at full life and ONE-SHOT it —
+        // 1600 against the firefly's 600, the corpus's own fireball
+        // (slot 772: life 600 → −1000 in a single mail).
+        w.g.ent[s].tick70 = 159;
+        w.g.ent[s].site_z = 16;
+        w.g.ent[s].act_life = 600;
+        w.g.ent[s].f26 = 250;
+        w.g.mail_write(MailTarget::Pool(s), 0, 1600, PLAYER_TARGET);
+        // One tick takes the kill; the conversion follows within the
+        // 8-tick throttle window.
+        let mut left_lane = None;
+        for n in 1..=9 {
+            w.tick(pose, PlayerCommand::default());
+            if w.g.ent[s].tick70 != 159 || w.g.ent[s].flags & 0x400 != 0 {
+                left_lane = Some(n);
+                break;
+            }
+        }
+        assert!(w.g.ent[s].act_life < 0, "the one-shot killed the firefly");
+        let n = left_lane.expect(
+            "the husk converts out of the summon lane inside the 8-tick \
+             throttle (it used to stand in 8m+7 forever)",
+        );
+        assert!(n <= 9, "conversion inside the throttle window, got {n}");
+        // …and it lands in the model's own death chain (156 prekill →
+        // 157 kill → reap), never back in a live state.
+        let mut died = w.g.ent[s].flags & 0x400 != 0;
+        for _ in 0..40 {
+            if died {
+                break;
+            }
+            assert!(
+                matches!(w.g.ent[s].tick70, 154 | 156 | 157),
+                "the husk hands to +2/+4/+5, got {}",
+                w.g.ent[s].tick70
+            );
+            w.tick(pose, PlayerCommand::default());
+            died = w.g.ent[s].flags & 0x400 != 0 || w.g.ent[s].class64 == 0;
+        }
+        assert!(died, "the converted husk finished its death animation");
+    }
+
+    /// The same husk OUT OF REACH still stands — the conversion is
+    /// gated on EF:10738's `v_28` test, not unconditional, and the
+    /// standing corpse itself (`word_0x2E_46 = 1`, no move, no state
+    /// change) IS retail law. Non-vacuity partner for the in-reach
+    /// test above: if the engage check were made unconditional both
+    /// tests could not pass at once.
+    #[test]
+    fn mc2_doom_husk_out_of_reach_still_stands_at_latch_one() {
+        use crate::mc1::combat::MailTarget;
+        let ptile = (100u16, 100u16);
+        // 60 tiles out — far beyond the firefly's 20-tile `v_28`.
+        let (mut w, _p, s) = mc2_doom_summon_fixture(19, ptile, 60);
+        for _ in 0..60 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[s].site_z == 16 {
+                break;
+            }
+        }
+        w.g.ent[s].tick70 = 159;
+        w.g.ent[s].site_z = 16;
+        w.g.ent[s].act_life = 600;
+        w.g.ent[s].f26 = 250;
+        w.g.mail_write(MailTarget::Pool(s), 0, 1600, PLAYER_TARGET);
+        for _ in 0..12 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(w.g.ent[s].act_life < 0, "the one-shot killed the firefly");
+        assert_eq!(
+            w.g.ent[s].tick70, 159,
+            "the out-of-reach husk stays in 8m+7"
+        );
+        assert_eq!(w.g.ent[s].f26, 1, "the corpse stands at @0x2E = 1");
+        assert_eq!(w.g.ent[s].flags & 0x400, 0, "and is still in the pool");
+    }
+
+    /// **THE SPIN-UP LANE DOES NOT DRAIN THE MAILBOX.** `sub_1E320`
+    /// (EF:10572-76) calls the move core `sub_1B8C0` and then tests
+    /// `life < 0` BARE — it never runs a damage head, and MC2 damage
+    /// only ever reaches an entity through the accumulate-mailbox a
+    /// state handler drains (EF:4023-25 and twins). So a hit taken
+    /// during the ~37-tick launch flight stays QUEUED and lands on the
+    /// first slot-16 tick: non-fatal → the `v2==1` retarget hands the
+    /// creature to `8m+2` on tick one (corpus slot 573, t=60142);
+    /// fatal → the husk arm, which then converts and plays the normal
+    /// death animation. The port used to drain it in the spin-up,
+    /// which swallowed the retarget and made a fatal in-flight hit
+    /// blink the creature out of existence with no death animation.
+    #[test]
+    fn mc2_doom_spinup_keeps_the_hit_queued_for_the_home_lane() {
+        use crate::mc1::combat::MailTarget;
+        let ptile = (100u16, 100u16);
+        // FATAL in-flight hit: 1600 on the 600-life firefly.
+        let (mut w, _p, s) = mc2_doom_summon_fixture(19, ptile, 60);
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[s].site_z, 17, "still in the spin-up lane");
+        let life0 = w.g.ent[s].act_life;
+        w.g.mail_write(MailTarget::Pool(s), 0, 1600, PLAYER_TARGET);
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.g.ent[s].site_z, 17, "still spinning up");
+        assert_eq!(
+            w.g.ent[s].act_life, life0,
+            "the spin-up applies NO damage (retail runs no damage head there)"
+        );
+        assert_ne!(
+            w.g.ent[s].mail[0].1, 0,
+            "the hit is still QUEUED for the home lane, not drained"
+        );
+        assert_eq!(
+            w.g.ent[s].flags & 0x400,
+            0,
+            "and the summon did not blink out mid-launch"
+        );
+        // It lands on the first home-lane tick and takes the creature
+        // through a real death, not a silent despawn.
+        let mut reached = false;
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[s].act_life < 0 {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "the queued hit lands once the home lane owns it");
+
+        // NON-FATAL twin: the queued hit becomes the tick-1 retarget.
+        let (mut w2, _p2, s2) = mc2_doom_summon_fixture(0, ptile, 60);
+        for _ in 0..60 {
+            w2.tick(away(), PlayerCommand::default());
+            if w2.g.ent[s2].site_z == 17 && w2.g.ent[s2].f126 <= 40 {
+                break;
+            }
+        }
+        w2.g.mail_write(MailTarget::Pool(s2), 0, 1600, PLAYER_TARGET);
+        let mut retargeted = false;
+        for _ in 0..12 {
+            w2.tick(away(), PlayerCommand::default());
+            if w2.g.ent[s2].tick70 == 2 {
+                retargeted = true;
+                break;
+            }
+        }
+        assert!(
+            retargeted,
+            "the worm's queued in-flight hit becomes the v2==1 retarget \
+             to 8m+2 on its first home-lane tick (corpus slot 573)"
+        );
+        assert!(w2.g.ent[s2].act_life > 0, "and it survived the hit");
+    }
+
+    /// The unlocked-drift latch order (EF:10727-30): retail reads
+    /// `word_0x2E_46` back AFTER the core and subtracts 4, so a summon
+    /// that DIED on the same tick reads the core's `= 1` and lands on
+    /// −3 — expiring next tick instead of draining its live 250 by 4s
+    /// for ~62 ticks.
+    #[test]
+    fn mc2_doom_unlocked_dead_summon_drains_to_minus_three() {
+        use crate::mc1::combat::MailTarget;
+        let ptile = (100u16, 100u16);
+        let (mut w, _p, s) = mc2_doom_summon_fixture(19, ptile, 60);
+        for _ in 0..60 {
+            w.tick(away(), PlayerCommand::default());
+            if w.g.ent[s].site_z == 16 {
+                break;
+            }
+        }
+        // Point the lock at a REAPED slot so it resolves to none, and
+        // hold the throttle off a multiple of 8 so the re-acquire does
+        // not run — retail's `v3x <= Entities[0]` drift branch. (`f63`
+        // is bumped AFTER the handler, so the handler sees this value.)
+        let dead =
+            w.g.mc2_spawn_m19(w.g.ent[s].x, w.g.ent[s].y, 0)
+                .expect("victim");
+        w.g.ent[dead].flags |= 0x400;
+        w.g.ent[s].tick70 = 159;
+        w.g.ent[s].site_z = 16;
+        w.g.ent[s].act_life = 600;
+        w.g.ent[s].f26 = 250;
+        w.g.ent[s].f146 = dead as u16;
+        w.g.ent[s].f63 = 3;
+        w.g.mail_write(MailTarget::Pool(s), 0, 1600, PLAYER_TARGET);
+        w.tick(away(), PlayerCommand::default());
+        assert!(w.g.ent[s].act_life < 0, "the unlocked summon took the kill");
+        assert_eq!(
+            w.g.ent[s].f26, -3,
+            "the latch reads back as 1 and drains to −3 (EF:10728-30)"
+        );
     }
 
     /// THE BOSS IS INVISIBLE THROUGH ITS OPENING RITUAL, and again for

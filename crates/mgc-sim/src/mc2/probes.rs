@@ -111,6 +111,7 @@ impl Gen {
     ///   runs over the near corner. Splitting −3/−3 there moved its
     ///   head, and the chain amplified it into **+981 unexplained
     ///   rows** over t=3560+440 (x/y/pitch/heading on 12 followers).
+    ///
     /// Both windows want the same answer — put the whole deficit on
     /// the far corner — and the reader count is what says so with only
     /// the pool in hand. The switch also PROVES that answer

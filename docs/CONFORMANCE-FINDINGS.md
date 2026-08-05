@@ -3208,18 +3208,16 @@ post-fix).
     `mc2::mobs::mc2_doom_summon_{home,spinup}_tick`, with a
     conformance import arm so a StageVar2 16/17 (5,0)/(5,27) summon
     keeps @0x2E instead of the m0 bob velocity.
-  - **STILL OPEN (see Open leads).** The standing husk itself is
-    RETAIL LAW, not a port bug: `sub_1E700` v2==2 → `word_0x2E_46 =
-    1` (EF:10864-66) and `sub_1E580`'s head only zeroes the latch
-    when the PARENT pyramid is gone (EF:10699-10701), so a summon
-    killed while still in slot 16 stands at life<0 until the boss
-    dies — in retail too. What the port adds is that it keeps
-    DRAWING and health-barring it; retail's own billboard pass has
-    no life gate either, so the remaining suspicion is the port's
-    damage granularity (a one-shot kill skips the v2==1 retarget
-    that would have handed the creature to its model's +2 state and
-    the normal death path). Needs a player re-check after this
-    round.
+  - **~~STILL OPEN~~ → SUPERSEDED 2026-08-05. The earlier "the
+    standing husk is RETAIL LAW" reading was HALF the law and the
+    half it missed is the whole bug — see the next entry.** The
+    latch write is real (`sub_1E700` v2==2 → `word_0x2E_46 = 1`,
+    EF:10864-66; `sub_1E580`'s head only zeroes the latch when the
+    PARENT pyramid is gone, EF:10699-10701), but retail NEVER
+    STRANDS on it, because the caller runs an escape hatch after
+    the core returns that the port `return`ed past — **FIXED and
+    landed the same day** (see "VISSULUTH'S SUMMONS — THE 'FROZEN
+    HUSK FOREVER' IS A PORT BUG"). Do not cite the old paragraph.
   - **NOT A BUG: the l24 "fountain sphere model 54".** The (10,54)
     rows at (41,212) z 2845..3600 over t=63971..68788 are NOT a
     wrong fountain model — they are `AddAuxiliary_50500` (EF:36812)
@@ -5084,3 +5082,274 @@ invisible to it (no probe run, none applicable).
 half a tile higher — same carpet, same mound, eye raised 128 engine
 units; MC1 gets the identical lift (its carpet floors half as high, so
 the change is proportionally more visible there).
+
+## VISSULUTH'S SUMMONS — THE "FROZEN HUSK FOREVER" IS A PORT BUG: ONE `return` SKIPS RETAIL'S ESCAPE HATCH — **DIAGNOSED AND LANDED 2026-08-05, PLAYTEST OWED** (l24 windowed unexplained −208 / −245, `sv2` mismatches → 0, no golden moved)
+
+Player report (sharpened 2026-08-05): on mc2l24, Vissuluth's summoned
+creatures killed at a specific very early moment after flying out
+remain behind as frozen husks — forever. Cyclone shoves them (physics
+still applies) but they never move or die. Incidence dropped after the
+session-8 latch-home fix; in the last playthrough it happened ONLY to
+"fireflies". Player adds: **they have never seen this in retail**,
+across substantial play of the level.
+
+**VERDICT: (b) THE PORT DIVERGES.** The ledger's earlier reading —
+"the standing husk is retail law" — was half the law. The latch write
+is real, but retail has an escape hatch on the very next statement and
+the port `return`s past it. The corpus contains **no standing-husk
+specimen at all**: every doom summon that dies in the recorded take
+dies in an ordinary model death state, never in the summon slot. The
+player's "never seen it in retail" is exactly right.
+
+### The latch lifecycle, both sides
+
+Retail `sub_1E580` (EF:10689-10746) is the StageVar2 13/16 body; a2 =
+`8 * model` (`sub_1D5D0` call sites, EF:11356/11454/11567/…). Its
+target-valid branch is:
+
+```c
+sub_1E700(a1x, a2);                                    // EF:10734
+if (!(a1x->byte_0x3E_62 & 7)) {                        // EF:10735
+    v4 = a1x->dword_0xA0_160x->word_160_0x1c_28;       // EF:10737
+    if (sub_583F0_distance_3d(&a1x->position, &v3x->position) < v4)
+        a1x->actionIndex_0x45_69 = a2 + 2;             // EF:10739
+}
+```
+
+`sub_1E700` (EF:10753-10871) is the shared damage head plus three
+arms:
+
+- **v2 == 0** (quiet) — move core `sub_1B8C0`, face target, crowd
+  steer-away (EF:10806-40).
+- **v2 == 1** (damaged, survived) — move core, then RETARGET: lock
+  the attacker and hand to the model's `+2` (or `+6` for flee rows),
+  plus the parent-XP mail (EF:10844-61). **This leaves the doom lane
+  permanently** — `8m+2 & 7 == 2`, so the next tick dispatches to the
+  model's own handler, whose head sends `life < 0` to `a2 + 4`, the
+  ordinary death animation (EF:9008-9013 and its 30-odd twins).
+- **v2 == 2** (dead) — `word_0x2E_46 = 1` (EF:10864-66). No state
+  change, no move, **no early return.** Control falls back to
+  EF:10735, so a DEAD husk still runs the engage check and still
+  converts to `a2 + 2` the moment it is inside `v_28` of its target.
+
+So retail's husk is a ≤ 8-tick freeze (the `byte_0x3E_62 & 7`
+throttle) whenever the player is within the row's engage reach, and
+the reach is enormous: `v_28` = 5120 (20 tiles) for m0 and m19, 4608
+for m21, 3072 for m25 (behavior.rs rows 71/88/96/92). In a fight
+fought inside that radius the husk is invisible; the creature simply
+freezes for a beat and then plays its death animation.
+
+The port (`crates/mgc-sim/src/mc2/mobs.rs`,
+`mc2_doom_summon_home_tick`) mirrors all three arms — and then:
+
+```rust
+match self.mc2_state_head(i) {
+    2 => {
+        self.ent[i].f26 = 1;
+        return;                      // mobs.rs:2598  ← THE BUG
+    }
+    ...
+}
+// The engage handoff (EF:10735-40) — mobs.rs:2659-2669, unreachable
+// from the dead arm.
+```
+
+`f26 = 1` and "do not move" are both correct. The `return` is not in
+retail. With it, a port husk can never leave `8m+7`, so it stands
+until the parent scan (mobs.rs:2552-58) fails — i.e. until Vissuluth
+himself dies (t=63221 in the corpus). That is the player's "forever".
+
+### Corpus specimens (recordings/mc2l24.mgcr) — retail never husks
+
+`f2e` in the trace output is `word_0x2E_46`, the latch; `flags` bit 10
+(0x400) is retail's `byte[1] & 4` teardown bit.
+
+- **slot 573, (5,0) worm.** Spin-up t=60104-60140 (`act=7`, speed
+  312 → 24 at −8/tick), enters the home lane t=60141 at the m0 cruise
+  30. **t=60142: first hit, 1600 damage, life 4000 → 2400, `act 7 →
+  2` in the SAME tick** — the v2==1 retarget (EF:10855-60), one tick
+  into the lane. t=60143 → 800, t=60144 → −800 and `act 4` (prekill),
+  t=60145-49 `act 5` (kill), t=60150 flags 0x40c. Latch `f2e = 250`
+  constant the whole time — never decremented, because StageVar2 16
+  skips the `--` (EF:10703-06), exactly as the port models it.
+- **slot 772, (5,19) firefly.** Home lane from ≈t=60138. **t=60153:
+  `act 159 → 154` at FULL life (600/600)** — the engage handoff,
+  15 ticks of exposure. Killed t=60193 by a single 1600 hit
+  (600 → −1000) while in `act 154` → `act 156` (prekill) →
+  `act 157` t=60194-60200 → torn down t=60201. A ONE-SHOT KILL, and
+  still a full 8-tick death animation.
+- **slot 820, (5,19) firefly.** Born t=60068, home lane ≈t=60105,
+  **`act 159 → 154` at t=60161 at full life** (56 ticks of exposure),
+  one-shot t=60192 → 156 → 157 → slot recycled t=60202.
+
+Every one of them left `8m+7` alive-or-instantly, by either the
+v2==1 retarget or the engage handoff. **The port's exposure window is
+the home-lane dwell before the engage handoff fires: 15 and 56 ticks
+in these two specimens (0.6-2.2 s).** A one-shot kill inside that
+window strands the husk permanently in the port and costs retail
+≤ 8 ticks.
+
+### Why only fireflies — HP, not a lane home
+
+Not a per-model field home; the four summon models share one lane and
+the session-8 f26 fix covers all of them. It is max_life against the
+player's 1600-damage fireball:
+
+| pick | model | max_life | per burst | roll weight |
+|------|-------|----------|-----------|-------------|
+| 3 | (5,0) worm | 4000 | 3 | 10/70 |
+| 4 | (5,21) | 1000 | 3 | 1/70 (roll 69 only) |
+| 5 | (5,25) | 7500 | 3 | 10/70 |
+| 6 | (5,19) firefly | **600** | **8** | 9/70 |
+
+(`mc2_spawn_m*` in roster.rs/multipart.rs; repeats + weights from
+`mc2_pyramid_pick_summon`, doomsday.rs:786-813.) m0 and m25 can never
+be one-shot, so their first hit is always a v2==1 retarget that pulls
+them out of the lane — specimen 573 is that, one tick in. m21 is
+one-shottable but is the rarest pick. Fireflies are ≈96% of the
+one-shottable summon population, and they arrive eight at a time.
+
+### NOT a divergence: visibility. There is no hide lane to honour
+
+Ruled out explicitly, because the reconciliation hypothesis was that
+retail hides its husks. It does not. Retail's sprite pass gates only
+on `byte[0] & 0x21` (`DrawSprites_3E360` GameRenderOriginal.cpp:3157,
+mirrored NG:2838/HD:3235; gather `sub_3FD60` GRO:1936) — no life gate
+anywhere. The corpus agrees: specimens 573/772/820 hold `flags=0xc`
+(bit 0 CLEAR = drawn) through prekill and kill, and only gain 0x400
+(`byte[1] & 4`) at teardown. The port draws exactly what retail draws
+and `live_poses_mc2`'s class-5 `flags & 1` gate (world.rs:1662) is
+already right. The floating red bar over the husk is the port's opt-in
+`render.debug.health_bars` overlay, not a retail element. **The
+divergence is DURATION, not visibility.**
+
+### Second divergence, same family: the spin-up lane eats the first hit
+
+`sub_1E320` (EF:10566-10604), StageVar2 17, calls **only** the move
+core and then tests life directly:
+
+```c
+sub_1B8C0(a1x);                       // EF:10572 — move core, no
+if (a1x->life_0x8 < 0) {              // EF:10573   damage intake
+    DisableEntityDrawing04_57F10(a1x); return; }
+```
+
+Damage in MC2 reaches an entity solely through the accumulate-mailbox
+(`dword_0x5E_94` += / `word_0x62_98` = src, EF:4023-25 and ~30 twins;
+the port's `Gen::mail_write`, mc1/combat.rs:85-95, matches) and is
+applied only by a state handler's head. So retail applies NOTHING
+during the ~37-tick spin-up flight: a hit taken in flight is carried
+into the home lane and consumed there, where it becomes either the
+v2==1 retarget (the escape) or the husk.
+
+The port's `mc2_doom_summon_spinup_tick` opens with
+`if self.mc2_state_head(i) == 2 { flags |= 0x400; return; }`
+(mobs.rs:2505-2508), which DRAINS the mailbox and applies the damage
+in the spin-up lane. Two consequences: (a) a non-fatal in-flight hit
+is swallowed, so the creature enters the home lane pristine and loses
+the retarget that would have taken it out of the husk-prone lane on
+tick 1; (b) a fatal in-flight hit makes it vanish outright — no death
+animation, no puff — where retail would have flown it into the home
+lane and given it the full `+4`/`+5` death.
+
+### ~~Proposed fix shape — DEFERRED~~ → **LANDED 2026-08-05** (player go-ahead: "Let's fix this")
+
+All three parts landed in `crates/mgc-sim/src/mc2/mobs.rs`, one
+function each side of the summon chain:
+
+1. **The `return` in the dead arm is gone**
+   (`mc2_doom_summon_home_tick`, mobs.rs:2617-2619). `f26 = 1` stays,
+   `mc2_move_core` still is NOT called (retail's v2==2 arm does
+   neither), and the arm now falls through to the engage handoff at
+   mobs.rs:2680-2688 exactly as EF:10864-66 → EF:10735-39 does. This
+   is the whole player-visible fix.
+2. **The spin-up no longer drains the mailbox**
+   (`mc2_doom_summon_spinup_tick`, mobs.rs:2517-2521): move core, then
+   a BARE `act_life < 0` test, mirroring EF:10572-76. The queued hit
+   now survives the launch flight and is consumed by the home lane —
+   non-fatal → the tick-1 `v2==1` retarget, fatal → the husk arm and
+   thence the normal death animation.
+3. **The drift latch read-back** (mobs.rs:2599-2611): the dead head
+   stamps `f26 = 1` before the `-= 4`, so an unlocked dead summon
+   lands on −3 and expires next tick (EF:10727-30) instead of draining
+   its live 250 by 4s.
+
+The `mc2_doom_summon_home_tick` doc comment carries the corrected law
+(the dead arm's fall-through and the three corpus specimens); the
+stale "a KILL leaves the corpse standing until the pyramid's death"
+line in `mc2_pyramid_summons_release_fight_and_expire`'s header
+(world.rs) is corrected to note that test sits its summon ~90 tiles
+out, far beyond m21's `v_28` 4608, which is why its husk legitimately
+stands.
+
+**Tests** (world.rs, all four green, each proven non-vacuous by
+neutering its own arm and watching only that test fail):
+
+- `mc2_doom_husk_converts_to_the_death_handoff_in_reach` — a firefly
+  one-shot (1600 vs 600) in `8m+7` six tiles from the player leaves
+  the lane inside the 8-tick throttle and finishes `154 → 156 → 157 →
+  reaped`. Neutered (`return` restored): *"the husk converts out of
+  the summon lane inside the 8-tick throttle (it used to stand in
+  8m+7 forever)"*.
+- `mc2_doom_husk_out_of_reach_still_stands_at_latch_one` — the same
+  kill 60 tiles out still stands at `tick70 = 159`, `f26 = 1`, in the
+  pool. The non-vacuity PARTNER: it pins that the conversion is gated
+  on EF:10738's `v_28` test and that the standing corpse itself is
+  retail law, so the engage check cannot be made unconditional.
+- `mc2_doom_spinup_keeps_the_hit_queued_for_the_home_lane` — a fatal
+  in-flight hit leaves `act_life` untouched, the mailbox still
+  charged and the summon still in the pool, then lands once the home
+  lane owns it; the non-fatal twin (a worm) becomes the tick-1
+  retarget to `8m+2`. Neutered: `left: -1000, right: 600` on *"the
+  spin-up applies NO damage"*.
+- `mc2_doom_unlocked_dead_summon_drains_to_minus_three` — `f26 == -3`.
+  Neutered: `left: 246, right: -3` (246 = the old 250 − 4).
+
+**Goldens: NOTHING MOVED — no re-pin.** `MGC_REQUIRE_GOLDENS=1 cargo
+test -p mgc-sim --no-fail-fast` = 347 lib + every integration binary
+green, 0 failed. As predicted: no golden world authors a (5,10), so
+the doom-summon lanes are simply not reachable from them.
+
+**Windowed A/B** (`verify-deltas recordings/mc2l24.mgcr`, pre-fix vs
+post-fix release binaries, `ulimit -v 2000000`, one at a time). The
+baseline was rebuilt from the SAME tree with only these three arms
+reverted, so the comparison isolates this law and nothing else — it
+reproduced the first baseline's CSV byte-identically in both windows:
+
+| window | UNEXPLAINED field | rows fixed | rows NEW | rng | conforming |
+|--------|-------------------|-----------|----------|-----|------------|
+| 51500 +600 | 2247 → **2039** (−208) | 224 | **0** | 1/600 → 1/600 | 51 → 51 |
+| 60000 +300 | 2625 → **2380** (−245) | 281 | **0** | 0/300 → 0/300 | 0 → 0 |
+
+Missing/extra rows unchanged in both (1/137 and 1/27). **Every moved
+row is a pyramid summon and the change introduces no new diff
+anywhere:** the only (class,model) touched are **(5,25)** in the
+first window and **(5,0) / (5,19) / (5,25)** in the second — the
+fireflies the player named are the largest block there (slots 974,
+959, 960, 908). Per-family, every count fell and none rose: w1 x
+2042→2005, y 2035→1998, z 925→909, heading 824→787, speed 418→381,
+life 182→126, action 66→64; w2 y 1632→1587, x 1631→1585, z
+1209→1173, speed 612→566, heading 540→494, life 270→216, action
+100→96. **`sv2` mismatches go to ZERO in both windows (2→0, 4→0)** —
+the spin-up's early mailbox drain had been shifting the
+StageVar2 17→16 handover a tick off retail, and dropping it puts the
+handover tick back on retail's. The `life` family is the direct hit:
+retail holds an in-flight hit QUEUED, so the port's early application
+had every damaged summon reading a wrong life for the rest of its
+spin-up and a wrong track thereafter.
+
+**Fixture suite: no drift, nothing promoted.** `cargo test -p
+mgc-conform` green — all 6 manifests, 203 fixtures, `0 regressions,
+0 fixed, 0 drifted, 0 not reached` (mc2l24: 17/17 as expected). The
+l24 manifest does not sample these summon ticks, so no fixture status
+moved; **`--promote` was NOT run.** `cargo fmt --all --check` clean.
+
+**PLAYTEST OWED — what the player should see:** a summon killed
+instantly right after it flies out now freezes for **at most a third
+of a second** (the 8-tick engage throttle, and only while you are
+within its engage reach — 20 tiles for a firefly) and then plays its
+normal death animation and disappears, instead of standing there for
+the rest of the fight. Summons shot during their launch flight now
+fly on and die properly instead of blinking out of existence. A
+corpse left standing far from you is still retail-correct — fly
+within ~20 tiles and it will drop.
