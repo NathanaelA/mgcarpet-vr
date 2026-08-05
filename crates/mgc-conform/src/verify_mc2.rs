@@ -100,8 +100,27 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let mut stats = Stats::default();
     let mut printed_import = false;
     let mut boundary_seeded = false;
+    // Measured-terrain accumulator — the MC1 twin's pending-block
+    // pattern (verify.rs): a pair (pt → t) runs on terrain AT pt.
+    let mut timg = (!args.no_terrain)
+        .then(|| {
+            rec.header
+                .channels
+                .terrain
+                .as_ref()
+                .map(mgc_formats::mgcr::TerrainImage::new)
+        })
+        .flatten();
+    let mut pending_terrain: Option<mgc_formats::mgcr::TerrainBlock> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
+        if let Some(img) = timg.as_mut() {
+            if let Some(block) = pending_terrain.take() {
+                img.apply(&block)
+                    .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
+            }
+            pending_terrain = tick.terrain.clone();
+        }
         let Some(state) = &tick.state else {
             prev = None;
             continue;
@@ -132,9 +151,11 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             );
         }
         prev_latch = latch;
-        let sample = ring_mode
-            .then(|| sample_cmd_mc2(tick.input.as_ref()))
-            .unwrap_or_default();
+        let sample = if ring_mode {
+            sample_cmd_mc2(tick.input.as_ref())
+        } else {
+            PlayerCommand::default()
+        };
         if ring_mode && !boundary_seeded && tick.input.is_some() {
             boundary_seeded = true;
             // A button already held on the recording's FIRST frame has
@@ -191,7 +212,15 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     stats.torn += 1;
                 } else {
                     let (pd, port, report) = exec_pair_mc2(
-                        &mut world, &pristine, &things, &pst, &st, &obs, pair_cmd, pair_prev,
+                        &mut world,
+                        &pristine,
+                        crate::verify::measured_planes(&timg),
+                        &things,
+                        &pst,
+                        &st,
+                        &obs,
+                        pair_cmd,
+                        pair_prev,
                         pin_n1,
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
@@ -213,8 +242,13 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     if !printed_import {
                         printed_import = true;
                         println!(
-                            "   import: {} active entities, human slot {human_slot}",
-                            obs.n_active
+                            "   import: {} active entities, human slot {human_slot}, terrain {}",
+                            obs.n_active,
+                            if crate::verify::measured_planes(&timg).is_some() {
+                                "MEASURED"
+                            } else {
+                                "pristine"
+                            }
                         );
                     }
                     stats.absorb_rng(pst.rand, obs.rng, port.rng);
@@ -246,7 +280,15 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         && let Some(tg) = tags.as_mut()
                     {
                         let (alt, _, _) = exec_pair_mc2(
-                            &mut world, &pristine, &things, &pst, &st, &obs, pair_cmd, pair_prev,
+                            &mut world,
+                            &pristine,
+                            crate::verify::measured_planes(&timg),
+                            &things,
+                            &pst,
+                            &st,
+                            &obs,
+                            pair_cmd,
+                            pair_prev,
                             !pin_n1,
                         )
                         .map_err(|e| format!("t={pt}: pose-alt: {e}"))?;
@@ -262,7 +304,15 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     stats.absorb(pt, pd, tags.as_ref(), roster.as_ref(), args);
                     if dump {
                         let (pd, port, _) = exec_pair_mc2(
-                            &mut world, &pristine, &things, &pst, &st, &obs, pair_cmd, pair_prev,
+                            &mut world,
+                            &pristine,
+                            crate::verify::measured_planes(&timg),
+                            &things,
+                            &pst,
+                            &st,
+                            &obs,
+                            pair_cmd,
+                            pair_prev,
                             pin_n1,
                         )
                         .map_err(|e| format!("t={pt}: {e}"))?;
@@ -552,6 +602,7 @@ pub(crate) fn capture_clean_mc2(pst: &RetailMc2, st: &RetailMc2) -> bool {
 pub(crate) fn exec_pair_mc2(
     world: &mut World,
     pristine: &Planes,
+    measured: Option<crate::verify::MeasuredPlanes<'_>>,
     things: &ThingTable,
     pst: &RetailMc2,
     st: &RetailMc2,
@@ -568,6 +619,11 @@ pub(crate) fn exec_pair_mc2(
     String,
 > {
     world.restore_planes(pristine);
+    if let Some((h, ty, ceil)) = measured {
+        world
+            .install_measured_terrain(h, ty, ceil)
+            .map_err(|e| format!("terrain: {e}"))?;
+    }
     world.restore_thing_table(things);
     let report = world
         .retail_import_mc2(pst)

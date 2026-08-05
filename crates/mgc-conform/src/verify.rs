@@ -95,8 +95,30 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         std::iter::repeat_n(PlayerCommand::default(), args.input_delay as usize + 1).collect();
     let mut stats = Stats::default();
     let mut printed_import = false;
+    // The measured-terrain accumulator (format-2 channel): a pair
+    // (pt → t) must run on terrain AT pt, so each record's block is
+    // held pending and applied at the TOP of the NEXT iteration —
+    // during pair processing the image is exactly the pair's start
+    // state. --no-terrain A/Bs the channel off (pristine planes only).
+    let mut timg = (!args.no_terrain)
+        .then(|| {
+            rec.header
+                .channels
+                .terrain
+                .as_ref()
+                .map(mgc_formats::mgcr::TerrainImage::new)
+        })
+        .flatten();
+    let mut pending_terrain: Option<mgc_formats::mgcr::TerrainBlock> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
+        if let Some(img) = timg.as_mut() {
+            if let Some(block) = pending_terrain.take() {
+                img.apply(&block)
+                    .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
+            }
+            pending_terrain = tick.terrain.clone();
+        }
         let Some(state) = &tick.state else {
             prev = None;
             continue;
@@ -140,6 +162,11 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     stats.torn += 1;
                 } else {
                     world.restore_planes(&pristine);
+                    if let Some((h, ty, ceil)) = measured_planes(&timg) {
+                        world
+                            .install_measured_terrain(h, ty, ceil)
+                            .map_err(|e| format!("t={pt}: terrain: {e}"))?;
+                    }
                     let report = world
                         .retail_import_mc1(&pst)
                         .map_err(|e| format!("t={pt}: import: {e}"))?;
@@ -152,8 +179,16 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     if !printed_import {
                         printed_import = true;
                         println!(
-                            "   import: {} active entities, human slot {}, behavior base {:#x}, {} bad rows",
-                            report.active, report.human_slot, report.behavior_base, report.bad_rows
+                            "   import: {} active entities, human slot {}, behavior base {:#x}, {} bad rows, terrain {}",
+                            report.active,
+                            report.human_slot,
+                            report.behavior_base,
+                            report.bad_rows,
+                            if measured_planes(&timg).is_some() {
+                                "MEASURED"
+                            } else {
+                                "pristine"
+                            }
                         );
                     }
                     let pose_src = match pin_pose {
@@ -207,6 +242,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                         let (alt, _, _) = exec_pair(
                             &mut world,
                             &pristine,
+                            measured_planes(&timg),
                             &pst,
                             &st,
                             &obs,
@@ -500,14 +536,38 @@ pub(crate) fn append_hand_diffs(pd: &mut PairDiff, st: &RetailMc1, port: &ObsMc1
     }
 }
 
+/// The measured height/type planes — plus the cave CEILING when the
+/// take declares it — for pair execution, when the recording's
+/// format-2 terrain channel has anchored the accumulator (a
+/// mid-stream start without the base yields None — relative-only
+/// planes must never be installed as absolute terrain).
+pub(crate) type MeasuredPlanes<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>);
+
+pub(crate) fn measured_planes(
+    timg: &Option<mgc_formats::mgcr::TerrainImage>,
+) -> Option<MeasuredPlanes<'_>> {
+    let img = timg.as_ref()?;
+    if !img.based() {
+        return None;
+    }
+    Some((
+        img.plane("height")?,
+        img.plane("type")?,
+        img.plane("ceiling"),
+    ))
+}
+
 /// One fixture-grade pair, executed on a prepared world: restore
-/// pristine planes, import state@N, tick with the pinned pose, and
-/// diff the port projection against the recorded obs@N+1. The single
-/// implementation behind both `verify-deltas` and the fixture suite.
+/// pristine planes (overlaying the MEASURED height/type images when
+/// the recording carries the terrain channel), import state@N, tick
+/// with the pinned pose, and diff the port projection against the
+/// recorded obs@N+1. The single implementation behind both
+/// `verify-deltas` and the fixture suite.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn exec_pair(
     world: &mut World,
     pristine: &Planes,
+    measured: Option<crate::verify::MeasuredPlanes<'_>>,
     pst: &RetailMc1,
     st: &RetailMc1,
     obs: &ObsMc1,
@@ -516,6 +576,11 @@ pub(crate) fn exec_pair(
     pin_n1: bool,
 ) -> Result<(PairDiff, ObsMc1, u16), String> {
     world.restore_planes(pristine);
+    if let Some((h, ty, ceil)) = measured {
+        world
+            .install_measured_terrain(h, ty, ceil)
+            .map_err(|e| format!("terrain: {e}"))?;
+    }
     let report = world
         .retail_import_mc1(pst)
         .map_err(|e| format!("import: {e}"))?;

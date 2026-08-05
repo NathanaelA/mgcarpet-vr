@@ -138,8 +138,25 @@ fn for_each_pair(
     let mut prev_cmd = PlayerCommand::default();
     let mut cmd_ring: std::collections::VecDeque<PlayerCommand> =
         std::iter::repeat_n(PlayerCommand::default(), input_delay as usize + 1).collect();
+    // Measured terrain (format-2 channel), same pending-block pattern
+    // as verify-deltas — the suite MUST run pairs on the same terrain
+    // the triage run graded them under.
+    let mut timg = rec
+        .header
+        .channels
+        .terrain
+        .as_ref()
+        .map(mgc_formats::mgcr::TerrainImage::new);
+    let mut pending_terrain: Option<mgc_formats::mgcr::TerrainBlock> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
+        if let Some(img) = timg.as_mut() {
+            if let Some(block) = pending_terrain.take() {
+                img.apply(&block)
+                    .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
+            }
+            pending_terrain = tick.terrain.clone();
+        }
         let Some(state) = &tick.state else {
             prev = None;
             continue;
@@ -168,7 +185,15 @@ fn for_each_pair(
                 };
                 if verify::capture_clean(&pst, &obs) {
                     let (pd, _, _) = verify::exec_pair(
-                        &mut world, &pristine, &pst, &st, &obs, pcmd, prev_cmd, pin_n1,
+                        &mut world,
+                        &pristine,
+                        verify::measured_planes(&timg),
+                        &pst,
+                        &st,
+                        &obs,
+                        pcmd,
+                        prev_cmd,
+                        pin_n1,
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
                     f(pt, pd, &class_map_mc1(&obs))?;
@@ -205,8 +230,22 @@ fn for_each_pair_mc2(
     let mut prev: Option<(u64, RetailMc2, PlayerCommand)> = None;
     let mut prev_latch = (false, false);
     let mut prev_press: Option<(i16, i16)> = None;
+    let mut timg = rec
+        .header
+        .channels
+        .terrain
+        .as_ref()
+        .map(mgc_formats::mgcr::TerrainImage::new);
+    let mut pending_terrain: Option<mgc_formats::mgcr::TerrainBlock> = None;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
+        if let Some(img) = timg.as_mut() {
+            if let Some(block) = pending_terrain.take() {
+                img.apply(&block)
+                    .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
+            }
+            pending_terrain = tick.terrain.clone();
+        }
         let Some(state) = &tick.state else {
             prev = None;
             continue;
@@ -242,7 +281,16 @@ fn for_each_pair_mc2(
                 // record's aligned command, with the pair's START record
                 // as the edge predecessor.
                 let (pd, _, _) = crate::verify_mc2::exec_pair_mc2(
-                    &mut world, &pristine, &things, &pst, &st, &obs, cmd, pcmd, pin_n1,
+                    &mut world,
+                    &pristine,
+                    verify::measured_planes(&timg),
+                    &things,
+                    &pst,
+                    &st,
+                    &obs,
+                    cmd,
+                    pcmd,
+                    pin_n1,
                 )
                 .map_err(|e| format!("t={pt}: {e}"))?;
                 f(pt, pd, &crate::verify_mc2::class_map_mc2(&obs))?;

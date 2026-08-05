@@ -19,7 +19,7 @@
 /mgcarpet.json
 
 # Flight recordings
-/recordings
+/recordings/*.mgcr
 
 # Python caches
 __pycache__

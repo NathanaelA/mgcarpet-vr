@@ -1,10 +1,15 @@
 # The `.mgcr` gameplay recording format
 
-Version 1 — this document is normative. Any tool that reads or writes
+Version 2 — this document is normative. Any tool that reads or writes
 `.mgcr` recordings should treat this file as the specification; changes
 to the format must land in the same commit as changes to this document.
 (Pre-1.0: no backward compatibility is owed to any earlier sample
 recordings — player ruling 2026-07-29.)
+
+Format 2 is a strict superset of format 1: it adds the optional
+**terrain channel**. Readers accept both; format-1 takes simply carry
+no terrain. Writers stamp `"format":2` when (and only when) the header
+declares the terrain channel.
 
 ## Design goals
 
@@ -45,14 +50,20 @@ hex **strings** — JSON numbers are doubles and cannot carry a u64.
 Common fields:
 
 ```json
-{"type":"header","format":1,
+{"type":"header","format":2,
  "game":"mc1|mc1hw|mc2","level":3,
  "source":"retail|port",
  "tick_hz":24,
- "channels":{"input":"exact|raw|none","obs":true,"state":true,"hash":false},
+ "channels":{"input":"exact|raw|none","obs":true,"state":true,"hash":false,
+             "terrain":{"planes":["type","height","shading","angle"],"dims":[256,256]}},
  "tool":{"name":"mc_dosbox_recorder","git":"<rev>"},
  "created":"2026-07-29T12:00:00Z"}
 ```
+
+`channels.terrain` (format 2, optional) declares the measured terrain
+planes: `planes` names them in the order they appear in every terrain
+blob; `dims` is `[width, height]`, shared by all of them. Absent =
+the recording carries no terrain channel.
 
 `source:"retail"` adds: `"build":"A|B"` (CARPET.EXE / HIDDEN.EXE
 address half), plus free-form capture provenance (DOSBox version,
@@ -82,7 +93,7 @@ force-apply) a mismatched environment:
 ## Tick records
 
 ```json
-{"t":N, "input":…, "obs":…, "state":…, "hash":…, "wallclock":…}
+{"t":N, "input":…, "obs":…, "state":…, "hash":…, "terrain":…, "wallclock":…}
 ```
 
 **Phase convention:** the state-bearing channels (`obs`, `state`,
@@ -170,6 +181,62 @@ triage is the detector for state living outside it.
 
 `wallclock` (retail): the free-running ~120 Hz PIT clock — a liveness/
 ordering signal only, never part of the closure.
+
+### `terrain` — the measured terrain channel (format 2)
+
+The live terrain planes, read from guest memory in the same settled
+window as `state` and recorded **relative to the previous record**:
+
+```json
+{"terrain":{"base_b64":"…"}}          // the take's FIRST record only
+{"terrain":{"delta_b64":"…"}}         // any later record with edits
+```
+
+- **`base_b64`** — the full plane set at the first recorded tick: the
+  declared planes concatenated in header order, each `width × height`
+  bytes, verbatim guest-linear layout (cell index = the plane's linear
+  byte offset). This is the t≈0 image — it doubles as the stock-bake
+  validator (diff against the port's generated level terrain).
+- **`delta_b64`** — per declared plane, in order: a `u32` LE count,
+  then `count × (u16 LE cell, u8 value)` — the cells that changed
+  since the **previous record** and their new values. An absent
+  `terrain` key = empty delta (nothing changed). A record after a `t`
+  gap simply carries everything the gap changed — the channel is
+  self-healing by construction, which is WHY deltas are
+  record-relative and not game-event-incremental: recorder stalls
+  can never lose a terraform. Decoders MUST reject truncated blobs,
+  trailing bytes and out-of-range cells outright (a torn blob never
+  half-applies).
+
+The channel describes the world **at** tick N (same phase convention
+as `obs`/`state`). A streaming consumer maintains the running image in
+O(delta) per record (`mgc_formats::mgcr::TerrainImage`); a consumer
+that starts mid-stream without the base may still accumulate deltas
+but must not treat the planes as absolute (`TerrainImage::based`).
+Torn/excluded pairs keep their terrain deltas — planes are stable
+mid-entity-pass except for the active edit, and the next record's
+delta re-syncs regardless.
+
+**Plane sources (both engines, decompile-verified 2026-08-05):** the
+planes are CONTIGUOUS static arrays in guest memory, captured in
+their guest order `type | height | shading | angle` at block offsets
++0/+0x10000/+0x20000/+0x30000. MC1/HW: base `mapTerrainType` guest
+`0xCC1E0` (build A) / `0xCC1D0` (build B, dual-suffixed), reached via
+the recorder's byte_99B58 static frame; MC1 shading is hard-clamped
+to [28,47] by every retail writer — the recorder's alignment AND
+level-generated gate — and is NOT derivable from height (flat cells
+take an LCG roll at bake), which is why it must be captured. MC2:
+base `mapTerrainType_10B4E0` through the struct-anchored data frame
+(named VA − 0xB0E98), plus the cave-only `ceiling` plane
+(`x_BYTE_14B4E0`, +0x40000) appended to the declared list **only when
+the level's MapType (struct+0x2FED4) is Cave** — retail never writes
+it on Day/Night levels, so off-cave it holds BSS residue, not
+terrain. Cell = `tile_y*256 + tile_x`; world z = `height[cell] × 32`
+(floor and ceiling alike).
+
+Size: empty deltas are 4 bytes per plane before compression;
+terraform windows tens of cells; volcano/doomsday storms hundreds —
+negligible next to `state`.
 
 ### `hash` — the port verification channel (port only)
 

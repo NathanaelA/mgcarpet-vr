@@ -27,6 +27,9 @@ fn usage() -> ! {
          \n\
          modes:\n\
            check-decode <file.mgcr>…      re-decode state, compare vs stored obs\n\
+           terrain-diff <file.mgcr>…      diff the take's measured terrain base\n\
+                                          against the port's generated planes\n\
+                                          (the record-0 stock-bake validator)\n\
            verify-deltas <file.mgcr>      import state@N, tick, diff obs@N+1\n\
            dump-state <file.mgcr> <t> <slot>…   print raw retail fields of\n\
                                           the given slots at tick t\n\
@@ -65,6 +68,10 @@ fn usage() -> ! {
                              (class,model) missing/extra within a pair =\n\
                              free-list slot-order desync at mass-spawn\n\
                              ticks; ledger session-4 + open-leads 0b)\n\
+           --no-terrain      ignore the recording's measured terrain\n\
+                             channel (format 2) — every pair runs on\n\
+                             pristine planes (the A/B for the terrain\n\
+                             installation)\n\
                              (raw, unclassified report — docs/CONFORMANCE.md)"
     );
     std::process::exit(2);
@@ -99,6 +106,10 @@ pub struct Args {
     /// Skip the computed slot-desync pass (balanced same-(class,model)
     /// missing/extra = free-list slot-order desync).
     pub no_slot_desync: bool,
+    /// verify-deltas: ignore the recording's measured terrain channel
+    /// and run every pair on pristine planes (the A/B for the format-2
+    /// terrain installation).
+    pub no_terrain: bool,
 }
 
 fn parse_args() -> Args {
@@ -118,6 +129,7 @@ fn parse_args() -> Args {
         no_roster: false,
         no_pose_alt: false,
         no_slot_desync: false,
+        no_terrain: false,
         max_open: 24,
         promote: false,
         input_delay: 0,
@@ -147,6 +159,7 @@ fn parse_args() -> Args {
             "--no-roster" => a.no_roster = true,
             "--no-pose-alt" => a.no_pose_alt = true,
             "--no-slot-desync" => a.no_slot_desync = true,
+            "--no-terrain" => a.no_terrain = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--sample-every" => {
@@ -210,6 +223,12 @@ fn main() {
         "dump-state" => dump_state(&args),
         "ground-audit" => ground_audit(&args),
         "trace" => trace(&args),
+        "terrain-diff" => args
+            .files
+            .iter()
+            .map(|f| terrain_diff(f, &args))
+            .max()
+            .unwrap_or(0),
         "extract" => args
             .files
             .iter()
@@ -570,6 +589,106 @@ fn trace(args: &Args) -> i32 {
     0
 }
 
+/// `terrain-diff <rec.mgcr>…` — the record-0 STOCK-BAKE VALIDATOR
+/// (docs/RECORDING-TERRAIN-V2.md "free instruments"): decode the
+/// take's measured terrain base and diff it plane-by-plane against
+/// the port's own generated level terrain. Agreement certifies the
+/// generator chain; disagreement prints cell-level examples to dig
+/// at. Exit 0 = every compared plane matched.
+fn terrain_diff(path: &std::path::Path, args: &Args) -> i32 {
+    match terrain_diff_inner(path, args) {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(e) => {
+            eprintln!("{}: {e}", path.display());
+            2
+        }
+    }
+}
+
+fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, String> {
+    let mut rec = Recording::open(path)?;
+    let decl = rec
+        .header
+        .channels
+        .terrain
+        .clone()
+        .ok_or("recording has no terrain channel (format-1 take?)")?;
+    let game = rec.header.game.clone();
+    let family = rec.header.family()?;
+    let level = rec.header.level.ok_or("recording has no level number")?;
+    let first = rec
+        .next_tick()
+        .ok_or("empty recording")?
+        .map_err(|e| e.to_string())?;
+    let base = first
+        .terrain
+        .as_ref()
+        .and_then(|b| b.base.clone())
+        .ok_or("first record carries no terrain base")?;
+    let mut img = mgc_formats::mgcr::TerrainImage::new(&decl);
+    img.apply(&mgc_formats::mgcr::TerrainBlock {
+        base: Some(base),
+        delta: None,
+    })?;
+    let pristine = match family {
+        mgc_formats::mgcr::Family::Mc1 => verify::build_world(&args.baked, &game, level)?.1,
+        mgc_formats::mgcr::Family::Mc2 => verify_mc2::build_world_mc2(&args.baked, level)?.1,
+    };
+    println!(
+        "== terrain-diff {} (game {game}, level {level}, base @t={})",
+        path.display(),
+        first.t
+    );
+    let mut dirty = 0usize;
+    for name in &decl.planes {
+        let measured = img.plane(name).ok_or("declared plane missing")?;
+        let baked: &[u8] = match name.as_str() {
+            "type" => &pristine.tile_type,
+            "height" => &pristine.height,
+            "shading" => &pristine.shading,
+            "angle" => &pristine.angle,
+            "ceiling" => &pristine.ceiling,
+            other => {
+                println!("  {other}: not a port plane — skipped");
+                continue;
+            }
+        };
+        if baked.len() != measured.len() {
+            println!(
+                "  {name}: size mismatch — port {} cells vs measured {}",
+                baked.len(),
+                measured.len()
+            );
+            dirty += 1;
+            continue;
+        }
+        let diffs: Vec<usize> = (0..measured.len())
+            .filter(|&i| measured[i] != baked[i])
+            .collect();
+        if diffs.is_empty() {
+            println!("  {name}: MATCH ({} cells)", measured.len());
+            continue;
+        }
+        dirty += diffs.len();
+        println!(
+            "  {name}: {} cell(s) differ ({:.2}%); examples:",
+            diffs.len(),
+            diffs.len() as f64 * 100.0 / measured.len() as f64
+        );
+        for &i in diffs.iter().take(args.max_diffs) {
+            println!(
+                "    ({:3},{:3}) retail {:3} vs port {:3}",
+                i % 256,
+                i / 256,
+                measured[i],
+                baked[i]
+            );
+        }
+    }
+    Ok(dirty == 0)
+}
+
 /// Re-decode every tick's raw struct image and compare against the
 /// stored obs channel, value for value. Exit 0 = every tick matched.
 fn check_decode(path: &std::path::Path, args: &Args) -> i32 {
@@ -595,6 +714,15 @@ fn check_decode(path: &std::path::Path, args: &Args) -> i32 {
         rec.header.source
     );
     let (mut ticks, mut ok, mut bad, mut skipped) = (0u64, 0u64, 0u64, 0u64);
+    // Terrain channel (format 2): every record's block must decode and
+    // accumulate cleanly; report the channel's shape at the end.
+    let mut timg = rec
+        .header
+        .channels
+        .terrain
+        .as_ref()
+        .map(mgc_formats::mgcr::TerrainImage::new);
+    let (mut t_deltas, mut t_cells) = (0u64, 0u64);
     while let Some(r) = rec.next_tick() {
         let tick = match r {
             Ok(t) => t,
@@ -604,6 +732,28 @@ fn check_decode(path: &std::path::Path, args: &Args) -> i32 {
             }
         };
         ticks += 1;
+        if let (Some(img), Some(block)) = (timg.as_mut(), &tick.terrain) {
+            if let Some(d) = &block.delta {
+                match mgc_formats::mgcr::decode_terrain_delta(
+                    d,
+                    img.decl().planes.len(),
+                    img.decl().cells(),
+                ) {
+                    Ok(planes) => {
+                        t_deltas += 1;
+                        t_cells += planes.iter().map(|p| p.len() as u64).sum::<u64>();
+                    }
+                    Err(e) => {
+                        eprintln!("  t={}: terrain: {e}", tick.t);
+                        bad += 1;
+                    }
+                }
+            }
+            if let Err(e) = img.apply(block) {
+                eprintln!("  t={}: terrain: {e}", tick.t);
+                bad += 1;
+            }
+        }
         let (Some(state), Some(stored)) = (&tick.state, &tick.obs) else {
             skipped += 1;
             continue;
@@ -636,5 +786,17 @@ fn check_decode(path: &std::path::Path, args: &Args) -> i32 {
         "  {} ticks: {} ok, {} mismatched, {} without state+obs",
         ticks, ok, bad, skipped
     );
+    if let Some(img) = &timg {
+        println!(
+            "  terrain: base {}, {} delta record(s), {} cell edit(s) total",
+            if img.based() { "present" } else { "MISSING" },
+            t_deltas,
+            t_cells
+        );
+        if !img.based() {
+            eprintln!("  terrain channel declared but no base record seen");
+            return 1;
+        }
+    }
     if bad == 0 { 0 } else { 1 }
 }

@@ -201,6 +201,14 @@ class BuildVariant:
     mouse_latchl_guest: int = 0
     mouse_latchr_guest: int = 0
     press_pos_guest: int = 0
+    # Guest addr of the CONTIGUOUS terrain-plane block (the format-2
+    # terrain channel). Both engines keep the planes back-to-back in
+    # static BSS, same order: type | height | shading | angle (+0 /
+    # +0x10000 / +0x20000 / +0x30000), MC2 adding the cave ceiling at
+    # +0x40000. MC1 A=0xCC1E0 / B=0xCC1D0 (dual-suffixed, fixup-table
+    # verified both builds); MC2 = mapTerrainType_10B4E0 through the
+    # struct-anchored frame. 0 = no terrain capture for this build.
+    terrain_guest: int = 0
 
 
 @dataclass(frozen=True)
@@ -272,6 +280,20 @@ class Layout:
     # off-2. 0 = the game keeps the mouse cursor in its own struct, so no
     # separate static frame is needed (unlike MC1). None = not in-struct.
     in_struct_mouse_off: Optional[int] = None
+    # Terrain planes (the format-2 terrain channel, docs/RECORDING.md):
+    # tuple of (name, offset) — offset from the build's `terrain_guest`
+    # block base, blob order = declaration order. Empty = no terrain
+    # capture for this game (the recording stays format 1).
+    terrain_planes: tuple = ()
+    # (width, height) of every declared plane, cells = bytes.
+    terrain_dims: tuple = (256, 256)
+    # A plane captured ONLY on cave levels (MC2's second heightmap —
+    # retail never writes it on Day/Night levels, so off-cave it holds
+    # BSS residue): (name, offset), gated by `terrain_cave_byte_off`.
+    terrain_cave_plane: Optional[tuple] = None
+    # Struct offset of the MapType byte (0=Day 1=Night 2=Cave); 0 = the
+    # game has no cave concept.
+    terrain_cave_byte_off: int = 0
 
 
 MC1_ENT = EntFields()
@@ -284,14 +306,17 @@ MC1_BUILDS = (
     BuildVariant("A", struct_ptr_guest=0x000AE400, wallclock_guest=0x000AC5D4,
                  pressed_keys_guest=0x0012EEF0, static_needle_guest=0x00099B58,
                  mouse_cursor_guest=0x0009AD90, mouse_lbtn_guest=0x0012EFE4,
-                 mouse_rbtn_guest=0x0012EFE2),
+                 mouse_rbtn_guest=0x0012EFE2,
+                 terrain_guest=0x000CC1E0),  # mapTerrainType_CC1E0
     # Only the DUAL-suffixed globals shift −0x10 in build B (struct-ptr,
-    # wallclock, pressed-keys, mouse buttons). The single-address symbols
-    # byte_99B58 and mouse_9AD90 are at the SAME guest addr in both builds.
+    # wallclock, pressed-keys, mouse buttons, terrain planes). The
+    # single-address symbols byte_99B58 and mouse_9AD90 are at the SAME
+    # guest addr in both builds.
     BuildVariant("B", struct_ptr_guest=0x000AE3F0, wallclock_guest=0x000AC5C4,
                  pressed_keys_guest=0x0012EEE0, static_needle_guest=0x00099B58,
                  mouse_cursor_guest=0x0009AD90, mouse_lbtn_guest=0x0012EFD4,
-                 mouse_rbtn_guest=0x0012EFD2),
+                 mouse_rbtn_guest=0x0012EFD2,
+                 terrain_guest=0x000CC1D0),  # −0x10 (dual-suffixed)
 )
 
 # A fixed 16-byte static-data global (byte_99B58, sub_main.cpp:5740) —
@@ -334,7 +359,11 @@ MC2_BUILDS = (
                  mouse_rbtn_guest=0x18074A + MC2_DATA_DELTA,  # held right
                  mouse_latchl_guest=0x180746 + MC2_DATA_DELTA,
                  mouse_latchr_guest=0x180744 + MC2_DATA_DELTA,
-                 press_pos_guest=0xE375C + MC2_DATA_DELTA),
+                 press_pos_guest=0xE375C + MC2_DATA_DELTA,
+                 # mapTerrainType_10B4E0..mapAngle_13B4E0 + the cave
+                 # ceiling x_BYTE_14B4E0, contiguous statics in the same
+                 # frame as the input registers (named VA − 0xB0E98).
+                 terrain_guest=0x10B4E0 + MC2_DATA_DELTA),
 )
 # Frame validation anchors (pin_externals): the control-mode word
 # x_WORD_1805C2_joystick (a small nonzero constant; 7 on the GOG
@@ -374,6 +403,16 @@ EXE_MB_PERIOD = 0x18  # u32 configured spin period (PIT counts)
 EXE_MB2_BASE = 0x1842C0  # guest-linear addr of the MC2 mailbox (obj3 tail)
 EXE_MB2_MAGIC = b"MGCTTIK2"  # 8 bytes the MC2 stub writes once, on first frame
 
+# The shared plane order (both engines keep them contiguous, in this
+# order, off the build's `terrain_guest` base — the same order retail's
+# own map savestate writes them). Blob order for the terrain channel.
+MC_TERRAIN_PLANES = (
+    ("type", 0x00000),
+    ("height", 0x10000),
+    ("shading", 0x20000),
+    ("angle", 0x30000),
+)
+
 # MC1 / MC1HW — identical engine + struct (save doc: "HW byte-identical").
 LAYOUT_MC1 = Layout(
     name="mc1",
@@ -405,6 +444,7 @@ LAYOUT_MC1 = Layout(
         (29795, 29795 + 164000),  # entity pool
     ),
     static_needle=MC1_STATIC_NEEDLE,
+    terrain_planes=MC_TERRAIN_PLANES,
 )
 
 # MC1HW shares every offset; only the level data (needle) differs — it
@@ -490,6 +530,14 @@ LAYOUT_MC2 = Layout(
     pp_hand_left_off=2103,  # SpellIndexLeft (block-relative)
     pp_hand_right_off=2105,  # SpellIndexRight
     pp_flight_off=998,  # type_str_164 base — cmd_speed at +12 (block+1010)
+    terrain_planes=MC_TERRAIN_PLANES,
+    # The cave CEILING (x_BYTE_14B4E0, block +0x40000): captured only
+    # when MapType (struct+0x2FED4: 0=Day 1=Night 2=Cave) says Cave —
+    # retail's generator never writes it off-cave (Terrain.cpp:19-56,
+    # only the cave branch calls the ceiling builder sub_43B40), so on
+    # Day/Night levels the array holds BSS residue, not terrain.
+    terrain_cave_plane=("ceiling", 0x40000),
+    terrain_cave_byte_off=0x2FED4,
     # in_struct_mouse_off intentionally UNSET: the field-map's mouse guess
     # (@0x36DEC) read 0 through a whole mid-steer dump, so it is NOT the aim
     # source. The steering intent is captured instead from the persistent
@@ -701,6 +749,9 @@ class Located:
     build: Optional[BuildVariant] = None  # which retail build is running
     mailbox_host: Optional[int] = None  # host addr of the EXE tick-patch mailbox
     mailbox_period: Optional[int] = None  # its configured spin period (PIT counts)
+    # Host addresses of the layout's terrain planes (parallel to
+    # Layout.terrain_planes); None = terrain channel unavailable.
+    terrain_hosts: Optional[tuple] = None
 
 
 def locate_struct(
@@ -1312,9 +1363,24 @@ def build_header(args: argparse.Namespace, layout: Layout, loc: Located,
     """The header record (docs/RECORDING.md, line 1)."""
     have_ext = (loc.static_base is not None
                 or layout.in_struct_mouse_off is not None)
+    channels: dict = {
+        "input": "raw" if have_ext else "none",
+        "obs": True,
+        "state": not args.no_state,
+        "hash": False,
+    }
+    # The terrain channel makes the recording format 2 (docs/RECORDING.md:
+    # format 2 = format 1 + the optional terrain channel; writers stamp 2
+    # exactly when the header declares it). The plane list is the PINNED
+    # set (the cave ceiling appears only on MC2 cave levels).
+    if loc.terrain_hosts is not None:
+        channels["terrain"] = {
+            "planes": [name for name, _ in loc.terrain_hosts],
+            "dims": list(layout.terrain_dims),
+        }
     hdr: dict = {
         "type": "header",
-        "format": 1,
+        "format": 2 if loc.terrain_hosts is not None else 1,
         "game": layout.name,
         "level": args.level,
         "source": "retail",
@@ -1322,12 +1388,7 @@ def build_header(args: argparse.Namespace, layout: Layout, loc: Located,
         # genuinely turns once per 24 fps frame; retail MC1 ran uncapped,
         # so 24 is the port's chosen cadence, not a retail measurement.
         "tick_hz": 24,
-        "channels": {
-            "input": "raw" if have_ext else "none",
-            "obs": True,
-            "state": not args.no_state,
-            "hash": False,
-        },
+        "channels": channels,
         "tool": {"name": "mc_dosbox_recorder", "git": _git_rev()},
         "created": datetime.datetime.now(datetime.timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1488,20 +1549,185 @@ def _externals_mc2(data: Optional[bytes], layout: Layout) -> Optional[dict]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Terrain planes (the format-2 terrain channel)
+# ---------------------------------------------------------------------------
+
+
+def _terrain_cells(layout: Layout) -> int:
+    w, h = layout.terrain_dims
+    return w * h
+
+
+def pin_terrain(mem: GuestMem, loc: Located, layout: Layout) -> None:
+    """Resolve the terrain-plane block to per-plane host addresses and
+    validate them. Leaves ``loc.terrain_hosts`` None (and the recording
+    on format 1, no terrain channel) when the block cannot be resolved
+    or fails validation — a wrong frame must never record garbage as
+    terrain.
+
+    Both engines keep the planes as CONTIGUOUS statics off one base
+    (`BuildVariant.terrain_guest`) in the frame the recorder already
+    pins: MC1/HW the byte_99B58 static frame (build B −0x10), MC2 the
+    struct-anchored data image. Validators (from the decompile digs):
+    MC1/HW shading is hard-clamped to [28,47] by every writer AND
+    all-zero until the level generator's final bake — one check gates
+    both alignment and readiness; MC2 height is generator-clamped ≤196
+    (terraform can push a handful of cells past — soft 99% bound)."""
+    if not layout.terrain_planes:
+        return
+    if loc.static_base is None or loc.build is None:
+        print("terrain: no static frame — recording without the terrain "
+              "channel", file=sys.stderr)
+        return
+    if loc.build.terrain_guest == 0:
+        return
+    n = _terrain_cells(layout)
+    base = loc.static_base + loc.build.terrain_guest
+    planes = list(layout.terrain_planes)
+    if layout.terrain_cave_plane is not None and layout.terrain_cave_byte_off:
+        mt = mem.pread(loc.struct_host + layout.terrain_cave_byte_off, 1)
+        if mt is not None and mt[0] == 2:  # MapType Cave
+            planes.append(layout.terrain_cave_plane)
+            print("terrain: cave level — capturing the ceiling plane too",
+                  file=sys.stderr)
+    hosts = []
+    for name, off in planes:
+        host = base + off
+        a = mem.pread(host, n)
+        b = mem.pread(host, n)
+        if a is None or b is None or a != b:
+            print(f"terrain: plane '{name}' unreadable/unstable @host "
+                  f"0x{host:x} — recording without the terrain channel",
+                  file=sys.stderr)
+            return
+        why = _implausible_plane(layout, name, a)
+        if why is not None:
+            print(f"terrain: plane '{name}' failed validation ({why}) — "
+                  "recording without the terrain channel", file=sys.stderr)
+            return
+        hosts.append((name, host))
+    loc.terrain_hosts = tuple(hosts)
+    names = ", ".join(nm for nm, _ in hosts)
+    print(f"terrain planes pinned ({names}), {n} cells each — "
+          "format-2 terrain channel on", file=sys.stderr)
+
+
+def _implausible_plane(layout: Layout, name: str, data: bytes
+                       ) -> Optional[str]:
+    """None if the plane image is plausible, else the reason."""
+    if name == "shading" and layout.family == "mc1":
+        # Every retail writer clamps shading into [28,47] (bake
+        # sub_329C0 :40248-63, repaints :41139-47/:41432-40), and the
+        # plane is all-zero until the generator's final bake — so this
+        # one check rejects both a misaligned frame and a not-yet-
+        # generated level.
+        bad = sum(1 for v in data if not 28 <= v <= 47)
+        if bad:
+            return f"{bad} shading cells outside [28,47]"
+        return None
+    if name == "height":
+        # Generation clamps ≤196 (MC1 :40296-305, MC2 Terrain.cpp:103);
+        # terraform can push a handful of cells past (building stamps
+        # add unclamped), so require 99% within bounds, not all.
+        over = sum(1 for v in data if v > 200)
+        if over > len(data) // 100:
+            return f"{over} height cells > 200"
+        if len(set(data)) < 8:
+            return "near-constant height field"
+    return None
+
+
+def read_terrain(mem: GuestMem, loc: Located, layout: Layout
+                 ) -> Optional[list]:
+    """One read of every pinned plane, or None (also on a read fault)."""
+    if loc.terrain_hosts is None:
+        return None
+    n = _terrain_cells(layout)
+    planes = []
+    for _name, host in loc.terrain_hosts:
+        p = mem.pread(host, n)
+        if p is None:
+            return None
+        planes.append(p)
+    return planes
+
+
+def _diff_plane(prev: bytes, cur: bytes, row: int = 256) -> list:
+    """Changed cells as (index, new_value). Row-chunked: the whole-plane
+    equality check (C speed) catches the common no-edit record, and only
+    rows that differ get the per-byte scan — a terraform window touches
+    tens of cells in a handful of rows."""
+    if prev == cur:
+        return []
+    cells = []
+    for o in range(0, len(cur), row):
+        if prev[o:o + row] == cur[o:o + row]:
+            continue
+        for i in range(o, min(o + row, len(cur))):
+            if prev[i] != cur[i]:
+                cells.append((i, cur[i]))
+    return cells
+
+
+class TerrainDiffer:
+    """Turns per-record plane images into the format-2 terrain channel
+    (docs/RECORDING.md): the first EMITTED record carries the full base
+    image; every later one a delta against the PREVIOUS EMITTED record —
+    so a `t` gap's edits are simply contained in the next record's delta
+    (self-healing). Returns None for a no-change record (the `terrain`
+    key is omitted entirely)."""
+
+    def __init__(self) -> None:
+        self.prev: Optional[list] = None
+
+    def channel(self, planes: Optional[list]) -> Optional[dict]:
+        if planes is None:
+            return None
+        if self.prev is None:
+            self.prev = planes
+            return {"base_b64": _b64(b"".join(planes))}
+        parts = []
+        changed = False
+        for pv, cv in zip(self.prev, planes):
+            cells = _diff_plane(pv, cv)
+            changed = changed or bool(cells)
+            parts.append(struct.pack("<I", len(cells)) + b"".join(
+                struct.pack("<HB", i, v) for i, v in cells))
+        self.prev = planes
+        return {"delta_b64": _b64(b"".join(parts))} if changed else None
+
+
+def attach_terrain(rec: dict, differ: Optional["TerrainDiffer"],
+                   planes: Optional[list]) -> dict:
+    """Attach the terrain channel to a record at WRITE time (the base/
+    delta decision depends on emission order, so it cannot happen at
+    build_record time — the deferred first record may be rebuilt)."""
+    if differ is not None:
+        ch = differ.channel(planes)
+        if ch is not None:
+            rec["terrain"] = ch
+    return rec
+
+
 def capture_clean(
     mem: GuestMem, loc: Located, layout: Layout, samples: int, retries: int
-) -> Optional[bytes]:
-    """Return the struct bytes once `samples` consecutive reads agree on
-    the volatile state. ⚠ Consensus proves only that the guest was
-    FROZEN for the window — DOSBox regularly parks MID-entity-loop, so
-    a consensus image can be a mid-tick state (half the pool stepped).
-    `pair_clean` in the poll loop is the actual inter-tick gate; this
-    alone only rules out READ tearing. None if no stable window was
-    caught in `retries` attempts (sim faster than we can snapshot)."""
+) -> Optional[tuple]:
+    """Return ``(struct_bytes, terrain_planes)`` once `samples`
+    consecutive reads agree on the volatile state (terrain planes, when
+    pinned, are part of the consensus — they must be byte-stable across
+    the same frozen window; ``terrain_planes`` is None when unpinned).
+    ⚠ Consensus proves only that the guest was FROZEN for the window —
+    DOSBox regularly parks MID-entity-loop, so a consensus image can be
+    a mid-tick state (half the pool stepped). `pair_clean` in the poll
+    loop is the actual inter-tick gate; this alone only rules out READ
+    tearing. None if no stable window was caught in `retries` attempts
+    (sim faster than we can snapshot)."""
     for _ in range(retries):
         first = mem.pread(loc.struct_host, layout.struct_size)
         if first is None:
             return None
+        tfirst = read_terrain(mem, loc, layout)
         vfirst = volatile_view(first, layout)
         stable = True
         for _ in range(samples - 1):
@@ -1511,8 +1737,13 @@ def capture_clean(
             if volatile_view(nxt, layout) != vfirst:
                 stable = False
                 break
+            if loc.terrain_hosts is not None:
+                tnxt = read_terrain(mem, loc, layout)
+                if tnxt != tfirst:
+                    stable = False
+                    break
         if stable:
-            return first
+            return first, tfirst
     return None
 
 
@@ -1658,16 +1889,17 @@ def read_mailbox(mem: GuestMem, loc: Located) -> Optional[tuple[int, int]]:
 
 def capture_windowed(
     mem: GuestMem, loc: Located, layout: Layout, samples: int, retries: int
-) -> Optional[tuple[bytes, int]]:
+) -> Optional[tuple]:
     """Capture the struct DURING a quiescent spin, keyed to the mailbox.
 
-    Returns (struct_bytes, tick_counter) once a read lands with in_window==1
-    and stays there — same tick counter, byte-stable struct — across
-    `samples` reads. This is strictly stronger than `capture_clean`: the
-    stub only raises in_window when the previous sub-step has fully settled
-    and the next one's LCG draw has not begun, so the window is provably
-    between-tick (no mid-pass tear possible). None if no window was caught
-    in `retries` attempts (recorder starved, or the game is paused)."""
+    Returns (struct_bytes, terrain_planes, tick_counter) once a read lands
+    with in_window==1 and stays there — same tick counter, byte-stable
+    struct (and terrain planes, when pinned) — across `samples` reads.
+    This is strictly stronger than `capture_clean`: the stub only raises
+    in_window when the previous sub-step has fully settled and the next
+    one's LCG draw has not begun, so the window is provably between-tick
+    (no mid-pass tear possible). None if no window was caught in
+    `retries` attempts (recorder starved, or the game is paused)."""
     for _ in range(retries):
         mb = read_mailbox(mem, loc)
         if mb is None:
@@ -1678,6 +1910,7 @@ def capture_windowed(
         data = mem.pread(loc.struct_host, layout.struct_size)
         if data is None:
             return None
+        terrain = read_terrain(mem, loc, layout)
         vfirst = volatile_view(data, layout)
         stable = True
         for _ in range(samples - 1):
@@ -1691,8 +1924,14 @@ def capture_windowed(
             if volatile_view(nxt, layout) != vfirst:
                 stable = False
                 break
+        # The window must still be open after the terrain read too, or
+        # the planes may belong to the next frame.
+        if stable and loc.terrain_hosts is not None:
+            mb3 = read_mailbox(mem, loc)
+            if mb3 != (tick, 1):
+                stable = False
         if stable:
-            return data, tick
+            return data, terrain, tick
     return None
 
 
@@ -1727,6 +1966,7 @@ def poll_loop_windowed(
     )
     base: Optional[int] = None  # counter value mapped to t=0
     prev_ctr: Optional[int] = None
+    differ = TerrainDiffer() if loc.terrain_hosts is not None else None
     emitted = gaps = missed = starved = 0
     while args.max_ticks == 0 or emitted < args.max_ticks:
         # Cheap gate: one 8-byte mailbox read decides whether a full 224 KB
@@ -1753,10 +1993,12 @@ def poll_loop_windowed(
             time.sleep(period or 0.001)
             continue
         starved = 0
-        data, ctr = cap
+        data, terrain, ctr = cap
         if prev_ctr is None:
             base, prev_ctr = ctr, ctr
-            sink.write(build_record(0, data, layout, mem, loc, not args.no_state))
+            sink.write(attach_terrain(
+                build_record(0, data, layout, mem, loc, not args.no_state),
+                differ, terrain))
             emitted += 1
             continue
         dv = ctr - prev_ctr
@@ -1778,8 +2020,9 @@ def poll_loop_windowed(
                     else "raise --poll-hz or --retries")
             print(f"! gap: {dv - 1} frame(s) missed before tick {ctr - base} "
                   f"(window not caught in time — {hint})", file=sys.stderr)
-        sink.write(build_record(ctr - base, data, layout, mem, loc,
-                                not args.no_state))
+        sink.write(attach_terrain(
+            build_record(ctr - base, data, layout, mem, loc,
+                         not args.no_state), differ, terrain))
         emitted += 1
         prev_ctr = ctr
         if emitted % 20 == 0:
@@ -1812,6 +2055,8 @@ def poll_loop(
     )
     prev: Optional[bytes] = None
     first_rec: Optional[dict] = None  # deferred tick-0 record (see below)
+    first_planes: Optional[list] = None  # its terrain planes, kept alongside
+    differ = TerrainDiffer() if loc.terrain_hosts is not None else None
     tick = 0
     emitted = gaps = missed = torn = 0
     torn_why: dict = {}
@@ -1863,8 +2108,8 @@ def poll_loop(
 
     wc_poll0 = read_wallclock(mem, loc, layout)  # go-live guest clock
     while args.max_ticks == 0 or emitted < args.max_ticks:
-        data = capture_clean(mem, loc, layout, args.samples, args.retries)
-        if data is None:
+        cap = capture_clean(mem, loc, layout, args.samples, args.retries)
+        if cap is None:
             if not ensure_attached(mem, launch_root, child):
                 print("dosbox exited — stopping.", file=sys.stderr)
                 break
@@ -1872,6 +2117,7 @@ def poll_loop(
                   file=sys.stderr)
             time.sleep(period or 0.005)
             continue
+        data, terrain = cap
         if prev is None:
             # The first snapshot has no pair to gate it, and a mid-tick
             # park recorded unvetted would poison every later pair (the
@@ -1882,6 +2128,7 @@ def poll_loop(
             prev = data
             first_rec = build_record(0, data, layout, mem, loc,
                                      not args.no_state)
+            first_planes = terrain
             continue
         dv = tick_delta(prev, data, layout)
         if dv is None:  # can't measure — treat any change as +1 tick
@@ -1903,6 +2150,7 @@ def poll_loop(
                     prev = data  # unvetted anchor — prefer the newer candidate
                     first_rec = build_record(0, data, layout, mem, loc,
                                              not args.no_state)
+                    first_planes = terrain
                 time.sleep(period if period else 0)
                 continue
             # Same tick (rng unchanged). While the anchor is unvetted,
@@ -1914,6 +2162,7 @@ def poll_loop(
                 prev = data
                 first_rec = build_record(0, data, layout, mem, loc,
                                          not args.no_state)
+                first_planes = terrain
             time.sleep(period or 0.001)  # wait for the tick to advance
             continue
         # Tear gate (MC1/HW): reject mid-pass snapshots — resample
@@ -1932,10 +2181,11 @@ def poll_loop(
                     prev = data
                     first_rec = build_record(0, data, layout, mem, loc,
                                              not args.no_state)
+                    first_planes = terrain
                 time.sleep(period if period else 0)
                 continue
         if first_rec is not None:  # the pair vouches for the anchor: flush it
-            sink.write(first_rec)
+            sink.write(attach_terrain(first_rec, differ, first_planes))
             wc_anchor = first_rec.get("wallclock")
             if wc_poll0 is not None and wc_anchor is not None:
                 late = (wc_anchor - wc_poll0) / 120
@@ -1956,8 +2206,9 @@ def poll_loop(
                   f"{tick + dv} — {streak} mid-tick park(s) rejected"
                   f"{why_s}", file=sys.stderr)
         tick += dv
-        sink.write(build_record(tick, data, layout, mem, loc,
-                                not args.no_state))
+        sink.write(attach_terrain(
+            build_record(tick, data, layout, mem, loc, not args.no_state),
+            differ, terrain))
         emitted += 1
         prev = data
         streak = 0
@@ -1973,6 +2224,74 @@ def poll_loop(
     print(f"done: {emitted} snapshots spanning {tick} ticks, "
           f"{gaps} gap(s) / {missed} missed, {torn} torn snapshot(s) "
           f"rejected{why}.", file=sys.stderr)
+
+
+def _decode_terrain_delta(blob: bytes, plane_count: int, cells: int) -> list:
+    """Reference decoder mirroring mgc_formats::mgcr::decode_terrain_delta
+    byte for byte — used only by --terrain-selftest to prove the emitter
+    and the Rust reader agree on the wire format."""
+    out, o = [], 0
+    for _ in range(plane_count):
+        (n,) = struct.unpack_from("<I", blob, o)
+        o += 4
+        plane = []
+        for _ in range(n):
+            c, v = struct.unpack_from("<HB", blob, o)
+            o += 3
+            assert c < cells, "cell out of range"
+            plane.append((c, v))
+        out.append(plane)
+    assert o == len(blob), "trailing bytes"
+    return out
+
+
+def terrain_selftest() -> None:
+    """Synthetic end-to-end check of the terrain channel emitter: base on
+    the first emitted record, omitted key on no-change records, exact
+    delta bytes, and the gap self-heal (a skipped record's edits land in
+    the next delta). Exits nonzero on any failure."""
+    cells = 256  # a 16x16 world keeps the test readable
+    h0 = bytes((i % 100 for i in range(cells)))
+    t0 = bytes(cells)
+    differ = TerrainDiffer()
+
+    b64d = base64.b64decode
+    ch0 = differ.channel([h0, t0])
+    assert ch0 is not None and "base_b64" in ch0, "first record carries base"
+    assert b64d(ch0["base_b64"]) == h0 + t0, "base = planes concatenated"
+
+    assert differ.channel([h0, t0]) is None, "no change → no terrain key"
+
+    # A terraform window: two height cells + one type cell.
+    h1 = bytearray(h0)
+    h1[5], h1[200] = 77, 78
+    t1 = bytearray(t0)
+    t1[5] = 9
+    ch1 = differ.channel([bytes(h1), bytes(t1)])
+    dec = _decode_terrain_delta(b64d(ch1["delta_b64"]), 2, cells)
+    assert dec == [[(5, 77), (200, 78)], [(5, 9)]], f"delta wrong: {dec}"
+
+    # Gap self-heal: an edit made in a record the recorder never emitted
+    # (h2) must appear in the NEXT emitted record's delta (h3's, which
+    # also has its own edit).
+    h2 = bytearray(h1)
+    h2[10] = 50  # the "lost" record's edit
+    h3 = bytearray(h2)
+    h3[11] = 51
+    ch3 = differ.channel([bytes(h3), bytes(t1)])
+    dec = _decode_terrain_delta(b64d(ch3["delta_b64"]), 2, cells)
+    assert dec == [[(10, 50), (11, 51)], []], f"gap edits lost: {dec}"
+
+    # Full-plane churn (a doomsday storm) round-trips too.
+    h4 = bytes(((i * 7 + 3) % 251 for i in range(cells)))
+    ch4 = differ.channel([h4, bytes(t1)])
+    dec = _decode_terrain_delta(b64d(ch4["delta_b64"]), 2, cells)
+    img = bytearray(h3)
+    for c, v in dec[0]:
+        img[c] = v
+    assert bytes(img) == h4, "accumulated image diverged"
+
+    print("terrain selftest: OK", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -2039,11 +2358,18 @@ def main() -> None:
     ap.add_argument("--mgc-import", help="path to the mgc-import binary")
     ap.add_argument("--levels-dat", help="override LEVELS.DAT path")
     ap.add_argument("--levels-tab", help="override LEVELS.TAB path")
+    ap.add_argument("--terrain-selftest", action="store_true",
+                    help="run the terrain-channel emitter selftest "
+                         "(synthetic, no DOSBox) and exit")
     ap.add_argument(
         "cmd", nargs=argparse.REMAINDER,
         help="-- <dosbox command …> to launch as a child",
     )
     args = ap.parse_args()
+
+    if args.terrain_selftest:
+        terrain_selftest()
+        return
 
     layout = LAYOUTS[args.game]
     if not layout.implemented:
@@ -2120,6 +2446,10 @@ def main() -> None:
               "in-struct control slot + entity state are still captured",
               file=sys.stderr)
 
+    # Pin the terrain planes (the format-2 terrain channel). Needs the
+    # frames above; a failed pin degrades to a format-1 recording.
+    pin_terrain(mem, loc, layout)
+
     # Retail's world sim + wall clock don't advance until gameplay proper
     # begins (a 'get ready' pause or menu leaves the pool frozen). Wait for
     # the gameplay RNG (struct+4, stepped only inside the sim tick) to move
@@ -2140,12 +2470,16 @@ def main() -> None:
     if args.once:
         if loc.mailbox_host is not None:
             cap = capture_windowed(mem, loc, layout, args.samples, args.retries)
-            data = cap[0] if cap else None
+            cap = cap[:2] if cap else None
         else:
-            data = capture_clean(mem, loc, layout, args.samples, args.retries)
-        if data is None:
+            cap = capture_clean(mem, loc, layout, args.samples, args.retries)
+        if cap is None:
             raise SystemExit("could not get a stable (non-torn) snapshot")
-        rec = build_record(0, data, layout, mem, loc, not args.no_state)
+        data, terrain = cap
+        rec = attach_terrain(
+            build_record(0, data, layout, mem, loc, not args.no_state),
+            TerrainDiffer() if loc.terrain_hosts is not None else None,
+            terrain)
         print_sanity(rec)
         sink.write(build_header(args, layout, loc, cmd))
         sink.write(rec)

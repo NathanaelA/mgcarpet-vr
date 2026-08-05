@@ -71,6 +71,29 @@ pub struct Channels {
     pub obs: bool,
     pub state: bool,
     pub hash: bool,
+    /// The format-2 terrain channel declaration; absent on v1 takes
+    /// (and on v2 takes recorded without terrain).
+    #[serde(default)]
+    pub terrain: Option<TerrainDecl>,
+}
+
+/// The header's terrain-channel declaration: which guest planes the
+/// recorder captures, in blob order, and their shared dimensions.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TerrainDecl {
+    /// Plane names in the order they appear in every base/delta blob
+    /// (e.g. `["height", "type"]`).
+    pub planes: Vec<String>,
+    /// `[width, height]`; cell index = the plane's guest-linear byte
+    /// offset (`y * width + x` as the game stores it).
+    pub dims: (u32, u32),
+}
+
+impl TerrainDecl {
+    /// Cells per plane.
+    pub fn cells(&self) -> usize {
+        self.dims.0 as usize * self.dims.1 as usize
+    }
 }
 
 impl Header {
@@ -103,6 +126,8 @@ pub struct TickRecord {
     /// MC1/HW external input registers (`state.ext`), raw bytes.
     pub ext: Option<Ext>,
     pub input: Option<serde_json::Value>,
+    /// The format-2 terrain channel (absent = empty delta).
+    pub terrain: Option<TerrainBlock>,
     pub wallclock: Option<u64>,
 }
 
@@ -194,12 +219,20 @@ impl TickRecord {
                 (image, ext)
             }
         };
+        let terrain = match v.get("terrain") {
+            None => None,
+            Some(tv) => Some(TerrainBlock {
+                base: b64_field(tv, "base_b64")?,
+                delta: b64_field(tv, "delta_b64")?,
+            }),
+        };
         Ok(TickRecord {
             t,
             obs: v.get("obs").cloned(),
             state,
             ext,
             input: v.get("input").cloned(),
+            terrain,
             wallclock: v.get("wallclock").and_then(|w| w.as_u64()),
         })
     }
@@ -240,7 +273,7 @@ impl Recording {
             .map_err(|e| e.to_string())?;
         let header: Header =
             serde_json::from_str(&first).map_err(|e| format!("header parse: {e}"))?;
-        if header.format != 1 {
+        if !(1..=2).contains(&header.format) {
             return Err(format!("unsupported .mgcr format {}", header.format));
         }
         Ok(Recording {
@@ -1726,6 +1759,144 @@ pub fn decode_retail_mc1(d: &[u8]) -> Result<RetailMc1, String> {
     })
 }
 
+// --------------------------------------------------------- terrain (format 2)
+
+/// One record's raw terrain channel. `base` is the full plane set (the
+/// take's FIRST record only — the t=0 image, which doubles as the
+/// stock-bake validator); `delta` is the changes since the PREVIOUS
+/// RECORD — not the previous tick: whatever a `t` gap edited is simply
+/// contained in the next record's delta, self-healing by construction.
+/// An absent channel on a record = empty delta.
+#[derive(Debug, Clone, Default)]
+pub struct TerrainBlock {
+    pub base: Option<Vec<u8>>,
+    pub delta: Option<Vec<u8>>,
+}
+
+/// Decode a delta blob: per declared plane (in header order), a u32 LE
+/// count then `count × (u16 LE cell, u8 value)`. Trailing bytes, a
+/// truncated stream, or an out-of-range cell are hard errors — a torn
+/// blob must never half-apply.
+pub fn decode_terrain_delta(
+    blob: &[u8],
+    plane_count: usize,
+    cells: usize,
+) -> Result<Vec<Vec<(u16, u8)>>, String> {
+    let mut out = Vec::with_capacity(plane_count);
+    let mut o = 0usize;
+    for p in 0..plane_count {
+        if blob.len() < o + 4 {
+            return Err(format!("terrain delta: plane {p} count truncated"));
+        }
+        let n = u32_(blob, o) as usize;
+        o += 4;
+        if blob.len() < o + n * 3 {
+            return Err(format!("terrain delta: plane {p} entries truncated"));
+        }
+        let mut plane = Vec::with_capacity(n);
+        for i in 0..n {
+            let cell = u16_(blob, o + i * 3);
+            let val = blob[o + i * 3 + 2];
+            if (cell as usize) >= cells {
+                return Err(format!(
+                    "terrain delta: plane {p} cell {cell} out of range (< {cells})"
+                ));
+            }
+            plane.push((cell, val));
+        }
+        o += n * 3;
+        out.push(plane);
+    }
+    if o != blob.len() {
+        return Err(format!(
+            "terrain delta: {} trailing bytes after {plane_count} planes",
+            blob.len() - o
+        ));
+    }
+    Ok(out)
+}
+
+/// Encode a delta blob — the exact inverse of [`decode_terrain_delta`]
+/// (the recorder's Python emitter mirrors this layout byte for byte).
+pub fn encode_terrain_delta(planes: &[Vec<(u16, u8)>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for plane in planes {
+        out.extend_from_slice(&(plane.len() as u32).to_le_bytes());
+        for &(cell, val) in plane {
+            out.extend_from_slice(&cell.to_le_bytes());
+            out.push(val);
+        }
+    }
+    out
+}
+
+/// The streaming terrain accumulator: feed every record's
+/// [`TerrainBlock`] in order and the running plane images stay
+/// current in O(delta) per record. A consumer that starts mid-take
+/// (no base seen) still accumulates, but [`TerrainImage::based`]
+/// stays false — the planes are then relative to an unknown origin
+/// and must not be compared absolutely.
+#[derive(Debug, Clone)]
+pub struct TerrainImage {
+    decl: TerrainDecl,
+    planes: Vec<Vec<u8>>,
+    based: bool,
+}
+
+impl TerrainImage {
+    pub fn new(decl: &TerrainDecl) -> TerrainImage {
+        TerrainImage {
+            decl: decl.clone(),
+            planes: vec![vec![0u8; decl.cells()]; decl.planes.len()],
+            based: false,
+        }
+    }
+
+    /// Apply one record's channel (base and/or delta, base first).
+    pub fn apply(&mut self, block: &TerrainBlock) -> Result<(), String> {
+        let cells = self.decl.cells();
+        if let Some(base) = &block.base {
+            let want = cells * self.planes.len();
+            if base.len() != want {
+                return Err(format!(
+                    "terrain base is {} bytes, want {want} ({} planes × {cells})",
+                    base.len(),
+                    self.planes.len()
+                ));
+            }
+            for (i, plane) in self.planes.iter_mut().enumerate() {
+                plane.copy_from_slice(&base[i * cells..(i + 1) * cells]);
+            }
+            self.based = true;
+        }
+        if let Some(delta) = &block.delta {
+            let decoded = decode_terrain_delta(delta, self.planes.len(), cells)?;
+            for (plane, edits) in self.planes.iter_mut().zip(&decoded) {
+                for &(cell, val) in edits {
+                    plane[cell as usize] = val;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a base image anchored this accumulator (absolute
+    /// values are only meaningful once true).
+    pub fn based(&self) -> bool {
+        self.based
+    }
+
+    /// The running image of a declared plane, by name.
+    pub fn plane(&self, name: &str) -> Option<&[u8]> {
+        let i = self.decl.planes.iter().position(|p| p == name)?;
+        Some(&self.planes[i])
+    }
+
+    pub fn decl(&self) -> &TerrainDecl {
+        &self.decl
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1865,5 +2036,120 @@ mod tests {
             .map(|c| u16_(&d, t + 508 + c * 2))
             .collect::<Vec<_>>();
         assert_ne!(flat, p.hate.to_vec());
+    }
+
+    fn decl_2x() -> TerrainDecl {
+        TerrainDecl {
+            planes: vec!["height".into(), "type".into()],
+            dims: (16, 16),
+        }
+    }
+
+    #[test]
+    fn terrain_delta_round_trips_and_accumulates() {
+        let decl = decl_2x();
+        let mut img = TerrainImage::new(&decl);
+        assert!(!img.based(), "no base yet");
+
+        // Record 0: full base — height ramps, type all 3.
+        let mut base = Vec::new();
+        base.extend((0..256u32).map(|i| (i % 200) as u8));
+        base.extend(std::iter::repeat_n(3u8, 256));
+        img.apply(&TerrainBlock {
+            base: Some(base),
+            delta: None,
+        })
+        .unwrap();
+        assert!(img.based());
+        assert_eq!(img.plane("height").unwrap()[10], 10);
+        assert_eq!(img.plane("type").unwrap()[42], 3);
+
+        // Record 1: a terraform window — 3 height cells, 1 type cell.
+        let delta = encode_terrain_delta(&[vec![(5, 99), (6, 98), (255, 1)], vec![(5, 7)]]);
+        let round = decode_terrain_delta(&delta, 2, 256).unwrap();
+        assert_eq!(round[0], vec![(5, 99), (6, 98), (255, 1)]);
+        assert_eq!(round[1], vec![(5, 7)]);
+        img.apply(&TerrainBlock {
+            base: None,
+            delta: Some(delta),
+        })
+        .unwrap();
+        assert_eq!(img.plane("height").unwrap()[5], 99);
+        assert_eq!(img.plane("height").unwrap()[255], 1);
+        assert_eq!(img.plane("type").unwrap()[5], 7);
+        assert_eq!(img.plane("height").unwrap()[10], 10, "untouched cell holds");
+
+        // An empty delta is 4 bytes per plane and a no-op.
+        let empty = encode_terrain_delta(&[vec![], vec![]]);
+        assert_eq!(empty.len(), 8);
+        let before = img.plane("height").unwrap().to_vec();
+        img.apply(&TerrainBlock {
+            base: None,
+            delta: Some(empty),
+        })
+        .unwrap();
+        assert_eq!(img.plane("height").unwrap(), &before[..]);
+    }
+
+    /// A torn blob must never half-apply: truncation, trailing bytes
+    /// and out-of-range cells are all hard errors.
+    #[test]
+    fn terrain_delta_rejects_malformed_blobs() {
+        let good = encode_terrain_delta(&[vec![(1, 2)], vec![]]);
+        assert!(decode_terrain_delta(&good, 2, 256).is_ok());
+        // Truncated mid-entry.
+        assert!(decode_terrain_delta(&good[..good.len() - 1], 2, 256).is_err());
+        // Trailing garbage.
+        let mut long = good.clone();
+        long.push(0);
+        assert!(decode_terrain_delta(&long, 2, 256).is_err());
+        // Cell beyond the plane.
+        let oob = encode_terrain_delta(&[vec![(300, 1)], vec![]]);
+        assert!(decode_terrain_delta(&oob, 2, 256).is_err());
+        // Plane-count mismatch (one plane declared, two encoded).
+        assert!(decode_terrain_delta(&good, 1, 256).is_err());
+        // Base of the wrong size.
+        let mut img = TerrainImage::new(&decl_2x());
+        let bad = TerrainBlock {
+            base: Some(vec![0u8; 100]),
+            delta: None,
+        };
+        assert!(img.apply(&bad).is_err());
+    }
+
+    /// The header terrain declaration parses from its JSON shape and
+    /// stays absent on v1 headers.
+    #[test]
+    fn terrain_header_declaration_parses() {
+        let h: Header = serde_json::from_str(
+            r#"{"format":2,"game":"mc1","source":"retail","tick_hz":24,
+                "channels":{"input":"raw","obs":true,"state":true,"hash":false,
+                            "terrain":{"planes":["height","type"],"dims":[256,256]}}}"#,
+        )
+        .unwrap();
+        let decl = h.channels.terrain.expect("terrain declared");
+        assert_eq!(decl.planes, ["height", "type"]);
+        assert_eq!(decl.dims, (256, 256));
+        assert_eq!(decl.cells(), 65536);
+
+        let v1: Header = serde_json::from_str(
+            r#"{"format":1,"game":"mc1","source":"retail","tick_hz":24,
+                "channels":{"input":"raw","obs":true,"state":true,"hash":false}}"#,
+        )
+        .unwrap();
+        assert!(v1.channels.terrain.is_none());
+
+        // A record's terrain block decodes off the container view.
+        use base64::Engine as _;
+        let d64 = base64::engine::general_purpose::STANDARD
+            .encode(encode_terrain_delta(&[vec![(9, 42)]]));
+        let rec: serde_json::Value =
+            serde_json::from_str(&format!(r#"{{"t":5,"terrain":{{"delta_b64":"{d64}"}}}}"#))
+                .unwrap();
+        let tick = TickRecord::from_value(&rec).unwrap();
+        let block = tick.terrain.expect("terrain block");
+        assert!(block.base.is_none());
+        let dec = decode_terrain_delta(&block.delta.unwrap(), 1, 256).unwrap();
+        assert_eq!(dec[0], vec![(9, 42)]);
     }
 }

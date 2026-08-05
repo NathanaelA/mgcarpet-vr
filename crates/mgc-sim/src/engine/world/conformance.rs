@@ -132,6 +132,47 @@ impl World {
         self.terrain_dirty = true;
     }
 
+    /// Overwrite the height and tile-type planes — plus, on MC2 cave
+    /// takes, the CEILING (cave carves edit it mid-level and the cave
+    /// clamp laws read it) — with MEASURED images (the recording's
+    /// format-2 terrain channel, accumulated to the pair's start
+    /// tick). The primary terrain source when present, layered over
+    /// [`World::restore_planes`]'s pristine base so shading/angle
+    /// (and the ceiling, when unmeasured) keep their level values.
+    /// Wrong-size slices are an error, never a partial write.
+    pub fn install_measured_terrain(
+        &mut self,
+        height: &[u8],
+        tile_type: &[u8],
+        ceiling: Option<&[u8]>,
+    ) -> Result<(), String> {
+        if height.len() != self.g.t.height.len() || tile_type.len() != self.g.t.tile_type.len() {
+            return Err(format!(
+                "measured terrain {}+{} cells, want {}+{}",
+                height.len(),
+                tile_type.len(),
+                self.g.t.height.len(),
+                self.g.t.tile_type.len()
+            ));
+        }
+        if let Some(c) = ceiling
+            && c.len() != self.g.t.ceiling.len()
+        {
+            return Err(format!(
+                "measured ceiling {} cells, want {}",
+                c.len(),
+                self.g.t.ceiling.len()
+            ));
+        }
+        self.g.t.height.copy_from_slice(height);
+        self.g.t.tile_type.copy_from_slice(tile_type);
+        if let Some(c) = ceiling {
+            self.g.t.ceiling.copy_from_slice(c);
+        }
+        self.terrain_dirty = true;
+        Ok(())
+    }
+
     /// Seed the cast edge-trigger baseline (the held state of the tick
     /// BEFORE the imported one) so a held button does not re-edge on
     /// every imported pair.
