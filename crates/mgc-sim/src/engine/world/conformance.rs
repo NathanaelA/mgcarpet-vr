@@ -389,7 +389,13 @@ impl World {
                 carpet.f132 as i32
             },
             life: carpet.act_life,
-            state: match carpet.f66 {
+            // The player's life state rides the carpet's TICK-HANDLER
+            // byte +70 (`*(_BYTE*)(a1+70) = 3`, :55550) — +66 is
+            // sClass (255 on the carpet, so the old read left every
+            // dead player Alive-with-negative-life and re-ran the
+            // whole death cascade each pair: the HW 33 rng over-draw
+            // runs at t=21468.. were exactly this).
+            state: match carpet.f70 {
                 2 => LifeState::Falling,
                 3 => LifeState::Dead,
                 _ => LifeState::Alive,
@@ -918,20 +924,27 @@ impl World {
         self.player = Player {
             mana: carpet.mana.max(0) as u32,
             mana_max: carpet.mana_max.max(0) as u32,
-            // The pending regen/debit delta (@0x88, the applied-then-
-            // recomputed pipeline both engines share) — the tick
-            // applies it before recomputing, same seed law as MC1's
-            // f132 import. KNOWN RESIDUAL (~232 pairs): a freshly
-            // stamped −cost pends TWO recorded frames (t=0/1 both
-            // show d88=−100 with the manifestation timer FROZEN
-            // between them — the recorder's mid-frame window catches
-            // the pre-apply state), so a single-pair import cannot
-            // tell "stamped, applies next tick" from "stamped after
-            // the apply, holds a frame"; an f2e-first-tick clamp was
-            // tried 2026-07-30 and bought exactly one pair.
-            mana_delta: carpet.d88,
+            // The pending regen/debit delta (@0x88) — the value the
+            // wizard body will APPLY next frame, which is NOT always
+            // the recorded one: see [`mc2_applied_mana_delta`].
+            mana_delta: mc2_applied_mana_delta(st, ply, human_slot, &carpet),
             life: carpet.life,
-            state: LifeState::Alive,
+            // MORTALITY (the MC1 arm's twin): the human carpet's
+            // `actionIndex_0x45_69` IS the wizard's life state on the
+            // MC2 column too — 0 alive (`AddPlayer03_00_5E010`), 2 the
+            // death fall (`sub_5E310`), 3 the corpse waiting for Space
+            // (`sub_5E7C0`). Pinning `Alive` here ran the whole regen
+            // block on a corpse: +maxLife/250 life and the stale
+            // `manaRegen` (@0x88) both landed every corpse pair, and
+            // the imported mana clamped to `mana_max` — retail's
+            // corpse touches neither (EF:59994-60040 gates the block
+            // on `life >= 0`).
+            state: match carpet.action45 {
+                _ if super::mc2_death_off() => LifeState::Alive,
+                2 => LifeState::Falling,
+                3 => LifeState::Dead,
+                _ => LifeState::Alive,
+            },
             left: hand(ply.hand_left),
             right: hand(ply.hand_right),
             grace: ply.invuln.max(0) as u16,
@@ -1309,6 +1322,117 @@ fn zero_control_mc2(player: u16) -> ControlMc2 {
         aim_pitch: 0,
         buttons: 0,
     }
+}
+
+/// **THE RECORDED `manaRegen` IS NOT ALWAYS THE ONE THAT GETS
+/// APPLIED — THE MANIFESTATION'S POOL SLOT DECIDES.**
+///
+/// Both engines run the wizard's mana as an applied-then-recomputed
+/// pipeline: `AddPlayer03_00_5E010` does `mana += manaRegen` and then
+/// recomputes `manaRegen` to the regen floor (EF:59996-60033). The
+/// CAST machinery writes the same word from a different place —
+/// `sub_68DE0` (EF:55569), run from the manifestation's OWN class-15
+/// action:
+///
+/// ```text
+///   word_0x2E_46 == word_0x30_48  (the burst's FIRST tick)
+///       caster.manaRegen  = -maxMana_0x8C (or -= it, accumulating)
+///   else if word_0x2E_46 != 0     (mid-burst)
+///       if caster.manaRegen > 0 { caster.manaRegen = 0 }   // the PIN
+/// ```
+///
+/// Both run inside the SAME ascending entity walk, so the
+/// manifestation's slot against the carpet's decides which of the two
+/// writes the recorder's frame-tail snapshot catches:
+///
+/// - **token ABOVE the carpet** — the wizard applies, recomputes, then
+///   the token overwrites: the record holds the token's stamp and
+///   applying it next frame is exactly right. (mc2l24 slot 118 vs
+///   carpet 116: `d88` −100 with mana flat, then mana −100 with `d88`
+///   0, then flat again.)
+/// - **token BELOW the carpet** — the token stamps FIRST and the
+///   wizard applies it and then recomputes: the record holds the
+///   RECOMPUTED floor (100/1000), and what the next frame applies is
+///   whatever the token stamps then. Seeding the recorded value made
+///   the port hand the wizard a full regen quantum on every casting
+///   tick — the `player.mana` family, 3,710 pairs of `want + 100` on
+///   mc2l3 take-2 — and, on a first tick, miss the debit outright
+///   (t=8445: the Create Castle cast, want 1359 got 41359, the whole
+///   40,000).
+///
+/// So: start from the recorded word (which IS what `manaRegen` holds
+/// when the next frame opens) and replay `sub_68DE0` for every human
+/// manifestation the walk reaches BEFORE the carpet, in slot order.
+///
+/// The CASTLE (spell 2) is the one exception, and retail's own
+/// dispatch is why: its timer is an upgrade LOCK, not a countdown, so
+/// its body only reaches `sub_68DE0` on the fresh-cast sentinel and
+/// never pins the regen while the tower transforms (mc2l3 t=8446+:
+/// `word_0x2E_46` parked at 100 while mana climbs +1000/tick).
+fn mc2_applied_mana_delta(
+    st: &RetailMc2,
+    ply: &mgc_formats::mgcr::RetailPlayerMc2,
+    human_slot: u16,
+    carpet: &RetailEntMc2,
+) -> i32 {
+    let recorded = carpet.d88;
+    // `MGC_NO_MC2_BURST_DELTA=1` — the A/B lane (both halves; see
+    // `world::mc2_burst_delta_off`): seed the recorded word verbatim,
+    // i.e. the pre-dig import.
+    if super::mc2_burst_delta_off() {
+        return recorded;
+    }
+    // The apply lives in the action-0 body alone. Actions 2/3 (the
+    // death fall and the corpse) are the port's `LifeState`, which
+    // gates the step directly — and their HELD delta is the reset's
+    // 750/2000 residue law, so it must survive the import untouched.
+    // Every OTHER body simply never reaches the regen block: action
+    // 12, the level-end sequence (`sub_5E8C0_endGameSeq` EF:60336),
+    // freezes mana for its whole run — 176 of mc2l3 take-2's 177
+    // action-12 ticks apply 0 against a recorded 100, including the
+    // take's last rng-mismatched pair (t=22621).
+    if !matches!(carpet.action45, 0 | 2 | 3) {
+        return 0;
+    }
+    let mut delta = recorded;
+    // Ascending slot order — the walk's, and the accumulate branch
+    // above makes two first-ticks in one frame order-dependent.
+    let mut below: Vec<(u16, usize)> = (0..26usize)
+        .map(|s| (ply.spell_ent[s], s))
+        .filter(|&(m, _)| m != 0 && m < human_slot && (m as usize) < st.ents.len())
+        .collect();
+    below.sort_unstable();
+    for (m, spell) in below {
+        let e = &st.ents[m as usize];
+        // The book entry must still BE that manifestation in its
+        // owned action state (3M): the death scatter parks a boolean
+        // 1 marker in the book (`sub_5E310` EF:60146) and a
+        // wraith-stolen jar runs action 78 — neither reaches
+        // `sub_68DE0`.
+        if e.class3f != 15 || e.model40 as usize != spell || e.action45 as usize != spell * 3 {
+            continue;
+        }
+        if e.f2e == 0 {
+            continue;
+        }
+        if e.f2e as i32 == e.f30 as i32 {
+            // FIRST tick: retail's `manaRegen = -maxMana_0x8C` wipes
+            // the recompute outright. The DEBIT itself is not seeded
+            // here — the port's own manifestation pass stamps it and
+            // lands it in the same tick
+            // (`World::mc2_same_frame_debit`), which keeps retail's
+            // ordering intact: the afford gate reads the purse BEFORE
+            // the debit, exactly as it does at the token's own slot.
+            delta = 0;
+        } else if spell != 2 && delta > 0 {
+            // The mid-burst PIN. Spell 2 is exempt: the castle's
+            // timer is an upgrade LOCK, so its body never reaches
+            // `sub_68DE0` again and the regen runs on (mc2l3 t=8446+:
+            // the timer parks at 100 while mana climbs +1000/tick).
+            delta = 0;
+        }
+    }
+    delta
 }
 
 /// One retail MC2 pool record → the port's `Ent`, per the SEMANTIC
@@ -1754,7 +1878,17 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         f68: r.f68,
         f69: r.f69,
         mail: r.mail.map(|(a, s)| (a, tr(s))),
-        f144: tr(r.f144),
+        // Class-12 tokens: retail +144 is always 0; the token's OWNER
+        // wizard carpet slot lives in +42 (the lane the Ent doesn't
+        // otherwise model). Stamp it into f144 so the active-token
+        // arms (the Accelerate contrail) can resolve a RIVAL owner's
+        // pose — corpus-proven: every hw:0 token reads f42 = its
+        // wizard's carpet slot, f144 = 0.
+        f144: if r.class64 == 12 && r.f144 == 0 {
+            tr(r.f42)
+        } else {
+            tr(r.f144)
+        },
         // The port keeps a manifestation's burst/refire counter in f26
         // (retail: +48; retail's +26 is the SPELL LEVEL there).
         f26: if r.class64 == 12 { r.f48 as i16 } else { r.f26 },
@@ -2336,5 +2470,107 @@ mod tests {
             "retail's removal swaps the TOP into the hole"
         );
         assert_eq!(w.g.free, vec![500], "the dying victim went free, once");
+    }
+
+    /// Minimal MC2 closure for the delta reconstruction: one carpet
+    /// and one book manifestation, both of which the caller shapes.
+    fn burst_closure(
+        carpet_slot: u16,
+        carpet: RetailEntMc2,
+        tok_slot: u16,
+        tok: RetailEntMc2,
+    ) -> (RetailMc2, mgc_formats::mgcr::RetailPlayerMc2) {
+        let mut ents = vec![RetailEntMc2::default(); 300];
+        ents[carpet_slot as usize] = carpet;
+        ents[tok_slot as usize] = tok;
+        let mut ply = mgc_formats::mgcr::RetailPlayerMc2 {
+            play_index: carpet_slot,
+            ..Default::default()
+        };
+        ply.spell_ent[tok.model40 as usize] = tok_slot;
+        let st = RetailMc2 {
+            rand: 0,
+            vortex: 0,
+            fire_col: 0,
+            local_player: 0,
+            player_count: 1,
+            spawn_ord: [0; 29],
+            players: vec![ply],
+            ents,
+            free_stack: Vec::new(),
+            recycle_stack: Vec::new(),
+            level: 3,
+            base160: 0,
+            stagevars: [[0; 8]; 11],
+        };
+        (st, ply)
+    }
+
+    /// **THE RECORDED `manaRegen` IS ONLY THE APPLIED ONE WHEN THE
+    /// MANIFESTATION SITS ABOVE THE CARPET.** See
+    /// [`mc2_applied_mana_delta`] for the law; this pins every arm of
+    /// it with the mc2l3 take-2 numbers that measured it.
+    ///
+    /// Non-vacuous: returning `carpet.d88` unconditionally (the
+    /// pre-dig import, still reachable as `MGC_NO_MC2_BURST_DELTA=1`)
+    /// fails four of the six asserts — the two pins, the end-sequence
+    /// freeze and the first-tick wipe.
+    #[test]
+    fn mc2_burst_delta_is_the_applied_word_not_the_recorded_one() {
+        // The carpet as recorded mid-cast: the regen recompute (100
+        // afield / 1000 at the castle) is what the frame tail holds.
+        let carpet = |d88: i32, action45: u8| RetailEntMc2 {
+            class3f: 3,
+            model40: 0,
+            action45,
+            d88,
+            ..Default::default()
+        };
+        // A live manifestation: @0x2E armed timer, @0x30 duration,
+        // @0x8C full cost, action 3M (the owned state).
+        let tok = |spell: u8, f2e: i16, f30: u16, cost: i32| RetailEntMc2 {
+            class3f: 15,
+            model40: spell,
+            action45: spell * 3,
+            f2e,
+            f30,
+            mana_max: cost,
+            ..Default::default()
+        };
+
+        // BELOW the carpet, mid-burst → the pin (mc2l3 t=9034-9035:
+        // recorded 100, mana FLAT).
+        let (st, ply) = burst_closure(167, carpet(100, 0), 109, tok(1, 2, 3, 100));
+        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167]), 0);
+
+        // BELOW the carpet, FIRST tick → the recompute is wiped; the
+        // debit itself is left to `World::mc2_same_frame_debit`, which
+        // is what keeps the afford gate reading the pre-debit purse
+        // (mc2l3 t=8445, the 40,000 Create Castle out of 41,359).
+        let (st, ply) = burst_closure(167, carpet(1000, 0), 114, tok(2, 101, 101, 40000));
+        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167]), 0);
+
+        // BELOW the carpet, the CASTLE's upgrade LOCK (timer parked,
+        // not counting) → no pin at all: mc2l3 t=8446+ climbs +1000.
+        let (st, ply) = burst_closure(167, carpet(1000, 0), 114, tok(2, 100, 101, 40000));
+        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167]), 1000);
+
+        // ABOVE the carpet → the record already holds the token's own
+        // stamp; it is applied verbatim (mc2l24 slot 118 vs carpet
+        // 116, recorded −100 then 0).
+        let (st, ply) = burst_closure(116, carpet(-100, 0), 118, tok(1, 2, 3, 100));
+        assert_eq!(mc2_applied_mana_delta(&st, &ply, 116, &st.ents[116]), -100);
+
+        // A DETACHED jar (the wraith steal's action 78) never reaches
+        // `sub_68DE0`, so it pins nothing.
+        let mut stolen = tok(1, 2, 3, 100);
+        stolen.action45 = 78;
+        let (st, ply) = burst_closure(167, carpet(100, 0), 109, stolen);
+        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167]), 100);
+
+        // Action 12, the level-end sequence: the regen block is in the
+        // action-0 body alone, so NOTHING is applied (mc2l3 t=22621+).
+        let (st, ply) = burst_closure(167, carpet(100, 12), 109, tok(1, 0, 3, 100));
+        assert_eq!(mc2_applied_mana_delta(&st, &ply, 167, &st.ents[167]), 0);
     }
 }

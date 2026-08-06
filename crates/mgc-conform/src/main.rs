@@ -41,6 +41,14 @@ fn usage() -> ! {
          common flags:\n\
            --max-diffs <n>   mismatch paths printed per tick (default 8)\n\
            --limit <n>       stop after n tick records / pairs (default: all)\n\
+         terrain-diff flags:\n\
+           --baked <dir>     baked tree root (default: baked)\n\
+           --out <dir>       dump both sides of every plane as raw 256x256\n\
+                             byte images (<plane>.retail / <plane>.port) for\n\
+                             offline clustering\n\
+           --baseline <dir>  read the MEASURED planes from an earlier --out\n\
+                             dump instead of this take's record-0 base (keeps\n\
+                             an attribution reproducible after a re-record)\n\
          extract flags:\n\
            --out <path>          manifest destination (required)\n\
            --sample-every <n>    conforming-pair sampling stride (default 10)\n\
@@ -89,6 +97,9 @@ pub struct Args {
     pub dump_port: bool,
     pub csv: Option<PathBuf>,
     pub out: Option<PathBuf>,
+    /// terrain-diff: take the MEASURED planes from a cached `--out`
+    /// dump directory instead of the recording's record-0 base.
+    pub baseline: Option<PathBuf>,
     pub sample_every: u64,
     pub max_open: usize,
     pub promote: bool,
@@ -125,6 +136,7 @@ fn parse_args() -> Args {
         dump_port: false,
         csv: None,
         out: None,
+        baseline: None,
         sample_every: 10,
         no_roster: false,
         no_pose_alt: false,
@@ -162,6 +174,9 @@ fn parse_args() -> Args {
             "--no-terrain" => a.no_terrain = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
+            "--baseline" => {
+                a.baseline = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage()))
+            }
             "--sample-every" => {
                 a.sample_every = it
                     .next()
@@ -640,9 +655,28 @@ fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, Strin
         path.display(),
         first.t
     );
+    // `--out <dir>`: dump both sides of every plane as raw
+    // 256x256 byte images (`<plane>.retail` / `<plane>.port`) so an
+    // offline clusterer can attribute the diffs region by region.
+    if let Some(dir) = &args.out {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
     let mut dirty = 0usize;
     for name in &decl.planes {
-        let measured = img.plane(name).ok_or("declared plane missing")?;
+        // `--baseline <dir>`: read the MEASURED planes from a cached
+        // `--out` dump (`<dir>/<plane>.retail`) instead of the take's
+        // own record-0 base. A take can be lost or re-recorded; a
+        // cached dump of a graded take keeps the stock-bake validator
+        // reproducible against the exact planes an attribution was
+        // written from.
+        let cached;
+        let measured: &[u8] = if let Some(dir) = args.baseline.as_ref() {
+            cached = std::fs::read(dir.join(format!("{name}.retail")))
+                .map_err(|e| format!("{}/{name}.retail: {e}", dir.display()))?;
+            &cached
+        } else {
+            img.plane(name).ok_or("declared plane missing")?
+        };
         let baked: &[u8] = match name.as_str() {
             "type" => &pristine.tile_type,
             "height" => &pristine.height,
@@ -654,6 +688,12 @@ fn terrain_diff_inner(path: &std::path::Path, args: &Args) -> Result<bool, Strin
                 continue;
             }
         };
+        if let Some(dir) = &args.out {
+            std::fs::write(dir.join(format!("{name}.retail")), measured)
+                .map_err(|e| format!("{name}.retail: {e}"))?;
+            std::fs::write(dir.join(format!("{name}.port")), baked)
+                .map_err(|e| format!("{name}.port: {e}"))?;
+        }
         if baked.len() != measured.len() {
             println!(
                 "  {name}: size mismatch — port {} cells vs measured {}",

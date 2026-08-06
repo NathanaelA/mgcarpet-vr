@@ -5353,3 +5353,1182 @@ the rest of the fight. Summons shot during their launch flight now
 fly on and die properly instead of blinking out of existence. A
 corpse left standing far from you is still retail-correct — fly
 within ~20 tiles and it will drop.
+
+---
+
+## MC1/HW RIVAL REBOUND — the arm existed, the BIT was never published (2026-08-06)
+
+**Player report (retail-observed, mc1hw:0):** the sole rival wizard, once
+taken down by meteor, puts Rebound (spell 14) up and keeps re-upping it
+for the rest of the level. The port's MC1/HW rivals had never been seen
+casting it.
+
+**Retail law (corroborated line-for-line in BOTH trees).**
+
+1. *Trigger* — `sub_132B0` (remc1 :18024-34 / remc1hw :16156-66), inside
+   the per-tick brain `sub_13170` (remc1 :17842 / hw :15974). Every
+   decision tick (`ent+63 % (64 - tempo/4) == 0`): `sub_16800` picks the
+   NEAREST class-9 whose `+146` (chase target) is my id, 3-D distance²
+   under `0x1900000` (= 5120²), walking bucket[3] — the class-9 list
+   rebuilt at :52277-84; a hit sets strafe 80 (`sub_16870`) and runs
+   `sub_16890`. (The same block also self-heals: `if (+12 < +8)
+   sub_155F0(a1, 1)`.)
+2. *Reactive pick* — `sub_16890` (remc1 :19808-54 / remc1hw :17940-90),
+   byte-identical between the trees. Inside `0x100000` (= 1024²), a
+   three-way switch on the THREAT's `+65`:
+   models {0, 3, 16} → `if (sub_15A00(a1,0xE)) sub_155F0(a1,0xE); else if
+   (sub_15A00(a1,4)) sub_155F0(a1,4);` — a LADDER, Rebound first and
+   Shield as the fallback; models {4, 9} → Shield only; **every other
+   model casts NOTHING** (1/2 fall out of the `< 4` branch, 5..8 out of
+   the `>= 9` branch, `!= 16` returns outright).
+3. *Readiness* — `sub_15A00` case 4/0xC/0xE (remc1 :19289-99 / hw
+   :17422-34): the manifestation must exist, its burst `+48` must be
+   **ZERO** (no re-cast while the buff runs), the AI cooldown
+   `+724[2*s]` must be zero, and wizard mana `+140 >= +136`.
+4. *Commit* — `sub_155F0` case 1/4/5/0xE (remc1 :19140-48 / hw
+   :17271-81): `+48 = +50` (= `count` = 101 for Rebound) and
+   `+724[2*s] = word_90034[s]` (= 1). No projectile, and **no castle
+   check at cast time**.
+5. *Token tick + THE BIT* — class-12 handler `0x2A` (= 3 × spell 14) of
+   `str_2563D8` (:4996) is `sub_573F0_57920` (remc1 :65774 / remc1hw
+   :61996): while `+48 > 0` run `sub_55DD0_56300` (remc1 :64910 — the
+   stored-mana ladder: owner mana/life >= 0 and, since the ctor
+   `sub_3C210` :48080 = `sub_3BF70(a1, 14, 42, 1000, 101, 1, 0, 8000,
+   100)` sets `+132` = 8000, the owner's castle entity `+140` must hold
+   >= 8000), then **`owner->+17 |= 0x80`** (our `flags & 0x8000`) and
+   `sub_55E80` (regen pin); on failure `+48 = 1` (dies next decrement,
+   buzz 29). `+48 <= 0` → `owner->+17 &= ~0x80`. Then `--+48`.
+6. *The effect* — that bit is what the projectile-vs-victim step reads
+   to deflect (`proj_move_and_hit`, remc1 :62848-90) — already ported,
+   already reading `ent[j].flags & 0x8000` for pool victims.
+
+**Corpus proof (`recordings/mc1hwl0.mgcr`, 50,150 ticks).** The retail
+rival is slot 473 (class 3 model 1). Its Rebound bit is directly
+observable in the obs `flags` lane, and the take contains **seven**
+windows, each exactly `count` = 101 ticks, ON→OFF at
+5591→5692, 7578→7679, 8506→8607, 12247→**12550**, 13442→13543,
+17858→17959, 21372→21473. The 12247 window is 303 ticks = 3 × 101: the
+rival re-upped twice, so "permanent" is a re-up loop, not a long token.
+The port missed the ON edge of all seven and the OFF edge of six — it
+never wrote the bit at all.
+
+**Root cause: the arm was there; the PUBLISH was not.** `rival_defense`
+already ported `sub_16800/70/90` and, driven against the corpus, fires
+correctly (instrumented windowed replay at 20800..21500 caught the port
+casting spell 14 at t=21371 with `owned=484, mana=24906, castle_stored=
+13768` — one tick off retail's t≈21372, inside the take's own class-9
+divergence). But `rival_refresh_buffs` mirrored ONLY the invisibility
+cloak (0x20) onto the wizard entity; the Rebound token's `f26` never
+reached `flags & 0x8000`, so `class12_tick` (which deliberately skips
+rival-owned manifestations) plus the missing mirror meant NOTHING could
+ever bounce off an AI wizard. `docs/DEVIATIONS.md` already flagged the
+symptom for MC2 ("rival Rebound windows are not yet mirrored onto their
+entities"); MC1/HW had the same hole.
+
+**Fixed (all in `crates/mgc-sim/src/mc1/rivals.rs`).**
+- `rival_refresh_buffs` publishes the token: `flags |= 0x8000` while the
+  burst is live, `&= !0x8000` when it lapses (`sub_573F0_57920`). The
+  wizard's death transition drops the bit too — retail's token keeps
+  ticking through death states 2/3, which the port's rival lanes never
+  reach, so without it a corpse would deflect forever.
+- `rival_cast_ready` gains retail's ALREADY-ACTIVE gate (`+48 != 0` →
+  not ready) for the self-buff group whose burst the port actually
+  decrements for rivals: 2/4/12/14. Before it, `AI_RECAST[14] = 1` let
+  the port re-cast Rebound every other tick for as long as the trigger
+  held, paying 1000 mana each time — the instrumented window shows the
+  port firing 3× in 12 ticks where retail fired once. Retail applies the
+  same gate to the aimed group (3/7/8/17/20, :19265-68) and to Castle
+  (:19305); **BANKED**, because the port never runs a per-tick countdown
+  on a rival's OFFENSIVE manifestations, so gating them would freeze the
+  picker after one shot.
+- `rival_defense` is now verbatim `sub_16890`: the default arm casts
+  nothing (was `_ => 4`, burning Shield + 2000 mana on threats retail
+  ignores) and the fire-spell arm is the Rebound→Shield LADDER (which
+  matters precisely because the new readiness gate makes Rebound unready
+  for the 100 ticks after it arms).
+- New `rival_token(ri, spell)` validates the `owned[]` binding
+  (class 12 / matching model / `tick70 >= MANIFEST_BASE` / `f144` = the
+  rival / not removed) before any burst lane touches it.
+
+**⚠ NEW FINDING — the rival spell book is NOT re-anchored at import, so
+no MC1 rival cast/buff lane is conformance-measurable.**
+`import_state` (conformance.rs :324-350) rebinds a rival's entity, mana,
+flight and brain lanes but NOT `owned[]`/`known[]`: the port's book still
+points at the slots the FRESH world minted, which the import has since
+overwritten with unrelated entities. Retail's token carries its owner in
+`+42`, a field the port's `Ent` does not model, so the importer *cannot*
+re-anchor today. Consequences: (a) the pre-existing code was decrementing
+`f26` on whatever entity happened to occupy a stale slot — `rival_token`
+stops that; (b) publishing the Rebound bit from a stale token actively
+DESTROYED retail's own imported bit (measured: +100 `flags` rows on slot
+473 per Rebound window, mc1hwl0 window 5500/+400 went 828 → 926
+unexplained field rows), which is why the mirror is gated on the port
+actually driving the token. Fixing this properly needs `Ent` to carry the
+manifestation owner (+42) — a hashed-field change. **Banked.**
+
+**Numbers.** Windowed A/B on `mc1hwl0` (`--input-delay 2`), before vs
+after, identical in every window: 5500/+400 → 828 field / 25 missing / 73
+extra both ways; 7500/+400 → 5533 / 117 / 55 both ways; 21300/+400 →
+16310 / 148 / 201 both ways. **Conformance-neutral by construction** —
+the rival token lanes are inert under a delta-verify import (see above),
+so the corpus validates the RETAIL law and the free-run arm, not the
+port's own casts. Full take after: 7,464 conforming / 49,765
+fixture-grade, 800,222 unexplained field rows (the drop from the 2.03 M
+baseline is the concurrent (10,13) smoke-puff landing, not this change).
+
+**Goldens.** `level_005_golden_state_hashes` moves — attributed by
+per-sub-change toggle to the ALREADY-ACTIVE gate alone (the mirror and
+the reactive-arm corrections leave it pinned). Level 005's rival casts
+Shield/Accelerate, and retail refuses those re-casts while the burst
+runs. Behavior change toward retail by design. NOTE: the pin now on disk
+was refreshed by the concurrent (10,13) smoke-puff work from a tree that
+already contained this change, so the recorded value covers both; with
+this change alone reverted the test fails.
+
+**Tests.** `rival_rebound_arms_publishes_expires_and_re_ups` (arm →
+publish → 101-tick countdown with no re-arm → expire → clear → re-up on
+a fresh threat) and `unlisted_threat_models_provoke_no_reactive_cast`
+(model 2 provokes nothing; model 9 controls that the Shield arm is live).
+Both NON-VACUOUS — verified by temporarily disabling each sub-fix behind
+an env toggle: the mirror off fails "did not publish the 0x8000
+deflection bit", the gate off fails "the live Rebound token was re-armed
+(100 -> 101)", the `_ => 4` fallback restored fails "a model-2 threat
+provoked the Shield cast retail ignores".
+
+**PLAYTEST OWED — what the player should see:** fireballs and meteors
+now BOUNCE off a rival wizard (with the deflection twang, sound 28) for
+about four seconds after he takes fire at close range, and the deflected
+bolt turns around and homes on whoever fired it. A rival needs a castle
+storing 8000+ for it — a poor or homeless rival still eats everything.
+And the rival no longer stands there re-casting Rebound into itself:
+once it is up, a second incoming bolt makes him raise Shield instead.
+
+## LIGHTNING STORM + THE (10,13) SMOKE PUFF — the two biggest mc1hw families, both LANDED 2026-08-06
+
+Player report (retail-observed): *"Lightning Storm is the safest way to
+kill griffin flocks in mc1"*, but in the port *"it barely kills one and
+the rest kill you"*, with the bolts visibly sitting **just above** the
+creatures. Dig target also covered the take's `(9,9)` / `(10,13)`
+families and the 33 rng over-draw pairs.
+
+### 1. FAMILY SPLIT — what those rows actually are
+
+- **`(10,13)` is NOT storm and NOT weather.** It is the class-10
+  **RISING SMOKE PUFF**: ctor `sub_3AAA0` (`str_255D0C[13]`, remc1
+  :46817 / remc1hw :44xxx — identical), tick `sub_257B0` (:28443,
+  remc1hw :26987 — identical). Life `rand%23+17`, rise speed
+  `rand%53+51`, sprite 67, filter pair `(10,13)`, `+18` bit1. The old
+  ledger note "(10,13) 9.1k missing (meteor showers)" was a mis-ID —
+  **retire it**. Exactly TWO creators in the whole binary, both
+  unported:
+  - the STANDING FIRE's exhaust (`sub_252D0` :28224, remc1hw :26774):
+    inside the shrink window (`life < 12 && +26 > 0`) and with `+16`
+    bit7 clear, one entity-LCG draw and on `d % 7 == 0` a puff at the
+    fire with `+26 = 100` (which parks it past the tick's 16-tick
+    drift window → fire smoke rises dead straight), `life = 15`
+    (`max_life` keeps the ctor roll), the fire's owner, sprite `+2`;
+  - the VOLCANO PLUME's ring spray (`sub_26140` :28834 = class-10
+    state 19, remc1hw :27419) — see §3.
+- **`(9,9)` is the lightning family and nothing else** — the m9 BEAM
+  (state 9) plus its born-dead state-14 SEGMENTS. In mc1hwl0 it is
+  driven by the storm windows (the `(9,12)` carrier fires at
+  t≈21976 / 26669 / 34573 / 41015 / 41338 / 42212) and by kraken/creature
+  beams elsewhere. The balanced missing/extra is segment churn, as the
+  standing law says — count RECORDS.
+
+### 2. THE STORM LAW, line-cited
+
+`sub_26D20` (:29279 / remc1hw :27823 — **byte-identical**), class-10
+state 40, reached from the `(9,12)` carrier's `sub_53DC0` (:63628),
+which stamps owner / `+30` / `+32` / `+44` / `+146` / `+68=9` / `+69=9`
+onto the `(10,38)` cloud (:63767-83):
+
+1. `v2 = ground_z(pos)`. `z < v2+1024` → `z += 64`, **skip the tick**.
+   `z > v2+1024` → `z = v2+1024`, **skip the tick too** (`HIBYTE(v2)+=4`
+   is `+1024`). The port fired on the clamp-DOWN tick — fixed.
+2. Pre-decrement life (33 firing ticks from the ctor's 32).
+3. ONE entity-LCG draw → `+30 = d & 0x7FF`; `+32 = 56` **fixed pitch**.
+4. Twice: `+30 ^= 0x400` (180° flip) then create `(+68, +69)` =
+   `(9, 9)` **AT THE CLOUD'S OWN POSITION**. Retail builds a
+   `z + <+78>` point in the shared temp `word_AE454_AE444` and then
+   passes `(axis_3d*)(a1+72)` — **the `+78` lift is a DEAD STORE**. The
+   port was adding it, laying every bolt a sprite half-height high.
+   Child gets owner, `life /= 3`, `+30`/`+32` (NOT `+34`/`+36` — retail
+   leaves those at NewEvent 0 for the beam's own acquire to fill),
+   `+68=10`, `+69=23`, `+44` = the storm damage.
+5. Thunder 23, positioned at the LAST bolt (the port plays it at the
+   cloud — presentation, left alone).
+
+Dropping the launcher's `+34`/`+36` pre-seed exposed a second missing
+store: `sub_534C0`'s acquire gate (:63232-40) copies `+30`/`+32` into
+`+34`/`+36` on a MISSED acquire, and the port only ever wrote them on a
+HIT. The storm's pre-seed had been standing in for that copy. The miss
+branch now lives in `proj_m9_tick` where the original puts it — worth
+−93 / −155 unexplained field rows in the two storm windows on its own,
+and no golden moves.
+
+**Reach arithmetic: the storm CANNOT hit anything on its own.** The
+`(9,9)` ctor (`sub_39EC0` :46135) is speed 384 / life 9, so a storm bolt
+gets `9/3 = 3` → **4 steps of 384 = 1536 units** of travel, fired at
+pitch 56 (≈9.8°) from **1024 above the terrain**. It descends 262 units
+over its whole flight. Every single storm kill therefore comes from the
+BEAM'S ACQUIRE snapping it down onto a victim.
+
+**⭐ THE BUG IS ONE CONSTANT.** `sub_54520` (:63943 / remc1hw :60053)
+switches on `+65`, and **case 9 is its own lane** (:64125 / remc1hw
+:60256, identical):
+
+- the wizard/castle list: cones `(0x71, 0x71)`, range gate
+  `+128 * +8` (speed × max_life = the beam's own reach), 2-D distance;
+- the **CREATURE buckets: `sub_54A90(a1, ii, 0x71u, 0x200u)`** — yaw
+  ±0x71 as usual, **pitch ±0x200 = ±90°**, no range gate beyond the
+  scorer's 3-D 5120.
+
+No other subtype does this (cases 0/3/4 and 1 are `0x71/0x71`; HW's
+meteor case 0x10 is `0x100/0x71` on BOTH lists). The port ran one shared
+`0x71/0x71` cone for every subtype, so a flock 1024 below the cloud sat
+outside the pitch wedge: nothing locked, the bolt held pitch 56, and it
+sailed out level — **"the bolts hover just above the monsters"**,
+exactly as reported. Restoring `0x200` on the creature lane makes the
+storm the flock-killer it is remembered as.
+
+### 3. THE PLUME (class-10 state 19) WAS UNTRACED — now transcribed
+
+`sub_26140` (:28834): pre-decrement life; `+26 = 0`; walk the radius-0
+ring (`sub_11410(0, +26)` → the 2×2 recentre block, 3 cells after the
+iterator's dropped-last quirk); per cell one draw for the spreader's
+~50% skip test (`d % 0x9D >= 79`) and, on a pass, the ±64 jitter pair;
+then on ODD post-decrement life ticks each passing cell emits **four**
+`(10,13)` puffs at yaws `{v, v+0x200, v+0x400, v+0x600}` with
+`v = ((life/2) & 1) << 8` — the column corkscrews. Re-seat on ground. NO
+animation step (sprite 228 is static). The port's stub drew **zero**
+entity-LCG values a tick where retail draws **3 / 5 / 7 / 9** — that is
+the entire `(10,19)` `rand` column in mc1hwl0 (3,822 rows on slot 767).
+
+**OPEN (banked, deliberately NOT ported):** `sub_26140` closes with an
+UNCONDITIONAL `sub_120B0(a1, 0, +44)` — 200 ch0 per tick over the
+ctor's 512 extents for the plume's whole 240-tick life, i.e. the volcano
+plume is a persistent damage field. No corpus take erupts a volcano, so
+this is left for a measured eruption window rather than guessed in.
+
+### 4. THE 33 rng OVER-DRAW PAIRS — DIAGNOSED, fix is OUTSIDE this lane
+
+Located by windowed bisection: they are **contiguous runs of ticks
+around the human's death**, e.g. t=21468..21481 (14 pairs) and
+t≈6xxx / 18xxx. On MC1 the port has exactly one site that can step the
+GLOBAL LCG more than once a tick: `player_land` (world.rs :3122-24),
+three draws per owned spell for the jar scatter.
+
+**Root cause is the conformance IMPORT, not a sim arm.**
+`import_state` (`crates/mgc-sim/src/engine/world/conformance.rs` :392)
+reads the human's life state from **`carpet.f66`**:
+```
+state: match carpet.f66 { 2 => Falling, 3 => Dead, _ => Alive }
+```
+Retail keeps the wizard's life state in **`+70`** (`sub_46B00`'s death
+tail writes `*(_BYTE*)(a1+70) = 3` at :55550). Measured on mc1hwl0 slot
+472: `f66 = 255` at t=100, 21400, 21470 and 21600 — *always* — while
+`f70` is 0 alive and 3 during the dead-waiting window. So a dead retail
+player imports as **Alive with a stale negative life**; the next damage
+mail re-runs the whole death (`life < 0` → `Falling` → the same tick's
+landing test → `player_land`) on EVERY imported tick of the window.
+
+**Measured probe** (applied, measured, reverted — the file is the
+harness-side import and outside this dig's territory): switching that
+match to `carpet.f70` on window 21440/+80 takes rng **14 → 1**
+mismatched pairs, unexplained field rows **5,385 → 4,775** and extra
+**36 → 11**, with all 203 fixtures still `as expected`. **Handed to the
+lead to land deliberately.**
+
+### 5. NUMBERS
+
+Full take `mc1hwl0.mgcr --input-delay 2`, before → after:
+
+| | before | after |
+|---|---|---|
+| conforming | 7,355 | **7,464** |
+| UNEXPLAINED field rows | 2,030,967 | **799,629** (−60.6 %) |
+| UNEXPLAINED missing | 32,097 | **17,142** (−46.6 %) |
+| UNEXPLAINED extra | 14,210 | 18,117 |
+| `(10,13)` missing / extra | 10,135 / 0 | **422 / 1,782** |
+| `(10,6)` missing / extra | 3,582 / 875 | **501 / 2,882** |
+| `(9,9)` missing / extra | 12,017 / 11,344 | 11,785 / 11,106 |
+| phase-clock disagreements | 1,844 | **898** ((10,13,13) 1,277 → 370) |
+| `mc1hwl0-terrain-z` rule rows | 609,374 | **159,071** |
+| rng mismatched pairs | 33 | 33 (see §4) |
+
+`(10,13)` alone carried **1,752,673** of the take's diff rows — 86 % of
+the whole field-row mass — because the state had no tick arm at all:
+every imported puff fell through world.rs's class-10 catch-all (the
+terrain-feature dispatch) and self-killed one tick after import
+(`flags` `0x20004` → `0x20404`, `life` +1, `z` −64 on every row).
+
+Windowed A/B, before → after (unexplained field / missing / extra):
+- storm window **41000/+120**: 40,450 / 183 / 82 → **19,018 / 6 / 161**
+- storm window **26690/+120**: 22,189 / 156 / 311 → **20,170 / 39 / 52**
+- storm window **41340/+120**: 5,428 / 4 / 5 → **5,079 / 4 / 5**
+
+`mc1l0` (regression guard): 8,834 / 126 / 98 → **8,520 / 119 / 99**,
+rng 0/7097, no new families. All six suites `as expected`
+(29 + 68 + 41 + 24 + 17 + 24 = 203, 0 regressions, 0 drifted).
+
+### 6. GOLDENS + TESTS
+
+`level_005_golden_state_hashes` B–E re-pinned (post-init and A hold —
+nothing burns before B): every burning tree and crater now emits smoke
+entities, so pool population and free-list order move. **Behavior change
+toward retail by design.** The layout-independent OBSERVABLE companion
+golden **held**. NOTE: the pin on disk was taken from a tree that also
+contained the concurrent MC1/HW rival-Rebound work, so the recorded
+value covers both changes.
+
+New NON-VACUOUS tests (`engine::world::tests`):
+- `storm_bolt_locks_the_flock_below_and_strikes_at_creature_z` — asserts
+  in-fixture that the target's pitch delta is `> 0x71` (so the shared
+  cone provably cannot see it) and `<= 0x200`, then that the bolt locks,
+  that the acquire SNAPS `+30/+32` onto the pick, that the beam ends at
+  flock altitude instead of ~760 above the deck, and that the `(10,23)`
+  endpoint flash carries and delivers the storm's 2000. Verified by
+  temporarily restoring the `0x71` creature cone: fails with
+  "the storm bolt must lock the creature under it — left 0, right 2".
+- `burning_fire_emits_rising_smoke_that_survives_its_own_tick` — the
+  fire's 1-in-7 exhaust, `+26 = 100` / `life = 15` / owner inheritance,
+  the `[64,128]` speed decay, the rise, the absence of lateral drift,
+  pre-decrement life, and expiry on its own clock (it used to be flagged
+  dead on the spot).
+
+### 7. PLAYTEST OWED — what the player should see
+
+Lightning Storm should once again be **the safest way to clear a griffin
+flock**: the cloud parks 1024 up and its bolts now *snap down* onto the
+birds under it instead of drifting overhead, two strikes a tick at
+2000 apiece. The same constant governs every m9 beam, so kraken beams
+also stop skimming past low targets. Separately, burning trees, fire
+walls and craters now trail rising smoke, and volcano plumes churn out
+a corkscrewing smoke column instead of standing there inert.
+
+## THE MC2 HUMAN DEATH LAW — the corpse, the token scatter and the SPACE reset, LANDED 2026-08-06 (mc2l3 both reset pairs now conform outright)
+
+The mc2l3 dig. The take carries **two human deaths** (t≈15280 and
+t≈20560) and the port failed both: it kept the corpse alive (regening
+life AND applying the frozen `manaRegen`, and clamping the corpse's
+mana to `mana_max`), never respawned, and never re-minted the
+spellbook — the 26 class-15 tokens retail creates at the reset were
+the take's whole `(15,*)` missing census. Everything below is
+`EventsFunctions.cpp` (`EF:`) unless marked.
+
+### 1. THE STATE MACHINE IS THE RIVALS' — THE FORK IS INSIDE ACTION 3
+
+The human wizard is a class-3 pool entity running the SAME action
+machine as the AI wizards. There is no separate human death path; the
+AI/human fork sits *inside* the action-3 body.
+
+| action | body | what it does |
+|---|---|---|
+| 0 | `AddPlayer03_00_5E010` (EF:60040-44) | `life < 0` → action = 2, `word_0x2C_44` = 0, sound 16, DEAD scene |
+| 2 | `sub_5E310` (EF:60074-99) | mover, then z-only gravity; floor = ground + row clearance; one `(10,1)` puff/tick; EXACT floor contact = the payout |
+| — | the payout (EF:60101-77) | `sub_49F90`, kill credit, mailbox wipe, "has died.", the 26-token SCATTER, the `(10,40)` grave + sphere re-point, action = 3, `dword_0x10_16` = 1200, hide |
+| 3 | `sub_5E7C0` (EF:60254) | **AI**: count 1200 down → castle respawn / banish. **HUMAN** (EF:60303-05): `sub_5C800(7)` + `sub_5E6C0` — face the killer at ≤22/tick, pin z to the ground, wait for SPACE forever |
+| reset | `sub_5C950` (EF:43630) | PlayerAction 0xF, accepted by PI:1102 only while `life < 0 && action == 3` |
+
+Two things the corpse does NOT do, both because the whole regen block
+in the action-0 body is inside `if (life >= 0)` (EF:59996-60033):
+it never heals and it never touches `mana`/`manaRegen`. mc2l3 holds
+life at **−3060** and mana at **16,957** for the entire 15-tick corpse
+window, and `mana` stays 95,951 at death 2 even though `mana_max` is
+2,559 — the corpse never runs the clamp either.
+
+Measured constants: floor − ground = **256** = the carpet tuning row's
+`word_160_0xc_12` (`Mc2Row::CAVE`/`OPEN` clearance, both 256) — mc2l3
+t=15300 lands at z 2125 over ground 1869. The corpse yaw walks
+585 → 563 → 541 → 519 → 497 → 482 in exact 22s, then wobbles ±3 as
+the killer moves: `sub_58350(yaw, bearing, 5, 0x16)`, cap 22.
+
+### 2. THE SCATTER KEEPS THE BOOK — `SpellEnabled[i] = 1`, NOT 0
+
+`sub_5E310` EF:60137-62 walks all 26 book slots. A live manifestation
+is detached in place — `byte[0] &= ~1`, `actionIndex++` (3M → 3M+1,
+the loose-pickup state), position ±256 around the corpse, life
+`rand%90 + 200` — and **the book entry becomes a boolean 1**. That
+marker is the wizard's whole memory of what he knew; the reset
+re-mints exactly the non-zero entries. mc2l3 t=15300 shows all 26
+tokens (slots 168-204) flipping to state 3M+1 with lives in [200,289]
+scattered over the death tile, and both hands (`SpellIndexLeft/Right`
+= 0/1) unchanged across both deaths — the scatter never touches them.
+
+The three draws per token come off the DYING WIZARD's private LCG
+(`a1x->rand_0x14_20`), never the world stream and never the token's
+own `rand` (mc2l3 keeps all 26 token seeds at their allocation values
+through the scatter).
+
+### 3. THE RESET — WHAT `sub_5C950` WRITES, AND WHY THE MANA RESIDUE IS 750
+
+For a human (`IsAiPlayer != 1`, so `actionIndex = 0` and the
+fresh-join block EF:43744-822 is skipped), in order:
+
+1. `sub_49F90` — **both** stacks rebuilt (descending 999→1 scan).
+2. position ← the own castle's FULL position (x, y **and z**);
+   castle-less single player = the level's authored start point at
+   ground + 0x100, plus `byte[2] |= 0xC` (lost + level-over, PI's
+   own flags) — retail respawns you anyway.
+3. grace (`word_0x159_345`) = 100, wanted = 0, `dword_0x16D_365` =
+   2000, commanded speed/yaw/fov/boost/strafe = 0, life-scale = 256.
+4. **`maxMana` = 1000, `maxLife` = 10000.**
+5. `sub_5CF40` (EF:59374) — the token RE-MINT (see §4).
+6. **`life = maxLife`; `mana = maxMana`; and the mana-census BASE
+   `byte_0x150_336` = maxMana.**
+7. every other wizard's hate toward this colour → −24609; the AI
+   target lanes cleared; the recycle stack emptied
+   (`dword_0x11e6 = −1`, EF:43857).
+
+`maxMana = 1000` is invisible one tick later: `sub_60F00` (EF:61976)
+recomputes every wizard's `maxMana` from `byte_0x150_336` plus the
+`mana` of every entity they own (castles, balloons, creatures,
+`(10,39)` spheres) **before the entity pass**, which is why mc2l3's
+`mana_max` reads 82,157 straight across the reset while `mana` lands
+on 750. (It is also why `mana_max` collapsed 82,157 → 2,559 between
+the deaths: the castle's stored mana went with the castle.)
+
+**THE 750/2000 RESIDUE IS THE FRAME ORDER, NOT A PENALTY.** The reset
+runs in `PlayerEvents` — ahead of the census, ahead of the entity pass
+and (measured) ahead of even the frame's one unconditional LCG draw —
+so the same frame's wizard body applies the `manaRegen` the corpse had
+frozen:
+
+```
+mana(reset) = 1000 + manaRegen_held
+  mc2l3 death 1: 1000 + (−250) =  750   (a cast debit was pending)
+  mc2l3 death 2: 1000 + 1000   = 2000   (at-castle regen floor)
+```
+
+mc2l24's 14 human deaths confirm it on a second take: resets land on
+1000 (delta 0, regen suppressed by a live cast), 1100 (the afield
+floor 100), **1295** = 1000 + 590060/2000, **1310** = 1000 +
+621060/2000 and 0 (a −1000 debit pending). The `maxMana/2000` afield
+rate reproduces the odd residues exactly.
+
+The RNG dating: retail's 26 fresh tokens are seeded `slot + rand` off
+**29,590**, which is the recorded global LCG at t=15314 *unadvanced* —
+so the reset allocates before the frame's own draw. That single fact
+places the whole reset in the input phase.
+
+### 4. `sub_5CF40` — the re-mint, and why the slots are 99, 100, 102…
+
+For every non-zero book entry, spawn a fresh class-15 token at the
+wizard's (already moved) position, `parentId` = the wizard,
+`byte[0] |= 1`, then re-apply `SetSpell_6D5E0` at the stored tier. An
+allocation failure zeroes that book entry — retail's own silent loss.
+
+Because `sub_49F90` rebuilt the free stack first, the mint takes the
+LOWEST free slots in ascending spell order: mc2l3 t=15315 puts spell 0
+at slot **99**, spell 1 at 100, spell 2 at 102 (101 is live), … spell
+25 at 133, all at the castle's exact x/y/z, with the same
+cost/upkeep payloads as the jars they replace. The same rebuild is why
+the graves land on slots **3** and **1**.
+
+The OLD scattered jars stay out in the world, still collectible — a
+death therefore doubles the class-15 census for a few hundred ticks.
+
+### 5. WHAT LANDED (port)
+
+- `retail_import_mc2`: `action45` 2/3 → `LifeState::Falling`/`Dead`
+  (it pinned `Alive` unconditionally, which is what let the corpse
+  regen and clamp).
+- `World::tick`: the MC2 reset is processed FIRST, ahead of the frame
+  draw, the census and the wizard body — the ordering IS the residue
+  law. `MGC_NO_MC2_DEATH=1` restores the pre-dig behaviour for A/B.
+- the mana step + delta recompute are gated off for an MC2 corpse.
+- `mc2_player_fall` / `mc2_player_land` / `mc2_player_dead_wait` /
+  `mc2_player_respawn` / `mc2_remint_book` — the human column;
+  `Gen::mc2_rebuild_free` is `sub_49F90`'s free half.
+- `mc2_scatter_spells` was written but never wired (and zeroed the
+  book, which would have made every death a permanent wipe); it now
+  leaves the boolean marker, keeps the hands, drops the jars at the
+  corpse's z and does NOT mutate the token's `rand`.
+- the book-driven manifestation loops now test the OWNED action state
+  (`tick70 == 3M`) — retail's own dispatch condition, which also keeps
+  the boolean marker from aliasing a real slot-1 manifestation.
+- harness: the recorded SPACE key (scancode 57) is decoded into
+  `PlayerCommand::respawn`. Dating it needs a witness — the key
+  registers carry no press latch and mc2l3 shows both sides of
+  retail's poll (SPACE first at record 15314 with the reset in frame
+  15315; at record 20612 with the reset in frame 20612) — so the rule
+  is `space(end) && (space(start) || recentred(end))`, where
+  "recentred" is the cursor jumping to a point that equals the
+  press-position snapshot: retail's 0xF handler runs
+  `SetCenterScreenForFlyAssistant_6EDB0` (EF:37653). Over the whole
+  take 348 records carry the recentre shape and exactly two of them
+  also have SPACE down — the two reset frames.
+
+### 6. THE `(10,2)` FAMILY — the Speed spell's slipstream, never ported
+
+175 missing rows, first at t=15499, right after respawn 1: an
+owner-stamped `(10,2)` appearing every 4th tick along the boosted
+flight path, life counting 31 → −2. It is `GetScroll_69DB0`'s
+contrail (EF:56251-59): on every live tick of the Speed window with
+`byte_0x3E_62 & 3 == 0` — the TOKEN's phase byte, not the caster's —
+spawn `NewAdd0A02_4E430` at the caster and **quadruple** the ctor's
+life (8 → 32). The ctor is four writes: maxLife/life 8, action 2,
+`dword_0x10_16` = 0, flags masked to `byte[0]|1`, `byte[0]&~8`,
+`byte[2]|2` (= the recorded 0x20001) — no sprite, and deliberately NO
+map link (it assigns `position_0x4C_76` instead of calling
+`AddEventToMap_57D70`), which is why the trail hangs where the carpet
+was. The MC1 twin of the same puff is documented in
+docs/traces/mc1-class12-spell-tokens.md.
+
+### 7. NUMBERS (windowed A/B, `MGC_NO_MC2_DEATH=1` = before)
+
+unexplained field / missing / extra:
+
+| window | before | after |
+|---|---|---|
+| mc2l3 **15255 +70** (death 1: fall, corpse, reset) | 375 / 28 / 7 | **215 / 2 / 7** |
+| mc2l3 **20595 +30** (death 2 reset) | 98 / 26 / 0 | **30 / 0 / 0** |
+| mc2l24 **2580 +40** (death 1) | 226 / 18 / 2 | 233 / **2** / 2 |
+| mc2l24 **11205 +45** (death 5) | 610 / 22 / 4 | 610 / **0** / 4 |
+
+- mc2l3 death-1 reset pair **15314→15315: 0 unexplained rows and the
+  rng matched** — life 10000, mana 750, all 26 tokens at retail's own
+  slots with retail's own seeds. (The rng needed one more thing: the
+  importer arms `mc2_carpet_stall` off the corpse's action 3, and the
+  reset must clear it — the resurrected carpet runs the mover, and
+  with it the cave tail's draw, that same frame.)
+- mc2l3 death-2 reset pair **20611→20612**: life/mana/tokens all
+  conform; the window's residue is the pre-existing grave-census
+  family (`slot 1 mana_max`, 12/12 pairs, present before the reset).
+Full take (`verify-deltas recordings/mc2l3.mgcr`, 27,489 pairs):
+
+| | before | after |
+|---|---|---|
+| conforming | 21,534 | **21,597** |
+| conforming + explained | 21,865 | **21,947** |
+| UNEXPLAINED field | 28,450 | **27,650** |
+| UNEXPLAINED missing | 440 | **209** |
+| UNEXPLAINED extra | 144 | 145 |
+| entity sets missing / extra | 559 / 304 | **328** / 305 |
+| rng mismatched pairs | 2 | **0** |
+| `(15,*)` reset rows | 52 / 0 | **0 / 0** |
+| `(10,2)` | 175 / 0 | **0 / 1** |
+| `player.life` / `player.mana` pairs | 454 / 1,447 | **357** / **1,351** |
+
+The two `(>16, 1)` rng pairs in the census were the two resets; the
+take now has none.
+
+### 8. RESIDUE + LEADS (all measured, none blocking)
+
+1. **The landing pair keeps ~104 rows** (26 tokens × life/x/y/z): the
+   scatter's three draws belong to the dying wizard's private LCG,
+   which this port has no home for (the human owns no pool record). A
+   copy of the token's own seed stands in. The recorded carpet DOES
+   carry `rand` — importing it would close this exactly.
+2. **Loose class-15 jars do not snap z.** Retail's scattered tokens
+   read 1997/2063/3194/3887 one tick after the scatter (cave terrain);
+   the port leaves them at the corpse's z. That is the class-15
+   pickup-state arm, not the death law — a clean follow-up, and the
+   take's `z` family is the biggest one left.
+3. **The death puff ticks one frame early.** The port's player column
+   runs before the pool walk, so a `(10,1)` allocated below the carpet
+   slot seeds its `(10,0)` fires in the same frame; retail's puff is
+   spawned at slot 167 inside the walk and waits. 6 extra rows on the
+   landing pair (`mc2_manifestation_pass` is the existing cure shape).
+4. **The mid-burst regen suppression is worth a dig.** `sub_68DE0`
+   zeroes the caster's `manaRegen` on every non-first burst tick, and
+   the manifestation slot decides whether the wizard body already
+   applied it: mc2l3's spell-3 token sits at slot 103 < carpet 167, so
+   retail's mana stays FLAT while the recorded `d88` reads the
+   post-recompute 100. The port applies the imported delta and
+   over-regens by exactly one quantum. This is the take's largest
+   single family (`player.mana` 1,447 pairs) and the MC1 import lane
+   already has the twin clamp (`conformance.rs`, the `f48 != f50`
+   probe) — the MC2 version wants `any live human class-15 token with
+   `f26 != 0 && f26 != f28` below the carpet slot`.
+5. `mc2_rival_death_impact` spawns the rival grave at `ground_z`, not
+   at the corpse's floor — the same one-line law this dig fixed on the
+   human side, left alone because no rival death was measured here.
+6. The port's respawn queues `pending_respawn` but the human pose
+   belongs to the app, so the same frame's scans still run from the
+   corpse (retail moves the entity mid-frame). Harmless — you collect
+   your own jars a tick early — but it is a real one-tick divergence
+   in native play.
+
+### 9. TESTS + GOLDENS
+
+New, non-vacuous, `engine::world::tests`:
+- `mc2_death_scatters_the_book_and_the_reset_re_mints_it` — the
+  landing scatters every manifestation into a loose jar on the
+  `rand%90+200` clock, leaves the **boolean 1** marker (not 0), raises
+  the grave, then a corpse tick that changes NOTHING (no heal, no
+  regen, no delta recompute), then SPACE: alive, life 10000, mana
+  **750** = 1000 + the held −250, a castle teleport, fresh tokens in
+  the owned state at NEW slots, the old jars still out in the world,
+  hands unchanged.
+- `mc2_speed_window_trails_a_puff_every_fourth_tick` — one puff per
+  four ticks, `maxLife` 8 with `life` 4×8, action 2, the caster stamp
+  and the exact flag word; off-cadence shifts WHICH tick drops, never
+  how many.
+
+No golden was re-pinned by this work: the MC2-native-visible changes
+(the Speed puff, the owned-state guard) were A/B'd against
+`mc2_cave_behaviors_and_goldens` and left its hashes bit-identical.
+That test IS red in the shared tree — its divergence is in `hashes[0]`,
+the freshly built world before any tick, which no death path can
+reach; it belongs to the concurrent `(10,13)` smoke-puff work
+(§"LIGHTNING STORM + THE (10,13) SMOKE PUFF"), whose own re-pin note
+says pool population and free-list order move from the build settle on.
+
+## MC1/HW SPEED-TOKEN CONTRAIL + TOKEN-OWNER IMPORT + PLAYER
+## LIFE-STATE LANE (session lead, dig/re-triage round, 2026-08-06)
+
+**(10,2) = the direction tokens' contrail, BOTH directions.** The
+ledger's old attribution (Accelerate `sub_56380` alone) was
+incomplete: the reverse token's arm `sub_57F00_58410` (remc1hw
+:62390-451; v_12 written −3×/−2× base, otherwise the same body)
+emits the same `(10,2)` puff every 4th token `+63` tick, and the
+hw:0 rival brakes/boosts near-permanently — every one of the take's
+1,847 missing rows was RIVAL contrail (`id24` 473; the human never
+cast a direction spell all take). Landed:
+
+1. **Strict class-12 phase-0 arm** (world.rs `class12_tick`): for
+   spells 2|21 with the imported burst counter live (f26 ← retail
+   +48) and `f63 & 3 == 0`, spawn the `(10,2)` at the OWNER's pose,
+   `id24` = owner, `act_life ×4` (ctor 8 → 32 — the t=3 corpus puff
+   reads 31). Admission per `sub_55DD0_56300` (:61132-55): both
+   direction ctors author no castle-store req; only first-burst-tick
+   mana ≥ 1000 gates. Cadence corroborated tick-exact (rival token
+   f63 244 & 3 == 0 at the t=2 spawn).
+2. **Token-owner import** (conformance.rs `import_ent`): class-12
+   `f144 ← tr(f42)` — retail keeps the token's owner wizard carpet
+   slot in +42 and +144 is authored 0 on every token (corpus-proven),
+   so the lane is free. This is the re-anchor lane the Rebound dig
+   banked as lead 1; MC1 obs never projects f144, and
+   `rival_token()` requires native encoding, so both stay unaffected.
+3. **Native contrail** (`manifestation_tick` arm 2): same law off the
+   native f26 burst; test
+   `accelerate_burst_emits_the_contrail_on_the_4_tick_cadence`
+   (non-vacuous: off-phase and lapsed-burst ticks spawn nothing).
+4. **Player life-state import fix** (the storm dig's diagnosed lead,
+   landed verbatim): `state:` read `carpet.f66` = sCLASS (255
+   always) — every dead player imported Alive-with-negative-life and
+   re-ran the death cascade per pair. Real lane = the tick-handler
+   byte `+70` (`*(_BYTE*)(a1+70) = 3`, :55550).
+
+**Full-take mc1hwl0 (`--input-delay 2`), post-storm baseline →
+after:** conforming 7,464 → **7,810**; rng mismatched pairs 33 →
+**4**; missing 17,142 → **15,035**; unexplained field 799,629 →
+796,115. `(10,2)` 1,847/0 → **150/220** — the residue is (a)
+burst-START pairs (the rival casts mid-tick: token 0 → 251 inside
+the pair, e.g. t=70 — cast-timing capture) and (b) free-stack
+slot-allocation capture from t≈278 (both sides spawn the same puff
+at the same tick, different slots; the retail slot is port-occupied
+so the balance degrades to field rows + one-sided extras — the
+extras run 278-326 at exactly the retail cadence). Suites: 1 FIXED
+(hw t=4 → conforming), 3 hw drifts + 1 mc2l4 drift all
+signature-shrinking, promoted; 0 regressions.
+
+**Leads:** ① the extras/missing (10,2) residue wants a slot-capture
+roster rule scoped to burst windows; ② the strict arm skips retail's
+`Type_160 +14` force-end clamp (`+48 = 1` when the owner's v_14 lane
+is pinned) — unmodeled, invisible on this corpus; ③ the regen seed
+clamp (conformance.rs :385) counts ANY mid-burst class-12 with
+`f144 == 0` as the human's — with rival tokens now stamped via f42
+that heuristic could be tightened to `f144 == PLAYER_TARGET` (it
+currently keys retail rows, where +144 = 0 for rivals too — worth a
+re-measure against the player.mana family, 9,983 rows).
+
+## MC2 CAVE STOCK-BAKE DIG — THE GENERATOR IS BYTE-PERFECT; THE
+## LOAD-TIME SPAWN DATUM WAS THE BUG (dig agent, 2026-08-06)
+
+**Premise falsified.** The dig opened on "the MC2 cave terrain
+GENERATOR chain diverges from retail's t=0 bake". It does not.
+`mgc-import/src/mc2_terrain.rs` reproduces retail's
+`GenerateLevelMap_43830` **byte for byte on every plane**: over
+mc2l3's 65,536 cells, the count of cells that neither retail's nor
+our load pass touched and that still disagree is **0 on all five
+planes** (type/height/shading/angle/ceiling). Every divergence the
+record-0 validator saw lived in MC2's LOAD-TIME cave-sculptor pass
+(`GenerateEvents_49290` + the `ApplyEvents_498A0` settle), which
+runs after the bake and before tick 0.
+
+The three-way split that proved it: `mgc-conform terrain-diff --out`
+gives retail's measured record-0 planes and our POST-LOAD planes;
+the new `mgc-import --example tmp_mc2gen` dumps the generator's
+output BEFORE the load pass. Generator-vs-`.mgcl` matched exactly;
+`.mgcl`-vs-post-load differed by 12,465 height cells — i.e. the
+carve, not the bake.
+
+### The three laws (all decompile-line-cited)
+
+1. **LOAD-TIME SPAWNS SIT ON THE TILE CORNER, NOT ITS CENTRE.**
+   `PrepareEvents_49540` builds every one of its three spawn
+   positions as the bare `entity->axis2d_4.x << 8`
+   (Events.cpp:307 class 2/0x0E, :339 the 0x2D building arm, :353 the
+   generic class-10 arm). Only the RUNTIME disposition spawn
+   `sub_4A310` adds the half tile (`(axis2d_4.x << 8) + 128`,
+   EF:33014). `World::spawn_from_thing` added +128 unconditionally,
+   so the MC2 at-load pass placed every cave sculptor half a tile
+   SE of retail's. That half tile is load-bearing twice over: each
+   sculptor derives its box origin from `(position + 128) >> 8`
+   (EF:25599-25602) — which rounds a whole tile the other way — and
+   its radial profile from `EuclideanDistXYZ` to each tile CORNER
+   `(i << 8, j << 8)` (EF:25666-68), so retail's cell-centred cone
+   (`d == 0` at the centre cell) became a 2x2-symmetric one with no
+   `d == 0` sample at all. Fix: `spawn_from_thing_at(ti, corner)`,
+   with `mc2_generate_events` passing `corner = true` and
+   `fire_disposition` keeping the centre. MC1 is untouched (its
+   load pass runs `load_time_pass`, not this seam) and stayed
+   byte-perfect on mc1l0/mc1hwl0.
+
+2. **THE PIT/HILL −128 RECENTRE BELONGS TO THE DISPOSITION PATH
+   ONLY.** `sub_4A310` subtracts 128 from x and y for models
+   0x54/0x55 (EF:33129-31) — which exactly CANCELS the +128 that
+   same function applied at EF:33014, landing the sculptor on the
+   corner. `PrepareEvents_49540`'s 0x54/0x55 case (Events.cpp:384-88)
+   consumes `word_10` and `par3_18` and does NO position fixup,
+   because it never added the half tile. We ran the −128 on both
+   paths, so after fix 1 the load-time pits/hills sat half a tile NW.
+   Fix: gate the recentre on `r.dis_id != 0xFFFF`.
+
+3. **THE RELIEF-SHADE INVERSION IS LIVE DURING THE LOAD SETTLE.**
+   `sub_462A0` / `AddBuildingToTerrain_46570` write `32 - s + 32`
+   whenever `MapType != Day` (Terrain.cpp:2030-33, EF:31185-88) — a
+   LEVEL property retail holds long before `GenerateEvents`. Our
+   `mc2_night_shade` is a post-construction setter, so every repaint
+   the load carve fired baked DAY shading into a cave level (the
+   plane came out `64 - correct` on ~15k cells). Fix: derive the
+   cave half of the flag inside `World::new_for_game` from the
+   ceiling plane (`Gen::is_cave`) before `mc2_generate_events`.
+   REMAINING GAP: a NIGHT non-cave level has no ceiling plane, so
+   its load-time painters (roads/rivers/beams) still repaint under
+   the Day law until the flag reaches construction properly.
+
+### Numbers (mc2l3, record-0 stock-bake validator)
+
+| plane | before | after | capture-domain | real |
+|---|---|---|---|---|
+| type | 2,244 (3.42%) | **131 (0.20%)** | 0 | 131 |
+| height | 4,483 (6.84%) | **140 (0.21%)** | 85 | 55 |
+| shading | 15,432 (23.55%) | **61 (0.09%)** | 0 | 61 |
+| angle | 9,640 (14.71%) | **5,373 (8.20%)** | 0 | 5,373 |
+| ceiling | 4,770 (7.28%) | **132 (0.20%)** | 80 | 52 |
+
+The "one-cell X-shift at map edges" in the original report was law 1
+seen edge-on, not a wrap/clamp bug: nothing is shifted globally
+(rolling the port ±1 in x or y makes every plane WORSE by 3-4x).
+
+### The capture-domain share is now MEASURED, not guessed
+
+Level 3 was recorded twice (the take was re-recorded mid-dig). The
+two takes' record-0 bases are **byte-identical on type, shading and
+angle, and differ on exactly 85 height + 80 ceiling cells** — all six
+`(14,2)` CAVE PILLAR footprints, and monotonically (old take floor
+46 / ceiling 91, new take 48 / 89). That is a pillar mid-ANIMATION:
+each pillar carries a co-located `(10,64)` riser trigger at
+disposition 0 (slots 646-651), which `fire_disposition(0)` arms at
+load and which drives the pillar's RETRACT arm on the first live
+ticks — after the load settle, before record 0. Our stock bake is a
+zero-tick world, so it cannot show it. **Those cells are capture
+domain, not a generator or carve bug** — the two-take A/B is the
+free discriminator, and it should become standard practice: record
+any stock-bake level twice and the cells that MOVE between takes are
+exactly the pre-record runtime edits.
+
+### Remaining (all attributed, none unknown)
+
+- **One cave-tube leg, x 158..170 / y 17..28** (55 height, 51
+  ceiling, 61 shading, 72 type cells): chain 21→22→23 around node
+  (165,22). Both sides carve it; ours runs 2-3 units LOW in both
+  floor AND ceiling, i.e. the `sub_34540` rolling midline baseline
+  (`x_BYTE_F01FEx[2+0]`, the 32-sample `(floor+ceiling)/2` buffer) is
+  2 low for those steps. Ruled out by reading: the chain walk and
+  FROM/TO order (Events.cpp:5352-59), the packed-radii nibbles
+  (EV:5348), `MoveEntity_57FA0` ≡ our `polar_step` (Player.cpp:6-19,
+  pitch 0), the box/abs-wrap arithmetic, the `sub_34B00` wall ring,
+  and the buffer shift order. Only 1 of ~55 legs diverges.
+- **A 59-cell TYPE-only cluster at x 145..152 / y 79..88**, adjacent
+  to the `(152,85)` pillar — downstream of the same capture-domain
+  pillar difference (the classes under a retracted pillar differ, so
+  the blend retile picks other textures).
+- **angle 5,373 = the ORIENTATION NIBBLE ONLY** (bits 4-6; class,
+  seal bit 3 and lock bit 7 all agree to within 225/0/0 cells).
+  `sub_462A0`/`AddBuildingToTerrain_46570` draw it from the shared
+  terrain LCG `rand2_17B4E0` (Terrain.cpp:1995-99, EF:31142-45),
+  whose post-generation state we reconstruct with
+  `post_generation_pseudo_rand` — and that reconstruction is CORRECT
+  (a brute-force solve over all 65,536 seeds against retail's own
+  nibbles picks our value, 777). The stream is a per-draw one: an
+  offline alignment of our 314,196 load-time draws against retail's
+  captured nibbles agrees **1.000 through draw ~154,500** (all
+  mesas, domes, pits, hills and most tube legs) and then goes random
+  — one missing/extra draw in a tube carve near the y-wrap at
+  x 196..201 / y 253..1 desyncs everything after it. Presentation
+  only (texture rotation), so it costs no sim fidelity, but it is
+  the single remaining lead with a known first-divergence index.
+
+### Instruments added
+
+- `mgc-conform terrain-diff --out <dir>` — dumps both sides of every
+  plane as raw 256x256 byte images (`<plane>.retail`/`.port`) for
+  offline clustering.
+- `mgc-conform terrain-diff --baseline <dir>` — reads the MEASURED
+  planes from an earlier `--out` dump instead of the take's own
+  record-0 base, so an attribution stays reproducible after a
+  re-record (and so two takes can be A/B'd against each other).
+- `mgc-import --example tmp_mc2gen <index> <out>` — the generator's
+  planes before the load carve; the third side of the triangle.
+
+**Goldens re-pinned (behavior change toward retail):**
+`mc2_cave_behaviors_and_goldens` GOLDEN and OBSERVABLE, all four
+checkpoints including the load checkpoint — as it must be, since the
+terrain plane the projection hashes differs before tick 0.
+Provenance comments carry the citations above. `cargo test -p
+mgc-sim` 18/18 suites green, `cargo test -p mgc-conform` suite green
+(no fixture regressions), `mgc-import` generator golden unmoved.
+
+## THE MC2 BURST MANA LANE — THE RECORDED `manaRegen` IS ONLY THE APPLIED ONE WHEN THE MANIFESTATION SITS ABOVE THE CARPET (dig agent, 2026-08-06; mc2l3 take-2's #1 family, 3,738 pairs)
+
+`player.mana` + the carpet's `mana` were 3,710 pairs each on the fresh
+mc2l3 — the take's largest family — with the dominant shape
+`port = want + 100`: one un-suppressed regen quantum per casting tick.
+The same lane also swallowed a 40,000-mana Create Castle whole
+(t=8445, want 1,359 got 41,359).
+
+### 1. THE LAW
+
+Both engines run the wizard's mana as applied-then-recomputed:
+`AddPlayer03_00_5E010` does `mana += manaRegen`, then recomputes
+`manaRegen` to the regen floor (EF:59996-60033). The CAST machinery
+writes the same word from somewhere else entirely — `sub_68DE0`
+(EF:55569), called from the manifestation's OWN class-15 action:
+
+```c
+if (a1x->word_0x2E_46 == a1x->word_0x30_48) {          // FIRST tick
+    v3 = a2x->manaRegen_0x88_136;                      // a2x = the CASTER
+    a2x->manaRegen_0x88_136 = v3 >= 0 ? -a1x->maxMana_0x8C_140
+                                      : v3 - a1x->maxMana_0x8C_140;
+} else if (a1x->word_0x2E_46 && a2x->manaRegen_0x88_136 > 0)
+    a2x->manaRegen_0x88_136 = 0;                       // the mid-burst PIN
+```
+
+Both live in the SAME ascending entity walk, so **the manifestation's
+pool slot against the carpet's decides which of the two writes the
+recorder's frame-tail snapshot catches**:
+
+- **token ABOVE the carpet** — wizard applies, recomputes, then the
+  token overwrites. The record holds the token's stamp and applying it
+  next frame is exactly right. (mc2l24 slot 118 vs carpet 116:
+  `d88` −100 with mana flat, then mana −100 with `d88` 0, then flat.)
+- **token BELOW the carpet** — the token stamps first, the wizard
+  applies it and then recomputes. The record holds the RECOMPUTED
+  FLOOR; what the next frame applies is whatever the token stamps
+  then. (mc2l3 t=9033-36: `d88` pinned at 100 while mana goes
+  41359 → −100 → flat → flat → +100.)
+
+Two exceptions, both retail's own dispatch:
+
+- **The CASTLE (spell 2)** never re-enters `sub_68DE0` while its timer
+  is parked: that timer is an upgrade LOCK, not a countdown. mc2l3
+  t=8446+ holds `word_0x2E_46` at 100 while mana climbs +1000/tick.
+- **Any action but 0** skips the regen block outright, because the
+  block lives in the action-0 body. Actions 2/3 are the corpse (see
+  the death-law entry — their HELD delta is the reset's 750/2000
+  residue). Action **12**, the level-end sequence
+  (`sub_5E8C0_endGameSeq`), freezes mana for its whole run: 176 of
+  mc2l3's 177 action-12 ticks apply 0 against a recorded 100.
+
+### 2. THE FAMILY DECOMPOSES EXACTLY
+
+Census over all 22,798 pairs (recorded `d88` vs what retail's mana
+actually did, clamped pairs excluded):
+
+| shape | pairs |
+|---|---|
+| a live burst BELOW the carpet | **3,407** (2,186 first-tick, 1,221 mid-burst) |
+| the carpet in a non-action-0 body (death fall / corpse / end seq) | **330** |
+| a live burst ABOVE the carpet | 1 |
+| **total mismatched** | **3,738** |
+
+which is the reported `player.mana` 3,710 plus the handful the clamp
+filter dropped. Nothing else is in there.
+
+### 3. WHAT LANDED
+
+- `conformance::mc2_applied_mana_delta` — the importer now seeds the
+  word the wizard body will APPLY, not the one the recorder caught:
+  replay `sub_68DE0` over the human's book manifestations that sit
+  below the carpet, in slot order. Non-action-0 carpets seed 0.
+- `World::mc2_same_frame_debit` — the FIRST-tick debit is deliberately
+  NOT pre-applied by the importer. The port stamps it in the
+  manifestation pass exactly like retail and lands it there, which
+  keeps retail's ORDERING: `mc2_afford` reads the purse BEFORE the
+  debit. Pre-applying it instead (tried first, measured) made the gate
+  see 1,359 against a 40,000 cost at t=8445 and the entire Create
+  Castle cast vanished — the build ball and its (10,43) painter both
+  went missing. Native play is untouched (the human owns no pool slot,
+  so the stamp pends a tick like retail's).
+- `MGC_NO_MC2_BURST_DELTA=1` restores the pre-dig import (both halves)
+  for A/B.
+
+The book entry must still BE that manifestation in its owned action
+state `3M`: the death scatter parks a boolean 1 marker in the book and
+a wraith-stolen jar runs action 78 — neither reaches `sub_68DE0`.
+
+### 4. NUMBERS (windowed A/B, `MGC_NO_MC2_BURST_DELTA=1` = before)
+
+conforming | unexplained field / missing / extra:
+
+| window (mc2l3 take-2) | before | after |
+|---|---|---|
+| **13500 +500** (burst-dense) | 109 conf, 1,700 / 0 / 31 | **237 conf, 946 / 0 / 31** |
+| **14500 +500** | 169 conf, 1,481 / 0 / 10 | **290 conf, 851 / 0 / 10** |
+| **10000 +500** | 148 conf, 4,954 / 5 / 32 | **208 conf, 4,344 / 5 / 32** |
+| **22620 +178** (the level-end sequence) | 354 / 0 / 0 | **2 / 0 / 0** |
+| **9028 +20** (possess re-arms) | 44 / 0 / 0 | **26 / 0 / 0** |
+| **8443 +6** (Create Castle, 40k) | `player.mana` want 1,359 got 41,359 | **conforms** |
+
+Full take (`verify-deltas recordings/mc2l3.mgcr`, 22,798 pairs):
+
+| | before | after |
+|---|---|---|
+| conforming | 14,276 | **15,706** (+1,430) |
+| conforming + explained | 14,546 | **15,999** |
+| UNEXPLAINED field | 42,414 | **34,986** (−7,428) |
+| UNEXPLAINED missing / extra | 335 / 340 | 335 / **337** |
+| **`player.mana` pairs** | **3,710** | **10** |
+| carpet+entity `mana` hits / pairs | 5,606 / 4,632 | **1,904 / 1,626** |
+| rng mismatched pairs | 4 | 4 (see §5) |
+
+Cross-take regression guard: `mc2l24` @45000 +400 conforming
+140 → **155**, unexplained unchanged; `mc2l24` @20000 +400 and
+`mc2l0` @3000 +400 both unchanged. All six fixture suites `as
+expected`, including the newly frozen `conformance/mc2l3.json`
+(1,452 fixtures, 0 regressions, 0 drifted).
+
+### 5. THE FOUR RNG PAIRS (mc2l3 take-2)
+
+- **22621** was ours: `player.mana` +100 in the level-end sequence,
+  now clean. Its rng lane stays mismatched `(1, >16)` — retail's
+  action-12 frame draws ONLY the frame-top LCG step (the mover, and
+  with it the cave tail, is parked), while the port still ticks
+  something through the end sequence. That is the end-sequence lane,
+  not the mana one.
+- **14275 / 14395 / 14491** are one shape and NOT this dig's: slot 96
+  reads `action 97` in retail against the port's `105`, with a stray
+  (10,0)/(10,45) spawned in the port each time. A creature state
+  machine one step ahead — worth its own probe.
+
+### 6. RESIDUE + LEADS
+
+1. **The 10 `player.mana` pairs left are the FATAL-HIT frame** (first
+   at t=7884, the frame that ends with `action45` 2). Retail takes the
+   killing damage in `sub_5EFA0`, which runs BEFORE the `life >= 0`
+   gate, so the whole regen block is skipped on the way into the death
+   fall; the port applies its imported delta at the top of `tick()`,
+   ahead of its own damage intake, and lands a −250 retail never
+   applied. Same root as lead 3.
+2. `mc2_afford`'s castle-store gate (`f136` against the castle's
+   stored mana) is evaluated against the port's own castle bank, which
+   carries its own residual — a starved bank there would now suppress
+   a cast the importer already zeroed the regen for. Not observed on
+   any take in the corpus.
+3. The port still applies the wizard's mana at the top of `tick()`
+   rather than at the carpet's slot in the walk. `mc2_same_frame_debit`
+   is the targeted repair for the one observable that ordering breaks;
+   a general fix (running the human's mana body from the walk at
+   `mc2_carpet_slot`, where `mc2_player_cast_pass` and the cave tail
+   already run) would retire this whole class — including the death
+   column's own one-frame puff artifact.
+
+## LIGHTNING/FIRE FIELD-ROW TRIAGE + VISUAL-ONLY DOCTRINE
+## (session lead, 2026-08-06, player-ruled)
+
+Post-dig triage of mc1hwl0's 796k unexplained field rows; player
+ruling generalized into docs/CONFORMANCE.md §roster "Visual-only
+families". All claims verified against consumers before
+classification:
+
+1. **(9,9) lightning trail nodes (~331k rows) = capture.** Born-dead
+   by law (maxLife=(node>=beam)-1), no victim scan — storm kills
+   ride the beam's acquire exclusively (storm dig). Row shapes:
+   life −1 vs −2 corpse stamps; max_life 0-vs-300 = different record
+   in slot; x/y bimodal — >60-tile (different record) or <0.12-tile
+   (one-node index shift along the beam). Rules
+   mc1hw-lightning-node-{life,maxlife,x,y}. REAL signal = record
+   counts (harness metric still owed) + missing/extra atoms, which
+   stay unexplained.
+2. **(10,0)/(10,6) fire churn** — fire_tick moves only the z flicker
+   and never reads f30: heading = write-only spawn stamp → capture
+   (mc1hw-fire-churn-heading, 67k). Same-slot x/y/rand = a DIFFERENT
+   fire in the slot, knock-on of the ambient spawn-cadence
+   divergence (the undug weather-churn lead) → classified **open**
+   citing the parent (mc1hw-fire-churn-{x,y,rand} 75k,
+   mc1hw-standing-fire-churn-{x,y} 11.7k) — explained, still on the
+   books.
+3. **(10,13) smoke puffs = fully visual entity** (smoke_puff_tick:
+   rise + 16-tick drift + sprite step, no damage, nothing scans it)
+   → blanket field rule mc1-smoke-puff-fields (50k hw + 15 mc1l0).
+4. **Boundary case proving the bar: (10,39) ball heading is NOT
+   visual** — re-derived per tick and fed to the merge-walk's
+   polar_step (:4119) → rows KEPT (ball-merge lead symptoms).
+
+**Close: mc1hwl0 unexplained field 796,115 → 260,818 (−67%);
+missing/extra untouched by design.** Remaining top families: (5,15)
+guards (~42k — now live leads on measured terrain), mana cadence
+(~26k incl. the :385 clamp over-fire lead), (10,40)/(10,39) known
+leads, long tail. Doctrine: visual-only = capture with consumer-read
+proof cited; knock-ons of real leads = open citing the parent; field
+rows only; hit-count jump = re-verify.
+
+**CROSS-GAME SWEEP ADDENDUM (same day):** the visual-only pass was
+run over base-MC1 and MC2 as well. MC2 fire tick verified
+(mobs.rs mc2_fire_tick): positions never move, z = the f44 flicker
+roll, PITCH never read = write-only spawn stamp — but MC2 needed no
+new rules: the existing mc2-fire-churn-m0/m6/m13 blanket rules
+(cadence dug-to-completion and RULED capture in the session-4/8
+rounds) merely lacked the mc2l3 take scope — extended. MC1 fire
+rules extended to mc1l0 (same stationary-fire law; its open cadence
+lead stands). **Post-sweep: mc2l3 unexplained 34,986 → 29,386
+field / 212 missing / 144 extra · mc1l0 8,505 → 8,054.** Everything
+left in both games' top families is gameplay-bearing: MC2 (10,40)
+aura-pull, (10,39) ball physics, (9,0)/(9,1) bolt aim, (5,19)
+firebug stagevars; MC1 (10,39) merge-walk heading, mana cadence,
+(9,x) aim. No further visual-only candidates above the noise floor.
+
+## HW:0 LIVE REBOUND — playtest "still no rebound" TRIAGED: mechanism WORKS live, the gate is the 8000-stored era (2026-08-06)
+
+**Player report (post-fix playtest):** hw:0 Vodor still never shows
+Rebound in the port, "even though he has it pretty much the entire
+time in retail."
+
+**Method.** Temporary live-game probe (deleted; recipe: build hw:0
+from `baked/mc1hw/level-000.mgcl` + `mc1-arctic` via
+`World::new_for_game(Mc1Hw)` + `set_wizards`, drive scripted
+`PlayerPose`/`PlayerCommand` ticks, watch `debug_rival_ai()` +
+`debug_pool()` — the pool view now carries `f26/f140/f136/f144/f146`
+lanes for exactly this kind of dig). Retail side read straight off
+the corpus with `mgc-conform dump-state recordings/mc1hwl0.mgcr <t>
+<slots>`.
+
+**Findings.**
+
+1. **Config is right.** hw:0 wizards.json slot 1 (Vodor): Rebound
+   pregranted+allowed (book[14] set, manifestation minted at spawn),
+   `castle_level` 0 — and retail t=10 confirms NO rival castle
+   exists (slot 473 wizard only), so the authored-castle question is
+   closed: retail Vodor bootstraps homeless too.
+2. **The whole arm works end-to-end in a live game.** With his
+   castle storing >= 8000, EVERY fireball volley opened a window
+   within ~5 ticks: trigger scan (class-9 f146 = him, <= 1024),
+   ladder pick, `rival_cast_ready`, commit past the castle gate,
+   f26 = 101 countdown, `flags|0x8000` published, deflection
+   returned the volley (and eventually killed the probe player).
+   A realistic 25k-tick session (64-tick hit-and-run volleys every
+   1500 ticks) produced 19 windows / 1,900 bounce-ticks, including
+   the re-up chatter retail shows, and even reproduced the
+   rebuild arc: stray volley fire collapsed his castle (lvl 4 ->
+   gone), he re-planted at a new site, re-banked 10,000 in ~1k
+   ticks, and went back to bouncing.
+3. **The gate that hides it is the Rebound castle_req 8000 — an
+   ERA, not a bug.** Both engines bank the same curve: first haul
+   4,490 by t~1-2k, stall while the map's ball supply is dry, then
+   cross 8,000 on the next wave. Retail crossed at ~5.5k (first
+   corpus window 5,591); the port crossed at 6.8k/9.6k/15.8k with a
+   PASSIVE player (variance = ball scarcity) and at **t=750** with
+   an ACTIVE one (the player's own fighting feeds the world's
+   balls). Corpus cross-check: the identical 4,490 first-haul
+   appears in retail slot 522 f140 at t=1000 — the economy port is
+   faithful; wealth split during ferry (balloon cargo vs banked)
+   lags retail ~1.2k ticks at worst.
+4. **Retail "permanent" decoded.** The take has just SEVEN windows
+   (~1.4% of ticks): Rebound is REACTIVE — the player only observes
+   it when attacking, and after t~5.5k every attack provokes it,
+   hence "permanently up." Retail's era ended at ~21-26k when the
+   player wrecked castle 522, Vodor re-planted, died castle-less,
+   and was ELIMINATED (slot 473 corpse states from ~31k on).
+
+**Verdict: no port defect found.** What the playtest needs in order
+to SEE it: engage Vodor a few minutes in (after his castle banks
+8,000 — faster the more the level is actually being played), don't
+eliminate him first, and expect bounces only WHILE provoking him
+(4-second windows, re-upped per threat). If a session with those
+conditions still shows nothing, the next suspect is the app binary
+being stale (the fix tree must be rebuilt), not the sim.
+
+**Tree delta:** `DebugEvent` (debug_pool) gained the f26/cargo/cap/
+owner/chase lanes (diagnostics-only, hash-silent). Suites: rivals
+unit tests, level-005 goldens, fmt — all green.
+
+## HW REBOUND ROUND 2 — the deflection itself was broken: sound-only "rebounds" (2026-08-06)
+
+**Player report (second playtest, rich Vodor confirmed):** the rebound
+SOUND plays, but the meteor explodes on him, hurts no one, and no
+projectile ever comes back. Reproduced the triage conclusion from
+round 1 (the arm/bit/economy are fine) and found the real remaining
+defect in the deflection reader.
+
+**Retail law (sub_52B30 :62858-90, re-read from source).** On a bolt
+striking a victim whose `+17` bit 7 is set: quarter = the bolt's
+`+140 / 4` (signed); **afford gate** `quarter <= victim->+140` — the
+victim's +140 is his MANA (retail keeps a wizard's mana ON the
+entity). On success: sound 28 positional at the victim (**inside**
+the branch, :62861), `victim->+140 -= quarter`, heading reversed +
+rand%0x5B−45 scatter, pitch negated, chase = the original shooter,
+owner = the deflector, life refreshed, bolt relinked at the victim
+LIFTED by `victim->+84`, and NO explosion. On afford-fail: **nothing
+at all** — no sound, no debit, no hit; the bolt flies straight
+through (the :62859 false arm leaves the explode flag clear).
+
+**Port defects found.**
+1. **The rival wizard entity's `f140` was never written** — rival
+   mana lives in `Rival::mana` and the entity field stayed 0 for
+   life, so the afford gate compared against 0 and EVERY real bolt
+   failed it. (`RivalAiDebug`'s doc comment even claimed the mirror
+   existed.)
+2. The port played sound 28 BEFORE the afford gate — the reported
+   sound-but-no-rebound.
+3. On afford-fail the port fell through to the normal
+   teleport-onto-victim EXPLODE — retail flies through.
+4. The deflected bolt relinked at the victim's z without the `+84`
+   lift.
+
+**Fixed.**
+- `crates/mgc-sim/src/mc1/rivals.rs`: the +140 mana mirror —
+  seeded at `spawn_rival`/`rival_respawn` (1000), published at the
+  end of every `rival_alive_tick` (= `Rival::mana`), and reconciled
+  DOWNWARD at the tick top so combat-side quarter debits land in the
+  pool. Downward-only: every port-side credit writes `Rival::mana`
+  first and re-publishes the same tick.
+- `crates/mgc-sim/src/mc1/combat.rs` (`proj_move_and_hit`): sound 28
+  moved inside the afford branch (positional at the deflector);
+  afford-fail = silent fly-through (advance + return, no explode);
+  deflect relink lifted by the victim's `f84`.
+
+**Verification.**
+- New unit test `rebound_deflection_bounces_debits_and_is_silent_when_poor`
+  (rivals.rs): world maintains the mirror; a direct `proj_tick` on a
+  parked bolt against the rebounding wizard deflects (no explode,
+  owner swap, re-homed on shooter), debits exactly quarter (1000 →
+  900 for a 400-mana bolt), twangs; the poor arm (50 mana vs quarter
+  100) flies through silently with no debit. NON-VACUOUS: verified by
+  toggling each sub-fix off — the mirror off fails the mirror assert,
+  the old explode/sound restored fails the fly-through + silence
+  asserts. Test trap for posterity: park the encounter AWAY from the
+  starting castle — its 0x2000-tall envelope scan-resolves the CASTLE
+  instead of the wizard hovering on it.
+- Live hw:0 probe (temporary, deleted): rich era at t=6,839; volley
+  → bit ON at +5; **returned bolt (class-9 owned by Vodor, chase =
+  PLAYER_TARGET) at +10**. The player-visible loop is closed.
+- Goldens: `level_005_golden_state_hashes` re-pinned — attributed by
+  toggle to the f140 mirror ALONE (a deliberate hashed-field change;
+  the deflection restructure is golden-silent). Observable goldens
+  unmoved. All 18 mgc-sim test bins green; fmt clean.
+- Conformance: mc1l0 492 / mc1hwl0 852 / mc2l3 1,452 fixtures — all
+  as expected, 0 regressions, 0 drift (the rival lanes are inert
+  under import; the mirror writes retail's own value back).
+
+**BANKED — MC2 twin:** `mc2/proj.rs` has the same quarter-debit
+pattern against entity f140. MC2 rival Rebound windows are not yet
+mirrored onto their entities (existing DEVIATIONS note), so the gate
+cannot mis-fire there today — but when the MC2 rival rebound lands,
+it needs the same mana-mirror treatment. Also banked: the PLAYER
+deflection arm keeps its INTERIM no-debit (sound placement now
+matches retail; the debit needs the player pool reachable from Gen).

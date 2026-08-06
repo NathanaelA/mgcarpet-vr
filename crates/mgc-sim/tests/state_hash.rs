@@ -396,13 +396,25 @@ fn level_005_golden_state_hashes() {
     // strictly > 1024, so an EXACT half-turn keeps the raw sign; the
     // port's wrapped-delta sign turned the other way (Gen::turn_sign,
     // mc1/mobs.rs). Behavior change toward retail by design.
+    // Re-pinned (B-E; post-init + A hold — nothing burns yet) for the
+    // (10,13) RISING SMOKE PUFF, ported for the first time: the ctor
+    // sub_3AAA0 (str_255D0C[13]), the state-13 tick sub_257B0 (:28443)
+    // and BOTH creators — the standing fire's 1-in-7 exhaust puff
+    // (sub_252D0 :28224, previously a documented skip that kept only
+    // the LCG draw) and the volcano plume's per-tick ring spray
+    // (sub_26140 :28874, previously an untraced life countdown that
+    // drew nothing at all). Every burning tree and crater now emits
+    // smoke entities, so the pool population and the free-list order
+    // move from B on. Behavior change toward retail by design;
+    // corpus-proven on mc1hwl0, where (10,13) was the single largest
+    // unexplained family (1.75M field rows + 10,135 missing).
     const GOLDEN: [u64; 6] = [
-        0x4adb9e3a7dd0638d, // post-init (feature pass + disposition 0)
-        0x071d8b3685c82b66, // A: 32 idle ticks far afield
-        0xa847e571eb557a52, // B: crater trigger fired + 120 dig ticks
-        0xdc57979495c6c7e1, // C: ambush disposition fired
-        0xb85142c2898aaa4c, // D: 64 ticks of two-hand fireball combat
-        0x232383063229f207, // E: 100 aftermath ticks
+        0x211182712dfcddda, // post-init (feature pass + disposition 0)
+        0x28dd4f98783352f9, // A: 32 idle ticks far afield
+        0xc1f61ca5abcfc251, // B: crater trigger fired + 120 dig ticks
+        0xebaaa338279c6384, // C: ambush disposition fired
+        0xceb8fb8fd265cc9d, // D: 64 ticks of two-hand fireball combat
+        0xef4322b1199fc500, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

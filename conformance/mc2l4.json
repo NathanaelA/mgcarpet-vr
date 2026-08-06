@@ -174,10 +174,9 @@
     {
       "t": 3375,
       "status": "open",
-      "sig": "d0036f57c84c4858",
+      "sig": "1c92c41a1d3054cb",
       "atoms": [
-        "field:15,19:z",
-        "field:5,4:z"
+        "field:15,19:z"
       ],
       "note": "auto-triage vs known-deviations: roster: mc2-guard-terrain, mc2-balloon-z, mc2-castle-pad-z, mc2-terraform-houses, mc2-token-fall-z, mc2-archer-ground-z"
     },

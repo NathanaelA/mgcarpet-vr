@@ -208,6 +208,27 @@ Guard rails:
   obsoletes in the same change (the ledger's Resolved entry is the
   cue), exactly like fixture promotion.
 
+### Visual-only families (player-ruled 2026-08-06)
+
+A field lane VERIFIED as visual-only — a write-only spawn stamp, a
+purely decorative entity (smoke, contrail puffs), or born-dead pool
+bookkeeping (lightning trail nodes) — is classified `capture` rather
+than dug: cycles go to gameplay divergence, not sprite noise. The
+verification bar is non-negotiable and goes in the rule's note plus a
+ledger entry:
+- Read EVERY consumer of the lane (the tick handler AND external
+  scans) before calling it inert — "fires are stationary and never
+  read f30" took reading fire_tick, and the same sweep proved ball
+  heading is NOT visual (it feeds the merge-walk each tick: those
+  rows stay).
+- Only field rows are eligible. Missing/extra atoms keep full weight
+  — spawn cadence is gameplay evidence even for decorative entities.
+- Lanes that are knock-ons of a REAL open lead (fire x/y under the
+  spawn-cadence churn) are classified with `status: open`, citing the
+  parent lead — explained, still on the books, never "capture".
+- The per-rule hit count remains the tripwire: a visual-only rule
+  whose count jumps means the family changed character — re-verify.
+
 Report lines: `N pairs fully explained (conforming + explained = M)`
 is the roster-aware conformance tier; `UNEXPLAINED rows: F field,
 M missing, E extra` is the number a triage session works to zero.

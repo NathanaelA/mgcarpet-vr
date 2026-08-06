@@ -4,7 +4,7 @@
   {
    "id": "mc2l24-ball-terrain-roll",
    "status": "capture",
-   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced — ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
+   "note": "Resolved 'MC2 FOUNTAIN + TEMP MANA + BALLOON-REFUSAL' (2026-08-02) item 4 + UPDATED 2026-08-04 (fountain dig): the fountain spawner is BYTE-EXACT (3 births/tick, LCG-proven); the 'over-spawn' was retail merge DEATHS the port under-reproduced \u2014 ring-walk partner search + MC2 hard-free donor LANDED (native, cave golden re-pinned). Residual extras = summit merges the pristine terrain cannot host (retail deaths cluster on the doomsday mound z 2400-3300; the port ball hovers ~60 units up, never grounds, so the merge arm never runs) + one-snapshot decay-expiry linger; 12 missing = within-ring visit order (bitmaps_E9980x, DEVIATIONS combat.rs). Ball laws byte-exact (TTL/arc/bounce/friction).",
    "takes": [
     "mc2l24"
    ],
@@ -14,7 +14,7 @@
   {
    "id": "mc2l24-static-terrain-z",
    "status": "capture",
-   "note": "RECONSTRUCTED 2026-08-04 (landing round, ledger Resolved prop-z inversion): mc2/probes.rs inverts the class-2 statics' own terrain samples at import (the meteor-fire scorches that dug their ground are lost by construction, but the props ARE terrain samplers). Family 2400→0 mid/late windows, 1512→12 at the t=23411 onset. ⚠ The arm recovers the very field this rule grades — the count is NOT independent evidence; the rule survives ONLY as a regression sensor for the inversion (a jump = the arm stopped firing).",
+   "note": "RECONSTRUCTED 2026-08-04 (landing round, ledger Resolved prop-z inversion): mc2/probes.rs inverts the class-2 statics' own terrain samples at import (the meteor-fire scorches that dug their ground are lost by construction, but the props ARE terrain samplers). Family 2400\u21920 mid/late windows, 1512\u219212 at the t=23411 onset. \u26a0 The arm recovers the very field this rule grades \u2014 the count is NOT independent evidence; the rule survives ONLY as a regression sensor for the inversion (a jump = the arm stopped firing).",
    "takes": [
     "mc2l24"
    ],
@@ -79,7 +79,7 @@
   {
    "id": "mc2l24-castle-piece-terrain-z",
    "status": "capture",
-   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick on terraformed ground the pristine replay lacks. RE-NOTED 2026-08-04: the BUILD00 pad replay collapsed this 367k→804 rows (post-replay residual only). Hit-count jump = piece-law OR pad-replay regression signal.",
+   "note": "Resolved '(10,79) CASTLE DEFENDER PIECE' (2026-08-03 dig B): after the eleven import field-home fixes (recoil f68<-@0x44 etc.), residual z = terrain closure - the piece's z-law recomputes ground_z+levelOffset every tick on terraformed ground the pristine replay lacks. RE-NOTED 2026-08-04: the BUILD00 pad replay collapsed this 367k\u2192804 rows (post-replay residual only). Hit-count jump = piece-law OR pad-replay regression signal.",
    "takes": [
     "mc2l24"
    ],
@@ -190,7 +190,7 @@
   {
    "id": "mc2-rival-terrain-z",
    "status": "capture",
-   "note": "SPLIT from mc2-rival-ai-lanes per the session-9 re-attribution (ledger 'RIVAL AI-LANE MAP DECODED'): ~80% of the post-decode (3,1) remainder is the rival hovering its OWN castle pad — z tracks the runtime-terraformed pad the pristine replay lacks (the guard-terrain root). l30 dropped from scope: only mc2l4 has rival wizards (session-9 corpus fact).",
+   "note": "SPLIT from mc2-rival-ai-lanes per the session-9 re-attribution (ledger 'RIVAL AI-LANE MAP DECODED'): ~80% of the post-decode (3,1) remainder is the rival hovering its OWN castle pad \u2014 z tracks the runtime-terraformed pad the pristine replay lacks (the guard-terrain root). l30 dropped from scope: only mc2l4 has rival wizards (session-9 corpus fact).",
    "takes": [
     "mc2l4"
    ],
@@ -202,7 +202,7 @@
   {
    "id": "mc2-rival-mana-mirror",
    "status": "open",
-   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~14%): retail keeps wizard mana ON THE ENTITY (f140/f136, +regen at castle EF:5423); the port keeps it in Mc2Rival, so the obs mana lane freezes at its import value. One mirror closes the family but MOVES GOLDENS (native) — PLAYER DECISION OWED (ledger session-9 item 4①).",
+   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~14%): retail keeps wizard mana ON THE ENTITY (f140/f136, +regen at castle EF:5423); the port keeps it in Mc2Rival, so the obs mana lane freezes at its import value. One mirror closes the family but MOVES GOLDENS (native) \u2014 PLAYER DECISION OWED (ledger session-9 item 4\u2460).",
    "takes": [
     "mc2l4"
    ],
@@ -214,7 +214,7 @@
   {
    "id": "mc2-rival-ai-residual",
    "status": "open",
-   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~11%): genuine decision divergence surviving the wizard-ext AI-lane decode+import (reanchor_mc2_rival_ai, rivals.rs:671) — state/target choices drift where hate/war inputs diverge mid-take. l30 dropped: only mc2l4 has rivals.",
+   "note": "SPLIT from mc2-rival-ai-lanes (session-9 re-attribution, ~11%): genuine decision divergence surviving the wizard-ext AI-lane decode+import (reanchor_mc2_rival_ai, rivals.rs:671) \u2014 state/target choices drift where hate/war inputs diverge mid-take. l30 dropped: only mc2l4 has rivals.",
    "takes": [
     "mc2l4"
    ],
@@ -252,12 +252,13 @@
   {
    "id": "mc2-fire-churn-m13",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,13) emitter face. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "See mc2-fire-smoke-churn \u2014 the (10,13) emitter face. mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
     "mc2l30",
-    "mc2l24"
+    "mc2l24",
+    "mc2l3"
    ],
    "class": 10,
    "model": 13
@@ -265,12 +266,13 @@
   {
    "id": "mc2-fire-churn-m0",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,0) fire face (flicker band + substitution). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "See mc2-fire-smoke-churn \u2014 the (10,0) fire face (flicker band + substitution). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
     "mc2l30",
-    "mc2l24"
+    "mc2l24",
+    "mc2l3"
    ],
    "class": 10,
    "model": 0
@@ -278,12 +280,13 @@
   {
    "id": "mc2-fire-churn-m6",
    "status": "capture",
-   "note": "See mc2-fire-smoke-churn \u2014 the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands.",
+   "note": "See mc2-fire-smoke-churn \u2014 the (10,6) standing-fire face (z = f44 + terrain, recomputed; divergence is upstream terrain/init). mc2l24: partially rides the OPEN wave-spawn lead (open-leads 0b) via pool under-population - re-triage when the wave trigger lands. SCOPE 2026-08-06: mc2l3 added (new take, same churn story; visual-only doctrine sweep).",
    "takes": [
     "mc2l0",
     "mc2l4",
     "mc2l30",
-    "mc2l24"
+    "mc2l24",
+    "mc2l3"
    ],
    "class": 10,
    "model": 6
@@ -304,7 +307,7 @@
   {
    "id": "mc2-cast-timing-extra",
    "status": "capture",
-   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the possession fresh-arm input-reconstruction extras (session-4 ruling; the hydra (9,9) under-fire since FIXED, session-7 f136<-d88 — residual is beam geometry/terrain). ⚠ RE-NOTED 2026-08-04: check SYMMETRY before trusting this rule — the (9,17) possession re-fire bug (452 extra vs 0 missing) AND the one-tick launch-phase bug (24 extra vs 0 missing, fixed 2026-08-05 manifestation-slot order) both hid under it; balanced ± = latency skew, ONE-SIDED counts = a real port bug hiding here.",
+   "note": "Class-9 projectiles extra-in-port: the cast-timing skew's other side, plus retail's parked ghost husks vs the port's free-list reuse. mc2l24: also carries the possession fresh-arm input-reconstruction extras (session-4 ruling; the hydra (9,9) under-fire since FIXED, session-7 f136<-d88 \u2014 residual is beam geometry/terrain). \u26a0 RE-NOTED 2026-08-04: check SYMMETRY before trusting this rule \u2014 the (9,17) possession re-fire bug (452 extra vs 0 missing) AND the one-tick launch-phase bug (24 extra vs 0 missing, fixed 2026-08-05 manifestation-slot order) both hid under it; balanced \u00b1 = latency skew, ONE-SIDED counts = a real port bug hiding here.",
    "takes": [
     "mc2l0",
     "mc2l4",
@@ -607,6 +610,164 @@
    ],
    "class": 5,
    "model": 13
+  },
+  {
+   "id": "mc1hw-speed-contrail-missing",
+   "status": "capture",
+   "note": "Ledger 'MC1/HW SPEED-TOKEN CONTRAIL + TOKEN-OWNER IMPORT' (2026-08-06): the (10,2) direction-token contrail arm is LANDED and cadence-exact (both sides spawn the same puff at the same tick); residual missing/extra = (a) burst-START pairs where the rival casts mid-tick (token f48 0->251 inside the pair, cast-timing capture) and (b) free-stack slot-allocation divergence during burst windows (retail's puff slot is port-occupied, so the pairing degrades to one-sided rows instead of the balanced slot-desync case). ~150 missing / ~220 extra full-take. A count jump = the contrail arm stopped firing or the f42->f144 owner stamp broke.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 10,
+   "model": 2,
+   "kind": "missing"
+  },
+  {
+   "id": "mc1hw-speed-contrail-extra",
+   "status": "capture",
+   "note": "Ledger 'MC1/HW SPEED-TOKEN CONTRAIL + TOKEN-OWNER IMPORT' (2026-08-06): the (10,2) direction-token contrail arm is LANDED and cadence-exact (both sides spawn the same puff at the same tick); residual missing/extra = (a) burst-START pairs where the rival casts mid-tick (token f48 0->251 inside the pair, cast-timing capture) and (b) free-stack slot-allocation divergence during burst windows (retail's puff slot is port-occupied, so the pairing degrades to one-sided rows instead of the balanced slot-desync case). ~150 missing / ~220 extra full-take. A count jump = the contrail arm stopped firing or the f42->f144 owner stamp broke.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 10,
+   "model": 2,
+   "kind": "extra"
+  },
+  {
+   "id": "mc1hw-lightning-node-life",
+   "status": "capture",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 9,
+   "model": 9,
+   "kind": "field",
+   "field": "life"
+  },
+  {
+   "id": "mc1hw-lightning-node-maxlife",
+   "status": "capture",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 9,
+   "model": 9,
+   "kind": "field",
+   "field": "max_life"
+  },
+  {
+   "id": "mc1hw-lightning-node-x",
+   "status": "capture",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 9,
+   "model": 9,
+   "kind": "field",
+   "field": "x"
+  },
+  {
+   "id": "mc1hw-lightning-node-y",
+   "status": "capture",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (9,9) trail nodes are BORN-DEAD by law (maxLife=(node>=beam)-1) and carry no victim scan \u2014 every storm kill rides the beam's acquire (storm dig). Field rows verified as slot-identity/bookkeeping noise: life -1 vs -2 corpse stamps, max_life 0-vs-300 = a different record in the slot, x/y either >60-tile (different record) or <0.12-tile (one-node index shift along the beam). The REAL signal for this family is record COUNTS (harness metric, ledgered lead) and the missing/extra atoms, which stay unexplained.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 9,
+   "model": 9,
+   "kind": "field",
+   "field": "y"
+  },
+  {
+   "id": "mc1hw-fire-churn-heading",
+   "status": "capture",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "takes": [
+    "mc1hwl0",
+    "mc1l0"
+   ],
+   "class": 10,
+   "model": 0,
+   "kind": "field",
+   "field": "heading"
+  },
+  {
+   "id": "mc1hw-fire-churn-x",
+   "status": "open",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "takes": [
+    "mc1hwl0",
+    "mc1l0"
+   ],
+   "class": 10,
+   "model": 0,
+   "kind": "field",
+   "field": "x"
+  },
+  {
+   "id": "mc1hw-fire-churn-y",
+   "status": "open",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "takes": [
+    "mc1hwl0",
+    "mc1l0"
+   ],
+   "class": 10,
+   "model": 0,
+   "kind": "field",
+   "field": "y"
+  },
+  {
+   "id": "mc1hw-fire-churn-rand",
+   "status": "open",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): MC1/HW fires are STATIONARY (fire_tick moves only the z flicker; f30 is a write-only spawn stamp never read) \u2014 same-slot x/y/rand mismatches mean a DIFFERENT fire occupies the slot, a knock-on of the ambient fire spawn-cadence divergence (the undug weather-churn lead). Classified OPEN, not capture: the parent cadence dig is the fix; heading alone is capture (inert visual lane). SCOPE 2026-08-06: mc1l0 added (same stationary-fire law; its cadence lead = 'mc1l0 fire CADENCE 57/210').",
+   "takes": [
+    "mc1hwl0",
+    "mc1l0"
+   ],
+   "class": 10,
+   "model": 0,
+   "kind": "field",
+   "field": "rand"
+  },
+  {
+   "id": "mc1-smoke-puff-fields",
+   "status": "capture",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06), extended by the VISUAL-ONLY doctrine: the (10,13) rising smoke puff is a FULLY VISUAL entity \u2014 smoke_puff_tick rises, drifts its first 16 ticks, steps the sprite row and dies; no damage, no gameplay writes, nothing scans it. ALL field rows on it are slot/lifecycle identity noise. Missing/extra stay unexplained (spawn cadence is real signal).",
+   "takes": [
+    "mc1hwl0",
+    "mc1l0"
+   ],
+   "class": 10,
+   "model": 13,
+   "kind": "field"
+  },
+  {
+   "id": "mc1hw-standing-fire-churn-x",
+   "status": "open",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (10,6) standing fires DAMAGE (area_write) but never move in x/y \u2014 same-slot x/y mismatch = a DIFFERENT fire in the slot, knock-on of the ambient spawn-cadence divergence (weather-churn lead, same parent as mc1hw-fire-churn-x/y). OPEN: the cadence dig is the fix.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 10,
+   "model": 6,
+   "kind": "field",
+   "field": "x"
+  },
+  {
+   "id": "mc1hw-standing-fire-churn-y",
+   "status": "open",
+   "note": "Ledger 'LIGHTNING/FIRE FIELD-ROW TRIAGE' (2026-08-06): (10,6) standing fires DAMAGE (area_write) but never move in x/y \u2014 same-slot x/y mismatch = a DIFFERENT fire in the slot, knock-on of the ambient spawn-cadence divergence (weather-churn lead, same parent as mc1hw-fire-churn-x/y). OPEN: the cadence dig is the fix.",
+   "takes": [
+    "mc1hwl0"
+   ],
+   "class": 10,
+   "model": 6,
+   "kind": "field",
+   "field": "y"
   }
  ]
 }

@@ -140,6 +140,7 @@ their source.
 
 ## mgc-sim — MC2 cast
 
+- **mc2/cast.rs::World::mc2_scatter_spells (the death scatter's LCG)** — Retail rolls the three draws per scattered spell token off the DYING WIZARD's private stream (`a1x->rand_0x14_20`, `sub_5E310` EF:60148-61). The human owns no pool record in this port, so its private stream has no home; a COPY of the token's own seed stands in — same constants, same shape, different scatter offsets. Deliberately NOT the world stream (which would desync every other entity's draws on the landing tick) and deliberately not the token's live `rand` field (retail's scatter never writes it). Costs ~104 field rows on the ONE landing pair per death (26 tokens × life/x/y). Closable by importing the recorded carpet `rand`.
 - **mc2/cast.rs::World::mc2_aim_preview** — Retail MC2 draws NO crosshair/reticle; the aim feedback is the sprite-42 projectile visibly curving toward its target (docs/traces/mc2-autoaim.md §4, mc2-mouse-aim.md §4). This method is an opt-in (Preference-class) predictor that returns the target the hand's spell projectile would acquire on its first flight tick — a pure twin of the real aim scan. It is an enhancement, not a faithful surface; keep it gated as an instrument rather than "fixing" MC2 to always show a reticle.
 
 

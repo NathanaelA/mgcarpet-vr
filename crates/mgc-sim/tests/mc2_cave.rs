@@ -390,13 +390,32 @@ fn mc2_cave_behaviors_and_goldens() {
     // wander target now commit the capped turn in retail's
     // direction. Behavior change toward retail by design —
     // mc1l0 0+2000 +5 conforming, mc2l0 0+2000 +25 conforming.
+    // Re-pinned (all four) for the MC2 LOAD-TIME SPAWN DATUM + the
+    // pit/hill recentre split — the cave stock-bake dig
+    // (docs/CONFORMANCE-FINDINGS.md, mc2l3 record-0):
+    //   * `PrepareEvents_49540` spawns at the bare tile CORNER
+    //     `axis2d.x << 8` (Events.cpp:307/339/353); only the runtime
+    //     disposition path `sub_4A310` adds +128 (EF:33014). We added
+    //     +128 on both, so every cave sculptor's box rounded a tile
+    //     over and its radial profile came out 2x2-symmetric instead
+    //     of cell-centred.
+    //   * `sub_4A310`'s −128 for models 0x54/0x55 (EF:33129-31)
+    //     CANCELS that same function's +128; it belongs to the
+    //     disposition path only, never to the load pass.
+    //   * the relief-shade inversion keys on the level's MapType
+    //     (Terrain.cpp:2030), which retail holds before
+    //     GenerateEvents — so the load settle's repaints already
+    //     invert on a cave.
+    // Behavior change toward retail by design: mc2l3's measured
+    // record-0 planes go type 2,244 → 131, height 4,483 → 140,
+    // shading 15,432 → 61, ceiling 4,770 → 132 cells.
     assert_eq!(
         got,
         vec![
-            0x782c32f9fb57405eu64,
-            0x146ee5c2bebe7753,
-            0x393afd4eda53bef1,
-            0x6713772ef6317796,
+            0x1557c9632897e7dbu64,
+            0x1db7b42ea48c2610,
+            0x2be8f4f0266e0a6e,
+            0xe58c989f7e70ef24,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -444,11 +463,18 @@ fn mc2_cave_behaviors_and_goldens() {
     // B-D and HOLDS the load checkpoint: an antipodal wander turn now
     // commits in retail's direction, and creature poses diverge from
     // the first tie on — real behavior, not layout.
+    // The load-time spawn datum (see the golden pin above) moves ALL
+    // FOUR, including the load checkpoint — as it must: every cave
+    // sculptor now carves a cell-centred cone at retail's tile, so
+    // the terrain plane this projection hashes differs before tick 0,
+    // and every walker standing on it is placed differently from the
+    // first tick. Real behavior, measured against retail's own t=0
+    // planes (mc2l3).
     const OBSERVABLE: [u64; 4] = [
-        0x4504aa689dad600c,
-        0xb3905db935bc77b7,
-        0x630c14c484a20ddc,
-        0x092eb7a230a57c42,
+        0xfb1faf378bf44770,
+        0x8648496126e11e8d,
+        0x8062dcb956c043f9,
+        0xc21c02240160df37,
     ];
     assert_eq!(
         obs, OBSERVABLE,

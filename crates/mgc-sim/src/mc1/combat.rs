@@ -480,46 +480,86 @@ impl Gen {
     /// One-time target acquisition sub_54520 (:63943): nearest awake
     /// creature (any range) or wizard within the caster row's v_28,
     /// inside a ±0x71 yaw AND pitch cone, 3D distance ≤ 5120.
+    ///
+    /// **THE LIGHTNING BEAM (model 9) IS ITS OWN CASE.** `sub_54520`
+    /// switches on `+65`, and case 9 (:64125, remc1hw :60256 —
+    /// identical) scores the CREATURE buckets at `(0x71, 0x200)`: the
+    /// yaw wedge is the usual ±20°, but the PITCH cone is ±90°, i.e.
+    /// effectively unbounded. Wizards/castles keep `(0x71, 0x71)`.
+    /// That one constant is the Lightning Storm: the (10,38) cloud
+    /// fires its (9,9) bolts at a fixed pitch 56 (≈10° down) from
+    /// 1024 above the ground, and the bolt's reach is only
+    /// `life/3 + 1` steps of 384 — it can NEVER reach the ground on
+    /// its own. Every kill comes from the acquire snapping the beam
+    /// onto a creature. Under the shared ±0x71 pitch cone the flock
+    /// underneath the cloud is outside the wedge, nothing locks, and
+    /// the bolts sail out level "just above the monsters" — the
+    /// reported bug. Retail's ±0x200 makes the storm the flock killer
+    /// it is remembered as.
     fn aim_assist_mc1(&mut self, i: usize, ctx: &MobCtx) {
-        self.aim_assist_mc1_cone(i, ctx, 0x71, 0x71);
+        let creature_pitch = if self.ent[i].model65 == 9 {
+            0x200
+        } else {
+            0x71
+        };
+        self.aim_assist_mc1_cone2(i, ctx, 0x71, 0x71, creature_pitch);
     }
 
     /// [`Self::aim_assist_mc1`] with an explicit acquire cone. The base
     /// MC1 scan is `0x71`/`0x71`; Hidden Worlds' Fire Storm child (model
     /// 16, acquire switch case 0x10, remc1hw :60322) widens the YAW cone
-    /// to `0x100` while the pitch stays `0x71`. APPROX: case 0x10 scans
-    /// the spatial buckets for any awake entity; we reuse the shared
-    /// creature+wizard+player candidate set (the meaningful enemy set),
-    /// only widening the cone.
+    /// to `0x100` while the pitch stays `0x71` on BOTH candidate lists.
+    /// APPROX: case 0x10 scans the spatial buckets for any awake entity;
+    /// we reuse the shared creature+wizard+player candidate set (the
+    /// meaningful enemy set), only widening the cone.
     fn aim_assist_mc1_cone(&mut self, i: usize, ctx: &MobCtx, yaw_cone: u32, pitch_cone: u32) {
+        self.aim_assist_mc1_cone2(i, ctx, yaw_cone, pitch_cone, pitch_cone);
+    }
+
+    /// [`Self::aim_assist_mc1_cone`] with the CREATURE-bucket pitch cone
+    /// split out: `sub_54520` case 9 (the lightning beam) is the one
+    /// subtype that scores creatures on a different cone than the
+    /// wizard/castle list.
+    fn aim_assist_mc1_cone2(
+        &mut self,
+        i: usize,
+        ctx: &MobCtx,
+        yaw_cone: u32,
+        pitch_cone: u32,
+        creature_pitch: u32,
+    ) {
         let (px, py, pz, yaw, pitch, own) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.f30, e.f32, e.id24)
         };
         let mut best: Option<(u16, u32, u16, u16)> = None; // (slot, score, yaw, pitch)
-        let consider =
-            |tx: u16, ty: u16, tz: i16, slot: u16, best: &mut Option<(u16, u32, u16, u16)>| {
-                let d2 = Self::dist2_sq(px, py, tx, ty);
-                let dz = tz.wrapping_sub(pz) as i32;
-                let d3 = d2.wrapping_add(dz.wrapping_mul(dz));
-                if d3 > 5120 * 5120 {
-                    return;
-                }
-                let ty_yaw = Self::angle_between(px, py, tx, ty);
-                let dh = Self::isqrt(d2 as u32) as i32;
-                let ty_pitch = Self::pitch_toward(pz, tz, dh);
-                let dy = Self::angdist(yaw, ty_yaw) as u32;
-                let dp = Self::angdist(pitch, ty_pitch) as u32;
-                if dy > yaw_cone || dp > pitch_cone {
-                    return;
-                }
-                let score = dy * dy + dp * dp;
-                // Strictly-less: on a score tie the earlier slot wins,
-                // matching the original's scan order.
-                if best.is_none() || best.is_some_and(|(_, bs, _, _)| score < bs) {
-                    *best = Some((slot, score, ty_yaw, ty_pitch));
-                }
-            };
+        let consider = |tx: u16,
+                        ty: u16,
+                        tz: i16,
+                        slot: u16,
+                        pcone: u32,
+                        best: &mut Option<(u16, u32, u16, u16)>| {
+            let d2 = Self::dist2_sq(px, py, tx, ty);
+            let dz = tz.wrapping_sub(pz) as i32;
+            let d3 = d2.wrapping_add(dz.wrapping_mul(dz));
+            if d3 > 5120 * 5120 {
+                return;
+            }
+            let ty_yaw = Self::angle_between(px, py, tx, ty);
+            let dh = Self::isqrt(d2 as u32) as i32;
+            let ty_pitch = Self::pitch_toward(pz, tz, dh);
+            let dy = Self::angdist(yaw, ty_yaw) as u32;
+            let dp = Self::angdist(pitch, ty_pitch) as u32;
+            if dy > yaw_cone || dp > pcone {
+                return;
+            }
+            let score = dy * dy + dp * dp;
+            // Strictly-less: on a score tie the earlier slot wins,
+            // matching the original's scan order.
+            if best.is_none() || best.is_some_and(|(_, bs, _, _)| score < bs) {
+                *best = Some((slot, score, ty_yaw, ty_pitch));
+            }
+        };
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 != 5 || c.tick70 == 120 || c.act_life < 0 || c.f58 == 0 {
@@ -529,7 +569,7 @@ impl Gen {
                 continue;
             }
             let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
-            consider(tx, ty, tz, j as u16, &mut best);
+            consider(tx, ty, tz, j as u16, creature_pitch, &mut best);
         }
         // The significant-entity list (sub_54520 list 1): rival
         // wizards (models 0/1) AND CASTLES (model 2) — live, not
@@ -552,9 +592,9 @@ impl Gen {
             match c.model65 {
                 0 | 1 if c.tick70 == 1 => {
                     let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
-                    consider(tx, ty, tz, j as u16, &mut best);
+                    consider(tx, ty, tz, j as u16, pitch_cone, &mut best);
                 }
-                2 => consider(c.x, c.y, c.z, j as u16, &mut best),
+                2 => consider(c.x, c.y, c.z, j as u16, pitch_cone, &mut best),
                 _ => {}
             }
         }
@@ -566,6 +606,7 @@ impl Gen {
                 ctx.py,
                 ctx.pz.wrapping_add(PLAYER_HH as i16),
                 PLAYER_TARGET,
+                pitch_cone,
                 &mut best,
             );
         }
@@ -1737,6 +1778,15 @@ impl Gen {
             if self.ent[i].f146 != 0 {
                 self.ent[i].f30 = self.ent[i].f34;
                 self.ent[i].f32 = self.ent[i].f36;
+            } else {
+                // :63238-40 — the MISS branch is a real store: the
+                // aim pair mirrors the live heading. (The storm's
+                // launcher used to pre-seed +34/+36 and stand in for
+                // this; the launcher now matches retail and leaves
+                // them at NewEvent 0, so the copy has to live here,
+                // where the original puts it.)
+                self.ent[i].f34 = self.ent[i].f30;
+                self.ent[i].f36 = self.ent[i].f32;
             }
         }
         // Yaw/pitch are saved AFTER the snap (:63313-14) and restored
@@ -2344,19 +2394,117 @@ impl Gen {
         false
     }
 
-    /// The (10,19) eruption plume: a 240-tick flame-family visual
-    /// riding the crater. APPROX(state-19 handler untraced): life
-    /// countdown + animation only.
+    /// sub_26140 (:28834), class-10 state 19 — the (10,19) eruption
+    /// plume, a 240-tick emitter riding the crater. TRACED (it was
+    /// "untraced: life countdown + animation only"): pre-decrement life
+    /// like the whole class-10 family, then a per-tick SMOKE SPRAY —
+    /// the radius-0 ring (the 2x2 recentre block, 3 cells after the
+    /// iterator's dropped-last quirk), each cell rolling the same
+    /// ~50% skip test the fire spreader uses and, on a pass, a ±64
+    /// jitter pair; on ODD post-decrement life ticks each passing cell
+    /// emits FOUR (10,13) puffs at yaws {v, v+0x200, v+0x400, v+0x600}
+    /// where v alternates 0/0x100 every other pair of ticks, so the
+    /// column corkscrews. The plume then re-seats on the ground.
+    /// Retail runs NO animation step here (sprite 228 is static) and
+    /// the retail rand cadence is 3/5/7/9 draws a tick — the port drew
+    /// zero, which is the whole (10,19) `rand` column in mc1hwl0.
+    ///
+    /// OPEN (banked, not ported): retail closes the handler with an
+    /// UNCONDITIONAL `sub_120B0(a1, 0, +44)` — 200 ch0 per tick over
+    /// the ctor's 512 extents, i.e. the plume is a damage field for its
+    /// whole 240-tick life. That is a gameplay law of its own and no
+    /// take in the corpus exercises a volcano; left out pending a
+    /// measured eruption window.
     fn plume_tick(&mut self, i: usize) -> bool {
-        self.ent[i].act_life -= 1;
-        if self.ent[i].act_life < 0 {
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
             self.ent[i].flags |= 0x400;
             if self.plume == i as u16 {
                 self.plume = 0;
             }
             return false;
         }
-        self.anim_advance(i);
+        self.ent[i].f26 = 0;
+        let (x, y, z, owner) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        for (dx, dy) in self.ring_cells_pub(0, 0) {
+            // The skip test and the jitter pair are the spreader's
+            // (:28860-70): the draw order is skip, then jitter ONLY on
+            // the spawn branch.
+            let s = self.ent_rand(i);
+            if s % 0x9D < 79 {
+                continue;
+            }
+            let j1 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            let px = x.wrapping_add((192 * dx as i32 + j1 - 96) as u16);
+            let j2 = (self.ent_rand(i) % 0x81) as i32 - 64;
+            let py = y.wrapping_add((192 * dy as i32 + j2 - 96) as u16);
+            if self.ent[i].act_life & 1 == 0 {
+                continue;
+            }
+            let mut yaw = (((self.ent[i].act_life / 2) & 1) << 8) as u16;
+            while yaw < 0x800 {
+                if let Some(p) = self.spawn_effect(13, px, py, z) {
+                    let e = &mut self.ent[p];
+                    e.id24 = owner;
+                    e.f30 = yaw;
+                }
+                yaw = yaw.wrapping_add(512);
+            }
+        }
+        self.ent[i].z = self.ground_z(x, y) as i16;
+        false
+    }
+
+    /// sub_257B0 (:28443), class-10 state 13 — the RISING SMOKE PUFF
+    /// (remc1hw :26987, byte-identical). Pre-decrement life like the
+    /// whole class-10 family; then each tick it
+    /// - decays the rise speed +126 by 4, clamped to [64, 128], and
+    ///   lifts z by the clamped value, never below the ground under
+    ///   its CURRENT cell (the sample precedes the drift);
+    /// - for its first 15 ticks (+26 < 16) drifts 30 units flat along
+    ///   its own +30 yaw and steps the sprite type on even +26;
+    /// - in its last 6 ticks steps the sprite type back down, but only
+    ///   while it is above the ctor's base row 67.
+    ///
+    /// WITHOUT THIS ARM the state fell through world.rs's class-10
+    /// catch-all (the terrain-feature dispatch) and every imported puff
+    /// self-killed one tick after import: (10,13) was the single
+    /// largest unexplained family in the mc1hw corpus.
+    fn smoke_puff_tick(&mut self, i: usize) -> bool {
+        let life = self.ent[i].act_life;
+        self.ent[i].act_life = life - 1;
+        if life < 0 {
+            self.ent[i].flags |= 0x400;
+            return false;
+        }
+        let (x, y, z) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z)
+        };
+        let speed = (self.ent[i].f126 - 4).clamp(64, 128);
+        self.ent[i].f126 = speed;
+        let mut p = (x, y, z.wrapping_add(speed));
+        let g = self.ground_z(x, y) as i16;
+        if p.2 < g {
+            p.2 = g;
+        }
+        let v5 = self.ent[i].f26 + 1;
+        self.ent[i].f26 = v5;
+        if v5 < 16 {
+            let yaw = self.ent[i].f30;
+            Self::polar_step(&mut p, yaw, 0, 30);
+            if v5 & 1 == 0 {
+                self.ent[i].type86 = self.ent[i].type86.wrapping_add(1);
+            }
+        }
+        if self.ent[i].act_life < 6 && self.ent[i].type86 > 67 {
+            self.ent[i].type86 -= 1;
+        }
+        self.move_relink(i, p.0, p.1, p.2);
         false
     }
 
@@ -2375,12 +2523,18 @@ impl Gen {
             (e.x, e.y, e.z)
         };
         let g = self.ground_z(x, y) as i16;
+        // :29296-303 — BOTH altitude corrections set the `v1` skip
+        // flag: the tick the cloud is pulled DOWN onto the ceiling
+        // (drifted terrain, a cloud born high) fires nothing either.
         if z < g.wrapping_add(1024) {
             let nz = z.wrapping_add(64);
             self.move_relink(i, x, y, nz);
             return false;
         }
-        self.move_relink(i, x, y, g.wrapping_add(1024));
+        if z > g.wrapping_add(1024) {
+            self.move_relink(i, x, y, g.wrapping_add(1024));
+            return false;
+        }
         // :29311-13 — PRE-decrement life test, as across the whole
         // class-10 effect family: 33 bolt ticks, not 32.
         let life = self.ent[i].act_life;
@@ -2395,19 +2549,27 @@ impl Gen {
         for _ in 0..2 {
             // Yaw flips 180° BEFORE each launch (:29321-23).
             self.ent[i].f30 = self.ent[i].f30.wrapping_add(0x400) & 0x7FF;
-            let (yaw, pitch, f44, own, hh) = {
+            let (yaw, pitch, f44, own) = {
                 let e = &self.ent[i];
-                (e.f30, e.f32, e.f44, e.id24, e.f78 as i16)
+                (e.f30, e.f32, e.f44, e.id24)
             };
-            let (bx, by, bz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z.wrapping_add(hh));
+            // :29325-31 — retail builds a `z + f78` point in the shared
+            // temp and then passes the cloud's OWN position struct to
+            // the creator: the +78 lift is a DEAD STORE. Adding it put
+            // every bolt a sprite half-height above where retail lays
+            // it (and above the flock the beam is meant to strike).
+            let (bx, by, bz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
             if let Some(b) = self.spawn_zigzag(bx, by, bz) {
                 let e = &mut self.ent[b];
                 e.id24 = own;
                 e.act_life /= 3; // shorter beams (:29334)
+                // Retail writes only +30/+32; the beam's own acquire
+                // (sub_534C0) fills +34/+36 on a lock and copies the
+                // live heading into them on a miss, so pre-seeding them
+                // would only matter if it could shadow that — it
+                // cannot, and the original leaves them at NewEvent 0.
                 e.f30 = yaw;
-                e.f34 = yaw;
                 e.f32 = pitch;
-                e.f36 = pitch;
                 e.f68 = 10;
                 e.f69 = 23;
                 e.f44 = f44;
@@ -2468,11 +2630,15 @@ impl Gen {
                 MailTarget::Player => self.player_rebound,
             };
             if rebound {
-                self.snd(28, i); // deflection twang (:62880)
                 match v {
                     MailTarget::Pool(j) => {
                         let quarter = (self.ent[i].f140 / 4).max(0);
                         if quarter <= self.ent[j].f140 {
+                            // Sound 28 rides INSIDE the afford branch
+                            // (:62861 — positional at the DEFLECTOR,
+                            // sub_55370(victim, -1, 28)); an
+                            // unaffordable deflection is silent.
+                            self.snd(28, j);
                             self.ent[j].f140 -= quarter;
                             let deflector_id = self.ent[j].id24;
                             let shooter = self.ent[i].id24;
@@ -2488,12 +2654,25 @@ impl Gen {
                             };
                             e.id24 = deflector_id;
                             e.act_life = e.max_life as i32;
-                            let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+                            // Relink at the deflector, LIFTED by its
+                            // +84 (:62885-88 — victim z + victim+84).
+                            let (jx, jy, jz) = (
+                                self.ent[j].x,
+                                self.ent[j].y,
+                                self.ent[j].z.wrapping_add(self.ent[j].f84 as i16),
+                            );
                             self.move_relink(i, jx, jy, jz);
                             return false;
                         }
+                        // Afford-fail (:62859's false arm — v24 stays
+                        // clear): NO hit at all. No sound, no debit,
+                        // no explosion — the bolt keeps its stepped
+                        // position and flies straight through.
+                        self.move_relink(i, tmp.0, tmp.1, tmp.2);
+                        return false;
                     }
                     MailTarget::Player => {
+                        self.snd(28, i); // deflection twang (:62861)
                         // The projectile reverses heading and swaps
                         // owner to the player, re-homing on its
                         // shooter. INTERIM: no mana-economy debit on
@@ -2672,6 +2851,30 @@ impl Gen {
                 self.link(s, x, y, z);
                 self.refill_life(s);
                 self.set_sprite(s, 36);
+            }
+            // sub_3AAA0 (str_255D0C[13]): the RISING SMOKE PUFF. Two
+            // creators, both untraced until now: the dying standing
+            // fire's 1-in-7 exhaust (sub_252D0 :28224) and the volcano
+            // plume's ring spray (sub_26140 :28874). Life rand%23+17,
+            // rise speed rand%53+51 (the state-13 tick decays it 4 a
+            // tick toward the 64 floor), sprite 67, the (10,13) filter
+            // pair, +18 bit1. Its class-10 twin model 14 (sub_3AB40,
+            // sprite 9, life rand%33+28) has NO MC1 creator — it is the
+            // MC2 column's particle, serviced there.
+            13 => {
+                let e = &mut self.ent[s];
+                e.tick70 = 13;
+                let d1 = lcg32(&mut e.rand);
+                e.max_life = d1 % 0x17 + 17;
+                e.flags = (e.flags & !(8 | 0x20000)) | 0x20000;
+                let d2 = lcg32(&mut e.rand);
+                e.f66 = 10;
+                e.f67 = 13;
+                e.f126 = (d2 % 0x35 + 51) as i16;
+                // Retail's ctor order: link, sprite, THEN refill.
+                self.link(s, x, y, z);
+                self.set_sprite(s, 67);
+                self.refill_life(s);
             }
             // The standing fire / ground wave (state 6, sub_3A730 ctor
             // → sub_252D0 tick): life 240, 50 ch0 per tick via the /10
@@ -2973,6 +3176,7 @@ impl Gen {
                 false
             }
             6 => self.standing_fire_tick(i, ctx),
+            13 => self.smoke_puff_tick(i),
             5 => {
                 // :28285-87 — PRE-decrement life test (class-10
                 // family): the splash animates 9 ticks, not 8.
@@ -3282,7 +3486,25 @@ impl Gen {
                     if self.ent[i].flags & 0x80 == 0 {
                         let d = self.ent_rand(i);
                         if d % 7 == 0 {
-                            // (10,13) smoke puff — skipped.
+                            // The (10,13) exhaust puff (:28224-33).
+                            // +26 = 100 parks it PAST the tick's
+                            // 16-tick drift window, so a fire's smoke
+                            // rises straight and never walks its
+                            // sprite up; life is overridden to 15
+                            // (max_life keeps the ctor's roll) and the
+                            // sprite starts two rows above the ctor's
+                            // 67.
+                            let (fx, fy, fz, own) = {
+                                let e = &self.ent[i];
+                                (e.x, e.y, e.z, e.id24)
+                            };
+                            if let Some(p) = self.spawn_effect(13, fx, fy, fz) {
+                                let e = &mut self.ent[p];
+                                e.f26 = 100;
+                                e.act_life = 15;
+                                e.id24 = own;
+                                e.type86 = e.type86.wrapping_add(2);
+                            }
                         }
                     }
                 }

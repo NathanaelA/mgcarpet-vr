@@ -1740,6 +1740,33 @@ impl Gen {
         Some(i)
     }
 
+    /// `NewAdd0A02_4E430` (EF:35375) — the (10,2) AMBIENT PUFF, the
+    /// Speed spell's slipstream marker (`GetScroll_69DB0` EF:56253 is
+    /// its only caller). Four writes and no more: maxLife/life 8,
+    /// action 2, `dword_0x10_16` = 0, and the flag word masked to
+    /// `byte[0] |= 1` / `byte[0] &= ~8` (untargetable) /
+    /// `byte[2] |= 2` (sacrificable) — recorded flags 0x20001.
+    ///
+    /// It is deliberately UNLINKED (the ctor assigns `position_0x4C_76`
+    /// instead of calling `AddEventToMap_57D70`) and SPRITELESS — the
+    /// MC1 twin of the same puff behaves identically
+    /// (docs/traces/mc1-class12-spell-tokens.md).
+    pub(crate) fn mc2_spawn_speed_puff(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
+        let i = self.new_event()?;
+        let e = &mut self.ent[i];
+        e.class64 = 10;
+        e.model65 = 2;
+        e.tick70 = 2;
+        e.max_life = 8;
+        e.act_life = 8;
+        e.f26 = 0;
+        e.flags = (e.flags & !0x2_0009) | 0x2_0001;
+        e.x = x;
+        e.y = y;
+        e.z = z;
+        Some(i)
+    }
+
     /// `sub_30D50` (:22692) — the (10,0) fire tick: optional fuse
     /// (`dword_0x10_16 & 3`), then per active tick: one-shot
     /// activation (area damage 400 via sub_10C80 ≡ our `area_write`

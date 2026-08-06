@@ -93,6 +93,11 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let press_edge_mode = std::env::var_os("MGC_PRESS_EDGE").is_some();
     let mut prev_press: Option<(i16, i16)> = None;
     let mut press_moves = 0u64;
+    // The respawn-key lane ([`respawn_key_mc2`]): the previous record's
+    // SPACE state and cursor, the two witnesses that date the press
+    // against retail's poll.
+    let mut prev_space = false;
+    let mut prev_mouse: Option<(i16, i16)> = None;
     // The cycle-ring cast lane (`ring_cast_mc2`): unreachable on today's
     // corpus, LOUD if a take ever trips it.
     let ring_bit_off = std::env::var_os("MGC_NO_HAND_BIT").is_some();
@@ -133,6 +138,15 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         let (held, latch) = raw_input_mc2(tick.input.as_ref());
         let mut aligned = align_cmd_mc2(held, latch, prev_latch);
         let press = press_pos_mc2(tick.input.as_ref());
+        // The respawn key rides the pair's END record like the aligned
+        // cast bits — see [`respawn_key_mc2`] for the two witnesses
+        // that date the press against retail's poll.
+        let space = respawn_key_mc2(tick.input.as_ref());
+        let mouse = mouse_pos_mc2(tick.input.as_ref());
+        let recentred = mouse.is_some() && mouse != prev_mouse && mouse == press;
+        aligned.respawn = space && (prev_space || recentred);
+        prev_space = space;
+        prev_mouse = mouse.or(prev_mouse);
         let moved = matches!((prev_press, press), (Some(a), Some(b)) if a != b);
         press_moves += u64::from(moved);
         if press_edge_mode {
@@ -397,8 +411,52 @@ pub(crate) fn sample_cmd_mc2(input: Option<&serde_json::Value>) -> PlayerCommand
     PlayerCommand {
         fire_left: get("mouse_buttons", "left") || get("mouse_clicks", "left"),
         fire_right: get("mouse_buttons", "right") || get("mouse_clicks", "right"),
+        respawn: respawn_key_mc2(input),
         ..Default::default()
     }
+}
+
+/// SPACE (scancode 57 = 0x39) — retail's RESPAWN key. The input
+/// dispatcher raises `PlayerAction` 0xF from it, and PI:1102 accepts
+/// that command only while `life < 0 && actionIndex == 3`, so a SPACE
+/// held in any other state is inert and the port's own
+/// `LifeState::Dead` gate reproduces the filter. Without this lane the
+/// replayed MC2 human can never leave the corpse state, and the two
+/// ticks where retail rebuilds the spellbook (mc2l3 t=15314→15315 and
+/// t=20611→20612) are unreachable.
+///
+/// DATING THE PRESS. The key registers carry no press LATCH (the
+/// mouse's disambiguator — see [`align_cmd_mc2`]), and the corpus
+/// shows BOTH sides of retail's poll: SPACE first appears at record
+/// 15314 with the reset in frame 15315 (pressed AFTER that frame's
+/// poll), and at record 20612 with the reset in frame 20612 (pressed
+/// BEFORE it). No held-key rule can split those, so the caller adds
+/// retail's own witness: the 0xF handler runs
+/// `SetCenterScreenForFlyAssistant_6EDB0` (EF:37653), which slams the
+/// cursor to the screen centre — so a record whose cursor JUMPED this
+/// pair and now equals the press-position snapshot is a record whose
+/// frame ran the command. The full rule is
+///
+/// ```text
+///   fire(pair) = space(end) && (space(start) || recentred(end))
+/// ```
+///
+/// Measured over the whole mc2l3 take: 348 records carry the
+/// recentre shape (ordinary clicks), and exactly TWO of them also have
+/// SPACE down — the two reset frames.
+pub(crate) fn respawn_key_mc2(input: Option<&serde_json::Value>) -> bool {
+    input
+        .and_then(|i| i.get("keys_down"))
+        .and_then(|k| k.as_array())
+        .is_some_and(|k| k.iter().any(|v| v.as_i64() == Some(57)))
+}
+
+/// The recorded LIVE cursor `(x, y)` — `input.mouse`, the twin of
+/// [`press_pos_mc2`]'s press snapshot.
+pub(crate) fn mouse_pos_mc2(input: Option<&serde_json::Value>) -> Option<(i16, i16)> {
+    let p = input?.get("mouse")?;
+    let g = |k: &str| p.get(k).and_then(|v| v.as_i64()).map(|v| v as i16);
+    Some((g("x")?, g("y")?))
 }
 
 /// The two recorded MC2 mouse registers, UNMERGED:

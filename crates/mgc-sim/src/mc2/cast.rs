@@ -1195,6 +1195,17 @@ impl World {
             if m == 0 {
                 continue;
             }
+            // Retail runs the effect body as the class-15 entity's own
+            // action 3M (3M+1/3M+2 are the pickup states, 78 the
+            // wraith-steal arc), so the port's book-driven loop tests
+            // for it — which also disambiguates the death scatter's
+            // BOOLEAN 1 marker (`sub_5E310` EF:60146,
+            // `mc2_scatter_spells`) from a real slot-1 manifestation.
+            if self.g.ent.get(m).is_none_or(|e| {
+                e.class64 != 15 || e.model65 as usize != spell || e.tick70 as usize != spell * 3
+            }) {
+                continue;
+            }
             self.mc2_manifestation_tick(spell, m, p, ctx);
         }
     }
@@ -1241,6 +1252,7 @@ impl World {
                         self.mc2_spell_fire(spell, m, p, ctx);
                         let cost = self.g.ent[m].max_life;
                         self.mana_debit(cost);
+                        self.mc2_same_frame_debit(m);
                     } else if self.g.ent[m].f56 != 0 {
                         // The possess re-press RELEASE SIGNAL
                         // (`byte_0x3C_60`, raised by the cast gate's
@@ -1265,6 +1277,7 @@ impl World {
                             self.mc2_spell_fire(spell, m, p, ctx);
                             let cost = self.g.ent[m].max_life;
                             self.mana_debit(cost);
+                            self.mc2_same_frame_debit(m);
                         }
                     }
                 } else {
@@ -1279,6 +1292,26 @@ impl World {
                 // wizard tick recomputed this frame (world.rs:1225).
                 if !first {
                     self.suppress_regen();
+                }
+                // SPEED's slipstream trail (`GetScroll_69DB0`
+                // EF:56251-59): every 4th tick of the live window
+                // — keyed on the TOKEN's phase byte
+                // (`byte_0x3E_62 & 3`, our f63, NOT the caster's) —
+                // drop a (10,2) ambient puff at the CASTER with the
+                // ctor's life QUADRUPLED (8 → 32) and the caster's id.
+                // `NewAdd0A02_4E430` (EF:35375) is a bare 4-field
+                // ctor: maxLife 8, action 2, no sprite, and NO map
+                // link (it writes `position_0x4C_76` directly), which
+                // is why the trail hangs in the air where the carpet
+                // was. mc2l3 t=15500+ is the instrument: one puff
+                // every 4 ticks marching along the boosted flight
+                // path, 175 of them across the take.
+                if spell == 3
+                    && self.g.ent[m].f63 & 3 == 0
+                    && let Some(s) = self.g.mc2_spawn_speed_puff(p.x, p.y, p.z)
+                {
+                    self.g.ent[s].act_life *= 4;
+                    self.g.ent[s].id24 = PLAYER_TARGET;
                 }
                 // The duel no-grip fizzle (`sub_6B610` abort arm,
                 // EF:57280): 28 ticks into the window with NO duel
@@ -1329,6 +1362,7 @@ impl World {
                 self.mc2_spell_fire(2, m, p, ctx); // cast_castle: spawns the ball
                 let cost = self.g.ent[m].max_life;
                 self.mana_debit(cost);
+                self.mc2_same_frame_debit(m);
             } else {
                 self.g.ent[m].f26 = 0;
                 return;
@@ -2098,36 +2132,50 @@ impl World {
 
     /// Wizard-death token scatter (`sub_5E310` EF:60137-62): every
     /// owned manifestation becomes a collectible jar again — state
-    /// 3M+1, scattered ±256, life 200..289 (the wizard's LCG).
-    /// Not yet wired into the human death path (OPEN — the machinery
-    /// is trace-complete).
-    #[allow(dead_code)]
-    pub(crate) fn mc2_scatter_spells(&mut self) {
-        let (px, py, pz) = self.human_pose;
+    /// 3M+1, the in-book bit cleared, scattered ±256 around the
+    /// CORPSE, life `rand%90 + 200`.
+    ///
+    /// The book entry becomes a BOOLEAN 1, not 0 (EF:60146): that
+    /// marker is the whole memory of what the wizard knew, and
+    /// `sub_5CF40` re-mints exactly the entries that are non-zero.
+    /// Zeroing it here (as this arm did while it was unwired) would
+    /// have made every death a permanent spellbook wipe.
+    ///
+    /// The HANDS are untouched — `SpellIndexLeft/Right` are outside
+    /// this loop and survive death (mc2l3 keeps 0/1 across both).
+    ///
+    /// DEVIATION: retail rolls the three draws per token off the dying
+    /// WIZARD's private LCG (`a1x->rand_0x14_20`), which this port has
+    /// no home for — the human owns no pool record, so its private
+    /// stream is outside the sim. A COPY of the token's own seed
+    /// stands in: same constants, same shape, different offsets. Two
+    /// things it deliberately is NOT — the world stream (which would
+    /// desync every other entity's draws on the landing tick) and the
+    /// token's live `rand` field (retail's scatter never writes it;
+    /// mc2l3 t=15300 keeps all 26 seeds at their allocation values).
+    /// OPEN: import `carpet.rand` and roll the real stream.
+    pub(crate) fn mc2_scatter_spells(&mut self, p: PlayerPose) {
         for spell in 0..26usize {
             let m = self.mc2_book.ent[spell] as usize;
             if m == 0 {
                 continue;
             }
-            self.mc2_book.ent[spell] = 0;
-            let r1 = lcg32(&mut self.g.ent[m].rand);
-            let r2 = lcg32(&mut self.g.ent[m].rand);
-            let x = px.wrapping_add((r1 & 0x1FF) as u16).wrapping_sub(256);
-            let y = py.wrapping_add((r2 & 0x1FF) as u16).wrapping_sub(256);
-            let life = (lcg32(&mut self.g.ent[m].rand) % 0x5A + 200) as i32;
-            let z;
+            self.mc2_book.ent[spell] = 1; // the boolean "still known" marker
+            let mut r = self.g.ent[m].rand;
+            let r1 = lcg32(&mut r);
+            let r2 = lcg32(&mut r);
+            let x = p.x.wrapping_add((r1 & 0x1FF) as u16).wrapping_sub(256);
+            let y = p.y.wrapping_add((r2 & 0x1FF) as u16).wrapping_sub(256);
+            let life = (lcg32(&mut r) % 0x5A + 200) as i32;
             {
                 let e = &mut self.g.ent[m];
                 e.tick70 = (spell as u8).wrapping_mul(3).wrapping_add(1);
                 e.act_life = life;
                 e.f26 = 0;
-                z = e.z;
+                e.flags &= !1;
             }
-            let _ = pz;
-            self.g.move_relink(m, x, y, z);
+            self.g.move_relink(m, x, y, p.z);
         }
-        self.mc2_book.left = -1;
-        self.mc2_book.right = -1;
         self.g.mc2_spell_tokens.0 = 0;
     }
 }

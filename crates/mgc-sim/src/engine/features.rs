@@ -1325,6 +1325,34 @@ impl Gen {
         }
     }
 
+    /// `sub_49F90`'s FREE half (Level.cpp:1294-1300): the same
+    /// DESCENDING 999→1 scan pushes every class-0 record, so the stack
+    /// TOP — the next allocation — is the LOWEST free slot.
+    ///
+    /// The port maintains its free stack incrementally, which is right
+    /// for ordinary play; this exists for retail's own explicit
+    /// rebuild call sites. The MC2 death payout (EF:60101) and the
+    /// respawn (EF:43635) are both such sites, and the rebuild is
+    /// OBSERVABLE there: mc2l3's graves land on slots 3 and 1, and the
+    /// respawn's 26 re-minted spell tokens take 99, 100, 102… in spell
+    /// order — the lowest free slots, not the recorded stack's order.
+    ///
+    /// Retail's reap half (`byte[1] & 4` → `sub_57F20`) is deliberately
+    /// NOT mirrored: strict MC2 keeps disabled records through the
+    /// frame (the ghost-record projection law, `retail_import_mc2`),
+    /// and `tick()`'s top reap is the one pusher.
+    ///
+    /// `pinned` is the conformance import's human-carpet slot, whose
+    /// record is a zeroed husk in our pool but a LIVE wizard in
+    /// retail's — it must never be handed out (0 = native MC2, where
+    /// the human owns no pool slot at all).
+    pub(crate) fn mc2_rebuild_free(&mut self, pinned: u16) {
+        self.free = (1..self.ent.len() as u16)
+            .rev()
+            .filter(|&s| s != pinned && self.ent[s as usize].class64 == 0)
+            .collect();
+    }
+
     /// `sub_49F90`'s victim half (Level.cpp:1284-1301): a DESCENDING
     /// 999→1 pool scan pushing every live record flagged sacrificable
     /// (`byte[2] & 2` = our `flags & 0x2_0000`), so the stack top — the

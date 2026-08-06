@@ -297,6 +297,12 @@ impl World {
         // (slot 0 keeps 44). Draw type 0x11: 16 views by mirror.
         self.g.set_sprite(i, 272 + slot as u16);
         self.g.refill_life(i);
+        // Retail keeps a wizard's mana ON the entity (+140); the
+        // port's authority is `Rival::mana`, with the entity as the
+        // combat-visible mirror — the Rebound deflection's afford
+        // gate and quarter debit (sub_52B30 :62858-90) read and
+        // write THIS field, so it must track the pool.
+        self.g.ent[i].f140 = 1000;
         let mut r = Rival::new(slot, i as u16, &cfg);
         // Level-start book (:49222): pregrant && allowed, as resolved
         // by the app into cfg.book.
@@ -481,6 +487,14 @@ impl World {
     }
 
     fn rival_alive_tick(&mut self, ri: usize, i: usize) {
+        // Pull combat-side debits out of the +140 mana mirror (the
+        // deflection quarter, sub_52B30 :62884, writes the ENTITY
+        // field). Downward-only: every port-side credit lands in
+        // `Rival::mana` first and re-publishes at this tick's end.
+        let mirrored = self.g.ent[i].f140.max(0) as u32;
+        if mirrored < self.rivals[ri].mana {
+            self.rivals[ri].mana = mirrored;
+        }
         // ---- housekeeping (sub_132B0 :17903) ----
         // Burst lockout recovery (:17936-38).
         if self.rivals[ri].burst < 0 {
@@ -519,6 +533,14 @@ impl World {
                 // Death (:17980-83): state 2, the fall.
                 self.g.ent[i].tick70 = 2;
                 self.g.ent[i].f46 = 0;
+                // Drop the Rebound bit with the wizard. Retail's token
+                // keeps ticking through the death states and clears
+                // +17 bit 7 when its burst lapses (sub_573F0_57920
+                // :65774); the port drives rival tokens only from
+                // `rival_refresh_buffs`, which death states 2/3 never
+                // reach — without this a corpse would deflect for the
+                // rest of the level.
+                self.g.ent[i].flags &= !0x8000;
                 self.g.snd(16, i); // the death scream (:55424-30)
                 return;
             }
@@ -594,6 +616,8 @@ impl World {
         if fresh {
             self.rival_selector(ri, i, think);
         }
+        // Publish the +140 mana mirror for the combat reads.
+        self.g.ent[i].f140 = self.rivals[ri].mana.min(i32::MAX as u32) as i32;
         self.entities_dirty = true;
     }
 
@@ -804,16 +828,39 @@ impl World {
         }
     }
 
+    /// Resolve a rival's own manifestation slot for `spell`, rejecting
+    /// a STALE binding. `owned[]` is minted by the port
+    /// ([`World::mint_manifestation`], `tick70 = MANIFEST_BASE +
+    /// spell`, `f144` = the owner), but a conformance import replaces
+    /// the whole pool from the recording WITHOUT rebinding it (the
+    /// retail token's owner lives in its `+42`, which the port's `Ent`
+    /// does not carry, so the importer cannot re-anchor the book) —
+    /// the slot then holds a different entity entirely. Running the
+    /// burst lanes on it would decrement a stranger's `f26` and
+    /// publish buff bits from noise. Imported class-12 tokens keep
+    /// RETAIL's encoding (`tick70 = spell*3 + phase`, always <
+    /// [`MANIFEST_BASE`]), so the state test is exact and total.
+    fn rival_token(&self, ri: usize, spell: usize) -> Option<usize> {
+        let m = self.rivals[ri].owned[spell] as usize;
+        let e = self.g.ent.get(m)?;
+        (m != 0
+            && e.class64 == 12
+            && e.model65 as usize == spell
+            && e.tick70 >= crate::engine::world::MANIFEST_BASE
+            && e.f144 == self.rivals[ri].ent
+            && e.flags & 0x400 == 0)
+            .then_some(m)
+    }
+
     /// Buff flags derive from the manifestations' burst counters
     /// (the human's manifestation_tick equivalents; the rival's
     /// bursts are armed by [`World::rival_cast`] and decremented
     /// here).
     fn rival_refresh_buffs(&mut self, ri: usize) {
         let mut get = |spell: usize| -> bool {
-            let m = self.rivals[ri].owned[spell] as usize;
-            if m == 0 {
+            let Some(m) = self.rival_token(ri, spell) else {
                 return false;
-            }
+            };
             if self.g.ent[m].f26 > 0 {
                 self.g.ent[m].f26 -= 1;
             }
@@ -822,8 +869,9 @@ impl World {
         let shield = get(4);
         let invisible = get(12);
         let rebound = get(14);
+        let driving = self.rival_token(ri, 14).is_some();
         // Heal channel (1): 5% per tick while live, paid per tick.
-        let heal_m = self.rivals[ri].owned[1] as usize;
+        let heal_m = self.rival_token(ri, 1).unwrap_or(0);
         let healing = heal_m != 0 && self.g.ent[heal_m].f26 > 0;
         if healing {
             let def = &SPELLS[1];
@@ -837,7 +885,7 @@ impl World {
         }
         // Speed-up (2) burst rides f26 too; consumed by the approach
         // helper's boost checks.
-        let m2 = self.rivals[ri].owned[2] as usize;
+        let m2 = self.rival_token(ri, 2).unwrap_or(0);
         if m2 != 0 && self.g.ent[m2].f26 > 0 {
             self.g.ent[m2].f26 -= 1;
         }
@@ -856,6 +904,29 @@ impl World {
                 self.g.ent[i].flags |= 0x20;
             } else {
                 self.g.ent[i].flags &= !0x20;
+            }
+        }
+        // Mirror the Rebound token onto the entity's +17 bit 7 (our
+        // 0x8000) — the ONLY thing that makes a rival's Rebound do
+        // anything. The token's own tick is what publishes the bit in
+        // retail: the class-12 handler 0x2A (`str_2563D8` entry 0x2A,
+        // :4996) is `sub_573F0_57920` (remc1 :65774 / remc1hw :61996),
+        // which sets `owner->+17 |= 0x80` on every tick the burst is
+        // live and clears it the tick the burst runs out. The port
+        // skips rival-owned manifestations in `class12_tick` (they are
+        // driven from here instead), so the bit was never published and
+        // the deflection reader (`proj_move_and_hit`, `flags & 0x8000`,
+        // :62848-62890) never saw a rival Rebound — nothing ever
+        // bounced off an AI wizard. Retail's clear arm is
+        // unconditional, so the port clears here too — but ONLY while
+        // the port is the one driving the token (`rival_token`): under
+        // a conformance import the bit belongs to retail's own token
+        // tick and the port must not touch it.
+        if driving {
+            if rebound {
+                self.g.ent[i].flags |= 0x8000;
+            } else {
+                self.g.ent[i].flags &= !0x8000;
             }
         }
     }
@@ -886,12 +957,33 @@ impl World {
         let Some((threat, d3)) = best else { return };
         self.rivals[ri].jink = 80;
         if d3 <= 1024 * 1024 {
-            let spell = match self.g.ent[threat].model65 {
-                0 | 3 | 16 => 14,
-                4 | 9 => 4,
-                _ => 4,
-            };
-            self.rival_cast(ri, i, spell);
+            // Verbatim `sub_16890` (remc1 :19815-52 / remc1hw
+            // :17947-84). Two corrections to the old port:
+            //
+            // (a) the model switch's DEFAULT arm casts nothing —
+            //     models 1/2 fall out of the `< 4` branch and 5..8 out
+            //     of the `>= 9` branch with no call, and `!= 16`
+            //     returns outright. The port folded every unlisted
+            //     model into Shield, burning the token (and 2000 mana)
+            //     on threats retail ignores.
+            // (b) the fire-spell arm is a LADDER, not a pick:
+            //     `if (sub_15A00(a1,0xE)) sub_155F0(a1,0xE); else if
+            //     (sub_15A00(a1,4)) sub_155F0(a1,4);` — with Rebound
+            //     already live (its readiness gate), the rival falls
+            //     through to Shield instead of standing there.
+            match self.g.ent[threat].model65 {
+                0 | 3 | 16 => {
+                    if self.rival_cast_ready(ri, 14) {
+                        self.rival_cast(ri, i, 14);
+                    } else if self.rival_cast_ready(ri, 4) {
+                        self.rival_cast(ri, i, 4);
+                    }
+                }
+                4 | 9 if self.rival_cast_ready(ri, 4) => {
+                    self.rival_cast(ri, i, 4);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1674,6 +1766,31 @@ impl World {
         if r.mana < def.possess_mana {
             return false;
         }
+        // ALREADY-ACTIVE gate (sub_15A00 case 4/0xC/0xE, remc1
+        // :19289-96 / remc1hw :17422-29): a self-buff whose
+        // manifestation still carries burst (+48, our f26) is NOT
+        // ready — retail's Shield/Invisible/Rebound each run one
+        // uninterrupted `count`-tick window per cast and re-arm only
+        // after it lapses. Without it the 1-tick AI_RECAST on 14 (and
+        // 0 on 4/12) let the port re-cast every other tick for as long
+        // as the trigger held, paying `possess_mana` each time; the
+        // mc1hwl0 corpus shows retail casting Rebound ONCE per window
+        // where the port fired three times in twelve ticks.
+        //
+        // Retail applies the same gate to the aimed group (3/7/8/17/20,
+        // :19265-68) and to Castle (0x10, :19305), and `sub_155F0`'s own
+        // case 2 gates Accelerate the same way (:19151). Only the group
+        // whose burst the port actually decrements for rivals
+        // (`rival_refresh_buffs`) is gated here — the offensive
+        // manifestations' rival-side countdown is unported, so gating
+        // them would freeze the picker after one shot. Banked.
+        if matches!(s, 2 | 4 | 12 | 14)
+            && self
+                .rival_token(ri, s)
+                .is_some_and(|m| self.g.ent[m].f26 > 0)
+        {
+            return false;
+        }
         // Aimed groups: the readiness pre-gate cone
         // ((255-acc)/4+20 degrees, :19252-57).
         if matches!(s, 0 | 3 | 7 | 8 | 11 | 13 | 15 | 17 | 20) && r.target != 0 {
@@ -2134,6 +2251,8 @@ impl World {
             r.cooldown = [0; SPELL_COUNT];
             r.cooldown[16] = 4 * r.slot as u16;
         }
+        // Re-seat the +140 mana mirror with the base pool.
+        self.g.ent[i].f140 = 1000;
         // Everyone else's ledger toward the respawner: the elevated-
         // but-decaying truce value (:55037-41).
         let slot = self.rivals[ri].slot as usize;
@@ -2260,5 +2379,389 @@ impl Snap for Rival {
             invisible: r.get()?,
             rebound: r.get()?,
         })
+    }
+}
+
+// ------------------------------------------------------------- tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::features::{FeatureAssets, Planes};
+    use crate::engine::world::{PlayerCommand, PlayerPose};
+    use mgc_formats::{Thing, ThingKind};
+
+    /// Diamond-ring SEARCH.DAT + a 4x4 building row — the same
+    /// synthetic shape the world/feature unit tests use, so no baked
+    /// tree is needed.
+    fn assets() -> FeatureAssets {
+        let mut grid = vec![31u8; 1024];
+        for y in 0..32i32 {
+            for x in 0..32i32 {
+                let (dx, dy) = (x - 15, y - 15);
+                let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+            }
+        }
+        let tab: Vec<u8> = (0..24u32)
+            .flat_map(|_| {
+                let mut e = 0u32.to_le_bytes().to_vec();
+                e.extend_from_slice(&[4, 4]);
+                e
+            })
+            .collect();
+        let mut dat = Vec::new();
+        for row in 0..4 {
+            dat.push(4u8);
+            if row == 1 || row == 2 {
+                dat.extend_from_slice(&[0x10, 7, 7, 0x10]);
+            } else {
+                dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+            }
+            dat.push(0);
+        }
+        FeatureAssets::parse(&grid, &tab, &dat).unwrap()
+    }
+
+    /// One rival at tile (120,120) with Fireball + Shield + Rebound +
+    /// Castle in its book and a level-1 starting castle —
+    /// CASTLE_CAP[1] = 10000 clears Rebound's 8000 castle_req, so the
+    /// token is not fizzled by the stored-mana ladder.
+    fn rebound_world() -> World {
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 3,
+            model: 5,
+            x: 120,
+            y: 120,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets());
+        let mut book = [false; SPELL_COUNT];
+        book[0] = true;
+        book[4] = true;
+        book[14] = true;
+        book[16] = true;
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            // tempo 255 → think period 1: the defense arm runs every tick.
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 2,
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        w
+    }
+
+    fn away() -> PlayerPose {
+        PlayerPose::from_tiles(10.0, 105.0 / 8.0, 10.0, 0.0, 0.0, 0.0)
+    }
+
+    /// Plant a stationary class-9 model-0 (fireball) threat homing on
+    /// the rival, 512 units off — inside `sub_16890`'s 1024 reactive
+    /// radius and outside the extents that would resolve it as a hit.
+    fn plant_threat(w: &mut World, ri: usize) -> usize {
+        let me = w.rivals[ri].ent;
+        let (x, y, z) = {
+            let e = &w.g.ent[me as usize];
+            (e.x.wrapping_add(512), e.y, e.z)
+        };
+        let p = w.g.spawn_fireball(x, y, z).expect("threat slot");
+        let e = &mut w.g.ent[p];
+        e.f146 = me;
+        e.id24 = PLAYER_TARGET;
+        // Parked: the reactive arm reads position, not motion, and a
+        // moving bolt would resolve into the carpet within a tick.
+        e.f126 = 0;
+        e.f128 = 0;
+        e.act_life = 4000;
+        e.max_life = 4000;
+        p
+    }
+
+    fn token_of(w: &World, ri: usize, spell: usize) -> i16 {
+        let m = w.rivals[ri].owned[spell] as usize;
+        assert!(m != 0, "the rival never minted a spell-{spell} token");
+        w.g.ent[m].f26
+    }
+
+    fn token(w: &World, ri: usize) -> i16 {
+        let m = w.rivals[ri].owned[14] as usize;
+        assert!(m != 0, "the rival never minted a Rebound manifestation");
+        w.g.ent[m].f26
+    }
+
+    fn rebound_bit(w: &World, ri: usize) -> bool {
+        w.g.ent[w.rivals[ri].ent as usize].flags & 0x8000 != 0
+    }
+
+    /// The rival Rebound arm, end to end: an incoming fireball inside
+    /// 1024 arms the token (`sub_16890` :19822 → `sub_155F0` case 0xE
+    /// :19140-48), the token PUBLISHES the deflection bit on the
+    /// wizard entity (`sub_573F0_57920` remc1 :65774 / remc1hw
+    /// :61996 — `owner->+17 |= 0x80`, our 0x8000), the bit clears when
+    /// the 101-tick burst lapses, and a fresh threat re-ups it.
+    ///
+    /// NON-VACUITY: before the fix the port never wrote 0x8000 for a
+    /// rival at all (the mirror was cloak-only), so `rebound_bit`
+    /// was false at every one of these assertions and nothing could
+    /// ever deflect off an AI wizard.
+    #[test]
+    fn rival_rebound_arms_publishes_expires_and_re_ups() {
+        let mut w = rebound_world();
+        assert!(!rebound_bit(&w, 0), "the bit starts clear");
+        assert_eq!(token(&w, 0), 0, "the token starts idle");
+
+        // ---- arm ------------------------------------------------------
+        let threat = plant_threat(&mut w, 0);
+        let mut armed = None;
+        for n in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+            if token(&w, 0) > 0 {
+                armed = Some(n);
+                break;
+            }
+        }
+        let armed = armed.expect("the incoming fireball never armed Rebound");
+        assert!(
+            token(&w, 0) >= SPELLS[14].count as i16 - armed as i16 - 2,
+            "the token armed short of its {} count",
+            SPELLS[14].count
+        );
+        // The bit lands one tick behind the arm: the token publishes
+        // on its OWN tick, which for a rival is the next pass of
+        // `rival_refresh_buffs` (retail: the class-12 handler's own
+        // slot in the entity loop).
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            rebound_bit(&w, 0),
+            "the armed token did not publish the 0x8000 deflection bit"
+        );
+
+        // ---- the already-active gate ----------------------------------
+        // `sub_15A00` case 0xE (:19289-96) refuses a re-cast while the
+        // burst is live, so the window is ONE uninterrupted countdown
+        // even though the threat is still there and AI_RECAST[14] = 1.
+        // Pre-gate the port re-armed to `count` every other tick.
+        let mut prev = token(&w, 0);
+        for _ in 0..20 {
+            w.tick(away(), PlayerCommand::default());
+            let now = token(&w, 0);
+            assert!(
+                now < prev,
+                "the live Rebound token was re-armed ({prev} -> {now}) while its burst ran"
+            );
+            prev = now;
+        }
+
+        // ---- expiry ---------------------------------------------------
+        w.g.ent[threat].flags |= 0x400;
+        for _ in 0..(SPELLS[14].count as usize + 8) {
+            w.tick(away(), PlayerCommand::default());
+            if token(&w, 0) == 0 {
+                break;
+            }
+        }
+        assert_eq!(token(&w, 0), 0, "the token never expired");
+        assert!(
+            !rebound_bit(&w, 0),
+            "the lapsed token left the deflection bit set"
+        );
+
+        // ---- re-up ----------------------------------------------------
+        plant_threat(&mut w, 0);
+        let mut re_upped = false;
+        for _ in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+            if token(&w, 0) > 0 && rebound_bit(&w, 0) {
+                re_upped = true;
+                break;
+            }
+        }
+        assert!(re_upped, "a fresh threat did not re-up Rebound");
+    }
+
+    /// The deflection itself (`sub_52B30` :62858-90): a bolt striking
+    /// a rebounding wizard pays a quarter of its own +140 out of the
+    /// WIZARD's +140 (his mana — the port's entity mirror of
+    /// `Rival::mana`), twangs (sound 28 — INSIDE the afford branch,
+    /// :62861), and reverses onto its shooter with the wizard as its
+    /// new owner — it never explodes. An unaffordable deflection is
+    /// retail's silent fly-through: no hit, no sound, no explosion,
+    /// no debit (the :62859 false arm leaves v24 clear).
+    ///
+    /// NON-VACUITY: pre-fix the port (a) never wrote the wizard's
+    /// +140 mirror, so the gate compared against 0 and every real
+    /// bolt fell through to the explode — the player-reported
+    /// "rebound sound but the meteor explodes on him and nothing
+    /// comes back" — and (b) played sound 28 BEFORE the gate. The
+    /// deflect arm, the debit, the poor-arm silence and the mirror
+    /// assertions all fail on that code.
+    #[test]
+    fn rebound_deflection_bounces_debits_and_is_silent_when_poor() {
+        use crate::mc1::mobs::MobCtx;
+        let mut w = rebound_world();
+        // Settle a few ticks, then check the WORLD maintains the
+        // entity mana mirror at all.
+        for _ in 0..4 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        let me = w.rivals[0].ent as usize;
+        assert_eq!(
+            w.g.ent[me].f140, w.rivals[0].mana as i32,
+            "the wizard entity's +140 does not mirror Rival::mana"
+        );
+
+        // The deflection reader is driven directly (the bit is the
+        // published state, not the token) for slot-order-free
+        // arithmetic.
+        w.g.ent[me].flags |= 0x8000;
+        let ctx = MobCtx {
+            px: 10,
+            py: 10,
+            pz: 200,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+            strict: false,
+            mc2_turn: 0,
+        };
+
+        // ---- the affordable deflect -----------------------------------
+        // Park the encounter far from the starting castle: the keep's
+        // 0x2000-tall envelope otherwise scan-resolves the CASTLE
+        // (no bit) instead of the wizard hovering at it.
+        w.g.ent[me].f140 = 1000;
+        let (wx, wy) = (60u16 << 8, 60u16 << 8);
+        let wz = (w.g.ground_z(wx, wy) as i16).wrapping_add(400);
+        w.g.move_relink(me, wx, wy, wz);
+        let bolt = w.g.spawn_fireball(wx, wy, wz).expect("bolt slot");
+        w.g.move_relink(bolt, wx, wy, wz); // the spawner tile-snaps
+        {
+            let e = &mut w.g.ent[bolt];
+            e.id24 = PLAYER_TARGET;
+            e.f126 = 0; // parked on the wizard: the scan overlaps
+            e.f140 = 400; // quarter = 100
+        }
+        w.g.sounds.clear();
+        w.g.proj_tick(bolt, &ctx);
+        {
+            let e = &w.g.ent[bolt];
+            assert_eq!(e.flags & 0x400, 0, "the deflected bolt exploded");
+            assert_eq!(
+                e.id24, w.rivals[0].ent,
+                "ownership did not swap to the deflector"
+            );
+            assert_eq!(e.f146, PLAYER_TARGET, "not re-homed on the shooter");
+        }
+        assert_eq!(
+            w.g.ent[me].f140, 900,
+            "the deflection did not debit a quarter of the bolt's +140"
+        );
+        assert!(
+            w.g.sounds.iter().any(|s| s.id == 28),
+            "no twang on a successful deflection"
+        );
+        w.g.ent[bolt].flags |= 0x400;
+
+        // ---- the poor wizard: silent fly-through ----------------------
+        w.g.ent[me].f140 = 50;
+        let bolt2 = w.g.spawn_fireball(wx, wy, wz).expect("bolt2 slot");
+        w.g.move_relink(bolt2, wx, wy, wz);
+        {
+            let e = &mut w.g.ent[bolt2];
+            e.id24 = PLAYER_TARGET;
+            e.f126 = 0;
+            e.f140 = 400; // quarter 100 > the 50 he holds
+        }
+        w.g.sounds.clear();
+        w.g.proj_tick(bolt2, &ctx);
+        {
+            let e = &w.g.ent[bolt2];
+            assert_eq!(e.flags & 0x400, 0, "the fly-through bolt exploded");
+            assert_eq!(e.id24, PLAYER_TARGET, "the poor wizard still deflected");
+        }
+        assert_eq!(w.g.ent[me].f140, 50, "the failed deflection still debited");
+        assert!(
+            w.g.sounds.iter().all(|s| s.id != 28),
+            "an unaffordable deflection twanged (retail is silent, :62861)"
+        );
+
+        // The debit round-trips into the pool on the wizard's next
+        // tick: the downward reconcile pulls Rival::mana to the
+        // debited mirror before the regen step re-adds its delta.
+        w.g.ent[me].f140 = 900;
+        let pre = w.rivals[0].mana;
+        assert!(
+            pre > 2000,
+            "test premise: the pool must sit well above the debited mirror"
+        );
+        w.tick(away(), PlayerCommand::default());
+        assert!(
+            w.rivals[0].mana < pre,
+            "the mirror debit never reconciled into Rival::mana"
+        );
+    }
+
+    /// `sub_16890`'s default arm casts NOTHING (remc1 :19815-52 /
+    /// remc1hw :17947-84): only projectile models {0,3,16} reach the
+    /// Rebound/Shield ladder and {4,9} the Shield-only one. The port
+    /// used to fall every other model through to Shield.
+    /// NON-VACUITY: the pre-fix `_ => 4` fallback armed the SHIELD
+    /// token on a model-2 threat; the model-9 control proves the
+    /// Shield arm itself is live, so the first assertion is not
+    /// passing for want of a castable Shield.
+    #[test]
+    fn unlisted_threat_models_provoke_no_reactive_cast() {
+        let mut w = rebound_world();
+        // Bank enough mana for Shield (2000) so a failed cast can only
+        // be the model gate, never affordability.
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(w.rivals[0].mana >= SPELLS[4].possess_mana);
+
+        let threat = plant_threat(&mut w, 0);
+        w.g.ent[threat].model65 = 2;
+        for _ in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            token_of(&w, 0, 4),
+            0,
+            "a model-2 threat provoked the Shield cast retail ignores"
+        );
+        assert_eq!(token(&w, 0), 0, "a model-2 threat provoked Rebound");
+        assert!(!rebound_bit(&w, 0));
+
+        // Model 9 IS in retail's Shield-only arm (:19845-49).
+        w.g.ent[threat].flags |= 0x400;
+        let control = plant_threat(&mut w, 0);
+        w.g.ent[control].model65 = 9;
+        let mut shielded = false;
+        for _ in 0..8 {
+            w.tick(away(), PlayerCommand::default());
+            if token_of(&w, 0, 4) > 0 {
+                shielded = true;
+                break;
+            }
+        }
+        assert!(shielded, "the model-9 control never armed Shield");
     }
 }
