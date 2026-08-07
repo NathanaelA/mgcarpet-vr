@@ -117,3 +117,38 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // toggle as the panels); the book map passes 1.
     return vec4<f32>(rgb, mg.mode.z);
 }
+
+// The extent fog (opt-in DEVIATION, `map_extent_fog`): the world is
+// toroidal, so the player-centered pane repeats every entity beyond
+// half a period from the player — retail simply shows the duplicates.
+// This pass alpha-blends black over the whole pane, clear inside the
+// TRUE-extent rectangle (axis-aligned in world space, so it rotates
+// with heading here) and saturating EXTENT_FADE tiles beyond it. It
+// draws AFTER the map, dots, stamps and guide overlays (player ruling:
+// the fog is the topmost map layer) and before the app's own UI.
+const EXTENT_FADE: f32 = 16.0;
+
+@fragment
+fn fs_fog(in: VsOut) -> @location(0) vec4<f32> {
+    // The same aspect correction + heading rotation as fs_main, up to
+    // the world-space delta — but NOT the toroidal wrap, which is
+    // exactly what the fog exists to mark.
+    let aspect = mg.mode.y;
+    var p = in.uv;
+    if aspect >= 1.0 {
+        p.x = p.x * aspect;
+    } else {
+        p.y = p.y / aspect;
+    }
+    let half = mg.player.w * 0.5;
+    let s = sin(mg.player.z);
+    let cth = cos(mg.player.z);
+    let off = vec2<f32>(p.x * half, p.y * half);
+    let d = vec2<f32>(off.x * cth + off.y * s, off.x * s - off.y * cth);
+    // Chebyshev distance against half the world period: the extent
+    // rect's edge, per axis.
+    let extent = mg.mode.w * 0.5;
+    let m = max(abs(d.x), abs(d.y));
+    let fog = smoothstep(extent, extent + EXTENT_FADE, m);
+    return vec4<f32>(0.0, 0.0, 0.0, fog);
+}

@@ -651,6 +651,68 @@ impl UiAssets {
         })
     }
 
+    /// Crop a WORLD sprite (frame 0) into fresh rows appended below
+    /// the composited atlas and hand back its map stamp — the marker
+    /// icon-swap's miniatures (jars, dolmens, statues). Plain palette
+    /// resolve with index 0 transparent, like the base atlas; the
+    /// stamp is shrunk to marker size — HALF the spell-stamp rule
+    /// (player-sized 2026-08-07: at the shared 12-px cap the
+    /// miniatures read double the other map marks), i.e. longer side
+    /// capped at 6 native px AND small sprites halved too. Draw size
+    /// only — the crop stays full-res. Must run before the atlas
+    /// uploads, i.e. at level load.
+    pub fn append_world_icon(
+        &mut self,
+        index: &SpriteIndex,
+        pixels: &[u8],
+        sprite: u16,
+        palette: &[[u8; 4]; 256],
+    ) -> Option<mgc_render::MapStamp> {
+        let e = index.sprites.get(sprite as usize)?;
+        let f = e.frames.first()?;
+        let (w, h) = (e.width as usize, e.height as usize);
+        let src_w = index.atlas_width as usize;
+        let dst_w = self.atlas_w as usize;
+        if w == 0 || h == 0 || w > dst_w {
+            return None;
+        }
+        // The whole source rect must be in bounds BEFORE the atlas
+        // grows, so a broken entry can't leave half-appended rows.
+        if f.x as usize + w > src_w || (f.y as usize + h) * src_w > pixels.len() {
+            return None;
+        }
+        let y0 = self.atlas_h as usize;
+        self.atlas_rgba.resize((y0 + h) * dst_w * 4, 0);
+        for y in 0..h {
+            let srow = (f.y as usize + y) * src_w + f.x as usize;
+            for x in 0..w {
+                let src = pixels[srow + x];
+                if src == 0 {
+                    continue; // transparent
+                }
+                let c = palette[src as usize];
+                let i = ((y0 + y) * dst_w + x) * 4;
+                self.atlas_rgba[i..i + 3].copy_from_slice(&c[..3]);
+                self.atlas_rgba[i + 3] = 255;
+            }
+        }
+        self.atlas_h += h as u32;
+        let (mut sw, mut sh) = (e.width as u32, e.height as u32);
+        // Exactly 2x smaller than the spell-stamp rule would draw:
+        // min(native, 12)/2 per axis via the shared long-side factor.
+        let scale = (6.0 / sw.max(sh) as f32).min(0.5);
+        sw = ((sw as f32 * scale) as u32).max(1);
+        sh = ((sh as f32 * scale) as u32).max(1);
+        Some(mgc_render::MapStamp {
+            x: 0.0,
+            z: 0.0,
+            w: sw,
+            h: sh,
+            uv: [0.0, y0 as f32, e.width as f32, e.height as f32],
+            anchor: [0.5, 1.0],
+        })
+    }
+
     /// The pre-composited icon-on-slab tile for a spell; `variant`
     /// 0 = plain, 1 = left-equipped, 2 = right-equipped highlight. Kept
     /// for the composited luminous-ramp look (the icon blended over the

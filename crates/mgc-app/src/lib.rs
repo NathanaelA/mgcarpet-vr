@@ -747,6 +747,65 @@ fn map_overlay(level: &LoadedLevel, cfg: &config::Config) -> mgc_render::MapOver
     }
 }
 
+/// Lazy miniature capture for the marker icon-swap
+/// (`map_marker_icons`): build the icon for any swap-family pose
+/// whose type row has none yet, appending the sprite crop below the
+/// UI atlas. Lazy because a LOAD-time scan misses most of what the
+/// option is for: MC2's authored spell tokens are predominantly
+/// disposition-gated (their `dis_id` is not the load sentinel, so
+/// they spawn mid-play — player-reported as "MC2 jars stay red
+/// dots"), and MC1 death-scatters jars onto levels that author none.
+/// Each type row is attempted at most once per sighting and cached
+/// forever on success. Returns whether the atlas grew — the caller
+/// must re-upload it (`load_ui_atlas`) before the next draw.
+fn capture_marker_icons(
+    level: &mut LoadedLevel,
+    poses: &[mgc_sim::engine::world::LivePose],
+) -> bool {
+    let Some((sidx, spx)) = level.sprites.as_ref() else {
+        return false;
+    };
+    let Some(ui) = level.ui.as_mut() else {
+        return false;
+    };
+    let mut grew = false;
+    for p in poses {
+        let bucket = match entities::icon_swap_family(level.game, p.class, p.model) {
+            Some(entities::SwapFamily::Jar) => &mut level.map_icons.jar_icons,
+            Some(entities::SwapFamily::Static) => &mut level.map_icons.static_icons,
+            None => continue,
+        };
+        if bucket.contains_key(&p.type_index) {
+            continue;
+        }
+        let Some(sprite) = entities::pose_sprite_id(level.game, p.type_index) else {
+            continue;
+        };
+        if let Some(stamp) = ui.append_world_icon(sidx, spx, sprite, &level.palette_rgba) {
+            bucket.insert(p.type_index, stamp);
+            grew = true;
+        }
+    }
+    grew
+}
+
+/// The type rows whose dots the marker icon-swap suppresses: exactly
+/// the families an icon was BUILT for (a missing icon keeps its dot),
+/// minus jars while expose-jar-spells is on — the debug option
+/// outranks the swap there (player ruling: spell icon + the retail
+/// red dot, never the jar miniature too).
+fn dot_swap_set(level: &LoadedLevel, cfg: &config::Config) -> std::collections::HashSet<u16> {
+    let mut set = std::collections::HashSet::new();
+    if !cfg.render.enhancement.map_marker_icons {
+        return set;
+    }
+    set.extend(level.map_icons.static_icons.keys().copied());
+    if !cfg.render.enhancement.expose_jar_spells {
+        set.extend(level.map_icons.jar_icons.keys().copied());
+    }
+    set
+}
+
 /// Resolve the package plus its asset bundle into what the renderer and
 /// sim consume. `tileset` overrides MC1's world-set choice: by default
 /// MC1 campaign levels use `mc1-temperate` and Hidden Worlds levels
@@ -1037,7 +1096,9 @@ fn load_level(
                     entities::billboards_from_poses(game_id, &poses, dims, false, false),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
-                    // (and the blink phase starts low).
+                    // (and the blink phase starts low). Icon-swap
+                    // suppression is likewise deferred to the first
+                    // tick's rebuild (the icon tables build below).
                     entities::map_dots_from_poses(
                         game_id,
                         &poses,
@@ -1045,6 +1106,7 @@ fn load_level(
                         false,
                         mc2_env,
                         0,
+                        &Default::default(),
                     ),
                 )
             }
@@ -1090,6 +1152,10 @@ fn load_level(
             bundle.web_sprites.as_ref().map(|(i, p)| (i, p.as_slice())),
         )
     });
+    // (The marker icon-swap's miniature tables start EMPTY: families
+    // capture lazily at first sighting — `capture_marker_icons` —
+    // because MC2's authored tokens are mostly disposition-gated and
+    // absent from the load population.)
 
     // Per-game audio bundle + the music pick. MC2: ONE looping XMI
     // by MapType (Night=GAME1, Day=GAME2, Cave=GAME3 — EF:31441-49,
@@ -1261,6 +1327,8 @@ fn load_level(
                     st.anchor = [0.5, 0.5];
                     st
                 }),
+            jar_icons: Default::default(),
+            static_icons: Default::default(),
         },
         map_stamps: Vec::new(),
         objective_marks: Vec::new(),
@@ -2234,6 +2302,24 @@ impl App {
                     r.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
                 }
             }
+            "render.enhancement.map_marker_scale" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_marker_scale(self.cfg.render.enhancement.map_marker_scale);
+                    // The dot bake-vs-lift decision lives in the map
+                    // recompose, which is tick-throttled and the menu
+                    // opens paused — run it explicitly so the slider
+                    // shows live.
+                    if let Some(sess) = self.session.as_deref() {
+                        let overlay = map_overlay(&sess.level, &self.cfg);
+                        r.update_map(&sess.level.view, &overlay);
+                    }
+                }
+            }
+            "render.enhancement.map_extent_fog" => {
+                if let Some(r) = &mut self.renderer {
+                    r.set_extent_fog(self.cfg.render.enhancement.map_extent_fog);
+                }
+            }
             "render.preference.fog_distance" => {
                 if let Some(r) = &mut self.renderer {
                     r.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
@@ -2296,23 +2382,53 @@ impl App {
             }
             // The map texture recompose is tick-throttled and the menu
             // opens paused — recompose explicitly so the toggle shows.
-            "render.debug.map_trigger_areas" | "render.enhancement.map_owned_buildings" => {
+            "render.debug.map_trigger_areas"
+            | "render.enhancement.map_owned_buildings"
+            | "render.enhancement.map_marker_icons"
+            | "render.enhancement.expose_jar_spells" => {
                 if let Some(sess) = self.session.as_deref_mut() {
-                    // The dot set itself consumes the option, and no
+                    // The dot set itself consumes the options, and no
                     // entity sync runs while paused — re-derive it
-                    // before the recompose.
+                    // before the recompose. The icon-swap also moves
+                    // families between the DOT and STAMP layers, so
+                    // the stamp set re-derives with it, and a family
+                    // first sighted NOW (toggled on mid-level) lazily
+                    // captures its miniature here too.
+                    let mut icons_grew = false;
                     if let Some(w) = &sess.sim.world {
+                        let poses = w.live_poses();
+                        if self.cfg.render.enhancement.map_marker_icons {
+                            icons_grew = capture_marker_icons(&mut sess.level, &poses);
+                        }
+                        let swapped = dot_swap_set(&sess.level, &self.cfg);
                         sess.level.map_dots = entities::map_dots_from_poses(
                             sess.level.game,
-                            &w.live_poses(),
+                            &poses,
                             &sess.level.palette_rgba,
                             self.cfg.render.enhancement.map_owned_buildings,
                             sess.level.mc2_env,
                             sess.sim.tick as u32,
+                            &swapped,
                         );
+                        sess.level.map_stamps = entities::map_stamps_from_poses(
+                            sess.level.game,
+                            &poses,
+                            &sess.level.map_icons,
+                            w.beyond_sight(),
+                            self.cfg.render.enhancement.expose_jar_spells,
+                            self.cfg.render.enhancement.map_marker_icons,
+                        );
+                        sess.level.map_stamps.extend(entities::exit_marker_stamps(
+                            &w.advertised_marker_poses(),
+                            &sess.level.map_icons,
+                        ));
                     }
                     let overlay = map_overlay(&sess.level, &self.cfg);
                     if let Some(r) = &mut self.renderer {
+                        if icons_grew && let Some(assets) = &sess.level.ui {
+                            r.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
+                        }
+                        r.set_map_stamps(sess.level.map_stamps.clone());
                         r.update_map(&sess.level.view, &overlay);
                     }
                 }
@@ -3705,6 +3821,7 @@ impl App {
         }
         let mut bars = Vec::new();
         let mut lights = Vec::new();
+        let mut icons_grew = false;
         if entities {
             let poses = w.live_poses();
             // Dynamic light sources (retail's Dynamic Lighting
@@ -3731,6 +3848,11 @@ impl App {
             if self.cfg.render.debug.health_bars {
                 bars = entities::health_bars_from_poses(level.game, &poses, dims);
             }
+            // Lazy marker-icon capture BEFORE the dot/stamp derive,
+            // so a newly sighted family swaps layers the same tick.
+            icons_grew =
+                self.cfg.render.enhancement.map_marker_icons && capture_marker_icons(level, &poses);
+            let swapped = dot_swap_set(level, &self.cfg);
             level.map_dots = entities::map_dots_from_poses(
                 level.game,
                 &poses,
@@ -3740,6 +3862,7 @@ impl App {
                 // MC1 derives its ~4 Hz claimed-ball blink from the
                 // tick; MC2's colorIndex_121 phases divide it.
                 sim.tick as u32,
+                &swapped,
             );
             level.map_stamps = entities::map_stamps_from_poses(
                 level.game,
@@ -3747,6 +3870,7 @@ impl App {
                 &level.map_icons,
                 w.beyond_sight(),
                 self.cfg.render.enhancement.expose_jar_spells,
+                self.cfg.render.enhancement.map_marker_icons,
             );
             // The advertised-trigger X/O markers (MC1 flight-path
             // breadcrumbs + MC2 exit trips): unconditional (untripped
@@ -3831,6 +3955,12 @@ impl App {
                 } else {
                     r.set_fire_particles(Vec::new());
                 }
+            }
+            // A lazy icon capture grew the UI atlas — re-upload it so
+            // the new miniature has texels to sample (rare: once per
+            // newly sighted family per level).
+            if icons_grew && let Some(assets) = &level.ui {
+                r.load_ui_atlas(assets.atlas_w, assets.atlas_h, &assets.atlas_rgba);
             }
             // Upright map icons + the guide path are drawn screen-
             // space by the renderer (never baked into the rotated map
@@ -6321,6 +6451,8 @@ impl ApplicationHandler for App {
                     }
                 }
                 renderer.set_smooth_shading(self.cfg.render.enhancement.smooth_shading);
+                renderer.set_marker_scale(self.cfg.render.enhancement.map_marker_scale);
+                renderer.set_extent_fog(self.cfg.render.enhancement.map_extent_fog);
                 renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
                 renderer.set_hud_transparent(self.hud_transparent());
                 renderer.set_reflections(self.cfg.render.preference.reflections);
@@ -7198,10 +7330,13 @@ impl ApplicationHandler for App {
                         }
                     }
                 }
-                // Radar zoom (`+`/`-`, main row or numpad): tighten or
-                // widen the in-flight minimap's world span. Faithful to
-                // MC2's runtime radar zoom (likely MC1 too). The book
-                // map always shows the whole world and is unaffected.
+                // Map zoom (`+`/`-`, main row or numpad): tighten or
+                // widen whichever map surface is showing — the
+                // in-flight radar, or the map screen while it is open
+                // (each owns its own zoom; the map screen's is a port
+                // addition like the radar's, session-only — player
+                // ask 2026-08-07: the keys used to fall through to
+                // the radar from the map screen).
                 if down {
                     let zoom = match event.physical_key {
                         PhysicalKey::Code(KeyCode::Equal | KeyCode::NumpadAdd) => Some(0.8),
@@ -7210,8 +7345,13 @@ impl ApplicationHandler for App {
                     };
                     if let Some(factor) = zoom {
                         if let Some(r) = &mut self.renderer {
-                            r.zoom_minimap(factor);
-                            println!("radar zoom: {:.0} tiles", r.minimap_zoom());
+                            if r.map_view() {
+                                r.zoom_map_screen(factor);
+                                println!("map zoom: {:.2}x", r.map_screen_mag());
+                            } else {
+                                r.zoom_minimap(factor);
+                                println!("radar zoom: {:.0} tiles", r.minimap_zoom());
+                            }
                         }
                         return;
                     }

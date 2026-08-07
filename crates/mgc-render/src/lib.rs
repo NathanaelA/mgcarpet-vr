@@ -100,6 +100,18 @@ pub struct MapDot {
     pub size: u8,
 }
 
+/// A [`MapDot`] lifted out of the map-texture bake for screen-space
+/// drawing (the marker-size deviation, `marker_scale != 1.0`): tile
+/// position, the dot's texel span (1 or 2), and its palette color
+/// resolved to a linear-space tint for the solid-quad UI path.
+#[derive(Debug, Clone, Copy)]
+struct ScreenDot {
+    x: f32,
+    z: f32,
+    size: f32,
+    tint: [f32; 4],
+}
+
 /// A tinted circle on the overhead map (the trigger-volume overlay —
 /// an opt-in enhancement/debugging aid, never drawn by the original).
 /// Tile-unit center and radius, direct RGB (deliberately outside the
@@ -185,6 +197,13 @@ pub struct MapOverlay {
 /// pixel per entity, exactly like the original (the enhanced marker
 /// mode is a planned opt-in).
 pub fn map_pixels(level: &LevelView, overlay: &MapOverlay) -> Vec<u8> {
+    map_pixels_impl(level, overlay, true)
+}
+
+/// [`map_pixels`] with the dot layer optional: the marker-size
+/// deviation (`Renderer::set_marker_scale` != 1.0) draws the dots
+/// screen-space instead, so baking them too would double them up.
+fn map_pixels_impl(level: &LevelView, overlay: &MapOverlay, bake_dots: bool) -> Vec<u8> {
     let n = MAP_TILES;
     let mut out = vec![0u8; n * n * 4];
     for i in 0..n * n {
@@ -236,15 +255,17 @@ pub fn map_pixels(level: &LevelView, overlay: &MapOverlay) -> Vec<u8> {
     // (:57161-82), so it draws screen-space with the stamps (see
     // `project_guide_path`); baking it stepped in world tiles read
     // ~1.5× sparser on the book map and stretched with radar zoom.
-    for dot in &overlay.dots {
-        let x = (dot.x as usize).min(n - 1);
-        let z = (dot.z as usize).min(n - 1);
-        // `size` covers the original's 2x2 grown dot (portals).
-        for dz in 0..dot.size as usize {
-            for dx in 0..dot.size as usize {
-                let i = ((z + dz) % n) * n + (x + dx) % n;
-                out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[dot.color as usize]);
-                out[i * 4 + 3] = 255;
+    if bake_dots {
+        for dot in &overlay.dots {
+            let x = (dot.x as usize).min(n - 1);
+            let z = (dot.z as usize).min(n - 1);
+            // `size` covers the original's 2x2 grown dot (portals).
+            for dz in 0..dot.size as usize {
+                for dx in 0..dot.size as usize {
+                    let i = ((z + dz) % n) * n + (x + dx) % n;
+                    out[i * 4..i * 4 + 3].copy_from_slice(&level.palette[dot.color as usize]);
+                    out[i * 4 + 3] = 255;
+                }
             }
         }
     }
@@ -332,7 +353,11 @@ fn project_map_stamps(
     for st in stamps {
         // Base image in [0, tiles); the −tiles sibling per axis covers
         // every offset a ≤full-world (stretched ≤~1.42×half) pane can
-        // show.
+        // show. (The map screen's √2 zoom-out CAN reach farther on a
+        // wide pane's far edges — beyond ±1 period — but everything
+        // out there is >256 tiles from the player, deep inside the
+        // extent fog's full black; player-ruled fine to leave those
+        // duplicate images unmarked.)
         let bx = (st.x - px).rem_euclid(tiles);
         let bz = (st.z - pz).rem_euclid(tiles);
         for dx in [bx, bx - tiles] {
@@ -370,6 +395,72 @@ fn project_map_stamps(
                         rect,
                         uv,
                         tint: [1.0, 1.0, 1.0, 1.0],
+                    });
+                }
+            }
+        }
+    }
+    quads
+}
+
+/// The marker-size deviation's entity dots as screen-space solid
+/// quads: the same wrap-image walk and projection as
+/// [`project_map_stamps`], but centered on the entity and sized by
+/// `dot_px` — the side of a size-1 dot in screen pixels, into which
+/// the caller folds the marker scale AND the zoom compensation (the
+/// radar divides by its DEFAULT zoom, not the current one, so dots
+/// hold their size while zooming; the map screens' zooms are fixed).
+#[allow(clippy::too_many_arguments)]
+fn project_map_dots(
+    dots: &[ScreenDot],
+    cx: f32,
+    cy: f32,
+    half_x: f32,
+    half_y: f32,
+    px: f32,
+    pz: f32,
+    yaw: f32,
+    zoom: f32,
+    round: bool,
+    aspect: f32,
+    dot_px: f32,
+) -> Vec<UiQuad> {
+    let half_tiles = zoom * 0.5;
+    let tiles = MAP_TILES as f32;
+    let (s, c) = yaw.sin_cos();
+    let bounds = [cx - half_x, cy - half_y, half_x * 2.0, half_y * 2.0];
+    let mut quads = Vec::new();
+    for d in dots {
+        let bx = (d.x - px).rem_euclid(tiles);
+        let bz = (d.z - pz).rem_euclid(tiles);
+        for dx in [bx, bx - tiles] {
+            for dz in [bz, bz - tiles] {
+                let ox = dx * c + dz * s;
+                let oy = dx * s - dz * c;
+                let mut nx = ox / half_tiles;
+                let mut ny = -oy / half_tiles;
+                if aspect >= 1.0 {
+                    nx /= aspect;
+                } else {
+                    ny *= aspect;
+                }
+                if round && (nx * nx + ny * ny) > 1.0 {
+                    continue;
+                }
+                if nx.abs() > 1.0 || ny.abs() > 1.0 {
+                    continue;
+                }
+                let scx = cx + nx * half_x;
+                let scy = cy + ny * half_y;
+                let side = d.size * dot_px;
+                let rect = [scx - side * 0.5, scy - side * 0.5, side, side];
+                // Solid quad (uv.z == 0); the zero uv survives the
+                // proportional clip untouched.
+                if let Some((rect, uv)) = clip_quad_to(rect, [0.0; 4], bounds) {
+                    quads.push(UiQuad {
+                        rect,
+                        uv,
+                        tint: d.tint,
                     });
                 }
             }
@@ -1299,6 +1390,12 @@ pub struct Renderer {
     /// Which topology the map screen uses (MC1 book vs MC2 split).
     map_layout: MapScreenLayout,
     map_pipeline: wgpu::RenderPipeline,
+    /// The extent-fog overlay (opt-in deviation): black past the
+    /// rotated true-extent rectangle, drawn over every map layer on
+    /// the map screens. Same quad/globals as the map pane.
+    fog_pipeline: wgpu::RenderPipeline,
+    /// Whether the extent fog draws (`set_extent_fog`).
+    extent_fog: bool,
     map_globals_buf: wgpu::Buffer,
     map_bind_group_layout: wgpu::BindGroupLayout,
     map_bind_group: Option<wgpu::BindGroup>,
@@ -1310,6 +1407,13 @@ pub struct Renderer {
     minimap_bind_group: Option<wgpu::BindGroup>,
     /// Runtime radar zoom (tiles across the disc); `+`/`-` adjust it.
     minimap_zoom: f32,
+    /// Runtime MAP-SCREEN zoom (`+`/`-` while the map is open — a
+    /// port addition like the radar zoom, no retail analogue): a
+    /// multiplier on the layout's base span. 1.0 = the full default
+    /// view; clamped so the tightest crop is 1/8 of it (32 tiles on
+    /// the MC1 book). Session-only — never persisted, like the
+    /// radar's.
+    map_zoom_mult: f32,
     /// Radar output alpha — HUD transparency (1 = opaque; the MC1
     /// default matches the translucent panels, MC2/opaque = 1).
     minimap_alpha: f32,
@@ -1373,6 +1477,16 @@ pub struct Renderer {
     /// whichever map surface is active each frame. World-positioned but
     /// drawn unrotated so they always point up.
     map_stamps: Vec<MapStamp>,
+    /// Marker-size multiplier for the maps' entity dots + icon stamps
+    /// (`set_marker_scale`; opt-in deviation). 1.0 = the baseline:
+    /// dots baked into the map texture as tile texels. Any other value
+    /// lifts the dots out of the bake into `screen_dots`, drawn
+    /// screen-space at a size that no longer varies with radar zoom.
+    marker_scale: f32,
+    /// The dots lifted out of the texture bake when `marker_scale !=
+    /// 1.0` (tile position, palette color resolved to a linear tint).
+    /// Refreshed with the map texture every `update_map`.
+    screen_dots: Vec<ScreenDot>,
     /// The marching-ants guide path (player → castle), projected onto
     /// the active map surface each frame in 4-surface-px steps.
     map_path: Option<MapPath>,
@@ -1809,6 +1923,44 @@ impl Renderer {
                     // Alpha blend so the in-flight radar can be
                     // translucent (HUD transparency); the book map and
                     // opaque-HUD radar pass alpha = 1 (a no-op blend).
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: ms,
+            multiview: None,
+            cache: None,
+        });
+        // The extent-fog overlay: the same quad + globals as the map
+        // pane, fragment `fs_fog` (black past the rotated true-extent
+        // rectangle). Drawn between the map-layer quads and the app UI.
+        let fog_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("map extent fog"),
+            layout: Some(&map_layout),
+            vertex: wgpu::VertexState {
+                module: &map_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &map_shader,
+                entry_point: Some("fs_fog"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -2548,10 +2700,13 @@ impl Renderer {
             map_view: false,
             map_layout: MapScreenLayout::default(),
             map_pipeline,
+            fog_pipeline,
+            extent_fog: false,
             map_globals_buf,
             minimap_globals_buf,
             minimap_bind_group: None,
             minimap_zoom: MINIMAP_ZOOM,
+            map_zoom_mult: 1.0,
             minimap_alpha: 1.0,
             map_bind_group_layout,
             map_bind_group: None,
@@ -2615,6 +2770,8 @@ impl Renderer {
             ui_capacity: 0,
             ui_quads: Vec::new(),
             map_stamps: Vec::new(),
+            marker_scale: 1.0,
+            screen_dots: Vec::new(),
             map_path: None,
             objective_marks: Vec::new(),
             objective_tick: 0,
@@ -2639,12 +2796,21 @@ impl Renderer {
 
     /// The fullscreen map pane's zoom, in the map shader's convention
     /// (tiles across the pane's SHORTER pixel axis; `aspect` = pane
-    /// w/h in px). MC1 book: the full world (deliberate — see
-    /// [`BOOK_MAP_ZOOM`]). MC2 split: the faithful retail span — the
-    /// VERTICAL axis always shows [`MC2_MAP_VIEW_SPAN_TILES`]
-    /// (318.75, EF:21840-49) whichever axis is currently shorter, so
-    /// window aspect only widens the horizontal wrap.
+    /// w/h in px): the layout base span times the runtime `+`/`-`
+    /// multiplier ([`Self::zoom_map_screen`]).
     fn map_pane_zoom(&self, aspect: f32) -> f32 {
+        self.map_pane_zoom_base(aspect) * self.map_zoom_mult
+    }
+
+    /// The layout's UNZOOMED base span. MC1 book: the full world
+    /// (deliberate — see [`BOOK_MAP_ZOOM`]). MC2 split: the faithful
+    /// retail span — the VERTICAL axis always shows
+    /// [`MC2_MAP_VIEW_SPAN_TILES`] (318.75, EF:21840-49) whichever
+    /// axis is currently shorter, so window aspect only widens the
+    /// horizontal wrap. Also the screen-space dots' size reference,
+    /// so map-screen zoom keeps markers constant like radar zoom
+    /// does.
+    fn map_pane_zoom_base(&self, aspect: f32) -> f32 {
         match self.map_layout {
             MapScreenLayout::Mc1Book => BOOK_MAP_ZOOM,
             MapScreenLayout::Mc2Split => {
@@ -2658,6 +2824,24 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    /// Marker-size multiplier for the overhead maps' entity dots and
+    /// icon stamps (opt-in deviation). 1.0 = the baseline: dots baked
+    /// into the map texture as tile texels, growing with radar zoom.
+    /// Any other value draws the dots screen-space at a constant size
+    /// (zoom-compensated) and scales the icon stamps to match. Dots
+    /// take effect at the next map recompose (every sim tick).
+    pub fn set_marker_scale(&mut self, scale: f32) {
+        self.marker_scale = scale.clamp(0.25, 8.0);
+    }
+
+    /// Fog the map screens beyond the world's true (heading-rotated)
+    /// extent, hiding the toroidal wrap's duplicate markers — the
+    /// topmost map layer (opt-in deviation; the round minimap never
+    /// shows duplicates, so it is untouched).
+    pub fn set_extent_fog(&mut self, on: bool) {
+        self.extent_fog = on;
     }
 
     /// Toggle smooth (tile-interpolated) shading; off is the original's
@@ -2824,6 +3008,24 @@ impl Renderer {
 
     pub fn minimap_zoom(&self) -> f32 {
         self.minimap_zoom
+    }
+
+    /// Zoom the MAP SCREEN by a factor — the `+`/`-` keys while it is
+    /// open (a port addition like [`Self::zoom_minimap`], deliberate;
+    /// retail's book map has no zoom). Multiplier clamped to
+    /// [1/8, √2]: from a 32-tile crop on the MC1 book out to the span
+    /// that fits the WHOLE rotated world — the extent square's
+    /// diagonal is base·√2, so the top stop keeps every corner on the
+    /// pane at any heading (player ask: at 1x a 45° heading clipped
+    /// the tip). Session-only, never persisted.
+    pub fn zoom_map_screen(&mut self, factor: f32) {
+        self.map_zoom_mult = (self.map_zoom_mult * factor).clamp(0.125, std::f32::consts::SQRT_2);
+    }
+
+    /// The map screen's current magnification (1 = the full default
+    /// span), for the console echo.
+    pub fn map_screen_mag(&self) -> f32 {
+        1.0 / self.map_zoom_mult
     }
 
     /// Upload a level: build the terrain mesh, the color/type LUTs, and
@@ -3284,7 +3486,8 @@ impl Renderer {
 
         // Overhead map for the book screen, composed on the CPU through
         // the engine's map color path.
-        let map_rgba = map_pixels(level, overlay);
+        let map_rgba = map_pixels_impl(level, overlay, self.marker_scale == 1.0);
+        self.refresh_screen_dots(level, overlay);
         let map_extent = wgpu::Extent3d {
             width: n as u32,
             height: n as u32,
@@ -3510,8 +3713,9 @@ impl Renderer {
     /// and the blink/marching-ants patterns need it.
     pub fn update_map(&mut self, level: &LevelView, overlay: &MapOverlay) {
         let n = MAP_TILES as u32;
+        self.refresh_screen_dots(level, overlay);
         if let Some(map_tex) = &self.map_tex {
-            let map_rgba = map_pixels(level, overlay);
+            let map_rgba = map_pixels_impl(level, overlay, self.marker_scale == 1.0);
             self.queue.write_texture(
                 map_tex.as_image_copy(),
                 &map_rgba,
@@ -3527,6 +3731,36 @@ impl Renderer {
                 },
             );
         }
+    }
+
+    /// Rebuild the screen-space dot set for the marker-size deviation:
+    /// at `marker_scale == 1.0` it stays empty (the dots bake into the
+    /// map texture as always); otherwise every overlay dot is lifted
+    /// out with its palette color resolved to a linear tint. Runs with
+    /// every map recompose so blink phases keep their cadence.
+    fn refresh_screen_dots(&mut self, level: &LevelView, overlay: &MapOverlay) {
+        self.screen_dots = if self.marker_scale == 1.0 {
+            Vec::new()
+        } else {
+            overlay
+                .dots
+                .iter()
+                .map(|d| {
+                    let c = level.palette[d.color as usize];
+                    ScreenDot {
+                        x: d.x,
+                        z: d.z,
+                        size: d.size as f32,
+                        tint: [
+                            srgb_to_linear(c[0] as f32 / 255.0),
+                            srgb_to_linear(c[1] as f32 / 255.0),
+                            srgb_to_linear(c[2] as f32 / 255.0),
+                            1.0,
+                        ],
+                    }
+                })
+                .collect()
+        };
     }
 
     /// Upload the bundle's sprite atlas + index for billboard drawing.
@@ -3735,7 +3969,10 @@ impl Renderer {
             zoom,
             round,
             aspect,
-            scale,
+            // The marker-size deviation scales the icon stamps with
+            // the dots (1.0 = no-op); the guide path and objective
+            // marks keep the plain surface scale.
+            scale * self.marker_scale,
         )
     }
 
@@ -4530,9 +4767,38 @@ impl Renderer {
                 ))
             };
             if let Some((cx, cy, hx, hy, zoom, round, aspect, scale)) = surface {
-                stamp_quads = self.map_stamp_quads(
+                // Marker-size deviation: the dots lifted out of the
+                // texture bake draw first (under the stamps/ants, the
+                // baked layer's z-order). A size-1 dot spans one tile
+                // of the surface at its DEFAULT zoom — identical to
+                // the baked texel on an unzoomed map screen — and is
+                // zoom-INVARIANT on both surfaces (`+`/`-` never
+                // resizes markers), times the scale.
+                if !self.screen_dots.is_empty() {
+                    let default_zoom = if self.map_view {
+                        self.map_pane_zoom_base(aspect)
+                    } else {
+                        MINIMAP_ZOOM
+                    };
+                    let dot_px = self.marker_scale * 2.0 * hx.min(hy) / default_zoom;
+                    stamp_quads = project_map_dots(
+                        &self.screen_dots,
+                        cx,
+                        cy,
+                        hx,
+                        hy,
+                        cam.x,
+                        cam.z,
+                        cam.yaw,
+                        zoom,
+                        round,
+                        aspect,
+                        dot_px,
+                    );
+                }
+                stamp_quads.extend(self.map_stamp_quads(
                     cx, cy, hx, hy, cam.x, cam.z, cam.yaw, zoom, round, aspect, scale,
-                );
+                ));
                 if let Some(path) = &self.map_path {
                     stamp_quads.extend(project_guide_path(
                         path, cx, cy, hx, hy, cam.x, cam.z, cam.yaw, zoom, round, aspect, scale,
@@ -4562,6 +4828,9 @@ impl Renderer {
         // map stamps/ants on top — written as two regions of one
         // vertex buffer (no per-frame concatenation copy).
         let ui_count = (self.ui_quads.len() + stamp_quads.len()) as u32;
+        // The map-layer region's size — where the extent fog splits
+        // the stream on the map screen (map_view puts stamps first).
+        let stamp_count = stamp_quads.len() as u32;
         if ui_count > 0 {
             self.queue.write_buffer(
                 &self.ui_globals_buf,
@@ -4909,12 +5178,36 @@ impl Renderer {
                     pass.draw(0..6, 0..1);
                 }
             }
-            // Screen-space UI on top of either view.
+            // Screen-space UI on top of either view. With the extent
+            // fog on, the map screen's stream splits: map layers (the
+            // stamps region — dots, icons, ants, objective marks) →
+            // fog → app UI, so the fog is the topmost MAP layer
+            // (player ruling) but never covers the book/roster UI.
+            let map_fog = self.map_view && self.extent_fog;
             if let (1.., Some(bg), Some(buf)) = (ui_count, &self.ui_bind_group, &self.ui_buf) {
                 pass.set_pipeline(&self.ui_pipeline);
                 pass.set_bind_group(0, bg, &[]);
                 pass.set_vertex_buffer(0, buf.slice(..));
-                pass.draw(0..6, 0..ui_count);
+                if map_fog && let Some(mbg) = &self.map_bind_group {
+                    if stamp_count > 0 {
+                        pass.draw(0..6, 0..stamp_count);
+                    }
+                    pass.set_pipeline(&self.fog_pipeline);
+                    pass.set_bind_group(0, mbg, &[]);
+                    pass.draw(0..6, 0..1);
+                    if ui_count > stamp_count {
+                        pass.set_pipeline(&self.ui_pipeline);
+                        pass.set_bind_group(0, bg, &[]);
+                        pass.draw(0..6, stamp_count..ui_count);
+                    }
+                } else {
+                    pass.draw(0..6, 0..ui_count);
+                }
+            } else if map_fog && let Some(mbg) = &self.map_bind_group {
+                // No UI quads at all — the fog still veils the pane.
+                pass.set_pipeline(&self.fog_pipeline);
+                pass.set_bind_group(0, mbg, &[]);
+                pass.draw(0..6, 0..1);
             }
         }
         // Resolve the supersample buffer down to the surface.
@@ -5257,6 +5550,89 @@ mod tests {
         let fov = flight_fov_y(base, 1.0);
         assert!(fov > base);
         assert!(((fov * 0.5).tan() * 1.0 - tan_h_ref).abs() < 1e-5);
+    }
+
+    /// The marker-size deviation's screen-space dots
+    /// (`project_map_dots`): centered on the entity, sized purely by
+    /// `dot_px` (zoom compensation is the CALLER folding the default
+    /// zoom in, so the projector itself must not scale with `zoom`
+    /// beyond position), the solid-quad uv (all zero) preserved
+    /// through the clip, the wrap image visible across the seam, and
+    /// the radar disc cull honored.
+    #[test]
+    fn screen_dots_center_wrap_and_clip() {
+        let dot = |x, z, size| ScreenDot {
+            x,
+            z,
+            size,
+            tint: [0.5, 0.25, 0.125, 1.0],
+        };
+        let (cx, cy, hx, hy) = (200.0, 200.0, 200.0, 200.0);
+        // At the player: centered on the pane center, side dot_px per
+        // size unit, at ANY heading (the center is rotation-fixed).
+        let q = project_map_dots(
+            &[dot(50.0, 128.0, 1.0), dot(50.0, 128.0, 2.0)],
+            cx,
+            cy,
+            hx,
+            hy,
+            50.0,
+            128.0,
+            0.7,
+            256.0,
+            false,
+            1.0,
+            6.0,
+        );
+        assert_eq!(q.len(), 2);
+        assert_eq!(q[0].rect, [cx - 3.0, cy - 3.0, 6.0, 6.0]);
+        assert_eq!(q[1].rect, [cx - 6.0, cy - 6.0, 12.0, 12.0]);
+        assert_eq!(q[0].uv, [0.0; 4], "solid-quad marker survives the clip");
+        assert_eq!(q[0].tint, [0.5, 0.25, 0.125, 1.0]);
+        // Across the seam: player at x=1, dot at x=255 is 2 tiles
+        // LEFT (the wrapped image), not 254 right. 64 tiles across
+        // 400 px = 6.25 px/tile → 12.5 px left of center.
+        let q = project_map_dots(
+            &[dot(255.0, 128.0, 1.0)],
+            cx,
+            cy,
+            hx,
+            hy,
+            1.0,
+            128.0,
+            0.0,
+            64.0,
+            false,
+            1.0,
+            4.0,
+        );
+        assert_eq!(q.len(), 1);
+        let center = (
+            q[0].rect[0] + q[0].rect[2] * 0.5,
+            q[0].rect[1] + q[0].rect[3] * 0.5,
+        );
+        assert!(
+            (center.0 - (cx - 12.5)).abs() < 0.01 && (center.1 - cy).abs() < 0.01,
+            "wrapped image at {center:?}"
+        );
+        // Radar disc cull: (+28,+28) at zoom 64 is inside the square
+        // bounds (28/32 per axis) but outside the unit disc (1.24) —
+        // only the round mask can drop it, and it must.
+        let q = project_map_dots(
+            &[dot(78.0, 156.0, 1.0)],
+            cx,
+            cy,
+            hx,
+            hy,
+            50.0,
+            128.0,
+            0.0,
+            64.0,
+            true,
+            1.0,
+            4.0,
+        );
+        assert!(q.is_empty(), "outside the disc");
     }
 
     fn stamp_at(x: f32, z: f32) -> MapStamp {

@@ -913,6 +913,77 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
+            label: "map_marker_scale",
+            class: Enhancement,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.map_marker_scale",
+            read: |c| Val::Scalar {
+                text: format!("{:.2}x", c.render.enhancement.map_marker_scale),
+                // Retail's markers are surface-pixel-scale (near-
+                // invisible at modern resolutions), so there is no
+                // faithful size; 1.00x is the shipped baseline.
+                faithful: "1.00x",
+            },
+            desc: "Overhead-map marker size (entity dots and icon stamps \
+                   together, on the map screen and the radar). Off 1x, \
+                   marker size stays constant as the radar zooms.",
+            ctl: Ctl::Slider {
+                get: |c| c.render.enhancement.map_marker_scale,
+                set: |c, v| c.render.enhancement.map_marker_scale = v,
+                min: 0.5,
+                max: 3.0,
+                step: 0.25,
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
+            label: "map_marker_icons",
+            class: Enhancement,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.map_marker_icons",
+            read: toggle!(c => render.enhancement.map_marker_icons),
+            desc: "Swap selected map dots for miniature pictures of the \
+                   thing itself: spell jars, dolmens/shrines, statues. \
+                   Drawn small — half the spell-stamp size — and scaled \
+                   by the marker-size slider. (The expose-jar-spells \
+                   debug option outranks this for jars.)",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.map_marker_icons = v,
+                descs: [
+                    "Plain dots, as retail draws them.",
+                    "Jars, dolmens and statues wear miniature sprites.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
+            group: "render · enhancement",
+            label: "map_extent_fog",
+            class: Enhancement,
+            key: None,
+            cli: None,
+            cfg_path: "render.enhancement.map_extent_fog",
+            read: toggle!(c => render.enhancement.map_extent_fog),
+            desc: "Fade the fullscreen map to black beyond the world's \
+                   true extent. The world wraps, so the player-centered \
+                   map repeats entities past half a world away — retail \
+                   shows the duplicates; the fog hides them. The extent \
+                   rectangle rotates with your heading.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.render.enhancement.map_extent_fog = v,
+                descs: [
+                    "The map repeats past the world seam, as retail.",
+                    "Soft black fog past the true extent hides the \
+                     wrap-around duplicates.",
+                ],
+            },
+        },
         // ---- render · debug ---------------------------------------------
         Spec {
             domain: Render,

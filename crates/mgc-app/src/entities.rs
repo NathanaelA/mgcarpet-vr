@@ -398,6 +398,51 @@ pub struct MapIcons {
     /// the sprite). Loaded for both games (83/84 baked for each).
     pub exit_x: Option<mgc_render::MapStamp>,
     pub exit_o: Option<mgc_render::MapStamp>,
+    /// The marker icon-swap's miniature world-sprite stamps
+    /// (`map_marker_icons`, deliberate deviation), keyed by the
+    /// pose's `type_index`: spell jars/tokens. Built per level from
+    /// the load population — a family with no icon keeps its dot.
+    pub jar_icons: std::collections::HashMap<u16, mgc_render::MapStamp>,
+    /// Icon-swap stamps for the dolmen/shrine/statue statics, keyed
+    /// like [`Self::jar_icons`].
+    pub static_icons: std::collections::HashMap<u16, mgc_render::MapStamp>,
+}
+
+/// Which icon-swap table a dot family belongs in (`map_marker_icons`,
+/// player-chosen scope 2026-08-07): spell jars/tokens (MC1/HW class
+/// 12 red AND blue, MC2 class-12/15 tokens), and the dolmen/shrine/
+/// statue statics. Per game those are: MC1's statues — the near-black
+/// models 1/3 (sprites 79/270) — plus its dolmen regen shrine, model
+/// 2 (sprite 39; its dot is the tree-colored scenery 28, which is
+/// exactly why it deserves an icon); MC2's blinking marker stone
+/// (2,1) and dolmen (2,2). Trees and the sprite-48 trail-marker
+/// stones keep their retail dots.
+pub enum SwapFamily {
+    Jar,
+    Static,
+}
+
+pub fn icon_swap_family(game: GameId, class: u8, model: u8) -> Option<SwapFamily> {
+    match (game, class, model) {
+        (_, 12 | 15, _) => Some(SwapFamily::Jar),
+        (GameId::Mc2, 2, 1 | 2) => Some(SwapFamily::Static),
+        (GameId::Mc1 | GameId::Mc1Hw, 2, 1..=3) => Some(SwapFamily::Static),
+        _ => None,
+    }
+}
+
+/// The atlas sprite id a pose's type row resolves to — what the
+/// marker icon-swap crops (frame 0). The same source rows as
+/// `resolve_pose_sprite`, without the size/draw-type resolution.
+pub fn pose_sprite_id(game: GameId, type_index: u16) -> Option<u16> {
+    match game {
+        GameId::Mc1 | GameId::Mc1Hw => Some(SPRITE_STATS.get(type_index as usize)?.sprite_base),
+        GameId::Mc2 => Some(
+            mgc_sim::mc2::sprite_params::SPRITE_PARAMS
+                .get(type_index as usize)?
+                .word_0,
+        ),
+    }
 }
 
 /// The MC2 map environment — selects the minimap's team-colour table
@@ -469,6 +514,7 @@ fn mc2_map_dots(
     palette: &[[u8; 4]; 256],
     env: Mc2MapEnv,
     turn: u32,
+    icon_swapped: &std::collections::HashSet<u16>,
 ) -> Vec<mgc_render::MapDot> {
     let team_tab = match env {
         Mc2MapEnv::Day => MC2_TEAM_DAY,
@@ -509,6 +555,12 @@ fn mc2_map_dots(
     let mut out = Vec::new();
     for p in poses {
         if p.segment {
+            continue;
+        }
+        // Marker icon-swap: this family draws as a miniature stamp
+        // instead (`map_stamps_from_poses`); the set holds exactly
+        // the type rows an icon was built for.
+        if icon_swapped.contains(&p.type_index) {
             continue;
         }
         let mut size = 1u8;
@@ -620,9 +672,10 @@ pub fn map_dots_from_poses(
     owned_buildings: bool,
     env: Mc2MapEnv,
     turn: u32,
+    icon_swapped: &std::collections::HashSet<u16>,
 ) -> Vec<mgc_render::MapDot> {
     if game == GameId::Mc2 {
-        return mc2_map_dots(poses, palette, env, turn);
+        return mc2_map_dots(poses, palette, env, turn, icon_swapped);
     }
     let blink = (turn >> 3) & 1 == 0;
     // MC2's linked-building flash phase (`colorIndex_121[3]`, the
@@ -649,6 +702,11 @@ pub fn map_dots_from_poses(
     let mut out = Vec::new();
     for p in poses {
         if p.segment {
+            continue;
+        }
+        // Marker icon-swap: the family draws as a miniature stamp
+        // instead (same rule as the MC2 walk above).
+        if icon_swapped.contains(&p.type_index) {
             continue;
         }
         let team = p.team.map(|t| TEAM_COLORS[(t as usize).min(7)]);
@@ -740,6 +798,7 @@ pub fn map_stamps_from_poses(
     icons: &MapIcons,
     beyond_sight: bool,
     expose_jar_spells: bool,
+    marker_icons: bool,
 ) -> Vec<mgc_render::MapStamp> {
     let mut out = Vec::new();
     for p in poses {
@@ -757,10 +816,19 @@ pub fn map_stamps_from_poses(
             (3, 3) if p.team == Some(0) || beyond_sight => icons.balloon[team].as_ref(),
             // expose-jar-spells: pickable jars (MC1 class 12, MC2
             // class-15 tokens; owned manifestations never reach the
-            // pose list) tag with their spell's icon.
+            // pose list) tag with their spell's icon. The debug
+            // option OUTRANKS the marker icon-swap for jars (player
+            // ruling): spell icon + the retail dot, never the jar
+            // miniature too.
             (12 | 15, m) if expose_jar_spells => {
                 icons.spell.get(m as usize).and_then(Option::as_ref)
             }
+            // Marker icon-swap (map_marker_icons): the jar/dolmen/
+            // statue families wear miniatures of their own world
+            // sprite; the tables hold exactly the type rows an icon
+            // was built for, so anything else keeps its dot.
+            (12 | 15, _) if marker_icons => icons.jar_icons.get(&p.type_index),
+            (2, _) if marker_icons => icons.static_icons.get(&p.type_index),
             // (MC2 exit X/O markers are NOT pose-driven — hidden
             // markers must plot too; see `exit_marker_stamps`.)
             _ => None,
@@ -2420,6 +2488,7 @@ mod tests {
                 owned_buildings,
                 Mc2MapEnv::Day,
                 if blink { 0 } else { 8 },
+                &Default::default(),
             )
         };
 
@@ -2472,7 +2541,15 @@ mod tests {
         // (turn / 3) & 1 cadence, NOT the slower claimed-ball phase;
         // all 1px.
         let at_turn = |p: LivePose, turn: u32| {
-            map_dots_from_poses(GameId::Mc1, &[p], &pal, true, Mc2MapEnv::Day, turn)
+            map_dots_from_poses(
+                GameId::Mc1,
+                &[p],
+                &pal,
+                true,
+                Mc2MapEnv::Day,
+                turn,
+                &Default::default(),
+            )
         };
         for turn in 0..8 {
             assert_eq!(at_turn(unclaimed, turn)[0].color, 1);
@@ -2501,7 +2578,15 @@ mod tests {
         pal[3] = [255, 255, 255, 255];
         pal[4] = [255, 0, 255, 255];
         let dots = |p: LivePose, turn: u32| {
-            map_dots_from_poses(GameId::Mc2, &[p], &pal, false, Mc2MapEnv::Night, turn)
+            map_dots_from_poses(
+                GameId::Mc2,
+                &[p],
+                &pal,
+                false,
+                Mc2MapEnv::Night,
+                turn,
+                &Default::default(),
+            )
         };
 
         // Wild civilians (12..=14) = CIVILIANS blue (:1228-37).
@@ -2528,6 +2613,72 @@ mod tests {
         // Switches: only the X-marker models draw (:1341-92).
         assert!(dots(pose(11, 0, false, 0), 0).is_empty());
         assert_eq!(dots(pose(11, 0x0C, false, 0), 0)[0].size, 2);
+    }
+
+    /// The marker icon-swap (`map_marker_icons`, deliberate
+    /// deviation): a type row in the swap set loses its DOT in both
+    /// games' walks and gains a miniature STAMP; expose-jar-spells
+    /// (debug) OUTRANKS the swap for jars (player ruling 2026-08-07:
+    /// spell icon + retail dot, never the jar miniature too); a
+    /// family with no built icon keeps its dot.
+    #[test]
+    fn marker_icon_swap_moves_families_between_layers() {
+        let pal = [[0u8; 4]; 256];
+        let mut swapped = std::collections::HashSet::new();
+        swapped.insert(42u16);
+        let dots = |game, p: LivePose| {
+            map_dots_from_poses(game, &[p], &pal, false, Mc2MapEnv::Day, 0, &swapped)
+        };
+        // MC1 jar (class 12) with an icon: no dot; without: the dot.
+        assert!(dots(GameId::Mc1, pose(12, 3, false, 42)).is_empty());
+        assert_eq!(dots(GameId::Mc1, pose(12, 3, false, 43)).len(), 1);
+        // The MC2 walk honors the same set (dolmen (2,2), on its
+        // visible blink phase — turn 0 is (turn/2)&1 == 0 → v90).
+        assert!(dots(GameId::Mc2, pose(2, 2, false, 42)).is_empty());
+        assert_eq!(dots(GameId::Mc2, pose(2, 2, false, 43)).len(), 1);
+
+        // Stamps: the miniature keyed by type row, gated on the
+        // toggle, outranked by the debug spell icon.
+        let mini = mgc_render::MapStamp {
+            x: 0.0,
+            z: 0.0,
+            w: 12,
+            h: 12,
+            uv: [0.0, 400.0, 24.0, 24.0],
+            anchor: [0.5, 1.0],
+        };
+        let spell_icon = mgc_render::MapStamp {
+            x: 0.0,
+            z: 0.0,
+            w: 8,
+            h: 8,
+            uv: [64.0, 0.0, 8.0, 8.0],
+            anchor: [0.5, 1.0],
+        };
+        let mut icons = MapIcons::default();
+        icons.jar_icons.insert(42, mini);
+        icons.static_icons.insert(7, mini);
+        icons.spell = vec![Some(spell_icon); 26];
+        let stamps = |p: LivePose, expose: bool, swap: bool| {
+            map_stamps_from_poses(GameId::Mc1, &[p], &icons, false, expose, swap)
+        };
+        let jar = pose(12, 3, false, 42);
+        // Toggle on, debug off → the jar miniature.
+        let s = stamps(jar, false, true);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].uv, mini.uv);
+        // Debug on outranks → the spell icon, never the miniature.
+        let s = stamps(jar, true, true);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].uv, spell_icon.uv);
+        // Both off → no stamp at all (the dot layer's business).
+        assert!(stamps(jar, false, false).is_empty());
+        // Statics resolve through their own table.
+        let s = stamps(pose(2, 1, false, 7), false, true);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].uv, mini.uv);
+        // An unkeyed static stays dotted, not stamped.
+        assert!(stamps(pose(2, 1, false, 8), false, true).is_empty());
     }
 
     /// The MC2 billboard size law (remc2 GameRenderOriginal.cpp

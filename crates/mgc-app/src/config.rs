@@ -464,6 +464,29 @@ pub struct RenderEnhancement {
     /// through). Covers MC1's class-12 jars (red AND blue) and MC2's
     /// class-15 spell tokens.
     pub expose_jar_spells: bool,
+    /// Overhead-map marker size multiplier (dots AND icon stamps,
+    /// both map surfaces). 1.0 = the shipped baseline (deliberate;
+    /// retail's markers are surface-pixel-scale, near-invisible at
+    /// modern resolutions — there is no faithful size to anchor to).
+    /// Any other value switches entity dots to screen-space quads
+    /// whose size no longer varies with minimap zoom.
+    pub map_marker_scale: f32,
+    /// Swap selected overhead-map dots for miniature sprites of the
+    /// thing itself (deliberate deviation): spell jars/tokens, and
+    /// the dolmen/shrine/statue statics. The expose-jar-spells debug
+    /// option outranks this for jars (its spell icon + red dot draw
+    /// instead, never both). Families with no icon built keep their
+    /// dots.
+    pub map_marker_icons: bool,
+    /// Fog the fullscreen map beyond the world's true extent
+    /// (deliberate deviation): the world wraps toroidally, so the
+    /// player-centered map repeats entities past ±half a world from
+    /// the player — retail simply shows the duplicates. A soft black
+    /// fade starting at the (heading-rotated) extent rectangle hides
+    /// them; drawn over every map layer. The round minimap never
+    /// shows duplicates (its zoom caps under half a world), so this
+    /// covers only the map screens.
+    pub map_extent_fog: bool,
     /// Procedural fire (fireball flame/trail, meteor crater walls +
     /// smoke, shockwave) vs the retail sprites. Defaults to classic
     /// for now. Needs smooth_motion for the frame-rate flame; with
@@ -483,6 +506,9 @@ impl Default for RenderEnhancement {
             hud_transparency: HudTransparency::default(),
             map_owned_buildings: false,
             expose_jar_spells: false,
+            map_marker_scale: 1.0,
+            map_marker_icons: false,
+            map_extent_fog: false,
             fire: FireEffects::default(),
             lightning: LightningEffects::default(),
         }
@@ -1038,7 +1064,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 19;
+const DEFAULTS_VERSION: u64 = 20;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp
