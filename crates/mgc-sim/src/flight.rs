@@ -186,12 +186,17 @@ pub fn mc1_move(
         st.tgt_speed = (st.tgt_speed + 16 * dir).clamp(-80, 80);
     }
     // Strafe: ±16/tick held clamp ±80 (:55783-96); released, decay
-    // 4/tick toward 0 with a sign-flip snap (:55800-19).
-    let sdir: i16 = match (inp.strafe_left, inp.strafe_right) {
-        (true, false) => -1,
-        (false, true) => 1,
-        _ => 0,
-    };
+    // 4/tick toward 0 with a sign-flip snap (:55800-19). The bit
+    // tests are SEQUENTIAL (:55783-86) — both strafes held resolves
+    // to RIGHT, never to release (pose-channel-measured on mc1l0
+    // t=3189/3305: retail steps +16 under the 0xE move byte).
+    let mut sdir: i16 = 0;
+    if inp.strafe_left {
+        sdir = -1;
+    }
+    if inp.strafe_right {
+        sdir = 1;
+    }
     if sdir != 0 {
         st.strafe = (st.strafe + 16 * sdir).clamp(-80, 80);
     } else if st.strafe != 0 {
@@ -277,13 +282,17 @@ pub fn mc1_move(
     }
 
     // (g) the every-64th-tick flutter roll on the entity's private
-    // LCG (:55294-99) — sound-only, but the draw is state.
-    st.tick_ctr = st.tick_ctr.wrapping_add(1);
+    // LCG (:55294-99) — sound-only, but the draw is state. The test
+    // reads the +63 clock BEFORE this tick's bump: retail's handler
+    // has no increment (:55294 tests the settled value; the dispatch
+    // bumps +63 after), pose-channel-measured on mc1l0 — every draw
+    // landed one pair late under the post-increment order.
     let mut flutter = false;
     if st.tick_ctr & 0x3F == 0 {
         st.rand = st.rand.wrapping_mul(9377).wrapping_add(9439);
         flutter = st.rand % 0xB == 0;
     }
+    st.tick_ctr = st.tick_ctr.wrapping_add(1);
     Mc1Moved { flutter }
 }
 
@@ -465,11 +474,15 @@ pub fn mc2_move(
     if dir != 0 {
         st.tgt_speed = (st.tgt_speed + 16 * dir).clamp(-80, 80);
     }
-    let sdir: i16 = match (inp.strafe_left, inp.strafe_right) {
-        (true, false) => -1,
-        (false, true) => 1,
-        _ => 0,
-    };
+    // Sequential bit tests like MC1's (EF:60793-96) — both strafes
+    // held resolves to RIGHT, never to release.
+    let mut sdir: i16 = 0;
+    if inp.strafe_left {
+        sdir = -1;
+    }
+    if inp.strafe_right {
+        sdir = 1;
+    }
     if sdir != 0 {
         st.strafe = (st.strafe + 16 * sdir).clamp(-80, 80);
     } else if st.strafe != 0 {
@@ -1028,6 +1041,35 @@ mod tests {
         assert_eq!(st.strafe, 4);
         step(&mut st, &idle);
         assert_eq!(st.strafe, 0, "sign-flip snap to rest");
+    }
+
+    /// Both strafes held resolves to RIGHT — retail's bit tests are
+    /// sequential (:55783-86 / EF:60793-96), never a release. Caught
+    /// by the pose channel on mc1l0 (t=3189/3305: the recorded strafe
+    /// column steps +16 under move byte 0xE where the old match
+    /// decayed it).
+    #[test]
+    fn both_strafes_held_resolve_right_not_release() {
+        let both = Mc1Input {
+            strafe_left: true,
+            strafe_right: true,
+            ..Default::default()
+        };
+        let mut st = Mc1State {
+            z: 128,
+            strafe: -40,
+            ..Default::default()
+        };
+        step(&mut st, &both);
+        assert_eq!(st.strafe, -24, "mc1: right wins from a left drift");
+        let mut st2 = Mc1State {
+            z: 128,
+            strafe: -40,
+            ..Default::default()
+        };
+        let mut ext = Mc2Ext::default();
+        step2(&mut st2, &mut ext, &both);
+        assert_eq!(st2.strafe, -24, "mc2: same sequential resolve");
     }
 
     #[test]

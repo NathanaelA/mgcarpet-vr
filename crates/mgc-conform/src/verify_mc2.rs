@@ -103,6 +103,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let ring_bit_off = std::env::var_os("MGC_NO_HAND_BIT").is_some();
     let mut ring_casts = 0u64;
     let mut stats = Stats::default();
+    let mut pose_chan = crate::pose_lane::PoseLane::default();
     let mut printed_import = false;
     let mut boundary_seeded = false;
     // Measured-terrain accumulator — the MC1 twin's pending-block
@@ -239,6 +240,34 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     )
                     .map_err(|e| format!("t={pt}: {e}"))?;
                     let human_slot = report.human_slot;
+                    // The POSE CHANNEL (crate::pose_lane): shadow-step
+                    // the faithful mover over the human's own motion
+                    // column. Terrain probes run on the MEASURED
+                    // terrain@N+1 (same phase argument as the MC1
+                    // arm; the pending-block re-apply at the loop top
+                    // is idempotent — deltas carry absolute values).
+                    if !args.no_pose_lane {
+                        if let (Some(img), Some(block)) = (timg.as_mut(), pending_terrain.as_ref())
+                        {
+                            img.apply(block)
+                                .map_err(|e| format!("t={pt}: pose terrain: {e}"))?;
+                        }
+                        if let Some((h, ty, ceil)) = crate::verify::measured_planes(&timg) {
+                            world
+                                .install_measured_terrain(h, ty, ceil)
+                                .map_err(|e| format!("t={pt}: pose terrain: {e}"))?;
+                        }
+                        pose_chan
+                            .run_pair_mc2(
+                                &world,
+                                &pst,
+                                &st,
+                                human_slot,
+                                pt,
+                                csv.as_mut().map(|w| w as &mut dyn std::io::Write),
+                            )
+                            .map_err(|e| format!("t={pt}: pose csv: {e}"))?;
+                    }
                     if announce && let Some((got, want)) = report.stack_fallback {
                         eprintln!("  free-stack fallback: live {got} != scan {want}");
                     }
@@ -377,6 +406,7 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         }
     }
     print!("{}", stats.render(args, roster.as_ref()));
+    print!("{}", pose_chan.render());
     // Both counters cover the whole STREAM, not just `--start`'s
     // window: the input chain is fed from t=0 regardless, and the ring
     // lane is a "did this take ever trip it" question.

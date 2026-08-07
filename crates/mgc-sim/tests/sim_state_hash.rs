@@ -205,11 +205,20 @@ fn flight_tier_golden_state_hashes() {
     // ambient creatures whose wander target sits at the exact antipode
     // now turn in retail's direction. Behavior change toward retail by
     // design; post-init + A hold (no tie occurs that early).
+    // Re-pinned (A-C, FAITHFUL only) for the two pose-channel corpus
+    // fixes (flight.rs): the flutter roll tests the +63 clock BEFORE
+    // the tick's bump (retail :55294 tests the settled value — every
+    // draw landed one pair late under the post-increment order), and
+    // both-strafes-held resolves RIGHT, never to release (:55783-86 /
+    // EF:60793-96 are sequential bit tests). Behavior change toward
+    // retail by design, corpus-proven on mc1l0 (99.9% pose-channel
+    // bit-exactness with the fixes, rand/strafe lanes at zero).
+    // ENHANCED holds — neither law runs outside the classic mover.
     const FAITHFUL: [u64; 4] = [
         0x66111d2420b92e5c, // post-init
-        0x6ee1467ef2185a6b, // A: 40 ticks of forward thrust
-        0x50b8c009621ea405, // B: 30 ticks of banked turn + strafe
-        0x07dd31af7cf5ab71, // C: 40 ticks of coast
+        0x965c332addaf3c12, // A: 40 ticks of forward thrust
+        0x8214624f97de8cc8, // B: 30 ticks of banked turn + strafe
+        0xb132e73c72b88b18, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it

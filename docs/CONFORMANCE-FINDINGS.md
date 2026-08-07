@@ -7009,3 +7009,128 @@ resolution folds them onto one (restart/keep-running granularity).
 MC1 keys on +24, which effect ctors owner-stamp — our resolution is
 exact there. Audible-difference cases look rare (the 0x80 gate now
 silences the bulk emitters); parked.
+
+## THE POSE CHANNEL LANDED (2026-08-07): the player-motion column
+## verified over the whole corpus — ~196k pairs, 99.3% bit-exact,
+## two sim fixes and one positioned MC2 gate lead out of round one
+
+The tier-1 ticks-replay design from the transit-clustering session
+(§TRANSIT-CLUSTERING PROBE) is implemented and graded. `verify-deltas`
+pins the human pose, so the player's own motion column was the one
+lane the diff never verified. The POSE CHANNEL
+(`crates/mgc-conform/src/pose_lane.rs`, docs/CONFORMANCE.md §"The
+pose channel") shadow-steps the faithful mover beside every
+fixture-grade pair: flight state seeded from the recorded closure at
+N, input recovered from the recorded flight column, one
+`flight::mc1_move`/`mc2_move` step against the imported world,
+stepped pose diffed bit-exact against N+1. World lanes untouched;
+fixture signatures cannot drift (`exec_pair` not involved).
+
+**The decode key (both games, decompile-verified):** the whole flight
+column lives in the recorded wizard/player block and most of it was
+simply undecoded. New `RetailWizardMc1` lanes (Type_160): `dw_0`
+move/fire byte @+0, filter deltas @+4/+6, `v_28` eff_pitch @+28.
+New `RetailPlayerMc2` lanes (Type_str_164): move byte @+0, deltas
+@+4/+6, knock `moveBoost` @+30 + direction @+32 (remc2's `yaw_0x1E_30`
+name is stale), eff_pitch @+36, stick accumulators @+341/+343,
+web-slow ladder @+332/+333, paralyze @+334/+336, nudge latch @+609,
+water counter @+610.
+
+**Input reconstruction is exact, not modeled:**
+- The move byte is stamped by the consume loop and SURVIVES to the
+  settled snapshot (unlike the memset 10-byte command). Phase is
+  per-game and was corpus-measured: MC1 stamps post-pass (:49018-22
+  runs after the entity pass — pair N→N+1 reads record N; mb@56's
+  strafe bit moves the recorded strafe across 56→57), MC2 stamps in
+  PlayerEvents (EF:38064) — read record N+1.
+- The stick reaches the mover only through the IIR filter, and the
+  accumulators are recorded at both ends: `recover_stick` inverts
+  `(2·stick − acc)/4` per pair (truncation-aware; any solution is
+  downstream-equivalent). Map-screen ticks self-classify (retail
+  zeroes the command; the accumulators decay; recovery returns a
+  centered stick) — no gate needed.
+- Mid-pass knock arms reconstruct by un-decaying the N+1 channel
+  (mc1hwl0 t=371: kmag 0→76 = 80 armed − 4).
+- Terrain probes run on MEASURED terrain@N+1 (terraform writers sit
+  below the carpet's slot; on mc1l0 every eff_pitch/z residue row sat
+  on a live terraform window; the port-evolved planes are no
+  substitute where port terraform itself diverges, e.g. the t=562-570
+  castle build).
+
+**Round-one grades (% of stepped pairs bit-exact):**
+
+| take | offered | stepped | bit-exact | % |
+|---|---|---|---|---|
+| mc1l0 | 7,097 | 7,097 | 7,092 | 99.93 |
+| mc1hwl0 | 49,765 | 49,121 | 49,059 | 99.87 |
+| mc2l0 | 22,695 | 22,402 | 22,376 | 99.88 |
+| mc2l4 | 17,818 | 17,523 | 17,517 | 99.97 |
+| mc2l30 | 12,561 | 12,172 | 12,141 | 99.75 |
+| mc2l3 | 22,798 | 22,371 | 21,706 | 97.04 |
+| mc2l24 | 66,904 | 65,342 | 64,775 | 99.13 |
+
+Gates (death/respawn, warp, accel/Speed-domain — importer lacks a
+`speed_boost` seed, MC2 debuffs, stick-unrecoverable) hold 2-3% of
+offered pairs; every gated class is counted in the report.
+
+**FIXED toward retail (sim, corpus-proven, goldens re-pinned):**
+1. **Flutter draw phase** — retail tests the +63 clock BEFORE the
+   tick's bump (:55294 tests the settled value, no increment in the
+   handler); the port tested post-increment, so EVERY draw landed one
+   pair late (the whole 220-row rand lane on mc1l0 was adjacent-pair
+   swaps; f63 191/192 at the t=57/58 exemplar). `flight.rs` now tests
+   then increments; rand lane 220→0.
+2. **Both-strafes-held resolves RIGHT** — retail's strafe bit tests
+   are SEQUENTIAL (:55783-86; MC2 EF:60793-96 identical), so 0xC in
+   the move byte steps +16; the port's match treated it as release
+   and decayed. Fixed in BOTH movers + regression test
+   `both_strafes_held_resolve_right_not_release`. mc1l0 exemplars
+   t=3189/3305 under move byte 0xE/0x2E.
+
+**Emulated in the harness, small sim lead parked:** `sub_46840`
+short-circuits WHOLE when the move byte is exactly 48 (both fires, no
+move — :55759), freezing a held strafe's decay while double-firing.
+`flight::mc1_move` cannot see fire state (Mc1Input has no fire bits),
+so the harness pre-feeds one decay quantum on dw==48 pairs (18 on
+mc1l0). Wire the fire bits into Mc1Input when convenient; MC2's
+sub_5F380 has NO such short-circuit.
+
+**OPEN LEAD (positioned, the one real family): the MC2 commit gate
+refuses water-skim moves retail allowed.** mc2l3's 3% residue is one
+story: 566 `tgt_speed want 80 got 0` rows + ~650 x/y/z rows, first
+exemplar t=1156-1172 — the player skims z≈1276 over deep water toward
+a rising shore, our `moveTest_5D0A0` port (`mc2_flight_gate`,
+mc2/cave.rs) refuses where retail passed, the deep-water wedge then
+legitimately fires `sub_5DD50`'s 128-unit nudge + zero_speed. The
+stuck law itself is verified cave-gated correctly (water-only
+off-cave, :59854-81). Likely live-play visible as phantom shoves when
+grazing terrain near water on Day levels. Dig target: the gate's
+water-slide arm vs retail moveTest_5D0A0 (EF:59429).
+
+**Corroborations and small families:**
+- l24's dirty windows cluster at t≈7686-7757 and t≈30-31k —
+  whirlwind-funnel grabs and the enclosure portal transits: the
+  funnel full-motion override corroborates the parked t=31121 lead
+  (§TRANSIT-CLUSTERING), now also visible in the player's OWN pose.
+  mc2l30's t≈2972-2990 yaw burst is the same signature.
+- Teleport-resolve `tgt_speed` zeroes (HW t=20088, 3 rows; l24 8
+  rows) — the spell-arm speed-zero law, spell-domain, not gated yet.
+- Residual z/eff_pitch rows (≤ a few dozen per take, |d| ≤ ~100) sit
+  on mid-pass terraform fractions (castle carve, meteor craters) —
+  neither terrain@N nor @N+1 captures intra-pass edits; irreducible
+  capture noise at current closure.
+- mc1hwl0 stick-unrecoverable 0 / l24 155 — heavy-combat stretches
+  where something else wrote the accumulators mid-pair (suspect the
+  paralyze/possession writers); un-dug.
+
+**Instruments kept:** `--example flight_dump_mc1` / `flight_dump_mc2`
+(the recorded flight column per tick — the microscope every finding
+above came from), CSV `kind=pose` rows. Golden re-pin:
+`flight_tier_golden_state_hashes` FAITHFUL A-C (flutter phase +
+strafe law; ENHANCED holds). Workspace + all 7 suites green.
+
+**Tier 2 (banked, design ready):** chained gap-free segments — seed
+once, recover input per pair from the recorded accumulators, step
+continuously, report first divergence per scalar; the same loop as
+tier 1 minus the reseed. Becomes the stepping stone to the full
+`--replay` verifier.

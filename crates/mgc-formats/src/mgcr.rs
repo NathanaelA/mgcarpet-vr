@@ -963,18 +963,35 @@ pub struct RetailWizardMc1 {
     /// Pool slot of this wizard's carpet (+10).
     pub play_index: u16,
     // Type_160 (wizard+1103) fields, by their in-record offsets:
-    pub cmd_speed: i16, // +12
-    pub strafe: i16,    // +16
+    /// The consumed move/fire byte (`dw_0`): the control command's
+    /// byte [5], stamped by the consume loop every tick (:49022) and
+    /// SURVIVING to the settled snapshot — unlike the 10-byte command
+    /// itself, which is memset right after. Bits: 1 speed-up,
+    /// 2 speed-down, 4 strafe-left, 8 strafe-right, 16/32 fire L/R.
+    /// The value 48 exactly (both fires, no move) short-circuits
+    /// sub_46840's whole integration block (:55759).
+    pub move_bits: u32, // +0
+    /// The stick filter's per-tick increments (`word_0x4_4`/`_0x6_6`):
+    /// (2·stick − acc)/4, computed at consume (:49018-20), applied by
+    /// the move (:55143-44). acc@N+1 − acc@N must equal these.
+    pub roll_delta: i16, // +4
+    pub pitch_delta: i16, // +6
+    pub cmd_speed: i16,   // +12
+    pub strafe: i16,      // +16
     /// Knock/buffet channel: magnitude v_22 / direction v_24.
     pub knock_mag: i16, // +22
-    pub knock_dir: u16, // +24
+    pub knock_dir: u16,   // +24
+    /// Effective (authority-scaled) pitch fed to the polar step
+    /// (`v_28`) — persisted because retail leaves it STALE on the
+    /// speed-0 and pitch-0 branches (:55163-92).
+    pub eff_pitch: u16, // +28
     /// Danger-music countdown (v_46).
     pub danger: i16, // +46
-    pub castle: u16,    // +50 (established castle slot)
+    pub castle: u16,      // +50 (established castle slot)
     /// Claimed-house mana tally (u32_308).
     pub banked_houses: i32, // +308
-    pub roll_acc: u16,  // +327
-    pub pitch_acc: u16, // +329
+    pub roll_acc: u16,    // +327
+    pub pitch_acc: u16,   // +329
     /// Spawn grace (u16_331): mailbox wiped while > 0.
     pub grace: u16,
     /// Life-regen stall (u32_383): every processed hit sets 16 —
@@ -1142,10 +1159,14 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
     RetailWizardMc1 {
         status: u16_(d, w + 2),
         play_index: u16_(d, w + m1::WIZ_PLAYINDEX),
+        move_bits: u32_(d, t),
+        roll_delta: i16_(d, t + 4),
+        pitch_delta: i16_(d, t + 6),
         cmd_speed: i16_(d, t + 12),
         strafe: i16_(d, t + 16),
         knock_mag: i16_(d, t + 22),
         knock_dir: u16_(d, t + 24),
+        eff_pitch: u16_(d, t + 28),
         danger: i16_(d, t + 46),
         castle: u16_(d, t + 50),
         banked_houses: i32_(d, t + 308),
@@ -1292,6 +1313,39 @@ pub struct RetailPlayerMc2 {
     pub castle_ent: i16,
     pub cmd_speed: i16, // type_str_164 (+998) +12
     pub strafe: i16,    // +998 +16
+    // The pose channel's flight lanes (Type_str_164 offsets, all
+    // decompile-verified against remc2 global_types.h):
+    /// The consumed move/fire byte (`entityIndex_0x0`): stamped from
+    /// the command's byte 5 by the consume loop every tick
+    /// (EF:38064) — MC2 stamps in PlayerEvents BEFORE the entity
+    /// pass, so pair N→N+1 consumes the byte recorded at N+1
+    /// (opposite of MC1's post-pass stamp).
+    pub move_bits: u32, // +0
+    /// The stick filter's per-tick increments (`rollDelta_0x4_4` /
+    /// `pitchDelta_0x6_6`, EF:38060-63).
+    pub roll_delta: i16, // +4
+    pub pitch_delta: i16, // +6
+    /// Knock/buffet channel (`moveBoost_0x1E_30` + its direction —
+    /// remc2's `yaw_0x1E_30` name is stale, the field sits at +32).
+    pub knock_mag: i16, // +30
+    pub knock_dir: u16,   // +32
+    /// Effective (authority-scaled) pitch fed to the polar step
+    /// (`pitch_0x24_36`) — stale on the speed-0/pitch-0 branches,
+    /// like MC1's v_28.
+    pub eff_pitch: u16, // +36
+    /// The stick accumulators (`roll_0x155_341`/`pitch_0x157_343`).
+    pub roll_acc: u16, // +341
+    pub pitch_acc: u16,   // +343
+    /// Web-slow debuff ladder (`moveSpeed_0x14C_332` 0..3 + its
+    /// 8-tick counter) and the paralyze pair (+334/+336).
+    pub move_speed: u8, // +332
+    pub move_speed_ctr: u8, // +333
+    pub mobilize: u8,     // +334
+    pub mobilize_ctr: u8, // +336
+    /// Water-splash counter (`waterCounter_0x262_610`) and the cave
+    /// nudge latch (`byte_0x261_609`, EF:59869-81).
+    pub water_ctr: u16, // +610
+    pub nudge_latch: u8,  // +609
     /// Invulnerability-reset countdown (`word_0x159_345`, +998+345).
     pub invuln: i16,
     /// Life-regen stall (`dword_0x18D_397`, +998+397): every
@@ -1539,6 +1593,20 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         castle_ent: i16_(d, b + m2::PP_CASTLE_TRUE),
         cmd_speed: i16_(d, t + 12),
         strafe: i16_(d, t + 16),
+        move_bits: u32_(d, t),
+        roll_delta: i16_(d, t + 4),
+        pitch_delta: i16_(d, t + 6),
+        knock_mag: i16_(d, t + 30),
+        knock_dir: u16_(d, t + 32),
+        eff_pitch: u16_(d, t + 36),
+        roll_acc: u16_(d, t + 341),
+        pitch_acc: u16_(d, t + 343),
+        move_speed: u8_(d, t + 332),
+        move_speed_ctr: u8_(d, t + 333),
+        mobilize: u8_(d, t + 334),
+        mobilize_ctr: u8_(d, t + 336),
+        water_ctr: u16_(d, t + 610),
+        nudge_latch: u8_(d, t + 609),
         invuln: i16_(d, t + 345),
         regen_stall: i32_(d, t + 397),
         wanted: i16_(d, t + 584),

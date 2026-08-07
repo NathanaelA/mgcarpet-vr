@@ -14,6 +14,7 @@
 
 mod fixtures;
 mod jsondiff;
+mod pose_lane;
 mod roster;
 mod verify;
 mod verify_mc2;
@@ -80,6 +81,11 @@ fn usage() -> ! {
                              channel (format 2) — every pair runs on\n\
                              pristine planes (the A/B for the terrain\n\
                              installation)\n\
+           --no-pose-lane    skip the POSE CHANNEL (the shadow mover\n\
+                             step verifying the human's own motion\n\
+                             column — flight state seeded from N,\n\
+                             input recovered from the recorded flight\n\
+                             column, pose diffed at N+1 bit-exact)\n\
                              (raw, unclassified report — docs/CONFORMANCE.md)"
     );
     std::process::exit(2);
@@ -121,6 +127,9 @@ pub struct Args {
     /// and run every pair on pristine planes (the A/B for the format-2
     /// terrain installation).
     pub no_terrain: bool,
+    /// Skip the pose channel (the shadow mover step over the human's
+    /// own motion column).
+    pub no_pose_lane: bool,
 }
 
 fn parse_args() -> Args {
@@ -142,6 +151,7 @@ fn parse_args() -> Args {
         no_pose_alt: false,
         no_slot_desync: false,
         no_terrain: false,
+        no_pose_lane: false,
         max_open: 24,
         promote: false,
         input_delay: 0,
@@ -172,6 +182,7 @@ fn parse_args() -> Args {
             "--no-pose-alt" => a.no_pose_alt = true,
             "--no-slot-desync" => a.no_slot_desync = true,
             "--no-terrain" => a.no_terrain = true,
+            "--no-pose-lane" => a.no_pose_lane = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--baseline" => {

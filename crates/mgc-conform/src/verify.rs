@@ -94,6 +94,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let mut cmd_ring: std::collections::VecDeque<PlayerCommand> =
         std::iter::repeat_n(PlayerCommand::default(), args.input_delay as usize + 1).collect();
     let mut stats = Stats::default();
+    let mut pose_chan = crate::pose_lane::PoseLane::default();
     let mut printed_import = false;
     // The measured-terrain accumulator (format-2 channel): a pair
     // (pt → t) must run on terrain AT pt, so each record's block is
@@ -197,6 +198,42 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     };
                     let pose = carpet_pose(pose_src);
                     world.tick(pose, pcmd);
+                    // The POSE CHANNEL: shadow-step the faithful
+                    // mover and diff the human's own motion column at
+                    // N+1. Its terrain probes run on the MEASURED
+                    // terrain@N+1: retail's terraform writers sit at
+                    // low pool slots and run BEFORE the carpet's, so
+                    // the carpet's ground probe saw the pair's END
+                    // terrain (measured on mc1l0 — every eff_pitch/z
+                    // residue row sat on a live terraform window, and
+                    // the port-evolved planes are no substitute where
+                    // the port's own terraform diverges). Applying the
+                    // pending block early is safe: deltas carry
+                    // absolute cell values, so the loop-top re-apply
+                    // is idempotent. The flight seed still comes from
+                    // the recorded closure at N.
+                    if !args.no_pose_lane {
+                        if let (Some(img), Some(block)) = (timg.as_mut(), pending_terrain.as_ref())
+                        {
+                            img.apply(block)
+                                .map_err(|e| format!("t={pt}: pose terrain: {e}"))?;
+                        }
+                        if let Some((h, ty, ceil)) = measured_planes(&timg) {
+                            world
+                                .install_measured_terrain(h, ty, ceil)
+                                .map_err(|e| format!("t={pt}: pose terrain: {e}"))?;
+                        }
+                        pose_chan
+                            .run_pair_mc1(
+                                &world,
+                                &pst,
+                                &st,
+                                report.human_slot,
+                                pt,
+                                csv.as_mut().map(|w| w as &mut dyn std::io::Write),
+                            )
+                            .map_err(|e| format!("t={pt}: pose csv: {e}"))?;
+                    }
                     let pin = PinnedMc1 {
                         slot: report.human_slot,
                         local: pst.local_player,
@@ -315,6 +352,7 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         }
     }
     print!("{}", stats.render(args, roster.as_ref()));
+    print!("{}", pose_chan.render());
     Ok(stats.clean_pairs == stats.pairs)
 }
 

@@ -272,3 +272,52 @@ MC2 arm reconstructs the cast phase exactly and ignores
 SNAPSHOT STRADDLES RETAIL'S INPUT POLL"). MC1 has no latch register
 and stays `--input-delay`-modeled with cast-edge pairs bucketed
 capture.
+
+## The pose channel
+
+`verify-deltas` pins the human pose, so the player's own motion column
+is the one lane the world diff never verifies — the pinned slot's pose
+fields are runner INPUTS, tautologically clean. The POSE CHANNEL
+(`crates/mgc-conform/src/pose_lane.rs`; on by default,
+`--no-pose-lane` disables) closes that hole: for every fixture-grade
+pair it seeds the faithful mover's flight state from the recorded
+closure at N, steps `flight::mc1_move`/`mc2_move` once against the
+imported world, and diffs the stepped pose against the recorded pose
+at N+1 — bit-exact, the movers being integer ports. Lanes: x/y/z,
+yaw, aim/eff pitch, actual/target speed, strafe, the stick-filter
+accumulators, and (MC1) the flutter clock + private LCG.
+
+Input needs no reconstruction guesswork:
+
+- the consumed move/fire byte (`Type_160/164 dw_0`) is stamped by the
+  consume loop every tick and SURVIVES to the settled snapshot. The
+  phase differs per game and is corpus-measured: MC1 stamps AFTER the
+  entity pass (pair N→N+1 reads record N), MC2 stamps in PlayerEvents
+  BEFORE it (read record N+1).
+- the stick enters the mover only through the low-pass filter
+  (`acc += (2·stick − acc)/4`), whose accumulators are recorded at
+  BOTH ends of the pair, so the filter inverts exactly per pair
+  (`pose_lane::recover_stick`); any solution is equivalent downstream.
+  The MC1 map screen needs no gate — retail zeroes the command there
+  and recovery returns a centered stick.
+- a knock/buffet armed mid-pass (writers sit below the carpet's slot)
+  reconstructs by un-decaying the N+1 channel.
+
+Terrain probes run on the MEASURED terrain@N+1 — terraform writers
+run before the carpet's slot, measured on mc1l0: every eff_pitch/z
+residue row sat on a live terraform window. Gates classify what a
+one-tick mover shadow cannot own: death/respawn, warps, the
+Accelerate/Speed-spell domain (the importer does not seed
+`player.speed_boost` yet), MC2 web-slow/paralyze pairs, and
+unrecoverable stick transitions.
+
+First full-corpus grades (2026-08-07, ~196k pairs stepped, % of
+stepped bit-exact): mc1l0 99.93 · mc1hwl0 99.87 · mc2l0 99.88 ·
+mc2l4 99.97 · mc2l30 99.75 · mc2l24 99.13 · mc2l3 97.0 — the l3
+residue is one positioned lead (the MC2 commit gate refusing
+water-skim moves retail allowed; ledger §POSE CHANNEL). CSV rows
+carry `kind = pose`, field `pose.<lane>`, empty rule column. The
+FIXTURE suite does not run the channel — signatures stay pose-free by
+construction (the shadow step never touches `exec_pair`). Triage
+microscopes: `--example flight_dump_mc1` / `flight_dump_mc2` (the
+recorded flight column per tick).
