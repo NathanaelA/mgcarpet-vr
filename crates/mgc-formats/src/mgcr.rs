@@ -977,6 +977,9 @@ pub struct RetailWizardMc1 {
     pub pitch_acc: u16, // +329
     /// Spawn grace (u16_331): mailbox wiped while > 0.
     pub grace: u16,
+    /// Life-regen stall (u32_383): every processed hit sets 16 —
+    /// no health regen while > 0 (:55387-90).
+    pub regen_stall: u32,
     pub shots: u32, // +343
     pub hits: u32,  // +347
     pub kills: u32, // +359
@@ -1149,6 +1152,7 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
         roll_acc: u16_(d, t + 327),
         pitch_acc: u16_(d, t + 329),
         grace: u16_(d, t + 331),
+        regen_stall: u32_(d, t + 383),
         shots: u32_(d, t + 343),
         hits: u32_(d, t + 347),
         kills: u32_(d, t + 359),
@@ -1290,6 +1294,10 @@ pub struct RetailPlayerMc2 {
     pub strafe: i16,    // +998 +16
     /// Invulnerability-reset countdown (`word_0x159_345`, +998+345).
     pub invuln: i16,
+    /// Life-regen stall (`dword_0x18D_397`, +998+397): every
+    /// processed hit/grip/steal sets 16 — no health regen while > 0
+    /// (EF:60000-60003; armed EF:60662/60710/62222).
+    pub regen_stall: i32,
     /// The WANTED timer (`word_0x248_584`, +998+584) — village aggro.
     pub wanted: i16,
     pub hand_left: i16,  // +2103 (SpellIndexLeft; -1 = empty)
@@ -1532,6 +1540,7 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         cmd_speed: i16_(d, t + 12),
         strafe: i16_(d, t + 16),
         invuln: i16_(d, t + 345),
+        regen_stall: i32_(d, t + 397),
         wanted: i16_(d, t + 584),
         hand_left: i16_(d, b + m2::PP_HAND_L),
         hand_right: i16_(d, b + m2::PP_HAND_R),

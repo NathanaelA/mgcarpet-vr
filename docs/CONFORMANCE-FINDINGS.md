@@ -6532,3 +6532,352 @@ cannot mis-fire there today — but when the MC2 rival rebound lands,
 it needs the same mana-mirror treatment. Also banked: the PLAYER
 deflection arm keeps its INTERIM no-debit (sound placement now
 matches retail; the debit needs the player pool reachable from Gen).
+
+### ROUND-2 ADDENDUM — playtest PASSED; retail "stuck flag" lead OPEN (2026-08-06)
+
+Player confirms deflection now works live. New lead from the same
+report: retail Vodor remembered as rebounding AT ALL TIMES, even
+castle-less — suspicion that the flag gets stuck. Corpus second look
+(dump-state slot 473 `flags` at 5600/7000/21400/24000/26000/31000/
+42000/49000): **this take is clean** — bit 15 ON only inside the
+seven windows, OFF between them, OFF through the final death and the
+entire corpse era; and window 7 (21,372→21,473) is law-consistent —
+he had REBUILT (slot 233, level-3 castle, stored 13,768 — the number
+the round-1 instrumentation saw). The take never TESTS the stuck
+hypothesis though: he never died mid-window. Mechanism is credible:
+retail clears `+17` bit 7 only from the token's burst tick
+(sub_573F0_57920), and rival death scatters the manifestations into
+decaying ground jars (:55519-49) whose handlers never touch the bit
+— a death with the window live should orphan the bit ON permanently
+(castle-less, across respawns). The port deliberately deviates (the
+death transition drops the bit — see the ROUND-1 fix notes).
+**Discriminator for a future retail take: kill the rival within ~4 s
+of a deflection, then check whether everything bounces off him for
+the rest of the level (flags lane stuck 0x8000 through state 3).**
+If confirmed: player ruling — keep the sane deviation (DEVIATIONS.md
+entry) or port the stuck flag faithfully.
+
+## V2 CORPUS INTAKE — mc2l0 / mc2l4 / mc2l30 / mc2l24 (2026-08-07)
+
+The 2026-08-06 evening re-records intaken and FROZEN per the
+freeze-at-intake law; these four sections supersede the "Baseline
+corpus" block's numbers for their levels. Pipeline per level:
+check-decode → terrain-diff → full verify-deltas (`--csv` at repo
+root) → extract → carry_curation → classify_fixtures → freeze →
+suite gate. ALL SEVEN suites green at close.
+
+**check-decode (all 100% clean, terrain base present):** mc2l0
+22,696 ticks (659 deltas / 37,913 cells) · mc2l4 17,819 (626 /
+128,685) · mc2l30 12,555 (803 / 118,614) · mc2l24 67,268 (3,821 /
+722,177). The mc2l4/mc2l30 cut (t=17,820) with the materialized
+part-B base decodes clean on both halves.
+
+**Stock-bake terrain-diff (first ever on these four levels; cells
+of 65,536):**
+
+| take | type | height | shading | angle | note |
+|---|---|---|---|---|---|
+| mc2l0 | 34 | 15 | **3,676 (5.61%)** | 33 | shading = SUM-64 signature |
+| mc2l4 | 28 | 1,357 (2.07%) | 583 | 940 (1.43%) | unattributed, first look |
+| mc2l30 | 8 | 288 | 88 | 345 | local clusters (x≈182-206) |
+| mc2l24 | 1,086 (1.66%) | 729 | 429 | 3,088 (4.71%) | ONE region x≈120-134,y≈101-105 |
+
+- **mc2l0 shading: every example sums to 64 (retail = 64 − port)** —
+  this is the banked night-shading gap made measurable (mc2:0 is
+  MapType Night; port bakes Day relief shading — the flag must reach
+  construction, the known ~60 `World::new` sites item). 3,676 cells =
+  the relief-shaded population. The corpus now grades the fix.
+- **mc2l24 (Night+doom): NOT the inversion** — diffs cluster in one
+  region (the citadel footprint): type retail 8 vs port 77/79,
+  shading a constant −8, angle 4.71%. Reads as an authored
+  citadel-stamp bake difference, one story.
+- **mc2l30 = MapType CAVE (level.json: cave, basic_height 173) and
+  the take has NO ceiling plane** — the conjoined take started on
+  non-cave l4, so the recorder never declared ceiling (the cut
+  caveat, as predicted). Ceiling runs PRISTINE-GENERATED in verify;
+  in-level cave carves are unshielded there. The floor planes'
+  small residues cluster locally (eruption/spawn-stamp shaped, e.g.
+  height ±2..4 at x=197-203,y=16-17). A future native-l30 take
+  would close the ceiling.
+
+**verify-deltas headlines (terrain MEASURED everywhere):**
+
+| take | pairs | torn | conforming raw | conf+explained | UNEXPL field/miss/extra | rng |
+|---|---|---|---|---|---|---|
+| mc2l0 | 22,695 | 0 | **17,153** | **21,872 (96.4%)** | 2,288 / 33 / 26 | 1 |
+| mc2l4 | 17,818 | 0 | 9,716 (was 0!) | 14,898 (83.6%) | 9,406 / 57 / 43 | 4 |
+| mc2l30 | 12,553 | 0 | 2,657 | 10,986 (87.5%) | 4,221 / 37 / 42 | 1 |
+| mc2l24 | 67,233 | 329 | 13,251 | 27,740 (41.3%) | 367,145 / 445 / 569 | **3** |
+
+RNG stays essentially locked corpus-wide (9 mismatched pairs across
+120k) — even through the l24 endgame frenzy (old take: 1,816 torn;
+new: 329).
+
+**mc2l24 freakshow scoping REFUTES the convenient story:** the
+unexplained bulk is MID-GAME — t=5k-25k holds ~254k of the 367k
+field rows; the post-victory stress window (t=50k-70k) only ~78k.
+Biggest single family in the GROSS entity-set table: 22,093 missing
+(10,39) mana spheres from t=2,857 on — **CORRECTED at triage: all
+22,093 are already claimed by the `mc2l24-ball-terrain-roll` capture
+rule** (fountain/merge/summit-grounding closure, 2026-08-04 dig) and
+none reach the unexplained headline (445 total unexplained missing).
+A spot dump (slot 357, t=2,857→2,858: alive 300/300 both ticks in
+retail, port kills it within ONE tick of import) is consistent with
+that rule's merge/grounding story rather than a spawn miss; the
+port-side "N spawn(s) dropped" bursts live in the LATE stress
+window only (pairs 36k+) and remain the entity-cap story. Second
+family: (9,9) lightning 9,527 missing / 2,539 extra from t=8,222.
+
+**Cross-take unexplained families (the joint-triage roster; all
+takes agree, exemplars in the repo-root TSVs mc2l0/l4/l30[-v2].tsv):**
+
+1. **player.life +5 skew** — (3,0).life + player.life mirrored, all
+   four takes (111/426/443 rows + l24): after a damage event the
+   port sits EXACTLY +5 above retail persistently (retail 9500 /
+   port 9505 for hundreds of flat ticks), damage tick itself one
+   frame apart (t=265 l30: retail 10000 port 9220). Reads as one
+   extra +5 life-regen application around the damage frame — the
+   frame-ORDER class again (cf. the burst-mana debit law).
+2. **(9,9) lightning missing** — l4 1,355 missing from t=928 (the
+   3-player rival level), l24 9,527 from t=8,222. Port draws far
+   less lightning than retail in rival fights.
+3. **(10,17) spawn pitch −2 + seeded mana** — CORRECTED by the
+   want/got distribution: retail applied_pitch walks multiples of
+   192 (192/384/576/…) and the port is EXACTLY −2 on every rung
+   (not compounding) → a spawn-time applied_pitch offset of −2 with
+   an identical 192/tick rate. Same family also shows port seeding
+   mana 8000/16000 where retail keeps 0 (l30: 103 of 106 mana
+   rows). (l30 965 + l4 417 pitch rows.)
+4. **(10,39) mana-sphere speed** — port pins 16, retail varies
+   (17/24/28/63); all takes (472/122/108 rows + l24's missing mass).
+   Sphere speed law, not a constant.
+5. **(5,9) action 72→73 at import** — l4 t=0 (354 rows over the
+   whole starting population), l30 a t=2,298 burst: retail parks at
+   action 72 (39 rows also 79) where the port writes 73 — the port
+   collapses a 72..79 state band onto 73. Import/state-mapping
+   off-by-one class (the f66→f70 lesson).
+6. **(10,79) spawn z** — port spawns at flat z=1760 where retail has
+   terrain-varied 800-1152 (l30 t=1,114 burst; l4 437 z + 253 x
+   rows). Spawn-z law.
+7. Lesser recurring: (10,1).mana, (10,45).life, (5,x).sv1 families,
+   (3,3) rival pose (x/y/heading), (10,40).mana_max l0 t≈11.2k
+   (the aura-pull lead's family).
+
+**Suites (frozen at intake, gates green):** mc2l0 1,740 fixtures
+(1 carried + 23 stories; classify 10 capture/13 open; one
+select-dependence FIXED at t=11,322 promoted) · mc2l4 996 (15 open /
+8 capture; t=2,278 (15,9) select-dependence demoted open) · mc2l30
+290 (t=3,586 (15,21) ditto) · mc2l24 1,349 (0 carried — the
+freakshow shares no stories with the old take; 16 capture / 8 open;
+green first run). The (15,x) select-dependence pair = the known
+warning-grade shared-world leak (2026-08-01 suite note), now with
+two more exemplars, both class 15.
+
+### mc1hwl0 gate: 5 rival-mana fixtures parked on the REBOUND-PENDING pile (2026-08-07)
+
+The all-suite pass found mc1hwl0 at 846/852: five fixtures
+(t=21,039 / 24,145 / 24,163 / 24,264 / 25,922), ALL `field:(3,1)
+mana`, frozen as conforming at session-11 close, now +100
+port-over-retail. Full-take windowed re-verify REPRODUCES it (not
+suite-context): retail's rival drains ~100-150/tick in these
+stretches while the port, re-importing retail state each pair,
+re-creates a +100 skew within ONE tick — i.e. retail is PAYING for
+something per-tick that the imported port rival doesn't resume
+(rival cast/channel state not reconstructed at import — the f66→f70
+lesson's rival sibling). This is rebound/re-up territory and the
+player owes the retail triple-check (ROUND-2 addendum above), so:
+demoted open with a note, t=140 FIXED promoted, suite green
+852/852. Revisit WITH the rebound ruling. (Why it was green at the
+session-11 freeze and not now is unexplained — the tree is the
+committed db356a7 state; suspect the freeze predated the last
+rival-arm edits of that session.)
+
+### JOINT-TRIAGE ANSWERS (player, 2026-08-07) — three redirects
+
+1. **l24 mana spheres: "only after victory" did mana lie around** —
+   the player collected as they went mid-game. This REFUTES the
+   lying-mana/entity-cap framing for the 22,093 missing (10,39)
+   rows from t=2,857: the early/mid-game missing spheres need a
+   different story (sphere spawn/lifetime law, not cap pressure).
+   The port-side "spawns dropped" bursts (pairs 36k+) remain the
+   late-game cap story only.
+2. **Life regen (player concept, TO VALIDATE FROM DECOMPILE):**
+   "life regenerates extremely slowly; speeds up at dolmen/shrine/
+   castle; outside of that it's so slow it feels disabled." The +5
+   skew = port applying a regen quantum around the damage frame
+   that retail gates. Dig authorized.
+3. **(9,9) lightning is NOT wizard-cast: "primarily castle
+   defenses; I do not recall players using it. In l24 it's also the
+   hydra and to some extent the final boss (Vissuluth)."** So the
+   under-firing arm is the CASTLE-DEFENSE lightning (and hydra m27 /
+   Vissuluth breath arms on l24) — not the rival reactive-cast
+   ladder. l4's t≈928 onset = when rival castles first stand.
+
+**Dig order (player selected ALL four lanes):** ① life +5 frame
+order (decompile validation of the regen concept) → ② l24
+mana-sphere drop (now a spawn/lifetime story) → ③ castle-defense
+lightning arm → ④ the constants batch ((10,17) 384-vs-382 rate,
+(10,39) sphere speed, (5,9) import 72→73, (10,79) spawn z 1760).
+
+### ⭐ LANE ① LANDED SAME DAY — the life+5 family was the UNSEEDED REGEN-STALL COUNTER (2026-08-07, FIXED)
+
+Opus decompile dig, spot-verified, then landed. **The port's live sim
+law was already correct** (world.rs `regen_delay`: armed 16 on
+hit/grip/steal, damage-before-regen order, 10000/2000 = +5 afield vs
+10000/250 = +40 at castle/dolmen — validating the player's concept
+exactly: slow ambient, 8× at castle/dolmen, and the 16-tick stall
+re-armed under sustained fire is the "feels disabled"). The
+divergence was VERIFICATION-DOMAIN: retail's stall counter
+(MC2 `dword_0x18D_397` = wizext +397, EF:60000-60003, armed
+EF:60662/60710/62222; MC1 `u32_383` = +383, sub_main.cpp:55387-90 —
+the agent's report said MC1 +397, corrected against remc1 before
+landing) was never decoded by the recorder structs, so BOTH
+importers seeded `regen_delay = 0` every pair → each pair inside
+retail's stall window applied exactly one heal quantum retail
+withheld → the dead-flat retail+0/port+5 (or +40) runs, ~15 pairs
+per hit, on every MC2 take.
+
+**Fix (pure decoder+importer, no sim change, no re-record — the
+bytes were always in the recorded struct images):**
+`mgc_formats::mgcr` decodes `regen_stall` (MC1 t+383 u32, MC2 t+397
+i32); both conformance imports seed `regen_delay` from it.
+PROOF: the l0 t=4103-4160 and l30 t=265-271 flat runs are GONE;
+survivors are only the one-frame damage-tick pairs themselves
+(capture-window artifact — the attacker's mail is not in the
+imported closure; roster-able as capture). All 7 suites green, 0
+regressions 0 fixed; state_hash goldens pass (import-side change —
+goldens can't see it). **Post-fix full mc2l0 re-verify: 17,494
+conforming (was 17,153), conf+explained 22,249/22,695 = 98.0% (was
+96.4%), UNEXPLAINED field 1,482 (was 2,288)** — ~800 rows retired on
+the cleanest take; l4/l30/l24 carry proportional retirements
+(re-verify at next full pass; intake headline table above still
+shows PRE-fix numbers).
+
+Banked from the same dig (second-order, masked until now): ① retail
+consumes the STORED stale rate `lifeRegen_0x163_355` (+355; port
+computes inline — only differs ±35 on castle/dolmen entry/exit
+ticks; +355 is in the recorded bytes, seed when it shows up); ② the
+l24 roster rules mc2l24-player-life-regen / mc2l24-wizard-life-regen
+(and the life half of the mana twins) = this same root cause —
+expect their hits to collapse on the next full l24 verify; retire
+then; ③ human maxLife = 10000 × header scalar/256 — port hardcodes
+10000 (all four takes are scalar 256; a non-256 level would bite);
+④ AI wizards have NO stall in retail (EF:5426-5433) and heal
+maxLife/200 home / /500 afield — unverified against the port's AI
+arm, separate lane.
+
+### LANE ③ MAPPED — the (9,9) lightning deficit IS the castle-defense turret burst arm (2026-08-07, Opus dig; player-redirected)
+
+The player's triage answer ("primarily castle defenses; I do not
+recall players using it; in l24 also the hydra and Vissuluth")
+aimed this dig straight past the rival-cast ladder — and the
+decompile confirms every element.
+
+**The retail arm:** castle pieces (10,79) (ctor sub_508E0 EF:36987,
+brain sub_3AF00 EF:30106-472) rebuilt on every castle level change
+by sub_613D0 (EF:62234); tower TYPE byte_0x43_67 = the castle spell
+tier's life_0x1A stamped by the research child sub_69AB0 (EF:56121)
+— type 1 = fireball tower, any other non-zero = LIGHTNING tower.
+Scan once per 64 ticks (byte_0x3E_62 & 0x3F), ring band 3..12, no
+LOS/invisibility test; weapon roll: 94% → 6-shot burst, one shot
+per tick, via the SHARED Lightning path sub_6DCA0 a3==7 → (9,9).
+**Row multiplier:** the (9,9) beam (sub_4D860, speed 384, life 9) is
+a one-tick hitscan laying steps*8+1 trail nodes (sub_66750
+EF:58268-400) → one bolt ≈ 1+81 records, one burst ≈ 490 (9,9)
+records. Secondary (9,9) sources CONFIRMED as the player said:
+hydra (5,27) whip bolt ≈33% power roll (EF:20543), Vissuluth
+doomsday pyramid case-2 volley, selector-gated ~10/29 (EF:13345);
+plus one UNRESOLVED site EF:26708 (owner not in any action table).
+
+**Corpus evidence both onsets = this arm:** mc2l4 missing (10,23)
+impacts arrive in ~6-wide consecutive-tick runs (925-930, 1156-63,
+…) — 48 retail burst windows, ~19 with NO port burst at all; (9,0)
+balanced so the port is not rolling fireball instead. mc2l24: 392
+missing-impact windows, ALL t≥8,223, starts 63-65 ticks apart —
+the 64-tick re-scan clock verbatim.
+
+**Port state: the machine is PORTED and largely faithful**
+(castle.rs mc2_castle_piece_tick/scan/fire; proj.rs beam+trail) —
+divergence list, ranked: **D7** one-tick aim-phase lag (every
+(10,79) pitch row = port carrying retail's previous-tick value;
+fits every burst; root walk-order vs fire-delay UNDUG — highest
+value next step); **D-19-bursts** ~19/48 l4 bursts absent entirely
+(candidates: D5 target-choice deviation, or the f67 tower-type
+stamp path — port stamps SPELLS[2].tiers[tier].life at cast time
+vs retail's research-child stamp at castleLevel+1 — compare f67
+against the recording); **D1** aim order (retail aims from unlifted
+muzzle at box-raised target, lifts z AFTER; port aims from lifted
+muzzle at raw target); **D2** trail one node short + one spacing
+downrange (drops retail's muzzle node — the mc1hw-lightning-node-x
+shift); **D3** lateral jag accumulator (possible IDA artifact);
+**D4** charged lightning doesn't chain (documented deviation —
+also kills turret mode 2, 5% of bursts); **D5/D6** documented
+deviations (target order, friendly exemption).
+
+**⚠ ROSTER MASKING WARNING:** mc2-cast-timing-missing/extra swallow
+ALL class-9 set rows — their own notes warn "ONE-SIDED counts = a
+real port bug hiding here", and 1,355/21 (l4), 9,527/2,539 (l24)
+is exactly that. mc2-lightning-blast-churn likewise masks the
+strongest signal (217/0, 1,660/14 (10,23) missing). When the
+turret fixes land, re-scope those rules or the win is invisible.
+
+Also corrected: docs/traces/mc2-castle-runtime.md:422 conflates
+(10,79) with the (5,15) guard — different brains (sub_3AF00 vs
+sub_23C40); trace doc NOT edited this session, note carried here.
+
+### REBOUND ROUND 4 — CLOSED BY PLAYER RETAIL PLAYTEST (2026-08-07)
+
+Player ran the retail check: **reduced the rival's castle to rubble
+→ the rebound went away.** That is the ported law exactly (reactive
+re-up gated on castle stores ≥8000; castle-less = no re-up, window
+lapses) — the remembered "rebounding at all times, castle-less" did
+NOT reproduce. Player ruling: "everything is the way it should be
+now; if I ever spot a deviation, I'll reopen." Topic CLOSED. (The
+narrow die-mid-window jar-orphan discriminator from the ROUND-2
+addendum was not the path tested; it stays moot under this ruling —
+the port's death-drops-the-bit guard stands as the sane behavior,
+no DEVIATIONS.md entry needed since no retail divergence was ever
+observed.)
+
+The five mc1hwl0 (3,1)-mana fixtures parked on this pending check
+are hereby RE-SCOPED, not un-parked: with the rebound arm vindicated,
+their +100-per-pair skew is a pure IMPORT-DOMAIN lead — retail's
+rival is paying ~100-150/tick for something in those stretches and
+the fixture import doesn't reconstruct the paying state (the exact
+class the regen-stall fix just closed for the human). Banked as
+"rival per-tick payment state unseeded"; fixture notes updated; dig
+when convenient, no urgency.
+
+### mc2l30 NATIVE RE-RECORD INTAKEN — THE CEILING CHANNEL IS CLOSED (2026-08-07)
+
+Player recorded l30 natively — CORRECTED MECHANISM (player,
+same day): NOT a savestate load. MC2 makes a reached hidden level
+revisitable from the campaign map (red portal; flag once
+completed). The player unlocked it via l4, exited, saved the
+CAMPAIGN, restarted, and launched l30 directly — a NORMAL level
+start, so the recorder pinned MapType=Cave and declared the
+ceiling. (Mid-level save-load recording remains UNTESTED; player
+rates it low priority.) Take REPLACES the cut one at
+recordings/mc2l30.mgcr per player instruction (cut preserved as
+mc2l30-cut.mgcr; regenerable from mc2l4,30.mgcr anyway).
+
+- check-decode: 12,562 ticks 100% clean, 763 deltas / 119,257
+  cells.
+- **terrain-diff: FIRST MEASURED l30 CEILING — 0.13% (84 cells)**
+  vs the port generator; floor planes 0.23-1.03% — MORE than the
+  cut take's (8/288/88/345 cells), which a fresh map-launch would
+  not obviously explain. OPEN QUESTION: does MC2 PERSIST hidden-
+  level terrain across revisits (campaign state), or does the
+  revisit re-bake with different spawn stamps? Until answered,
+  treat the native base as ceiling evidence only; the cut take
+  remains the t0-bake instrument for the floor planes.
+- verify: 12,561 pairs, 0 gaps 0 TORN, 2,024 raw conforming,
+  10,541 conf+explained (83.9%), UNEXPL 5,199 field / 98 / 22 —
+  ceiling now INSTALLS measured per pair. ⚠ **rng 39/12,561** (cut
+  take: 1) — cause unknown (save-load theory RETIRED with the
+  mechanism correction; different gameplay or revisit state are the
+  remaining candidates), long-tail item.
+- Suite re-frozen: 227 fixtures (14 carried via sig-bridge from the
+  cut-take suite, 10 new stories), gate green; ALL 7 suites green.
+  Select-dependence claimed a THIRD exemplar (t=3,362, again
+  (15,21) action/owner) — demoted+sig-refreshed like the others.

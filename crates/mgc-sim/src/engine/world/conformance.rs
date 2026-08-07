@@ -404,6 +404,11 @@ impl World {
             right: hand(wiz.hand_right),
             owned: wiz.owned_slots,
             grace: wiz.grace,
+            // The 16-tick post-hit life-regen stall (u32_383,
+            // :55387-90). Unseeded, every pair inside retail's stall
+            // window applied one heal quantum retail withheld — the
+            // persistent life+5/+40 skew family.
+            regen_delay: wiz.regen_stall.min(u16::MAX as u32) as u16,
             killer: tr(carpet.f38),
             fall_speed: carpet.f46,
             shield: carpet.flags & 0x4000 != 0,
@@ -948,6 +953,13 @@ impl World {
             left: hand(ply.hand_left),
             right: hand(ply.hand_right),
             grace: ply.invuln.max(0) as u16,
+            // The 16-tick post-hit life-regen stall (dword_0x18D_397,
+            // EF:60000-60003; armed EF:60662/60710/62222 on
+            // hit/grip/steal). Unseeded, every pair inside retail's
+            // stall window applied one heal quantum (5 afield, 40 at
+            // castle/dolmen) retail withheld — the cross-take
+            // player.life +5 family.
+            regen_delay: ply.regen_stall.clamp(0, u16::MAX as i32) as u16,
             killer: tr(carpet.f24 as u16),
             fall_speed: carpet.f2c,
             invisible: carpet.flags & 0x20 != 0,

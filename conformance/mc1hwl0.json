@@ -1,3533 +1,3554 @@
 {
- "recording": "fixtures/mc1hwl0-fixtures.mgcr",
- "input_delay": 0,
- "pin_pose": "n1",
- "fixtures": [
-  {
-   "t": 0,
-   "status": "conforming"
-  },
-  {
-   "t": 11,
-   "status": "conforming"
-  },
-  {
-   "t": 22,
-   "status": "conforming"
-  },
-  {
-   "t": 32,
-   "status": "conforming"
-  },
-  {
-   "t": 42,
-   "status": "conforming"
-  },
-  {
-   "t": 52,
-   "status": "conforming"
-  },
-  {
-   "t": 72,
-   "status": "open",
-   "sig": "3923d3f1e53c7195",
-   "atoms": [
-    "field:12,2:flags"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 73,
-   "status": "open",
-   "sig": "2cc0dc3d30b5e9b3",
-   "atoms": [
-    "extra:9,10"
-   ]
-  },
-  {
-   "t": 77,
-   "status": "conforming"
-  },
-  {
-   "t": 87,
-   "status": "conforming"
-  },
-  {
-   "t": 89,
-   "status": "open",
-   "sig": "53faea88cb3ff403",
-   "atoms": [
-    "missing:10,41"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 91,
-   "status": "open",
-   "sig": "8163248d28644622",
-   "atoms": [
-    "field:3,2:z"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
-  },
-  {
-   "t": 108,
-   "status": "conforming"
-  },
-  {
-   "t": 113,
-   "status": "open",
-   "sig": "e1cdb015d94c64f7",
-   "atoms": [
-    "field:3,3:chase"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 119,
-   "status": "conforming"
-  },
-  {
-   "t": 129,
-   "status": "conforming"
-  },
-  {
-   "t": 140,
-   "status": "open",
-   "sig": "06ed78ebadb9af90",
-   "atoms": [
-    "field:3,1:mana"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 154,
-   "status": "open",
-   "sig": "271e3bf9759ad213",
-   "atoms": [
-    "field:3,1:mana_max"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 163,
-   "status": "capture",
-   "sig": "cc61b0843551088d",
-   "atoms": [
-    "field:3,1:z"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
-  },
-  {
-   "t": 184,
-   "status": "open",
-   "sig": "97af2825376ed0d9",
-   "atoms": [
-    "extra:9,1"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 222,
-   "status": "conforming"
-  },
-  {
-   "t": 237,
-   "status": "conforming"
-  },
-  {
-   "t": 248,
-   "status": "conforming"
-  },
-  {
-   "t": 443,
-   "status": "open",
-   "sig": "a2451411b31b3882",
-   "atoms": [
-    "field:5,3:target_yaw"
-   ],
-   "note": "auto-triage vs known-deviations: roster: pose-phase"
-  },
-  {
-   "t": 702,
-   "status": "open",
-   "sig": "9e452ffe9cf4b10d",
-   "atoms": [
-    "field:5,6:target_yaw"
-   ],
-   "note": "auto-triage vs known-deviations: roster: pose-phase"
-  },
-  {
-   "t": 902,
-   "status": "conforming"
-  },
-  {
-   "t": 929,
-   "status": "open",
-   "sig": "21adf41ed5f4ae31",
-   "atoms": [
-    "field:9,0:flags"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 936,
-   "status": "conforming"
-  },
-  {
-   "t": 977,
-   "status": "conforming"
-  },
-  {
-   "t": 1045,
-   "status": "open",
-   "sig": "ed82c0c880876d89",
-   "atoms": [
-    "field:3,1:chase"
-   ],
-   "note": "auto-triage vs known-deviations: 2 row(s) unexplained"
-  },
-  {
-   "t": 1298,
-   "status": "open",
-   "sig": "58362133705f10c0",
-   "atoms": [
-    "field:10,12:flags"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 23 row(s) unexplained"
-  },
-  {
-   "t": 1314,
-   "status": "open",
-   "sig": "4d1985660553dfb4",
-   "atoms": [
-    "field:9,1:flags"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 1592,
-   "status": "conforming"
-  },
-  {
-   "t": 1698,
-   "status": "open",
-   "sig": "85b61e945da26986",
-   "atoms": [
-    "field:10,39:heading"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hw-speed-contrail-extra, mc1hwl0-terrain-z; 14 row(s) unexplained"
-  },
-  {
-   "t": 1830,
-   "status": "conforming"
-  },
-  {
-   "t": 1843,
-   "status": "conforming"
-  },
-  {
-   "t": 1858,
-   "status": "conforming"
-  },
-  {
-   "t": 1870,
-   "status": "conforming"
-  },
-  {
-   "t": 1906,
-   "status": "open",
-   "sig": "ab9e1b1de5436f36",
-   "atoms": [
-    "field:10,39:z"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z, mc1hw-speed-contrail-extra; 15 row(s) unexplained"
-  },
-  {
-   "t": 2059,
-   "status": "capture",
-   "sig": "254f6ddea0c169ed",
-   "atoms": [
-    "field:12,23:z"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
-  },
-  {
-   "t": 2067,
-   "status": "conforming"
-  },
-  {
-   "t": 2089,
-   "status": "conforming"
-  },
-  {
-   "t": 2103,
-   "status": "conforming"
-  },
-  {
-   "t": 2144,
-   "status": "conforming"
-  },
-  {
-   "t": 2155,
-   "status": "conforming"
-  },
-  {
-   "t": 2165,
-   "status": "conforming"
-  },
-  {
-   "t": 2175,
-   "status": "conforming"
-  },
-  {
-   "t": 2375,
-   "status": "open",
-   "sig": "22254b68555f037e",
-   "atoms": [
-    "field:3,1:speed"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 2878,
-   "status": "conforming"
-  },
-  {
-   "t": 2888,
-   "status": "conforming"
-  },
-  {
-   "t": 2898,
-   "status": "conforming"
-  },
-  {
-   "t": 2910,
-   "status": "conforming"
-  },
-  {
-   "t": 2921,
-   "status": "conforming"
-  },
-  {
-   "t": 2933,
-   "status": "open",
-   "sig": "2cace03d30a54775",
-   "atoms": [
-    "extra:9,16"
-   ]
-  },
-  {
-   "t": 2936,
-   "status": "conforming"
-  },
-  {
-   "t": 2950,
-   "status": "conforming"
-  },
-  {
-   "t": 2957,
-   "status": "open",
-   "sig": "b940654d68acdd12",
-   "atoms": [
-    "missing:10,0"
-   ],
-   "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z, mc1-spawn-arm-f34-fire; 12 row(s) unexplained"
-  },
-  {
-   "t": 3052,
-   "status": "conforming"
-  },
-  {
-   "t": 3088,
-   "status": "conforming"
-  },
-  {
-   "t": 3102,
-   "status": "open",
-   "sig": "91c5d9b7855c33bf",
-   "atoms": [
-    "field:wizard0.hand_left"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 3222,
-   "status": "conforming"
-  },
-  {
-   "t": 3223,
-   "status": "open",
-   "sig": "55a3c3e187933e93",
-   "atoms": [
-    "field:5,8:target_yaw"
-   ],
-   "note": "auto-triage vs known-deviations: roster: pose-phase"
-  },
-  {
-   "t": 3501,
-   "status": "conforming"
-  },
-  {
-   "t": 3511,
-   "status": "conforming"
-  },
-  {
-   "t": 3523,
-   "status": "conforming"
-  },
-  {
-   "t": 3542,
-   "status": "conforming"
-  },
-  {
-   "t": 3553,
-   "status": "conforming"
-  },
-  {
-   "t": 3561,
-   "status": "open",
-   "sig": "59a90663446eeffc",
-   "atoms": [
-    "field:5,15:heading"
-   ],
-   "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
-  },
-  {
-   "t": 3564,
-   "status": "conforming"
-  },
-  {
-   "t": 3575,
-   "status": "conforming"
-  },
-  {
-   "t": 3588,
-   "status": "conforming"
-  },
-  {
-   "t": 3600,
-   "status": "conforming"
-  },
-  {
-   "t": 3610,
-   "status": "conforming"
-  },
-  {
-   "t": 3622,
-   "status": "conforming"
-  },
-  {
-   "t": 3651,
-   "status": "conforming"
-  },
-  {
-   "t": 3687,
-   "status": "conforming"
-  },
-  {
-   "t": 3753,
-   "status": "conforming"
-  },
-  {
-   "t": 3808,
-   "status": "conforming"
-  },
-  {
-   "t": 3964,
-   "status": "conforming"
-  },
-  {
-   "t": 4086,
-   "status": "conforming"
-  },
-  {
-   "t": 4102,
-   "status": "conforming"
-  },
-  {
-   "t": 4115,
-   "status": "conforming"
-  },
-  {
-   "t": 4128,
-   "status": "conforming"
-  },
-  {
-   "t": 4142,
-   "status": "conforming"
-  },
-  {
-   "t": 4154,
-   "status": "conforming"
-  },
-  {
-   "t": 4170,
-   "status": "conforming"
-  },
-  {
-   "t": 4180,
-   "status": "conforming"
-  },
-  {
-   "t": 4190,
-   "status": "conforming"
-  },
-  {
-   "t": 4203,
-   "status": "conforming"
-  },
-  {
-   "t": 4215,
-   "status": "conforming"
-  },
-  {
-   "t": 4230,
-   "status": "conforming"
-  },
-  {
-   "t": 4281,
-   "status": "conforming"
-  },
-  {
-   "t": 4294,
-   "status": "conforming"
-  },
-  {
-   "t": 4308,
-   "status": "conforming"
-  },
-  {
-   "t": 4319,
-   "status": "conforming"
-  },
-  {
-   "t": 4335,
-   "status": "conforming"
-  },
-  {
-   "t": 4355,
-   "status": "conforming"
-  },
-  {
-   "t": 4573,
-   "status": "conforming"
-  },
-  {
-   "t": 4584,
-   "status": "conforming"
-  },
-  {
-   "t": 4598,
-   "status": "conforming"
-  },
-  {
-   "t": 4690,
-   "status": "conforming"
-  },
-  {
-   "t": 4722,
-   "status": "conforming"
-  },
-  {
-   "t": 4744,
-   "status": "conforming"
-  },
-  {
-   "t": 4836,
-   "status": "conforming"
-  },
-  {
-   "t": 4847,
-   "status": "conforming"
-  },
-  {
-   "t": 4860,
-   "status": "conforming"
-  },
-  {
-   "t": 4873,
-   "status": "conforming"
-  },
-  {
-   "t": 4886,
-   "status": "conforming"
-  },
-  {
-   "t": 4898,
-   "status": "conforming"
-  },
-  {
-   "t": 4913,
-   "status": "conforming"
-  },
-  {
-   "t": 4930,
-   "status": "conforming"
-  },
-  {
-   "t": 4950,
-   "status": "conforming"
-  },
-  {
-   "t": 4961,
-   "status": "conforming"
-  },
-  {
-   "t": 5603,
-   "status": "conforming"
-  },
-  {
-   "t": 5678,
-   "status": "conforming"
-  },
-  {
-   "t": 5689,
-   "status": "conforming"
-  },
-  {
-   "t": 5702,
-   "status": "conforming"
-  },
-  {
-   "t": 5715,
-   "status": "conforming"
-  },
-  {
-   "t": 5726,
-   "status": "conforming"
-  },
-  {
-   "t": 5736,
-   "status": "conforming"
-  },
-  {
-   "t": 5747,
-   "status": "conforming"
-  },
-  {
-   "t": 5758,
-   "status": "conforming"
-  },
-  {
-   "t": 5768,
-   "status": "conforming"
-  },
-  {
-   "t": 5780,
-   "status": "conforming"
-  },
-  {
-   "t": 5791,
-   "status": "conforming"
-  },
-  {
-   "t": 5802,
-   "status": "conforming"
-  },
-  {
-   "t": 5814,
-   "status": "conforming"
-  },
-  {
-   "t": 5825,
-   "status": "conforming"
-  },
-  {
-   "t": 5840,
-   "status": "conforming"
-  },
-  {
-   "t": 6121,
-   "status": "conforming"
-  },
-  {
-   "t": 6179,
-   "status": "conforming"
-  },
-  {
-   "t": 6376,
-   "status": "conforming"
-  },
-  {
-   "t": 6622,
-   "status": "conforming"
-  },
-  {
-   "t": 6688,
-   "status": "conforming"
-  },
-  {
-   "t": 6745,
-   "status": "conforming"
-  },
-  {
-   "t": 6800,
-   "status": "conforming"
-  },
-  {
-   "t": 6881,
-   "status": "conforming"
-  },
-  {
-   "t": 6925,
-   "status": "conforming"
-  },
-  {
-   "t": 7007,
-   "status": "conforming"
-  },
-  {
-   "t": 7276,
-   "status": "conforming"
-  },
-  {
-   "t": 7964,
-   "status": "conforming"
-  },
-  {
-   "t": 8197,
-   "status": "conforming"
-  },
-  {
-   "t": 8510,
-   "status": "conforming"
-  },
-  {
-   "t": 8568,
-   "status": "conforming"
-  },
-  {
-   "t": 8641,
-   "status": "conforming"
-  },
-  {
-   "t": 8653,
-   "status": "conforming"
-  },
-  {
-   "t": 8665,
-   "status": "conforming"
-  },
-  {
-   "t": 8676,
-   "status": "conforming"
-  },
-  {
-   "t": 8687,
-   "status": "conforming"
-  },
-  {
-   "t": 8698,
-   "status": "conforming"
-  },
-  {
-   "t": 8710,
-   "status": "conforming"
-  },
-  {
-   "t": 8748,
-   "status": "conforming"
-  },
-  {
-   "t": 9068,
-   "status": "conforming"
-  },
-  {
-   "t": 9280,
-   "status": "conforming"
-  },
-  {
-   "t": 9351,
-   "status": "conforming"
-  },
-  {
-   "t": 9366,
-   "status": "conforming"
-  },
-  {
-   "t": 9604,
-   "status": "conforming"
-  },
-  {
-   "t": 9898,
-   "status": "conforming"
-  },
-  {
-   "t": 10086,
-   "status": "conforming"
-  },
-  {
-   "t": 10108,
-   "status": "conforming"
-  },
-  {
-   "t": 10120,
-   "status": "conforming"
-  },
-  {
-   "t": 10134,
-   "status": "conforming"
-  },
-  {
-   "t": 10255,
-   "status": "conforming"
-  },
-  {
-   "t": 10328,
-   "status": "conforming"
-  },
-  {
-   "t": 10342,
-   "status": "conforming"
-  },
-  {
-   "t": 10415,
-   "status": "conforming"
-  },
-  {
-   "t": 10910,
-   "status": "conforming"
-  },
-  {
-   "t": 11061,
-   "status": "conforming"
-  },
-  {
-   "t": 11236,
-   "status": "conforming"
-  },
-  {
-   "t": 11365,
-   "status": "conforming"
-  },
-  {
-   "t": 11391,
-   "status": "conforming"
-  },
-  {
-   "t": 11407,
-   "status": "conforming"
-  },
-  {
-   "t": 11647,
-   "status": "conforming"
-  },
-  {
-   "t": 12150,
-   "status": "conforming"
-  },
-  {
-   "t": 12165,
-   "status": "conforming"
-  },
-  {
-   "t": 12276,
-   "status": "conforming"
-  },
-  {
-   "t": 12298,
-   "status": "conforming"
-  },
-  {
-   "t": 12350,
-   "status": "conforming"
-  },
-  {
-   "t": 12409,
-   "status": "conforming"
-  },
-  {
-   "t": 12431,
-   "status": "conforming"
-  },
-  {
-   "t": 12577,
-   "status": "conforming"
-  },
-  {
-   "t": 12594,
-   "status": "conforming"
-  },
-  {
-   "t": 12607,
-   "status": "conforming"
-  },
-  {
-   "t": 12622,
-   "status": "conforming"
-  },
-  {
-   "t": 12636,
-   "status": "conforming"
-  },
-  {
-   "t": 12647,
-   "status": "conforming"
-  },
-  {
-   "t": 12662,
-   "status": "conforming"
-  },
-  {
-   "t": 12676,
-   "status": "conforming"
-  },
-  {
-   "t": 12692,
-   "status": "conforming"
-  },
-  {
-   "t": 12704,
-   "status": "conforming"
-  },
-  {
-   "t": 12719,
-   "status": "conforming"
-  },
-  {
-   "t": 12733,
-   "status": "conforming"
-  },
-  {
-   "t": 12746,
-   "status": "conforming"
-  },
-  {
-   "t": 12919,
-   "status": "conforming"
-  },
-  {
-   "t": 13488,
-   "status": "conforming"
-  },
-  {
-   "t": 13664,
-   "status": "conforming"
-  },
-  {
-   "t": 14224,
-   "status": "conforming"
-  },
-  {
-   "t": 14247,
-   "status": "conforming"
-  },
-  {
-   "t": 14437,
-   "status": "conforming"
-  },
-  {
-   "t": 14768,
-   "status": "conforming"
-  },
-  {
-   "t": 14782,
-   "status": "conforming"
-  },
-  {
-   "t": 14792,
-   "status": "conforming"
-  },
-  {
-   "t": 14808,
-   "status": "conforming"
-  },
-  {
-   "t": 14824,
-   "status": "conforming"
-  },
-  {
-   "t": 14840,
-   "status": "conforming"
-  },
-  {
-   "t": 14853,
-   "status": "conforming"
-  },
-  {
-   "t": 14873,
-   "status": "conforming"
-  },
-  {
-   "t": 14888,
-   "status": "conforming"
-  },
-  {
-   "t": 15262,
-   "status": "conforming"
-  },
-  {
-   "t": 15276,
-   "status": "conforming"
-  },
-  {
-   "t": 15297,
-   "status": "conforming"
-  },
-  {
-   "t": 15311,
-   "status": "conforming"
-  },
-  {
-   "t": 15325,
-   "status": "conforming"
-  },
-  {
-   "t": 15336,
-   "status": "conforming"
-  },
-  {
-   "t": 15357,
-   "status": "conforming"
-  },
-  {
-   "t": 15370,
-   "status": "conforming"
-  },
-  {
-   "t": 15384,
-   "status": "conforming"
-  },
-  {
-   "t": 15401,
-   "status": "conforming"
-  },
-  {
-   "t": 15416,
-   "status": "conforming"
-  },
-  {
-   "t": 15430,
-   "status": "conforming"
-  },
-  {
-   "t": 15444,
-   "status": "conforming"
-  },
-  {
-   "t": 15460,
-   "status": "conforming"
-  },
-  {
-   "t": 15710,
-   "status": "conforming"
-  },
-  {
-   "t": 16743,
-   "status": "conforming"
-  },
-  {
-   "t": 16754,
-   "status": "conforming"
-  },
-  {
-   "t": 18999,
-   "status": "conforming"
-  },
-  {
-   "t": 20063,
-   "status": "conforming"
-  },
-  {
-   "t": 20078,
-   "status": "conforming"
-  },
-  {
-   "t": 20088,
-   "status": "conforming"
-  },
-  {
-   "t": 20354,
-   "status": "conforming"
-  },
-  {
-   "t": 20374,
-   "status": "conforming"
-  },
-  {
-   "t": 21039,
-   "status": "conforming"
-  },
-  {
-   "t": 24145,
-   "status": "conforming"
-  },
-  {
-   "t": 24163,
-   "status": "conforming"
-  },
-  {
-   "t": 24264,
-   "status": "conforming"
-  },
-  {
-   "t": 24895,
-   "status": "conforming"
-  },
-  {
-   "t": 25922,
-   "status": "conforming"
-  },
-  {
-   "t": 26346,
-   "status": "conforming"
-  },
-  {
-   "t": 26358,
-   "status": "conforming"
-  },
-  {
-   "t": 26434,
-   "status": "conforming"
-  },
-  {
-   "t": 26452,
-   "status": "conforming"
-  },
-  {
-   "t": 26472,
-   "status": "conforming"
-  },
-  {
-   "t": 26489,
-   "status": "conforming"
-  },
-  {
-   "t": 26503,
-   "status": "conforming"
-  },
-  {
-   "t": 26517,
-   "status": "conforming"
-  },
-  {
-   "t": 26532,
-   "status": "conforming"
-  },
-  {
-   "t": 26546,
-   "status": "conforming"
-  },
-  {
-   "t": 26560,
-   "status": "conforming"
-  },
-  {
-   "t": 26571,
-   "status": "conforming"
-  },
-  {
-   "t": 26587,
-   "status": "conforming"
-  },
-  {
-   "t": 26604,
-   "status": "conforming"
-  },
-  {
-   "t": 26617,
-   "status": "conforming"
-  },
-  {
-   "t": 26630,
-   "status": "conforming"
-  },
-  {
-   "t": 26646,
-   "status": "conforming"
-  },
-  {
-   "t": 26659,
-   "status": "conforming"
-  },
-  {
-   "t": 26676,
-   "status": "conforming"
-  },
-  {
-   "t": 26692,
-   "status": "conforming"
-  },
-  {
-   "t": 26708,
-   "status": "conforming"
-  },
-  {
-   "t": 26879,
-   "status": "conforming"
-  },
-  {
-   "t": 26916,
-   "status": "conforming"
-  },
-  {
-   "t": 26936,
-   "status": "conforming"
-  },
-  {
-   "t": 26995,
-   "status": "conforming"
-  },
-  {
-   "t": 27009,
-   "status": "conforming"
-  },
-  {
-   "t": 27029,
-   "status": "conforming"
-  },
-  {
-   "t": 27047,
-   "status": "conforming"
-  },
-  {
-   "t": 27065,
-   "status": "conforming"
-  },
-  {
-   "t": 27119,
-   "status": "conforming"
-  },
-  {
-   "t": 27143,
-   "status": "conforming"
-  },
-  {
-   "t": 27163,
-   "status": "conforming"
-  },
-  {
-   "t": 27183,
-   "status": "conforming"
-  },
-  {
-   "t": 27204,
-   "status": "conforming"
-  },
-  {
-   "t": 27232,
-   "status": "conforming"
-  },
-  {
-   "t": 27252,
-   "status": "conforming"
-  },
-  {
-   "t": 27272,
-   "status": "conforming"
-  },
-  {
-   "t": 27299,
-   "status": "conforming"
-  },
-  {
-   "t": 27318,
-   "status": "conforming"
-  },
-  {
-   "t": 27333,
-   "status": "conforming"
-  },
-  {
-   "t": 27352,
-   "status": "conforming"
-  },
-  {
-   "t": 27375,
-   "status": "conforming"
-  },
-  {
-   "t": 27398,
-   "status": "conforming"
-  },
-  {
-   "t": 27414,
-   "status": "conforming"
-  },
-  {
-   "t": 27432,
-   "status": "conforming"
-  },
-  {
-   "t": 27447,
-   "status": "conforming"
-  },
-  {
-   "t": 27463,
-   "status": "conforming"
-  },
-  {
-   "t": 27477,
-   "status": "conforming"
-  },
-  {
-   "t": 27493,
-   "status": "conforming"
-  },
-  {
-   "t": 27510,
-   "status": "conforming"
-  },
-  {
-   "t": 27525,
-   "status": "conforming"
-  },
-  {
-   "t": 27540,
-   "status": "conforming"
-  },
-  {
-   "t": 27553,
-   "status": "conforming"
-  },
-  {
-   "t": 27568,
-   "status": "conforming"
-  },
-  {
-   "t": 27584,
-   "status": "conforming"
-  },
-  {
-   "t": 27598,
-   "status": "conforming"
-  },
-  {
-   "t": 27616,
-   "status": "conforming"
-  },
-  {
-   "t": 27628,
-   "status": "conforming"
-  },
-  {
-   "t": 27648,
-   "status": "conforming"
-  },
-  {
-   "t": 27662,
-   "status": "conforming"
-  },
-  {
-   "t": 27673,
-   "status": "conforming"
-  },
-  {
-   "t": 27690,
-   "status": "conforming"
-  },
-  {
-   "t": 27705,
-   "status": "conforming"
-  },
-  {
-   "t": 27718,
-   "status": "conforming"
-  },
-  {
-   "t": 27733,
-   "status": "conforming"
-  },
-  {
-   "t": 27747,
-   "status": "conforming"
-  },
-  {
-   "t": 27762,
-   "status": "conforming"
-  },
-  {
-   "t": 27776,
-   "status": "conforming"
-  },
-  {
-   "t": 27790,
-   "status": "conforming"
-  },
-  {
-   "t": 27801,
-   "status": "conforming"
-  },
-  {
-   "t": 27816,
-   "status": "conforming"
-  },
-  {
-   "t": 27831,
-   "status": "conforming"
-  },
-  {
-   "t": 27847,
-   "status": "conforming"
-  },
-  {
-   "t": 27863,
-   "status": "conforming"
-  },
-  {
-   "t": 27877,
-   "status": "conforming"
-  },
-  {
-   "t": 27890,
-   "status": "conforming"
-  },
-  {
-   "t": 27904,
-   "status": "conforming"
-  },
-  {
-   "t": 27915,
-   "status": "conforming"
-  },
-  {
-   "t": 27961,
-   "status": "conforming"
-  },
-  {
-   "t": 27979,
-   "status": "conforming"
-  },
-  {
-   "t": 27995,
-   "status": "conforming"
-  },
-  {
-   "t": 28032,
-   "status": "conforming"
-  },
-  {
-   "t": 28046,
-   "status": "conforming"
-  },
-  {
-   "t": 28057,
-   "status": "conforming"
-  },
-  {
-   "t": 28073,
-   "status": "conforming"
-  },
-  {
-   "t": 28091,
-   "status": "conforming"
-  },
-  {
-   "t": 28104,
-   "status": "conforming"
-  },
-  {
-   "t": 28117,
-   "status": "conforming"
-  },
-  {
-   "t": 28132,
-   "status": "conforming"
-  },
-  {
-   "t": 28197,
-   "status": "conforming"
-  },
-  {
-   "t": 28214,
-   "status": "conforming"
-  },
-  {
-   "t": 28230,
-   "status": "conforming"
-  },
-  {
-   "t": 28244,
-   "status": "conforming"
-  },
-  {
-   "t": 28257,
-   "status": "conforming"
-  },
-  {
-   "t": 28270,
-   "status": "conforming"
-  },
-  {
-   "t": 28285,
-   "status": "conforming"
-  },
-  {
-   "t": 28302,
-   "status": "conforming"
-  },
-  {
-   "t": 28342,
-   "status": "conforming"
-  },
-  {
-   "t": 28356,
-   "status": "conforming"
-  },
-  {
-   "t": 28371,
-   "status": "conforming"
-  },
-  {
-   "t": 28385,
-   "status": "conforming"
-  },
-  {
-   "t": 28396,
-   "status": "conforming"
-  },
-  {
-   "t": 28411,
-   "status": "conforming"
-  },
-  {
-   "t": 28424,
-   "status": "conforming"
-  },
-  {
-   "t": 28439,
-   "status": "conforming"
-  },
-  {
-   "t": 28456,
-   "status": "conforming"
-  },
-  {
-   "t": 28480,
-   "status": "conforming"
-  },
-  {
-   "t": 28494,
-   "status": "conforming"
-  },
-  {
-   "t": 28507,
-   "status": "conforming"
-  },
-  {
-   "t": 28523,
-   "status": "conforming"
-  },
-  {
-   "t": 28536,
-   "status": "conforming"
-  },
-  {
-   "t": 28551,
-   "status": "conforming"
-  },
-  {
-   "t": 28569,
-   "status": "conforming"
-  },
-  {
-   "t": 28588,
-   "status": "conforming"
-  },
-  {
-   "t": 28605,
-   "status": "conforming"
-  },
-  {
-   "t": 28620,
-   "status": "conforming"
-  },
-  {
-   "t": 28637,
-   "status": "conforming"
-  },
-  {
-   "t": 28654,
-   "status": "conforming"
-  },
-  {
-   "t": 28672,
-   "status": "conforming"
-  },
-  {
-   "t": 28688,
-   "status": "conforming"
-  },
-  {
-   "t": 28704,
-   "status": "conforming"
-  },
-  {
-   "t": 28724,
-   "status": "conforming"
-  },
-  {
-   "t": 28741,
-   "status": "conforming"
-  },
-  {
-   "t": 28761,
-   "status": "conforming"
-  },
-  {
-   "t": 28784,
-   "status": "conforming"
-  },
-  {
-   "t": 28803,
-   "status": "conforming"
-  },
-  {
-   "t": 28822,
-   "status": "conforming"
-  },
-  {
-   "t": 28842,
-   "status": "conforming"
-  },
-  {
-   "t": 28855,
-   "status": "conforming"
-  },
-  {
-   "t": 28875,
-   "status": "conforming"
-  },
-  {
-   "t": 28893,
-   "status": "conforming"
-  },
-  {
-   "t": 28910,
-   "status": "conforming"
-  },
-  {
-   "t": 28931,
-   "status": "conforming"
-  },
-  {
-   "t": 28955,
-   "status": "conforming"
-  },
-  {
-   "t": 28976,
-   "status": "conforming"
-  },
-  {
-   "t": 28996,
-   "status": "conforming"
-  },
-  {
-   "t": 29015,
-   "status": "conforming"
-  },
-  {
-   "t": 29038,
-   "status": "conforming"
-  },
-  {
-   "t": 29057,
-   "status": "conforming"
-  },
-  {
-   "t": 29075,
-   "status": "conforming"
-  },
-  {
-   "t": 29136,
-   "status": "conforming"
-  },
-  {
-   "t": 29160,
-   "status": "conforming"
-  },
-  {
-   "t": 29190,
-   "status": "conforming"
-  },
-  {
-   "t": 29208,
-   "status": "conforming"
-  },
-  {
-   "t": 29228,
-   "status": "conforming"
-  },
-  {
-   "t": 29252,
-   "status": "conforming"
-  },
-  {
-   "t": 29272,
-   "status": "conforming"
-  },
-  {
-   "t": 29294,
-   "status": "conforming"
-  },
-  {
-   "t": 29319,
-   "status": "conforming"
-  },
-  {
-   "t": 29336,
-   "status": "conforming"
-  },
-  {
-   "t": 29355,
-   "status": "conforming"
-  },
-  {
-   "t": 29380,
-   "status": "conforming"
-  },
-  {
-   "t": 29399,
-   "status": "conforming"
-  },
-  {
-   "t": 29419,
-   "status": "conforming"
-  },
-  {
-   "t": 29442,
-   "status": "conforming"
-  },
-  {
-   "t": 29461,
-   "status": "conforming"
-  },
-  {
-   "t": 29480,
-   "status": "conforming"
-  },
-  {
-   "t": 29496,
-   "status": "conforming"
-  },
-  {
-   "t": 29512,
-   "status": "conforming"
-  },
-  {
-   "t": 29533,
-   "status": "conforming"
-  },
-  {
-   "t": 29552,
-   "status": "conforming"
-  },
-  {
-   "t": 29571,
-   "status": "conforming"
-  },
-  {
-   "t": 29591,
-   "status": "conforming"
-  },
-  {
-   "t": 29610,
-   "status": "conforming"
-  },
-  {
-   "t": 29795,
-   "status": "conforming"
-  },
-  {
-   "t": 29811,
-   "status": "conforming"
-  },
-  {
-   "t": 29917,
-   "status": "conforming"
-  },
-  {
-   "t": 30064,
-   "status": "conforming"
-  },
-  {
-   "t": 30101,
-   "status": "conforming"
-  },
-  {
-   "t": 30154,
-   "status": "conforming"
-  },
-  {
-   "t": 30176,
-   "status": "conforming"
-  },
-  {
-   "t": 30195,
-   "status": "conforming"
-  },
-  {
-   "t": 30214,
-   "status": "conforming"
-  },
-  {
-   "t": 30235,
-   "status": "conforming"
-  },
-  {
-   "t": 30259,
-   "status": "conforming"
-  },
-  {
-   "t": 30283,
-   "status": "conforming"
-  },
-  {
-   "t": 30316,
-   "status": "conforming"
-  },
-  {
-   "t": 30363,
-   "status": "conforming"
-  },
-  {
-   "t": 30429,
-   "status": "conforming"
-  },
-  {
-   "t": 30459,
-   "status": "conforming"
-  },
-  {
-   "t": 30475,
-   "status": "conforming"
-  },
-  {
-   "t": 30496,
-   "status": "conforming"
-  },
-  {
-   "t": 30520,
-   "status": "conforming"
-  },
-  {
-   "t": 30592,
-   "status": "conforming"
-  },
-  {
-   "t": 30628,
-   "status": "conforming"
-  },
-  {
-   "t": 30667,
-   "status": "conforming"
-  },
-  {
-   "t": 30699,
-   "status": "conforming"
-  },
-  {
-   "t": 30734,
-   "status": "conforming"
-  },
-  {
-   "t": 30751,
-   "status": "conforming"
-  },
-  {
-   "t": 30783,
-   "status": "conforming"
-  },
-  {
-   "t": 30813,
-   "status": "conforming"
-  },
-  {
-   "t": 30835,
-   "status": "conforming"
-  },
-  {
-   "t": 30875,
-   "status": "conforming"
-  },
-  {
-   "t": 30913,
-   "status": "conforming"
-  },
-  {
-   "t": 30936,
-   "status": "conforming"
-  },
-  {
-   "t": 30955,
-   "status": "conforming"
-  },
-  {
-   "t": 30999,
-   "status": "conforming"
-  },
-  {
-   "t": 31108,
-   "status": "conforming"
-  },
-  {
-   "t": 31127,
-   "status": "conforming"
-  },
-  {
-   "t": 31144,
-   "status": "conforming"
-  },
-  {
-   "t": 31161,
-   "status": "conforming"
-  },
-  {
-   "t": 31184,
-   "status": "conforming"
-  },
-  {
-   "t": 31203,
-   "status": "conforming"
-  },
-  {
-   "t": 31222,
-   "status": "conforming"
-  },
-  {
-   "t": 31248,
-   "status": "conforming"
-  },
-  {
-   "t": 31266,
-   "status": "conforming"
-  },
-  {
-   "t": 31285,
-   "status": "conforming"
-  },
-  {
-   "t": 31303,
-   "status": "conforming"
-  },
-  {
-   "t": 31352,
-   "status": "conforming"
-  },
-  {
-   "t": 31397,
-   "status": "conforming"
-  },
-  {
-   "t": 31415,
-   "status": "conforming"
-  },
-  {
-   "t": 31432,
-   "status": "conforming"
-  },
-  {
-   "t": 31467,
-   "status": "conforming"
-  },
-  {
-   "t": 31528,
-   "status": "conforming"
-  },
-  {
-   "t": 31563,
-   "status": "conforming"
-  },
-  {
-   "t": 31617,
-   "status": "conforming"
-  },
-  {
-   "t": 31655,
-   "status": "conforming"
-  },
-  {
-   "t": 31714,
-   "status": "conforming"
-  },
-  {
-   "t": 31735,
-   "status": "conforming"
-  },
-  {
-   "t": 31790,
-   "status": "conforming"
-  },
-  {
-   "t": 31816,
-   "status": "conforming"
-  },
-  {
-   "t": 31841,
-   "status": "conforming"
-  },
-  {
-   "t": 31856,
-   "status": "conforming"
-  },
-  {
-   "t": 31877,
-   "status": "conforming"
-  },
-  {
-   "t": 31895,
-   "status": "conforming"
-  },
-  {
-   "t": 31912,
-   "status": "conforming"
-  },
-  {
-   "t": 31933,
-   "status": "conforming"
-  },
-  {
-   "t": 31954,
-   "status": "conforming"
-  },
-  {
-   "t": 31971,
-   "status": "conforming"
-  },
-  {
-   "t": 31992,
-   "status": "conforming"
-  },
-  {
-   "t": 32007,
-   "status": "conforming"
-  },
-  {
-   "t": 32024,
-   "status": "conforming"
-  },
-  {
-   "t": 32048,
-   "status": "conforming"
-  },
-  {
-   "t": 32215,
-   "status": "conforming"
-  },
-  {
-   "t": 32253,
-   "status": "conforming"
-  },
-  {
-   "t": 32290,
-   "status": "conforming"
-  },
-  {
-   "t": 32338,
-   "status": "conforming"
-  },
-  {
-   "t": 32419,
-   "status": "conforming"
-  },
-  {
-   "t": 32456,
-   "status": "conforming"
-  },
-  {
-   "t": 32513,
-   "status": "conforming"
-  },
-  {
-   "t": 32575,
-   "status": "conforming"
-  },
-  {
-   "t": 32624,
-   "status": "conforming"
-  },
-  {
-   "t": 32659,
-   "status": "conforming"
-  },
-  {
-   "t": 32686,
-   "status": "conforming"
-  },
-  {
-   "t": 32712,
-   "status": "conforming"
-  },
-  {
-   "t": 32747,
-   "status": "conforming"
-  },
-  {
-   "t": 32791,
-   "status": "conforming"
-  },
-  {
-   "t": 32819,
-   "status": "conforming"
-  },
-  {
-   "t": 32888,
-   "status": "conforming"
-  },
-  {
-   "t": 32925,
-   "status": "conforming"
-  },
-  {
-   "t": 32963,
-   "status": "conforming"
-  },
-  {
-   "t": 32996,
-   "status": "conforming"
-  },
-  {
-   "t": 33025,
-   "status": "conforming"
-  },
-  {
-   "t": 33058,
-   "status": "conforming"
-  },
-  {
-   "t": 33080,
-   "status": "conforming"
-  },
-  {
-   "t": 33096,
-   "status": "conforming"
-  },
-  {
-   "t": 33143,
-   "status": "conforming"
-  },
-  {
-   "t": 33960,
-   "status": "conforming"
-  },
-  {
-   "t": 33976,
-   "status": "conforming"
-  },
-  {
-   "t": 33998,
-   "status": "conforming"
-  },
-  {
-   "t": 34020,
-   "status": "conforming"
-  },
-  {
-   "t": 34049,
-   "status": "conforming"
-  },
-  {
-   "t": 34079,
-   "status": "conforming"
-  },
-  {
-   "t": 34096,
-   "status": "conforming"
-  },
-  {
-   "t": 34212,
-   "status": "conforming"
-  },
-  {
-   "t": 34269,
-   "status": "conforming"
-  },
-  {
-   "t": 34306,
-   "status": "conforming"
-  },
-  {
-   "t": 34327,
-   "status": "conforming"
-  },
-  {
-   "t": 34343,
-   "status": "conforming"
-  },
-  {
-   "t": 34363,
-   "status": "conforming"
-  },
-  {
-   "t": 34412,
-   "status": "conforming"
-  },
-  {
-   "t": 34433,
-   "status": "conforming"
-  },
-  {
-   "t": 34451,
-   "status": "conforming"
-  },
-  {
-   "t": 34472,
-   "status": "conforming"
-  },
-  {
-   "t": 34493,
-   "status": "conforming"
-  },
-  {
-   "t": 34519,
-   "status": "conforming"
-  },
-  {
-   "t": 34539,
-   "status": "conforming"
-  },
-  {
-   "t": 34555,
-   "status": "conforming"
-  },
-  {
-   "t": 34583,
-   "status": "conforming"
-  },
-  {
-   "t": 34689,
-   "status": "conforming"
-  },
-  {
-   "t": 34711,
-   "status": "conforming"
-  },
-  {
-   "t": 34762,
-   "status": "conforming"
-  },
-  {
-   "t": 34779,
-   "status": "conforming"
-  },
-  {
-   "t": 34806,
-   "status": "conforming"
-  },
-  {
-   "t": 34835,
-   "status": "conforming"
-  },
-  {
-   "t": 34871,
-   "status": "conforming"
-  },
-  {
-   "t": 34891,
-   "status": "conforming"
-  },
-  {
-   "t": 34914,
-   "status": "conforming"
-  },
-  {
-   "t": 35013,
-   "status": "conforming"
-  },
-  {
-   "t": 35048,
-   "status": "conforming"
-  },
-  {
-   "t": 35075,
-   "status": "conforming"
-  },
-  {
-   "t": 35114,
-   "status": "conforming"
-  },
-  {
-   "t": 35141,
-   "status": "conforming"
-  },
-  {
-   "t": 35165,
-   "status": "conforming"
-  },
-  {
-   "t": 35178,
-   "status": "conforming"
-  },
-  {
-   "t": 35195,
-   "status": "conforming"
-  },
-  {
-   "t": 35939,
-   "status": "conforming"
-  },
-  {
-   "t": 35968,
-   "status": "conforming"
-  },
-  {
-   "t": 35991,
-   "status": "conforming"
-  },
-  {
-   "t": 36024,
-   "status": "conforming"
-  },
-  {
-   "t": 36057,
-   "status": "conforming"
-  },
-  {
-   "t": 36089,
-   "status": "conforming"
-  },
-  {
-   "t": 36119,
-   "status": "conforming"
-  },
-  {
-   "t": 36157,
-   "status": "conforming"
-  },
-  {
-   "t": 36182,
-   "status": "conforming"
-  },
-  {
-   "t": 36225,
-   "status": "conforming"
-  },
-  {
-   "t": 36246,
-   "status": "conforming"
-  },
-  {
-   "t": 36291,
-   "status": "conforming"
-  },
-  {
-   "t": 36577,
-   "status": "conforming"
-  },
-  {
-   "t": 36598,
-   "status": "conforming"
-  },
-  {
-   "t": 36620,
-   "status": "conforming"
-  },
-  {
-   "t": 36673,
-   "status": "conforming"
-  },
-  {
-   "t": 36695,
-   "status": "conforming"
-  },
-  {
-   "t": 37016,
-   "status": "conforming"
-  },
-  {
-   "t": 37040,
-   "status": "conforming"
-  },
-  {
-   "t": 37063,
-   "status": "conforming"
-  },
-  {
-   "t": 37104,
-   "status": "conforming"
-  },
-  {
-   "t": 37128,
-   "status": "conforming"
-  },
-  {
-   "t": 37155,
-   "status": "conforming"
-  },
-  {
-   "t": 37188,
-   "status": "conforming"
-  },
-  {
-   "t": 37211,
-   "status": "conforming"
-  },
-  {
-   "t": 37245,
-   "status": "conforming"
-  },
-  {
-   "t": 37272,
-   "status": "conforming"
-  },
-  {
-   "t": 37299,
-   "status": "conforming"
-  },
-  {
-   "t": 37395,
-   "status": "conforming"
-  },
-  {
-   "t": 37484,
-   "status": "conforming"
-  },
-  {
-   "t": 37514,
-   "status": "conforming"
-  },
-  {
-   "t": 37561,
-   "status": "conforming"
-  },
-  {
-   "t": 37938,
-   "status": "conforming"
-  },
-  {
-   "t": 37979,
-   "status": "conforming"
-  },
-  {
-   "t": 38453,
-   "status": "conforming"
-  },
-  {
-   "t": 38485,
-   "status": "conforming"
-  },
-  {
-   "t": 38514,
-   "status": "conforming"
-  },
-  {
-   "t": 38562,
-   "status": "conforming"
-  },
-  {
-   "t": 38594,
-   "status": "conforming"
-  },
-  {
-   "t": 38619,
-   "status": "conforming"
-  },
-  {
-   "t": 38647,
-   "status": "conforming"
-  },
-  {
-   "t": 38677,
-   "status": "conforming"
-  },
-  {
-   "t": 38717,
-   "status": "conforming"
-  },
-  {
-   "t": 38747,
-   "status": "conforming"
-  },
-  {
-   "t": 38764,
-   "status": "conforming"
-  },
-  {
-   "t": 38783,
-   "status": "conforming"
-  },
-  {
-   "t": 38817,
-   "status": "conforming"
-  },
-  {
-   "t": 38851,
-   "status": "conforming"
-  },
-  {
-   "t": 38875,
-   "status": "conforming"
-  },
-  {
-   "t": 38909,
-   "status": "conforming"
-  },
-  {
-   "t": 38939,
-   "status": "conforming"
-  },
-  {
-   "t": 38962,
-   "status": "conforming"
-  },
-  {
-   "t": 38988,
-   "status": "conforming"
-  },
-  {
-   "t": 39008,
-   "status": "conforming"
-  },
-  {
-   "t": 39024,
-   "status": "conforming"
-  },
-  {
-   "t": 39064,
-   "status": "conforming"
-  },
-  {
-   "t": 39091,
-   "status": "conforming"
-  },
-  {
-   "t": 39118,
-   "status": "conforming"
-  },
-  {
-   "t": 39150,
-   "status": "conforming"
-  },
-  {
-   "t": 39179,
-   "status": "conforming"
-  },
-  {
-   "t": 39203,
-   "status": "conforming"
-  },
-  {
-   "t": 39223,
-   "status": "conforming"
-  },
-  {
-   "t": 39243,
-   "status": "conforming"
-  },
-  {
-   "t": 39261,
-   "status": "conforming"
-  },
-  {
-   "t": 39575,
-   "status": "conforming"
-  },
-  {
-   "t": 39598,
-   "status": "conforming"
-  },
-  {
-   "t": 39619,
-   "status": "conforming"
-  },
-  {
-   "t": 39640,
-   "status": "conforming"
-  },
-  {
-   "t": 39667,
-   "status": "conforming"
-  },
-  {
-   "t": 39685,
-   "status": "conforming"
-  },
-  {
-   "t": 39704,
-   "status": "conforming"
-  },
-  {
-   "t": 39768,
-   "status": "conforming"
-  },
-  {
-   "t": 39795,
-   "status": "conforming"
-  },
-  {
-   "t": 39811,
-   "status": "conforming"
-  },
-  {
-   "t": 39832,
-   "status": "conforming"
-  },
-  {
-   "t": 39854,
-   "status": "conforming"
-  },
-  {
-   "t": 39874,
-   "status": "conforming"
-  },
-  {
-   "t": 39897,
-   "status": "conforming"
-  },
-  {
-   "t": 39922,
-   "status": "conforming"
-  },
-  {
-   "t": 39943,
-   "status": "conforming"
-  },
-  {
-   "t": 39963,
-   "status": "conforming"
-  },
-  {
-   "t": 39984,
-   "status": "conforming"
-  },
-  {
-   "t": 40015,
-   "status": "conforming"
-  },
-  {
-   "t": 40034,
-   "status": "conforming"
-  },
-  {
-   "t": 40055,
-   "status": "conforming"
-  },
-  {
-   "t": 40104,
-   "status": "conforming"
-  },
-  {
-   "t": 40130,
-   "status": "conforming"
-  },
-  {
-   "t": 40155,
-   "status": "conforming"
-  },
-  {
-   "t": 40179,
-   "status": "conforming"
-  },
-  {
-   "t": 40199,
-   "status": "conforming"
-  },
-  {
-   "t": 40214,
-   "status": "conforming"
-  },
-  {
-   "t": 40244,
-   "status": "conforming"
-  },
-  {
-   "t": 40270,
-   "status": "conforming"
-  },
-  {
-   "t": 40289,
-   "status": "conforming"
-  },
-  {
-   "t": 40360,
-   "status": "conforming"
-  },
-  {
-   "t": 40391,
-   "status": "conforming"
-  },
-  {
-   "t": 40411,
-   "status": "conforming"
-  },
-  {
-   "t": 40477,
-   "status": "conforming"
-  },
-  {
-   "t": 40504,
-   "status": "conforming"
-  },
-  {
-   "t": 40530,
-   "status": "conforming"
-  },
-  {
-   "t": 40546,
-   "status": "conforming"
-  },
-  {
-   "t": 40571,
-   "status": "conforming"
-  },
-  {
-   "t": 40600,
-   "status": "conforming"
-  },
-  {
-   "t": 40622,
-   "status": "conforming"
-  },
-  {
-   "t": 40641,
-   "status": "conforming"
-  },
-  {
-   "t": 40658,
-   "status": "conforming"
-  },
-  {
-   "t": 40678,
-   "status": "conforming"
-  },
-  {
-   "t": 40693,
-   "status": "conforming"
-  },
-  {
-   "t": 40712,
-   "status": "conforming"
-  },
-  {
-   "t": 40733,
-   "status": "conforming"
-  },
-  {
-   "t": 40754,
-   "status": "conforming"
-  },
-  {
-   "t": 40784,
-   "status": "conforming"
-  },
-  {
-   "t": 41145,
-   "status": "conforming"
-  },
-  {
-   "t": 41174,
-   "status": "conforming"
-  },
-  {
-   "t": 41194,
-   "status": "conforming"
-  },
-  {
-   "t": 41224,
-   "status": "conforming"
-  },
-  {
-   "t": 41250,
-   "status": "conforming"
-  },
-  {
-   "t": 41266,
-   "status": "conforming"
-  },
-  {
-   "t": 41291,
-   "status": "conforming"
-  },
-  {
-   "t": 41314,
-   "status": "conforming"
-  },
-  {
-   "t": 41336,
-   "status": "conforming"
-  },
-  {
-   "t": 41637,
-   "status": "conforming"
-  },
-  {
-   "t": 41664,
-   "status": "conforming"
-  },
-  {
-   "t": 41693,
-   "status": "conforming"
-  },
-  {
-   "t": 41746,
-   "status": "conforming"
-  },
-  {
-   "t": 41783,
-   "status": "conforming"
-  },
-  {
-   "t": 41810,
-   "status": "conforming"
-  },
-  {
-   "t": 41835,
-   "status": "conforming"
-  },
-  {
-   "t": 41870,
-   "status": "conforming"
-  },
-  {
-   "t": 41896,
-   "status": "conforming"
-  },
-  {
-   "t": 41926,
-   "status": "conforming"
-  },
-  {
-   "t": 41960,
-   "status": "conforming"
-  },
-  {
-   "t": 41987,
-   "status": "conforming"
-  },
-  {
-   "t": 42018,
-   "status": "conforming"
-  },
-  {
-   "t": 42040,
-   "status": "conforming"
-  },
-  {
-   "t": 42058,
-   "status": "conforming"
-  },
-  {
-   "t": 42081,
-   "status": "conforming"
-  },
-  {
-   "t": 42111,
-   "status": "conforming"
-  },
-  {
-   "t": 42128,
-   "status": "conforming"
-  },
-  {
-   "t": 42144,
-   "status": "conforming"
-  },
-  {
-   "t": 42162,
-   "status": "conforming"
-  },
-  {
-   "t": 42179,
-   "status": "conforming"
-  },
-  {
-   "t": 42259,
-   "status": "conforming"
-  },
-  {
-   "t": 42295,
-   "status": "conforming"
-  },
-  {
-   "t": 42315,
-   "status": "conforming"
-  },
-  {
-   "t": 42336,
-   "status": "conforming"
-  },
-  {
-   "t": 42352,
-   "status": "conforming"
-  },
-  {
-   "t": 42374,
-   "status": "conforming"
-  },
-  {
-   "t": 42401,
-   "status": "conforming"
-  },
-  {
-   "t": 42424,
-   "status": "conforming"
-  },
-  {
-   "t": 42443,
-   "status": "conforming"
-  },
-  {
-   "t": 42465,
-   "status": "conforming"
-  },
-  {
-   "t": 42482,
-   "status": "conforming"
-  },
-  {
-   "t": 42519,
-   "status": "conforming"
-  },
-  {
-   "t": 42545,
-   "status": "conforming"
-  },
-  {
-   "t": 42576,
-   "status": "conforming"
-  },
-  {
-   "t": 42596,
-   "status": "conforming"
-  },
-  {
-   "t": 42611,
-   "status": "conforming"
-  },
-  {
-   "t": 42630,
-   "status": "conforming"
-  },
-  {
-   "t": 42651,
-   "status": "conforming"
-  },
-  {
-   "t": 42667,
-   "status": "conforming"
-  },
-  {
-   "t": 42707,
-   "status": "conforming"
-  },
-  {
-   "t": 42734,
-   "status": "conforming"
-  },
-  {
-   "t": 42754,
-   "status": "conforming"
-  },
-  {
-   "t": 42768,
-   "status": "conforming"
-  },
-  {
-   "t": 42786,
-   "status": "conforming"
-  },
-  {
-   "t": 42800,
-   "status": "conforming"
-  },
-  {
-   "t": 42821,
-   "status": "conforming"
-  },
-  {
-   "t": 42867,
-   "status": "conforming"
-  },
-  {
-   "t": 42892,
-   "status": "conforming"
-  },
-  {
-   "t": 42920,
-   "status": "conforming"
-  },
-  {
-   "t": 42952,
-   "status": "conforming"
-  },
-  {
-   "t": 42981,
-   "status": "conforming"
-  },
-  {
-   "t": 42995,
-   "status": "conforming"
-  },
-  {
-   "t": 43015,
-   "status": "conforming"
-  },
-  {
-   "t": 43035,
-   "status": "conforming"
-  },
-  {
-   "t": 43491,
-   "status": "conforming"
-  },
-  {
-   "t": 43508,
-   "status": "conforming"
-  },
-  {
-   "t": 43526,
-   "status": "conforming"
-  },
-  {
-   "t": 43544,
-   "status": "conforming"
-  },
-  {
-   "t": 43566,
-   "status": "conforming"
-  },
-  {
-   "t": 43585,
-   "status": "conforming"
-  },
-  {
-   "t": 43600,
-   "status": "conforming"
-  },
-  {
-   "t": 43690,
-   "status": "conforming"
-  },
-  {
-   "t": 43823,
-   "status": "conforming"
-  },
-  {
-   "t": 43861,
-   "status": "conforming"
-  },
-  {
-   "t": 43906,
-   "status": "conforming"
-  },
-  {
-   "t": 43933,
-   "status": "conforming"
-  },
-  {
-   "t": 43954,
-   "status": "conforming"
-  },
-  {
-   "t": 43979,
-   "status": "conforming"
-  },
-  {
-   "t": 43993,
-   "status": "conforming"
-  },
-  {
-   "t": 44015,
-   "status": "conforming"
-  },
-  {
-   "t": 44033,
-   "status": "conforming"
-  },
-  {
-   "t": 44055,
-   "status": "conforming"
-  },
-  {
-   "t": 44075,
-   "status": "conforming"
-  },
-  {
-   "t": 44091,
-   "status": "conforming"
-  },
-  {
-   "t": 47767,
-   "status": "conforming"
-  },
-  {
-   "t": 47790,
-   "status": "conforming"
-  },
-  {
-   "t": 47812,
-   "status": "conforming"
-  },
-  {
-   "t": 47842,
-   "status": "conforming"
-  },
-  {
-   "t": 47856,
-   "status": "conforming"
-  },
-  {
-   "t": 47875,
-   "status": "conforming"
-  },
-  {
-   "t": 47891,
-   "status": "conforming"
-  },
-  {
-   "t": 47908,
-   "status": "conforming"
-  },
-  {
-   "t": 47925,
-   "status": "conforming"
-  },
-  {
-   "t": 47946,
-   "status": "conforming"
-  },
-  {
-   "t": 47972,
-   "status": "conforming"
-  },
-  {
-   "t": 47987,
-   "status": "conforming"
-  },
-  {
-   "t": 48003,
-   "status": "conforming"
-  },
-  {
-   "t": 48021,
-   "status": "conforming"
-  },
-  {
-   "t": 48036,
-   "status": "conforming"
-  },
-  {
-   "t": 48055,
-   "status": "conforming"
-  },
-  {
-   "t": 48071,
-   "status": "conforming"
-  },
-  {
-   "t": 48088,
-   "status": "conforming"
-  },
-  {
-   "t": 48110,
-   "status": "conforming"
-  },
-  {
-   "t": 48132,
-   "status": "conforming"
-  },
-  {
-   "t": 48152,
-   "status": "conforming"
-  },
-  {
-   "t": 48167,
-   "status": "conforming"
-  },
-  {
-   "t": 48187,
-   "status": "conforming"
-  },
-  {
-   "t": 48213,
-   "status": "conforming"
-  },
-  {
-   "t": 48231,
-   "status": "conforming"
-  },
-  {
-   "t": 48253,
-   "status": "conforming"
-  },
-  {
-   "t": 48267,
-   "status": "conforming"
-  },
-  {
-   "t": 48281,
-   "status": "conforming"
-  },
-  {
-   "t": 48303,
-   "status": "conforming"
-  },
-  {
-   "t": 48321,
-   "status": "conforming"
-  },
-  {
-   "t": 48336,
-   "status": "conforming"
-  },
-  {
-   "t": 48352,
-   "status": "conforming"
-  },
-  {
-   "t": 48377,
-   "status": "conforming"
-  },
-  {
-   "t": 48403,
-   "status": "conforming"
-  },
-  {
-   "t": 48422,
-   "status": "conforming"
-  },
-  {
-   "t": 48443,
-   "status": "conforming"
-  },
-  {
-   "t": 48466,
-   "status": "conforming"
-  },
-  {
-   "t": 48485,
-   "status": "conforming"
-  },
-  {
-   "t": 48507,
-   "status": "conforming"
-  },
-  {
-   "t": 48523,
-   "status": "conforming"
-  },
-  {
-   "t": 48546,
-   "status": "conforming"
-  },
-  {
-   "t": 48564,
-   "status": "conforming"
-  },
-  {
-   "t": 48583,
-   "status": "conforming"
-  },
-  {
-   "t": 48599,
-   "status": "conforming"
-  },
-  {
-   "t": 48615,
-   "status": "conforming"
-  },
-  {
-   "t": 48631,
-   "status": "conforming"
-  },
-  {
-   "t": 48650,
-   "status": "conforming"
-  },
-  {
-   "t": 48672,
-   "status": "conforming"
-  },
-  {
-   "t": 48692,
-   "status": "conforming"
-  },
-  {
-   "t": 48710,
-   "status": "conforming"
-  },
-  {
-   "t": 48727,
-   "status": "conforming"
-  },
-  {
-   "t": 48746,
-   "status": "conforming"
-  },
-  {
-   "t": 48765,
-   "status": "conforming"
-  },
-  {
-   "t": 48784,
-   "status": "conforming"
-  },
-  {
-   "t": 48808,
-   "status": "conforming"
-  },
-  {
-   "t": 48825,
-   "status": "conforming"
-  },
-  {
-   "t": 48844,
-   "status": "conforming"
-  },
-  {
-   "t": 48865,
-   "status": "conforming"
-  },
-  {
-   "t": 48887,
-   "status": "conforming"
-  },
-  {
-   "t": 48903,
-   "status": "conforming"
-  },
-  {
-   "t": 48927,
-   "status": "conforming"
-  },
-  {
-   "t": 48942,
-   "status": "conforming"
-  },
-  {
-   "t": 48960,
-   "status": "conforming"
-  },
-  {
-   "t": 48974,
-   "status": "conforming"
-  },
-  {
-   "t": 48995,
-   "status": "conforming"
-  },
-  {
-   "t": 49019,
-   "status": "conforming"
-  },
-  {
-   "t": 49034,
-   "status": "conforming"
-  },
-  {
-   "t": 49058,
-   "status": "conforming"
-  },
-  {
-   "t": 49085,
-   "status": "conforming"
-  },
-  {
-   "t": 49104,
-   "status": "conforming"
-  },
-  {
-   "t": 49126,
-   "status": "conforming"
-  },
-  {
-   "t": 49147,
-   "status": "conforming"
-  },
-  {
-   "t": 49163,
-   "status": "conforming"
-  },
-  {
-   "t": 49183,
-   "status": "conforming"
-  },
-  {
-   "t": 49202,
-   "status": "conforming"
-  },
-  {
-   "t": 49218,
-   "status": "conforming"
-  },
-  {
-   "t": 49235,
-   "status": "conforming"
-  },
-  {
-   "t": 49254,
-   "status": "conforming"
-  },
-  {
-   "t": 49279,
-   "status": "conforming"
-  },
-  {
-   "t": 49294,
-   "status": "conforming"
-  },
-  {
-   "t": 49313,
-   "status": "conforming"
-  },
-  {
-   "t": 49328,
-   "status": "conforming"
-  },
-  {
-   "t": 49349,
-   "status": "conforming"
-  },
-  {
-   "t": 49368,
-   "status": "conforming"
-  },
-  {
-   "t": 49386,
-   "status": "conforming"
-  },
-  {
-   "t": 49411,
-   "status": "conforming"
-  },
-  {
-   "t": 49431,
-   "status": "conforming"
-  },
-  {
-   "t": 49447,
-   "status": "conforming"
-  },
-  {
-   "t": 49471,
-   "status": "conforming"
-  },
-  {
-   "t": 49483,
-   "status": "conforming"
-  },
-  {
-   "t": 49505,
-   "status": "conforming"
-  },
-  {
-   "t": 49522,
-   "status": "conforming"
-  },
-  {
-   "t": 49542,
-   "status": "conforming"
-  },
-  {
-   "t": 49563,
-   "status": "conforming"
-  },
-  {
-   "t": 49586,
-   "status": "conforming"
-  },
-  {
-   "t": 49604,
-   "status": "conforming"
-  },
-  {
-   "t": 49631,
-   "status": "conforming"
-  },
-  {
-   "t": 49654,
-   "status": "conforming"
-  },
-  {
-   "t": 49682,
-   "status": "conforming"
-  },
-  {
-   "t": 49703,
-   "status": "conforming"
-  },
-  {
-   "t": 49727,
-   "status": "conforming"
-  },
-  {
-   "t": 49742,
-   "status": "conforming"
-  },
-  {
-   "t": 49763,
-   "status": "conforming"
-  },
-  {
-   "t": 49783,
-   "status": "conforming"
-  },
-  {
-   "t": 49806,
-   "status": "conforming"
-  },
-  {
-   "t": 49826,
-   "status": "conforming"
-  },
-  {
-   "t": 49847,
-   "status": "conforming"
-  },
-  {
-   "t": 49866,
-   "status": "conforming"
-  },
-  {
-   "t": 49891,
-   "status": "conforming"
-  },
-  {
-   "t": 49919,
-   "status": "conforming"
-  },
-  {
-   "t": 49939,
-   "status": "conforming"
-  },
-  {
-   "t": 49955,
-   "status": "conforming"
-  },
-  {
-   "t": 49985,
-   "status": "conforming"
-  },
-  {
-   "t": 50002,
-   "status": "conforming"
-  },
-  {
-   "t": 50024,
-   "status": "conforming"
-  },
-  {
-   "t": 50041,
-   "status": "conforming"
-  },
-  {
-   "t": 50054,
-   "status": "conforming"
-  },
-  {
-   "t": 50073,
-   "status": "conforming"
-  },
-  {
-   "t": 50090,
-   "status": "conforming"
-  },
-  {
-   "t": 50114,
-   "status": "conforming"
-  },
-  {
-   "t": 50131,
-   "status": "conforming"
-  },
-  {
-   "t": 50147,
-   "status": "conforming"
-  },
-  {
-   "t": 50176,
-   "status": "conforming"
-  }
- ]
+  "recording": "fixtures/mc1hwl0-fixtures.mgcr",
+  "input_delay": 0,
+  "pin_pose": "n1",
+  "fixtures": [
+    {
+      "t": 0,
+      "status": "conforming"
+    },
+    {
+      "t": 11,
+      "status": "conforming"
+    },
+    {
+      "t": 22,
+      "status": "conforming"
+    },
+    {
+      "t": 32,
+      "status": "conforming"
+    },
+    {
+      "t": 42,
+      "status": "conforming"
+    },
+    {
+      "t": 52,
+      "status": "conforming"
+    },
+    {
+      "t": 72,
+      "status": "open",
+      "sig": "3923d3f1e53c7195",
+      "atoms": [
+        "field:12,2:flags"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 73,
+      "status": "open",
+      "sig": "2cc0dc3d30b5e9b3",
+      "atoms": [
+        "extra:9,10"
+      ]
+    },
+    {
+      "t": 77,
+      "status": "conforming"
+    },
+    {
+      "t": 87,
+      "status": "conforming"
+    },
+    {
+      "t": 89,
+      "status": "open",
+      "sig": "53faea88cb3ff403",
+      "atoms": [
+        "missing:10,41"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 91,
+      "status": "open",
+      "sig": "8163248d28644622",
+      "atoms": [
+        "field:3,2:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 1 row(s) unexplained"
+    },
+    {
+      "t": 108,
+      "status": "conforming"
+    },
+    {
+      "t": 113,
+      "status": "open",
+      "sig": "e1cdb015d94c64f7",
+      "atoms": [
+        "field:3,3:chase"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 119,
+      "status": "conforming"
+    },
+    {
+      "t": 129,
+      "status": "conforming"
+    },
+    {
+      "t": 140,
+      "status": "conforming",
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 154,
+      "status": "open",
+      "sig": "271e3bf9759ad213",
+      "atoms": [
+        "field:3,1:mana_max"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 163,
+      "status": "capture",
+      "sig": "cc61b0843551088d",
+      "atoms": [
+        "field:3,1:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
+    },
+    {
+      "t": 184,
+      "status": "open",
+      "sig": "97af2825376ed0d9",
+      "atoms": [
+        "extra:9,1"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 222,
+      "status": "conforming"
+    },
+    {
+      "t": 237,
+      "status": "conforming"
+    },
+    {
+      "t": 248,
+      "status": "conforming"
+    },
+    {
+      "t": 443,
+      "status": "open",
+      "sig": "a2451411b31b3882",
+      "atoms": [
+        "field:5,3:target_yaw"
+      ],
+      "note": "auto-triage vs known-deviations: roster: pose-phase"
+    },
+    {
+      "t": 702,
+      "status": "open",
+      "sig": "9e452ffe9cf4b10d",
+      "atoms": [
+        "field:5,6:target_yaw"
+      ],
+      "note": "auto-triage vs known-deviations: roster: pose-phase"
+    },
+    {
+      "t": 902,
+      "status": "conforming"
+    },
+    {
+      "t": 929,
+      "status": "open",
+      "sig": "21adf41ed5f4ae31",
+      "atoms": [
+        "field:9,0:flags"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 936,
+      "status": "conforming"
+    },
+    {
+      "t": 977,
+      "status": "conforming"
+    },
+    {
+      "t": 1045,
+      "status": "open",
+      "sig": "ed82c0c880876d89",
+      "atoms": [
+        "field:3,1:chase"
+      ],
+      "note": "auto-triage vs known-deviations: 2 row(s) unexplained"
+    },
+    {
+      "t": 1298,
+      "status": "open",
+      "sig": "58362133705f10c0",
+      "atoms": [
+        "field:10,12:flags"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 23 row(s) unexplained"
+    },
+    {
+      "t": 1314,
+      "status": "open",
+      "sig": "4d1985660553dfb4",
+      "atoms": [
+        "field:9,1:flags"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 1592,
+      "status": "conforming"
+    },
+    {
+      "t": 1698,
+      "status": "open",
+      "sig": "85b61e945da26986",
+      "atoms": [
+        "field:10,39:heading"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hw-speed-contrail-extra, mc1hwl0-terrain-z; 14 row(s) unexplained"
+    },
+    {
+      "t": 1830,
+      "status": "conforming"
+    },
+    {
+      "t": 1843,
+      "status": "conforming"
+    },
+    {
+      "t": 1858,
+      "status": "conforming"
+    },
+    {
+      "t": 1870,
+      "status": "conforming"
+    },
+    {
+      "t": 1906,
+      "status": "open",
+      "sig": "ab9e1b1de5436f36",
+      "atoms": [
+        "field:10,39:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z, mc1hw-speed-contrail-extra; 15 row(s) unexplained"
+    },
+    {
+      "t": 2059,
+      "status": "capture",
+      "sig": "254f6ddea0c169ed",
+      "atoms": [
+        "field:12,23:z"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z"
+    },
+    {
+      "t": 2067,
+      "status": "conforming"
+    },
+    {
+      "t": 2089,
+      "status": "conforming"
+    },
+    {
+      "t": 2103,
+      "status": "conforming"
+    },
+    {
+      "t": 2144,
+      "status": "conforming"
+    },
+    {
+      "t": 2155,
+      "status": "conforming"
+    },
+    {
+      "t": 2165,
+      "status": "conforming"
+    },
+    {
+      "t": 2175,
+      "status": "conforming"
+    },
+    {
+      "t": 2375,
+      "status": "open",
+      "sig": "22254b68555f037e",
+      "atoms": [
+        "field:3,1:speed"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 2878,
+      "status": "conforming"
+    },
+    {
+      "t": 2888,
+      "status": "conforming"
+    },
+    {
+      "t": 2898,
+      "status": "conforming"
+    },
+    {
+      "t": 2910,
+      "status": "conforming"
+    },
+    {
+      "t": 2921,
+      "status": "conforming"
+    },
+    {
+      "t": 2933,
+      "status": "open",
+      "sig": "2cace03d30a54775",
+      "atoms": [
+        "extra:9,16"
+      ]
+    },
+    {
+      "t": 2936,
+      "status": "conforming"
+    },
+    {
+      "t": 2950,
+      "status": "conforming"
+    },
+    {
+      "t": 2957,
+      "status": "open",
+      "sig": "b940654d68acdd12",
+      "atoms": [
+        "missing:10,0"
+      ],
+      "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z, mc1-spawn-arm-f34-fire; 12 row(s) unexplained"
+    },
+    {
+      "t": 3052,
+      "status": "conforming"
+    },
+    {
+      "t": 3088,
+      "status": "conforming"
+    },
+    {
+      "t": 3102,
+      "status": "open",
+      "sig": "91c5d9b7855c33bf",
+      "atoms": [
+        "field:wizard0.hand_left"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 3222,
+      "status": "conforming"
+    },
+    {
+      "t": 3223,
+      "status": "open",
+      "sig": "55a3c3e187933e93",
+      "atoms": [
+        "field:5,8:target_yaw"
+      ],
+      "note": "auto-triage vs known-deviations: roster: pose-phase"
+    },
+    {
+      "t": 3501,
+      "status": "conforming"
+    },
+    {
+      "t": 3511,
+      "status": "conforming"
+    },
+    {
+      "t": 3523,
+      "status": "conforming"
+    },
+    {
+      "t": 3542,
+      "status": "conforming"
+    },
+    {
+      "t": 3553,
+      "status": "conforming"
+    },
+    {
+      "t": 3561,
+      "status": "open",
+      "sig": "59a90663446eeffc",
+      "atoms": [
+        "field:5,15:heading"
+      ],
+      "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
+    },
+    {
+      "t": 3564,
+      "status": "conforming"
+    },
+    {
+      "t": 3575,
+      "status": "conforming"
+    },
+    {
+      "t": 3588,
+      "status": "conforming"
+    },
+    {
+      "t": 3600,
+      "status": "conforming"
+    },
+    {
+      "t": 3610,
+      "status": "conforming"
+    },
+    {
+      "t": 3622,
+      "status": "conforming"
+    },
+    {
+      "t": 3651,
+      "status": "conforming"
+    },
+    {
+      "t": 3687,
+      "status": "conforming"
+    },
+    {
+      "t": 3753,
+      "status": "conforming"
+    },
+    {
+      "t": 3808,
+      "status": "conforming"
+    },
+    {
+      "t": 3964,
+      "status": "conforming"
+    },
+    {
+      "t": 4086,
+      "status": "conforming"
+    },
+    {
+      "t": 4102,
+      "status": "conforming"
+    },
+    {
+      "t": 4115,
+      "status": "conforming"
+    },
+    {
+      "t": 4128,
+      "status": "conforming"
+    },
+    {
+      "t": 4142,
+      "status": "conforming"
+    },
+    {
+      "t": 4154,
+      "status": "conforming"
+    },
+    {
+      "t": 4170,
+      "status": "conforming"
+    },
+    {
+      "t": 4180,
+      "status": "conforming"
+    },
+    {
+      "t": 4190,
+      "status": "conforming"
+    },
+    {
+      "t": 4203,
+      "status": "conforming"
+    },
+    {
+      "t": 4215,
+      "status": "conforming"
+    },
+    {
+      "t": 4230,
+      "status": "conforming"
+    },
+    {
+      "t": 4281,
+      "status": "conforming"
+    },
+    {
+      "t": 4294,
+      "status": "conforming"
+    },
+    {
+      "t": 4308,
+      "status": "conforming"
+    },
+    {
+      "t": 4319,
+      "status": "conforming"
+    },
+    {
+      "t": 4335,
+      "status": "conforming"
+    },
+    {
+      "t": 4355,
+      "status": "conforming"
+    },
+    {
+      "t": 4573,
+      "status": "conforming"
+    },
+    {
+      "t": 4584,
+      "status": "conforming"
+    },
+    {
+      "t": 4598,
+      "status": "conforming"
+    },
+    {
+      "t": 4690,
+      "status": "conforming"
+    },
+    {
+      "t": 4722,
+      "status": "conforming"
+    },
+    {
+      "t": 4744,
+      "status": "conforming"
+    },
+    {
+      "t": 4836,
+      "status": "conforming"
+    },
+    {
+      "t": 4847,
+      "status": "conforming"
+    },
+    {
+      "t": 4860,
+      "status": "conforming"
+    },
+    {
+      "t": 4873,
+      "status": "conforming"
+    },
+    {
+      "t": 4886,
+      "status": "conforming"
+    },
+    {
+      "t": 4898,
+      "status": "conforming"
+    },
+    {
+      "t": 4913,
+      "status": "conforming"
+    },
+    {
+      "t": 4930,
+      "status": "conforming"
+    },
+    {
+      "t": 4950,
+      "status": "conforming"
+    },
+    {
+      "t": 4961,
+      "status": "conforming"
+    },
+    {
+      "t": 5603,
+      "status": "conforming"
+    },
+    {
+      "t": 5678,
+      "status": "conforming"
+    },
+    {
+      "t": 5689,
+      "status": "conforming"
+    },
+    {
+      "t": 5702,
+      "status": "conforming"
+    },
+    {
+      "t": 5715,
+      "status": "conforming"
+    },
+    {
+      "t": 5726,
+      "status": "conforming"
+    },
+    {
+      "t": 5736,
+      "status": "conforming"
+    },
+    {
+      "t": 5747,
+      "status": "conforming"
+    },
+    {
+      "t": 5758,
+      "status": "conforming"
+    },
+    {
+      "t": 5768,
+      "status": "conforming"
+    },
+    {
+      "t": 5780,
+      "status": "conforming"
+    },
+    {
+      "t": 5791,
+      "status": "conforming"
+    },
+    {
+      "t": 5802,
+      "status": "conforming"
+    },
+    {
+      "t": 5814,
+      "status": "conforming"
+    },
+    {
+      "t": 5825,
+      "status": "conforming"
+    },
+    {
+      "t": 5840,
+      "status": "conforming"
+    },
+    {
+      "t": 6121,
+      "status": "conforming"
+    },
+    {
+      "t": 6179,
+      "status": "conforming"
+    },
+    {
+      "t": 6376,
+      "status": "conforming"
+    },
+    {
+      "t": 6622,
+      "status": "conforming"
+    },
+    {
+      "t": 6688,
+      "status": "conforming"
+    },
+    {
+      "t": 6745,
+      "status": "conforming"
+    },
+    {
+      "t": 6800,
+      "status": "conforming"
+    },
+    {
+      "t": 6881,
+      "status": "conforming"
+    },
+    {
+      "t": 6925,
+      "status": "conforming"
+    },
+    {
+      "t": 7007,
+      "status": "conforming"
+    },
+    {
+      "t": 7276,
+      "status": "conforming"
+    },
+    {
+      "t": 7964,
+      "status": "conforming"
+    },
+    {
+      "t": 8197,
+      "status": "conforming"
+    },
+    {
+      "t": 8510,
+      "status": "conforming"
+    },
+    {
+      "t": 8568,
+      "status": "conforming"
+    },
+    {
+      "t": 8641,
+      "status": "conforming"
+    },
+    {
+      "t": 8653,
+      "status": "conforming"
+    },
+    {
+      "t": 8665,
+      "status": "conforming"
+    },
+    {
+      "t": 8676,
+      "status": "conforming"
+    },
+    {
+      "t": 8687,
+      "status": "conforming"
+    },
+    {
+      "t": 8698,
+      "status": "conforming"
+    },
+    {
+      "t": 8710,
+      "status": "conforming"
+    },
+    {
+      "t": 8748,
+      "status": "conforming"
+    },
+    {
+      "t": 9068,
+      "status": "conforming"
+    },
+    {
+      "t": 9280,
+      "status": "conforming"
+    },
+    {
+      "t": 9351,
+      "status": "conforming"
+    },
+    {
+      "t": 9366,
+      "status": "conforming"
+    },
+    {
+      "t": 9604,
+      "status": "conforming"
+    },
+    {
+      "t": 9898,
+      "status": "conforming"
+    },
+    {
+      "t": 10086,
+      "status": "conforming"
+    },
+    {
+      "t": 10108,
+      "status": "conforming"
+    },
+    {
+      "t": 10120,
+      "status": "conforming"
+    },
+    {
+      "t": 10134,
+      "status": "conforming"
+    },
+    {
+      "t": 10255,
+      "status": "conforming"
+    },
+    {
+      "t": 10328,
+      "status": "conforming"
+    },
+    {
+      "t": 10342,
+      "status": "conforming"
+    },
+    {
+      "t": 10415,
+      "status": "conforming"
+    },
+    {
+      "t": 10910,
+      "status": "conforming"
+    },
+    {
+      "t": 11061,
+      "status": "conforming"
+    },
+    {
+      "t": 11236,
+      "status": "conforming"
+    },
+    {
+      "t": 11365,
+      "status": "conforming"
+    },
+    {
+      "t": 11391,
+      "status": "conforming"
+    },
+    {
+      "t": 11407,
+      "status": "conforming"
+    },
+    {
+      "t": 11647,
+      "status": "conforming"
+    },
+    {
+      "t": 12150,
+      "status": "conforming"
+    },
+    {
+      "t": 12165,
+      "status": "conforming"
+    },
+    {
+      "t": 12276,
+      "status": "conforming"
+    },
+    {
+      "t": 12298,
+      "status": "conforming"
+    },
+    {
+      "t": 12350,
+      "status": "conforming"
+    },
+    {
+      "t": 12409,
+      "status": "conforming"
+    },
+    {
+      "t": 12431,
+      "status": "conforming"
+    },
+    {
+      "t": 12577,
+      "status": "conforming"
+    },
+    {
+      "t": 12594,
+      "status": "conforming"
+    },
+    {
+      "t": 12607,
+      "status": "conforming"
+    },
+    {
+      "t": 12622,
+      "status": "conforming"
+    },
+    {
+      "t": 12636,
+      "status": "conforming"
+    },
+    {
+      "t": 12647,
+      "status": "conforming"
+    },
+    {
+      "t": 12662,
+      "status": "conforming"
+    },
+    {
+      "t": 12676,
+      "status": "conforming"
+    },
+    {
+      "t": 12692,
+      "status": "conforming"
+    },
+    {
+      "t": 12704,
+      "status": "conforming"
+    },
+    {
+      "t": 12719,
+      "status": "conforming"
+    },
+    {
+      "t": 12733,
+      "status": "conforming"
+    },
+    {
+      "t": 12746,
+      "status": "conforming"
+    },
+    {
+      "t": 12919,
+      "status": "conforming"
+    },
+    {
+      "t": 13488,
+      "status": "conforming"
+    },
+    {
+      "t": 13664,
+      "status": "conforming"
+    },
+    {
+      "t": 14224,
+      "status": "conforming"
+    },
+    {
+      "t": 14247,
+      "status": "conforming"
+    },
+    {
+      "t": 14437,
+      "status": "conforming"
+    },
+    {
+      "t": 14768,
+      "status": "conforming"
+    },
+    {
+      "t": 14782,
+      "status": "conforming"
+    },
+    {
+      "t": 14792,
+      "status": "conforming"
+    },
+    {
+      "t": 14808,
+      "status": "conforming"
+    },
+    {
+      "t": 14824,
+      "status": "conforming"
+    },
+    {
+      "t": 14840,
+      "status": "conforming"
+    },
+    {
+      "t": 14853,
+      "status": "conforming"
+    },
+    {
+      "t": 14873,
+      "status": "conforming"
+    },
+    {
+      "t": 14888,
+      "status": "conforming"
+    },
+    {
+      "t": 15262,
+      "status": "conforming"
+    },
+    {
+      "t": 15276,
+      "status": "conforming"
+    },
+    {
+      "t": 15297,
+      "status": "conforming"
+    },
+    {
+      "t": 15311,
+      "status": "conforming"
+    },
+    {
+      "t": 15325,
+      "status": "conforming"
+    },
+    {
+      "t": 15336,
+      "status": "conforming"
+    },
+    {
+      "t": 15357,
+      "status": "conforming"
+    },
+    {
+      "t": 15370,
+      "status": "conforming"
+    },
+    {
+      "t": 15384,
+      "status": "conforming"
+    },
+    {
+      "t": 15401,
+      "status": "conforming"
+    },
+    {
+      "t": 15416,
+      "status": "conforming"
+    },
+    {
+      "t": 15430,
+      "status": "conforming"
+    },
+    {
+      "t": 15444,
+      "status": "conforming"
+    },
+    {
+      "t": 15460,
+      "status": "conforming"
+    },
+    {
+      "t": 15710,
+      "status": "conforming"
+    },
+    {
+      "t": 16743,
+      "status": "conforming"
+    },
+    {
+      "t": 16754,
+      "status": "conforming"
+    },
+    {
+      "t": 18999,
+      "status": "conforming"
+    },
+    {
+      "t": 20063,
+      "status": "conforming"
+    },
+    {
+      "t": 20078,
+      "status": "conforming"
+    },
+    {
+      "t": 20088,
+      "status": "conforming"
+    },
+    {
+      "t": 20354,
+      "status": "conforming"
+    },
+    {
+      "t": 20374,
+      "status": "conforming"
+    },
+    {
+      "t": 21039,
+      "status": "open",
+      "sig": "06ed78ebadb9af90",
+      "atoms": [
+        "field:3,1:mana"
+      ],
+      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+    },
+    {
+      "t": 24145,
+      "status": "open",
+      "sig": "06ed78ebadb9af90",
+      "atoms": [
+        "field:3,1:mana"
+      ],
+      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+    },
+    {
+      "t": 24163,
+      "status": "open",
+      "sig": "06ed78ebadb9af90",
+      "atoms": [
+        "field:3,1:mana"
+      ],
+      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+    },
+    {
+      "t": 24264,
+      "status": "open",
+      "sig": "06ed78ebadb9af90",
+      "atoms": [
+        "field:3,1:mana"
+      ],
+      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+    },
+    {
+      "t": 24895,
+      "status": "conforming"
+    },
+    {
+      "t": 25922,
+      "status": "open",
+      "sig": "06ed78ebadb9af90",
+      "atoms": [
+        "field:3,1:mana"
+      ],
+      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+    },
+    {
+      "t": 26346,
+      "status": "conforming"
+    },
+    {
+      "t": 26358,
+      "status": "conforming"
+    },
+    {
+      "t": 26434,
+      "status": "conforming"
+    },
+    {
+      "t": 26452,
+      "status": "conforming"
+    },
+    {
+      "t": 26472,
+      "status": "conforming"
+    },
+    {
+      "t": 26489,
+      "status": "conforming"
+    },
+    {
+      "t": 26503,
+      "status": "conforming"
+    },
+    {
+      "t": 26517,
+      "status": "conforming"
+    },
+    {
+      "t": 26532,
+      "status": "conforming"
+    },
+    {
+      "t": 26546,
+      "status": "conforming"
+    },
+    {
+      "t": 26560,
+      "status": "conforming"
+    },
+    {
+      "t": 26571,
+      "status": "conforming"
+    },
+    {
+      "t": 26587,
+      "status": "conforming"
+    },
+    {
+      "t": 26604,
+      "status": "conforming"
+    },
+    {
+      "t": 26617,
+      "status": "conforming"
+    },
+    {
+      "t": 26630,
+      "status": "conforming"
+    },
+    {
+      "t": 26646,
+      "status": "conforming"
+    },
+    {
+      "t": 26659,
+      "status": "conforming"
+    },
+    {
+      "t": 26676,
+      "status": "conforming"
+    },
+    {
+      "t": 26692,
+      "status": "conforming"
+    },
+    {
+      "t": 26708,
+      "status": "conforming"
+    },
+    {
+      "t": 26879,
+      "status": "conforming"
+    },
+    {
+      "t": 26916,
+      "status": "conforming"
+    },
+    {
+      "t": 26936,
+      "status": "conforming"
+    },
+    {
+      "t": 26995,
+      "status": "conforming"
+    },
+    {
+      "t": 27009,
+      "status": "conforming"
+    },
+    {
+      "t": 27029,
+      "status": "conforming"
+    },
+    {
+      "t": 27047,
+      "status": "conforming"
+    },
+    {
+      "t": 27065,
+      "status": "conforming"
+    },
+    {
+      "t": 27119,
+      "status": "conforming"
+    },
+    {
+      "t": 27143,
+      "status": "conforming"
+    },
+    {
+      "t": 27163,
+      "status": "conforming"
+    },
+    {
+      "t": 27183,
+      "status": "conforming"
+    },
+    {
+      "t": 27204,
+      "status": "conforming"
+    },
+    {
+      "t": 27232,
+      "status": "conforming"
+    },
+    {
+      "t": 27252,
+      "status": "conforming"
+    },
+    {
+      "t": 27272,
+      "status": "conforming"
+    },
+    {
+      "t": 27299,
+      "status": "conforming"
+    },
+    {
+      "t": 27318,
+      "status": "conforming"
+    },
+    {
+      "t": 27333,
+      "status": "conforming"
+    },
+    {
+      "t": 27352,
+      "status": "conforming"
+    },
+    {
+      "t": 27375,
+      "status": "conforming"
+    },
+    {
+      "t": 27398,
+      "status": "conforming"
+    },
+    {
+      "t": 27414,
+      "status": "conforming"
+    },
+    {
+      "t": 27432,
+      "status": "conforming"
+    },
+    {
+      "t": 27447,
+      "status": "conforming"
+    },
+    {
+      "t": 27463,
+      "status": "conforming"
+    },
+    {
+      "t": 27477,
+      "status": "conforming"
+    },
+    {
+      "t": 27493,
+      "status": "conforming"
+    },
+    {
+      "t": 27510,
+      "status": "conforming"
+    },
+    {
+      "t": 27525,
+      "status": "conforming"
+    },
+    {
+      "t": 27540,
+      "status": "conforming"
+    },
+    {
+      "t": 27553,
+      "status": "conforming"
+    },
+    {
+      "t": 27568,
+      "status": "conforming"
+    },
+    {
+      "t": 27584,
+      "status": "conforming"
+    },
+    {
+      "t": 27598,
+      "status": "conforming"
+    },
+    {
+      "t": 27616,
+      "status": "conforming"
+    },
+    {
+      "t": 27628,
+      "status": "conforming"
+    },
+    {
+      "t": 27648,
+      "status": "conforming"
+    },
+    {
+      "t": 27662,
+      "status": "conforming"
+    },
+    {
+      "t": 27673,
+      "status": "conforming"
+    },
+    {
+      "t": 27690,
+      "status": "conforming"
+    },
+    {
+      "t": 27705,
+      "status": "conforming"
+    },
+    {
+      "t": 27718,
+      "status": "conforming"
+    },
+    {
+      "t": 27733,
+      "status": "conforming"
+    },
+    {
+      "t": 27747,
+      "status": "conforming"
+    },
+    {
+      "t": 27762,
+      "status": "conforming"
+    },
+    {
+      "t": 27776,
+      "status": "conforming"
+    },
+    {
+      "t": 27790,
+      "status": "conforming"
+    },
+    {
+      "t": 27801,
+      "status": "conforming"
+    },
+    {
+      "t": 27816,
+      "status": "conforming"
+    },
+    {
+      "t": 27831,
+      "status": "conforming"
+    },
+    {
+      "t": 27847,
+      "status": "conforming"
+    },
+    {
+      "t": 27863,
+      "status": "conforming"
+    },
+    {
+      "t": 27877,
+      "status": "conforming"
+    },
+    {
+      "t": 27890,
+      "status": "conforming"
+    },
+    {
+      "t": 27904,
+      "status": "conforming"
+    },
+    {
+      "t": 27915,
+      "status": "conforming"
+    },
+    {
+      "t": 27961,
+      "status": "conforming"
+    },
+    {
+      "t": 27979,
+      "status": "conforming"
+    },
+    {
+      "t": 27995,
+      "status": "conforming"
+    },
+    {
+      "t": 28032,
+      "status": "conforming"
+    },
+    {
+      "t": 28046,
+      "status": "conforming"
+    },
+    {
+      "t": 28057,
+      "status": "conforming"
+    },
+    {
+      "t": 28073,
+      "status": "conforming"
+    },
+    {
+      "t": 28091,
+      "status": "conforming"
+    },
+    {
+      "t": 28104,
+      "status": "conforming"
+    },
+    {
+      "t": 28117,
+      "status": "conforming"
+    },
+    {
+      "t": 28132,
+      "status": "conforming"
+    },
+    {
+      "t": 28197,
+      "status": "conforming"
+    },
+    {
+      "t": 28214,
+      "status": "conforming"
+    },
+    {
+      "t": 28230,
+      "status": "conforming"
+    },
+    {
+      "t": 28244,
+      "status": "conforming"
+    },
+    {
+      "t": 28257,
+      "status": "conforming"
+    },
+    {
+      "t": 28270,
+      "status": "conforming"
+    },
+    {
+      "t": 28285,
+      "status": "conforming"
+    },
+    {
+      "t": 28302,
+      "status": "conforming"
+    },
+    {
+      "t": 28342,
+      "status": "conforming"
+    },
+    {
+      "t": 28356,
+      "status": "conforming"
+    },
+    {
+      "t": 28371,
+      "status": "conforming"
+    },
+    {
+      "t": 28385,
+      "status": "conforming"
+    },
+    {
+      "t": 28396,
+      "status": "conforming"
+    },
+    {
+      "t": 28411,
+      "status": "conforming"
+    },
+    {
+      "t": 28424,
+      "status": "conforming"
+    },
+    {
+      "t": 28439,
+      "status": "conforming"
+    },
+    {
+      "t": 28456,
+      "status": "conforming"
+    },
+    {
+      "t": 28480,
+      "status": "conforming"
+    },
+    {
+      "t": 28494,
+      "status": "conforming"
+    },
+    {
+      "t": 28507,
+      "status": "conforming"
+    },
+    {
+      "t": 28523,
+      "status": "conforming"
+    },
+    {
+      "t": 28536,
+      "status": "conforming"
+    },
+    {
+      "t": 28551,
+      "status": "conforming"
+    },
+    {
+      "t": 28569,
+      "status": "conforming"
+    },
+    {
+      "t": 28588,
+      "status": "conforming"
+    },
+    {
+      "t": 28605,
+      "status": "conforming"
+    },
+    {
+      "t": 28620,
+      "status": "conforming"
+    },
+    {
+      "t": 28637,
+      "status": "conforming"
+    },
+    {
+      "t": 28654,
+      "status": "conforming"
+    },
+    {
+      "t": 28672,
+      "status": "conforming"
+    },
+    {
+      "t": 28688,
+      "status": "conforming"
+    },
+    {
+      "t": 28704,
+      "status": "conforming"
+    },
+    {
+      "t": 28724,
+      "status": "conforming"
+    },
+    {
+      "t": 28741,
+      "status": "conforming"
+    },
+    {
+      "t": 28761,
+      "status": "conforming"
+    },
+    {
+      "t": 28784,
+      "status": "conforming"
+    },
+    {
+      "t": 28803,
+      "status": "conforming"
+    },
+    {
+      "t": 28822,
+      "status": "conforming"
+    },
+    {
+      "t": 28842,
+      "status": "conforming"
+    },
+    {
+      "t": 28855,
+      "status": "conforming"
+    },
+    {
+      "t": 28875,
+      "status": "conforming"
+    },
+    {
+      "t": 28893,
+      "status": "conforming"
+    },
+    {
+      "t": 28910,
+      "status": "conforming"
+    },
+    {
+      "t": 28931,
+      "status": "conforming"
+    },
+    {
+      "t": 28955,
+      "status": "conforming"
+    },
+    {
+      "t": 28976,
+      "status": "conforming"
+    },
+    {
+      "t": 28996,
+      "status": "conforming"
+    },
+    {
+      "t": 29015,
+      "status": "conforming"
+    },
+    {
+      "t": 29038,
+      "status": "conforming"
+    },
+    {
+      "t": 29057,
+      "status": "conforming"
+    },
+    {
+      "t": 29075,
+      "status": "conforming"
+    },
+    {
+      "t": 29136,
+      "status": "conforming"
+    },
+    {
+      "t": 29160,
+      "status": "conforming"
+    },
+    {
+      "t": 29190,
+      "status": "conforming"
+    },
+    {
+      "t": 29208,
+      "status": "conforming"
+    },
+    {
+      "t": 29228,
+      "status": "conforming"
+    },
+    {
+      "t": 29252,
+      "status": "conforming"
+    },
+    {
+      "t": 29272,
+      "status": "conforming"
+    },
+    {
+      "t": 29294,
+      "status": "conforming"
+    },
+    {
+      "t": 29319,
+      "status": "conforming"
+    },
+    {
+      "t": 29336,
+      "status": "conforming"
+    },
+    {
+      "t": 29355,
+      "status": "conforming"
+    },
+    {
+      "t": 29380,
+      "status": "conforming"
+    },
+    {
+      "t": 29399,
+      "status": "conforming"
+    },
+    {
+      "t": 29419,
+      "status": "conforming"
+    },
+    {
+      "t": 29442,
+      "status": "conforming"
+    },
+    {
+      "t": 29461,
+      "status": "conforming"
+    },
+    {
+      "t": 29480,
+      "status": "conforming"
+    },
+    {
+      "t": 29496,
+      "status": "conforming"
+    },
+    {
+      "t": 29512,
+      "status": "conforming"
+    },
+    {
+      "t": 29533,
+      "status": "conforming"
+    },
+    {
+      "t": 29552,
+      "status": "conforming"
+    },
+    {
+      "t": 29571,
+      "status": "conforming"
+    },
+    {
+      "t": 29591,
+      "status": "conforming"
+    },
+    {
+      "t": 29610,
+      "status": "conforming"
+    },
+    {
+      "t": 29795,
+      "status": "conforming"
+    },
+    {
+      "t": 29811,
+      "status": "conforming"
+    },
+    {
+      "t": 29917,
+      "status": "conforming"
+    },
+    {
+      "t": 30064,
+      "status": "conforming"
+    },
+    {
+      "t": 30101,
+      "status": "conforming"
+    },
+    {
+      "t": 30154,
+      "status": "conforming"
+    },
+    {
+      "t": 30176,
+      "status": "conforming"
+    },
+    {
+      "t": 30195,
+      "status": "conforming"
+    },
+    {
+      "t": 30214,
+      "status": "conforming"
+    },
+    {
+      "t": 30235,
+      "status": "conforming"
+    },
+    {
+      "t": 30259,
+      "status": "conforming"
+    },
+    {
+      "t": 30283,
+      "status": "conforming"
+    },
+    {
+      "t": 30316,
+      "status": "conforming"
+    },
+    {
+      "t": 30363,
+      "status": "conforming"
+    },
+    {
+      "t": 30429,
+      "status": "conforming"
+    },
+    {
+      "t": 30459,
+      "status": "conforming"
+    },
+    {
+      "t": 30475,
+      "status": "conforming"
+    },
+    {
+      "t": 30496,
+      "status": "conforming"
+    },
+    {
+      "t": 30520,
+      "status": "conforming"
+    },
+    {
+      "t": 30592,
+      "status": "conforming"
+    },
+    {
+      "t": 30628,
+      "status": "conforming"
+    },
+    {
+      "t": 30667,
+      "status": "conforming"
+    },
+    {
+      "t": 30699,
+      "status": "conforming"
+    },
+    {
+      "t": 30734,
+      "status": "conforming"
+    },
+    {
+      "t": 30751,
+      "status": "conforming"
+    },
+    {
+      "t": 30783,
+      "status": "conforming"
+    },
+    {
+      "t": 30813,
+      "status": "conforming"
+    },
+    {
+      "t": 30835,
+      "status": "conforming"
+    },
+    {
+      "t": 30875,
+      "status": "conforming"
+    },
+    {
+      "t": 30913,
+      "status": "conforming"
+    },
+    {
+      "t": 30936,
+      "status": "conforming"
+    },
+    {
+      "t": 30955,
+      "status": "conforming"
+    },
+    {
+      "t": 30999,
+      "status": "conforming"
+    },
+    {
+      "t": 31108,
+      "status": "conforming"
+    },
+    {
+      "t": 31127,
+      "status": "conforming"
+    },
+    {
+      "t": 31144,
+      "status": "conforming"
+    },
+    {
+      "t": 31161,
+      "status": "conforming"
+    },
+    {
+      "t": 31184,
+      "status": "conforming"
+    },
+    {
+      "t": 31203,
+      "status": "conforming"
+    },
+    {
+      "t": 31222,
+      "status": "conforming"
+    },
+    {
+      "t": 31248,
+      "status": "conforming"
+    },
+    {
+      "t": 31266,
+      "status": "conforming"
+    },
+    {
+      "t": 31285,
+      "status": "conforming"
+    },
+    {
+      "t": 31303,
+      "status": "conforming"
+    },
+    {
+      "t": 31352,
+      "status": "conforming"
+    },
+    {
+      "t": 31397,
+      "status": "conforming"
+    },
+    {
+      "t": 31415,
+      "status": "conforming"
+    },
+    {
+      "t": 31432,
+      "status": "conforming"
+    },
+    {
+      "t": 31467,
+      "status": "conforming"
+    },
+    {
+      "t": 31528,
+      "status": "conforming"
+    },
+    {
+      "t": 31563,
+      "status": "conforming"
+    },
+    {
+      "t": 31617,
+      "status": "conforming"
+    },
+    {
+      "t": 31655,
+      "status": "conforming"
+    },
+    {
+      "t": 31714,
+      "status": "conforming"
+    },
+    {
+      "t": 31735,
+      "status": "conforming"
+    },
+    {
+      "t": 31790,
+      "status": "conforming"
+    },
+    {
+      "t": 31816,
+      "status": "conforming"
+    },
+    {
+      "t": 31841,
+      "status": "conforming"
+    },
+    {
+      "t": 31856,
+      "status": "conforming"
+    },
+    {
+      "t": 31877,
+      "status": "conforming"
+    },
+    {
+      "t": 31895,
+      "status": "conforming"
+    },
+    {
+      "t": 31912,
+      "status": "conforming"
+    },
+    {
+      "t": 31933,
+      "status": "conforming"
+    },
+    {
+      "t": 31954,
+      "status": "conforming"
+    },
+    {
+      "t": 31971,
+      "status": "conforming"
+    },
+    {
+      "t": 31992,
+      "status": "conforming"
+    },
+    {
+      "t": 32007,
+      "status": "conforming"
+    },
+    {
+      "t": 32024,
+      "status": "conforming"
+    },
+    {
+      "t": 32048,
+      "status": "conforming"
+    },
+    {
+      "t": 32215,
+      "status": "conforming"
+    },
+    {
+      "t": 32253,
+      "status": "conforming"
+    },
+    {
+      "t": 32290,
+      "status": "conforming"
+    },
+    {
+      "t": 32338,
+      "status": "conforming"
+    },
+    {
+      "t": 32419,
+      "status": "conforming"
+    },
+    {
+      "t": 32456,
+      "status": "conforming"
+    },
+    {
+      "t": 32513,
+      "status": "conforming"
+    },
+    {
+      "t": 32575,
+      "status": "conforming"
+    },
+    {
+      "t": 32624,
+      "status": "conforming"
+    },
+    {
+      "t": 32659,
+      "status": "conforming"
+    },
+    {
+      "t": 32686,
+      "status": "conforming"
+    },
+    {
+      "t": 32712,
+      "status": "conforming"
+    },
+    {
+      "t": 32747,
+      "status": "conforming"
+    },
+    {
+      "t": 32791,
+      "status": "conforming"
+    },
+    {
+      "t": 32819,
+      "status": "conforming"
+    },
+    {
+      "t": 32888,
+      "status": "conforming"
+    },
+    {
+      "t": 32925,
+      "status": "conforming"
+    },
+    {
+      "t": 32963,
+      "status": "conforming"
+    },
+    {
+      "t": 32996,
+      "status": "conforming"
+    },
+    {
+      "t": 33025,
+      "status": "conforming"
+    },
+    {
+      "t": 33058,
+      "status": "conforming"
+    },
+    {
+      "t": 33080,
+      "status": "conforming"
+    },
+    {
+      "t": 33096,
+      "status": "conforming"
+    },
+    {
+      "t": 33143,
+      "status": "conforming"
+    },
+    {
+      "t": 33960,
+      "status": "conforming"
+    },
+    {
+      "t": 33976,
+      "status": "conforming"
+    },
+    {
+      "t": 33998,
+      "status": "conforming"
+    },
+    {
+      "t": 34020,
+      "status": "conforming"
+    },
+    {
+      "t": 34049,
+      "status": "conforming"
+    },
+    {
+      "t": 34079,
+      "status": "conforming"
+    },
+    {
+      "t": 34096,
+      "status": "conforming"
+    },
+    {
+      "t": 34212,
+      "status": "conforming"
+    },
+    {
+      "t": 34269,
+      "status": "conforming"
+    },
+    {
+      "t": 34306,
+      "status": "conforming"
+    },
+    {
+      "t": 34327,
+      "status": "conforming"
+    },
+    {
+      "t": 34343,
+      "status": "conforming"
+    },
+    {
+      "t": 34363,
+      "status": "conforming"
+    },
+    {
+      "t": 34412,
+      "status": "conforming"
+    },
+    {
+      "t": 34433,
+      "status": "conforming"
+    },
+    {
+      "t": 34451,
+      "status": "conforming"
+    },
+    {
+      "t": 34472,
+      "status": "conforming"
+    },
+    {
+      "t": 34493,
+      "status": "conforming"
+    },
+    {
+      "t": 34519,
+      "status": "conforming"
+    },
+    {
+      "t": 34539,
+      "status": "conforming"
+    },
+    {
+      "t": 34555,
+      "status": "conforming"
+    },
+    {
+      "t": 34583,
+      "status": "conforming"
+    },
+    {
+      "t": 34689,
+      "status": "conforming"
+    },
+    {
+      "t": 34711,
+      "status": "conforming"
+    },
+    {
+      "t": 34762,
+      "status": "conforming"
+    },
+    {
+      "t": 34779,
+      "status": "conforming"
+    },
+    {
+      "t": 34806,
+      "status": "conforming"
+    },
+    {
+      "t": 34835,
+      "status": "conforming"
+    },
+    {
+      "t": 34871,
+      "status": "conforming"
+    },
+    {
+      "t": 34891,
+      "status": "conforming"
+    },
+    {
+      "t": 34914,
+      "status": "conforming"
+    },
+    {
+      "t": 35013,
+      "status": "conforming"
+    },
+    {
+      "t": 35048,
+      "status": "conforming"
+    },
+    {
+      "t": 35075,
+      "status": "conforming"
+    },
+    {
+      "t": 35114,
+      "status": "conforming"
+    },
+    {
+      "t": 35141,
+      "status": "conforming"
+    },
+    {
+      "t": 35165,
+      "status": "conforming"
+    },
+    {
+      "t": 35178,
+      "status": "conforming"
+    },
+    {
+      "t": 35195,
+      "status": "conforming"
+    },
+    {
+      "t": 35939,
+      "status": "conforming"
+    },
+    {
+      "t": 35968,
+      "status": "conforming"
+    },
+    {
+      "t": 35991,
+      "status": "conforming"
+    },
+    {
+      "t": 36024,
+      "status": "conforming"
+    },
+    {
+      "t": 36057,
+      "status": "conforming"
+    },
+    {
+      "t": 36089,
+      "status": "conforming"
+    },
+    {
+      "t": 36119,
+      "status": "conforming"
+    },
+    {
+      "t": 36157,
+      "status": "conforming"
+    },
+    {
+      "t": 36182,
+      "status": "conforming"
+    },
+    {
+      "t": 36225,
+      "status": "conforming"
+    },
+    {
+      "t": 36246,
+      "status": "conforming"
+    },
+    {
+      "t": 36291,
+      "status": "conforming"
+    },
+    {
+      "t": 36577,
+      "status": "conforming"
+    },
+    {
+      "t": 36598,
+      "status": "conforming"
+    },
+    {
+      "t": 36620,
+      "status": "conforming"
+    },
+    {
+      "t": 36673,
+      "status": "conforming"
+    },
+    {
+      "t": 36695,
+      "status": "conforming"
+    },
+    {
+      "t": 37016,
+      "status": "conforming"
+    },
+    {
+      "t": 37040,
+      "status": "conforming"
+    },
+    {
+      "t": 37063,
+      "status": "conforming"
+    },
+    {
+      "t": 37104,
+      "status": "conforming"
+    },
+    {
+      "t": 37128,
+      "status": "conforming"
+    },
+    {
+      "t": 37155,
+      "status": "conforming"
+    },
+    {
+      "t": 37188,
+      "status": "conforming"
+    },
+    {
+      "t": 37211,
+      "status": "conforming"
+    },
+    {
+      "t": 37245,
+      "status": "conforming"
+    },
+    {
+      "t": 37272,
+      "status": "conforming"
+    },
+    {
+      "t": 37299,
+      "status": "conforming"
+    },
+    {
+      "t": 37395,
+      "status": "conforming"
+    },
+    {
+      "t": 37484,
+      "status": "conforming"
+    },
+    {
+      "t": 37514,
+      "status": "conforming"
+    },
+    {
+      "t": 37561,
+      "status": "conforming"
+    },
+    {
+      "t": 37938,
+      "status": "conforming"
+    },
+    {
+      "t": 37979,
+      "status": "conforming"
+    },
+    {
+      "t": 38453,
+      "status": "conforming"
+    },
+    {
+      "t": 38485,
+      "status": "conforming"
+    },
+    {
+      "t": 38514,
+      "status": "conforming"
+    },
+    {
+      "t": 38562,
+      "status": "conforming"
+    },
+    {
+      "t": 38594,
+      "status": "conforming"
+    },
+    {
+      "t": 38619,
+      "status": "conforming"
+    },
+    {
+      "t": 38647,
+      "status": "conforming"
+    },
+    {
+      "t": 38677,
+      "status": "conforming"
+    },
+    {
+      "t": 38717,
+      "status": "conforming"
+    },
+    {
+      "t": 38747,
+      "status": "conforming"
+    },
+    {
+      "t": 38764,
+      "status": "conforming"
+    },
+    {
+      "t": 38783,
+      "status": "conforming"
+    },
+    {
+      "t": 38817,
+      "status": "conforming"
+    },
+    {
+      "t": 38851,
+      "status": "conforming"
+    },
+    {
+      "t": 38875,
+      "status": "conforming"
+    },
+    {
+      "t": 38909,
+      "status": "conforming"
+    },
+    {
+      "t": 38939,
+      "status": "conforming"
+    },
+    {
+      "t": 38962,
+      "status": "conforming"
+    },
+    {
+      "t": 38988,
+      "status": "conforming"
+    },
+    {
+      "t": 39008,
+      "status": "conforming"
+    },
+    {
+      "t": 39024,
+      "status": "conforming"
+    },
+    {
+      "t": 39064,
+      "status": "conforming"
+    },
+    {
+      "t": 39091,
+      "status": "conforming"
+    },
+    {
+      "t": 39118,
+      "status": "conforming"
+    },
+    {
+      "t": 39150,
+      "status": "conforming"
+    },
+    {
+      "t": 39179,
+      "status": "conforming"
+    },
+    {
+      "t": 39203,
+      "status": "conforming"
+    },
+    {
+      "t": 39223,
+      "status": "conforming"
+    },
+    {
+      "t": 39243,
+      "status": "conforming"
+    },
+    {
+      "t": 39261,
+      "status": "conforming"
+    },
+    {
+      "t": 39575,
+      "status": "conforming"
+    },
+    {
+      "t": 39598,
+      "status": "conforming"
+    },
+    {
+      "t": 39619,
+      "status": "conforming"
+    },
+    {
+      "t": 39640,
+      "status": "conforming"
+    },
+    {
+      "t": 39667,
+      "status": "conforming"
+    },
+    {
+      "t": 39685,
+      "status": "conforming"
+    },
+    {
+      "t": 39704,
+      "status": "conforming"
+    },
+    {
+      "t": 39768,
+      "status": "conforming"
+    },
+    {
+      "t": 39795,
+      "status": "conforming"
+    },
+    {
+      "t": 39811,
+      "status": "conforming"
+    },
+    {
+      "t": 39832,
+      "status": "conforming"
+    },
+    {
+      "t": 39854,
+      "status": "conforming"
+    },
+    {
+      "t": 39874,
+      "status": "conforming"
+    },
+    {
+      "t": 39897,
+      "status": "conforming"
+    },
+    {
+      "t": 39922,
+      "status": "conforming"
+    },
+    {
+      "t": 39943,
+      "status": "conforming"
+    },
+    {
+      "t": 39963,
+      "status": "conforming"
+    },
+    {
+      "t": 39984,
+      "status": "conforming"
+    },
+    {
+      "t": 40015,
+      "status": "conforming"
+    },
+    {
+      "t": 40034,
+      "status": "conforming"
+    },
+    {
+      "t": 40055,
+      "status": "conforming"
+    },
+    {
+      "t": 40104,
+      "status": "conforming"
+    },
+    {
+      "t": 40130,
+      "status": "conforming"
+    },
+    {
+      "t": 40155,
+      "status": "conforming"
+    },
+    {
+      "t": 40179,
+      "status": "conforming"
+    },
+    {
+      "t": 40199,
+      "status": "conforming"
+    },
+    {
+      "t": 40214,
+      "status": "conforming"
+    },
+    {
+      "t": 40244,
+      "status": "conforming"
+    },
+    {
+      "t": 40270,
+      "status": "conforming"
+    },
+    {
+      "t": 40289,
+      "status": "conforming"
+    },
+    {
+      "t": 40360,
+      "status": "conforming"
+    },
+    {
+      "t": 40391,
+      "status": "conforming"
+    },
+    {
+      "t": 40411,
+      "status": "conforming"
+    },
+    {
+      "t": 40477,
+      "status": "conforming"
+    },
+    {
+      "t": 40504,
+      "status": "conforming"
+    },
+    {
+      "t": 40530,
+      "status": "conforming"
+    },
+    {
+      "t": 40546,
+      "status": "conforming"
+    },
+    {
+      "t": 40571,
+      "status": "conforming"
+    },
+    {
+      "t": 40600,
+      "status": "conforming"
+    },
+    {
+      "t": 40622,
+      "status": "conforming"
+    },
+    {
+      "t": 40641,
+      "status": "conforming"
+    },
+    {
+      "t": 40658,
+      "status": "conforming"
+    },
+    {
+      "t": 40678,
+      "status": "conforming"
+    },
+    {
+      "t": 40693,
+      "status": "conforming"
+    },
+    {
+      "t": 40712,
+      "status": "conforming"
+    },
+    {
+      "t": 40733,
+      "status": "conforming"
+    },
+    {
+      "t": 40754,
+      "status": "conforming"
+    },
+    {
+      "t": 40784,
+      "status": "conforming"
+    },
+    {
+      "t": 41145,
+      "status": "conforming"
+    },
+    {
+      "t": 41174,
+      "status": "conforming"
+    },
+    {
+      "t": 41194,
+      "status": "conforming"
+    },
+    {
+      "t": 41224,
+      "status": "conforming"
+    },
+    {
+      "t": 41250,
+      "status": "conforming"
+    },
+    {
+      "t": 41266,
+      "status": "conforming"
+    },
+    {
+      "t": 41291,
+      "status": "conforming"
+    },
+    {
+      "t": 41314,
+      "status": "conforming"
+    },
+    {
+      "t": 41336,
+      "status": "conforming"
+    },
+    {
+      "t": 41637,
+      "status": "conforming"
+    },
+    {
+      "t": 41664,
+      "status": "conforming"
+    },
+    {
+      "t": 41693,
+      "status": "conforming"
+    },
+    {
+      "t": 41746,
+      "status": "conforming"
+    },
+    {
+      "t": 41783,
+      "status": "conforming"
+    },
+    {
+      "t": 41810,
+      "status": "conforming"
+    },
+    {
+      "t": 41835,
+      "status": "conforming"
+    },
+    {
+      "t": 41870,
+      "status": "conforming"
+    },
+    {
+      "t": 41896,
+      "status": "conforming"
+    },
+    {
+      "t": 41926,
+      "status": "conforming"
+    },
+    {
+      "t": 41960,
+      "status": "conforming"
+    },
+    {
+      "t": 41987,
+      "status": "conforming"
+    },
+    {
+      "t": 42018,
+      "status": "conforming"
+    },
+    {
+      "t": 42040,
+      "status": "conforming"
+    },
+    {
+      "t": 42058,
+      "status": "conforming"
+    },
+    {
+      "t": 42081,
+      "status": "conforming"
+    },
+    {
+      "t": 42111,
+      "status": "conforming"
+    },
+    {
+      "t": 42128,
+      "status": "conforming"
+    },
+    {
+      "t": 42144,
+      "status": "conforming"
+    },
+    {
+      "t": 42162,
+      "status": "conforming"
+    },
+    {
+      "t": 42179,
+      "status": "conforming"
+    },
+    {
+      "t": 42259,
+      "status": "conforming"
+    },
+    {
+      "t": 42295,
+      "status": "conforming"
+    },
+    {
+      "t": 42315,
+      "status": "conforming"
+    },
+    {
+      "t": 42336,
+      "status": "conforming"
+    },
+    {
+      "t": 42352,
+      "status": "conforming"
+    },
+    {
+      "t": 42374,
+      "status": "conforming"
+    },
+    {
+      "t": 42401,
+      "status": "conforming"
+    },
+    {
+      "t": 42424,
+      "status": "conforming"
+    },
+    {
+      "t": 42443,
+      "status": "conforming"
+    },
+    {
+      "t": 42465,
+      "status": "conforming"
+    },
+    {
+      "t": 42482,
+      "status": "conforming"
+    },
+    {
+      "t": 42519,
+      "status": "conforming"
+    },
+    {
+      "t": 42545,
+      "status": "conforming"
+    },
+    {
+      "t": 42576,
+      "status": "conforming"
+    },
+    {
+      "t": 42596,
+      "status": "conforming"
+    },
+    {
+      "t": 42611,
+      "status": "conforming"
+    },
+    {
+      "t": 42630,
+      "status": "conforming"
+    },
+    {
+      "t": 42651,
+      "status": "conforming"
+    },
+    {
+      "t": 42667,
+      "status": "conforming"
+    },
+    {
+      "t": 42707,
+      "status": "conforming"
+    },
+    {
+      "t": 42734,
+      "status": "conforming"
+    },
+    {
+      "t": 42754,
+      "status": "conforming"
+    },
+    {
+      "t": 42768,
+      "status": "conforming"
+    },
+    {
+      "t": 42786,
+      "status": "conforming"
+    },
+    {
+      "t": 42800,
+      "status": "conforming"
+    },
+    {
+      "t": 42821,
+      "status": "conforming"
+    },
+    {
+      "t": 42867,
+      "status": "conforming"
+    },
+    {
+      "t": 42892,
+      "status": "conforming"
+    },
+    {
+      "t": 42920,
+      "status": "conforming"
+    },
+    {
+      "t": 42952,
+      "status": "conforming"
+    },
+    {
+      "t": 42981,
+      "status": "conforming"
+    },
+    {
+      "t": 42995,
+      "status": "conforming"
+    },
+    {
+      "t": 43015,
+      "status": "conforming"
+    },
+    {
+      "t": 43035,
+      "status": "conforming"
+    },
+    {
+      "t": 43491,
+      "status": "conforming"
+    },
+    {
+      "t": 43508,
+      "status": "conforming"
+    },
+    {
+      "t": 43526,
+      "status": "conforming"
+    },
+    {
+      "t": 43544,
+      "status": "conforming"
+    },
+    {
+      "t": 43566,
+      "status": "conforming"
+    },
+    {
+      "t": 43585,
+      "status": "conforming"
+    },
+    {
+      "t": 43600,
+      "status": "conforming"
+    },
+    {
+      "t": 43690,
+      "status": "conforming"
+    },
+    {
+      "t": 43823,
+      "status": "conforming"
+    },
+    {
+      "t": 43861,
+      "status": "conforming"
+    },
+    {
+      "t": 43906,
+      "status": "conforming"
+    },
+    {
+      "t": 43933,
+      "status": "conforming"
+    },
+    {
+      "t": 43954,
+      "status": "conforming"
+    },
+    {
+      "t": 43979,
+      "status": "conforming"
+    },
+    {
+      "t": 43993,
+      "status": "conforming"
+    },
+    {
+      "t": 44015,
+      "status": "conforming"
+    },
+    {
+      "t": 44033,
+      "status": "conforming"
+    },
+    {
+      "t": 44055,
+      "status": "conforming"
+    },
+    {
+      "t": 44075,
+      "status": "conforming"
+    },
+    {
+      "t": 44091,
+      "status": "conforming"
+    },
+    {
+      "t": 47767,
+      "status": "conforming"
+    },
+    {
+      "t": 47790,
+      "status": "conforming"
+    },
+    {
+      "t": 47812,
+      "status": "conforming"
+    },
+    {
+      "t": 47842,
+      "status": "conforming"
+    },
+    {
+      "t": 47856,
+      "status": "conforming"
+    },
+    {
+      "t": 47875,
+      "status": "conforming"
+    },
+    {
+      "t": 47891,
+      "status": "conforming"
+    },
+    {
+      "t": 47908,
+      "status": "conforming"
+    },
+    {
+      "t": 47925,
+      "status": "conforming"
+    },
+    {
+      "t": 47946,
+      "status": "conforming"
+    },
+    {
+      "t": 47972,
+      "status": "conforming"
+    },
+    {
+      "t": 47987,
+      "status": "conforming"
+    },
+    {
+      "t": 48003,
+      "status": "conforming"
+    },
+    {
+      "t": 48021,
+      "status": "conforming"
+    },
+    {
+      "t": 48036,
+      "status": "conforming"
+    },
+    {
+      "t": 48055,
+      "status": "conforming"
+    },
+    {
+      "t": 48071,
+      "status": "conforming"
+    },
+    {
+      "t": 48088,
+      "status": "conforming"
+    },
+    {
+      "t": 48110,
+      "status": "conforming"
+    },
+    {
+      "t": 48132,
+      "status": "conforming"
+    },
+    {
+      "t": 48152,
+      "status": "conforming"
+    },
+    {
+      "t": 48167,
+      "status": "conforming"
+    },
+    {
+      "t": 48187,
+      "status": "conforming"
+    },
+    {
+      "t": 48213,
+      "status": "conforming"
+    },
+    {
+      "t": 48231,
+      "status": "conforming"
+    },
+    {
+      "t": 48253,
+      "status": "conforming"
+    },
+    {
+      "t": 48267,
+      "status": "conforming"
+    },
+    {
+      "t": 48281,
+      "status": "conforming"
+    },
+    {
+      "t": 48303,
+      "status": "conforming"
+    },
+    {
+      "t": 48321,
+      "status": "conforming"
+    },
+    {
+      "t": 48336,
+      "status": "conforming"
+    },
+    {
+      "t": 48352,
+      "status": "conforming"
+    },
+    {
+      "t": 48377,
+      "status": "conforming"
+    },
+    {
+      "t": 48403,
+      "status": "conforming"
+    },
+    {
+      "t": 48422,
+      "status": "conforming"
+    },
+    {
+      "t": 48443,
+      "status": "conforming"
+    },
+    {
+      "t": 48466,
+      "status": "conforming"
+    },
+    {
+      "t": 48485,
+      "status": "conforming"
+    },
+    {
+      "t": 48507,
+      "status": "conforming"
+    },
+    {
+      "t": 48523,
+      "status": "conforming"
+    },
+    {
+      "t": 48546,
+      "status": "conforming"
+    },
+    {
+      "t": 48564,
+      "status": "conforming"
+    },
+    {
+      "t": 48583,
+      "status": "conforming"
+    },
+    {
+      "t": 48599,
+      "status": "conforming"
+    },
+    {
+      "t": 48615,
+      "status": "conforming"
+    },
+    {
+      "t": 48631,
+      "status": "conforming"
+    },
+    {
+      "t": 48650,
+      "status": "conforming"
+    },
+    {
+      "t": 48672,
+      "status": "conforming"
+    },
+    {
+      "t": 48692,
+      "status": "conforming"
+    },
+    {
+      "t": 48710,
+      "status": "conforming"
+    },
+    {
+      "t": 48727,
+      "status": "conforming"
+    },
+    {
+      "t": 48746,
+      "status": "conforming"
+    },
+    {
+      "t": 48765,
+      "status": "conforming"
+    },
+    {
+      "t": 48784,
+      "status": "conforming"
+    },
+    {
+      "t": 48808,
+      "status": "conforming"
+    },
+    {
+      "t": 48825,
+      "status": "conforming"
+    },
+    {
+      "t": 48844,
+      "status": "conforming"
+    },
+    {
+      "t": 48865,
+      "status": "conforming"
+    },
+    {
+      "t": 48887,
+      "status": "conforming"
+    },
+    {
+      "t": 48903,
+      "status": "conforming"
+    },
+    {
+      "t": 48927,
+      "status": "conforming"
+    },
+    {
+      "t": 48942,
+      "status": "conforming"
+    },
+    {
+      "t": 48960,
+      "status": "conforming"
+    },
+    {
+      "t": 48974,
+      "status": "conforming"
+    },
+    {
+      "t": 48995,
+      "status": "conforming"
+    },
+    {
+      "t": 49019,
+      "status": "conforming"
+    },
+    {
+      "t": 49034,
+      "status": "conforming"
+    },
+    {
+      "t": 49058,
+      "status": "conforming"
+    },
+    {
+      "t": 49085,
+      "status": "conforming"
+    },
+    {
+      "t": 49104,
+      "status": "conforming"
+    },
+    {
+      "t": 49126,
+      "status": "conforming"
+    },
+    {
+      "t": 49147,
+      "status": "conforming"
+    },
+    {
+      "t": 49163,
+      "status": "conforming"
+    },
+    {
+      "t": 49183,
+      "status": "conforming"
+    },
+    {
+      "t": 49202,
+      "status": "conforming"
+    },
+    {
+      "t": 49218,
+      "status": "conforming"
+    },
+    {
+      "t": 49235,
+      "status": "conforming"
+    },
+    {
+      "t": 49254,
+      "status": "conforming"
+    },
+    {
+      "t": 49279,
+      "status": "conforming"
+    },
+    {
+      "t": 49294,
+      "status": "conforming"
+    },
+    {
+      "t": 49313,
+      "status": "conforming"
+    },
+    {
+      "t": 49328,
+      "status": "conforming"
+    },
+    {
+      "t": 49349,
+      "status": "conforming"
+    },
+    {
+      "t": 49368,
+      "status": "conforming"
+    },
+    {
+      "t": 49386,
+      "status": "conforming"
+    },
+    {
+      "t": 49411,
+      "status": "conforming"
+    },
+    {
+      "t": 49431,
+      "status": "conforming"
+    },
+    {
+      "t": 49447,
+      "status": "conforming"
+    },
+    {
+      "t": 49471,
+      "status": "conforming"
+    },
+    {
+      "t": 49483,
+      "status": "conforming"
+    },
+    {
+      "t": 49505,
+      "status": "conforming"
+    },
+    {
+      "t": 49522,
+      "status": "conforming"
+    },
+    {
+      "t": 49542,
+      "status": "conforming"
+    },
+    {
+      "t": 49563,
+      "status": "conforming"
+    },
+    {
+      "t": 49586,
+      "status": "conforming"
+    },
+    {
+      "t": 49604,
+      "status": "conforming"
+    },
+    {
+      "t": 49631,
+      "status": "conforming"
+    },
+    {
+      "t": 49654,
+      "status": "conforming"
+    },
+    {
+      "t": 49682,
+      "status": "conforming"
+    },
+    {
+      "t": 49703,
+      "status": "conforming"
+    },
+    {
+      "t": 49727,
+      "status": "conforming"
+    },
+    {
+      "t": 49742,
+      "status": "conforming"
+    },
+    {
+      "t": 49763,
+      "status": "conforming"
+    },
+    {
+      "t": 49783,
+      "status": "conforming"
+    },
+    {
+      "t": 49806,
+      "status": "conforming"
+    },
+    {
+      "t": 49826,
+      "status": "conforming"
+    },
+    {
+      "t": 49847,
+      "status": "conforming"
+    },
+    {
+      "t": 49866,
+      "status": "conforming"
+    },
+    {
+      "t": 49891,
+      "status": "conforming"
+    },
+    {
+      "t": 49919,
+      "status": "conforming"
+    },
+    {
+      "t": 49939,
+      "status": "conforming"
+    },
+    {
+      "t": 49955,
+      "status": "conforming"
+    },
+    {
+      "t": 49985,
+      "status": "conforming"
+    },
+    {
+      "t": 50002,
+      "status": "conforming"
+    },
+    {
+      "t": 50024,
+      "status": "conforming"
+    },
+    {
+      "t": 50041,
+      "status": "conforming"
+    },
+    {
+      "t": 50054,
+      "status": "conforming"
+    },
+    {
+      "t": 50073,
+      "status": "conforming"
+    },
+    {
+      "t": 50090,
+      "status": "conforming"
+    },
+    {
+      "t": 50114,
+      "status": "conforming"
+    },
+    {
+      "t": 50131,
+      "status": "conforming"
+    },
+    {
+      "t": 50147,
+      "status": "conforming"
+    },
+    {
+      "t": 50176,
+      "status": "conforming"
+    }
+  ]
 }
