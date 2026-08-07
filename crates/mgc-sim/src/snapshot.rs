@@ -57,7 +57,11 @@ const MAGIC: u32 = 0x5343_474D;
 /// 7: `Gen::rival_wanted` (the per-rival village-wanted timers, so
 ///    militia and griffons turn on hostile rival wizards, not only the
 ///    human) joined the stream after `player_aggro`.
-pub const SNAPSHOT_VERSION: u32 = 7;
+/// 8: the teleport family's retail z hand-off — `Player::
+///    teleport_return` widened to the full saved axis (x, y, z),
+///    `World::pending_teleport` gained the arrival altitude,
+///    `World::pending_speed_zero` joined the stream after it.
+pub const SNAPSHOT_VERSION: u32 = 8;
 
 /// Why a snapshot could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -182,8 +182,11 @@ pub struct Player {
     /// Cached signed thrust-override factor (0.0 = inactive) —
     /// [`World::accel_override`].
     speed_boost: f32,
-    /// Teleport return slot (:65554): recast returns here.
-    teleport_return: Option<(u16, u16)>,
+    /// Teleport return slot (:65554): recast returns here — the FULL
+    /// saved axis (x, y, z), like retail's manifestation +150/+154
+    /// (MC2: `axis_0x9A_154x`). Armed only from the castle-save leg;
+    /// the no-castle random hop clears it (:65585 `+154 = 0`).
+    teleport_return: Option<(u16, u16, i16)>,
     /// Current life (actLife +12; signed — dying drives it below 0).
     pub life: i32,
     /// The spawn grace (Type_160 u16_331): while > 0 the whole
@@ -658,8 +661,21 @@ pub struct World {
     /// Live entity set changed since last cleared.
     pub entities_dirty: bool,
     /// A portal fired this tick: destination in tile units, consumed
-    /// by the sim (which moves the flyer).
-    pending_teleport: Option<(f32, f32)>,
+    /// by the sim (which moves the flyer). The third slot is the
+    /// arrival ALTITUDE (tiles) when retail authors one — the
+    /// vortex/pad warp (dest ground + the behavior row's v_12, both
+    /// games' NewEvent-default row carries 0 there) and the teleport
+    /// spell's castle/return legs (`CopyEntityPosition` hands the
+    /// full axis over). `None` = the pitch-0 random hop, whose
+    /// `MoveEntity` leaves z untouched.
+    pending_teleport: Option<(f32, f32, Option<f32>)>,
+    /// The teleport spell zeroed the caster's flight TARGET speed
+    /// this tick (`Type_160 v_12 = 0`, :65599/:65613; MC2
+    /// `speed_0xc_12 = 0` EF:57029/57046) — on every resolve arm AND
+    /// at the burst expiry. Consumed by the sim alongside
+    /// `pending_teleport` (the expiry fires it alone). `pub(crate)`
+    /// for the MC2 expiry arm (`mc2_cast_expire`, mc2/cast.rs).
+    pub(crate) pending_speed_zero: bool,
     /// The human player's spell/mana state (spells cast through the
     /// per-hand dispatcher, sub_46B00_46E40 :55851).
     pub(crate) player: Player,
@@ -1307,6 +1323,7 @@ impl World {
             terrain_dirty: false,
             entities_dirty: false,
             pending_teleport: None,
+            pending_speed_zero: false,
             player: Player::default(),
             win_pct: 0,
             win_streak: 0,
@@ -3230,6 +3247,11 @@ impl World {
             }
             self.g.move_relink(m, x, y, z);
         }
+        // The teleport return slot rides the manifestation's +150/+154
+        // in retail — the scatter just recycled those entities, so an
+        // armed return dies with them (the respawn re-grant mints
+        // fresh ones, +154 = 0).
+        self.player.teleport_return = None;
         // The grave (:55550-65). On a full pool the original retries
         // the whole landing next tick; ours proceeds graveless (the
         // balls simply stay player-owned) — a benign deviation
@@ -3723,6 +3745,7 @@ impl World {
             terrain_dirty: _,
             entities_dirty: _,
             pending_teleport: _,
+            pending_speed_zero: _,
             player,
             rivals,
             mc2_rivals,
@@ -4357,25 +4380,47 @@ impl World {
         self.entities_dirty = true;
     }
 
-    /// 10 Teleport (:65554): to the player's castle when one stands
-    /// (the authentic anchor); the recast returns to the cast site.
-    /// INTERIM (no castle built): the 64-tile LCG hop (0x4000 units,
-    /// :65579-81) along a manifestation-LCG yaw.
+    /// 10 Teleport (:65554, the `+48 == +50` resolve arm): the castle's
+    /// existence picks the branch FIRST — the save/return toggle lives
+    /// only on the castle side.
+    /// - No castle (:65575-86): the 64-tile LCG hop (0x4000 units) along
+    ///   a manifestation-LCG yaw, PITCH 0 — the altitude rides along
+    ///   untouched — and the armed return slot is CLEARED (+154 = 0).
+    /// - Castle, return armed (:65589-93): `CopyEntityPosition` of the
+    ///   saved axis — x, y AND z restored verbatim.
+    /// - Castle, unarmed (:65594-98): save the caster's full axis, then
+    ///   `CopyEntityPosition` of the CASTLE's axis — its x, y and z, no
+    ///   offset (the −448 stand-off is MC2's).
+    /// Every arm then zeroes the caster's `Type_160 v_12` — the flight
+    /// TARGET speed (:65583/:65601; the burst expiry repeats it, :65614).
     pub(crate) fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
-        if let Some((rx, ry)) = self.player.teleport_return.take() {
-            self.pending_teleport = Some((rx as f32 / 256.0, ry as f32 / 256.0));
-        } else {
-            self.player.teleport_return = Some((p.x, p.y));
-            let dest = if let Some(c) = self.player_castle() {
-                (self.g.ent[c].x, self.g.ent[c].y)
-            } else {
+        match self.player_castle() {
+            None => {
+                self.player.teleport_return = None;
                 let yaw = (self.g.ent_rand(m) & 0x7FF) as u16;
                 let mut d = (p.x, p.y, 0i16);
                 Gen::polar_step(&mut d, yaw, 0, 0x4000);
-                (d.0, d.1)
-            };
-            self.pending_teleport = Some((dest.0 as f32 / 256.0, dest.1 as f32 / 256.0));
+                self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0, None));
+            }
+            Some(c) => {
+                if let Some((rx, ry, rz)) = self.player.teleport_return.take() {
+                    self.pending_teleport = Some((
+                        rx as f32 / 256.0,
+                        ry as f32 / 256.0,
+                        Some(rz as f32 / 256.0),
+                    ));
+                } else {
+                    self.player.teleport_return = Some((p.x, p.y, p.z));
+                    let e = &self.g.ent[c];
+                    self.pending_teleport = Some((
+                        e.x as f32 / 256.0,
+                        e.y as f32 / 256.0,
+                        Some(e.z as f32 / 256.0),
+                    ));
+                }
+            }
         }
+        self.pending_speed_zero = true;
     }
 
     /// MC2 Castle Teleport (`sub_6AD60` EF:56860) — a real 3-tier
@@ -4384,12 +4429,18 @@ impl World {
     /// castle; **T1** a save/return toggle (to the castle, then back
     /// to where you cast it on the next press); **T2** cycle own
     /// castle → each rival's castle, one hop per cast. All land at
-    /// the castle offset `-448` along `(yaw-204)`. The no-castle
-    /// fallback is a SILENT random hop; a real castle teleport plays
-    /// sound 22. The cycle/return state rides the manifestation's
-    /// `f146` (`word_0x96_150`); the T1 saved position reuses the
-    /// player's `teleport_return`. (Flight-speed zero on resolve —
-    /// retail `speed_0xc_12 = 0` — is a banked follow-up.)
+    /// the castle offset `-448` along `(yaw-204)` — a PITCH-0
+    /// `MoveEntity`, so the arrival z is the CASTLE's own (the full
+    /// axis is copied, EF:56930/56960/57005). The T1 return leg
+    /// restores the saved axis verbatim (x, y AND z). The no-castle
+    /// fallback is a SILENT random hop, also pitch-0 — altitude rides
+    /// along; a real castle teleport plays sound 22. The cycle/return
+    /// state rides the manifestation's `f146` (`word_0x96_150`); the
+    /// T1 saved position reuses the player's `teleport_return`
+    /// (retail: the manifestation's `axis_0x9A_154x`). EVERY resolve
+    /// zeroes the caster's flight TARGET speed (`speed_0xc_12 = 0`,
+    /// EF:57029 — success and fallback alike; the burst expiry
+    /// repeats it, EF:57046).
     pub(crate) fn mc2_cast_teleport(&mut self, m: usize, p: PlayerPose) {
         let tier = self.g.ent[m].f71;
         let yaw = p.heading;
@@ -4407,13 +4458,20 @@ impl World {
             1 => {
                 if let Some(c) = self.player_castle() {
                     if self.g.ent[m].f146 == 1 {
-                        if let Some((rx, ry)) = self.player.teleport_return.take() {
-                            self.pending_teleport = Some((rx as f32 / 256.0, ry as f32 / 256.0));
+                        if let Some((rx, ry, rz)) = self.player.teleport_return.take() {
+                            // The saved axis restored verbatim
+                            // (EF:56947 CopyEntityPosition of
+                            // axis_0x9A_154x — x, y AND z).
+                            self.pending_teleport = Some((
+                                rx as f32 / 256.0,
+                                ry as f32 / 256.0,
+                                Some(rz as f32 / 256.0),
+                            ));
                             castle_ok = true;
                         }
                         self.g.ent[m].f146 = 0;
                     } else {
-                        self.player.teleport_return = Some((p.x, p.y));
+                        self.player.teleport_return = Some((p.x, p.y, p.z));
                         self.mc2_teleport_to(c, yaw);
                         self.g.ent[m].f146 = 1;
                         castle_ok = true;
@@ -4429,18 +4487,27 @@ impl World {
                 }
             }
         }
+        // `speed_0xc_12 = 0` (EF:57029): unconditional — the random
+        // fallback's arrival is speed-killed like a castle hop.
+        self.pending_speed_zero = true;
         if castle_ok {
             self.g.snd_player(22);
         }
     }
 
     /// Stage a relocation to a castle slot at the `-448`/`(yaw-204)`
-    /// offset (all MC2 teleport castle branches).
+    /// offset (all MC2 teleport castle branches). The polar step is
+    /// pitch-0, so the arrival altitude is the castle entity's own z
+    /// (the full axis is copied, EF:56930).
     fn mc2_teleport_to(&mut self, c: usize, yaw: u16) {
         let e = &self.g.ent[c];
         let mut d = (e.x, e.y, e.z);
         Gen::polar_step(&mut d, yaw.wrapping_sub(204) & 0x7FF, 0, -448);
-        self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0));
+        self.pending_teleport = Some((
+            d.0 as f32 / 256.0,
+            d.1 as f32 / 256.0,
+            Some(d.2 as f32 / 256.0),
+        ));
     }
 
     /// T2 cycle: advance the `f146` state 0..9 until a reachable
@@ -4481,7 +4548,8 @@ impl World {
         let mut d = (p.x, p.y, 0i16);
         Gen::polar_step(&mut d, yaw, 0, 0x4000);
         self.g.ent[m].f146 = 0;
-        self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0));
+        // Pitch-0 `MoveEntity` (EF:57024): the altitude rides along.
+        self.pending_teleport = Some((d.0 as f32 / 256.0, d.1 as f32 / 256.0, None));
     }
 
     /// The cast lockout: a castle ball (9,10) or upgrade token
@@ -5290,6 +5358,14 @@ impl World {
             5 => self.player.beyond_sight = active,
             12 => self.player.invisible = active,
             14 => self.player.rebound = active,
+            // 10 Teleport: the burst END repeats the target-speed
+            // zero (:65613-14, `if (!life) Type_160 v_12 = 0` —
+            // fired however the burst ended).
+            10 => {
+                if was_live && !active {
+                    self.pending_speed_zero = true;
+                }
+            }
             _ => {}
         }
     }
@@ -8495,7 +8571,13 @@ impl World {
             let d = player.heading.wrapping_sub(bearing) & 0x7FF;
             if d.min(2048 - d) < 0xAA {
                 let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
-                self.pending_teleport = Some((dx as f32 / 256.0, dy as f32 / 256.0));
+                // The warp-out z (:29212-13): dest terrain alt + the
+                // vortex's behavior row v_12 — the ctor keeps the
+                // NewEvent default `unk_98F38[0]`, whose v_12 = 0, so
+                // the player emerges exactly on the ground however
+                // high they flew in.
+                let gz = self.g.ground_z(dx, dy) as f32 / 256.0;
+                self.pending_teleport = Some((dx as f32 / 256.0, dy as f32 / 256.0, Some(gz)));
                 // PORTUSE — the same 22 as the teleport spell.
                 self.g.snd_player(22);
             }
@@ -8525,12 +8607,16 @@ impl World {
     /// - retail warps EVERY player in the list (AI wizards included,
     ///   the NumberOfPlayers scan) — the rival-warp arm is owed with
     ///   a level that authors a pad near a rival start;
-    /// - the warp-out altitude (`dword_0xA0_160x->word_160_0xc_12` +
-    ///   dest terrain, trace OPEN-2) rides the consumer's own
-    ///   placement, like the MC1 vortex;
     /// - `sub_5C800(player, 6)` — the blue/cyan full-screen palette
     ///   flash (mc2-class10-tail-helper-closure.md §4) — is
     ///   presentation, banked with 4.9.
+    ///
+    /// The warp-out altitude (was trace OPEN-2, resolved by the
+    /// mc2l24 enclosure deviation): `axis.z = row->word_160_0xc_12 +
+    /// getTerrainAlt(dest)` recomputed on every warp, and the pad
+    /// keeps the NewEvent-default row 59, whose word12 = 0
+    /// (`BEHAVIOR[ROW_BASE].v_12`) — the player emerges exactly on
+    /// the destination ground.
     fn mc2_portal_tick(&mut self, i: usize, player: PlayerPose) {
         if self.g.ent[i].flags & 2 == 0 {
             self.g.ent[i].flags |= 2;
@@ -8554,7 +8640,11 @@ impl World {
             let d = player.heading.wrapping_sub(bearing) & 0x7FF;
             if d.min(2048 - d) < 0xAA {
                 let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
-                self.pending_teleport = Some((dx as f32 / 256.0, dy as f32 / 256.0));
+                // EF:25785-86: dest z = dest terrain alt + the pad's
+                // behavior-row word12 — the NewEvent-default row 59.
+                let v12 = crate::mc2::behavior::BEHAVIOR[crate::mc2::behavior::ROW_BASE].v_12;
+                let gz = (self.g.ground_z(dx, dy).wrapping_add(v12 as i32)) as f32 / 256.0;
+                self.pending_teleport = Some((dx as f32 / 256.0, dy as f32 / 256.0, Some(gz)));
                 self.g.snd_player(22);
             }
         }
@@ -8567,9 +8657,20 @@ impl World {
     }
 
     /// Consume this tick's portal teleport, if one fired: destination
-    /// in world tile units (x, z).
-    pub fn take_teleport(&mut self) -> Option<(f32, f32)> {
+    /// in world tile units (x, z, Some(altitude)). The altitude is
+    /// retail's authored arrival z where one exists (vortex/pad =
+    /// dest ground, spell castle/return legs = the copied axis);
+    /// `None` = the pitch-0 random hop, z untouched.
+    pub fn take_teleport(&mut self) -> Option<(f32, f32, Option<f32>)> {
         self.pending_teleport.take()
+    }
+
+    /// Consume this tick's teleport-spell flight TARGET-speed zero
+    /// (`Type_160 v_12 = 0` :65599/:65613; MC2 `speed_0xc_12 = 0`
+    /// EF:57029/57046): raised on every resolve arm and again at the
+    /// burst expiry — the expiry fires it with no teleport attached.
+    pub fn take_speed_zero(&mut self) -> bool {
+        std::mem::take(&mut self.pending_speed_zero)
     }
 
     /// Raise the top-of-screen notification (retail `SetCurrentNotif
@@ -9699,6 +9800,7 @@ impl World {
             terrain_dirty,
             entities_dirty,
             pending_teleport,
+            pending_speed_zero,
             player,
             rivals,
             mc2_rivals,
@@ -9751,6 +9853,7 @@ impl World {
         w.put(terrain_dirty);
         w.put(entities_dirty);
         w.put(pending_teleport);
+        w.put(pending_speed_zero);
         w.put(player);
         w.put(rivals);
         w.put(mc2_rivals);
@@ -9804,6 +9907,7 @@ impl World {
         self.terrain_dirty = r.get()?;
         self.entities_dirty = r.get()?;
         self.pending_teleport = r.get()?;
+        self.pending_speed_zero = r.get()?;
         self.player = r.get()?;
         self.rivals = r.get()?;
         self.mc2_rivals = r.get()?;
@@ -19141,11 +19245,81 @@ mod tests {
         pose.heading = bearing;
         w.tick(pose, PlayerCommand::default());
         let dest = w.take_teleport().expect("facing the pad warps");
-        assert_eq!(dest, (30.5, 40.5), "destination = par2/par1 center");
+        // EF:25785-86: the warp-out z = dest terrain alt + row-59
+        // word12 (= 0) — flat height-100 world → 100·32 engine units
+        // = 12.5 tiles exactly.
+        assert_eq!(
+            dest,
+            (30.5, 40.5, Some(12.5)),
+            "destination = par2/par1 center, arrival on the dest ground"
+        );
         assert!(
             w.g.ent[p].flags & 0x400 == 0,
             "the pad persists (maxLife 0)"
         );
+    }
+
+    /// The MC1 teleport spell's retail z + speed laws (:65554 resolve
+    /// arm): no castle = a pitch-0 hop that KEEPS the flyer's altitude
+    /// and clears an armed return (:65585); a castle hop copies the
+    /// castle's FULL axis (no MC2 stand-off) and banks the caster's;
+    /// the recast restores the saved axis verbatim. Every arm zeroes
+    /// the flight TARGET speed (:65583/:65601).
+    #[test]
+    fn mc1_teleport_spell_z_and_speed_laws() {
+        let mut w = flat_world();
+        let m = w.g.new_event().expect("manifestation stand-in");
+        let pose = PlayerPose {
+            x: 50 << 8,
+            y: 60 << 8,
+            z: 3200 + 1024, // 4 tiles above the flat height-100 ground
+            heading: 0,
+            pitch: 0,
+            speed: 80,
+        };
+        // No castle: the random hop authors NO arrival altitude.
+        w.player.teleport_return = Some((1, 2, 3));
+        w.cast_teleport(m, pose);
+        let (_, _, alt) = w.take_teleport().expect("hop staged");
+        assert_eq!(alt, None, "the pitch-0 hop keeps the altitude");
+        assert!(w.player.teleport_return.is_none(), "+154 = 0 on the hop");
+        assert!(w.take_speed_zero(), "v_12 zero on the hop arm");
+        // A standing castle: the save leg lands at the castle's own z.
+        let c = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.x = 80 << 8;
+            e.y = 90 << 8;
+            e.z = 3456; // the castle datum, deliberately off-ground
+        }
+        w.cast_teleport(m, pose);
+        let (cx, cy, calt) = w.take_teleport().expect("castle hop staged");
+        assert_eq!((cx, cy), (80.0, 90.0));
+        assert_eq!(calt, Some(3456.0 / 256.0), "arrival at the castle's z");
+        assert_eq!(
+            w.player.teleport_return,
+            Some((pose.x, pose.y, pose.z)),
+            "the caster's full axis banked"
+        );
+        assert!(w.take_speed_zero(), "v_12 zero on the save arm");
+        // The recast: the saved axis restored VERBATIM.
+        let elsewhere = PlayerPose {
+            x: 10 << 8,
+            y: 10 << 8,
+            z: 5000,
+            heading: 0,
+            pitch: 0,
+            speed: 80,
+        };
+        w.cast_teleport(m, elsewhere);
+        let (rx, ry, ralt) = w.take_teleport().expect("return staged");
+        assert_eq!((rx, ry), (50.0, 60.0));
+        assert_eq!(ralt, Some(4224.0 / 256.0), "the saved z restored");
+        assert!(w.player.teleport_return.is_none(), "toggle cleared");
+        assert!(w.take_speed_zero(), "v_12 zero on the return arm");
     }
 
     /// The (10,50) ridge-fence chain (sub_49090 → sub_48880): a

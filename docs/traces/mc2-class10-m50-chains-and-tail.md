@@ -285,7 +285,7 @@ void sub_35390(type_entity_0x6E8E* a1x)//216390
 - The pad is **persistent** (maxLife 0 → the `v2 <= 0` guard keeps it looping; it only expires on the `v2 == 1` branch, which needs a positive life first — so with maxLife 0 it effectively never self-expires and stays as a permanent warp pad).
 - Warp condition: player within `sub_106C0` reach **and** facing the pad (front cone `sub_582B0 < 0xAA` ≈ 30°). On trip: teleport to `axis_0x9A_154x` (dest tile from par1/par2, dest z = destination-record `word_160_0xc_12` + terrain alt) + `sub_5C800(player,6)`.
 - **Sounds: 21 on spawn (once), 22 on each warp, 20 on expire.**
-- `dword_0xA0_160x` = a behavior-row pointer (`str_D7BD6[...]`); `word_160_0xc_12` supplies the destination altitude offset. **OPEN-2:** which behavior row the pad's `dword_0xA0_160x` points at (NewEvent default `&str_D7BD6[59]`) determines the warp-out altitude; confirm against a level with a known portal.
+- `dword_0xA0_160x` = a behavior-row pointer (`str_D7BD6[...]`); `word_160_0xc_12` supplies the destination altitude offset. **RESOLVED (was OPEN-2):** neither the ctor (`sub_4FE40` EF:36506) nor the (10,34) THING post-init (EF:33077 — writes `axis_0x9A_154x.x/y` only) repoints `dword_0xA0_160x`, so the NewEvent default `&str_D7BD6[59]` (Events.cpp:573/599) stands. Row 59 = `{0x0000,0x0038,0x0005,0x0016,0x0005,0x0700,`**`0x0000`**`,0xFFFC,...}` (Level.cpp:11 table) → `word_160_0xc_12 = 0` → **warp-out z = terrain alt at the destination tile exactly (ground + 0)**. MC1's vortex (`sub_26A60` remc1 :29170) runs the identical law with its NewEvent default `unk_98F38[0]` — the byte-identical row (word12 = 0) — so both games emerge on the ground.
 
 ### 2.4 Difference from the MC1 portal arm (port note)
 Our port has an MC1-style portal. MC2's (10,34):
@@ -522,7 +522,7 @@ Per the roster (`docs/SURVEY-MC2-ROSTER.md`) and ROADMAP, MC2's captured-buildin
 
 ## OPEN items
 1. **(10,51) beam damage magnitude** — `sub_48880` sets yaw+life but not subSpellIndex; the (10,51) ctor doesn't set it either → defaults to NewEvent's 100. Whether the chain author intends a different magnitude (via a par field or a spell-buffer lookup at THING init) is unconfirmed. Verify with a level that has a (10,50) fence.
-2. **(10,34) portal warp-out altitude** — `dword_0xA0_160x->word_160_0xc_12` supplies dest z-offset; which behavior row (`str_D7BD6[?]`) the pad points at was not resolved (NewEvent default is row 59). Confirm against a known portal level.
+2. ~~**(10,34) portal warp-out altitude**~~ **RESOLVED** (mc2l24 playthrough deviation dig, 2026-08-07): the pad keeps the NewEvent default row 59, whose `word_160_0xc_12 = 0` → warp-out z = dest ground exactly. Same law + same row value in MC1's vortex (`unk_98F38[0]`). See §2.3.
 3. **(10,76)=0x4C (`AddFireSpheres_4F2A0` :35936)** — highest-count tail model (172/25) but only headline-identified here (fire-sphere ring). Its full creator body + action (strA0[0x4C] alias to `sub_38D80` vs. an own actionIndex) needs a dedicated read before porting. Flagged high.
 4. **(10,67)=0x43 phases 3+ and the action-74 (0x4A) finisher** not transcribed — needed for the full flood/quake behavior.
 5. **(10,71)=0x47 per-cell stamp target** (heightmap raise vs. damage vs. lava terrain-type write) inside the `sub_10130` loop not fully transcribed.

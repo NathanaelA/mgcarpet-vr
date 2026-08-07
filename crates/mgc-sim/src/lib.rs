@@ -819,19 +819,54 @@ impl Simulation {
                 self.turn_rate = 0.0;
                 self.aim_lead = 0.0;
             }
-            if let Some((x, z)) = w.take_teleport() {
-                // Portal arrival: the original moves the entity to the
-                // destination point; altitude snaps above the ground
-                // there (velocity, speeds and steering carry over —
-                // only the position hands off to the integer state).
-                let ground = w.ground_height_tiles(x, z);
+            if let Some((x, z, alt)) = w.take_teleport() {
+                // Teleport arrival: `CopyEntityPosition` hands the
+                // FULL destination axis to the wizard where retail
+                // authors one — the vortex/pad warp lands exactly on
+                // the destination ground (row v_12 = 0, both games),
+                // the spell's castle/return legs carry the castle's/
+                // saved z. `None` = the pitch-0 random hop: retail
+                // leaves z untouched (the mover's own z-floor digs it
+                // out of higher terrain next move, :55103-05).
+                // Velocity/steering carry over — position only.
                 let f = &mut self.flyer;
                 f.x = x;
                 f.z = z;
-                f.y = f.y.max(ground + MIN_CLEARANCE);
+                if let Some(alt) = alt {
+                    f.y = alt;
+                }
                 self.carpet.x = (x.rem_euclid(256.0) * 256.0) as u16;
                 self.carpet.y = (z.rem_euclid(256.0) * 256.0) as u16;
                 self.carpet.z = (self.flyer.y * 256.0) as i16;
+                // The pinned ground-relative desired altitude is a
+                // port-model quantity — re-seed it at the arrival
+                // pose (the spawn-seed law, inlined like the respawn
+                // arm's): retail has no absolute altitude hold, so a
+                // ground-level emergence must not auto-climb back to
+                // the departure altitude.
+                let g = w.ground_height_tiles(self.flyer.x, self.flyer.z);
+                let (lo, hi) = if w.verbs().flight == verbs::FlightVerb::Mc2 {
+                    let row = w.mc2_carpet_row();
+                    (row.clearance, row.band)
+                } else {
+                    (128, 1024)
+                };
+                self.lift_desired =
+                    (((self.flyer.y - g) * 256.0) as i32).clamp(lo as i32, hi as i32) as i16;
+            }
+            if w.take_speed_zero() {
+                // The teleport spell's `Type_160 v_12 = 0`
+                // (:65583/:65601/:65614; MC2 EF:57029/57046): the
+                // TARGET speed alone — the actual then chases down
+                // 16/tick, retail's short glide-out. The enhanced
+                // mover's float velocity is its speed state; kill the
+                // horizontal component as the same stop (vertical is
+                // outside retail's word).
+                self.carpet.tgt_speed = 0;
+                if self.thrust_model == ThrustModel::Enhanced {
+                    self.flyer.vx = 0.0;
+                    self.flyer.vz = 0.0;
+                }
             }
             // The MC2 ending sequence: mirror the scripted pose onto
             // the flyer (position + heading; the tail's roll/pitch

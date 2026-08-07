@@ -1461,6 +1461,10 @@ impl World {
                 self.player.accel = 0;
                 self.player.accel_mc2_factor = 0;
             }
+            // Teleport's window end repeats the flight target-speed
+            // zero (`sub_6AD60` countdown-out arm, EF:57046
+            // `speed_0xc_12 = 0` beside the `sub_6D880` teardown).
+            0xA => self.pending_speed_zero = true,
             _ => {}
         }
     }

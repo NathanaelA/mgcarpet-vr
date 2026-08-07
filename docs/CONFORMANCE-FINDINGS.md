@@ -6881,3 +6881,52 @@ mc2l30-cut.mgcr; regenerable from mc2l4,30.mgcr anyway).
   cut-take suite, 10 new stories), gate green; ALL 7 suites green.
   Select-dependence claimed a THIRD exemplar (t=3,362, again
   (15,21) action/owner) — demoted+sig-refreshed like the others.
+
+## PORTAL WARP-OUT ALTITUDE — mc2l24 enclosure deviation, the WHOLE
+## teleport family re-pinned to retail z + speed laws (player-spotted,
+## LANDED 2026-08-07, PLAYTEST OWED)
+
+Player report: the mc2l24 start enclosure's pad warps the port flyer
+at its PRE-portal altitude (x/y only, snap-up-if-buried), where retail
+emerges ON the ground — and the too-high flyer drags the enclosure
+monsters' aggro/aim upward (live-play cascade; conformance replays pin
+the recorded pose, so the suites never saw it).
+
+**Retail law (both games, resolved from the decompiles):** the warp
+tick recomputes `dest.z = row->word_0xc + terrainAlt(dest)` on every
+warp — MC2 `sub_35390` EF:25785-86, MC1 vortex `sub_26A60` :29212-13 —
+and the pad keeps the NewEvent-default behavior row (`str_D7BD6[59]` /
+`unk_98F38[0]`, byte-identical), whose word12 = **0**: the wizard
+arrives exactly on the destination ground. This closed trace OPEN-2 in
+docs/traces/mc2-class10-m50-chains-and-tail.md.
+
+**The teleport SPELLS carry their own z laws** (read while in there —
+MC1 `sub_56E50_57380` :65554, MC2 `sub_6AD60` EF:56860):
+- castle hop → the castle entity's FULL axis (`CopyEntityPosition`;
+  MC2 offsets −448 along yaw−204 pitch-0, MC1 has no stand-off);
+- T1/return toggle → the SAVED axis restored verbatim (x, y AND z);
+  the toggle is castle-gated, and the no-castle random hop CLEARS an
+  armed return (:65585);
+- random hop → pitch-0 `MoveEntity`, altitude rides along untouched;
+- EVERY resolve arm zeroes the caster's flight TARGET speed
+  (`Type_160 v_12` :65583/:65601; MC2 `speed_0xc_12` EF:57029), and
+  the burst EXPIRY repeats the zero (:65614 / EF:57046) — the
+  formerly-banked "flight-speed zero on resolve" follow-up landed
+  with this round.
+
+**Port shape:** `pending_teleport` widened to carry the arrival
+altitude (`None` = keep, the pitch-0 arms); new `pending_speed_zero`
+channel (`take_speed_zero`) → `carpet.tgt_speed = 0` (target only —
+the actual chases down 16/tick, retail's glide-out); the consumer
+re-seeds `lift_desired` at the arrival pose so a ground emergence
+doesn't auto-climb back; `teleport_return` widened to the full saved
+axis and cleared at the MC1 death scatter (retail's +154 dies with
+the recycled manifestation). SNAPSHOT_VERSION 7→8. Tests: level-032
+vortex + (10,34) pad asserts extended with the ground-z law;
+`mc1_teleport_spell_z_and_speed_laws` covers the three spell arms.
+Full workspace + ALL 7 conformance suites green (bit-unchanged, as
+expected for a live-play-only fix).
+
+Still owed on the pad: the rival-warp arm (retail warps EVERY player
+in the list) and the `sub_5C800(player, 6)` palette flash — both
+pre-registered in the (10,34) APPROX register, unchanged this round.

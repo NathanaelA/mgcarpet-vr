@@ -99,10 +99,19 @@ fn level_032_entry_portal_spawns_and_teleports() {
             break;
         }
     }
-    let (dx, dz) = dest.expect("flying into the portal teleports");
+    let (dx, dz, dalt) = dest.expect("flying into the portal teleports");
     assert!(
         (dx - 5.5).abs() < 0.01 && (dz - 230.5).abs() < 0.01,
         "dest = ({dx}, {dz})"
+    );
+    // The warp-out altitude (:29212-13): dest ground + the NewEvent-
+    // default behavior row's v_12 = 0 — the wizard emerges exactly on
+    // the destination ground, however high (or low) it flew in.
+    let dground = w.ground_height_tiles(dx, dz);
+    let dalt = dalt.expect("the vortex authors an arrival altitude");
+    assert!(
+        (dalt - dground).abs() < 0.01,
+        "warp-out z = dest ground: alt {dalt} vs ground {dground}"
     );
 
     // The portal is persistent (maxLife 0): it keeps working.
