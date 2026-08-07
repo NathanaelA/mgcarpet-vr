@@ -95,10 +95,16 @@ pub fn consumed_knock(mag0: i16, dir0: u16, mag1: i16, dir1: u16) -> Option<(u16
 /// MC1 has no press latch, so the caller reads the pair's END record
 /// and accepts the ±1-tick dating caveat (docs/RECORDING.md).
 pub fn respawn_key(input: Option<&serde_json::Value>) -> bool {
+    key_held(input, 57)
+}
+
+/// A scancode's held state off the raw input channel's `keys_down`
+/// lane (the recorder emits every held scancode, unfiltered).
+pub fn key_held(input: Option<&serde_json::Value>, scancode: i64) -> bool {
     input
         .and_then(|i| i.get("keys_down"))
         .and_then(|k| k.as_array())
-        .is_some_and(|k| k.iter().any(|v| v.as_i64() == Some(57)))
+        .is_some_and(|k| k.iter().any(|v| v.as_i64() == Some(scancode)))
 }
 
 /// The recorded LIVE cursor `(x, y)` — `input.mouse`, the twin of
@@ -201,6 +207,12 @@ pub struct RecoveredPair {
     /// left wins, the right is DROPPED (counted by consumers).
     pub rebind_dropped: bool,
     pub respawn: bool,
+    /// Shift+L, destroy own castle one level. MC1: the move byte IS
+    /// the witness (`dw_0 == 48`, retail's own predicate :55760 —
+    /// measured 18/18 on mc1l0, zero false positives over 7,098
+    /// records). MC2: the castle-entity witness (no move-byte trace
+    /// there — the command rides `PlayerAction` 0x2A).
+    pub demolish: bool,
 }
 
 impl RecoveredPair {
@@ -214,12 +226,14 @@ impl RecoveredPair {
         (self.stick_x.unwrap_or(0), self.stick_y.unwrap_or(0))
     }
 
-    /// Move byte exactly 48 (both fires, no move): retail
-    /// short-circuits sub_46840 WHOLE (:55759), freezing the held
-    /// strafe's decay. `Mc1Input` carries no fire state, so the
-    /// consumer pre-feeds one decay quantum — the mover's decay lands
-    /// back on the frozen value. MC1-only — MC2's sub_5F380 has no
-    /// such short-circuit.
+    /// Move byte exactly 48: retail's DEMOLISH command word
+    /// (`MakeControlCommand(6, 48)` from Shift+L — the only writer
+    /// that can produce exactly 16|32). It short-circuits sub_46840
+    /// WHOLE (:55759): no move, no casts, and the held strafe's
+    /// decay freezes. `Mc1Input` carries no fire state, so the
+    /// consumer pre-feeds one decay quantum — the mover's decay
+    /// lands back on the frozen value. MC1-only — MC2's sub_5F380
+    /// has no such short-circuit.
     pub fn mc1_strafe_freeze(&self) -> bool {
         self.move_byte == 48
     }
@@ -236,7 +250,18 @@ pub fn recover_pair_mc1(
     let pw = &pst.wizards[pst.local_player as usize];
     let cw = &st.wizards[st.local_player as usize];
     let mb = pw.move_bits;
-    let (fire_left, fire_right) = mc1_fire(mb);
+    // Byte 48 exactly = the DEMOLISH command word: retail's :55760
+    // short-circuit skips the WHOLE mover including both cast calls,
+    // so a demolish tick fires NEITHER hand despite carrying both
+    // fire bits (measured: dw_0 == 48 on exactly the 18 demolish
+    // press edges of mc1l0, and the castle's `act_life = -1` lands
+    // on the very next record each time).
+    let demolish = mb == 48;
+    let (fire_left, fire_right) = if demolish {
+        (false, false)
+    } else {
+        mc1_fire(mb)
+    };
     // Equips: a recorded hand change across the pair replays as the
     // equip command (resolved to the internal spell id via the
     // acquisition list at N+1).
@@ -254,6 +279,7 @@ pub fn recover_pair_mc1(
         equip_left: equip(pw.hand_left, cw.hand_left),
         equip_right: equip(pw.hand_right, cw.hand_right),
         respawn: respawn_key(input_end),
+        demolish,
         ..RecoveredPair::default()
     }
 }
@@ -261,8 +287,14 @@ pub fn recover_pair_mc1(
 /// Recover the input consumed across an MC2 pair (records N → N+1).
 /// `respawn` is the [`Mc2RespawnWitness`] verdict for the END record
 /// (the witness folds EVERY record in stream order, anchors included,
-/// so its state machine lives outside the pair).
-pub fn recover_pair_mc2(pst: &RetailMc2, st: &RetailMc2, respawn: bool) -> RecoveredPair {
+/// so its state machine lives outside the pair). `input_end` is the
+/// END record's raw input channel (the demolish key corroboration).
+pub fn recover_pair_mc2(
+    pst: &RetailMc2,
+    st: &RetailMc2,
+    respawn: bool,
+    input_end: Option<&serde_json::Value>,
+) -> RecoveredPair {
     let pp = &pst.players[pst.local_player as usize];
     let cp = &st.players[st.local_player as usize];
     // MC2 stamps the move byte in PlayerEvents — read the END record.
@@ -290,6 +322,23 @@ pub fn recover_pair_mc2(pst: &RetailMc2, st: &RetailMc2, respawn: bool) -> Recov
         (Some(l), Some(_)) => (Some(l), true),
         (l, r) => (l.or(r), false),
     };
+    // Demolish (Shift+L → `PlayerAction` 0x2A, EF:37991-96): MC2's
+    // command never touches the move byte, so the witness is the own
+    // CASTLE at the END record carrying the demolish write — life
+    // exactly −1 in the destroy intake (action 6) — corroborated by
+    // the held Shift+L scancodes (L = 38, either shift 42/54;
+    // measured at mc2l24 t=41798). The write is idempotent, so a
+    // castle parked at −1 across records re-fires harmlessly.
+    let demolish = {
+        let castle = cp.castle_ent;
+        castle > 0
+            && st
+                .ents
+                .get(castle as usize)
+                .is_some_and(|c| c.class3f == 3 && c.life == -1 && c.action45 == 6)
+            && key_held(input_end, 38)
+            && (key_held(input_end, 42) || key_held(input_end, 54))
+    };
     RecoveredPair {
         stick_x: recover_stick(pp.roll_acc as i16, cp.roll_acc as i16),
         stick_y: recover_stick(pp.pitch_acc as i16, cp.pitch_acc as i16),
@@ -299,6 +348,7 @@ pub fn recover_pair_mc2(pst: &RetailMc2, st: &RetailMc2, respawn: bool) -> Recov
         mc2_select,
         rebind_dropped,
         respawn,
+        demolish,
         ..RecoveredPair::default()
     }
 }

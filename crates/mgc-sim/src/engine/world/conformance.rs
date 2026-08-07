@@ -207,6 +207,12 @@ impl World {
                 carpet.class64
             ));
         }
+        // Seed the pose registers from the closure so the first tick
+        // after the import sees the RECORDED carpet as its previous
+        // position (retail pass order — the strict jar poll and its
+        // kin read the carpet before its slot runs).
+        self.human_pose = (carpet.x, carpet.y, carpet.z);
+        self.human_pose_prev = self.human_pose;
         // The carpet's Type_156 is the canonical `&unk_98F38[7]`
         // (retail's own load-fixup anchor) — derive the table base
         // from it instead of hardcoding a per-build guest address.
@@ -592,6 +598,11 @@ impl World {
                 carpet.class3f
             ));
         }
+        // Pose registers from the closure (see the MC1 twin): the
+        // first post-import tick's previous-position reads must see
+        // the RECORDED carpet, not a stale pose.
+        self.human_pose = (carpet.x, carpet.y, carpet.z);
+        self.human_pose_prev = self.human_pose;
         let tr = |v: u16| if v == human_slot { PLAYER_TARGET } else { v };
 
         // Anchor the per-tick counter to the recording: it feeds the

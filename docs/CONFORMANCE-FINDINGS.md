@@ -7271,3 +7271,63 @@ implementation (RECORDING.md "Consumers" is the normative entry):
   the port loop pinned by
   `mgc-app replay::tests::port_record_replay_roundtrip` (record →
   reopen → replay: 200/200 hash-verified, end states bit-equal).
+
+## The first playtest round (same session): jars + demolish
+
+The player's first watched replays surfaced two failures; both dug
+to root and fixed, plus what the digs exposed on the way.
+
+**"Picked-up spells leave their jars behind" = a DRAW-FILTER gap.**
+The grant itself worked: strict-retail pickup converts the jar IN
+PLACE into the owned-spell TOKEN (`tick70 = spell*3`, phase 0), but
+`live_poses`/`live_things` only hid the NATIVE encoding
+(`>= MANIFEST_BASE`), so the token kept rendering as a ground jar.
+Both draw layers now hide phase-0 class-12 under `strict_retail`
+(retail never draws tokens; phases 1/2 = the visible world jars).
+Sibling fix: the MC1 rival-death jar scatter now stamps the RETAIL
+encoding (`spell*3 + 1`, a phase-1 world jar) in strict worlds — the
+native `DROPPED_JAR = 3` aliases the heal TOKEN there.
+
+**The dig exposed the strict pickup poll granting 5-8 ticks EARLY**
+(mc1hwl0: port t=10 vs retail t=13 on jar 17 — hands then diverge
+from t=9 and 15k hand-lane rows follow). Root: retail's poll
+(sub_55A40 :64798-842, the plain summed-extents sub_11950 AABB over
+the bucket[0] wizard chain) sees the carpet at its PREVIOUS-frame
+position — jars sit low in the pool, the carpet's slot runs after
+them. The port tested against the CURRENT tick's pose. Fix: the
+world keeps `human_pose_prev` (hash-quiet, derived) and the strict
+jar poll reads it; both importers seed `human_pose`(+prev) from the
+recorded carpet so the first post-import tick is phase-correct.
+Measured: mc1hwl0's first hand divergence moves t=9 → t=1268 (the
+first three pickups land on retail's exact ticks; the 1268 residue
+is downstream of the pose break at t=294). mc1l0 world-replay field
+traffic drops 3.03M → 2.22M rows.
+
+**"No input for castle destruction (Shift+L)" — demolish recovery
+LANDED, both games** (decompile + corpus verified):
+- MC1/HW: `dw_0 == 48` IS the command (`MakeControlCommand(6, 48)`,
+  the only writer producing exactly 16|32; consumed by the :55760
+  short-circuit that skips the whole mover INCLUDING both casts).
+  Measured 18/18 on mc1l0's demolish presses, zero false positives
+  over 7,098 records; `act_life = -1` lands on the next record each
+  time. `recover_pair_mc1` now emits `demolish` on the byte and
+  fires NEITHER hand on those ticks (the old recovery double-cast —
+  bits 0x10|0x20 read as fire levels).
+- MC2: the command rides `PlayerAction` 0x2A (EF:37991-96), never
+  the move byte. Witness: own castle (`players[local].castle_ent`)
+  at the END record with `life == -1 && action45 == 6`, corroborated
+  by the held Shift+L scancodes (38 + 42|54) — verified at mc2l24
+  t=41798. Idempotent re-fire while the castle parks at −1.
+- Live-play sibling fix: the app now binds EITHER shift for
+  Shift+L (retail :20467 accepts both; the corpus takes used RIGHT
+  shift, which the app ignored).
+
+**Recorder lead (banked):** `lastPressedKey` — retail's own keyboard
+press latch, the byte the demolish/respawn dispatchers actually read
+— sits at `pressed_keys_guest + 128` in ALL THREE builds; recording
+`pressed_keys_len = 129` would retire the keyboard ±1 caveat for
+both games (needs a re-record).
+
+All 7 suites stayed green through every change (7,108 fixtures, 0
+regressions); pose-only horizons unmoved (mc1l0 567, mc2l3 1,156);
+`--replay-check` re-certified identical on mc1l0/mc2l3/mc1hwl0.

@@ -2143,7 +2143,17 @@ impl World {
             let life = (self.g.ent_rand(m) % 90 + 200) as i16;
             {
                 let e = &mut self.g.ent[m];
-                e.tick70 = crate::engine::world::DROPPED_JAR; // pickup-able, decaying
+                // Strict-retail worlds (a conformance import) carry
+                // RETAIL's class-12 encoding — a scattered jar is
+                // spell*3 + 1 (a phase-1 world jar the strict pickup
+                // poll serves); the native DROPPED_JAR value would
+                // alias the heal TOKEN there (spell-1 phase 0) and
+                // vanish from the draw set.
+                e.tick70 = if self.strict_retail {
+                    (s * 3 + 1) as u8
+                } else {
+                    crate::engine::world::DROPPED_JAR // pickup-able, decaying
+                };
                 e.f144 = 0; // no owner — a free copy
                 e.f26 = life; // the decay countdown
             }

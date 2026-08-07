@@ -692,6 +692,11 @@ pub struct World {
     /// the rival scans (the original reads the wizard entity; ours
     /// lives outside the pool).
     pub(crate) human_pose: (u16, u16, i16),
+    /// The previous tick's settled pose — retail pass order for laws
+    /// that read the carpet BEFORE its slot runs (the strict-retail
+    /// jar pickup poll: jars sit low in the pool, the carpet's slot
+    /// runs after them, so a jar's poll sees last frame's position).
+    pub(crate) human_pose_prev: (u16, u16, i16),
     /// Rival deaths this tick (player slots) — drained by the app
     /// for the death-message ticker (:55499-517).
     pub(crate) rival_deaths: Vec<u8>,
@@ -1341,6 +1346,7 @@ impl World {
             kill_tally: [[0; 8]; 8],
             start_markers,
             human_pose: (0, 0, 0),
+            human_pose_prev: (0, 0, 0),
             rival_deaths: Vec::new(),
             duel: None,
             mc2_duel: None,
@@ -1432,8 +1438,15 @@ impl World {
                 continue;
             }
             // Owned-spell manifestations occupy their (former jar)
-            // slot but are not world drawables.
-            if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
+            // slot but are not world drawables. Strict-retail worlds
+            // (a conformance import — in-app replay included) carry
+            // RETAIL's class-12 encoding instead: tick70 = spell*3 +
+            // phase, phase 0 = a wizard's owned-spell TOKEN (the
+            // granted jar converts in place) — retail never draws
+            // those either, phases 1/2 are the visible world jars.
+            if e.class64 == 12
+                && (e.tick70 >= MANIFEST_BASE || (self.strict_retail && e.tick70 % 3 == 0))
+            {
                 continue;
             }
             // MC2 likewise: a class-15 token in its effect state
@@ -1494,8 +1507,13 @@ impl World {
             if e.class64 == 0 || !drawable(self.game, e.class64 as u16, e.model65 as u16) {
                 continue;
             }
-            if e.class64 == 12 && e.tick70 >= MANIFEST_BASE {
-                continue; // owned manifestation, not a drawable
+            // Owned manifestation, not a drawable — strict-retail
+            // worlds hide the phase-0 owned TOKEN the same way (the
+            // granted jar converts in place; see `live_things`).
+            if e.class64 == 12
+                && (e.tick70 >= MANIFEST_BASE || (self.strict_retail && e.tick70 % 3 == 0))
+            {
+                continue;
             }
             // MC2 owned-spell manifestations (state 3M, rebound
             // owner) — cast machinery, not a drawable.
@@ -1981,6 +1999,7 @@ impl World {
             strict: self.strict_retail,
             mc2_turn: self.mc2_turn,
         };
+        self.human_pose_prev = self.human_pose;
         self.human_pose = (player.x, player.y, player.z);
 
         // The duel pull on the CASTER (:55228-48): while latched,
@@ -3751,6 +3770,9 @@ impl World {
             mc2_rivals,
             kill_tally,
             human_pose,
+            // A one-tick echo of the (hashed) pose stream, fully
+            // derived — hash-quiet like the dirty flags.
+            human_pose_prev: _,
             rival_deaths: _,
             duel,
             mc2_book,
@@ -5194,7 +5216,24 @@ impl World {
                 }
                 return;
             }
-            if self.player.state == LifeState::Alive && self.g.player_overlap(i, ctx) {
+            // Retail's poll geometry (sub_55A40 :64798-842 →
+            // sub_11950, the plain summed-extents AABB) — but read
+            // against the carpet's PREVIOUS-frame position: the
+            // wizard slot runs AFTER the jars in the pass, so a
+            // jar's poll sees last frame's carpet (measured on
+            // mc1hwl0 jar 17: current-pose grants at t=10 where
+            // retail granted at t=13; prev-pose reproduces it).
+            let (px, py, pz) = self.human_pose_prev;
+            let hit = {
+                let e = &self.g.ent[i];
+                let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+                use crate::mc1::combat::{PLAYER_HH, PLAYER_HW};
+                wd(e.x, px) < e.f80 as i32 + PLAYER_HW
+                    && wd(e.y, py) < e.f82 as i32 + PLAYER_HW
+                    && ((e.z as i32 + e.f78 as i16 as i32) - (pz as i32 + PLAYER_HH)).abs()
+                        < e.f84 as i32 + PLAYER_HH
+            };
+            if self.player.state == LifeState::Alive && hit {
                 self.g.ent[i].flags |= 1;
                 self.g.ent[i].tick70 = (spell * 3) as u8;
                 self.player.owned[spell] = i as u16;
@@ -9823,6 +9862,10 @@ impl World {
             mc2_rivals,
             kill_tally,
             human_pose,
+            // Re-derived on the first tick after a restore (prev :=
+            // the restored `human_pose`) — exactly the value the
+            // strict jar law wants; nothing to save.
+            human_pose_prev: _,
             rival_deaths,
             duel,
             mc2_duel,

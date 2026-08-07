@@ -7591,7 +7591,9 @@ impl ApplicationHandler for App {
                             self.stick = VirtualStick::default();
                         }
                     }
-                    PhysicalKey::Code(KeyCode::ShiftLeft) => {
+                    // Retail accepts EITHER shift (scancodes 42/54 —
+                    // :20467); the corpus takes used the right one.
+                    PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => {
                         self.shift_held = down;
                     }
                     _ => {}

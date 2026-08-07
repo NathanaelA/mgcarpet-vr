@@ -361,6 +361,12 @@ Input recovery is exact, byte-domain (no `--input-delay` modeling):
   per-spell tier, out-of-range = unbind).
 - Respawn: the SPACE lane (MC2 with the recentre witness; MC1 keeps
   the keyboard ±1 caveat).
+- Demolish (Shift+L): MC1/HW ride the move byte itself — `dw_0 ==
+  48` IS the command word (retail's :55760 predicate; such a tick
+  fires NEITHER hand — the whole mover short-circuits). MC2 has no
+  move-byte trace (`PlayerAction` 0x2A): the witness is the own
+  castle at the END record with `life == -1` in the destroy intake
+  (action 6), corroborated by the held Shift+L scancodes.
 
 Chained replay only matches SETTLED boundaries, so capture-phase
 families (pose-phase, mid-pass terraform, add-mailbox) EVAPORATE

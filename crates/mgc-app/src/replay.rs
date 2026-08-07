@@ -425,6 +425,7 @@ impl ReplayDriver {
             equip_left: rp.equip_left.map(SpellId),
             equip_right: rp.equip_right.map(SpellId),
             respawn: rp.respawn,
+            demolish: rp.demolish,
             mc1_move_byte: Some(rp.move_byte as u8),
             ..FlightInput::default()
         };
@@ -484,7 +485,7 @@ impl ReplayDriver {
         let RetailPrev::Mc2(pst) = prev else {
             unreachable!("family-stable stream")
         };
-        let rp = recover::recover_pair_mc2(&pst, &st, respawn);
+        let rp = recover::recover_pair_mc2(&pst, &st, respawn, tick.input.as_ref());
         if !rp.stick_ok() {
             self.stick_unrec += 1;
         }
@@ -495,6 +496,7 @@ impl ReplayDriver {
             fire_right: rp.fire_right,
             mc2_select: rp.mc2_select,
             respawn: rp.respawn,
+            demolish: rp.demolish,
             // Retail's dw_0 bit 0x80 IS the barrel-roll command.
             barrel_roll: rp.move_byte & 0x80 != 0,
             mc1_move_byte: Some(rp.move_byte as u8),

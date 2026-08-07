@@ -663,6 +663,7 @@ fn run_mc1(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             equip_left: rec.equip_left.map(SpellId),
             equip_right: rec.equip_right.map(SpellId),
             respawn: rec.respawn,
+            demolish: rec.demolish,
             ..PlayerCommand::default()
         };
         // The dw==48 strafe-freeze emulation (law in RecoveredPair):
@@ -898,7 +899,7 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
 
         // ---- input for the pair pt → t, all from the recording
         // (the shared recovery laws — mgc_formats::recover) ----
-        let rec = recover::recover_pair_mc2(&pst, &st, respawn);
+        let rec = recover::recover_pair_mc2(&pst, &st, respawn, tick.input.as_ref());
         let stick_ok = rec.stick_ok();
         if !stick_ok {
             stats.stick_unrec += 1;
@@ -918,6 +919,7 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             fire_right: rec.fire_right,
             mc2_select: rec.mc2_select,
             respawn: rec.respawn,
+            demolish: rec.demolish,
             ..PlayerCommand::default()
         };
 
