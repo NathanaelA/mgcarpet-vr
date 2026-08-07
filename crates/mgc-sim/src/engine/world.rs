@@ -8766,6 +8766,23 @@ impl World {
         AudioFrame {
             events: {
                 let mut evs = std::mem::take(&mut self.g.sounds);
+                // The request-phase SILENT-EMITTER gate: both games'
+                // sound dispatchers refuse any request whose emitter
+                // wears flags byte[0] bit 0x80 — the no-damage/
+                // decorative bit — before the slot table (remc1
+                // sub_55370 :64473 `byte[+16] < 0 → return`; remc2
+                // PrepareEventSound Sound.cpp:6291-92). That is what
+                // keeps the meteor's per-tick spark trail (seeder,
+                // sparks and ring children all 0x80-stamped) silent
+                // in retail: only the cast whoosh and the un-flagged
+                // impact sound. Applied at drain time like the owner
+                // resolution below — the sim-side vec is hashed and
+                // must stay byte-stable.
+                evs.retain(|e| {
+                    e.player
+                        || (e.tag as usize) >= self.g.ent.len()
+                        || self.g.ent[e.tag as usize].flags & 0x80 == 0
+                });
                 // The mixer's channel key is the (OWNER word, id)
                 // pair (remc1 sub_483C0 matches both words). The hashed
                 // pending vec carries the EMITTER index — resolve it to
@@ -19320,6 +19337,36 @@ mod tests {
         assert_eq!(ralt, Some(4224.0 / 256.0), "the saved z restored");
         assert!(w.player.teleport_return.is_none(), "toggle cleared");
         assert!(w.take_speed_zero(), "v_12 zero on the return arm");
+    }
+
+    /// The sound dispatchers' SILENT-EMITTER gate (remc1 sub_55370
+    /// :64473 `byte[+16] < 0 → return`; remc2 PrepareEventSound
+    /// Sound.cpp:6291-92): a 0x80-flagged (decorative/no-damage)
+    /// emitter's requests are refused before the slot table — the
+    /// meteor's per-tick spark trail is SILENT in retail. Regression:
+    /// the ungated port machine-gunned sound 3 down the whole meteor
+    /// path in both games (player report 2026-08-07).
+    #[test]
+    fn silent_emitter_gate_drops_decorative_trail_sounds() {
+        let mut w = flat_world();
+        // Drain the construction-time sounds (the init mode-set 14).
+        let _ = w.take_audio(away());
+        // A decorative trail spark: a 0x80-stamped fire.
+        let s = w.g.spawn_effect(0, 100 << 8, 100 << 8, 3200).unwrap();
+        w.g.ent[s].flags |= 0x80;
+        w.g.snd(3, s);
+        // A REAL (impact) fire: un-flagged.
+        let f = w.g.spawn_effect(0, 101 << 8, 100 << 8, 3200).unwrap();
+        w.g.snd(3, f);
+        // A player-sourced request always rides the full-volume arm.
+        w.g.snd_player(15);
+        let frame = w.take_audio(away());
+        let ids: Vec<u8> = frame.events.iter().map(|e| e.id).collect();
+        assert_eq!(
+            ids,
+            vec![3, 15],
+            "the 0x80 spark is dropped; the real fire and the player whoosh pass"
+        );
     }
 
     /// The (10,50) ridge-fence chain (sub_49090 → sub_48880): a

@@ -6930,3 +6930,82 @@ expected for a live-play-only fix).
 Still owed on the pad: the rival-warp arm (retail warps EVERY player
 in the list) and the `sub_5C800(player, 6)` palette flash — both
 pre-registered in the (10,34) APPROX register, unchanged this round.
+
+## TRANSIT-CLUSTERING PROBE (2026-08-07): the pin does NOT alias
+## portal warps — and one dated whirlwind lead at t=31121
+
+Cheap pre-test for the proposed player-pose channel: do mc2l24's
+unexplained rows cluster after recorded player-position jumps (the
+mid-tick-warp aliasing hypothesis — retail moves the player DURING the
+entity walk, our pin holds one pose per tick)? Instrument:
+`mgc-conform --example pose_dump` (new) + scratch clustering script
+over `mc2l24-v2.tsv`.
+
+**Verdict: NO broad aliasing.** 9 true pad transits found (>30-tile
+one-tick jumps, flying both sides). All-warp windows 0.92x baseline;
+transit-only windows 1.77x but the excess is ONE event — 7 of 9
+transits sit at zero-to-baseline rows (the three early enclosure
+entries are completely clean: 0 rows before AND after). Mechanism
+retired as a deviation source at current corpus scale; the pose
+channel's case rests on coverage, not on explaining existing rows.
+
+**The one event — t=31121 (enclosure re-entry, dz=−3184): a 410-row
+burst in 8 ticks, ~90% (10,75) WHIRLWIND FUNNEL rows** — full-motion
+mismatches (x/y/z/pitch/yaw/rand/speed/applied_*) on ~4 funnel
+entities plus ~11 wrong-record rows (model/action/life/max_life/mana
+— mis-slotted spawns?). A whirlwind engages right at the re-entry and
+the port's funnel column diverges wholesale. (10,75) is the (10,22)
+head's funnel child; the tail-band creators around it are the trace's
+under-transcribed models. DATED, POSITIONED LEAD — parked for player
+triage (mc2l24 carries the late-game freakshow ruling; this is
+mid-take t=31121).
+
+**Bonus corpus corroboration of the portal-z law:** every enclosure
+transit in the recording lands with dz ≈ −3200 (−12.4 tiles) — retail
+measurably DROPS the player to the destination ground on warp. The
+row-59 word12=0 law now has recording-side proof independent of the
+decompile.
+
+Incidental: pose data alone cleanly classifies the player-motion
+event families — pad warps (>30-tile jumps), respawns (act3→0,
++~1700dz, back to castle), knock throws (~80u/tick decaying
+displacement runs, the buffet law visible passively). Exactly the
+signal set a tier-1 pose channel would formalize.
+
+## METEOR TRAIL SOUND MACHINE-GUN — the dispatchers' SILENT-EMITTER
+## gate was unported (player report 2026-08-07, FIXED, PLAYTEST OWED)
+
+Player report: the port repeats the meteor's shoot/trail sound at
+every step of the flight path until impact, clipping the audio engine;
+retail (BOTH games) sounds once at fire + once at impact. Not a
+regression — born with the sound wiring (git bisect found nothing,
+correctly).
+
+**Cause:** both retail sound dispatchers refuse any request whose
+EMITTER wears flags byte[0] bit 0x80 — the no-damage/decorative bit —
+before the request-slot table: remc1 `sub_55370` :64473
+(`byte[+16] < 0 → return`), remc2 `PrepareEventSound_6E450`
+Sound.cpp:6291-92. The meteor trail is built ENTIRELY of 0x80-stamped
+entities (MC1: the per-tick (10,1) seeder + its ring children, all
+`|= 0x80`; MC2: the per-tick (10,0) sparks, `|= 0x10080`), and every
+fire's activation tick requests sound 3 (:28118/:28152 / EF-side
+sub_30D50) — faithful emissions the port then PLAYED because
+`Gen::snd()` had no gate: one sound-3 restart per flight tick =
+the machine-gun + mode-1 restart clipping.
+
+**Fix:** the gate applied at DRAIN time in `World::take_audio`
+(retain: player-sourced OR emitter `flags & 0x80 == 0`), beside the
+existing drain-time owner resolution — the sim-side `sounds` vec is
+hashed and stays byte-stable (the standing "audio fixes go in
+mgc-audio/drain, not snd()" law). Regression test
+`silent_emitter_gate_drops_decorative_trail_sounds`. Workspace + all
+7 suites green (no hashed state touched).
+
+**Noted while in there (small open lead, not dug):** MC2's dispatcher
+keys the channel on the emitter's OWN id (`id_0x1A_26`,
+Sound.cpp:6299), not the owner — retail MC2 gives concurrent
+same-owner emitters separate channels where our drain-time id24
+resolution folds them onto one (restart/keep-running granularity).
+MC1 keys on +24, which effect ctors owner-stamp — our resolution is
+exact there. Audible-difference cases look rare (the 0x80 gate now
+silences the bulk emitters); parked.
