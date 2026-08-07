@@ -7134,3 +7134,97 @@ once, recover input per pair from the recorded accumulators, step
 continuously, report first divergence per scalar; the same loop as
 tier 1 minus the reseed. Becomes the stepping stone to the full
 `--replay` verifier.
+
+## THE REPLAY VERIFIER LANDED (2026-08-07): pure input replay —
+## seed once, free-run on the recovered input stream, report (never
+## correct) divergence; the MC1 ±1-tick cast caveat is RETIRED
+
+Player-directed scope cut: no resync machinery — gaps are recording
+artifacts (re-anchor a segment), divergence is the finding. New mode
+`mgc-conform replay <take>` (crates/mgc-conform/src/replay.rs;
+docs/CONFORMANCE.md §"The replay verifier"): world imported ONCE from
+the first closure, the human's flight state chained and stepped by
+the same integer laws as the app (`Simulation::step`'s faithful path:
+dead/falling override, Accelerate expiry edge, knock drain, mover,
+death fall + dead-camera turn, `World::tick(pose, cmd)`, then the
+respawn/teleport/speed-zero/end-pose mailboxes). `--pose-only` =
+tier 2 (flight chained, world re-imported per pair). Headline metric:
+the BIT-EXACT HORIZON.
+
+**dw_0 IS the cast ground truth (decompile + corpus, both games).**
+Writer: MC1's poller sends press-edge OR held-while-reloading/charging
+via `MakeControlCommand_188A0(6, 16|32)` (:20590-20632), the consume
+loop stamps `T160->dw_0` post-pass (:49021) — record N's byte is the
+byte tick N+1 acts on. Readers: bit 0x10 = LEFT hand (+940), 0x20 =
+RIGHT (+944), dispatched EVERY set tick (:55825/:55830) — retail cast
+dispatch is LEVEL-triggered through the manifestation reload ladder
+(`f48 := f50` arm at :55893; launch at `f48==f50`), autorepeat = the
+held level itself. No edge detection exists in retail; replaying the
+byte as a per-tick level is exact by construction. Corpus: mc1l0
+312/312 and mc1hwl0 2,056/2,056 single-shot casts at exactly
+byte-record +2 (zero off-phase; the +2 is pool pass order); MC2
+560/560 arms carry the byte on the same record, and the press-latch
+law's extra edges are UI clicks the byte correctly omits — the byte
+outranks the latch. RECORDING.md updated; `--input-delay` stays only
+for the legacy raw-externals path.
+
+**Fixed in this round (all three caught BY the chain):**
+1. `RetailPlayerMc2.water_ctr` decoded u16 at +610 — retail's
+   `n_0x262_610` is int8_t (remc2 global_types.h); the read polluted
+   the value with the 0xE0 neighbor byte on every take. mgc-formats
+   now reads the byte.
+2. Measured-terrain install order: the importer's terrain-replay pass
+   DOUBLE-APPLIES state-derived edits on already-measured planes.
+   The replay driver installs measured planes AFTER the import (the
+   pose channel's proven order); mc2l0 pose horizon 0 → 597 on the
+   fix. (`exec_pair`'s install-before-import is unchanged — its world
+   lanes absorb the same double-apply; candidate cleanup.)
+3. MC2 importer gap: `g.player_knock` now seeds from the recorded
+   `moveBoost` channel (the MC1 arm's :295 twin).
+
+**Grades (2026-08-07 corpus). Pose-only horizon = boundaries
+bit-exact from the anchor; world horizon = whole-world raw compare
+(NO roster — known-open families are chain-breakers by design):**
+
+| take | pose-only horizon | first pose break | world horizon | first world break |
+|---|---|---|---|---|
+| mc1l0 | 567 | t=568 z−3 (castle-build terraform window) | 1 | t=2 (10,39,41) statics z +32..35 re-snap |
+| mc1hwl0 | 339; seg1 **14,053 ZERO-DIVERGENCE**; seg7 1,021 | t=340 z+21 | 1 | t=2 rival col: mana 0→100, target_yaw, speed |
+| mc2l0 | 597 | t=598 spell-arm tgt_speed-zero (known, un-gated) | 64 | t=65 (10,12) missing + slot 418 life/xyz |
+| mc2l3 | **1,156** | t=1157 x/y/z/yaw — THE WATER-GATE exemplar (t=1156-1172), exact hit | 4 | t=5 slot 124 z −128 |
+| mc2l4 | 1,656 | t=1657 z−1/eff_pitch | 0 | t=1 slots 99/100/135 action 72→73 cohort |
+| mc2l30 | 246 | t=247 z−10 | 14 | t=15 slot 30 life 3→1 |
+| mc2l24 | **7,686** (~5.3 min) | t=7687 y−2 | 1 | t=2 slot 16 heading |
+
+MC1's global LCG holds LOCKSTEP across entire takes even after
+entity-set divergence (rng 0 mismatches on all MC1 runs — one
+unconditional draw + per-entity private LCGs); MC2's
+activity-dependent draw count breaks within ~35-2,600 ticks of the
+first entity divergence, as expected.
+
+**Positioned world-chain leads (NOT dug — categorize-and-ask):**
+mc1l0 (10,39,41) z re-snap on the SECOND free tick (+32..35, port
+lands on ×16 grid; survives the terrain-order fix — per-pair
+verification structurally cannot see it, only tick 2+ of a chain
+does); mc1hwl0 rival-column mana/aim at t=2 (corroborates the banked
+hw-mana import-domain lead); mc2l4's t=1 action-72→73 cohort. The
+pose chain's breaks all land on ALREADY-KNOWN families — the
+recovery+mover chain itself is sound.
+
+**Notes for the next round:** replay compares RAW; a roster-aware
+replay tier (skip known families when counting the horizon) is the
+obvious lever on MC2 world horizons. The app/driver step the mover
+BEFORE `World::tick` (player probes last tick's terrain) where
+retail's carpet moves mid-pass after the terraform writers — the
+structural skew is now measurable here if it ever matters. MC1
+respawn stays keyboard-±1 (SPACE, no latch). Runtime: the whole
+7-take × 2-mode sweep ≈ 3 min wall.
+
+**Follow-ups agreed with the player:** (a) the in-app PORT recorder
+(`source:"port"`, `input:"exact"`, optional hash channel) + `--replay`
+playback — one consumer plays both port demos and transcoded retail
+takes; the hash channel dates any post-fix drift for free re-record
+decisions. (b) For watchable retail replays the app should derive the
+faithful-tier pose from the integer carpet, not the accumulated float
+yaw (a quantization risk over long sessions the integer driver
+sidesteps).

@@ -321,3 +321,49 @@ FIXTURE suite does not run the channel — signatures stay pose-free by
 construction (the shadow step never touches `exec_pair`). Triage
 microscopes: `--example flight_dump_mc1` / `flight_dump_mc2` (the
 recorded flight column per tick).
+
+## The replay verifier
+
+`mgc-conform replay <take.mgcr>` (crates/mgc-conform/src/replay.rs)
+is PURE INPUT REPLAY — the zero-drift instrument: seed the world ONCE
+from the recording's first closure, then free-run, feeding only the
+per-tick input recovered from the recording. The mover steps OUTSIDE
+the world tick exactly like the app (`Simulation::step`'s faithful
+path, integer-only), `World::tick(pose, cmd)` after; nothing pins,
+nothing re-imports, and divergence is REPORTED at every recorded
+boundary, never corrected. The headline is the BIT-EXACT HORIZON —
+graded boundaries clean from the anchor before the first divergence —
+plus per-channel firsts (pose / rng / entity-set / fields) and
+post-divergence traffic. A recording `t` gap re-anchors a fresh
+segment (a capture artifact, not a resync); `--start <t>` anchors
+late; `--csv` emits the verify-deltas TSV shape.
+
+`--pose-only` is the tier-2 chain: the FLIGHT state chains while the
+world context re-imports per pair — it isolates the mover +
+input-recovery chain from world fidelity. World-driven pose domains
+(death/respawn, warps, the accel domain, debuffs, unrecoverable stick
+transitions) re-seed the chain silently and are counted as gates.
+
+Input recovery is exact, byte-domain (no `--input-delay` modeling):
+
+- The consumed move/fire byte (`dw_0`, RECORDING.md): bits 1/2/4/8
+  move, **0x10 = left fire, 0x20 = right fire** — retail's cast
+  decision is a pure function of this byte + sim state (the cast
+  dispatch is LEVEL-triggered through the manifestation reload
+  ladder; edge inference is unnecessary and wrong). Corpus-measured:
+  MC1 2,368/2,368 single-shot casts at byte-record +2; MC2 560/560
+  arms on the same record — strictly stronger than the press-latch
+  law, whose extra edges are UI clicks the byte correctly omits.
+  This RETIRES MC1's ±1-tick cast caveat for byte-domain consumers.
+- Stick: the pose channel's filter inversion per recorded pair.
+- Equips: recorded hand changes replay as equip commands (MC1
+  acquisition-list resolve; MC2 pane select with the recorded
+  per-spell tier, out-of-range = unbind).
+- Respawn: the SPACE lane (MC2 with the recentre witness; MC1 keeps
+  the keyboard ±1 caveat).
+
+Chained replay only matches SETTLED boundaries, so capture-phase
+families (pose-phase, mid-pass terraform, add-mailbox) EVAPORATE
+here — and conversely every OPEN world family becomes a
+chain-breaker. Findings land in the ledger under §THE REPLAY
+VERIFIER.

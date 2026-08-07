@@ -15,6 +15,7 @@
 mod fixtures;
 mod jsondiff;
 mod pose_lane;
+mod replay;
 mod roster;
 mod verify;
 mod verify_mc2;
@@ -32,6 +33,11 @@ fn usage() -> ! {
                                           against the port's generated planes\n\
                                           (the record-0 stock-bake validator)\n\
            verify-deltas <file.mgcr>      import state@N, tick, diff obs@N+1\n\
+           replay <file.mgcr>             PURE INPUT REPLAY: seed once from the\n\
+                                          first closure, free-run on the recovered\n\
+                                          input stream, report (never correct)\n\
+                                          divergence at every recorded boundary;\n\
+                                          gaps re-anchor a fresh segment\n\
            dump-state <file.mgcr> <t> <slot>…   print raw retail fields of\n\
                                           the given slots at tick t\n\
            extract <file.mgcr> --out <manifest.json>   lift a fixture-suite\n\
@@ -86,7 +92,15 @@ fn usage() -> ! {
                              column — flight state seeded from N,\n\
                              input recovered from the recorded flight\n\
                              column, pose diffed at N+1 bit-exact)\n\
-                             (raw, unclassified report — docs/CONFORMANCE.md)"
+                             (raw, unclassified report — docs/CONFORMANCE.md)\n\
+         replay flags:\n\
+           --pose-only       tier-2 chain: the FLIGHT state chains while\n\
+                             the world context re-imports per pair —\n\
+                             isolates mover + input recovery from world\n\
+                             fidelity; world-driven pose domains reseed\n\
+                             silently and are counted as gates\n\
+           --start <t>       anchor the replay at tick t instead of the\n\
+                             first record"
     );
     std::process::exit(2);
 }
@@ -130,6 +144,9 @@ pub struct Args {
     /// Skip the pose channel (the shadow mover step over the human's
     /// own motion column).
     pub no_pose_lane: bool,
+    /// replay: tier-2 chain (flight chained, world re-imported per
+    /// pair) instead of the full free-running world.
+    pub pose_only: bool,
 }
 
 fn parse_args() -> Args {
@@ -152,6 +169,7 @@ fn parse_args() -> Args {
         no_slot_desync: false,
         no_terrain: false,
         no_pose_lane: false,
+        pose_only: false,
         max_open: 24,
         promote: false,
         input_delay: 0,
@@ -183,6 +201,7 @@ fn parse_args() -> Args {
             "--no-slot-desync" => a.no_slot_desync = true,
             "--no-terrain" => a.no_terrain = true,
             "--no-pose-lane" => a.no_pose_lane = true,
+            "--pose-only" => a.pose_only = true,
             "--promote" => a.promote = true,
             "--out" => a.out = Some(it.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--baseline" => {
@@ -244,6 +263,12 @@ fn main() {
             .files
             .iter()
             .map(|f| verify::verify_deltas(f, &args))
+            .max()
+            .unwrap_or(0),
+        "replay" => args
+            .files
+            .iter()
+            .map(|f| replay::replay(f, &args))
             .max()
             .unwrap_or(0),
         "dump-state" => dump_state(&args),

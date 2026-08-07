@@ -965,6 +965,12 @@ impl World {
             invisible: carpet.flags & 0x20 != 0,
             ..Player::default()
         };
+        // The knock/buffet channel (`moveBoost` @+30 + direction @+32:
+        // the MC1 channel's retail home on this column — same cap 128,
+        // decay −4, snap <4): the MC1 arm seeds its twin from the
+        // Type_160 tail; without this a free-running replay anchored
+        // mid-buffet starts with a silently empty channel.
+        self.g.player_knock = (ply.knock_dir, ply.knock_mag);
 
         // The human's str_611 spellbook: manifestation slots, XP,
         // and tier state live in the per-player block and mutate at

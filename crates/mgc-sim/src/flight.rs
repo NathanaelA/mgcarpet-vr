@@ -111,6 +111,13 @@ pub struct Mc1State {
     pub rand: u32,
 }
 
+/// Retail's 11-bit bearing between two engine-unit points (the Gen
+/// atan helper), exposed for boundary drivers that mirror the app's
+/// dead-camera turn outside this crate (the conformance replay).
+pub fn angle_between(ax: u16, ay: u16, bx: u16, by: u16) -> u16 {
+    crate::engine::features::Gen::angle_between(ax, ay, bx, by)
+}
+
 impl Mc1State {
     /// Seed the integer state from tile-space floats (spawn/level
     /// hand-off; the reverse mapping runs after every move).

@@ -132,6 +132,18 @@ checks against record N+1.
   by replaying input. (MC2 takes recorded before 2026-07-30 predate
   the MC2 register map and carry `input:"none"`.)
 
+  **The consumed move/fire byte outranks the externals.** Both games
+  also RECORD the consumed per-tick command byte inside the state
+  closure (`Type_160`/`Type_str_164 dw_0`: bits 1/2 speed, 4/8
+  strafe, 0x10 left fire, 0x20 right fire) — the byte retail's own
+  tick acted on, stamped by the consume loop (MC1 post-pass, read at
+  record N; MC2 in PlayerEvents, read at N+1). Corpus-measured
+  against retail's own arms: MC1 2,368/2,368 single-shot casts at
+  exactly byte-record +2, MC2 560/560 arms on the same record — so
+  consumers that need exact input (the pose channel, `replay`)
+  read the byte and the ±1 caveat below applies only to the raw
+  externals.
+
   **MC2 phase caveat — the snapshot straddles retail's poll, and the
   latch resolves it.** The recorder parks in the settled tail of frame
   `r` (after the entity pass, before frame `r+1`'s `PlayerEvents`), so
@@ -458,8 +470,18 @@ remains the path for any unpatched exe.
     as an automated expected-status test on every `cargo test`
     (crates/mgc-conform/tests/suite.rs; skips when the recording or
     baked tree is absent).
+  - `replay` (retail): PURE INPUT REPLAY (docs/CONFORMANCE.md "The
+    replay verifier") — seed the world ONCE from the first closure,
+    then free-run feeding only the input stream recovered from the
+    recording (the consumed move/fire byte, the inverted stick
+    filter, hand equips, the respawn key); divergence is reported at
+    every recorded boundary and never corrected. A `t` gap re-anchors
+    a fresh segment, so gap-free takes replay as one unbroken chain —
+    recorders should keep striving for gap-free streams.
   - `verify-replay` (port): init from header, feed inputs, compare
-    the hash at every tick — not built yet.
+    the hash at every tick — not built yet (the `replay` mode above
+    is its retail-source twin; the port arm lands with the in-app
+    recorder).
 
 ## Cross-model replay (sandbox, not replay)
 

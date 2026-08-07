@@ -79,7 +79,7 @@ pub struct PoseLane {
 /// downstream; the smallest-|stick| one is returned. None = no
 /// command-range stick explains the transition (respawn wipe, a
 /// non-mouse write).
-fn recover_stick(acc_n: i16, acc_n1: i16) -> Option<i16> {
+pub(crate) fn recover_stick(acc_n: i16, acc_n1: i16) -> Option<i16> {
     let a = acc_n as i32;
     let d = acc_n1 as i32 - a;
     let (lo, hi) = if d > 0 {
@@ -115,7 +115,7 @@ fn wrap16(want: u16, got: u16) -> i64 {
 /// (measured on mc1hwl0 t=371: kmag 0→76 = 80 armed − 4, right at the
 /// first dirty x/y window). Same channel shape both games (cap 128,
 /// decay −4, snap <4; EF:59695-711).
-fn consumed_knock(mag0: i16, dir0: u16, mag1: i16, dir1: u16) -> Option<(u16, i16)> {
+pub(crate) fn consumed_knock(mag0: i16, dir0: u16, mag1: i16, dir1: u16) -> Option<(u16, i16)> {
     let m0 = mag0.clamp(-128, 128);
     let decay = if m0 == 0 {
         0
@@ -409,7 +409,7 @@ impl PoseLane {
             rand: 0,
         };
         let mut ext = Mc2Ext {
-            water_ctr: p0.water_ctr,
+            water_ctr: p0.water_ctr as u16,
             nudge_latch: p0.nudge_latch != 0,
             row: world.mc2_carpet_row(),
             ..Default::default()

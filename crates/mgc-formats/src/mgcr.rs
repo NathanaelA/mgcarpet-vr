@@ -1342,9 +1342,11 @@ pub struct RetailPlayerMc2 {
     pub move_speed_ctr: u8, // +333
     pub mobilize: u8,     // +334
     pub mobilize_ctr: u8, // +336
-    /// Water-splash counter (`waterCounter_0x262_610`) and the cave
-    /// nudge latch (`byte_0x261_609`, EF:59869-81).
-    pub water_ctr: u16, // +610
+    /// Water-splash counter (`waterCounter_0x262_610` — an int8_t in
+    /// retail; a u16 read here polluted the value with the 0xE0
+    /// neighbor byte on every take) and the cave nudge latch
+    /// (`byte_0x261_609`, EF:59869-81).
+    pub water_ctr: u8, // +610
     pub nudge_latch: u8,  // +609
     /// Invulnerability-reset countdown (`word_0x159_345`, +998+345).
     pub invuln: i16,
@@ -1605,7 +1607,7 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         move_speed_ctr: u8_(d, t + 333),
         mobilize: u8_(d, t + 334),
         mobilize_ctr: u8_(d, t + 336),
-        water_ctr: u16_(d, t + 610),
+        water_ctr: u8_(d, t + 610),
         nudge_latch: u8_(d, t + 609),
         invuln: i16_(d, t + 345),
         regen_stall: i32_(d, t + 397),
