@@ -71,32 +71,41 @@ impl Overlay {
     /// near-misses).
     pub fn levels(&self, tag: &str) -> Result<Vec<OverlayLevel>, String> {
         let dir = self.root.join(tag).join("levels");
-        let mut by_index: BTreeMap<u32, OverlayLevel> = BTreeMap::new();
-        for name in dir_names(&dir) {
-            if furniture(&name) {
-                continue;
-            }
-            let Some(index) = level_index(&name) else {
-                eprintln!(
-                    "warning: overlay/{tag}/levels/{name}: not LEVnnnnn.DAT \
-                     (LEV + 5-digit member index + .DAT) — ignored"
-                );
-                continue;
-            };
-            let level = OverlayLevel {
-                index,
-                path: dir.join(&name),
-                rel: format!("{tag}/levels/{name}"),
-            };
-            if let Some(prev) = by_index.insert(index, level) {
-                return Err(format!(
-                    "overlay/{tag}/levels: {} and {name} both target member {index}",
-                    prev.rel.rsplit('/').next().unwrap_or(&prev.rel),
-                ));
-            }
-        }
-        Ok(by_index.into_values().collect())
+        let names = dir_names(&dir);
+        collect_levels(&dir, tag, &names)
     }
+}
+
+/// The pure half of [`Overlay::levels`]: resolve directory entry
+/// `names` into replacement levels. Separate so the duplicate-member
+/// error is testable everywhere — on a case-insensitive filesystem
+/// (macOS) the offending pair cannot even be materialized on disk.
+fn collect_levels(dir: &Path, tag: &str, names: &[String]) -> Result<Vec<OverlayLevel>, String> {
+    let mut by_index: BTreeMap<u32, OverlayLevel> = BTreeMap::new();
+    for name in names {
+        if furniture(name) {
+            continue;
+        }
+        let Some(index) = level_index(name) else {
+            eprintln!(
+                "warning: overlay/{tag}/levels/{name}: not LEVnnnnn.DAT \
+                 (LEV + 5-digit member index + .DAT) — ignored"
+            );
+            continue;
+        };
+        let level = OverlayLevel {
+            index,
+            path: dir.join(name),
+            rel: format!("{tag}/levels/{name}"),
+        };
+        if let Some(prev) = by_index.insert(index, level) {
+            return Err(format!(
+                "overlay/{tag}/levels: {} and {name} both target member {index}",
+                prev.rel.rsplit('/').next().unwrap_or(&prev.rel),
+            ));
+        }
+    }
+    Ok(by_index.into_values().collect())
 }
 
 /// `LEVnnnnn.DAT` (case-insensitive) → member index.
@@ -169,17 +178,11 @@ mod tests {
 
     #[test]
     fn duplicate_member_is_an_error() {
-        let gamedata = scratch("dup");
-        let levels = gamedata.join("overlay/mc2/levels");
-        std::fs::create_dir_all(&levels).unwrap();
-        std::fs::write(levels.join("LEV00003.DAT"), b"a").unwrap();
-        std::fs::write(levels.join("lev00003.dat"), b"b").unwrap();
-
-        let overlay = Overlay::locate(&gamedata).unwrap();
-        let err = overlay.levels("mc2").unwrap_err();
+        // Via collect_levels, not the filesystem: a case-insensitive
+        // filesystem (macOS CI) folds the two names into one file.
+        let names = ["LEV00003.DAT".to_string(), "lev00003.dat".to_string()];
+        let err = collect_levels(Path::new("overlay/mc2/levels"), "mc2", &names).unwrap_err();
         assert!(err.contains("member 3"), "unexpected error: {err}");
-
-        std::fs::remove_dir_all(&gamedata).ok();
     }
 
     #[test]
