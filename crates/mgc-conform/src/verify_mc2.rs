@@ -446,48 +446,11 @@ pub(crate) fn sample_cmd_mc2(input: Option<&serde_json::Value>) -> PlayerCommand
     }
 }
 
-/// SPACE (scancode 57 = 0x39) — retail's RESPAWN key. The input
-/// dispatcher raises `PlayerAction` 0xF from it, and PI:1102 accepts
-/// that command only while `life < 0 && actionIndex == 3`, so a SPACE
-/// held in any other state is inert and the port's own
-/// `LifeState::Dead` gate reproduces the filter. Without this lane the
-/// replayed MC2 human can never leave the corpse state, and the two
-/// ticks where retail rebuilds the spellbook (mc2l3 t=15314→15315 and
-/// t=20611→20612) are unreachable.
-///
-/// DATING THE PRESS. The key registers carry no press LATCH (the
-/// mouse's disambiguator — see [`align_cmd_mc2`]), and the corpus
-/// shows BOTH sides of retail's poll: SPACE first appears at record
-/// 15314 with the reset in frame 15315 (pressed AFTER that frame's
-/// poll), and at record 20612 with the reset in frame 20612 (pressed
-/// BEFORE it). No held-key rule can split those, so the caller adds
-/// retail's own witness: the 0xF handler runs
-/// `SetCenterScreenForFlyAssistant_6EDB0` (EF:37653), which slams the
-/// cursor to the screen centre — so a record whose cursor JUMPED this
-/// pair and now equals the press-position snapshot is a record whose
-/// frame ran the command. The full rule is
-///
-/// ```text
-///   fire(pair) = space(end) && (space(start) || recentred(end))
-/// ```
-///
-/// Measured over the whole mc2l3 take: 348 records carry the
-/// recentre shape (ordinary clicks), and exactly TWO of them also have
-/// SPACE down — the two reset frames.
-pub(crate) fn respawn_key_mc2(input: Option<&serde_json::Value>) -> bool {
-    input
-        .and_then(|i| i.get("keys_down"))
-        .and_then(|k| k.as_array())
-        .is_some_and(|k| k.iter().any(|v| v.as_i64() == Some(57)))
-}
-
-/// The recorded LIVE cursor `(x, y)` — `input.mouse`, the twin of
-/// [`press_pos_mc2`]'s press snapshot.
-pub(crate) fn mouse_pos_mc2(input: Option<&serde_json::Value>) -> Option<(i16, i16)> {
-    let p = input?.get("mouse")?;
-    let g = |k: &str| p.get(k).and_then(|v| v.as_i64()).map(|v| v as i16);
-    Some((g("x")?, g("y")?))
-}
+// The respawn SPACE lane + press-dating witness laws moved to the
+// shared recovery home (mgc_formats::recover — doc comments travel
+// with them) so the app's `--replay` shares one implementation.
+pub(crate) use mgc_formats::recover::mouse_pos as mouse_pos_mc2;
+pub(crate) use mgc_formats::recover::respawn_key as respawn_key_mc2;
 
 /// The two recorded MC2 mouse registers, UNMERGED:
 /// `((held_l, held_r), (latch_l, latch_r))` — the ISR held state
@@ -551,27 +514,7 @@ pub(crate) fn align_cmd_mc2(
     }
 }
 
-/// The recorded cursor-AT-PRESS `(x, y)` — `input.mouse_press_pos`,
-/// raw twin `state.ext.press_b64` ([`mgc_formats::mgcr::Ext::press`]).
-///
-/// **It is NOT the cast's aim.** The ISR snapshots it on every press
-/// edge (EF:51478-97) and the poll copies it to
-/// `unk_18058C.x_DWORD_1805B8/1805BC` (EF:49664-65 and the three
-/// sibling control-mode arms), but the ONLY consumer downstream is
-/// `sub_1A7A0_fly_asistant` (PI:1988-2013) — the fly-assistant
-/// idle-recentre watchdog. The player's aim/attitude command (input
-/// bytes 3/4, `playerInputs.roll`/`pitch`) is computed from the LIVE
-/// cursor `x_DWORD_1805B0_mouse` ← `x_WORD_E3760` by
-/// `ComputeMousePlayerMovement_17060` (PI:643/1007 → PI:2100-41), and
-/// the cast gate `sub_5F660` (EF:60874) takes no aim argument at all:
-/// its three call sites pass (caster, manifestation, hand flag) and the
-/// launch direction comes off the caster entity's own pose — which the
-/// harness already pins from the recording ([`carpet_pose_mc2`]).
-pub(crate) fn press_pos_mc2(input: Option<&serde_json::Value>) -> Option<(i16, i16)> {
-    let p = input?.get("mouse_press_pos")?;
-    let g = |k: &str| p.get(k).and_then(|v| v.as_i64()).map(|v| v as i16);
-    Some((g("x")?, g("y")?))
-}
+pub(crate) use mgc_formats::recover::press_pos as press_pos_mc2;
 
 /// `MGC_PRESS_EDGE=1` A/B lane: fold a cursor-AT-PRESS CHANGE into the
 /// aligned rising edge, attributed to whichever button the record shows
@@ -655,26 +598,9 @@ pub(crate) fn ring_cast_mc2(
     (p.ring_cursor <= 25).then_some(p.ring_cursor)
 }
 
-/// Is the pair fixture-grade? See the module doc: step-1 dominance of
-/// the per-entity phase byte across entities live (same class+model)
-/// at both ends. Pairs with no live-in-both population (never happens
-/// on real levels) fail closed.
-pub(crate) fn capture_clean_mc2(pst: &RetailMc2, st: &RetailMc2) -> bool {
-    let (mut d0, mut d1, mut d2) = (0u32, 0u32, 0u32);
-    for slot in 1..pst.ents.len().min(st.ents.len()) {
-        let (a, b) = (&pst.ents[slot], &st.ents[slot]);
-        if a.class3f == 0 || a.class3f != b.class3f || a.model40 != b.model40 {
-            continue;
-        }
-        match b.phase3e.wrapping_sub(a.phase3e) {
-            0 => d0 += 1,
-            1 => d1 += 1,
-            2 => d2 += 1,
-            _ => {}
-        }
-    }
-    d1 > 0 && d1 >= d0 && d1 >= d2
-}
+// The MC2 capture-grade law (module doc: step-1 dominance of the
+// per-entity phase byte) moved to the shared recovery home.
+pub(crate) use mgc_formats::recover::capture_clean_mc2;
 
 /// One fixture-grade pair on a prepared MC2 world — the single
 /// implementation behind both `verify-deltas` and the fixture suite.

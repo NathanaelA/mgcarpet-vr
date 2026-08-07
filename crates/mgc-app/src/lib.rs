@@ -18,6 +18,7 @@ mod frontend_mc1;
 mod menu;
 mod minimenu;
 mod movie;
+mod replay;
 mod saves;
 mod settings;
 mod ui;
@@ -1844,6 +1845,13 @@ struct App {
     campaign: Option<CampaignRun>,
     /// The initial `load_level` parameters, for campaign switches.
     launch: LaunchParams,
+    /// `--replay`: the opened take waiting for the boot session
+    /// (consumed by `attach_replay_record`), then the live driver.
+    replay_pending: Option<replay::ReplayFile>,
+    replay: Option<replay::ReplayDriver>,
+    /// `--record`: the destination path, then the live recorder.
+    record_path: Option<PathBuf>,
+    recorder: Option<replay::PortRecorder>,
     /// The MC2 world-map screen assets (lazy-loaded on first entry;
     /// stays None when the mc2-ui bundle is absent).
     worldmap: Option<worldmap::WorldMap>,
@@ -1901,6 +1909,8 @@ impl App {
         cfg_file: PathBuf,
         campaign: Option<CampaignRun>,
         launch: LaunchParams,
+        replay_boot: Option<replay::ReplayFile>,
+        record_path: Option<PathBuf>,
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
@@ -2037,6 +2047,10 @@ impl App {
             },
             campaign,
             launch,
+            replay_pending: replay_boot,
+            replay: None,
+            record_path,
+            recorder: None,
             worldmap: None,
             mainmenu: None,
             mc1menu: None,
@@ -2055,7 +2069,10 @@ impl App {
         };
         match level {
             // Single-level mode boots straight into its session.
-            Some(l) => app.install_level(l),
+            Some(l) => {
+                app.install_level(l);
+                app.attach_replay_record();
+            }
             // Campaign boot: frontend only — its dedicated menu music
             // starts now (MC1 `csetup`, MC2 the SETUP render). NOT when
             // the intro chain is about to play: the movie owns the
@@ -2068,6 +2085,90 @@ impl App {
             None => {}
         }
         app
+    }
+
+    /// Turn the boot-time `--replay`/`--record` requests into the live
+    /// driver/recorder, once the boot session exists. Port takes
+    /// restore their embedded start snapshot first (the resume path's
+    /// shape — the restore replaces the world wholesale, so the render
+    /// mirrors re-seed).
+    fn attach_replay_record(&mut self) {
+        if let Some(mut file) = self.replay_pending.take() {
+            let snap = file.snapshot.take();
+            let res = (|| -> Result<replay::ReplayDriver, String> {
+                let sess = self.session.as_deref_mut().ok_or("level did not install")?;
+                if let Some(snap) = &snap {
+                    sess.sim.restore(snap).map_err(|e| e.to_string())?;
+                    sess.prev_flyer = sess.sim.flyer;
+                    sess.pose_prev = Vec::new();
+                    sess.pose_cur = Vec::new();
+                    sess.fire_blasts.clear();
+                    sess.bolts.clear();
+                    if let Some(w) = sess.sim.world.as_mut() {
+                        w.terrain_dirty = true;
+                        w.entities_dirty = true;
+                    }
+                }
+                replay::ReplayDriver::install(file, &mut sess.sim)
+            })();
+            match res {
+                Ok(d) => self.replay = Some(d),
+                Err(e) => eprintln!("error: replay: {e}"),
+            }
+        }
+        if let Some(path) = self.record_path.take() {
+            if self.replay.is_some() {
+                eprintln!("record: disabled — a replay is the input source");
+                return;
+            }
+            let res = {
+                let cfg = &self.cfg;
+                let (thrust, altitude) = (
+                    sim_thrust(cfg.controls.models.thrust),
+                    sim_altitude(cfg.controls.models.altitude),
+                );
+                let sess = self.session.as_deref_mut();
+                sess.ok_or("level did not install".to_string())
+                    .and_then(|sess| {
+                        let game = sess.level.game;
+                        let level = sess.level.level_number;
+                        replay::PortRecorder::begin(
+                            &path,
+                            &sess.sim,
+                            match game {
+                                mgc_sim::ids::GameId::Mc1 => "mc1",
+                                mgc_sim::ids::GameId::Mc1Hw => "mc1hw",
+                                mgc_sim::ids::GameId::Mc2 => "mc2",
+                            },
+                            level,
+                            thrust,
+                            altitude,
+                        )
+                    })
+            };
+            match res {
+                Ok(r) => {
+                    println!(
+                        "record: {} (input:\"exact\" + hash channel)",
+                        path.display()
+                    );
+                    self.recorder = Some(r);
+                }
+                Err(e) => eprintln!("error: record: {e}"),
+            }
+        }
+    }
+
+    /// Finalize a live recording (level switch, app exit) — the zstd
+    /// stream needs its frame end to reopen cleanly.
+    fn finish_recorder(&mut self) {
+        if let Some(r) = self.recorder.take() {
+            let (path, n, res) = r.finish();
+            match res {
+                Ok(()) => println!("record: {} — {n} tick(s) written", path.display()),
+                Err(e) => eprintln!("record: {}: {e}", path.display()),
+            }
+        }
     }
 
     /// The HUD blends over the sky (MC1's always-on look) vs opaque
@@ -3337,6 +3438,13 @@ impl App {
     /// the per-level transients. Any previous session's remains
     /// (sounds included) are cut first.
     fn install_level(&mut self, mut level: LoadedLevel) {
+        // A new session ends the replay/record instruments — both are
+        // single-take, single-level by design (the boot install runs
+        // before either attaches, so this is a no-op there).
+        if self.replay.take().is_some() {
+            println!("replay: ended by level switch");
+        }
+        self.finish_recorder();
         // Retail stops sfx + speech before EVERY launch (remc1
         // :59992-94), so this is unconditional rather than gated on an
         // outgoing session.
@@ -3684,13 +3792,22 @@ impl App {
                 .and_then(|i| i.sprites.get(id as usize))
                 .map(|s| (s.width, s.height, s.flags))
         };
-        r.set_billboards(entities::billboards_from_poses(
+        let mut billboards = entities::billboards_from_poses(
             sess.level.game,
             &poses,
             dims,
             enhanced_fire,
             enhanced_lightning,
-        ));
+        );
+        // The replay GHOST (④): the recorded pose as a translucent
+        // wizard-carpet, riding beside the free-running sim — where
+        // they overlap, the replay is visually exact.
+        if let Some(d) = &self.replay
+            && let Some(b) = replay::ghost_billboard(d, sess)
+        {
+            billboards.push(b);
+        }
+        r.set_billboards(billboards);
         // Enhanced fire: the procedural crater (walls + smoke) goes
         // FIRST so it wins density-cap slots; then the velocity-aware
         // projectile/impact particles, then the shockwave ring (all
@@ -5418,8 +5535,55 @@ impl App {
                 let sess = sess!(self);
                 sess.prev_flyer = sess.sim.flyer;
             }
-            let input = self.tick_input();
+            // Replay playback replaces the live input wholesale; when
+            // the take ends, control hands back to the player.
+            let input = match self.replay.take() {
+                Some(mut d) => {
+                    let next = d.next(&mut sess!(self).sim);
+                    if d.take_anchored() {
+                        // An anchor re-imported the world — stale
+                        // (slot, generation) pose pairs must not
+                        // survive it (the resume path's law).
+                        let sess = sess!(self);
+                        sess.prev_flyer = sess.sim.flyer;
+                        sess.pose_prev = Vec::new();
+                        sess.pose_cur = Vec::new();
+                    }
+                    match next {
+                        Some(i) => {
+                            self.replay = Some(d);
+                            i
+                        }
+                        None => {
+                            self.mini_toast(format!("replay ended — {}", d.summary()));
+                            // Hand control back cleanly: drop the
+                            // stale live-input accumulators the
+                            // replay never drained.
+                            self.mouse = MouseAccum::default();
+                            self.stick = VirtualStick::default();
+                            self.tick_input()
+                        }
+                    }
+                }
+                None => self.tick_input(),
+            };
+            // `--record`: t/hash describe the PRE-step state; the
+            // input is what the step consumes (the phase convention,
+            // docs/RECORDING.md).
+            let pre = self.recorder.is_some().then(|| {
+                let sess = sess!(self);
+                (sess.sim.tick, sess.sim.state_hash())
+            });
             sess!(self).sim.step(&input);
+            if let Some(d) = self.replay.as_mut() {
+                d.grade(&sess!(self).sim);
+            }
+            if let (Some(r), Some((t, hash))) = (self.recorder.as_mut(), pre) {
+                if let Err(e) = r.record(t, &input, hash) {
+                    eprintln!("record: {e} — recording stopped");
+                    self.recorder = None;
+                }
+            }
             // Smooth-motion snapshot rotation — the entity
             // analogue of prev_flyer above (entities render
             // lerped over the same one-tick window).
@@ -6293,6 +6457,22 @@ impl App {
                 let pad = 4.0 * font_s;
                 let y = size.1 - 2.0 * (assets.font_line_height() + 4.0) * font_s;
                 quads.extend(assets.text_quads(&text, pad, y, [1.0, 1.0, 1.0, 1.0], font_s));
+            }
+            // The replay counter (④, docs/RECORDING.md "Consumers"):
+            // the third fixed bottom-left line — bit-exact/diverged
+            // since t=N, always on while a take drives the session.
+            if let Some(d) = &self.replay
+                && assets.has_font()
+            {
+                let font_s = 2.0 * ui::HudFrame::new(size.0, size.1).s;
+                let pad = 4.0 * font_s;
+                let y = size.1 - 3.0 * (assets.font_line_height() + 4.0) * font_s;
+                let ink = if d.hud.contains("diverged") {
+                    [1.0, 0.6, 0.4, 1.0]
+                } else {
+                    [0.6, 1.0, 0.6, 1.0]
+                };
+                quads.extend(assets.text_quads(&d.hud, pad, y, ink, font_s));
             }
             self.hovered = hovered;
             self.append_software_cursor(&mut quads);
@@ -7585,6 +7765,18 @@ struct Args {
     /// None = the game's pristine chassis value (1000).
     pool_slots: Option<usize>,
     awake_range: Option<u32>,
+    /// `--replay <take.mgcr>`: play a recording as the session's only
+    /// input source — SOURCE-AGNOSTIC (retail takes via inline input
+    /// recovery, port recordings via the exact input channel);
+    /// docs/RECORDING.md "Consumers".
+    replay: Option<PathBuf>,
+    /// `--replay-check <take.mgcr>`: the headless verifying twin —
+    /// run the whole take, print the drift summary; exit 0 only on
+    /// zero divergence.
+    replay_check: Option<PathBuf>,
+    /// `--record <out.mgcr>`: write this session as a port recording
+    /// (`source:"port"`, `input:"exact"` + hash channel).
+    record: Option<PathBuf>,
     /// Headless flocking probe: tick the real world and dump per-
     /// creature AI state as CSV (the goat-cohesion diagnostic).
     flock_probe: Option<PathBuf>,
@@ -7647,6 +7839,9 @@ fn parse_args() -> Result<Args, String> {
     let mut terrain_features = true;
     let mut awake_range = None;
     let mut pool_slots = None;
+    let mut replay = None;
+    let mut replay_check = None;
+    let mut record = None;
     let mut flock_probe = None;
     let mut probe_ticks = 8000u32;
     let mut probe_every = 1u32;
@@ -7718,6 +7913,21 @@ fn parse_args() -> Result<Args, String> {
             }
             "--screenshot" => {
                 screenshot = Some(PathBuf::from(it.next().ok_or("--screenshot needs a path")?));
+            }
+            "--replay" => {
+                replay = Some(PathBuf::from(
+                    it.next().ok_or("--replay needs a .mgcr path")?,
+                ));
+            }
+            "--replay-check" => {
+                replay_check = Some(PathBuf::from(
+                    it.next().ok_or("--replay-check needs a .mgcr path")?,
+                ));
+            }
+            "--record" => {
+                record = Some(PathBuf::from(
+                    it.next().ok_or("--record needs an output .mgcr path")?,
+                ));
             }
             "--flock-probe" => {
                 flock_probe = Some(PathBuf::from(
@@ -7960,6 +8170,11 @@ fn parse_args() -> Result<Args, String> {
                      [--anim-turn N]] \
                      [--map out.png [--map-scale N]] [--no-terrain-features] \
                      [--pool-slots N] [--awake-range TILES (0 = always awake)] \
+                     [--replay take.mgcr (play a recording — retail or port — as \
+                     the session; level from the header)] \
+                     [--replay-check take.mgcr (headless: whole take + drift \
+                     summary; exit 0 = zero divergence)] \
+                     [--record out.mgcr (write this session as a port recording)] \
                      [--flock-probe out.csv [--probe-ticks N] [--probe-every N] \
                      [--probe-pose far|start|hover[:ALT]|approach[:ALT]|orbit[:ALT]] \
                      [--probe-species CLASS,MODEL] [--probe-strip] [--probe-dis N,N..]]\n\
@@ -8015,6 +8230,9 @@ fn parse_args() -> Result<Args, String> {
         terrain_features,
         pool_slots,
         awake_range,
+        replay,
+        replay_check,
+        record,
         flock_probe,
         probe_ticks,
         probe_every,
@@ -9223,6 +9441,80 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
     }
 
+    // In-app replay (docs/RECORDING.md "Consumers"): the take's
+    // header picks the level; the session boots single-level with the
+    // fidelity-relevant knobs pinned — a retail take demands the
+    // faithful tiers and no instruments, a port take pins its own
+    // recorded sim closure.
+    let mut replay_boot: Option<replay::ReplayFile> = None;
+    if let Some(path) = args.replay.as_ref().or(args.replay_check.as_ref()) {
+        if args.record.is_some() {
+            eprintln!("error: --record cannot run under --replay (the take is the input source)");
+            return std::process::ExitCode::from(2);
+        }
+        let file = match replay::ReplayFile::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("error: {}: {e}", path.display());
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        level_path =
+            get_baked_directory().join(format!("{}/level-{:03}.mgcl", file.game, file.level));
+        campaign_run = None;
+        match file.source {
+            replay::ReplaySource::Retail => {
+                cfg.controls.models.thrust = config::ThrustModel::Classic;
+                cfg.controls.models.altitude = config::AltitudeModel::Classic;
+            }
+            replay::ReplaySource::Port => {
+                let (thrust, altitude) = match file.models() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("error: {}: {e}", path.display());
+                        return std::process::ExitCode::FAILURE;
+                    }
+                };
+                cfg.controls.models.thrust = match thrust {
+                    mgc_sim::ThrustModel::Mc1 => config::ThrustModel::Classic,
+                    mgc_sim::ThrustModel::Enhanced => config::ThrustModel::Enhanced,
+                };
+                cfg.controls.models.altitude = match altitude {
+                    mgc_sim::AltitudeModel::Faithful => config::AltitudeModel::Classic,
+                    mgc_sim::AltitudeModel::ExtendedLift => config::AltitudeModel::Enhanced,
+                };
+            }
+        }
+        cfg.gameplay.cheat.dev_spells = false;
+        cfg.gameplay.cheat.invincible = false;
+        cfg.dev.plausible_spellbook = false;
+        cfg.gameplay.enhancement.prune_owned_jars = false;
+        cfg.sim.parameters.entity_pool_size = None;
+        cfg.sim.parameters.awake_range = None;
+        println!(
+            "replay: {} — game {}, level {}, source {}",
+            path.display(),
+            file.game,
+            file.level,
+            match file.source {
+                replay::ReplaySource::Retail => "retail (inline input recovery)",
+                replay::ReplaySource::Port => "port (exact input channel)",
+            }
+        );
+        replay_boot = Some(file);
+    }
+    // Re-derive the offline pool params after the replay pin.
+    let pool_slots = if replay_boot.is_some() {
+        None
+    } else {
+        pool_slots
+    };
+    let awake_range = if replay_boot.is_some() {
+        None
+    } else {
+        awake_range
+    };
+
     // First-run / stale-epoch auto-bake: regenerate the baked tree
     // from the original game data before touching it.
     if let Err(e) = bakecheck::ensure_baked(&level_path, cfg.gamedata.as_deref()) {
@@ -9234,7 +9526,10 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     // map) is the loader, constructing a gameplay session when the
     // player launches one. Only the headless instruments and single-
     // level mode load a level up front.
-    let headless = args.screenshot.is_some() || args.map.is_some() || args.flock_probe.is_some();
+    let headless = args.screenshot.is_some()
+        || args.map.is_some()
+        || args.flock_probe.is_some()
+        || args.replay_check.is_some();
     let boot_level = if campaign_run.is_some() && !headless {
         None
     } else {
@@ -9254,6 +9549,19 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             }
         }
     };
+
+    if args.replay_check.is_some() {
+        let level = boot_level.expect("headless paths load a level");
+        let file = replay_boot.expect("--replay-check opened the take");
+        return match replay::replay_check(level, file) {
+            Ok(true) => std::process::ExitCode::SUCCESS,
+            Ok(false) => std::process::ExitCode::FAILURE,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::ExitCode::from(2)
+            }
+        };
+    }
 
     if let Some(out) = &args.map {
         let level = boot_level.as_ref().expect("headless paths load a level");
@@ -9409,11 +9717,16 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             pool_slots,
             awake_range,
         },
+        replay_boot,
+        args.record.clone(),
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
         return std::process::ExitCode::FAILURE;
     }
+    // Every exit path funnels here — a live recording gets its zstd
+    // frame end so the file reopens cleanly.
+    app.finish_recorder();
     std::process::ExitCode::SUCCESS
 }
 

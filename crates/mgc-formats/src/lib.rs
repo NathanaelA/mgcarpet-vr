@@ -15,6 +15,7 @@ pub mod bundle;
 pub mod mgcl;
 pub mod mgcr;
 pub mod mgcs;
+pub mod recover;
 
 /// Current `.mgcl` format version (see docs/FORMAT.md "Versioning").
 /// 2: MC1 packages gained `wizards.json` (per-player AI records +

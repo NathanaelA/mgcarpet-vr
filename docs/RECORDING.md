@@ -426,12 +426,41 @@ remains the path for any unpatched exe.
 
 ## Consumers
 
-- **`--replay <file>`** (the game): port recordings only
-  (`source:"port"`, `input:"exact"`). Pins the header's sim closure —
-  mismatch is a refusal, not a warning. Feeds the input channel,
-  optionally asserts the hash channel live; a mid-demo desync is
-  surfaced on screen, never silently absorbed. Playback speed is a
-  viewer control (presentation); per-tick semantics are invariant.
+- **`--replay <file>`** (the game; LANDED): SOURCE-AGNOSTIC — one
+  flag plays both arms (player-ruled):
+  - **Retail takes** (`source:"retail"`, state channel required):
+    inline input recovery (the shared laws in
+    `mgc_formats::recover` — the consumed move/fire byte fed to the
+    movers verbatim via `FlightInput::mc1_move_byte`, the inverted
+    stick filter, hand equips/rebinds, the respawn witness), world
+    seeded by `retail_import_*` at the first closure, gaps re-anchor
+    fresh segments. PURE replay: divergence is graded at every
+    capture-clean boundary (the pose channel's lane set) and
+    reported, never corrected.
+  - **Port recordings** (`source:"port"`, `input:"exact"`): pins the
+    header's sim closure (tier tags applied; a foreign
+    `snapshot_version` is a refusal, not a warning), restores the
+    embedded `start_mgcs_b64`, feeds the input channel and asserts
+    the hash channel live.
+  Either way the HUD carries a bit-exact / "diverged since t=N"
+  counter and a translucent GHOST billboard rides at the recorded
+  pose (retail takes) — a mid-demo desync is surfaced on screen,
+  never silently absorbed. Playback speed is a viewer control (F3;
+  presentation only); per-tick semantics are invariant.
+  **`--replay-check <file>`** is the headless twin: whole take, drift
+  summary on stdout, exit 0 only on zero divergence. Its retail
+  results are certified against `mgc-conform replay`'s (identical
+  first-divergence boundaries on mc1l0 t=563 / mc2l3 t=244,
+  2026-08-07).
+- **`--record <out.mgcr>`** (the game; LANDED): write the running
+  session as a port recording — `source:"port"`, `input:"exact"`
+  (`mgc_formats::mgcr::PortInput`, the serialization mirror of the
+  sim's `FlightInput`), hash channel on, and the start state embedded
+  as `start_mgcs_b64` (a pristine level boot is just the t=0 special
+  case, so mid-level and campaign starts replay exactly). Writer =
+  `mgc_formats::mgcr::RecordingWriter` (zstd JSONL, `.jsonl` stays
+  plain). Recording ends with the session (level switch or exit
+  finalizes the stream).
 - **Puppet playback** (any recording, retail included): drive the
   recorded poses through the renderer with **no sim** — watch the
   actual retail run inside the port. Presentation styling is free
@@ -479,9 +508,10 @@ remains the path for any unpatched exe.
     a fresh segment, so gap-free takes replay as one unbroken chain —
     recorders should keep striving for gap-free streams.
   - `verify-replay` (port): init from header, feed inputs, compare
-    the hash at every tick — not built yet (the `replay` mode above
-    is its retail-source twin; the port arm lands with the in-app
-    recorder).
+    the hash at every tick — LANDED as the game's own
+    `--replay-check` (the port arm of the source-agnostic `--replay`
+    above; the round-trip is pinned by
+    `mgc-app replay::tests::port_record_replay_roundtrip`).
 
 ## Cross-model replay (sandbox, not replay)
 

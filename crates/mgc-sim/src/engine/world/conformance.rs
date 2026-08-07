@@ -27,12 +27,13 @@
 
 use super::{LifeState, PLAYER_LIFE_MAX, Player, PlayerPose, World};
 use crate::engine::features::{Ent, Planes};
+use crate::flight::{Mc1State, Mc2Ext, Mc2Row};
 use crate::mc1::mobs::PLAYER_TARGET;
 use crate::mc1::spells::{SPELL_COUNT, SpellId};
 use mgc_formats::mgcr::{
     ControlMc1, ControlMc2, EntObsMc1, EntObsMc2, FlightMc1, FlightMc2, ObsMc1, ObsMc2,
     PlayerJoinMc1, PlayerJoinMc2, PlayerMc2, RetailEntMc1, RetailEntMc2, RetailMc1, RetailMc2,
-    WizardMc1,
+    RetailPlayerMc2, RetailWizardMc1, WizardMc1,
 };
 
 /// What the importer did — counts for the runner's coverage report.
@@ -1950,6 +1951,157 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         dest_y: r.dest_y,
         site_z: r.site_z,
     }
+}
+
+// ------------------------------------------------- replay chain seeding
+//
+// The pure-input replay consumers (`mgc-conform replay`, the app's
+// `--replay`) seed the chained human flight state ONCE from a recorded
+// closure and free-run on recovered input. The field maps are the pose
+// channel's (docs/CONFORMANCE.md "The pose channel"); they live here so
+// both consumers share one seeding law.
+
+/// Seed the chained MC1/HW flight state from the recorded closure at
+/// an anchor.
+pub fn mc1_state_from_retail(st: &RetailMc1, slot: u16) -> Mc1State {
+    let e = &st.ents[slot as usize];
+    let w = &st.wizards[st.local_player as usize];
+    Mc1State {
+        x: e.x,
+        y: e.y,
+        z: e.z,
+        yaw: e.f30 & 0x7FF,
+        roll_f: w.roll_acc as i16,
+        pitch_f: w.pitch_acc as i16,
+        aim_pitch: e.f32 & 0x7FF,
+        eff_pitch: w.eff_pitch & 0x7FF,
+        act_speed: e.f126,
+        tgt_speed: w.cmd_speed,
+        strafe: w.strafe,
+        tick_ctr: e.f63,
+        rand: e.rand,
+    }
+}
+
+/// The MC2 twin — plus the debuff ladders and water/nudge channels
+/// the pose channel gates instead of seeding. `row` is the world's
+/// live carpet tuning row ([`World::mc2_carpet_row`]).
+pub fn mc2_state_from_retail(st: &RetailMc2, slot: u16, row: Mc2Row) -> (Mc1State, Mc2Ext) {
+    let e = &st.ents[slot as usize];
+    let p = &st.players[st.local_player as usize];
+    (
+        Mc1State {
+            x: e.x,
+            y: e.y,
+            z: e.z,
+            yaw: e.yaw as u16 & 0x7FF,
+            roll_f: p.roll_acc as i16,
+            pitch_f: p.pitch_acc as i16,
+            aim_pitch: e.pitch as u16 & 0x7FF,
+            eff_pitch: p.eff_pitch & 0x7FF,
+            act_speed: e.speed,
+            tgt_speed: p.cmd_speed,
+            strafe: p.strafe,
+            tick_ctr: 0,
+            rand: 0,
+        },
+        Mc2Ext {
+            move_speed: p.move_speed,
+            move_speed_ctr: p.move_speed_ctr,
+            mobilize: p.mobilize,
+            mobilize_ctr: p.mobilize_ctr,
+            add: (0, 0, 0),
+            water_ctr: p.water_ctr as u16,
+            nudge_latch: p.nudge_latch != 0,
+            row,
+        },
+    )
+}
+
+/// The integer carpet as the world-tick pose — the faithful path's
+/// pose law: heading/pitch/speed straight off the chained state, no
+/// float round-trip.
+pub fn integer_pose(s: &Mc1State) -> PlayerPose {
+    PlayerPose {
+        x: s.x,
+        y: s.y,
+        z: s.z,
+        heading: s.yaw,
+        pitch: s.aim_pitch,
+        speed: s.act_speed,
+    }
+}
+
+/// Pose lanes: a chained carpet vs the recorded pose at a graded
+/// boundary (the pose channel's lane set). Rows are
+/// `(lane, retail, port)`, dirty lanes only.
+pub fn pose_lanes_mc1(
+    s: &Mc1State,
+    e: &RetailEntMc1,
+    w: &RetailWizardMc1,
+) -> Vec<(&'static str, i64, i64)> {
+    let mut rows = Vec::new();
+    let mut lane = |name, want: i64, got: i64| {
+        if want != got {
+            rows.push((name, want, got));
+        }
+    };
+    lane("pose.x", e.x as i64, s.x as i64);
+    lane("pose.y", e.y as i64, s.y as i64);
+    lane("pose.z", e.z as i64, s.z as i64);
+    lane("pose.yaw", (e.f30 & 0x7FF) as i64, s.yaw as i64);
+    lane("pose.aim_pitch", (e.f32 & 0x7FF) as i64, s.aim_pitch as i64);
+    lane(
+        "pose.eff_pitch",
+        (w.eff_pitch & 0x7FF) as i64,
+        (s.eff_pitch & 0x7FF) as i64,
+    );
+    lane("pose.act_speed", e.f126 as i64, s.act_speed as i64);
+    lane("pose.tgt_speed", w.cmd_speed as i64, s.tgt_speed as i64);
+    lane("pose.strafe", w.strafe as i64, s.strafe as i64);
+    lane("pose.roll_f", w.roll_acc as i16 as i64, s.roll_f as i64);
+    lane("pose.pitch_f", w.pitch_acc as i16 as i64, s.pitch_f as i64);
+    lane("pose.tick_ctr", e.f63 as i64, s.tick_ctr as i64);
+    lane("pose.rand", e.rand as i64, s.rand as i64);
+    rows
+}
+
+/// The MC2 lane set. `water_ctr` is deliberately NOT a lane yet: it
+/// gates the water-flight sound loop, not the pose. (Grading it is
+/// what EXPOSED the +610 u16-vs-int8 decode bug — the fixed byte read
+/// makes it a candidate lane once its ++/−− law is verified against a
+/// wet stretch.)
+pub fn pose_lanes_mc2(
+    s: &Mc1State,
+    e: &RetailEntMc2,
+    p: &RetailPlayerMc2,
+) -> Vec<(&'static str, i64, i64)> {
+    let mut rows = Vec::new();
+    let mut lane = |name, want: i64, got: i64| {
+        if want != got {
+            rows.push((name, want, got));
+        }
+    };
+    lane("pose.x", e.x as i64, s.x as i64);
+    lane("pose.y", e.y as i64, s.y as i64);
+    lane("pose.z", e.z as i64, s.z as i64);
+    lane("pose.yaw", (e.yaw as u16 & 0x7FF) as i64, s.yaw as i64);
+    lane(
+        "pose.aim_pitch",
+        (e.pitch as u16 & 0x7FF) as i64,
+        s.aim_pitch as i64,
+    );
+    lane(
+        "pose.eff_pitch",
+        (p.eff_pitch & 0x7FF) as i64,
+        (s.eff_pitch & 0x7FF) as i64,
+    );
+    lane("pose.act_speed", e.speed as i64, s.act_speed as i64);
+    lane("pose.tgt_speed", p.cmd_speed as i64, s.tgt_speed as i64);
+    lane("pose.strafe", p.strafe as i64, s.strafe as i64);
+    lane("pose.roll_f", p.roll_acc as i16 as i64, s.roll_f as i64);
+    lane("pose.pitch_f", p.pitch_acc as i16 as i64, s.pitch_f as i64);
+    rows
 }
 
 #[cfg(test)]

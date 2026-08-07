@@ -584,15 +584,7 @@ pub(crate) type MeasuredPlanes<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>);
 pub(crate) fn measured_planes(
     timg: &Option<mgc_formats::mgcr::TerrainImage>,
 ) -> Option<MeasuredPlanes<'_>> {
-    let img = timg.as_ref()?;
-    if !img.based() {
-        return None;
-    }
-    Some((
-        img.plane("height")?,
-        img.plane("type")?,
-        img.plane("ceiling"),
-    ))
+    timg.as_ref().and_then(|img| img.measured())
 }
 
 /// One fixture-grade pair, executed on a prepared world: restore
@@ -642,24 +634,9 @@ pub(crate) fn exec_pair(
     Ok((pd, port, report.human_slot))
 }
 
-pub(crate) fn capture_clean(pst: &RetailMc1, retail: &ObsMc1) -> bool {
-    let mut tear_suspects = 0u32;
-    for re in &retail.entities {
-        let prev = &pst.ents[re.slot as usize];
-        if prev.class64 == 0 || prev.class64 != re.class || prev.model65 != re.model {
-            continue;
-        }
-        if matches!(re.tick_byte.wrapping_sub(prev.f63), 0 | 2) {
-            tear_suspects += 1;
-            if tear_suspects > 2 {
-                return false;
-            }
-        }
-    }
-    let mut x = pst.rand;
-    x = x.wrapping_mul(9377).wrapping_add(9439);
-    x == retail.rng
-}
+// The MC1 capture-grade law moved to the shared recovery home so the
+// app's `--replay` grades boundaries by the same rule.
+pub(crate) use mgc_formats::recover::capture_clean_mc1 as capture_clean;
 
 /// The recorded carpet's raw fields as the pinned pose (heading @30,
 /// pitch @32, speed @126 — engine units throughout).

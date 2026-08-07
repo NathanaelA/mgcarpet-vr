@@ -129,6 +129,10 @@ pub struct TickRecord {
     /// The format-2 terrain channel (absent = empty delta).
     pub terrain: Option<TerrainBlock>,
     pub wallclock: Option<u64>,
+    /// The golden state-hash channel (port recordings): the hex
+    /// string parsed to the u64 it carries. Describes tick `t`'s
+    /// PRE-input state (the phase convention, docs/RECORDING.md).
+    pub hash: Option<u64>,
 }
 
 /// The static-frame input registers (same ±1-tick attribution caveat as
@@ -234,6 +238,10 @@ impl TickRecord {
             input: v.get("input").cloned(),
             terrain,
             wallclock: v.get("wallclock").and_then(|w| w.as_u64()),
+            hash: v
+                .get("hash")
+                .and_then(|h| h.as_str())
+                .and_then(|h| u64::from_str_radix(h, 16).ok()),
         })
     }
 }
@@ -1971,8 +1979,184 @@ impl TerrainImage {
         Some(&self.planes[i])
     }
 
+    /// The measured height/type planes — plus the cave CEILING when
+    /// the take declares it — once the accumulator is anchored. A
+    /// mid-stream start without the base yields None: relative-only
+    /// planes must never be installed as absolute terrain.
+    pub fn measured(&self) -> Option<(&[u8], &[u8], Option<&[u8]>)> {
+        if !self.based {
+            return None;
+        }
+        Some((
+            self.plane("height")?,
+            self.plane("type")?,
+            self.plane("ceiling"),
+        ))
+    }
+
     pub fn decl(&self) -> &TerrainDecl {
         &self.decl
+    }
+}
+
+// ------------------------------------------------------ port recordings
+
+/// Base64 (standard alphabet) — the channel encoding every b64 field
+/// of the format uses, exposed for header builders/consumers (the
+/// port recorder's `start_mgcs_b64`).
+pub fn b64_encode(data: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+pub fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|e| format!("bad base64: {e}"))
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+fn is_zero_i16(v: &i16) -> bool {
+    *v == 0
+}
+
+/// The `channels.input:"exact"` record payload — the serialization
+/// mirror of the sim's `FlightInput` (the Rust type is normative by
+/// reference, docs/RECORDING.md "The input channel"; raw spell ids
+/// stand in for `SpellId`). Every field is default-skipped so an idle
+/// tick serializes to `{}` — port recordings stay tiny.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct PortInput {
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub thrust: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub strafe: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub lift: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub yaw_delta: f32,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub pitch_delta: f32,
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub stick_x: i16,
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub stick_y: i16,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fire_left: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fire_right: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equip_left: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equip_right: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mc2_select: Option<(u8, u8, u8)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spell_ring: Option<(u8, u8)>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub full_stop: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub respawn: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub demolish: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub barrel_roll: bool,
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub raw_dx: i16,
+    /// The replay exact move byte (retail `dw_0` bits) — written by
+    /// transcoders, never by live play.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mc1_move_byte: Option<u8>,
+}
+
+/// The `.mgcr` WRITER (the port recorder's sink; the retail twin is
+/// `tools/mc_dosbox_recorder.py::RecordSink`). Same container law as
+/// the reader: zstd-compressed JSONL, except a `.jsonl` path stays
+/// plain for greppability. The header value is written verbatim as
+/// line 1; every record is one line. Flushed every 32 records so a
+/// crash loses at most a tail.
+pub struct RecordingWriter {
+    out: WriterOut,
+    pending: u32,
+    records: u64,
+}
+
+enum WriterOut {
+    Plain(std::io::BufWriter<std::fs::File>),
+    Zstd(zstd::stream::write::Encoder<'static, std::fs::File>),
+}
+
+impl RecordingWriter {
+    pub fn create(path: &std::path::Path, header: &serde_json::Value) -> Result<Self, String> {
+        let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let plain = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
+        let out = if plain {
+            WriterOut::Plain(std::io::BufWriter::new(file))
+        } else {
+            let enc = zstd::stream::write::Encoder::new(file, 9)
+                .map_err(|e| format!("{}: zstd: {e}", path.display()))?;
+            WriterOut::Zstd(enc)
+        };
+        let mut w = RecordingWriter {
+            out,
+            pending: 0,
+            records: 0,
+        };
+        w.write_line(header)?;
+        Ok(w)
+    }
+
+    fn write_line(&mut self, v: &serde_json::Value) -> Result<(), String> {
+        let line = serde_json::to_string(v).map_err(|e| e.to_string())?;
+        let go = |w: &mut dyn std::io::Write| -> std::io::Result<()> {
+            w.write_all(line.as_bytes())?;
+            w.write_all(b"\n")
+        };
+        match &mut self.out {
+            WriterOut::Plain(w) => go(w),
+            WriterOut::Zstd(w) => go(w),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Append one tick record; flushes every 32.
+    pub fn write_record(&mut self, v: &serde_json::Value) -> Result<(), String> {
+        use std::io::Write as _;
+        self.write_line(v)?;
+        self.records += 1;
+        self.pending += 1;
+        if self.pending >= 32 {
+            self.pending = 0;
+            match &mut self.out {
+                WriterOut::Plain(w) => w.flush(),
+                WriterOut::Zstd(w) => w.flush(),
+            }
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Records written so far (header excluded).
+    pub fn records(&self) -> u64 {
+        self.records
+    }
+
+    /// Finish the stream (zstd frame end + flush).
+    pub fn finish(self) -> Result<(), String> {
+        use std::io::Write as _;
+        match self.out {
+            WriterOut::Plain(mut w) => w.flush().map_err(|e| e.to_string()),
+            WriterOut::Zstd(w) => {
+                let mut f = w.finish().map_err(|e| e.to_string())?;
+                f.flush().map_err(|e| e.to_string())
+            }
+        }
     }
 }
 
@@ -2230,5 +2414,49 @@ mod tests {
         assert!(block.base.is_none());
         let dec = decode_terrain_delta(&block.delta.unwrap(), 1, 256).unwrap();
         assert_eq!(dec[0], vec![(9, 42)]);
+    }
+
+    /// The writer's output must reopen through the reader — container
+    /// (zstd JSONL), header, record framing and the PortInput mirror
+    /// all round-trip.
+    #[test]
+    fn writer_roundtrip() {
+        let path = std::env::temp_dir().join("mgcr-writer-roundtrip-test.mgcr");
+        let header = serde_json::json!({
+            "format": 1, "game": "mc1", "level": 0, "source": "port",
+            "tick_hz": 24,
+            "channels": {"input": "exact", "obs": false, "state": false, "hash": true},
+        });
+        let mut w = RecordingWriter::create(&path, &header).unwrap();
+        let input = PortInput {
+            thrust: 1.0,
+            fire_left: true,
+            ..PortInput::default()
+        };
+        for t in 0..40u64 {
+            w.write_record(&serde_json::json!({
+                "t": t, "input": input, "hash": format!("{t:016x}")
+            }))
+            .unwrap();
+        }
+        assert_eq!(w.records(), 40);
+        w.finish().unwrap();
+
+        let mut rec = Recording::open(&path).unwrap();
+        assert_eq!(rec.header.game, "mc1");
+        assert_eq!(rec.header.source, "port");
+        assert_eq!(rec.header.channels.input, "exact");
+        let mut n = 0u64;
+        while let Some(r) = rec.next_tick() {
+            let tick = r.unwrap();
+            assert_eq!(tick.t, n);
+            let inp: PortInput = serde_json::from_value(tick.input.clone().unwrap()).unwrap();
+            assert_eq!(inp.thrust, 1.0);
+            assert!(inp.fire_left);
+            assert_eq!(inp.stick_x, 0);
+            n += 1;
+        }
+        assert_eq!(n, 40);
+        let _ = std::fs::remove_file(&path);
     }
 }

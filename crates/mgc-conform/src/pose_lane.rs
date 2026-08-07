@@ -72,66 +72,14 @@ pub struct PoseLane {
     arm: &'static str,
 }
 
-/// Invert the stick filter across one recorded tick: find a stick
-/// value whose increment `(2·stick − acc)/4` (trunc toward zero, the
-/// :49018 law) lands the accumulator exactly on acc@N+1. The mover
-/// reads only the filtered value, so any solution is equivalent
-/// downstream; the smallest-|stick| one is returned. None = no
-/// command-range stick explains the transition (respawn wipe, a
-/// non-mouse write).
-pub(crate) fn recover_stick(acc_n: i16, acc_n1: i16) -> Option<i16> {
-    let a = acc_n as i32;
-    let d = acc_n1 as i32 - a;
-    let (lo, hi) = if d > 0 {
-        (4 * d, 4 * d + 3)
-    } else if d < 0 {
-        (4 * d - 3, 4 * d)
-    } else {
-        (-3, 3)
-    };
-    let mut best: Option<i16> = None;
-    for n in lo..=hi {
-        // n = 2·stick − acc: parity is pinned by acc.
-        if (n + a) % 2 != 0 {
-            continue;
-        }
-        let s = (n + a) / 2;
-        if (-128..=127).contains(&s) && best.is_none_or(|b| s.abs() < (b as i32).abs()) {
-            best = Some(s as i16);
-        }
-    }
-    best
-}
+// The stick-filter inversion and consumed-knock reconstruction laws
+// moved to the shared recovery home (mgc_formats::recover) so the
+// app's `--replay` shares one implementation with the harness.
+pub(crate) use mgc_formats::recover::{consumed_knock, recover_stick};
 
 /// Wrapped signed distance on a 16-bit axis (x/y are wrapping).
 fn wrap16(want: u16, got: u16) -> i64 {
     got.wrapping_sub(want) as i16 as i64
-}
-
-/// The knock the pair's mover consumed. Normally N's channel, clamped
-/// ±128 like `take_knock_step`. A hit ARMS the channel mid-pass
-/// before the carpet's slot, so when N+1's stored value is not the
-/// pure decay of N's, reconstruct the armed value by un-decaying it
-/// (measured on mc1hwl0 t=371: kmag 0→76 = 80 armed − 4, right at the
-/// first dirty x/y window). Same channel shape both games (cap 128,
-/// decay −4, snap <4; EF:59695-711).
-pub(crate) fn consumed_knock(mag0: i16, dir0: u16, mag1: i16, dir1: u16) -> Option<(u16, i16)> {
-    let m0 = mag0.clamp(-128, 128);
-    let decay = if m0 == 0 {
-        0
-    } else {
-        let d = m0 - 4 * m0.signum();
-        if d.abs() < 4 { 0 } else { d }
-    };
-    let rearmed = mag1 != decay || (mag1 != 0 && dir1 != dir0);
-    if rearmed && mag1 != 0 {
-        let m = mag1 + 4 * mag1.signum();
-        Some((dir1 & 0x7FF, m.clamp(-128, 128)))
-    } else if m0 != 0 {
-        Some((dir0 & 0x7FF, m0))
-    } else {
-        None
-    }
 }
 
 /// Wrapped signed distance on the 11-bit angle lanes.

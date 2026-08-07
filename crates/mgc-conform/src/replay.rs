@@ -29,15 +29,16 @@
 //! model.
 
 use crate::Args;
-use crate::pose_lane::{consumed_knock, recover_stick};
 use crate::verify::{PairDiff, append_hand_diffs, capture_clean, compare, measured_planes};
-use crate::verify_mc2::{
-    capture_clean_mc2, compare_mc2_gated, mouse_pos_mc2, press_pos_mc2, respawn_key_mc2, torn_slots,
-};
+use crate::verify_mc2::{capture_clean_mc2, compare_mc2_gated, torn_slots};
 use mgc_formats::mgcr::{
     ObsMc1, ObsMc2, Recording, RetailMc1, RetailMc2, decode_retail_mc1, decode_retail_mc2,
 };
-use mgc_sim::engine::world::conformance::{PinnedMc1, PinnedMc2};
+use mgc_formats::recover::{self, consumed_knock};
+use mgc_sim::engine::world::conformance::{
+    PinnedMc1, PinnedMc2, integer_pose, mc1_state_from_retail, mc2_state_from_retail,
+    pose_lanes_mc1, pose_lanes_mc2,
+};
 use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use mgc_sim::flight::{self, Mc1Input, Mc1State, Mc2Ext};
 use mgc_sim::mc1::spells::SpellId;
@@ -84,27 +85,11 @@ struct Chain {
 }
 
 impl Chain {
-    /// Seed from the recorded closure at the anchor (the pose
-    /// channel's field map, pose_lane.rs).
+    /// Seed from the recorded closure at the anchor (the shared
+    /// seeding law — mgc_sim conformance).
     fn seed_mc1(st: &RetailMc1, slot: u16) -> Self {
-        let e = &st.ents[slot as usize];
-        let w = &st.wizards[st.local_player as usize];
         Chain {
-            s: Mc1State {
-                x: e.x,
-                y: e.y,
-                z: e.z,
-                yaw: e.f30 & 0x7FF,
-                roll_f: w.roll_acc as i16,
-                pitch_f: w.pitch_acc as i16,
-                aim_pitch: e.f32 & 0x7FF,
-                eff_pitch: w.eff_pitch & 0x7FF,
-                act_speed: e.f126,
-                tgt_speed: w.cmd_speed,
-                strafe: w.strafe,
-                tick_ctr: e.f63,
-                rand: e.rand,
-            },
+            s: mc1_state_from_retail(st, slot),
             ext: Mc2Ext::default(),
             accel_was_active: false,
         }
@@ -113,47 +98,16 @@ impl Chain {
     /// The MC2 twin — plus the debuff ladders and water/nudge
     /// channels the pose channel gates instead of seeding.
     fn seed_mc2(st: &RetailMc2, slot: u16, row: flight::Mc2Row) -> Self {
-        let e = &st.ents[slot as usize];
-        let p = &st.players[st.local_player as usize];
+        let (s, ext) = mc2_state_from_retail(st, slot, row);
         Chain {
-            s: Mc1State {
-                x: e.x,
-                y: e.y,
-                z: e.z,
-                yaw: e.yaw as u16 & 0x7FF,
-                roll_f: p.roll_acc as i16,
-                pitch_f: p.pitch_acc as i16,
-                aim_pitch: e.pitch as u16 & 0x7FF,
-                eff_pitch: p.eff_pitch & 0x7FF,
-                act_speed: e.speed,
-                tgt_speed: p.cmd_speed,
-                strafe: p.strafe,
-                tick_ctr: 0,
-                rand: 0,
-            },
-            ext: Mc2Ext {
-                move_speed: p.move_speed,
-                move_speed_ctr: p.move_speed_ctr,
-                mobilize: p.mobilize,
-                mobilize_ctr: p.mobilize_ctr,
-                add: (0, 0, 0),
-                water_ctr: p.water_ctr as u16,
-                nudge_latch: p.nudge_latch != 0,
-                row,
-            },
+            s,
+            ext,
             accel_was_active: false,
         }
     }
 
     fn pose(&self) -> PlayerPose {
-        PlayerPose {
-            x: self.s.x,
-            y: self.s.y,
-            z: self.s.z,
-            heading: self.s.yaw,
-            pitch: self.s.aim_pitch,
-            speed: self.s.act_speed,
-        }
+        integer_pose(&self.s)
     }
 }
 
@@ -370,12 +324,9 @@ fn step_mc2(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand
 }
 
 // ------------------------------------------------------- input recovery
-
-/// MC1 dw_0 fire bits (0x10/0x20) — the CONSUMED per-tick fire levels,
-/// stamped by the same consume loop as the move bits.
-fn mc1_fire(mb: u32) -> (bool, bool) {
-    (mb & 0x10 != 0, mb & 0x20 != 0)
-}
+//
+// The recovery laws live in the shared home (mgc_formats::recover);
+// this driver only widens the recovered pair into the mover's input.
 
 fn mc1_mover_input(mb: u32, stick: (i16, i16)) -> Mc1Input {
     Mc1Input {
@@ -593,76 +544,9 @@ impl RStats {
     }
 }
 
-/// Pose lanes: the chained carpet vs the recorded pose at the graded
-/// boundary (the pose channel's lane set).
-fn pose_lanes_mc1(
-    s: &Mc1State,
-    e: &mgc_formats::mgcr::RetailEntMc1,
-    w: &mgc_formats::mgcr::RetailWizardMc1,
-) -> Vec<(&'static str, i64, i64)> {
-    let mut rows = Vec::new();
-    let mut lane = |name, want: i64, got: i64| {
-        if want != got {
-            rows.push((name, want, got));
-        }
-    };
-    lane("pose.x", e.x as i64, s.x as i64);
-    lane("pose.y", e.y as i64, s.y as i64);
-    lane("pose.z", e.z as i64, s.z as i64);
-    lane("pose.yaw", (e.f30 & 0x7FF) as i64, s.yaw as i64);
-    lane("pose.aim_pitch", (e.f32 & 0x7FF) as i64, s.aim_pitch as i64);
-    lane(
-        "pose.eff_pitch",
-        (w.eff_pitch & 0x7FF) as i64,
-        (s.eff_pitch & 0x7FF) as i64,
-    );
-    lane("pose.act_speed", e.f126 as i64, s.act_speed as i64);
-    lane("pose.tgt_speed", w.cmd_speed as i64, s.tgt_speed as i64);
-    lane("pose.strafe", w.strafe as i64, s.strafe as i64);
-    lane("pose.roll_f", w.roll_acc as i16 as i64, s.roll_f as i64);
-    lane("pose.pitch_f", w.pitch_acc as i16 as i64, s.pitch_f as i64);
-    lane("pose.tick_ctr", e.f63 as i64, s.tick_ctr as i64);
-    lane("pose.rand", e.rand as i64, s.rand as i64);
-    rows
-}
-
-fn pose_lanes_mc2(
-    s: &Mc1State,
-    e: &mgc_formats::mgcr::RetailEntMc2,
-    p: &mgc_formats::mgcr::RetailPlayerMc2,
-) -> Vec<(&'static str, i64, i64)> {
-    let mut rows = Vec::new();
-    let mut lane = |name, want: i64, got: i64| {
-        if want != got {
-            rows.push((name, want, got));
-        }
-    };
-    lane("pose.x", e.x as i64, s.x as i64);
-    lane("pose.y", e.y as i64, s.y as i64);
-    lane("pose.z", e.z as i64, s.z as i64);
-    lane("pose.yaw", (e.yaw as u16 & 0x7FF) as i64, s.yaw as i64);
-    lane(
-        "pose.aim_pitch",
-        (e.pitch as u16 & 0x7FF) as i64,
-        s.aim_pitch as i64,
-    );
-    lane(
-        "pose.eff_pitch",
-        (p.eff_pitch & 0x7FF) as i64,
-        (s.eff_pitch & 0x7FF) as i64,
-    );
-    lane("pose.act_speed", e.speed as i64, s.act_speed as i64);
-    lane("pose.tgt_speed", p.cmd_speed as i64, s.tgt_speed as i64);
-    lane("pose.strafe", p.strafe as i64, s.strafe as i64);
-    lane("pose.roll_f", p.roll_acc as i16 as i64, s.roll_f as i64);
-    lane("pose.pitch_f", p.pitch_acc as i16 as i64, s.pitch_f as i64);
-    // water_ctr is deliberately NOT a lane yet: it gates the
-    // water-flight sound loop, not the pose. (Grading it here is what
-    // EXPOSED the +610 u16-vs-int8 decode bug — the fixed byte read
-    // makes it a candidate lane once its ++/−− law is verified against
-    // a wet stretch.)
-    rows
-}
+// Pose lanes (the chained carpet vs the recorded pose at a graded
+// boundary) live in the shared seeding home — mgc_sim conformance
+// `pose_lanes_mc1`/`pose_lanes_mc2`.
 
 // --------------------------------------------------------------- MC1 run
 
@@ -734,7 +618,7 @@ fn run_mc1(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     .install_measured_terrain(h, ty, ceil)
                     .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
             }
-            let (fl, fr) = mc1_fire(st.wizards[st.local_player as usize].move_bits);
+            let (fl, fr) = recover::mc1_fire(st.wizards[st.local_player as usize].move_bits);
             world.set_prev_fire(fl, fr);
             chain = Some((Chain::seed_mc1(&st, report.human_slot), report.human_slot));
             stats.open(tick.t);
@@ -757,61 +641,34 @@ fn run_mc1(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         let (pt, pst) = st_prev.take().expect("anchored");
         let (ch, human_slot) = chain.as_mut().expect("anchored");
         let slot = *human_slot;
-        let pw = &pst.wizards[pst.local_player as usize];
         let cw = &st.wizards[st.local_player as usize];
 
-        // ---- input for the pair pt → t, all from the recording ----
-        let rec_stick = (
-            recover_stick(pw.roll_acc as i16, cw.roll_acc as i16),
-            recover_stick(pw.pitch_acc as i16, cw.pitch_acc as i16),
-        );
-        let stick_ok = matches!(rec_stick, (Some(_), Some(_)));
-        let stick = match rec_stick {
-            (Some(x), Some(y)) => (x, y),
-            _ => {
-                stats.stick_unrec += 1;
-                (0, 0)
-            }
-        };
-        let mb = pw.move_bits;
-        let inp = mc1_mover_input(mb, stick);
-        let (fire_left, fire_right) = mc1_fire(mb);
-        // Equips: a recorded hand change across the pair replays as
-        // the equip command (resolved to the internal spell id via the
-        // acquisition list at N+1 — append_hand_diffs' convention).
-        let equip = |prev_raw: u16, cur_raw: u16| -> Option<SpellId> {
-            (prev_raw != cur_raw)
-                .then(|| {
-                    st.hand_spell(st.local_player as usize, cur_raw)
-                        .map(SpellId)
-                })
-                .flatten()
-        };
-        let equip_left = equip(pw.hand_left, cw.hand_left);
-        let equip_right = equip(pw.hand_right, cw.hand_right);
-        if equip_left.is_some() || equip_right.is_some() {
+        // ---- input for the pair pt → t, all from the recording
+        // (the shared recovery laws — mgc_formats::recover) ----
+        let rec = recover::recover_pair_mc1(&pst, &st, tick.input.as_ref());
+        let stick_ok = rec.stick_ok();
+        if !stick_ok {
+            stats.stick_unrec += 1;
+        }
+        let inp = mc1_mover_input(rec.move_byte, rec.stick());
+        if rec.equip_left.is_some() || rec.equip_right.is_some() {
             stats.equips += 1;
         }
-        // Respawn: the SPACE lane on the END record (MC1 has no press
-        // latch — ±1-tick dating caveat, RECORDING.md).
-        let respawn = respawn_key_mc2(tick.input.as_ref());
-        if respawn {
+        if rec.respawn {
             stats.respawns += 1;
         }
         let cmd = PlayerCommand {
-            fire_left,
-            fire_right,
-            equip_left,
-            equip_right,
-            respawn,
+            fire_left: rec.fire_left,
+            fire_right: rec.fire_right,
+            equip_left: rec.equip_left.map(SpellId),
+            equip_right: rec.equip_right.map(SpellId),
+            respawn: rec.respawn,
             ..PlayerCommand::default()
         };
-        // Move byte exactly 48 (both fires, no move): retail
-        // short-circuits sub_46840 WHOLE (:55759), freezing the held
-        // strafe's decay. `Mc1Input` carries no fire state, so
-        // pre-feed one decay quantum (the pose channel's emulation) —
-        // the mover's decay lands back on the frozen value.
-        if mb == 48 && ch.s.strafe != 0 {
+        // The dw==48 strafe-freeze emulation (law in RecoveredPair):
+        // pre-feed one decay quantum, the mover's decay lands back on
+        // the frozen value.
+        if rec.mc1_strafe_freeze() && ch.s.strafe != 0 {
             ch.s.strafe += 4 * ch.s.strafe.signum();
         }
 
@@ -968,9 +825,8 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
     let mut stats = RStats::default();
     let mut st_prev: Option<(u64, RetailMc2)> = None;
     let mut chain: Option<(Chain, u16)> = None;
-    // The respawn-key witnesses (verify_mc2::respawn_key_mc2 law).
-    let mut prev_space = false;
-    let mut prev_mouse: Option<(i16, i16)> = None;
+    // The respawn-press dating witness (mgc_formats::recover law).
+    let mut witness = recover::Mc2RespawnWitness::default();
     let mut printed_import = false;
     while let Some(r) = rec.next_tick() {
         let tick = r?;
@@ -990,23 +846,11 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
-        // Fire rides the CONSUMED move/fire byte on the pair's END
-        // record (MC2 stamps it in PlayerEvents): measured strictly
-        // stronger than the press-latch law — 560/560 retail arms
-        // carry the bit on the same record, and the latch's extra
-        // edges are UI clicks the byte correctly omits (ledger §THE
-        // REPLAY VERIFIER). The respawn key still needs its witness
-        // pair (no latch on the keyboard registers).
-        let byte_fire = |p: &mgc_formats::mgcr::RetailPlayerMc2| {
-            (p.move_bits & 0x10 != 0, p.move_bits & 0x20 != 0)
-        };
-        let press = press_pos_mc2(tick.input.as_ref());
-        let space = respawn_key_mc2(tick.input.as_ref());
-        let mouse = mouse_pos_mc2(tick.input.as_ref());
-        let recentred = mouse.is_some() && mouse != prev_mouse && mouse == press;
-        let respawn = space && (prev_space || recentred);
-        prev_space = space;
-        prev_mouse = mouse.or(prev_mouse);
+        // The respawn witness folds EVERY record in stream order
+        // (dating law on [`recover::Mc2RespawnWitness`]); fire rides
+        // the CONSUMED move/fire byte on the pair's END record —
+        // both laws live in the shared recovery home.
+        let respawn = witness.observe(tick.input.as_ref());
 
         let anchor = match (&st_prev, &chain) {
             (Some((pt, _)), Some(_)) if tick.t == pt + 1 => false,
@@ -1024,7 +868,7 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     .install_measured_terrain(h, ty, ceil)
                     .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
             }
-            let (fl, fr) = byte_fire(&st.players[st.local_player as usize]);
+            let (fl, fr) = recover::mc1_fire(st.players[st.local_player as usize].move_bits);
             world.set_prev_fire(fl, fr);
             let row = world.mc2_carpet_row();
             chain = Some((
@@ -1050,58 +894,30 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         let (pt, pst) = st_prev.take().expect("anchored");
         let (ch, human_slot) = chain.as_mut().expect("anchored");
         let slot = *human_slot;
-        let pp = &pst.players[pst.local_player as usize];
         let cp = &st.players[st.local_player as usize];
 
-        // ---- input for the pair pt → t ----
-        let rec_stick = (
-            recover_stick(pp.roll_acc as i16, cp.roll_acc as i16),
-            recover_stick(pp.pitch_acc as i16, cp.pitch_acc as i16),
-        );
-        let stick_ok = matches!(rec_stick, (Some(_), Some(_)));
-        let stick = match rec_stick {
-            (Some(x), Some(y)) => (x, y),
-            _ => {
-                stats.stick_unrec += 1;
-                (0, 0)
-            }
-        };
-        // MC2 stamps the move byte in PlayerEvents — read the END
-        // record.
-        let inp = mc1_mover_input(cp.move_bits, stick);
-        // Hand rebinds: a recorded hand change replays as the pane
-        // select (tier = the recorded per-spell selection at N+1;
-        // out-of-range spell = the unbind commit).
-        let rebind = |hand: u8, prev: i16, cur: i16| -> Option<(u8, u8, u8)> {
-            (prev != cur).then(|| {
-                if (0..26i16).contains(&cur) {
-                    (cur as u8, cp.sel[cur as usize], hand)
-                } else {
-                    (255, 0, hand)
-                }
-            })
-        };
-        let left = rebind(0, pp.hand_left, cp.hand_left);
-        let right = rebind(1, pp.hand_right, cp.hand_right);
-        let mc2_select = match (left, right) {
-            (Some(l), Some(_)) => {
-                stats.rebind_dropped += 1;
-                Some(l)
-            }
-            (l, r) => l.or(r),
-        };
-        if mc2_select.is_some() {
+        // ---- input for the pair pt → t, all from the recording
+        // (the shared recovery laws — mgc_formats::recover) ----
+        let rec = recover::recover_pair_mc2(&pst, &st, respawn);
+        let stick_ok = rec.stick_ok();
+        if !stick_ok {
+            stats.stick_unrec += 1;
+        }
+        let inp = mc1_mover_input(rec.move_byte, rec.stick());
+        if rec.rebind_dropped {
+            stats.rebind_dropped += 1;
+        }
+        if rec.mc2_select.is_some() {
             stats.equips += 1;
         }
-        if respawn {
+        if rec.respawn {
             stats.respawns += 1;
         }
-        let (fire_left, fire_right) = byte_fire(cp);
         let cmd = PlayerCommand {
-            fire_left,
-            fire_right,
-            mc2_select,
-            respawn,
+            fire_left: rec.fire_left,
+            fire_right: rec.fire_right,
+            mc2_select: rec.mc2_select,
+            respawn: rec.respawn,
             ..PlayerCommand::default()
         };
 

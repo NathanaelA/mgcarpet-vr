@@ -1770,6 +1770,33 @@ pub fn rival_markers(
 
 /// Resolve one type index to a billboard at a world position; skips
 /// rows whose size cannot be resolved (missing sprite dims).
+/// The replay GHOST (`--replay`): the recorded pose drawn as a
+/// translucent billboard (blend 2 — the 33%-opaque raster mode) of
+/// the wizard-carpet sprite, feet at the recorded altitude like any
+/// flying pose.
+pub fn ghost_billboard(
+    game: GameId,
+    type_index: u16,
+    x: f32,
+    alt: f32,
+    z: f32,
+    yaw: f32,
+    sprite_dims: &impl Fn(u16) -> Option<(u16, u16, u16)>,
+) -> Option<Billboard> {
+    let s = resolve_pose_sprite(game, type_index, sprite_dims)?;
+    Some(Billboard {
+        x: x.rem_euclid(MAP_TILES as f32),
+        y: alt,
+        z: z.rem_euclid(MAP_TILES as f32),
+        yaw,
+        sprite_base: s.sprite_base,
+        draw_type: s.draw_type,
+        frame: 0,
+        world_h: s.world_h,
+        blend: 2,
+    })
+}
+
 fn push_billboard(
     out: &mut Vec<Billboard>,
     height: &[u8],

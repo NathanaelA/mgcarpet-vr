@@ -7228,3 +7228,46 @@ decisions. (b) For watchable retail replays the app should derive the
 faithful-tier pose from the integer carpet, not the accumulated float
 yaw (a quantization risk over long sessions the integer driver
 sidesteps).
+
+# THE IN-APP REPLAY + RECORDER LANDED (2026-08-07, session 13)
+
+Both follow-ups above are LANDED, plus the lift that makes them one
+implementation (RECORDING.md "Consumers" is the normative entry):
+
+- **The lift:** input recovery moved to `mgc_formats::recover`
+  (stick inversion, consumed knock, move/fire byte, equips/rebinds,
+  the respawn SPACE lane + MC2 recentre witness as
+  `Mc2RespawnWitness`, per-pair `recover_pair_mc1/mc2`, the
+  capture-grade laws); chain seeding + the pose-lane compare moved
+  to mgc-sim's conformance module (`mc1_state_from_retail`,
+  `mc2_state_from_retail`, `integer_pose`, `pose_lanes_*`).
+  `mgc-conform replay` now consumes the shared home — regraded
+  IDENTICAL post-lift (mc1l0 pose-only horizon 567; mc2l3 pose-only
+  1,156 breaking at the water-gate t=1157).
+- **(b) integer pose:** `Simulation::step`'s faithful tier hands
+  `World::tick` the INTEGER carpet pose verbatim (heading/pitch were
+  re-quantized from the accumulated float yaw — a ±1-unit cumulative
+  drift); the death fall integrates in integer space at the carpet
+  (the replay driver's exact form) and respawn preserves the integer
+  yaw. Enhanced keeps the float flyer. Goldens unmoved (the drift
+  needs long sessions to bite — exactly the risk retired).
+- **(a) `--replay` (source-agnostic) + `--record`:**
+  crates/mgc-app/src/replay.rs. Retail arm = the verifier's chain
+  through the app's own `Simulation::step` (`FlightInput` gained the
+  replay-only `mc1_move_byte` exact-byte lane — the float axes
+  cannot express both-bits-held states; MC2 dw_0 bit 0x80 arms the
+  barrel roll). Port arm = header sim-closure pins (tier tags
+  applied, foreign `snapshot_version` refused), `start_mgcs_b64`
+  restore, hash channel asserted live. HUD: bit-exact/diverged-since
+  counter + translucent recorded-pose GHOST billboard.
+  `--replay-check` = the headless twin (exit 0 = zero divergence).
+  `--record` writes `source:"port"` + `input:"exact"`
+  (`mgcr::PortInput`) + hash via the new `mgcr::RecordingWriter`,
+  start state ALWAYS embedded as `start_mgcs_b64` (pristine boot =
+  the t=0 special case).
+- **Certification:** app `--replay-check` vs `mgc-conform replay`
+  world mode — IDENTICAL pose timelines on mc1l0 (first divergence
+  t=563, 7,097 ticks, one segment) and mc2l3 (t=244, 22,798 ticks);
+  the port loop pinned by
+  `mgc-app replay::tests::port_record_replay_roundtrip` (record →
+  reopen → replay: 200/200 hash-verified, end states bit-equal).

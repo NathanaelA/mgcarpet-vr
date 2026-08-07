@@ -367,3 +367,15 @@ families (pose-phase, mid-pass terraform, add-mailbox) EVAPORATE
 here — and conversely every OPEN world family becomes a
 chain-breaker. Findings land in the ledger under §THE REPLAY
 VERIFIER.
+
+The recovery laws above LIVE in `mgc_formats::recover` (the shared
+home) and the chain seeding/pose-lane compare in mgc-sim's
+conformance module — one implementation drives this verifier AND the
+game's own `--replay` / `--replay-check` (RECORDING.md "Consumers").
+The in-app chain is certified against this verifier: identical
+first-divergence boundaries on mc1l0 (pose t=563) and mc2l3 (pose
+t=244), 2026-08-07. The app feeds the recovered move byte to the
+faithful movers verbatim (`FlightInput::mc1_move_byte`) — the float
+axes cannot express retail's both-bits-held states — and its
+faithful tier hands `World::tick` the INTEGER carpet pose (the
+quantization-risk fix; the enhanced tier keeps the float flyer).

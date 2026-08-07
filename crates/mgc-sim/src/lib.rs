@@ -166,6 +166,36 @@ pub struct FlightInput {
     /// units) — the roll's abort sense: a per-tick |dx| > 16 means
     /// the player grabbed the stick (sub_55C60 EF:38951-56).
     pub raw_dx: i16,
+    /// REPLAY-ONLY exact move byte (retail `dw_0` bits 1/2 speed,
+    /// 4/8 strafe): when set, the faithful movers consume these bits
+    /// verbatim instead of deriving them from the float axes. The
+    /// float mapping cannot express retail's both-bits-held states
+    /// (both speed keys, both strafes — the latter resolves RIGHT by
+    /// the sequential-bit-test law), so a recovered retail stream
+    /// needs the byte itself. Live play leaves it `None`.
+    pub mc1_move_byte: Option<u8>,
+}
+
+/// The faithful movers' input view: the float axes' sign mapping, or
+/// the replay exact byte when the caller supplies one.
+fn mc1_input(input: &FlightInput) -> flight::Mc1Input {
+    let (up, down, left, right) = match input.mc1_move_byte {
+        Some(mb) => (mb & 1 != 0, mb & 2 != 0, mb & 4 != 0, mb & 8 != 0),
+        None => (
+            input.thrust > 0.0,
+            input.thrust < 0.0,
+            input.strafe < 0.0,
+            input.strafe > 0.0,
+        ),
+    };
+    flight::Mc1Input {
+        stick_x: input.stick_x.clamp(-127, 127),
+        stick_y: input.stick_y.clamp(-127, 127),
+        speed_up: up,
+        speed_down: down,
+        strafe_left: left,
+        strafe_right: right,
+    }
 }
 
 /// The carpet: position in tile units, velocity in tiles/second.
@@ -465,6 +495,33 @@ impl Simulation {
         self.seed_lift_desired();
     }
 
+    /// Drop the Accelerate expiry edge (the replay RE-anchor: a fresh
+    /// segment must not fire the +80 restore off the previous
+    /// segment's stale arm).
+    pub fn clear_accel_edge(&mut self) {
+        self.accel_was_active = false;
+    }
+
+    /// The reverse hand-off: derive the float flyer WHOLESALE from
+    /// the integer carpet (the replay anchor — the carpet was just
+    /// seeded from a recorded closure and is the sole authority).
+    /// Velocities zero; the continuous yaw accumulator re-bases here.
+    pub fn sync_flyer_from_carpet(&mut self) {
+        const RAD: f32 = std::f32::consts::TAU / 2048.0;
+        let c = self.carpet;
+        let f = &mut self.flyer;
+        f.x = c.x as f32 / 256.0;
+        f.z = c.y as f32 / 256.0;
+        f.y = c.z as f32 / 256.0;
+        f.yaw = c.yaw as f32 * RAD;
+        f.pitch = -(c.aim_signed() as f32) * RAD;
+        f.roll = c.roll_f as f32 * RAD;
+        f.vx = 0.0;
+        f.vy = 0.0;
+        f.vz = 0.0;
+        self.seed_lift_desired();
+    }
+
     /// The desired-altitude offset band, engine units over terrain:
     /// clearance floor .. climb band, game-keyed (MC1 128..1024; MC2
     /// by tuning row — 256..1024 open, 256..3072 cave, the decompile's
@@ -636,7 +693,15 @@ impl Simulation {
         // models share the directional law: v_14 is the resisting-press
         // edge, NOT any-press (hold + re-cast must survive).
         if let Some(w) = &mut self.world {
-            w.thrust_cancel(input.thrust);
+            // Replay byte drive: the cancel's directional sense comes
+            // off the byte (speed-up wins — the replay driver's law).
+            let thrust = match input.mc1_move_byte {
+                Some(mb) if mb & 1 != 0 => 1.0,
+                Some(mb) if mb & 2 != 0 => -1.0,
+                Some(_) => 0.0,
+                None => input.thrust,
+            };
+            w.thrust_cancel(thrust);
         }
 
         // The Backspace full stop, applied before the move like
@@ -713,18 +778,34 @@ impl Simulation {
         // The death fall (sub_45FC0 :55466-77): gravity −2/tick²
         // (clamped −256) on top of the still-drifting move, riding
         // down to the ground+128 floor — touchdown is detected by
-        // the world tick below at that exact altitude. Integrated in
-        // FLYER space at the FLYER's position: the integer carpet's
-        // x/y are stale under the enhanced mover (never synced after
-        // spawn), so clamping against ground THERE would suspend the
-        // corpse mid-air wherever the local ground sits lower.
+        // the world tick below at that exact altitude. Faithful tier:
+        // integer space at the carpet's position (the replay driver's
+        // exact form — the integer carpet is live under the faithful
+        // movers). Enhanced: FLYER space at the FLYER's position —
+        // the integer carpet's x/y are stale there (never synced
+        // after spawn), so clamping against ground THERE would
+        // suspend the corpse mid-air wherever the local ground sits
+        // lower.
         if falling && let Some(w) = &mut self.world {
-            let dz = w.death_fall_step() as f32 / 256.0;
-            let g = w.ground_height_tiles(self.flyer.x, self.flyer.z);
-            let y = (self.flyer.y + dz).max(g + 0.5);
-            self.flyer.y = y;
-            self.flyer.vy = 0.0;
-            self.carpet.z = ((y * 256.0) as i32).min(i16::MAX as i32) as i16;
+            match self.thrust_model {
+                ThrustModel::Mc1 => {
+                    let dz = w.death_fall_step();
+                    let g = w.ground_z_engine(self.carpet.x, self.carpet.y);
+                    self.carpet.z = (self.carpet.z as i32 + dz as i32)
+                        .max(g as i32 + 128)
+                        .min(i16::MAX as i32) as i16;
+                    self.flyer.y = self.carpet.z as f32 / 256.0;
+                    self.flyer.vy = 0.0;
+                }
+                ThrustModel::Enhanced => {
+                    let dz = w.death_fall_step() as f32 / 256.0;
+                    let g = w.ground_height_tiles(self.flyer.x, self.flyer.z);
+                    let y = (self.flyer.y + dz).max(g + 0.5);
+                    self.flyer.y = y;
+                    self.flyer.vy = 0.0;
+                    self.carpet.z = ((y * 256.0) as i32).min(i16::MAX as i32) as i16;
+                }
+            }
         }
         // Dead (sub_463B0 :55575-91): the speeds were already zeroed
         // before the move (the flyer is pinned at the grave); here the
@@ -753,35 +834,48 @@ impl Simulation {
         // The world turn: triggers/portals probe the flyer, events tick.
         if let Some(w) = &mut self.world {
             let f = self.flyer;
-            // Forward speed in tiles/tick — the cast inherits it onto
-            // the projectile's base speed like the carpet's +126, and
-            // MC2's Speed spell reads its direction from the sign.
-            // Faithful: +126 itself, sign included; enhanced: the
-            // horizontal velocity's SIGNED component along the hull
-            // axis — the retail-analog signed carpet speed (backward
-            // drift reads negative). The hull, not the aim: the boost
-            // drives along the hull basis, and right after a sharp
-            // mouse turn the aim projection would misread forward
-            // motion as backward. (The former |v| magnitude could
-            // never go negative — the Speed spell always propelled
-            // forward — and read strafe/fall speed as forward.)
-            let speed = match self.thrust_model {
-                ThrustModel::Mc1 => self.carpet.act_speed as f32 / 256.0,
+            let pose = match self.thrust_model {
+                // Faithful: the INTEGER carpet verbatim — the replay
+                // driver's pose law (`conformance::integer_pose`).
+                // x/y/z/speed round-trip through the flyer exactly
+                // (power-of-two scaling), but heading/pitch do NOT:
+                // `flyer.yaw` is an accumulated float sum of per-tick
+                // radian deltas whose 11-bit re-quantization drifts
+                // off the integer yaw over a session. The speed is
+                // the carpet's +126, sign included — the cast
+                // inherits it onto the projectile's base speed, and
+                // MC2's Speed spell reads its direction from the
+                // sign.
+                ThrustModel::Mc1 => world::conformance::integer_pose(&self.carpet),
+                // Enhanced: the float flyer, quantized at the seam.
+                // The pose heading is the AIM (yaw + lead): under
+                // chase steering casts launch along the crosshair,
+                // not the hull — you shoot where you point while the
+                // carpet is still coming around (player ruling). The
+                // speed is the horizontal velocity's SIGNED component
+                // along the hull axis — the retail-analog signed
+                // carpet speed (backward drift reads negative). The
+                // hull, not the aim: the boost drives along the hull
+                // basis, and right after a sharp mouse turn the aim
+                // projection would misread forward motion as
+                // backward. (The former |v| magnitude could never go
+                // negative — the Speed spell always propelled forward
+                // — and read strafe/fall speed as forward.)
                 ThrustModel::Enhanced => {
                     let (sy, cy) = f.yaw.sin_cos();
-                    (f.vx * sy - f.vz * cy) * TICK_DT
+                    let speed = (f.vx * sy - f.vz * cy) * TICK_DT;
+                    world::PlayerPose::from_tiles(
+                        f.x,
+                        f.y,
+                        f.z,
+                        f.yaw + self.aim_lead,
+                        f.pitch,
+                        speed,
+                    )
                 }
             };
-            // The pose heading is the AIM: under enhanced chase
-            // steering casts launch along the crosshair (yaw + lead),
-            // not the hull — you shoot where you point while the
-            // carpet is still coming around (player ruling).
-            let aim = match self.thrust_model {
-                ThrustModel::Enhanced => f.yaw + self.aim_lead,
-                ThrustModel::Mc1 => f.yaw,
-            };
             w.tick(
-                world::PlayerPose::from_tiles(f.x, f.y, f.z, aim, f.pitch, speed),
+                pose,
                 world::PlayerCommand {
                     fire_left: input.fire_left,
                     fire_right: input.fire_right,
@@ -799,6 +893,7 @@ impl Simulation {
             // heading preserved.
             if let Some((x, z)) = w.take_respawn() {
                 let ground = w.ground_height_tiles(x, z);
+                let yaw_i = self.carpet.yaw;
                 let f = &mut self.flyer;
                 f.x = x;
                 f.z = z;
@@ -807,6 +902,13 @@ impl Simulation {
                 f.vy = 0.0;
                 f.vz = 0.0;
                 self.carpet = flight::Mc1State::from_tiles(f.x, f.z, f.y, f.yaw);
+                // Heading preserved: under the faithful tier the
+                // INTEGER yaw is authoritative — keep it over
+                // `from_tiles`' float re-quantization (the replay
+                // driver's law).
+                if self.thrust_model == ThrustModel::Mc1 {
+                    self.carpet.yaw = yaw_i;
+                }
                 // Ruling 6: death/respawn resets the pinned desired
                 // altitude to the spawn offset (ground + one tile).
                 let (lo, hi) = if w.verbs().flight == verbs::FlightVerb::Mc2 {
@@ -923,14 +1025,7 @@ impl Simulation {
         self.accel_was_active = over.is_some();
 
         let knock = self.world.as_mut().and_then(|w| w.take_knock_step());
-        let inp = flight::Mc1Input {
-            stick_x: input.stick_x.clamp(-127, 127),
-            stick_y: input.stick_y.clamp(-127, 127),
-            speed_up: input.thrust > 0.0,
-            speed_down: input.thrust < 0.0,
-            strafe_left: input.strafe < 0.0,
-            strafe_right: input.strafe > 0.0,
-        };
+        let inp = mc1_input(input);
         let prev = self.carpet;
         let moved = match &self.world {
             Some(w) => flight::mc1_move(
@@ -1089,14 +1184,7 @@ impl Simulation {
             }
         }
 
-        let inp = flight::Mc1Input {
-            stick_x: input.stick_x.clamp(-127, 127),
-            stick_y: input.stick_y.clamp(-127, 127),
-            speed_up: input.thrust > 0.0,
-            speed_down: input.thrust < 0.0,
-            strafe_left: input.strafe < 0.0,
-            strafe_right: input.strafe > 0.0,
-        };
+        let inp = mc1_input(input);
         let prev = self.carpet;
         let w = self.world.as_ref().expect("checked above");
         let moved = flight::mc2_move(
