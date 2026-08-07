@@ -15,18 +15,25 @@ the function entry -- the entry stays byte-for-byte pristine, so there are no
 injected bytes there to be misdecoded. The stub paces, then ``call``s the
 original tick fn and ``ret``s to the caller. It:
 
-  1. paces every sub-step to a wall-clock deadline (the game's own PIT
-     counter, measured live at ~480 Hz). At the default game speed the caller
-     runs the tick fn 4x per rendered frame, so fps = 480 / (4 * period): the
-     default period 5 gives ~24 fps (the authentic Magic Carpet rate),
-     regardless of how high DOSBox cycles are set. The excess cycles are
-     burned in a wall-clock spin, which is exactly the large *quiescent*
-     window the recorder wants: the world struct is settled and untouched.
-  2. maintains a mailbox in obj3's committed tail: a magic, a monotonic tick
-     counter, and an ``in_window`` flag raised for the whole spin. The
-     recorder snipes on ``in_window==1`` keyed by the tick counter and gets
-     one coherent snapshot per sub-step -- gap-free by construction, no more
-     +63 heuristic.
+  1. paces ONE sub-step per rendered frame to a wall-clock deadline (the
+     game's own ~120 Hz PIT counter): fps = 120 / period, so the default
+     period 5 gives ~24 fps (the authentic Magic Carpet rate) regardless of
+     how high DOSBox cycles are set. The excess cycles are burned in a
+     wall-clock spin -- exactly the large *quiescent* window the recorder
+     wants: the world struct is settled and untouched. Only the FIRST
+     sub-step of a frame is paced, so the F3 game-speed feature (1x / 4x /
+     16x sub-steps per frame) still speeds the SIM up while the frame rate
+     stays put; at the default speed (1 sub-step/frame) every sub-step is the
+     first, so pacing is bit-identical in effect to the old every-sub-step
+     pacer.
+  2. maintains a mailbox in obj3's committed tail: a magic, a monotonic
+     sub-step counter, an ``in_window`` flag raised only around a paced spin
+     (never on a free-running sub-step, so the recorder never parks in a
+     zero-width window), and the raw F3 gameSpeed (0/1/2) so the recorder can
+     tell a legit speed-up from a capture loss. The recorder snipes on
+     ``in_window==1`` keyed by the tick counter and gets one coherent
+     snapshot per paced sub-step -- gap-free by construction, no +63
+     heuristic.
 
 The sim is unaffected: MC1's lockstep multiplayer proves per-tick logic is
 wall-clock independent (the ~120 Hz counter feeds render/animation timing,
@@ -43,9 +50,10 @@ Safety / provenance
   detoured the entry; the 10-byte overwrite decoded as a wild ``add eax,[eax]``
   when the dynamic recompiler picked the region up misaligned, so we redirect
   the call site instead).
-- The stub touches only EAX/ECX/EDX (caller-clobber on a void, no-arg fn); the
-  original tick fn saves/restores EBX/ESI/EDI/EBP, so the caller's callee-saved
-  registers (its loop counter in EBX) survive the wrapper unchanged.
+- The stub WRITES only EAX/ECX/EDX (caller-clobber on a void, no-arg fn) and
+  only READS EBX (the fan-out's live loop index, to pace just the first
+  sub-step); the original tick fn saves/restores EBX/ESI/EDI/EBP, so the
+  caller's callee-saved registers (its loop counter in EBX) survive unchanged.
 - DOS/4GW relocates the image by one base and injected code gets no LE fixups,
   so the stub computes that load delta at runtime (call/pop) and addresses all
   globals and the original tick fn relatively (delta-invariant).
@@ -84,6 +92,8 @@ MB_MAGIC1 = MB_OBJ3 + 0x04  # 'TIK1'
 MB_TICK = MB_OBJ3 + 0x08  # u32 monotonic sub-step counter
 MB_INWIN = MB_OBJ3 + 0x0C  # u32 1 while parked in the quiescent spin
 MB_DEADLINE = MB_OBJ3 + 0x10  # u32 next release, in PIT counts
+MB_SPEED = MB_OBJ3 + 0x14  # u32 raw F3 gameSpeed latch (0/1/2) -- lets the
+#                            recorder tell a legit F3 speed-up from capture loss
 MB_PERIOD = MB_OBJ3 + 0x18  # u32 sub-step period in PIT counts (default 1)
 MB_GUEST = OBJ3_BASE + MB_OBJ3  # guest-LINK addr the recorder reads (0x132c40)
 
@@ -145,6 +155,10 @@ MC2_LIMITER_SIG = _re.compile(
 )
 
 WALLCLOCK_FROM_STRUCTPTR = 0x1E2C  # wallclock obj3-offset = structptr_off - this
+GAMESPEED_PTR_FROM_STRUCTPTR = 8  # obj3ptr global obj3-offset = structptr_off + this
+#   (the gameSpeed fan-out reads its runtime struct through THIS pointer global,
+#    a different global from the tick fn's struct ptr; +8 holds in both builds.)
+GAMESPEED_BYTE_OFF = 0x96  # F3 gameSpeed byte within that runtime struct (0/1/2)
 
 # sub_41780 head: push ebx/esi/edi/ebp ; sub esp,0x158 ; mov esi,[structptr] ;
 # imul eax,[esi+4],0x24a1 ; add eax,0x24df  (the :52223 LCG draw). Used only to
@@ -245,6 +259,22 @@ def find_build(le: LE) -> Build:
     if (b"\xff\x05" + wc_pre) not in code:
         raise ValueError(
             f"wallclock {wallclock:#x}: no 'inc [wc]' writer -- derivation suspect"
+        )
+
+    # Validate the F3 gameSpeed fan-out is the shape the pacer stub relies on
+    # (obj3ptr global @ structptr_off+8, then gameSpeed byte @ +0x96). Match the
+    # FULL `mov ebx,[obj3ptr] ; mov bl,[ebx+0x96]` form -- NOT a bare
+    # `96 00 00 00` (a decoy flat-global `mov dl,[0x96]` lives elsewhere in the
+    # code). Fail loudly if absent so an unexpected build can't be mispatched.
+    gs_ptr_pre = structptr_pre + GAMESPEED_PTR_FROM_STRUCTPTR
+    fanout_sig = (b"\x8b\x1d" + struct.pack("<I", gs_ptr_pre)
+                  + b"\x8a\x9b" + struct.pack("<I", GAMESPEED_BYTE_OFF))
+    if fanout_sig not in code:
+        raise SystemExit(
+            f"gameSpeed fan-out signature not found "
+            f"(`mov ebx,[obj3+{gs_ptr_pre:#x}] ; mov bl,[ebx+{GAMESPEED_BYTE_OFF:#x}]`"
+            f" = {fanout_sig.hex()}). The pacer's gameSpeed derivation is not "
+            f"valid on this build -- refusing to patch."
         )
 
     # The call sites: `E8 rel32` (5 bytes) whose target is the tick fn. These
@@ -348,6 +378,12 @@ class Asm:
     def test_eax(self):
         self.raw(b"\x85\xc0")
 
+    def movzx_eax_byte_eax(self, disp):  # movzx eax, byte [eax+disp32]  (base EAX)
+        self.raw(b"\x0f\xb6\x80" + struct.pack("<I", disp))
+
+    def cmp_ebx_imm8(self, imm):  # cmp ebx, imm8
+        self.raw(b"\x83\xfb" + struct.pack("<b", imm))
+
     def sub_eax_m(self, a):  # sub eax,[edx+a]
         self.raw(b"\x2b\x82" + struct.pack("<I", a))
 
@@ -405,6 +441,7 @@ def build_passthrough(b: Build) -> bytes:
 def build_stub(b: Build, period: int) -> bytes:
     a = Asm(b.cave_va)
     wc_off = b.structptr_off - WALLCLOCK_FROM_STRUCTPTR  # wallclock obj3-offset
+    gs_ptr_off = b.structptr_off + GAMESPEED_PTR_FROM_STRUCTPTR  # obj3ptr global
 
     # --- derive obj3's real runtime base into EDX ---
     # DOS/4GW relocates objects independently and injected code gets no LE
@@ -433,9 +470,30 @@ def build_stub(b: Build, period: int) -> bytes:
     a.mov_m_imm(MB_MAGIC0, MAGIC0)  # write magic LAST -> mailbox is atomic-ish
     a.label("after_init")
 
-    # --- open the quiescent window for this sub-step ---
+    # --- bump the sub-step counter and publish gameSpeed EVERY sub-step ---
     a.inc_m(MB_TICK)
-    a.mov_m_imm(MB_INWIN, 1)
+    a.mov_eax_m(gs_ptr_off)  # eax = *obj3ptr = the runtime struct pointer
+    a.movzx_eax_byte_eax(GAMESPEED_BYTE_OFF)  # eax = gameSpeed (0/1/2)
+    a.mov_m_eax(MB_SPEED)  # publish raw gameSpeed for the recorder
+
+    # --- decide whether THIS sub-step paces (law A: one paced sub-step/frame) --
+    # The F3 fan-out runs the tick fn 1/4/16x per frame (gameSpeed 0/1/2) with
+    # EBX = the loop index (1 on the first sub-step, 2..N after). Pacing every
+    # sub-step would nullify F3 (N steps x one per-step wait = same real-time
+    # sim rate at 1/N the fps). Instead pace exactly ONE sub-step per frame:
+    #   * gameSpeed 0 (the default) runs the tick fn once/frame -> always pace
+    #     (bit-identical in effect to the old every-sub-step pacer), and we do
+    #     this via `test eax; jz` WITHOUT reading EBX (which is loop garbage at
+    #     speed 0, never 1);
+    #   * gameSpeed 1/2 -> pace only the first sub-step (EBX==1); sub-steps
+    #     2..N run FREE, so the SIM speeds up 4x/16x while fps stays put.
+    a.test_eax()
+    a.br8(0x74, "pace")  # jz pace   (speed 0 -> pace unconditionally)
+    a.cmp_ebx_imm8(1)
+    a.br8(0x75, "skip")  # jne skip  (a later sub-step of a fast frame runs free)
+
+    a.label("pace")
+    a.mov_m_imm(MB_INWIN, 1)  # window raised ONLY around a real spin
 
     # --- spin until now >= deadline (or bail on a frozen counter) ---
     # diff = now - deadline as a SIGNED i32: negative => still waiting,
@@ -462,14 +520,16 @@ def build_stub(b: Build, period: int) -> bytes:
     a.add_eax_m(MB_PERIOD)
     a.mov_m_eax(MB_DEADLINE)  # deadline += period (fixed cadence, no drift)
     a.mov_m_imm(MB_INWIN, 0)
+    a.label("skip")
 
     body = a.assemble()
 
     # --- call the ORIGINAL (untouched) tick fn, then return to the caller ---
     # A relative call: both the stub and the tick fn are in obj1, so the rel32
-    # is position-independent (delta-invariant). The stub only touched
-    # eax/ecx/edx; the tick fn saves/restores ebx/esi/edi/ebp itself, so the
-    # caller's callee-saved regs (its loop counter in ebx) survive intact.
+    # is position-independent (delta-invariant). The stub WRITES only
+    # eax/ecx/edx and only READS ebx (the fan-out's loop index); the tick fn
+    # saves/restores ebx/esi/edi/ebp itself, so the caller's callee-saved regs
+    # (its loop counter in ebx) survive intact.
     call_pos = len(body)
     rel = b.hook_va - (b.cave_va + call_pos + 5)
     return body + b"\xe8" + struct.pack("<i", rel) + b"\xc3"  # call hook ; ret
@@ -862,8 +922,8 @@ def main(argv=None):
         "--period",
         type=int,
         default=5,
-        help="sub-step period in ~480 Hz PIT counts. fps = 480 / (4 substeps * "
-             "period): default 5 -> ~24 fps; 4 -> ~30 fps; 6 -> ~20 fps "
+        help="frame period in ~120 Hz PIT counts. fps = 120 / period: "
+             "default 5 -> ~24 fps; 4 -> ~30 fps; 6 -> ~20 fps "
              "(measured live: period 30 gave ~4 fps).",
     )
     ap.add_argument(

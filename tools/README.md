@@ -181,7 +181,7 @@ cleanly. Two arms, auto-selected from the binary:
   tear-gate path's "lower cycles" advice). `--poll-hz` helps only at the
   margin — the windowed loop already polls at a 0.1 ms floor by default.
 
-The MC1 arm installs a ~183-byte
+The MC1 arm installs a ~211-byte
 wrapper stub around the per-sub-step tick function (remc1
 `sub_41780_41AC0`) by redirecting the tick fn's callers (the 3
 gameSpeed-fanout `call`s — rewriting only their 4-byte rel32) so they
@@ -189,12 +189,18 @@ enter the stub, which paces, then `call`s the original untouched tick fn
 and `ret`s. The function entry is left byte-for-byte intact (a first
 version detoured the entry, which decoded as a wild `add eax,[eax]` under
 the dynamic recompiler's misaligned decode). The stub
-(1) spins on the game's own PIT counter (~480 Hz, measured live) until one
-period elapses — pacing every sub-step, so at the 4×/frame default speed
-`fps = 480/(4·period)` ≈ 24 fps at the default period 5, and the *spare*
-cycles become a wide quiescent window — and
-(2) keeps a mailbox (magic + monotonic sub-step counter + `in_window`
-flag) in obj3's committed tail, addressed via a runtime-derived obj3 base
+(1) spins on the game's own PIT counter (~120 Hz, measured live) until one
+period elapses, so `fps = 120/period` ≈ 24 fps at the default period 5,
+and the *spare* cycles become a wide quiescent window. It paces exactly
+**one sub-step per rendered frame** (the first — detected via the fan-out's
+live loop index in `EBX`), so the F3 game-speed feature (1× / 4× / 16×
+sub-steps per frame) still speeds the *sim* up 4×/16× while the frame rate
+holds; at the default speed of one sub-step/frame every sub-step is the
+first, so pacing is bit-identical in effect to the earlier every-sub-step
+pacer. And
+(2) keeps a mailbox (magic + monotonic sub-step counter + `in_window` flag,
+raised only around a paced spin + the raw F3 `gameSpeed` 0/1/2) in obj3's
+committed tail, addressed via a runtime-derived obj3 base
 (read from the game's own relocated struct pointer, since DOS/4GW loads
 each object at an independent base — assuming a uniform delta made the
 stub write into game memory and crash). **Both obj1 (code cave) and obj3
@@ -220,7 +226,7 @@ wires a bare `call tickfn;ret` (proved execution was the issue);
 # produce the patched copies (~24 fps, the authentic rate)
 python3 tools/mc_exe_tickpatch.py CARPET.EXE          # -> CARPET_REC.EXE
 python3 tools/mc_exe_tickpatch.py HIDDEN.EXE          # -> HIDDEN_REC.EXE
-#   --period 4     ~30 fps ;  --period 6  ~20 fps  (fps = 480/(4·period))
+#   --period 4     ~30 fps ;  --period 6  ~20 fps  (fps = 120/period)
 #   --verify-only PATCHED.EXE   re-disassemble the hook + stub and check
 
 # record against the patched exe — recorder detects the mailbox itself
@@ -237,7 +243,10 @@ Live-run checklist (what a real recording session should confirm):
    MC1 reports a `spin-period`; MC2 reports `signal-only`.
 3. **MC1 only:** in-game feel is a steady ~24 fps even with `cycles=max`
    (period 5); raising cycles widens the window (longer spin), never speeds
-   the game. **MC2** keeps its own native rate (no pacing was added).
+   the game. F3 game-speed still works: cycling to 4×/16× speeds the *sim*
+   up (more sub-steps per frame) while the frame rate stays ~24 fps, and
+   returning to 1× restores it — only the first sub-step of each frame is
+   paced. **MC2** keeps its own native rate (no pacing was added).
 4. `done: … window-gated, no tears possible` with 0 gaps across a full
    playthrough, including level-start fades and big explosions (the
    structural gaps the tear-gate recorder could not close).
