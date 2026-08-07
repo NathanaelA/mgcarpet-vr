@@ -65,6 +65,7 @@ always appear together.
     "entry": 0,
     "entry_sha256": "<hex sha-256 of the raw archive entry>"
   },
+  "overlay": "mc1/levels/LEV00032.DAT",
   "importer": { "name": "mgc-import", "version": "0.1.0" }
 }
 ```
@@ -84,6 +85,15 @@ always appear together.
 - `source`: provenance of game-derived packages — enough to regenerate
   and to verify the input was the expected retail data. Absent on
   community-authored levels.
+- `overlay` (optional): overlay-relative path of the community
+  replacement file the payload came from (`gamedata/overlay/`,
+  docs/MODDING.md). Present = a MODDED package: `source` is kept (the
+  member slot it replaces) but `entry_sha256` hashes the overlay file
+  rather than the retail archive entry — so save identity checks keep
+  working — and the package must never feed goldens or conformance. A
+  bake that applied any overlay file also writes a `MODDED` marker
+  file at the baked root listing every substitution; a pristine bake
+  removes it.
 - `importer`: tool and version that produced the package.
 
 ### `things.json`

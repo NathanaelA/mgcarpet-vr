@@ -167,6 +167,13 @@ pub struct Meta {
     /// Provenance; absent on community-authored levels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<Source>,
+    /// Overlay-relative path of the community replacement file the
+    /// payload came from (`gamedata/overlay/`, docs/MODDING.md).
+    /// Present = a MODDED package: `source.entry_sha256` hashes the
+    /// overlay file rather than the retail archive entry, and the
+    /// package must never feed goldens or conformance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<String>,
     pub importer: Importer,
 }
 

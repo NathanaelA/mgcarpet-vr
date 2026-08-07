@@ -20,7 +20,10 @@ mod common;
 
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
-    (p.join("mc2/level-000.mgcl").exists() && p.join("assets/mc1-temperate").exists()).then_some(p)
+    (p.join("mc2/level-000.mgcl").exists()
+        && p.join("assets/mc1-temperate").exists()
+        && !common::modded_bake(&p))
+    .then_some(p)
 }
 
 fn build_world(root: &std::path::Path) -> Option<World> {

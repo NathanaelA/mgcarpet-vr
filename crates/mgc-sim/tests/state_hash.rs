@@ -24,7 +24,7 @@ mod common;
 
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
-    p.join("mc1/level-005.mgcl").exists().then_some(p)
+    (p.join("mc1/level-005.mgcl").exists() && !common::modded_bake(&p)).then_some(p)
 }
 
 /// Level 005 with its authored wizards (rival preplants), mirroring

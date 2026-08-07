@@ -15,10 +15,15 @@ use mgc_sim::engine::world::{PlayerCommand, PlayerPose, World};
 use mgc_sim::ids::GameId;
 use std::path::PathBuf;
 
+#[path = "common/mod.rs"]
+mod common;
+
 fn baked_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../baked");
-    (p.join("mc2/level-000.mgcl").exists() && p.join("assets/mc2-night/build.tab.bin").exists())
-        .then_some(p)
+    (p.join("mc2/level-000.mgcl").exists()
+        && p.join("assets/mc2-night/build.tab.bin").exists()
+        && !common::modded_bake(&p))
+    .then_some(p)
 }
 
 fn build_world(root: &std::path::Path) -> Option<World> {

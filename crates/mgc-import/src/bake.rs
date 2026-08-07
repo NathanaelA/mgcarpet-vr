@@ -1,5 +1,6 @@
 //! Baking: original archives in, `.mgcl` packages out.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -8,6 +9,7 @@ use crate::dattab::Archive;
 use crate::gamedata::GameSource;
 use crate::level_mc1::{Mc1Level, ThingKind as Mc1Kind};
 use crate::level_mc2::{MC2_LEVEL_SIZE, MapType as Mc2MapType, Mc2Level};
+use crate::overlay::{Overlay, OverlayLevel};
 use mgc_formats::{
     BAKE_EPOCH, FORMAT_VERSION, Game, GenParams, Importer, LevelHeader, LevelPackage, MapType,
     Meta, Source, StageCheckpoint, StageVar, Stages, TERRAIN_GRID_BYTES, Terrain, Thing, ThingKind,
@@ -81,6 +83,7 @@ pub fn package_mc1_level(
             game,
             level: level_index,
             source: Some(source),
+            overlay: None,
             importer: importer(),
         },
         things: Things { things },
@@ -128,9 +131,58 @@ pub fn package_mc1_level(
     }
 }
 
-/// Bake every level of one MC1-format archive into `out_dir/<tag>/`.
-/// `base` is the archive's canonical path without extension, e.g.
-/// `LEVELS/DDLEVELS`. Returns `(package file name, sha256)` pairs.
+/// One archive's bake: the `(package file name, sha256)` manifest
+/// pairs, plus the applied overlay substitutions as
+/// `<member> <- <overlay file>` lines for the baked tree's `MODDED`
+/// marker (docs/MODDING.md); empty on a pristine bake.
+pub struct ArchiveBake {
+    pub outputs: Vec<(String, String)>,
+    pub overlaid: Vec<String>,
+}
+
+/// The payload for one archive member, and the `entry_sha256` to stamp:
+/// the community replacement file when the overlay targets this index
+/// (hashed over the overlay file itself), the retail entry otherwise
+/// (hashed over the raw, still-compressed bytes).
+fn member_payload(
+    archive: &Archive,
+    entry: crate::dattab::Entry,
+    dat_path: &Path,
+    replacement: Option<&OverlayLevel>,
+) -> Result<(Vec<u8>, String), BakeError> {
+    match replacement {
+        Some(o) => {
+            let bytes = std::fs::read(&o.path).map_err(|e| BakeError::Io(o.path.clone(), e))?;
+            let sha = hex(&Sha256::digest(&bytes));
+            Ok((bytes, sha))
+        }
+        None => {
+            let raw = archive.raw(entry);
+            let sha = hex(&Sha256::digest(raw));
+            let payload = archive.extract(entry).map_err(|e| {
+                BakeError::Level(dat_path.to_path_buf(), entry.index as u32, e.to_string())
+            })?;
+            Ok((payload, sha))
+        }
+    }
+}
+
+/// Overlay files that targeted no bakeable member (empty slots, MC2's
+/// extended-format leftovers) are reported, never silently inert.
+fn warn_unapplied(tag: &str, overlay: &[OverlayLevel], applied: &BTreeSet<u32>) {
+    for o in overlay {
+        if !applied.contains(&o.index) {
+            eprintln!(
+                "warning: overlay {} NOT applied — {tag} has no bakeable member {}",
+                o.rel, o.index
+            );
+        }
+    }
+}
+
+/// Bake every level of one MC1-format archive into `out_dir/<tag>/`,
+/// substituting `overlay` payloads by member index. `base` is the
+/// archive's canonical path without extension, e.g. `LEVELS/DDLEVELS`.
 ///
 /// Terrain comes from the native MC1 generator port (`mc1_terrain`) —
 /// unlike MC2, no external oracle tool is involved.
@@ -140,7 +192,8 @@ pub fn bake_mc1_archive(
     src: &GameSource,
     base: &str,
     out_dir: &Path,
-) -> Result<Vec<(String, String)>, BakeError> {
+    overlay: &[OverlayLevel],
+) -> Result<ArchiveBake, BakeError> {
     let dat_path = PathBuf::from(format!("{base}.DAT"));
     let read = |rel: String| {
         src.read(&rel)
@@ -157,28 +210,37 @@ pub fn bake_mc1_archive(
     let game_dir = out_dir.join(tag);
     std::fs::create_dir_all(&game_dir).map_err(|e| BakeError::Io(game_dir.clone(), e))?;
 
-    let mut outputs = Vec::new();
-    for entry in archive.non_empty() {
-        let raw = archive.raw(entry);
-        let entry_sha256 = hex(&Sha256::digest(raw));
+    let by_index: BTreeMap<u32, &OverlayLevel> = overlay.iter().map(|o| (o.index, o)).collect();
+    let mut applied = BTreeSet::new();
 
-        let payload = archive.extract(entry).map_err(|e| {
-            BakeError::Level(dat_path.to_path_buf(), entry.index as u32, e.to_string())
-        })?;
+    let mut outputs = Vec::new();
+    let mut overlaid = Vec::new();
+    for entry in archive.non_empty() {
+        let index = entry.index as u32;
+        let replacement = by_index.get(&index).copied();
+        let (payload, entry_sha256) = member_payload(&archive, entry, &dat_path, replacement)?;
         let level = Mc1Level::parse(&payload).map_err(|e| {
-            BakeError::Level(dat_path.to_path_buf(), entry.index as u32, e.to_string())
+            // Parse errors blame whichever file supplied the bytes.
+            let blamed = replacement.map_or_else(|| dat_path.clone(), |o| o.path.clone());
+            BakeError::Level(blamed, index, e.to_string())
         })?;
 
         let mut package = package_mc1_level(
             game,
-            entry.index as u32,
+            index,
             &level,
             Source {
                 archive: archive_name.clone(),
-                entry: entry.index as u32,
+                entry: index,
                 entry_sha256,
             },
         );
+        if let Some(o) = replacement {
+            package.meta.overlay = Some(o.rel.clone());
+            println!("{tag}: level {index:03} OVERLAY {}", o.rel);
+            overlaid.push(format!("{tag}/level-{index:03}.mgcl <- {}", o.rel));
+            applied.insert(index);
+        }
         let generated =
             crate::mc1_terrain::generate(&level.gen_map, matches!(game, Game::HiddenWorlds));
         package.terrain = Some(Terrain {
@@ -190,7 +252,7 @@ pub fn bake_mc1_archive(
             ceiling: None,
         });
 
-        let name = format!("level-{:03}.mgcl", entry.index);
+        let name = format!("level-{index:03}.mgcl");
         let path = game_dir.join(&name);
         let file = std::fs::File::create(&path).map_err(|e| BakeError::Io(path.clone(), e))?;
         mgcl::write(std::io::BufWriter::new(file), &package)
@@ -199,7 +261,8 @@ pub fn bake_mc1_archive(
         let baked = std::fs::read(&path).map_err(|e| BakeError::Io(path.clone(), e))?;
         outputs.push((format!("{tag}/{name}"), hex(&Sha256::digest(&baked))));
     }
-    Ok(outputs)
+    warn_unapplied(tag, overlay, &applied);
+    Ok(ArchiveBake { outputs, overlaid })
 }
 
 // MC1 asset baking lives in `crate::bundle` (unified asset bundles).
@@ -255,6 +318,7 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
             game: Game::MagicCarpet2,
             level: level_index,
             source: Some(source),
+            overlay: None,
             importer: importer(),
         },
         things: Things { things },
@@ -345,14 +409,16 @@ pub fn package_mc2_level(level_index: u32, level: &Mc2Level, source: Source) -> 
     }
 }
 
-/// Bake every standard level of the MC2 archive into `out_dir/mc2/`.
-/// The 18 "extended" dev-leftover entries (older format, ~39 KB) are
-/// skipped and their indices returned separately.
-#[allow(clippy::type_complexity)]
+/// Bake every standard level of the MC2 archive into `out_dir/mc2/`,
+/// substituting `overlay` payloads by member index. The 18 "extended"
+/// dev-leftover entries (older format, ~39 KB) are skipped and their
+/// indices returned separately — the skip is decided on the RETAIL
+/// member, so those slots cannot be overlay targets.
 pub fn bake_mc2_archive(
     src: &GameSource,
     out_dir: &Path,
-) -> Result<(Vec<(String, String)>, Vec<u32>), BakeError> {
+    overlay: &[OverlayLevel],
+) -> Result<(ArchiveBake, Vec<u32>), BakeError> {
     let dat_path = PathBuf::from("LEVELS/LEVELS.DAT");
     let read = |rel: &str| {
         src.read(rel)
@@ -369,42 +435,67 @@ pub fn bake_mc2_archive(
     let game_dir = out_dir.join("mc2");
     std::fs::create_dir_all(&game_dir).map_err(|e| BakeError::Io(game_dir.clone(), e))?;
 
+    let by_index: BTreeMap<u32, &OverlayLevel> = overlay.iter().map(|o| (o.index, o)).collect();
+    let mut applied = BTreeSet::new();
+
     let mut outputs = Vec::new();
+    let mut overlaid = Vec::new();
     let mut skipped = Vec::new();
     for entry in archive.non_empty() {
+        let index = entry.index as u32;
         let raw = archive.raw(entry);
-        let entry_sha256 = hex(&Sha256::digest(raw));
+        let mut entry_sha256 = hex(&Sha256::digest(raw));
 
-        let payload = archive.extract(entry).map_err(|e| {
-            BakeError::Level(dat_path.to_path_buf(), entry.index as u32, e.to_string())
-        })?;
+        let mut payload = archive
+            .extract(entry)
+            .map_err(|e| BakeError::Level(dat_path.to_path_buf(), index, e.to_string()))?;
         if payload.len() != MC2_LEVEL_SIZE {
-            skipped.push(entry.index as u32);
+            skipped.push(index);
             continue;
         }
+        let replacement = by_index.get(&index).copied();
+        if let Some(o) = replacement {
+            payload = std::fs::read(&o.path).map_err(|e| BakeError::Io(o.path.clone(), e))?;
+            if payload.len() != MC2_LEVEL_SIZE {
+                return Err(BakeError::Level(
+                    o.path.clone(),
+                    index,
+                    format!(
+                        "MC2 level must be {MC2_LEVEL_SIZE} bytes, got {}",
+                        payload.len()
+                    ),
+                ));
+            }
+            entry_sha256 = hex(&Sha256::digest(&payload));
+        }
         let level = Mc2Level::parse(&payload).map_err(|e| {
-            BakeError::Level(dat_path.to_path_buf(), entry.index as u32, e.to_string())
+            // Parse errors blame whichever file supplied the bytes.
+            let blamed = replacement.map_or_else(|| dat_path.clone(), |o| o.path.clone());
+            BakeError::Level(blamed, index, e.to_string())
         })?;
         if matches!(level.header.map_type, Mc2MapType::Unknown(_)) {
-            return Err(BakeError::Level(
-                dat_path.to_path_buf(),
-                entry.index as u32,
-                "unknown map type".into(),
-            ));
+            let blamed = replacement.map_or_else(|| dat_path.clone(), |o| o.path.clone());
+            return Err(BakeError::Level(blamed, index, "unknown map type".into()));
         }
 
         let mut package = package_mc2_level(
-            entry.index as u32,
+            index,
             &level,
             Source {
                 archive: archive_name.clone(),
-                entry: entry.index as u32,
+                entry: index,
                 entry_sha256,
             },
         );
+        if let Some(o) = replacement {
+            package.meta.overlay = Some(o.rel.clone());
+            println!("mc2: level {index:03} OVERLAY {}", o.rel);
+            overlaid.push(format!("mc2/level-{index:03}.mgcl <- {}", o.rel));
+            applied.insert(index);
+        }
         package.terrain = Some(native_mc2_terrain(&level));
 
-        let name = format!("level-{:03}.mgcl", entry.index);
+        let name = format!("level-{index:03}.mgcl");
         let path = game_dir.join(&name);
         let file = std::fs::File::create(&path).map_err(|e| BakeError::Io(path.clone(), e))?;
         mgcl::write(std::io::BufWriter::new(file), &package)
@@ -413,7 +504,8 @@ pub fn bake_mc2_archive(
         let baked = std::fs::read(&path).map_err(|e| BakeError::Io(path.clone(), e))?;
         outputs.push((format!("mc2/{name}"), hex(&Sha256::digest(&baked))));
     }
-    Ok((outputs, skipped))
+    warn_unapplied("mc2", overlay, &applied);
+    Ok((ArchiveBake { outputs, overlaid }, skipped))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -448,7 +540,16 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
     // MC1 and MC2 terrain are both generated natively (mc1_terrain /
     // mc2_terrain) — no external tool required.
 
+    // The community/mod overlay, when present (docs/MODDING.md). NOT
+    // epoch-tracked: overlay changes require deleting baked/.
+    let overlay = Overlay::locate(gamedata);
+    if let Some(ov) = &overlay {
+        println!("overlay: {}", ov.root().display());
+    }
+    let overlay_levels = |tag: &str| overlay.as_ref().map_or(Ok(Vec::new()), |ov| ov.levels(tag));
+
     let mut manifest = Vec::new();
+    let mut modded = Vec::new();
     if let Some(src) = &found.mc1 {
         let archives = [
             (Game::MagicCarpet1, "mc1", "LEVELS/LEVELS"),
@@ -459,10 +560,11 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
                 eprintln!("note: {base}.DAT not found — skipping {tag}");
                 continue;
             }
-            let outputs =
-                bake_mc1_archive(game, tag, src, base, out_dir).map_err(|e| e.to_string())?;
-            println!("{tag}: baked {} levels", outputs.len());
-            manifest.extend(outputs);
+            let bake = bake_mc1_archive(game, tag, src, base, out_dir, &overlay_levels(tag)?)
+                .map_err(|e| e.to_string())?;
+            println!("{tag}: baked {} levels", bake.outputs.len());
+            manifest.extend(bake.outputs);
+            modded.extend(bake.overlaid);
         }
         if src.exists("DATA/PAL0-0.DAT") {
             let outputs =
@@ -506,8 +608,9 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
     }
 
     if let Some(src) = &found.mc2 {
-        let (outputs, skipped) = bake_mc2_archive(src, out_dir).map_err(|e| e.to_string())?;
-        println!("mc2: baked {} levels", outputs.len());
+        let (bake, skipped) =
+            bake_mc2_archive(src, out_dir, &overlay_levels("mc2")?).map_err(|e| e.to_string())?;
+        println!("mc2: baked {} levels", bake.outputs.len());
         if !skipped.is_empty() {
             println!(
                 "mc2: skipped {} extended-format dev leftovers (indices {:?})",
@@ -515,7 +618,8 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
                 skipped
             );
         }
-        manifest.extend(outputs);
+        manifest.extend(bake.outputs);
+        modded.extend(bake.overlaid);
         // Environment bundles need the CD catalogs (absent from
         // hard-disk-only legacy copies).
         if src.exists("DATA/PALD-0.DAT") {
@@ -557,6 +661,30 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
             );
             manifest.extend(outputs);
         }
+    }
+
+    // The tree-level pristine/modded discriminator: a bake that
+    // applied ANY overlay file writes the MODDED marker listing every
+    // substitution; a pristine bake removes it. Goldens and
+    // conformance key off it (docs/MODDING.md).
+    let modded_path = out_dir.join("MODDED");
+    if modded.is_empty() {
+        let _ = std::fs::remove_file(&modded_path);
+    } else {
+        modded.sort();
+        let body = format!(
+            "# MODDED bake: community-overlay files were applied (docs/MODDING.md).\n\
+             # Not a faithful fixture — goldens and conformance refuse this tree.\n\
+             # For a pristine tree, delete baked/ and rebake without gamedata/overlay/.\n{}",
+            modded.iter().map(|l| format!("{l}\n")).collect::<String>()
+        );
+        std::fs::write(&modded_path, body)
+            .map_err(|e| format!("cannot write {}: {e}", modded_path.display()))?;
+        println!(
+            "MODDED bake: {} overlay file(s) applied — not a faithful fixture ({})",
+            modded.len(),
+            modded_path.display()
+        );
     }
 
     if manifest.is_empty() {

@@ -829,6 +829,9 @@ fn load_level(
         std::fs::File::open(level_path).map_err(|e| format!("{}: {e}", level_path.display()))?;
     let package: LevelPackage =
         mgcl::read(file).map_err(|e| format!("{}: {e}", level_path.display()))?;
+    if let Some(ov) = &package.meta.overlay {
+        println!("level: OVERLAY {ov} — community-modified data, not a faithful run");
+    }
     let terrain = package.terrain.as_ref().ok_or_else(|| {
         format!(
             "{}: package has no terrain (bake with the mc2-genlevel oracle available)",

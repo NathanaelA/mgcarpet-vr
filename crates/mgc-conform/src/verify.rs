@@ -648,6 +648,13 @@ pub(crate) fn build_world(
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
         mgc_formats::mgcl::read(file).map_err(|e| format!("{}: {e}", lp.display()))?;
+    if let Some(ov) = &pkg.meta.overlay {
+        return Err(format!(
+            "{}: MODDED level (overlay {ov}) — conformance runs against pristine bakes \
+             only; delete baked/ and rebake without gamedata/overlay/ (docs/MODDING.md)",
+            lp.display()
+        ));
+    }
     // The HW fall-through trap: a bare World::new here replayed HW
     // takes under BASE-MC1 law (SPELLS not SPELLS_HW, no m16 homing
     // acquire, base napalm fork) — the game string must select the

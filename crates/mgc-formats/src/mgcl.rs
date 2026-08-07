@@ -258,6 +258,7 @@ mod tests {
                     entry: 0,
                     entry_sha256: "00".repeat(32),
                 }),
+                overlay: None,
                 importer: Importer {
                     name: "mgc-import".into(),
                     version: "0.1.0".into(),

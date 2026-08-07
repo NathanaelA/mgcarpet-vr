@@ -752,6 +752,13 @@ pub(crate) fn build_world_mc2(
     let file = std::fs::File::open(&lp).map_err(|e| format!("{}: {e}", lp.display()))?;
     let pkg: mgc_formats::LevelPackage =
         mgc_formats::mgcl::read(file).map_err(|e| format!("{}: {e}", lp.display()))?;
+    if let Some(ov) = &pkg.meta.overlay {
+        return Err(format!(
+            "{}: MODDED level (overlay {ov}) — conformance runs against pristine bakes \
+             only; delete baked/ and rebake without gamedata/overlay/ (docs/MODDING.md)",
+            lp.display()
+        ));
+    }
     let header = pkg.header.as_ref();
     let variant = match header.map(|h| (h.map_type, h.gfx_type)) {
         Some((mgc_formats::MapType::Night, g)) if g & 2 != 0 => "mc2-night-fog",

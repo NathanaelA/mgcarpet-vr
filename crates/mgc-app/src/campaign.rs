@@ -558,6 +558,7 @@ mod tests {
                 game: Game::MagicCarpet1,
                 level: 30,
                 source: None,
+                overlay: None,
                 importer: Importer {
                     name: "test".into(),
                     version: "0".into(),
@@ -776,6 +777,7 @@ mod tests {
                 game,
                 level,
                 source: None,
+                overlay: None,
                 importer: Importer {
                     name: "test".into(),
                     version: "0".into(),

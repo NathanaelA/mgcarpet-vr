@@ -12,3 +12,18 @@ pub fn golden_skip(what: &str) {
     }
     eprintln!("GOLDEN-SKIP: {what}");
 }
+
+/// True (and reported via [`golden_skip`], so `MGC_REQUIRE_GOLDENS=1`
+/// fails instead) when the baked tree carries the `MODDED` marker — a
+/// bake with community-overlay files applied (docs/MODDING.md).
+/// Goldens run against pristine bakes only; every suite's
+/// `baked_root()` gates on this.
+pub fn modded_bake(root: &std::path::Path) -> bool {
+    if root.join("MODDED").exists() {
+        golden_skip(
+            "baked tree is MODDED (community overlay applied) — goldens need a pristine bake",
+        );
+        return true;
+    }
+    false
+}

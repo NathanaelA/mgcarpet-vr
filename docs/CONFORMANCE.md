@@ -152,6 +152,13 @@ take:
   promote and note the mechanism in the ledger.
 - Keep suites per take (`mc1l0.json`, `mc1hwl0.json`, …); a
   re-recorded take gets a fresh extract, not an edit of the old one.
+- Conformance (and goldens) run against PRISTINE bakes only. A bake
+  with community-overlay files applied (docs/MODDING.md) carries a
+  `MODDED` marker at the baked root and `meta.overlay` in each
+  substituted package; `mgc-conform` hard-refuses such a level and the
+  golden suites report it as a skip (= failure under
+  `MGC_REQUIRE_GOLDENS=1`). Delete `baked/` and rebake without
+  `gamedata/overlay/` before any conformance work.
 
 ## Current suites
 
