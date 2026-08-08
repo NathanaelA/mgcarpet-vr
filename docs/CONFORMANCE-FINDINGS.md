@@ -7397,3 +7397,163 @@ there. fmt clean, workspace green.
   statics, port doesn't — known l32 lane); (10,39/41) balloon
   z-resnap + flags 0x20000000 (known family); wizard hand equips
   (capture, input-recon ±1).
+
+**Boulder re-bind LANDED same session** (two-bugs banked lead (a)):
+state 0xF → `proj_generic_tick(false)` per the relocated table; the
+throw ctor's pre-target CORRECTION (sub_1AE30 :22122-23 copies the
+thrower's +146 + binds row [6] — the old "no pre-targeting ctor"
+reading was wrong) makes retail boulders PITCH-home (row 6 v_2 = 0:
+yaw never turns, :5247); m14 = acquire default-refuse (:64185); no
+fire trail (the trail wrapper is state 3's sub_53070). DEVIATIONS
+boulder entry rewritten; residual deliberate: the (3,0xFF)-vs-
+thrower's-+66/+67 filter copy. Pin:
+`troll_boulder_rides_the_generic_flight_pretargeted` (homing + refuse
+legs, mutually non-vacuous geometry). No goldens moved.
+
+**Two-bugs lead (c) SCOPED, banked deeper than memoed**: the rival
+mid-game first castle (rivals.rs ~1950-70) not only stamps CastleInit
+instantly — it parks the (3,2) at state 4 and pre-sets extents +
+f136, bypassing the state-5/f59=0 build machine the player's
+touchdown runs (leveler 43 → painter 44 → protection promote).
+Retail rivals cast a real castle BALL through the same touchdown
+chain. The minimal faithful form is letting the spawned castle run
+its own state-5 build (delete the tick70=4 override + instant
+stamp/extents/cap), but rival-side assumptions (instant usability,
+banking cap, recast timers) need reading first; the full form is
+rival ball emission. Water-yard drain is the only player-visible
+consequence known.
+
+**(5,3) SECOND-WORM family DUG same session — two causes, segment-follow EXACT.**
+Agent-measured (hand-derived both sides from the port's own helpers,
+bit-exact), zero segment-only divergent ticks across all 4 chains —
+segments are 100% downstream of their heads:
+- **CAUSE A (~92%, ~9.7k rows, CROSS-FAMILY): the terrain datum.**
+  The port's excavation floor pins at height 196 (z 6272) in the
+  x∈[3.7,14.1], y∈[195,230] corner while retail keeps digging to 189
+  (6049 stable); every grounded/floored z lane rides it — (10,39)
+  mana balls 7.7k rows (the "balloon z-resnap" bulk!), (10,0) fires
+  974, (5,3) 225 via the alt-clamp floor, (5,9) 205, (9,1) 60. First
+  at t=2036, ~1000 ticks before any m3 involvement. Candidate: the
+  protection abort in dig_cell (features.rs ~1712, angle bit 0x80)
+  believing cells building-protected where retail does not — SEPARATE
+  dig, and THE TAKE IS FORMAT-1: attribution needs a **v2 re-record
+  of MC1 l32 with the terrain channel** (top ask). No m3/creature
+  change can move these rows.
+- **CAUSE B (~8%): a hit costs the WHOLE handler tick.** All four
+  shared retail class-5 handlers (idle :21368-75 / wander :21488-503
+  / chase :21634-54 / pack :21741-69, villager variant :25048-63)
+  abort BEFORE the mover on ANY hit — non-wizard attacker = bare
+  return, wizard = retarget/promote then return. The port's
+  centralized intake (mobs.rs ~2945-99) returns only for WIZARD
+  attackers, so a creature damaged by another creature still moves —
+  proven exactly at t=3284 (head slot 4: retail frozen, port a full
+  turn+step) and t=3839 (the SEGMENT-CHAIN life-inheritance path
+  latching a militia attacker). Fix audit in flight: every non-shared
+  retail handler's prologue shape (m5/m9/m11/m15/m16/feeders) must be
+  read before the unconditional return lands.
+- **segment_follow faithfulness nits** (not load-bearing here; feed
+  cause B's +40): missing `else { f40 = 0 }` (:21134-37) leaves a
+  dead attacker latched; port-invented `f38 = src` (retail writes
+  only +40, :21132); intake ordered before the move (retail after);
+  orphan arm returns where retail falls through (:21112-13);
+  combat.rs:275 sets f38 = f40 unconditionally where all four retail
+  prologues set +38 only on the lethal branch.
+
+**HIT-ABORT RESTRUCTURE — AUDITED, BANKED (implementation spec).**
+The full per-state prologue audit (agent, 2026-08-08, every claim
+cited + HW-corroborated) ruled the blanket "any hit returns from
+creature_tick" WRONG. Retail's invariant: a hit skips the shared/
+custom CORE (prologue-tail through sub_196E0) — wrapper PRE-WORK and
+TRAILERS still run. The correct shape:
+1. NO intake at all for states 30 (5,0) / 54 (9,0) / 66 (11,0) /
+   72 (12,0) — retail handlers carry no damage prologue (:22775-78,
+   :23591-623, :24317-84, :24835-992); the port currently runs its
+   wizard-return intake for them, an infidelity in the OTHER
+   direction. Keep (13/14/15,0) + (13/14,2|3) out too — untranscribed
+   stubs (:4636-40).
+2. m15 guard_chase (state 92, sub_201D0 :25826) is the exception:
+   ONLY the lethal branch acts — any non-lethal hit (wizard or not)
+   falls through into the FULL chase body (aim/range/bolt), no
+   retarget, no return. HW byte-identical (:24383-86). Its lethal
+   write is raw `+70 = 94` (:25828), bypassing the state helper.
+3. m9 hidden (state 55) promotes on ANY attacker class — no class-3
+   test (:23735-38; buried arm :24004-07): drop attacker_is_wizard
+   for (9,1).
+4. Everything else roles 0-3: return from the CORE, keeping alive —
+   pre-prologue work (m2 chase +26/z-step :22343-54 ✓ already so;
+   m6 chase speed pin :23146; m7 wander regen :23303-11 + chase
+   countdown/sprite :23325-32; m8 chase speed + 0x8000 :23549-52;
+   m9 bury countdown/hide-timer :23682-98) and post-handler trailers
+   (m0 flyer_bob; m2 lunge-arm ✓ + exit speed ✓; m4 sub_1BC50/1BCE0
+   + wanted flag :22689-717; m5 regen :22977-83; m6 speed pin
+   :23116/:23276; m8 screech; m9 sub_1DCD0/1DD50 :23920-22/:24209-10
+   /:24219-20; m15 enter/exit trailers :25766-67/:25862-63; m16
+   house hunt :26032-58 — retail RUNS it on a non-wizard-hit tick).
+   The port's hoisted m6 `f126 = 30` (mobs.rs ~3002) must move into
+   the m6 arms to survive the abort.
+5. Missing secondary arms to fold in: m6 chase wizard-hit `+26 = -10`
+   (:23193); m15 wander same-owner retaliation veto (attacker +24 ==
+   own +24, :25727); and neither (5,3) :23052 nor (12,3) :25264 does
+   the pack-leader retarget the port's Inbox::Dead role-3 arm applies
+   to every model.
+Cause-B measured size on this take: ~0.8k rows (t=3284/t=3839
+exemplars in the suite). This is a central-intake restructure across
+every model — its own session.
+
+## ⭐ mc1l32 FULL-LEVEL TAKE INTAKE 2026-08-08 (the player's "as brutal as levels get" end-to-end re-record)
+
+**Take:** `recordings/mc1l32.mgcr` — 50,762 ticks, 50,673 pairs, 15 gap
+events (=74 skipped ticks, player-confirmed unavoidable, mostly meteor
+showers), 264 torn, 50,409 fixture-grade; window-gated build A;
+**format 1 — NO terrain channel** (see the recorder fix below).
+Suite: `conformance/mc1l32.json`, 384 fixtures (356 sampled conforming
++ curated exemplars; 12 stories carried from the bee-height suite by
+exact signature). Raw: 3,555 conforming, 46,854 dirty, 1.9M
+unexplained rows across 15,509 signatures. Supersedes nothing — the
+bee-height suite stays (self-contained bundle).
+
+**RECORDER FIX (tools/mc_dosbox_recorder.py):** pin_terrain ran once
+at attach, BEFORE wait_until_live; attaching while a level GENERATES
+(shading all-zero until final bake — the validator doubles as the
+readiness gate) silently degraded the whole take to format 1. Both
+2026-08-08 l32 takes lost their terrain channel this way. Now retried
+after go-live. Existing takes are unaffected (nothing can add terrain
+retroactively); the terrain-datum attribution still wants ANY l32
+recording with terrain — need not be a full/better run.
+
+**STORIES FOUND AT INTAKE:**
+- **The (11,9) SPAWN TRIGGER never fires (exemplar t=39412).** Retail:
+  a class-11 model-9 trigger (17 tiles from site; player just arrived
+  at 21 tiles) fires TWO full m3 worm chains in one tick — 25+ slots,
+  free stack 395 (NOT pool pressure). Port: nothing, and the pair's
+  sole diff is the missing (5,3) set (no rand rows — the refusal costs
+  no draws). The whole late-take (5,3) missing block (510 rows,
+  t=39412+) is this one unfired trigger. Dig lane: the port's class-11
+  model-9 handler (the mc1:37 trigger session certified sounds +
+  x-markers; model 9 = creature spawn is evidently not among them).
+- **THE STUCK EXPLOSION (player-reported; exemplars t=39509/39511).**
+  Retail spawns a (10,0) into slot 2 at t=39508 that WEDGES: flags
+  0x30086, life frozen 6/8, chase 182, floating at z=6139 — never
+  ticks down, never dies, alive 11,000+ ticks to take end. The PORT
+  KILLS IT within one tick (stamps 0x400) — every pair, 11,215 flags
+  rows. The port does not reproduce this retail bug; it silently
+  fixes it. **RULING OWED: reproduce-or-patch** (smells like a
+  patches-class toggle; retail's wedge mechanism — why its dispatcher
+  never advances the entity — is undug; NB the meteor-trail session's
+  "dispatchers refuse 0x80 emitters" rhyme, and the entity carries
+  0x80). Birth pair also shows the terrain-datum floor (port z 6272).
+- **METEOR-STORM CHURN (the take's dominant entity-set family).**
+  (10,0) 1,120 missing / 2,179 extra + (9,0) 1,341/1,405 from t≈414
+  on, retail >16-LCG-draw bursts on 26 pairs — the ambient meteor
+  weather diverging, same class as mc1hwl0's storms. Global rng still
+  (1,1) on 50,382/50,673 pairs.
+- **CASTLE (3,2)/(3,3) z (exemplars t=5502-5981)** — the castle-latch
+  session's banked castle-z+64 lead, now with suite exemplars.
+- **(9,9) missing block** (881 rows, t=23132+, exemplar) — m9-bolt
+  family, undug.
+- **The terrain-datum class dominates z** (1.3M rows / 46,670 pairs)
+  level-wide across the full take — unattributable at format 1 (see
+  the bee-session cause-A entry).
+
+Suites: mc1l32 384 fixtures baseline all-as-expected; all other
+suites untouched.

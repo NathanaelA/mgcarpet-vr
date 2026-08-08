@@ -2276,10 +2276,16 @@ impl Gen {
                 }
             }
             // sub_1AE30 (:22101): m7's 780-damage slow bolt (class-9
-            // m14; interim straight-bolt flight — table truncation).
+            // m14, the generic homing flight): the ctor binds row [6]
+            // (:22122) and pre-targets the bolt with the thrower's
+            // own +146 (:22122-23) — arm_projectile's `tgt` carries
+            // it. OPEN (DEVIATIONS boulder entry): retail copies the
+            // thrower's +66/+67 filter pair; we pass the shared
+            // (3, 0xFF).
             7 => {
                 if let Some(p) = self.spawn_slow_bolt(x, y, launch_z) {
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 780, 0);
+                    self.ent[p].row156 = 6;
                 }
             }
             // sub_1AEE0 (:22134): m8's 4000-damage beam, filter
@@ -2632,19 +2638,13 @@ impl Gen {
     /// the exact bearing (position derived from the leader every
     /// tick); asleep ones collapse onto it every 4th tick.
     fn segment_follow(&mut self, i: usize) {
-        // The segment's own damage intake (:21127-37): apply pending
-        // ch0, latch the attacker — the head's inbox walk inherits it.
-        if self.ent[i].f58 != 0 && self.ent[i].mail[0].1 != 0 {
-            let (amt, src) = self.ent[i].mail[0];
-            self.ent[i].act_life -= amt as i32;
-            self.ent[i].mail[0].1 = 0;
-            self.ent[i].f40 = src;
-            self.ent[i].f38 = src;
-        }
         let l = self.ent[i].f52 as usize;
-        if l == 0 || self.ent[l].class64 != 5 {
-            self.ent[i].flags |= 0x400; // orphaned (sub_41E80)
-            return;
+        // Orphan (:21116-17): a leader no longer class 5 flags the
+        // segment dead (sub_41E80 = 0x400) and FALLS THROUGH — the
+        // orphan still follows the stale leader slot this tick
+        // (f52 == 0 follows the scratch slot, as retail reads it).
+        if self.ent[l].class64 != 5 {
+            self.ent[i].flags |= 0x400;
         }
         let (lx, ly, lz) = (self.ent[l].x, self.ent[l].y, self.ent[l].z);
         if self.ent[i].f58 != 0 {
@@ -2659,6 +2659,18 @@ impl Gen {
             let d = self.ent[i].f56 as i16;
             Self::polar_step(&mut tmp, yaw, pitch, -d);
             self.move_relink(i, tmp.0, tmp.1, tmp.2);
+            // Damage intake AFTER the move (:21127-37): apply pending
+            // ch0 and latch the attacker in +40 ALONE — or CLEAR the
+            // latch on a quiet tick (the head's chain walk inherits
+            // +40; +38 is the lethal branch's alone).
+            if self.ent[i].mail[0].1 != 0 {
+                let (amt, src) = self.ent[i].mail[0];
+                self.ent[i].act_life -= amt as i32;
+                self.ent[i].mail[0].1 = 0;
+                self.ent[i].f40 = src;
+            } else {
+                self.ent[i].f40 = 0;
+            }
         } else if self.ent[i].f63 & 3 == 0 {
             self.move_relink(i, lx, ly, lz);
             self.ent[i].f30 = self.ent[l].f30;

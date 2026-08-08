@@ -2457,6 +2457,15 @@ def main() -> None:
     if not args.no_wait_live:
         wait_until_live(mem, loc, layout, args.wait_timeout, launch_root, child)
 
+    # The pre-live pin legitimately fails while a level is still
+    # GENERATING (the shading validator doubles as the readiness
+    # gate: all-zero until the final bake), and an attach from the
+    # menu always hits that window — so give the terrain channel a
+    # second chance now the sim is live. (Both 2026-08-08 l32 takes
+    # silently degraded to format 1 exactly this way.)
+    if loc.terrain_hosts is None:
+        pin_terrain(mem, loc, layout)
+
     # Detect a tick-patched exe (CARPET/HIDDEN_REC.EXE or NETHERW_REC.EXE): its
     # stub exposes a mailbox once the sim has ticked once, so probe AFTER go-live.
     find_mailbox(mem, loc, layout)

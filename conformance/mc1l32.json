@@ -1,0 +1,1848 @@
+{
+ "recording": "fixtures/mc1l32-fixtures.mgcr",
+ "input_delay": 0,
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 0,
+   "status": "conforming"
+  },
+  {
+   "t": 10,
+   "status": "conforming"
+  },
+  {
+   "t": 20,
+   "status": "conforming"
+  },
+  {
+   "t": 30,
+   "status": "conforming"
+  },
+  {
+   "t": 40,
+   "status": "conforming"
+  },
+  {
+   "t": 50,
+   "status": "conforming"
+  },
+  {
+   "t": 60,
+   "status": "conforming"
+  },
+  {
+   "t": 70,
+   "status": "conforming"
+  },
+  {
+   "t": 80,
+   "status": "open",
+   "sig": "93d5bf3ba92e36db",
+   "atoms": [
+    "missing:12,3"
+   ],
+   "note": "[carried from bee-height take] class-12 ecology churn: retail respawns statics, port does not (l32 known lane, castle-latch session leads)"
+  },
+  {
+   "t": 81,
+   "status": "open",
+   "sig": "93cbbd3ba925def0",
+   "atoms": [
+    "missing:12,0"
+   ],
+   "note": "[carried from bee-height take] class-12 ecology churn (see t=124)"
+  },
+  {
+   "t": 82,
+   "status": "conforming"
+  },
+  {
+   "t": 92,
+   "status": "conforming"
+  },
+  {
+   "t": 102,
+   "status": "conforming"
+  },
+  {
+   "t": 112,
+   "status": "conforming"
+  },
+  {
+   "t": 122,
+   "status": "conforming"
+  },
+  {
+   "t": 127,
+   "status": "capture",
+   "sig": "a1a1758349b40a12",
+   "atoms": [
+    "field:wizard0.hand_right"
+   ],
+   "note": "[carried from bee-height take] equip/cast input reconstruction (RECORDING.md raw-input +/-1 caveat): wizard0.hand_right"
+  },
+  {
+   "t": 129,
+   "status": "open",
+   "sig": "97af2825376ed0d9",
+   "atoms": [
+    "extra:9,1"
+   ],
+   "note": "[carried from bee-height take] (9,1) projectile lane: extra-in-port"
+  },
+  {
+   "t": 134,
+   "status": "conforming"
+  },
+  {
+   "t": 145,
+   "status": "conforming"
+  },
+  {
+   "t": 148,
+   "status": "open",
+   "sig": "4d1985660553dfb4",
+   "atoms": [
+    "field:9,1:flags"
+   ],
+   "note": "[carried from bee-height take] (9,1) flags lane"
+  },
+  {
+   "t": 152,
+   "status": "open",
+   "sig": "787cee3cf7efead5",
+   "atoms": [
+    "field:10,12:flags",
+    "field:9,1:flags"
+   ],
+   "note": "[carried from bee-height take] (10,12)+(9,1) flags lane"
+  },
+  {
+   "t": 156,
+   "status": "open",
+   "sig": "75c3f97e45cb9f4c",
+   "atoms": [
+    "field:10,39:flags",
+    "field:9,1:flags"
+   ],
+   "note": "[carried from bee-height take] (10,39) balloon flags + (9,1) flags"
+  },
+  {
+   "t": 182,
+   "status": "open",
+   "sig": "c82601d277fa8a1d",
+   "atoms": [
+    "field:10,39:flags"
+   ],
+   "note": "[carried from bee-height take] (10,39) balloon flags bit 0x20000000 (l32 known balloon family)"
+  },
+  {
+   "t": 183,
+   "status": "conforming"
+  },
+  {
+   "t": 194,
+   "status": "conforming"
+  },
+  {
+   "t": 204,
+   "status": "conforming"
+  },
+  {
+   "t": 214,
+   "status": "conforming"
+  },
+  {
+   "t": 222,
+   "status": "open",
+   "sig": "516247606ff62f95",
+   "atoms": [
+    "missing:12,16"
+   ],
+   "note": "[carried from bee-height take] class-12 ecology churn (see t=124)"
+  },
+  {
+   "t": 225,
+   "status": "conforming"
+  },
+  {
+   "t": 235,
+   "status": "conforming"
+  },
+  {
+   "t": 245,
+   "status": "conforming"
+  },
+  {
+   "t": 256,
+   "status": "conforming"
+  },
+  {
+   "t": 262,
+   "status": "open",
+   "sig": "58362133705f10c0",
+   "atoms": [
+    "field:10,12:flags"
+   ],
+   "note": "[carried from bee-height take] (10,12) flags lane"
+  },
+  {
+   "t": 273,
+   "status": "conforming"
+  },
+  {
+   "t": 289,
+   "status": "conforming"
+  },
+  {
+   "t": 304,
+   "status": "conforming"
+  },
+  {
+   "t": 315,
+   "status": "conforming"
+  },
+  {
+   "t": 325,
+   "status": "conforming"
+  },
+  {
+   "t": 335,
+   "status": "conforming"
+  },
+  {
+   "t": 345,
+   "status": "conforming"
+  },
+  {
+   "t": 355,
+   "status": "conforming"
+  },
+  {
+   "t": 365,
+   "status": "conforming"
+  },
+  {
+   "t": 375,
+   "status": "conforming"
+  },
+  {
+   "t": 385,
+   "status": "conforming"
+  },
+  {
+   "t": 395,
+   "status": "conforming"
+  },
+  {
+   "t": 405,
+   "status": "conforming"
+  },
+  {
+   "t": 412,
+   "status": "capture",
+   "sig": "91c5d9b7855c33bf",
+   "atoms": [
+    "field:wizard0.hand_left"
+   ],
+   "note": "[carried from bee-height take] equip/cast input reconstruction: wizard0.hand_left"
+  },
+  {
+   "t": 414,
+   "status": "open",
+   "sig": "97ac2225376c90d0",
+   "atoms": [
+    "extra:9,0"
+   ],
+   "note": "[carried from bee-height take] bee z-law FIXED; residual: (9,0) extra"
+  },
+  {
+   "t": 417,
+   "status": "conforming"
+  },
+  {
+   "t": 427,
+   "status": "conforming"
+  },
+  {
+   "t": 437,
+   "status": "conforming"
+  },
+  {
+   "t": 447,
+   "status": "conforming"
+  },
+  {
+   "t": 459,
+   "status": "conforming"
+  },
+  {
+   "t": 465,
+   "status": "open",
+   "sig": "b6f54402d020e196",
+   "atoms": [
+    "field:10,0:z"
+   ],
+   "note": "(10,0) fire z lane - the terrain-datum class rides grounded fires (bee-session cause A ledger entry)"
+  },
+  {
+   "t": 467,
+   "status": "open",
+   "sig": "dc8049ba64ad38d2",
+   "atoms": [
+    "field:10,0:rand",
+    "field:10,0:z"
+   ],
+   "note": "(10,0) fire z + ent-rand knock-on (see t=465)"
+  },
+  {
+   "t": 491,
+   "status": "conforming"
+  },
+  {
+   "t": 504,
+   "status": "conforming"
+  },
+  {
+   "t": 517,
+   "status": "conforming"
+  },
+  {
+   "t": 529,
+   "status": "conforming"
+  },
+  {
+   "t": 541,
+   "status": "conforming"
+  },
+  {
+   "t": 553,
+   "status": "conforming"
+  },
+  {
+   "t": 566,
+   "status": "conforming"
+  },
+  {
+   "t": 577,
+   "status": "conforming"
+  },
+  {
+   "t": 589,
+   "status": "conforming"
+  },
+  {
+   "t": 601,
+   "status": "conforming"
+  },
+  {
+   "t": 613,
+   "status": "conforming"
+  },
+  {
+   "t": 624,
+   "status": "conforming"
+  },
+  {
+   "t": 636,
+   "status": "conforming"
+  },
+  {
+   "t": 648,
+   "status": "conforming"
+  },
+  {
+   "t": 659,
+   "status": "conforming"
+  },
+  {
+   "t": 671,
+   "status": "conforming"
+  },
+  {
+   "t": 684,
+   "status": "conforming"
+  },
+  {
+   "t": 696,
+   "status": "conforming"
+  },
+  {
+   "t": 708,
+   "status": "conforming"
+  },
+  {
+   "t": 720,
+   "status": "conforming"
+  },
+  {
+   "t": 732,
+   "status": "conforming"
+  },
+  {
+   "t": 744,
+   "status": "conforming"
+  },
+  {
+   "t": 756,
+   "status": "conforming"
+  },
+  {
+   "t": 768,
+   "status": "conforming"
+  },
+  {
+   "t": 786,
+   "status": "conforming"
+  },
+  {
+   "t": 814,
+   "status": "conforming"
+  },
+  {
+   "t": 817,
+   "status": "open",
+   "sig": "0df81e3a71dc2119",
+   "atoms": [
+    "field:10,0:rand"
+   ],
+   "note": "(10,0) ent-rand lane (see t=465)"
+  },
+  {
+   "t": 828,
+   "status": "conforming"
+  },
+  {
+   "t": 851,
+   "status": "conforming"
+  },
+  {
+   "t": 865,
+   "status": "conforming"
+  },
+  {
+   "t": 878,
+   "status": "conforming"
+  },
+  {
+   "t": 886,
+   "status": "open",
+   "sig": "1306fcda24209429",
+   "atoms": [
+    "extra:9,0",
+    "field:10,0:z"
+   ],
+   "note": "(10,0) fire z + (9,0) extra (meteor churn)"
+  },
+  {
+   "t": 912,
+   "status": "conforming"
+  },
+  {
+   "t": 922,
+   "status": "conforming"
+  },
+  {
+   "t": 932,
+   "status": "conforming"
+  },
+  {
+   "t": 944,
+   "status": "conforming"
+  },
+  {
+   "t": 957,
+   "status": "conforming"
+  },
+  {
+   "t": 970,
+   "status": "conforming"
+  },
+  {
+   "t": 983,
+   "status": "conforming"
+  },
+  {
+   "t": 997,
+   "status": "conforming"
+  },
+  {
+   "t": 1009,
+   "status": "conforming"
+  },
+  {
+   "t": 1021,
+   "status": "conforming"
+  },
+  {
+   "t": 1033,
+   "status": "conforming"
+  },
+  {
+   "t": 1045,
+   "status": "conforming"
+  },
+  {
+   "t": 1057,
+   "status": "conforming"
+  },
+  {
+   "t": 1069,
+   "status": "conforming"
+  },
+  {
+   "t": 1082,
+   "status": "conforming"
+  },
+  {
+   "t": 1095,
+   "status": "conforming"
+  },
+  {
+   "t": 1106,
+   "status": "conforming"
+  },
+  {
+   "t": 1118,
+   "status": "conforming"
+  },
+  {
+   "t": 1130,
+   "status": "conforming"
+  },
+  {
+   "t": 1142,
+   "status": "conforming"
+  },
+  {
+   "t": 1153,
+   "status": "conforming"
+  },
+  {
+   "t": 1165,
+   "status": "conforming"
+  },
+  {
+   "t": 1178,
+   "status": "conforming"
+  },
+  {
+   "t": 1190,
+   "status": "conforming"
+  },
+  {
+   "t": 1202,
+   "status": "conforming"
+  },
+  {
+   "t": 1214,
+   "status": "conforming"
+  },
+  {
+   "t": 1225,
+   "status": "conforming"
+  },
+  {
+   "t": 1237,
+   "status": "conforming"
+  },
+  {
+   "t": 1248,
+   "status": "conforming"
+  },
+  {
+   "t": 1260,
+   "status": "conforming"
+  },
+  {
+   "t": 1272,
+   "status": "conforming"
+  },
+  {
+   "t": 1285,
+   "status": "conforming"
+  },
+  {
+   "t": 1297,
+   "status": "conforming"
+  },
+  {
+   "t": 1309,
+   "status": "conforming"
+  },
+  {
+   "t": 1321,
+   "status": "conforming"
+  },
+  {
+   "t": 1333,
+   "status": "conforming"
+  },
+  {
+   "t": 1344,
+   "status": "conforming"
+  },
+  {
+   "t": 1356,
+   "status": "conforming"
+  },
+  {
+   "t": 1368,
+   "status": "conforming"
+  },
+  {
+   "t": 1380,
+   "status": "conforming"
+  },
+  {
+   "t": 1393,
+   "status": "conforming"
+  },
+  {
+   "t": 1404,
+   "status": "conforming"
+  },
+  {
+   "t": 1416,
+   "status": "conforming"
+  },
+  {
+   "t": 1428,
+   "status": "conforming"
+  },
+  {
+   "t": 1440,
+   "status": "conforming"
+  },
+  {
+   "t": 1451,
+   "status": "conforming"
+  },
+  {
+   "t": 1463,
+   "status": "conforming"
+  },
+  {
+   "t": 1475,
+   "status": "conforming"
+  },
+  {
+   "t": 1488,
+   "status": "conforming"
+  },
+  {
+   "t": 1501,
+   "status": "conforming"
+  },
+  {
+   "t": 1513,
+   "status": "conforming"
+  },
+  {
+   "t": 1525,
+   "status": "conforming"
+  },
+  {
+   "t": 1537,
+   "status": "conforming"
+  },
+  {
+   "t": 1548,
+   "status": "conforming"
+  },
+  {
+   "t": 1560,
+   "status": "conforming"
+  },
+  {
+   "t": 1572,
+   "status": "conforming"
+  },
+  {
+   "t": 1584,
+   "status": "conforming"
+  },
+  {
+   "t": 1596,
+   "status": "conforming"
+  },
+  {
+   "t": 1620,
+   "status": "conforming"
+  },
+  {
+   "t": 1692,
+   "status": "conforming"
+  },
+  {
+   "t": 1715,
+   "status": "conforming"
+  },
+  {
+   "t": 1725,
+   "status": "conforming"
+  },
+  {
+   "t": 1736,
+   "status": "conforming"
+  },
+  {
+   "t": 1795,
+   "status": "conforming"
+  },
+  {
+   "t": 1807,
+   "status": "conforming"
+  },
+  {
+   "t": 1819,
+   "status": "conforming"
+  },
+  {
+   "t": 1831,
+   "status": "conforming"
+  },
+  {
+   "t": 1843,
+   "status": "conforming"
+  },
+  {
+   "t": 1855,
+   "status": "conforming"
+  },
+  {
+   "t": 1866,
+   "status": "conforming"
+  },
+  {
+   "t": 1876,
+   "status": "conforming"
+  },
+  {
+   "t": 1886,
+   "status": "conforming"
+  },
+  {
+   "t": 1899,
+   "status": "conforming"
+  },
+  {
+   "t": 1912,
+   "status": "conforming"
+  },
+  {
+   "t": 1959,
+   "status": "conforming"
+  },
+  {
+   "t": 1972,
+   "status": "conforming"
+  },
+  {
+   "t": 1982,
+   "status": "conforming"
+  },
+  {
+   "t": 1993,
+   "status": "conforming"
+  },
+  {
+   "t": 2005,
+   "status": "conforming"
+  },
+  {
+   "t": 2015,
+   "status": "conforming"
+  },
+  {
+   "t": 2025,
+   "status": "conforming"
+  },
+  {
+   "t": 2035,
+   "status": "conforming"
+  },
+  {
+   "t": 2045,
+   "status": "conforming"
+  },
+  {
+   "t": 2055,
+   "status": "conforming"
+  },
+  {
+   "t": 2066,
+   "status": "conforming"
+  },
+  {
+   "t": 2089,
+   "status": "conforming"
+  },
+  {
+   "t": 2112,
+   "status": "conforming"
+  },
+  {
+   "t": 2135,
+   "status": "conforming"
+  },
+  {
+   "t": 2147,
+   "status": "conforming"
+  },
+  {
+   "t": 2198,
+   "status": "conforming"
+  },
+  {
+   "t": 2210,
+   "status": "conforming"
+  },
+  {
+   "t": 2247,
+   "status": "conforming"
+  },
+  {
+   "t": 2259,
+   "status": "conforming"
+  },
+  {
+   "t": 2272,
+   "status": "conforming"
+  },
+  {
+   "t": 2284,
+   "status": "conforming"
+  },
+  {
+   "t": 2295,
+   "status": "conforming"
+  },
+  {
+   "t": 2307,
+   "status": "conforming"
+  },
+  {
+   "t": 2318,
+   "status": "conforming"
+  },
+  {
+   "t": 2330,
+   "status": "conforming"
+  },
+  {
+   "t": 2342,
+   "status": "conforming"
+  },
+  {
+   "t": 2353,
+   "status": "conforming"
+  },
+  {
+   "t": 2368,
+   "status": "conforming"
+  },
+  {
+   "t": 2390,
+   "status": "conforming"
+  },
+  {
+   "t": 2425,
+   "status": "conforming"
+  },
+  {
+   "t": 2459,
+   "status": "conforming"
+  },
+  {
+   "t": 2490,
+   "status": "conforming"
+  },
+  {
+   "t": 2515,
+   "status": "conforming"
+  },
+  {
+   "t": 2527,
+   "status": "conforming"
+  },
+  {
+   "t": 2543,
+   "status": "conforming"
+  },
+  {
+   "t": 2555,
+   "status": "conforming"
+  },
+  {
+   "t": 2595,
+   "status": "conforming"
+  },
+  {
+   "t": 2625,
+   "status": "conforming"
+  },
+  {
+   "t": 2637,
+   "status": "conforming"
+  },
+  {
+   "t": 2649,
+   "status": "conforming"
+  },
+  {
+   "t": 2704,
+   "status": "conforming"
+  },
+  {
+   "t": 2716,
+   "status": "conforming"
+  },
+  {
+   "t": 2762,
+   "status": "conforming"
+  },
+  {
+   "t": 2801,
+   "status": "conforming"
+  },
+  {
+   "t": 2812,
+   "status": "conforming"
+  },
+  {
+   "t": 2822,
+   "status": "conforming"
+  },
+  {
+   "t": 2832,
+   "status": "conforming"
+  },
+  {
+   "t": 2842,
+   "status": "conforming"
+  },
+  {
+   "t": 2852,
+   "status": "conforming"
+  },
+  {
+   "t": 2862,
+   "status": "conforming"
+  },
+  {
+   "t": 2872,
+   "status": "conforming"
+  },
+  {
+   "t": 2882,
+   "status": "conforming"
+  },
+  {
+   "t": 2892,
+   "status": "conforming"
+  },
+  {
+   "t": 2904,
+   "status": "conforming"
+  },
+  {
+   "t": 2931,
+   "status": "conforming"
+  },
+  {
+   "t": 2957,
+   "status": "conforming"
+  },
+  {
+   "t": 2969,
+   "status": "conforming"
+  },
+  {
+   "t": 2983,
+   "status": "conforming"
+  },
+  {
+   "t": 3004,
+   "status": "conforming"
+  },
+  {
+   "t": 3032,
+   "status": "conforming"
+  },
+  {
+   "t": 3045,
+   "status": "conforming"
+  },
+  {
+   "t": 3066,
+   "status": "conforming"
+  },
+  {
+   "t": 3078,
+   "status": "conforming"
+  },
+  {
+   "t": 3100,
+   "status": "conforming"
+  },
+  {
+   "t": 3123,
+   "status": "conforming"
+  },
+  {
+   "t": 3135,
+   "status": "conforming"
+  },
+  {
+   "t": 3147,
+   "status": "conforming"
+  },
+  {
+   "t": 3175,
+   "status": "conforming"
+  },
+  {
+   "t": 3187,
+   "status": "conforming"
+  },
+  {
+   "t": 3212,
+   "status": "conforming"
+  },
+  {
+   "t": 3224,
+   "status": "conforming"
+  },
+  {
+   "t": 3236,
+   "status": "conforming"
+  },
+  {
+   "t": 3248,
+   "status": "conforming"
+  },
+  {
+   "t": 3258,
+   "status": "conforming"
+  },
+  {
+   "t": 3268,
+   "status": "conforming"
+  },
+  {
+   "t": 3278,
+   "status": "conforming"
+  },
+  {
+   "t": 3288,
+   "status": "conforming"
+  },
+  {
+   "t": 3312,
+   "status": "conforming"
+  },
+  {
+   "t": 3325,
+   "status": "conforming"
+  },
+  {
+   "t": 3339,
+   "status": "conforming"
+  },
+  {
+   "t": 3352,
+   "status": "conforming"
+  },
+  {
+   "t": 3363,
+   "status": "conforming"
+  },
+  {
+   "t": 3393,
+   "status": "conforming"
+  },
+  {
+   "t": 3411,
+   "status": "conforming"
+  },
+  {
+   "t": 3422,
+   "status": "conforming"
+  },
+  {
+   "t": 3434,
+   "status": "conforming"
+  },
+  {
+   "t": 3446,
+   "status": "conforming"
+  },
+  {
+   "t": 3457,
+   "status": "conforming"
+  },
+  {
+   "t": 3512,
+   "status": "conforming"
+  },
+  {
+   "t": 3546,
+   "status": "conforming"
+  },
+  {
+   "t": 3558,
+   "status": "conforming"
+  },
+  {
+   "t": 3570,
+   "status": "conforming"
+  },
+  {
+   "t": 3584,
+   "status": "conforming"
+  },
+  {
+   "t": 3599,
+   "status": "conforming"
+  },
+  {
+   "t": 3611,
+   "status": "conforming"
+  },
+  {
+   "t": 3623,
+   "status": "conforming"
+  },
+  {
+   "t": 3635,
+   "status": "conforming"
+  },
+  {
+   "t": 3652,
+   "status": "conforming"
+  },
+  {
+   "t": 3663,
+   "status": "conforming"
+  },
+  {
+   "t": 3676,
+   "status": "conforming"
+  },
+  {
+   "t": 3689,
+   "status": "conforming"
+  },
+  {
+   "t": 3701,
+   "status": "conforming"
+  },
+  {
+   "t": 3713,
+   "status": "conforming"
+  },
+  {
+   "t": 3735,
+   "status": "conforming"
+  },
+  {
+   "t": 3747,
+   "status": "conforming"
+  },
+  {
+   "t": 3760,
+   "status": "conforming"
+  },
+  {
+   "t": 3771,
+   "status": "open",
+   "sig": "619d7cc359a6c835",
+   "atoms": [
+    "extra:10,0",
+    "extra:9,0"
+   ],
+   "note": "meteor-storm pool churn: (9,0)+(10,0) extra-in-port (l32-full intake, ledger)"
+  },
+  {
+   "t": 3772,
+   "status": "conforming"
+  },
+  {
+   "t": 3804,
+   "status": "conforming"
+  },
+  {
+   "t": 3816,
+   "status": "conforming"
+  },
+  {
+   "t": 3842,
+   "status": "conforming"
+  },
+  {
+   "t": 3855,
+   "status": "conforming"
+  },
+  {
+   "t": 3866,
+   "status": "conforming"
+  },
+  {
+   "t": 3902,
+   "status": "conforming"
+  },
+  {
+   "t": 3954,
+   "status": "conforming"
+  },
+  {
+   "t": 3965,
+   "status": "conforming"
+  },
+  {
+   "t": 3977,
+   "status": "conforming"
+  },
+  {
+   "t": 3988,
+   "status": "conforming"
+  },
+  {
+   "t": 3999,
+   "status": "conforming"
+  },
+  {
+   "t": 4012,
+   "status": "conforming"
+  },
+  {
+   "t": 4026,
+   "status": "conforming"
+  },
+  {
+   "t": 4048,
+   "status": "conforming"
+  },
+  {
+   "t": 4058,
+   "status": "conforming"
+  },
+  {
+   "t": 4068,
+   "status": "conforming"
+  },
+  {
+   "t": 4078,
+   "status": "conforming"
+  },
+  {
+   "t": 4088,
+   "status": "conforming"
+  },
+  {
+   "t": 4098,
+   "status": "conforming"
+  },
+  {
+   "t": 4111,
+   "status": "conforming"
+  },
+  {
+   "t": 4175,
+   "status": "conforming"
+  },
+  {
+   "t": 4197,
+   "status": "conforming"
+  },
+  {
+   "t": 4208,
+   "status": "conforming"
+  },
+  {
+   "t": 4220,
+   "status": "conforming"
+  },
+  {
+   "t": 4232,
+   "status": "conforming"
+  },
+  {
+   "t": 4244,
+   "status": "conforming"
+  },
+  {
+   "t": 4254,
+   "status": "conforming"
+  },
+  {
+   "t": 4288,
+   "status": "conforming"
+  },
+  {
+   "t": 4300,
+   "status": "conforming"
+  },
+  {
+   "t": 4313,
+   "status": "conforming"
+  },
+  {
+   "t": 4326,
+   "status": "conforming"
+  },
+  {
+   "t": 4347,
+   "status": "conforming"
+  },
+  {
+   "t": 4368,
+   "status": "conforming"
+  },
+  {
+   "t": 4380,
+   "status": "conforming"
+  },
+  {
+   "t": 4393,
+   "status": "conforming"
+  },
+  {
+   "t": 4406,
+   "status": "conforming"
+  },
+  {
+   "t": 4418,
+   "status": "conforming"
+  },
+  {
+   "t": 4431,
+   "status": "conforming"
+  },
+  {
+   "t": 4443,
+   "status": "conforming"
+  },
+  {
+   "t": 4455,
+   "status": "conforming"
+  },
+  {
+   "t": 4467,
+   "status": "conforming"
+  },
+  {
+   "t": 4479,
+   "status": "conforming"
+  },
+  {
+   "t": 4491,
+   "status": "conforming"
+  },
+  {
+   "t": 4503,
+   "status": "conforming"
+  },
+  {
+   "t": 4514,
+   "status": "conforming"
+  },
+  {
+   "t": 4527,
+   "status": "conforming"
+  },
+  {
+   "t": 4539,
+   "status": "conforming"
+  },
+  {
+   "t": 4550,
+   "status": "conforming"
+  },
+  {
+   "t": 4564,
+   "status": "conforming"
+  },
+  {
+   "t": 4575,
+   "status": "conforming"
+  },
+  {
+   "t": 4587,
+   "status": "conforming"
+  },
+  {
+   "t": 4600,
+   "status": "conforming"
+  },
+  {
+   "t": 4613,
+   "status": "conforming"
+  },
+  {
+   "t": 4624,
+   "status": "conforming"
+  },
+  {
+   "t": 4637,
+   "status": "conforming"
+  },
+  {
+   "t": 4649,
+   "status": "conforming"
+  },
+  {
+   "t": 4660,
+   "status": "conforming"
+  },
+  {
+   "t": 4693,
+   "status": "conforming"
+  },
+  {
+   "t": 4715,
+   "status": "conforming"
+  },
+  {
+   "t": 4728,
+   "status": "conforming"
+  },
+  {
+   "t": 4756,
+   "status": "conforming"
+  },
+  {
+   "t": 4769,
+   "status": "conforming"
+  },
+  {
+   "t": 4807,
+   "status": "conforming"
+  },
+  {
+   "t": 4818,
+   "status": "conforming"
+  },
+  {
+   "t": 4862,
+   "status": "conforming"
+  },
+  {
+   "t": 4875,
+   "status": "conforming"
+  },
+  {
+   "t": 4888,
+   "status": "conforming"
+  },
+  {
+   "t": 4940,
+   "status": "conforming"
+  },
+  {
+   "t": 4956,
+   "status": "conforming"
+  },
+  {
+   "t": 5093,
+   "status": "conforming"
+  },
+  {
+   "t": 5117,
+   "status": "conforming"
+  },
+  {
+   "t": 5136,
+   "status": "conforming"
+  },
+  {
+   "t": 5147,
+   "status": "conforming"
+  },
+  {
+   "t": 5159,
+   "status": "conforming"
+  },
+  {
+   "t": 5172,
+   "status": "conforming"
+  },
+  {
+   "t": 5183,
+   "status": "conforming"
+  },
+  {
+   "t": 5195,
+   "status": "conforming"
+  },
+  {
+   "t": 5205,
+   "status": "conforming"
+  },
+  {
+   "t": 5215,
+   "status": "conforming"
+  },
+  {
+   "t": 5225,
+   "status": "conforming"
+  },
+  {
+   "t": 5235,
+   "status": "conforming"
+  },
+  {
+   "t": 5245,
+   "status": "conforming"
+  },
+  {
+   "t": 5255,
+   "status": "conforming"
+  },
+  {
+   "t": 5265,
+   "status": "conforming"
+  },
+  {
+   "t": 5275,
+   "status": "conforming"
+  },
+  {
+   "t": 5285,
+   "status": "conforming"
+  },
+  {
+   "t": 5295,
+   "status": "conforming"
+  },
+  {
+   "t": 5305,
+   "status": "conforming"
+  },
+  {
+   "t": 5315,
+   "status": "conforming"
+  },
+  {
+   "t": 5325,
+   "status": "conforming"
+  },
+  {
+   "t": 5335,
+   "status": "conforming"
+  },
+  {
+   "t": 5345,
+   "status": "conforming"
+  },
+  {
+   "t": 5355,
+   "status": "conforming"
+  },
+  {
+   "t": 5365,
+   "status": "conforming"
+  },
+  {
+   "t": 5375,
+   "status": "conforming"
+  },
+  {
+   "t": 5385,
+   "status": "conforming"
+  },
+  {
+   "t": 5395,
+   "status": "conforming"
+  },
+  {
+   "t": 5405,
+   "status": "conforming"
+  },
+  {
+   "t": 5415,
+   "status": "conforming"
+  },
+  {
+   "t": 5425,
+   "status": "conforming"
+  },
+  {
+   "t": 5432,
+   "status": "open",
+   "sig": "2cc0dc3d30b5e9b3",
+   "atoms": [
+    "extra:9,10"
+   ],
+   "note": "(9,10) castle-ball extra-in-port - castle-latch session leads family (painter ctor fields)"
+  },
+  {
+   "t": 5437,
+   "status": "conforming"
+  },
+  {
+   "t": 5447,
+   "status": "conforming"
+  },
+  {
+   "t": 5457,
+   "status": "conforming"
+  },
+  {
+   "t": 5467,
+   "status": "conforming"
+  },
+  {
+   "t": 5473,
+   "status": "open",
+   "sig": "ecf104049ed8ab17",
+   "atoms": [
+    "field:3,0:mana",
+    "field:player.mana"
+   ],
+   "note": "cast-reconstruction mana ((3,0)+player.mana pair) - raw-input +/-1 caveat, kept open pending an mc1 roster rule"
+  },
+  {
+   "t": 5502,
+   "status": "open",
+   "sig": "8163248d28644622",
+   "atoms": [
+    "field:3,2:z"
+   ],
+   "note": "CASTLE (3,2) z - the banked castle z+64 lead (castle-latch session verify residuals)"
+  },
+  {
+   "t": 5503,
+   "status": "open",
+   "sig": "0ed6bd85e74a39e8",
+   "atoms": [
+    "field:3,2:z",
+    "field:3,3:z"
+   ],
+   "note": "castle (3,2)+(3,3) z (see t=5502)"
+  },
+  {
+   "t": 5600,
+   "status": "open",
+   "sig": "bb17b103ebc746a4",
+   "atoms": [
+    "field:3,2:z",
+    "field:wizard0.hand_left"
+   ],
+   "note": "castle z + equip recon (see t=5502)"
+  },
+  {
+   "t": 5602,
+   "status": "open",
+   "sig": "f25231f22ffaabf3",
+   "atoms": [
+    "extra:9,0",
+    "field:3,2:z"
+   ],
+   "note": "castle z + (9,0) extra (see t=5502)"
+  },
+  {
+   "t": 5981,
+   "status": "open",
+   "sig": "fe32f6570ff6f8e3",
+   "atoms": [
+    "field:10,12:flags",
+    "field:3,2:z"
+   ],
+   "note": "castle z + (10,12) flags (see t=5502)"
+  },
+  {
+   "t": 23132,
+   "status": "open",
+   "sig": "7a2c4d37e1b9da61",
+   "atoms": [
+    "extra:9,9",
+    "field:10,0:heading",
+    "field:10,0:rand",
+    "field:10,0:z",
+    "field:10,34:z",
+    "field:10,39:z",
+    "field:10,40:z",
+    "field:2,2:z",
+    "field:3,0:life",
+    "field:3,0:mana",
+    "field:3,2:z",
+    "field:3,3:z",
+    "field:5,15:rand",
+    "field:5,15:y",
+    "field:5,15:z",
+    "field:5,1:target_yaw",
+    "field:5,1:x",
+    "field:5,1:y",
+    "field:5,1:z",
+    "field:5,3:heading",
+    "field:5,3:x",
+    "field:5,3:y",
+    "field:5,5:heading",
+    "field:5,5:rand",
+    "field:5,5:target_yaw",
+    "field:5,5:x",
+    "field:5,5:y",
+    "field:5,5:z",
+    "field:5,7:z",
+    "field:5,9:z",
+    "field:9,1:heading",
+    "field:9,1:life",
+    "field:9,1:mana",
+    "field:9,1:max_life",
+    "field:9,1:pitch",
+    "field:9,1:target_yaw",
+    "field:9,1:x",
+    "field:9,1:y",
+    "field:9,1:z",
+    "field:player.life",
+    "field:player.mana"
+   ],
+   "note": "(9,9) missing-in-port block first tick (881 rows total) - m9-bolt family, undug story"
+  },
+  {
+   "t": 39412,
+   "status": "open",
+   "sig": "c34cf8da14f1175b",
+   "atoms": [
+    "field:10,34:z",
+    "field:10,39:z",
+    "field:2,1:z",
+    "field:2,2:z",
+    "field:2,3:z",
+    "field:3,2:z",
+    "field:5,15:rand",
+    "field:5,15:x",
+    "field:5,15:z",
+    "field:5,1:z",
+    "missing:11,9",
+    "missing:5,3",
+    "missing:5,4"
+   ],
+   "note": "SPAWN TRIGGER story: retail (11,9) proximity trigger 17 tiles from site fires 2 full m3 worm chains (25+ slots, free=395 - NOT pool pressure); port trigger never fires. Sole diff of the pair = the missing (5,3) set. Ledger l32-full intake"
+  },
+  {
+   "t": 39509,
+   "status": "open",
+   "sig": "f99de9bb4e7f2a38",
+   "atoms": [
+    "extra:10,0",
+    "field:10,0:flags",
+    "field:10,0:heading",
+    "field:10,0:id",
+    "field:10,0:life",
+    "field:10,0:mana",
+    "field:10,0:max_life",
+    "field:10,0:model",
+    "field:10,0:rand",
+    "field:10,0:sclass",
+    "field:10,0:smodel",
+    "field:10,0:speed",
+    "field:10,0:x",
+    "field:10,0:y",
+    "field:10,0:z",
+    "field:10,1:flags",
+    "field:10,1:heading",
+    "field:10,1:id",
+    "field:10,1:life",
+    "field:10,1:mana",
+    "field:10,1:max_life",
+    "field:10,1:model",
+    "field:10,1:rand",
+    "field:10,1:target_yaw",
+    "field:10,1:x",
+    "field:10,1:y",
+    "field:10,1:z",
+    "field:10,34:z",
+    "field:10,39:flags",
+    "field:10,39:heading",
+    "field:10,39:id",
+    "field:10,39:life",
+    "field:10,39:mana",
+    "field:10,39:max_life",
+    "field:10,39:model",
+    "field:10,39:rand",
+    "field:10,39:sclass",
+    "field:10,39:smodel",
+    "field:10,39:speed",
+    "field:10,39:target_yaw",
+    "field:10,39:x",
+    "field:10,39:y",
+    "field:10,39:z",
+    "field:2,1:z",
+    "field:2,2:z",
+    "field:2,3:z",
+    "field:3,2:z",
+    "field:5,15:heading",
+    "field:5,15:rand",
+    "field:5,15:z",
+    "field:5,1:z",
+    "field:5,3:heading",
+    "field:5,3:pitch",
+    "field:5,3:x",
+    "field:5,3:y",
+    "field:5,3:z",
+    "missing:10,0",
+    "missing:10,1",
+    "missing:10,39"
+   ],
+   "note": "STUCK EXPLOSION - PLAYER-RULED 2026-08-08: do NOT reproduce the retail wedge; the port's one-tick kill is the kept behavior (DEVIATIONS 'the stuck explosion', roster mc1l32-stuck-explosion-wedge). Expected to fail forever by design."
+  },
+  {
+   "t": 39511,
+   "status": "open",
+   "sig": "50862adecf489106",
+   "atoms": [
+    "field:10,0:flags",
+    "field:10,0:heading",
+    "field:10,0:id",
+    "field:10,0:life",
+    "field:10,0:mana",
+    "field:10,0:max_life",
+    "field:10,0:model",
+    "field:10,0:rand",
+    "field:10,0:sclass",
+    "field:10,0:smodel",
+    "field:10,0:speed",
+    "field:10,0:x",
+    "field:10,0:y",
+    "field:10,0:z",
+    "field:10,34:z",
+    "field:10,39:flags",
+    "field:10,39:heading",
+    "field:10,39:id",
+    "field:10,39:life",
+    "field:10,39:mana",
+    "field:10,39:max_life",
+    "field:10,39:model",
+    "field:10,39:rand",
+    "field:10,39:sclass",
+    "field:10,39:smodel",
+    "field:10,39:speed",
+    "field:10,39:target_yaw",
+    "field:10,39:x",
+    "field:10,39:y",
+    "field:10,39:z",
+    "field:2,1:z",
+    "field:2,2:z",
+    "field:2,3:z",
+    "field:3,2:z",
+    "field:5,15:heading",
+    "field:5,15:rand",
+    "field:5,15:x",
+    "field:5,15:y",
+    "field:5,15:z",
+    "field:5,1:heading",
+    "field:5,1:life",
+    "field:5,1:x",
+    "field:5,1:y",
+    "field:5,1:z",
+    "missing:10,0",
+    "missing:10,39"
+   ],
+   "note": "STUCK EXPLOSION - PLAYER-RULED 2026-08-08: do NOT reproduce the retail wedge; the port's one-tick kill is the kept behavior (DEVIATIONS 'the stuck explosion', roster mc1l32-stuck-explosion-wedge). Expected to fail forever by design."
+  }
+ ]
+}

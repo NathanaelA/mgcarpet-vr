@@ -13673,6 +13673,79 @@ mod tests {
     }
 
     #[test]
+    fn troll_boulder_rides_the_generic_flight_pretargeted() {
+        // CARPET.EXE's class-9 table: state 0xF → the bare sub_52770
+        // thunk. The throw ctor sub_1AE30 pre-targets the boulder
+        // with the thrower's +146 (:22122-23) and binds row [6]
+        // (:22122); the bare thunk drops NO fire trail (that wrapper
+        // is state 3's own sub_53070); the impact carries the thrown
+        // +44 = 780 through the (10,0). Direct-spawn fixture (the
+        // bare creature world is an ocean and row 19's mask kills a
+        // live troll) mirroring the attack_thunk case-7 arm.
+        use crate::mc1::mobs::PLAYER_TARGET;
+        // 12 tiles north of the wizard: the pitch-only correction
+        // needs the run-up (v_6 = 22/tick against a ~150-unit armed
+        // climb; a 6-tile throw crosses the victim still high).
+        let (bx, by, bz) = ((112 << 8) + 128u16, (104 << 8) + 128u16, 3600i16);
+
+        // Row [6]'s yaw cap v_2 = 0 (:5247): a boulder NEVER turns —
+        // its homing is PITCH-ONLY (v_6 = 22). So both legs throw on
+        // the wizard's exact bearing but aimed 1000 units OVER their
+        // head: the pre-targeted one dives back to the victim's
+        // altitude and lands, the untargeted one sails over — the
+        // same geometry is each leg's non-vacuity witness.
+        let (px, py) = ((112 << 8) + 128u16, (116 << 8) + 128u16);
+        let (ax, ay, az) = (px, py, 4400i16);
+
+        // Homing leg.
+        let mut w = flat_world();
+        w.set_invincible(true);
+        for _ in 0..150 {
+            w.tick(firing_line(), PlayerCommand::default()); // burn spawn grace
+        }
+        let b = w.g.spawn_slow_bolt(bx, by, bz).unwrap();
+        w.g.arm_projectile(b, 1, 3, 0xFF, PLAYER_TARGET, ax, ay, az, 780, 0);
+        w.g.ent[b].row156 = 6; // the throw site's row bind (:22122)
+        let mut trailed = false;
+        for _ in 0..300 {
+            w.tick(firing_line(), PlayerCommand::default());
+            trailed |= count(&w, 10, 1) > 0;
+            if w.player_damage_taken() > 0 {
+                break;
+            }
+        }
+        assert!(!trailed, "the bare thunk drops no fire trail");
+        assert!(
+            w.player_damage_taken() > 0,
+            "the pre-targeted boulder homes onto the wizard and lands its 780"
+        );
+
+        // Refuse leg: same off aim, UNTARGETED — m14 is sub_54520's
+        // default (:64185): it never acquires mid-flight (m3 in this
+        // same flight would snap here) and the off throw misses.
+        let mut w = flat_world();
+        w.set_invincible(true);
+        for _ in 0..150 {
+            w.tick(firing_line(), PlayerCommand::default());
+        }
+        let b = w.g.spawn_slow_bolt(bx, by, bz).unwrap();
+        w.g.arm_projectile(b, 1, 3, 0xFF, 0, ax, ay, az, 780, 0);
+        w.g.ent[b].row156 = 6;
+        for _ in 0..200 {
+            w.tick(firing_line(), PlayerCommand::default());
+            let e = &w.g.ent[b];
+            if e.class64 == 9 && e.model65 == 14 && e.flags & 0x400 == 0 {
+                assert_eq!(e.f146, 0, "an untargeted boulder never acquires");
+            }
+        }
+        assert_eq!(
+            w.player_damage_taken(),
+            0,
+            "the untargeted off throw sails past"
+        );
+    }
+
+    #[test]
     fn genie_blinks_ambushes_and_steals_mana() {
         // sub_1DFE0's mana hunt (:24523-46, no range gate) → the
         // sub_1E770 ambush blink → the blink cycle → chase seekers →

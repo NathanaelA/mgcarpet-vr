@@ -19,11 +19,12 @@
 //!   hitscan walk + state-14 segment chain, confirmed vs remc2
 //!   sub_66750); the explosion's +146 stamps hit-or-0 where the
 //!   original writes garbage on a miss (deliberate).
-//! - Class-9 model 14 / state 15 (the Troll & Ape boulder) has no
-//!   TRANSCRIBED handler — remc1's class-9 tick table is truncated —
-//!   so `proj_boulder_tick` reconstructs it: straight flight, silent,
-//!   `(10,0)` impact. It must NOT alias onto state 13, whose
-//!   first-tick roll is the arrow quartet (OPEN: retail table).
+//! - Class-9 model 14 / state 15 (the Troll & Ape boulder): remc1's
+//!   class-9 tick table is truncated, but CARPET.EXE's relocated
+//!   table binds 0xF to the bare sub_52770 thunk — the boulder runs
+//!   the generic homing flight (no fire trail, no acquire for m14),
+//!   pre-targeted by its throw ctor. It must NOT alias onto state
+//!   13, whose first-tick roll is the arrow quartet.
 //! - Mana-shield reflection (+17 bit 7) is ported but nothing sets the
 //!   flag yet (OPEN: wizard shields are the spell track).
 
@@ -270,8 +271,10 @@ impl Gen {
         }
         if self.ent[i].act_life < 0 {
             hit = 2;
+            // The killer latch belongs to the LETHAL branch alone
+            // (:21365-66 / :21485-86 / :21631-32 / :21737-38).
+            self.ent[i].f38 = self.ent[i].f40;
         }
-        self.ent[i].f38 = self.ent[i].f40;
         match hit {
             1 => Inbox::Hit(self.ent[i].f40),
             2 => Inbox::Dead,
@@ -390,8 +393,8 @@ impl Gen {
         false
     }
 
-    /// sub_3A1A0 (:46281): m7's slow bolt — state 15 is PAST remc1's
-    /// transcribed table; interim straight-bolt flight (see header).
+    /// sub_3A1A0 (:46281): m7's slow bolt — state 15, the generic
+    /// flight (see the dispatch note at [`Gen::proj_tick`]).
     pub(crate) fn spawn_slow_bolt(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
         self.spawn_projectile(14, 15, x, y, z, 128, 32, 0, 196)
     }
@@ -1109,9 +1112,17 @@ impl Gen {
             10 => self.proj_castle_ball_tick(i, ctx),
             12 => self.proj_m12_tick(i, ctx),
             13 => self.proj_bolt_tick(i, ctx),
-            // The Troll/Ape boulder — its own state, silent in flight
-            // (it used to alias onto 13 and inherit the arrow roll).
-            15 => self.proj_boulder_tick(i, ctx),
+            // The Troll/Ape boulder — CARPET.EXE's relocated class-9
+            // table binds state 0xF to the sub_52770 thunk 0x53060,
+            // the BARE generic flight (the fire-trail wrapper is
+            // state 3's own thunk sub_53070 :63021 — the boulder
+            // drops no trail). Silent in flight (the arrow roll is
+            // state 13's alone); it speaks through its (10,0) impact
+            // (sub_3A490 :46454, sound 3 :28114), which inherits the
+            // thrown +44 = 780 (:22112). The throw ctor sub_1AE30
+            // pre-targets it with the thrower's own +146 (:22122-23)
+            // — a thrown boulder HOMES like any generic bolt.
+            15 => self.proj_generic_tick(i, ctx, false),
             17 => self.proj_firewall_tick(i, ctx),
             // Player-spell payload projectiles (spell track). The
             // m17 magnet bolt is NOT here — it rides possession's
@@ -1766,9 +1777,12 @@ impl Gen {
         e.f126 += (e.f128 - e.f126).clamp(-2, 2);
         // The generic flight re-acquires while untargeted (:62652 →
         // sub_54520); the meteor's m3 is an acquire case (block
-        // 0/3/4) — the retail meteor SNAPS to a bee in the cone and
-        // the blast ring does the cluster.
-        if self.ent[i].f146 == 0 {
+        // 0/3/4 :63979) — the retail meteor SNAPS to a bee in the
+        // cone and the blast ring does the cluster. The boulder's
+        // m14 is sub_54520's `default: return 0` (:64185): it never
+        // acquires, so an untargeted (or bereaved) boulder flies
+        // straight.
+        if self.ent[i].f146 == 0 && matches!(self.ent[i].model65, 0 | 3 | 4) {
             self.aim_assist(i, ctx);
         }
         if self.ent[i].f146 != 0 {
@@ -2025,52 +2039,6 @@ impl Gen {
             e.f44 = if quartered { f44 >> 2 } else { f44 };
         }
         self.ent[i].flags |= 0x400;
-        false
-    }
-
-    /// Class-9 m14 / **state 15** (`sub_3A1A0` :46281) — the Troll and
-    /// Ape boulder (class-5 m7's throw, `sub_1AE30` :22101). Its own
-    /// flight state, NOT the arrow's.
-    ///
-    /// The boulder is SILENT in flight; the only sound it makes is its
-    /// impact. Retail's arrow roll (ids 33-36 = `arrow1`..`arrow4`)
-    /// lives solely in state 13's `sub_54180` (:63799 — the binary's
-    /// ONLY emitter of those four ids), and this is state 15. Proof
-    /// they are different handlers: `sub_1AE30` writes the impact
-    /// descriptor `+68 = 10` / `+69 = 0` (:22103-04), which state 13
-    /// never reads — dead stores otherwise. So the throw speaks
-    /// through its `(10,0)` impact (`sub_3A490` :46454), whose tick
-    /// plays sound 3 (:28114).
-    ///
-    /// APPROX(original: state 15's table entry is NOT transcribed —
-    /// remc1's class-9 tick table `str_25573C` (:4838) stops at state
-    /// 0x0D while its address span holds 22 entries, the only short
-    /// table in the block; the best-fit orphan is `sub_542B0_54640`
-    /// :63841). Two deliberate departures from that orphan, registered
-    /// in docs/DEVIATIONS.md: the flight stays STRAIGHT (the orphan
-    /// steers toward `+146`), and the impact inherits the thrown
-    /// `+44 = 780` (:22112) instead of the `(10,0)` default 400 — the
-    /// transcribed 780 write would otherwise be a dead store.
-    /// CARPET.EXE's relocated table binds state 0xF to the sub_52770
-    /// thunk 0x53060 — the shared generic flight — and the orphan
-    /// 0x542B0 to state 0x12; straight flight stands (no acquire case
-    /// 15, no pre-targeting ctor), re-binding to proj_generic_tick is
-    /// the banked follow-up (DEVIATIONS entry).
-    fn proj_boulder_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
-        let (yaw, pitch, speed) = {
-            let e = &self.ent[i];
-            (e.f30, e.f32, e.f126)
-        };
-        Self::polar_step(&mut tmp, yaw, pitch, speed);
-        let ground = self.ground_z(tmp.0, tmp.1) as i16;
-        let hit = self.victim_scan_at(i, tmp, ctx);
-        let grounded = ground > tmp.2;
-        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
-        self.ent[i].act_life -= 1;
-        if hit.is_some() || grounded || self.ent[i].act_life < 0 {
-            self.proj_explode(i, ctx, hit, true, false);
-        }
         false
     }
 

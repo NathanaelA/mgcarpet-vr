@@ -768,6 +768,19 @@
    "model": 6,
    "kind": "field",
    "field": "y"
+  },
+  {
+   "id": "mc1l32-stuck-explosion-wedge",
+   "status": "deviation",
+   "note": "PLAYER-RULED 2026-08-08 (mc1l32 full-take intake): retail wedges a (10,0) at slot 2 from t=39508 to take end (flags 0x30086, life frozen - its dispatcher never advances it; player attributes to entity exhaustion). The port kills it in one tick (0x400) and that is the KEPT behavior - do not reproduce the wedge. DEVIATIONS.md 'the stuck explosion'.",
+   "takes": [
+    "mc1l32"
+   ],
+   "class": 10,
+   "model": 0,
+   "kind": "field",
+   "field": "flags",
+   "t_min": 39508
   }
  ]
 }

@@ -796,6 +796,51 @@
     "field:10,39:z"
    ],
    "note": "human pose residual + (10,39) balloon z-resnap (l32 known lane)"
+  },
+  {
+   "t": 3028,
+   "status": "open",
+   "sig": "47b36376603d976b",
+   "atoms": [
+    "field:10,39:z",
+    "field:5,3:heading",
+    "field:5,3:pitch",
+    "field:5,3:x",
+    "field:5,3:y",
+    "field:5,3:z"
+   ],
+   "note": "TERRAIN-DATUM corner (cause A, ledger bee-session entry): port dig floor pins at height 196 vs retail 189; carries (10,39)/(10,0)/(5,3)/(5,9) z lanes; needs v2 terrain-channel re-record to attribute"
+  },
+  {
+   "t": 3284,
+   "status": "open",
+   "sig": "a6a3fbe80ff87ae1",
+   "atoms": [
+    "extra:10,0",
+    "extra:9,0",
+    "field:10,0:z",
+    "field:10,39:z",
+    "field:3,0:mana",
+    "field:5,3:heading",
+    "field:5,3:pitch",
+    "field:5,3:x",
+    "field:5,3:y",
+    "field:5,3:z",
+    "field:9,0:flags",
+    "field:9,0:heading",
+    "field:9,0:mana",
+    "field:9,0:pitch",
+    "field:9,0:target_yaw",
+    "field:9,0:x",
+    "field:9,0:y",
+    "field:9,0:z",
+    "field:9,13:life",
+    "field:9,13:x",
+    "field:9,13:y",
+    "field:9,13:z",
+    "field:player.mana"
+   ],
+   "note": "HIT-ABORT law (cause B): retail skips the handler CORE on ANY hit; port moves anyway. BANKED restructure - full audited spec in ledger bee-session entry (blanket abort ruled WRONG; trailers/pre-work survive)"
   }
  ]
 }
