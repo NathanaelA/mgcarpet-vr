@@ -986,12 +986,75 @@ struct BillboardInstance {
 /// the shade LUT's row-0 fill is the engine's fog far color (night =
 /// black, day = pale blue). sRGB, converted to linear where uploaded.
 const SKY_SRGB: [f32; 3] = [0.42, 0.55, 0.75];
+
+/// Soften the resolved sky bitmap with a small separable gaussian,
+/// torus-wrapped on both axes (the cloud plane tiles infinitely).
+/// The 256-texel bitmap was authored for ~1:1 texel:pixel at 320x200;
+/// at modern resolutions one texel spans many screen pixels, and the
+/// bilinear upscale exposes the texel grid and the period dither as
+/// soft blocks. Baked once at load, the blur restores the smooth read
+/// the original had at native resolution — player-ruled 2026-08-08
+/// ("the sky genuinely looks better blurred", a net win independent
+/// of the water-reflection blur, which this also feeds since the
+/// mirrored sky and the fog/extinction melts sample the same
+/// texture). Sigma 1 texel, 7 taps.
+fn blur_sky(rgba: &mut [u8]) {
+    const N: i32 = 256;
+    // exp(-x²/2) for x = -3..=3 (sigma 1), normalized below.
+    const K: [f32; 7] = [
+        0.011109, 0.135335, 0.606531, 1.0, 0.606531, 0.135335, 0.011109,
+    ];
+    let norm: f32 = K.iter().sum();
+    let mut tmp = vec![0u8; rgba.len()];
+    let blur_axis = |src: &[u8], dst: &mut [u8], dx: i32, dy: i32| {
+        for y in 0..N {
+            for x in 0..N {
+                let mut acc = [0.0f32; 3];
+                for (i, w) in K.iter().enumerate() {
+                    let o = i as i32 - 3;
+                    let sx = (x + o * dx).rem_euclid(N);
+                    let sy = (y + o * dy).rem_euclid(N);
+                    let p = ((sy * N + sx) * 4) as usize;
+                    for (c, a) in acc.iter_mut().enumerate() {
+                        *a += src[p + c] as f32 * w;
+                    }
+                }
+                let d = ((y * N + x) * 4) as usize;
+                for (c, a) in acc.iter().enumerate() {
+                    dst[d + c] = (a / norm).round() as u8;
+                }
+                dst[d + 3] = 255;
+            }
+        }
+    };
+    blur_axis(rgba, &mut tmp, 1, 0);
+    blur_axis(&tmp, rgba, 0, 1);
+}
+
+/// The 1x1 group-1 sky-dummy texel for a fog color. sRGB bytes — the
+/// dummy is Rgba8UnormSrgb, so samples come back linear, matching the
+/// globals' fog constant.
+fn sky_texel(srgb: [f32; 3]) -> [u8; 4] {
+    [
+        (srgb[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (srgb[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (srgb[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+        255,
+    ]
+}
 /// Default fog VIEW DISTANCE in tiles: where the fog band fully
 /// occludes. 20 = the retail law (remc2 GRO:668-679 — fade 15..19
 /// tiles, geometry cutoff 20; the shaders scale that band as
 /// 0.75·D..0.95·D). Most monster sight radii are 15-20 tiles, so the
 /// retail distance is exactly what hides acquisition pop-in.
 const DEFAULT_FOG_TILES: f32 = 20.0;
+/// Fog view-distance cap, tiles: keeps the whole fog band (full
+/// occlusion at 0.95·D = 85.5) short of the silhouette melt band
+/// (terrain.wgsl EXT_START..EXT_END = 95..125), which runs
+/// unconditionally and hides the ~128-tile torus-copy pop — the fog
+/// and the melt never overlap (player-ruled 2026-08-08, round 2).
+/// 0 stays "fog off". config::FOG_STOPS' top stop matches this.
+pub const MAX_FOG_TILES: f32 = 90.0;
 
 /// Shore-field bake geometry — must match terrain.wgsl's SHORE_RES /
 /// SHORE_MAX: texels per tile edge, and the distance saturation.
@@ -999,6 +1062,13 @@ const SHORE_RES: usize = 4;
 const SHORE_MAX: f32 = 2.5;
 /// Tile edge of one deep-water presence block (the mirror-pass gate).
 const WATER_BLOCK: usize = 8;
+/// Downsample factor of the reflection-blur chain (blur.wgsl's DIV
+/// must match): the mirror image is gaussian-softened at this
+/// fraction of the framebuffer before the water samples it. 2 =
+/// player-tuned (round 3: the first build's 4 was "roughly twice"
+/// the wanted blur diameter — the kernel is in downsampled texels,
+/// so the diameter scales with this factor).
+const REFLECTION_BLUR_DIV: u32 = 2;
 
 /// Bake the shore-haze distance law into the sub-tile field the
 /// terrain shader samples: for every SHORE_RES x SHORE_RES texel of
@@ -1339,16 +1409,41 @@ pub struct Renderer {
     /// Terrain bind group over the mirror globals; rebuilt with
     /// `bind_group` at level load.
     mirror_bind_group: Option<wgpu::BindGroup>,
-    /// Group-1 (mirror texture) machinery: layout + shared sampler +
-    /// the 1x1 dummy bound when no mirror image exists for a pass.
+    /// Group-1 (mirror + sky textures) machinery: layout + shared
+    /// samplers + the dummies bound when a real image is absent.
     reflection_layout: wgpu::BindGroupLayout,
     reflection_sampler: wgpu::Sampler,
     reflection_dummy_bind_group: wgpu::BindGroup,
+    /// The 1x1 dummy for the group-1 mirror slot (kept for bind-group
+    /// rebuilds on sky load/clear).
+    mirror_dummy_view: wgpu::TextureView,
+    /// Group-1 sky slot: the loaded parallax sky's view (`load_sky`,
+    /// the fog/extinction melt target), or None — the 1x1
+    /// fog-constant dummy is bound instead.
+    sky_view: Option<wgpu::TextureView>,
+    /// Repeat sampler shared by the sky pass and the terrain melt.
+    sky_sampler: wgpu::Sampler,
+    /// 1x1 fog-constant fallback for the group-1 sky slot; its texel
+    /// is kept in sync by `set_sky_color`.
+    sky_dummy_tex: wgpu::Texture,
+    sky_dummy_view: wgpu::TextureView,
     /// The mirror render target (recreated on resize) + its group-1
-    /// bind group for the main pass.
+    /// bind group for the main pass. The bind group's mirror slot
+    /// carries the BLURRED B target, never the raw mirror image.
     reflection_view: Option<wgpu::TextureView>,
     reflection_bind_group: Option<wgpu::BindGroup>,
     reflection_size: (u32, u32),
+    /// Reflection-blur chain (blur.wgsl): H/V pipelines + the
+    /// 1/[`REFLECTION_BLUR_DIV`]-res A (H output) and B (V output —
+    /// what the water actually samples) targets, recreated with the
+    /// mirror target on resize.
+    blur_layout: wgpu::BindGroupLayout,
+    blur_h_pipeline: wgpu::RenderPipeline,
+    blur_v_pipeline: wgpu::RenderPipeline,
+    blur_a_view: Option<wgpu::TextureView>,
+    blur_b_view: Option<wgpu::TextureView>,
+    blur_h_bind_group: Option<wgpu::BindGroup>,
+    blur_v_bind_group: Option<wgpu::BindGroup>,
     /// Water reflections on (config `render.preference.reflections`).
     reflections: bool,
     /// Live dynamic lights (already gated app-side to Night/Cave +
@@ -1737,8 +1832,10 @@ impl Renderer {
         });
 
         // Group 1: the water-reflection mirror texture (the previous
-        // mirror pass's output). Always bound — a 1x1 dummy when
-        // reflections are off or inside the mirror pass itself.
+        // mirror pass's output) — a 1x1 dummy when reflections are off
+        // or inside the mirror pass itself — plus the sky slot: the
+        // parallax sky bitmap the fog/extinction melts fade into (a
+        // 1x1 fog-constant dummy when no sky is loaded). Always bound.
         let reflection_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("reflection"),
             entries: &[
@@ -1754,6 +1851,22 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -1851,22 +1964,140 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        // The group-1 sky slot: the same repeat sampler the sky pass
+        // uses, and a 1x1 fallback texel kept on the flat fog constant
+        // (`set_sky_color`) for levels with no sky texture — the
+        // shader's melts then degenerate to the plain constant fade.
+        let sky_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sky"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let sky_dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sky dummy"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            sky_dummy_tex.as_image_copy(),
+            &sky_texel(SKY_SRGB),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let mirror_dummy_view = dummy_tex.create_view(&Default::default());
+        let sky_dummy_view = sky_dummy_tex.create_view(&Default::default());
         let reflection_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("reflection dummy"),
             layout: &reflection_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &dummy_tex.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&mirror_dummy_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&reflection_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&sky_dummy_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&sky_sampler),
+                },
             ],
         });
+
+        // The reflection-blur pipelines (blur.wgsl): a separable
+        // gaussian softens the mirror image before the water samples
+        // it (player ask 2026-08-08 — retail's 320x200 reflection
+        // block was inherently soft; a modern-res pixel-perfect
+        // mirror reads "too clean"). Runs at 1/REFLECTION_BLUR_DIV
+        // resolution, only when the mirror pass itself runs.
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blur"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("blur.wgsl").into()),
+        });
+        let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur"),
+            bind_group_layouts: &[&blur_layout],
+            push_constant_ranges: &[],
+        });
+        let make_blur = |label: &str, entry: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&blur_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &blur_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &blur_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let blur_h_pipeline = make_blur("blur-h", "fs_h");
+        let blur_v_pipeline = make_blur("blur-v", "fs_v");
 
         // The map (book screen) pass: fullscreen-quad pipeline over the
         // CPU-composed map texture.
@@ -2259,7 +2490,10 @@ impl Renderer {
             });
         let billboard_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("billboard"),
-            bind_group_layouts: &[&billboard_bind_group_layout],
+            // Group 1 = the terrain pass's mirror+sky group: sprites
+            // read only its sky slots, for the same fog/extinction
+            // melts as terrain (billboard.wgsl sky_backdrop).
+            bind_group_layouts: &[&billboard_bind_group_layout, &reflection_layout],
             push_constant_ranges: &[],
         });
         let billboard_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2723,6 +2957,18 @@ impl Renderer {
             reflection_layout,
             reflection_sampler,
             reflection_dummy_bind_group,
+            mirror_dummy_view,
+            sky_view: None,
+            sky_sampler,
+            sky_dummy_tex,
+            sky_dummy_view,
+            blur_layout,
+            blur_h_pipeline,
+            blur_v_pipeline,
+            blur_a_view: None,
+            blur_b_view: None,
+            blur_h_bind_group: None,
+            blur_v_bind_group: None,
             reflection_view: None,
             reflection_bind_group: None,
             reflection_size: (0, 0),
@@ -2853,9 +3099,15 @@ impl Renderer {
     /// Set the fog view distance in TILES: where the distance fog
     /// fully occludes (the band fades in from 0.75·D, retail's
     /// 15..19-tile ramp scaled). 0 disables fog entirely; the default
-    /// is the retail 20. Takes effect on the next frame.
+    /// is the retail 20. Nonzero values clamp to [`MAX_FOG_TILES`] so
+    /// the fog band can never reach the silhouette melt band. Takes
+    /// effect on the next frame.
     pub fn set_fog_distance(&mut self, tiles: f32) {
-        self.fog_distance = tiles.max(0.0);
+        self.fog_distance = if tiles <= 0.0 {
+            0.0
+        } else {
+            tiles.min(MAX_FOG_TILES)
+        };
     }
 
     /// Enable/disable water reflections (the per-frame mirrored-
@@ -2879,14 +3131,32 @@ impl Renderer {
     /// fill and the distance fog all fade into.
     pub fn set_sky_color(&mut self, srgb: [f32; 3]) {
         self.sky_srgb = srgb;
+        // Keep the group-1 sky-dummy texel on the constant: with no
+        // sky texture loaded, the terrain fog/extinction melts sample
+        // this instead and must degenerate to the plain constant.
+        self.queue.write_texture(
+            self.sky_dummy_tex.as_image_copy(),
+            &sky_texel(srgb),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Load the level's parallax sky: the 256x256 8bpp sky bitmap
     /// (bundle `sky.bin`), resolved through the variant palette
     /// (RGBA, index straight through — retail DrawSky writes the
-    /// palette index raw, no shade remap). Enables the textured sky
-    /// pass; without it the flat fog-color fill IS the sky (retail's
-    /// sky-off/cave keyColor fill).
+    /// palette index raw, no shade remap), then softened by
+    /// [`blur_sky`]. Enables the textured sky pass; without it the
+    /// flat fog-color fill IS the sky (retail's sky-off/cave keyColor
+    /// fill).
     pub fn load_sky(&mut self, indices: &[u8], palette: &[[u8; 4]; 256]) {
         assert_eq!(indices.len(), 256 * 256, "sky.bin must be 256x256");
         let mut rgba = Vec::with_capacity(256 * 256 * 4);
@@ -2894,6 +3164,7 @@ impl Renderer {
             let p = palette[i as usize];
             rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
         }
+        blur_sky(&mut rgba);
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sky"),
             size: wgpu::Extent3d {
@@ -2922,21 +3193,15 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        // Repeat on both axes (retail's 16-bit wrapping index tiles
-        // the cloud plane infinitely); linear filtering — the bitmap
-        // was authored for ~1:1 at 320x200, so at modern resolutions
-        // it upscales, and chunky texels would read as noise.
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sky"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        // The shared sky sampler repeats on both axes (retail's 16-bit
+        // wrapping index tiles the cloud plane infinitely) and filters
+        // linearly — the bitmap was authored for ~1:1 at 320x200, so
+        // at modern resolutions it upscales, and chunky texels would
+        // read as noise.
         let view = tex.create_view(&Default::default());
         let device = &self.device;
         let layout = &self.sky_bind_group_layout;
+        let sampler = &self.sky_sampler;
         let make = |globals: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("sky"),
@@ -2952,7 +3217,7 @@ impl Renderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: wgpu::BindingResource::Sampler(sampler),
                     },
                 ],
             })
@@ -2963,12 +3228,63 @@ impl Renderer {
         let mirror_bg = make(&self.mirror_globals_buf);
         self.sky_bind_group = Some(main_bg);
         self.sky_mirror_bind_group = Some(mirror_bg);
+        // The terrain pass's group-1 sky slot (the fog/extinction
+        // melt target) tracks the same texture.
+        self.sky_view = Some(view);
+        self.refresh_terrain_textures();
     }
 
     /// Drop the textured sky (back to the flat fog-color fill).
     pub fn clear_sky(&mut self) {
         self.sky_bind_group = None;
         self.sky_mirror_bind_group = None;
+        self.sky_view = None;
+        self.refresh_terrain_textures();
+    }
+
+    /// Rebuild both group-1 bind groups (the always-bound dummy and,
+    /// when a mirror target exists, the real reflection one — over
+    /// the BLURRED B target the water samples) so their sky slot
+    /// tracks `sky_view`.
+    fn refresh_terrain_textures(&mut self) {
+        self.reflection_dummy_bind_group = self.terrain_textures("reflection dummy", None);
+        let real = self
+            .blur_b_view
+            .as_ref()
+            .map(|rv| self.terrain_textures("reflection", Some(rv)));
+        self.reflection_bind_group = real;
+    }
+
+    /// Build a group-1 bind group: the mirror slot (the reflection
+    /// image, or the 1x1 dummy) + the sky slot (the parallax sky, or
+    /// the 1x1 fog-constant dummy) — terrain.wgsl's melt target.
+    fn terrain_textures(&self, label: &str, mirror: Option<&wgpu::TextureView>) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.reflection_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        mirror.unwrap_or(&self.mirror_dummy_view),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.reflection_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        self.sky_view.as_ref().unwrap_or(&self.sky_dummy_view),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sky_sampler),
+                },
+            ],
+        })
     }
 
     fn sky_color_linear(&self) -> [f64; 3] {
@@ -4598,21 +4914,54 @@ impl Renderer {
                     view_formats: &[],
                 });
                 let view = tex.create_view(&Default::default());
-                self.reflection_bind_group =
-                    Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("reflection"),
-                        layout: &self.reflection_layout,
+                // The blur chain at 1/REFLECTION_BLUR_DIV resolution;
+                // the water samples the blurred B, never the raw
+                // mirror image.
+                let bw = (w / REFLECTION_BLUR_DIV).max(1);
+                let bh = (hpx / REFLECTION_BLUR_DIV).max(1);
+                let blur_tex = |label: &str| {
+                    self.device
+                        .create_texture(&wgpu::TextureDescriptor {
+                            label: Some(label),
+                            size: wgpu::Extent3d {
+                                width: bw,
+                                height: bh,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: self.format,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        })
+                        .create_view(&Default::default())
+                };
+                let a_view = blur_tex("reflection-blur-a");
+                let b_view = blur_tex("reflection-blur-b");
+                let blur_bg = |label: &str, src: &wgpu::TextureView| {
+                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(label),
+                        layout: &self.blur_layout,
                         entries: &[
                             wgpu::BindGroupEntry {
                                 binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&view),
+                                resource: wgpu::BindingResource::TextureView(src),
                             },
                             wgpu::BindGroupEntry {
                                 binding: 1,
                                 resource: wgpu::BindingResource::Sampler(&self.reflection_sampler),
                             },
                         ],
-                    }));
+                    })
+                };
+                self.blur_h_bind_group = Some(blur_bg("blur-h", &view));
+                self.blur_v_bind_group = Some(blur_bg("blur-v", &a_view));
+                self.reflection_bind_group =
+                    Some(self.terrain_textures("reflection", Some(&b_view)));
+                self.blur_a_view = Some(a_view);
+                self.blur_b_view = Some(b_view);
                 self.reflection_view = Some(view);
                 self.reflection_size = (w, hpx);
                 // The mirror pass reuses the main pass's pipelines, so
@@ -5010,6 +5359,9 @@ impl Renderer {
             ) {
                 pass.set_pipeline(&self.billboard_pipeline);
                 pass.set_bind_group(0, bbg, &[]);
+                // Group 1: sprites read the sky slots for the
+                // mirrored-sky fog target (billboard.wgsl).
+                pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]);
                 pass.set_vertex_buffer(0, bbuf.slice(..));
                 pass.draw(0..6, 0..opaque_count);
             }
@@ -5027,6 +5379,40 @@ impl Renderer {
                 pass.set_bind_group(0, &self.fire_mirror_bind_group, &[]);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..bolt_count);
+            }
+        }
+        // Soften the fresh mirror image before the water samples it:
+        // the separable gaussian into the 1/REFLECTION_BLUR_DIV-res
+        // B target (blur.wgsl; the water's group-1 mirror slot binds
+        // B, never the raw mirror).
+        if mirror_active
+            && let (Some(hbg), Some(vbg), Some(a), Some(b)) = (
+                &self.blur_h_bind_group,
+                &self.blur_v_bind_group,
+                &self.blur_a_view,
+                &self.blur_b_view,
+            )
+        {
+            for (pipeline, bg, target) in [
+                (&self.blur_h_pipeline, hbg, a),
+                (&self.blur_v_pipeline, vbg, b),
+            ] {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("reflection blur"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
             }
         }
         {
@@ -5085,7 +5471,8 @@ impl Renderer {
                     pass.set_pipeline(&self.pipeline);
                     pass.set_bind_group(0, bg, &[]);
                     // Group 1 = the mirror texture for the water
-                    // fragments (a dummy when no mirror pass ran).
+                    // fragments (a dummy when no mirror pass ran) +
+                    // the sky slot the fog/extinction melts sample.
                     match (&self.reflection_bind_group, mirror_active) {
                         (Some(rbg), true) => pass.set_bind_group(1, rbg, &[]),
                         _ => pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]),
@@ -5110,6 +5497,13 @@ impl Renderer {
                     &self.billboard_buf,
                 ) {
                     pass.set_bind_group(0, bg, &[]);
+                    // Group 1 (sky slots for the fog/extinction
+                    // melts) — bound here too so sprites draw right
+                    // even when no terrain is loaded.
+                    match (&self.reflection_bind_group, mirror_active) {
+                        (Some(rbg), true) => pass.set_bind_group(1, rbg, &[]),
+                        _ => pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]),
+                    }
                     pass.set_vertex_buffer(0, buf.slice(..));
                     if opaque_count > 0 {
                         pass.set_pipeline(&self.billboard_pipeline);

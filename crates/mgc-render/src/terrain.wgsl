@@ -45,6 +45,13 @@ struct Globals {
 // a 1x1 dummy when viewport.z = 0.
 @group(1) @binding(0) var t_mirror: texture_2d<f32>;
 @group(1) @binding(1) var s_mirror: sampler;
+// The parallax sky bitmap — the melt target for the mirror-arm fog
+// and the extinction ramp (the pixel a vanishing fragment must match
+// is the sky pass's, never the flat constant). A 1x1 texel of the
+// fog constant when no sky is loaded (caves, sky off), degenerating
+// every melt to the plain constant fade.
+@group(1) @binding(2) var t_sky: texture_2d<f32>;
+@group(1) @binding(3) var s_sky: sampler;
 
 // Atlas geometry: 256 px wide, 32x32 cells, 8 per row (BLK*-1.DAT).
 const ATLAS_CELL: i32 = 32;
@@ -225,6 +232,18 @@ struct FsOut {
 
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
+    let dist = distance(in.world, globals.camera.xyz);
+    let fog_a = fog_amount(dist);
+    let ext = ext_amount(dist);
+    // A fully melted fragment — or a fully fogged one in the MIRROR
+    // arm — is pixel-identical to the sky sample it would return, and
+    // the sky pass already painted exactly that behind it: discard
+    // instead, which also recoups the fill rate of rasterizing the
+    // far reaches of the 3x3 torus field (early-z is off here anyway
+    // — this shader writes frag_depth — so the discard is free).
+    if ext >= 1.0 || (globals.atlas.w == 2u && fog_a >= 1.0) {
+        discard;
+    }
     // A fragment seen from BEHIND its surface means the eye is inside
     // rock, or the near plane cut a hugged cave wall open — the wall-
     // peek x-ray (player report 2026-07-17). Paint it unlit black
@@ -296,9 +315,11 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
     // own water texture — so falling through to normal texel shading
     // is exactly the retail look.
     if peek && !(globals.atlas.w == 0u && watery) {
-        let d = distance(in.world, globals.camera.xyz);
         var out: FsOut;
-        out.color = vec4<f32>(globals.fog_color.rgb * fog_amount(d), 1.0);
+        out.color = vec4<f32>(
+            mix(globals.fog_color.rgb * fog_a, sky_backdrop(in.world), ext),
+            1.0,
+        );
         out.depth = plan_depth(in.world.xz);
         return out;
     }
@@ -346,9 +367,23 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
     // it carries a synthetic hillshade only for packages without one.
     let lit = base * in.light;
 
-    let dist = distance(in.world, globals.camera.xyz);
-    let fog_a = fog_amount(dist);
-    var rgb = mix(lit, globals.fog_color.rgb, fog_a);
+    // Fog target: the flat constant (retail's law — and the color the
+    // silhouettes past the wall wear). In the MIRROR arm the backdrop
+    // is never the muted horizon rows that constant was authored
+    // against, but the elevation-negated sky — the bright authored
+    // cloud band — so fading toward the constant left full-contrast
+    // mountain cutouts in the reflection, presented crisp in NEAR
+    // water (from carpet height a far peak's reflection lands in
+    // close, fog-free water, at full sheen strength): the player-
+    // reported "fog never applies to reflections". The mirror arm
+    // instead fades toward the actual mirrored sky pixel behind the
+    // fragment, so reflected terrain melts into the reflected clouds
+    // at the same rate the direct view melts into the horizon.
+    var fog_target = globals.fog_color.rgb;
+    if globals.atlas.w == 2u && fog_a > 0.0 {
+        fog_target = sky_backdrop(in.world);
+    }
+    var rgb = mix(lit, fog_target, fog_a);
 
     // Sea reflection (retail GRO reflection block, simplified): sea
     // fragments at sea level blend the mirror texture at their own
@@ -491,6 +526,12 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
         }
     }
 
+    // The extinction melt (ext_amount): approaching the far band the
+    // silhouette dissolves into the sky pixel behind it.
+    if ext > 0.0 {
+        rgb = mix(rgb, sky_backdrop(in.world), ext);
+    }
+
     var out: FsOut;
     out.color = vec4<f32>(rgb, 1.0);
     out.depth = plan_depth(in.world.xz);
@@ -510,4 +551,49 @@ fn fog_amount(dist: f32) -> f32 {
     let start2 = 0.5625 * d * d;  // (0.75 D)^2
     let end2 = 0.9025 * d * d;    // (0.95 D)^2
     return clamp((dist * dist - start2) / (end2 - start2), 0.0, 1.0);
+}
+
+// Silhouette extinction. Terrain past the fog wall stays visible as a
+// flat fog-constant silhouette wherever that constant differs from
+// the sky texture behind it (the whole 3x3 torus field rasterizes,
+// with no reach cull) — the "distant ranges" scenery, kept. This
+// second, far ramp melts those silhouettes into the actual sky pixel
+// across the FIXED band EXT_START..EXT_END, fully gone before ~128
+// tiles: the half-map distance where a peak's nearest torus copy
+// switches sides as the camera flies — the sharp appear/vanish pop
+// this ramp exists to hide. The band is independent of the fog
+// distance and runs UNCONDITIONALLY (round 2: round 1 anchored the
+// melt to the fog wall, entangling the two systems — player-ruled
+// they must never overlap); the renderer instead caps the fog
+// setting (lib.rs MAX_FOG_TILES = 90) so the whole fog band always
+// ends short of EXT_START. Applies in every arm — in the MIRROR the
+// fog discard usually preempts it, but a fog-off view melts its
+// reflection at the same band as the world above.
+// Billboard.wgsl copies these constants — keep them in lockstep.
+const EXT_START: f32 = 95.0;
+const EXT_END: f32 = 125.0;
+
+fn ext_amount(dist: f32) -> f32 {
+    return smoothstep(EXT_START, EXT_END, dist);
+}
+
+// The sky-texture pixel behind a fragment: the same ray law as
+// sky.wgsl (azimuth/elevation at 1024 texels per turn, horizon on
+// the bitmap's bottom edge), including its mirror-arm y negation —
+// so a melt toward this sample sits pixel-exact on the sky the sky
+// pass painted behind this very fragment.
+fn sky_backdrop(world: vec3<f32>) -> vec3<f32> {
+    var dir = normalize(world - globals.camera.xyz);
+    if globals.atlas.w == 2u {
+        dir.y = -dir.y;
+    }
+    let az = atan2(dir.x, -dir.z);
+    let el = asin(clamp(dir.y, -1.0, 1.0));
+    let scale = 1024.0 / TAU / 256.0; // texture wraps per radian
+    return textureSampleLevel(
+        t_sky,
+        s_sky,
+        vec2<f32>(az * scale, 1.0 - el * scale),
+        0.0,
+    ).rgb;
 }

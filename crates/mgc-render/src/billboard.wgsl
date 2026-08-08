@@ -23,6 +23,12 @@ struct Globals {
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var t_sprites: texture_2d<u32>;
 @group(0) @binding(2) var t_colormap: texture_2d<f32>;
+// Group 1 is the terrain pass's mirror+sky group (bindings 0/1 are
+// the mirror slots this shader never reads); the sky slots feed the
+// same fog/extinction melts as terrain.wgsl. A 1x1 fog-constant
+// texel when no sky is loaded.
+@group(1) @binding(2) var t_sky: texture_2d<f32>;
+@group(1) @binding(3) var s_sky: sampler;
 
 struct Instance {
     // Feet-center world position (wrap-adjusted near the camera).
@@ -141,9 +147,56 @@ fn fs_main(in: VsOut) -> FsOut {
         let end2 = 0.9025 * d * d;
         fog = clamp((dist * dist - start2) / (end2 - start2), 0.0, 1.0);
     }
-    let rgb = mix(base, globals.fog_color.rgb, fog);
+    // Sprites follow the terrain's silhouette law exactly: past the
+    // fog wall they linger as fog-colored cutouts like the landscape
+    // they stand on, then dissolve into the sky pixel across the same
+    // fixed extinction band. (Round 2: round 1 discarded at full fog,
+    // which popped sprites in/out of existence at the wall where
+    // terrain kept fading — player report 2026-08-08.)
+    let ext = smoothstep(EXT_START, EXT_END, dist);
+    if ext >= 1.0 || (globals.atlas.w == 2u && fog >= 1.0) {
+        discard;
+    }
+    // MIRROR arm: fade toward the mirrored sky pixel, exactly like
+    // mirrored terrain. Toward the flat constant, a reflected sprite
+    // kept its full-contrast cutout against the bright reflected
+    // cloud band — mobs and castle flags read clearly in the water
+    // well before they resolved in the direct view (player report
+    // 2026-08-08).
+    var fog_target = globals.fog_color.rgb;
+    if globals.atlas.w == 2u && fog > 0.0 {
+        fog_target = sky_backdrop(in.world);
+    }
+    var rgb = mix(base, fog_target, fog);
+    if ext > 0.0 {
+        rgb = mix(rgb, sky_backdrop(in.world), ext);
+    }
     var out: FsOut;
     out.color = vec4<f32>(rgb, in.alpha);
     out.depth = in.anchor_depth;
     return out;
+}
+
+const TAU: f32 = 6.283185307179586;
+// The extinction band — MUST match terrain.wgsl's EXT_START/EXT_END.
+const EXT_START: f32 = 95.0;
+const EXT_END: f32 = 125.0;
+
+// The sky-texture pixel behind a fragment — terrain.wgsl's
+// sky_backdrop, duplicated verbatim (same ray law as sky.wgsl,
+// including the mirror-arm y negation).
+fn sky_backdrop(world: vec3<f32>) -> vec3<f32> {
+    var dir = normalize(world - globals.camera.xyz);
+    if globals.atlas.w == 2u {
+        dir.y = -dir.y;
+    }
+    let az = atan2(dir.x, -dir.z);
+    let el = asin(clamp(dir.y, -1.0, 1.0));
+    let scale = 1024.0 / TAU / 256.0; // texture wraps per radian
+    return textureSampleLevel(
+        t_sky,
+        s_sky,
+        vec2<f32>(az * scale, 1.0 - el * scale),
+        0.0,
+    ).rgb;
 }

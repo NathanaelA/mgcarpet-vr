@@ -239,12 +239,16 @@ pub struct RenderPreference {
     /// GRO:668-679) — a pure period-performance choice that also
     /// deliberately overlaps the monster sight/acquisition radii
     /// (15-20 tiles) so pop-in hides in the fog; raising it reveals
-    /// creatures acting before you can see them and, past ~128, the
-    /// torus wrap. 0 = fog off. Max useful ≈ 255 (the map is 256
-    /// tiles around — you'd see the back of your own carpet one tile
-    /// short). DEFAULT 50 (deliberate: retail's 20 was performance-only);
-    /// the menu offers the stops 20 (faithful) / 50 (default) / 100
-    /// (high) / 255 (max).
+    /// creatures acting before you can see them. Beyond the wall the
+    /// terrain lingers as flat horizon silhouettes that always melt
+    /// into the sky across the fixed 95..125-tile band (terrain.wgsl
+    /// EXT_START..EXT_END), hiding the torus wrap unconditionally —
+    /// and the fog may never reach into that band: values clamp to
+    /// [`MAX_FOG_TILES`] = 90 at load, CLI and in the renderer (the
+    /// old 255 whole-torus stop is retired; player-ruled 2026-08-08).
+    /// 0 = fog off (the melt still runs). DEFAULT 50 (deliberate:
+    /// retail's 20 was performance-only); the menu offers the stops
+    /// 20 (faithful) / 50 (default) / 70 (high) / 90 (max).
     pub fog_distance: u32,
     /// Vertical sync (on by default — off has no visual upside, only
     /// tearing). Off releases the frame rate from the display's
@@ -341,13 +345,18 @@ impl AntiAliasing {
     }
 }
 
-/// The fog-distance menu stops: (tiles, tag).
-pub const FOG_STOPS: [(u32, &str); 4] = [
-    (20, "faithful"),
-    (50, "default"),
-    (100, "high"),
-    (255, "max"),
-];
+/// Fog view-distance cap, tiles (mgc_render::MAX_FOG_TILES twin):
+/// keeps the whole fog band (full occlusion at 0.95·D) short of the
+/// 95..125-tile silhouette melt band, which runs unconditionally and
+/// hides the world's torus wrap. Applied at config load and to the
+/// CLI override; 0 stays "fog off".
+pub const MAX_FOG_TILES: u32 = 90;
+
+/// The fog-distance menu stops: (tiles, tag). Top stop =
+/// [`MAX_FOG_TILES`]; the old 255 whole-torus stop is retired
+/// (player-ruled 2026-08-08: the fog must never reach the melt band).
+pub const FOG_STOPS: [(u32, &str); 4] =
+    [(20, "faithful"), (50, "default"), (70, "high"), (90, "max")];
 
 impl Default for RenderPreference {
     fn default() -> Self {
@@ -1032,7 +1041,13 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => {}
             Err(e) => return Err(format!("{}: {e}", path.display())),
         }
-        serde_json::from_value(merged).map_err(|e| format!("{}: {e}", path.display()))
+        let mut cfg: Self =
+            serde_json::from_value(merged).map_err(|e| format!("{}: {e}", path.display()))?;
+        // Cap the fog distance (old configs may carry the retired
+        // 100/255 stops): the fog band must never reach the terrain
+        // silhouette melt band. 0 stays "fog off".
+        cfg.render.preference.fog_distance = cfg.render.preference.fog_distance.min(MAX_FOG_TILES);
+        Ok(cfg)
     }
 }
 

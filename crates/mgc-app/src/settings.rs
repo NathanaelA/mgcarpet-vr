@@ -507,7 +507,10 @@ pub fn registry() -> Vec<Spec> {
                    in tiles. Retail drew 20 tiles for pure period-performance \
                    reasons; note the monsters' sight radii (15-20 tiles) were \
                    tuned so pop-in hides in that fog — long distances reveal \
-                   creatures acting before you could faithfully see them.",
+                   creatures acting before you could faithfully see them. \
+                   Capped at 90: the horizon silhouettes beyond the fog always \
+                   melt into the sky across 95..125 tiles (hiding the world's \
+                   wrap-around), and the fog may never reach into that band.",
             ctl: Ctl::Stops {
                 get: |c| c.render.preference.fog_distance,
                 set: |c, v| c.render.preference.fog_distance = v,

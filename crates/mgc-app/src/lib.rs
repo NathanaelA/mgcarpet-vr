@@ -9343,7 +9343,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         cfg.audio.subtitles = v;
     }
     if let Some(v) = args.fog_distance {
-        cfg.render.preference.fog_distance = v;
+        // Same cap as config load: the fog band must never reach the
+        // terrain silhouette melt band (0 stays "fog off").
+        cfg.render.preference.fog_distance = v.min(config::MAX_FOG_TILES);
     }
     if let Some(v) = args.sky {
         cfg.render.preference.sky = v;
