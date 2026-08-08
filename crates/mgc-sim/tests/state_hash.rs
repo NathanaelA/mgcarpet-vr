@@ -408,13 +408,23 @@ fn level_005_golden_state_hashes() {
     // move from B on. Behavior change toward retail by design;
     // corpus-proven on mc1hwl0, where (10,13) was the single largest
     // unexplained family (1.75M field rows + 10,135 missing).
+    // Re-pinned (D/E; post-init through C hold) for the spell-16
+    // cost-cache ctor seed that came with the `castle_recast_cost`
+    // patch: `grant_spell` now stamps the manifestation's retail ctor
+    // values (+136 = 1000, +140 = 1000/101 — sub_3BF70 :47996), so
+    // the D-window `set_dev_spells(true)` grant carries them into the
+    // hashed pool. LAYOUT-ONLY by the disable experiment (seed off →
+    // old pins return) and OBSERVABLE holds: the cache is only ever
+    // READ by the castle cast gate, which this fixture never fires.
+    // The patch's arm switches themselves cannot move goldens — every
+    // `World::new*` world runs WorldPatches::RETAIL.
     const GOLDEN: [u64; 6] = [
         0x211182712dfcddda, // post-init (feature pass + disposition 0)
         0x28dd4f98783352f9, // A: 32 idle ticks far afield
         0xc1f61ca5abcfc251, // B: crater trigger fired + 120 dig ticks
         0xebaaa338279c6384, // C: ambush disposition fired
-        0xceb8fb8fd265cc9d, // D: 64 ticks of two-hand fireball combat
-        0xef4322b1199fc500, // E: 100 aftermath ticks
+        0x42fce58ac96512bd, // D: 64 ticks of two-hand fireball combat
+        0x9b3bfd60c4f33260, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

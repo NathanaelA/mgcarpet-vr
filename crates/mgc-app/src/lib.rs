@@ -2622,6 +2622,23 @@ impl App {
                     });
                 }
             }
+            // The retail-bug patches: one live re-apply covers all of
+            // them — the sim consumes the whole set per tick/event,
+            // and the movie-score patch is read at play time. While a
+            // recording or replay is live the arms stay RETAIL — the
+            // take's determinism depends on it (the boot pin set the
+            // cfg; a menu flip mid-take must not undo it).
+            p if p.starts_with("gameplay.patches.") => {
+                if self.recorder.is_some() || self.replay.is_some() {
+                    println!("patches: pinned to retail arms while a recording/replay is live");
+                } else if let Some(w) = self
+                    .session
+                    .as_deref_mut()
+                    .and_then(|s| s.sim.world.as_mut())
+                {
+                    w.set_patches(world_patches(&self.cfg.gameplay.patches));
+                }
+            }
             // Everything else is read live off self.cfg (game_speed,
             // crosshair, grace_meter, expose_jar_spells, sensitivity,
             // invert_y, fly_assistant, bindings, speech, subtitles,
@@ -3057,6 +3074,7 @@ impl App {
                 &sess.level.plausible_spells,
                 &sess.level.plausible_book_mc2,
                 self.cfg.gameplay.cheat.invincible,
+                world_patches(&self.cfg.gameplay.patches),
             );
             if let Some(run) = &self.campaign {
                 // The restart is a fresh world — the campaign carry
@@ -3487,6 +3505,7 @@ impl App {
                     &level.plausible_spells,
                     &level.plausible_book_mc2,
                     self.cfg.gameplay.cheat.invincible,
+                    world_patches(&self.cfg.gameplay.patches),
                 );
                 if let Some(run) = &self.campaign {
                     apply_campaign_book(&mut w, run, &level);
@@ -4840,7 +4859,13 @@ impl App {
             } else {
                 "assets/mc1-movies"
             });
-            movie::MoviePlayer::new(&dir, cues, mc2, self.cfg.render.preference.movie_subtitles)
+            movie::MoviePlayer::new(
+                &dir,
+                cues,
+                mc2,
+                self.cfg.render.preference.movie_subtitles,
+                self.cfg.gameplay.patches.win2_movie_score.on(),
+            )
         } else {
             None
         };
@@ -8711,7 +8736,9 @@ fn apply_instruments(
     plausible_spells: &[u8],
     plausible_book_mc2: &[(u8, i32)],
     invincible: bool,
+    patches: mgc_sim::WorldPatches,
 ) {
+    w.set_patches(patches);
     if dev_spells {
         w.set_dev_spells(true);
     }
@@ -8723,6 +8750,24 @@ fn apply_instruments(
     }
     if invincible {
         w.set_invincible(true);
+    }
+}
+
+/// The config → sim mapping for the `gameplay · patches` class. The
+/// world constructor defaults every arm to RETAIL (that is what keeps
+/// goldens/tests/mgc-conform faithful); the app opts the configured
+/// patches in here, and `apply_option` re-applies live.
+fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
+    mgc_sim::WorldPatches {
+        castle_recast_cost: p.castle_recast_cost.on(),
+        jar_ground_snap: p.jar_ground_snap.on(),
+        ball_ground_track: p.ball_ground_track.on(),
+        map_wide_ball_rolling: p.map_wide_ball_rolling.on(),
+        possessed_footprint: p.possessed_footprint.on(),
+        castle_death_mana: p.castle_death_mana.on(),
+        castle_death_balloons: p.castle_death_balloons.on(),
+        mc2_downgrade_overflow: p.mc2_downgrade_overflow.on(),
+        mc2_magic_mine: p.mc2_magic_mine.on(),
     }
 }
 
@@ -9048,6 +9093,7 @@ fn run_screenshot(
             &level.plausible_spells,
             &level.plausible_book_mc2,
             false,
+            mgc_sim::WorldPatches::RETAIL,
         );
         let loadout = w.loadout();
         let vitals = w.vitals();
@@ -9495,6 +9541,17 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         cfg.gameplay.enhancement.prune_owned_jars = false;
         cfg.sim.parameters.entity_pool_size = None;
         cfg.sim.parameters.awake_range = None;
+        // The retail-bug patches pin to the take's recorded policy:
+        // retail-source and post-policy port takes run the retail
+        // arms; a pre-option port take replays under the legacy
+        // hard-wired set it was recorded against.
+        cfg.gameplay.patches = match file.patch_policy() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("error: {}: {e}", path.display());
+                return std::process::ExitCode::FAILURE;
+            }
+        };
         println!(
             "replay: {} — game {}, level {}, source {}",
             path.display(),
@@ -9506,6 +9563,14 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             }
         );
         replay_boot = Some(file);
+    }
+    // --record: a recording is a conformance instrument — the whole
+    // session runs the retail patch arms so a later replay's pin
+    // matches by construction (the port header stamps
+    // `"patches": "retail"`). Player-ruled 2026-08-08.
+    if args.record.is_some() {
+        cfg.gameplay.patches = config::GameplayPatches::retail_all();
+        println!("record: retail-bug patches run their RETAIL arms for this session");
     }
     // Re-derive the offline pool params after the replay pin.
     let pool_slots = if replay_boot.is_some() {
@@ -9555,8 +9620,14 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     };
 
     if args.replay_check.is_some() {
-        let level = boot_level.expect("headless paths load a level");
+        let mut level = boot_level.expect("headless paths load a level");
         let file = replay_boot.expect("--replay-check opened the take");
+        // The headless path bypasses apply_instruments — hand the
+        // pinned patch policy (cfg was set by the replay pin block)
+        // to the world directly.
+        if let Some(w) = level.world.as_mut() {
+            w.set_patches(world_patches(&cfg.gameplay.patches));
+        }
         return match replay::replay_check(level, file) {
             Ok(true) => std::process::ExitCode::SUCCESS,
             Ok(false) => std::process::ExitCode::FAILURE,

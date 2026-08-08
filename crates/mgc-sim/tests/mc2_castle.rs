@@ -534,6 +534,99 @@ fn mc2_castle_cost_refreshes_on_downgrade() {
     );
 }
 
+/// The MC2 face of the `castle_recast_cost` patch (DEVIATIONS.md
+/// first-castle lockout): retail's `sub_60780` cost re-sync rides the
+/// castle's OWN stat stamps, so total castle DEATH never re-stamps —
+/// the homeless recast keeps the last rung cached. Retail arm keeps
+/// that; the patched arm re-syncs the castle-less release to the base
+/// cost. One world per arm (the release edge fires once per death).
+fn mc2_castle_death_cost_arm(patched: bool) {
+    let Some(root) = baked_root() else {
+        eprintln!("skipping: no baked data");
+        return;
+    };
+    let Some(mut w) = build_world(&root) else {
+        eprintln!("skipping: level-000 has no terrain");
+        return;
+    };
+    if patched {
+        w.set_patches(mgc_sim::WorldPatches {
+            castle_recast_cost: true,
+            ..mgc_sim::WorldPatches::RETAIL
+        });
+    }
+    w.set_dev_spells(true);
+
+    let (cx, cy) = clear_spot(&w);
+    let px = cx as f32 + 0.5;
+    let pz = cy as f32 + 16.5;
+    let alt = w.ground_height_tiles(px, pz) + 2.0;
+    let pose = PlayerPose::from_tiles(px, alt, pz, 0.0, 0.0, 0.0);
+
+    // Build to level 1 under the dev instrument.
+    w.mc2_select_spell(2, 0, 0);
+    w.tick(
+        pose,
+        PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..160 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    let (_, _, lvl) = w.loadout().castle.expect("castle stands");
+    assert_eq!(lvl, 1, "harness built to level 1");
+
+    // Real-mana mode; the re-select recomputes the honest level-1
+    // cache: the NEXT build (level 2) = ladder rung 10000.
+    w.set_dev_spells(false);
+    w.mc2_select_spell(2, 0, 0);
+    assert_eq!(w.debug_spell_gate_cost(2), Some(10_000));
+
+    // Demolish level 1 -> total destruction, castle-less.
+    w.tick(
+        pose,
+        PlayerCommand {
+            demolish: true,
+            ..Default::default()
+        },
+    );
+    for _ in 0..90 {
+        w.tick(pose, PlayerCommand::default());
+    }
+    assert!(w.loadout().castle.is_none(), "the demolish razed it");
+
+    assert_eq!(
+        w.mc2_book_view().cost[2],
+        1_000,
+        "the live law prices the castle-less rebuild at base"
+    );
+    if patched {
+        assert_eq!(
+            w.debug_spell_gate_cost(2),
+            Some(1_000),
+            "patched arm: the castle-less release re-synced to base cost"
+        );
+    } else {
+        assert_eq!(
+            w.debug_spell_gate_cost(2),
+            Some(10_000),
+            "retail arm: death never re-stamps - the stale rung is the lockout"
+        );
+    }
+}
+
+#[test]
+fn mc2_castle_death_keeps_the_stale_cost_on_the_retail_arm() {
+    mc2_castle_death_cost_arm(false);
+}
+
+#[test]
+fn mc2_castle_death_resyncs_to_base_cost_on_the_patched_arm() {
+    mc2_castle_death_cost_arm(true);
+}
+
 /// The pane grey-out law (`canSummon`/`canSubSummon`, EF:22503-08 /
 /// EF:22602-08): a tier whose `maxManaLimit_A` castle-pool
 /// prerequisite is nonzero must read NOT castable while no own castle

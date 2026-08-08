@@ -431,6 +431,15 @@ impl Gen {
             }
             _ => {}
         }
+        // The `mc2_magic_mine` patch: the arming + proximity trigger
+        // below is the port's reconstruction of a lane retail SHIPS
+        // DEAD — nothing is known to write the `word_0x36_54` armed
+        // gate (magic-mine.md §6), so a retail mine floats, expires
+        // and sinks without ever detonating on anyone. The retail arm
+        // keeps it dead.
+        if !ctx.patches.mc2_magic_mine || ctx.strict {
+            return false;
+        }
         if self.ent[i].f26 > 0 {
             self.ent[i].f26 -= 1; // arming
             return false;

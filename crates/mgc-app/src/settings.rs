@@ -65,6 +65,12 @@ pub enum Class {
     Cheat,
     /// Troubleshooting instrument that alters the run itself.
     Instrument,
+    /// A retail-bug patch: one deliberate upstream bugfix with BOTH
+    /// arms implemented (faithful = the retail arm). Counted apart in
+    /// the rollup — a patched run is still the intended default
+    /// experience, and fixture capture forces the retail arms
+    /// structurally — so patches never flip the verdict.
+    Patch,
 }
 
 /// The run-level fidelity rollup.
@@ -90,7 +96,7 @@ pub enum Mutability {
 impl Class {
     fn fidelity(self) -> Fidelity {
         match self {
-            Class::Preference => Fidelity::Faithful,
+            Class::Preference | Class::Patch => Fidelity::Faithful,
             Class::Enhancement | Class::Debug => Fidelity::Enhanced,
             Class::Cheat | Class::Instrument => Fidelity::Modified,
         }
@@ -1651,6 +1657,268 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        // ---- gameplay · patches -----------------------------------------
+        // Retail-bug patches (docs/DEVIATIONS.md "Patch options"):
+        // every deliberate upstream bugfix, both arms implemented.
+        // Faithful = the RETAIL arm (off); most ship ON as the
+        // intended default experience. Fixture safety is structural —
+        // goldens/tests/mgc-conform build retail-arm worlds and
+        // --record/--replay force the retail arms — so a patched run
+        // still rolls up FAITHFUL, with the patch count reported.
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "castle_recast_cost",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.castle_recast_cost",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.castle_recast_cost.on(),
+                faithful: false,
+            },
+            desc: "Create Castle pricing after castle loss. Retail never re-prices \
+                   when your castle dies: the recast keeps the last ladder \
+                   price (the first-castle lockout) until collected mana \
+                   raises your ceiling past it. The patch re-derives the \
+                   live price, so a fresh castle always costs 1000.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.castle_recast_cost = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "The retail lockout - maybe a deliberate challenge (default).",
+                    "Live pricing: a fresh castle is always affordable.",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "jar_ground_snap",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.jar_ground_snap",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.jar_ground_snap.on(),
+                faithful: false,
+            },
+            desc: "Spell jars follow the ground. Retail's terrain reshaping skips \
+                   jars, leaving them buried (Hidden Worlds ships some!) or \
+                   floating after earth-shaping spells.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.jar_ground_snap = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Jars freeze in place through terrain edits, as retail.",
+                    "Jars stay grounded and collectable (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "ball_ground_track",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.ball_ground_track",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.ball_ground_track.on(),
+                faithful: false,
+            },
+            desc: "Settled mana balls follow the ground (MC1). Retail freezes a \
+                   ball wherever its settle timer ran out - mid-hop balls \
+                   hang in the air forever, and terrain edits bury grounded \
+                   ones.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.ball_ground_track = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Settled balls freeze mid-air or get buried, as retail.",
+                    "Settled balls land and surface (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "map_wide_ball_rolling",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.map_wide_ball_rolling",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.map_wide_ball_rolling.on(),
+                faithful: false,
+            },
+            desc: "Mana balls roll downhill everywhere (MC1). Retail only rolls \
+                   balls within 24 tiles of you - a period perf save - so \
+                   approaching mana wakes it and it visibly runs away \
+                   downhill. Balls only; creature wake-up is untouched.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.map_wide_ball_rolling = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Balls only roll near you and run away downhill, as retail.",
+                    "Every ball rolls to rest, map-wide (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "possessed_footprint",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.possessed_footprint",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.possessed_footprint.on(),
+                faithful: false,
+            },
+            desc: "A possessed dwelling keeps its true footprint (MC1). Retail \
+                   shrinks it to the owner-flag sprite, so villagers and \
+                   defenders spawn walled-in on the roof and their corpse \
+                   flames destroy the house you just possessed.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.possessed_footprint = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Possessed villages slowly self-destruct, as retail.",
+                    "Possessed villages keep working (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "castle_death_mana",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.castle_death_mana",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.castle_death_mana.on(),
+                faithful: false,
+            },
+            desc: "Total castle destruction scatters the residual mana bank as \
+                   balls (MC1). Retail frees the castle without running the \
+                   ejector - the banked mana vanishes from the world.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.castle_death_mana = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "The residual bank vanishes - a mana leak, as retail.",
+                    "The bank scatters; the world's mana is conserved (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "castle_death_balloons",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.castle_death_balloons",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.castle_death_balloons.on(),
+                faithful: false,
+            },
+            desc: "Total castle destruction demolishes the balloon fleet, cargo \
+                   spilling as owned balls (MC1). Retail leaves the orphans \
+                   flying at the dead castle's coordinates forever.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.castle_death_balloons = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Orphaned balloons circle the ruin forever, as retail.",
+                    "The fleet is demolished; cargo spills (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_downgrade_overflow",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_downgrade_overflow",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_downgrade_overflow.on(),
+                faithful: false,
+            },
+            desc: "MC2 castle downgrade's 10% mana haircut, computed safely. \
+                   Retail's 32-bit math overflows at the maxed level-7 rung: \
+                   the downgrade RAISES capacity and scatters nothing.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_downgrade_overflow = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "The level-7 haircut overflows backwards, as retail.",
+                    "The haircut is always 10% (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "mc2_magic_mine",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_magic_mine",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_magic_mine.on(),
+                faithful: false,
+            },
+            desc: "MC2 Magic Mine proximity trigger. Retail ships the spell dead: \
+                   nothing ever arms the trigger, so a mine floats, expires \
+                   and sinks without detonating on anyone.",
+            ctl: Ctl::Toggle {
+                set: |c, v| c.gameplay.patches.mc2_magic_mine = crate::config::PatchArm::from_on(v),
+                descs: [
+                    "Mines never detonate - a dead spell, as retail.",
+                    "Mines detonate on approaching enemies (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "win2_movie_score",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.win2_movie_score",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.win2_movie_score.on(),
+                faithful: false,
+            },
+            desc: "The second win movie plays its own score. Retail points both \
+                   win movies at one script, so levelw2 plays against the \
+                   wrong sample bank; its own orphaned table (bank 7, win2) \
+                   sits unreferenced in the binary.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.win2_movie_score = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "levelw2 plays the shared win1 score, as retail.",
+                    "levelw2 plays its own win2 score (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -1740,12 +2008,19 @@ pub fn registry() -> Vec<Spec> {
 
 /// Roll the whole config up to a single run-fidelity verdict, plus the
 /// counts that back it.
-pub fn rollup(cfg: &Config) -> (Fidelity, usize, usize) {
+pub fn rollup(cfg: &Config) -> (Fidelity, usize, usize, usize) {
     let mut enhancements = 0;
     let mut modifiers = 0;
+    let mut patches = 0;
     for spec in registry() {
         let val = (spec.read)(cfg);
         if !val.deviates() {
+            continue;
+        }
+        if spec.class == Class::Patch {
+            // Counted apart: a patched arm never flips the verdict
+            // (fixture capture forces the retail arms structurally).
+            patches += 1;
             continue;
         }
         match spec.class.fidelity() {
@@ -1761,7 +2036,7 @@ pub fn rollup(cfg: &Config) -> (Fidelity, usize, usize) {
     } else {
         Fidelity::Faithful
     };
-    (verdict, enhancements, modifiers)
+    (verdict, enhancements, modifiers, patches)
 }
 
 /// Print the structured options summary at startup: one line per
@@ -1769,14 +2044,19 @@ pub fn rollup(cfg: &Config) -> (Fidelity, usize, usize) {
 /// out, alternatives (faithful `*`-marked) and the toggle comment
 /// trailing. Non-faithful selections are flagged with a leading `•`.
 pub fn print_summary(cfg: &Config, game: GameId, level_label: &str) {
-    let (verdict, enh, modi) = rollup(cfg);
-    let banner = match verdict {
+    let (verdict, enh, modi, patches) = rollup(cfg);
+    let mut banner = match verdict {
         Fidelity::Faithful => "FAITHFUL".to_string(),
         Fidelity::Enhanced => format!("ENHANCED ({enh} enhancement(s), 0 cheats)"),
         Fidelity::Modified => {
             format!("MODIFIED ({modi} modifier(s), {enh} enhancement(s)) — not a faithful run")
         }
     };
+    if patches > 0 {
+        banner.push_str(&format!(
+            " ({patches} retail patch(es) on; recordings and fixtures run retail arms)"
+        ));
+    }
     let game_name = match game {
         GameId::Mc1 => "Magic Carpet",
         GameId::Mc1Hw => "Magic Carpet: Hidden Worlds",
@@ -1834,17 +2114,20 @@ mod tests {
         // 50, hud opaque) are all Preference-class, so a stock run
         // rolls up FAITHFUL (cleanup/visual preferences must not flag
         // the run).
-        let (verdict, enh, modi) = rollup(&Config::default());
+        let (verdict, enh, modi, patches) = rollup(&Config::default());
         assert_eq!(modi, 0, "no cheats/instruments on by default");
         assert_eq!(enh, 0, "no enhancement-class deviation by default");
         assert_eq!(verdict, Fidelity::Faithful);
+        // The default-on retail patches count apart and never flip
+        // the verdict (castle_recast_cost ships on its retail arm).
+        assert_eq!(patches, 9, "nine of the ten patches ship on");
     }
 
     #[test]
     fn a_cheat_makes_the_run_modified() {
         let mut c = Config::default();
         c.gameplay.cheat.dev_spells = true;
-        let (verdict, _, modi) = rollup(&c);
+        let (verdict, _, modi, _) = rollup(&c);
         assert_eq!(verdict, Fidelity::Modified);
         assert!(modi >= 1);
     }

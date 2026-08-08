@@ -63,6 +63,10 @@ pub(crate) struct MobCtx {
     /// here so Gen-side ticks can gate without a Gen field (which
     /// would drag the snapshot codec and the state hash along).
     pub(crate) strict: bool,
+    /// The retail-bug patch set (`World::patches`) — same MobCtx
+    /// rationale as `strict`. Gated sites read the patched arm as
+    /// `ctx.patches.x && !ctx.strict`.
+    pub(crate) patches: crate::patches::WorldPatches,
     /// MC2's `setting_30` game-loop counter (engine_support.h:229):
     /// zeroed at level init, incremented in `PlayerEvents_51BB0`
     /// beside `Turn++` (EF:37557) — during the entity pass it equals
@@ -2830,7 +2834,16 @@ impl Gen {
                 }
             } else if e.f59 > 0 {
                 self.ent[i].f59 -= 1;
-            } else if Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < self.chassis.awake_gate_sq {
+            } else if (ball && ctx.patches.map_wide_ball_rolling && !ctx.strict)
+                || Self::dist2_sq(e.x, e.y, ctx.px, ctx.py) < self.chassis.awake_gate_sq
+            {
+                // Patch option `map_wide_ball_rolling`: the BALL rows
+                // re-arm without the 24-tile radius, so every ball
+                // rolls to its resting place at retail's own
+                // 16-of-17-tick duty cycle instead of visibly "running
+                // away" when the human walks into wake range. Balls
+                // only — creatures keep the distance gate (this is NOT
+                // `awake_range = 0`, which wakes the whole ecology).
                 self.ent[i].f58 = 16;
                 self.ent[i].f59 = 0;
                 let mut s = self.ent[i].f54 as usize;

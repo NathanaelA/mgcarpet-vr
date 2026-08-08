@@ -980,6 +980,9 @@ pub struct MoviePlayer {
     subtitles_open: bool,
     /// Whether subtitles are wanted at all (the caller's setting).
     subtitles_wanted: bool,
+    /// The `win2_movie_score` patch arm (true = patched: levelw2
+    /// plays its own bank-7 score; false = retail's shared table).
+    win2_own_score: bool,
     done: bool,
 }
 
@@ -990,7 +993,13 @@ impl MoviePlayer {
     /// Queue `cues` (in order) from the bundle at `dir`. Returns
     /// `None` if the bundle is unreadable or none of the cues are in
     /// it, so callers fall straight through to whatever follows.
-    pub fn new(dir: &Path, cues: &[Cue], mc2: bool, subtitles: bool) -> Option<MoviePlayer> {
+    pub fn new(
+        dir: &Path,
+        cues: &[Cue],
+        mc2: bool,
+        subtitles: bool,
+        win2_own_score: bool,
+    ) -> Option<MoviePlayer> {
         let set = MovieSet::load(dir)
             .map_err(|e| eprintln!("note: movies unavailable: {e}"))
             .ok()?;
@@ -1011,6 +1020,7 @@ impl MoviePlayer {
             subtitle: None,
             subtitles_open: false,
             subtitles_wanted: subtitles,
+            win2_own_score,
             done: false,
         };
         player.next_stream();
@@ -1200,7 +1210,16 @@ impl MoviePlayer {
         self.dirty = true;
         while let Some(cue) = self.queue.pop_front() {
             if let Some(cursor) = self.set.open(cue.name) {
-                let script = script::for_movie(cue.name, self.mc2);
+                // The `win2_movie_score` patch: retail points both
+                // win movies at ONE table, so `levelw2` plays scored
+                // with `win1` at the wrong cue frame; the patched arm
+                // uses its own orphaned table (bank 7). The retail
+                // arm reproduces the shared-table read.
+                let script = if cue.name == "levelw2" && !self.win2_own_score {
+                    script::for_movie("levelw1", self.mc2)
+                } else {
+                    script::for_movie(cue.name, self.mc2)
+                };
                 let mut cur = Current {
                     cue,
                     cursor,
@@ -1434,7 +1453,8 @@ mod tests {
             return;
         }
         let cues = [Cue::new("title-02"), Cue::new("title-04")];
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &cues, false, true).expect("bundle opens");
+        let mut p =
+            MoviePlayer::new(Path::new(BUNDLE), &cues, false, true, true).expect("bundle opens");
         let mut seen: Vec<(&str, usize)> = Vec::new();
         // 1/60 s steps, generously bounded — the chain is ~1 s of
         // fades plus 8 frames at 24 fps.
@@ -1470,7 +1490,8 @@ mod tests {
         // `intro` is 3165 frames: without the skip this chain could
         // not possibly reach `logo` inside the loop below.
         let cues = [Cue::new("intro"), Cue::new("logo")];
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &cues, false, true).expect("bundle opens");
+        let mut p =
+            MoviePlayer::new(Path::new(BUNDLE), &cues, false, true, true).expect("bundle opens");
         p.tick(1.0 / 60.0);
         assert_eq!(p.progress().map(|x| x.0), Some("intro"));
         p.skip();
@@ -1500,6 +1521,7 @@ mod tests {
             &[Cue::new("title-02"), Cue::new("title-01")],
             false,
             false,
+            true,
         )
         .expect("bundle opens");
         let mut acts = Vec::new();
@@ -1535,6 +1557,7 @@ mod tests {
             &[Cue::new("intro"), Cue::new("title-01")],
             false,
             false,
+            true,
         )
         .expect("bundle opens");
         // Run past the intro's frame-1 music cue, then bail out.
@@ -1570,7 +1593,8 @@ mod tests {
             return;
         }
         let cues = [Cue::unskippable("intro"), Cue::new("logo")];
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &cues, false, true).expect("bundle opens");
+        let mut p =
+            MoviePlayer::new(Path::new(BUNDLE), &cues, false, true, true).expect("bundle opens");
         p.tick(1.0 / 60.0);
         p.skip();
         for _ in 0..120 {
@@ -1649,7 +1673,7 @@ mod tests {
         if set().is_none() {
             return;
         }
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true)
+        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true, true)
             .expect("bundle opens");
         for _ in 0..60 {
             p.tick(1.0 / 60.0);
@@ -1679,7 +1703,7 @@ mod tests {
         if set().is_none() {
             return;
         }
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true)
+        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true, true)
             .expect("bundle opens");
         let mut cued = None;
         for _ in 0..120 {
@@ -1717,7 +1741,8 @@ mod tests {
         // budget loop runs past the end and `end_of_movie` is reached
         // more than once for the same stream.
         let cues = [Cue::new("title-02").holding(3.0), Cue::new("title-04")];
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &cues, false, true).expect("bundle opens");
+        let mut p =
+            MoviePlayer::new(Path::new(BUNDLE), &cues, false, true, true).expect("bundle opens");
         for _ in 0..6 {
             p.tick(0.25);
         }
@@ -1746,7 +1771,7 @@ mod tests {
         if set().is_none() {
             return;
         }
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true)
+        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true, true)
             .expect("bundle opens");
         let (mut acts, mut subs) = (Vec::new(), Vec::new());
         // Big steps: we want the whole 3164-frame script walked, not
@@ -2019,7 +2044,7 @@ mod tests {
         // the text. Comparing against a subtitles-off run instead would
         // be confounded: the lift changes which picture rows land in
         // the band.
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true)
+        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[Cue::new("intro")], false, true, true)
             .expect("bundle opens");
         for _ in 0..400 {
             p.tick(0.05);
@@ -2094,7 +2119,8 @@ mod tests {
     /// Clear the fade-in, then run `seconds` of playback and report
     /// how far the playhead moved.
     fn frames_in(cue: Cue, seconds: f32) -> usize {
-        let mut p = MoviePlayer::new(Path::new(BUNDLE), &[cue], false, true).expect("bundle opens");
+        let mut p =
+            MoviePlayer::new(Path::new(BUNDLE), &[cue], false, true, true).expect("bundle opens");
         for _ in 0..60 {
             p.tick(1.0 / 60.0);
         }

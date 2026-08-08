@@ -3670,7 +3670,7 @@ impl Gen {
     /// refreshes to live ground every tick (idle :56014 + wait
     /// cases 1/4/6 :56073-78) — the flag rides the painted tower;
     /// the build-site datum lives in f28 (+154).
-    pub(crate) fn castle_tick(&mut self, i: usize) {
+    pub(crate) fn castle_tick(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         let (x, y) = (self.ent[i].x, self.ent[i].y);
         self.ent[i].z = self.ground_z(x, y) as i16;
         match self.ent[i].f59 {
@@ -3816,7 +3816,7 @@ impl Gen {
                 // the demolish path — Shift+L writes life = −1 with
                 // no mail at all (:55846-50).
                 if self.ent[i].act_life < 0 {
-                    self.castle_downgrade(i);
+                    self.castle_downgrade(i, patches);
                     return;
                 }
                 // sub_47EC0: HP -= pending ch0; lethal → the
@@ -3826,7 +3826,7 @@ impl Gen {
                     self.ent[i].mail[0] = (0, 0);
                     self.ent[i].act_life -= amt as i32;
                     if self.ent[i].act_life < 0 {
-                        self.castle_downgrade(i);
+                        self.castle_downgrade(i, patches);
                         return;
                     }
                     // "Castle under attack" flash (Type_160+391=4).
@@ -3898,7 +3898,7 @@ impl Gen {
     /// At level 1 the whole castle dies instead (:56531-37): the
     /// balloon is released, the ENTIRE bank scatters, the entity is
     /// freed — the player is castle-less (die now = restart).
-    fn castle_downgrade(&mut self, i: usize) {
+    fn castle_downgrade(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         let lvl0 = self.ent[i].f26;
         let (x, y, site_z, own) = {
             let e = &self.ent[i];
@@ -3953,44 +3953,41 @@ impl Gen {
         };
         self.ent[i].f26 = lvl;
         if lvl <= 0 {
-            // Total destruction (:56531-37): release the balloons,
-            // clear the owner's castle slot, free the castle. The
-            // full-bank scatter below is a DELIBERATE deviation
-            // (docs/DEVIATIONS.md): retail's !level arm frees the
-            // castle without ever calling the ejector, so the
-            // residual bank (whatever the level-1 downgrade eject
-            // left, ≤ ~90% of cap) vanishes with the entity — a
-            // shipped-engine mana leak. We route it through the
-            // ejector's own level-0 all-stored rule (:56172) instead,
-            // conserving the census total.
-            self.ent[i].f136 = 0;
-            self.castle_eject(i);
-            for j in 1..self.ent.len() {
-                if self.ent[j].class64 == 3
-                    && self.ent[j].model65 == 3
-                    && self.ent[j].id24 == own
-                    && self.ent[j].flags & 0x400 == 0
-                {
-                    // The castle-less fleet quota is zero: demolish
-                    // every owned balloon through the cull's spill —
-                    // cargo drops as an owned ball (sub_27690 shape,
-                    // nothing for an empty balloon), so the census
-                    // total is conserved. DELIBERATE deviation
-                    // (docs/DEVIATIONS.md): retail's !level arm frees
-                    // the castle without touching the fleet — the
-                    // balloons fly at the freed slot's stale
-                    // coordinates forever, culled only if a rebuilt
-                    // castle's dispatcher re-adopts them. (The
-                    // sub_46D20(a1, 0) call in that arm is the
-                    // spell-16 charge-pin clear on the owner's Create
-                    // Castle manifestation slot — wizext +708 — not a
-                    // balloon release; an earlier port comment
-                    // misglossed it.) Despawning WITHOUT the spill
-                    // (the oldest arm) erased in-flight cargo from
-                    // the owner's mana total: the destroy/rebuild
-                    // mana leak.
-                    self.corpse_drop(j);
-                    self.ent[j].flags |= 0x400;
+            // Total destruction (:56531-37). The full-bank scatter is
+            // the `castle_death_mana` patch (docs/DEVIATIONS.md):
+            // retail's !level arm frees the castle without ever
+            // calling the ejector, so the residual bank (whatever the
+            // level-1 downgrade eject left, ≤ ~90% of cap) vanishes
+            // with the entity — a shipped-engine mana leak. The
+            // patched arm routes it through the ejector's own level-0
+            // all-stored rule (:56172), conserving the census total.
+            if patches.castle_death_mana {
+                self.ent[i].f136 = 0;
+                self.castle_eject(i);
+            }
+            // The fleet demolition is the `castle_death_balloons`
+            // patch (docs/DEVIATIONS.md): the castle-less fleet quota
+            // is zero, so the patched arm demolishes every owned
+            // balloon through the cull's spill — cargo drops as an
+            // owned ball (sub_27690 shape, nothing for an empty
+            // balloon), conserving the census total. Retail's !level
+            // arm never touches the fleet — the balloons fly at the
+            // freed slot's stale coordinates forever, culled only if
+            // a rebuilt castle's dispatcher re-adopts them. (The
+            // sub_46D20(a1, 0) call in that arm is the spell-16
+            // charge-pin clear on the owner's Create Castle
+            // manifestation slot — wizext +708 — not a balloon
+            // release; an earlier port comment misglossed it.)
+            if patches.castle_death_balloons {
+                for j in 1..self.ent.len() {
+                    if self.ent[j].class64 == 3
+                        && self.ent[j].model65 == 3
+                        && self.ent[j].id24 == own
+                        && self.ent[j].flags & 0x400 == 0
+                    {
+                        self.corpse_drop(j);
+                        self.ent[j].flags |= 0x400;
+                    }
                 }
             }
             self.ent[i].flags |= 0x400;
@@ -4214,7 +4211,7 @@ impl Gen {
     /// (An earlier reading took the `+86 +=` line for a mana credit —
     /// +86 is the sprite type field; there is no mana movement in the
     /// claim block.)
-    pub(crate) fn tick_building_live(&mut self, i: usize) {
+    pub(crate) fn tick_building_live(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         if self.ent[i].act_life < 0 {
             // Killed directly (castle crush life = -1, :17638).
             self.ent[i].tick70 = 53;
@@ -4238,8 +4235,9 @@ impl Gen {
                 } else if (src as usize) < self.ent.len() && self.ent[src as usize].class64 != 0 {
                     self.snd(4, src as usize);
                 }
-                // The owner-flag sprite, but PRESERVING the building's
-                // footprint extents (+78/80/82/84). Retail's
+                // The owner-flag sprite — PRESERVING the building's
+                // footprint extents (+78/80/82/84) under the
+                // `possessed_footprint` patch. Retail's
                 // sub_36FA0_37360(_,177) (:30808) overwrites +80 with the
                 // tiny flag sprite's extent — and the villager-emit /
                 // defender pop-out spawn at (x + f80). With the footprint
@@ -4247,7 +4245,8 @@ impl Gen {
                 // OUTSIDE the footprint to ON the roof, where the creature
                 // is walled-in, dies, and its corpse-flame (400) destroys
                 // the very house you just possessed (a self-sustaining
-                // collapse). Deliberate deviation — see docs/DEVIATIONS.md.
+                // collapse). The retail arm lets the clobber stand —
+                // see docs/DEVIATIONS.md.
                 let (f78, f80, f82, f84) = {
                     let e = &self.ent[i];
                     (e.f78, e.f80, e.f82, e.f84)
@@ -4256,11 +4255,13 @@ impl Gen {
                 // (rows 177-184 are the eight team flags).
                 let flag = 177 + self.owner_team(src).unwrap_or(0) as u16;
                 self.set_sprite(i, flag);
-                let e = &mut self.ent[i];
-                e.f78 = f78;
-                e.f80 = f80;
-                e.f82 = f82;
-                e.f84 = f84;
+                if patches.possessed_footprint {
+                    let e = &mut self.ent[i];
+                    e.f78 = f78;
+                    e.f80 = f80;
+                    e.f82 = f82;
+                    e.f84 = f84;
+                }
             }
         }
         if self.ent[i].mail[0].1 != 0 {
@@ -5394,7 +5395,7 @@ mod tests {
         g.ent[r].x = 5 * 256;
         g.ent[r].y = 6 * 256;
         g.ent[b].mail[1] = (0, r as u16);
-        g.tick_building_live(b);
+        g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
         let ev = g
             .sounds
             .iter()
@@ -5406,7 +5407,7 @@ mod tests {
         // The player's own claim still rings the local chime.
         g.sounds.clear();
         g.ent[b].mail[1] = (0, crate::mc1::mobs::PLAYER_TARGET);
-        g.tick_building_live(b);
+        g.tick_building_live(b, crate::patches::WorldPatches::RETAIL);
         let ev = g
             .sounds
             .iter()
@@ -5560,14 +5561,14 @@ mod tests {
         while g.new_event().is_some() {}
 
         // Case 0: exhausted pool → no commit, no wait state.
-        g.castle_tick(i);
+        g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(
             g.ent[i].f59, 0,
             "level-up retries instead of parking in wait"
         );
         assert_eq!(g.ent[i].f26, 0, "no level commit without a painter");
         g.free.push(spares[0] as u16);
-        g.castle_tick(i);
+        g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 1, "freed slot: the painter spawned");
         assert_eq!(g.ent[i].f26, 1, "the level-up committed with it");
         assert!(
@@ -5579,16 +5580,16 @@ mod tests {
 
         // Case 5 (leveler) and case 3 (repaint) hold their state too.
         g.ent[i].f59 = 5;
-        g.castle_tick(i);
+        g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 5, "leveler spawn failure holds state 5");
         g.free.push(spares[1] as u16);
-        g.castle_tick(i);
+        g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 6, "freed slot: the leveler handoff");
         g.ent[i].f59 = 3;
-        g.castle_tick(i);
+        g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 3, "repaint spawn failure holds state 3");
         g.free.push(spares[2] as u16);
-        g.castle_tick(i);
+        g.castle_tick(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f59, 1, "freed slot: the repaint painter wait");
     }
 
@@ -5665,6 +5666,7 @@ mod tests {
             pmana: 1000,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         }
     }

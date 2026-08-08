@@ -49,6 +49,9 @@ pub struct ReplayFile {
     /// "enhanced") and the embedded start snapshot.
     pub sim_thrust: Option<String>,
     pub sim_altitude: Option<String>,
+    /// The recorded retail-bug patch policy tag (see
+    /// [`ReplayFile::patch_policy`]); absent on pre-option takes.
+    pub sim_patches: Option<String>,
     pub snapshot: Option<Vec<u8>>,
 }
 
@@ -109,6 +112,7 @@ impl ReplayFile {
             source,
             sim_thrust: s("thrust_model"),
             sim_altitude: s("altitude_model"),
+            sim_patches: s("patches"),
             snapshot,
             rec,
         })
@@ -128,6 +132,22 @@ impl ReplayFile {
             Some(other) => return Err(format!("unknown altitude_model {other:?}")),
         };
         Ok((thrust, altitude))
+    }
+
+    /// The patch policy this take was recorded under (port takes).
+    /// `"retail"` (every take since --record forced the retail arms)
+    /// -> replay under GameplayPatches::retail_all(); an ABSENT key is
+    /// a take from before the patches were options -> the legacy
+    /// hard-wired set. Retail-source takes always pin retail arms.
+    pub fn patch_policy(&self) -> Result<crate::config::GameplayPatches, String> {
+        if self.source == ReplaySource::Retail {
+            return Ok(crate::config::GameplayPatches::retail_all());
+        }
+        match self.sim_patches.as_deref() {
+            Some("retail") => Ok(crate::config::GameplayPatches::retail_all()),
+            None => Ok(crate::config::GameplayPatches::legacy()),
+            Some(other) => Err(format!("unknown patches policy {other:?}")),
+        }
     }
 }
 
@@ -610,6 +630,13 @@ impl PortRecorder {
                     AltitudeModel::Faithful => "classic",
                     AltitudeModel::ExtendedLift => "enhanced",
                 },
+                // The retail-bug patch policy: --record forces every
+                // patch to its retail arm for the whole session, and
+                // says so here. A header WITHOUT this key is a take
+                // from before the patches became options — it replays
+                // under the legacy hard-wired set (ReplayFile::
+                // patch_policy).
+                "patches": "retail",
                 "start_mgcs_b64": mgcr::b64_encode(&sim.snapshot()),
             },
         });

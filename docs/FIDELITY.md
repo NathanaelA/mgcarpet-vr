@@ -64,6 +64,12 @@ modern deviation). Two engine-level classes:
 - **G-class** (gameplay): changes simulation state or RNG consumption.
   Recorded into replays; a replay taped under a non-faithful G option
   is not a faithful fixture.
+- **Patch-class** (`gameplay · patches`, DEVIATIONS.md "Patch
+  options"): a deliberate retail-bug fix with BOTH arms implemented
+  (`retail` = the shipped bug, `patched` = the fix). Sim-affecting like
+  G, but fixture safety is structural — worlds default to the retail
+  arms, and `--record`/`--replay`/conformance force them — so patches
+  never flag the run; the startup banner counts them apart.
 
 Current option surface: `mgcarpet.json` + CLI flags (the generated
 `mgcarpet.json.defaults` documents every option); an in-game menu is

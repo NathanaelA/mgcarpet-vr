@@ -19,8 +19,11 @@ pub mod flight;
 pub mod ids;
 pub mod mc1;
 pub mod mc2;
+pub mod patches;
 pub mod snapshot;
 pub mod verbs;
+
+pub use patches::WorldPatches;
 
 use engine::{features, world};
 use mc1::spells;

@@ -1237,6 +1237,9 @@ fn mc2_magic_mine_blast_reaches_a_neighbouring_wizard() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
+    // The working mine is the `mc2_magic_mine` patched arm (retail
+    // ships the trigger dead — DEVIATIONS.md).
+    w.set_patches(mgc_sim::WorldPatches::LEGACY);
     let (cx, cy) = open_spot(&w);
     // Burn off SPAWN GRACE far from the mine site first — grace absorbs
     // the blast and makes a working mine look broken.
@@ -1343,6 +1346,9 @@ fn mc2_magic_mine_detonates_when_a_target_approaches() {
         eprintln!("skipping: level-000 has no terrain");
         return;
     };
+    // The proximity trigger only exists under the `mc2_magic_mine`
+    // patched arm (retail ships it dead — DEVIATIONS.md).
+    w.set_patches(mgc_sim::WorldPatches::LEGACY);
     let (cx, cy) = open_spot(&w);
     let pose = pose_at(&w, cx, cy);
     let slot = w.debug_mc2_place_mine(cx, cy, 0, 7); // owner = rival id 7

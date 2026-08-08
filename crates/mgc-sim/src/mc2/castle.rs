@@ -74,11 +74,11 @@ impl Gen {
     /// The class-3 model-2 dispatch under the MC2 column: retail
     /// runs `tick70` through the class-3 action table (EF:1206-08).
     /// Anything else on a (3,2) is a load-time husk — stand still.
-    pub(crate) fn mc2_castle_tick(&mut self, i: usize) {
+    pub(crate) fn mc2_castle_tick(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         match self.ent[i].tick70 {
             4 => self.mc2_castle_standing(i),
             5 => self.mc2_castle_build(i),
-            6 => self.mc2_castle_destroy(i),
+            6 => self.mc2_castle_destroy(i, patches),
             _ => {}
         }
     }
@@ -204,9 +204,9 @@ impl Gen {
     /// conversion where retail leaves it to the roster call, so
     /// balloon-spheres draw before the bank-spheres (same mana,
     /// different LCG interleave).
-    fn mc2_castle_destroy(&mut self, i: usize) {
+    fn mc2_castle_destroy(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         if !self.free.is_empty() {
-            self.mc2_castle_downgrade(i);
+            self.mc2_castle_downgrade(i, patches);
             self.ent[i].tick70 = 4;
             self.mc2_castle_eject(i);
             self.mc2_castle_roster(i);
@@ -295,16 +295,21 @@ impl Gen {
     /// haircut (scattered), terrain restore for the removed level,
     /// ladder + stage rebuild; at level 0 the castle dies (owner
     /// unbind = the id24 link simply despawns with the entity).
-    fn mc2_castle_downgrade(&mut self, i: usize) {
+    fn mc2_castle_downgrade(&mut self, i: usize, patches: crate::patches::WorldPatches) {
         if self.ent[i].f26 > 0 {
-            // 10% capacity haircut, computed in i64 (deliberate
-            // idealization): a castle over-filled past the normal cap
-            // ladder can carry an f136 large enough that `10 * f136`
-            // overflows i32. Retail's i32 `10 * x / 100` overflows at
-            // the always-overflowing level-7 rung (10 × 300M) into a
-            // NEGATIVE cut — a maxed level-7 castle downgrade *raises*
-            // its cap and scatters nothing. We keep the sane 10%.
-            let cut = (10i64 * self.ent[i].f136 as i64 / 100) as i32;
+            // 10% capacity haircut. Patched arm (`mc2_downgrade_
+            // overflow`): computed in i64 — a castle over-filled past
+            // the normal cap ladder can carry an f136 large enough
+            // that `10 * f136` overflows i32. Retail's i32
+            // `10 * x / 100` overflows at the always-overflowing
+            // level-7 rung (10 × 300M) into a NEGATIVE cut — a maxed
+            // level-7 castle downgrade *raises* its cap and scatters
+            // nothing. The retail arm reproduces the wrap exactly.
+            let cut = if patches.mc2_downgrade_overflow {
+                (10i64 * self.ent[i].f136 as i64 / 100) as i32
+            } else {
+                10i32.wrapping_mul(self.ent[i].f136 as i32) / 100
+            };
             self.ent[i].f136 -= cut;
             self.mc2_castle_eject(i);
             self.ent[i].f136 += cut;
@@ -1885,7 +1890,7 @@ mod tests {
         }
         g.link(i, 100 << 8, 100 << 8, g.ground_z(100 << 8, 100 << 8) as i16);
         // Must not panic on `10 * i32::MAX`.
-        g.mc2_castle_downgrade(i);
+        g.mc2_castle_downgrade(i, crate::patches::WorldPatches::RETAIL);
         assert_eq!(g.ent[i].f26, 6, "one level off, no overflow");
     }
 
@@ -2010,7 +2015,7 @@ mod tests {
         let i = place_castle(&mut g, 100 << 8, 100 << 8, 1, 7);
         g.ent[i].f136 = 50_000; // capacity
         g.ent[i].f140 = 20_000; // stored bank
-        g.mc2_castle_destroy(i);
+        g.mc2_castle_destroy(i, crate::patches::WorldPatches::RETAIL);
         assert_ne!(g.ent[i].flags & 0x400, 0, "level-1 destroy kills");
         let spilled: i32 = (1..g.ent.len())
             .filter(|&j| {

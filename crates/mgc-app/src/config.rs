@@ -838,9 +838,146 @@ impl MusicArrangement {
 pub struct GameplayConfig {
     /// Fair play opt-ins (still authentic-legal — no impossible power).
     pub enhancement: GameplayEnhancement,
+    /// Retail-bug patches: things retail messes up that the port can
+    /// do better — every deliberate upstream bugfix, with BOTH arms
+    /// implemented. Faithful fixtures are protected structurally:
+    /// goldens, unit tests and mgc-conform build worlds that default
+    /// to the retail arms, and `--record`/`--replay` force them.
+    pub patches: GameplayPatches,
     /// Cheats: otherwise-impossible power. Any of these on = a
     /// non-canonical run.
     pub cheat: GameplayCheat,
+}
+
+/// One retail-bug patch's arm. `retail` = the shipped bug, bug for
+/// bug; `patched` = the fix. (Aliases `off`/`on` accepted.)
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PatchArm {
+    /// Retail's shipped behavior, bug for bug.
+    #[default]
+    #[serde(alias = "off")]
+    Retail,
+    /// The port's fix.
+    #[serde(alias = "on", alias = "fixed")]
+    Patched,
+}
+
+impl PatchArm {
+    pub fn on(self) -> bool {
+        self == PatchArm::Patched
+    }
+    pub fn from_on(on: bool) -> Self {
+        if on {
+            PatchArm::Patched
+        } else {
+            PatchArm::Retail
+        }
+    }
+}
+
+/// The `gameplay · patches` class (docs/DEVIATIONS.md "Patch
+/// options"): each field picks one arm of a deliberate upstream
+/// bugfix. All are Live options with no hotkeys; sim-affecting ones
+/// never leak into faithful fixtures (see [`GameplayConfig::patches`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GameplayPatches {
+    /// Create Castle pricing after castle loss (all 3 games).
+    /// `retail` (DEFAULT — player-ruled 2026-08-08): the stale cost
+    /// stamp; after your castle dies the recast costs the last
+    /// stamped ladder price (the first-castle lockout — possibly a
+    /// deliberate period challenge). `patched`: live-law pricing; a
+    /// fresh castle is always affordable (1000) when homeless.
+    pub castle_recast_cost: PatchArm,
+    /// Spell jars re-snap to the ground every tick. Retail's terrain
+    /// reshaping leaves jars buried (HW ships several!) or floating.
+    pub jar_ground_snap: PatchArm,
+    /// Settled MC1 mana balls track the ground. Retail freezes a ball
+    /// wherever its settle budget expired — mid-hop balls hang in the
+    /// air forever; terrain edits bury grounded ones.
+    pub ball_ground_track: PatchArm,
+    /// MC1 mana balls roll downhill map-wide. Retail only rolls balls
+    /// within 24 tiles of you (a period perf save), so approaching
+    /// mana visibly "runs away downhill". Balls only — creature
+    /// wake-up is untouched.
+    pub map_wide_ball_rolling: PatchArm,
+    /// A possessed dwelling keeps its true footprint. Retail's
+    /// owner-flag stamp shrinks it to the flag sprite, so villagers
+    /// and defenders spawn walled-in ON the roof and their corpse
+    /// flames destroy the house you just possessed.
+    pub possessed_footprint: PatchArm,
+    /// Total castle destruction scatters the residual mana bank.
+    /// Retail frees the castle without running the ejector — the
+    /// banked mana vanishes from the world (a shipped mana leak).
+    pub castle_death_mana: PatchArm,
+    /// Total castle destruction demolishes the balloon fleet (cargo
+    /// spills as owned balls). Retail leaves the orphaned balloons
+    /// flying at the freed castle slot's stale coordinates forever.
+    pub castle_death_balloons: PatchArm,
+    /// MC2 castle downgrade's 10% mana haircut, computed safely.
+    /// Retail's i32 math overflows at the level-7 rung — a maxed
+    /// castle downgrade RAISES its capacity and scatters nothing.
+    pub mc2_downgrade_overflow: PatchArm,
+    /// MC2 Magic Mine proximity trigger. Retail ships the spell dead —
+    /// nothing ever arms the trigger, so a mine floats, expires and
+    /// sinks without detonating on anyone.
+    pub mc2_magic_mine: PatchArm,
+    /// The second win movie (`levelw2`) plays its own orphaned score
+    /// table (bank 7 `win2`). Retail points both win movies at one
+    /// script, so `levelw2` plays scored with the wrong bank.
+    pub win2_movie_score: PatchArm,
+}
+
+impl Default for GameplayPatches {
+    fn default() -> Self {
+        Self {
+            // Player-ruled 2026-08-08: the lockout ships as the
+            // authentic default; the fix is the opt-in.
+            castle_recast_cost: PatchArm::Retail,
+            jar_ground_snap: PatchArm::Patched,
+            ball_ground_track: PatchArm::Patched,
+            map_wide_ball_rolling: PatchArm::Patched,
+            possessed_footprint: PatchArm::Patched,
+            castle_death_mana: PatchArm::Patched,
+            castle_death_balloons: PatchArm::Patched,
+            mc2_downgrade_overflow: PatchArm::Patched,
+            mc2_magic_mine: PatchArm::Patched,
+            win2_movie_score: PatchArm::Patched,
+        }
+    }
+}
+
+impl GameplayPatches {
+    /// Every patch on its retail arm — what `--record`, `--replay`
+    /// and every faithful fixture runs.
+    pub fn retail_all() -> Self {
+        Self {
+            castle_recast_cost: PatchArm::Retail,
+            jar_ground_snap: PatchArm::Retail,
+            ball_ground_track: PatchArm::Retail,
+            map_wide_ball_rolling: PatchArm::Retail,
+            possessed_footprint: PatchArm::Retail,
+            castle_death_mana: PatchArm::Retail,
+            castle_death_balloons: PatchArm::Retail,
+            mc2_downgrade_overflow: PatchArm::Retail,
+            mc2_magic_mine: PatchArm::Retail,
+            win2_movie_score: PatchArm::Retail,
+        }
+    }
+
+    /// The pre-option hard-wired behavior set: what native play ran
+    /// before the patches became options. Port recordings taped
+    /// before the header carried a patch policy replay under this
+    /// (`map_wide_ball_rolling` did not exist then; the castle cost
+    /// was live-law).
+    pub fn legacy() -> Self {
+        Self {
+            castle_recast_cost: PatchArm::Patched,
+            map_wide_ball_rolling: PatchArm::Retail,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1079,7 +1216,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 20;
+const DEFAULTS_VERSION: u64 = 21;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

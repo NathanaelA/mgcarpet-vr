@@ -83,6 +83,14 @@ force-apply) a mismatched environment:
   exist"*; DEVIATIONS.md "enhanced flight": *"Selected once at the sim
   boundary; replays record it"*).
 - `snapshot_version`, pool sizes (the pool size feeds the hash).
+- `patches` — the retail-bug patch policy (`gameplay · patches`,
+  DEVIATIONS.md "Patch options"). `--record` forces every patch to its
+  RETAIL arm for the whole session and stamps `"patches": "retail"`;
+  `--replay` pins to the recorded policy. A port header WITHOUT the
+  key predates the option class (2026-08-08) and replays under the
+  legacy hard-wired set (`GameplayPatches::legacy()` — the sim those
+  takes were recorded against). Retail-source takes always pin the
+  retail arms.
 - every sim-reaching option from the options registry, including
   sim-affecting dev instruments (e.g. `dev.lift_unclamped`);
   presentation-only options are excluded and never recorded.

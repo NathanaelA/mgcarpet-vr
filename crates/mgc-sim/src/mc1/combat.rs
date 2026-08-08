@@ -4188,13 +4188,14 @@ impl Gen {
         let settle = (self.ent[i].f58 & 0xFF) as u8;
         if !mc2 {
             if settle == 0 {
-                // Settled balls TRACK the ground (deliberate,
-                // player-ruled — DEVIATIONS.md): retail's freeze
-                // leaves a mid-hop ball hanging in the air forever
-                // and lets terrain edits (volcano, castle stamps)
-                // BURY a grounded one. Both directions on purpose.
-                // Off under conformance replay. MC1-native only.
-                if !ctx.strict {
+                // Settled balls TRACK the ground (patch option
+                // `ball_ground_track`, player-ruled — DEVIATIONS.md):
+                // retail's freeze leaves a mid-hop ball hanging in
+                // the air forever and lets terrain edits (volcano,
+                // castle stamps) BURY a grounded one. Both directions
+                // on purpose. Retail arm / conformance replay keep
+                // the freeze. MC1-native only.
+                if ctx.patches.ball_ground_track && !ctx.strict {
                     let (x, y) = (self.ent[i].x, self.ent[i].y);
                     let g = self.ground_z(x, y) as i16;
                     self.ent[i].z = g;

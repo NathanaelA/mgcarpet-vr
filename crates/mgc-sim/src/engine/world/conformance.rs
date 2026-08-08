@@ -190,6 +190,7 @@ impl World {
         // Replaying retail state means retail law exactly: deliberate
         // gameplay deviations (DEVIATIONS.md) switch off for this world.
         self.strict_retail = true;
+        self.patches = crate::patches::WorldPatches::RETAIL;
         let local = st.local_player as usize;
         let wiz = st
             .wizards
@@ -581,6 +582,7 @@ impl World {
     /// the cross-pair latches.
     pub fn retail_import_mc2(&mut self, st: &RetailMc2) -> Result<ImportReport, String> {
         self.strict_retail = true;
+        self.patches = crate::patches::WorldPatches::RETAIL;
         let local = st.local_player as usize;
         let ply = st
             .players

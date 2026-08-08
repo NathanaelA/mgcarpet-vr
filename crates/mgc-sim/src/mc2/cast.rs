@@ -1388,9 +1388,19 @@ impl World {
             // unaffordable). Ported at the lock-release edge instead
             // of retail's mid-transform stamp: observably equivalent,
             // since the cast gate is armed-blocked for the whole
-            // transform.
-            let tier = self.g.ent[m].f71;
-            self.mc2_set_spell(m, tier);
+            // transform — WHILE A CASTLE STANDS. Retail's stamp rides
+            // the castle's own HP/CAP writes, so castle DEATH leaves
+            // the old rung cached (the MC2 face of the first-castle
+            // lockout): under the `castle_recast_cost` retail arm the
+            // castle-less release skips the re-sync exactly like
+            // retail; the patched arm re-syncs to the base-cost
+            // rebuild.
+            if (self.patches.castle_recast_cost && !self.strict_retail)
+                || self.player_castle().is_some()
+            {
+                let tier = self.g.ent[m].f71;
+                self.mc2_set_spell(m, tier);
+            }
         }
     }
 

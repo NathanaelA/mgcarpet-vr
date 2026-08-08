@@ -66,6 +66,7 @@ use crate::mc1::combat::MailTarget;
 use crate::mc1::mobs::{MobCtx, PLAYER_TARGET};
 use crate::mc1::spells::{DISPLAY_ORDER, SPELL_COUNT, SPELLS, SpellDef, SpellId};
 use crate::mc1::sprite_stats::SPRITE_STATS;
+use crate::patches::WorldPatches;
 use crate::verbs::{
     AwakeVerb, CommitGateVerb, DamageVerb, MovementVerb, ObjectiveVerb, TargetingVerb, VerbKind,
     VerbSet,
@@ -754,6 +755,14 @@ pub struct World {
     /// law exactly. Never set in normal play; config-like, not part
     /// of the state hash or snapshots.
     pub(crate) strict_retail: bool,
+    /// Retail-bug patch switches (`gameplay · patches`): each field
+    /// picks the patched or the retail arm of one deliberate upstream
+    /// bugfix. Constructor default = [`WorldPatches::RETAIL`], so
+    /// every direct `World::new*` consumer (goldens, tests,
+    /// mgc-conform) runs retail law; the app opts patches in from
+    /// config. Config-like: not hashed, not snapshotted, and
+    /// `strict_retail` still force-disables the patched arms.
+    pub(crate) patches: WorldPatches,
     /// Last tick's fire-button states — casts are EDGE-triggered (one
     /// cast per press) except the traced hold spells; the edges are
     /// derived sim-side from the held booleans.
@@ -1336,6 +1345,7 @@ impl World {
             dev_spells: false,
             prune_owned_jars: false,
             strict_retail: false,
+            patches: WorldPatches::RETAIL,
             prev_fire: (false, false),
             accel_veto: (false, false),
             pending_respawn: None,
@@ -1997,6 +2007,7 @@ impl World {
             pmana: self.player.mana,
             pdead: self.player.state != LifeState::Alive,
             strict: self.strict_retail,
+            patches: self.patches,
             mc2_turn: self.mc2_turn,
         };
         self.human_pose_prev = self.human_pose;
@@ -2538,7 +2549,7 @@ impl World {
                 // demolish fake collapse is a direct call, not this
                 // dispatch, so gating on m45 leaves it untouched.
                 10 if self.g.ent[i].tick70 == 52 && self.g.ent[i].model65 == 45 => {
-                    self.g.tick_building_live(i)
+                    self.g.tick_building_live(i, self.patches)
                 }
                 10 if self.g.ent[i].tick70 == 53 && self.g.ent[i].model65 == 45 => {
                     self.g.tick_building_collapse(i);
@@ -2618,7 +2629,7 @@ impl World {
                 // three-actionIndex castle (tick70 4/5/6) and the
                 // AddBallon_60AB0 balloon.
                 3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 2 => {
-                    self.g.mc2_castle_tick(i)
+                    self.g.mc2_castle_tick(i, self.patches)
                 }
                 3 if matches!(self.game, GameId::Mc2) && self.g.ent[i].model65 == 3 => {
                     self.g.mc2_balloon_tick(i)
@@ -2632,32 +2643,49 @@ impl World {
                     // ctor's +50 divisor, sub_3BF70 :47996).
                     // Castle-side because the imported manifestation
                     // encodes +70 < MANIFEST_BASE and never reaches
-                    // manifestation_tick; joined on the f144 owner
-                    // lane (0 = the human on BOTH under import;
-                    // retail's real binding, wizext+708, is outside
-                    // the closure — a dropped (12,16) ground jar
-                    // could alias, accepted). Conformance-scoped:
-                    // native manifestations keep golden-pinned
-                    // f136/f140 until a re-pinned pass adopts the
-                    // law there.
-                    if self.strict_retail {
-                        let own = self.g.ent[i].f144;
+                    // manifestation_tick. Live under BOTH cost arms
+                    // since the `castle_recast_cost` patch landed:
+                    // the stamp is retail's own state evolution —
+                    // only the READ (spell_cast_cost) forks, so
+                    // hashes and snapshots stay arm-independent
+                    // while a castle stands. Import worlds join on
+                    // the f144 owner lane (0 = the human on BOTH
+                    // under import; retail's real binding, wizext
+                    // +708, is outside the closure — a dropped
+                    // (12,16) ground jar could alias, accepted);
+                    // native worlds bind exactly: the human castle
+                    // (id24) stamps `player.owned[16]`. Rival casts
+                    // never read a stamp (rival-immune, the
+                    // affordability lanes are separate).
+                    {
                         let lvl = self.g.ent[i].f26;
                         let cap = crate::engine::features::Gen::CASTLE_CAP[(lvl as usize).min(7)];
-                        for j in 1..self.g.ent.len() {
-                            let c = &self.g.ent[j];
-                            if c.class64 == 12
-                                && c.model65 == 16
-                                && c.f144 == own
-                                && c.flags & 0x400 == 0
-                            {
-                                self.g.ent[j].f136 = cap;
-                                self.g.ent[j].f140 = cap / 101;
-                                break;
+                        if self.strict_retail {
+                            let own = self.g.ent[i].f144;
+                            for j in 1..self.g.ent.len() {
+                                let c = &self.g.ent[j];
+                                if c.class64 == 12
+                                    && c.model65 == 16
+                                    && c.f144 == own
+                                    && c.flags & 0x400 == 0
+                                {
+                                    self.g.ent[j].f136 = cap;
+                                    self.g.ent[j].f140 = cap / 101;
+                                    break;
+                                }
+                            }
+                        } else if self.g.ent[i].id24 == PLAYER_TARGET {
+                            let m = self.player.owned[16] as usize;
+                            if m != 0 && m < self.g.ent.len() {
+                                let c = &self.g.ent[m];
+                                if c.class64 == 12 && c.flags & 0x400 == 0 {
+                                    self.g.ent[m].f136 = cap;
+                                    self.g.ent[m].f140 = cap / 101;
+                                }
                             }
                         }
                     }
-                    self.g.castle_tick(i)
+                    self.g.castle_tick(i, self.patches)
                 }
                 3 if self.g.ent[i].model65 == 3 => self.g.balloon_tick(i),
                 // MC2 rival (AI) wizards — the MC2-native brain
@@ -3626,6 +3654,17 @@ impl World {
             e.flags &= !8; // never a damage victim
             e.f26 = 0;
             e.f44 = f44;
+            // The spell-16 cost-cache seed (sub_3C060 → sub_3BF70
+            // :48026/:47996): +136 = the ctor price 1000, +140 =
+            // 1000/101 (the +50 count divisor — the HUD dot unit).
+            // Faithful field state either way; the retail arm of the
+            // `castle_recast_cost` patch READS this cache (and the
+            // castle tick's every-tick re-stamp), the patched arm
+            // live-derives and ignores it.
+            if spell.0 == 16 {
+                e.f136 = SPELLS[16].possess_mana as i32;
+                e.f140 = SPELLS[16].possess_mana as i32 / 101;
+            }
         }
         // The class-12 ctor sub_3BF70 (:47979-) gives EVERY jar sprite
         // type 77 + a 4x extent override; without it a death-scattered
@@ -3716,6 +3755,19 @@ impl World {
         self.prune_owned_jars = on;
     }
 
+    /// Install the retail-bug patch set (`gameplay · patches`). Safe
+    /// to re-apply live — every gated site reads the current value
+    /// per tick or per event. `strict_retail` still force-disables
+    /// the patched arms at the gated sites regardless of this set.
+    pub fn set_patches(&mut self, p: WorldPatches) {
+        self.patches = p;
+    }
+
+    /// The live patch set (the app's menu view reads it back).
+    pub fn patches(&self) -> WorldPatches {
+        self.patches
+    }
+
     /// Allocations dropped on pool exhaustion since the last call —
     /// the limit-removing register's telemetry (the app logs it; the
     /// sim itself fails open exactly like the original).
@@ -3784,6 +3836,7 @@ impl World {
             dev_spells,
             prune_owned_jars: _,
             strict_retail: _,
+            patches: _,
             prev_fire,
             accel_veto: _,
             pending_respawn: _,
@@ -3978,20 +4031,38 @@ impl World {
     /// to the capacity ladder at the OWN castle's current level on every
     /// init/level-up (sub_47C60/sub_47DD0), so the real cost climbs with
     /// the castle — and the HUD availability dots (sub_23D40 :27703)
-    /// divide the pool by this LIVE +136, not the static table. A fresh
-    /// castle (none built) keeps the ctor 1000. Every other spell's cost
-    /// is its static possess-mana. Shared by the cast gate and
-    /// [`World::loadout`] so the shown dots can never drift from what a
-    /// cast actually charges.
+    /// divide the pool by this LIVE +136, not the static table. Every
+    /// other spell's cost is its static possess-mana. Shared by the
+    /// cast gate and [`World::loadout`] so the shown dots can never
+    /// drift from what a cast actually charges.
+    ///
+    /// The `castle_recast_cost` patch forks the spell-16 READ:
+    /// - retail arm (default): the manifestation's +136 cache — which
+    ///   NO teardown ever re-stamps, so a homeless wizard keeps the
+    ///   last stamped ladder price (the player-certified FIRST-CASTLE
+    ///   LOCKOUT, DEVIATIONS.md).
+    /// - patched arm: live-law re-derive — housed → `CAP[level]`,
+    ///   homeless → the ctor 1000, so a fresh castle is always
+    ///   affordable after a loss.
     pub(crate) fn spell_cast_cost(&self, id: usize) -> u32 {
         if id >= SPELL_COUNT {
             return 1;
         }
         if id == 16 {
-            return self
-                .player_castle()
-                .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
-                .unwrap_or(SPELLS[16].possess_mana);
+            if self.patches.castle_recast_cost && !self.strict_retail {
+                return self
+                    .player_castle()
+                    .map(|c| Gen::CASTLE_CAP[self.g.ent[c].f26.clamp(0, 7) as usize] as u32)
+                    .unwrap_or(SPELLS[16].possess_mana);
+            }
+            let m = self.player.owned[16] as usize;
+            if m != 0 && m < self.g.ent.len() {
+                let e = &self.g.ent[m];
+                if e.class64 == 12 && e.flags & 0x400 == 0 && e.f136 > 0 {
+                    return e.f136 as u32;
+                }
+            }
+            return SPELLS[16].possess_mana;
         }
         self.spells()[id].possess_mana
     }
@@ -5243,15 +5314,15 @@ impl World {
             }
             return;
         }
-        // Jar ground-snap (deliberate deviation — DEVIATIONS.md
-        // "class12_tick jar ground-snap", player-ruled): retail's
-        // reshape walk re-snaps class 2 and kills class 5 only
-        // (:51729), so terrain shaped over/under a jar leaves it
+        // Jar ground-snap (patch option `jar_ground_snap` —
+        // DEVIATIONS.md "class12_tick jar ground-snap", player-ruled):
+        // retail's reshape walk re-snaps class 2 and kills class 5
+        // only (:51729), so terrain shaped over/under a jar leaves it
         // buried or hovering — on HW that makes authored jars
-        // unpickable (release-QA failure). The snap keeps every jar
-        // riding its ground in play; strict-retail replay (above)
-        // keeps retail's frozen-z law instead.
-        {
+        // unpickable (release-QA failure). The patched arm keeps every
+        // jar riding its ground; the retail arm (and strict-retail
+        // replay, which returned above) keeps the frozen-z law.
+        if self.patches.jar_ground_snap {
             let (x, y) = (self.g.ent[i].x, self.g.ent[i].y);
             let gz = self.g.ground_z(x, y) as i16;
             if self.g.ent[i].z != gz {
@@ -6103,6 +6174,7 @@ impl World {
             pmana: 0,
             pdead: false,
             strict: self.strict_retail,
+            patches: self.patches,
             mc2_turn: self.mc2_turn,
         };
         for _ in 0..1024 {
@@ -6322,6 +6394,7 @@ impl World {
             pmana: 0,
             pdead: false,
             strict: self.strict_retail,
+            patches: self.patches,
             mc2_turn: self.mc2_turn,
         };
         while self.g.ent[b].flags & 0x400 == 0 {
@@ -9880,6 +9953,10 @@ impl World {
             // Conformance-import mode, never true in a playable world
             // — a saved game has no business carrying it.
             strict_retail: _,
+            // Config-like: the app re-applies the live option set on
+            // resume; saving it would resurrect stale arms after a
+            // menu change.
+            patches: _,
             mc2_carpet_stall: _,
             mc2_carpet_slot: _,
             prev_fire,
@@ -10106,6 +10183,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
 
@@ -10175,6 +10253,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
 
@@ -10343,9 +10422,9 @@ mod tests {
         w.g.ent[h].f82 = 0x700;
 
         // A possession claim (ch1), then the live-building tick runs the
-        // genuine re-owner path.
+        // genuine re-owner path — under the `possessed_footprint` patch.
         w.g.ent[h].mail[1] = (0, crate::mc1::mobs::PLAYER_TARGET);
-        w.g.tick_building_live(h);
+        w.g.tick_building_live(h, crate::patches::WorldPatches::LEGACY);
 
         assert_eq!(
             w.g.ent[h].f144,
@@ -10359,6 +10438,26 @@ mod tests {
         assert_eq!(
             w.g.ent[h].f82, 0x700,
             "footprint y-extent must survive possession"
+        );
+
+        // The RETAIL arm lets sub_36FA0's flag-sprite stamp clobber the
+        // extents (the walled-in-defender collapse, DEVIATIONS.md).
+        let h2 = w.g.spawn_creator(45, 0x9000, 0x9000, 0).expect("house 2");
+        w.g.ent[h2].tick70 = 52;
+        w.g.ent[h2].act_life = 2000;
+        w.g.ent[h2].f144 = 0;
+        w.g.ent[h2].f80 = 0x700;
+        w.g.ent[h2].f82 = 0x700;
+        w.g.ent[h2].mail[1] = (0, crate::mc1::mobs::PLAYER_TARGET);
+        w.g.tick_building_live(h2, crate::patches::WorldPatches::RETAIL);
+        assert_eq!(
+            w.g.ent[h2].f144,
+            crate::mc1::mobs::PLAYER_TARGET,
+            "the retail-arm claim took too"
+        );
+        assert_ne!(
+            w.g.ent[h2].f80, 0x700,
+            "retail arm: the flag sprite's extent replaces the footprint"
         );
     }
 
@@ -10648,6 +10747,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         // Empty cone: the latch arms, no target is found.
@@ -10700,6 +10800,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         w.g.proj_tick(lob, &ctx);
@@ -10754,6 +10855,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         // Fly until impact (life is 21 ticks; the house overlap ends
@@ -10783,7 +10885,7 @@ mod tests {
             w.g.ent[h].mail[1].1, 0,
             "ch1 claim mail landed on the house"
         );
-        w.g.tick_building_live(h);
+        w.g.tick_building_live(h, crate::patches::WorldPatches::RETAIL);
         assert_eq!(
             w.g.ent[h].f144, rival_tag,
             "the dwelling is rival-possessed (accidental claim, retail-faithful)"
@@ -10858,6 +10960,7 @@ mod tests {
             pmana: 0,
             pdead: true, // keep the human out of the candidate set
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         let (cx, cy) = (0x8000u16, 0x8000u16);
@@ -10960,6 +11063,7 @@ mod tests {
             pmana: 0,
             pdead: true,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         let (cx, cy) = (0x8000u16, 0x8000u16);
@@ -11744,6 +11848,7 @@ mod tests {
                 pmana: 0,
                 pdead: false,
                 strict: false,
+                patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
             };
             w.g.proj_tick(bolt, &ctx);
@@ -11794,6 +11899,7 @@ mod tests {
                 pmana: 0,
                 pdead: false,
                 strict: false,
+                patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
             };
             w.g.proj_tick(bolt, &ctx);
@@ -12845,6 +12951,7 @@ mod tests {
     #[test]
     fn castle_total_death_demolishes_balloons_spilling_cargo() {
         let mut w = bare_creature_world(2);
+        w.set_patches(crate::patches::WorldPatches::LEGACY);
         w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
         let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
         let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
@@ -12889,6 +12996,74 @@ mod tests {
             w.loadout().mana_max >= 7_000 + WIZARD_BASE_MANA,
             "the census keeps the cargo: no destroy/rebuild leak"
         );
+    }
+
+    /// The `castle_recast_cost` patch, both arms (DEVIATIONS.md "the
+    /// castle-cost stale stamp / first-castle lockout"). While housed
+    /// the stamp and the live law agree (the castle tick re-stamps the
+    /// manifestation's +136 every tick, both arms); after castle death
+    /// retail's missing teardown re-stamp leaves the ladder price
+    /// cached — the player-certified FIRST-CASTLE LOCKOUT — while the
+    /// patched arm re-derives the ctor 1000.
+    #[test]
+    fn first_castle_lockout_stale_stamp_vs_live_law() {
+        let mut w = bare_creature_world(2);
+        w.g.move_relink(1, 30 << 8, 30 << 8, 3200);
+        let pose = PlayerPose::level(90 << 8, 90 << 8, 3400, 0);
+        w.set_dev_spells(true); // grants the book, incl. spell 16
+        let c = w.g.spawn_castle(140 << 8, 140 << 8).unwrap();
+        w.g.ent[c].id24 = PLAYER_TARGET;
+        w.g.ent[c].f144 = PLAYER_TARGET;
+        for _ in 0..80 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        let cap1 = crate::engine::features::Gen::CASTLE_CAP[1] as u32;
+        let m = w.player.owned[16] as usize;
+        assert_ne!(m, 0, "the dev grant materialized the manifestation");
+        assert_eq!(
+            w.g.ent[m].f136 as u32, cap1,
+            "the castle tick stamps the manifestation's +136 to CAP[level]"
+        );
+        assert_eq!(
+            w.spell_cast_cost(16),
+            cap1,
+            "housed: the stale stamp IS the live law (both arms agree)"
+        );
+
+        // Demolish: level 1 -> total destruction, castle-less.
+        w.tick(
+            pose,
+            PlayerCommand {
+                demolish: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..4 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(w.loadout().castle.is_none(), "the demolish razed it");
+
+        // Retail arm (the default): no teardown ever re-stamps — the
+        // homeless recast keeps the ladder price. The HUD dots
+        // (loadout) read the same word, so they show it too.
+        assert_eq!(
+            w.spell_cast_cost(16),
+            cap1,
+            "retail arm: the stale stamp prices the homeless recast"
+        );
+        assert_eq!(w.loadout().cost[16], cap1, "the HUD dots agree");
+
+        // Patched arm: live-law re-derive — homeless -> the ctor 1000.
+        w.set_patches(crate::patches::WorldPatches {
+            castle_recast_cost: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        assert_eq!(
+            w.spell_cast_cost(16),
+            SPELLS[16].possess_mana,
+            "patched arm: a fresh castle is always affordable"
+        );
+        assert_eq!(w.loadout().cost[16], SPELLS[16].possess_mana);
     }
 
     /// The dispatcher's over-quota cull (:56399-411): when the fleet
@@ -14817,6 +14992,7 @@ mod tests {
             par3: None,
         }];
         let mut w = World::new(planes, &things, 1, assets());
+        w.set_patches(crate::patches::WorldPatches::LEGACY);
         let away = PlayerPose::level(10 << 8, 10 << 8, 3260, 0);
         w.tick(away, PlayerCommand::default());
         let jar = (1..w.g.ent.len())
@@ -15260,6 +15436,7 @@ mod tests {
     #[test]
     fn a_settled_ball_tracks_the_ground_instead_of_freezing() {
         let mut w = flat_world();
+        w.set_patches(crate::patches::WorldPatches::LEGACY);
         let (bx, by) = ((112u16 << 8) + 128, (110u16 << 8) + 128);
         let gz = w.g.ground_z(bx, by) as i16;
         let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
@@ -15290,6 +15467,78 @@ mod tests {
         w.g.ent[b].z = raised + 500;
         w.tick(away(), PlayerCommand::default());
         assert_eq!(w.g.ent[b].z, raised + 500, "strict keeps the freeze");
+    }
+
+    /// The `map_wide_ball_rolling` patch: a settled ball far outside
+    /// the 24-tile awake radius is re-armed by the awake pass and
+    /// rolls downhill to rest; under the retail arm it freezes
+    /// wherever its 128-tick settle budget expired ("the mana runs
+    /// away when approached" law, mobs.rs :64352-61).
+    #[test]
+    fn map_wide_ball_rolling_rolls_distant_balls() {
+        let mut w = flat_world();
+        let (btx, bty) = (112u8, 110u8);
+        let (bx, by) = (((btx as u16) << 8) + 128, ((bty as u16) << 8) + 128);
+        let gz = w.g.ground_z(bx, by) as i16;
+        let b = w.g.spawn_mana_ball(bx, by, gz).unwrap();
+        // The settle budget drains far from the player; the ball
+        // freezes on the flat.
+        for _ in 0..140 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58 & 0xFF, 0, "the distant ball settled");
+        // A terrain edit builds a slope under it, falling toward +x
+        // onto the flat plain (the volcano/crater class of reshaping).
+        let base = w.g.t.height[crate::engine::features::tile(btx, bty)];
+        for dx in 0..8u8 {
+            for dy in 0..8u8 {
+                let t = crate::engine::features::tile(
+                    btx.wrapping_add(dx).wrapping_sub(3),
+                    bty.wrapping_add(dy).wrapping_sub(3),
+                );
+                w.g.t.height[t] = base + 6 * (7 - dx);
+            }
+        }
+        let frozen = (w.g.ent[b].x, w.g.ent[b].y);
+        // Retail arm: the frozen ball ignores the new slope forever.
+        for _ in 0..40 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            (w.g.ent[b].x, w.g.ent[b].y),
+            frozen,
+            "retail arm: a settled distant ball never moves again"
+        );
+        // Patched arm (live toggle): the awake pass re-arms it and the
+        // grounded roll walks it downhill to its resting place.
+        w.set_patches(crate::patches::WorldPatches {
+            map_wide_ball_rolling: true,
+            ..crate::patches::WorldPatches::RETAIL
+        });
+        for _ in 0..80 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[b].x > frozen.0,
+            "patched arm: the ball rolls DOWNHILL (+x): {} -> {}",
+            frozen.0,
+            w.g.ent[b].x
+        );
+        // The creature awake gate is untouched: the pass wakes BALLS
+        // only. (A distant sleeping creature stays asleep.)
+        let m =
+            w.g.spawn_creature(0, (30u16) << 8, (30u16) << 8, 3200)
+                .unwrap();
+        w.g.ent[m].f58 = 0;
+        w.g.ent[m].f59 = 0;
+        for _ in 0..20 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.ent[m].f58 & 0xFF,
+            0,
+            "map-wide rolling must NOT wake distant creatures"
+        );
     }
 
     #[test]
@@ -18507,6 +18756,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         w.g.area_write(fire, 0, 400, &ctx, false, false);
@@ -20258,6 +20508,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         for _ in 0..60 {
@@ -20335,6 +20586,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         let mut rmax = 0i16;
@@ -20381,6 +20633,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         w.g.mc2_fire_orb_tick(h, &ctx);
@@ -20903,6 +21156,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         // First homing tick: the steer target is the BOX CENTER.
@@ -21000,6 +21254,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         // First homing tick: the steer target is the player's BOX
@@ -21272,6 +21527,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         // A NON-owner claim springs the tier-0 trap (EF:26631-38).
@@ -21367,6 +21623,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
         let b =

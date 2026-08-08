@@ -2650,6 +2650,7 @@ mod tests {
             pmana: 0,
             pdead: false,
             strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         };
 
