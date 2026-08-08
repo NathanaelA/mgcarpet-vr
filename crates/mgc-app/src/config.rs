@@ -923,6 +923,17 @@ pub struct GameplayPatches {
     /// nothing ever arms the trigger, so a mine floats, expires and
     /// sinks without detonating on anyone.
     pub mc2_magic_mine: PatchArm,
+    /// MC2 mana dwellers share the wraith's proximity concealment:
+    /// they materialize only inside retail's own ~19-tile fog band —
+    /// a slant-distance sphere, so climbing out of the band conceals
+    /// too (player-ruled 2026-08-08: one shape for every concealed
+    /// entity). Their covert mana-stealing design leaned on retail's
+    /// very short draw distance; under the port's extended fog they
+    /// stand exposed map-wide — safe long-range meteor targets.
+    /// `retail` = always drawn (the authentic entity itself has no
+    /// fade); presentation-only, hash-silent (the sim never reads
+    /// it).
+    pub mc2_dweller_invisibility: PatchArm,
     /// The second win movie (`levelw2`) plays its own orphaned score
     /// table (bank 7 `win2`). Retail points both win movies at one
     /// script, so `levelw2` plays scored with the wrong bank.
@@ -943,6 +954,7 @@ impl Default for GameplayPatches {
             castle_death_balloons: PatchArm::Patched,
             mc2_downgrade_overflow: PatchArm::Patched,
             mc2_magic_mine: PatchArm::Patched,
+            mc2_dweller_invisibility: PatchArm::Patched,
             win2_movie_score: PatchArm::Patched,
         }
     }
@@ -962,6 +974,7 @@ impl GameplayPatches {
             castle_death_balloons: PatchArm::Retail,
             mc2_downgrade_overflow: PatchArm::Retail,
             mc2_magic_mine: PatchArm::Retail,
+            mc2_dweller_invisibility: PatchArm::Retail,
             win2_movie_score: PatchArm::Retail,
         }
     }
@@ -975,6 +988,9 @@ impl GameplayPatches {
         Self {
             castle_recast_cost: PatchArm::Patched,
             map_wide_ball_rolling: PatchArm::Retail,
+            // Did not exist pre-option (2026-08-08): dwellers drew
+            // plainly.
+            mc2_dweller_invisibility: PatchArm::Retail,
             ..Self::default()
         }
     }
@@ -1216,7 +1232,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 21;
+const DEFAULTS_VERSION: u64 = 22;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

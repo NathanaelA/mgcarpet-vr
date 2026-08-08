@@ -267,6 +267,7 @@ pub fn billboards_from_poses(
     sprite_dims: impl Fn(u16) -> Option<(u16, u16, u16)>,
     enhanced_fire: bool,
     enhanced_lightning: bool,
+    dweller_invisibility: bool,
 ) -> Vec<Billboard> {
     let mut out = Vec::new();
     for p in poses {
@@ -315,6 +316,18 @@ pub fn billboards_from_poses(
             // frame's pixel aspect exactly as retail does.
             world_h: p.sprite_h_units.map_or(s.world_h, |u| u / UNITS_PER_TILE),
             blend: p.blend,
+            // Retail proximity concealment (a 19..15-tile slant-
+            // distance sphere, retail's own fog band — see
+            // mgc_render::Billboard): the MC2 wraith (5,26)
+            // unconditionally — retail's short draw radius is what
+            // kept its hunting ghost unseen until close, and the
+            // port's extended fog had left it exposed map-wide —
+            // plus the mana dwellers (5,23) under the
+            // `mc2_dweller_invisibility` patch, whose covert design
+            // leaned on the same short fog.
+            conceal: game == GameId::Mc2
+                && p.class == 5
+                && (p.model == 26 || (p.model == 23 && dweller_invisibility)),
         });
     }
     out
@@ -1794,6 +1807,8 @@ pub fn ghost_billboard(
         frame: 0,
         world_h: s.world_h,
         blend: 2,
+        // An instrument, not a retail entity — never distance-hidden.
+        conceal: false,
     })
 }
 
@@ -1833,6 +1848,7 @@ fn push_billboard(
         frame: 0,
         world_h,
         blend: 0,
+        conceal: false,
     });
 }
 
@@ -2730,6 +2746,32 @@ mod tests {
         let any_dims = |_: u16| Some((32u16, 64u16, 0u16));
         let mc1 = resolve_pose_sprite(GameId::Mc1, 43, &any_dims).unwrap();
         assert_eq!(mc1.sprite_base, SPRITE_STATS[43].sprite_base);
+    }
+
+    /// Retail proximity concealment marking: the MC2 wraith (5,26)
+    /// carries it unconditionally (its retail concealment was the
+    /// short draw radius, not a flag), the mana dweller (5,23) only
+    /// under the `mc2_dweller_invisibility` patch, and nothing else —
+    /// MC1's (5,26) is a different creature and never concealed.
+    #[test]
+    fn conceal_marks_the_wraith_always_and_dwellers_under_the_patch() {
+        let dims = |id: u16| (id == 0x52).then_some((32u16, 64u16, 0x1200u16));
+        let poses = [
+            pose(5, 26, false, 43),
+            pose(5, 23, false, 43),
+            pose(5, 2, false, 43),
+        ];
+        let conceals = |patch: bool| {
+            billboards_from_poses(GameId::Mc2, &poses, dims, false, false, patch)
+                .iter()
+                .map(|b| b.conceal)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(conceals(false), [true, false, false]);
+        assert_eq!(conceals(true), [true, true, false]);
+        let any_dims = |_: u16| Some((32u16, 64u16, 0u16));
+        let mc1 = billboards_from_poses(GameId::Mc1, &poses, any_dims, false, false, true);
+        assert!(mc1.iter().all(|b| !b.conceal), "MC1 never conceals");
     }
 
     /// The rival tag chrome: MC2 resolves the retail bldgprmbuffer

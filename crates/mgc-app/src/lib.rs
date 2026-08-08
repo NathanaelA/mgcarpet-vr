@@ -1095,9 +1095,11 @@ fn load_level(
                 let poses = w.live_poses();
                 (
                     // Load-time set: no fire exists at level start, so
-                    // the enhanced-fire sprite suppression is moot here
-                    // (sync_world re-derives with the real flag).
-                    entities::billboards_from_poses(game_id, &poses, dims, false, false),
+                    // the enhanced-fire sprite suppression is moot here,
+                    // and the dweller-invisibility patch flag likewise
+                    // (sync_world re-derives with the real flags; the
+                    // wraith's unconditional concealment is in already).
+                    entities::billboards_from_poses(game_id, &poses, dims, false, false, false),
                     // No dwelling is claimed at load time, so the
                     // owned-buildings highlight is vacuously off here
                     // (and the blink phase starts low). Icon-swap
@@ -3817,6 +3819,7 @@ impl App {
             dims,
             enhanced_fire,
             enhanced_lightning,
+            self.cfg.gameplay.patches.mc2_dweller_invisibility.on(),
         );
         // The replay GHOST (④): the recorded pose as a translucent
         // wizard-carpet, riding beside the free-running sim — where
@@ -3983,6 +3986,7 @@ impl App {
                 dims,
                 enhanced_fire,
                 enhanced_lightning,
+                self.cfg.gameplay.patches.mc2_dweller_invisibility.on(),
             );
             if self.cfg.render.debug.health_bars {
                 bars = entities::health_bars_from_poses(level.game, &poses, dims);

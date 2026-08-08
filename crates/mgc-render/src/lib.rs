@@ -859,6 +859,28 @@ pub struct Billboard {
     /// modes 2/3 render as plain alpha 1/3 / 2/3, back-to-front with
     /// depth writes off (retail draws them inline in painter order).
     pub blend: u8,
+    /// RETAIL PROXIMITY CONCEALMENT: the sprite materializes only
+    /// inside retail's OWN fog band, independent of the configured
+    /// fog distance — alpha ramps 0→full across 19..15 tiles on
+    /// retail's fog-row law and the instance is dropped entirely
+    /// beyond it (`conceal_visibility`). Retail gets this for
+    /// free from its short draw radius: every sprite hard-culls at
+    /// 20 tiles (GRO:3498 `tileRenderCutOffDistance` = 5120²) with
+    /// fog saturated from 19 (GRO:3505-3511); the port's extended
+    /// fog would otherwise expose these entities map-wide. Carried by
+    /// the MC2 wraith (5,26) always, and dwellers (5,23) under the
+    /// `mc2_dweller_invisibility` patch.
+    ///
+    /// The volume is a SPHERE — slant (3D) distance, the port's own
+    /// fog metric, so climbing out of the band conceals too
+    /// (player-ruled 2026-08-08: one shape for every concealed
+    /// entity, no special cases). Retail's literal metric is
+    /// horizontal-only in both games (MC2 GRO:3498/1040, MC1 remc1
+    /// sub_main.cpp:36843/34456 — altitude enters only the screen
+    /// projection), but the shape was unobservable at retail flight
+    /// ceilings, and the fog this law stands in for is spherical
+    /// here.
+    pub conceal: bool,
 }
 
 /// 16 view sectors folded to 5 sprites (draw type 19, `byte_906E8`).
@@ -4350,6 +4372,22 @@ impl Renderer {
         self.billboard_mirror_bind_group = Some(mirror_bg);
     }
 
+    /// Visibility of a proximity-concealed sprite ([`Billboard::
+    /// conceal`]) at squared slant distance `d2` (tiles²): retail's
+    /// own fog-row ramp, `(FogEnd − d²) / FogThickness` clamped to
+    /// 0..1 (GRO:3505-3511), with retail's constants hardwired —
+    /// FogStart 3840² / FogEnd 4864² engine units at 256/tile, i.e.
+    /// full at ≤15 tiles, gone at ≥19. Retail's mode-2 ghost is
+    /// never fogged; its concealment is the backdrop saturating to
+    /// the fog color across this same band plus the hard sprite cull
+    /// at 20 tiles (GRO:3498) — the ramp is that compound, expressed
+    /// as alpha so it survives the port's extended fog distance.
+    fn conceal_visibility(d2: f32) -> f32 {
+        const START2: f32 = 15.0 * 15.0;
+        const END2: f32 = 19.0 * 19.0;
+        ((END2 - d2) / (END2 - START2)).clamp(0.0, 1.0)
+    }
+
     /// Resolve each billboard against the camera (rotation view,
     /// mirroring, wrap-nearest position) into instance data — the
     /// original's per-sprite draw dispatch (remc1 DrawSprite3D_2F170),
@@ -4419,19 +4457,29 @@ impl Renderer {
                 }
                 c + d
             };
+            let pos = [wrap(b.x, cam.x), b.y, wrap(b.z, cam.z)];
+            let mut alpha = match b.blend {
+                2 => 1.0 / 3.0,
+                3 => 2.0 / 3.0,
+                _ => 1.0,
+            };
+            if b.conceal {
+                let (dx, dy, dz) = (pos[0] - cam.x, pos[1] - cam.y, pos[2] - cam.z);
+                let vis = Self::conceal_visibility(dx * dx + dy * dy + dz * dz);
+                if vis <= 0.0 {
+                    continue;
+                }
+                alpha *= vis;
+            }
             let inst = BillboardInstance {
-                pos: [wrap(b.x, cam.x), b.y, wrap(b.z, cam.z)],
+                pos,
                 size: [world_w, b.world_h],
                 uv_pos: [frame.x as f32, frame.y as f32],
                 uv_size: [w, h],
                 flags: [mirror as u32, 32],
-                alpha: match b.blend {
-                    2 => 1.0 / 3.0,
-                    3 => 2.0 / 3.0,
-                    _ => 1.0,
-                },
+                alpha,
             };
-            if b.blend == 2 || b.blend == 3 {
+            if alpha < 1.0 {
                 translucent.push(inst);
             } else {
                 out.push(inst);
@@ -5837,6 +5885,20 @@ fn camera_matrix(cam: &CameraView, aspect: f32) -> [[f32; 4]; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The retail proximity-concealment ramp: full inside FogStart
+    /// (15 tiles), gone at FogEnd (19 tiles), retail's linear-in-d²
+    /// fog-row law between (GRO:3505-3511 at 256 units/tile).
+    #[test]
+    fn conceal_visibility_runs_retails_fog_band() {
+        assert_eq!(Renderer::conceal_visibility(0.0), 1.0);
+        assert_eq!(Renderer::conceal_visibility(15.0 * 15.0), 1.0);
+        assert_eq!(Renderer::conceal_visibility(19.0 * 19.0), 0.0);
+        assert_eq!(Renderer::conceal_visibility(25.0 * 25.0), 0.0);
+        // Midband: d² halfway between 15² and 19² → exactly half.
+        let mid = (15.0 * 15.0 + 19.0 * 19.0) / 2.0;
+        assert!((Renderer::conceal_visibility(mid) - 0.5).abs() < 1e-6);
+    }
 
     /// world_to_screen: a point dead ahead lands at screen center; a
     /// point behind the camera is rejected; the world wrap picks the

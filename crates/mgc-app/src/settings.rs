@@ -1896,6 +1896,33 @@ pub fn registry() -> Vec<Spec> {
         Spec {
             domain: Gameplay,
             group: "gameplay · patches",
+            label: "mc2_dweller_invisibility",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.mc2_dweller_invisibility",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.mc2_dweller_invisibility.on(),
+                faithful: false,
+            },
+            desc: "MC2 mana dwellers fade into view only up close, like the \
+                   zombie. Their sneaky mana stealing relied on retail's very \
+                   short view range; with the port's long view they stand \
+                   exposed to safe long-range meteors.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.mc2_dweller_invisibility =
+                        crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "Dwellers are plainly visible at any range, as retail draws them.",
+                    "Dwellers materialize up close, restoring their stealth (default).",
+                ],
+            },
+        },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
             label: "win2_movie_score",
             class: Patch,
             key: None,
@@ -2120,7 +2147,7 @@ mod tests {
         assert_eq!(verdict, Fidelity::Faithful);
         // The default-on retail patches count apart and never flip
         // the verdict (castle_recast_cost ships on its retail arm).
-        assert_eq!(patches, 9, "nine of the ten patches ship on");
+        assert_eq!(patches, 10, "ten of the eleven patches ship on");
     }
 
     #[test]
