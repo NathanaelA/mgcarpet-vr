@@ -7331,3 +7331,69 @@ both games (needs a re-record).
 All 7 suites stayed green through every change (7,108 fixtures, 0
 regressions); pose-only horizons unmoved (mc1l0 567, mc2l3 1,156);
 `--replay-check` re-certified identical on mc1l0/mc2l3/mc1hwl0.
+
+## ⭐ THE BEE ALTITUDE LAW — mc1l32-bee-height intake + FIX LANDED 2026-08-08 (player-queued: "a very significant deviation from retail")
+
+**Take:** `recordings/mc1l32-bee-height.mgcr` (2026-08-08, window-gated
+`CARPET_REC.EXE`, format 1 — no terrain channel): 3,958 pairs, 0 torn,
+all fixture-grade, RNG (1,1) on every pair. Suite FROZEN AT INTAKE
+(pre-fix): `conformance/mc1l32-bee-height.json`, 168 fixtures
+(144 sampled conforming + 24 story exemplars), bundle
+`conformance/fixtures/mc1l32-bee-height-fixtures.mgcr`.
+
+**THE FINDING — port bees never climbed.** Pre-fix headline: (5,2) z
+= 3,133 rows / 2,396 pairs, single-tick signature retail +24/tick
+climbing vs port 0/−8 (diff 32, sign-flipped when retail bobs at its
+hover). Retail's law is NOT a pitch and NOT in the shared chase: the
+m2 CHASE wrapper `sub_1B3C0` (:22349-54) steps z DIRECTLY by
+`sign(z − target.z) · row.v_14` (row 14 v_14 = −32) BEFORE `sub_1A120`
+— unvalidated target read (f146==0 reads slot 0, dead targets still
+steer), and the mover's alt clamp then fights it: net +24/tick
+climbing in-band, net 0 above ground+v_10 (hard ceiling at
+ground+1792), and an asymmetric 4-tick bob (+24/−40 legs) about the
+victim's altitude. Cross-verified byte-identical in remc1hw:20906-12.
+The mover itself is pitch-0 for creatures (all four :21224-88 legs) —
+the port's `move_probe` pitch-0 is CORRECT; only the wrapper nudge was
+missing. FIXED in `bee_chase` (mc1/mobs.rs). The same session landed
+retail's ACQUISITION LUNGE ARM: every non-chase m2 handler
+(sub_1B350 :22319 / sub_1B370 :22327-31 incl. sound 13 / sub_1B4C0
+:22374-75) arms +26 = 1 on promotion to CHASE, so the FIRST chase tick
+fires the 3x lunge (the port had only the ctor's slot%100 seed + the
+post-sting re-arm). And the m3 SPAWN GUARD: retail guards multipart
+spawns on 16 free slots for m0 (:44586) and m6 (:45028) ONLY — m3's
+ctor sub_384B0 has no guard (straight to NewEvent; HW sibling agrees)
+— the port's blanket guard is now m0/m6-only.
+
+**Receipts.** Bee family 3,186 → 110 rows (z 3,133 → 57, −98%);
+conforming pairs 1,433 → 1,647. Suite: t=951 exemplar FIXED+promoted
+(regression guard), t=981/991/1054 drifted down to their (9,0)
+co-atoms, 0 regressions; all 7 prior suites green (7,108 fixtures,
+0 regressions). Pins: `bee_climbs_to_meet_an_elevated_victim` (climb +
+band-top ceiling) and `bee_arms_the_lunge_the_tick_it_acquires_a_target`
+(stale-77 overwrite + first-tick 3x), both revert-checked. L005
+GOLDEN C..E + OBSERVABLE C..E re-pinned, attributed by toggling each
+piece: the arm fires in the C ambush window (sound 13 is hash-visible
+via the sounds vec), the z-nudge moves D/E, the m3 guard moves nothing
+there. fmt clean, workspace green.
+
+**Residuals on the take (open):**
+- (5,2) z long tail: 57 rows, ±32 on scattered ticks — suspect the
+  PLAYER-z read phase at altitude-crossing ticks (retail reads the
+  pool wizard entity; the pin feeds ctx.pz at n1) + a few
+  floor-snap/tile-edge rows (51/8/24 diffs). Not worth a lane until
+  the (9,0) family is read.
+- (5,3) SECOND-WORM family: 10,555 rows t=3028-3939 across 68 slots
+  (4 heads + 64 segments, the end-of-take wall scene) — full-motion
+  per-tick divergence, NOT the bee law (m3 chases via the shared
+  handlers with no wrapper) and NOT the spawn guard (single-tick
+  pairs init from retail state). Needs its own dig: suspect the
+  segment-follow path (sub_19550 — the one creature mover that DOES
+  feed pitch/+32 into sub_41EC0).
+- (9,0) 3,595 rows (flags 4-vs-1028 = port sets 0x400, full motion) +
+  (10,0) z 1,355 rows: same ±32 shape — likely knock-on of creature
+  launch z (e.z + f84), re-measure after the (5,3) dig.
+- (5,9) m9 life 1000-vs-600 + z lanes; (5,4) militia heading
+  (160 rows, 3 slots); class-12 ecology churn (retail respawns
+  statics, port doesn't — known l32 lane); (10,39/41) balloon
+  z-resnap + flags 0x20000000 (known family); wizard hand equips
+  (capture, input-recon ±1).

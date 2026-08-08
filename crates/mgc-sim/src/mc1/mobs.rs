@@ -1142,9 +1142,41 @@ impl Gen {
                 self.ent[i].f126 = 3 * self.ent[i].f128;
             }
         }
+        // The vertical aim (:22349-54): a DIRECT z step of |v_14|
+        // toward the target's altitude, BEFORE the shared chase — so
+        // it lands even on ticks whose damage prologue bails, and the
+        // target read has no validity test (f146 == 0 reads the
+        // scratch slot; a dead target still steers). The mover's alt
+        // clamp then fights it: net +24/tick climbing in-band, a hard
+        // ceiling at ground + v_10, and the short bob cycle about the
+        // victim's altitude once level.
+        let tgt = self.ent[i].f146;
+        let tz = if tgt == PLAYER_TARGET {
+            ctx.pz
+        } else {
+            self.ent.get(tgt as usize).map_or(0, |e| e.z)
+        };
+        let d = self.ent[i].z as i32 - tz as i32;
+        let sign = i32::from(d > 0) - i32::from(d < 0);
+        let v14 = BEHAVIOR[self.ent[i].row156 as usize].v_14 as i32;
+        self.ent[i].z = self.ent[i].z.wrapping_add((sign * v14) as i16);
         self.mob_chase(i, base, ctx);
         if self.ent[i].tick70 != base + 2 {
             self.ent[i].f126 = self.ent[i].f128;
+        }
+    }
+
+    /// m2's promotion arm (sub_1B350 :22319 / sub_1B370 :22327-31 /
+    /// sub_1B4C0 :22374): the tick a non-chase handler promotes the
+    /// bee to CHASE, +26 arms to 1 — the next bee_chase tick expires
+    /// it into the 3x acquisition lunge. Only the WANDER promotion
+    /// buzzes (sound 13); idle and pack arm silently.
+    fn m2_lunge_arm(&mut self, i: usize, base: u8, buzz: bool) {
+        if self.ent[i].tick70 == base + 2 {
+            if buzz {
+                self.snd(13, i);
+            }
+            self.ent[i].f26 = 1;
         }
     }
 
@@ -2995,6 +3027,12 @@ impl Gen {
             (11, 0) => self.genie_idle(i, base),
             (12, 0) => self.m12_build(i),
             (13 | 14 | 15, 0) => {}
+            // m2's idle wrapper sub_1B350 (:22316): shared idle, then
+            // the acquisition-lunge arm.
+            (2, 0) => {
+                self.mob_idle(i, base);
+                self.m2_lunge_arm(i, base, false);
+            }
             (_, 0) => self.mob_idle(i, base),
 
             // -- wanders --
@@ -3025,6 +3063,12 @@ impl Gen {
             // stays peaceful until a village marks the wizard); m16
             // layers the house hunt on top of the shared scans
             // (sub_20710 :26033) when it is still wandering afterwards.
+            // m2's wander wrapper sub_1B370 (:22324-32): the shared
+            // scan, and the promotion tick buzzes AND arms the lunge.
+            (2, 1) => {
+                self.mob_wander(i, base, ctx);
+                self.m2_lunge_arm(i, base, true);
+            }
             (_, 1) => {
                 self.mob_wander(i, base, ctx);
                 if model == 16 && self.ent[i].tick70 == base + 1 {
@@ -3063,6 +3107,11 @@ impl Gen {
             // slots stay parked (unreferenced in the trace).
             (12, 3) => self.m12_seek(i),
             (13, 3) | (14, 3) => {}
+            // m2's pack wrapper sub_1B4C0 (:22371-76): silent arm.
+            (2, 3) => {
+                self.mob_pack(i, base);
+                self.m2_lunge_arm(i, base, false);
+            }
             (_, 3) => self.mob_pack(i, base),
 
             _ => unreachable!(),
@@ -3074,8 +3123,13 @@ impl Gen {
     /// no draws of their own) at state 120, chained via +52 (toward
     /// head) / +54 (toward tail).
     fn spawn_worm(&mut self, model: u16, x: u16, y: u16, z: i16) -> Option<usize> {
-        // :44586: all three guard on 16 free pool slots.
-        if self.free.len() < 16 {
+        // :44586 (m0) / :45028 (m6): guard on 16 free pool slots.
+        // m3's ctor sub_384B0 has NO guard (:44815 goes straight to
+        // NewEvent; the HW sibling agrees) — under pool pressure
+        // retail raises an m3 head with a partial chain where a
+        // blanket-guarded port raised nothing, shifting every later
+        // slot allocation.
+        if model != 3 && self.free.len() < 16 {
             return None;
         }
         let (state, max_speed, row, head_type): (u8, i16, u8, u16) = match model {

@@ -13609,6 +13609,70 @@ mod tests {
     }
 
     #[test]
+    fn bee_climbs_to_meet_an_elevated_victim() {
+        // sub_1B3C0 (:22349-54): CHASE steps z by |v_14| toward the
+        // victim's altitude every tick, and the mover's in-band clamp
+        // (25% of v_14) nets +24/tick — retail bees RISE to an
+        // elevated wizard instead of buzzing at the ground. The band
+        // top (ground + v_10) stays the hard ceiling.
+        let mut w = bare_creature_world(2);
+        w.set_invincible(true);
+        let b = find_slot(&w, 5, 2);
+        // 1500 above ground: inside the bee band (row 14 v_10 = 1792).
+        let perch = PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3200 + 1500, 0);
+        let mut peak = i16::MIN;
+        for _ in 0..3000 {
+            w.tick(perch, PlayerCommand::default());
+            peak = peak.max(w.g.ent[b].z);
+        }
+        assert!(
+            peak >= 4600,
+            "the bee climbs to the perched wizard (peak z {peak}, ground 3200)"
+        );
+        // Above the band the clamp's full v_14 cancels the nudge: a
+        // wizard parked over the ceiling is met AT the ceiling.
+        let sky = PlayerPose::level((112 << 8) + 128, (116 << 8) + 128, 3200 + 2400, 0);
+        let mut peak2 = i16::MIN;
+        for _ in 0..2000 {
+            w.tick(sky, PlayerCommand::default());
+            peak2 = peak2.max(w.g.ent[b].z);
+        }
+        assert!(
+            peak2 <= 3200 + 1792 + 32,
+            "the band top ground+v_10 stays the hard ceiling (peak z {peak2})"
+        );
+    }
+
+    #[test]
+    fn bee_arms_the_lunge_the_tick_it_acquires_a_target() {
+        // sub_1B350 (:22319) / sub_1B370 (:22327-31) / sub_1B4C0
+        // (:22374-75): every non-chase m2 handler arms +26 = 1 on the
+        // promotion to CHASE, so the FIRST chase tick expires it into
+        // the 3x acquisition lunge — not a stale ctor countdown.
+        let mut w = bare_creature_world(2);
+        w.set_invincible(true);
+        let b = find_slot(&w, 5, 2);
+        w.g.ent[b].f26 = 77; // a stale countdown the arm must overwrite
+        let mut acquired = false;
+        for _ in 0..3000 {
+            w.tick(firing_line(), PlayerCommand::default());
+            if w.g.ent[b].tick70 == 14 {
+                acquired = true;
+                break;
+            }
+        }
+        assert!(acquired, "the bee acquires the wizard");
+        assert_eq!(w.g.ent[b].f26, 1, "promotion arms the lunge cooldown");
+        let max = w.g.ent[b].f128;
+        w.tick(firing_line(), PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[b].f126,
+            3 * max,
+            "the first chase tick fires the acquisition lunge"
+        );
+    }
+
+    #[test]
     fn genie_blinks_ambushes_and_steals_mana() {
         // sub_1DFE0's mana hunt (:24523-46, no range gate) → the
         // sub_1E770 ambush blink → the blink cycle → chase seekers →

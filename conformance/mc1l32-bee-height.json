@@ -1,0 +1,801 @@
+{
+ "recording": "fixtures/mc1l32-bee-height-fixtures.mgcr",
+ "input_delay": 0,
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 0,
+   "status": "conforming"
+  },
+  {
+   "t": 10,
+   "status": "conforming"
+  },
+  {
+   "t": 20,
+   "status": "conforming"
+  },
+  {
+   "t": 30,
+   "status": "conforming"
+  },
+  {
+   "t": 40,
+   "status": "conforming"
+  },
+  {
+   "t": 50,
+   "status": "conforming"
+  },
+  {
+   "t": 60,
+   "status": "conforming"
+  },
+  {
+   "t": 70,
+   "status": "conforming"
+  },
+  {
+   "t": 80,
+   "status": "conforming"
+  },
+  {
+   "t": 90,
+   "status": "conforming"
+  },
+  {
+   "t": 100,
+   "status": "conforming"
+  },
+  {
+   "t": 110,
+   "status": "conforming"
+  },
+  {
+   "t": 120,
+   "status": "conforming"
+  },
+  {
+   "t": 124,
+   "status": "open",
+   "sig": "93d5bf3ba92e36db",
+   "atoms": [
+    "missing:12,3"
+   ],
+   "note": "class-12 ecology churn: retail respawns statics, port does not (l32 known lane, castle-latch session leads)"
+  },
+  {
+   "t": 129,
+   "status": "open",
+   "sig": "93cbbd3ba925def0",
+   "atoms": [
+    "missing:12,0"
+   ],
+   "note": "class-12 ecology churn (see t=124)"
+  },
+  {
+   "t": 132,
+   "status": "conforming"
+  },
+  {
+   "t": 142,
+   "status": "conforming"
+  },
+  {
+   "t": 152,
+   "status": "conforming"
+  },
+  {
+   "t": 162,
+   "status": "conforming"
+  },
+  {
+   "t": 169,
+   "status": "capture",
+   "sig": "a1a1758349b40a12",
+   "atoms": [
+    "field:wizard0.hand_right"
+   ],
+   "note": "equip/cast input reconstruction (RECORDING.md raw-input +/-1 caveat): wizard0.hand_right"
+  },
+  {
+   "t": 171,
+   "status": "open",
+   "sig": "97af2825376ed0d9",
+   "atoms": [
+    "extra:9,1"
+   ],
+   "note": "(9,1) projectile lane: extra-in-port"
+  },
+  {
+   "t": 174,
+   "status": "conforming"
+  },
+  {
+   "t": 185,
+   "status": "conforming"
+  },
+  {
+   "t": 194,
+   "status": "open",
+   "sig": "58362133705f10c0",
+   "atoms": [
+    "field:10,12:flags"
+   ],
+   "note": "(10,12) flags lane"
+  },
+  {
+   "t": 198,
+   "status": "open",
+   "sig": "4d1985660553dfb4",
+   "atoms": [
+    "field:9,1:flags"
+   ],
+   "note": "(9,1) flags lane"
+  },
+  {
+   "t": 207,
+   "status": "open",
+   "sig": "c82601d277fa8a1d",
+   "atoms": [
+    "field:10,39:flags"
+   ],
+   "note": "(10,39) balloon flags bit 0x20000000 (l32 known balloon family)"
+  },
+  {
+   "t": 208,
+   "status": "conforming"
+  },
+  {
+   "t": 219,
+   "status": "open",
+   "sig": "787cee3cf7efead5",
+   "atoms": [
+    "field:10,12:flags",
+    "field:9,1:flags"
+   ],
+   "note": "(10,12)+(9,1) flags lane"
+  },
+  {
+   "t": 230,
+   "status": "open",
+   "sig": "75c3f97e45cb9f4c",
+   "atoms": [
+    "field:10,39:flags",
+    "field:9,1:flags"
+   ],
+   "note": "(10,39) balloon flags + (9,1) flags"
+  },
+  {
+   "t": 236,
+   "status": "conforming"
+  },
+  {
+   "t": 258,
+   "status": "conforming"
+  },
+  {
+   "t": 277,
+   "status": "conforming"
+  },
+  {
+   "t": 298,
+   "status": "conforming"
+  },
+  {
+   "t": 316,
+   "status": "conforming"
+  },
+  {
+   "t": 334,
+   "status": "conforming"
+  },
+  {
+   "t": 346,
+   "status": "conforming"
+  },
+  {
+   "t": 356,
+   "status": "conforming"
+  },
+  {
+   "t": 366,
+   "status": "conforming"
+  },
+  {
+   "t": 376,
+   "status": "conforming"
+  },
+  {
+   "t": 386,
+   "status": "conforming"
+  },
+  {
+   "t": 396,
+   "status": "conforming"
+  },
+  {
+   "t": 406,
+   "status": "conforming"
+  },
+  {
+   "t": 416,
+   "status": "conforming"
+  },
+  {
+   "t": 418,
+   "status": "open",
+   "sig": "516247606ff62f95",
+   "atoms": [
+    "missing:12,16"
+   ],
+   "note": "class-12 ecology churn (see t=124)"
+  },
+  {
+   "t": 427,
+   "status": "conforming"
+  },
+  {
+   "t": 437,
+   "status": "conforming"
+  },
+  {
+   "t": 447,
+   "status": "conforming"
+  },
+  {
+   "t": 457,
+   "status": "conforming"
+  },
+  {
+   "t": 467,
+   "status": "conforming"
+  },
+  {
+   "t": 477,
+   "status": "conforming"
+  },
+  {
+   "t": 487,
+   "status": "conforming"
+  },
+  {
+   "t": 497,
+   "status": "conforming"
+  },
+  {
+   "t": 507,
+   "status": "conforming"
+  },
+  {
+   "t": 517,
+   "status": "conforming"
+  },
+  {
+   "t": 527,
+   "status": "conforming"
+  },
+  {
+   "t": 537,
+   "status": "conforming"
+  },
+  {
+   "t": 547,
+   "status": "conforming"
+  },
+  {
+   "t": 557,
+   "status": "conforming"
+  },
+  {
+   "t": 567,
+   "status": "conforming"
+  },
+  {
+   "t": 577,
+   "status": "conforming"
+  },
+  {
+   "t": 587,
+   "status": "conforming"
+  },
+  {
+   "t": 597,
+   "status": "conforming"
+  },
+  {
+   "t": 607,
+   "status": "conforming"
+  },
+  {
+   "t": 617,
+   "status": "conforming"
+  },
+  {
+   "t": 627,
+   "status": "conforming"
+  },
+  {
+   "t": 637,
+   "status": "conforming"
+  },
+  {
+   "t": 647,
+   "status": "conforming"
+  },
+  {
+   "t": 657,
+   "status": "conforming"
+  },
+  {
+   "t": 667,
+   "status": "conforming"
+  },
+  {
+   "t": 677,
+   "status": "conforming"
+  },
+  {
+   "t": 687,
+   "status": "conforming"
+  },
+  {
+   "t": 697,
+   "status": "conforming"
+  },
+  {
+   "t": 707,
+   "status": "conforming"
+  },
+  {
+   "t": 717,
+   "status": "conforming"
+  },
+  {
+   "t": 727,
+   "status": "conforming"
+  },
+  {
+   "t": 737,
+   "status": "conforming"
+  },
+  {
+   "t": 747,
+   "status": "conforming"
+  },
+  {
+   "t": 757,
+   "status": "conforming"
+  },
+  {
+   "t": 767,
+   "status": "conforming"
+  },
+  {
+   "t": 777,
+   "status": "conforming"
+  },
+  {
+   "t": 787,
+   "status": "conforming"
+  },
+  {
+   "t": 797,
+   "status": "conforming"
+  },
+  {
+   "t": 807,
+   "status": "conforming"
+  },
+  {
+   "t": 817,
+   "status": "conforming"
+  },
+  {
+   "t": 827,
+   "status": "conforming"
+  },
+  {
+   "t": 837,
+   "status": "conforming"
+  },
+  {
+   "t": 847,
+   "status": "conforming"
+  },
+  {
+   "t": 857,
+   "status": "conforming"
+  },
+  {
+   "t": 867,
+   "status": "conforming"
+  },
+  {
+   "t": 868,
+   "status": "capture",
+   "sig": "91c5d9b7855c33bf",
+   "atoms": [
+    "field:wizard0.hand_left"
+   ],
+   "note": "equip/cast input reconstruction: wizard0.hand_left"
+  },
+  {
+   "t": 870,
+   "status": "open",
+   "sig": "97ac2225376c90d0",
+   "atoms": [
+    "extra:9,0"
+   ],
+   "note": "(9,0) extra-in-port"
+  },
+  {
+   "t": 879,
+   "status": "conforming"
+  },
+  {
+   "t": 889,
+   "status": "conforming"
+  },
+  {
+   "t": 899,
+   "status": "conforming"
+  },
+  {
+   "t": 909,
+   "status": "conforming"
+  },
+  {
+   "t": 919,
+   "status": "conforming"
+  },
+  {
+   "t": 929,
+   "status": "conforming"
+  },
+  {
+   "t": 939,
+   "status": "conforming"
+  },
+  {
+   "t": 949,
+   "status": "conforming"
+  },
+  {
+   "t": 951,
+   "status": "conforming",
+   "note": "BEE Z-LAW regression guard - was the take's story: retail sub_1B3C0 z-nudge sign(z-target.z)*v_14, FIXED 2026-08-08 (bee_chase vertical aim + promotion lunge-arm)"
+  },
+  {
+   "t": 981,
+   "status": "open",
+   "sig": "21adf41ed5f4ae31",
+   "atoms": [
+    "field:9,0:flags"
+   ],
+   "note": "bee z-law FIXED; residual: (9,0) flags"
+  },
+  {
+   "t": 991,
+   "status": "open",
+   "sig": "1e281710dbe509a2",
+   "atoms": [
+    "field:9,0:pitch"
+   ],
+   "note": "bee z-law FIXED; residual: (9,0) pitch"
+  },
+  {
+   "t": 1054,
+   "status": "open",
+   "sig": "97ac2225376c90d0",
+   "atoms": [
+    "extra:9,0"
+   ],
+   "note": "bee z-law FIXED; residual: (9,0) extra"
+  },
+  {
+   "t": 1181,
+   "status": "open",
+   "sig": "93bf6fd645589cee",
+   "atoms": [
+    "field:5,2:speed",
+    "field:5,2:z"
+   ],
+   "note": "bee z-law (see t=951) + bee speed (lunge-arm lead)"
+  },
+  {
+   "t": 1381,
+   "status": "conforming"
+  },
+  {
+   "t": 1392,
+   "status": "open",
+   "sig": "21adf41ed5f4ae31",
+   "atoms": [
+    "field:9,0:flags"
+   ],
+   "note": "(9,0) flags lane"
+  },
+  {
+   "t": 1394,
+   "status": "conforming"
+  },
+  {
+   "t": 1406,
+   "status": "conforming"
+  },
+  {
+   "t": 1418,
+   "status": "conforming"
+  },
+  {
+   "t": 1429,
+   "status": "conforming"
+  },
+  {
+   "t": 1442,
+   "status": "conforming"
+  },
+  {
+   "t": 1460,
+   "status": "conforming"
+  },
+  {
+   "t": 1482,
+   "status": "conforming"
+  },
+  {
+   "t": 1494,
+   "status": "conforming"
+  },
+  {
+   "t": 1507,
+   "status": "conforming"
+  },
+  {
+   "t": 1522,
+   "status": "conforming"
+  },
+  {
+   "t": 1536,
+   "status": "conforming"
+  },
+  {
+   "t": 1552,
+   "status": "conforming"
+  },
+  {
+   "t": 1562,
+   "status": "conforming"
+  },
+  {
+   "t": 1572,
+   "status": "conforming"
+  },
+  {
+   "t": 1582,
+   "status": "conforming"
+  },
+  {
+   "t": 1587,
+   "status": "open",
+   "sig": "93d2c13ba92c046a",
+   "atoms": [
+    "missing:12,2"
+   ],
+   "note": "class-12 ecology churn (see t=124)"
+  },
+  {
+   "t": 1593,
+   "status": "conforming"
+  },
+  {
+   "t": 1603,
+   "status": "conforming"
+  },
+  {
+   "t": 1613,
+   "status": "conforming"
+  },
+  {
+   "t": 1628,
+   "status": "conforming"
+  },
+  {
+   "t": 1644,
+   "status": "conforming"
+  },
+  {
+   "t": 1663,
+   "status": "conforming"
+  },
+  {
+   "t": 1680,
+   "status": "conforming"
+  },
+  {
+   "t": 1692,
+   "status": "conforming"
+  },
+  {
+   "t": 1702,
+   "status": "conforming"
+  },
+  {
+   "t": 1712,
+   "status": "conforming"
+  },
+  {
+   "t": 1722,
+   "status": "conforming"
+  },
+  {
+   "t": 1732,
+   "status": "conforming"
+  },
+  {
+   "t": 1742,
+   "status": "conforming"
+  },
+  {
+   "t": 1752,
+   "status": "conforming"
+  },
+  {
+   "t": 1762,
+   "status": "conforming"
+  },
+  {
+   "t": 1772,
+   "status": "conforming"
+  },
+  {
+   "t": 1784,
+   "status": "conforming"
+  },
+  {
+   "t": 1794,
+   "status": "conforming"
+  },
+  {
+   "t": 1804,
+   "status": "conforming"
+  },
+  {
+   "t": 1814,
+   "status": "conforming"
+  },
+  {
+   "t": 1824,
+   "status": "conforming"
+  },
+  {
+   "t": 1834,
+   "status": "conforming"
+  },
+  {
+   "t": 1844,
+   "status": "conforming"
+  },
+  {
+   "t": 1854,
+   "status": "conforming"
+  },
+  {
+   "t": 1864,
+   "status": "conforming"
+  },
+  {
+   "t": 1874,
+   "status": "conforming"
+  },
+  {
+   "t": 1884,
+   "status": "conforming"
+  },
+  {
+   "t": 1894,
+   "status": "conforming"
+  },
+  {
+   "t": 1904,
+   "status": "conforming"
+  },
+  {
+   "t": 1914,
+   "status": "conforming"
+  },
+  {
+   "t": 1924,
+   "status": "conforming"
+  },
+  {
+   "t": 1934,
+   "status": "conforming"
+  },
+  {
+   "t": 1944,
+   "status": "conforming"
+  },
+  {
+   "t": 1954,
+   "status": "conforming"
+  },
+  {
+   "t": 1964,
+   "status": "conforming"
+  },
+  {
+   "t": 1974,
+   "status": "conforming"
+  },
+  {
+   "t": 1984,
+   "status": "conforming"
+  },
+  {
+   "t": 1994,
+   "status": "conforming"
+  },
+  {
+   "t": 2004,
+   "status": "conforming"
+  },
+  {
+   "t": 2015,
+   "status": "conforming"
+  },
+  {
+   "t": 2025,
+   "status": "conforming"
+  },
+  {
+   "t": 2032,
+   "status": "open",
+   "sig": "7b9862364d6219cb",
+   "atoms": [
+    "field:5,9:chase",
+    "field:5,9:life"
+   ],
+   "note": "(5,9) m9 life 1000-vs-600 + chase: regen/lane undug"
+  },
+  {
+   "t": 2040,
+   "status": "open",
+   "sig": "f2d0b28450fa99b1",
+   "atoms": [
+    "field:5,9:life"
+   ],
+   "note": "(5,9) m9 life lane (see t=2032)"
+  },
+  {
+   "t": 2061,
+   "status": "open",
+   "sig": "9ffb399f1ec9ade8",
+   "atoms": [
+    "field:10,0:z",
+    "field:5,9:z"
+   ],
+   "note": "(5,9)+(10,0) z lanes"
+  },
+  {
+   "t": 2109,
+   "status": "open",
+   "sig": "f843085c2c2ad988",
+   "atoms": [
+    "field:10,39:z",
+    "field:5,9:z"
+   ],
+   "note": "(5,9)+(10,39) z lanes"
+  },
+  {
+   "t": 2126,
+   "status": "open",
+   "sig": "ab9e1b1de5436f36",
+   "atoms": [
+    "field:10,39:z"
+   ],
+   "note": "human pose residual + (10,39) balloon z-resnap (l32 known lane)"
+  }
+ ]
+}

@@ -428,13 +428,18 @@ fn level_005_golden_state_hashes() {
     // the terrain planes move from A on. Behavior change toward
     // retail by design; the level-init stamp (sub_279D0) keeps its
     // unconditional conversion, which is why post-init holds.
+    // C..E re-pinned for the m2 bee laws (toward retail, attributed
+    // by toggling each piece): the acquisition-lunge arm fires in
+    // window C (sound 13 is hash-visible via the sim sounds vec), and
+    // the chase z-nudge moves D/E; the m3 spawn-guard change moves
+    // nothing here (no pool pressure).
     const GOLDEN: [u64; 6] = [
         0x211182712dfcddda, // post-init (feature pass + disposition 0)
         0x59d7c529578f0cd6, // A: 32 idle ticks far afield
         0x3787ed5c6bfe724e, // B: crater trigger fired + 120 dig ticks
-        0x8266cc3084b87893, // C: ambush disposition fired
-        0xa05aaa314e49e375, // D: 64 ticks of two-hand fireball combat
-        0x468e3fbf3c354328, // E: 100 aftermath ticks
+        0x9c2a50d14ed0e96a, // C: ambush disposition fired
+        0x6b9ba2ef8319dbc3, // D: 64 ticks of two-hand fireball combat
+        0x3cd19f1fadd3107c, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -514,13 +519,18 @@ fn level_005_golden_state_hashes() {
     // REAL behavior: a creature whose wander target sits at the exact
     // antipode now commits its capped turn in retail's direction, so
     // wander poses diverge from the first half-turn tie on.
+    // The m2 bee laws move OBSERVABLE at C-E — REAL behavior by
+    // design: the acquisition lunge (arm + buzz) fires in the C
+    // ambush window, and chasing bees now step z toward their victim
+    // every tick, so creature poses from C on genuinely differ.
+    // Post-init..B hold — no bee has acquired before C.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
         0x9ec1a5584565a87e, // A
         0x2156af8d3ce3a001, // B — settler phase + feeder leash
-        0xd08a4b83f1335789, // C
-        0xce680146dcefdc7b, // D
-        0x93c2d36af0a83b89, // E
+        0xf7692c2d2dddcdf5, // C
+        0x1d1358847f59eb01, // D
+        0x44777c2296a08f,   // E
     ];
     assert_eq!(
         obs, OBSERVABLE,
