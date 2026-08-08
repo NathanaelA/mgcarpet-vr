@@ -122,6 +122,29 @@ pub struct BuildDef {
     pub h: u8,
 }
 
+/// Which retail builder's water-conversion law a flatten pass carries.
+/// All three walk the same BUILD RLE cell decode, but convert a water
+/// tile to land under different conditions:
+/// - `Building` (sub_27D30 :30101-11, authored construction): flip a
+///   slope-nibble-0 tile whenever the cell carries a goal, `& 0xF0 |
+///   1`, flag-mode retile (sub_33B90).
+/// - `CastleLive` (sub_285C0 :30550-62, the live castle painter): a
+///   cell whose goal equals its height is never touched; the flip
+///   requires height 0, writes `& 0xF8 | 1`, dig-mode retile
+///   (sub_33E10). A castle raised on water therefore keeps LIVE WATER
+///   between its walls — the courtyard sits at the water-level datum
+///   (zero delta) until a collapse rubbles it.
+/// - `CastleInit` (sub_279D0 :29863-917, the level-init instant
+///   stamp): height = goal outright, flip like Building but
+///   `& 0xF8 | 1` — authored starting castles DO drain their
+///   courtyards.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum FlattenLaw {
+    Building,
+    CastleLive,
+    CastleInit,
+}
+
 /// One MC2 `BLDGPRM.DAT` record (4 bytes; remc2
 /// Type_D93C0_Bldgprmbuffer.h + loader sub_539A0 :38319): production
 /// rate, flag bits (0x10 = GenerateEvents pass F/G split, 8 = no
@@ -2809,7 +2832,7 @@ impl Gen {
         let x0 = cx.wrapping_sub(half_w);
         let y0 = cy.wrapping_sub(half_h);
         if life != 0 {
-            self.flatten_build_row(e.f71 as usize, cx, cy, target, life);
+            self.flatten_build_row(e.f71 as usize, cx, cy, target, life, FlattenLaw::Building);
             if life % 5 == 0 || life == 1 {
                 self.paint_build_row(e.f71 as usize, cx, cy);
             }
@@ -2830,9 +2853,22 @@ impl Gen {
 
     /// One flatten pass over build-table row `bt` centered on tile
     /// (cx, cy): the shared cell-code goal decode of sub_27D30
-    /// (:30040-70) / sub_285C0 (:30541-94), stepping each tile's
-    /// height toward its goal by /divisor.
-    fn flatten_build_row(&mut self, bt: usize, cx: u8, cy: u8, target: i32, divisor: i32) {
+    /// (:30040-70) / sub_285C0 (:30541-94) / sub_279D0 (:29863-917),
+    /// stepping each tile's height toward its goal by /divisor. The
+    /// three retail builders share the decode but NOT the
+    /// water-conversion condition — `law` picks it (see
+    /// [`FlattenLaw`]; merging them was the castle-on-water bug:
+    /// the courtyard's zero-delta cells must stay live water under
+    /// the live painter).
+    fn flatten_build_row(
+        &mut self,
+        bt: usize,
+        cx: u8,
+        cy: u8,
+        target: i32,
+        divisor: i32,
+        law: FlattenLaw,
+    ) {
         let def = self.assets.build_tab[bt % self.assets.build_tab.len()];
         let (w, h) = (def.w as u16, def.h as u16);
         let x0 = cx.wrapping_sub((w >> 1) as u8);
@@ -2874,12 +2910,38 @@ impl Gen {
                     }
                 };
                 if let Some(goal) = goal {
-                    let angle_before = self.t.angle[t];
                     let hh = self.t.height[t] as i32;
-                    self.t.height[t] = self.t.height[t].wrapping_add(((goal - hh) / divisor) as u8);
-                    if angle_before & 7 == 0 {
-                        self.t.angle[t] = (angle_before & 0xF0) | 1;
-                        self.recompute_protected(x, y, x, y);
+                    match law {
+                        FlattenLaw::Building => {
+                            let angle_before = self.t.angle[t];
+                            self.t.height[t] =
+                                self.t.height[t].wrapping_add(((goal - hh) / divisor) as u8);
+                            if angle_before & 7 == 0 {
+                                self.t.angle[t] = (angle_before & 0xF0) | 1;
+                                self.recompute_protected(x, y, x, y);
+                            }
+                        }
+                        FlattenLaw::CastleLive => {
+                            // :30550 — a cell whose goal equals its
+                            // height is not written AT ALL; the flip
+                            // tests the HEIGHT (:30558), pre-step,
+                            // and retiles dig-mode (:30561).
+                            if goal != hh {
+                                if hh == 0 {
+                                    self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
+                                    self.recompute_unprotected(x, y, x, y);
+                                }
+                                self.t.height[t] =
+                                    self.t.height[t].wrapping_add(((goal - hh) / divisor) as u8);
+                            }
+                        }
+                        FlattenLaw::CastleInit => {
+                            self.t.height[t] = goal as u8;
+                            if self.t.angle[t] & 7 == 0 {
+                                self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
+                                self.recompute_protected(x, y, x, y);
+                            }
+                        }
                     }
                 }
                 x = x.wrapping_add(1);
@@ -3069,7 +3131,7 @@ impl Gen {
         // :30563 — the divisor is the POST-decrement counter itself.
         let divisor = (e.f26 as i32).max(1);
         for r in 1..=level {
-            self.flatten_build_row(r, cx, cy, target, divisor);
+            self.flatten_build_row(r, cx, cy, target, divisor, FlattenLaw::CastleLive);
         }
         // THE CASTLE WEAPON (sub_40E20 :51729, called per footprint
         // tile per paint tick :30631-34): the rising transformation
@@ -3216,7 +3278,7 @@ impl Gen {
         // loop and the protect-bit block below both degenerate.
         let rows = rows.min(8);
         for r in 1..=rows {
-            self.flatten_build_row(r, cx, cy, target, 1);
+            self.flatten_build_row(r, cx, cy, target, 1, FlattenLaw::CastleInit);
             self.paint_build_row(r, cx, cy);
         }
         let def = self.assets.build_tab[rows % self.assets.build_tab.len()];
@@ -5530,6 +5592,69 @@ mod tests {
             "the owner's own creature is spared"
         );
         assert_eq!(g.ent[on_hole].f38, 9, "the kill credits the castle owner");
+    }
+
+    #[test]
+    fn castle_painter_keeps_courtyard_water() {
+        // A 3x3 castle row: an 0x59 wall ring (goal target+32, paint)
+        // around one 0x07 courtyard cell (goal = the datum itself).
+        // On a water site the courtyard's delta is 0 and sub_285C0's
+        // apply loop never touches a zero-delta cell (:30550) — the
+        // yard keeps its water nibble, type and height while the
+        // risen ring converts. The level-init stamp (sub_279D0
+        // :29868) converts unconditionally: authored starting castles
+        // DO drain the yard.
+        // 5x5 so the yard CENTRE cell's quad touches no risen wall
+        // vertex — a 1-wide yard would re-derive as a slope blend
+        // (its corners ARE the wall columns), in retail too.
+        let grid = vec![0u8; 1024];
+        let dat: Vec<u8> = vec![
+            5, 0x59, 0x59, 0x59, 0x59, 0x59, 0, // wall ring
+            5, 0x59, 0x07, 0x07, 0x07, 0x59, 0, 5, 0x59, 0x07, 0x07, 0x07, 0x59,
+            0, // the courtyard
+            5, 0x59, 0x07, 0x07, 0x07, 0x59, 0, 5, 0x59, 0x59, 0x59, 0x59, 0x59, 0,
+        ];
+        let mut tab = Vec::new();
+        tab.extend_from_slice(&0u32.to_le_bytes());
+        tab.extend_from_slice(&[0, 0]); // row 0: EMPTY, like the real tables
+        for _ in 1..8 {
+            tab.extend_from_slice(&0u32.to_le_bytes());
+            tab.extend_from_slice(&[5, 5]);
+        }
+        let water = || Planes {
+            height: vec![0; GRID],
+            tile_type: vec![0; GRID],
+            shading: vec![32; GRID],
+            angle: vec![0; GRID],
+            ceiling: Vec::new(),
+        };
+        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let mut g = Gen::new(water(), assets.clone(), 1, ChassisParams::MC1, VerbSet::MC1);
+        let p = g.spawn_creator(42, 100 << 8, 100 << 8, 0).unwrap();
+        g.ent[p].f71 = 1;
+        g.ent[p].flags |= 0x10000; // the upgrade-commit painter (:56492)
+        for _ in 0..60 {
+            if g.ent[p].flags & 0x400 != 0 {
+                break;
+            }
+            g.tick_castle_painter(p);
+        }
+        assert!(g.ent[p].flags & 0x400 != 0, "the painter ran to its finish");
+        let court = tile(100, 100);
+        assert_eq!(g.t.angle[court] & 0xF, 0, "the yard keeps the water nibble");
+        assert_eq!(g.t.tile_type[court], 0, "the yard keeps the water type");
+        assert_eq!(g.t.height[court], 0, "the yard stays level with the water");
+        let wall = tile(98, 100);
+        assert_eq!(g.t.angle[wall] & 7, 1, "a risen wall cell converts to land");
+        assert_eq!(g.t.height[wall], 32, "the wall reached its +32 goal");
+        // The level-init stamp over the same water drains the yard.
+        let mut g2 = Gen::new(water(), assets, 1, ChassisParams::MC1, VerbSet::MC1);
+        g2.stamp_castle_terrain(1, 100, 100, 0);
+        assert_eq!(
+            g2.t.angle[court] & 7,
+            1,
+            "the authored stamp converts the yard (sub_279D0's law)"
+        );
     }
 
     #[test]

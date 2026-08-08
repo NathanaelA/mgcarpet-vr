@@ -418,13 +418,23 @@ fn level_005_golden_state_hashes() {
     // READ by the castle cast gate, which this fixture never fires.
     // The patch's arm switches themselves cannot move goldens — every
     // `World::new*` world runs WorldPatches::RETAIL.
+    // Re-pinned (A on; post-init holds) for the castle-on-water
+    // flatten-law split (FlattenLaw::CastleLive, sub_285C0 :30550-62):
+    // the live castle painter now skips zero-delta cells outright (a
+    // shore castle's water apron stays LIVE WATER instead of being
+    // drained to land) and its water→land flip keys on HEIGHT 0 with
+    // the `& 0xF8 | 1` write + dig-mode retile (sub_33E10). A rival's
+    // window-A shore castle at ~(3,217) rises from height-0 tiles, so
+    // the terrain planes move from A on. Behavior change toward
+    // retail by design; the level-init stamp (sub_279D0) keeps its
+    // unconditional conversion, which is why post-init holds.
     const GOLDEN: [u64; 6] = [
         0x211182712dfcddda, // post-init (feature pass + disposition 0)
-        0x28dd4f98783352f9, // A: 32 idle ticks far afield
-        0xc1f61ca5abcfc251, // B: crater trigger fired + 120 dig ticks
-        0xebaaa338279c6384, // C: ambush disposition fired
-        0x42fce58ac96512bd, // D: 64 ticks of two-hand fireball combat
-        0x9b3bfd60c4f33260, // E: 100 aftermath ticks
+        0x59d7c529578f0cd6, // A: 32 idle ticks far afield
+        0x3787ed5c6bfe724e, // B: crater trigger fired + 120 dig ticks
+        0x8266cc3084b87893, // C: ambush disposition fired
+        0xa05aaa314e49e375, // D: 64 ticks of two-hand fireball combat
+        0x468e3fbf3c354328, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

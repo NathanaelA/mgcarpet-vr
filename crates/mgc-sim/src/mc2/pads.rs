@@ -308,7 +308,10 @@ impl Gen {
                 }
                 let (gx, gy) = (tlx.wrapping_add(dx as u8), tly.wrapping_add(dy as u8));
                 let t = tile(gx, gy);
-                if self.t.height[t] == 0 || super::flood::burn_flags(self.t.tile_type[t]) {
+                // EF:27852's auto-flat predicate is sub_57450
+                // (morph::auto_flat), NOT the damage pass's burnable
+                // set (flood::burn_flags).
+                if self.t.height[t] == 0 || super::morph::auto_flat(self.t.tile_type[t]) {
                     self.t.angle[t] = (self.t.angle[t] & 0xF8) | 1;
                     self.mc2_add_building_region(gx, gy, gx, gy);
                 }

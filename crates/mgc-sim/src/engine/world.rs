@@ -11889,6 +11889,183 @@ mod tests {
     }
 
     #[test]
+    fn wall_of_fire_punches_through_rebound_in_base_mc1() {
+        // sub_52770's deflect arm whitelists impact pairs: base MC1
+        // accepts (10,1)/(10,17) only (:62713), so the (10,53) Wall of
+        // Fire bolt hits a deflecting victim straight through the
+        // shield — silently, no debit (:62751-55) — the anti-griffon
+        // spell. HIDDEN.EXE whitelists (10,53) too (the homing meteor;
+        // the single compare added to the shared handler, 0x52BF9-
+        // 0x52C03), so the same cast deflects in HW. The m0 fireball
+        // rides sub_52B30's UNGATED arm (:62847-88) and deflects in
+        // both games — the control separating law wiring from fixture.
+        use crate::mc1::mobs::PLAYER_TARGET;
+        fn shoot(game: GameId, firewall: bool) -> (bool, i32, bool) {
+            let planes = Planes {
+                height: vec![100; 0x10000],
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            };
+            let mut w = World::new_for_game(planes, &[], 1, assets(), game);
+            let (bx, by, bz) = (100u16 << 8, 100u16 << 8, 4000i16);
+            let bolt = if firewall {
+                w.g.spawn_firewall_bolt(bx, by, bz)
+            } else {
+                w.g.spawn_fireball(bx, by, bz)
+            }
+            .expect("bolt slot");
+            {
+                let e = &mut w.g.ent[bolt];
+                e.id24 = PLAYER_TARGET;
+                e.f30 = 0;
+                e.f34 = 0;
+                e.f32 = 0;
+                e.f36 = 0;
+                // The cast stamps the impact pair + cost-per-shot
+                // (cast_firewall :66158 / the m0 fireball's (10,0)).
+                e.f68 = 10;
+                e.f69 = if firewall { 53 } else { 0 };
+                e.f44 = 500;
+                e.f140 = 400;
+            }
+            // A deflecting body parked on the flight line (yaw 0 =
+            // -y): solid bit 8 + the attack-state deflection bit
+            // 0x8000 (:23552) + a deep shield pool.
+            let vic = w.g.new_event().expect("victim slot");
+            {
+                let c = &mut w.g.ent[vic];
+                c.class64 = 5;
+                c.model65 = 8;
+                c.act_life = 30000;
+                c.max_life = 30000;
+                c.f58 = 1;
+                c.tick70 = 120;
+                c.id24 = 7;
+                c.flags |= 8 | 0x8000;
+                c.f140 = 1_000_000;
+                c.f78 = 0;
+                c.f80 = 512;
+                c.f82 = 512;
+                c.f84 = 512;
+            }
+            w.g.link(vic, bx, by.wrapping_sub(640), bz);
+            let ctx = MobCtx {
+                px: 10 << 8,
+                py: 10 << 8,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pdead: false,
+                strict: false,
+                patches: crate::patches::WorldPatches::RETAIL,
+                mc2_turn: 0,
+            };
+            let mut deflected = false;
+            for _ in 0..5 {
+                w.g.proj_tick(bolt, &ctx);
+                let e = &w.g.ent[bolt];
+                if e.flags & 0x400 != 0 {
+                    break; // exploded — the plain hit
+                }
+                if e.f146 == PLAYER_TARGET && e.id24 == 7 {
+                    deflected = true;
+                    break;
+                }
+            }
+            let cloud = (1..w.g.ent.len()).any(|j| {
+                w.g.ent[j].class64 == 10
+                    && w.g.ent[j].model65 == 53
+                    && w.g.ent[j].flags & 0x400 == 0
+            });
+            (deflected, w.g.ent[vic].f140, cloud)
+        }
+        let (deflected, mana, cloud) = shoot(GameId::Mc1, true);
+        assert!(!deflected, "base MC1 Wall of Fire punches through Rebound");
+        assert_eq!(mana, 1_000_000, "the refusal is silent — no shield debit");
+        assert!(cloud, "the napalm cloud erupts ON the deflector");
+        let (deflected, mana, _) = shoot(GameId::Mc1Hw, true);
+        assert!(deflected, "the HW meteor (10,53) deflects off Rebound");
+        assert_eq!(mana, 1_000_000 - 100, "the deflection quarters +140");
+        let (deflected, ..) = shoot(GameId::Mc1, false);
+        assert!(deflected, "the m0 fireball's ungated arm still deflects");
+    }
+
+    #[test]
+    fn castle_on_water_spares_the_courtyard_kraken() {
+        // The live painter leaves the yard's water ALIVE (sub_285C0
+        // :30550 — zero-delta cells are never touched): a kraken (m6,
+        // exempt from the footprint kill, :51753) caught between the
+        // rising walls survives the build, swimming its pond — the
+        // retail "krakens get trapped between the towers and
+        // survive". Before the flatten-law split the yard's tile_type
+        // was stenciled to land and the water-only mover rule
+        // (:21225-91) killed it on its first boundary crossing.
+        let planes = Planes {
+            height: vec![0; 0x10000],
+            tile_type: vec![0; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![0; 0x10000],
+            ceiling: Vec::new(),
+        };
+        // A 9x9 castle row: 0x59 wall ring + a 7x7 water yard.
+        let grid = vec![0u8; 1024];
+        let mut dat = Vec::new();
+        for row in 0..9u8 {
+            dat.push(9);
+            for col in 0..9u8 {
+                let edge = row == 0 || row == 8 || col == 0 || col == 8;
+                dat.push(if edge { 0x59 } else { 0x07 });
+            }
+            dat.push(0);
+        }
+        let mut tab = Vec::new();
+        tab.extend_from_slice(&0u32.to_le_bytes());
+        tab.extend_from_slice(&[0, 0]);
+        for _ in 1..8 {
+            tab.extend_from_slice(&0u32.to_le_bytes());
+            tab.extend_from_slice(&[9, 9]);
+        }
+        let assets = FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+        let things = vec![Thing {
+            slot: 0,
+            kind: ThingKind::Entity,
+            class: 5,
+            model: 6,
+            x: 112,
+            y: 110,
+            dis_id: 0,
+            swi_sz: 0,
+            swi_id: 0,
+            parent: 0,
+            child: 0,
+            par3: None,
+        }];
+        let mut w = World::new(planes, &things, 1, assets);
+        w.set_invincible(true);
+        let k = find_slot(&w, 5, 6);
+        let p =
+            w.g.spawn_creator(42, 112 << 8, 110 << 8, 0)
+                .expect("painter slot");
+        w.g.ent[p].f71 = 1;
+        w.g.ent[p].flags |= 0x10000; // the kill-bit commit painter
+        let pose = firing_line();
+        for _ in 0..200 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(
+            w.g.ent[k].flags & 0x400 == 0 && w.g.ent[k].act_life > 0,
+            "the yard kraken swims its pond alive"
+        );
+        assert_eq!(
+            w.g.t.tile_type[crate::engine::features::tile(112, 110)],
+            0,
+            "the yard centre keeps its water type"
+        );
+    }
+
+    #[test]
     fn hidden_worlds_firewall_bolt_is_the_meteor_and_copies_damage() {
         // The HW ctor swap (sub_3A5F0, hw:42474) gives the m16 bolt
         // the meteor sprite 76 (base sub_3A270 :46353 = fireball 42),

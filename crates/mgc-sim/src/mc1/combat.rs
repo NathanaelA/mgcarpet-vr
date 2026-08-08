@@ -76,6 +76,23 @@ pub(crate) enum Inbox {
     Dead,
 }
 
+/// Which Rebound deflection arm a bolt family carries. sub_52B30's
+/// fireball arm (:62847-88) deflects ANY impact pair with the ±45
+/// scatter, and an unaffordable deflection flies straight through
+/// untouched. sub_52770's generic arm (:62705-50) deflects only the
+/// (10,1)/(10,17) impact descriptors — Hidden Worlds inserts (10,53),
+/// the homing meteor's pair, the single compare distinguishing the two
+/// shipped binaries' handlers (CARPET.EXE 0x528B6-C3 vs HIDDEN.EXE
+/// 0x52BF9-0x52C03) — with the ±22 scatter, and ANY refusal (pair gate
+/// or mana) lands as a plain hit on the deflector. Wall of Fire's bolt
+/// carries (10,53), so it punches through Rebound in base MC1 (the
+/// anti-griffon spell) while the HW meteor deflects.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum DeflectLaw {
+    Fireball,
+    Generic,
+}
+
 impl Gen {
     // ---- mailbox writes ---------------------------------------------------
 
@@ -1136,7 +1153,7 @@ impl Gen {
         } else {
             self.home(i, ctx);
         }
-        self.proj_move_and_hit(i, ctx, false, false)
+        self.proj_move_and_hit(i, ctx, false, false, DeflectLaw::Fireball)
     }
 
     /// sub_52ED0 (:62937): the POSSESS lob (c9 m1). Its flight z is
@@ -1504,7 +1521,7 @@ impl Gen {
             self.home(i, ctx);
         }
         let copy_f44 = self.is_hidden_worlds();
-        self.proj_move_and_hit(i, ctx, copy_f44, true)
+        self.proj_move_and_hit(i, ctx, copy_f44, true, DeflectLaw::Generic)
     }
 
     /// sub_53980/sub_53B50 (:63453/:63525): the castle ball's flight
@@ -1769,7 +1786,7 @@ impl Gen {
                 self.ent[s].id24 = owner;
             }
         }
-        self.proj_move_and_hit(i, ctx, true, true)
+        self.proj_move_and_hit(i, ctx, true, true, DeflectLaw::Generic)
     }
 
     /// sub_530C0 (:63048): m11's bolt — explodes ONLY on wizard-family
@@ -2034,6 +2051,11 @@ impl Gen {
     /// steers toward `+146`), and the impact inherits the thrown
     /// `+44 = 780` (:22112) instead of the `(10,0)` default 400 — the
     /// transcribed 780 write would otherwise be a dead store.
+    /// CARPET.EXE's relocated table binds state 0xF to the sub_52770
+    /// thunk 0x53060 — the shared generic flight — and the orphan
+    /// 0x542B0 to state 0x12; straight flight stands (no acquire case
+    /// 15, no pre-targeting ctor), re-binding to proj_generic_tick is
+    /// the banked follow-up (DEVIATIONS entry).
     fn proj_boulder_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
@@ -2667,15 +2689,20 @@ impl Gen {
         false
     }
 
-    /// Move + hit scan + terrain shared by m0/m3/m9 (:62842-932).
-    /// Returns terrain_dirty (always false here — craters come from
-    /// the explosion).
+    /// Move + hit scan + terrain shared by the bolt flights — the
+    /// common body of sub_52B30 (:62779-936, the m0 fireball) and
+    /// sub_52770 (:62618-776, the generic family the class-9 table
+    /// routes states 2-6/0xB/0xF/0x10/0x11/0x14 into). Returns
+    /// terrain_dirty (always false here — craters come from the
+    /// explosion). `law` picks the caller's Rebound deflection arm;
+    /// the two are NOT interchangeable (see [`DeflectLaw`]).
     fn proj_move_and_hit(
         &mut self,
         i: usize,
         ctx: &MobCtx,
         copy_f44: bool,
         stamp_victim: bool,
+        law: DeflectLaw,
     ) -> bool {
         let mut tmp = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (yaw, pitch, speed) = {
@@ -2684,22 +2711,43 @@ impl Gen {
         };
         Self::polar_step(&mut tmp, yaw, pitch, speed);
         if let Some(v) = self.victim_scan_at(i, tmp, ctx) {
-            // Rebound (+17 bit 7): mana-shield deflection (:62858-90).
-            // The human carpet's bit is the Rebound spell (14, :65774
-            // — the ported deflection-bit semantics).
+            // Rebound (+17 bit 7): mana-shield deflection. The human
+            // carpet's bit is the Rebound spell (14, :65774 — the
+            // ported deflection-bit semantics). The Generic arm only
+            // deflects whitelisted impact pairs (:62705-21): a bolt
+            // failing the pair gate — or the mana check — lands as a
+            // PLAIN HIT on the deflector (:62751-55), unlike the
+            // Fireball arm's fly-through.
             let rebound = match v {
                 MailTarget::Pool(j) => self.ent[j].flags & 0x8000 != 0,
                 MailTarget::Player => self.player_rebound,
+            };
+            let gate_ok = rebound
+                && match law {
+                    DeflectLaw::Fireball => true,
+                    DeflectLaw::Generic => {
+                        let e = &self.ent[i];
+                        e.f68 == 10
+                            && (e.f69 == 1
+                                || e.f69 == 17
+                                || (e.f69 == 53 && self.is_hidden_worlds()))
+                    }
+                };
+            // Scatter around the reversed heading: ±45 (:62877) vs
+            // ±22 (:62740).
+            let (modulus, half) = match law {
+                DeflectLaw::Fireball => (0x5B, 45i32),
+                DeflectLaw::Generic => (0x2D, 22i32),
             };
             if rebound {
                 match v {
                     MailTarget::Pool(j) => {
                         let quarter = (self.ent[i].f140 / 4).max(0);
-                        if quarter <= self.ent[j].f140 {
-                            // Sound 28 rides INSIDE the afford branch
-                            // (:62861 — positional at the DEFLECTOR,
-                            // sub_55370(victim, -1, 28)); an
-                            // unaffordable deflection is silent.
+                        if gate_ok && quarter <= self.ent[j].f140 {
+                            // Sound 28 rides INSIDE the deflect branch
+                            // (:62861/:62723 — positional at the
+                            // DEFLECTOR, sub_55370(victim, -1, 28)); a
+                            // refused deflection is silent.
                             self.snd(28, j);
                             self.ent[j].f140 -= quarter;
                             let deflector_id = self.ent[j].id24;
@@ -2707,7 +2755,7 @@ impl Gen {
                             let d = self.ent_rand(i);
                             let e = &mut self.ent[i];
                             e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
-                            e.f30 = (e.f34 as i32 + (d % 0x5B) as i32 - 45) as u16 & 0x7FF;
+                            e.f30 = (e.f34 as i32 + (d % modulus) as i32 - half) as u16 & 0x7FF;
                             e.f32 = e.f32.wrapping_neg() & 0x7FF;
                             e.f146 = if shooter == PLAYER_TARGET {
                                 PLAYER_TARGET
@@ -2726,31 +2774,40 @@ impl Gen {
                             self.move_relink(i, jx, jy, jz);
                             return false;
                         }
-                        // Afford-fail (:62859's false arm — v24 stays
-                        // clear): NO hit at all. No sound, no debit,
-                        // no explosion — the bolt keeps its stepped
-                        // position and flies straight through.
-                        self.move_relink(i, tmp.0, tmp.1, tmp.2);
-                        return false;
+                        if law == DeflectLaw::Fireball {
+                            // Afford-fail (:62859's false arm — v24
+                            // stays clear): NO hit at all. No sound, no
+                            // debit, no explosion — the bolt keeps its
+                            // stepped position and flies straight
+                            // through.
+                            self.move_relink(i, tmp.0, tmp.1, tmp.2);
+                            return false;
+                        }
+                        // Generic refusal falls through to the plain
+                        // hit below (:62751-55).
                     }
                     MailTarget::Player => {
-                        self.snd(28, i); // deflection twang (:62861)
-                        // The projectile reverses heading and swaps
-                        // owner to the player, re-homing on its
-                        // shooter. INTERIM: no mana-economy debit on
-                        // the player pool (the original quarters the
-                        // projectile's +140 against the shield pool).
-                        let shooter = self.ent[i].id24;
-                        let d = self.ent_rand(i);
-                        let e = &mut self.ent[i];
-                        e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
-                        e.f30 = (e.f34 as i32 + (d % 0x5B) as i32 - 45) as u16 & 0x7FF;
-                        e.f32 = e.f32.wrapping_neg() & 0x7FF;
-                        e.f146 = shooter;
-                        e.id24 = PLAYER_TARGET;
-                        e.act_life = e.max_life as i32;
-                        self.move_relink(i, ctx.px, ctx.py, ctx.pz);
-                        return false;
+                        if gate_ok {
+                            self.snd(28, i); // deflection twang (:62861)
+                            // The projectile reverses heading and swaps
+                            // owner to the player, re-homing on its
+                            // shooter. INTERIM: no mana-economy debit on
+                            // the player pool (the original quarters the
+                            // projectile's +140 against the shield pool).
+                            let shooter = self.ent[i].id24;
+                            let d = self.ent_rand(i);
+                            let e = &mut self.ent[i];
+                            e.f34 = e.f30.wrapping_add(0x400) & 0x7FF;
+                            e.f30 = (e.f34 as i32 + (d % modulus) as i32 - half) as u16 & 0x7FF;
+                            e.f32 = e.f32.wrapping_neg() & 0x7FF;
+                            e.f146 = shooter;
+                            e.id24 = PLAYER_TARGET;
+                            e.act_life = e.max_life as i32;
+                            self.move_relink(i, ctx.px, ctx.py, ctx.pz);
+                            return false;
+                        }
+                        // Generic refusal: the bolt hits the rebounding
+                        // player like any other (:62751-55).
                     }
                 }
             }
