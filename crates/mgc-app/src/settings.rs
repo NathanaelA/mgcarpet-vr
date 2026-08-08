@@ -1946,6 +1946,33 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        Spec {
+            domain: Gameplay,
+            group: "gameplay · patches",
+            label: "castle_latch_bug",
+            class: Patch,
+            key: None,
+            cli: None,
+            cfg_path: "gameplay.patches.castle_latch_bug",
+            read: |c| Val::Toggle {
+                on: c.gameplay.patches.castle_latch_bug.on(),
+                faithful: false,
+            },
+            desc: "Create Castle placement validation (MC1). Retail checks the \
+                   tile beside your casting hand - steerable by aim - and \
+                   skips the check when the ball hits terrain, so a cast \
+                   glued to the right wall corner raises a castle inside a \
+                   no-castle maze and carves its protected walls.",
+            ctl: Ctl::Toggle {
+                set: |c, v| {
+                    c.gameplay.patches.castle_latch_bug = crate::config::PatchArm::from_on(v)
+                },
+                descs: [
+                    "The skippable hand-side check - maze castles work, as retail.",
+                    "The check anchors on you and always runs (default).",
+                ],
+            },
+        },
         // ---- gameplay · cheat -------------------------------------------
         Spec {
             domain: Gameplay,
@@ -2147,7 +2174,7 @@ mod tests {
         assert_eq!(verdict, Fidelity::Faithful);
         // The default-on retail patches count apart and never flip
         // the verdict (castle_recast_cost ships on its retail arm).
-        assert_eq!(patches, 10, "ten of the eleven patches ship on");
+        assert_eq!(patches, 11, "eleven of the twelve patches ship on");
     }
 
     #[test]

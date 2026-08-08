@@ -8772,6 +8772,7 @@ fn world_patches(p: &config::GameplayPatches) -> mgc_sim::WorldPatches {
         castle_death_balloons: p.castle_death_balloons.on(),
         mc2_downgrade_overflow: p.mc2_downgrade_overflow.on(),
         mc2_magic_mine: p.mc2_magic_mine.on(),
+        castle_latch_bug: p.castle_latch_bug.on(),
     }
 }
 

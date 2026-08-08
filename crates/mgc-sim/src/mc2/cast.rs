@@ -1681,7 +1681,10 @@ impl World {
             // MC2 column — the sub_69AB0 build queue is the castle
             // column's banked follow-up), sound 15.
             2 => {
-                self.cast_castle(p);
+                // The hand pick feeds MC1's muzzle anchor only; the
+                // MC2 lane always spawns at the carpet (cast_castle's
+                // mc2 gate), so the side is inert here.
+                self.cast_castle(p, false);
                 self.g.snd_player(15);
             }
             // speed_up: the accelerate channel (`GetScroll_69DB0`

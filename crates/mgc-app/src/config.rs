@@ -938,6 +938,15 @@ pub struct GameplayPatches {
     /// table (bank 7 `win2`). Retail points both win movies at one
     /// script, so `levelw2` plays scored with the wrong bank.
     pub win2_movie_score: PatchArm,
+    /// MC1 Create Castle placement validation (the "latch bug",
+    /// certified on the mc1l32 recording). Retail anchors the
+    /// placement scan at the casting HAND — a steerable tile beside
+    /// the carpet — and skips it entirely when the ball lands by
+    /// terrain touchdown, so a wall-corner cast raises a castle
+    /// inside a no-castle maze and carves its protected walls.
+    /// `patched` (default): the scan anchors at the carpet and the
+    /// landing always re-checks.
+    pub castle_latch_bug: PatchArm,
 }
 
 impl Default for GameplayPatches {
@@ -956,6 +965,7 @@ impl Default for GameplayPatches {
             mc2_magic_mine: PatchArm::Patched,
             mc2_dweller_invisibility: PatchArm::Patched,
             win2_movie_score: PatchArm::Patched,
+            castle_latch_bug: PatchArm::Patched,
         }
     }
 }
@@ -976,6 +986,7 @@ impl GameplayPatches {
             mc2_magic_mine: PatchArm::Retail,
             mc2_dweller_invisibility: PatchArm::Retail,
             win2_movie_score: PatchArm::Retail,
+            castle_latch_bug: PatchArm::Retail,
         }
     }
 
@@ -1232,7 +1243,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 22;
+const DEFAULTS_VERSION: u64 = 23;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

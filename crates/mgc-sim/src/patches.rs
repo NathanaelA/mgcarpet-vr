@@ -68,6 +68,21 @@ pub struct WorldPatches {
     /// `word_0x36_54` armed gate (magic-mine.md §6) — a shipped mine
     /// floats, expires and sinks without ever detonating on anyone.
     pub mc2_magic_mine: bool,
+    /// MC1 Create Castle placement validation. Retail (the "latch
+    /// bug", certified on mc1l32-castle-bug.mgcr): the castle ball
+    /// spawns at the HAND muzzle (sub_55EF0 — ±256 units at yaw∓512,
+    /// steerable by aim), the launch-tick scan samples THAT tile, and
+    /// the landing condition short-circuits (`ground > z || life < 0
+    /// || !scan`, :63588-90) — a terrain touchdown builds the castle
+    /// with no placement check at all; the scan only re-runs on
+    /// airborne ticks, where a failure stops the ball early
+    /// (flip 180° + one step back) and still builds. Combined with
+    /// sub_12F70's NW-only 8×8 window this lets a wall-corner cast
+    /// raise a castle inside a no-castle maze and carve its protected
+    /// walls. Patched: the ball spawns at the carpet (the scan
+    /// samples where you are) and the landing always re-scans
+    /// (failure displaces the site one step back).
+    pub castle_latch_bug: bool,
 }
 
 impl WorldPatches {
@@ -84,6 +99,7 @@ impl WorldPatches {
         castle_death_balloons: false,
         mc2_downgrade_overflow: false,
         mc2_magic_mine: false,
+        castle_latch_bug: false,
     };
 
     /// The pre-option behavior set: what native play hard-wired
@@ -101,5 +117,6 @@ impl WorldPatches {
         castle_death_balloons: true,
         mc2_downgrade_overflow: true,
         mc2_magic_mine: true,
+        castle_latch_bug: true,
     };
 }

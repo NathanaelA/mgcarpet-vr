@@ -4312,7 +4312,7 @@ impl World {
             // 10 Teleport (:65554).
             10 => self.cast_teleport(m, p),
             // 16 Create Castle (:65862).
-            16 => self.cast_castle(p),
+            16 => self.cast_castle(p, right),
             // 18 Lightning Storm (:65988).
             18 => self.cast_storm(p),
             // 20 Wall of Fire (:66110).
@@ -5027,15 +5027,32 @@ impl World {
     /// ball from the caster. NO castle standing: target 16 tiles
     /// (4096 units) ahead at ground level (:65894-902), morph =
     /// the (3,2) castle; the flight runs the sub_12F70 placement
-    /// scans (launch = silent abort, landing = flip 180 + step back,
-    /// then build). Castle standing: the RECAST is the UPGRADE —
-    /// the ball flies AT the castle and morphs into the (10,43)
-    /// upgrade token instead (+68/69, +146 = castle idx, :65904-08).
-    pub(crate) fn cast_castle(&mut self, p: PlayerPose) {
+    /// scans (the `castle_latch_bug` arms — see
+    /// `Gen::proj_castle_ball_tick`). Castle standing: the RECAST is
+    /// the UPGRADE — the ball flies AT the castle and morphs into the
+    /// (10,43) upgrade token instead (+68/69, +146 = castle idx,
+    /// :65904-08).
+    ///
+    /// Retail spawns the ball at the HAND muzzle (`sub_55EF0` :56420,
+    /// called before the half-height add, so the ground-guard tests
+    /// the carpet z — exactly [`World::muzzle`]): the launch-tick
+    /// placement scan therefore samples a tile the AIM steers on a
+    /// one-tile circle around the carpet. That steerability is half
+    /// of the maze-castle cheese, so the muzzle is the RETAIL arm of
+    /// `gameplay.patches.castle_latch_bug`; the patched arm anchors
+    /// the ball (and so the scan) at the carpet.
+    pub(crate) fn cast_castle(&mut self, p: PlayerPose, right: bool) {
         use crate::mc1::combat::PLAYER_HH;
         let z = p.z.wrapping_add(PLAYER_HH as i16);
         let castle = self.player_castle();
-        let Some(pr) = self.g.spawn_castle_ball(p.x, p.y, z) else {
+        let mc2 = matches!(self.game, GameId::Mc2);
+        let (bx, by) = if mc2 || (self.patches.castle_latch_bug && !self.strict_retail) {
+            (p.x, p.y)
+        } else {
+            let m = self.muzzle(p, right);
+            (m.0, m.1)
+        };
+        let Some(pr) = self.g.spawn_castle_ball(bx, by, z) else {
             return;
         };
         let tgt = if let Some(c) = castle {
@@ -5047,8 +5064,15 @@ impl World {
         };
         let def = &SPELLS[16];
         let e = &mut self.g.ent[pr];
+        // The carpet speed rides +126 ONLY (sub_57610 `*(v3+126) +=
+        // v4`); +128 keeps the ctor 384, so the flight eases the
+        // launch boost away at 2/tick (the recorded ball decays
+        // 464 → 462 on its first flight tick). MC2 keeps the pre-arm
+        // no-decay pairing (EF unverified).
         e.f126 += p.speed;
-        e.f128 = e.f126;
+        if mc2 {
+            e.f128 = e.f126;
+        }
         e.id24 = PLAYER_TARGET;
         // The launch inherits the wizard's AIM — yaw and pitch both
         // (:65913-14 copies +30/+32) — and the flight EASES from it

@@ -1509,17 +1509,31 @@ impl Gen {
 
     /// sub_53980/sub_53B50 (:63453/:63525): the castle ball's flight
     /// — steered at the +150 ground target (dest_x/dest_y). The
-    /// LAUNCH tick re-runs the placement scan at the cast spot; a
-    /// failure is a silent despawn (:63617-21). On landing the scan
-    /// runs again: a failure flips the heading 180° and steps back
-    /// once, then the class-3 m2 castle is created anyway
-    /// (:63590-606). APPROX: snap-steer in place of the original's
-    /// eased turn.
+    /// LAUNCH tick latches, runs the placement scan at the spawn spot
+    /// (the hand muzzle under the `castle_latch_bug` retail arm) and
+    /// RETURNS — no move (:63612-21; the recorded ball sits latched
+    /// and unmoved at its first boundary). A launch failure is a
+    /// silent despawn.
+    ///
+    /// The landing law is the `castle_latch_bug` patch fork
+    /// (mc1l32-castle-bug.mgcr; MC1/HW only — MC2 keeps the pre-arm
+    /// behavior under both arms, its EF lineage unverified):
+    /// - RETAIL arm (:63588-90, the short-circuit `ground > z ||
+    ///   life < 0 || !scan`): a terrain touchdown or expiry builds
+    ///   the castle at the contact point UNSCANNED; the scan re-runs
+    ///   only on airborne ticks, where a failure stops the ball —
+    ///   flip 180°, one step back with the live pitch (:63601-04) —
+    ///   and still builds. Once launched, a castle always rises.
+    /// - PATCHED arm: the landing always re-scans; a refused site is
+    ///   displaced one step back (the pre-arm port behavior).
+    /// APPROX: snap-steer in place of the original's eased turn.
     fn proj_castle_ball_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
-        let _ = ctx;
+        let mc1 = !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
+        let patched = ctx.patches.castle_latch_bug && !ctx.strict;
         // The UPGRADE variant (+69 = 43, :65904-08) skips the
         // placement scans — it flies at the OWN castle and morphs
-        // into the (10,43) token there.
+        // into the (10,43) token there (sub_53980 has no launch
+        // latch: the upgrade ball moves from its first tick).
         let upgrade = self.ent[i].f69 == 43;
         if self.ent[i].flags & 2 == 0 {
             self.ent[i].flags |= 2;
@@ -1528,6 +1542,15 @@ impl Gen {
                 self.ent[i].flags |= 0x400;
                 return false;
             }
+            if mc1 && !upgrade {
+                return false;
+            }
+        }
+        // The launch speed boost eases away: +126 walks 2/tick toward
+        // the ctor +128 (:63565-67 and the :63472-76 upgrade twin).
+        if mc1 {
+            let e = &mut self.ent[i];
+            e.f126 += (e.f128 - e.f126).clamp(-2, 2);
         }
         let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
         let (dx, dy) = (self.ent[i].dest_x, self.ent[i].dest_y);
@@ -1557,7 +1580,12 @@ impl Gen {
         Self::polar_step(&mut tmp, yaw, pitch, speed);
         let ground = self.ground_z(tmp.0, tmp.1) as i16;
         let mut grounded = ground > tmp.2;
-        self.move_relink(i, tmp.0, tmp.1, if grounded { ground } else { tmp.2 });
+        // Retail keeps the STEPPED z through the move (:63577-79 —
+        // the recorded landing tick shows z 7344 under ground 7808);
+        // the ctor'd castle takes its own ground datum. MC2 keeps the
+        // pre-arm ground clamp.
+        let move_z = if mc1 || !grounded { tmp.2 } else { ground };
+        self.move_relink(i, tmp.0, tmp.1, move_z);
         // The with-castle flight lands on OVERLAP with the linked
         // castle — the ball snaps onto it and morphs (:63484-88);
         // the castle's 0x4000 z-extent makes any overflight count.
@@ -1574,8 +1602,22 @@ impl Gen {
                 grounded = true;
             }
         }
-        self.ent[i].act_life -= 1;
-        if grounded || self.ent[i].act_life < 0 {
+        // The life countdown runs on AIRBORNE ticks only (:63586-88
+        // short-circuits the decrement behind the ground test); the
+        // pre-arm MC2 path keeps the unconditional decrement.
+        if !mc1 || !grounded {
+            self.ent[i].act_life -= 1;
+        }
+        let mut land = grounded || self.ent[i].act_life < 0;
+        // The RETAIL arm's airborne tripwire (:63588-90): the scan
+        // runs only while still flying; a failure stops the ball
+        // here and builds displaced.
+        let mut stepback = false;
+        if mc1 && !patched && !land && !upgrade && !self.castle_site_ok(i, tmp.0, tmp.1) {
+            land = true;
+            stepback = true;
+        }
+        if land {
             let own = self.ent[i].id24;
             if upgrade {
                 // Morph into the (10,43) upgrade token at the castle
@@ -1589,10 +1631,20 @@ impl Gen {
                 return false;
             }
             let (mut bx, mut by) = (tmp.0, tmp.1);
-            if !self.castle_site_ok(i, bx, by) {
+            // RETAIL arm: touchdown/expiry build unscanned; only the
+            // tripwire displaces. PATCHED arm (and pre-arm MC2): the
+            // landing always re-scans, a refusal displaces.
+            let displace = if mc1 && !patched {
+                stepback
+            } else {
+                !self.castle_site_ok(i, bx, by)
+            };
+            if displace {
                 let back = yaw.wrapping_add(0x400) & 0x7FF;
                 let mut t = (bx, by, 0i16);
-                Self::polar_step(&mut t, back, 0, speed);
+                // The step back carries the live pitch (:63601-04);
+                // pre-arm MC2 keeps the flat step.
+                Self::polar_step(&mut t, back, if mc1 { pitch } else { 0 }, speed);
                 bx = t.0;
                 by = t.1;
             }
@@ -1608,20 +1660,30 @@ impl Gen {
     }
 
     /// sub_12F70 (:17786): the castle placement scan — fails when
-    /// another castle (c3 m2) is within extents+2048 on both axes,
-    /// or any tile of the 8x8 block at (tx-8..tx-1, ty-8..ty-1) —
-    /// the original's asymmetric window, ported verbatim — carries
-    /// the protection bit.
+    /// another castle (c3 m2) is within its own extents+2048 on both
+    /// axes (`abs16(dx) <= f80 + 2048` — the probe's extents play no
+    /// part; MC1-faithful, MC2 keeps the pre-arm wider margin), or
+    /// any tile of the 8x8 block at (tx-8..tx-1, ty-8..ty-1) — the
+    /// original's asymmetric NW-only window, ported verbatim: it
+    /// never samples the anchor tile itself nor anything south/east
+    /// of it, which is half of the `castle_latch_bug` maze cheese —
+    /// carries the protection bit.
     pub(crate) fn castle_site_ok(&self, i: usize, x: u16, y: u16) -> bool {
-        let (f80, f82) = (self.ent[i].f80 as i32, self.ent[i].f82 as i32);
+        let mc1 = !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
+        let (f80, f82) = if mc1 {
+            (0, 0)
+        } else {
+            (self.ent[i].f80 as i32, self.ent[i].f82 as i32)
+        };
+        let slack = i32::from(mc1);
         let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 == 3
                 && c.model65 == 2
                 && c.flags & 0x400 == 0
-                && wd(c.x, x) < c.f80 as i32 + f80 + 2048
-                && wd(c.y, y) < c.f82 as i32 + f82 + 2048
+                && wd(c.x, x) < c.f80 as i32 + f80 + 2048 + slack
+                && wd(c.y, y) < c.f82 as i32 + f82 + 2048 + slack
             {
                 return false;
             }
