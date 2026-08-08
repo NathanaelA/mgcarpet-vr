@@ -7,11 +7,15 @@
 //! Staleness is judged from the artifact stamps, not timestamps: the
 //! requested level package's `meta.json` and every present bundle's
 //! `bundle.json` must carry the current schema version AND the
-//! current bake epoch. Any mismatch (or a missing artifact) triggers
-//! one full `bake_all` — the same orchestration the `mgc-import bake`
-//! CLI runs — into the baked tree, from game data located via (in
-//! order) the config's `gamedata` path, `MGC_GAMEDATA`, or
-//! `gamedata/` in the working directory.
+//! current bake epoch, and the bake's completion stamp
+//! (`manifest.sha256`, written last by `bake_all`) must exist with
+//! every file it lists still on disk — an interrupted first bake
+//! otherwise leaves a partial tree whose present artifacts all look
+//! current. Any mismatch (or a missing artifact) triggers one full
+//! `bake_all` — the same orchestration the `mgc-import bake` CLI
+//! runs — into the baked tree, from game data located via (in order)
+//! the config's `gamedata` path, `MGC_GAMEDATA`, or `gamedata/` in
+//! the working directory.
 
 use std::path::{Path, PathBuf};
 
@@ -78,6 +82,39 @@ fn bundle_staleness(baked_root: &Path) -> Option<String> {
     (bundles == 0).then(|| format!("{}: no asset bundles baked", assets.display()))
 }
 
+/// The bake's completion stamp: `bake_all` writes `manifest.sha256`
+/// LAST, so its absence means the previous bake never finished — a
+/// first run killed or crashed mid-way (classically during the long
+/// audio/music render, which a double-click user sees as a hung
+/// window) leaves a tree whose PRESENT artifacts all look current
+/// while whole bundles are missing, and without this check that
+/// partial tree would be accepted forever. Every listed file must
+/// also still exist (names only — no re-hashing; content
+/// verification stays an external `sha256sum -c` affair).
+fn manifest_staleness(baked_root: &Path) -> Option<String> {
+    let path = baked_root.join("manifest.sha256");
+    let body = match std::fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(_) => {
+            return Some(format!(
+                "{}: missing — the previous bake did not run to completion",
+                path.display()
+            ));
+        }
+    };
+    for line in body.lines() {
+        let Some((_, name)) = line.split_once("  ") else {
+            continue;
+        };
+        if !baked_root.join(name).is_file() {
+            return Some(format!(
+                "{name}: listed in manifest.sha256 but missing from the baked tree"
+            ));
+        }
+    }
+    None
+}
+
 /// Locate original game data: config override, `MGC_GAMEDATA`, then
 /// `gamedata/` beside the working directory.
 fn locate_gamedata(config_override: Option<&Path>) -> Option<PathBuf> {
@@ -127,7 +164,9 @@ pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
 
-    let reason = level_staleness(level_path).or_else(|| bundle_staleness(baked_root));
+    let reason = level_staleness(level_path)
+        .or_else(|| bundle_staleness(baked_root))
+        .or_else(|| manifest_staleness(baked_root));
     let Some(reason) = reason else {
         return Ok(());
     };
@@ -159,10 +198,58 @@ pub fn ensure_baked(level_path: &Path, config_gamedata: Option<&Path>) -> Result
     // The bake ran; verify it actually produced what we came for
     // (e.g. the requested level might belong to a game whose data is
     // absent).
-    if let Some(still) = level_staleness(level_path).or_else(|| bundle_staleness(baked_root)) {
+    if let Some(still) = level_staleness(level_path)
+        .or_else(|| bundle_staleness(baked_root))
+        .or_else(|| manifest_staleness(baked_root))
+    {
         return Err(format!(
             "bake completed but the requested data is still unavailable: {still}"
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The completion stamp guards the interrupted-first-bake hole: a
+    /// tree without `manifest.sha256` (bake killed mid-run — e.g.
+    /// during the long audio render) is stale even when every PRESENT
+    /// bundle looks current, and a listed-but-deleted file is caught
+    /// by the existence sweep. Non-vacuity: before this check, such a
+    /// tree passed `bundle_staleness` and shipped without audio
+    /// forever (Windows player report 2026-08-08).
+    #[test]
+    fn manifest_stamp_flags_unfinished_and_gutted_bakes() {
+        let root = std::env::temp_dir().join(format!("mgc-bakecheck-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("assets/mc1-audio")).unwrap();
+
+        // No stamp at all: the interrupted bake.
+        assert!(
+            manifest_staleness(&root)
+                .expect("missing stamp is stale")
+                .contains("did not run to completion")
+        );
+
+        // Stamp listing an existing file: current.
+        std::fs::write(root.join("assets/mc1-audio/bundle.json"), b"{}").unwrap();
+        std::fs::write(
+            root.join("manifest.sha256"),
+            "0000  assets/mc1-audio/bundle.json\n",
+        )
+        .unwrap();
+        assert_eq!(manifest_staleness(&root), None);
+
+        // A listed file deleted afterwards: stale again.
+        std::fs::remove_file(root.join("assets/mc1-audio/bundle.json")).unwrap();
+        assert!(
+            manifest_staleness(&root)
+                .expect("gutted tree is stale")
+                .contains("assets/mc1-audio/bundle.json")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

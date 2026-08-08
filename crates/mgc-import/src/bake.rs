@@ -560,6 +560,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
                 eprintln!("note: {base}.DAT not found — skipping {tag}");
                 continue;
             }
+            println!("{tag}: baking levels…");
             let bake = bake_mc1_archive(game, tag, src, base, out_dir, &overlay_levels(tag)?)
                 .map_err(|e| e.to_string())?;
             println!("{tag}: baked {} levels", bake.outputs.len());
@@ -567,6 +568,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
             modded.extend(bake.overlaid);
         }
         if src.exists("DATA/PAL0-0.DAT") {
+            println!("mc1: baking asset bundles…");
             let outputs =
                 crate::bundle::bake_mc1_bundles(src, out_dir).map_err(|e| e.to_string())?;
             println!(
@@ -578,6 +580,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
             eprintln!("note: mc1 DATA/PAL0-0.DAT not found — skipping asset bundles");
         }
         if src.exists("DATA/SNDS0-1.DAT") {
+            println!("mc1: baking the audio bundle — the slow part of a first run…");
             let outputs = crate::bundle::bake_mc1_audio(src, out_dir).map_err(|e| e.to_string())?;
             println!(
                 "mc1: baked audio bundle mc1-audio ({} members)",
@@ -608,6 +611,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
     }
 
     if let Some(src) = &found.mc2 {
+        println!("mc2: baking levels…");
         let (bake, skipped) =
             bake_mc2_archive(src, out_dir, &overlay_levels("mc2")?).map_err(|e| e.to_string())?;
         println!("mc2: baked {} levels", bake.outputs.len());
@@ -623,6 +627,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
         // Environment bundles need the CD catalogs (absent from
         // hard-disk-only legacy copies).
         if src.exists("DATA/PALD-0.DAT") {
+            println!("mc2: baking asset bundles…");
             let outputs =
                 crate::bundle::bake_mc2_bundles(src, out_dir).map_err(|e| e.to_string())?;
             println!(
@@ -635,6 +640,7 @@ pub fn bake_all(gamedata: &Path, out_dir: &Path) -> Result<BakeSummary, String> 
                 "note: mc2 DATA/PALD-0.DAT not found (CD catalogs missing) — skipping mc2 bundles"
             );
         }
+        println!("mc2: baking the audio bundle (music render + CD speech rip)…");
         let outputs = crate::bundle::bake_mc2_audio(src, out_dir).map_err(|e| e.to_string())?;
         if !outputs.is_empty() {
             println!(

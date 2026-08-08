@@ -382,6 +382,7 @@ pub fn bake_mc1_audio(
 
     // Sample banks. Decompressed DAT/TAB pairs are borrowed by the
     // parsed banks, so decompress all of them first.
+    println!("mc1 audio: extracting sound banks…");
     let mut raw_pairs = Vec::new();
     for bank in MC1_SOUND_BANKS {
         let dat_rel = format!("DATA/SNDS{bank}-{MC1_SOUND_QUALITY}.DAT");
@@ -458,7 +459,18 @@ pub fn bake_mc1_audio(
                 gm_songs.push((stem, song));
             }
         }
-        for (_, name, hmp_bytes) in &parsed.entries {
+        for (i, (_, name, hmp_bytes)) in parsed.entries.iter().enumerate() {
+            // The render below is the slow half of the whole first-run
+            // bake (OPL3 FM per song, GM again when a soundfont is
+            // present) — say so, per song, or a double-click console
+            // reads as hung and gets killed (Windows player report).
+            println!(
+                "mc1 music: rendering {} ({}/{} of bank {bank}{})…",
+                name.strip_suffix(".hmp").unwrap_or(name),
+                i + 1,
+                parsed.entries.len(),
+                if gm.is_some() { ", FM + GM" } else { ", FM" },
+            );
             let err = |e: String| {
                 BakeError::Level(Path::new(&dat_rel).to_path_buf(), 0, format!("{name}: {e}"))
             };
@@ -635,6 +647,7 @@ pub fn bake_mc2_audio(
         file: "SOUND.DAT".into(),
         sha256: hex(&Sha256::digest(&sound_dat_raw)),
     });
+    println!("mc2 audio: extracting sound samples…");
     let banks = crate::sound::parse_mc2_sound_dat(&sound_dat_raw)
         .map_err(|e| BakeError::Level(Path::new("SOUND/SOUND.DAT").to_path_buf(), 0, e))?;
     let (index, blob) = crate::sound::bake_blob(&banks, MC1_SOUND_RATE);
@@ -698,6 +711,7 @@ pub fn bake_mc2_audio(
                         format!("{}: {e}", sub.name),
                     )
                 };
+                println!("mc2 music: rendering {role} (GM)…");
                 let layered = sub.song.has_war_layer();
                 let base_mix = if layered {
                     crate::xmi::Mix::Ambient
@@ -761,6 +775,7 @@ pub fn bake_mc2_audio(
             .map_err(|e| BakeError::Level(cue_path.clone(), 0, e))?;
         let speech_dir = dir.join("speech");
         std::fs::create_dir_all(&speech_dir).map_err(|e| BakeError::Io(speech_dir.clone(), e))?;
+        println!("mc2 speech: ripping voiceover tracks from the CD image…");
         for (row, entry) in crate::cdtracks::CD_TRACKS.iter().enumerate() {
             // Table row r = level r → rip track r+2 (duration-fit proof
             // in the trace; row 27 implies track 29 = dead data).
@@ -768,6 +783,7 @@ pub fn bake_mc2_audio(
             let Some(track) = tracks.iter().find(|t| t.number == rip_number) else {
                 continue;
             };
+            println!("mc2 speech: track {rip_number} (level {row:02})…");
             let pcm = crate::redbook::read_track(&image, *track)
                 .map_err(|e| BakeError::Io(image.clone(), e))?;
             for (seg, &(start, len)) in entry.segments.iter().enumerate() {
