@@ -411,13 +411,20 @@ fn mc2_cave_behaviors_and_goldens() {
     // Behavior change toward retail by design: mc2l3's measured
     // record-0 planes go type 2,244 → 131, height 4,483 → 140,
     // shading 15,432 → 61, ceiling 4,770 → 132 cells.
+    // Re-pinned (2nd + 4th) for the sphere vertical-law fidelity
+    // change (ball_tick): gravity integrates every moving tick with
+    // the STRICT below-ground clamp (EF:26188-91/:26244) and grounded
+    // contact on exact landings (EF:26265) — the hidden +44 lift now
+    // cycles 0 → −16 → 0 on resting awake spheres like retail's.
+    // Observable projection unchanged (all 9 conformance suites
+    // green across the change); the hash covers the hidden field.
     assert_eq!(
         got,
         vec![
             0x1557c9632897e7dbu64,
-            0x1db7b42ea48c2610,
+            0xafda7701ddfc141d,
             0x2be8f4f0266e0a6e,
-            0xe58c989f7e70ef24,
+            0x4504ae788bc74230,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -472,11 +479,18 @@ fn mc2_cave_behaviors_and_goldens() {
     // and every walker standing on it is placed differently from the
     // first tick. Real behavior, measured against retail's own t=0
     // planes (mc2l3).
+    // 4th re-pinned for the sphere vertical-law change (strict
+    // below-ground clamp, EF:26244): a sphere landing EXACTLY on the
+    // floor keeps its fall lift one more tick, so its free-running z
+    // phase shifts one tick toward retail's — the same family the
+    // mc1l0 replay corpus pins at t=2. Per-pair conformance
+    // observables are unchanged (all 9 suites green across the
+    // change); only free-running evolutions move.
     const OBSERVABLE: [u64; 4] = [
         0xfb1faf378bf44770,
         0x8648496126e11e8d,
         0x8062dcb956c043f9,
-        0xc21c02240160df37,
+        0x93071b2fa95aa0e7,
     ];
     assert_eq!(
         obs, OBSERVABLE,

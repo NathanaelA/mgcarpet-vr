@@ -7632,3 +7632,68 @@ suites green (only the t=39412 exemplar drifted, consciously
 re-pinned with the settled note; t=23132 note updated, no drift).
 Full-take headline moved: the (5,3)/(5,4) unexplained missing block
 0'd; (9,9) life/max_life field families −97%/−95%.
+
+## 🚀 mc1l0 1:1-REPLAY CAMPAIGN OPENED 2026-08-09 — ball vertical law + possess-lob life; horizon 1 → 62, clean boundaries 1 → 196
+
+**Player directive (standing):** drive ONE lightweight level's pure
+replay to 1:1, family by family — families generalize; l1 gets
+recorded when l0 is perfect. Method settled: fix families in the
+PER-PAIR lane, certify horizons in `replay --pose-only` / full
+`replay`, never debug through compounding replays.
+
+**Baseline (l0, terrain-measured take, 7,097 pairs):** per-pair 99.93%
+pose-bit-exact (6 imperfect ticks); pose-only chained flight bit-exact
+567 boundaries, first break = the pose.z t=567 exemplar; FULL replay
+horizon was 1 boundary — first divergence t=2.
+
+**1. BALL VERTICAL LAW (the t=2 family) — FIXED, both games.** The
+replay's first wall was the authored (10,39) mana balls: the port ran
+gravity only airborne-or-launched, clamped at `z <= ground`, and
+grounded only inside the clamp. Retail (sub_27030 :29532-64 and the
+MC2 twin EF:26188-26265, VERBATIM the same): gravity integrates EVERY
+moving tick; clamp+rebound (−impact/4, zeroed ≤16) fires only
+STRICTLY below ground; grounded contact (merge/roll/friction) is
+post-clamp `z == ground`. A ball landing EXACTLY on ground keeps its
+fall lift one more tick — l0's cohort all fell 128-multiples onto
+flat ground, so the port flipped them one tick early IN LOCKSTEP
+(the t=2 z+32 cohort). PER-PAIR VERIFY CAN NEVER SEE THIS CLASS: the
+import restores retail's +46 each pair and the flip tick's
+observables coincide — only free-running evolution (replay, goldens)
+exposes it. Horizon 1 → 62 on this change alone; all 9 suites green
+(observables untouched); goldens re-pinned WITH attribution
+(mc2_cave 2, flight-tier 6, L005 full+OBSERVABLE — the observable
+moves are REAL one-tick bounce-phase shifts, corpus-certified by the
+horizon jump).
+- **Bonus fidelity:** the resting awake ball's hidden +46 now cycles
+  0 → −16 → 0 like retail's (the old at-rest gate froze it), and the
+  climb-into-terrain rebound uses retail's formula.
+
+**2. POSSESS-LOB LIFE (pair-63 family) — FIXED.** spawn_spell_lob
+gave every payload the fireball's life 21; retail's possess ctor
+sub_39A90 (:45900-16) is the family's ONE short fuse: 4096/speed =
+10 (corpus: retail lob 9/10 vs port 20/21, mc1l0 pair 63). The
+doubled range overshot close-in possess targets — the likeliest root
+of the player's "possessed tent missed in replay". l32's t=23132
+exemplar dropped its (9,1) life atoms (promoted+noted); clean replay
+boundaries 62 → 196.
+
+**NEXT WALLS (in order, exemplars pinned):**
+- **CAST PHASE (t=63, the current horizon wall):** in free replay the
+  port casts ONE TICK EARLY (port lob in obs@63, retail's first at
+  obs@64) while per-pair the same pair casts in phase — the cast
+  gate's hidden charge state runs a tick fast in evolution. Related:
+  per-pair t=49 `wizard0.hand_right` retail Some(3) vs port None (the
+  ARM side lags; 5 hand rows across the take). This family is the
+  player's "spells fired in the wrong direction" original sin lane.
+- Pose z t=567 (want 1056 got 1053, 5 rows max |d| 25) + eff_pitch
+  wrap t=3879 (2047 vs 0) — the 6 imperfect mover ticks.
+- Entity-set churn after the cast wall (sets/fields traffic) —
+  re-triage AFTER the cast phase lands; most of it is downstream.
+- Per-pair unexplained residue for reference: 8,171 field rows, top
+  families (10,39):heading 1,280 (ball aim/roll lane), player.mana +
+  (3,0):mana 737 each, (9,0)/(9,1) projectile fields (cast-adjacent).
+
+**Verification state:** 19 test binaries green (goldens re-pinned:
+mc2_cave.rs, sim_state_hash.rs, state_hash.rs — every re-pin
+annotated with its window attribution), all 9 suites green, fmt
+clean.

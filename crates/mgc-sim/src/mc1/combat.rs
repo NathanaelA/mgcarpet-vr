@@ -427,7 +427,14 @@ impl Gen {
             _ => return None,
         };
         let state = if model == 17 { 1 } else { model };
-        self.spawn_projectile(model, state, x, y, z, 384, 21, 0, sprite)
+        // The possess lob's ctor is the family's ONE short fuse:
+        // sub_39A90 (:45900-16) computes life 4096/speed = 10 where
+        // every sibling (:45861..:46135) takes 0x2000/speed = 21 —
+        // corpus-pinned (mc1l0 pair 63: retail lob 9/10 vs the port's
+        // fireball-shaped 20/21; the doubled range overshoots every
+        // close-in possess target).
+        let life = if model == 1 { 10 } else { 21 };
+        self.spawn_projectile(model, state, x, y, z, 384, life, 0, sprite)
     }
 
     /// Vertical bearing (sub_42180 :52644): the pitch whose polar step
@@ -4332,38 +4339,36 @@ impl Gen {
         let x = x0.wrapping_add(vx as u16);
         let y = y0.wrapping_add(vy as u16);
         let ground = self.ground_z(x, y) as i16;
-        // Vertical: gravity only while airborne or launched — a ball
-        // at rest stays at rest (applying gravity at rest makes
-        // settled balls oscillate 16 units).
-        let mut z = z0;
-        let mut grounded = false;
-        // MC1 gates gravity on airborne-or-launched (a ball at rest
-        // stays at rest); MC2's mover applies it unconditionally in
-        // the moving branch (EF:26188-91 — the settle gate above is
-        // what keeps resting spheres still; the obs z round-trips
-        // because the ground clamp lands the same tick).
-        if mc2 || z > ground || self.ent[i].f46 > 0 {
-            z = z.wrapping_add(self.ent[i].f46);
-            self.ent[i].f46 = (self.ent[i].f46 - 16).max(-128);
-        }
-        if z <= ground {
+        // Vertical (:29532-37 / EF:26188-91 — the twins are verbatim):
+        // z steps by the +46 lift and gravity integrates EVERY moving
+        // tick; there is no at-rest gate. The strict below-ground
+        // clamp is what keeps a resting ball's observable z pinned
+        // while its lift cycles 0 → −16 → 0 underneath.
+        let mut z = z0.wrapping_add(self.ent[i].f46);
+        self.ent[i].f46 = (self.ent[i].f46 - 16).max(-128);
+        // Clamp + rebound ONLY when the step went STRICTLY below the
+        // ground (`tempV13 > z` :29538 / `v22 > z` EF:26244): a ball
+        // landing EXACTLY on it keeps its falling lift one more tick
+        // and flips on the next. The mc1l0 replay corpus pins the
+        // phase — the authored balls all fall 128-multiples onto flat
+        // ground, and a `<=` clamp flips them one tick early (the
+        // replay t=2 z+32 cohort; per-pair verify can never see it,
+        // the import restores retail's +46 each pair). Rebound =
+        // −impact/4 truncating, zeroed at ≤ 16 (:29542-49 /
+        // EF:26244-52, the same formula in both binaries; the old
+        // MC1-only `< -64` arm was the equivalent form for falls but
+        // wrong for the climb-into-terrain case).
+        if z < ground {
             z = ground;
-            grounded = true;
             let v = self.ent[i].f46;
-            self.ent[i].f46 = if mc2 {
-                // MC2 exact transcription (EF:26244-52): rebound =
-                // −impact/4 truncating, then zeroed at ≤ 16. (The
-                // old −32 floor predated the mover's trace.)
-                let nb = -(v / 4);
-                if nb <= 16 { 0 } else { nb }
-            } else if v < -64 {
-                // MC1 bounce = -impact/4, ZEROED at <= 16 (:29538-49's
-                // `if (f46 <= 16) f46 = 0`) — rebound only past -64.
-                -v / 4
-            } else {
-                0
-            };
+            let nb = -(v / 4);
+            self.ent[i].f46 = if nb <= 16 { 0 } else { nb };
         }
+        // Grounded contact = post-clamp z ON the ground (`tempV13 ==
+        // z` :29552 / `v22 == predicted.z` EF:26265) — true on an
+        // exact landing too: the corpus rolls and frictions on the
+        // landing tick (ball 223's +150 accumulator moves at t=1).
+        let grounded = z == ground;
         // Downhill roll + friction — GROUNDED only, both games (MC1
         // sub_27030's `tempV13 == z` branch :29556-64 via
         // sub_41F50_42290 :52547; MC2 `sub_58030` inside

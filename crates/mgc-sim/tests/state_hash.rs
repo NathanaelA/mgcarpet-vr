@@ -433,13 +433,21 @@ fn level_005_golden_state_hashes() {
     // window C (sound 13 is hash-visible via the sim sounds vec), and
     // the chase z-nudge moves D/E; the m3 spawn-guard change moves
     // nothing here (no pool pressure).
+    // A-E re-pinned (post-init holds) for the ball vertical-law
+    // conformance fix (ball_tick :29532-49 / EF:26188-26252): gravity
+    // integrates every moving tick, clamp+rebound requires STRICTLY
+    // below ground, grounded contact is post-clamp z == ground. The
+    // awake pass re-arms settled balls near the human every 17-tick
+    // cycle, so their hidden +46 lift now runs retail's 0 → −16 → 0
+    // rest cycle in every window. See the OBSERVABLE verdict below
+    // for the behavior/layout attribution of this re-pin.
     const GOLDEN: [u64; 6] = [
         0x211182712dfcddda, // post-init (feature pass + disposition 0)
-        0x59d7c529578f0cd6, // A: 32 idle ticks far afield
-        0x3787ed5c6bfe724e, // B: crater trigger fired + 120 dig ticks
-        0x9c2a50d14ed0e96a, // C: ambush disposition fired
-        0x6b9ba2ef8319dbc3, // D: 64 ticks of two-hand fireball combat
-        0x3cd19f1fadd3107c, // E: 100 aftermath ticks
+        0x2a633e3dd996a877, // A: 32 idle ticks far afield
+        0x8af0a56a74730403, // B: crater trigger fired + 120 dig ticks
+        0xa564efb2b181c8f7, // C: ambush disposition fired
+        0x21094386a3e4b47c, // D: 64 ticks of two-hand fireball combat
+        0x1ab1b02c4ce699e1, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -524,13 +532,22 @@ fn level_005_golden_state_hashes() {
     // ambush window, and chasing bees now step z toward their victim
     // every tick, so creature poses from C on genuinely differ.
     // Post-init..B hold — no bee has acquired before C.
+    // The ball vertical-law fix moves OBSERVABLE at A-E — REAL
+    // behavior by design: a ball landing EXACTLY on the ground keeps
+    // its fall lift one more tick (strict below-ground clamp,
+    // :29538 / EF:26244), so every mid-settle ball's bounce phase
+    // shifts one tick. Retail-correctness is corpus-certified: the
+    // mc1l0 pure replay's bit-exact horizon moves 1 → 62 boundaries
+    // on this change alone (the t=2 z+32 cohort), while all 9
+    // per-pair conformance suites hold green. Post-init holds — the
+    // law first acts on tick 1.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
-        0x9ec1a5584565a87e, // A
-        0x2156af8d3ce3a001, // B — settler phase + feeder leash
-        0xf7692c2d2dddcdf5, // C
-        0x1d1358847f59eb01, // D
-        0x44777c2296a08f,   // E
+        0xddd8315df984d068, // A
+        0xfdef97c77cb17fe8, // B — settler phase + feeder leash
+        0x60e4a4184235a4ea, // C
+        0x3194bcefac3f8d1b, // D
+        0x1c2cfe453584342b, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,
