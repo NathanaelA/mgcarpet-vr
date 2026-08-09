@@ -252,6 +252,19 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
+    // `--out` belongs to terrain-diff (plane dumps) and extract (the
+    // manifest destination). Every other mode ignores `args.out`, and
+    // silently accepting it reads as "the tool stopped writing my
+    // file" — the classic slip is `verify-deltas --out x.tsv` for
+    // what is spelled `--csv x.tsv`.
+    if args.out.is_some() && !matches!(args.mode.as_str(), "terrain-diff" | "extract") {
+        eprintln!(
+            "error: --out is not a {} flag (terrain-diff/extract only); \
+             the verify-deltas per-pair TSV is written with --csv <path>",
+            args.mode
+        );
+        std::process::exit(2);
+    }
     let code = match args.mode.as_str() {
         "check-decode" => args
             .files
