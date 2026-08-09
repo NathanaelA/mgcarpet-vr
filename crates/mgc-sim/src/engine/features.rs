@@ -529,6 +529,29 @@ pub(crate) struct Ent {
     pub(crate) site_z: i16,
 }
 
+impl Ent {
+    /// The aim-z bracket (MC1 sub_524C0/sub_524E0 :62503-14, MC2
+    /// twin sub_65580/sub_655A0 EF:62750-67): homing, acquisition
+    /// and impact placement measure a target at its z-box center
+    /// (z + signed +78) EXCEPT model 2, measured at the RAW z. Both
+    /// games guard on the MODEL byte alone (MC1 +65, MC2 +64 — each
+    /// layout's model slot; remc2 names its +64 `model_0x40_64`,
+    /// values "2 - castle"). For a castle (3,2) the raw z is the
+    /// ground under the flag — projectiles home on the FLAG, not
+    /// 8192 under the base (+78 is the castle's 0xE000 collision
+    /// marker, not a center). The MC2 class-3 acquire walk routes
+    /// model 2 through the dedicated raw-position castle scorer
+    /// sub_685D0 (EF:54790/54899/54945) — same cones/score, so the
+    /// guard alone reproduces it.
+    pub(crate) fn aim_z(&self) -> i16 {
+        if self.model65 == 2 {
+            self.z
+        } else {
+            self.z.wrapping_add(self.f78 as i16)
+        }
+    }
+}
+
 /// Pending MC2 player debuff-stamp hits (slow webs, paralyze webs).
 /// Manual Hash: contributes to the state hash ONLY while hits are
 /// pending — hash-transparent when idle (the Planes ceiling / Rec par3

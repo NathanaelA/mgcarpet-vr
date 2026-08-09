@@ -2064,8 +2064,8 @@ impl World {
             x: e.x as f32 / 256.0,
             z: e.y as f32 / 256.0,
             // The acquire aims at the +78 half-height point
-            // (`sub_655C0`).
-            alt: e.z.wrapping_add(e.f78 as i16) as f32 / 256.0,
+            // (`sub_655C0`) — castles at the raw z (the flag).
+            alt: e.aim_z() as f32 / 256.0,
         })
     }
 

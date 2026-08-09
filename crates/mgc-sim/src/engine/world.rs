@@ -5613,11 +5613,10 @@ impl World {
             let e = &self.g.ent[slot as usize];
             // The acquire aims at the +78 half-height point — except
             // castles (sub_524C0's model-2 guard aims at the flag).
-            let lift = if e.model65 == 2 { 0 } else { e.f78 as i16 };
             Some(AimLock {
                 x: e.x as f32 / 256.0,
                 z: e.y as f32 / 256.0,
-                alt: e.z.wrapping_add(lift) as f32 / 256.0,
+                alt: e.aim_z() as f32 / 256.0,
             })
         };
         [hand(false), hand(true)]
@@ -11065,6 +11064,150 @@ mod tests {
         assert!(
             w.g.ent[m].mail[0].1 >= 2000 || w.g.ent[m].act_life < before,
             "the strike must deliver the storm's 2000 to the creature"
+        );
+    }
+
+    /// THE AIM-Z BRACKET (`Ent::aim_z` — sub_524C0/sub_524E0
+    /// :62503-14): per-tick homing (sub_52550) measures its target at
+    /// z + signed +78 EXCEPT model 2, measured RAW. A castle's +78 is
+    /// the 0xE000 (−8192) collision marker, so the unguarded lift
+    /// steered every homing projectile at a point 8192 UNDER the
+    /// mound — the player report: fireballs/meteors dive sharply at
+    /// the castle base, with only the (already-guarded) landing
+    /// teleport putting the burst at the flag.
+    #[test]
+    fn homing_steers_at_the_castle_flag_not_under_the_mound() {
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = flat_world();
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: true,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        let (cx, cy) = (0x8000u16, 0x8000u16);
+        let ground = w.g.ground_z(cx, cy) as i16;
+
+        // A rival castle with the level-1 extents applied — f78 takes
+        // the 0xE000 z-center marker (sub_37150).
+        let castle = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.tick70 = 4;
+            e.id24 = 3;
+            e.x = cx;
+            e.y = cy;
+            e.z = ground;
+        }
+        w.g.castle_extents(castle, 1);
+        assert_eq!(
+            w.g.ent[castle].f78, 0xE000,
+            "fixture vacuous without the castle z-center marker"
+        );
+
+        // A player fireball 16 tiles west, locked onto the castle.
+        let (bx, by, bz) = (cx - 4096, cy, ground + 1024);
+        let b = w.g.spawn_fireball(bx, by, bz).expect("fireball");
+        w.g.arm_projectile(
+            b,
+            PLAYER_TARGET,
+            3,
+            0xFF,
+            castle as u16,
+            cx,
+            cy,
+            ground,
+            780,
+            0,
+        );
+
+        w.g.proj_tick(b, &ctx);
+
+        let dh = Gen::isqrt(Gen::dist2_sq(bx, by, cx, cy) as u32) as i32;
+        let flag = Gen::pitch_toward(bz, ground, dh);
+        let under_mound = Gen::pitch_toward(bz, ground.wrapping_add(0xE000u16 as i16), dh);
+        assert_ne!(
+            flag, under_mound,
+            "fixture vacuous: the two laws agree at this geometry"
+        );
+        assert_eq!(
+            w.g.ent[b].f36, flag,
+            "the homing tick must steer at the castle's RAW z (the flag)"
+        );
+    }
+
+    /// The MC2 twin (sub_65580/sub_655A0 EF:62750-67, the same
+    /// model-2 guard — remc2's `model_0x40_64` value key reads
+    /// "2 - castle"): the flyer homing tick steers at a castle's RAW
+    /// z. The old port guarded on the CLASS byte, so castles (class
+    /// 3) took the −8192 lift and dove at the mound exactly like the
+    /// MC1 bug.
+    #[test]
+    fn mc2_flyer_homing_steers_at_the_castle_flag() {
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = mc2_flat_world();
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pdead: true,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        let (cx, cy) = (0x8000u16, 0x8000u16);
+        let ground = w.g.ground_z(cx, cy) as i16;
+
+        // A rival castle wearing the settled-tick collision layout
+        // (the every-other-tick sub_37150 self-heal: extents +
+        // f78 = 0xE000).
+        let castle = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[castle];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.tick70 = 4;
+            e.id24 = 2;
+            e.x = cx;
+            e.y = cy;
+            e.z = ground;
+            e.max_life = 1000;
+            e.act_life = 1000;
+            e.f78 = 0xE000;
+            e.f80 = 0x8A0;
+            e.f82 = 0x8A0;
+            e.f84 = 0x4000;
+        }
+
+        // A player fireball 16 tiles west, locked onto the castle.
+        let (fx, fy, fz) = (cx - 4096, cy, ground + 1024);
+        let f = w.g.mc2_spawn_cast_proj(0, fx, fy, fz).expect("fireball");
+        w.g.ent[f].id24 = PLAYER_TARGET;
+        w.g.ent[f].f146 = castle as u16;
+
+        w.g.mc2_proj_tick(f, &ctx);
+
+        let dh = Gen::isqrt(Gen::dist2_sq(fx, fy, cx, cy) as u32) as i32;
+        let flag = Gen::pitch_toward(fz, ground, dh);
+        let under_mound = Gen::pitch_toward(fz, ground.wrapping_add(0xE000u16 as i16), dh);
+        assert_ne!(
+            flag, under_mound,
+            "fixture vacuous: the two laws agree at this geometry"
+        );
+        assert_eq!(
+            w.g.ent[f].f36, flag,
+            "the MC2 flyer homing tick must steer at the castle's RAW z (the flag)"
         );
     }
 

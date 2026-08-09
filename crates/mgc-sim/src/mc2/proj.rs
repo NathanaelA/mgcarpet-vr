@@ -983,23 +983,22 @@ impl Gen {
         match self.mc2_target(self.ent[i].f146, ctx) {
             Some((tx, ty, tz)) => {
                 // `sub_65610` steers at the target RAISED to its z-box
-                // CENTER (`sub_65580` EF:62750: z += f78 unless the
-                // entity is class 2 — the struct's `model_0x40_64` is
-                // the CLASS byte; restored by `sub_655A0` after). The
-                // acquisition sites already apply the same raise.
-                // Without it the meteor aims a half-box low every
-                // homing tick and grazes under small high-altitude
-                // flyers. The PLAYER is a raised victim too — retail's
-                // player is a boxed pool wizard and `sub_65580` lifts
-                // it like any other; the pose-only player's box center
-                // is pz + PLAYER_HH.
+                // CENTER (`sub_65580` EF:62750: z += f78 unless MODEL
+                // 2 — [`Ent::aim_z`]; `model_0x40_64` IS the model
+                // byte, per its own value key "2 - castle": castles
+                // home at the FLAG, not 8192 under the base; restored
+                // by `sub_655A0` after). The acquisition sites apply
+                // the same raise. Without it the meteor aims a
+                // half-box low every homing tick and grazes under
+                // small high-altitude flyers. The PLAYER is a raised
+                // victim too — retail's player is a boxed pool wizard
+                // and `sub_65580` lifts it like any other; the
+                // pose-only player's box center is pz + PLAYER_HH.
                 let target = self.ent[i].f146;
                 let tz = if target == PLAYER_TARGET {
                     tz + crate::mc1::combat::PLAYER_HH as i16
-                } else if self.ent[target as usize].class64 != 2 {
-                    tz + self.ent[target as usize].f78 as i16
                 } else {
-                    tz
+                    self.ent[target as usize].aim_z()
                 };
                 let e = &self.ent[i];
                 let (yaw, pitch) = (e.f30, e.f32);
@@ -1239,11 +1238,11 @@ impl Gen {
                 // (`sub_10C80`'s 3-D window) reaches the victim. At
                 // the raw origin a tall-offset flyer (wyvern f78 ≈
                 // 937 retail-derived) sat entirely above its own
-                // burst. Class-2 exempt like every sub_65580 site.
+                // burst. Model-2 exempt ([`Ent::aim_z`]) like every
+                // sub_65580 site — castle hits land at the flag.
                 let (vx, vy, vz) = {
                     let t = &self.ent[v];
-                    let lift = if t.class64 != 2 { t.f78 as i16 } else { 0 };
-                    (t.x, t.y, t.z.wrapping_add(lift))
+                    (t.x, t.y, t.aim_z())
                 };
                 self.move_relink(i, vx, vy, vz);
                 v as u16
@@ -1447,7 +1446,11 @@ impl Gen {
                 if d > wiz_range {
                     continue;
                 }
-                let pos = (e.x, e.y, e.z + e.f78 as i16);
+                // Castles (3,2) score at the RAW z — the retail walk
+                // routes model 2 through the raw-position castle
+                // scorer sub_685D0 (EF:54790/54899/54945), same
+                // cones/score as the bracketed sub_68490.
+                let pos = (e.x, e.y, e.aim_z());
                 consider(self, &mut best, v as u16, pos, yc, wiz_pc);
             }
             if let Some((hx, hy, hz)) = human {
@@ -1487,7 +1490,7 @@ impl Gen {
                         continue;
                     }
                 }
-                let pos = (e.x, e.y, e.z + e.f78 as i16);
+                let pos = (e.x, e.y, e.aim_z());
                 consider(self, &mut best, v as u16, pos, yc, pc);
             }
         }
@@ -1504,14 +1507,7 @@ impl Gen {
                 {
                     continue;
                 }
-                consider(
-                    self,
-                    &mut best,
-                    v as u16,
-                    (e.x, e.y, e.z + e.f78 as i16),
-                    yc,
-                    pc,
-                );
+                consider(self, &mut best, v as u16, (e.x, e.y, e.aim_z()), yc, pc);
             }
         }
         if buildings {
@@ -1535,14 +1531,7 @@ impl Gen {
                 {
                     continue;
                 }
-                consider(
-                    self,
-                    &mut best,
-                    v as u16,
-                    (e.x, e.y, e.z + e.f78 as i16),
-                    yc,
-                    pc,
-                );
+                consider(self, &mut best, v as u16, (e.x, e.y, e.aim_z()), yc, pc);
             }
         }
         if best.is_none()
@@ -1563,14 +1552,7 @@ impl Gen {
                 {
                     continue;
                 }
-                consider(
-                    self,
-                    &mut best,
-                    v as u16,
-                    (e.x, e.y, e.z + e.f78 as i16),
-                    yc,
-                    pc,
-                );
+                consider(self, &mut best, v as u16, (e.x, e.y, e.aim_z()), yc, pc);
             }
         }
         best.map(|(target, _)| target)
@@ -1601,12 +1583,13 @@ impl Gen {
             return false;
         };
         let alarm = Self::mc2_aim_lists(probe.model).is_some_and(|l| l.7);
-        // `sub_655C0`: the lock + the desired aim toward it.
+        // `sub_655C0`: the lock + the desired aim toward it (the
+        // sub_65580 bracket — model-2 raw, [`Ent::aim_z`]).
         let (tx, ty, tz) = if target == PLAYER_TARGET {
             (ctx.px, ctx.py, ctx.pz)
         } else {
             let t = &self.ent[target as usize];
-            (t.x, t.y, t.z + t.f78 as i16)
+            (t.x, t.y, t.aim_z())
         };
         let e = &self.ent[i];
         let yaw = Self::angle_between(e.x, e.y, tx, ty);

@@ -902,6 +902,40 @@ post-fix).
 
 ## Resolved
 
+- **THE AIM-Z BRACKET / CASTLE-FLAG HOMING (2026-08-09, player
+  report).** Homing, acquisition and impact placement measure a
+  target at z + signed +78 EXCEPT model 2, measured RAW — MC1
+  sub_524C0/sub_524E0 (:62503-14, bracketing sub_52550 homing and the
+  sub_54A90 scorer), MC2 twin sub_65580/sub_655A0 (EF:62750-67,
+  bracketing sub_65610/sub_655C0/sub_68490); the MC2 class-3 acquire
+  walk additionally routes model 2 through the raw-position castle
+  scorer sub_685D0 (EF:54790/54899/54945 — same cones/score). The
+  guard reads the MODEL byte alone in both games (MC1 +65, MC2 +64).
+  Ported as `Ent::aim_z`, now used at every aim site. What was wrong:
+  MC1 homing/acquire lifted castles by their +78 = 0xE000 (−8192)
+  collision marker — every homing projectile (fireball, meteor,
+  volcano…) steered at a point 8192 UNDER the mound and dove sharply
+  at the castle base, with only the (already-guarded) landing
+  teleport putting the burst at the flag; MC2 guarded on the CLASS
+  byte (a remc2 field-naming trap — `model_0x40_64` IS the model,
+  value key "2 - castle"), so castles took the same wrong lift and
+  class-2 statics missed their correct one. Side law, same guard:
+  model-2 CREATURES (the MC1 m2 bee) are aimed at their RAW z —
+  L005 goldens D/E re-pinned for exactly this (the D-window fireball
+  combat fights bees). Pinned by
+  `homing_steers_at_the_castle_flag_not_under_the_mound` +
+  `mc2_flyer_homing_steers_at_the_castle_flag` (both proven
+  non-vacuous against both bug variants). EXPECT MOVEMENT in the
+  z-offset conformance families on the next takes — castle-homing
+  flights (mc1hwl0 slot-522 meteor churn is castle-homing) should
+  grade toward retail. NOT this fix: the castle spawn z +64 residual
+  (retail 7872 vs port 7808, mc1l32 t=5502+ exemplars) — that's the
+  entity-z datum lead, still open. FLAGGED, not yet fixed: MC2
+  castle-piece turret fire aims at the target's RAW z where retail's
+  sub_655C0 lifts non-model-2 targets (mc2/castle.rs::mc2_piece_fire
+  EF:30292 — turret shots aim a half-box low at creatures/wizards);
+  separate change, needs its own verification pass.
+
 - **⭐ SESSION-10 CLOSE (2026-08-05, THE LANDING ROUND) — authoritative
   full-take numbers on the final tree, all six takes, suites promoted
   203/203 as-expected, 0 regressions, `MGC_REQUIRE_GOLDENS=1` 0

@@ -441,13 +441,26 @@ fn level_005_golden_state_hashes() {
     // cycle, so their hidden +46 lift now runs retail's 0 → −16 → 0
     // rest cycle in every window. See the OBSERVABLE verdict below
     // for the behavior/layout attribution of this re-pin.
+    // D/E re-pinned (post-init through C hold) for the AIM-Z BRACKET
+    // law (`Ent::aim_z` — sub_524C0/sub_524E0 :62503-14, the MC2 twin
+    // sub_65580/sub_655A0 EF:62750-67): homing (sub_52550) and the
+    // sub_54A90 acquire scorer measure a target at z + signed +78
+    // EXCEPT model 2, measured RAW — the guard reads the MODEL byte
+    // alone, so castles (3,2) home at the FLAG (the player's "sharp
+    // dive at the castle base" report) and m2 BEES are aimed at their
+    // raw z like retail. This fixture's D-window fireballs fight the
+    // ambush BEES, which is what moves D/E (attributed by a
+    // class-3-only guard experiment: restricting the guard still
+    // moves D/E — the impact-landing site already carried the
+    // model-2 guard, so homing/acquire were the inconsistent
+    // holdouts). Behavior change toward retail by design.
     const GOLDEN: [u64; 6] = [
         0x211182712dfcddda, // post-init (feature pass + disposition 0)
         0x2a633e3dd996a877, // A: 32 idle ticks far afield
         0x8af0a56a74730403, // B: crater trigger fired + 120 dig ticks
         0xa564efb2b181c8f7, // C: ambush disposition fired
-        0x21094386a3e4b47c, // D: 64 ticks of two-hand fireball combat
-        0x1ab1b02c4ce699e1, // E: 100 aftermath ticks
+        0x7744e84f808b70c6, // D: 64 ticks of two-hand fireball combat
+        0x7bb358e15e31d7ee, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -541,13 +554,19 @@ fn level_005_golden_state_hashes() {
     // on this change alone (the t=2 z+32 cohort), while all 9
     // per-pair conformance suites hold green. Post-init holds — the
     // law first acts on tick 1.
+    // The aim-z bracket law (see the GOLDEN note) moves D-E — REAL
+    // behavior by design: the D-window fireballs acquire and home on
+    // the ambush m2 BEES at their RAW z (retail's sub_524C0 model-2
+    // guard), so projectile pitches, flight paths and downstream
+    // combat genuinely differ. Post-init..C hold — nothing is aimed
+    // at before D.
     const OBSERVABLE: [u64; 6] = [
         0x3b95f7fa279c099d, // post-init — + unclaimed-dwelling poses
         0xddd8315df984d068, // A
         0xfdef97c77cb17fe8, // B — settler phase + feeder leash
         0x60e4a4184235a4ea, // C
-        0x3194bcefac3f8d1b, // D
-        0x1c2cfe453584342b, // E
+        0x0c46a73cb40f752f, // D
+        0xc8a82f9165fdfdc8, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

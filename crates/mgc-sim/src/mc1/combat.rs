@@ -595,7 +595,7 @@ impl Gen {
             if c.id24 == own {
                 continue;
             }
-            let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+            let (tx, ty, tz) = (c.x, c.y, c.aim_z());
             consider(tx, ty, tz, j as u16, creature_pitch, &mut best);
         }
         // The significant-entity list (sub_54520 list 1): rival
@@ -618,10 +618,10 @@ impl Gen {
             }
             match c.model65 {
                 0 | 1 if c.tick70 == 1 => {
-                    let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+                    let (tx, ty, tz) = (c.x, c.y, c.aim_z());
                     consider(tx, ty, tz, j as u16, pitch_cone, &mut best);
                 }
-                2 => consider(c.x, c.y, c.z, j as u16, pitch_cone, &mut best),
+                2 => consider(c.x, c.y, c.aim_z(), j as u16, pitch_cone, &mut best),
                 _ => {}
             }
         }
@@ -703,7 +703,7 @@ impl Gen {
                     _ => false,
                 };
                 if candidate {
-                    consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+                    consider(c.x, c.y, c.aim_z(), j as u16);
                 }
             }
             return best.map(|(slot, _)| slot);
@@ -718,7 +718,7 @@ impl Gen {
                 if c.id24 == own {
                     continue;
                 }
-                consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+                consider(c.x, c.y, c.aim_z(), j as u16);
             }
         }
         // Both remaining sets scan the rival-wizard list (live, not
@@ -733,7 +733,7 @@ impl Gen {
             {
                 continue;
             }
-            consider(c.x, c.y, c.z.wrapping_add(c.f78 as i16), j as u16);
+            consider(c.x, c.y, c.aim_z(), j as u16);
         }
         // Castles ride the GENERAL acquire only (sub_54520 cases
         // 0/3/4/0x10 walk the significant list's model-2 members
@@ -807,13 +807,7 @@ impl Gen {
             {
                 continue;
             }
-            consider(
-                c.x,
-                c.y,
-                c.z.wrapping_add(c.f78 as i16),
-                j as u16,
-                &mut best,
-            );
+            consider(c.x, c.y, c.aim_z(), j as u16, &mut best);
         }
         if own != PLAYER_TARGET && !self.player_invisible {
             consider(
@@ -835,8 +829,10 @@ impl Gen {
     }
 
     /// sub_52550 (:62534): per-tick homing — recompute bearing to the
-    /// target (z-centered) and turn yaw/pitch capped at the row's
-    /// v_2/v_6.
+    /// target (z-centered via the
+    /// [`crate::engine::features::Ent::aim_z`] model-2 bracket:
+    /// castles home at the FLAG, not 8192 under the base) and turn
+    /// yaw/pitch capped at the row's v_2/v_6.
     fn home(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let tgt = self.ent[i].f146;
         let (tx, ty, tz) = if tgt == PLAYER_TARGET {
@@ -849,7 +845,7 @@ impl Gen {
                 return false;
             }
             let c = &self.ent[t];
-            (c.x, c.y, c.z.wrapping_add(c.f78 as i16))
+            (c.x, c.y, c.aim_z())
         };
         let e = &self.ent[i];
         let yaw = Self::angle_between(e.x, e.y, tx, ty);
@@ -1314,7 +1310,7 @@ impl Gen {
             if !candidate {
                 continue;
             }
-            let (tx, ty, tz) = (c.x, c.y, c.z.wrapping_add(c.f78 as i16));
+            let (tx, ty, tz) = (c.x, c.y, c.aim_z());
             let ty_yaw = Self::angle_between(px, py, tx, ty);
             let dy = Self::angdist(yaw, ty_yaw) as usize;
             if dy > 0x71 {
@@ -1362,11 +1358,7 @@ impl Gen {
             return;
         }
         let (px, py, pz) = (self.ent[i].x, self.ent[i].y, self.ent[i].z);
-        let (tx, ty, tz) = (
-            self.ent[t].x,
-            self.ent[t].y,
-            self.ent[t].z.wrapping_add(self.ent[t].f78 as i16),
-        );
+        let (tx, ty, tz) = (self.ent[t].x, self.ent[t].y, self.ent[t].aim_z());
         let yaw = Self::angle_between(px, py, tx, ty);
         let dh = Self::isqrt(Self::dist2_sq(px, py, tx, ty) as u32) as i32;
         let pitch = Self::pitch_toward(pz, tz, dh);
@@ -2799,18 +2791,9 @@ impl Gen {
             match v {
                 MailTarget::Pool(j) => {
                     // The +78 aim lift skips castles (sub_524C0's
-                    // model-2 guard): a castle strike lands at the
-                    // flag, not 8192 under the mound.
-                    let lift = if self.ent[j].model65 == 2 {
-                        0
-                    } else {
-                        self.ent[j].f78 as i16
-                    };
-                    let (jx, jy, jz) = (
-                        self.ent[j].x,
-                        self.ent[j].y,
-                        self.ent[j].z.wrapping_add(lift),
-                    );
+                    // model-2 guard, [`Ent::aim_z`]): a castle strike
+                    // lands at the flag, not 8192 under the mound.
+                    let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].aim_z());
                     self.move_relink(i, jx, jy, jz);
                 }
                 MailTarget::Player => {
