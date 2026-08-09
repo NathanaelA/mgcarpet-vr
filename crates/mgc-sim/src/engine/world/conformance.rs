@@ -1902,7 +1902,13 @@ fn import_ent(r: &RetailEntMc1, row156: u8, tr: &dyn Fn(u16) -> u16) -> Ent {
         flags: r.flags & !4,
         next20: 0,
         prev22: 0,
-        id24: tr(r.id24),
+        // Class-11 id24 is the trigger's DISPOSITION id, not a slot
+        // reference: a dis that numerically equals the human's pool
+        // slot must not become PLAYER_TARGET (l32's breadcrumb dis 14
+        // vs human slot 14 — the fire resolved dis 65535, whose table
+        // rows are the consumed load-sentinel set, and the mass spawn
+        // silently vanished; obs untr() masked the id from the diff).
+        id24: if r.class64 == 11 { r.id24 } else { tr(r.id24) },
         f38: tr(r.f38),
         f40: tr(r.f40),
         f46: r.f46,

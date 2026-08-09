@@ -7537,11 +7537,14 @@ recording with terrain — need not be a full/better run.
   ticks down, never dies, alive 11,000+ ticks to take end. The PORT
   KILLS IT within one tick (stamps 0x400) — every pair, 11,215 flags
   rows. The port does not reproduce this retail bug; it silently
-  fixes it. **RULING OWED: reproduce-or-patch** (smells like a
-  patches-class toggle; retail's wedge mechanism — why its dispatcher
-  never advances the entity — is undug; NB the meteor-trail session's
-  "dispatchers refuse 0x80 emitters" rhyme, and the entity carries
-  0x80). Birth pair also shows the terrain-datum floor (port z 6272).
+  fixes it. **RULED same day, re-confirmed 2026-08-08: do NOT
+  reproduce** — the port's one-tick kill is the kept behavior
+  (DEVIATIONS.md "the stuck explosion", roster rule
+  `mc1l32-stuck-explosion-wedge`, exemplars expected-fail by design;
+  wedge-mechanism dig demoted to curiosity — NB the meteor-trail
+  session's "dispatchers refuse 0x80 emitters" rhyme, and the entity
+  carries 0x80). Birth pair also shows the terrain-datum floor (port
+  z 6272).
 - **METEOR-STORM CHURN (the take's dominant entity-set family).**
   (10,0) 1,120 missing / 2,179 extra + (9,0) 1,341/1,405 from t≈414
   on, retail >16-LCG-draw bursts on 26 pairs — the ambient meteor
@@ -7557,3 +7560,75 @@ recording with terrain — need not be a full/better run.
 
 Suites: mc1l32 384 fixtures baseline all-as-expected; all other
 suites untouched.
+
+## 🏆 mc1l32 SETTLE SESSION 2026-08-09 — the (11,9) spawn trigger and the (9,9) block, both to root cause
+
+**Player directive:** stuck explosion stays ruled closed (re-confirmed);
+settle the other two stories for good.
+
+**1. The (11,9) SPAWN TRIGGER (exemplar t=39412) — IMPORTER BUG, FIXED.**
+The port's trigger probed and MATCHED (overlap true, phase f63=104
+aligned, pose inside the 768+119 AABB with margin) and fired — but
+`import_ent` (conformance.rs) translated `id24` through the human-slot
+map for EVERY class, and for class-11 triggers id24 is the DISPOSITION
+id, not a slot reference. l32's breadcrumb disposition is 14 == this
+take's human slot 14, so the armed trigger imported with dis
+`PLAYER_TARGET` (65535) and the fire resolved 134 load-sentinel
+(dis −1) rows, all consumed at load: a silent no-op. Self-concealing:
+the obs projection `untr()` mapped 65535 back to 14, so no id diff ever
+surfaced, and the differ's flags row was absent because BOTH arms kill
+the trigger (0x400) on fire. Fix: class-11 id24 imports untranslated.
+Post-fix the pair spawns the full dis-14 set — 30×(5,3) worm chains
+(17 slots each) + 21×(5,4) + the next (11,9) breadcrumb (dis 15,
+slot 622) = 532 slots, exactly retail's free-stack delta (893→361).
+The old "(5,3) 510-row missing block t=39412+" is GONE; residue at the
+fire pair = free-list slot-order desync (361+361 rows, roster-tagged)
++ pose-phase, plus the pre-existing 44 terrain-z field rows.
+- **The intake's story was wrong twice**: not "2 worm chains" (30),
+  and not "the trigger never fires" (it fired into a mangled dis).
+- **NATIVE GAMEPLAY WAS NEVER AFFECTED** — spawn_postinit sets id24
+  from the THING record; `tr()` exists only in the conformance import.
+  No patches toggle needed, nothing player-visible.
+- **LEAD (unverified): MC2 import** keys id24 off `owner28` — check
+  whether an MC2 class-11 switch whose dis == the recorded carpet slot
+  can take the same collision. All MC2 suites green today, no exemplar.
+- **Trap for future digs:** in per-pair verify, a one-shot's
+  fire_disposition CONSUMES `table` rows in the shared World (and the
+  pose-alt second pass re-fires into the already-consumed table), so
+  "fires but spawns nothing" can also mean "someone consumed the dis
+  earlier in THIS RUN" — rule that out with an env-gated fire log
+  before blaming the bake.
+
+**2. The (9,9) BLOCK (exemplar t=23132; 881 missing + 13k field rows,
+t=21041..34571) — DECOMPOSED: two segment micro-laws FIXED, geometry
+residue RULED terrain-family.**
+(9,9) = the zigzag-lightning one-frame beam SEGMENTS (sprite 216), born
+8·steps+1 per beam by the m5 multishot volleys (owner = (5,5) creatures
+sieging the player near the dug castle; bursts of 282/142/102 rows in
+single pairs). No rng rows, no wrong-branch spawns — the volleys fire
+in both arms. Three sub-families:
+- **max_life ctor gap (2,940 rows, FIXED):** retail segments carry
+  max_life 0/−1 in lockstep with the slot-order act_life; the port
+  left the NewEvent default 300. Ctor now mirrors the value.
+- **pre/post-decrement kill (3,764 rows, FIXED):** retail's state-14
+  arm decrements THEN tests (dying segments read −2); the port killed
+  on the pre-decrement −1. Death frames identical either way — the
+  recording pins the residual value. (The pre/post-decrement error
+  class strikes again; remc1's class-9 table is truncated at state 14,
+  so the corpus is the only witness.)
+  A/B to t=24000: life rows 1662→43, max_life 1171→63, every other
+  row class byte-identical.
+- **Geometry displacement (RULED, stays open-frozen):** the
+  missing/extra bursts and x/y/z rows all sit in tiles x16-31/y176-223
+  where retail terrain is dug (retail z 6107-6270 vs pristine 6272,
+  mean |dz| 175). Shooter z, launch z, pitch, and the beam's
+  terrain-stop all shift on pristine planes → sprays land elsewhere.
+  This is the terrain-datum family (bee-session cause A), frozen
+  pending any terrain-channel l32 take. NOT a port bug; no roster rule
+  (deliberately visible, like the rest of the z class).
+
+**Verification:** 369 mgc-sim tests + goldens green; all 9 frozen
+suites green (only the t=39412 exemplar drifted, consciously
+re-pinned with the settled note; t=23132 note updated, no drift).
+Full-take headline moved: the (5,3)/(5,4) unexplained missing block
+0'd; (9,9) life/max_life field families −97%/−95%.

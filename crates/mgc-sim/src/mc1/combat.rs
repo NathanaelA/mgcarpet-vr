@@ -1133,11 +1133,15 @@ impl Gen {
             // :63349-53): kill on the PRE-decrement value so every
             // segment renders exactly one frame regardless of whether
             // its slot ticks before or after the beam's.
+            // Decrement THEN test (the l32 corpus: every dying
+            // segment reads act_life −2, never −1 — the post-
+            // decrement kill), below −1. Death frames are identical
+            // to the pre-decrement form; only the residual value in
+            // the record differs, and the recording pins it.
             14 => {
-                if self.ent[i].act_life < 0 {
+                self.ent[i].act_life -= 1;
+                if self.ent[i].act_life < -1 {
                     self.ent[i].flags |= 0x400;
-                } else {
-                    self.ent[i].act_life -= 1;
                 }
                 false
             }
@@ -1949,7 +1953,12 @@ impl Gen {
                 }
                 self.link(s, disp.0, disp.1, disp.2);
                 self.set_sprite(s, 216);
-                self.ent[s].act_life = if s >= beam_slot { 0 } else { -1 };
+                // The slot-order life lands in BOTH halves of the
+                // pair (l32 corpus: segment max_life is 0/−1 in
+                // lockstep with act_life, never a refill value).
+                let sl = if s >= beam_slot { 0 } else { -1 };
+                self.ent[s].act_life = sl;
+                self.ent[s].max_life = sl as u32;
             }
             // Amplitude pinches toward the endpoint (:63358-62).
             let amp = (v30 / 2).clamp(0, 8);
