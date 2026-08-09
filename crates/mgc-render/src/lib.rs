@@ -3383,6 +3383,21 @@ impl Renderer {
         self.set_lights(&[]);
         self.clear_sky();
         self.wave_mode = 0;
+        self.fire_particles = Vec::new();
+        self.bolt_segments = Vec::new();
+        // The map surfaces die with their level: the disc/pane draws
+        // are gated on these bind groups, and the screen-space marker
+        // layers (dots, stamps, ants, objective marks) append to the
+        // UI quad stream — any of them surviving would draw over the
+        // frontend.
+        self.map_bind_group = None;
+        self.minimap_bind_group = None;
+        self.screen_dots = Vec::new();
+        self.map_stamps = Vec::new();
+        self.map_path = None;
+        self.objective_marks = Vec::new();
+        self.objective_tick = 0;
+        self.map_view = false;
     }
 
     pub fn load_level(&mut self, level: &LevelView, overlay: &MapOverlay) {

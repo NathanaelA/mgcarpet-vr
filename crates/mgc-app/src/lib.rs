@@ -2290,10 +2290,6 @@ impl App {
         self.menu = None;
         if let Some(r) = &mut self.renderer {
             r.clear_level();
-            r.set_map_stamps(Vec::new());
-            r.set_map_path(None);
-            r.set_objective_marks(Vec::new(), 0);
-            r.set_map_view(false);
         }
         // Per-level transients die with the session. The mini-menu is
         // one of them: it is an IN-LEVEL surface, and a stale panel
