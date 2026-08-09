@@ -201,10 +201,15 @@ impl Gen {
         }
         let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
         let mut victims: Vec<(usize, u32)> = Vec::new();
+        // The broadcast window centers on the NEAREST tile — retail's
+        // sub_120B0 rounds (`(+72 + 128) >> 8`) where the truncation
+        // dropped the advancing edge: the l0 t=91 tent claim needs
+        // the flash at y=70.63 to sweep tile row 73 (its big-extent
+        // victim overlaps from outside a truncated window).
         for dy in -r..=r {
             for dx in -r..=r {
-                let tx = ((wx >> 8) as i32 + dx) as u8;
-                let ty = ((wy >> 8) as i32 + dy) as u8;
+                let tx = (((wx as i32 + 128) >> 8) + dx) as u8;
+                let ty = (((wy as i32 + 128) >> 8) + dy) as u8;
                 let mut j = self.map_entity[tile(tx, ty)] as usize;
                 while j != 0 {
                     let c = &self.ent[j];
@@ -1245,12 +1250,19 @@ impl Gen {
                 }
             }
         }
-        self.ent[i].act_life -= 1;
         if let Some(j) = hit {
-            let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].z);
+            // The HIT tick detonates before the life decrement (the
+            // l0 impact record keeps life 5, corpus t=69), parking
+            // the lob AT the victim's AIM point — x/y and the z+f78
+            // bracket (the tent lands the record at 896 − 8192 =
+            // −7296).
+            let (jx, jy, jz) = (self.ent[j].x, self.ent[j].y, self.ent[j].aim_z());
             self.move_relink(i, jx, jy, jz);
             self.proj_explode(i, ctx, Some(MailTarget::Pool(j)), false, false);
-        } else if self.ent[i].act_life < 0 {
+            return false;
+        }
+        self.ent[i].act_life -= 1;
+        if self.ent[i].act_life < 0 {
             self.proj_explode(i, ctx, None, false, false);
         }
         false
@@ -1393,25 +1405,37 @@ impl Gen {
         let own = self.ent[i].id24;
         let balls_only = self.ent[i].model65 == 17;
         let mut found = None;
-        let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
-        'scan: for dy in -r..=r {
-            for dx in -r..=r {
-                let tx = ((tmp.0 >> 8) as i32 + dx) as u8;
-                let ty = ((tmp.1 >> 8) as i32 + dy) as u8;
-                let mut j = self.map_entity[tile(tx, ty)] as usize;
-                while j != 0 {
-                    let c = &self.ent[j];
-                    if c.flags & 8 != 0
-                        && c.class64 == 10
-                        && (c.model65 == 39 || (!balls_only && matches!(c.model65, 40 | 45)))
-                        && (balls_only || (c.id24 != own && c.f144 != own))
-                        && self.ent_overlap(i, j)
-                    {
-                        found = Some(j);
-                        break 'scan;
-                    }
-                    j = c.next20 as usize;
+        // sub_11AC0's geometry exactly: the scan center is the
+        // NEAREST tile (`(+72 + 128) >> 8`, :17046-47) and the
+        // neighborhood is the SEARCH.DAT ring iterator (sub_11410
+        // rings 0..=(f80+255)>>8) — the retail rings are 2x2-anchored
+        // shells (ring 1 spans dx,dy −1..2), which is how the l0 tent
+        // two tiles up-range still meets the lob's radius-1 scan
+        // (the t=69/t=78 impacts; big-extent victims overlap from
+        // well outside a square window).
+        let r = (self.ent[i].f80 as i32 + 255) >> 8;
+        let cells = self.ring_cells(0, r);
+        let cx = ((tmp.0 as i32 + 128) >> 8) as u8;
+        let cy = ((tmp.1 as i32 + 128) >> 8) as u8;
+        for (dx, dy) in cells {
+            let tx = cx.wrapping_add(dx);
+            let ty = cy.wrapping_add(dy);
+            let mut j = self.map_entity[tile(tx, ty)] as usize;
+            while j != 0 {
+                let c = &self.ent[j];
+                if c.flags & 8 != 0
+                    && c.class64 == 10
+                    && (c.model65 == 39 || (!balls_only && matches!(c.model65, 40 | 45)))
+                    && (balls_only || (c.id24 != own && c.f144 != own))
+                    && self.ent_overlap(i, j)
+                {
+                    found = Some(j);
+                    break;
                 }
+                j = c.next20 as usize;
+            }
+            if found.is_some() {
+                break;
             }
         }
         self.ent[i].x = old.0;
@@ -3031,7 +3055,9 @@ impl Gen {
                 e.tick70 = 12;
                 e.max_life = 8;
                 e.f44 = 0;
-                e.flags &= !8;
+                // Corpus: every fresh flash record reads flags 0x5 —
+                // the ctor sets bit 1 like the (10,19) plume's.
+                e.flags = (e.flags & !8) | 1;
                 self.link(s, x, y, z);
                 self.refill_life(s);
                 // The ctor's sub_36FA0(41) — the visible claim

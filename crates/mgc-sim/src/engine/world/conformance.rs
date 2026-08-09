@@ -214,6 +214,23 @@ impl World {
         // kin read the carpet before its slot runs).
         self.human_pose = (carpet.x, carpet.y, carpet.z);
         self.human_pose_prev = self.human_pose;
+        // The wizard pass anchors at the recorded carpet slot (the
+        // class-3 dispatch position, sub_45C90) — above the spell
+        // tokens, which is the cast-phase law's whole ordering.
+        self.mc1_carpet_slot = human_slot;
+        // The cast-arm hand bits (+16 & 0x300, :55886-95) and the
+        // carpet pose the token fires measure from (retail reads the
+        // wizard entity's own fields at the token's walk position =
+        // the closure's settled values).
+        self.mc1_hand_bits = carpet.flags & 0x300;
+        self.mc1_cast_pose = crate::engine::world::PlayerPose {
+            x: carpet.x,
+            y: carpet.y,
+            z: carpet.z,
+            heading: carpet.f30,
+            pitch: carpet.f32,
+            speed: carpet.f126,
+        };
         // The carpet's Type_156 is the canonical `&unk_98F38[7]`
         // (retail's own load-fixup anchor) — derive the table base
         // from it instead of hardcoding a per-build guest address.
@@ -385,12 +402,21 @@ impl World {
             // closure always reads the refreshed floor — but every
             // live MID-burst spell event zeroes it again before the
             // next apply (sub_55E80 :64956; the first burst tick,
-            // +48 == +50, does not). Re-derive the suppression or
-            // every hold-fire pair over-regens one quantum (there is
-            // no regen clock — the drifting cadence IS this
-            // suppression beating against slot order).
+            // +48 == +50, does not). The LAUNCHER tokens now run that
+            // machine live (manifestation_tick under strict, with the
+            // wizard pass applying after them), so their pairs seed
+            // the recorded delta raw; only the still-inert
+            // hold/channel/toggle tokens keep the seed clamp.
             mana_delta: if st.ents.iter().any(|e| {
-                e.class64 == 12 && e.f144 == 0 && e.f48 != 0 && e.f48 as i32 != e.f50 as i32
+                e.class64 == 12
+                    && e.f144 == 0
+                    && e.f48 != 0
+                    && e.f48 as i32 != e.f50 as i32
+                    && !(e.f70 % 3 == 0
+                        && matches!(
+                            e.f70 / 3,
+                            0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 16 | 17 | 18 | 19 | 20 | 22
+                        ))
             }) {
                 0
             } else {

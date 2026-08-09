@@ -411,20 +411,19 @@ fn mc2_cave_behaviors_and_goldens() {
     // Behavior change toward retail by design: mc2l3's measured
     // record-0 planes go type 2,244 → 131, height 4,483 → 140,
     // shading 15,432 → 61, ceiling 4,770 → 132 cells.
-    // Re-pinned (2nd + 4th) for the sphere vertical-law fidelity
-    // change (ball_tick): gravity integrates every moving tick with
-    // the STRICT below-ground clamp (EF:26188-91/:26244) and grounded
-    // contact on exact landings (EF:26265) — the hidden +44 lift now
-    // cycles 0 → −16 → 0 on resting awake spheres like retail's.
-    // Observable projection unchanged (all 9 conformance suites
-    // green across the change); the hash covers the hidden field.
+    // Re-pinned (2nd-4th) for the AREA-BROADCAST TILE ROUNDING
+    // fidelity change (`area_write`): the window centers on the
+    // NEAREST tile (`(pos + 128) >> 8` — MC1 sub_120B0 and the MC2
+    // twin EF:3750/3798 alike) where the old truncation dropped the
+    // advancing edge; corpus pin = the mc1l0 t=91 tent claim.
+    // (Previous re-pin: the sphere vertical law, ball_tick.)
     assert_eq!(
         got,
         vec![
             0x1557c9632897e7dbu64,
-            0xafda7701ddfc141d,
-            0x2be8f4f0266e0a6e,
-            0x4504ae788bc74230,
+            0xc542bd0e97859a1d,
+            0x9c6472922a10cc31,
+            0xc7fe428a6b5c0822,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );
@@ -486,11 +485,15 @@ fn mc2_cave_behaviors_and_goldens() {
     // mc1l0 replay corpus pins at t=2. Per-pair conformance
     // observables are unchanged (all 9 suites green across the
     // change); only free-running evolutions move.
+    // 2nd-4th re-pinned with the state pins above (the AREA-BROADCAST
+    // TILE ROUNDING, `area_write` — MC2 twin EF:3750/3798): edge-tile
+    // victims now receive their mail on retail's tick; the mc2l0
+    // t=7257 fixture went conforming on the same change.
     const OBSERVABLE: [u64; 4] = [
         0xfb1faf378bf44770,
-        0x8648496126e11e8d,
-        0x8062dcb956c043f9,
-        0x93071b2fa95aa0e7,
+        0x339f43e8e59380d8,
+        0x62f2504ead5e10e0,
+        0xdbd06afdc5dc8cc8,
     ];
     assert_eq!(
         obs, OBSERVABLE,

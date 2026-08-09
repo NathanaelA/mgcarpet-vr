@@ -124,6 +124,7 @@ fn create_castle_builds_on_clear_ground() {
             ..Default::default()
         },
     );
+    w.tick(pose, PlayerCommand::default()); // the token fires at arm+1
     assert_eq!(count(&w, 9, 10), 1, "the cast launched the castle ball");
 
     // Ball flight (~11 ticks) + level-up + 20-tick painter + 10-tick
@@ -182,6 +183,7 @@ fn create_castle_builds_on_clear_ground() {
             ..Default::default()
         },
     );
+    w.tick(pose, PlayerCommand::default()); // the token fires at arm+1
     assert_eq!(count(&w, 9, 10), 1, "the recast launches the upgrade ball");
     for _ in 0..200 {
         w.tick(pose, PlayerCommand::default());

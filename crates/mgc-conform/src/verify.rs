@@ -145,6 +145,21 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         cmd_ring.push_back(sampled);
         let cmd = cmd_ring.pop_front().unwrap_or_default();
         if let Some((pt, pst, pcmd)) = prev.take() {
+            // Equips + demolish ride the shared recovery laws (the
+            // replay verifier's lane): a recorded hand change across
+            // the pair replays as the equip command, the dw==48 word
+            // as the demolish. Fire keeps the raw input channel (the
+            // ±1-tick caveat above) — only the lanes verify never fed
+            // are taken from the recovery.
+            let pcmd = {
+                let rec = mgc_formats::recover::recover_pair_mc1(&pst, &st, tick.input.as_ref());
+                PlayerCommand {
+                    equip_left: rec.equip_left.map(mgc_sim::mc1::spells::SpellId),
+                    equip_right: rec.equip_right.map(mgc_sim::mc1::spells::SpellId),
+                    demolish: rec.demolish,
+                    ..pcmd
+                }
+            };
             if args.start.is_some_and(|s| pt < s) {
                 // Before the triage window — keep the pairing chain
                 // and the input ring warm, execute nothing.

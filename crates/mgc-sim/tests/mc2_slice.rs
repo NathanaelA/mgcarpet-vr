@@ -547,7 +547,12 @@ fn mc2_slice_behaviors_and_goldens() {
         0x08a482fcbb41e1a4, // B: the type-5 fly-to latched
         0x858258c14dd451a7, // C: goat awake/flee window
         0x92a47b7d605a919a, // D: fireball combat over the goat
-        0x75c1e0bc3d8878a5, // E: census + villager/archer provocation
+        // E re-pinned for the AREA-BROADCAST TILE ROUNDING
+        // (`area_write` centers on the nearest tile — sub_120B0 /
+        // EF:3750; corpus pins: mc1l0 t=91 tent claim, mc2l0 t=7257
+        // fixture conforming): an edge-tile victim in the provocation
+        // window now gets its mail on retail's tick.
+        0xa6b2ffbdb30e670a, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,

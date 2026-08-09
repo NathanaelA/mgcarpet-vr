@@ -459,8 +459,19 @@ fn level_005_golden_state_hashes() {
         0x2a633e3dd996a877, // A: 32 idle ticks far afield
         0x8af0a56a74730403, // B: crater trigger fired + 120 dig ticks
         0xa564efb2b181c8f7, // C: ambush disposition fired
-        0x7744e84f808b70c6, // D: 64 ticks of two-hand fireball combat
-        0x7bb358e15e31d7ee, // E: 100 aftermath ticks
+        // D/E re-pinned for THE CAST-PHASE LAW (the MC1 arm→token-fire
+        // restructure): every hand cast now arms its spell token at
+        // the wizard pass and the token's own tick fires ONE FRAME
+        // later (corpus: 257/257 l0 + 371/371 l32 arms spawn at
+        // arm+1) — the D-window fireballs all shifted one tick, and
+        // their f140 stamp is now cost/period (40, corpus-pinned).
+        // Then again for the AREA-BROADCAST TILE ROUNDING
+        // (`area_write` nearest-tile center, sub_120B0/EF:3750 —
+        // corpus: mc1l0 t=91 tent claim): the D-window explosion
+        // mail reaches edge-tile bees on retail's tick.
+        // Windows A-C (no casts) are byte-identical throughout.
+        0xed280cb7dfa75472, // D: 64 ticks of two-hand fireball combat
+        0x984e8025c415a055, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,
@@ -565,8 +576,12 @@ fn level_005_golden_state_hashes() {
         0xddd8315df984d068, // A
         0xfdef97c77cb17fe8, // B — settler phase + feeder leash
         0x60e4a4184235a4ea, // C
-        0x0c46a73cb40f752f, // D
-        0xc8a82f9165fdfdc8, // E
+        // D/E re-pinned with the state pins above (THE CAST-PHASE
+        // LAW + the area-broadcast tile rounding): the D-window
+        // fireballs launch at arm+1 with the corpus f140 stamp and
+        // their explosion mail lands edge-true — A-C unmoved.
+        0x9fc27d77ba8095cd, // D
+        0x0e3e299e5a48bd1e, // E
     ];
     assert_eq!(
         obs, OBSERVABLE,

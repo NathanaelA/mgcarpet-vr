@@ -38,11 +38,7 @@
     },
     {
       "t": 73,
-      "status": "open",
-      "sig": "2cc0dc3d30b5e9b3",
-      "atoms": [
-        "extra:9,10"
-      ]
+      "status": "conforming"
     },
     {
       "t": 77,
@@ -185,11 +181,7 @@
     },
     {
       "t": 1298,
-      "status": "open",
-      "sig": "58362133705f10c0",
-      "atoms": [
-        "field:10,12:flags"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc1hwl0-terrain-z; 23 row(s) unexplained"
     },
     {
@@ -307,11 +299,7 @@
     },
     {
       "t": 2933,
-      "status": "open",
-      "sig": "2cace03d30a54775",
-      "atoms": [
-        "extra:9,16"
-      ]
+      "status": "conforming"
     },
     {
       "t": 2936,
@@ -1048,7 +1036,7 @@
       "atoms": [
         "field:3,1:mana"
       ],
-      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+      "note": "rival (3,1) mana +100 per pair under window import — IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble → rebound lapses) — topic closed, this is a seeding gap, not a sim-law question"
     },
     {
       "t": 24145,
@@ -1057,7 +1045,7 @@
       "atoms": [
         "field:3,1:mana"
       ],
-      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+      "note": "rival (3,1) mana +100 per pair under window import — IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble → rebound lapses) — topic closed, this is a seeding gap, not a sim-law question"
     },
     {
       "t": 24163,
@@ -1066,7 +1054,7 @@
       "atoms": [
         "field:3,1:mana"
       ],
-      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+      "note": "rival (3,1) mana +100 per pair under window import — IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble → rebound lapses) — topic closed, this is a seeding gap, not a sim-law question"
     },
     {
       "t": 24264,
@@ -1075,7 +1063,7 @@
       "atoms": [
         "field:3,1:mana"
       ],
-      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+      "note": "rival (3,1) mana +100 per pair under window import — IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble → rebound lapses) — topic closed, this is a seeding gap, not a sim-law question"
     },
     {
       "t": 24895,
@@ -1088,7 +1076,7 @@
       "atoms": [
         "field:3,1:mana"
       ],
-      "note": "rival (3,1) mana +100 per pair under window import \u2014 IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble \u2192 rebound lapses) \u2014 topic closed, this is a seeding gap, not a sim-law question"
+      "note": "rival (3,1) mana +100 per pair under window import — IMPORT-DOMAIN lead: retail's rival pays ~100-150/tick in these stretches and the import doesn't reconstruct the paying state (regen-stall class; cf. the 2026-08-07 human regen_delay fix). Rebound arm itself VINDICATED by player retail playtest 2026-08-07 (castle rubble → rebound lapses) — topic closed, this is a seeding gap, not a sim-law question"
     },
     {
       "t": 26346,

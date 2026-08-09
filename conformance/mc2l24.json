@@ -304,11 +304,7 @@
     },
     {
       "t": 718,
-      "status": "capture",
-      "sig": "0ecefd726379c998",
-      "atoms": [
-        "field:9,10:mana"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc2-cast-timing-fields"
     },
     {

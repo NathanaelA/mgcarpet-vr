@@ -34,11 +34,7 @@
     },
     {
       "t": 51,
-      "status": "capture",
-      "sig": "97af2825376ed0d9",
-      "atoms": [
-        "extra:9,1"
-      ],
+      "status": "conforming",
       "note": "cast/impact input latency (ledger entry 4)"
     },
     {
@@ -55,11 +51,7 @@
     },
     {
       "t": 83,
-      "status": "capture",
-      "sig": "58362133705f10c0",
-      "atoms": [
-        "field:10,12:flags"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: mc1l0-hit-flash"
     },
     {
@@ -324,11 +316,7 @@
     },
     {
       "t": 802,
-      "status": "open",
-      "sig": "2cc0dc3d30b5e9b3",
-      "atoms": [
-        "extra:9,10"
-      ]
+      "status": "conforming"
     },
     {
       "t": 811,
@@ -558,7 +546,7 @@
       "atoms": [
         "field:10,39:heading"
       ],
-      "note": "mana magnet (10,54) lifecycle + ball pull \u2014 untriaged"
+      "note": "mana magnet (10,54) lifecycle + ball pull — untriaged"
     },
     {
       "t": 1466,
@@ -864,11 +852,7 @@
     },
     {
       "t": 2654,
-      "status": "open",
-      "sig": "97ac2225376c90d0",
-      "atoms": [
-        "extra:9,0"
-      ]
+      "status": "conforming"
     },
     {
       "t": 2665,

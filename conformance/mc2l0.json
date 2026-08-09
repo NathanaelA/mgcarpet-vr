@@ -2515,11 +2515,7 @@
     },
     {
       "t": 7257,
-      "status": "open",
-      "sig": "649fccb5543ae8b5",
-      "atoms": [
-        "field:10,39:player_ent_idx"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {

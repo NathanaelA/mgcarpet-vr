@@ -105,14 +105,15 @@ fn projectiles(w: &World) -> usize {
 fn edge_spell_refires_on_every_fresh_press() {
     let (mut w, pose) = armed_world();
     equip(&mut w, pose, 0);
-    tick_full(&mut w, pose, true);
-    assert_eq!(projectiles(&w), 1, "first press casts");
+    tick_full(&mut w, pose, true); // press arms the token
     assert!(
         w.loadout().cooldown[0] > 0.0,
-        "the burst counter is live after the cast"
+        "the burst counter is live after the arm"
     );
-    tick_full(&mut w, pose, false);
-    tick_full(&mut w, pose, true); // fresh edge mid-burst
+    tick_full(&mut w, pose, false); // the token fires at arm+1
+    assert_eq!(projectiles(&w), 1, "first press casts");
+    tick_full(&mut w, pose, true); // fresh edge mid-burst re-arms
+    tick_full(&mut w, pose, false); // and fires again at arm+1
     assert_eq!(
         projectiles(&w),
         2,

@@ -7731,3 +7731,120 @@ boundaries 62 → 196.
 mc2_cave.rs, sim_state_hash.rs, state_hash.rs — every re-pin
 annotated with its window attribution), all 9 suites green, fmt
 clean.
+
+## 🏆 THE CAST-PHASE LAW 2026-08-09 — MC1 casts ARM the token, the token FIRES at arm+1; horizon 62 → 413
+
+**The l0 campaign's cast wall, dug to the root and landed.** Retail
+MC1 has NO spawn at the cast command site — for all 24 spells:
+
+**1. THE LAW (decompile + corpus, both readers' reports verbatim):**
+- **Command site** = `sub_46B00_46E40` (:55851-919), called per hand
+  from the carpet mover's tail (:55825-34) INSIDE the class-3 carpet
+  dispatch (`sub_45C90` = `str_254ADC[0]`) at the carpet's pool slot.
+  It only: gates (SILENTLY on mana short — :55873/:55890/:55908; the
+  ONE audible refusal is castle-16's armed-token buzz :55903-06),
+  reloads the burst (`+48 = +50`, :55893, unconditional — re-click =
+  re-arm, no cadence gate), restamps the wizard's HAND BITS (+16 &
+  0x300: both cleared, 0x100 left / 0x200 right, :55886-95), breaks
+  the cloak (~0x20, :55896). NO debit, NO spawn.
+- **Token tick** = one function per spell (class-12 dispatch
+  `str_2563D8`, model = 3×spell), shared skeleton (:65203-63 =
+  possess `sub_56510`): dry (+48 ≤ 0) = NOTHING (no decrement);
+  gate `sub_55DD0` (:64910-32: alive, castle-store `+132`, first-tick
+  affordability; failure = buzz 29 + burst abort); FULL (+48 == +50)
+  = FIRE the emission + the `sub_55E80` debit (wizard `+132` =
+  −(token `+136`) overwrite / deepen-if-negative — remc1 ships it
+  `//fix`-commented, the .bak and remc2's live twin prove it);
+  MID = zero a positive `+132`; decrement LAST (:65260).
+- **Walk order IS the phase**: tokens sit below the carpet in every
+  recorded pool (l0: 28/139/305 vs carpet 630; l32: 9 vs 14; HW: 472
+  with 57 actives above) → an arm can never fire the same frame, and
+  a token's mana write applies the SAME frame (the wizard's
+  apply-then-recompute `:55385/:55409-17` runs after the token
+  slots). Corpus: **257/257 l0 + 371/371 l32 arms spawn at arm+1**;
+  the l0 t=63/64 trace pins arm (f48 0→3, mana untouched) then
+  fire+debit together (spawn record + 1000→950 + f132 already
+  re-armed +100).
+- **Muzzle** (`sub_55EF0` :64963-65026): from the WIZARD's OWN pose
+  at token time = the PREVIOUS frame's settled carpet (the
+  pose-phase-tagged ctor diffs, now exact), offset 256 units at
+  yaw∓512 by the hand bits, terrain-guarded, z += +84. **Rivals
+  never set hand bits** (:19111 clears) — rival shots fire centered.
+- **Projectile stamps**: `+140` = token `+140` = **cost/period**
+  (:48005 — fireball 40, possess 16, castle ball = LADDER/101:
+  corpus 9/49/99/198; feeds the Rebound deflection economics >> 2);
+  `+30/+32` only — **`+34/+36` stay ctor-default** (corpus
+  target_yaw 0 on every fresh m0/m1/m10).
+
+**2. THE PORT RESTRUCTURE (engine/world.rs):**
+- `mc1_wizard_pass` (mana step + cast commands + demolish word) runs
+  at the walk hook `mc1_carpet_slot` (conformance import; the MC2
+  precedent pattern) / post-walk natively. `mc1_cast_command` =
+  arm-only for the launcher set {0,3,6,7,8,9,10,11,13,16,17,18,19,
+  20,22}; `manifestation_tick` fires at full + `mc1_token_gate`
+  (buzz 29) + debit + suppression + post-fire decrement; the strict
+  class12 phase-0 arm now runs the LIVE machine for human launcher
+  tokens (the old "tokens rest inert" harness emulations retired —
+  the importer's mana_delta clamp narrowed to the still-inert set).
+- New World fields: `mc1_carpet_slot`, `mc1_hand_bits`,
+  `mc1_cast_pose` (prev-frame pose echo) — hash/snapshot-quiet like
+  the mc2 carpet pair (a native save inside a live burst reloads
+  with a center muzzle; ledgered).
+- strict fire semantics: recorded dw_0 bits are the CONSUMED command
+  word (input layer pre-edged, +60 law :20601-34) → each bit = one
+  command; native keeps level+edge (the hold spells' legacy arms ARE
+  the input-layer emulation).
+- verify.rs now feeds recovered equips + demolish (the 5 hand rows
+  were a harness gap — all gone, t=49 + 4 hand_left rebinds).
+
+**3. TWO SCAN-GEOMETRY LAWS (the impact walls behind the cast wall):**
+- `sub_11AC0` (possess victim scan): center = NEAREST tile
+  (`(pos+128)>>8`) and the neighborhood = the SEARCH.DAT RING
+  iterator (`sub_11410` rings 0..(f80+255)>>8 — 2×2-anchored shells,
+  ring 1 spans −1..2) — `possess_victim_at` now uses `ring_cells` +
+  rounded center (l0 t=69/t=78 impacts: big-extent tents overlap
+  from outside a square window).
+- `sub_120B0` / MC2 twin EF:3750 (area mail broadcast): SQUARE
+  window but ROUNDED center — `area_write` fixed (l0 t=91 tent
+  claim; mc2l0 t=7257 fixture went conforming on the same change;
+  MC2 cave/slice goldens re-pinned with attribution).
+- The detonating lob parks AT the victim's aim point (x/y + z+f78
+  bracket → the −7296 record) and the HIT tick skips the life
+  decrement; fresh (10,12) flashes carry flags bit 1 (corpus 0x5).
+- ⚠ AUDIT LEAD: other truncated scan centers may lurk (e.g. the m17
+  reconstruction-bridge house scan still truncates) — the class is
+  now named; fix on corpus evidence.
+
+**RESULTS (mc1l0):** full replay horizon **62 → 413 boundaries**
+(t=1..414 bit-exact; clean total 196 → 413; entity-set first 63 →
+569); per-pair first divergent pair **49 → 413**; unexplained field
+rows **8,171 → 4,385**; the (10,39):heading 1,280-row and player.mana
+737-row families are GONE; per-pair fixture promotions: mc1l32 ×9,
+bee-height ×4, mc1l0, mc1hwl0, mc2l24 (castle-ball f140), mc2l0
+(area rounding). Pose-only 567 unchanged (its wall is the
+terraform-window family). **NEXT WALL t=414: (5,3) creatures in
+state 120 — the multipart segment family** (slots 62/63/64, x/y/z/
+heading/pitch drift).
+
+**DEFERRED (positioned, with the full decompile map above):**
+- Token-phase for the hold/channel/toggle set {2,15,21,23} + heal +
+  {4,5,12,14}: their certified command-site machines kept verbatim
+  (l0 never casts them). Retail truth when dug: full +136 debit per
+  token fire (firehose 600/burst-tick, stream 1000), silent
+  command gates, effects from the token.
+- The charge machinery (+61/+62, release-cast, HUD charge bar) is
+  DEAD CODE in retail MC1 — a7 = 0 in all 24 ctors.
+- Invisibility arm nuance: :55896 clears the cloak bit on EVERY arm
+  including spell 12's own; the live invis token re-sets it — the
+  port's break-cloak (kills the invis burst) may over-break; dig
+  with a corpus exemplar.
+- Rival cast phase (rivals arm their own tokens in retail; the port
+  mints + emits directly) — own lane.
+- The wizard-pass hook runs before the post-walk damage intake
+  (retail: intake INSIDE sub_45C90 before the mover) — invisible on
+  l0 (nothing above slot 630); revisit if an HW window pins it.
+
+**Verification: 697 workspace tests green** (L005 D/E state +
+observable, mc2_cave 2nd-4th, mc2_slice E re-pinned, all with
+attribution; windows A-C byte-identical throughout), all fixture
+suites green post-promotion, clippy + fmt clean.

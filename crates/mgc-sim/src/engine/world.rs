@@ -456,7 +456,7 @@ pub struct LoadoutView {
 /// 8.8 fixed-point tile coordinates, z is altitude in engine units
 /// (256 = one tile of height, i.e. 32 per height byte), heading is the
 /// engine's 11-bit angle (0 = north/-Z, matching the flyer's yaw 0).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PlayerPose {
     pub x: u16,
     pub y: u16,
@@ -640,6 +640,24 @@ pub struct World {
     /// walk crosses it. Native play keeps 0 and runs the tail
     /// post-pass. HASH-EXCLUDED.
     mc2_carpet_slot: u16,
+    /// The human carpet's recorded pool slot on the MC1/HW column
+    /// (conformance import only; 0 = none): the wizard pass — cast
+    /// commands + mana step, retail's sub_45C90 leg — fires when the
+    /// frame walk crosses it. Native play keeps 0 and runs the pass
+    /// post-walk (retail allocates the carpet above the level's
+    /// entities, so post-walk IS its slot position). HASH-EXCLUDED.
+    mc1_carpet_slot: u16,
+    /// The wizard entity's hand-flag bits (+16 & 0x300): every cast
+    /// arm clears both and sets the firing hand's (:55886-95, 0x100
+    /// left / 0x200 right); the token-fire muzzle placer reads them
+    /// (sub_55EF0 :64978-65006). Hash-transparent while 0.
+    mc1_hand_bits: u32,
+    /// The carpet pose MC1 token fires measure their muzzle from —
+    /// retail reads the wizard entity's own +30/+72.. at the TOKEN's
+    /// walk position, i.e. the pose settled by the PREVIOUS frame's
+    /// carpet mover (tokens sit below the carpet in every recorded
+    /// pool). A pose echo like `human_pose_prev` — HASH-EXCLUDED.
+    mc1_cast_pose: PlayerPose,
     /// The doomsday HUD meter `x_BYTE_D9F50[0x87a]` (0..1200),
     /// driven by the pyramid's bit-5 ramp — banked for the 4.9 HUD
     /// track (hash-transparent while 0, like the latch).
@@ -1332,6 +1350,9 @@ impl World {
             mc2_turn: 0,
             mc2_carpet_stall: false,
             mc2_carpet_slot: 0,
+            mc1_carpet_slot: 0,
+            mc1_hand_bits: 0,
+            mc1_cast_pose: PlayerPose::default(),
             mc2_doom_meter: 0,
             mc2_doom_level: false,
             terrain_dirty: false,
@@ -1911,6 +1932,173 @@ impl World {
         self.mc2_manifestation_tick(spell, i, player, ctx);
     }
 
+    /// The castle/dolmen fast-regen probes (:55346-50 + the dolmen
+    /// flag leg, MC1 :55407 / MC2 EF:60018) — shared by both games'
+    /// wizard mana steps.
+    fn regen_boost(&self, player: PlayerPose, ctx: &MobCtx) -> (bool, bool) {
+        let at_castle = self.player_castle().is_some_and(|c| {
+            let e = &self.g.ent[c];
+            ((player.x.wrapping_sub(e.x) as i16).unsigned_abs() as u16) <= e.f80
+                && ((player.y.wrapping_sub(e.y) as i16).unsigned_abs() as u16) <= e.f82
+        });
+        let at_dolmen = (1..self.g.ent.len()).any(|j| {
+            let e = &self.g.ent[j];
+            e.class64 == 2
+                && e.model65 == 2
+                && e.flags & 0x400 == 0
+                && self.g.player_overlap(j, ctx)
+        });
+        (at_castle, at_dolmen)
+    }
+
+    /// The MC1/HW WIZARD PASS — retail's sub_45C90 leg at the
+    /// carpet's pool slot: the per-hand cast commands (sub_46840's
+    /// tail :55825-34; the demolish word :55837-39 REPLACES them) and
+    /// the wizard mana step (:55385-421). Runs at the recorded carpet
+    /// slot under a conformance import, post-walk natively — in both
+    /// cases AFTER every spell token's own tick, which is the whole
+    /// cast-phase law: a fresh arm can never fire the same frame, and
+    /// a token's same-frame mana write (fire debit / mid-burst
+    /// zeroing) is applied by THIS step before the recompute
+    /// (l0 trace: the debit and the spawn surface on the same record,
+    /// with the delta already re-armed to +100).
+    fn mc1_wizard_pass(
+        &mut self,
+        alive: bool,
+        edge: (bool, bool),
+        cmd: PlayerCommand,
+        player: PlayerPose,
+        ctx: &MobCtx,
+    ) {
+        // The wizard mana step (:55385-421): apply the delta the
+        // token slots wrote earlier THIS frame (fire debit /
+        // mid-burst zeroing — they sit below the carpet), clamp,
+        // recompute the regen rate. Ahead of the cast commands so the
+        // legacy command-site debits keep their next-tick landing
+        // (retail's own debits are all token-side; only the token
+        // lane's same-frame apply is corpus-constrained).
+        let stepped = self.player.mana as i64 + self.player.mana_delta as i64;
+        self.player.mana = stepped.clamp(0, self.player.mana_max as i64) as u32;
+        let (at_castle, at_dolmen) = self.regen_boost(player, ctx);
+        self.player.mana_delta = if at_castle || at_dolmen {
+            ((self.player.mana_max / 200) as i32).max(1000)
+        } else {
+            ((self.player.mana_max / 2000) as i32).max(100)
+        };
+        if alive && cmd.demolish {
+            // dw_0 == 48 exactly (:55837-39): own castle to −1, both
+            // cast calls skipped.
+            if let Some(c) = self.player_castle() {
+                self.g.ent[c].act_life = -1;
+            }
+        } else if alive {
+            // A conformance recording's fire bits are the CONSUMED
+            // command word — the input layer already edge-filtered
+            // them (one bit per click for +60==1 spells, :20601-34)
+            // — so under strict every set bit IS a command edge.
+            // Native play feeds raw held levels; the tick-head edge
+            // supplies the click discrimination (the hold spells'
+            // legacy arms consume the level themselves, which is the
+            // input layer's held-re-emit in port form).
+            let eff = if self.strict_retail {
+                (cmd.fire_left, cmd.fire_right)
+            } else {
+                edge
+            };
+            if cmd.fire_left
+                && let Some(s) = self.player.left
+            {
+                self.mc1_cast_command(s, false, eff.0, player, ctx);
+            }
+            if cmd.fire_right
+                && let Some(s) = self.player.right
+            {
+                self.mc1_cast_command(s, true, eff.1, player, ctx);
+            }
+        }
+        // Next frame's token fires measure from THIS frame's settled
+        // carpet (retail reads the wizard entity's fields at the
+        // token's walk position, below the carpet).
+        self.mc1_cast_pose = player;
+    }
+
+    /// One per-hand cast COMMAND (sub_46B00_46E40 :55851-919). The
+    /// discrete launcher set arms its spell token and NOTHING ELSE —
+    /// the token's own tick fires the spell one walk-lap later (the
+    /// class-12 per-spell ticks, :65029-66296) — while the traced
+    /// hold/channel/toggle spells keep their certified command-site
+    /// machines ([`World::cast_spell`]; token-phase = ledgered lead).
+    fn mc1_cast_command(
+        &mut self,
+        spell: SpellId,
+        right: bool,
+        edge: bool,
+        player: PlayerPose,
+        ctx: &MobCtx,
+    ) {
+        let id = spell.0 as usize;
+        if id >= SPELL_COUNT {
+            return;
+        }
+        // The launcher set: every spell whose retail command arm is
+        // the bare LABEL_20→LABEL_32 flow (silent mana gate :55890,
+        // reload :55893, hand restamp :55894-95, cloak break :55896)
+        // and whose fire lives in its token tick. 16 Create Castle
+        // adds the +48 hard-gate (:55903-06), the one audible
+        // command-site refusal.
+        if matches!(
+            id,
+            0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 16 | 17 | 18 | 19 | 20 | 22
+        ) {
+            if !edge {
+                return;
+            }
+            let m = self.player.owned[id] as usize;
+            if m == 0 {
+                return; // :55858 empty/invalid-hand guard
+            }
+            if id == 16 && self.castle_lock_active() {
+                self.g.snd_player(29); // the pinned-charge fizzle (:55905)
+                return;
+            }
+            let cost = self.spell_cast_cost(id);
+            if !self.dev_spells && self.player.mana < cost {
+                return; // the mana gate is SILENT (:55890/:55908)
+            }
+            let def = &self.spells()[id];
+            self.g.ent[m].f26 = def.count as i16; // :55893 reload
+            self.mc1_hand_bits = if right { 0x200 } else { 0x100 }; // :55894-95
+            self.break_cloak(id); // :55896
+            return;
+        }
+        // Hold/channel/toggle spells: the certified command-site
+        // machine, unchanged.
+        self.cast_spell(spell, right, edge, player, ctx);
+    }
+
+    /// The token-fire precondition, sub_55DD0_56300 (:64910-32):
+    /// caster alive, castle-store requirement met, and — on the
+    /// burst's FIRST tick only — the full spell cost in the pool.
+    /// Failure buzzes 29 (:64931) at the TOKEN, one frame after the
+    /// silent command gate.
+    fn mc1_token_gate(&self, id: usize) -> bool {
+        if self.dev_spells {
+            return true;
+        }
+        if self.player.state != LifeState::Alive {
+            return false;
+        }
+        let req = self.spell_castle_req(id);
+        if req > 0
+            && !self
+                .player_castle()
+                .is_some_and(|c| self.g.ent[c].f140.max(0) as u32 >= req)
+        {
+            return false;
+        }
+        self.player.mana >= self.spell_cast_cost(id)
+    }
+
     /// One game turn (`sub_41780_41AC0`, :52197). `player` feeds the
     /// trigger volume probes, creature awake checks and aggro scans;
     /// `cmd` is the rest of the player's tick input (fire).
@@ -2057,49 +2245,27 @@ impl World {
             }
         }
 
-        // The wizard mana tick (:55385-421) — BEFORE cast handling,
-        // like the original wizard tick (regen first, casts later in
-        // the same function): step the pool by the delta (a cast
-        // debit overwrote it negative last turn — it lands here),
-        // clamp to [0, max], then recompute the delta: fast regen
-        // touching the own castle (max/200, floor 1000), slow afield
-        // (max/2000, floor 100).
-        //
-        // MC2 mortality gate: the whole block (step, clamp, delta
-        // recompute) sits inside `if (life >= 0)` in the MC2 wizard
-        // body (EF:59996-60033) and the death arms (`sub_5E310`
-        // action 2 / `sub_5E7C0` action 3) touch neither lane — a
-        // corpse holds BOTH its mana and its last `manaRegen`, and
-        // that held delta is what the respawn tick then applies.
-        let mc2_corpse = matches!(self.game, GameId::Mc2) && self.player.state != LifeState::Alive;
-        if !mc2_corpse {
-            let stepped = self.player.mana as i64 + self.player.mana_delta as i64;
-            self.player.mana = stepped.clamp(0, self.player.mana_max as i64) as u32;
-        }
-        let at_castle = self.player_castle().is_some_and(|c| {
-            let e = &self.g.ent[c];
-            ((player.x.wrapping_sub(e.x) as i16).unsigned_abs() as u16) <= e.f80
-                && ((player.y.wrapping_sub(e.y) as i16).unsigned_abs() as u16) <= e.f82
-        });
-        // The dolmen-shrine leg of the fast fork (MC1 :55407 / MC2
-        // EF:60018 — `at_castle || +17&0x10`, ONE condition driving
-        // both the mana delta here and the life rate below): retail's
-        // dolmen tick (sub_49AD0 / AddDolmen02_02) stamps the flag on
-        // the human's pool entity; ours is a husk, so probe the
-        // dolmens against the live carpet directly.
-        let at_dolmen = (1..self.g.ent.len()).any(|j| {
-            let e = &self.g.ent[j];
-            e.class64 == 2
-                && e.model65 == 2
-                && e.flags & 0x400 == 0
-                && self.g.player_overlap(j, &ctx)
-        });
-        if !mc2_corpse {
-            self.player.mana_delta = if at_castle || at_dolmen {
-                ((self.player.mana_max / 200) as i32).max(1000)
-            } else {
-                ((self.player.mana_max / 2000) as i32).max(100)
-            };
+        // The wizard mana tick — MC2 keeps its pre-walk placement
+        // (the whole block sits inside `if (life >= 0)` in the MC2
+        // wizard body, EF:59996-60033, and the death arms touch
+        // neither lane — a corpse holds BOTH its mana and its last
+        // `manaRegen`, and that held delta is what the respawn tick
+        // then applies). The MC1 step (:55385-421) runs INSIDE the
+        // wizard pass at the carpet's walk position instead — after
+        // the token slots, whose fire debit / mid-burst zeroing it
+        // must apply the SAME frame (see `mc1_wizard_pass`).
+        if matches!(self.game, GameId::Mc2) {
+            let mc2_corpse = self.player.state != LifeState::Alive;
+            if !mc2_corpse {
+                let stepped = self.player.mana as i64 + self.player.mana_delta as i64;
+                self.player.mana = stepped.clamp(0, self.player.mana_max as i64) as u32;
+                let (at_castle, at_dolmen) = self.regen_boost(player, &ctx);
+                self.player.mana_delta = if at_castle || at_dolmen {
+                    ((self.player.mana_max / 200) as i32).max(1000)
+                } else {
+                    ((self.player.mana_max / 2000) as i32).max(100)
+                };
+            }
         }
 
         // Mirror the cloak/deflection flags into the pool engine for
@@ -2117,34 +2283,19 @@ impl World {
             self.spell_ring_set(s, v);
         }
 
-        // Per-hand cast triggers (the carpet fire tick,
-        // sub_46840_46B80 :55825-34, dw_0 bits 0x10/0x20). Casting is
-        // EDGE-triggered — one cast per press, re-arm on release —
-        // except the traced hold spells (23 firehose, 15 stream, the
-        // channels); the edges derive from last tick's held state.
+        // Per-hand fire edges (from last tick's held state); the MC1
+        // cast COMMANDS themselves run in the wizard pass at the
+        // carpet's walk position (sub_46840's tail sits inside the
+        // class-3 carpet dispatch, :55825-34 — see mc1_wizard_pass),
+        // one walk-position after every spell token has ticked. That
+        // ordering is the whole cast-phase law: an arm can never fire
+        // its token the same frame.
         let edge = (
             cmd.fire_left && !self.prev_fire.0,
             cmd.fire_right && !self.prev_fire.1,
         );
         self.prev_fire = (cmd.fire_left, cmd.fire_right);
         let alive = self.player.state == LifeState::Alive;
-        // The MC1 hand cast never runs on the MC2 column: ALL MC2
-        // casts ride mc2_cast_input. A bound MC1 hand here fires a
-        // ghost cast (the dev grant auto-fills player.left).
-        if !matches!(self.game, GameId::Mc2) {
-            if alive
-                && cmd.fire_left
-                && let Some(s) = self.player.left
-            {
-                self.cast_spell(s, false, edge.0, player, &ctx);
-            }
-            if alive
-                && cmd.fire_right
-                && let Some(s) = self.player.right
-            {
-                self.cast_spell(s, true, edge.1, player, &ctx);
-            }
-        }
 
         // The MC2 spell column (Phase 4.2): pane selection, the
         // class-15 cast gate (held-button semantics — the gate
@@ -2174,11 +2325,12 @@ impl World {
             }
         }
 
-        // The demolish key (:55846-50): the OWN castle's life goes
-        // to −1 — the castle tick's damage path does the rest (one
-        // downgrade level per press; the last one costs the respawn
-        // point).
-        if alive && cmd.demolish {
+        // The MC2 demolish (Shift+L → PlayerAction 0x2A, EF:37991):
+        // the OWN castle's life goes to −1 — the castle tick's
+        // damage path does the rest. The MC1 word (dw_0 == 48
+        // exactly, :55837-39) rides the wizard pass instead, where
+        // it REPLACES the cast tail.
+        if matches!(self.game, GameId::Mc2) && alive && cmd.demolish {
             if let Some(c) = self.player_castle() {
                 self.g.ent[c].act_life = -1;
             }
@@ -2271,6 +2423,14 @@ impl World {
                 self.mc2_player_cast_pass(alive, edge, cmd, player, &ctx);
                 let turn = self.mc2_turn;
                 self.mc2_cave_carpet_tail(turn);
+            }
+            // The MC1 twin (sub_45C90, the class-3 carpet dispatch):
+            // the wizard pass anchors at the recorded carpet slot —
+            // above every spell token, so a fresh arm can never fire
+            // the same frame and a token's mana write applies the
+            // SAME frame (the l0 trace: debit visible with the spawn).
+            if !matches!(self.game, GameId::Mc2) && i == self.mc1_carpet_slot as usize {
+                self.mc1_wizard_pass(alive, edge, cmd, player, &ctx);
             }
             if self.g.ent[i].class64 == 0 {
                 continue;
@@ -2782,6 +2942,13 @@ impl World {
             let turn = self.mc2_turn;
             self.mc2_cave_carpet_tail(turn);
         }
+        // Native MC1/HW likewise has no pooled carpet: retail's own
+        // level build allocates the carpet ABOVE the level entities,
+        // so post-walk IS its slot position — the wizard pass runs
+        // here (conformance anchors it at the recorded slot above).
+        if !matches!(self.game, GameId::Mc2) && self.mc1_carpet_slot == 0 {
+            self.mc1_wizard_pass(alive, edge, cmd, player, &ctx);
+        }
         if any_creature || any_transient {
             // Creatures/projectiles/effects move: poses refresh.
             self.entities_dirty = true;
@@ -2813,6 +2980,7 @@ impl World {
 
         // ---- player damage intake (the wizard tick's mailbox block,
         // sub_45C90 :55344-74 + sub_46540 :55641-737) ----
+        let (at_castle, at_dolmen) = self.regen_boost(player, &ctx);
         if self.player.state == LifeState::Alive {
             // The at-castle redirect (:55353-62): with the own castle
             // underfoot, pending ch0 damage FORWARDS into the
@@ -3812,6 +3980,14 @@ impl World {
             mc2_turn: _,
             mc2_carpet_stall: _,
             mc2_carpet_slot: _,
+            // The wizard-pass anchor, the cast-arm hand bits and the
+            // token-fire pose echo: conformance-reseeded / rewritten
+            // at every arm — hash-quiet like the mc2 carpet pair and
+            // human_pose_prev (ledger: a native save inside a live
+            // burst reloads with a center muzzle).
+            mc1_carpet_slot: _,
+            mc1_hand_bits: _,
+            mc1_cast_pose: _,
             table,
             terrain_dirty: _,
             entities_dirty: _,
@@ -4355,16 +4531,18 @@ impl World {
         e.f126 += p.speed; // inherits carpet speed (:65060)
         e.f128 = e.f126;
         e.id24 = PLAYER_TARGET;
+        // Heading/pitch only (:65070-71 stamps +30/+32; +34/+36 keep
+        // the ctor default — the corpus pins target_yaw 0 on fresh
+        // spawns, and the untargeted flight re-derives them).
         e.f30 = p.heading;
-        e.f34 = p.heading;
         e.f32 = p.pitch;
-        e.f36 = p.pitch;
         // Spell-row +44 (125/50 — vestigial on detonation: the fire
         // effect's own 400 is the fireball's real damage, sub_52B30
-        // does not copy +44, :62928-30) and the possess pool onto
-        // +140 (deflection economics).
+        // does not copy +44, :62928-30) and the TOKEN's +140 =
+        // cost/period (ctor :48005 — the deflection economics unit;
+        // corpus: fireball 40, not the 200 total).
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
-        e.f140 = def.possess_mana as i32;
+        e.f140 = (def.possess_mana / def.count.max(1) as u32) as i32;
         self.entities_dirty = true;
     }
 
@@ -4420,12 +4598,13 @@ impl World {
         e.f126 += p.speed; // carpet speed inherited (:65060)
         e.f128 = e.f126;
         e.id24 = PLAYER_TARGET;
+        // +30/+32 only (the sub_56510 skeleton :65250-51); +34/+36
+        // keep the ctor default — corpus target_yaw 0 on fresh spawns.
         e.f30 = p.heading;
-        e.f34 = p.heading;
         e.f32 = pitch;
-        e.f36 = pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
-        e.f140 = def.possess_mana as i32;
+        // Token +140 = cost/period (:48005): possess 16, not 50.
+        e.f140 = (def.possess_mana / def.count.max(1) as u32) as i32;
         match id {
             // Possess (:65236-52): detonation = the (10,12) ch1
             // claim flash; target-class filter 10 (the dedicated
@@ -5064,6 +5243,10 @@ impl World {
             t
         };
         let def = &SPELLS[16];
+        // Token +140 = cost/period (:48005) — and the castle token's
+        // +136 is the LADDER's current cost (sub_47C60 rewrites it),
+        // so the ball's stamp tracks the level: corpus 9/49/99/198.
+        let ball_mana = (self.spell_cast_cost(16) / def.count.max(1) as u32) as i32;
         let e = &mut self.g.ent[pr];
         // The carpet speed rides +126 ONLY (sub_57610 `*(v3+126) +=
         // v4`); +128 keeps the ctor 384, so the flight eases the
@@ -5076,13 +5259,13 @@ impl World {
         }
         e.id24 = PLAYER_TARGET;
         // The launch inherits the wizard's AIM — yaw and pitch both
-        // (:65913-14 copies +30/+32) — and the flight EASES from it
-        // toward the ground target.
+        // (:65913-14 copies +30/+32; +34 keeps the ctor default,
+        // corpus target_yaw 0 on fresh balls) — and the flight EASES
+        // from it toward the ground target.
         e.f30 = p.heading;
         e.f32 = p.pitch;
-        e.f34 = p.heading;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
-        e.f140 = def.possess_mana as i32;
+        e.f140 = ball_mana;
         e.dest_x = tgt.0;
         e.dest_y = tgt.1;
         if let Some(c) = castle {
@@ -5214,7 +5397,7 @@ impl World {
             // Rival-owned manifestations (f144 = the owner tag) are
             // driven by the rival tick, not the player's channels.
             if self.g.ent[i].f144 == 0 {
-                self.manifestation_tick(i, (t - MANIFEST_BASE) as usize);
+                self.manifestation_tick(i, (t - MANIFEST_BASE) as usize, ctx);
             }
             return;
         }
@@ -5226,10 +5409,11 @@ impl World {
         // states (DROPPED_JAR=3 decay, MANIFEST_BASE+spell) are a
         // different encoding: retail state 3 is the HEAL token, and
         // decaying it reaped rivals' spell banks one tick after
-        // import. Tokens rest inert here except the Accelerate
-        // contrail (below); the remaining ACTIVE token effects (heal
-        // sub_56270, sub_56510's (9,1) bolts) are unported —
-        // CONFORMANCE-FINDINGS.md.
+        // import. The HUMAN's launcher tokens run the LIVE burst
+        // machine (`manifestation_tick` — fire at full, delta debit,
+        // mid-burst suppression, decrement: the cast-phase law);
+        // rival tokens and the hold/channel set rest inert except the
+        // Accelerate contrail (below) — CONFORMANCE-FINDINGS.md.
         //
         // Placed jars (phases 1/2) run retail's own pickup poll,
         // sub_55A40_55F70 (:64729-64872): only every 4th tick
@@ -5248,6 +5432,22 @@ impl World {
                 return;
             }
             if phase == 0 {
+                // THE HUMAN'S LAUNCHER TOKENS RUN LIVE — the same
+                // burst machine the native encoding uses (fire at
+                // full, delta debit, mid-burst suppression, decrement
+                // — manifestation_tick). The wizard pass at the
+                // recorded carpet slot applies the delta after these
+                // slots, retail's own ordering. Rival tokens and the
+                // hold/channel set stay inert (their lanes below).
+                if self.player.owned[spell] == i as u16
+                    && matches!(
+                        spell,
+                        0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 16 | 17 | 18 | 19 | 20 | 22
+                    )
+                {
+                    self.manifestation_tick(i, spell, ctx);
+                    return;
+                }
                 // sub_56380_568B0 (remc1 :65131-99 / remc1hw
                 // :61353-422) and its reverse twin sub_57F00_58410
                 // (:62390-451, spell 21 — braking, v_12 negative,
@@ -5418,19 +5618,36 @@ impl World {
         self.entities_dirty = true; // the jar sprite leaves the world
     }
 
-    /// The owned-spell manifestation tick (the class-12 runtime arm):
-    /// the burst counter (+48 → f26) decrements once per tick — it is
-    /// the refire spacing — and the continuous/toggle effects derive
-    /// from it.
-    fn manifestation_tick(&mut self, i: usize, spell: usize) {
-        // CASTLE (16) is the UPGRADE LOCK, not a timed burst: its `f26`
-        // tracks the castle transform (the flying ball / the `f59`
-        // build-upgrade-downgrade state machine), NOT the fixed `count`
-        // countdown, and it does NOT suppress mana regen — retail's
-        // castle effect touches the caster's mana only at cast (the
-        // one-shot debit), never during the hold (unlike a channelled
-        // spell). Mirrors the MC2 fix (`mc2_castle_spell_tick`).
+    /// The owned-spell manifestation tick — the class-12 per-spell
+    /// token ticks (:65029-66296, one function per spell on the
+    /// shared skeleton): the launcher set FIRES its emission on the
+    /// burst's FULL tick (+48 == +50, before the decrement) with the
+    /// sub_55E80 delta debit, suppresses regen on mid-burst ticks,
+    /// and decrements LAST; the continuous/toggle effects derive from
+    /// the post-decrement counter. The human's cast command only ARMS
+    /// (f26 = count) — from the wizard pass ABOVE the token slots —
+    /// so a fresh arm always fires here one frame later, which is the
+    /// corpus-pinned cast phase (257/257 l0 + 371/371 l32 arms:
+    /// spawn at arm+1).
+    fn manifestation_tick(&mut self, i: usize, spell: usize, ctx: &MobCtx) {
+        // CASTLE (16): the fresh arm fires the ball from the token
+        // (:65862-924: gate → debit → spawn → `+48 = +50 − 1`, the
+        // re-cast lockout latch). Otherwise `f26` mirrors the UPGRADE
+        // LOCK, not a timed burst: it tracks the castle transform
+        // (the flying ball / the `f59` build-upgrade-downgrade
+        // machine) and does NOT suppress mana regen. Mirrors the MC2
+        // fix (`mc2_castle_spell_tick`).
         if spell == 16 {
+            if self.g.ent[i].f26 == self.spells()[16].count as i16 {
+                if self.mc1_token_gate(16) {
+                    self.mana_debit(self.spell_cast_cost(16));
+                    let p = self.mc1_cast_pose;
+                    let right = self.mc1_hand_bits & 0x200 != 0;
+                    self.emit_spell(16, i, p, right, ctx);
+                } else {
+                    self.g.snd_player(29); // the token gate's buzz (:64931)
+                }
+            }
             self.g.ent[i].f26 = if self.castle_lock_active() {
                 (SPELLS[16].count as i16 - 1).max(1)
             } else {
@@ -5438,19 +5655,41 @@ impl World {
             };
             return;
         }
-        // `sub_55E80` (:64936) mid-burst regen suppression: while a
-        // spell burst is live, pin the caster's regen accumulator to
-        // 0 — the "an active spell blocks mana regeneration" law
-        // (docs/spell-audit/mana-regen.md). The first-fire tick
-        // already stamped `mana_delta` negative (`mana_debit`), so
-        // the `> 0` guard preserves that per-cast debit and only the
-        // positive regen the wizard tick recomputed this frame
-        // (world.rs:1225) is clamped away.
+        // `sub_55E80` (:64936): on the FULL tick the launcher fires
+        // and the debit overwrites the regen delta (:64942-52); on
+        // mid-burst ticks the positive delta is pinned to 0 — the
+        // "an active spell blocks mana regeneration" law
+        // (docs/spell-audit/mana-regen.md). The wizard pass applies
+        // the delta AFTER the token slots, so both land the same
+        // frame like retail's. The gate failure (:64926-31) buzzes
+        // and aborts the burst (+48 = 1, then the decrement).
+        // The traced hold/channel spells {2, 15, 21, 23} and heal
+        // keep their certified command-site fire — their tokens stay
+        // countdown + effects only (token-phase = ledgered lead).
         let was_live = self.g.ent[i].f26 > 0;
-        if self.g.ent[i].f26 > 0 {
-            self.g.ent[i].f26 -= 1;
+        let launcher = matches!(
+            spell,
+            0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 17 | 18 | 19 | 20 | 22
+        );
+        let mut fired = false;
+        let mut gate_failed = false;
+        if was_live && launcher && self.g.ent[i].f26 == self.spells()[spell].count as i16 {
+            if self.mc1_token_gate(spell) {
+                self.mana_debit(self.spell_cast_cost(spell));
+                let p = self.mc1_cast_pose;
+                let right = self.mc1_hand_bits & 0x200 != 0;
+                self.emit_spell(spell, i, p, right, ctx);
+                fired = true;
+            } else {
+                self.g.snd_player(29); // :64931
+                self.g.ent[i].f26 = 1; // +48 = 1, the shared decrement zeroes it
+                gate_failed = true;
+            }
         }
-        if was_live {
+        if self.g.ent[i].f26 > 0 {
+            self.g.ent[i].f26 -= 1; // :65260 — post-fire
+        }
+        if was_live && !fired && !gate_failed {
             self.suppress_regen();
         }
         let active = self.g.ent[i].f26 > 0;
@@ -9981,6 +10220,9 @@ impl World {
             patches: _,
             mc2_carpet_stall: _,
             mc2_carpet_slot: _,
+            mc1_carpet_slot: _,
+            mc1_hand_bits: _,
+            mc1_cast_pose: _,
             prev_fire,
             accel_veto,
             pending_respawn,
@@ -10719,6 +10961,17 @@ mod tests {
             e.f63 = 0; // on-phase
         }
         w.human_pose = (0x8000, 0x8000, 3200);
+        let ctx = MobCtx {
+            px: 0x8000,
+            py: 0x8000,
+            pz: 3200,
+            pyaw: 0,
+            pmana: 0,
+            pdead: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
         let puffs = |w: &World| {
             w.g.ent
                 .iter()
@@ -10726,7 +10979,7 @@ mod tests {
                 .count()
         };
         assert_eq!(puffs(&w), 0);
-        w.manifestation_tick(m, 2);
+        w.manifestation_tick(m, 2, &ctx);
         assert_eq!(puffs(&w), 1, "on-phase burst tick emits the puff");
         let p =
             w.g.ent
@@ -10736,11 +10989,11 @@ mod tests {
         assert_eq!(w.g.ent[p].id24, PLAYER_TARGET, "owner-stamped");
         assert_eq!(w.g.ent[p].act_life, 32, "ctor 8 ×4 (:61407)");
         w.g.ent[m].f63 = 1;
-        w.manifestation_tick(m, 2);
+        w.manifestation_tick(m, 2, &ctx);
         assert_eq!(puffs(&w), 1, "off-phase tick spawns nothing");
         w.g.ent[m].f63 = 0;
         w.g.ent[m].f26 = 0; // burst lapsed
-        w.manifestation_tick(m, 2);
+        w.manifestation_tick(m, 2, &ctx);
         assert_eq!(puffs(&w), 1, "lapsed burst spawns nothing");
     }
 
@@ -13520,6 +13773,10 @@ mod tests {
                 ..Default::default()
             },
         );
+        // The demolish word lands at the WIZARD PASS (above the
+        // castle's slot in the walk) — the castle tick reacts the
+        // next frame, retail's own ordering.
+        w.tick(away(), PlayerCommand::default());
         assert!(
             w.terrain_dirty,
             "the destruction tick re-uploads the flattened footprint"
@@ -15031,7 +15288,8 @@ mod tests {
         w.g.ent[b].f144 = PLAYER_TARGET;
         w.tick(away(), PlayerCommand::default()); // census + release
         w.player.mana = w.player.mana_max;
-        w.tick(away(), fire);
+        w.tick(away(), fire); // arms the castle token
+        w.tick(away(), PlayerCommand::default()); // the token fires
         assert_eq!(count(&w, 9, 10), 1, "funded upgrade launches the ball");
     }
 
@@ -15362,14 +15620,23 @@ mod tests {
             ..Default::default()
         };
         w.tick(firing_line(), fire);
-        assert_eq!(count(&w, 9, 0), 1, "the press edge casts one fireball");
-        // Ceiling = the intrinsic 1000 with nothing claimed
-        // (sub_48230); the FULL 200 debit rides the regen delta and
-        // lands NEXT tick (sub_55E80 — the debit remc1 comments out).
-        assert_eq!(w.loadout().mana, 1000, "debit is delta-deferred");
+        // THE CAST-PHASE LAW: the press only ARMS the spell token
+        // (f26 = count at the wizard pass, above the token slots);
+        // the token's own tick fires one frame later — corpus:
+        // 257/257 l0 + 371/371 l32 arms spawn at arm+1.
+        assert_eq!(count(&w, 9, 0), 0, "the press edge only arms");
+        assert_eq!(w.loadout().mana, 1000, "no debit at the command site");
         assert!(w.loadout().cooldown[0] > 0.0, "burst window armed");
-        w.tick(firing_line(), fire); // held: no re-cast
-        assert_eq!(w.loadout().mana, 800, "the full 200 debit landed");
+        w.tick(firing_line(), fire); // held: the token fires the arm
+        assert_eq!(count(&w, 9, 0), 1, "the token fires at arm+1");
+        // The debit and the spawn land TOGETHER: the token writes the
+        // delta (sub_55E80) and the wizard pass applies it the same
+        // frame (l0 trace: mana 950 on the spawn record).
+        assert_eq!(
+            w.loadout().mana,
+            800,
+            "the full 200 debit landed with the spawn"
+        );
         // Fireball is EDGE-triggered (autofire is spell 23's alone):
         // holding adds nothing; a fresh press past the burst does.
         for _ in 0..8 {
@@ -15381,9 +15648,10 @@ mod tests {
             "held fire never re-casts"
         );
         w.tick(firing_line(), PlayerCommand::default()); // release
-        w.tick(firing_line(), fire); // re-press
+        w.tick(firing_line(), fire); // re-press: arms
+        w.tick(firing_line(), fire); // the token fires
         let total = count(&w, 9, 0) + w.combat_stats().1 as usize;
-        assert_eq!(total, 2, "release + re-press casts again");
+        assert_eq!(total, 2, "release + re-press casts again (at arm+1)");
         // Below the possess gate nothing fires.
         let mut w2 = flat_world();
         w2.player.mana = 100;
@@ -15869,7 +16137,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched");
+        assert_eq!(count(&w, 9, 1), 0, "the press arms the token");
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched at arm+1");
         let mut claimed = false;
         for _ in 0..120 {
             w.tick(p, PlayerCommand::default());
@@ -16060,7 +16330,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched");
+        assert_eq!(count(&w, 9, 1), 0, "the press arms the token");
+        w.tick(p, PlayerCommand::default());
+        assert_eq!(count(&w, 9, 1), 1, "the possess lob launched at arm+1");
         let mut claimed = false;
         for _ in 0..120 {
             w.tick(p, PlayerCommand::default());
@@ -16083,6 +16355,7 @@ mod tests {
                 ..Default::default()
             },
         );
+        w.tick(p, PlayerCommand::default()); // the token fires at arm+1
         assert_eq!(count(&w, 9, 12), 1, "the storm carrier launched");
         let (mut saw_cloud, mut bolts) = (false, 0usize);
         for _ in 0..80 {
@@ -16111,6 +16384,7 @@ mod tests {
                 ..Default::default()
             },
         );
+        w.tick(p, PlayerCommand::default()); // the token fires at arm+1
         assert_eq!(count(&w, 9, 16), 1, "the firewall bolt launched");
         let bolt = find_slot(&w, 9, 16);
         let def = &crate::mc1::spells::SPELLS[20];
@@ -16143,10 +16417,10 @@ mod tests {
                 ..Default::default()
             },
         );
+        w.tick(p, PlayerCommand::default()); // the token fires at arm+1
         assert_eq!(count(&w, 9, 18), 1, "the (9,18) death fuse armed");
         // Charges STACK: a release + re-press primes a second
         // independent fuse.
-        w.tick(p, PlayerCommand::default());
         w.tick(
             p,
             PlayerCommand {
@@ -16154,6 +16428,7 @@ mod tests {
                 ..Default::default()
             },
         );
+        w.tick(p, PlayerCommand::default()); // second token fire
         assert_eq!(count(&w, 9, 18), 2, "overlapping charges both live");
 
         // The fuse rides the caster ~21 ticks, then the (10,55)
@@ -16274,6 +16549,7 @@ mod tests {
                 ..Default::default()
             },
         );
+        w.tick(firing_line(), PlayerCommand::default()); // token fires
         assert_eq!(count(&w, 9, 0), 1, "no mana gate under dev spells");
         assert_eq!(w.loadout().mana, w.loadout().mana_max);
         // Off keeps the granted spells (no un-granting).
