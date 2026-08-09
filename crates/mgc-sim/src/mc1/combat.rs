@@ -1557,6 +1557,7 @@ impl Gen {
     ///   and still builds. Once launched, a castle always rises.
     /// - PATCHED arm: the landing always re-scans; a refused site is
     ///   displaced one step back (the pre-arm port behavior).
+    ///
     /// APPROX: snap-steer in place of the original's eased turn.
     fn proj_castle_ball_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let mc1 = !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);

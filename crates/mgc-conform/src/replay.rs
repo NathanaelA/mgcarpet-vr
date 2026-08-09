@@ -596,10 +596,7 @@ fn run_mc1(path: &std::path::Path, args: &Args) -> Result<bool, String> {
             Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("obs: {e}"))?,
             None => return Err(format!("t={}: no obs channel", tick.t)),
         };
-        let anchor = match (&st_prev, &chain) {
-            (Some((pt, _)), Some(_)) if tick.t == pt + 1 => false,
-            _ => true,
-        };
+        let anchor = !matches!((&st_prev, &chain), (Some((pt, _)), Some(_)) if tick.t == pt + 1);
         if anchor {
             // (Re-)anchor: restore planes to the measured image at
             // this record, import the closure, seed the chain. The
@@ -853,10 +850,7 @@ fn run_mc2(path: &std::path::Path, args: &Args) -> Result<bool, String> {
         // both laws live in the shared recovery home.
         let respawn = witness.observe(tick.input.as_ref());
 
-        let anchor = match (&st_prev, &chain) {
-            (Some((pt, _)), Some(_)) if tick.t == pt + 1 => false,
-            _ => true,
-        };
+        let anchor = !matches!((&st_prev, &chain), (Some((pt, _)), Some(_)) if tick.t == pt + 1);
         if anchor {
             world.restore_planes(&pristine);
             world.restore_thing_table(&things);

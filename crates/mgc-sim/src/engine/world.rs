@@ -4484,6 +4484,7 @@ impl World {
     /// - Castle, unarmed (:65594-98): save the caster's full axis, then
     ///   `CopyEntityPosition` of the CASTLE's axis — its x, y and z, no
     ///   offset (the −448 stand-off is MC2's).
+    ///
     /// Every arm then zeroes the caster's `Type_160 v_12` — the flight
     /// TARGET speed (:65583/:65601; the burst expiry repeats it, :65614).
     pub(crate) fn cast_teleport(&mut self, m: usize, p: PlayerPose) {
@@ -5495,10 +5496,8 @@ impl World {
             // 10 Teleport: the burst END repeats the target-speed
             // zero (:65613-14, `if (!life) Type_160 v_12 = 0` —
             // fired however the burst ended).
-            10 => {
-                if was_live && !active {
-                    self.pending_speed_zero = true;
-                }
+            10 if was_live && !active => {
+                self.pending_speed_zero = true;
             }
             _ => {}
         }
