@@ -466,24 +466,33 @@ fn level_005_golden_state_hashes() {
     // (sub_37920 :44244-55). Level 005's authored rival castles run
     // these machines from the first idle window. OBSERVABLE holds at
     // every leg — the shift is bookkeeping-layout only.
+    // A-E re-pinned for the RIVAL TOKEN COST-CACHE SEED (mc1l5 dig:
+    // `mint_manifestation` now seeds every rival spell-16 token with
+    // the class-12 ctor's 1000/9 — sub_3BF70 :47996, the same seed
+    // grant_spell always gave the human book; the mc1l5 take pins
+    // Vodor's token at exactly 1000/9 under his standing authored
+    // castle). The seed rides in the state from the mint, so every
+    // leg's hash shifts; the poverty-gate READ (`rival_castle_price`)
+    // resolves to the same 1000 the old static gate used, so no
+    // decision moves. See the OBSERVABLE verdict below.
     const GOLDEN: [u64; 6] = [
-        0x211182712dfcddda, // post-init (feature pass + disposition 0)
-        0xe1b840ea99cad7cd, // A: 32 idle ticks far afield
-        0xc5fb6b472657e57d, // B: crater trigger fired + 120 dig ticks
-        0x2930c9dfd5f447f9, // C: ambush disposition fired
-        // D/E re-pinned for THE CAST-PHASE LAW (the MC1 arm→token-fire
-        // restructure): every hand cast now arms its spell token at
-        // the wizard pass and the token's own tick fires ONE FRAME
-        // later (corpus: 257/257 l0 + 371/371 l32 arms spawn at
-        // arm+1) — the D-window fireballs all shifted one tick, and
-        // their f140 stamp is now cost/period (40, corpus-pinned).
-        // Then again for the AREA-BROADCAST TILE ROUNDING
-        // (`area_write` nearest-tile center, sub_120B0/EF:3750 —
-        // corpus: mc1l0 t=91 tent claim): the D-window explosion
-        // mail reaches edge-tile bees on retail's tick.
-        // Windows A-C (no casts) are byte-identical throughout.
-        0x58a160d036e4311c, // D: 64 ticks of two-hand fireball combat
-        0x899fac6c52d428e7, // E: 100 aftermath ticks
+        0xebb26ffc9347eb7a, // post-init (feature pass + disposition 0)
+        0x9b268228d1fda151, // A: 32 idle ticks far afield
+        0xd1fa31b4c60ec9a1, // B: crater trigger fired + 120 dig ticks
+        0x7770b764bae3bd65, // C: ambush disposition fired
+        // D/E previously re-pinned for THE CAST-PHASE LAW (the MC1
+        // arm→token-fire restructure): every hand cast now arms its
+        // spell token at the wizard pass and the token's own tick
+        // fires ONE FRAME later (corpus: 257/257 l0 + 371/371 l32
+        // arms spawn at arm+1) — the D-window fireballs all shifted
+        // one tick, and their f140 stamp is now cost/period (40,
+        // corpus-pinned). Then again for the AREA-BROADCAST TILE
+        // ROUNDING (`area_write` nearest-tile center,
+        // sub_120B0/EF:3750 — corpus: mc1l0 t=91 tent claim): the
+        // D-window explosion mail reaches edge-tile bees on retail's
+        // tick.
+        0xa46d319e3301b8b0, // D: 64 ticks of two-hand fireball combat
+        0xa2b204802eb5113b, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

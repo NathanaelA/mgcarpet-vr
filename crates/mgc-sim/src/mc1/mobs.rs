@@ -2513,16 +2513,77 @@ impl Gen {
         }
     }
 
+    /// The mound's roam/CONVERT tail (surfaced sub_1D060 :23834-23917,
+    /// buried sub_1D6D0 :24030-24116): the undead-army growth. Every
+    /// v_26 ticks a mound with nothing to chase eats the nearest
+    /// civilian and mints a fresh (5,9) at its feet. The victim menu
+    /// cycles on the mound's own clock — `f63 / v_26 % 3` → m4 village
+    /// militia / m12 settler / m13 feeder (:23837; m14/m15 are never
+    /// on it) — with NO owner or team filter: a mound eats its own
+    /// wizard's villagers too. Nearest is XY-only within v_28 (8
+    /// tiles); the kill needs the 3-D reach ≤ 0x600 (:23904/:24103).
+    /// The victim is destroy-flagged raw (sub_41E80 — no death state,
+    /// no corpse, no mana ball, no kill credit) and the newborn runs
+    /// the ctor's state-54 emergence, never born buried. Owner stamp
+    /// = the parent's id24; the surfaced arm gates it on the owner
+    /// actually being a wizard body (:23912), the buried arm stamps
+    /// unconditionally (:24112 — a wild mound passes its own slot
+    /// index on, a genuine retail quirk kept as-is).
+    fn m9_convert(&mut self, i: usize, buried: bool) {
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let victim_model = match (self.ent[i].f63 as i16 / row.v_26) % 3 {
+            0 => 4,
+            1 => 12,
+            _ => 13,
+        };
+        let (ex, ey, ez, own) = {
+            let e = &self.ent[i];
+            (e.x, e.y, e.z, e.id24)
+        };
+        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let mut best: Option<(usize, i32)> = None;
+        for j in 1..self.ent.len() {
+            let c = &self.ent[j];
+            if c.class64 != 5
+                || c.model65 != victim_model
+                || c.tick70 == 120
+                || c.act_life < 0
+                || c.flags & 0x400 != 0
+            {
+                continue;
+            }
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((j, d2));
+            }
+        }
+        let Some((v, _)) = best else { return };
+        let (vx, vy, vz) = (self.ent[v].x, self.ent[v].y, self.ent[v].z);
+        let dz = vz.wrapping_sub(ez) as i32;
+        let sq = Self::dist2_sq(ex, ey, vx, vy).wrapping_add(dz.wrapping_mul(dz));
+        if Self::isqrt(sq as u32) > 0x600 {
+            return;
+        }
+        self.ent[v].flags |= 0x400;
+        if let Some(n) = self.spawn_creature(9, vx, vy, vz) {
+            let owner_is_wizard =
+                (own as usize) < self.ent.len() && self.ent[own as usize].class64 == 3;
+            if buried || owner_is_wizard {
+                self.ent[n].id24 = own;
+            }
+        }
+    }
+
     /// Hidden state 55, sub_1D060 (:23627): the mound lurks — burrow
     /// timer (bury as type 245 when the countdown runs out and the
     /// player is away), burrow-walk + every v_26 a CASTLE hunt
     /// (nearest class-3 model-2; within its extent + v_28 → chase),
     /// the standard yaw jitter when no castle exists, then — whenever
     /// no castle chase was taken — the awake-gated WIZARD scan
-    /// (:23796-23833). Buried mode (sub_1D6D0): the wizard entering
-    /// the 24-tile wake gate arms a −50 countdown and the mound rises
-    /// again (sub_1DDB0); only its roam/convert self-spawn — like the
-    /// surfaced tail (:23834-23920) — is the AI track.
+    /// (:23796-23833) and, if that declines too, the `m9_convert`
+    /// tail. Buried mode (sub_1D6D0): the wizard entering the 24-tile
+    /// wake gate arms a −50 countdown and the mound rises again
+    /// (sub_1DDB0); asleep, it runs the convert tail underground.
     fn m9_hidden(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         if self.ent[i].type86 == 202 {
             // Back from a chase: sub_1DA60's exit path restores the
@@ -2546,9 +2607,6 @@ impl Gen {
             // (:24016-22), else an awake trigger — the wizard inside
             // the 24-tile wake gate — arms it at −50 (:24024-28), so
             // a buried mound rises ~1 s after the player flies near.
-            // The asleep roam/convert scan (:24030-118, the
-            // underground undead-army growth) is the AI track — still
-            // open in ROADMAP.
             let v8 = self.ent[i].f26;
             if v8 < 0 {
                 self.ent[i].f26 = v8 + 1;
@@ -2560,6 +2618,11 @@ impl Gen {
                 }
             } else if self.ent[i].f58 != 0 {
                 self.ent[i].f26 = -50;
+            } else if (self.ent[i].f63 as i16) % BEHAVIOR[self.ent[i].row156 as usize].v_26 == 0 {
+                // The ASLEEP roam/convert scan (:24030-116): buried
+                // mounds grow the army only while the player is far —
+                // the village is gone by the time you fly back.
+                self.m9_convert(i, true);
             }
             return;
         }
@@ -2612,11 +2675,19 @@ impl Gen {
         // but out of range falls through here too (no jitter, like
         // the original). Same range/cone/invisibility gates as the
         // shared wander scan.
+        let mut engaged = chased;
         if !chased && self.ent[i].f58 != 0 {
             if let Some(t) = self.nearest_wizard_target(i, ctx, false, false) {
                 self.ent[i].f146 = t;
                 self.ent[i].tick70 = base + 2;
+                engaged = true;
             }
+        }
+        // The last-resort convert tail (:23834-: the `if (!v46)`
+        // branch) — only when neither the castle hunt nor the wizard
+        // scan took a target this cadence tick.
+        if !engaged {
+            self.m9_convert(i, false);
         }
     }
 

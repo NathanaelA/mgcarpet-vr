@@ -1521,14 +1521,16 @@ impl Gen {
 
     /// The m16 firewall flight (state 17): generic ease + move, no
     /// fire trail. The state-17 handler sub_52770_52AB0 copies the
-    /// bolt's +44 into the +68/+69 explosion (hw:58859) — ported
-    /// HW-only: the (10,53) cloud burns the ROW damage (5000 over
-    /// its 6 ticks ≈ 833/tick — 3 hits beat a rival's 10000 with
-    /// regen stalled, the "3 guaranteed hits" law; only the HW
-    /// model-53 rebound reflect defends, hw:58806). Base MC1 keeps
-    /// the cloud's own ctor 100 — remc1's truncated class-9 table
-    /// hid the copy there and the goldens pin today's behavior; the
-    /// base +44-copy question stays banked.
+    /// bolt's +44 into the +68/+69 explosion (:62770, hw:58859) —
+    /// BOTH games. remc1's truncated class-9 state table hid the
+    /// base-MC1 copy for a while (the question sat banked); the
+    /// mc1l5 take settled it: victims under the recorded wall lose
+    /// EXACTLY 191/tick = 24464/128 = the copied spell damage over
+    /// the cloud's maxLife — the cloud is the wall's ONLY damage
+    /// source (its 225 flames are stamped decorative, see
+    /// `napalm_tick`). HW keeps its ROW damage (5000 over 6 ticks ≈
+    /// 833/tick, the "3 guaranteed hits" law; only the HW model-53
+    /// rebound reflect defends, hw:58806).
     fn proj_firewall_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let e = &mut self.ent[i];
         e.f126 += (e.f128 - e.f126).clamp(-2, 2);
@@ -1558,8 +1560,7 @@ impl Gen {
         if self.ent[i].f146 != 0 {
             self.home(i, ctx);
         }
-        let copy_f44 = self.is_hidden_worlds();
-        self.proj_move_and_hit(i, ctx, copy_f44, true, DeflectLaw::Generic)
+        self.proj_move_and_hit(i, ctx, true, true, DeflectLaw::Generic)
     }
 
     /// sub_53980/sub_53B50 (:63453/:63525): the castle ball's flight
@@ -3486,18 +3487,29 @@ impl Gen {
         if self.is_hidden_worlds() {
             return self.napalm_tick_hw(i, ctx);
         }
+        // Retail burns the cloud's own life down every tick
+        // (:31150-52) — inert under the 15-wave cap, but the mc1l5
+        // take shows the decrement in every recorded (10,53) pair.
         {
             let e = &mut self.ent[i];
+            e.act_life -= 1;
+            if e.act_life < 0 {
+                e.flags |= 0x400;
+                return false;
+            }
             e.f80 = 512;
             e.f82 = 512;
             e.f84 = 2048;
         }
+        // The wall's ONLY damage: the cloud's single f44/maxLife
+        // write — 24464/128 = 191/tick with the bolt-copied +44,
+        // exactly the victim life slope the mc1l5 take records.
         let amt = self.ent[i].f44 as u32 / self.ent[i].max_life.max(1);
         self.area_write(i, 0, amt, ctx, false, false);
         let wave = self.ent[i].f26;
-        let (x, y, z, own) = {
+        let (x, y, z, own, f44) = {
             let e = &self.ent[i];
-            (e.x, e.y, e.z, e.id24)
+            (e.x, e.y, e.z, e.id24, e.f44)
         };
         let cells = self.ring_cells_pub(0, 1);
         for (dx, dy) in cells {
@@ -3508,11 +3520,23 @@ impl Gen {
             if let Some(f) = self.spawn_effect(6, fx, fy, z) {
                 let e = &mut self.ent[f];
                 e.id24 = own;
-                e.f44 = 100;
+                // Inherited, not the flame ctor's 50 (:31168) —
+                // inert under the decorative stamp, but the field
+                // is what the take records on every wall flame.
+                e.f44 = f44;
                 e.act_life = if wave == 0 { 14 } else { 1 };
                 e.type86 += 7;
                 e.f26 += 7;
                 e.f46 = wave * 128;
+                // :31169 — +18 bit0 (0x10000): NO ch0 broadcast, the
+                // flames are pure light show (without it all 15 live
+                // cells accumulate ~100 each into ONE mailbox read ≈
+                // 6,000/tick — the reported griffon instakill; retail
+                // can never one-shot: 10,000 life / 191 ≈ 53 ticks).
+                // +16 bit7 (0x80): no smoke-puff LCG draw — the port's
+                // extra rand pulls desynced every wanderer downstream
+                // of a wall cast in the take.
+                e.flags |= 0x10080;
             }
         }
         self.ent[i].f26 = wave + 1;

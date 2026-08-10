@@ -8014,3 +8014,88 @@ mis-heighted tower-wall cells one sub-step per tick).
    upgrade token still rides f146 (retail resolves via wizard +50)
    — revisit on an upgrade-window exemplar; wizard +48 team sprite
    stamp stays presentation-side.
+
+## 🏆 THE MC1L5 THREE-DIG SESSION 2026-08-10 — poverty gate, undead conversion, wall-of-fire damage law
+
+**Take intake:** `recordings/mc1l5.mgcr` (23,680 ticks, 100% clean
+decode, terrain channel 898 deltas / 145,078 cell edits). Suite
+extracted + auto-triaged + frozen AT intake: `conformance/mc1l5.json`,
+167 fixtures (143 conforming sample, 22 open, 2 no-rows), bundle
+`conformance/fixtures/mc1l5-fixtures.mgcr`. Full verify TSV at repo
+root `mc1l5.tsv` (235,904 rows raw). Pose channel 99.9% bit-exact
+(23,655/23,675). ⚠ manifest+bundle+TSV uncommitted — player git.
+
+**1. RIVAL CASTLE-REBUILD POVERTY GATE = the live cost stamp.**
+Retail want gate (sub_13F00 :18359, every tick, castle-less):
+`manifest16 +136 <= wizard mana_max` (sub_15E90 :19375); commit adds
+`cooldown[16]==0 && manifest.f48==0 && CURRENT mana >= stamp`
+(sub_15A00 case 0x10 :19332). The stamp is a LIVE cache: ctor 1000/9
+(sub_3BF70 :47996), CAP[lvl] at castle build/level-up (sub_47960
+:56481 → sub_47C60), **CAP[0] = 5000 at total teardown** (sub_47A70
+:56527-28 stamps AFTER the final decrement — the folklore "<5000 no
+rebuild"). Corroboration: cast-phase corpus token +140 = 49 =
+5000/101; **mc1l5 take: Vodor castle-less at mana_max 1,768-3,796 for
+t≈15,700-17,600 (no rebuild), rebuilds at t=17643 the moment
+mana_max crosses 5,322**. The port had NO poverty gate (static ctor
+1000 in both want + ready). LANDED: death stamp world-side in the
+castle dispatch arm (castle died inside castle_tick → stamp CAP[0]
+via `castle_owner_token`: human registry / native rival registry /
+import f144 join, model-16-gated), `rivals.rs::rival_castle_price`
+read in the want gate + `rival_cast_ready` s==16,
+`mint_manifestation` now seeds the ctor 1000/9 (matches recorded
+rival tokens). ⚠ LAW REFINED ON TAKE EVIDENCE: the every-tick
+standing re-stamp is HUMAN-ONLY — mc1l5 t=0 pins Vodor's token at
+ctor 1000/9 under his STANDING authored castle (rival init order:
+wizext+708 empty when the authored-castle stamp runs; a first
+attempt stamping rival tokens every tick regressed 70 mc1l5
+fixtures + threw (12,19) mis-stamps on mc1hwl0 until the model-16
+gate landed). DEVIATIONS `spell_cast_cost` entry CORRECTED (old
+claim "no teardown re-stamp / stale 10000" was wrong; lockout price
+= 5000; NOT rival-immune). Human-lane collateral: post-death recast
+now 5000 (was stale CAP[lvl]) under the retail arm. Pinned by
+`rival_rebuild_waits_out_poverty_at_the_death_stamp` +
+`first_castle_lockout_stale_stamp_vs_live_law` (updated to CAP[0]).
+DEFERRED: rival token CAP stamp at the rival's own build/level-up
+commit (retail sub_47960 site; decision-inert in the port — the
+upgrade arm reads CASTLE_CAP directly — but obs-relevant if a take
+ever samples a rival token mid-life between rebuild and death).
+
+**2. UNDEAD CONVERT TAIL LANDED (the open villager→skeleton lead,
+player-reports 2026-07-19 #8).** Full law in `mobs.rs::m9_convert`
+doc + ROADMAP entry (updated). mc1l5 corpus: village battle from
+t≈4,441 (the 68-riser army spawn is pose-phase-explained; the
+trickle of single missing:(5,9) at ~4-25-tick gaps from t=4,477 =
+the conversions the port lacked). No caps; victim deleted raw
+(no corpse/ball/credit); newborn state-54 emergence; owner-stamp
+wizard-gate surfaced vs unconditional buried (retail quirk kept).
+Pinned by `m9_mound_converts_civilians_into_skeletons`.
+
+**3. WALL-OF-FIRE DAMAGE LAW (griffon-instakill report).** Retail:
+the (10,53) cloud is the wall's ONLY damage source — bolt +44
+(24464) copies into the cloud at impact (sub_52770 tail :62770; the
+truncated class-9 state table had banked this as HW-only), cloud
+writes f44/maxLife = 24464/128 = **191/tick — the recorded victim
+life slope EXACTLY (mc1l5 t=23,415-23,420: two (5,9) at −191/tick)**;
+all 225 flames carry `flags |= 0x10080` (:31169: +18 bit0 = no ch0
+broadcast, +16 bit7 = no smoke LCG draw) — pure light show. The port
+spawned the flames UNSTAMPED: 15 live cells × 100 accumulated into
+one mailbox read ≈ 6,000/tick (griffon 10,000 dead in 2 ticks; the
+2026-07-29 ambient-fire extents fix unmasked it — before that the
+wall flames had zero extents and hit nobody). Retail griffon kill
+time = 53 ticks; instakill impossible. LANDED: the 0x10080 stamp +
+f44 inherit on napalm children, the +44 bolt→cloud copy now BOTH
+games (`proj_move_and_hit(.., true, ..)`), cloud actLife decrement
+(:31150-52 — the recorded (10,53) life ramp). The 0x80 half also
+kills the port's extra smoke rand draws — the take's post-cast
+(5,15) wanderer rand/heading cascade (t=23,404+) was this. Test
+`hidden_worlds_firewall_bolt_...` updated: base MC1 copies too.
+COLLATERAL TO SPOT-CHECK (banked, unverified): pre-fix port walls
+also tree-burned (amt/10 ch0 to class-2 m0) and castle-pre-passed
+with no radius gate — both now suppressed by the stamp; visual
+smoke density on walls drops to retail's zero.
+
+**Receipts:** 699 workspace tests green (MGC_REQUIRE_GOLDENS=1), all
+10 fixture suites green (incl. fresh mc1l5 167/167), clippy + fmt
+clean. L005 GOLDEN A-E re-pinned for the rival token mint seed —
+OBSERVABLE holds every leg (layout-only; no golden-run behavior
+moved). PLAYTESTS OWED: all three fixes.

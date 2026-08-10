@@ -918,11 +918,15 @@ by offset, never by our field name.
   `m9_mound_scans_the_wizard_when_awake` +
   `m9_buried_mound_rises_near_the_wizard`; live-level verify:
   dis-2 army buries player-far, then 16 risers chasing within 400
-  ticks of hovering it. Goldens unmoved. STILL OPEN (AI track):
-  the roam/convert self-spawn (surfaced :23834-23920 tile-dis-3
-  gated, buried :24030-118 unconditional owner stamp — the
-  undead-army growth that consumes villagers/creatures within
-  0x600 and mints new (5,9)s).
+  ticks of hovering it. Goldens unmoved. The roam/convert
+  self-spawn LANDED 2026-08-10 (`mobs.rs::m9_convert`, mc1l5 dig):
+  the undead-army growth — a mound with nothing to chase eats the
+  nearest m4/m12/m13 within reach 0x600 every v_26 ticks (victim
+  menu cycles on `f63/v_26 % 3`) and mints a fresh (5,9); no
+  corpse, no ball, no kill credit; buried mounds convert only
+  asleep (player-far). Pinned by
+  `m9_mound_converts_civilians_into_skeletons` (both arms + the
+  wild-mound owner-stamp quirk).
 
 ### MC2 fidelity debts
 - `mc2_seed_default_spells` unconditionally seeds `{0,1}` at EVERY level

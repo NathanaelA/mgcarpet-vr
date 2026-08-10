@@ -2841,45 +2841,41 @@ impl World {
                     // the stamp is retail's own state evolution —
                     // only the READ (spell_cast_cost) forks, so
                     // hashes and snapshots stay arm-independent
-                    // while a castle stands. Import worlds join on
-                    // the owner lane: the token's +144 carries the
-                    // same owner sentinel as the castle's id24 (the
-                    // importer tags human book tokens PLAYER_TARGET;
-                    // a dropped (12,16) ground jar could alias,
-                    // accepted); native worlds bind exactly: the
-                    // human castle (id24) stamps `player.owned[16]`.
-                    // Rival casts never read a stamp (rival-immune,
-                    // the affordability lanes are separate).
+                    // while a castle stands. HUMAN-ONLY: the mc1l5
+                    // take pins Vodor's token at the ctor 1000/9
+                    // under his STANDING authored castle (t=0..), so
+                    // the every-tick re-stamp is the local player's
+                    // wizard handler alone — rival tokens move only
+                    // on castle EVENTS (the death stamp below; the
+                    // rival init order leaves AI+708 empty at the
+                    // authored-castle init, so even that stamp
+                    // misses them at level start).
                     if self.g.ent[i].f26 > 0 && self.g.ent[i].flags & 0x400 == 0 {
                         let lvl = self.g.ent[i].f26;
                         let cap = crate::engine::features::Gen::CASTLE_CAP[(lvl as usize).min(7)];
                         let own = self.g.ent[i].id24;
-                        let tok = if own == PLAYER_TARGET {
-                            // The human book: `owned[16]` — the mint
-                            // registry natively, the recorded wizext
-                            // +724 slot under import (both lanes).
-                            let m = self.player.owned[16] as usize;
-                            (m != 0
-                                && m < self.g.ent.len()
-                                && self.g.ent[m].class64 == 12
-                                && self.g.ent[m].flags & 0x400 == 0)
-                                .then_some(m)
-                        } else if self.strict_retail {
-                            // Rival books exist only in imported pools;
-                            // their tokens' +144 joins on the importer's
-                            // f42 lane = the rival's carpet slot = this
-                            // castle's id24.
-                            (1..self.g.ent.len()).find(|&j| {
-                                let c = &self.g.ent[j];
-                                c.class64 == 12
-                                    && c.model65 == 16
-                                    && c.f144 == own
-                                    && c.flags & 0x400 == 0
-                            })
-                        } else {
-                            None
-                        };
-                        if let Some(m) = tok {
+                        if own == PLAYER_TARGET {
+                            if let Some(m) = self.castle_owner_token(own) {
+                                self.g.ent[m].f136 = cap;
+                                self.g.ent[m].f140 = cap / 101;
+                            }
+                        }
+                    } else if self.g.ent[i].flags & 0x400 != 0 {
+                        // The castle died INSIDE this castle_tick.
+                        // Retail's teardown runs the ladder stamp
+                        // AFTER the level decrement (sub_47A70
+                        // :56527-28 → sub_47C60 case 0), so a razed
+                        // castle re-prices the owner's Create-Castle
+                        // token at CASTLE_CAP[0] = 5000 — the rival
+                        // rebuild poverty gate, and the human's
+                        // post-death recast price (the first-castle
+                        // lockout's real constant; the mc1l5 take
+                        // pins Vodor's rebuild exactly at mana_max
+                        // crossing 5000, and the cast-phase corpus's
+                        // token +140 = 49 is this stamp's /101).
+                        let cap = crate::engine::features::Gen::CASTLE_CAP[0];
+                        let own = self.g.ent[i].id24;
+                        if let Some(m) = self.castle_owner_token(own) {
                             self.g.ent[m].f136 = cap;
                             self.g.ent[m].f140 = cap / 101;
                         }
@@ -3834,6 +3830,42 @@ impl World {
     /// [`MANIFEST_BASE`] + spell id; +48 burst counter → our f26,
     /// +44 damage → f44 (count/possess read from the static table).
     /// Auto-fills an empty hand, LEFT first (:49246-54).
+    /// Resolve a castle owner's Create-Castle manifestation token —
+    /// retail's `wizext+708` slot (sub_47C60 :56580-84, owner filter
+    /// `+70 <= 1`). Human = the mint registry (`player.owned[16]`
+    /// natively, the recorded wizext slot under import); rival = the
+    /// native mint registry first, else the importer's f144 join
+    /// (f144 carries the owner slot = the castle's id24 in both the
+    /// native mint and the import tag; a dropped (12,16) ground jar
+    /// could alias, accepted).
+    fn castle_owner_token(&self, own: u16) -> Option<usize> {
+        // The model gate matters under import: a registry slot that
+        // survived a re-import can point at a DIFFERENT class-12 jar
+        // (a (12,19) book token took a stamp meant for the castle
+        // cache until this checked the model).
+        let valid = |m: usize| {
+            m != 0
+                && m < self.g.ent.len()
+                && self.g.ent[m].class64 == 12
+                && self.g.ent[m].model65 == 16
+                && self.g.ent[m].flags & 0x400 == 0
+        };
+        if own == PLAYER_TARGET {
+            let m = self.player.owned[16] as usize;
+            return valid(m).then_some(m);
+        }
+        if let Some(r) = self.rivals.iter().find(|r| r.ent == own) {
+            let m = r.owned[16] as usize;
+            if valid(m) {
+                return Some(m);
+            }
+        }
+        (1..self.g.ent.len()).find(|&j| {
+            let c = &self.g.ent[j];
+            c.class64 == 12 && c.model65 == 16 && c.f144 == own && c.flags & 0x400 == 0
+        })
+    }
+
     fn grant_spell(&mut self, spell: SpellId) -> Option<usize> {
         // MC1 class-12 manifestations never exist on the MC2 column
         // (the native book owns spells there; the dev/plausible
@@ -12558,8 +12590,10 @@ mod tests {
         );
         assert_eq!(
             sprite_and_cloud_f44(GameId::Mc1),
-            (42, 100),
-            "base MC1: fireball sprite, cloud keeps its ctor 100"
+            (42, 5000),
+            "base MC1: fireball sprite, and the +44 copy runs here \
+             too (:62770 — mc1l5 take: 191/tick = 24464/128 victim \
+             slope under the recorded wall)"
         );
     }
 
@@ -13644,10 +13678,13 @@ mod tests {
     /// The `castle_recast_cost` patch, both arms (DEVIATIONS.md "the
     /// castle-cost stale stamp / first-castle lockout"). While housed
     /// the stamp and the live law agree (the castle tick re-stamps the
-    /// manifestation's +136 every tick, both arms); after castle death
-    /// retail's missing teardown re-stamp leaves the ladder price
-    /// cached — the player-certified FIRST-CASTLE LOCKOUT — while the
-    /// patched arm re-derives the ctor 1000.
+    /// manifestation's +136 every tick, both arms); at castle death
+    /// retail's teardown re-stamps the token at CAP[0] = 5000
+    /// (sub_47A70 :56527-28 → sub_47C60 case 0 — corroborated by the
+    /// cast-phase corpus's token +140 = 49 = 5000/101) — the
+    /// player-certified FIRST-CASTLE LOCKOUT prices at 5000, not the
+    /// stale ladder price — while the patched arm re-derives the ctor
+    /// 1000.
     #[test]
     fn first_castle_lockout_stale_stamp_vs_live_law() {
         let mut w = bare_creature_world(2);
@@ -13686,15 +13723,21 @@ mod tests {
         }
         assert!(w.loadout().castle.is_none(), "the demolish razed it");
 
-        // Retail arm (the default): no teardown ever re-stamps — the
-        // homeless recast keeps the ladder price. The HUD dots
-        // (loadout) read the same word, so they show it too.
+        // Retail arm (the default): the teardown re-stamped CAP[0] =
+        // 5000 — the homeless recast prices at 5000 whatever level
+        // the dead castle held. The HUD dots (loadout) read the same
+        // word, so they show it too.
+        let cap0 = crate::engine::features::Gen::CASTLE_CAP[0] as u32;
+        assert_eq!(
+            w.g.ent[m].f136 as u32, cap0,
+            "the teardown stamps the token at CAP[0]"
+        );
         assert_eq!(
             w.spell_cast_cost(16),
-            cap1,
-            "retail arm: the stale stamp prices the homeless recast"
+            cap0,
+            "retail arm: the death stamp prices the homeless recast"
         );
-        assert_eq!(w.loadout().cost[16], cap1, "the HUD dots agree");
+        assert_eq!(w.loadout().cost[16], cap0, "the HUD dots agree");
 
         // Patched arm: live-law re-derive — homeless -> the ctor 1000.
         w.set_patches(crate::patches::WorldPatches {
@@ -16903,6 +16946,106 @@ mod tests {
         }
         assert!(fired, "the rival never fired on the player");
         assert_eq!(w.rivals[0].state, crate::mc1::rivals::AiState::AttackWizard);
+    }
+
+    /// The rival castle-rebuild POVERTY GATE (sub_13F00 :18359 →
+    /// sub_15E90 :19375: `manifest16 +136 <= wizard mana_max`, with the
+    /// teardown re-stamp sub_47A70 :56527-28 → sub_47C60 case 0 pricing
+    /// a razed wizard's token at CAP[0] = 5000). A destroyed, starved
+    /// rival must NOT rebuild until the census ceiling crosses 5000 —
+    /// the mc1l5 take's Vodor experiment (castle-less at mana_max
+    /// 1.7-3.8k for ~2,000 ticks, rebuilt at t=17643 the moment
+    /// mana_max hit 5,322).
+    #[test]
+    fn rival_rebuild_waits_out_poverty_at_the_death_stamp() {
+        use crate::mc1::rivals::RivalConfig;
+        let mut book = [false; SPELL_COUNT];
+        book[16] = true;
+        let planes = Planes {
+            height: vec![100; 0x10000],
+            tile_type: vec![5; 0x10000],
+            shading: vec![32; 0x10000],
+            angle: vec![5; 0x10000],
+            ceiling: Vec::new(),
+        };
+        let mut w = World::new(planes, &rival_marker_things(), 1, assets());
+        let mut cfgs: [Option<RivalConfig>; 8] = Default::default();
+        cfgs[1] = Some(RivalConfig {
+            aggression: 200,
+            accuracy: 255,
+            tempo: 255,
+            castle_level: 2, // spawns housed at level 1
+            book,
+            allowed: book,
+        });
+        w.set_wizards(&cfgs, 2);
+        let rid = w.rivals[0].ent;
+        let pose = PlayerPose::level(200 << 8, 200 << 8, 3400, 0);
+        for _ in 0..5 {
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(w.rival_castle(rid).is_some(), "housed by construction");
+        let m = w.rivals[0].owned[16] as usize;
+        assert_ne!(m, 0, "the mint registered the manifestation");
+        assert_eq!(
+            w.g.ent[m].f136, 1000,
+            "rival token keeps the ctor seed while housed (no \
+             every-tick stamp for rivals — mc1l5 t=0, Vodor 1000/9)"
+        );
+        // Raze it — one lethal write per tick until every level is
+        // knocked down (the downgrade eats one rung per hit). The
+        // death arm must re-price the token at CAP[0].
+        for _ in 0..200 {
+            if let Some(cc) = w.rival_castle(rid) {
+                w.g.ent[cc].act_life = -1;
+            } else {
+                break;
+            }
+            w.tick(pose, PlayerCommand::default());
+        }
+        assert!(w.rival_castle(rid).is_none(), "the castle died");
+        assert_eq!(
+            w.g.ent[m].f136 as u32,
+            crate::engine::features::Gen::CASTLE_CAP[0] as u32,
+            "the teardown stamps the token at CAP[0] = 5000"
+        );
+        // Starve: strip every mana ball (the death scatter included) so
+        // the census collapses to the intrinsic 1000 base.
+        for _ in 0..300 {
+            for j in 1..w.g.ent.len() {
+                if w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 39 {
+                    w.g.ent[j].flags |= 0x400;
+                }
+            }
+            w.tick(pose, PlayerCommand::default());
+            assert!(
+                w.rival_castle(rid).is_none(),
+                "poverty: mana_max {} < 5000 must not rebuild",
+                w.rivals[0].mana_max
+            );
+        }
+        assert_eq!(w.rivals[0].mana_max, WIZARD_BASE_MANA);
+        // One fat claimed ball releases the gate (the census credits
+        // f140 through the f144 claim to the rival's ceiling).
+        let b = w.g.new_event().expect("pool has room");
+        {
+            let e = &mut w.g.ent[b];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.f140 = 5000;
+            e.f144 = rid;
+            e.max_life = 10000;
+            e.act_life = 10000;
+        }
+        let mut rebuilt = false;
+        for _ in 0..4000 {
+            w.tick(pose, PlayerCommand::default());
+            if w.rival_castle(rid).is_some() {
+                rebuilt = true;
+                break;
+            }
+        }
+        assert!(rebuilt, "mana_max past the 5000 stamp rebuilds");
     }
 
     /// Regression: the attack-spell picker must not FREEZE on a

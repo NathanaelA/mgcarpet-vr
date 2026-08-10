@@ -346,6 +346,15 @@ impl World {
             e.f26 = 0;
             e.f44 = f44;
             e.f144 = owner;
+            // The spell-16 cost-cache ctor seed (sub_3BF70 :47996,
+            // same as the human grant): 1000/9. Rival tokens keep it
+            // until a castle EVENT stamps them — the mc1l5 take
+            // shows Vodor's token at 1000/9 under his standing
+            // authored castle.
+            if spell == 16 {
+                e.f136 = SPELLS[16].possess_mana as i32;
+                e.f140 = SPELLS[16].possess_mana as i32 / 101;
+            }
         }
         self.g.set_sprite(m, 77);
         let (h4, v4) = {
@@ -989,12 +998,34 @@ impl World {
 
     // ---- the decision cascade (sub_136C0 :18048) --------------------------
 
+    /// The LIVE Create-Castle price — the manifestation's +136 cost
+    /// cache, which retail's want/commit gates read (sub_15E90
+    /// :19375: `manifest +136 <= wizard +136`). Ctor 1000; CAP[lvl]
+    /// while a castle stands; re-stamped CAP[0] = 5000 by the
+    /// teardown (sub_47A70 → sub_47C60 case 0) — the rival rebuild
+    /// POVERTY GATE: a razed, mana-starved rival (census ceiling
+    /// collapsed to the 1000 base) refuses to rebuild until claims
+    /// push mana_max past 5000 (mc1l5 take: Vodor rebuilds at
+    /// t=17643, the tick mana_max crosses 5000).
+    fn rival_castle_price(&self, ri: usize) -> u32 {
+        let m = self.rivals[ri].owned[16] as usize;
+        if m != 0
+            && m < self.g.ent.len()
+            && self.g.ent[m].class64 == 12
+            && self.g.ent[m].flags & 0x400 == 0
+        {
+            self.g.ent[m].f136.max(0) as u32
+        } else {
+            SPELLS[16].possess_mana
+        }
+    }
+
     fn rival_selector(&mut self, ri: usize, i: usize, think: bool) {
         // 1. Need a castle (sub_13F00 :18345).
         let castle = self.rival_castle(self.rivals[ri].ent);
         if castle.is_none()
             && self.rivals[ri].known[16]
-            && self.rivals[ri].mana_max >= SPELLS[16].possess_mana
+            && self.rivals[ri].mana_max >= self.rival_castle_price(ri)
         {
             if self.rival_scout_site(ri, i) {
                 self.rivals[ri].state = AiState::Build;
@@ -1763,7 +1794,16 @@ impl World {
             return false;
         }
         let def = &self.spells()[s];
-        if r.mana < def.possess_mana {
+        // Spell 16 prices through the LIVE manifestation cache
+        // (sub_15A00 case 0x10 :19332 reads the token's +136, same
+        // stamp as the want gate) — 1000 ctor, CAP[lvl] housed, 5000
+        // after a raze. Every other spell is the static table cost.
+        let cost = if s == 16 {
+            self.rival_castle_price(ri)
+        } else {
+            def.possess_mana
+        };
+        if r.mana < cost {
             return false;
         }
         // ALREADY-ACTIVE gate (sub_15A00 case 4/0xC/0xE, remc1

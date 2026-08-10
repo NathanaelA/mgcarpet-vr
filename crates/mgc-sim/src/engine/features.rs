@@ -5976,6 +5976,76 @@ mod tests {
         assert_eq!(run(0).0, 55, "asleep mound never scans (+58 gate)");
     }
 
+    /// The mound's convert tail (surfaced sub_1D060 :23834-917,
+    /// buried sub_1D6D0 :24030-116): with nothing to chase, the
+    /// cadence tick eats the nearest on-menu civilian (phase 0 → m4)
+    /// within 3-D reach 0x600 and mints a fresh (5,9) at its feet —
+    /// no corpse, no mana ball, no death state on the victim. Owner
+    /// stamp quirk: a WILD mound's newborn stays self-owned on the
+    /// surfaced arm (the :23912 wizard-body gate fails) but inherits
+    /// the parent's slot index on the buried arm (:24112,
+    /// unconditional).
+    #[test]
+    fn m9_mound_converts_civilians_into_skeletons() {
+        let run = |buried: bool| {
+            let mut g = Gen::new(
+                flat_land(8),
+                synthetic_assets(),
+                1,
+                ChassisParams::MC1,
+                crate::verbs::VerbSet::MC1,
+            );
+            let i = g.spawn_creature(9, 0x4000, 0x4000, 0).unwrap();
+            g.ent[i].tick70 = 55;
+            g.ent[i].f26 = if buried { 0 } else { 200 };
+            g.ent[i].f71 = if buried { 1 } else { 0 };
+            g.ent[i].f58 = 0; // asleep: no wizard scan, no wake-arm
+            g.ent[i].f63 = 0; // cadence hit, phase 0 → m4 militia
+            let v = g.spawn_creature(4, 0x4100, 0x4000, 0).unwrap();
+            let ctx = ctx_at(0x7F00, 0x7F00, 0); // player far away
+            g.creature_tick(i, &ctx);
+            assert_ne!(
+                g.ent[v].flags & 0x400,
+                0,
+                "the civilian is destroy-flagged raw (no death state)"
+            );
+            let n = (1..g.ent.len())
+                .find(|&j| {
+                    j != i
+                        && g.ent[j].class64 == 5
+                        && g.ent[j].model65 == 9
+                        && g.ent[j].flags & 0x400 == 0
+                })
+                .expect("a fresh (5,9) rose at the victim");
+            assert_eq!(
+                (g.ent[n].x, g.ent[n].y),
+                (0x4100, 0x4000),
+                "the riser stands where the victim stood"
+            );
+            assert_eq!(
+                g.ent
+                    .iter()
+                    .filter(|e| e.class64 == 10 && e.model65 == 39 && e.flags & 0x400 == 0)
+                    .count(),
+                0,
+                "no mana ball drops from a converted kill"
+            );
+            if buried {
+                assert_eq!(
+                    g.ent[n].id24 as usize, i,
+                    "buried arm stamps the parent's id24 unconditionally"
+                );
+            } else {
+                assert_eq!(
+                    g.ent[n].id24 as usize, n,
+                    "surfaced arm leaves a wild mound's newborn self-owned"
+                );
+            }
+        };
+        run(false);
+        run(true);
+    }
+
     /// The buried mound's unbury law (sub_1D6D0 :24016-28 +
     /// sub_1DDB0 :24273): asleep it stays buried forever; the wizard
     /// entering the 24-tile wake gate (an armed f58) starts the −50
