@@ -524,13 +524,24 @@ impl World {
             if owner == 0 {
                 return 0;
             }
+            // Retail's wizard +50 is written ONLY by the level-up arm
+            // (sub_47960 :56484) and cleared by the level-down-to-0 /
+            // removal path (:56534) — a freshly landed level-0 flag is
+            // NOT yet bound (mc1l0 t=562: flag live, +50 still 0), so
+            // the scan requires an established level. (Rival direct
+            // mint :19206 binds at spawn; the port mints leveled — the
+            // one-tick level-0 window is the rival-cast-phase lane.)
             self.g
                 .ent
                 .iter()
                 .enumerate()
                 .skip(1)
                 .find(|(_, e)| {
-                    e.class64 == 3 && e.model65 == 2 && e.id24 == owner && e.flags & 0x400 == 0
+                    e.class64 == 3
+                        && e.model65 == 2
+                        && e.id24 == owner
+                        && e.flags & 0x400 == 0
+                        && e.f26 > 0
                 })
                 .map_or(0, |(s, _)| s as u16)
         };

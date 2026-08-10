@@ -2181,20 +2181,22 @@ impl Gen {
                 e.flags &= !8;
             }
             // sub_3B760 (:47545): the castle ground-leveling pass
-            // (state 43); counter armed by its first tick.
+            // (state 43); counter armed by its first tick. The ctor
+            // writes max_life 0 (:47557) — the machine runs on the
+            // +26 counter, never on life.
             41 => {
                 e.tick70 = 43;
-                e.max_life = 10;
-                e.act_life = 10;
+                e.max_life = 0;
+                e.act_life = 0;
                 e.flags &= !8;
             }
             // sub_3B7B0 (:47567): the CASTLE painter (state 44,
             // sub_285C0) — the caller stamps level (+71) and the
-            // castle link.
+            // castle link. Life 0 like the leveler (:47579).
             42 => {
                 e.tick70 = 44;
-                e.max_life = 30;
-                e.act_life = 30;
+                e.max_life = 0;
+                e.act_life = 0;
                 e.flags &= !8;
             }
             // sub_3B6F0 (:47526): the castle UPGRADE token — state
@@ -2918,6 +2920,20 @@ impl Gen {
                 let t = tile(x, y);
                 let goal = if b < 0xF {
                     if b > 6 { Some(target) } else { None }
+                } else if law == FlattenLaw::CastleLive {
+                    // The live painter's fill (:30637-41) has NO 3x
+                    // arm — every 0xF.. cell with a nonzero low
+                    // nibble steps to 4*(lo-1)+target. The +12/+16
+                    // fork below is the INIT stamp's law (:29877-95);
+                    // sharing it here mis-heighted the tower-wall
+                    // cells one sub-step per tick (mc1l0 t=563
+                    // pose.z, ground under the hovering caster).
+                    let lo = b % 16;
+                    if lo != 0 {
+                        Some(4 * (lo as i32 - 1) + target)
+                    } else {
+                        None
+                    }
                 } else if b >> 4 == 3 {
                     match (b % 16) % 3 {
                         1 => Some(target + 12),
@@ -3145,6 +3161,15 @@ impl Gen {
             return;
         }
         let e = self.ent[i];
+        // :30520-21 — a shaking castle (damage-response +50 armed by
+        // a nearby blast) suspends the whole work body; the counter
+        // has already stepped. Retail resolves the castle through the
+        // painter's +42 link; ours re-derives it by site.
+        if let Some(c) = self.castle_at_site(e.x, e.y) {
+            if self.ent[c].f50 != 0 {
+                return;
+            }
+        }
         let cx = ((e.x as u32 + 128) >> 8) as u8;
         let cy = ((e.y as u32 + 128) >> 8) as u8;
         let target = (e.z >> 5) as i32;
@@ -3191,11 +3216,22 @@ impl Gen {
                 }
             }
         }
-        let c = self.ent[i].f146 as usize;
-        if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
+        if let Some(c) = self.castle_at_site(e.x, e.y) {
             self.ent[c].f59 = 5;
         }
         self.ent[i].flags |= 0x400;
+    }
+
+    /// The castle a build worker (m41/m42) serves: retail links it by
+    /// slot in the worker's +42 — a field the port entity does not
+    /// carry — so the port re-derives it from the worker's spawn
+    /// position, which IS the castle's site corner (unique: the
+    /// placement scan enforces 8-tile spacing between castles).
+    fn castle_at_site(&self, x: u16, y: u16) -> Option<usize> {
+        (1..self.ent.len()).find(|&c| {
+            let e = &self.ent[c];
+            e.class64 == 3 && e.model65 == 2 && e.flags & 0x400 == 0 && e.x == x && e.y == y
+        })
     }
 
     /// sub_28200 (:30284), byte70 43: the castle ground LEVELER — a
@@ -3276,8 +3312,7 @@ impl Gen {
                 self.ent[i].f26 -= 1;
             }
         } else {
-            let c = self.ent[i].f146 as usize;
-            if c != 0 && self.ent[c].class64 == 3 && self.ent[c].model65 == 2 {
+            if let Some(c) = self.castle_at_site(e.x, e.y) {
                 self.ent[c].f59 = 2;
                 // Castle SITE z (+154) = 32 * final — the next
                 // build's datum (:30424); the entity z refreshes
@@ -3756,8 +3791,15 @@ impl Gen {
     /// cases 1/4/6 :56073-78) — the flag rides the painted tower;
     /// the build-site datum lives in f28 (+154).
     pub(crate) fn castle_tick(&mut self, i: usize, patches: crate::patches::WorldPatches) {
-        let (x, y) = (self.ent[i].x, self.ent[i].y);
-        self.ent[i].z = self.ground_z(x, y) as i16;
+        // The ground refresh belongs to the established tick and the
+        // pure waits ONLY (:56013 + cases 1/4/6 :56073-78) — the
+        // action cases keep the stale z: the level-up commit tick
+        // still shows the ctor's raw-point ground (mc1l0 t=563:
+        // z 797 held while the corner reads 864).
+        if matches!(self.ent[i].f59, 1 | 4 | 6) {
+            let (x, y) = (self.ent[i].x, self.ent[i].y);
+            self.ent[i].z = self.ground_z(x, y) as i16;
+        }
         match self.ent[i].f59 {
             // Level-up (sub_47960 :56461, case 0 :56053-72): the
             // house pre-clear + (for standing castles) the space
@@ -3790,6 +3832,14 @@ impl Gen {
                 // and case 0 retries next tick. Committing (or
                 // advancing to the wait) without a painter deadlocks
                 // the castle under meteor pool exhaustion.
+                // The first-commit latch (:56057-62): flags bit 1 +
+                // the one-time team sprite stamp (+86 += wizard +48).
+                // The port keeps the ctor's sprite row — team art is
+                // the renderer's pose.team lane; the flag bit is the
+                // retail-visible half.
+                if self.ent[i].flags & 2 == 0 {
+                    self.ent[i].flags |= 2;
+                }
                 let Some(p) = self.spawn_creator(42, x, y, site_z) else {
                     return;
                 };
@@ -3814,8 +3864,12 @@ impl Gen {
                 }
                 self.snd(10, i);
                 {
+                    // Retail stamps the castle link into the painter's
+                    // +42 (:56484-91) — a field the port does not carry;
+                    // the workers re-derive their castle by SITE (unique
+                    // by the 8-tile spacing law). f146 stays 0 like the
+                    // recorded painters.
                     let e = &mut self.ent[p];
-                    e.f146 = i as u16;
                     e.f71 = lvl as u8;
                     e.id24 = own;
                     e.flags |= 0x10000; // +18 |= 1 (:56492)
@@ -3847,7 +3901,6 @@ impl Gen {
                 if let Some(l) = self.spawn_creator(41, x, y, z) {
                     {
                         let e = &mut self.ent[l];
-                        e.f146 = i as u16;
                         e.f71 = lvl as u8;
                         e.id24 = own;
                     }
@@ -3871,7 +3924,6 @@ impl Gen {
                 if let Some(p) = self.spawn_creator(42, x, y, site_z) {
                     {
                         let e = &mut self.ent[p];
-                        e.f146 = i as u16;
                         // The repaint row is the level VERBATIM
                         // (sub_47020 :56104 `+71 = +26`).
                         e.f71 = lvl.min(8) as u8;

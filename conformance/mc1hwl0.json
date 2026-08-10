@@ -50,11 +50,7 @@
     },
     {
       "t": 89,
-      "status": "open",
-      "sig": "53faea88cb3ff403",
-      "atoms": [
-        "missing:10,41"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: 1 row(s) unexplained"
     },
     {

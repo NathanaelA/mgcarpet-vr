@@ -454,11 +454,23 @@ fn level_005_golden_state_hashes() {
     // moves D/E — the impact-landing site already carried the
     // model-2 guard, so homing/acquire were the inconsistent
     // holdouts). Behavior change toward retail by design.
+    // A-E re-pinned (post-init holds) for THE CASTLE COMMIT LAWS
+    // (mc1l0 t=562/563 dig): the level-up commit's first-commit
+    // latch (+16 |= 2, :56057-62), the m41/m42 build workers' ctor
+    // life 0 (:47557/:47579) with the castle link left out of f146
+    // (retail carries it in +42, unmodeled — workers re-derive by
+    // site), the castle z ground-refresh gated to the established/
+    // wait cases (:56013 + 1/4/6 — action cases hold the stale z),
+    // the live painter's fill goal table (:30637-41, no 3x arm),
+    // and the ctor site snap = truncation + raw-point ground z
+    // (sub_37920 :44244-55). Level 005's authored rival castles run
+    // these machines from the first idle window. OBSERVABLE holds at
+    // every leg — the shift is bookkeeping-layout only.
     const GOLDEN: [u64; 6] = [
         0x211182712dfcddda, // post-init (feature pass + disposition 0)
-        0x2a633e3dd996a877, // A: 32 idle ticks far afield
-        0x8af0a56a74730403, // B: crater trigger fired + 120 dig ticks
-        0xa564efb2b181c8f7, // C: ambush disposition fired
+        0xe1b840ea99cad7cd, // A: 32 idle ticks far afield
+        0xc5fb6b472657e57d, // B: crater trigger fired + 120 dig ticks
+        0x2930c9dfd5f447f9, // C: ambush disposition fired
         // D/E re-pinned for THE CAST-PHASE LAW (the MC1 arm→token-fire
         // restructure): every hand cast now arms its spell token at
         // the wizard pass and the token's own tick fires ONE FRAME
@@ -470,8 +482,8 @@ fn level_005_golden_state_hashes() {
         // corpus: mc1l0 t=91 tent claim): the D-window explosion
         // mail reaches edge-tile bees on retail's tick.
         // Windows A-C (no casts) are byte-identical throughout.
-        0xed280cb7dfa75472, // D: 64 ticks of two-hand fireball combat
-        0x984e8025c415a055, // E: 100 aftermath ticks
+        0x58a160d036e4311c, // D: 64 ticks of two-hand fireball combat
+        0x899fac6c52d428e7, // E: 100 aftermath ticks
     ];
     assert_eq!(
         got, GOLDEN,

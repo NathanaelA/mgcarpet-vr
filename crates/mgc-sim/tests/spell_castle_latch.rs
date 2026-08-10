@@ -160,13 +160,17 @@ fn castle_latch_patched_arm_refuses_the_recorded_cast() {
 /// The patched arm's residual (documented, DEVIATIONS.md): parked
 /// INSIDE tile (14,233) — the corner's clean-window anchor — the
 /// carpet-anchored launch passes; the landing re-scan refuses the
-/// wall and displaces the build one step back into the corridor at
-/// (14,234). The retail arm from the SAME park anchors at the hand
+/// wall and displaces the build one step back into the corridor,
+/// snapping to (15,233) (the ctor's truncate + odd-parity x+1 over
+/// the stepped-back point — carpet-side of the x=16 wall either
+/// way). The retail arm from the SAME park anchors at the hand
 /// muzzle one tile north instead — tile (14,232), whose window is
 /// clean once the corridor statics' early protection churn clears
 /// row 224 — and its ball crosses the wall face, so the castle
-/// rises BEYOND the wall at the odd-parity snap (17,233): the two
-/// arms build on opposite sides of the "impenetrable" wall.
+/// rises ON the wall column at (16,232) (the truncating snap —
+/// the recorded cheese's own character, cf. the recording's
+/// (16,234)): the arms still split across the "impenetrable"
+/// wall face.
 #[test]
 fn castle_latch_patched_arm_keeps_the_carpet_anchored_corridor_build() {
     let Some(root) = baked_root() else {
@@ -190,7 +194,7 @@ fn castle_latch_patched_arm_keeps_the_carpet_anchored_corridor_build() {
     cast_and_run(&mut w, park, 110);
     assert_eq!(
         castle_tile(&w),
-        Some((14, 234)),
+        Some((15, 233)),
         "the corridor park builds displaced into the corridor"
     );
 
@@ -199,7 +203,7 @@ fn castle_latch_patched_arm_keeps_the_carpet_anchored_corridor_build() {
     cast_and_run(&mut w, park, 60);
     assert_eq!(
         castle_tile(&w),
-        Some((17, 233)),
+        Some((16, 232)),
         "the retail-arm hand anchor builds beyond the wall"
     );
 }

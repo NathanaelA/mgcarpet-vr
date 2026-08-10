@@ -2821,6 +2821,7 @@ impl World {
                     self.g.mc2_balloon_tick(i)
                 }
                 3 if self.g.ent[i].model65 == 2 => {
+                    self.g.castle_tick(i, self.patches);
                     // sub_47DD0 (:56617-73), run every tick from the
                     // wizard handler whenever a castle is bound
                     // (wizext+50): the owner's Create-Castle
@@ -2829,49 +2830,60 @@ impl World {
                     // ctor's +50 divisor, sub_3BF70 :47996).
                     // Castle-side because the imported manifestation
                     // encodes +70 < MANIFEST_BASE and never reaches
-                    // manifestation_tick. Live under BOTH cost arms
+                    // manifestation_tick — but AFTER castle_tick and
+                    // gated on the established level, mirroring the
+                    // retail order: the wizard walks ABOVE its castle,
+                    // so the level-up commit's fresh level (and bind)
+                    // is what the same tick's stamp reads (mc1l0
+                    // t=563: 10000/99 with the commit, not the
+                    // pre-commit 1000/9). Live under BOTH cost arms
                     // since the `castle_recast_cost` patch landed:
                     // the stamp is retail's own state evolution —
                     // only the READ (spell_cast_cost) forks, so
                     // hashes and snapshots stay arm-independent
                     // while a castle stands. Import worlds join on
-                    // the f144 owner lane (0 = the human on BOTH
-                    // under import; retail's real binding, wizext
-                    // +708, is outside the closure — a dropped
-                    // (12,16) ground jar could alias, accepted);
-                    // native worlds bind exactly: the human castle
-                    // (id24) stamps `player.owned[16]`. Rival casts
-                    // never read a stamp (rival-immune, the
-                    // affordability lanes are separate).
-                    {
+                    // the owner lane: the token's +144 carries the
+                    // same owner sentinel as the castle's id24 (the
+                    // importer tags human book tokens PLAYER_TARGET;
+                    // a dropped (12,16) ground jar could alias,
+                    // accepted); native worlds bind exactly: the
+                    // human castle (id24) stamps `player.owned[16]`.
+                    // Rival casts never read a stamp (rival-immune,
+                    // the affordability lanes are separate).
+                    if self.g.ent[i].f26 > 0 && self.g.ent[i].flags & 0x400 == 0 {
                         let lvl = self.g.ent[i].f26;
                         let cap = crate::engine::features::Gen::CASTLE_CAP[(lvl as usize).min(7)];
-                        if self.strict_retail {
-                            let own = self.g.ent[i].f144;
-                            for j in 1..self.g.ent.len() {
+                        let own = self.g.ent[i].id24;
+                        let tok = if own == PLAYER_TARGET {
+                            // The human book: `owned[16]` — the mint
+                            // registry natively, the recorded wizext
+                            // +724 slot under import (both lanes).
+                            let m = self.player.owned[16] as usize;
+                            (m != 0
+                                && m < self.g.ent.len()
+                                && self.g.ent[m].class64 == 12
+                                && self.g.ent[m].flags & 0x400 == 0)
+                                .then_some(m)
+                        } else if self.strict_retail {
+                            // Rival books exist only in imported pools;
+                            // their tokens' +144 joins on the importer's
+                            // f42 lane = the rival's carpet slot = this
+                            // castle's id24.
+                            (1..self.g.ent.len()).find(|&j| {
                                 let c = &self.g.ent[j];
-                                if c.class64 == 12
+                                c.class64 == 12
                                     && c.model65 == 16
                                     && c.f144 == own
                                     && c.flags & 0x400 == 0
-                                {
-                                    self.g.ent[j].f136 = cap;
-                                    self.g.ent[j].f140 = cap / 101;
-                                    break;
-                                }
-                            }
-                        } else if self.g.ent[i].id24 == PLAYER_TARGET {
-                            let m = self.player.owned[16] as usize;
-                            if m != 0 && m < self.g.ent.len() {
-                                let c = &self.g.ent[m];
-                                if c.class64 == 12 && c.flags & 0x400 == 0 {
-                                    self.g.ent[m].f136 = cap;
-                                    self.g.ent[m].f140 = cap / 101;
-                                }
-                            }
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(m) = tok {
+                            self.g.ent[m].f136 = cap;
+                            self.g.ent[m].f140 = cap / 101;
                         }
                     }
-                    self.g.castle_tick(i, self.patches)
                 }
                 3 if self.g.ent[i].model65 == 3 => self.g.balloon_tick(i),
                 // MC2 rival (AI) wizards — the MC2-native brain
@@ -9567,6 +9579,15 @@ impl World {
             .iter()
             .find(|e| e.class64 == 3 && e.model65 == 2)
             .map(|e| e.site_z)
+    }
+
+    /// Raw height bytes for a tile row segment (conformance triage
+    /// probe — terrain-write attribution).
+    #[doc(hidden)]
+    pub fn debug_height_row(&self, x0: u8, y: u8, w: u8) -> Vec<u8> {
+        (0..w)
+            .map(|dx| self.g.t.height[crate::engine::features::tile(x0.wrapping_add(dx), y)])
+            .collect()
     }
 
     /// Count live class-10 model-45 buildings carrying the given

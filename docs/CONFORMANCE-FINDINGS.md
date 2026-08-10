@@ -7916,3 +7916,101 @@ retail builds at (114,96) z=797, port at (115,97) z=736, and
 wizard0.castle/player.castle bind 486 where retail still has 0 (a
 site/timing pair). Pose channel unchanged: z t=567 ×5 rows
 (terraform-window family), eff_pitch t=3879 (2047 vs 0).
+
+## 🏆 THE CASTLE COMMIT LAWS — mc1l0 wall 2 (t=562 slot-486 site) FIXED; per-pair 561 → 564
+
+**The castle-site pair dug to the root: five laws, all corpus- and
+decompile-pinned.**
+
+**1. THE SITE LAW** (ctor sub_37920 :44244-55; MC2 twin sub_4AA40
+EF:33383-88 agrees): the snap is **TRUNCATION** (`HIBYTE(x)` /
+`>>= 8`) + the odd-parity x+1 — NOT rounding — and the MC1 link/site
+z = `sub_11F50` at the **RAW landing point BEFORE the snap** (MC2's
+perimeter-MIN site z unchanged). The port rounded (+128) and sampled
+the snapped corner → (115,97) z=736 where retail builds (114,96)
+z=797. The ctor also writes the +150 site echo (dest) — now ported.
+
+**2. THE BIND LAW**: wizard +50 is written ONLY by the level-up arm
+(sub_47960 :56484, with the +416 level echo) and cleared by the
+level-down-to-0/removal path (:56534); the rival direct mint
+(:19206) binds at spawn; the landing ctor copies id24 alone. The
+obs `castle_of` scan now requires **f26 > 0** — the established
+level ⇔ the bound field on the human lane (retail t=562: flag live,
++50 still 0; the bind arrives WITH the t=563 commit). The rival
+mint-tick nuance is the rival-cast-phase lane's.
+
+**3. THE COMMIT TICK** (sub_46F10 case 0): the first-commit latch —
+flags |= 2 + the one-time type86 team stamp (+= wizard +48; port
+keeps the ctor row, team art is the renderer's pose.team lane) —
+and **NO ground z-refresh in the action cases**: the refresh
+belongs to the established tick + pure waits (:56013 + 1/4/6), so
+the ctor's raw-point z survives the commit tick (797 held while
+the corner reads 864).
+
+**4. THE LADDER ORDER** (sub_47DD0): the every-tick token stamp
+runs from the WIZARD's walk slot — above the castle — so the
+commit tick's stamp reads the POST-level f26 (t=563: 10000/99, not
+the pre-commit 1000/9). Port stamp moved AFTER `castle_tick`,
+gated established (+!0x400), keyed: human token = `owned[16]` (the
+mint registry natively, the recorded wizext+724 slot under import —
+the old f144-keyed scan silently missed the importer's
+PLAYER_TARGET tag on book tokens); rival tokens = f144 == castle
+id24 under strict (the importer's f42 join).
+
+**5. THE BUILD WORKERS**: the m41/m42 ctors write **life 0**
+(:47557/:47579 — the machines run on the +26 counter, never life);
+the castle link is carried in **+42** at all three spawn sites
+(:56484-91, sub_47020/sub_47080 :56100-133) — an unmodeled field,
+so the port workers now re-derive their castle BY SITE (unique per
+the 8-tile spacing law) and leave f146 = 0 like the recordings.
+The painter body gained retail's castle-+50 shake-suspend
+(:30520-21), and the live painter's fill goal table (:30637-41)
+has **NO 3x arm** — every 0xF.. cell steps to 4*(lo-1)+target (the
++12/+16 fork belongs to the INIT stamp :29877-95; sharing it
+mis-heighted tower-wall cells one sub-step per tick).
+
+**RECEIPTS:**
+- Per-pair first divergent pair **561 → 564**; the landing, commit
+  and first-work pairs (561-563) fully conforming; unexplained
+  field rows 4,385 → 4,282.
+- Full replay horizon 561 → **562 boundaries**; channel firsts:
+  fields 562 → 565, entity-set 569 → 568 (post-fork cascade noise —
+  the world forks at the pose wall below), pose 563 unchanged.
+- **2 open fixtures FIXED + promoted**: mc1l0 t=1208 AND mc1hwl0
+  t=89, both `missing:(10,41)` — the ground leveler now survives
+  to its tick (ctor life + link laws).
+- Terrain probe: the port's paint sequence is **BIT-EXACT** against
+  the measured terrain channel at every boundary t=562..565.
+- All fixture suites green, 0 regressions; workspace tests green;
+  clippy + fmt clean. L005 GOLDEN A-E re-pinned with attribution —
+  **OBSERVABLE holds at every leg** (bookkeeping-layout only; the
+  authored rival castles run these machines from window A). The
+  castle-latch corridor-park synthetic pins re-derived under the
+  faithful snap: patched arm (15,233) (still carpet-side), retail
+  arm (16,232) ON the wall column — the recorded cheese's own
+  character; the recorded-cast pins were already truncation-exact
+  and did not move.
+
+**NEXT WALLS:**
+1. **REPLAY wall = pose.z t=563: THE MOVER GROUND-SAMPLE PHASE,
+   root-caused.** The driver steps the human flight BEFORE
+   `World::tick` (sampling the PREV tick's terrain) where retail's
+   carpet mover, at the walk slot, samples AFTER the same-tick
+   painter step — the carpet lags each paint step under it by one
+   tick (retail 904 vs port 898 over the rising tower). This IS the
+   terraform-window family (the pose-only z t=567 ×5 rows). The fix
+   is the named mid-walk restructure (step the flight at the carpet
+   slot; prev-pose ctx for the walkers below) — own lane, blast
+   radius large: app + replay + pose lanes share `Simulation::step`.
+2. **Pair 564→565: the castle established-tick ball collection** —
+   retail stamps nearby (10,39) mana balls sclass/smodel = 10/39,
+   resets target_yaw, speeds 42..48 (port: 255/255, stale yaw, 16),
+   plus (10,0) z/rand rows — sub_46DB0's every-other-tick block
+   (sub_47130 ejector / sub_47400) + the absorption loop. Fresh
+   family, undug.
+3. Leads: the painter's counter-2/-1 angle-bit rituals
+   (0x80 ↔ 8 over the rectangle, :30556-85) unported —
+   protection-channel only, obs-invisible today; the (10,43)
+   upgrade token still rides f146 (retail resolves via wizard +50)
+   — revisit on an upgrade-window exemplar; wizard +48 team sprite
+   stamp stays presentation-side.

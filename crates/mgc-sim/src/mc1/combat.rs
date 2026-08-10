@@ -1761,18 +1761,23 @@ impl Gen {
     /// sprite 177, life 40000. The visible castle is painted
     /// terrain; this entity is the anchor/state machine.
     pub(crate) fn spawn_castle(&mut self, x: u16, y: u16) -> Option<usize> {
-        let mut cx = ((x as u32 + 128) >> 8) as u8;
-        let cy = ((y as u32 + 128) >> 8) as u8;
+        // Snap = TRUNCATION in both ctors (sub_37920's HIBYTE /
+        // sub_4AA40's `>>= 8`), then the parity +1 on x.
+        let mut cx = (x >> 8) as u8;
+        let cy = (y >> 8) as u8;
         if (cx as u16 + cy as u16) % 2 == 1 {
             cx = cx.wrapping_add(1); // parity snap (:44246-52)
         }
         let (px, py) = ((cx as u16) << 8, (cy as u16) << 8);
-        // The build datum: MC1 = the center ground; MC2's ctor
+        // The build datum: MC1 = the ground AT THE RAW LANDING POINT
+        // (sub_37920 runs sub_11F50 on the caller's axis BEFORE the
+        // snap — mc1l0 t=562: site (114,96) carries z 797, the
+        // mid-tile ground, not the corner's 736); MC2's ctor
         // (sub_4AA40 EF:33390-99) = 32 x the perimeter-MIN over the
-        // BUILD00 row-1 footprint.
+        // BUILD00 row-1 footprint at the snapped site.
         let z = match self.verbs.movement {
             crate::verbs::MovementVerb::Mc2 => self.mc2_castle_site_z(cx, cy),
-            _ => self.ground_z(px, py) as i16,
+            _ => self.ground_z(x, y) as i16,
         };
         let s = self.new_event()?;
         {
@@ -1783,6 +1788,10 @@ impl Gen {
             e.f59 = 0;
             e.f26 = 0;
             e.max_life = 40000;
+            // The site echo (+150, :44255) — retail's build workers
+            // resolve their castle through it.
+            e.dest_x = px;
+            e.dest_y = py;
             // Build-site z (+154): the painter/leveler datum. The
             // entity z (+76) is refreshed to live ground per tick —
             // the flag rides the painted tower.
