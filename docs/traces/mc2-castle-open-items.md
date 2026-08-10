@@ -34,7 +34,7 @@ EF = `engine/EventsFunctions.cpp`, EV = `engine/Events.cpp`.
    blocked) or, on cave levels, `mapAngle & 8` (ceiling-blocked). It always restores the AABB to the
    current level on exit. (§1)
 
-4. **`sub_11960` (house pre-clear) KILLS overlapping EFFECT entities** (`dword_38527` list) whose AABB
+4. **`sub_11960` (house pre-clear) KILLS overlapping BUILDINGS** (`dword_38527` = the class-10 MODEL-45 list, builder EF:40043-51 — NOT an "effect list"; corrected 2026-08-11) whose AABB
    overlaps the level+1 footprint (sets `life = -1`, `fontTypeIndex = 0`). It does NOT touch terrain and
    does NOT clear objects — it only nukes effect entities in the way. (§1)
 
@@ -85,7 +85,7 @@ void sub_11960(type_entity_0x6E8E* a1)//1f2960
     v6 = a1->array_0x52_82.pitch;                           // half-extent X (next level)
     v1 = a1->position_0x4C_76.x;
     v5 = a1->array_0x52_82.roll;                            // half-extent Y (next level)
-    v2x = x_D41A0_BYTEARRAY_4_struct.dword_38527;           // the EFFECT list (dword_38527)
+    v2x = x_D41A0_BYTEARRAY_4_struct.dword_38527;           // the (10,45) BUILDING list
     v4 = a1->position_0x4C_76.y;
     while (v2x > Entities_EA3E4[0])
     {
@@ -101,7 +101,7 @@ void sub_11960(type_entity_0x6E8E* a1)//1f2960
 }
 ```
 **Exact semantics:**
-- **What it clears:** ONLY entities on the **EFFECT list `dword_38527`** whose AABB (XY Minkowski-sum of
+- **What it clears:** ONLY entities on the **(10,45) BUILDING list `dword_38527`** whose AABB (XY Minkowski-sum of
   half-extents, `|dx| <= pitchA+pitchB && |dy| <= rollA+rollB`) overlaps the castle's **level+1** footprint.
   Overlap ⇒ `life = -1` (queues despawn) and `fontTypeIndex_0x3D_61 = 0`.
 - **NOT touched:** terrain (`mapHeightmap`/`mapAngle`), the OBJECT list `dword_38519`, guards, mana. It is
@@ -656,7 +656,7 @@ LABEL_74:
 
 | constant | value | meaning | cite |
 |---|---|---|---|
-| pre-clear list | `dword_38527` (EFFECT list) | overlap → life=-1, fontType=0 | EF:4403-4411 |
+| pre-clear list | `dword_38527` ((10,45) BUILDING list) | overlap → life=-1, fontType=0 | EF:4403-4411 |
 | pre-clear overlap | `\|dx\|<=pA+pB && \|dy\|<=rA+rB` (inclusive) | AABB Minkowski | EF:4407 |
 | space-check object gate | `dword_38519` model-2 + `sub_106C0` overlap → 0 | EF:4449-4455 |
 | space-check cell predicate | `mapAngle bit7 set` OR (cave & `bit3` set) → blocked | `sub_11C80` | EF:4549-4551 |

@@ -374,8 +374,9 @@ void sub_33110(type_entity_0x6E8E* a1x)//214110
   **`sub_11900(a1x, ix, 0, subSpellIndex_0x2A_42=200)`** — channel-0 damage of subspell 200 into the victim's
   mailbox `str_0x5E_94` — and accumulates a hit count. At loop end, if any hits: `sub_6D8B0(id, 0x15u, hits)` →
   spell-row **0x15 (21)** XP. So the vortex's damage subspell is **200**, XP credited to spell 21. (EF:24272-24408.)
-- **`sub_33710` (EF:24416):** every 8th tick (`!(byte_0x3E_62 & 7)`) sweeps two global entity lists: creatures
-  (`dword_38527`) get `sub_11900(a1x, ix, 0, 200)`; class/model-2 objects (`dword_38519`, model==2) get a knockback
+- **`sub_33710` (EF:24416):** every 8th tick (`!(byte_0x3E_62 & 7)`) sweeps two global entity lists: village
+  BUILDINGS (`dword_38527` = the class-10 MODEL-45 list, builder EF:40043-51 — the earlier "creatures" reading
+  was wrong, corrected 2026-08-11) get `sub_11900(a1x, ix, 0, 200)`; class/model-2 objects (`dword_38519`, model==2) get a knockback
   stamp (`word_0x30_48=30`, damage added into `str_0x5E_94.dword_0x5E_94 += 200`, owner id stamped, +2 hits).
   Hits → `sub_6D8B0(id, 0x15, v1)`. (EF:24424-24445.)
 - **`sub_338D0` (EF:24518, death):** clears the "being-whirled" flags (`struct_byte...dword &= 0xEFFFF7FF`) on every

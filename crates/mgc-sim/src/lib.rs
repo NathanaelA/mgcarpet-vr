@@ -1176,6 +1176,17 @@ impl Simulation {
         self.accel_was_active = over.is_some();
 
         let knock = self.world.as_mut().and_then(|w| w.take_knock_step());
+        // The tornado's forced turn (`sub_33340`'s wizard arm writes
+        // `yaw_0x1C_28` on every arm — see `Gen::player_spin`).
+        // Applied BEFORE the move, so this tick's flight rides the
+        // heading the funnel just imposed, exactly as retail's wizard
+        // pass precedes the wizard's own move in the entity walk.
+        if let Some(w) = &mut self.world {
+            let spin = w.take_player_spin();
+            if spin != 0 {
+                self.carpet.yaw = (self.carpet.yaw as i32 + spin as i32) as u16 & 0x7FF;
+            }
+        }
         // Debuff-stamp hits → the slow/stun web channels (§5c/5d).
         if let Some(w) = &mut self.world {
             let (slow, stun) = w.take_mc2_debuffs();
@@ -1370,6 +1381,13 @@ impl Simulation {
                 let d = mag as f32 / 256.0; // engine units → tiles
                 f.x += d * a.sin();
                 f.z -= d * a.cos();
+            }
+            // …and the forced TURN that rides with it (the tornado —
+            // `Gen::player_spin`). The free-flight mover keeps yaw in
+            // radians, so the 11-bit engine delta converts here.
+            let spin = w.take_player_spin();
+            if spin != 0 {
+                f.yaw += spin as f32 * std::f32::consts::TAU / 2048.0;
             }
         }
 

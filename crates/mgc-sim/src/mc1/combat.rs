@@ -175,6 +175,11 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.id24, e.f66, e.f67)
         };
+        // Does this call run MC2's BUILDING FOOTPRINT pass (below)?
+        // It is `sub_10C80`'s ch0 arm alone — and where it runs, the
+        // tile scan must skip (10,45) so the two never double up.
+        let fp_pass =
+            ch == 0 && !shake && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2);
         // The castle pre-pass (ch0 only).
         if ch == 0 {
             let mut hits: Vec<usize> = Vec::new();
@@ -199,7 +204,104 @@ impl Gen {
                 }
             }
         }
+        // ---- MC2 PASS 2: THE BUILDING FOOTPRINT LIST ---------------
+        //
+        // `sub_10C80`'s ch0 arm runs THREE passes, not two: between
+        // the castle list and the tile scan sits a walk of
+        // `dword_38527` — the (10,45) BUILDING list (built at
+        // EF:40043-52, the `model <= 0x2D` arm) — at EF:4076-4105.
+        // Every building whose 2-D box the writer overlaps gets its
+        // BUILD00 footprint mask sampled at the WRITER's tile, and a
+        // solid cell takes the mail. `CompareAxisWithShift_10750`
+        // (EF:3733) is `ent_overlap` MINUS the z term, so this is
+        // [`Gen::mc2_overlap_xy`], and the pass has **no owner
+        // immunity, no damageable flag, no vulnerability mask, no
+        // +66/+67 filter and no z test** — "damage registers anywhere
+        // within the perimeter", literally. `sub_116A0` (the shake
+        // variant) has no such pass, which is why this is gated on
+        // `!shake`; MC1's `sub_120B0` has none either.
+        //
+        // Without it a building was reachable only through the tile
+        // chain, where it is linked at its ANCHOR alone
+        // (`AddEventToMap_57D70` EF:40313 single-links, exactly like
+        // our `Gen::link` — the multi-link theory is refuted). A
+        // ground fire's 3×3 window at the anchor reaches 4 of the
+        // main tower's 2,024 footprint cells; retail lands all 2,024.
+        // The "damage snaps to the flag" report is the anchor hit
+        // being the port's ONLY hit — the snap itself is faithful.
+        //
+        // ⚠ The mask row is BUILD00, not the sprite table remc2
+        // guessed: the raw expression is `**filearray[24] + 6*idx +
+        // 4`, a 6-byte TAB record with w at +4 and h at +5, and the
+        // building ctor `sub_49A30` (EF:32765) reads the same row
+        // through `filearrayindex_BUILD00DATTAB`. remc2 marks the
+        // block `//fix it` ×3 and transcribes the top-left from the
+        // WRITER, which would pin the index to the mask's centre cell
+        // forever and make the parity bump meaningless; the corner
+        // belongs to the BUILDING, whose ctor computes it with this
+        // exact expression and bump (EF:32780-88). remc2's
+        // resolution halving is part of the same misreading (a
+        // sprite-table adaptation) — and the port's un-halved extents
+        // already reproduce the recorded retail ones.
+        if fp_pass {
+            let (wtx, wty) = ((wx >> 8) as u8, (wy >> 8) as u8);
+            let mut hits: Vec<usize> = Vec::new();
+            for j in 1..self.ent.len() {
+                let c = &self.ent[j];
+                if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 {
+                    continue;
+                }
+                if !self.mc2_overlap_xy(i, j) {
+                    continue;
+                }
+                let Some(def) = self.assets.build_tab.get(c.f71 as usize).copied() else {
+                    continue;
+                };
+                if def.w == 0 {
+                    continue;
+                }
+                // The building's own top-left, its ctor's expression
+                // verbatim. Idempotent here: the ctor already shifted
+                // the building one tile +x to make the sum even, so
+                // recomputing from the stored position re-derives the
+                // bumped corner and the bump is a no-op — which is
+                // the corroboration that this corner is the
+                // building's and not the writer's.
+                let mut tlx = ((c.x >> 8) as u8).wrapping_sub(def.w / 2);
+                let tly = ((c.y >> 8) as u8).wrapping_sub(def.h / 2);
+                if tlx.wrapping_add(tly) & 1 != 0 {
+                    tlx = tlx.wrapping_add(1);
+                }
+                // Cell offsets stay SIGNED (retail's are plain ints):
+                // a writer left of or above the corner indexes
+                // backwards out of the row, and a writer past the
+                // right edge spills into the next one. Both are
+                // retail reads into the neighbouring BUILD00 bytes,
+                // reproduced as far as the blob reaches — off the
+                // blob we decline rather than invent a byte.
+                let dx = wtx.wrapping_sub(tlx) as i8 as i32;
+                let dy = wty.wrapping_sub(tly) as i8 as i32;
+                let off = def.offset as i64 + 2 * (dx + dy * def.w as i32) as i64;
+                if off < 0 {
+                    continue;
+                }
+                if let Some(&cell) = self.assets.build_dat.get(off as usize) {
+                    if cell != 0xFF {
+                        hits.push(j);
+                    }
+                }
+            }
+            for j in hits {
+                self.mail_write(MailTarget::Pool(j), 0, amt, id);
+                count += 1;
+            }
+        }
         let r = ((self.ent[i].f80 as i32 + 255) >> 8).max(1);
+        // Pass 2 OWNS the buildings, so the tile scan must not also
+        // find them: `&& (class != 10 || model != 45)` sits at
+        // EF:4135 right beside the castle exclusion, and for the same
+        // reason. Only in the variant that runs pass 2 — `sub_116A0`
+        // carries neither, and MC1 has neither.
         let mut victims: Vec<(usize, u32)> = Vec::new();
         // The broadcast window centers on the NEAREST tile — retail's
         // sub_120B0 rounds (`(+72 + 128) >> 8`) where the truncation
@@ -219,6 +321,7 @@ impl Gen {
                         && c.f28 & (1 << ch) != 0
                         && Self::filter_admits(f66, f67, c.class64, c.model65)
                         && !(ch == 0 && c.class64 == 3 && c.model65 == 2)
+                        && !(fp_pass && c.class64 == 10 && c.model65 == 45)
                         && self.ent_overlap(i, j)
                     {
                         let a = if building_tenth && c.class64 == 2 && c.model65 == 0 {
@@ -4225,6 +4328,28 @@ impl Gen {
                 e.dest_y = (e.dest_y as i16).wrapping_add(ivy) as u16;
             }
         }
+        // MC2's HOMING intake (`word_0x7A_122`, EF:26097-110) — the
+        // (10,54) aura's half of the one-tick handshake. Retail stamps
+        // every unclaimed sphere in range EVERY tick (sub_38D80
+        // EF:28364-75, `if (!w7A)`) and the SPHERE clears the stamp
+        // here, at the head of its own tick, latching `v35` — which is
+        // what lets a pull drag a sphere whose settle counter has
+        // already run out (the moving gate is `byte_0x39_57 || v35`,
+        // EF:26173). The port's field home for +122 is the aura claim
+        // map, and the aura collapses the +118 pull speed into the
+        // dest velocity it writes there (documented in
+        // [`Self::mc2_aura_tick`]).
+        //
+        // ⚠ Releasing HERE and not on the moving tail is the whole
+        // fix: a settled sphere returns early below, so a tail-only
+        // release left the claim latched forever — the aura then
+        // skipped that sphere for the rest of the level and the mana
+        // stopped dead short of the eye, twitching back to life only
+        // when the player wandered close enough for the awake pass to
+        // re-arm +58. That is precisely the reported regression.
+        if mc2 && self.mc2_aura_claim.0.remove(&(i as u16)).is_some() {
+            kicked = true;
+        }
         // Collector tether (flag 0x40): the ball FLIES to its
         // collector (+146) instead of running ground physics
         // (:29464-90; the MC2 twins EF:26111-72 for the (10,39) ball
@@ -4328,9 +4453,12 @@ impl Gen {
         // post-maintenance value exactly like retail's else-if, so
         // each 17-tick wake cycle moves 16 and freezes 1. Byte
         // semantics: retail reads +58 as a raw byte (the import
-        // widens i8, so 0x80 arrives as -128). MC2 keeps the local
-        // decrement fold (its sphere maintenance twin is untraced;
-        // nothing re-arms an MC2 sphere — mc2l4 corpus).
+        // widens i8, so 0x80 arrives as -128). MC2's maintenance twin
+        // is `sub_68C70` via `sub_68BF0`'s SECOND loop over the sphere
+        // chain `dword_38523` (EF:55489-90), ported as the sphere leg
+        // of [`Gen::mc2_awake_pass`] — it owns the decrement AND the
+        // proximity re-arm, exactly like MC1's. This handler only
+        // READS +58 (EF:26173); the sphere tick never writes it.
         let settle = (self.ent[i].f58 & 0xFF) as u8;
         if !mc2 {
             if settle == 0 {
@@ -4353,10 +4481,11 @@ impl Gen {
             // home: TransformArcherToMana's whole moving body sits
             // behind `byte_0x39_57 || fresh-kick` (EF:26173), the
             // ctor seeds @0x39 = 128 (CreateManaSphere EF:36617 —
-            // the port ctor's f58 = 0x80), an external pass steps
-            // it ~1/tick to 0 (mc2l4 corpus: b39 36→0, then f2c
-            // parks at −16 and the sphere never moves again), and
-            // nothing ever re-arms it. The port previously ran
+            // the port ctor's f58 = 0x80), and `mc2_awake_pass`'s
+            // sphere leg steps it 1/tick to 0 (mc2l4 corpus: b39
+            // 36→0, then f2c parks at −16 and the sphere never moves
+            // again) — then re-arms it to 16 inside 24 tiles of the
+            // player, same law as MC1's. The port previously ran
             // always-on physics here, dropping every authored
             // economy sphere to the pristine ground (the mc2l4
             // (10,39) z family). No ground-track deviation for MC2:
@@ -4366,9 +4495,6 @@ impl Gen {
             if settle == 0 && !kicked {
                 self.ball_decay_tail(i);
                 return false;
-            }
-            if settle != 0 {
-                self.ent[i].f58 = (settle - 1) as i16;
             }
         }
         let mut vx = self.ent[i].dest_x as i16;
@@ -4436,10 +4562,6 @@ impl Gen {
         }
         self.ent[i].dest_x = vx as u16;
         self.ent[i].dest_y = vy as u16;
-        // The MC2 aura claim clears once the ball has consumed the
-        // pull (EF:28383) — the one-tick handshake's release side.
-        // No-op for MC1 (the map only fills under MC2 auras).
-        self.mc2_aura_claim.0.remove(&(i as u16));
         if (x, y, z) != (x0, y0, z0) {
             self.move_relink(i, x, y, z);
         }

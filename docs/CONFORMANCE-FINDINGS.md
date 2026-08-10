@@ -8099,3 +8099,157 @@ smoke density on walls drops to retail's zero.
 clean. L005 GOLDEN A-E re-pinned for the rival token mint seed —
 OBSERVABLE holds every leg (layout-only; no golden-run behavior
 moved). PLAYTESTS OWED: all three fixes.
+
+# THE MC2L1 FOUR-DEVIATION SESSION (2026-08-11)
+
+The player's mc2l1 ("Payahandra's tower") take produced four
+implementation-ready specs; all four LANDED here, in the order the dig
+session proposed. Receipts for every one: workspace tests green under
+`MGC_REQUIRE_GOLDENS=1`, all 10 fixture suites 0 regressions, clippy +
+fmt clean. **PLAYTESTS OWED: all four.**
+
+**1. THE MANA MAGNET REGRESSION — two structural defects, both fixed.**
+The player: the aura pulls a sphere a little, it stops far short, and
+it twitches back to life when you walk toward it.
+(a) `byte_0x39_57`, the sphere settle counter, has exactly ONE writer —
+`sub_68C70` (EF:55494) off `sub_68BF0`'s second loop over the sphere
+chain `dword_38523` (EF:55489-90), ported as `mc2_awake_pass`'s sphere
+leg by commit 3844924. The sphere tick `TransformArcherToMana_35940`
+only READS it (EF:26173). `ball_tick`'s MC2 arm still carried the local
+decrement fold it used before that pass existed, so the counter stepped
+TWICE per tick and every sphere froze in half the ticks retail gives
+it. Removed; the handler now only reads.
+(b) The aura's homing stamp `word_0x7A_122` is a PER-TICK HANDSHAKE:
+`sub_38D80` re-stamps every unclaimed sphere in range every tick
+(EF:28364, `if (!w7A)`) and the SPHERE clears it at the head of its own
+tick (EF:26109), latching `v35` — the flag that opens the moving branch
+`if (byte_0x39_57 || v35)` and therefore drags a sphere whose settle
+counter has already run out. The port homed +122 in the aura claim map
+but released it on the ball's MOVING TAIL, which a settled sphere never
+reaches: one pull, then the claim latched forever and the aura's scan
+skipped that sphere for the rest of the level. The release moved to
+retail's position and now latches the kick. The "starts moving again
+when the player walks over" was the awake pass's 24-tile re-arm — the
+only thing still able to move it. Pinned by
+`mc2_aura_drags_a_settled_sphere_home` +
+`mc2_sphere_settle_counter_steps_once_per_tick` (both verified
+non-vacuous; the counter one reads 80 vs 90 against the old code).
+mc2_cave goldens 2-4 re-pinned (leg 2 moves on the decrement alone).
+
+**2. THE JAGGED COLLAPSE GROUND — a missing finalizer, one call.**
+Retail's demolish arm (`RemoveCastleStage_385C0`, the
+`fontTypeIndex == 0` branch) ends with
+`SetHeightmapByBuildingArea_48B50` (EF:28171 → EF:32446): a gated
+in-place 3x3 height average over exactly the footprint, in RASTER
+order, so smoothed cells feed later windows — a one-pass IIR blur, not
+an independent average. `World::mc2_house_collapse` ended with
+`mc2_retile_region`, which writes tile_type/angle/shading and never
+touches `t.height`, so the rubble carve's per-cell LCG jitter WAS the
+final ground: on sloped authored terrain the `pad >= height` fast path
+almost never fires, leaving ~58% of cells 0..19 units above the datum
+with no correlation to their neighbours. The jitter itself is faithful
+(ROADMAP: the pad + "up to +19 byte-wrapping LCG rubble jitter") — only
+the finalizer was missing. The port already owned a verbatim port,
+`Gen::mc2_smooth_heights_region` (the castle un-stamp twin); made
+`pub(crate)` and called at retail's position, BEFORE the port's
+approximate retile so the smoother's gate still reads the angle blend
+nibble the carve just wrote and the texture pass sees final heights.
+Pinned by `mc2_building_demolish_smooths_the_rubble_floor` — an
+arithmetic separation, not a tuned threshold: the carve can only write
+60..=79, and the finalizer must leave the top-left corner cell at
+`(5*100 + 240..=316)/9` = 82..=90. No golden or fixture moved.
+
+**3. THE BUILDING FOOTPRINT PASS — the missing middle pass.**
+MC2's `sub_10C80` runs THREE passes on channel 0 and the port had two.
+Between the castle list and the tile scan sits a walk of `dword_38527`,
+the (10,45) BUILDING list (EF:4076-4105): the 2-D box
+(`CompareAxisWithShift_10750`, NO z) then a BUILD00 footprint-mask
+sample under the WRITER's tile — **no owner immunity, no damageable
+flag, no vulnerability mask, no +66/+67 filter**. The tile scan carries
+the matching `(class != 10 || model != 45)` exclusion at EF:4135
+because pass 2 owns buildings; `sub_116A0` (the shake variant) has
+neither, and MC1's `sub_120B0` has neither. Both landed, gated on the
+`sub_10C80` variant. A building is linked into the tile chain at its
+ANCHOR alone (`AddEventToMap_57D70` single-links — the multi-link
+theory was REFUTED), so a ground fire's 3x3 window reached 4 of the
+main tower's 2,024 footprint cells and retail lands all 2,024; the
+"damage snaps to the flag" report was the anchor hit being the port's
+only hit, the snap itself being faithful.
+- ⚠ The mask row is **BUILD00**, not the sprite table remc2 guessed:
+  the raw expression is `**filearray[24] + 6*idx + 4`, a 6-byte TAB
+  record with w at +4 / h at +5, and the ctor `sub_49A30` reads the
+  same row through `filearrayindex_BUILD00DATTAB`. remc2 marks the
+  block `//fix it` x3 and transcribes the top-left from the WRITER,
+  which would pin the index to the mask's centre cell forever and make
+  the parity bump meaningless; the corner is the BUILDING's, computed
+  by its own ctor with this exact expression and bump (EF:32780-88) —
+  and because the ctor SHIFTS the building a tile to make the sum even,
+  re-deriving it is idempotent, which is the corroboration. remc2's
+  resolution halving belongs to the same misreading; the port's
+  un-halved extents already reproduce the recorded retail ones.
+- The two MC2 sites bound to the WRONG writer variant were re-bound in
+  the same patch, as the dig required: the dome (`sub_116A0` at
+  EF:23393, mc2/morph.rs) and the scorch ring (EF:23513, mc2/tail.rs).
+  Both are `sub_116A0` in retail; left on `sub_10C80` they would have
+  wrongly ACQUIRED the footprint pass.
+- ⛔ HELD BACK deliberately, per the dig's landing caution: the ring
+  radius (`(f80+255)>>8` vs retail `f80>>8`) and the ch0 window centre
+  (`+128` vs `-128`/`-127`). The over-wide ring is the port's only
+  partial compensation for the missing pass; removing both at once
+  makes the per-pair TSV unreadable. Re-measure mc2l1 first, then the
+  radius alone.
+- Pinned by `mc2_area_damage_lands_across_a_building_footprint` (an A/B
+  on one 0xFF cell punched in an otherwise solid template, both cells
+  outside the anchor's old 3x3 reach; non-vacuous). mc2_slice goldens
+  A-E and mc2_cave leg 4 re-pinned — verified attributable to the pass
+  alone, reverting the writer re-bind leaves the cave hash unchanged.
+
+**3b. THE IMPORTER DROPPED THE NO-BROADCAST STAMP (found by 3).**
+The footprint pass surfaced 4 mc2l24 regressions: 41 (10,0) ground
+fires x 400 landing on one village house in a single tick where retail
+delivered nothing. Cause: retail's fire tick gates its damage
+broadcast on `if (!(byte[2] & 1))` (EF:22719) and the port reads that
+bit POSITIONALLY at `flags & 0x1_0000` (three sites) — but
+`import_ent_mc2` mapped byte[2] bits 2/4/5 and never bit 0, so every
+imported DECORATIVE fire (the 0x10080-stamped light-show family the
+mc1l5 wall-of-fire dig pinned) broadcast full damage under conformance.
+Carried now. All 4 regressions cleared and mc2l4 t=2249 — an open
+`field:3,3:life` exemplar — went conforming (PROMOTED).
+⭐ OPEN LEAD: byte[2] bit 1 is the port's `0x2_0000` recycle-stack
+marker, also positional, also unimported. Left alone deliberately —
+importing it moves free-list behaviour, which is the slot-order desync
+lane, and it is not needed here.
+
+**4. THE TORNADO NEVER TURNED YOU.** Retail's whirlwind victim block
+`sub_33340` writes the victim's `yaw_0x1C_28` on EVERY arm it takes:
+`v38` per tick for the far-grab, near-grab and inner-lift arms — and
+`v38` is **56 for the wizard**, `v40 = (class == 3 && !model)` picking
+it over the 204 creatures get (EF:24294-99) — while the MID RING
+(`d2 >= 0x40000`, not yet grabbed) sets the ABSOLUTE tangent
+`bearing + 591` (EF:24350-56), which is what makes the approach a
+spiral instead of a fall straight in. The port's player arm carried
+only the positional shove on `player_knock`, so the funnel threw the
+flyer around while it kept facing exactly where it came in. Added
+`Gen::player_spin` — same transport shape as the knock (world writes,
+mover drains) but with NO decay, because retail rewrites it from
+scratch every tick the funnel holds you and the tick it stops is the
+tick you stop turning. Applied in both flyer paths BEFORE the move.
+`PlayerSpin` is hash-TRANSPARENT at zero (the NightShade pattern) so no
+pre-tornado golden moved, and it is deliberately NOT snapshotted — a
+per-tick transient, like the carpet echoes, so SNAPSHOT_VERSION stands
+at 8. The grab / lift / camera-roll takeover remains the deferred
+FlightVerb seam. Pinned by `mc2_whirlwind_turns_the_flyer_it_sweeps`
+(eye = 56, mid ring = the tangent, and the channel drains on read).
+
+**Still open from the mc2l1 intake, in the order they are worth
+taking:** the building-life FIELD HOME bug (`mc2_spawn_building` parks
+bldgprm word_0 in f140 where retail's home is `subSpellIndex_0x2A_42`
+= f44, and the mana `(1000*word_0)>>7` in f136 — right number by
+coincidence in fresh play, WRONG under import, mc2l1 t=888 slot 161
+retail 190,000 / port 0); the CHAIN SOURCE defect (retail branches
+demolish-vs-rebuild on the ENTITY's `fontTypeIndex_0x3D_61`, seeded
+`bldgprm[a2].byte_3` by the ctor at EF:32797 and ZEROED by the two
+crush paths to force a demolish, where the port re-reads the static
+table, so 16 self-chaining ids rebuild forever); the held-back radius
+and window-centre fixes above; and the mc2l1 pure-replay blocker (the
+t=1 slot-138 rival-wizard z).

@@ -1545,6 +1545,19 @@ fn import_ent_mc2(r: &RetailEntMc2, slot: u16, row156: u8, tr: &dyn Fn(u16) -> u
     if b1 & 8 != 0 {
         flags |= 1 << 26;
     }
+    if b2 & 1 != 0 {
+        // byte[2] bit 0 = the NO-CH0-BROADCAST stamp, and the port
+        // already homes it POSITIONALLY at 0x1_0000 — the (10,0)
+        // fire's `if (!(byte[2] & 1)) sub_10C80(...)` (EF:22719) and
+        // its two siblings in mc2::effects read exactly that bit.
+        // The importer never filled it, so every DECORATIVE imported
+        // fire — the 0x10080-stamped light-show kind, the same family
+        // the mc1l5 wall-of-fire dig pinned — broadcast full damage
+        // in the port. Invisible while buildings were only reachable
+        // at their anchor; the footprint pass surfaced it as 41 fires
+        // × 400 landing on one mc2l24 village house in a single tick.
+        flags |= 0x1_0000;
+    }
     if b2 & 4 != 0 {
         flags |= 1 << 27;
     }

@@ -417,13 +417,39 @@ fn mc2_cave_behaviors_and_goldens() {
     // twin EF:3750/3798 alike) where the old truncation dropped the
     // advancing edge; corpus pin = the mc1l0 t=91 tent claim.
     // (Previous re-pin: the sphere vertical law, ball_tick.)
+    // Re-pinned (2nd-4th; the load checkpoint holds) for the MANA
+    // MAGNET REGRESSION FIX, both halves. (a) `byte_0x39_57` has
+    // exactly ONE writer — `sub_68C70` (EF:55494) off `sub_68BF0`'s
+    // sphere-chain loop (EF:55489-90), ported as `mc2_awake_pass`'s
+    // second leg; the sphere tick only READS it (EF:26173). The
+    // handler's leftover local decrement made that TWO per tick, so
+    // every sphere froze in half the ticks retail gives it — the 2nd
+    // checkpoint moves on this alone. (b) The (10,54) aura's homing
+    // stamp (`word_0x7A_122`) is a PER-TICK handshake — re-stamped by
+    // the aura every tick (EF:28364), cleared by the sphere at the
+    // head of its own tick (EF:26109) with the `v35` latch that drags
+    // a settled sphere — where the port released it only on the
+    // moving tail a settled sphere never reaches, latching the claim
+    // forever. Both shift which cave drips travel, coalesce and when.
+    // Behavior change toward retail by design.
+    // Re-pinned (LAST checkpoint only; 1-3 hold) for MC2's BUILDING
+    // FOOTPRINT PASS — `sub_10C80`'s missing middle pass over the
+    // (10,45) list `dword_38527` (EF:4076-4105), plus the tile scan's
+    // matching `(class != 10 || model != 45)` exclusion at EF:4135.
+    // A building is linked into the tile chain at its ANCHOR only, so
+    // before this an area writer could reach it from a 3x3 window
+    // there and nowhere else; retail samples the BUILD00 footprint
+    // mask under the writer and takes the hit anywhere in the
+    // perimeter. Verified attributable to the pass alone — reverting
+    // the dome/scorch-ring writer re-bind in the same patch leaves
+    // this hash unchanged. Behavior change toward retail by design.
     assert_eq!(
         got,
         vec![
             0x1557c9632897e7dbu64,
-            0xc542bd0e97859a1d,
-            0x9c6472922a10cc31,
-            0xc7fe428a6b5c0822,
+            0x847583d974765156,
+            0x92f1329afce69d1a,
+            0xf0658c77ebc88e7f,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );

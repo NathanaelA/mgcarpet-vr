@@ -676,6 +676,19 @@ pub(crate) struct Gen {
     /// DIRECT struct writes in the original — spawn grace does NOT
     /// wipe them, so even the invincible dev player gets dragged.
     pub(crate) player_knock: (u16, i16),
+    /// The player's pending forced HEADING delta, 11-bit engine
+    /// angle. The whirlwind's wizard arm (`sub_33340` EF:24296+) does
+    /// not merely shove the flyer: EVERY branch that touches a victim
+    /// also writes its `yaw_0x1C_28` — `+56` per tick for a class-3
+    /// model-0 (the wizard's own step; creatures get 204), or the
+    /// tangent bearing `+591` on the mid ring. The port carried the
+    /// shove on [`Gen::player_knock`] and dropped the heading, so a
+    /// tornado threw you around while you kept facing exactly where
+    /// you started. Same transport shape as the knock (world writes,
+    /// the mover drains it once), but NO decay: retail re-writes it
+    /// from scratch every tick the funnel holds you, and the tick it
+    /// stops is the tick you stop turning.
+    pub(crate) player_spin: PlayerSpin,
     /// Pending MC2 debuff-stamp hits on the player — (10,65) slow
     /// web / (10,66) paralyze web (`sub_38E70`/`sub_38F70`
     /// EF:28407/28442) — drained into the flight `Mc2Ext` channels
@@ -1040,6 +1053,24 @@ impl<const TAG: u8> std::hash::Hash for Mc2SlotMap<TAG> {
     }
 }
 
+/// See [`Gen::player_spin`] — the pending forced heading delta on the
+/// flyer, hash-TRANSPARENT at rest so no pre-tornado golden moves for
+/// carrying it. Live only inside a funnel, and drained by the mover
+/// every tick, so it is deliberately NOT snapshotted: a save taken
+/// mid-tornado reloads owing at most one tick of turn, the same call
+/// the carpet echoes make.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct PlayerSpin(pub i16);
+
+impl std::hash::Hash for PlayerSpin {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.0 != 0 {
+            state.write_u8(0x5B);
+            state.write_i16(self.0);
+        }
+    }
+}
+
 /// See [`Gen::mc2_night_shade`] — a bool that hashes to NOTHING when
 /// false (hash-transparent).
 #[derive(Default)]
@@ -1137,6 +1168,7 @@ impl Gen {
             erupting: 0,
             plume: 0,
             player_knock: (0, 0),
+            player_spin: PlayerSpin::default(),
             mc2_debuffs: Mc2PlayerDebuffs::default(),
             rival_ents: [0; 8],
             mc2_life_scale: Mc2LifeScale::default(),
@@ -5251,6 +5283,8 @@ impl Gen {
             erupting,
             plume,
             player_knock,
+            // A per-tick transient the mover drains — see PlayerSpin.
+            player_spin: _,
             mc2_debuffs,
             rival_ents,
             mc2_life_scale,

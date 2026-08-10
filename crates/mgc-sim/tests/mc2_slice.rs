@@ -552,18 +552,27 @@ fn mc2_slice_behaviors_and_goldens() {
     // conforming (mc1l0 t=683/1613, mc2l4 t=621, mc2l24
     // t=616/1206). The slice's goat/flyer wake ticks shift by one.
     // Behavior change toward retail by design.
+    // Re-pinned (A-E; post-init holds) for MC2's BUILDING FOOTPRINT
+    // PASS — the middle pass of `sub_10C80`'s ch0 arm over the (10,45)
+    // list `dword_38527` (EF:4076-4105) plus the tile scan's matching
+    // exclusion (EF:4135). Level-000 is a village map, and a building
+    // is tile-chained at its ANCHOR alone, so every area writer that
+    // used to miss a house it stands inside now samples the BUILD00
+    // footprint mask and lands. Behavior change toward retail by
+    // design — mc2l4 t=2249 (an open `field:3,3:life` exemplar) went
+    // conforming on the same patch.
     const GOLDEN: [u64; 6] = [
         0x95c8d53f76cff370, // post-init (GenerateEvents + dis 0)
-        0x44ae93c94c1978b2, // A: 64 idle ticks afield
-        0x0d9f23eb027cff60, // B: the type-5 fly-to latched
-        0x6d9eb15618ca5b00, // C: goat awake/flee window
-        0xc8292987a7d787fb, // D: fireball combat over the goat
+        0x11c7763c0e624f57, // A: 64 idle ticks afield
+        0x13c47d537b40b07d, // B: the type-5 fly-to latched
+        0x04d5b5e68a47426d, // C: goat awake/flee window
+        0x6c03faaea22402d6, // D: fireball combat over the goat
         // E re-pinned for the AREA-BROADCAST TILE ROUNDING
         // (`area_write` centers on the nearest tile — sub_120B0 /
         // EF:3750; corpus pins: mc1l0 t=91 tent claim, mc2l0 t=7257
         // fixture conforming): an edge-tile victim in the provocation
         // window now gets its mail on retail's tick.
-        0xc785d937dd959480, // E: census + villager/archer provocation
+        0x69a9de181f9f2731, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,

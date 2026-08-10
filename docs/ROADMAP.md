@@ -847,6 +847,14 @@ by offset, never by our field name.
     subtraction — a destroyed castle genuinely leaves its levelled pad
     (plus up to +19 of byte-wrapping LCG rubble jitter, faithful in
     both columns). Only the EXCESS above the datum was ours.
+  - The jitter is faithful, but it is meant to be SMOOTHED: both
+    un-stamp sites end in `SetHeightmapByBuildingArea_48B50`
+    (`Gen::mc2_smooth_heights_region`), a gated raster-order 3x3 height
+    average over the footprint. The castle's had it; the MC2 BUILDING
+    demolish (`World::mc2_house_collapse`) did not, which is why a
+    collapsed tower left extremely jagged ground where retail leaves
+    almost none. Landed 2026-08-11 — ledger §THE MC2L1
+    FOUR-DEVIATION SESSION.
 - **MC1 Global Death had no player-visible effect.** Retail's only
   sighting of the spell is a full-screen palette flash at the
   detonation — `sub_44BE0(owner, 3)` → `Type_160+152`, painted by the

@@ -8338,6 +8338,26 @@ impl World {
                 }
             }
         }
+        // THE DEMOLISH FINALIZER (EF:28171) — retail closes the
+        // `fontTypeIndex == 0` branch with
+        // `SetHeightmapByBuildingArea_48B50(tlx, tly, h, w)`, a gated
+        // in-place 3×3 height average over exactly the footprint. In
+        // raster order, so smoothed cells feed later windows: a
+        // one-pass IIR blur, not an independent average.
+        //
+        // Without it the rubble carve's per-cell jitter is the FINAL
+        // ground. That jitter is faithful (docs/ROADMAP.md — the pad
+        // plus "up to +19 byte-wrapping LCG rubble jitter"; do NOT
+        // remove it), but it is meant to be smoothed: on authored
+        // slope the `pad >= height` fast path almost never fires, so
+        // ~58% of cells land 0..19 units above the datum — about 2.4
+        // tiles of uncorrelated relief on a 15×15 footprint. That is
+        // the "extremely jagged after a tower collapses" report.
+        //
+        // BEFORE the retile, not after: the smoother's gate reads the
+        // angle blend nibble the carve loop just wrote (`& 7`,
+        // EF:32503), and the texture pass should see final heights.
+        self.g.mc2_smooth_heights_region(tlx, tly, h as u8, w as u8);
         // The texture rebuild + smoothing window (APPROX — module
         // doc): one retile over the footprint + 1 ring.
         self.g.mc2_retile_region(
@@ -9391,6 +9411,16 @@ impl World {
         }
         self.g.player_knock = (dir, next);
         Some((dir, mag))
+    }
+
+    /// This tick's forced HEADING delta on the flyer, in 11-bit
+    /// engine angle, drained on read. The whirlwind's wizard arm
+    /// (`sub_33340`) rewrites the victim's `yaw_0x1C_28` every tick
+    /// it holds them — +56 for the wizard, or the tangent bearing on
+    /// the mid ring — so unlike the knock there is no decay: the
+    /// funnel simply stops writing and the turning stops with it.
+    pub fn take_player_spin(&mut self) -> i16 {
+        std::mem::take(&mut self.g.player_spin.0)
     }
 
     /// The live knock magnitude (for the app's camera pitch kick:
@@ -18673,6 +18703,330 @@ mod tests {
             "ball 2 magnetized inward: {d2_0} -> {}",
             hdist(&w, b2)
         );
+    }
+
+    /// **A DEMOLISHED BUILDING'S RUBBLE FLOOR IS SMOOTHED, NOT LEFT
+    /// RAW.** Retail's `fontTypeIndex == 0` branch
+    /// (`RemoveCastleStage_385C0`) ends with
+    /// `SetHeightmapByBuildingArea_48B50` (EF:28171 → EF:32446): a
+    /// gated in-place 3×3 height average over exactly the footprint.
+    /// The port carved the pad out with retail's verbatim LCG jitter
+    /// (faithful — up to +19 units per cell, DO NOT remove it) and
+    /// then stopped, so on sloped authored ground ~58% of cells sat
+    /// 0..19 above the datum with no correlation to their
+    /// neighbours: the "extremely jagged after the towers collapse"
+    /// report.
+    ///
+    /// Pinned by the invariant only a RASTER-ORDER pass can satisfy.
+    /// The smoother writes in raster order, so a cell's window can
+    /// still be rewritten by later cells — except for the LAST one:
+    /// nothing in the footprint follows the bottom-right cell, so its
+    /// final height must equal the integer mean of its own final 3×3
+    /// window. Off by the jitter if the finalizer never ran.
+    #[test]
+    fn mc2_building_demolish_smooths_the_rubble_floor() {
+        use crate::engine::features::{BldgParam, BuildDef};
+        let mut w = mc2_flat_world();
+        // One 5×5 template, every cell solid, each carrying a 40-unit
+        // pad — under the flat world's 100-unit datum, which is what
+        // sends every cell down the LCG jitter arm rather than the
+        // `pad >= height` flat-to-zero fast path.
+        const N: u8 = 5;
+        w.g.assets.build_tab = vec![BuildDef {
+            offset: 0,
+            w: N,
+            h: N,
+        }];
+        w.g.assets.build_dat = (0..N as u32 * N as u32).flat_map(|_| [7u8, 40u8]).collect();
+        w.g.assets.bldgprm = vec![BldgParam {
+            rate: 20,
+            flags: 0,
+            chain: 0, // chain 0 = a true demolish, not a rebuild
+        }];
+        let (x, y) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(x, y) as i16;
+        let b = w.g.mc2_spawn_building(x, y, gz, 0).expect("the building");
+        // The ctor recentres the building onto its pad, so the
+        // footprint origin comes from the ENTITY, exactly as the
+        // collapse derives it.
+        let (ex, ey) = (w.g.ent[b].x, w.g.ent[b].y);
+        let tlx = (((ex.wrapping_add(128)) >> 8) as u8).wrapping_sub(N / 2);
+        let tly = (((ey.wrapping_add(128)) >> 8) as u8).wrapping_sub(N / 2);
+        w.mc2_house_collapse(b);
+        // The carve must actually have jittered — a uniform floor
+        // would make the pin below vacuous.
+        let at = |w: &World, dx: u8, dy: u8| -> u8 {
+            w.g.t.height[crate::engine::features::tile(tlx.wrapping_add(dx), tly.wrapping_add(dy))]
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for dy in 0..N {
+            for dx in 0..N {
+                seen.insert(at(&w, dx, dy));
+            }
+        }
+        assert!(
+            seen.len() > 1,
+            "the rubble carve jitter must be live for this pin: {seen:?}"
+        );
+        // The separation is arithmetic, not a tuned threshold. The
+        // carve can only ever write `100 - 40` or `100 - (40 - r%20)`
+        // — every raw cell lands in 60..=79. The FIRST cell of the
+        // raster, the top-left corner, is the one whose window is
+        // still five untouched 100-unit plain cells (the up/left ring
+        // is outside the footprint) plus four raw carve cells, so the
+        // finalizer must leave it at
+        // `(5*100 + 240..=316) / 9` = 82..=90 — strictly above
+        // anything the carve alone can produce. No finalizer, no
+        // value over 79 anywhere in the footprint.
+        assert!(
+            seen.iter().all(|&h| h <= 100),
+            "nothing may rise above the plain: {seen:?}"
+        );
+        let corner = at(&w, 0, 0);
+        assert!(
+            (82..=90).contains(&corner),
+            "the demolish finalizer must average the corner cell into \
+             the surrounding plain (82..=90, carve alone gives 60..=79): \
+             got {corner}"
+        );
+    }
+
+    /// **AN AREA WRITER DAMAGES A BUILDING ANYWHERE INSIDE ITS
+    /// FOOTPRINT, THROUGH THE MASK — NOT JUST AT ITS FLAG.**
+    /// `sub_10C80`'s ch0 arm runs a middle pass the port never had: a
+    /// walk of the (10,45) list `dword_38527` (EF:4076-4105) that
+    /// tests the 2-D box (`CompareAxisWithShift_10750`, no z) and then
+    /// samples the BUILD00 footprint mask under the WRITER's tile. No
+    /// owner immunity, no damageable flag, no vulnerability mask, no
+    /// +66/+67 filter. The tile scan carries the matching
+    /// `(class != 10 || model != 45)` exclusion (EF:4135) because
+    /// this pass owns buildings.
+    ///
+    /// It matters because a building is linked into the tile chain at
+    /// its ANCHOR only (`AddEventToMap_57D70`, one cell) — so before
+    /// this, a fire three tiles up the wall of a 9x9 house hit
+    /// nothing, and only a hit at the flag registered at all.
+    ///
+    /// The mask is the discriminator, so the pin is an A/B on one
+    /// hole punched in an otherwise solid template: a fire on a solid
+    /// cell damages, the same fire on the 0xFF cell beside it does
+    /// not, and both sit outside the anchor's old 3x3 reach.
+    #[test]
+    fn mc2_area_damage_lands_across_a_building_footprint() {
+        use crate::engine::features::{BldgParam, BuildDef};
+        const N: u8 = 9;
+        // The hole: one 0xFF cell at footprint (7, 1).
+        const HOLE: (u8, u8) = (7, 1);
+        // A solid cell on the same row, equally far from the anchor.
+        const SOLID: (u8, u8) = (2, 1);
+        let run = |fire_at: Option<(u8, u8)>| -> i32 {
+            let mut w = mc2_flat_world();
+            w.g.assets.build_tab = vec![BuildDef {
+                offset: 0,
+                w: N,
+                h: N,
+            }];
+            let mut dat = vec![0u8; 2 * N as usize * N as usize];
+            for (k, c) in dat.chunks_exact_mut(2).enumerate() {
+                let (cx, cy) = ((k % N as usize) as u8, (k / N as usize) as u8);
+                c.copy_from_slice(if (cx, cy) == HOLE {
+                    &[0xFF, 0xFF]
+                } else {
+                    &[7, 4]
+                });
+            }
+            w.g.assets.build_dat = dat;
+            w.g.assets.bldgprm = vec![BldgParam {
+                rate: 20,
+                flags: 8, // non-productive: no claim channel to muddy the read
+                chain: 0,
+            }];
+            let (x, y) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(x, y) as i16;
+            let b = w.g.mc2_spawn_building(x, y, gz, 0).expect("the building");
+            // Park it straight into the finished state (action 52)
+            // rather than ticking the 30-tick raise: the construction
+            // repaints terrain, and this world's uniform synthetic
+            // plane is not what that pass is pinned against.
+            w.g.ent[b].tick70 = 52;
+            w.g.ent[b].act_life = 100_000;
+            if let Some((fx, fy)) = fire_at {
+                let (ex, ey) = (w.g.ent[b].x, w.g.ent[b].y);
+                let mut tlx = ((ex >> 8) as u8).wrapping_sub(N / 2);
+                let tly = ((ey >> 8) as u8).wrapping_sub(N / 2);
+                if tlx.wrapping_add(tly) & 1 != 0 {
+                    tlx = tlx.wrapping_add(1);
+                }
+                let (cx, cy) = (tlx.wrapping_add(fx), tly.wrapping_add(fy));
+                let f = w.g.new_event().expect("fire slot");
+                let (fpx, fpy) = (((cx as u16) << 8) | 128, ((cy as u16) << 8) | 128);
+                // Hovering: over 128 above the ground skips the fire's
+                // scorch dig (EF:22738), which would repaint this
+                // synthetic plane and tell us nothing. The broadcast
+                // runs first and carries no z test at all — which is
+                // itself the point of the pass.
+                let fz = w.g.ground_z(fpx, fpy) as i16 + 200;
+                {
+                    let e = &mut w.g.ent[f];
+                    e.class64 = 10;
+                    e.model65 = 0;
+                    e.tick70 = 0; // sub_30D50
+                    e.act_life = 8;
+                    e.f26 = 0; // no fuse: it acts on the next tick
+                    e.f140 = 400; // subSpellIndex = the broadcast amount
+                    e.f80 = 128;
+                    e.f82 = 128;
+                    e.f84 = 128;
+                    e.f66 = 0xFF;
+                    e.f67 = 0xFF;
+                }
+                w.g.link(f, fpx, fpy, fz);
+            }
+            for _ in 0..3 {
+                w.tick(away(), PlayerCommand::default());
+            }
+            w.g.ent[b].act_life
+        };
+        let quiet = run(None);
+        let on_hole = run(Some(HOLE));
+        let on_solid = run(Some(SOLID));
+        assert_eq!(
+            on_hole, quiet,
+            "a fire over a 0xFF footprint cell writes nothing"
+        );
+        assert_eq!(
+            on_solid,
+            quiet - 400,
+            "a fire over a SOLID footprint cell four tiles off the \
+             anchor must land its full amount"
+        );
+    }
+
+    /// **A TORNADO TURNS YOU, IT DOES NOT JUST THROW YOU.** Retail's
+    /// whirlwind victim block (`sub_33340`) writes the victim's
+    /// `yaw_0x1C_28` on EVERY arm it takes. The wizard's step is
+    /// `v38` = 56 — `v40 = (class == 3 && !model)` selects it over
+    /// the 204 creatures get (EF:24294-99) — and the mid ring
+    /// (`d2 >= 0x40000`, not yet grabbed) instead sets the absolute
+    /// tangent `bearing + 591` (EF:24350-56), which is what makes the
+    /// approach a spiral rather than a fall straight in. The port
+    /// carried only the positional shove, so the funnel threw the
+    /// flyer around while it kept facing exactly where it started —
+    /// the player's report.
+    #[test]
+    fn mc2_whirlwind_turns_the_flyer_it_sweeps() {
+        let spin_at = |tiles_out: f32| -> i16 {
+            let mut w = mc2_flat_world();
+            let (wx, wy) = mc2_pos(100, 100);
+            let gz = w.g.ground_z(wx, wy) as i16;
+            let t = w.g.mc2_spawn_whirlwind(wx, wy, gz).expect("whirlwind");
+            // Someone ELSE's funnel: retail's `sub_33810` case 1 lets
+            // your own whirlwind pass over you untouched.
+            w.g.ent[t].id24 = 7;
+            let pose = PlayerPose::from_tiles(100.0 + tiles_out, 6.0, 100.0, 0.0, 0.0, 0.0);
+            w.tick(pose, PlayerCommand::default());
+            w.take_player_spin()
+        };
+        // In the eye: the wizard's own constant step.
+        assert_eq!(spin_at(0.0), 56, "the wizard's yaw step is 56, not 204");
+        // Out on the mid ring: the tangent, which for a flyer facing
+        // yaw 0 due east of the eye is `bearing + 591` — a hard turn,
+        // and emphatically not zero.
+        let mid = spin_at(4.0);
+        assert!(
+            mid != 0 && mid != 56,
+            "the mid ring sets the absolute tangent heading: got {mid}"
+        );
+        // And the channel is DRAINED, not sticky: one read empties it
+        // (retail rewrites it from scratch every tick it holds you).
+        let mut w = mc2_flat_world();
+        let (wx, wy) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(wx, wy) as i16;
+        let t = w.g.mc2_spawn_whirlwind(wx, wy, gz).expect("whirlwind");
+        w.g.ent[t].id24 = 7;
+        w.tick(
+            PlayerPose::from_tiles(100.0, 6.0, 100.0, 0.0, 0.0, 0.0),
+            PlayerCommand::default(),
+        );
+        assert_ne!(w.take_player_spin(), 0);
+        assert_eq!(w.take_player_spin(), 0, "the spin channel drains on read");
+    }
+
+    /// **THE AURA PULL IS A PER-TICK HANDSHAKE, AND IT OUTLIVES THE
+    /// SETTLE COUNTER.** Retail's magnet (`sub_38D80`, EF:28364-75)
+    /// re-stamps `word_0x7A_122` on every UNCLAIMED sphere in range
+    /// every single tick, and the sphere clears the stamp at the head
+    /// of its own tick (EF:26109) while latching `v35` — the flag
+    /// that opens the moving branch `if (byte_0x39_57 || v35)`
+    /// (EF:26173). So a sphere whose settle counter ran out long ago
+    /// is still dragged all the way to the eye: the magnet does not
+    /// need +58, it substitutes for it.
+    ///
+    /// The port homes +122 in the aura claim map, and released it on
+    /// the ball's MOVING TAIL — which a settled sphere never reaches.
+    /// One pull, then the claim latched forever and the aura's
+    /// `if (!w7A)` scan skipped that sphere for the rest of the
+    /// level. Observably: the mana crept a little and stopped dead,
+    /// then twitched again whenever the player wandered inside 24
+    /// tiles and the awake pass re-armed +58. Six tiles out at
+    /// min(dist, 42) per tick this is a ~37-tick trip; if the
+    /// handshake is one-shot the sphere never even starts.
+    #[test]
+    fn mc2_aura_drags_a_settled_sphere_home() {
+        let mut w = mc2_flat_world();
+        let (ax, ay) = mc2_pos(100, 100);
+        let gz = w.g.ground_z(ax, ay) as i16;
+        let aura = w.g.mc2_spawn_aura(ax, ay, gz).expect("aura");
+        let (bx, by) = mc2_pos(106, 100);
+        let b =
+            w.g.spawn_mana_ball(bx, by, w.g.ground_z(bx, by) as i16)
+                .expect("ball");
+        // A SETTLED sphere — +58 already run out, exactly the state
+        // every authored economy sphere is in 128 ticks into a level.
+        w.g.ent[b].f58 = 0;
+        let hdist = |w: &World, j: usize| -> f64 {
+            let (a, c) = (&w.g.ent[aura], &w.g.ent[j]);
+            let dx = (a.x.wrapping_sub(c.x)) as i16 as f64;
+            let dy = (a.y.wrapping_sub(c.y)) as i16 as f64;
+            (dx * dx + dy * dy).sqrt()
+        };
+        let d0 = hdist(&w, b);
+        // Far enough that the awake pass never proximity-re-arms +58
+        // (24 tiles) — the pull is the ONLY thing that can move it.
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        for _ in 0..120 {
+            w.tick(far, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58, 0, "the pull must not re-arm +58");
+        assert!(
+            hdist(&w, b) < 256.0,
+            "settled sphere dragged to the eye: {d0} -> {}",
+            hdist(&w, b)
+        );
+    }
+
+    /// **THE MC2 SETTLE COUNTER HAS EXACTLY ONE WRITER.** Retail's
+    /// `byte_0x39_57` is stepped by `sub_68C70` (EF:55494) off
+    /// `sub_68BF0`'s second loop over the sphere chain `dword_38523`
+    /// (EF:55489-90) — the sphere tick `TransformArcherToMana_35940`
+    /// only READS it. The port's sphere handler used to fold in a
+    /// local decrement of its own, a stand-in from when the
+    /// maintenance twin was untraced; once the real pass landed that
+    /// became a DOUBLE decrement and every sphere settled in half the
+    /// ticks retail gives it (mc2l4 corpus: b39 steps 1/tick).
+    #[test]
+    fn mc2_sphere_settle_counter_steps_once_per_tick() {
+        let mut w = mc2_flat_world();
+        let (bx, by) = mc2_pos(100, 100);
+        let b =
+            w.g.spawn_mana_ball(bx, by, w.g.ground_z(bx, by) as i16)
+                .expect("ball");
+        w.g.ent[b].f58 = 100;
+        let far = PlayerPose::from_tiles(10.0, 14.0, 10.0, 0.0, 0.0, 0.0);
+        for _ in 0..10 {
+            w.tick(far, PlayerCommand::default());
+        }
+        assert_eq!(w.g.ent[b].f58, 90, "+58 steps 1/tick, not 2");
     }
 
     /// A CHARGED/repeat fireball impact spawns the (10,76) fire-orb

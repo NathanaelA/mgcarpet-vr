@@ -326,7 +326,10 @@ impl Gen {
         } else {
             self.ent[i].f140
         } as u32;
-        let hits = self.area_write(i, 0, amt, ctx, false, false);
+        // `sub_116A0` (EF:23513), NOT `sub_10C80` — see the dome's
+        // twin in mc2::morph: the variant now decides whether the
+        // building footprint pass runs at all.
+        let hits = self.area_write(i, 0, amt, ctx, false, true);
         // The scorch-ring batch XP (sub_31FB0 EF:23521-25): f40 (the
         // retail word_0x26_38 stamp) discriminates the owning spell —
         // 15 = Earthquake (17), 11 = Crater (16). Human only (F3).
@@ -1270,6 +1273,30 @@ impl Gen {
             // the knock channel's band and never overshooting the eye.
             let mag = ((((3328 - pd) << 8) / 3328) << 7 >> 8).clamp(8, 80).min(pd);
             self.player_knock = (dir, mag as i16);
+            // THE HEADING. Retail's victim block writes `yaw_0x1C_28`
+            // on EVERY arm, and the wizard's step is `v38` = 56 —
+            // `v40 = (class == 3 && !model)` picks 56 over the 204
+            // creatures get (EF:24294-99), and the same 56 lands in
+            // the far-grab, near-grab and inner-lift arms alike. Only
+            // the MID RING (`d2 >= 0x40000`, not yet grabbed) sets an
+            // absolute heading instead: the tangent `bearing + 591`
+            // (EF:24350-56), which is what turns a straight fall
+            // toward the eye into the spiral. The port shoved the
+            // flyer and never touched its facing, so a tornado threw
+            // you around while you kept staring the way you came in.
+            //
+            // The grab/lift/camera-roll takeover is still the
+            // deferred FlightVerb seam — the spin rides the pose
+            // channel on its own, which is what the report is about.
+            let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as i64;
+            self.player_spin.0 = if d2 >= 0x40000 {
+                let tangent = Self::angle_between(ex, ey, ctx.px, ctx.py).wrapping_add(591) & 0x7FF;
+                // Absolute in retail; delivered as the delta that
+                // reaches it, since the pose channel carries turns.
+                (tangent as i16 - (ctx.pyaw & 0x7FF) as i16).rem_euclid(2048)
+            } else {
+                56
+            };
         }
         // The grab-pass batch XP (sub_33340 EF:24407).
         if hits != 0 && id == crate::mc1::mobs::PLAYER_TARGET {
@@ -1608,7 +1635,15 @@ impl Gen {
     /// overlapping balls, so the aura writes the pull velocity onto
     /// each ball's dest exactly like [`Self::magnet_tick`] — the
     /// homing triplet collapses to the same observable motion
-    /// (deliberate).
+    /// (deliberate). Only the TARGET half (`word_0x7A_122`) keeps a
+    /// field home of its own, the aura claim map, because retail's
+    /// handshake is load-bearing on BOTH sides: the aura re-stamps
+    /// EVERY tick (`if (!w7A)`, EF:28364) and the sphere clears the
+    /// stamp at the head of its own tick (EF:26109), latching the
+    /// `v35` kick that drags a sphere whose settle counter has run
+    /// out. Claim in, claim out, once per tick — a claim that
+    /// outlives its tick silently retires the sphere from the aura's
+    /// scan for good.
     pub(crate) fn mc2_aura_tick(&mut self, i: usize) {
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;

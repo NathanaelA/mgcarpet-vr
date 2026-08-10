@@ -1301,7 +1301,14 @@ impl Gen {
     /// gated 3×3 floor smoother (`SetHeightmapByBuilding_48B90` =
     /// [`Gen::mc2_smooth_pad_edge`]) on every cell (no 0xff skip,
     /// no border).
-    fn mc2_smooth_heights_region(&mut self, x: u8, y: u8, rows: u8, cols: u8) {
+    ///
+    /// Shared by BOTH un-stamp sites: the castle's (above) and the
+    /// BUILDING demolish's (`RemoveCastleStage_385C0` EF:28171, the
+    /// `fontTypeIndex == 0` branch — [`World::mc2_house_collapse`]).
+    /// Raster order matters: a smoothed cell feeds its right/lower
+    /// neighbours' windows, so this is a one-pass IIR blur, not an
+    /// independent 3×3 average.
+    pub(crate) fn mc2_smooth_heights_region(&mut self, x: u8, y: u8, rows: u8, cols: u8) {
         for r in 0..rows {
             for c in 0..cols {
                 self.mc2_smooth_pad_edge(x.wrapping_add(c), y.wrapping_add(r));

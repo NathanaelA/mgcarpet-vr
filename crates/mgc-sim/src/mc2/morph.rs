@@ -299,7 +299,12 @@ impl Gen {
         // byte_0x3E_62 (f63) 4-tick cadence.
         if !apocalypse {
             let amt = self.ent[i].f140 as u32;
-            let hits = self.area_write(i, 0, amt, ctx, false, false);
+            // `sub_116A0` (EF:23393), NOT `sub_10C80` — the two MC2
+            // area writers differ by more than the castle shake now
+            // that pass 2 is in: only `sub_10C80` walks the building
+            // footprint list, so a site bound to the wrong variant
+            // would silently acquire (or lose) that pass.
+            let hits = self.area_write(i, 0, amt, ctx, false, true);
             if hits != 0 && self.ent[i].id24 == crate::mc1::mobs::PLAYER_TARGET {
                 self.mc2_cast_xp.0.push((self.ent[i].id24, 18, hits as i32));
             }

@@ -328,7 +328,7 @@ Called once at phase-2 countdown step 5, and at the top of finisher phase-0.
 void sub_3A090(type_entity_0x6E8E* a1x)//21b909
 {
     int v8 = 0;
-    // ---- (a) kill overlapping EFFECT entities: list dword_38527 ----
+    // ---- (a) kill overlapping BUILDINGS: list dword_38527 = (10,45) ----
     for (ix = x_D41A0_BYTEARRAY_4_struct.dword_38527; ix > Entities_EA3E4[0]; ix = ix->next_0) {
         if (CompareAxisWithShift_10750(a1x, ix)) {         // AABB overlap (§8)
             ix->life_0x8 = -1;                             // kill it
@@ -369,7 +369,7 @@ void sub_3A090(type_entity_0x6E8E* a1x)//21b909
 ```
 
 **Exact semantics:**
-- **Effect kill (a):** walks `dword_38527` (the EFFECT list); overlap = `CompareAxisWithShift_10750`
+- **Building kill (a):** walks `dword_38527` — the class-10 MODEL-45 list (builder EF:40043-51; the older "EFFECT list" reading was wrong, corrected 2026-08-11); overlap = `CompareAxisWithShift_10750`
   (AABB, §8); sets `life = -1` and `fontTypeIndex_0x3D_61 = 0`.
 - **Object grab (b):** walks `dword_38519` (the OBJECT list); for **model 2** objects that AABB-overlap:
   sets **byte[2] |= 0x10** (grab bit4), `word_0x30_48 = 30` (grab timer), `word_0x26_38 = self index`
