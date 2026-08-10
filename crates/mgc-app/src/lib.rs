@@ -2028,7 +2028,18 @@ impl App {
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
             toast_accumulator: 0.0,
-            effect_time: 0.0,
+            // MGC_FIRE_T0 (seconds): pre-seed the prototype fire
+            // clock. This is how the sticky "corrupt fire" was
+            // confirmed live (T0=36000 → corrupt from launch: the
+            // driver's sin() range-reduction cliff). The runtime
+            // wrap in redraw_requested folds any T0 within one
+            // frame now — the flag remains for regression checks
+            // (corrupt pre-wrap, clean post-wrap) and near-wrap
+            // testing (T0=599.9).
+            effect_time: std::env::var("MGC_FIRE_T0")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0),
             fire_applied: None,
             lightning_applied: None,
             fps_frames: 0,
@@ -5426,8 +5437,17 @@ impl App {
         let raw_dt = (now - self.last_frame).as_secs_f32();
         let dt = raw_dt.min(0.25);
         self.last_frame = now;
-        // PROTOTYPE fire clock (advances while paused too).
-        self.effect_time += raw_dt;
+        // PROTOTYPE fire clock (advances while paused too). WRAPPED:
+        // the clock feeds shader sin() through the particle seeds
+        // (~96·t radians at the fastest term), and WGSL guarantees
+        // sin() accuracy only on [-π, π] — an unbounded clock walks
+        // off the driver's range-reduction cliff after ~1h of uptime
+        // (the sticky "corrupt fire", repro'd live via MGC_FIRE_T0).
+        // The 600 s fold keeps arguments ~6× under the observed
+        // cliff; the once-per-10-min phase pop is invisible in
+        // chaotic flame. dt clamped so a suspend/debugger stall
+        // cannot leap the clock in one frame.
+        self.effect_time = (self.effect_time + dt) % 600.0;
         // FPS-overlay accounting: true wall time (the clamp
         // above is sim pacing, not measurement), readout
         // refreshed every half-second. Counts while paused
