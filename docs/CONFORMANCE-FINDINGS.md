@@ -7848,3 +7848,71 @@ heading/pitch drift).
 observable, mc2_cave 2nd-4th, mc2_slice E re-pinned, all with
 attribution; windows A-C byte-identical throughout), all fixture
 suites green post-promotion, clippy + fmt clean.
+
+## 🏆 THE AWAKE-PASS POSE PHASE — mc1l0 wall 1 (t=414 worm chain) FIXED; horizon 413 → 561
+
+**The (5,3) state-120 "multipart segment family" at t=414 was never
+a segment law at all.** Retail slots 62-73 (worm head 61 + chain)
+sat ASLEEP through t=414 (f58=0, f63&3≠0 → sub_19550's collapse
+branch idles); the port ran the AWAKE branch (fresh yaw/pitch +
+polar re-place — pitch sign flipped vs the stale 1932-1995 values
+because it was freshly computed, not because the formula differs;
+`segment_follow` itself is FAITHFUL). The port woke the chain one
+tick early.
+
+**THE LAW.** Retail's awake maintenance (MC1 sub_54F00 :64266 →
+sub_54F80; MC2 twin sub_68BF0/sub_68C70 remc2 :55469) is a PRE-pass
+whose proximity gate reads the local player's POOL entity (:64352-53
+index → +72). Pre-walk, that entity still holds the PREV frame's
+carpet — the pooled walk hook (sub_45C90 / AddPlayer03) hasn't run.
+The port fed the pass THIS tick's integrated pose, so a wizard
+crossing the 24-tile gate (dist² < 0x2400000) mid-tick woke the
+bucket one tick early. mc1l0 t=414: pose@413 dist² 38,125,256 (24.06
+tiles, OUT) vs pose@414 37,187,713 (IN) — retail arms f58=16 at
+t=415 with pose@414; the port armed at 414. Corpus-pinned by the
+dump-state ladder (head f58 0→0→16 over t=413..415, chain 18 at 415).
+
+**Fix (world.rs, the AwakeVerb seam):** the wake pass gets a ctx
+whose px/py = the `human_pose_prev` echo — which IS the pool-entity
+value in every lane: the conformance import seeds it to the carpet's
+recorded pose@N (the carpet-slot record itself is OUT-OF-POOL in
+import lanes — zeroed, unreadable; a first attempt reading
+`ent[carpet_slot]` collapsed the replay horizon to 66 on the stale
+record). Unseeded first tick falls back to the incoming pose (the
+pool wizard would hold the placement).
+
+**Receipts:**
+- mc1l0 FULL replay horizon 413 → **561** boundaries (t=1..562);
+  per-pair first divergent pair 413 → **561**; both lanes agree on
+  the new wall. (5,3) rows 1,263 → 350 (−72%); total field rows
+  8,848 → 7,865; unexplained-row count EXACTLY unchanged — the fix
+  killed precisely the pose-phase-tagged family, zero collateral.
+- **5 open exemplars → conforming across 3 suites** (promoted):
+  mc1l0 t=683 + t=1613, mc2l4 t=621, mc2l24 t=616 + t=1206 — the
+  MC2 twin generalized for free.
+- All fixture suites green, 0 regressions, 0 drift. 697 workspace
+  tests green (MGC_REQUIRE_GOLDENS=1), clippy + fmt clean.
+- Goldens re-pinned WITH toggle attribution (old sample restored →
+  old hashes byte-exact): mc2_slice GOLDEN B-E (goat/flyer wake
+  bookkeeping phase; **OBSERVABLE untouched — visible behavior
+  identical**), flight-tier FAITHFUL C only (coast crosses a ball's
+  gate; enhanced track never does).
+
+**Leads opened:**
+- The cave-drip probe (EF:40468) reads `player.*` = this tick's pose
+  where retail's pre-walk pass would see the pool entity — same
+  class, MC2 cave lane, weak signal (only matters when the 20×20
+  window shifts a tile). Fix on corpus evidence.
+- The mid-walk ctx consumers still ride this tick's pose; retail
+  walkers below the carpet slot read the pool entity = prev pose.
+  This is the bee-session "(5,2) player-z read phase" suspicion —
+  now with a named mechanism. Own lane, blast radius large.
+- Retail sub_54F80 stamps +48 = Distance(player) on every arm; the
+  port never writes f48. Not in the diff projection; port f48
+  readers unknown — audit before caring.
+
+**NEXT WALL t=562 (both lanes agree): slot 486 castle site** —
+retail builds at (114,96) z=797, port at (115,97) z=736, and
+wizard0.castle/player.castle bind 486 where retail still has 0 (a
+site/timing pair). Pose channel unchanged: z t=567 ×5 rows
+(terraform-window family), eff_pitch t=3879 (2047 vs 0).

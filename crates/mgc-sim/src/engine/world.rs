@@ -2346,9 +2346,35 @@ impl World {
         // The awake pre-pass runs before dispatch — the AwakeVerb
         // seam: MC1 sub_54F00 (:64266) vs MC2 sub_68BF0/sub_68C70
         // (remc2 :55469).
+        //
+        // The proximity gate reads the local player's POOL entity
+        // (:64352-53 index → +72), and as a PRE-pass that entity
+        // still holds the PREV frame's carpet — the pooled walk hook
+        // hasn't run yet. Feeding this tick's pose instead wakes a
+        // bucket one tick early whenever the wizard crosses the
+        // 24-tile gate mid-tick (mc1l0 t=414: the worm chain woke at
+        // 414 where retail arms at 415 — corpus-pinned). The
+        // `human_pose_prev` echo IS that value in every lane (the
+        // conformance import seeds it to the carpet's recorded
+        // pose@N; the carpet-slot record itself is out-of-pool
+        // there, so it can't be read directly).
+        let wake_ctx = {
+            let (wx, wy) = if self.human_pose_prev == (0, 0, 0) {
+                // Unseeded echo (first tick of a fresh World): the
+                // pool wizard would already hold the placement pose.
+                (player.x, player.y)
+            } else {
+                (self.human_pose_prev.0, self.human_pose_prev.1)
+            };
+            MobCtx {
+                px: wx,
+                py: wy,
+                ..ctx
+            }
+        };
         match self.g.verbs.awake {
-            AwakeVerb::Mc1 => self.g.mob_awake_pass(&ctx),
-            AwakeVerb::Mc2 => self.g.mc2_awake_pass(&ctx),
+            AwakeVerb::Mc1 => self.g.mob_awake_pass(&wake_ctx),
+            AwakeVerb::Mc2 => self.g.mc2_awake_pass(&wake_ctx),
         }
 
         // The (10,86) cave-drip ambient spawner (`sub_58630`

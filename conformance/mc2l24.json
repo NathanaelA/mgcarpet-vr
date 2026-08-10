@@ -254,11 +254,7 @@
     },
     {
       "t": 616,
-      "status": "open",
-      "sig": "1bbb60cff1af20ed",
-      "atoms": [
-        "field:10,57:y"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: pose-phase"
     },
     {
@@ -490,11 +486,7 @@
     },
     {
       "t": 1206,
-      "status": "open",
-      "sig": "1bb75acff1ab2de4",
-      "atoms": [
-        "field:10,57:x"
-      ],
+      "status": "conforming",
       "note": "auto-triage vs known-deviations: roster: pose-phase"
     },
     {

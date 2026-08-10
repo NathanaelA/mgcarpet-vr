@@ -541,18 +541,29 @@ fn mc2_slice_behaviors_and_goldens() {
     // antipodal wander turns in retail's direction. Behavior change
     // toward retail by design — mc1l0 0+2000 +5 conforming, mc2l0
     // 0+2000 +25 conforming.
+    // Re-pinned (B-E; post-init + A hold) for the AWAKE-PASS POSE
+    // PHASE: the pre-pass proximity gate reads the local player's
+    // POOL entity (:64352-53 / remc2 sub_68C70), which pre-walk
+    // still holds the PREV frame's carpet — the port now feeds the
+    // `human_pose_prev` echo instead of this tick's pose. A wizard
+    // crossing the 24-tile gate mid-tick wakes the bucket one tick
+    // LATER (retail's tick). Corpus: mc1l0 replay horizon 413 → 561
+    // boundaries (the t=414 worm-chain wall), 5 open exemplars
+    // conforming (mc1l0 t=683/1613, mc2l4 t=621, mc2l24
+    // t=616/1206). The slice's goat/flyer wake ticks shift by one.
+    // Behavior change toward retail by design.
     const GOLDEN: [u64; 6] = [
         0x95c8d53f76cff370, // post-init (GenerateEvents + dis 0)
         0x44ae93c94c1978b2, // A: 64 idle ticks afield
-        0x08a482fcbb41e1a4, // B: the type-5 fly-to latched
-        0x858258c14dd451a7, // C: goat awake/flee window
-        0x92a47b7d605a919a, // D: fireball combat over the goat
+        0x0d9f23eb027cff60, // B: the type-5 fly-to latched
+        0x6d9eb15618ca5b00, // C: goat awake/flee window
+        0xc8292987a7d787fb, // D: fireball combat over the goat
         // E re-pinned for the AREA-BROADCAST TILE ROUNDING
         // (`area_write` centers on the nearest tile — sub_120B0 /
         // EF:3750; corpus pins: mc1l0 t=91 tent claim, mc2l0 t=7257
         // fixture conforming): an edge-tile victim in the provocation
         // window now gets its mail on retail's tick.
-        0xa6b2ffbdb30e670a, // E: census + villager/archer provocation
+        0xc785d937dd959480, // E: census + villager/archer provocation
     ];
     assert_eq!(
         got, GOLDEN,

@@ -223,11 +223,20 @@ fn flight_tier_golden_state_hashes() {
     // is post-clamp z == ground. The authored balls' settle
     // trajectories shift one tick; per-pair conformance observables
     // hold (all 9 suites green across the change).
+    // FAITHFUL C re-pinned for the AWAKE-PASS POSE PHASE (the
+    // pre-pass proximity gate samples the PREV frame's carpet — the
+    // pool-entity read :64352-53; see the mc2_slice GOLDEN note):
+    // the coast track crosses a background ball's 24-tile gate
+    // mid-window, so its 16-of-17 duty-cycle re-arm now lands on
+    // retail's tick — one later. ONLY faithful C moves: the
+    // enhanced mover flies a different track (no crossing), and
+    // A/B/post-init precede any gate edge. Behavior change toward
+    // retail by design (mc1l0 replay horizon 413 → 561).
     const FAITHFUL: [u64; 4] = [
         0x66111d2420b92e5c, // post-init
         0xf8441d9f701f1bde, // A: 40 ticks of forward thrust
         0x78acc542d59e3181, // B: 30 ticks of banked turn + strafe
-        0x9d91c63ee4ac25dd, // C: 40 ticks of coast
+        0x2dc376652ae35846, // C: 40 ticks of coast
     ];
     // Re-pinned for the enhanced-bank strafe fix (2026-07-27): the
     // proportional camera bank no longer gates off while strafing — it
