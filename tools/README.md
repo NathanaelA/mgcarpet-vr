@@ -206,7 +206,14 @@ each object at an independent base — assuming a uniform delta made the
 stub write into game memory and crash). **Both obj1 (code cave) and obj3
 (mailbox) have their `vsize` page-aligned so those tails are inside the
 segment limit — else the cave won't execute and the mailbox writes won't
-persist (the pacing deadline resets every call).** The recorder auto-detects the mailbox and
+persist (the pacing deadline resets every call).** The PIT counter is
+**not monotonic for the life of the process** while the mailbox is — the game
+zeroes the clock in its fade/delay helper (`sub_10300`) on the way back to the
+menu, and restores an older value on ALT+L quickload — so the pacer resyncs on
+a deadline too far *ahead* of the clock as well as too far behind. Without that
+second guard, the second level of a session inherits a deadline minutes in the
+future and spins out its guard counter every frame (**~0.2 fps** until the
+clock climbs back). The recorder auto-detects the mailbox and
 switches to windowed capture (`docs/RECORDING.md` → "Tick-patched
 capture"): no tear gate, no `+63` guessing, gap-free by construction.
 The sim is unaffected — MC1's lockstep multiplayer proves per-tick logic

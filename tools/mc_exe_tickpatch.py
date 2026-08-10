@@ -59,6 +59,12 @@ Safety / provenance
   globals and the original tick fn relatively (delta-invariant).
 - A guard counter bounds the spin: if the timer ISR is ever masked (counter
   frozen) the stub releases after ~1 s of emulated time instead of hanging.
+- The wall clock is NOT monotonic for the life of the process, but the mailbox
+  IS (init is magic-gated, so the deadline survives a level exit). The game
+  zeroes the clock in its fade/delay helper on the way back to the menu and
+  restores an older value on quickload, so the pacer resyncs on a deadline that
+  is too far AHEAD of the clock as well as too far behind -- otherwise the
+  second level of a session spins out the guard every frame (~0.2 fps).
 
 Usage
 -----
@@ -500,11 +506,26 @@ def build_stub(b: Build, period: int) -> bytes:
     # non-negative => the deadline passed. Signed handles both the normal
     # "deadline slightly ahead" wait and a post-pause "deadline far behind"
     # resync with the same subtraction (no unsigned underflow).
+    #
+    # The wall clock is NOT monotonic across a level: the game's delay helper
+    # (remc1 sub_10300, reached from the screen-fade path on the way back to
+    # the menu) spins until the clock reaches a target and then ZEROES it, and
+    # ALT+L quickload restores the clock from the savegame. Either one leaves
+    # `now` far BEHIND a deadline the mailbox carried over from the previous
+    # level -- so on level 2 every paced sub-step would spin out the full guard
+    # (~0.2 fps) until the clock climbed back to a stale value minutes ahead.
+    # Bound the wait in the other direction too: a deadline more than one
+    # period + the catch-up slack AHEAD of the clock cannot be schedule, only a
+    # backwards clock step, so drop it and resync. Checked inside the loop so
+    # it self-heals whenever the step lands, not just at stub entry.
+    back_limit = period + RESYNC_COUNTS
     a.mov_ecx_imm(GUARD_ITERS)
     a.label("spin")
     a.mov_eax_m(wc_off)  # eax = now
     a.sub_eax_m(MB_DEADLINE)  # eax = now - deadline (signed)
     a.br8(0x79, "passed")  # jns passed  (now >= deadline)
+    a.cmp_eax_imm(-back_limit)  # still waiting: is the deadline absurdly far off?
+    a.br8(0x7C, "resync")  # jl resync  (clock stepped backwards -> stale deadline)
     a.dec_ecx()
     a.br8(0x75, "spin")  # jnz spin  (keep waiting)
     a.br8(0xEB, "release")  # guard expired (counter frozen) -> release
@@ -512,7 +533,8 @@ def build_stub(b: Build, period: int) -> bytes:
     a.label("passed")
     a.cmp_eax_imm(RESYNC_COUNTS)  # eax >= 0 here
     a.br8(0x72, "release")  # jb release  (within one catch-up bound)
-    a.mov_eax_m(wc_off)  # too far behind (long pause) -> drop the backlog
+    a.label("resync")
+    a.mov_eax_m(wc_off)  # clock jumped (long pause / level exit) -> drop backlog
     a.mov_m_eax(MB_DEADLINE)  # deadline = now
 
     a.label("release")
