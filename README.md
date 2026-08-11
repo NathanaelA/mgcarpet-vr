@@ -166,17 +166,25 @@ not exist without:
   of its time we're still catching up to it.
 
 ## Android Stuff
- 
+
+The Android build uses [`cargo-apk2`](https://github.com/mzdk100/cargo-apk2),
+which compiles Java sources under `crates/mgc-app/android/src/main/java`,
+packages the Rust `cdylib`, and bundles the OpenXR loader from
+`src/main/jniLibs`.
+
 ```bash
+  # Install cargo-apk2 once
+  cargo install cargo-apk2
+
   # At least once you need to push the baked data
   adb push baked/ /sdcard/mgcarpet/baked/
-  
-  # Then you can build and install the APK
+
+
+
+  # Then build and install the APK
   cd crates/mgc-app/android
-  ANDROID_NDK_HOME=/home/nathanaela/Android/Sdk/ndk/30.0.14904198 \
-  ANDROID_SDK_ROOT=/home/nathanaela/Android/Sdk \
-    make apk   
-  adb install -r build/mgcarpet-vr.apk
+  ANDROID_SDK_ROOT=/home/nathanaela/Android/Sdk make apk
+  adb install -r ../../../target/release/apk/mgcarpet-vr.apk
 ```
 
 

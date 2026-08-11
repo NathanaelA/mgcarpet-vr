@@ -61,9 +61,11 @@ use openxr as xr;
 #[cfg(target_os = "android")]
 use winit::platform::android::ActiveEventLoopExtAndroid;
 #[cfg(target_os = "android")]
-use winit::platform::android::activity::AndroidApp;
+use winit::platform::android::activity::{AndroidApp, PollEvent, MainEvent};
 #[cfg(target_os = "android")]
 use log::{Level, log};
+#[cfg(target_os = "android")]
+use jni_min_helper::{PermissionRequest};
 
 #[cfg(target_os = "android")]
 const IS_ANDROID: bool = true;
@@ -8362,10 +8364,12 @@ impl ApplicationHandler for App {
 #[cfg(target_os = "android")]
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        log::info!("!!! mgcarpet VR: resumed");
         if self.window.is_some() {
+            log::info!("!!! mgcarpet VR: resumed: window is some");
             return;
         }
-        log::info!("rApp Handler resumed");
+        log::info!("!!! mgcarpet rApp Handler resumed");
 
         let window = match event_loop.create_window(Window::default_attributes()) {
             Ok(w) => Arc::new(w),
@@ -8543,11 +8547,14 @@ impl ApplicationHandler for App {
                 self.redraw_requested(event_loop, handle_redraw);
             }
 
-            _ => {}
+            _ => {
+                log::info!("!!! mgcarpet VR: window_event: {:?}", event);
+            }
         }
     }
 
     fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, _event: DeviceEvent) {
+        log::info!("!!! mgcarpet VR: device_event: {:?}", _event);
         if !self.grabbed {
             return;
         }
@@ -10776,6 +10783,78 @@ mod ring_tests {
     }
 }
 
+
+#[cfg(target_os = "android")]
+fn check_permissions_active(perms: &[&str; 2]) -> bool {
+    let res1 = PermissionRequest::has_permission(perms[0]);
+    let res2 = PermissionRequest::has_permission(perms[1]);
+    if res1.expect("Permission check failed") && res2.expect("Permission check failed") {
+        log::info!("!!! mgcarpet VR: Permission Granted...");
+        return true;
+    }
+    false
+}
+
+#[cfg(target_os = "android")]
+fn android_permission_check(app: &AndroidApp) -> bool {
+    let perms = [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+    ];
+
+    log::info!("!!! mgcarpet VR: Checking permissions...");
+
+    if check_permissions_active(&perms) {
+        return true;
+    }
+
+    log::info!("!!! mgcarpet VR: Asking permissions...");
+
+
+    let mut request = PermissionRequest::request(
+        "Magic Carpet VR needs storage access to read the game data and write saves.",
+        perms
+        ,
+    ).unwrap();
+
+    log::info!("!!! Sent permission request, waiting for user response...");
+
+    let mut on_destroy = false;
+    loop {
+        log::info!("!!! mgcarpet VR: Looping");
+        if check_permissions_active(&perms) {
+            return true;
+        }
+        app.poll_events(None, |event| match event {
+            PollEvent::Main(MainEvent::Resume { loader: _, .. }) => {
+                log::info!("mgcarpet VR: Main Event");
+
+                if request.is_some() {
+                    if !PermissionRequest::is_pending() {
+                        // `is_pending` returned false, this means `wait` will not block
+                        let result = request.take().unwrap().wait();
+                        log::info!("!!! mgcarpet request result: {result:#?}");
+                        return;
+                    }
+                }
+            }
+            PollEvent::Main(MainEvent::Destroy) => {
+                log::info!("mgcarpet VR: Main Event Destroy");
+                on_destroy = true;
+            }
+            _ => (),
+        });
+        if on_destroy {
+            if check_permissions_active(&perms) {
+                return true;
+            }
+            return false;
+        }
+    };
+
+}
+
+
 #[allow(clippy::field_reassign_with_default)]
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -10785,14 +10864,32 @@ fn android_main(app: AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
-    log::info!("mgcarpet VR: android_main entered");
+    log::info!("!!!! mgcarpet VR: android_main entered !!!!");
+
+    // Very HACKY, if we pass the APP to the check, then this creates a catch-22 with
+    //   the EventLoop code below and Rust panics because the app is already active...
+    // We check for READ/WRITE access at startup in Rust so we
+    //   can divert to a permission request screen if needed.
+    //   If the file doesn't exist BUT you have permissions, it will attempt to reask for permissions.
+    let path = get_baked_directory().join("manifest.sha256");
+    if !std::fs::File::open(path.clone()).is_ok() {
+        if !android_permission_check(&app) {
+            log::info!("mgcarpet VR: Permission denied, exiting...");
+        }
+        return;
+    }
+
+    log::info!("mgcarpet VR: Starting Game");
 
     let event_loop: EventLoop<()> = EventLoop::with_user_event()
         .with_android_app(app)
         .build()
         .unwrap();
 
+    log::info!("mgcarpet VR: Starting Game 2");
+
     game_main(Some(event_loop));
 
     log::info!("mgcarpet VR: exiting");
 }
+

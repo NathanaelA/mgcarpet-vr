@@ -40,6 +40,7 @@ openxr = {git = "https://github.com/Ralith/openxrs", branch = "master"}
 # handles passed between wgpu-hal and openxr are the same Rust type.
 ash = "0.38.0+1.3.281"
 winit = { version = "0.30.13", features = [ "android-native-activity",]}
+jni-min-helper = "0.4.7"
 
 # The library target is the implicit src/lib.rs; `lib` (rlib) is what
 # the desktop bins link, `cdylib` is the Android/OpenXR shell's shared
@@ -48,7 +49,7 @@ winit = { version = "0.30.13", features = [ "android-native-activity",]}
 crate-type = ["lib", "cdylib"]
 
 # Tests only: fabricating an OLD-format `.mgcs` to prove the salvage
-# path recovers campaign progress from a container this build cannot
+# path recovers campaign progress from a container, this build cannot
 # apply. Nothing in the binary writes ZIPs — `mgc-formats` owns that.
 [dev-dependencies]
 zip = { version = "2", default-features = false }
@@ -59,3 +60,84 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+# cargo-apk2 configuration: builds the `mgc-app` cdylib into an APK,
+# compiles any Java sources under `android/src/main/java`, and bundles
+# extra shared libraries from `android/src/main/jniLibs`.
+[package.metadata.android]
+use_aapt2 = true
+package = "com.mgcarpet.vr"
+build_targets = ["aarch64-linux-android"]
+apk_name = "mgcarpet-vr"
+java_sources = "android/src/main/java"
+runtime_libs = "android/src/main/jniLibs"
+#resources = "android/src/main/res"
+strip = "strip"
+manifest_override = "android/AndroidManifest.xml"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 29
+compile_sdk_version = 29
+# If we use 30 or above, we have to deal with managed storage
+# https://stackoverflow.com/questions/62782648/android-11-scoped-storage-permissions
+
+[package.metadata.android.signing.release]
+path = "android/build/debug.keystore"
+keystore_password = "android"
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.vr.headtracking"
+required = true
+version = 1
+
+[[package.metadata.android.uses_feature]]
+name = "com.oculus.feature.PASSTHROUGH"
+required = false
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WRITE_EXTERNAL_STORAGE"
+
+
+[package.metadata.android.application]
+label = "Magic Carpet VR"
+request_legacy_external_storage = true
+extract_native_libs = true
+#icon = "@mipmap/ic_launcher"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.supportedDevices"
+value = "quest2|questpro|quest3|quest3s"
+
+[[package.metadata.android.application.activity]]
+name = "android.app.NativeActivity"
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+exported = true
+resizeable_activity = false
+orientation = "landscape"
+launch_mode = "singleTask"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.lib_name"
+value = "mgc_app"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "com.oculus.intent.category.VR"
+value = "vr_only"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = [
+    "android.intent.category.LAUNCHER",
+    "com.oculus.intent.category.VR",
+]
+
+[[package.metadata.android.application.activity]]
+name = "rust.jniminhelper.PermActivity"
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+resizeable_activity = false
+orientation = "landscape"
+launch_mode = "singleTask"
