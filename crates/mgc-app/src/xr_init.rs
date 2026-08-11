@@ -12,8 +12,6 @@
 //! required at runtime.  If the runtime rejects the instance without it a
 //! future revision will add the raw-pointer approach.
 
-use std::ffi::{CString, c_char};
-
 use crate::wgpu_share::WgpuContext;
 use ash::vk;
 use ash::vk::Handle as _;
