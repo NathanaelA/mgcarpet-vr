@@ -4,16 +4,6 @@
           android:versionCode="1"
           android:versionName="0.1.0">
 
-    <!--
-      minSdkVersion 26: AAudio (cpal's Android backend) needs API 26+.
-      targetSdkVersion 29: deliberately BELOW the scoped-storage cutover
-      (30), so android.permission.READ_EXTERNAL_STORAGE grants full
-      legacy /sdcard/ access at install time with no runtime permission
-      prompt — appropriate for a sideloaded homebrew APK (this would not
-      be accepted as-is for a Play Store submission, which requires
-      targeting a much newer API; not a concern for adb-installed VR
-      homebrew).
-    -->
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="29"/>
 
     <!-- VR headtracking required; Quest 3 always provides it -->
@@ -21,6 +11,11 @@
         android:name="android.hardware.vr.headtracking"
         android:required="true"
         android:version="1"/>
+
+    <!-- Boundaryless application -->
+    <uses-feature
+            android:name="com.oculus.feature.BOUNDARYLESS_APP"
+            android:required="true"/>
 
     <!-- Passthrough is optional — useful for future mixed-reality overlays -->
     <uses-feature
@@ -34,7 +29,7 @@
     <application
         android:label="Magic Carpet VR"
         android:requestLegacyExternalStorage="true"
-        android:hasCode="false">
+        android:hasCode="true">
 
         <!--
           NativeActivity: the OS calls into the .so produced by mgc-app.
@@ -64,5 +59,10 @@
                 android:value="vr_only"/>
 
         </activity>
+
+        <activity
+                android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+                android:name="rust.jniminhelper.PermActivity" android:screenOrientation="landscape"
+                android:resizeableActivity="false"/>
     </application>
 </manifest>
