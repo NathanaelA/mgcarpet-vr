@@ -3,3 +3,4 @@
 # suite is self-contained. Fullsize recordings never enter git
 # (/recordings is ignored).
 conformance/fixtures/*.mgcr filter=lfs diff=lfs merge=lfs -text
+android/src/main/jniLibs/*.so filter=fls diff=lfs merget=lfs -text
