@@ -19,7 +19,6 @@
 
 use mgc_sim::{FlightInput, Flyer};
 use openxr as xr;
-use winit::platform::android::activity::ndk_sys::sin;
 use crate::xr_init;
 
 /// Turn rate at full stick deflection, radians/tick (24 Hz sim) — a
@@ -364,7 +363,7 @@ impl InputActions {
         // Pitch Delta would normally be on right.y; but pitch is VERY annoying in vr; so we are fixing it based on moving forward backwards.
         let pitch_delta = if left.y < 0.0 {
             0.3
-        } else if (left.y > 0.0) {
+        } else if left.y > 0.0 {
             -0.3
         } else {
             0.0
@@ -460,7 +459,7 @@ impl InputActions {
 
         // We have to consume primary trigger clicks until we no longer have any triggers held down
         if self.consume_triggers && !consume_click {
-            if (!trigger_left_value && !trigger_right_value) {
+            if !trigger_left_value && !trigger_right_value {
                 self.consume_triggers = false;
             } else {
                 trigger_left_value = false;

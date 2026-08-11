@@ -1243,6 +1243,7 @@ fn flight_input_from(p: &PortInput) -> FlightInput {
         mc2_cmd_speed: p.mc2_cmd_speed,
         mc2_park: p.mc2_park,
         cheat: p.cheat.and_then(mgc_formats::recover::Cheat::from_code),
+        extra_data: 0
     }
 }
 
