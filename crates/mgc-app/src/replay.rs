@@ -707,6 +707,7 @@ fn flight_input_from(p: &PortInput) -> FlightInput {
         barrel_roll: p.barrel_roll,
         raw_dx: p.raw_dx,
         mc1_move_byte: p.mc1_move_byte,
+        extra_data: 0
     }
 }
 

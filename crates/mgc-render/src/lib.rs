@@ -5043,8 +5043,8 @@ impl Renderer {
         // world-space mode; it is allowed to overlap the world viewport
         // because the map view is the point of this screen.
         if self.ui_panel_mode == 1 {
-            map_pane.2 = (map_pane.2 * 3.0); // .min(f.w - map_pane.0);
-            map_pane.3 = (map_pane.3 * 2.0); //.min(f.h - map_pane.1);
+            map_pane.2 = map_pane.2 * 3.0; // .min(f.w - map_pane.0);
+            map_pane.3 = map_pane.3 * 2.0; //.min(f.h - map_pane.1);
         }
 
         let aspect = if self.map_view {
@@ -5886,7 +5886,7 @@ impl Renderer {
             if self.map_view {
                 // World viewport in the top-right corner: sky fill, then
                 // the terrain, clipped to the rect.
-                let (mut vx, mut vy, mut vw, mut vh) = view_rect;
+                let (vx, vy, vw, vh) = view_rect;
                 if vw > 0 && vh > 0 {
                     if !IS_ANDROID {
                         // We disable this on VR because  it  is totally broken

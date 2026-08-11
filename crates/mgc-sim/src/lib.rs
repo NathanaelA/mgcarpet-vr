@@ -845,6 +845,10 @@ impl Simulation {
         // The world turn: triggers/portals probe the flyer, events tick.
         if let Some(w) = &mut self.world {
             let f = self.flyer;
+
+            // The Pitch on Android needs to be 0 so it is level with the ground for casting spells
+            let pitch = if IS_ANDROID { 0.0 } else { f.pitch };
+
             let pose = match self.thrust_model {
                 // Faithful: the INTEGER carpet verbatim — the replay
                 // driver's pose law (`conformance::integer_pose`).
@@ -880,13 +884,11 @@ impl Simulation {
                         f.y,
                         f.z,
                         f.yaw + self.aim_lead,
-                        f.pitch,
+                        pitch,
                         speed,
                     )
                 }
             };
-            // The Pitch on Android needs to be 0 so it is level with the ground for spells
-            let pitch = if IS_ANDROID { 0.0 } else { f.pitch };
             w.tick(
                 pose,
                 world::PlayerCommand {

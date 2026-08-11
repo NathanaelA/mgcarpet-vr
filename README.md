@@ -165,6 +165,8 @@ not exist without:
 - **Bullfrog Productions** — for the 1994 original that was so far ahead
   of its time we're still catching up to it.
 
+
+
 ## Android Stuff
 
 The Android build uses [`cargo-apk2`](https://github.com/mzdk100/cargo-apk2),
@@ -172,19 +174,29 @@ which compiles Java sources under `crates/mgc-app/android/src/main/java`,
 packages the Rust `cdylib`, and bundles the OpenXR loader from
 `src/main/jniLibs`.
 
+### Building
 ```bash
   # Install cargo-apk2 once
   cargo install cargo-apk2
 
+  # You need to build and run mgcarpet once to create the baked  data.
+
   # At least once you need to push the baked data
   adb push baked/ /sdcard/mgcarpet/baked/
-
-
 
   # Then build and install the APK
   cd crates/mgc-app/android
   ANDROID_SDK_ROOT=/home/nathanaela/Android/Sdk make apk
   adb install -r ../../../target/release/apk/mgcarpet-vr.apk
+```
+
+### Update to latest upstream release
+```bash
+git fetch upstream
+git lfs fetch --all upstream
+git pull --rebase upstream master
+git push --force
+git lfs prune
 ```
 
 
