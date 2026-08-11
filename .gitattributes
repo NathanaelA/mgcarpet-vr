@@ -15,3 +15,6 @@
 #
 # Fullsize recordings still never enter git (/recordings is ignored).
 conformance/fixtures/**/*.mgcr filter=lfs diff=lfs merge=lfs -text
+
+# Android Files
+android/src/main/jniLibs/*.so filter=lfs diff=lfs merget=lfs -text
