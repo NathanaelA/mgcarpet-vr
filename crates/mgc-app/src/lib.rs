@@ -1798,6 +1798,15 @@ struct App {
     /// (line deltas accumulate; each whole ±1 cycles one step).
     wheel_accum: f32,
     shift_held: bool,
+    /// CTRL as a plain MODIFIER, distinct from [`Self::ctrl_held`].
+    /// That one is the selector PANE's hold latch and carries the
+    /// pointer-grab release with it; it is also only tracked when
+    /// `pane.is_some()`, which is FALSE for default MC1
+    /// (`SpellSelector::Auto` resolves `ctrl_pane = false` there).
+    /// The retail quick-key chord is CTRL+digit and belongs to MC1
+    /// above all, so it needs a latch that exists in every game and
+    /// config. Tracked before the pane's early `return`.
+    ctrl_mod: bool,
     /// Alt latch, for the Alt+Enter fullscreen combo. Tracked at the
     /// very top of the key handler so no early `return` can strand it.
     alt_held: bool,
@@ -2024,6 +2033,7 @@ impl App {
             pending_ring: None,
             wheel_accum: 0.0,
             shift_held: false,
+            ctrl_mod: false,
             alt_held: false,
             last_frame: std::time::Instant::now(),
             accumulator: 0.0,
@@ -7147,6 +7157,7 @@ impl ApplicationHandler for App {
                 // into a fullscreen toggle instead of the map.
                 self.alt_held = false;
                 self.shift_held = false;
+                self.ctrl_mod = false;
             }
             // Returning focus re-applies the pointer mode the screen
             // wants: Windows clears cursor confinement across the
@@ -7478,6 +7489,15 @@ impl ApplicationHandler for App {
                 if matches!(
                     event.physical_key,
                     PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight)
+                ) {
+                    // The bare modifier first — the pane latch below
+                    // returns early, and it is not even armed in
+                    // default MC1, where the CTRL+digit chord lives.
+                    self.ctrl_mod = down;
+                }
+                if matches!(
+                    event.physical_key,
+                    PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight)
                 ) && self.pane.is_some()
                 {
                     if down && !self.ctrl_held {
@@ -7506,10 +7526,29 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // Quick keys 1..9,0 (enhancement; the original's only
-                // digit path is the Ctrl+]+digit chord, :20340-56):
-                // in the book, bind the hovered spell to the digit;
-                // in flight, equip the bound spell (Shift = right hand).
+                // Quick keys 1..9,0 — RETAIL, both chords. MC1 has TWO
+                // digit paths, not one, and they are the two hands:
+                //   bare digit  → `MakeControlCommand_188A0(24, k-2)`
+                //                 (:20568) → slot +940 = LEFT
+                //   CTRL+digit  → `MakeControlCommand_188A0(25, k-2)`
+                //                 (:20356) → slot +944 = RIGHT
+                // Both index the same per-player bind table
+                // `var_15198_1875_772[digit]` (−1 = unbound) and
+                // commit through the pending-command mailbox
+                // (:48747 / :48766).
+                //
+                // ⚠ This used to read SHIFT for the right hand, from a
+                // typo we inherited: remc1 annotates the gate
+                // `pressedKeys_12EEF0_12EEE0[29]` as "clrl + ]", so
+                // the chord looked like it needed a bracket too and
+                // the whole feature got treated as ours to bind.
+                // Scancode 29 is 0x1D = LEFT CTRL; `]` is 0x1B. There
+                // is no bracket, and retail owns the quick binds.
+                // Player-reported 2026-08-11 and decompile-confirmed.
+                //
+                // Ours on top: BINDING from the book (retail assigns
+                // the +772 slots elsewhere). In the book, bind the
+                // hovered spell to the digit; in flight, equip it.
                 if down {
                     if let PhysicalKey::Code(code) = event.physical_key {
                         let digit = match code {
@@ -7547,7 +7586,7 @@ impl ApplicationHandler for App {
                                     println!("quick key {}: {}", (d + 1) % 10, spell.name());
                                 }
                             } else if let Some(spell) = self.quick_binds[d] {
-                                if self.shift_held {
+                                if self.ctrl_mod {
                                     self.pending_equip.1 = Some(spell);
                                 } else {
                                     self.pending_equip.0 = Some(spell);
