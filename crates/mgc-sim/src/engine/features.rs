@@ -5977,6 +5977,303 @@ mod tests {
         assert_eq!(g.ent[b].f58, 0, "out of radius, frozen for good");
     }
 
+    // ---- the chase-trailer / speed-restore family -----------------------
+    //
+    // MC1 bounds creature speed with per-model ENTRY and EXIT trailers
+    // hung off the individual state handlers, NOT with a clamp: +128
+    // (max speed) and +130 (accel) are write-once in the ctors, and the
+    // mover passes +126 verbatim (sub_196E0 :21182 -> sub_41EC0
+    // :52523). The pack catch-up (sub_1A390 :21814) is the only thing
+    // that ever raises +126 above a creature's own +128, and what pulls
+    // it back down is the exit trailer of whatever state the creature
+    // leaves next. Miss a trailer and that creature keeps the inflated
+    // speed for the rest of the level — the player-reported "monsters
+    // that keep speeding up". These tests pin every trailer in the
+    // family, including the DEATH tick, which retail reaches because
+    // its damage prologue lives inside each handler and falls through.
+
+    fn mob_gen() -> Gen {
+        Gen::new(
+            flat_land(8),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        )
+    }
+
+    /// Raise an m7 of the ODD spawn ordinal — the parity arm that gets
+    /// sprite 85 and so is the variant `sub_1C960` toggles (:45101-13).
+    fn spawn_m7_odd(g: &mut Gen, x: u16, y: u16) -> usize {
+        let i = g.spawn_creature(7, x, y, 0).unwrap();
+        if g.ent[i].type86 != 85 {
+            let j = g.spawn_creature(7, x, y, 0).unwrap();
+            g.ent[i].flags |= 0x400;
+            return j;
+        }
+        i
+    }
+
+    /// m7's CHASE trailer `sub_1C960` (:23319, twin remc1hw :21876) —
+    /// the family's only speed bound, and the one the port was missing
+    /// outright (`(_, 2) => mob_chase` routed m7 through the shared
+    /// chase). Firing PLANTS the thrower: sprite 85 -> 198, +126 down
+    /// to the accel, a 30-tick timer armed (:23339-45). The timer
+    /// expiring un-plants and restores +128 (:23327-32) — and so does
+    /// leaving CHASE while planted (:23346-55).
+    #[test]
+    fn m7_plants_on_the_hit_and_restores_on_the_timer() {
+        let mut g = mob_gen();
+        let i = spawn_m7_odd(&mut g, 0x4000, 0x4000);
+        let (max, accel) = (g.ent[i].f128, g.ent[i].f130);
+        assert!(accel != 0 && accel < max, "m7 carries a live accel step");
+
+        // In CHASE, on the cadence tick, with the wizard in reach.
+        let ctx = ctx_at(0x4080, 0x4000, 0);
+        g.ent[i].tick70 = 44;
+        g.ent[i].f146 = crate::mc1::mobs::PLAYER_TARGET;
+        g.ent[i].f63 = 0;
+        g.ent[i].f26 = 0;
+        g.creature_tick(i, &ctx);
+        assert_eq!(
+            (g.ent[i].type86, g.ent[i].f126, g.ent[i].f26),
+            (198, accel, 30),
+            "the connecting bolt plants the thrower at the accel speed"
+        );
+
+        // 30 ticks of cooldown; the last one un-plants it.
+        for n in 1..30 {
+            g.ent[i].f63 = 1; // off-cadence: no second bolt
+            g.creature_tick(i, &ctx);
+            assert_eq!(g.ent[i].type86, 198, "still planted at tick {n}");
+            assert_eq!(g.ent[i].f126, accel, "still crawling at tick {n}");
+        }
+        g.ent[i].f63 = 1;
+        g.creature_tick(i, &ctx);
+        assert_eq!(
+            (g.ent[i].type86, g.ent[i].f126),
+            (85, max),
+            "the timer expiring un-plants and restores +128"
+        );
+    }
+
+    /// The other half of `sub_1C960` (:23346-55): a planted thrower
+    /// that LOSES the chase restores on that very tick, whatever the
+    /// dug-in timer still says. This is the arm that re-baselines a
+    /// +126 the pack catch-up inflated.
+    #[test]
+    fn m7_chase_exit_restores_a_pack_inflated_speed() {
+        let mut g = mob_gen();
+        let i = spawn_m7_odd(&mut g, 0x4000, 0x4000);
+        let (max, accel) = (g.ent[i].f128, g.ent[i].f130);
+
+        // Plant it, then hand it the speed a pack catch-up would have
+        // written (sub_1A390 :21814 = leader +126 + leader +130), well
+        // above its own maximum.
+        g.ent[i].tick70 = 44;
+        g.ent[i].f146 = crate::mc1::mobs::PLAYER_TARGET;
+        g.ent[i].f63 = 0;
+        g.ent[i].f26 = 0;
+        g.creature_tick(i, &ctx_at(0x4080, 0x4000, 0));
+        assert_eq!(g.ent[i].type86, 198, "planted");
+        let inflated = max + 4 * accel;
+        g.ent[i].f126 = inflated;
+        g.ent[i].f26 = 25; // timer still running — not the expiry arm
+
+        // Now the wizard steps out of range: the shared chase drops to
+        // WANDER on the cadence tick and the trailer fires.
+        g.ent[i].f63 = 0;
+        g.creature_tick(i, &ctx_at(0x7F00, 0x7F00, 0));
+        assert_eq!(g.ent[i].tick70, 43, "dropped back to WANDER");
+        assert_eq!(
+            (g.ent[i].type86, g.ent[i].f126),
+            (85, max),
+            "leaving the chase re-baselines +126 to +128"
+        );
+        assert!(
+            g.ent[i].f126 < inflated,
+            "the inflated speed does not survive the chase"
+        );
+    }
+
+    /// The pack catch-up itself (sub_1A390 :21814) is UNBOUNDED by
+    /// design in both engines — it is the SET form (member +126 =
+    /// LEADER +126 + LEADER +130), it consults no cap, and it must not
+    /// grow a `.min(+128)`: retail carries m2 +126 = 95 against +128 =
+    /// 70 for 62 creature-ticks in the mc1l5 take alone. This pins the
+    /// arithmetic AND the fact that the exit trailer, not a clamp, is
+    /// what ends the inflation.
+    #[test]
+    fn pack_catch_up_is_the_set_form_and_stays_uncapped() {
+        let mut g = mob_gen();
+        let leader = spawn_m7_odd(&mut g, 0x4000, 0x4000);
+        let follower = spawn_m7_odd(&mut g, 0x4010, 0x4000);
+        let (max, accel) = (g.ent[leader].f128, g.ent[leader].f130);
+
+        // A leader already running hot, and a follower far below it.
+        g.ent[leader].tick70 = 43; // WANDER: the follow case
+        g.ent[leader].f126 = max + 7 * accel;
+        g.ent[follower].tick70 = 45; // PACK
+        g.ent[follower].f52 = leader as u16;
+        g.ent[follower].f126 = 1;
+        g.ent[follower].f63 = 0; // on the v_26 cadence
+        g.creature_tick(follower, &ctx_at(0x7F00, 0x7F00, 0));
+        assert_eq!(
+            g.ent[follower].f126,
+            g.ent[leader].f126 + accel,
+            "the member takes the LEADER's speed plus the LEADER's accel"
+        );
+        assert!(
+            g.ent[follower].f126 > max,
+            "and it is NOT clamped to the member's own +128"
+        );
+    }
+
+    /// m4's militia trailers: `sub_1BC50` (:22744) arms him on the
+    /// PROMOTION tick — one LCG draw, speed 0, the target's own
+    /// class/model as his bolt filter — and `sub_1BCE0` (:22766) puts
+    /// the dart away on the chase-exit tick, restoring the WALK SPEED.
+    /// The port had the zero but not the restore, so a militiaman who
+    /// had chased once stayed pinned at speed 0 for the rest of the
+    /// level; the mc1l5 take scores both halves.
+    #[test]
+    fn militia_arms_on_promotion_and_restores_its_walk_speed_on_exit() {
+        let mut g = mob_gen();
+        let i = g.spawn_creature(4, 0x4000, 0x4000, 0).unwrap();
+        let max = g.ent[i].f128;
+        assert_eq!(g.ent[i].f126, max, "spawns at his walk speed");
+
+        // Standing in the village (state 25) with the wizard in reach,
+        // on the 4*v_26 acquisition tick and village-wanted.
+        let ctx = ctx_at(0x4200, 0x4000, 0);
+        g.ent[i].tick70 = 25;
+        g.ent[i].f58 = 16;
+        g.ent[i].f63 = 0;
+        g.ent[i].f30 = Gen::angle_between(0x4000, 0x4000, ctx.px, ctx.py);
+        g.player_aggro = 200; // the +528 hostility gate
+        g.creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].tick70, 26, "promoted to CHASE");
+        assert_eq!(
+            g.ent[i].f126, 0,
+            "and armed on the SAME tick — sub_1BC50 stops him dead"
+        );
+        assert_ne!(g.ent[i].type86, 0, "wearing an armed sprite");
+
+        // The wizard leaves: the chase breaks and the trailer disarms.
+        g.ent[i].f63 = 0;
+        g.creature_tick(i, &ctx_at(0x7F00, 0x7F00, 0));
+        assert_eq!(g.ent[i].tick70, 25, "back to the village walk");
+        assert_eq!(
+            (g.ent[i].f126, g.ent[i].type86, g.ent[i].f66, g.ent[i].f67),
+            (max, 0, 3, 0xFF),
+            "sub_1BCE0 restores speed, sprite and filter together"
+        );
+    }
+
+    /// m9's `sub_1DCD0` (:24236) / `sub_1DD50` (:24255) pair: the mound
+    /// fights ROOTED (+126 = 0 on the promotion tick — retail's
+    /// burrower never walks in the warrior form) and goes back to the
+    /// type-201 disguise at +128 when the chase ends.
+    #[test]
+    fn mound_enters_the_chase_rooted_and_restores_on_exit() {
+        let mut g = mob_gen();
+        let i = g.spawn_creature(9, 0x4000, 0x4000, 0).unwrap();
+        let max = g.ent[i].f128;
+        let ctx = ctx_at(0x4200, 0x4000, 0);
+        g.ent[i].tick70 = 55;
+        g.ent[i].f26 = 200;
+        g.ent[i].f63 = 0;
+        g.ent[i].f58 = 16;
+        g.ent[i].f30 = Gen::angle_between(0x4000, 0x4000, ctx.px, ctx.py);
+        g.creature_tick(i, &ctx);
+        assert_eq!(g.ent[i].tick70, 56, "surfaced into CHASE");
+        assert_eq!(
+            (g.ent[i].f126, g.ent[i].type86),
+            (0, 202),
+            "rooted in the warrior form on the promotion tick"
+        );
+
+        g.ent[i].f63 = 0;
+        g.creature_tick(i, &ctx_at(0x7F00, 0x7F00, 0));
+        assert_eq!(g.ent[i].tick70, 55, "back to lurking");
+        assert_eq!(
+            (g.ent[i].f126, g.ent[i].type86, g.ent[i].f67),
+            (max, 201, 0xFF),
+            "sub_1DD50 restores speed, mound sprite and filter"
+        );
+    }
+
+    /// DEATH is a chase exit. Retail's damage prologue sits INSIDE each
+    /// state handler and `goto`s that handler's trailer rather than
+    /// returning (m9 sub_1DA60 :24184 `goto LABEL_31`; m2/m4/m15 reach
+    /// it through sub_1A120's plain `return v15`), so a creature killed
+    /// mid-chase still restores on the tick it dies. The mc1l5 take
+    /// shows it directly — slot 348 goes act_life -1 at t=6241 and is
+    /// still restored to +126 = 20, type 201 at t=6242 — and it is what
+    /// stops a bee dying mid-lunge from leaving 3x +128 on the corpse.
+    #[test]
+    fn chase_exit_trailers_run_on_the_death_tick() {
+        // (model, chase state, the speed the creature dies carrying)
+        for &(model, chase, hot) in &[(2u16, 14u8, 0i16), (4, 26, 0), (9, 56, 0), (15, 92, 0)] {
+            let mut g = mob_gen();
+            let i = g.spawn_creature(model, 0x4000, 0x4000, 0).unwrap();
+            let max = g.ent[i].f128;
+            g.ent[i].tick70 = chase;
+            g.ent[i].f146 = crate::mc1::mobs::PLAYER_TARGET;
+            g.ent[i].f126 = hot;
+            // A lethal mail item, delivered the way combat does.
+            g.ent[i].f58 = 16;
+            g.ent[i].mail[0] = (g.ent[i].max_life + 1000, 1);
+            g.creature_tick(i, &ctx_at(0x4080, 0x4000, 0));
+            assert_eq!(
+                g.ent[i].tick70,
+                chase + 2,
+                "model {model} entered its DEATH slot"
+            );
+            assert_eq!(
+                g.ent[i].f126, max,
+                "model {model} restores +126 on the death tick"
+            );
+        }
+
+        // The bee specifically: dying mid-lunge at 3x max must not
+        // leave the lunge speed standing (sub_1B3C0 :22363-66).
+        let mut g = mob_gen();
+        let i = g.spawn_creature(2, 0x4000, 0x4000, 0).unwrap();
+        let max = g.ent[i].f128;
+        g.ent[i].tick70 = 14;
+        g.ent[i].f146 = crate::mc1::mobs::PLAYER_TARGET;
+        g.ent[i].f126 = 3 * max;
+        g.ent[i].f58 = 16;
+        g.ent[i].mail[0] = (g.ent[i].max_life + 1000, 1);
+        g.creature_tick(i, &ctx_at(0x4080, 0x4000, 0));
+        assert_eq!(g.ent[i].f126, max, "the lunge does not outlive the bee");
+    }
+
+    /// The kraken pins +126 = 30 on every movement tick, but its three
+    /// slots do it at different points: the chase (sub_1C4F0 :23146)
+    /// writes it FIRST, the wander (sub_1C4A0 :23118) and the pack
+    /// (sub_1C880 :23276) write it LAST. The tail write is what keeps
+    /// m6 out of the pack catch-up's reach — an inflated +126 is
+    /// stamped back before the tick ends, so it is never left standing
+    /// for a follower's next read.
+    #[test]
+    fn kraken_pack_tick_ends_at_its_pinned_speed() {
+        let mut g = mob_gen();
+        let head = g.spawn_creature(6, 0x4000, 0x4000, 0).unwrap();
+        let follower = g.spawn_creature(6, 0x4010, 0x4000, 0).unwrap();
+        g.ent[head].tick70 = 37; // WANDER: the follow case
+        g.ent[head].f126 = 900; // hot leader
+        g.ent[follower].tick70 = 39; // PACK
+        g.ent[follower].f52 = head as u16;
+        g.ent[follower].f63 = 0;
+        g.creature_tick(follower, &ctx_at(0x7F00, 0x7F00, 0));
+        assert_eq!(
+            g.ent[follower].f126, 30,
+            "the kraken's tail write outlives the catch-up"
+        );
+    }
+
     /// The m9 mound's state-55 wizard scan (sub_1D060 :23796-23833):
     /// an awake surfaced mound with no castle chase targets the
     /// player and pops up into CHASE; an asleep one never scans (the

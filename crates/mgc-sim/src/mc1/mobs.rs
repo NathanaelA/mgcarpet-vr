@@ -1041,11 +1041,16 @@ impl Gen {
     /// (:21665-72). m6 arms a burst counter instead; the burst spawns
     /// run every tick while armed. (m2/m8/m11/m16 chase through their
     /// own wrappers/handlers above.)
-    fn mob_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+    ///
+    /// Returns retail's `sub_1A120` result: true ONLY on the tick the
+    /// per-model thunk actually connected (:21668-69) — every other
+    /// exit returns the zero-initialised `v15`. Wrappers trail on it;
+    /// m7's `m7_chase` is the port's consumer.
+    fn mob_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) -> bool {
         let model = self.ent[i].model65;
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
-            return;
+            return false;
         }
         let tgt = self.ent[i].f146;
         // tf66/tf67 = the target's OWN filter fields (the player
@@ -1055,10 +1060,20 @@ impl Gen {
             (ctx.px, ctx.py, ctx.pz, 0xFFu8, 0xFFu8)
         } else {
             let t = tgt as usize;
-            if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 || self.ent[t].act_life < 0
+            // Target lost (:21656-58). Retail's pair is `+12 < 0 ||
+            // (+17 & 4)` — dead OR DESTROY-FLAGGED (+17 bit 2 is the
+            // 0x400 the port names `flags & 0x400`), the second half of
+            // which the port was missing: a target blown up under a
+            // chaser left it chasing a corpse-flagged entity forever,
+            // so its exit trailer never ran.
+            if t == 0
+                || t >= self.ent.len()
+                || self.ent[t].class64 == 0
+                || self.ent[t].act_life < 0
+                || self.ent[t].flags & 0x400 != 0
             {
-                self.ent[i].tick70 = base + 1; // target lost (:21658)
-                return;
+                self.ent[i].tick70 = base + 1;
+                return false;
             }
             let c = &self.ent[t];
             (c.x, c.y, c.z, c.f66, c.f67)
@@ -1114,7 +1129,21 @@ impl Gen {
         if (e.f63 as i16) % row.v_26 == 0 {
             let dz = tz.wrapping_sub(e.z) as i32;
             let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
-            if Self::isqrt(sq as u32) >= row.v_28 as u32 {
+            // m9 drives its own chase in retail (sub_1DA60), whose only
+            // difference from the shared gate is that a CASTLE target
+            // widens the keep-chasing radius by the castle's own extent
+            // (:24201-02) — the same `+80 + v_28` the mound's castle
+            // hunt acquires on (:23770). Without it the port acquired a
+            // castle at a distance its own drop-out test then rejected,
+            // so a mound flapped chase/hidden on every v_26 tick.
+            let mut v28 = row.v_28 as u32;
+            if model == 9 && tgt != PLAYER_TARGET {
+                let t = tgt as usize;
+                if self.ent[t].class64 == 3 && self.ent[t].model65 == 2 {
+                    v28 += self.ent[t].f80 as u32;
+                }
+            }
+            if Self::isqrt(sq as u32) >= v28 {
                 self.ent[i].tick70 = base + 1;
             } else if model == 6 {
                 // Kraken: growl + arm the 5-bolt spit (:23240-42).
@@ -1123,9 +1152,10 @@ impl Gen {
                 self.snd(37, i);
                 self.ent[i].f71 = 5;
             } else {
-                self.attack_thunk(i, model, tgt, tx, ty, tz, tf66, tf67);
+                return self.attack_thunk(i, model, tgt, tx, ty, tz, tf66, tf67);
             }
         }
+        false
     }
 
     /// m2's CHASE wrapper sub_1B3C0 (:22335): the sting cooldown +26
@@ -1162,7 +1192,7 @@ impl Gen {
         self.ent[i].z = self.ent[i].z.wrapping_add((sign * v14) as i16);
         self.mob_chase(i, base, ctx);
         if self.ent[i].tick70 != base + 2 {
-            self.ent[i].f126 = self.ent[i].f128;
+            self.chase_exit_trailer(i, 2);
         }
     }
 
@@ -1176,6 +1206,52 @@ impl Gen {
             if buzz {
                 self.snd(13, i);
             }
+            self.ent[i].f26 = 1;
+        }
+    }
+
+    /// m7's CHASE sub_1C960 (:23319, twin remc1hw :21876): the
+    /// boulder-thrower's DUG-IN cycle, and the family's only speed
+    /// bound. Firing plants it — sprite 85 -> 198, speed dropped to
+    /// the ACCEL (+130 = 3, a crawl) and a 30-tick timer armed
+    /// (:23339-45); the timer expiring un-plants it and restores
+    /// +128 (:23327-32); and leaving CHASE in the planted pose
+    /// restores it too (:23346-55), which is the RESTORE the port
+    /// lacked. Without the third arm an m7 that inherited a pack
+    /// catch-up (+126 = leader +126 + leader +130) carried the
+    /// inflated speed out of the chase with nothing to re-baseline
+    /// it — the mc1l5 corpus scores exactly that, `speed` 23 against
+    /// retail's 20, alongside the 20<->3 toggle rows this restores.
+    /// Only the ODD-ordinal variant participates: the ctor's parity
+    /// arm gives the even one sprite 199 (:45101-13), which matches
+    /// neither pose test, so it never plants and never restores.
+    fn m7_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        let v1 = self.ent[i].f26;
+        if v1 != 0 {
+            self.ent[i].f26 = v1 - 1;
+            if v1 == 1 && self.ent[i].type86 == 198 {
+                self.set_sprite(i, 85);
+                self.ent[i].f126 = self.ent[i].f128;
+            }
+        }
+        if self.mob_chase(i, base, ctx) && self.ent[i].type86 == 85 {
+            self.set_sprite(i, 198);
+            self.ent[i].f26 = 30;
+            self.ent[i].f126 = self.ent[i].f130;
+        }
+        // The exit trailer runs on the SAME tick the chase breaks —
+        // the shared chase has already written the new state.
+        if self.ent[i].tick70 != base + 2 {
+            self.chase_exit_trailer(i, 7);
+        }
+    }
+
+    /// m7's promotion arm (sub_1C900 :23315 / sub_1CA00 :23361): the
+    /// tick a non-chase handler promotes the thrower, +26 arms to 1 —
+    /// the same shape as the bee's, and what lets a chase entered
+    /// while still planted un-plant on its first `m7_chase` tick.
+    fn m7_arm(&mut self, i: usize, base: u8) {
+        if self.ent[i].tick70 == base + 2 {
             self.ent[i].f26 = 1;
         }
     }
@@ -1716,34 +1792,70 @@ impl Gen {
         }
     }
 
-    /// m4 CHASE (sub_1BB20 :22690): the militiaman stands his ground
-    /// and shoots. Entering arms him (sub_1BC50 :22745 — ONE LCG:
-    /// sprite 206 on 11/20 else 1, speed 0, filter = target
-    /// class/model); every v_26 in range fires the sub_1A990 dart and
-    /// refreshes the wizard's wanted timer (:22714); break state is
-    /// base+0 (24, the disarm slot).
-    fn militia_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+    /// sub_1BC50 (:22744): the militiaman shoulders his dart — ONE LCG
+    /// draw (sprite 206 on 11/20 else 1), STOPS (speed 0) and takes the
+    /// target's own class/model as his projectile filter. Retail runs
+    /// this from the three non-chase handlers on the PROMOTION tick
+    /// (idle :22432, wander :22690, pack :22725), not from the chase —
+    /// the mc1l5 corpus scores the one-tick lag the port's in-chase arm
+    /// produced on `speed`, `sclass`, `smodel` and `rand` alike.
+    fn militia_arm(&mut self, i: usize) {
         let tgt = self.ent[i].f146;
-        let (tx, ty, tz, tc, tm) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz, 3u8, 0u8)
+        // The human is out of pool here, so his class/model pair is
+        // named directly (the wizard-body class 3, model 0) exactly as
+        // the chase read it before.
+        let (tc, tm) = match tgt as usize {
+            _ if tgt == PLAYER_TARGET => (3u8, 0u8),
+            t if t != 0 && t < self.ent.len() => (self.ent[t].class64, self.ent[t].model65),
+            _ => (3u8, 0u8),
+        };
+        let d = self.ent_rand(i);
+        self.ent[i].f126 = 0;
+        self.set_sprite(i, if d % 20 <= 10 { 206 } else { 1 });
+        self.ent[i].f66 = tc;
+        self.ent[i].f67 = tm;
+    }
+
+    /// sub_1BCE0 (:22766): leaving the chase puts the dart away —
+    /// the WALK SPEED restored (+126 = +128), the unarmed sprite and
+    /// the hit-anything filter. This is the militia's only speed
+    /// restore anywhere in the engine; without it a militiaman who
+    /// had chased once stayed pinned at speed 0 for the rest of the
+    /// level and never wandered again.
+    fn militia_disarm(&mut self, i: usize) {
+        self.ent[i].f126 = self.ent[i].f128;
+        self.set_sprite(i, 0);
+        self.ent[i].f66 = 3;
+        self.ent[i].f67 = 0xFF;
+    }
+
+    /// m4 CHASE (sub_1BB20 :22690): the militiaman stands his ground
+    /// and shoots. Every v_26 in range fires the sub_1A990 dart and
+    /// refreshes the wizard's wanted timer (:22714). Break state is
+    /// base+1 (25) — the shared chase's own `a2 + 1` (:21657/:21661) —
+    /// and ANY break runs the disarm trailer on the same tick.
+    fn militia_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.militia_chase_body(i, base, ctx);
+        // sub_1BB20's trailer (:22699-702).
+        if self.ent[i].tick70 != base + 2 {
+            self.chase_exit_trailer(i, 4);
+        }
+    }
+
+    fn militia_chase_body(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        let tgt = self.ent[i].f146;
+        let (tx, ty, tz) = if tgt == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz)
         } else {
             let t = tgt as usize;
             if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 || self.ent[t].act_life < 0
             {
-                self.ent[i].tick70 = base;
+                self.ent[i].tick70 = base + 1;
                 return;
             }
             let c = &self.ent[t];
-            (c.x, c.y, c.z, c.class64, c.model65)
+            (c.x, c.y, c.z)
         };
-        if self.ent[i].type86 == 0 {
-            let d = self.ent_rand(i);
-            let armed = if d % 20 <= 10 { 206 } else { 1 };
-            self.set_sprite(i, armed);
-            self.ent[i].f126 = 0;
-            self.ent[i].f66 = tc;
-            self.ent[i].f67 = tm;
-        }
         // Retail runs the movement core (sub_196E0 :21654, via
         // sub_1A120) every alive tick — at chase speed 0 it only
         // altitude-clamps, settling a militiaman a collapse spawned
@@ -1765,7 +1877,7 @@ impl Gen {
             let dz = tz.wrapping_sub(e.z) as i32;
             let sq = Self::dist2_sq(e.x, e.y, tx, ty).wrapping_add(dz.wrapping_mul(dz));
             if Self::isqrt(sq as u32) >= row.v_28 as u32 {
-                self.ent[i].tick70 = base;
+                self.ent[i].tick70 = base + 1;
             } else {
                 self.attack_thunk(i, 4, tgt, tx, ty, tz, 0, 0);
                 self.flag_village_wanted(tgt);
@@ -1791,6 +1903,15 @@ impl Gen {
     /// the shared `pack_scan`, so a lone militiaman falls in behind the
     /// nearest packless sibling (state 0x1B).
     fn militia_idle(&mut self, i: usize, base: u8, ctx: &MobCtx) {
+        self.militia_idle_body(i, base, ctx);
+        // sub_1B5D0's trailer (:22689-90): acquiring a target arms him
+        // on the SAME tick, before the first chase tick runs.
+        if self.ent[i].tick70 == base + 2 {
+            self.militia_arm(i);
+        }
+    }
+
+    fn militia_idle_body(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         // First statement of the retail handler (:22482): the walk-in
         // flag is re-zeroed every idle tick, so +26 is only ever set
         // during the one-tick hop from the house branch below into the
@@ -1798,12 +1919,10 @@ impl Gen {
         // (+26 = slot % 100) survives into combat and mob_death's
         // absorb gate swallows the corpse — no mana ball.
         self.ent[i].f26 = 0;
-        if self.ent[i].type86 != 0 {
-            // Disarm: the unarmed sprite + hit-anything filter restore.
-            self.set_sprite(i, 0);
-            self.ent[i].f66 = 3;
-            self.ent[i].f67 = 0xFF;
-        }
+        // (The unarmed-look restore that used to sit here was the
+        // port's stand-in for the missing sub_1BCE0 disarm trailer;
+        // retail's sub_1B5D0 writes neither sprite nor filter, and the
+        // trailer now runs on the chase-exit tick where it belongs.)
         self.creature_move(i);
         if self.ent[i].act_life < 0 {
             return; // walled in — dies via the prologue next tick
@@ -2183,6 +2302,14 @@ impl Gen {
     /// The per-model attack thunks CHASE fires in range. Constants per
     /// the banked combat trace (docs/ROADMAP.md); projectile damage
     /// rides +44, explosions on +68/+69, owner immunity on +24.
+    ///
+    /// The return is retail's thunk return, which `sub_1A120` passes
+    /// straight out (:21668-69) so a chase WRAPPER can trail the tick
+    /// that actually connected: true = the attack happened (the
+    /// projectile got a pool slot, or the melee reach test passed).
+    /// m7's `sub_1C960` is the consumer — the m1/m2/m8 trailers are
+    /// folded into their own arms below, where the same gate is
+    /// already in scope.
     #[allow(clippy::too_many_arguments)]
     fn attack_thunk(
         &mut self,
@@ -2194,7 +2321,7 @@ impl Gen {
         tz: i16,
         tf66: u8,
         tf67: u8,
-    ) {
+    ) -> bool {
         let (x, y, z, owner, f44, f84) = {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24, e.f44, e.f84)
@@ -2207,7 +2334,9 @@ impl Gen {
                     self.ent[p].row156 = 6; // turn 0: no homing
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 500, 0);
                     self.snd(8, i); // :22182/:22406
+                    return true;
                 }
+                false
             }
             // sub_1AB10 (:21962): melee within 1024 units, m2 recoils.
             // (No cooldown gate — the thunk fires whenever the shared
@@ -2230,17 +2359,22 @@ impl Gen {
                         let v26 = BEHAVIOR[self.ent[i].row156 as usize].v_26;
                         self.ent[i].f26 = 3 * v26;
                     }
+                    return true;
                 }
+                false
             }
             // sub_1A990 (:21907): the 250-damage straight bolt.
             4 | 10 => {
                 if let Some(p) = self.spawn_bolt(x, y, launch_z) {
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 250, 0);
+                    return true;
                 }
+                false
             }
             // sub_1AB70 (:21976): m5's mana-scaled multishot,
             // sound 32 (:22975).
             5 => {
+                let mut fired = false;
                 self.snd(32, i);
                 let mana = self.ent[i].f140;
                 let maxmana = self.ent[i].f136.max(1);
@@ -2257,6 +2391,7 @@ impl Gen {
                             if let Some(p) = self.spawn_fireball(x, y, launch_z) {
                                 self.ent[p].row156 = (6 - k).max(0) as u8;
                                 self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 400, 0);
+                                fired = true;
                             }
                         }
                     }
@@ -2264,6 +2399,7 @@ impl Gen {
                         for _ in 0..(n - 1).max(0) {
                             if let Some(p) = self.spawn_zigzag(x, y, launch_z) {
                                 self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 800, 23);
+                                fired = true;
                             }
                         }
                     }
@@ -2271,9 +2407,11 @@ impl Gen {
                         if let Some(p) = self.spawn_trail_bolt(x, y, launch_z) {
                             self.ent[p].row156 = 3;
                             self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 8000, 17);
+                            fired = true;
                         }
                     }
                 }
+                fired
             }
             // sub_1AE30 (:22101): m7's 780-damage slow bolt (class-9
             // m14, the generic homing flight): the ctor binds row [6]
@@ -2286,7 +2424,9 @@ impl Gen {
                 if let Some(p) = self.spawn_slow_bolt(x, y, launch_z) {
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 780, 0);
                     self.ent[p].row156 = 6;
+                    return true;
                 }
+                false
             }
             // sub_1AEE0 (:22134): m8's 4000-damage beam, filter
             // copied from the target's own fields, row [6] (:22155).
@@ -2298,11 +2438,15 @@ impl Gen {
                     self.ent[p].row156 = 6;
                     self.snd(38, i); // :23555
                     self.flag_village_wanted(tgt);
+                    return true;
                 }
+                false
             }
             // sub_1AA40 (:21935): m9's bolt — 600 with segments, else
             // 400. (Aimed at the TARGET; the transcription's
             // self-aim at :21947-48 is a decompile casualty.)
+            // (`sub_1AA40` is `void` — m9 drives its own chase and
+            // never reads a return; the value here is unobserved.)
             9 => {
                 let dmg = if self.ent[i].f144 != 0 { 600 } else { 400 };
                 if let Some(p) = self.spawn_bolt(x, y, launch_z) {
@@ -2313,7 +2457,9 @@ impl Gen {
                     // PURELY the billboard. Its arrow sound is retail
                     // asset reuse and stays (see DEVIATIONS.md).
                     self.set_sprite_x2(p, 203);
+                    return true;
                 }
+                false
             }
             // sub_1E380 (:24554): m11's 3000-payload wizard-seeker
             // (explodes into the ch3 mana-steal flash, wizards only).
@@ -2322,7 +2468,9 @@ impl Gen {
                     self.ent[p].f26 = 20;
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, 3000, 25);
                     self.snd(9, i); // :24700
+                    return true;
                 }
+                false
             }
             // m15 (:25846-59): a bare bolt — no +44 override, so the
             // NewEvent default 100 rides.
@@ -2330,9 +2478,11 @@ impl Gen {
                 if let Some(p) = self.spawn_bolt(x, y, launch_z) {
                     let dflt = self.ent[p].f44;
                     self.arm_projectile(p, owner, 3, 0xFF, tgt, tx, ty, tz, dflt, 0);
+                    return true;
                 }
+                false
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -2416,6 +2566,30 @@ impl Gen {
         // pack scan is NOT awake-gated, so distant idle crowds pack
         // up and would ratchet forever). The bee's retail "no escape"
         // is the 3x lunge in bee_chase, not this line.
+        //
+        // ⛔ DO NOT "fix" this toward the `+=`. Three independent
+        // reasons, in increasing order of authority:
+        //   1. remc1 :21813 and remc1hw :20370 both keep the ORIGINAL
+        //      decompiler line commented out directly above the live
+        //      rewrite — and it is the SET form, byte for byte. Those
+        //      two files share a maintainer, so they are ONE witness;
+        //      the cross-binary check is remc2 EF:9482, a different
+        //      lineage, which carries the SET form too.
+        //   2. An unbiased `dump-state` sweep of the mc1l5 recording
+        //      over every live class-5 entity finds NO creature above
+        //      its own +128 at t=5000/12000/17000 except one bee mid
+        //      3x lunge. The `+=` would have filled that take with
+        //      inflated creatures. Recorded gameplay outranks the
+        //      decompile.
+        //   3. There is no cap on this path in EITHER engine: +128 and
+        //      +130 are write-once (ctors only) and the mover passes
+        //      +126 verbatim (sub_196E0 :21182 -> sub_41EC0 :52523).
+        //      What bounds retail is the per-model chase-exit RESTORE
+        //      (m2 :22366, m4 :22768, m7 :23353, m9 :24257, m15
+        //      :25901), which is why those are ported rather than a
+        //      clamp added here — a `.min(+128)` would be measurably
+        //      WRONG, retail carries m2 +126 = 95 against +128 = 70
+        //      for 62 creature-ticks in mc1l5 alone.
         self.ent[i].f126 = self.ent[l].f126.wrapping_add(self.ent[l].f130);
     }
 
@@ -2481,7 +2655,10 @@ impl Gen {
 
     // ---- model 9, the burrower (states 54/55, :23591-:23920) ---------------
 
-    /// sub_1DD50 (:24255): the hidden-mound disguise.
+    /// sub_1DD50 (:24255): the hidden-mound disguise — and the mound's
+    /// speed RESTORE. Retail runs it from exactly two places: the
+    /// ctor's emergence (:23619) and the chase EXIT trailer (:24212,
+    /// `if (+70 != 56)`).
     fn m9_disguise(&mut self, i: usize) {
         self.ent[i].f126 = self.ent[i].f128;
         self.set_sprite(i, 201);
@@ -2489,6 +2666,32 @@ impl Gen {
         self.ent[i].f67 = 0xFF; // sModel = -1
         self.ent[i].f26 = 50;
         self.ent[i].f71 = 0;
+    }
+
+    /// sub_1DCD0 (:24236): the mound's chase-ENTRY trailer, run by the
+    /// hidden (:23922) and pack (:24220) handlers on the promotion
+    /// tick. A mound that acquired its own owner's body drops straight
+    /// back to hidden; otherwise it STOPS (+126 = 0 — retail's
+    /// burrower fights rooted, it never walks in the warrior form),
+    /// pops the type-202 disguise and takes the target's class/model
+    /// as its bolt filter.
+    fn m9_enter_chase(&mut self, i: usize) {
+        let tgt = self.ent[i].f146;
+        let (tc, tm) = match tgt as usize {
+            _ if tgt == PLAYER_TARGET => (3u8, 0u8),
+            t if t != 0 && t < self.ent.len() => {
+                if self.ent[i].id24 == self.ent[t].id24 {
+                    self.ent[i].tick70 = 55; // 0x37, back to hidden
+                    return;
+                }
+                (self.ent[t].class64, self.ent[t].model65)
+            }
+            _ => (3u8, 0u8),
+        };
+        self.ent[i].f126 = 0;
+        self.set_sprite(i, 202);
+        self.ent[i].f66 = tc;
+        self.ent[i].f67 = tm;
     }
 
     /// Spawn state 54, sub_1CFF0 (:23591): the materialize sequence —
@@ -2585,12 +2788,15 @@ impl Gen {
     /// wake gate arms a −50 countdown and the mound rises again
     /// (sub_1DDB0); asleep, it runs the convert tail underground.
     fn m9_hidden(&mut self, i: usize, base: u8, ctx: &MobCtx) {
-        if self.ent[i].type86 == 202 {
-            // Back from a chase: sub_1DA60's exit path restores the
-            // mound (sub_1DD50).
-            self.m9_disguise(i);
-            self.ent[i].f26 = 400;
+        self.m9_hidden_body(i, base, ctx);
+        // sub_1D060's trailer (:23921-22): promoting to CHASE runs the
+        // entry trailer on the SAME tick.
+        if self.ent[i].tick70 == base + 2 {
+            self.m9_enter_chase(i);
         }
+    }
+
+    fn m9_hidden_body(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         let v1 = self.ent[i].f26;
         if v1 > 0 {
             self.ent[i].f26 = v1 - 1;
@@ -2856,6 +3062,53 @@ impl Gen {
         self.set_sprite(i, 0);
     }
 
+    /// The per-model CHASE-ENTRY trailers, run on the tick the
+    /// promotion lands. Retail hangs these off the individual state
+    /// handlers, so the coverage is NOT uniform and the `role` gate is
+    /// load-bearing: m7's idle slot (sub_1C8F0 :23294) is a bare
+    /// shared idle with no trailer, and m15's pack slot (sub_203E0
+    /// :25867) a bare shared pack. (m15's idle slot 90 — sub_1FF50, a
+    /// bare shared idle too — is kept on the list: nothing in the port
+    /// or the original ever parks a guard there, so the extra arm is
+    /// unreachable, and the m15 lane measures clean as it stands.)
+    /// The per-model CHASE-EXIT trailers — the speed RESTORES. Every
+    /// one hangs off its handler's tail as `if (+70 != chase)
+    /// <trailer>`, so it fires on the tick the chase breaks for ANY
+    /// reason: target lost, out of range, or the creature's own DEATH.
+    /// The death case is easy to miss because retail's damage prologue
+    /// sits INSIDE each handler and `goto`s the trailer instead of
+    /// returning (m9 sub_1DA60 :24184 `goto LABEL_31`; m2/m4/m7 reach
+    /// it through sub_1A120's plain `return v15`) — the mc1l5
+    /// recording shows it plainly: slot 348 goes act_life -1 at
+    /// t=6241 and STILL gets +126 = 20, type 201 and its filter
+    /// restored at t=6242.
+    fn chase_exit_trailer(&mut self, i: usize, model: u8) {
+        match model {
+            2 => self.ent[i].f126 = self.ent[i].f128, // sub_1B3C0 :22363-66
+            4 => self.militia_disarm(i),              // sub_1BCE0
+            7 => {
+                // sub_1C960 :23346-55 — the planted pose only.
+                if self.ent[i].type86 == 198 {
+                    self.set_sprite(i, 85);
+                    self.ent[i].f126 = self.ent[i].f128;
+                }
+            }
+            9 => self.m9_disguise(i),       // sub_1DD50
+            15 => self.guard_exit_chase(i), // sub_20450
+            _ => {}
+        }
+    }
+
+    fn chase_entry_trailer(&mut self, i: usize, model: u8, role: u8) {
+        match (model, role) {
+            (4, 0 | 1 | 3) => self.militia_arm(i),    // sub_1BC50
+            (7, 1 | 3) => self.ent[i].f26 = 1,        // sub_1C900/sub_1CA00
+            (9, 1 | 3) => self.m9_enter_chase(i),     // sub_1DCD0
+            (15, 0 | 1) => self.guard_enter_chase(i), // sub_20410
+            _ => {}
+        }
+    }
+
     /// m15 castle-guard CHASE, state 92 (sub_201D0 :25771): STATIONARY —
     /// face the target every 4th tick (heading f34 only, never a step or
     /// a move core), break back to WANDER (91) on target loss or when
@@ -2898,7 +3151,7 @@ impl Gen {
         }
         // Exit trailer (:25862): restore the walk speed on any break.
         if self.ent[i].tick70 != base + 2 {
-            self.guard_exit_chase(i);
+            self.chase_exit_trailer(i, 15);
         }
     }
 
@@ -3017,6 +3270,12 @@ impl Gen {
                     self.flag_village_wanted(self.ent[i].f38);
                 }
                 self.ent[i].tick70 = base + 4;
+                // Dying IS leaving the chase: retail's prologue falls
+                // through to the handler's own exit trailer on this
+                // very tick.
+                if role == 2 {
+                    self.chase_exit_trailer(i, model);
+                }
                 return;
             }
             Inbox::Hit(src) => {
@@ -3041,13 +3300,15 @@ impl Gen {
                                 self.genie_ambush(i, base, ctx);
                             } else {
                                 self.ent[i].tick70 = base + 2;
-                                if model == 15 {
-                                    // The m15 guard runs its chase-entry
-                                    // trailer (sub_20410) on the
-                                    // retaliate path too (sub_1FF60
-                                    // LABEL_33 → LABEL_34).
-                                    self.guard_enter_chase(i);
-                                }
+                                // Every family with a chase-entry
+                                // trailer runs it on the retaliate path
+                                // too: retail's damage prologue lives
+                                // INSIDE each handler and falls through
+                                // to the handler's own trailer (m4
+                                // sub_1B5D0 :22522 → :22689, m15
+                                // sub_1FF60 LABEL_33 → LABEL_34, and
+                                // the m7/m9 twins).
+                                self.chase_entry_trailer(i, model, role);
                             }
                             return;
                         }
@@ -3067,6 +3328,10 @@ impl Gen {
                             self.ent[i].f146 = src;
                             self.ent[i].f52 = 0;
                             self.ent[i].tick70 = base + 2;
+                            // The per-model PACK wrappers trail the
+                            // shared sub_1A390 the same way (m4
+                            // :22724-25, m7 :23362-64, m9 :24219-20).
+                            self.chase_entry_trailer(i, model, role);
                             return;
                         }
                         _ => {}
@@ -3075,30 +3340,39 @@ impl Gen {
             }
             Inbox::Quiet => {}
         }
-        // Model 6 forces its speed every movement tick (:23116).
-        if model == 6 && role >= 1 {
+        // The kraken pins its speed on every movement tick, but the
+        // three slots do it at DIFFERENT points: the chase (sub_1C4F0
+        // :23146) writes it as its first statement, while the wander
+        // (sub_1C4A0 :23118) and the pack (sub_1C880 :23276) write it
+        // as their LAST — which is what keeps m6 out of the pack
+        // catch-up's reach, since :21814's inflated +126 is stamped
+        // back to 30 before the tick ends instead of being left
+        // standing for the follower's next read.
+        if model == 6 && role == 2 {
             self.ent[i].f126 = 30;
         }
         match (model, role) {
             // -- m4, the VILLAGE MILITIA (the "mimic" reading was
             // half the story): stand-and-shoot with the +528 wanted-
             // timer hostility gate, armed/unarmed sprite swaps and
-            // the walk-back-into-a-house exit. State 24 = the disarm
-            // slot the chase breaks to. State 27 = the pair-up pack
-            // (sub_1BBE0 = mob_pack; a member promoted to chase re-arms
-            // on its first militia_chase tick, same as the idle/spawn
-            // promotions).
+            // the walk-back-into-a-house exit. State 24 (sub_1B5A0
+            // :22428) is the shared idle plus the promotion arm; the
+            // chase breaks to 25, not here. State 27 = the pair-up
+            // pack (sub_1BBE0), which arms on promotion the same way.
             (4, 0) => {
-                if self.ent[i].type86 != 0 {
-                    self.set_sprite(i, 0);
-                    self.ent[i].f66 = 3;
-                    self.ent[i].f67 = 0xFF;
+                self.mob_idle(i, base);
+                if self.ent[i].tick70 == base + 2 {
+                    self.militia_arm(i);
                 }
-                self.ent[i].tick70 = base + 1;
             }
             (4, 1) => self.militia_idle(i, base, ctx),
             (4, 2) => self.militia_chase(i, base, ctx),
-            (4, 3) => self.mob_pack(i, base),
+            (4, 3) => {
+                self.mob_pack(i, base);
+                if self.ent[i].tick70 == base + 2 {
+                    self.militia_arm(i); // sub_1BBE0 :22724-25
+                }
+            }
 
             // -- idles --
             // m5's spawn state falls straight through to wander
@@ -3133,6 +3407,12 @@ impl Gen {
                 self.m5_regen(i);
             }
             (9, 1) => self.m9_hidden(i, base, ctx),
+            // m7's wander wrapper sub_1C900 (:23300): the shared scan,
+            // and the promotion tick arms the dug-in timer.
+            (7, 1) => {
+                self.mob_wander(i, base, ctx);
+                self.m7_arm(i, base);
+            }
             (11, 1) => self.genie_wander(i, base, ctx),
             (15, 1) => self.guard_wander(i, base, ctx),
             // The villager families' custom hunts.
@@ -3166,20 +3446,24 @@ impl Gen {
             }
             (2, 2) => self.bee_chase(i, base, ctx),
             (8, 2) => self.griffon_chase(i, base, ctx),
+            (7, 2) => self.m7_chase(i, base, ctx),
             (9, 2) => {
-                // sub_1DA60's per-tick disguise (sub_1DCD0): the mound
-                // pops up as the warrior form while it chases.
-                if self.ent[i].type86 != 202 {
-                    self.set_sprite(i, 202);
-                }
+                // sub_1DA60: the pose and the ROOTED speed are set by
+                // the entry trailer, not re-stamped per tick; leaving
+                // the chase restores both (:24211-12).
                 self.mob_chase(i, base, ctx);
+                if self.ent[i].tick70 != base + 2 {
+                    self.chase_exit_trailer(i, 9);
+                }
             }
             (11, 2) => self.genie_chase(i, base, ctx),
             // m12's chase slot 74 = the house APPROACH.
             (12, 2) => self.m12_approach(i),
             (15, 2) => self.guard_chase(i, base, ctx),
             (16, 2) => self.wyvern_chase(i, base, ctx),
-            (_, 2) => self.mob_chase(i, base, ctx),
+            (_, 2) => {
+                self.mob_chase(i, base, ctx);
+            }
 
             // -- packs --
             (0, 3) => {
@@ -3195,9 +3479,27 @@ impl Gen {
                 self.mob_pack(i, base);
                 self.m2_lunge_arm(i, base, false);
             }
+            // m7's pack wrapper sub_1CA00 (:23359).
+            (7, 3) => {
+                self.mob_pack(i, base);
+                self.m7_arm(i, base);
+            }
+            // m9's pack wrapper sub_1DC80 (:24216).
+            (9, 3) => {
+                self.mob_pack(i, base);
+                if self.ent[i].tick70 == base + 2 {
+                    self.m9_enter_chase(i);
+                }
+            }
             (_, 3) => self.mob_pack(i, base),
 
             _ => unreachable!(),
+        }
+        // The kraken's wander and pack slots pin the speed on the way
+        // OUT (sub_1C4A0 :23118 / sub_1C880 :23276) — see the chase's
+        // pre-write above.
+        if model == 6 && matches!(role, 1 | 3) {
+            self.ent[i].f126 = 30;
         }
     }
     /// Multipart spawns — worms m0 (sub_38030 :44570) / m3 (sub_384B0

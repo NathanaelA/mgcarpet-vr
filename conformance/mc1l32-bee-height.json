@@ -475,12 +475,11 @@
     {
       "t": 1181,
       "status": "open",
-      "sig": "93bf6fd645589cee",
+      "sig": "4a92b06ce764d984",
       "atoms": [
-        "field:5,2:speed",
         "field:5,2:z"
       ],
-      "note": "bee z-law (see t=951) + bee speed (lunge-arm lead)"
+      "note": "bee z-law (see t=951); the bee-speed atom closed 2026-08-11 with the chase-exit trailers (death-tick restore)"
     },
     {
       "t": 1381,

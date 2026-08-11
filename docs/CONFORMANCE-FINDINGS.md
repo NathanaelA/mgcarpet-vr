@@ -8253,3 +8253,675 @@ crush paths to force a demolish, where the port re-reads the static
 table, so 16 self-chaining ids rebuild forever); the held-back radius
 and window-centre fixes above; and the mc2l1 pure-replay blocker (the
 t=1 slot-138 rival-wizard z).
+
+# THE mc2l1 ROUND-2 REPORTS (2026-08-11) — A/B/C BANKED, D LANDED
+
+Four more player reports off the same mc2l1 session. **D landed here; A, B and
+C are dug to implementation-ready specs and BANKED, not landed.** Every dig ran
+two independent verifiers (an adversarial refuter and a completeness critic);
+all three cores came back CONFIRMED, all three fix specs came back
+PARTLY_WRONG. **The verifier corrections below are load-bearing — read them
+before implementing, they are not editorial.**
+
+## D — MC1 SPELL SELECTOR: THE RIGHT-HAND CHORD IS CTRL, NOT SHIFT (LANDED)
+MC1 has **two** digit paths, and they are the two hands:
+- bare digit → `MakeControlCommand_188A0(24, key-2)` (:20568) → slot **+940** = LEFT
+- **CTRL**+digit → `MakeControlCommand_188A0(25, key-2)` (:20356) → slot **+944** = RIGHT
+
+Both index the same per-player bind table `var_15198_1875_772[digit]`
+(−1 = unbound) and commit through the pending-command mailbox (:48747 / :48766).
+⚠ ROOT CAUSE OF OUR ERROR, worth remembering: remc1 annotates the gate
+`pressedKeys_12EEF0_12EEE0[29]` as `//clrl + ]`, so the chord looked like it
+needed a bracket and the whole feature got treated as a port enhancement free to
+pick its own binding. **Scancode 29 is 0x1D = LEFT CTRL; `]` is 0x1B.** There is
+no bracket, it is not the only digit path, and retail owns the quick binds (the
+`+772` table) — only the bind-from-book UI is ours.
+LANDED: `ctrl_mod`, a plain modifier latch separate from `ctrl_held`. They must
+stay separate: `ctrl_held` is the selector PANE's hold latch, carries a pointer-
+grab release, and is only tracked when `pane.is_some()` — which is FALSE in
+default MC1 (`SpellSelector::Auto` → `ctrl_pane: false`), i.e. exactly the game
+this chord belongs to. Tracked before the pane's early `return`, cleared on
+focus loss. App-layer input only: no sim state, no goldens. **PLAYTEST OWED.**
+
+## A — A CASTLE PERMANENTLY KILLS A SELF-CHAINING BUILDING (BANKED)
+This is the CHAIN SOURCE defect banked last session, now complete in both
+directions. The degradation link is a **PER-ENTITY** field, not a table read:
+- SEED: `sub_49A30` EF:32795/32798 — `fontTypeIndex_0x3D_61 = bldgprm[a2].byte_3`
+  (int8 @0x3D; byte_3 IS the port's `BldgParam.chain`).
+- BRANCH: `RemoveCastleStage_385C0` EF:28090 `if (!event->fontTypeIndex_0x3D_61)`
+  → demolish, else → rebuild with `sub_49A30(successor, fontTypeIndex)` (EF:28190).
+- ZEROED BY TWO CRUSH PATHS: `sub_11960` EF:4410-11 (the CASTLE level-up
+  pre-clear, called EF:61128) and `sub_3A090` EF:29335-36 (the (10,67) QUAKE grab
+  — **not** a castle path; 3 call sites, incl. Events.cpp:2753-55).
+- The player's "flat basalt sea-level area" is the demolish branch's own
+  `pad >= height → height = 0` (EF:28147-49), already ported at world.rs:8324-27.
+- NEITHER STRUCTURE CAN DAMAGE THE OTHER: the castle painter's purge `sub_57390`
+  (EF:39746) handles only class 2 (free) and class 5 (kill, minus protected
+  models {6,8,10,16,22,23,27} + 25-in-action-200). Class 10 is untouched, both
+  ways. So the fight is purely between their TERRAIN passes.
+- SECOND CONSUMER: objective type 2 (EF:40771-79) latches on
+  `life <= -1 && !fontTypeIndex` — a castle-crushed building COMPLETES a type-2
+  objective in retail; a damage-killed chain building hands off via `sub_59760`.
+
+**PORT:** `mc2_spawn_building` never seeds it, and `mc2_house_collapse` re-reads
+the static table (world.rs:8199-8200), so the 16 self-chaining ids resurrect
+forever. The "levels the castle but does not damage it" half is the SUCCESSOR's
+construction pass: it inherits the OLD completion datum (world.rs:8216
+`z = site_z` ≡ EF:28191) and lerps the plane toward its own pad every tick
+(mobs.rs:2145-47), dragging the castle mound back down — then the castle's next
+level-up pre-clears again, and round it goes.
+
+**FIELD HOME RULING: `Ent::f46`.** Already the MC2 alias for @0x3D on class 5,
+unread for (10,45) anywhere in the workspace, and the value the importer
+currently puts there (@0x2E) is dead on both sides. NOT free, though — three
+sites must ship in the SAME commit or a replayed building imports chain 0:
+1. `conformance.rs` `import_ent_mc2` needs the (10,45) arm (~:1695);
+2. ⚠ `mc2_building_pad_reconstruct`'s field-restore WHITELIST (mc2/pads.rs:195-203,
+   called from conformance.rs:1076) is {act_life, tick70, z, site_z, max_life,
+   flags} — f46 must join it, or a replayed construction pass drops the link;
+3. `mc2_spawn_building` has THREE callers, not two: world.rs:7489 (authored),
+   world.rs:8215 (chain) and **mc2/roster.rs:926** (the model-12 builder villager).
+Rejected: `f69` — splits the @0x3D alias family and collides with `new_event`'s
+explosion defaults.
+Blast: `f46` is hashed, so MC2 levels with authored buildings whose bldgprm
+byte_3 ≠ 0 move from t=0. MC1 goldens unmoved. The MC2 behavioural suites build
+with `bldgprm: Vec::new()` → chain 0 → unmoved. Save format unchanged (f46 is
+already serialised).
+Verifier corrections to fold in: `dword_38527` is class-10 model **45 ONLY**
+(EF:40019-51 — independently re-confirmed, so the port's existing `model65 == 45`
+filters are already exact); the port's footprint dirty-bit clear
+(world.rs:8236-44) is unconditional where retail gates per cell on
+`locData2[1] != 0xff || locData2[0] != 0xff` (EF:28210); several dig EF cites are
+off by one or two (4399/4405/4415, 28147/28149, 28191, 28115).
+
+## B — FIRESTORM: THE DISTINCTION IS THE LOCK, NOT THE HIT (BANKED)
+⭐ The player's "there has to be a structural distinction between the two types
+of structure" is exactly right, and it is one level UPSTREAM of the firestorm:
+
+**A charged fireball can LOCK a castle. It can never lock a (10,45) building.**
+`sub_67CB0` case 0x1C (the (9,28) charged fireball, action 29) walks the class-3
+list `dword_38519` (EF:54783, castles scored by the model-2-specific
+`sub_685D0` EF:54790) and the class-5 buckets — it **never** walks the building
+list `dword_38527`, which only the model 1/0x11 possession arm reaches
+(EF:54853-58 → EF:55047).
+
+The hub reads its leader `word_0x96_150` (port `f146`) in exactly two places:
+phase-0 SIZING (`sub_339B0` EF:24581-90 — bounds from `leader.f80`) and the
+per-tick HARD SNAP (`sub_33C70` EF:24722-45 — `leader.pos.z + leader.f78`).
+- **Castle leader** → `maxSpeed 3392 / minSpeed 640`, re-centred every tick =
+  the engulf the player recognises as real.
+- **Leader 0** → the AUTHORED `192/480` compact ring (EF:35950-51), floating
+  where the ball died, riding the building's own stamped heightmap (EF:27341) =
+  **"spins and runs above the flag", verbatim.**
+
+And the delivery: `sub_65C20` (EF:63057) is the ONE MC2 impact worker that never
+struck-stamps its spawned effect — it only ZEROES the projectile's own lock when
+nothing was struck (EF:63195-96); `sub_65B50` (action 29) then copies that lock
+onto the hub (EF:63027-29). Its two siblings DO struck-stamp (`sub_65820`
+EF:62992, `CastPosses_65F60` EF:63557). The port folded all three into one seam
+and took the struck-write as universal: **crates/mgc-sim/src/mc2/proj.rs:768
+`e.f146 = victim;`**, unconditional. No victim-type branch exists anywhere in
+the port's chain.
+FIX = gate that stamp on the spawning action. ⚠ **VERIFIER CORRECTION: the gate
+is action 29 ONLY, not `0 | 29`.** `CastPlayerFire_65B30` (action 0, EF:63005-09)
+leaves the (10,0) splat's lock at the memset 0 UNCONDITIONALLY; including action
+0 writes a lock retail never writes, and `f146` is both hashed AND a COMPARED
+conformance column (`chase`, conformance.rs:517 → mgc-conform/src/verify.rs:883).
+⚠ Second acquisition source the spec must respect: `sub_68940` runs FIRST
+(EF:63093) and can lock a class-10 **model-78 MAGIC MINE** from `dword_38535`;
+on success `sub_67CB0` never runs.
+Corpus: **zero `chase` deviation rows across all six banked MC2 takes** — no
+evidence against the change, and no cover for it either; it must introduce none.
+Damage is untouched (`sub_33C00` EF:24700-14, 70 per satellite from the
+satellite's own quad), matching the player's "damage seems identical".
+⚠ Trace-bank note: `docs/traces/mc2-class10-m76-fire-spheres.md` §7 concluded
+"remc2 under-transcribes a struck-write". That is **superseded as the
+explanation but NOT disproven** — remc1's equivalent worker
+`sub_52ED0_53210` (:63188-63210) really does carry a struck-write.
+⭐ Latent divergence found in passing: `mc2_castle_extents_ent`
+(mc2/castle.rs:416-424) never writes f78, where retail's `SetShiftByCastle_49EC0`
+writes `yaw = 0` explicitly.
+
+## C — CLASSIC FIRE PAINTS UNDER THE TREE (BANKED — HALF 2 NEEDS A RULING)
+Two independent halves; the first is small and safe, the second is not.
+
+**HALF 1 (safe, retail-literal): the missing IGNITION RE-LINK.** At tree
+ignition retail re-links the TREE to the head of its tile chain —
+remc1 `sub_41CC0_42000` (:52460, sole call :57698) / remc2 `sub_57D40`
+(EF:40306, sole call EF:62443); MC1HW identical (remc1hw :48510 / :53754). Both
+are unlink+link with the tree's OWN position, so nothing moves. The sprite pass
+walks head→tail and is a pure painter with **no z-buffer at all**, so the OLDEST
+member paints LAST = on top. The flame was head-linked one instruction earlier;
+re-heading the tree puts the flame behind it in the walk, so the flame paints
+after = in front. The port never relinks (mc1/combat.rs:3807-3820,
+mc2/scenery.rs:173-191 both end at `tick70 = 1`; `move_relink` no-ops within a
+tile and `link` early-returns on `flags & 4`).
+Half 1 moves hashed state (`next20`/`prev22` are `Ent` fields) but changes NO
+behaviour — verified: the ignition branch clears the tree's hittable bit
+(MC1 :57694 / MC2 EF:62439), so the re-headed tree satisfies no scan predicate,
+and a relink preserves relative order for every other member. The golden re-pin
+is pure bookkeeping. Suites to expect: state_hash.rs, sim_state_hash.rs, plus
+snapshot/frankenstein/mc2_slice/mc2_cave/mc2_rivals if their window contains an
+ignition.
+
+**HALF 2 — ⚖ PLAYER-RULED 2026-08-11: LAND THE PERFECTLY FAITHFUL RETAIL
+VERSION.** The player was shown that reproducing the painter order re-rules
+co-tile ordering for EVERY sprite pair in both games (a creature that walks into
+a tree's tile becomes the chain head and the tree then covers it) and ruled for
+retail fidelity anyway. So BOTH halves land, there is NO opt-out toggle and NO
+DEVIATIONS entry — this is the faithful default. The verifier corrections below
+still bind; they are about the proposed IMPLEMENTATION, not the ruling.
+**The mechanism:**
+The port keys billboard depth to the anchor TILE (billboard.wgsl:106-111
+`floor(inst.pos.xz)+0.5`, force-written :176), so two sprites on one tile get
+bit-identical depth; the opaque pipeline (`depth_write_enabled: true`,
+`depth_compare: Less`, mgc-render/src/lib.rs:2554-55) resolves the tie by
+submission order — one instanced draw in buffer order (lib.rs:5571-74) = pool
+order. So even with Half 1 the outcome is pool-allocation luck unless the
+painter order is reproduced.
+⚠ VERIFIER CORRECTIONS — the dig's proposal does not survive as written:
+- `LivePose` has no `Default` and THREE construction sites (world.rs:1570,
+  mgc-app/src/lib.rs:9170, mgc-app/src/entities.rs:2426) — the spec names one.
+- The BLEND pipeline does **not** write depth (lib.rs:2601), so translucent-vs-
+  translucent order is decided by the back-to-front sort on RAW plan distance
+  (lib.rs:4506-12); a depth epsilon does nothing there.
+- An ABSOLUTE chain-hop rank is wrong: the burning tree's tile continuously
+  gains/loses (10,13) smoke puffs for the whole 130..189-tick burn, so the
+  proposed 64 cap is actually reached and clamping restores the exact tie. It
+  must be a RELATIVE rank over the co-tile DRAWABLE set.
+- Retail's chain order is LINK RECENCY, not allocation age, so Half 2 re-rules
+  co-tile ordering for EVERY sprite pair in both games — a creature that walks
+  into a tree's tile becomes the head and the tree then covers it. That IS what
+  retail did at 320x200 with no z-buffer, but it is a broad, immediately visible
+  presentation change well beyond the reported bug. **Ask the player first, and
+  it probably wants a DEVIATIONS entry either way.**
+- The comparison/replay billboard paths (`push_billboard` entities.rs:1841,
+  `ghost_billboard` entities.rs:1790-1800) keep the bug under the proposal.
+- Presentation-only, so there is NO guard: per the visual-only triage doctrine,
+  name every consumer (opaque pass, blend pass, the mirror pass at
+  billboard.wgsl:91-94, and the `conceal` alpha demotion at lib.rs:4483-88 which
+  can push an opaque MC2 sprite into the no-depth-write bucket) before landing.
+  Under the player's fidelity ruling this is a "name them and playtest" item,
+  not a reason to hold the change.
+⭐ THE FLAME'S PLACEMENT IS A TWO-PART LAW AND THE PORT ALREADY HAS ALL OF IT —
+⛔ do not "fix" any of it. **Player-explained 2026-08-11, code-confirmed:**
+- BOTH games SIZE the flame from the tree: MC1 `flame.+46 = (3 * tree.+84) >> 2`
+  (:57685-86, ported mc1/combat.rs:3812 — note MC1's home is +46 where MC2's is
+  `word_0x2C_44`, an alias split); MC2 `flame.word_0x2C_44 = (3 * tree.fov) >> 2`
+  (EF:62428-30, ported mc2/scenery.rs:180).
+- MC2 ADDITIONALLY lowers the flame 128 (EF:62429-33, ported
+  mc2/scenery.rs:172) — **because the MC2 tree visibly SHRINKS as it burns**:
+  `sub_64F60` swaps it to the charred sprite at `life < 60` (83→226, 84→227 via
+  `SetHalfSpeedEntity_49DA0`, EF:62471-84, ported mc2/scenery.rs:204-207, and
+  the set-sprite call re-derives the extents). The flame therefore rides the
+  VISIBLE trunk rather than the tree's anchor. MC1 has no such drop and no such
+  shrink — correctly absent from the port's MC1 arm.
+⭐ Consequence, and it usefully narrows the whole lane: the ONLY divergence in
+either game's ignition block is the missing RELINK. Everything else in
+mc1/combat.rs:3795-3820 and mc2/scenery.rs:150-196 reproduces retail line for
+line.
+⭐ OPEN QUESTION FOR THE PLAYER: is this one case or a family? Retail has NO
+relink for fire sharing a tile with a dwelling, a building anchor, a castle stage
+piece or a second tree — each relink function has exactly one call site — so
+retail genuinely draws fire UNDER those, and the port may already match.
+
+# THE MOB-SPEED RUNAWAY (2026-08-11) — ✅ RESOLVED: THE MISSING CHASE-EXIT RESTORES
+
+⭐ **JUMP TO THE END OF THIS SECTION** — everything between here and `RESOLVED
+2026-08-11` is the investigation as it ran, kept for its rulings. The answer is
+that MC1 bounds creature speed with per-model chase ENTRY/EXIT trailers, not
+with a cap, and the port was missing four of them.
+
+⚠⚠ **READ THIS FIRST — THE HEADING BELOW IS SUPERSEDED.** This section was
+written while the report was believed to be VR-only. **The player then observed
+the same runaway on the DESKTOP build.** The mechanism below is UNCHANGED and
+still correct — it is pure integer code, byte-identical between `master` and
+`vr/master`, which is exactly why three of the five verifiers refused to accept
+"VR-only" as explicable and said so. **The corrected reading: the ratchet is the
+bug, and the Android `awake_range = 80` override is only a RATE AMPLIFIER
+(~11x the awake area) that surfaces it in hours instead of sessions.** The fork
+config is therefore a real finding but NOT the cause, and the "PRIMARY fix =
+fork-side config" line below is WRONG — the fix is port-side. The open question
+became: *what bounds this in retail?*, which is being measured against the
+recorded corpus (retail's own creature speed over an 18k-tick take). Everything
+in the KILLED list at the bottom still stands.
+
+## (superseded heading) THE VR MOB-SPEED RUNAWAY — THE ANCIENT BUG, RE-ARMED BY CONFIG
+
+Player report from the VR fork (`vr/master`, Android/Quest): *"some monsters keep
+speeding up throughout the game until they are super fast, well faster than a
+flyer with Accelerate on — never observed outside the VR port."* Dug across five
+independent modalities (accumulator audit / platform math / fork diff /
+archaeology / retail ramp law), each adversarially verified. **SOLVED. Not
+landed — the fix is a decision, see below.**
+
+## THE ANSWER IN ONE LINE
+The port's pack catch-up has no cap of its own; retail's cap **is the awake
+gate**; and the VR fork force-sets `awake_range = 80` on Android, which
+effectively switches that gate off for the whole map.
+
+## THE MECHANISM (survived every attack)
+`crates/mgc-sim/src/mc1/mobs.rs:2419`
+`self.ent[i].f126 = self.ent[l].f126.wrapping_add(self.ent[l].f130);` — a pack
+follower takes the LEADER's speed plus the leader's accel. `f128`, the
+creature's own max speed, is **never consulted as a cap on this path**.
+⭐ **THE CARRIER IS THE PACK *EXIT*, NOT THE JOIN.** Nothing re-baselines `f126`
+when a creature LEAVES a pack: all three break sites (:2369-72 leader chased,
+:2384-87 leader elsewhere, :3059-71 the damage-inbox arm) drop the link and
+return the creature to WANDER with the inflated speed intact, and
+`mob_idle`/`mob_wander`/`mob_chase` never write `f126`. `pack_scan` admits any
+leaderless same-model creature (`f52 == 0`) with **no speed filter**
+(mc1/mobs.rs:826-846; retail's own filter at remc1 :21551 is the same), so an
+inflated ex-follower is a fully legal future LEADER. Each generation adds one
+`f130` permanently, so the POPULATION maximum is monotone non-decreasing and
+unbounded. Cadence is once per `v_26` = 30-40 ticks (mc1/mobs.rs:2354), which is
+why it reads as a slow climb over a session rather than a step change.
+**SCOPE — this is why the player said "SOME monsters":** the ratchet only bites
+families with `f130 != 0`, a PACK slot, and no per-model `f126` restore — worms
+m0/m3, m1, m10, m16. IMMUNE: m2 bees (restore `f126 = f128` on every chase exit,
+:1164-66), m6 kraken (forced 30/tick), m4/m15 guards, m9, m13/m14; m5 and m12
+never reach `mob_pack` at all (dispatch overrides at :3130/:3191).
+
+## WHY VR ONLY — THE ONLY SUCH LEVER IN THE TREE
+`vr/master:crates/mgc-app/src/lib.rs:8653-8666`, inside
+`#[cfg(target_os = "android")] fn parse_args()`:
+```
+args.fog_distance = Option::from(80);
+args.awake_range  = Option::from(80);   // faithful = 24 tiles
+args.pool_slots   = Option::from(5000); // faithful = 1000
+args.thrust       = Some(ThrustModel::Enhanced);
+```
+WANDER's `pack_scan` is AWAKE-GATED (mc1/mobs.rs:1025-30). The faithful wake
+radius is 24 tiles (`awake_gate_sq = 0x240_0000`, chassis.rs:70/81), so on
+desktop a creature more than 24 tiles from the player never enters the
+join/break churn at all — the ratchet barely advances. **80 tiles is 11.1x the
+awake AREA, and on a 128x128 torus that is effectively the whole map awake,
+always**, so every eligible creature churns continuously for the entire level.
+`pool_slots = 5000` compounds it through DENSITY (5x the simultaneous
+same-model population feeding the churn).
+Both are G-class knobs the desktop build refuses silently to treat as faithful
+(it prints "G-class — not a faithful run", lib.rs:989-1014); on Android there is
+no opt-out, because `Config::load` is stubbed to `Self::default()` and the
+forced args are applied after it. Neither commit is in master (verified:
+`git merge-base --is-ancestor <sha> master` → exit 1 for both).
+⭐ **AUTHORING STORY (near-certain):** `fog_distance = 80` sits on the line
+directly above `awake_range = 80` under a `// TODO: Configure this via a menu
+option...`. The intent was plainly *"draw distance 80, so wake what you can
+see"* — entirely reasonable for VR, and the coupling is the accident.
+⭐ The same block forces `thrust = Enhanced`, so the player's own yardstick
+("faster than Accelerate") is already the enhanced mover's boosted ceiling.
+
+## THE ANCIENT BUG THE PLAYER HALF-REMEMBERED IS REAL, AND THIS IS IT
+`docs/archive/ROADMAP-2026-07-19-full.md:7974-88`: *"Runaway worm/bee speed
+(packs gradually accelerating without bound). Two compounding causes, both
+fixed: (1) WANDER's scans are entirely awake-gated in the original (:21514) —
+the agent trace read it as 'awake→wizard ELSE pack', so every distant asleep
+crowd packed up. (2) The pack catch-up at :21814 … the `+=` is a remc1
+maintainer MIS-FIX and porting it verbatim is the runaway."*
+Leg (2) was fixed and STAYED fixed (the port uses MC2's SET form, EF:9482, for
+both games — the `+=` is gone). **Leg (1) is a chassis PARAMETER, not code —
+and the fork turns it off.** So the report is the ancient bug's mechanism,
+re-armed by configuration. The fork author's belief that "the VR port does not
+really touch the sim" is CORRECT and is exactly what made this invisible: the
+whole `mgc-sim` delta over the merge base is **14 lines in
+crates/mgc-sim/src/lib.rs** (the Android `pitch = 0` pose override), and
+`mc1/mobs.rs` is byte-identical. The fork changes the sim's CHASSIS from the
+launcher, which no diff of `crates/mgc-sim` can show.
+
+## FIX — A DECISION, NOT A PATCH
+⚠ REORDERED after the desktop sighting: (2) is now the PRIMARY lane and (1) is a
+worthwhile fork hygiene item that reduces the rate but does not fix the bug.
+1. **(fork hygiene, not the fix):** stop forcing `awake_range = 80` on
+   Android — decouple wake radius from fog/draw distance, which is what the TODO
+   wanted anyway. `pool_slots = 5000` should be reviewed on the same pass (it is
+   a G-class knob). This lowers the rate; it does not remove the ratchet.
+2. **PRIMARY (port-side, NEEDS A PLAYER RULING):** should the catch-up clamp
+   `f126` to the creature's own `f128`? ⚠ **Retail does NOT clamp** — neither
+   remc1 :21814 nor remc2 EF:9482 — so a clamp is a DEVIATION and would want a
+   `docs/DEVIATIONS.md` entry. It is defensible as robustness (it makes the
+   ratchet structurally impossible at any awake_range) but it is not fidelity.
+   The faithful alternative is to re-baseline `f126` at the pack-BREAK sites,
+   which is also not in retail. Ask before landing either.
+
+## ⛔ KILLED BY THE VERIFIERS — DO NOT RE-OPEN
+- **Build-profile / overflow-checks asymmetry.** Dead three ways: MC1's line is
+  `wrapping_add` and cannot panic on any profile; desktop playtesters run
+  `--release` too (.github/workflows/release.yml:42); and the symptom appears at
+  `f126` ~150-400 while i16 overflow is 32767 = 128 tiles/tick, ~400x later.
+- **Self-leader (`f52 == i`) or a cyclic leader graph.** Provably unreachable:
+  every scan admits only `f52 == 0` ROOTS and skips self, so the leader graph is
+  a FOREST and relink is path compression.
+- **Chain DEPTH as the carrier.** Bounded — a merge adds exactly one level and
+  the flatten removes one per follower per `v_26`.
+- **m27 hydra branch retract.** Wrong entry cited, sign backwards (it is a
+  12/tick DECREMENT), and time-bounded to ~11 ticks.
+- **"pool_slots 5000 means slots are never recycled, so inflated f126
+  persists".** Wrong reasoning — recycling only ever touches DEAD entities.
+  `pool_slots` contributes via density, not persistence.
+- **"mob_idle's pack_scan is not awake-gated".** True but irrelevant: `mob_idle`
+  is dead code in MC1 normal play (every ctor spawns in WANDER).
+- **"Bees have no self-heal".** They do — `bee_chase` restores `f126 = f128` on
+  every chase exit.
+- Platform math is NOT implicated: the whole path is integer.
+⭐ Partial natural brake worth knowing: `creature_move` sets `act_life = -1`
+when all four probed headings fail the capability/roughness gates
+(mc1/mobs.rs:717-22, :752-54), so a very fast creature is likelier to cull
+itself on terrain. A brake, not a bound.
+
+## ADDENDUM (2026-08-11, same day): THE CORPUS MEASUREMENT + THE RETAIL READ
+
+**⚖ ANSWER TO "does retail do this too, and is the awake gate what saves it?"
+— retail has the SAME UNBOUNDED MECHANISM, and the corpus shows it does not
+actually run away in a full level.** Both halves matter.
+
+### The retail read (full writer census of remc1, verdict SOUND)
+NOTHING bounds it in retail that the port lacks, for the five named families:
+- `+126` has exactly ONE inflation site in the whole engine — remc1 :21814, the
+  pack catch-up — and retail's transcribed form is `+=`, i.e. it compounds
+  every `v_26` ticks *within a single pack episode*, where the port's SET form
+  advances at most one step per leadership generation. **The port is the more
+  conservative of the two.**
+- `+128` (max speed) and `+130` (accel) are **WRITE-ONCE, ctors only**. No live
+  handler ever writes them, so "max speed" can never cap anything except
+  through an explicit `f126 = f128` restore.
+- ⭐ THE STRUCTURAL QUESTION IS ANSWERED "NO": retail's class-5 mover
+  `sub_196E0` (:21182) passes `actSpeed_126` VERBATIM as the step distance into
+  `sub_41EC0_42200` (:52523-44), which applies it with no clamp and no
+  re-derivation, and the behaviour row carries turn rate / altitude / roughness
+  / terrain mask / cadence / range / cone and **no speed field at all**. An
+  inflated actSpeed is exactly as load-bearing in retail as in the port.
+- The state setter (`sub_424F0_42830` :52757-60 is one assignment), the wake
+  pass (:64266-64371 writes only +58/+59/+48), the damage-inbox prologue and the
+  ctors contain no re-baseline the port lacks. MC1 has no respawner for these
+  families, so "they die before it matters" is dead too.
+- The behaviour table (:5240-71) is byte-identical to the port's
+  `mc1/behavior.rs:81-112`, so cadence/range/cone are NOT the divergence.
+
+### The corpus measurement (mc1l5, 18,633 ticks, `want` = RETAIL / `got` = PORT)
+722 class-5 `speed` rows; **128 of them are slot-desync artifacts and were
+excluded** (e.g. t=4484 slot 813: retail holds a class-5 m9 with life 1000, the
+port a class-9 m1 with life 9 — every field differs and its "speed 464" is a
+projectile's). The clean 594:
+
+| model | n | retail max | port max |
+|---|---|---|---|
+| 2 (bee) | 12 | 70 | **210** (= 3x70) and **−30** |
+| 4 | 22 | 30 | 30 |
+| 7 | 22 | 20 | **23** |
+| 9 | 538 | 20 | 20 |
+
+- **RETAIL'S CREATURE SPEEDS DO NOT CLIMB.** Across a full level they sit at
+  their spawn values (20/30/70). Whatever holds retail together, it holds.
+- **m2's 210 / −30 are the bee's own lunge and recoil** (`sub_1B3C0` :22347
+  `f126 = 3*f128`, :22359 `f126 = -f130`) — legitimate values at the WRONG
+  TICK. That is a chase-phase divergence, not a ratchet.
+- ⭐ **m7 at 23 vs retail 20 is the missing restore, MEASURED** — exactly one
+  `f130` step (m7's accel = 3) above the max it should have been restored to.
+
+### ⚠ WHAT THE CORPUS STRUCTURALLY CANNOT SHOW
+`verify-deltas` re-imports retail state at EVERY pair and ticks ONE step, so it
+can prove the single-tick math and can prove retail does not ramp — but it
+**cannot observe a cumulative free-play ratchet by construction**. The same
+limit bit the mc2l1 tower-damage lane. So the ratchet is neither confirmed nor
+refuted by this measurement; what IS confirmed is that retail does not ramp and
+that the port has a concrete, measured speed-restore gap.
+
+### THE ONE REAL PORT DEFECT FOUND (faithful fix, no ruling needed)
+**m7 has no per-model CHASE handler in the port.** `mc1/mobs.rs:3182`
+(`(_, 2) => self.mob_chase(...)`) routes model 7 through the shared chase, so
+the port has none of retail's `sub_1C960` (:23319-55, dispatch slot 0x2C, twin
+confirmed at remc1hw :21876-912), which carries THREE speed writes:
+`:23330-31` restore `f126 = f128` when the 30-tick dug-in timer expires;
+`:23342-43` set `f126 = f130` (=3) on entering the dug-in form; **`:23352-53`
+restore `f126 = f128` on ANY chase exit.** m7 therefore satisfies every ratchet
+precondition in the port while retail bounds it. **Add m7 to the affected list
+and port `sub_1C960` — this is a straight faithfulness fix and the corpus
+already scores it (23 vs 20).**
+
+### A SECOND, OPPOSITE-DIRECTION FIDELITY BREAK (banked)
+`mc1/mobs.rs:3062-3070`, the PACK arm of the damage inbox, clears only the
+FOLLOWER's `f52`; retail's `sub_1A390` (:21758 + :21762) clears **both** the
+leader's and the follower's. The port's stale leader `f52` makes that leader
+invisible to `pack_scan` (which rejects `f52 != 0`), so the port forms FEWER
+packs on this path. It cannot be the amplifier — but it is a real break, and it
+means port-vs-retail pack churn is not comparable until it is fixed.
+
+### CORRECTION TO THE SECTION ABOVE
+There is **no** `docs/DEVIATIONS.md` entry for the pack catch-up. DEVIATIONS.md
+:135 only name-drops :21814 ("like :21814") inside the `combat.rs` mail-write
+entry. Any clamp/re-baseline fix still needs a NEW entry — and note the corpus
+now shows a clamp WOULD be visible: retail carries m2 `f126` = 95 against
+`f128` = 70 for 62 creature-ticks in this very take, so `.min(f128)` at the
+catch-up would break conforming rows.
+
+## ⚖ RESOLUTION (2026-08-11): THE `+=` IS THE ARTIFACT — OUR SET FORM IS FAITHFUL
+Player ruled "always be perfectly faithful", and proposed adopting remc1's `+=`
+on the reasoning that chase-exit restores bound it anyway. **The reasoning is
+sound; the premise was wrong, and the action inverts.**
+
+BOTH remc1 :21813-14 AND remc1hw :20370-71 carry the SAME pair of lines:
+```c
+//v10 = v3x->acceleration_29925_130 + v3x->actSpeed_29921_126;
+a1x->actSpeed_29921_126 += v3x->acceleration_29925_130;
+```
+The COMMENTED line is the decompiler's own output and takes BOTH operands from
+`v3x` — the LEADER. That is the SET form, and it is byte-for-byte what the port
+does (`mc1/mobs.rs:2419` `f126 = leader.f126 + leader.f130`). The LIVE line
+reads the FOLLOWER's own speed and is not equivalent.
+⭐ remc1 and remc1hw share a maintainer, so their agreement is ONE hand edit
+applied twice — **not** independent corroboration. The independent corroboration
+runs the other way: **remc2 EF:9482, a different transcription lineage, carries
+the SET form** and matches the commented-out MC1 output exactly. Three
+machine-derived sources agree; only the hand edit dissents.
+⇒ The archived "remc1 maintainer MIS-FIX" ruling
+(docs/archive/ROADMAP-2026-07-19-full.md:7974-88) is **CONFIRMED**. The port's
+line is already the faithful one. ⛔ **DO NOT adopt the `+=`** — it would import
+a decompiler artifact and make us LESS faithful. This is
+[[decompile-corroboration-across-binaries]] working exactly as designed: a
+commented-out original beside a live rewrite proves the rewrite is human.
+
+### NEXT SESSION, FIRST THING (player-directed) — revised order
+1. ✅ **NO CHANGE to `mc1/mobs.rs:2419`** — already faithful. Add a doc note
+   citing the commented-out originals so nobody "fixes" it toward the `+=`.
+2. ⭐ **PORT m7's `sub_1C960`** (remc1 :23319-55 / remc1hw :21876-912): its
+   three speed writes, above all the chase-exit restore `f126 = f128` at
+   :23352-53. `mc1/mobs.rs:3182` currently routes model 7 through the shared
+   `mob_chase`. Corpus already scores it: mc1l5 shows port 23 vs retail 20.
+3. **Clear the LEADER's f52 too** in the damage-inbox PACK arm
+   (`mc1/mobs.rs:3062-3070`) — retail clears both (:21758 + :21762). Real
+   fidelity break; currently SUPPRESSES joins, so port-vs-retail pack churn is
+   not comparable until it lands.
+4. THEN re-assess the ratchet. With the chase-exit restores in place the
+   player's boundedness argument may simply hold — every chase ends, and retail
+   re-baselines on exit. Re-measure before proposing any clamp (a clamp remains
+   a DEVIATION and would break conforming rows — retail carries m2 f126 = 95
+   against f128 = 70 in this very take).
+
+## ⚖⚖ THE RECORDING RULES (2026-08-11): NO RATCHET IN RETAIL, AND `+=` IS OUT
+Player: *"the deviation could just be remc1, not retail, and we have the
+recording to make that ruling."* Correct, and it does.
+
+**UNBIASED SAMPLES** (`dump-state recordings/mc1l5.mgcr <t> $(seq 1 400)`, every
+LIVE class-5 entity, comparing its own `f126` against its own `f128`):
+
+| tick | live class-5 | above own f128 |
+|---|---|---|
+| 5,000 | 146 | **0** |
+| 12,000 | 72 | **1** — slot 332, m2, f126 = 210 = exactly 3 x f128 (the lunge) |
+| 17,000 | 40 | **0** |
+
+Across 18,633 ticks the ONLY creature ever above its own max speed is a bee
+mid-lunge at exactly 3x (`sub_1B3C0` :22347), a deliberate bounded state that is
+restored. **There is no speed ratchet in retail at any point in the take.**
+
+⇒ **remc1's `+=` is EMPIRICALLY RULED OUT.** Under it a follower accumulates
+`+f130` every `v_26` (30-40) ticks for as long as it follows — hundreds of steps
+over this take — and the recording would be full of inflated creatures. It
+contains none. Recorded gameplay outranks the decompile, so the `+=` is not the
+original's behaviour whatever its provenance. ⛔ DO NOT PORT IT. This is now
+settled on EVIDENCE, not on the artifact inference.
+
+### ⚠ BUT THE SET FORM IS NOT VINDICATED EITHER — THE QUESTION HAS MOVED
+At t=5000 a 15-deep `f52` chain of m0 worms sits at `f126` = 30 for EVERY
+member, with `f128` = 80 and `f130` = 16. The SET form predicts a follower at
+30 + 16 = 46. They are all at 30. **So in retail the catch-up essentially never
+fires, in either form.** The question is no longer "which arithmetic?" but
+**"why does ours fire when retail's does not?"** — i.e. the GATING/CHURN lane,
+not the formula.
+
+### ⚠⚠ CONFOUND TO RESOLVE FIRST — `f52` IS OVERLOADED
+For worms, `+52`/`+54` are the MULTIPART BODY-SEGMENT links (features.rs `Ent`
+doc: "+52 = toward the head, +54 = toward the tail"), NOT pack links. The deep
+chains sampled above are very likely worm BODIES. **Whether the pack arm and the
+segment chain share `f52`, and how retail tells them apart, must be settled
+before any pack-churn analysis means what it appears to mean.** Everything in
+the churn lane is provisional until then.
+
+### CORRECTION TO THE ADDENDUM ABOVE
+The "retail's creature speeds do not climb — they sit at spawn values" table was
+**BIASED**: `verify-deltas` TSV rows exist only where retail and port DIFFER,
+which is exactly where retail restores and the port does not. Retail DOES reach
+210. Tracked directly: slot 281 (m2) runs `f126` = 210 at t=730 and t=731, then
+retail restores to 70 at t=732 while the port holds 210. The correct reading of
+those rows is **"the port misses retail's restores"**, not "the port inflates".
+Column semantics confirmed at crates/mgc-conform/src/verify.rs:817
+(`"{}: retail {} port {}", d.field, d.want, d.got`) — `want` = RETAIL.
+
+### REVISED PLAN (supersedes the previous "next session" list)
+1. ⛔ NO CHANGE to `mc1/mobs.rs:2419` — neither to the `+=` (ruled out by the
+   recording) nor otherwise. Add the doc note.
+2. **Settle the `f52` overload** (pack link vs multipart segment link) — this
+   gates everything else.
+3. **Port m7's `sub_1C960`** — still the clearest single defect: the corpus
+   scores it (port 23 vs retail 20) and it is a missing RESTORE, which is the
+   same family of defect as the m2 rows.
+4. **Audit the port's RESTORES generally.** The corrected reading says our real
+   divergence is failing to restore where retail restores — m2 at t=732 and m7
+   both. That is a different and more tractable bug class than the ratchet.
+5. Only then re-open the ratchet, with the churn/gating question, not the
+   formula.
+
+---
+
+## ✅ RESOLVED 2026-08-11 — IT WAS THE RESTORES, AND THEY ARE LANDED
+
+The revised plan's step 4 ("audit the port's RESTORES generally") turned out to
+be the whole answer. **MC1 does not bound creature speed with a clamp. It bounds
+it with per-model ENTRY and EXIT trailers hung off the individual state
+handlers.** `+128`/`+130` are write-once in the ctors, the mover passes `+126`
+verbatim (`sub_196E0` :21182 → `sub_41EC0` :52523), and the pack catch-up
+(`sub_1A390` :21814) is the only writer that can push `+126` past a creature's
+own `+128`. What ends that inflation is the exit trailer of whatever state the
+creature leaves next. Miss a trailer and that one creature keeps the inflated
+speed for the rest of the level — which is exactly the player's *"some
+monsters"*.
+
+### THE AUDIT — every `+126` writer in the MC1 engine, against the port
+
+| retail site | what it does | port before | now |
+|---|---|---|---|
+| `sub_1A390` :21814 | pack catch-up (the only inflater) | ✓ SET form | unchanged, ⛔ do not clamp |
+| `sub_1B3C0` :22347/:22359/:22366 | m2 lunge / recoil / chase-exit | ✓ | ✓ + death tick |
+| `sub_1BC50` :22753 | m4 arm, speed 0 | ✗ one tick late, inside the chase | `militia_arm`, promotion tick |
+| `sub_1BCE0` :22768 | **m4 chase-exit disarm, `+126 = +128`** | ⛔ **MISSING ENTIRELY** | `militia_disarm` |
+| `sub_1C4A0`/`sub_1C4F0`/`sub_1C880` :23116/:23146/:23276 | m6 pin 30 | ✓ value, ✗ ORDER (all pre-handler) | chase pre-, wander/pack post- |
+| `sub_1C960` :23331/:23343/:23353 | **m7 plant / un-plant / chase-exit** | ⛔ **MISSING ENTIRELY** (`(_, 2) => mob_chase`) | `m7_chase` |
+| `sub_1CE30` :23551 | m8 griffon cooldown restore | ✓ | ✓ |
+| `sub_1DCD0` :24247 | **m9 chase-entry, speed 0 (rooted)** | ⛔ MISSING | `m9_enter_chase` |
+| `sub_1DD50` :24257 | m9 chase-exit restore | ✗ one tick late, in state 55, with the wrong `+26` (400 vs 50) | on the chase-exit tick |
+| `sub_1F640`/`sub_1FAC0` :25401/:25438 etc. | m13/m14 feeder home speeds | ✓ | ✓ |
+| `sub_20410`/`sub_20450` :25891/:25901 | m15 guard enter/exit | ✓ (the model the port got right — the template) | ✓ + death tick |
+
+### THE THREE LAWS THAT FELL OUT
+
+1. **ENTRY trailers run on the PROMOTION tick**, from the *non-chase* handler
+   (`sub_1B5A0` :22432 / `sub_1B5D0` :22690 / `sub_1BBE0` :22725 for m4; the
+   `sub_1C900`/`sub_1CA00` `+26 = 1` pair for m7; :23922/:24220 for m9), never
+   from the chase's own first tick. Coverage is NOT uniform — m7's idle slot
+   `sub_1C8F0` and m15's pack slot `sub_203E0` are bare shared handlers with no
+   trailer at all, which is why `chase_entry_trailer` is keyed on (model, role).
+2. **EXIT trailers run on the tick the chase breaks**, for ANY reason —
+   including **the creature's own DEATH**. Easy to miss: retail's damage
+   prologue lives *inside* each handler and `goto`s the trailer instead of
+   returning (`sub_1DA60` :24184 `goto LABEL_31`; the others reach it through
+   `sub_1A120`'s plain `return v15`). The port's shared inbox returned before
+   dispatch, so no dying creature ever restored. The recording shows it plainly:
+   **mc1l5 slot 348 goes `act_life = -1` at t=6241 and is STILL restored to
+   `+126 = 20`, type 201, filter 255 at t=6242.**
+3. **The shared chase's target-lost test is `+12 < 0 || (+17 & 4)`** (:21656) —
+   dead OR **destroy-flagged**. The port tested `class64 == 0` and missed the
+   0x400 half, so a chaser whose target was blown up kept chasing the corpse
+   forever and never reached its trailer.
+
+Two riders the audit surfaced, both landed because the trailers are useless
+without them: m4's chase breaks to `base+1` (25), not `base` — `sub_1A120`'s own
+`a2 + 1` (:21657/:21661), so state 24 is the shared idle + arm (`sub_1B5A0`),
+not a synthetic "disarm slot"; and m9's chase keeps the CASTLE-extent widening
+on its drop-out radius (`sub_1DA60` :24201-02, `+80 + v_28` — the same radius
+the mound's castle hunt acquires on at :23770), without which a mound acquired a
+castle its own drop-out test then rejected and flapped chase/hidden every `v_26`.
+
+### MEASURED — mc1l5, 23,679 pairs, `want` = RETAIL
+
+Creature (`class 5`) `speed` deviation rows: **722 → 148, −79%.**
+
+| model | before | after | what closed |
+|---|---|---|---|
+| m2 bee | 12 | 2 | the lunge/recoil rows were the DEATH-tick restore, not a chase phase bug |
+| m4 militia | 83 | 7 | the missing disarm + the one-tick-late arm |
+| m7 | 23 | 1 | `sub_1C960`, including the 3 rows of `port 23 vs retail 20` = one `+130` step of pack catch-up left standing |
+| m9 mound | 600 | 136 | entry/exit trailers + the castle-extent drop-out |
+| m15 guard | 1 | 0 | death tick |
+
+Whole-take: conforming pairs **1427 → 1436**, missing-in-port entities **3828 →
+3376**. The other three MC1 takes all improved or held (mc1l0 −6 field rows,
+mc1l32 −1190, mc1hwl0 +2 conforming / −225 field rows); all 10 fixture suites
+stay green with 0 regressions and 0 drifts.
+
+⚠ **ONE HONEST REGRESSION, and it is a pre-existing bug now UNMASKED.** mc1l5's
+class-9 model-13 (bolt) field rows rise ~1600 because the mound now *stays* in
+its chase and fires the bolts retail fires, at slots that desync. The residual
+94 m9 `speed` rows all have the same shape: the port promotes the mound to CHASE
+where retail declines — `chase: retail 0 port 650` at t=4804 is the port's m9
+**wizard scan** (`sub_1D060` :23796-23833) acquiring the human when retail does
+not. That row is present in the BASE take too, unchanged: the over-acquisition
+predates this work and was previously invisible because the mound flapped
+straight back out. ⭐ **NEXT DIG in this lane = m9's state-55 wizard scan.**
+
+### ⛔ STILL RULED — DO NOT RE-OPEN
+The `+=` (empirically ruled out by the recording, see above) and any `.min(+128)`
+clamp at the catch-up: retail carries m2 `+126` = 95 against `+128` = 70 for 62
+creature-ticks in this take alone, so a clamp breaks conforming rows. Both are
+pinned by `pack_catch_up_is_the_set_form_and_stays_uncapped`, which passes both
+BEFORE and AFTER this work by design — it is the regression guard, not a fix
+witness.
+
+### FIXTURES
+`crates/mgc-sim/src/engine/features.rs` (test module), seven tests; six fail
+against the pre-fix `mobs.rs` and pass after (non-vacuity checked by swapping
+the file), the seventh is the ⛔ guard above:
+`m7_plants_on_the_hit_and_restores_on_the_timer`,
+`m7_chase_exit_restores_a_pack_inflated_speed`,
+`pack_catch_up_is_the_set_form_and_stays_uncapped`,
+`militia_arms_on_promotion_and_restores_its_walk_speed_on_exit`,
+`mound_enters_the_chase_rooted_and_restores_on_exit`,
+`chase_exit_trailers_run_on_the_death_tick`,
+`kraken_pack_tick_ends_at_its_pinned_speed`.
+
+### STILL OPEN FROM THE ORIGINAL PLAN
+- The `f52` overload (pack link vs multipart segment link) is **not** settled;
+  it still gates any pack-CHURN analysis. It did not gate this work, which is
+  about restores rather than churn.
+- `mc1/mobs.rs`'s damage-inbox PACK arm still clears only the FOLLOWER's `+52`;
+  retail clears BOTH (:21758 + :21762), so the port forms fewer packs there.
+- The VR fork's `awake_range = 80` / `pool_slots = 5000` overrides
+  (`vr/master:crates/mgc-app/src/lib.rs:8653-66`) remain a real rate amplifier
+  and worth fixing as hygiene, but they are not the cause.
+- m7's wander slot `sub_1C900` (:23300-10) carries a per-`v_26` LIFE restore
+  the port does not have; the decompile of it is mangled (`v1 = maxLife >> 6 >
+  maxLife` is always 0, leaving a literal FULL heal) and the HW twin is
+  identical, so it needs a ruling before porting. Speed lane only here.
+- m8's `sub_1CE30` fires sound 38 and refreshes the victim's `+528` on the
+  connecting attack (:23555-60); the port has the cadence screech but not the
+  attack-gated pair. Now trivially reachable — `mob_chase` returns the thunk
+  verdict.
