@@ -248,6 +248,7 @@ impl InputActions {
         is_mc2: bool,
         grabbed: bool,
         consume_click: bool,
+        enhanced: bool,
     ) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
 
@@ -387,25 +388,24 @@ impl InputActions {
                 }
             };
             if !self.last_thumbstick_right_click && pressed(&self.thumbstick_right_click) {
-                if self.right_spell == 3 {
-                    self.right_spell = 16; // castle spell
+                if self.right_spell == 1 {
+                    self.right_spell = 2; // castle spell
                 } else {
-                    self.right_spell = 3; // possess spell
+                    self.right_spell = 1; // possess spell
                 }
                 mc2_select = Some((self.right_spell, 0, 1));
             }
             if !self.last_thumbstick_left_click && pressed(&self.thumbstick_left_click) {
                 if self.left_spell == 0 {
-                    self.left_spell = 15; // Lightning
-                } else if self.left_spell == 15 {
-                    self.left_spell = 7 // Meteor
+                    self.left_spell = 7; // Lightning
+                } else if self.left_spell == 7 {
+                    self.left_spell = 9 // Meteor
                 } else {
                     self.left_spell = 0; // Fireball
                 }
                 mc2_select = Some((self.left_spell, 0, 0));
             }
-
-
+            
         } else {
             equip_left = if !self.last_squeeze_left && value(&self.squeeze_left) > 0.5 {
                 self.left_spell = next_spell(self.left_spell);
@@ -489,8 +489,8 @@ impl InputActions {
         self.last_btn_b_click = pressed(&self.btn_b);
 
         FlightInput {
-            thrust: left.y * 4.0,
-            strafe: left.x * 4.0,
+            thrust: left.y * if enhanced { 4.0 } else { 2.0 },
+            strafe: left.x * if enhanced { 4.0 } else { 2.0 },
             yaw_delta: right.x * YAW_RATE_PER_TICK,
             pitch_delta,
             fire_left: trigger_left_value,

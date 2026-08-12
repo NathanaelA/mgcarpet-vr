@@ -80,9 +80,9 @@ impl XrContext {
         // ── 3. Get the HMD system ────────────────────────────────────────────
         let xr_system = xr_instance.system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)?;
 
-        let environment_blend_mode = xr_instance
+       /* let environment_blend_mode = xr_instance
             .enumerate_environment_blend_modes(xr_system, xr::ViewConfigurationType::PRIMARY_STEREO)
-            .unwrap()[0];
+            .unwrap()[0]; */
 
 
         // ── 4. Validate minimum Vulkan version ───────────────────────────────

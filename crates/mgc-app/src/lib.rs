@@ -426,7 +426,7 @@ impl CampaignRun {
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
                 let save = if let Some(bytes) = record {
-                    let s = saves::Mc1Save::decode(&bytes)
+                    let mut s = saves::Mc1Save::decode(&bytes)
                         .map_err(|e| format!("{} slot {}: {e}", id.tag(), slot_no))?;
                     println!(
                         "campaign {}: slot {} \"{}\" at level {}",
@@ -435,6 +435,15 @@ impl CampaignRun {
                         s.name,
                         s.level
                     );
+                    // With VR, we need to auto-start a new game when we finish...
+                    if IS_ANDROID {
+                        if id == CampaignId::Mc1Hw && s.level >= 25 || id == CampaignId::Mc1 && s.level >= 50 {
+                            s = saves::Mc1Save {
+                                name: "Zanzamar".into(),
+                                ..Default::default()
+                            }
+                        }
+                    }
                     s
                 } else {
                     match slot {
@@ -473,14 +482,22 @@ impl CampaignRun {
                 })
             }
             CampaignId::Mc2 => {
-                let save = if let Some(bytes) = record {
+                let mut save = if let Some(bytes) = record {
                     let s = saves::Mc2Save::decode(&bytes)
                         .map_err(|e| format!("mc2 slot {}: {e}", slot_no))?;
                     println!(
                         "campaign mc2: slot {} \"{}\" — {} level(s) completed",
                         slot_no, s.label, s.levels_completed
                     );
-                    s
+                    if IS_ANDROID && s.levels_completed >= 25 {
+                        saves::Mc2Save {
+                            label: "Zanzamar".into(),
+                            player_name: "Zanzamar".into(),
+                            ..Default::default()
+                        }
+                    } else {
+                        s
+                    }
                 } else {
                     match slot {
                         Some(_) => println!("campaign mc2: new game (slot {slot_no})"),
@@ -4756,7 +4773,7 @@ impl App {
                     let castable = w.mc2_book_view().castable;
                     let mut cast = [false; 26];
                     for i in 0..26 {
-                        cast[i] = castable[0][i];
+                        cast[i] = castable[i][0];
                     }
                     (w.mc2_book_view().owned, cast)
                 } else {
@@ -4775,6 +4792,8 @@ impl App {
             };
         }
 
+        let in_pregame_screen = self.screen == Screen::PreGameMenu;
+
         // We have to reset grabbed if we are on the book/map view (not the MC2 main map screen).
         let in_bookview = if let Some(r) = &mut self.renderer {
             let on = r.map_view();
@@ -4786,8 +4805,8 @@ impl App {
         let mut in_panel = false;
         // Since our state is handled a bit differently than the original system as we still need inputs
         // We set a flag if we are in a panel in the game screen
-        if in_bookview || self.paused {
-           // grabbed = true;
+        if in_bookview || self.paused || in_pregame_screen {
+            // grabbed = true;
             in_panel = true;
         }
 
@@ -4811,73 +4830,83 @@ impl App {
             is_mc2,
             grabbed,
             in_panel,
+            self.cfg.gameplay.enhancement.vr_enhancement,
         );
         let pointer = *self.input.as_ref().unwrap().pointer();
         self.pointer_beam = pointer.beam;
 
         if !grabbed || in_panel {
             if let Some((px, py)) = pointer.screen_pos {
-                self.cursor = (px , py);
+                self.cursor = (px, py);
             }
 
-            if !is_mc2 {
-                if input.fire_right || input.fire_left {
-
+            if input.fire_right || input.fire_left {
+                if in_pregame_screen {
+                    if let Some(m) = &mut self.pre_game_menu {
+                        m.click(screen_size, self.cursor);
+                    }
+                } else if self.screen == Screen::Movie {
+                    // Either fire button skips the movie.
+                    if let Some(m) = &mut self.movie {
+                        m.skip();
+                        return FlightInput::default();
+                    }
+                } else if !is_mc2 {
                     if self.paused && input.fire_right {
                         // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
                         // If the mini-menu is open, it handles and return true
-                       if !self.mini_click(event_loop) {
-                           // If the mini-menu did not handle the click, we check if the options menu is open and handle it.
-                           if self.menu.is_some() {
-                               // The options menu owns the pointer while open.
-                               let size = self.view_size();
-                               if let Some(assets) = ui_assets!(self) {
-                                   let st = self.menu.as_ref().unwrap();
-                                   match menu::hit_test(
-                                       assets,
-                                       &self.specs,
-                                       st,
-                                       size.0,
-                                       size.1,
-                                       self.cursor,
-                                   ) {
-                                       menu::Hit::Tab(t) => {
-                                           self.menu.as_mut().unwrap().set_tab(t);
-                                       }
-                                       menu::Hit::ScrollTo(row) => {
-                                           self.menu.as_mut().unwrap().scroll_to(row);
-                                       }
-                                       menu::Hit::Widget(i) => {
-                                           let changed = menu::pointer_apply(
-                                               assets,
-                                               &mut self.cfg,
-                                               &self.specs,
-                                               self.menu.as_mut().unwrap(),
-                                               size.0,
-                                               size.1,
-                                               self.cursor,
-                                               i,
-                                               true,
-                                           );
-                                           let path = self.specs[i].cfg_path;
-                                           if changed {
-                                               self.apply_option(path);
-                                           }
-                                           // Click widgets persist
-                                           // immediately; sliders persist
-                                           // on release (not per motion
-                                           // event).
-                                           if changed && self.menu.as_ref().unwrap().drag.is_none() {
-                                               self.persist_option(&self.specs[i]);
-                                           }
-                                       }
-                                       menu::Hit::None => {}
-                                   }
-                               }
-                           } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
-                               self.persist_option(&self.specs[i]);
-                           }
-                       }
+                        if !self.mini_click(event_loop) {
+                            // If the mini-menu did not handle the click, we check if the options menu is open and handle it.
+                            if self.menu.is_some() {
+                                // The options menu owns the pointer while open.
+                                let size = self.view_size();
+                                if let Some(assets) = ui_assets!(self) {
+                                    let st = self.menu.as_ref().unwrap();
+                                    match menu::hit_test(
+                                        assets,
+                                        &self.specs,
+                                        st,
+                                        size.0,
+                                        size.1,
+                                        self.cursor,
+                                    ) {
+                                        menu::Hit::Tab(t) => {
+                                            self.menu.as_mut().unwrap().set_tab(t);
+                                        }
+                                        menu::Hit::ScrollTo(row) => {
+                                            self.menu.as_mut().unwrap().scroll_to(row);
+                                        }
+                                        menu::Hit::Widget(i) => {
+                                            let changed = menu::pointer_apply(
+                                                assets,
+                                                &mut self.cfg,
+                                                &self.specs,
+                                                self.menu.as_mut().unwrap(),
+                                                size.0,
+                                                size.1,
+                                                self.cursor,
+                                                i,
+                                                true,
+                                            );
+                                            let path = self.specs[i].cfg_path;
+                                            if changed {
+                                                self.apply_option(path);
+                                            }
+                                            // Click widgets persist
+                                            // immediately; sliders persist
+                                            // on release (not per motion
+                                            // event).
+                                            if changed && self.menu.as_ref().unwrap().drag.is_none() {
+                                                self.persist_option(&self.specs[i]);
+                                            }
+                                        }
+                                        menu::Hit::None => {}
+                                    }
+                                }
+                            } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
+                                self.persist_option(&self.specs[i]);
+                            }
+                        }
                         return FlightInput::default();
                     } else if self.screen == Screen::Movie {
                         // Either fire button skips the movie.
@@ -4895,7 +4924,7 @@ impl App {
                             .unwrap_or([false; 24]);
                         if let Some(spell) = self.hovered {
                             if owned[spell.0 as usize] {
-                                let flight_input : FlightInput = if input.fire_right {
+                                let flight_input: FlightInput = if input.fire_right {
                                     FlightInput {
                                         equip_right: Some(mgc_sim::mc1::spells::SpellId(spell.0)),
                                         ..FlightInput::default()
@@ -4917,22 +4946,43 @@ impl App {
                             }
                         }
                     } else if input.fire_right {
-                      // The normal main menu pointing is on the right-hand controller, so we only allow the right click to trigger menu items.
-                      let size = self.view_size();
+                        // The normal main menu pointing is on the right-hand controller, so we only allow the right click to trigger menu items.
+                        let size = self.view_size();
                         if let Some(m) = &mut self.mc1menu {
                             m.click(size, self.cursor);
                         }
                     }
+                } else {
+                    // MC2
+                     if self.screen == Screen::Menu {
+                         let size = self.view_size();
+                         let cursor = self.cursor;
+                         let _request = self.mainmenu.as_mut().and_then(|m| m.click(size, cursor));
+                     } else if self.screen == Screen::Map {
+                         let size = self.view_size();
+                         let cursor = self.cursor;
+                         if let (Some(wm), Some(save)) = (
+                             &mut self.worldmap,
+                             self.campaign.as_ref().and_then(|c| c.save.mc2()),
+                         ) {
+                             wm.click(save, size, cursor);
+                         }
+                     }
+
+
                 }
             }
 
-            if !in_panel {
+            // If we are in the pregame screen or not  in a panel we want to swallow all input
+            // Otherwise we want to fall thru because if they are in a panel we want the menu button to close the panel
+            if !in_panel || in_pregame_screen {
                 return FlightInput::default();
             }
         }
 
+
         if input.extra_data & 0x02 != 0 {
-            // Pause
+            // Pause / Unpause
             self.toggle_menu();
             return FlightInput::default();
         } else if input.extra_data & 0x01 != 0 && !self.paused {
@@ -10576,12 +10626,15 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     // TODO: Configure this via a menu option...
     let mut args = parse_base_args()?;
-    args.campaign = Some(campaign::CampaignId::Mc1);
+//    args.campaign = Some(campaign::CampaignId::Mc1);
+//    args.show_pregame_menu = false;
+    // args.fog_distance = Option::from(80);
+    // args.awake_range = Option::from(80);
     args.sky = Option::from(false); // At this point, the sky is not supported on Android.
     args.crosshair = Option::from(false);
+    args.fps = Option::from(true);
+    args.vsync = Option::from(false);
     args.slot = Option::from(1);
-    args.fog_distance = Option::from(80);
-    args.awake_range = Option::from(80);
     args.pool_slots = Option::from(5000);
     args.health_bars = Option::from(true);
     args.thrust = Some(config::ThrustModel::Enhanced);
@@ -12645,6 +12698,10 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         if args.set_spellbook.is_some() {
             println!("campaign: set-spellbook ignored — the real campaign carry replaces it");
         }
+    }
+
+    if let Some(s) = args.slot {
+        cfg.gameplay.enhancement.pregame_slot = s;
     }
 
     // In-app replay (docs/RECORDING.md "Consumers"): the take's
