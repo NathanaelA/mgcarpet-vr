@@ -1038,6 +1038,9 @@ pub struct GameplayEnhancement {
     /// SHIFT/ALT+click rotation works either way — so it defaults ON;
     /// disable for a purist input surface.
     pub wheel_spells: bool,
+    /// Unfortunately, we need to save this value somewhere, so we can use it from the pregame menu.
+    pub pregame_slot: usize,
+    pub vr_enhancement: bool,
 }
 
 impl Default for GameplayEnhancement {
@@ -1049,6 +1052,10 @@ impl Default for GameplayEnhancement {
             prune_owned_jars: true,
             // Default-ON: additive input, collides with nothing.
             wheel_spells: true,
+            // Default-OFF: VR enhancements.
+            vr_enhancement: false,
+            // pregame slot.
+            pregame_slot: 0,
         }
     }
 }
