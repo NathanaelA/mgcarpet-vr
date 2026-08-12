@@ -156,6 +156,11 @@ impl PreGameMenu {
             }
         }
         if in_rect(mx, my, START_BTN) {
+            if (self.selected == 0 && !self.has_mc1) || (self.selected == 1 && !self.has_mc1hw) || (self.selected == 2 && !self.has_mc2) {
+                // Do not allow starting unavailable games.  This path can really only occur if NO game data is available -- but we still want to
+                // handle it.
+                return;
+            }
             self.pending = Some(MenuAction::Start {
                 game: GAMES[self.selected].0,
                 enhanced: self.enhanced,
