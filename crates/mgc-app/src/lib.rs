@@ -17,6 +17,7 @@ mod config;
 mod entities;
 mod frontend;
 mod frontend_mc1;
+mod pregamemenu;
 mod menu;
 mod minimenu;
 mod movie;
@@ -350,7 +351,7 @@ impl CampaignRun {
         match id {
             CampaignId::Mc1 | CampaignId::Mc1Hw => {
                 let save = if let Some(bytes) = record {
-                    let s = saves::Mc1Save::decode(&bytes)
+                    let mut s = saves::Mc1Save::decode(&bytes)
                         .map_err(|e| format!("{} slot {}: {e}", id.tag(), slot_no))?;
                     println!(
                         "campaign {}: slot {} \"{}\" at level {}",
@@ -359,6 +360,15 @@ impl CampaignRun {
                         s.name,
                         s.level
                     );
+                    // With VR, we need to auto-start a new game when we finish...
+                    if IS_ANDROID {
+                        if id == CampaignId::Mc1Hw && s.level >= 25 || id == CampaignId::Mc1 && s.level >= 50 {
+                            s = saves::Mc1Save {
+                                name: "Zanzamar".into(),
+                                ..Default::default()
+                            }
+                        }
+                    }
                     s
                 } else {
                     match slot {
@@ -396,14 +406,22 @@ impl CampaignRun {
                 })
             }
             CampaignId::Mc2 => {
-                let save = if let Some(bytes) = record {
+                let mut save = if let Some(bytes) = record {
                     let s = saves::Mc2Save::decode(&bytes)
                         .map_err(|e| format!("mc2 slot {}: {e}", slot_no))?;
                     println!(
                         "campaign mc2: slot {} \"{}\" — {} level(s) completed",
                         slot_no, s.label, s.levels_completed
                     );
-                    s
+                    if IS_ANDROID && s.levels_completed >= 25 {
+                        saves::Mc2Save {
+                            label: "Zanzamar".into(),
+                            player_name: "Zanzamar".into(),
+                            ..Default::default()
+                        }
+                    } else {
+                        s
+                    }
                 } else {
                     match slot {
                         Some(_) => println!("campaign mc2: new game (slot {slot_no})"),
@@ -1612,6 +1630,10 @@ struct Session {
 enum Screen {
     /// Gameplay (`session` is Some).
     Level,
+    /// The pre-game game-selection menu (`pregamemenu`), shown at launch
+    /// when neither `--level` nor `--campaign` was passed. Picks the
+    /// game + Enhanced mode, then hands off to a campaign boot.
+    PreGameMenu,
     /// The campaign main menu (MC2 temple / MC1 globe).
     Menu,
     /// The MC2 world-map hub.
@@ -1655,6 +1677,8 @@ enum UiAtlas {
     FrontendUi,
     /// The FMV player's resolved frame (re-uploaded as it decodes).
     Movie,
+    // Pregame Menu
+    PreGameMenu,
 }
 
 /// The running session, mutably — the gameplay paths' accessor.
@@ -1924,6 +1948,10 @@ struct App {
     mainmenu: Option<frontend::MainMenu>,
     /// The MC1/HW frontend (the 320×200 globe menu).
     mc1menu: Option<frontend_mc1::Mc1Menu>,
+    /// The pre-game game-selection menu — owns the frame while
+    /// `screen == Screen::MainMenu` (a launch with no `--level`/
+    /// `--campaign`), then dropped once a game is chosen.
+    pre_game_menu: Option<pregamemenu::PreGameMenu>,
     /// The running FMV chain — owns the frame while
     /// `screen == Screen::Movie`, and is dropped when it ends.
     movie: Option<movie::MoviePlayer>,
@@ -2001,6 +2029,7 @@ impl App {
         launch: LaunchParams,
         replay_boot: Option<replay::ReplayFile>,
         record_path: Option<PathBuf>,
+        show_pregame_menu: bool,
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
@@ -2142,7 +2171,11 @@ impl App {
             // temple; MC1/HW: the globe menu) with NO level loaded —
             // the frontend is the loader; a session is constructed
             // when the player launches one.
-            screen: if has_campaign {
+            screen: if show_pregame_menu {
+                // No game chosen yet: the pre-game selection menu owns
+                // the app until Start launches a campaign.
+                Screen::PreGameMenu
+            } else if has_campaign {
                 Screen::Menu
             } else {
                 Screen::Level
@@ -2156,6 +2189,7 @@ impl App {
             worldmap: None,
             mainmenu: None,
             mc1menu: None,
+            pre_game_menu: None,
             movie: None,
             // A campaign booting to its menu gets the intro chain; a
             // direct `--level` launch does not, matching retail's own
@@ -2203,6 +2237,9 @@ impl App {
             // blip of menu MIDI under the opening (player-reported).
             // The chain hands back to `enter_main_menu`, which starts
             // it properly.
+            // The pre-game selection menu is silent (no game — hence
+            // no game audio bundle — has been chosen yet).
+            None if app.screen == Screen::PreGameMenu => {}
             None if !app.boot_intro => app.frontend_music(),
             None => {}
         }
@@ -2863,6 +2900,8 @@ impl App {
                 }
                 // A movie owns the whole screen and takes no pointer.
                 Screen::Movie => {}
+                // The pre-game selection menu is never paused.
+                Screen::PreGameMenu => {}
             }
         }
         // Retail pause suspends ALL sound; resumed sounds pick up
@@ -3758,7 +3797,7 @@ impl App {
                     let castable = w.mc2_book_view().castable;
                     let mut cast = [false; 26];
                     for i in 0..26 {
-                        cast[i] = castable[0][i];
+                        cast[i] = castable[i][0];
                     }
                     (w.mc2_book_view().owned, cast)
                 } else {
@@ -3777,6 +3816,8 @@ impl App {
             };
         }
 
+        let in_pregame_screen = self.screen == Screen::PreGameMenu;
+
         // We have to reset grabbed if we are on the book/map view (not the MC2 main map screen).
         let in_bookview = if let Some(r) = &mut self.renderer {
             let on = r.map_view();
@@ -3788,8 +3829,8 @@ impl App {
         let mut in_panel = false;
         // Since our state is handled a bit differently than the original system as we still need inputs
         // We set a flag if we are in a panel in the game screen
-        if in_bookview || self.paused {
-           // grabbed = true;
+        if in_bookview || self.paused || in_pregame_screen {
+            // grabbed = true;
             in_panel = true;
         }
 
@@ -3813,80 +3854,84 @@ impl App {
             is_mc2,
             grabbed,
             in_panel,
+            self.cfg.gameplay.enhancement.vr_enhancement,
         );
         let pointer = *self.input.as_ref().unwrap().pointer();
         self.pointer_beam = pointer.beam;
 
         if !grabbed || in_panel {
             if let Some((px, py)) = pointer.screen_pos {
-                self.cursor = (px , py);
+                self.cursor = (px, py);
             }
 
-            if !is_mc2 {
-                if input.fire_right || input.fire_left {
-
+            if input.fire_right || input.fire_left {
+                if in_pregame_screen {
+                    if let Some(m) = &mut self.pre_game_menu {
+                        m.click(screen_size, self.cursor);
+                    }
+                } else if self.screen == Screen::Movie {
+                    // Either fire button skips the movie.
+                    if let Some(m) = &mut self.movie {
+                        m.skip();
+                        return FlightInput::default();
+                    }
+                } else if !is_mc2 {
                     if self.paused && input.fire_right {
                         // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
                         // If the mini-menu is open, it handles and return true
-                       if !self.mini_click(event_loop) {
-                           // If the mini-menu did not handle the click, we check if the options menu is open and handle it.
-                           if self.menu.is_some() {
-                               // The options menu owns the pointer while open.
-                               let size = self.view_size();
-                               if let Some(assets) = ui_assets!(self) {
-                                   let st = self.menu.as_ref().unwrap();
-                                   match menu::hit_test(
-                                       assets,
-                                       &self.specs,
-                                       st,
-                                       size.0,
-                                       size.1,
-                                       self.cursor,
-                                   ) {
-                                       menu::Hit::Tab(t) => {
-                                           self.menu.as_mut().unwrap().set_tab(t);
-                                       }
-                                       menu::Hit::ScrollTo(row) => {
-                                           self.menu.as_mut().unwrap().scroll_to(row);
-                                       }
-                                       menu::Hit::Widget(i) => {
-                                           let changed = menu::pointer_apply(
-                                               assets,
-                                               &mut self.cfg,
-                                               &self.specs,
-                                               self.menu.as_mut().unwrap(),
-                                               size.0,
-                                               size.1,
-                                               self.cursor,
-                                               i,
-                                               true,
-                                           );
-                                           let path = self.specs[i].cfg_path;
-                                           if changed {
-                                               self.apply_option(path);
-                                           }
-                                           // Click widgets persist
-                                           // immediately; sliders persist
-                                           // on release (not per motion
-                                           // event).
-                                           if changed && self.menu.as_ref().unwrap().drag.is_none() {
-                                               self.persist_option(&self.specs[i]);
-                                           }
-                                       }
-                                       menu::Hit::None => {}
-                                   }
-                               }
-                           } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
-                               self.persist_option(&self.specs[i]);
-                           }
-                       }
-                        return FlightInput::default();
-                    } else if self.screen == Screen::Movie {
-                        // Either fire button skips the movie.
-                        if let Some(m) = &mut self.movie {
-                            m.skip();
-                            return FlightInput::default();
+                        if !self.mini_click(event_loop) {
+                            // If the mini-menu did not handle the click, we check if the options menu is open and handle it.
+                            if self.menu.is_some() {
+                                // The options menu owns the pointer while open.
+                                let size = self.view_size();
+                                if let Some(assets) = ui_assets!(self) {
+                                    let st = self.menu.as_ref().unwrap();
+                                    match menu::hit_test(
+                                        assets,
+                                        &self.specs,
+                                        st,
+                                        size.0,
+                                        size.1,
+                                        self.cursor,
+                                    ) {
+                                        menu::Hit::Tab(t) => {
+                                            self.menu.as_mut().unwrap().set_tab(t);
+                                        }
+                                        menu::Hit::ScrollTo(row) => {
+                                            self.menu.as_mut().unwrap().scroll_to(row);
+                                        }
+                                        menu::Hit::Widget(i) => {
+                                            let changed = menu::pointer_apply(
+                                                assets,
+                                                &mut self.cfg,
+                                                &self.specs,
+                                                self.menu.as_mut().unwrap(),
+                                                size.0,
+                                                size.1,
+                                                self.cursor,
+                                                i,
+                                                true,
+                                            );
+                                            let path = self.specs[i].cfg_path;
+                                            if changed {
+                                                self.apply_option(path);
+                                            }
+                                            // Click widgets persist
+                                            // immediately; sliders persist
+                                            // on release (not per motion
+                                            // event).
+                                            if changed && self.menu.as_ref().unwrap().drag.is_none() {
+                                                self.persist_option(&self.specs[i]);
+                                            }
+                                        }
+                                        menu::Hit::None => {}
+                                    }
+                                }
+                            } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
+                                self.persist_option(&self.specs[i]);
+                            }
                         }
+                        return FlightInput::default();
                     } else if in_bookview {
                         // Each controller can select its spell.
                         let owned = self
@@ -3897,7 +3942,7 @@ impl App {
                             .unwrap_or([false; 24]);
                         if let Some(spell) = self.hovered {
                             if owned[spell.0 as usize] {
-                                let flight_input : FlightInput = if input.fire_right {
+                                let flight_input: FlightInput = if input.fire_right {
                                     FlightInput {
                                         equip_right: Some(mgc_sim::mc1::spells::SpellId(spell.0)),
                                         ..FlightInput::default()
@@ -3919,22 +3964,43 @@ impl App {
                             }
                         }
                     } else if input.fire_right {
-                      // The normal main menu pointing is on the right-hand controller, so we only allow the right click to trigger menu items.
-                      let size = self.view_size();
+                        // The normal main menu pointing is on the right-hand controller, so we only allow the right click to trigger menu items.
+                        let size = self.view_size();
                         if let Some(m) = &mut self.mc1menu {
                             m.click(size, self.cursor);
                         }
                     }
+                } else {
+                    // MC2
+                     if self.screen == Screen::Menu {
+                         let size = self.view_size();
+                         let cursor = self.cursor;
+                         let _request = self.mainmenu.as_mut().and_then(|m| m.click(size, cursor));
+                     } else if self.screen == Screen::Map {
+                         let size = self.view_size();
+                         let cursor = self.cursor;
+                         if let (Some(wm), Some(save)) = (
+                             &mut self.worldmap,
+                             self.campaign.as_ref().and_then(|c| c.save.mc2()),
+                         ) {
+                             wm.click(save, size, cursor);
+                         }
+                     }
+
+
                 }
             }
 
-            if !in_panel {
+            // If we are in the pregame screen or not  in a panel we want to swallow all input
+            // Otherwise we want to fall thru because if they are in a panel we want the menu button to close the panel
+            if !in_panel || in_pregame_screen {
                 return FlightInput::default();
             }
         }
 
+
         if input.extra_data & 0x02 != 0 {
-            // Pause
+            // Pause / Unpause
             self.toggle_menu();
             return FlightInput::default();
         } else if input.extra_data & 0x01 != 0 && !self.paused {
@@ -5061,6 +5127,140 @@ impl App {
         }
     }
 
+    /// One pre-game selection-menu frame: compose the CPU screen
+    /// (option art + Enhanced switch + Start), upload it as the UI
+    /// atlas, and act on a Start/Quit.
+    fn pregame_menu_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self.pre_game_menu.is_none() {
+
+            let enhanced = if IS_ANDROID { true } else { false };
+            match pregamemenu::PreGameMenu::new(enhanced) {
+                Ok(m) => {
+                    self.pre_game_menu = Some(m);
+                    // Windowed: the OS pointer clicks the menu;
+                    // fullscreen draws the software arrow via
+                    // `append_software_cursor`.
+                    self.set_grab(false);
+                }
+                Err(e) => {
+                    // The compiled-in art failed to decode (should not
+                    // happen): fall back to a Magic Carpet campaign so
+                    // the game is still reachable.
+                    eprintln!("note: main menu unavailable: {e} — starting Magic Carpet");
+                    self.start_from_main_menu(campaign::CampaignId::Mc1, enhanced, event_loop);
+                    return;
+                }
+            }
+        }
+        let size = self.view_size();
+        let cursor = self.cursor;
+        let action = {
+            let Some(menu) = &mut self.pre_game_menu else {
+                return;
+            };
+            menu.tick(dt);
+            let (rgba, quads) = menu.frame(size, cursor);
+            let action = menu.take_action();
+            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            q.extend(quads);
+            self.append_software_cursor(&mut q);
+            if let Some(r) = &mut self.renderer {
+                // The composed screen IS the atlas — re-uploaded per
+                // frame (hover/selection live in the pixels).
+                r.load_ui_atlas(pregamemenu::W as u32, pregamemenu::H as u32, &rgba);
+                self.ui_atlas = UiAtlas::PreGameMenu;
+                r.set_ui_quads(q);
+            }
+            action
+        };
+        if let Some(a) = action {
+            match a {
+                pregamemenu::MenuAction::Start { game, enhanced } => {
+                    self.start_from_main_menu(game, enhanced, event_loop);
+                }
+                pregamemenu::MenuAction::Quit => event_loop.exit(),
+            }
+        }
+    }
+
+    /// Launch the game chosen on the pre-game menu: apply the vr Enhanced
+    /// (re)load that game's audio, and hand off to the campaign boot
+    /// (its intro chain + retail frontend) exactly as `--campaign`
+    /// would have.
+    fn start_from_main_menu(
+        &mut self,
+        game: campaign::CampaignId,
+        enhanced: bool,
+        event_loop: &ActiveEventLoop,
+    ) {
+        #[cfg(target_os = "android")]
+        if enhanced {
+            self.cfg.gameplay.enhancement.vr_enhancement = enhanced;
+            self.cfg.render.preference.fog_distance = 50;
+            self.cfg.sim.parameters.awake_range = Option::from(54);
+        } else {
+            // We reset this to actual defaults.
+            self.cfg.render.preference.fog_distance = 20;
+        }
+
+        match CampaignRun::start(game, Option::from(self.cfg.gameplay.enhancement.pregame_slot), false) {
+            Ok(run) => self.campaign = Some(run),
+            Err(e) => {
+                eprintln!("error: cannot start {} campaign: {e}", game.tag());
+                event_loop.exit();
+                return;
+            }
+        }
+        // The audio bundle is per-game; the boot loaded MC1's, so swap
+        // to the chosen game's before its frontend needs it.
+        let is_mc2 = game == campaign::CampaignId::Mc2;
+        self.reload_game_audio(is_mc2);
+        // Done with the selection menu; hand the app to the campaign
+        // boot: the intro chain plays, then the retail frontend.
+        self.pre_game_menu = None;
+        self.boot_intro = true;
+        self.screen = Screen::Menu;
+        self.ui_atlas = UiAtlas::None;
+    }
+
+    /// (Re)open the audio device and load a game's bundle — the
+    /// per-game load `App::new` runs at boot, replayed when the
+    /// pre-game menu picks a different game.
+    fn reload_game_audio(&mut self, is_mc2: bool) {
+        if !(self.cfg.audio.sound || self.cfg.audio.music) {
+            self.audio = None;
+            return;
+        }
+        let mut a = mgc_audio::Audio::open();
+        a.set_prefer_gm(self.cfg.audio.arrangement.prefer_gm());
+        if is_mc2 {
+            a.set_mc2_danger_ramp();
+        }
+        let dir = get_baked_directory()
+            .join("assets")
+            .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+        if dir.is_dir() {
+            if let Err(e) = a.load_bundle(&dir, 0) {
+                eprintln!("note: audio bundle: {e}");
+            }
+        } else {
+            eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
+        }
+        a.set_volumes(
+            if self.cfg.audio.sound {
+                self.cfg.audio.sfx_volume
+            } else {
+                0.0
+            },
+            if self.cfg.audio.music {
+                self.cfg.audio.music_volume
+            } else {
+                0.0
+            },
+        );
+        self.audio = Some(a);
+    }
+
     /// One frontend frame (`screen != Level`): the P options menu
     /// over a frozen screen, or the live menu/map frame.
     fn frontend_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
@@ -5122,6 +5322,7 @@ impl App {
             return;
         }
         match self.screen {
+            Screen::PreGameMenu => self.pregame_menu_frame(dt, event_loop),
             Screen::Menu => self.menu_screen_frame(dt, event_loop),
             Screen::Map => self.map_screen_frame(dt, event_loop),
             Screen::Movie => self.movie_screen_frame(dt, event_loop),
@@ -7462,6 +7663,19 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                if self.screen == Screen::PreGameMenu {
+                    // The pre-game selection menu owns the pointer:
+                    // clicks pick an option, toggle Enhanced mode, or
+                    // press Start.
+                    if down && button == MouseButton::Left {
+                        let size = self.view_size();
+                        let cursor = self.cursor;
+                        if let Some(m) = &mut self.pre_game_menu {
+                            m.click(size, cursor);
+                        }
+                    }
+                    return;
+                }
                 if self.screen == Screen::Menu {
                     // The main menu owns the pointer. Save/Load
                     // clicks need the slot scan before their dialog
@@ -8687,18 +8901,23 @@ struct Args {
     /// Dispositions fired at t=0 (materialize dis-gated spawns —
     /// e.g. mc2:00's dis-6 quest fireflies).
     probe_dis: Vec<u16>,
+    // If --level or --campaign are set then, show the pregame menu
+    show_pregame_menu: bool,
 }
 
 #[cfg(target_os = "android")]
 fn parse_args() -> Result<Args, String> {
     // TODO: Configure this via a menu option...
     let mut args = parse_base_args()?;
-    args.campaign = Some(campaign::CampaignId::Mc1);
+//    args.campaign = Some(campaign::CampaignId::Mc1);
+//    args.show_pregame_menu = false;
+    // args.fog_distance = Option::from(80);
+    // args.awake_range = Option::from(80);
     args.sky = Option::from(false); // At this point, the sky is not supported on Android.
     args.crosshair = Option::from(false);
+    args.fps = Option::from(true);
+    args.vsync = Option::from(false);
     args.slot = Option::from(1);
-    args.fog_distance = Option::from(80);
-    args.awake_range = Option::from(80);
     args.pool_slots = Option::from(5000);
     args.health_bars = Option::from(true);
     args.thrust = Some(config::ThrustModel::Enhanced);
@@ -8775,6 +8994,7 @@ fn parse_base_args() -> Result<Args, String> {
     let mut probe_species = (5u8, 1u8);
     let mut probe_strip = false;
     let mut probe_dis = Vec::new();
+    let mut show_pregame_menu = true;
 
     /// `--level` accepts a package path or the path-free shorthand
     /// `<game>:<index>` (`mc1:32`, `mc1hw:7`, `mc2:100`) resolving to
@@ -8805,12 +9025,14 @@ fn parse_base_args() -> Result<Args, String> {
         match arg.as_str() {
             "--level" => {
                 level = resolve_level_arg(&it.next().ok_or("--level needs a path or game:index")?)?;
+                show_pregame_menu = false;
             }
             "--campaign" => {
                 let v = it.next().ok_or("--campaign needs mc1, mc1hw or mc2")?;
                 campaign_id = Some(campaign::CampaignId::parse(&v).ok_or_else(|| {
                     format!("--campaign {v}: unknown campaign (mc1, mc1hw or mc2)")
                 })?);
+                show_pregame_menu = false;
             }
             "--slot" => {
                 let n: usize = it
@@ -8839,16 +9061,19 @@ fn parse_base_args() -> Result<Args, String> {
             }
             "--screenshot" => {
                 screenshot = Some(PathBuf::from(it.next().ok_or("--screenshot needs a path")?));
+                show_pregame_menu = false;
             }
             "--replay" => {
                 replay = Some(PathBuf::from(
                     it.next().ok_or("--replay needs a .mgcr path")?,
                 ));
+                show_pregame_menu = false;
             }
             "--replay-check" => {
                 replay_check = Some(PathBuf::from(
                     it.next().ok_or("--replay-check needs a .mgcr path")?,
                 ));
+                show_pregame_menu = false;
             }
             "--record" => {
                 record = Some(PathBuf::from(
@@ -9166,6 +9391,7 @@ fn parse_base_args() -> Result<Args, String> {
         probe_species,
         probe_strip,
         probe_dis,
+        show_pregame_menu,
     })
 }
 
@@ -10391,6 +10617,10 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
     }
 
+    if let Some(s) = args.slot {
+        cfg.gameplay.enhancement.pregame_slot = s;
+    }
+
     // In-app replay (docs/RECORDING.md "Consumers"): the take's
     // header picks the level; the session boots single-level with the
     // fidelity-relevant knobs pinned — a retail take demands the
@@ -10499,7 +10729,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         || args.map.is_some()
         || args.flock_probe.is_some()
         || args.replay_check.is_some();
-    let boot_level = if campaign_run.is_some() && !headless {
+    let boot_level = if (campaign_run.is_some() || args.show_pregame_menu) && !headless {
         None
     } else {
         match load_level(
@@ -10694,6 +10924,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         },
         replay_boot,
         args.record.clone(),
+        args.show_pregame_menu,
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");

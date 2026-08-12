@@ -266,7 +266,7 @@ const FAITHFUL_CRUISE_TPS: f32 = 80.0 / 256.0 * TICK_RATE_HZ as f32; // 7.5 @ 24
 /// shapes the approach snappiness; the ceiling stays pinned regardless.
 const ACCEL: f32 = FAITHFUL_CRUISE_TPS * (1.0 - DRAG_PER_TICK) / (TICK_DT * DRAG_PER_TICK);
 const MAX_PITCH: f32 = 1.45; // radians
-const MIN_CLEARANCE: f32 = 0.75; // tiles above ground
+const MIN_CLEARANCE: f32 = if IS_ANDROID { 1.0 } else { 0.75 }; // tiles above ground
 
 // --- Enhanced-throttle steering: chase-the-pointer + proportional
 // bank (deliberate deviations — docs/DEVIATIONS.md "enhanced flight").
