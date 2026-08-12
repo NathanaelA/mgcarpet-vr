@@ -2602,6 +2602,12 @@ impl App {
                     r.set_reflections(self.cfg.render.preference.reflections);
                 }
             }
+            "render.preference.reflection_quality" => {
+                if let Some(r) = &mut self.renderer {
+                    let q = self.cfg.render.preference.reflection_quality;
+                    r.set_reflection_quality(q.mirror_scale(), q.reflect_entities(), q.mirror_lights());
+                }
+            }
             "render.preference.vsync" => {
                 if let Some(r) = &mut self.renderer {
                     r.set_vsync(self.cfg.render.preference.vsync);
@@ -7498,6 +7504,8 @@ impl ApplicationHandler for App {
                 renderer.set_fog_distance(self.cfg.render.preference.fog_distance as f32);
                 renderer.set_hud_transparent(self.hud_transparent());
                 renderer.set_reflections(self.cfg.render.preference.reflections);
+                let q = self.cfg.render.preference.reflection_quality;
+                renderer.set_reflection_quality(q.mirror_scale(), q.reflect_entities(), q.mirror_lights());
                 renderer.set_vsync(self.cfg.render.preference.vsync);
                 renderer.set_render_scale(self.cfg.render.preference.anti_aliasing.render_scale());
                 // Map-screen topology follows the book surface: no
@@ -8848,6 +8856,9 @@ struct Args {
     sky: Option<bool>,
     /// Water-reflection override (config `render.preference.reflections`).
     reflections: Option<bool>,
+    /// Reflection-quality override (config
+    /// `render.preference.reflection_quality`).
+    reflection_quality: Option<config::ReflectionQuality>,
     /// Dynamic-lights override (config `render.preference.light_sources`).
     light_sources: Option<bool>,
     /// Vertical-sync override (config `render.preference.vsync`).
@@ -8959,6 +8970,7 @@ fn parse_base_args() -> Result<Args, String> {
     let mut fog_distance = None;
     let mut sky = None;
     let mut reflections = None;
+    let mut reflection_quality = None;
     let mut light_sources = None;
     let mut vsync = None;
     let mut fullscreen = None;
@@ -9154,6 +9166,14 @@ fn parse_base_args() -> Result<Args, String> {
             "--no-sky" => sky = Some(false),
             "--reflections" => reflections = Some(true),
             "--no-reflections" => reflections = Some(false),
+            "--reflection-quality" => {
+                reflection_quality = Some(match it.next().as_deref() {
+                    Some("high") => config::ReflectionQuality::High,
+                    Some("balanced") => config::ReflectionQuality::Balanced,
+                    Some("fast") => config::ReflectionQuality::Fast,
+                    _ => return Err("--reflection-quality wants high|balanced|fast".into()),
+                });
+            }
             "--light-sources" => light_sources = Some(true),
             "--no-light-sources" => light_sources = Some(false),
             "--anti-aliasing" => {
@@ -9299,6 +9319,7 @@ fn parse_base_args() -> Result<Args, String> {
                      [--rival-tags auto|on|off] \
                      [--subtitles on|off] [--fog-distance TILES (0 = no fog)] \
                      [--sky|--no-sky] [--reflections|--no-reflections] \
+                     [--reflection-quality high|balanced|fast] \
                      [--light-sources|--no-light-sources] \
                      [--vsync|--no-vsync] [--fullscreen|--windowed] \
                      [--movies|--no-movies] [--anti-aliasing off|msaa|1.5x|2x] \
@@ -9356,6 +9377,7 @@ fn parse_base_args() -> Result<Args, String> {
         fog_distance,
         sky,
         reflections,
+        reflection_quality,
         light_sources,
         vsync,
         fullscreen,
@@ -10095,6 +10117,7 @@ fn run_screenshot(
     fog_distance: u32,
     sky_texture: bool,
     reflections: bool,
+    reflection_quality: config::ReflectionQuality,
     light_sources: bool,
     map_view: bool,
     anim_turn: f32,
@@ -10164,6 +10187,11 @@ fn run_screenshot(
         renderer.load_sky(bitmap, &level.palette_rgba);
     }
     renderer.set_reflections(reflections);
+    renderer.set_reflection_quality(
+        reflection_quality.mirror_scale(),
+        reflection_quality.reflect_entities(),
+        reflection_quality.mirror_lights(),
+    );
     if light_sources
         && level.mc2_env != entities::Mc2MapEnv::Day
         && let Some(w) = &level.world
@@ -10511,6 +10539,9 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
     if let Some(v) = args.reflections {
         cfg.render.preference.reflections = v;
     }
+    if let Some(v) = args.reflection_quality {
+        cfg.render.preference.reflection_quality = v;
+    }
     if let Some(v) = args.light_sources {
         cfg.render.preference.light_sources = v;
     }
@@ -10800,6 +10831,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
             cfg.render.preference.fog_distance,
             cfg.render.preference.sky,
             cfg.render.preference.reflections,
+            cfg.render.preference.reflection_quality,
             cfg.render.preference.light_sources,
             args.map_view,
             args.anim_turn,

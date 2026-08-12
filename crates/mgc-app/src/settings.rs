@@ -467,6 +467,44 @@ pub fn registry() -> Vec<Spec> {
         },
         Spec {
             domain: Render,
+            group: "render \u{b7} preference",
+            label: "reflection_quality",
+            class: Preference,
+            key: None,
+            cli: Some("--reflection-quality"),
+            cfg_path: "render.preference.reflection_quality",
+            read: |c| Val::Choice {
+                cur: match c.render.preference.reflection_quality {
+                    crate::config::ReflectionQuality::High => 0,
+                    crate::config::ReflectionQuality::Balanced => 1,
+                    crate::config::ReflectionQuality::Fast => 2,
+                },
+                faithful: 0,
+                variants: &["high", "balanced", "fast"],
+            },
+            desc: "Reflection fidelity versus performance. High draws the mirror \
+                   pass at full resolution and reflects sprites, fire and lightning. \
+                   Balanced (default) halves the mirror resolution for a large FPS \
+                   gain with little visible difference. Fast keeps the half-resolution \
+                   mirror but skips reflected entities and dynamic lights in the \
+                   reflection.",
+            ctl: Ctl::Choice {
+                set: |c, v| {
+                    c.render.preference.reflection_quality = match v {
+                        0 => crate::config::ReflectionQuality::High,
+                        1 => crate::config::ReflectionQuality::Balanced,
+                        _ => crate::config::ReflectionQuality::Fast,
+                    }
+                },
+                descs: &[
+                    "Full-resolution mirror; reflects entities and lights.",
+                    "Half-resolution mirror; reflects entities and lights (default).",
+                    "Half-resolution mirror; terrain and sky only, no reflected lights.",
+                ],
+            },
+        },
+        Spec {
+            domain: Render,
             group: "render · preference",
             label: "light_sources",
             class: Preference,

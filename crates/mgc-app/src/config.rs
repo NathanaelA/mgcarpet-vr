@@ -226,6 +226,11 @@ pub struct RenderPreference {
     /// altitude where retail cut off when flying high). Off = the
     /// plain animated water.
     pub reflections: bool,
+    /// Reflection fidelity/performance trade-off. The mirror pass is
+    /// a full second scene render, so rendering it at reduced
+    /// resolution and optionally skipping reflected entities is the
+    /// main lever for recovering FPS while keeping water sheen.
+    pub reflection_quality: ReflectionQuality,
     /// Dynamic light sources (retail MC2's Dynamic Lighting option,
     /// on by default): fireballs, explosions and standing fire cast
     /// a sphere of light that brightens the terrain around them —
@@ -345,6 +350,61 @@ impl AntiAliasing {
     }
 }
 
+/// Water-reflection quality/performance trade-off.
+///
+/// The mirror pass re-renders the world from below the water plane,
+/// so its resolution and what it includes are the biggest levers on
+/// the FPS cost of reflections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReflectionQuality {
+    /// Full-resolution mirror + blur; reflected terrain, sky, sprites,
+    /// fire and lightning. Best fidelity, highest cost.
+    High,
+    /// Half-resolution mirror + blur; reflected terrain, sky, sprites,
+    /// fire and lightning. The default balance.
+    Balanced,
+    /// Half-resolution mirror + blur; reflected terrain and sky only
+    /// (no sprites/fire/lightning), and dynamic lights are disabled
+    /// in the reflection. Fastest while keeping water sheen.
+    Fast,
+}
+
+impl Default for ReflectionQuality {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+impl ReflectionQuality {
+    /// Resolution at which the mirror pass renders, as a fraction of
+    /// the main viewport.
+    pub fn mirror_scale(self) -> f32 {
+        match self {
+            Self::High => 1.0,
+            Self::Balanced | Self::Fast => 0.5,
+        }
+    }
+
+    /// Whether sprites, fire particles and lightning should appear in
+    /// the water reflection.
+    pub fn reflect_entities(self) -> bool {
+        match self {
+            Self::High | Self::Balanced => true,
+            Self::Fast => false,
+        }
+    }
+
+    /// Whether dynamic point lights should illuminate the mirrored
+    /// terrain.
+    pub fn mirror_lights(self) -> bool {
+        match self {
+            Self::High | Self::Balanced => true,
+            Self::Fast => false,
+        }
+    }
+}
+
 /// Fog view-distance cap, tiles (mgc_render::MAX_FOG_TILES twin):
 /// keeps the whole fog band (full occlusion at 0.95·D) short of the
 /// 95..125-tile silhouette melt band, which runs unconditionally and
@@ -364,6 +424,7 @@ impl Default for RenderPreference {
             crosshair: true,
             sky: true,
             reflections: true,
+            reflection_quality: ReflectionQuality::default(),
             light_sources: true,
             fog_distance: 50,
             vsync: true,
@@ -1250,7 +1311,7 @@ fn merge(base: &mut serde_json::Value, overlay: serde_json::Value) {
 /// renamed, retyped or its default changes, so stale generated
 /// baselines regenerate instead of feeding outdated values/shapes
 /// into the merge.
-const DEFAULTS_VERSION: u64 = 23;
+const DEFAULTS_VERSION: u64 = 24;
 
 /// Generate the defaults baseline so every option is spelled out and
 /// discoverable. Regenerates automatically when its `_version` stamp

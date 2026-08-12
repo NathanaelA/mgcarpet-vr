@@ -1579,6 +1579,9 @@ pub struct Renderer {
     reflection_view: Option<wgpu::TextureView>,
     reflection_bind_group: Option<wgpu::BindGroup>,
     reflection_size: (u32, u32),
+    /// Depth buffer for the mirror pass: must match the mirror
+    /// target's scaled resolution, not the main scene depth buffer.
+    mirror_depth: Option<wgpu::TextureView>,
     /// Reflection-blur chain (blur.wgsl): H/V pipelines + the
     /// 1/[`REFLECTION_BLUR_DIV`]-res A (H output) and B (V output —
     /// what the water actually samples) targets, recreated with the
@@ -1592,6 +1595,12 @@ pub struct Renderer {
     blur_v_bind_group: Option<wgpu::BindGroup>,
     /// Water reflections on (config `render.preference.reflections`).
     reflections: bool,
+    /// Mirror-pass resolution as a fraction of the main viewport.
+    reflection_scale: f32,
+    /// Whether the mirror pass draws sprites, fire and lightning.
+    reflection_entities: bool,
+    /// Whether dynamic lights illuminate the mirrored terrain.
+    reflection_lights: bool,
     /// Live dynamic lights (already gated app-side to Night/Cave +
     /// the option), capped at [`MAX_LIGHTS`].
     lights: Vec<[f32; 4]>,
@@ -3078,7 +3087,7 @@ impl Renderer {
             cache: None,
         });
 
-        let depth = create_depth(&device, width, height, samples);
+        let depth = create_depth(&device, width, height, samples, "depth");
 
         Self {
             device,
@@ -3149,6 +3158,7 @@ impl Renderer {
             reflection_view: None,
             reflection_bind_group: None,
             reflection_size: (0, 0),
+            mirror_depth: None,
             samples,
             msaa_color: None,
             msaa_mirror: None,
@@ -3159,6 +3169,9 @@ impl Renderer {
             ssaa_layout,
             ssaa_sampler,
             reflections: true,
+            reflection_scale: 0.5,
+            reflection_entities: true,
+            reflection_lights: true,
             lights: Vec::new(),
             billboard_pipeline,
             billboard_blend_pipeline,
@@ -3295,9 +3308,56 @@ impl Renderer {
     /// Enable/disable water reflections (the per-frame mirrored-
     /// terrain pass sampled by sea fragments). On by default; the
     /// pass self-gates off caves, the book screen and non-water
-    /// levels either way.
+    /// levels either way. Disabling frees the mirror GPU resources
+    /// so they are not recreated until reflections are turned back
+    /// on.
     pub fn set_reflections(&mut self, on: bool) {
         self.reflections = on;
+        if !on {
+            self.reflection_view = None;
+            self.msaa_mirror = None;
+            self.msaa_mirror_size = (0, 0);
+            self.blur_a_view = None;
+            self.blur_b_view = None;
+            self.blur_h_bind_group = None;
+            self.blur_v_bind_group = None;
+            self.reflection_bind_group = None;
+            self.reflection_size = (0, 0);
+            self.mirror_depth = None;
+        }
+    }
+
+    /// Set reflection quality: `scale` is the mirror-pass resolution
+    /// as a fraction of the main viewport, `reflect_entities`
+    /// controls whether sprites/fire/lightning are drawn into the
+    /// mirror, and `mirror_lights` controls whether dynamic point
+    /// lights illuminate the reflected terrain.
+    pub fn set_reflection_quality(
+        &mut self,
+        scale: f32,
+        reflect_entities: bool,
+        mirror_lights: bool,
+    ) {
+        let scale = scale.clamp(0.25, 1.0);
+        if (self.reflection_scale - scale).abs() > f32::EPSILON
+            || self.reflection_entities != reflect_entities
+            || self.reflection_lights != mirror_lights
+        {
+            self.reflection_scale = scale;
+            self.reflection_entities = reflect_entities;
+            self.reflection_lights = mirror_lights;
+            // Force recreation of the mirror targets at the new size.
+            self.reflection_view = None;
+            self.msaa_mirror = None;
+            self.msaa_mirror_size = (0, 0);
+            self.blur_a_view = None;
+            self.blur_b_view = None;
+            self.blur_h_bind_group = None;
+            self.blur_v_bind_group = None;
+            self.reflection_bind_group = None;
+            self.reflection_size = (0, 0);
+            self.mirror_depth = None;
+        }
     }
 
     /// Set this frame's dynamic point lights (`[x, alt, z,
@@ -4775,7 +4835,7 @@ impl Renderer {
         // Depth and the MSAA colour buffer follow the SCENE buffer,
         // which is the supersampled one when supersampling is on.
         let (dw, dh) = self.size();
-        self.depth = create_depth(&self.device, dw, dh, self.samples);
+        self.depth = create_depth(&self.device, dw, dh, self.samples, "depth");
         self.msaa_color = self.make_msaa_target(dw, dh, "msaa-scene");
     }
 
@@ -4828,7 +4888,7 @@ impl Renderer {
         self.render_scale = scale;
         self.rebuild_ssaa();
         let (dw, dh) = self.size();
-        self.depth = create_depth(&self.device, dw, dh, self.samples);
+        self.depth = create_depth(&self.device, dw, dh, self.samples, "depth");
     }
 
     /// (Re)create the supersample buffer for the current window size,
@@ -5181,10 +5241,19 @@ impl Renderer {
                     self.wave_mode,
                     2,
                 ],
-                // A mirror never samples itself (z = 0); the lights
-                // still apply (`..globals` keeps the array + count in
-                // w) so reflected terrain glows too.
-                viewport: [w as f32, hpx as f32, 0.0, self.lights.len() as f32],
+                // A mirror never samples itself (z = 0); dynamic
+                // lights can be disabled for performance while keeping
+                // the mirror image.
+                viewport: [
+                    w as f32,
+                    hpx as f32,
+                    0.0,
+                    if self.reflection_lights {
+                        self.lights.len() as f32
+                    } else {
+                        0.0
+                    },
+                ],
                 ..globals
             };
             self.queue.write_buffer(
@@ -5192,13 +5261,18 @@ impl Renderer {
                 0,
                 bytemuck::bytes_of(&mirror_globals),
             );
-            // (Re)create the mirror target at the framebuffer size.
-            if self.reflection_view.is_none() || self.reflection_size != (w, hpx) {
+            // (Re)create the mirror target at the scaled framebuffer
+            // size. Halving the resolution is a large FPS win because
+            // the mirror pass is a full second scene render, and the
+            // water samples a blurred image anyway.
+            let mw = ((w as f32 * self.reflection_scale).max(1.0) as u32).max(1);
+            let mh = ((hpx as f32 * self.reflection_scale).max(1.0) as u32).max(1);
+            if self.reflection_view.is_none() || self.reflection_size != (mw, mh) {
                 let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("reflection"),
                     size: wgpu::Extent3d {
-                        width: w,
-                        height: hpx,
+                        width: mw,
+                        height: mh,
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
@@ -5259,12 +5333,19 @@ impl Renderer {
                 self.blur_a_view = Some(a_view);
                 self.blur_b_view = Some(b_view);
                 self.reflection_view = Some(view);
-                self.reflection_size = (w, hpx);
+                self.reflection_size = (mw, mh);
                 // The mirror pass reuses the main pass's pipelines, so
                 // its attachment must match their sample count; it
                 // resolves into the sampled texture the water reads.
-                self.msaa_mirror = self.make_msaa_target(w, hpx, "msaa-mirror");
-                self.msaa_mirror_size = (w, hpx);
+                self.msaa_mirror = self.make_msaa_target(mw, mh, "msaa-mirror");
+                self.msaa_mirror_size = (mw, mh);
+                self.mirror_depth = Some(create_depth(
+                    &self.device,
+                    mw,
+                    mh,
+                    self.samples,
+                    "mirror-depth",
+                ));
             }
         }
 
@@ -5635,13 +5716,14 @@ impl Renderer {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         // The water-reflection MIRROR pass: the terrain grid y-flipped
         // about the sea plane (atlas.w = 2), rendered into the mirror
-        // texture the main pass's water fragments sample. Terrain
-        // only, exactly retail's reflection block (GRO:1104-1431 —
-        // sprites are never reflected); cleared to the sky color so
-        // open water beyond the mirrored landscape reflects sky.
+        // texture the main pass's water fragments sample. Rendered at
+        // `reflection_scale` of the viewport (0.5 by default) because
+        // the water samples a blurred image anyway, which recovers the
+        // bulk of the FPS cost of this full second scene render.
         if mirror_active
-            && let (Some(rv), Some(bg), Some(vb), Some(ib)) = (
+            && let (Some(rv), Some(md), Some(bg), Some(vb), Some(ib)) = (
                 &self.reflection_view,
+                &self.mirror_depth,
                 &self.mirror_bind_group,
                 &self.vertex_buf,
                 &self.index_buf,
@@ -5668,7 +5750,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth,
+                    view: md,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -5694,12 +5776,15 @@ impl Renderer {
             // Mirrored sprites (opaque range only — reflected smoke
             // isn't worth a sorted blend pass). NOT retail (GRO reflects
             // terrain only); a monster over water should show in the
-            // water (deliberate).
-            if let (1.., Some(bbg), Some(bbuf)) = (
-                opaque_count,
-                &self.billboard_mirror_bind_group,
-                &self.billboard_buf,
-            ) {
+            // water (deliberate). Can be disabled on the Fast quality
+            // preset for a measurable FPS gain.
+            if self.reflection_entities
+                && let (1.., Some(bbg), Some(bbuf)) = (
+                    opaque_count,
+                    &self.billboard_mirror_bind_group,
+                    &self.billboard_buf,
+                )
+            {
                 pass.set_pipeline(&self.billboard_pipeline);
                 pass.set_bind_group(0, bbg, &[]);
                 // Group 1: sprites read the sky slots for the
@@ -5710,14 +5795,14 @@ impl Renderer {
             }
             // PROTOTYPE fire in the reflection (mirror globals flip the
             // quads under the sea plane) — so the flame shows in water.
-            if let (1.., Some(buf)) = (fire_count, &self.fire_buf) {
+            if self.reflection_entities && let (1.., Some(buf)) = (fire_count, &self.fire_buf) {
                 pass.set_pipeline(&self.fire_pipeline);
                 pass.set_bind_group(0, &self.fire_mirror_bind_group, &[]);
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..fire_count);
             }
             // PROTOTYPE lightning in the reflection.
-            if let (1.., Some(buf)) = (bolt_count, &self.bolt_buf) {
+            if self.reflection_entities && let (1.., Some(buf)) = (bolt_count, &self.bolt_buf) {
                 pass.set_pipeline(&self.bolt_pipeline);
                 pass.set_bind_group(0, &self.fire_mirror_bind_group, &[]);
                 pass.set_vertex_buffer(0, buf.slice(..));
@@ -6072,10 +6157,16 @@ fn request_device(
     Ok((adapter, device, queue))
 }
 
-fn create_depth(device: &wgpu::Device, width: u32, height: u32, samples: u32) -> wgpu::TextureView {
+fn create_depth(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    samples: u32,
+    label: &str,
+) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
-            label: Some("depth"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width,
                 height,
