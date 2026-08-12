@@ -93,6 +93,7 @@ const ROLL: FlightInput = FlightInput {
     barrel_roll: true,
     raw_dx: 0,
     mc1_move_byte: None,
+    extra_data: 0,
 };
 
 /// The command tumbles the MC2 view through inverted and settles back

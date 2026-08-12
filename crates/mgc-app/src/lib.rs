@@ -1993,6 +1993,13 @@ struct App {
     /// (or exits, single-level).
     exit_confirm: bool,
 
+    // Used to track which slot  was picked  so that the pregame menu has
+    // the valid slot to use when launching the game.
+    pregame_slot: usize,
+
+    // Used to track if playing with vr enhancements
+    vr_enhancement: bool,
+
     #[cfg(target_os = "android")]
     swapchain: Option<xr::Swapchain<xr::Vulkan>>,
     /// Per swapchain-image-index eye views: (left = array layer 0, right
@@ -2030,6 +2037,7 @@ impl App {
         replay_boot: Option<replay::ReplayFile>,
         record_path: Option<PathBuf>,
         show_pregame_menu: bool,
+        pregame_slot: usize,
     ) -> Self {
         // The running game's identity is known without a level: the
         // campaign id (a campaign boots to its frontend, level-less).
@@ -2202,6 +2210,8 @@ impl App {
             frontend_ui: None,
             won_handled: false,
             exit_confirm: false,
+            pregame_slot,
+            vr_enhancement: false,
             #[cfg(target_os = "android")]
             swapchain: None,
             #[cfg(target_os = "android")]
@@ -3854,7 +3864,7 @@ impl App {
             is_mc2,
             grabbed,
             in_panel,
-            self.cfg.gameplay.enhancement.vr_enhancement,
+            self.vr_enhancement,
         );
         let pointer = *self.input.as_ref().unwrap().pointer();
         self.pointer_beam = pointer.beam;
@@ -5190,7 +5200,7 @@ impl App {
         enhanced: bool,
         event_loop: &ActiveEventLoop,
     ) {
-        self.cfg.gameplay.enhancement.vr_enhancement = enhanced;
+        self.vr_enhancement = enhanced;
         #[cfg(target_os = "android")]
         if enhanced {
             self.cfg.render.preference.fog_distance = 50;
@@ -5201,7 +5211,7 @@ impl App {
             self.cfg.sim.parameters.awake_range = Option::from(24);
         }
 
-        match CampaignRun::start(game, Option::from(self.cfg.gameplay.enhancement.pregame_slot), false) {
+        match CampaignRun::start(game, Option::from(self.pregame_slot), false) {
             Ok(run) => self.campaign = Some(run),
             Err(e) => {
                 eprintln!("error: cannot start {} campaign: {e}", game.tag());
@@ -10604,9 +10614,11 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
     }
 
-    if let Some(s) = args.slot {
-        cfg.gameplay.enhancement.pregame_slot = s;
-    }
+    let pregame_slot = if let Some(s) = args.slot {
+        s
+    } else {
+        0
+    };
 
     // In-app replay (docs/RECORDING.md "Consumers"): the take's
     // header picks the level; the session boots single-level with the
@@ -10912,6 +10924,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         replay_boot,
         args.record.clone(),
         args.show_pregame_menu,
+        pregame_slot,
     );
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("error: event loop: {e}");
