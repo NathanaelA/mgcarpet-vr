@@ -5193,8 +5193,8 @@ impl App {
         self.cfg.gameplay.enhancement.vr_enhancement = enhanced;
         #[cfg(target_os = "android")]
         if enhanced {
-            self.cfg.render.preference.fog_distance = 40;
-            self.cfg.sim.parameters.awake_range = Option::from(50);
+            self.cfg.render.preference.fog_distance = 50;
+            self.cfg.sim.parameters.awake_range = Option::from(55);
         } else {
             // We reset this to actual defaults.
             self.cfg.render.preference.fog_distance = 20;
@@ -8908,6 +8908,7 @@ fn parse_args() -> Result<Args, String> {
     let mut args = parse_base_args()?;
     args.sky = Option::from(false); // At this point, the sky is not supported on Android.
     args.reflections = Option::from(false); // This costs a lot of CPU, worth defaulting off
+    args.fps = Option::from(true);
     args.crosshair = Option::from(false);
     args.vsync = Option::from(false);
     args.slot = Option::from(1);
@@ -10425,7 +10426,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
     };
     let (config_path, explicit) = match &args.config {
-        Some(p) => (p.clone(), true),
+        Some(p) => (p.clone(), !IS_ANDROID),
         None => (PathBuf::from(config::DEFAULT_PATH), false),
     };
     let mut cfg = match config::Config::load(&config_path, explicit) {
