@@ -19,7 +19,7 @@
 use mgc_render::UiQuad;
 
 use crate::campaign::CampaignId;
-use crate::IS_ANDROID;
+use crate::{get_baked_directory, IS_ANDROID};
 
 
 /// Authored screen resolution (letterboxed into the real window). 4:3
@@ -67,6 +67,10 @@ pub struct PreGameMenu {
     /// The Enhanced-mode switch.
     enhanced: bool,
     pending: Option<MenuAction>,
+    has_mc1: bool,
+    has_mc1hw: bool,
+    has_mc2: bool,
+
 }
 
 // ---- layout (authored 640x480 space) ---------------------------------
@@ -95,11 +99,29 @@ impl PreGameMenu {
                 format!("pregame-menu image {}: {e}", GAMES[i].1)
             })?);
         }
+        let mc1_path = get_baked_directory().join("mc1/level-000.mgcl");
+        let has_mc1 = std::fs::File::open(mc1_path.clone()).is_ok();
+        let mc1hw_path = get_baked_directory().join("mc1hw/level-000.mgcl");
+        let has_mc1hw = std::fs::File::open(mc1hw_path.clone()).is_ok();
+        let mc2_path = get_baked_directory().join("mc2/level-000.mgcl");
+        let has_mc2 = std::fs::File::open(mc2_path.clone()).is_ok();
+        let mut selected = 0;
+        if !has_mc1 {
+            if has_mc1hw {
+                selected = 1;
+            } else if has_mc2 {
+                selected = 2;
+            }
+        }
+
         Ok(Self {
             images,
-            selected: 0,
+            selected,
             enhanced,
             pending: None,
+            has_mc1,
+            has_mc1hw,
+            has_mc2,
         })
     }
 
@@ -119,6 +141,10 @@ impl PreGameMenu {
         let (mx, my) = crate::ui::unletterbox(cursor, size, W as f32, H as f32);
         for (i, b) in BOXES.iter().enumerate() {
             if in_rect(mx, my, *b) {
+                if (i == 0 && !self.has_mc1) || (i == 1 && !self.has_mc1hw) || (i == 2 && !self.has_mc2) {
+                    // Do not allow selection of unavailable games.
+                    return;
+                }
                 self.selected = i;
                 return;
             }
@@ -186,6 +212,17 @@ impl PreGameMenu {
                 ([70, 74, 92, 255], 2.0)
             };
             border(&mut buf, bx, by, bw, bh, thick, edge);
+
+            // Red X for games whose data is not present.
+            let available = match i {
+                0 => self.has_mc1,
+                1 => self.has_mc1hw,
+                2 => self.has_mc2,
+                _ => true,
+            };
+            if !available {
+                cross_out(&mut buf, *b, [220, 60, 60, 255]);
+            }
         }
 
         if IS_ANDROID {
@@ -262,6 +299,31 @@ fn border(buf: &mut [u8], x: f32, y: f32, w: f32, h: f32, t: f32, c: [u8; 4]) {
     fill(buf, x, y + h - t, w, t, c);
     fill(buf, x, y, t, h, c);
     fill(buf, x + w - t, y, t, h, c);
+}
+
+/// Draw a thick line from (x0,y0) to (x1,y1).
+fn line(buf: &mut [u8], x0: f32, y0: f32, x1: f32, y1: f32, thick: f32, c: [u8; 4]) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let steps = dx.abs().max(dy.abs()).max(1.0) as usize;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = x0 + dx * t;
+        let y = y0 + dy * t;
+        fill(buf, x - thick / 2.0, y - thick / 2.0, thick, thick, c);
+    }
+}
+
+/// Draw a red X across a rectangle to mark it unavailable.
+fn cross_out(buf: &mut [u8], r: (f32, f32, f32, f32), c: [u8; 4]) {
+    let (x, y, w, h) = r;
+    let margin = 12.0;
+    let x0 = x + margin;
+    let y0 = y + margin;
+    let x1 = x + w - margin;
+    let y1 = y + h - margin;
+    line(buf, x0, y0, x1, y1, 6.0, c);
+    line(buf, x1, y0, x0, y1, 6.0, c);
 }
 
 /// Nearest-neighbour blit of an RGBA image, alpha-blended.
