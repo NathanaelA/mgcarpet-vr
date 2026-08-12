@@ -29,9 +29,11 @@ const PITCH_RATE_PER_TICK: f32 = 0.8 / mgc_sim::TICK_RATE_HZ as f32;
 /// Distance from the head at which the virtual UI panel is placed
 /// (world units).  The pointer ray is intersected against this panel.
 const POINTER_PANEL_DISTANCE: f32 = 0.5;
-/// World units per UI pixel.  This is tuned so the panel is readable
-/// at `POINTER_PANEL_DISTANCE`.
-const POINTER_PANEL_SCALE: f32 = POINTER_PANEL_DISTANCE * 0.0015;
+/// World units per UI pixel.  This controls how much wrist rotation is
+/// required to move the cursor across the screen.  The previous value
+/// (0.0015) made the cursor too sluggish, so it is now tuned for
+/// comfortable wrist pointing.
+const POINTER_PANEL_SCALE: f32 = POINTER_PANEL_DISTANCE * 0.0005;
 
 /// Controller-pointer state produced by `InputActions::poll` when
 /// `grabbed == false`.
