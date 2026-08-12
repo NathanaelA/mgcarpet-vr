@@ -64,6 +64,19 @@ impl XrContext {
 
         ext_set.khr_android_create_instance = true;
 
+        //
+        // adb shell setprop debug.oculus.refreshRate 120
+        // This will set the max rate to 120 fpr testing
+        //
+        // Optional: Meta/FB display refresh-rate control (Quest 3 etc.).
+        // Enumerate first so we only request it when the runtime advertises it.
+/*        let supported_exts = xr_entry.enumerate_extensions()?;
+        let enable_fb_refresh_rate = supported_exts.fb_display_refresh_rate;
+        ext_set.fb_display_refresh_rate = enable_fb_refresh_rate;
+        if enable_fb_refresh_rate {
+            log::info!("XR Init enabling XR_FB_display_refresh_rate");
+        } */
+
         let xr_instance = xr_entry.create_instance(
             &xr::ApplicationInfo {
                 application_name: "mgcarpet-vr",
@@ -173,6 +186,14 @@ impl XrContext {
         // ── 10. Reference space (floor level) ────────────────────────────────
         let stage_space = xr_session
             .create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY)?;
+
+        // ── 10a. Request 90 Hz display refresh rate if the FB extension is available ──
+/*        if enable_fb_refresh_rate {
+            match xr_session.request_display_refresh_rate(90.0) {
+                Ok(()) => log::info!("XR Init requested 90 Hz display refresh rate"),
+                Err(e) => log::warn!("XR Init request_display_refresh_rate(90) failed: {e}"),
+            }
+        } */
 
         // ── 11. Environment blend mode ────────────────────────────────────────
         let env_blend_mode = xr_instance
