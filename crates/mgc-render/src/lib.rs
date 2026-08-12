@@ -1101,6 +1101,16 @@ struct BoltInstance {
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
+struct PointerInstance {
+    p0: [f32; 3],
+    _pad0: f32,
+    p1: [f32; 3],
+    width: f32,
+    color: [f32; 4],
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
 struct FireInstance {
     pos: [f32; 3],
     size: [f32; 2],
@@ -1695,6 +1705,12 @@ pub struct Renderer {
     bolt_buf: Option<wgpu::Buffer>,
     bolt_capacity: usize,
     bolt_segments: Vec<BoltSegment>,
+    // VR controller pointer beam: world-space line from controller to
+    // the UI panel hit, drawn when the cursor is free.
+    pointer_pipeline: wgpu::RenderPipeline,
+    pointer_buf: Option<wgpu::Buffer>,
+    pointer_capacity: usize,
+    pointer_beam: Option<([f32; 3], [f32; 3])>,
     /// CPU copy of the sprite index for per-frame view selection.
     sprite_index: Option<mgc_formats::bundle::SpriteIndex>,
     sprite_tex: Option<wgpu::Texture>,
@@ -2910,6 +2926,73 @@ impl Renderer {
             cache: None,
         });
 
+        // VR controller pointer beam: same globals layout as fire/bolt,
+        // simple solid-color ribbon instances.
+        let pointer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pointer"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("pointer.wgsl").into()),
+        });
+        let pointer_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("pointer"),
+            layout: Some(&fire_layout),
+            vertex: wgpu::VertexState {
+                module: &pointer_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<PointerInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x3,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x3,
+                            offset: 16,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 28,
+                            shader_location: 2,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 32,
+                            shader_location: 3,
+                        },
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &pointer_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(premul),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: ms,
+            multiview: None,
+            cache: None,
+        });
+
         // Health-bar overlay: solid-color instanced quads on the same
         // camera basis; own single-binding layout so bars draw even
         // before any sprite atlas is loaded.
@@ -3174,6 +3257,10 @@ impl Renderer {
             bolt_buf: None,
             bolt_capacity: 0,
             bolt_segments: Vec::new(),
+            pointer_pipeline,
+            pointer_buf: None,
+            pointer_capacity: 0,
+            pointer_beam: None,
             fire_capacity: 0,
             fire_particles: Vec::new(),
             sprite_index: None,
@@ -4540,6 +4627,11 @@ impl Renderer {
         self.bolt_segments = segments;
     }
 
+    /// Set the VR controller pointer beam (None = hidden).
+    pub fn set_pointer_beam(&mut self, beam: Option<([f32; 3], [f32; 3])>) {
+        self.pointer_beam = beam;
+    }
+
     /// Replace the monster health-bar overlay set (empty = off).
     pub fn set_health_bars(&mut self, bars: Vec<HealthBar>) {
         self.health_bars = bars;
@@ -5365,6 +5457,33 @@ impl Renderer {
                 .write_buffer(self.bar_buf.as_ref().unwrap(), 0, bytes);
         }
 
+        // VR controller pointer beam: one ribbon instance when active.
+        let pointer_count = if let Some((p0, p1)) = self.pointer_beam {
+            let inst = PointerInstance {
+                p0,
+                _pad0: 0.0,
+                p1,
+                width: 0.005,
+                color: [0.2, 0.9, 1.0, 0.85],
+            };
+            let bytes: &[u8] = bytemuck::bytes_of(&inst);
+            let need = bytes.len();
+            if self.pointer_buf.is_none() || self.pointer_capacity < need {
+                self.pointer_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("pointer instance"),
+                    size: need.next_power_of_two() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.pointer_capacity = need.next_power_of_two();
+            }
+            self.queue
+                .write_buffer(self.pointer_buf.as_ref().unwrap(), 0, bytes);
+            1u32
+        } else {
+            0u32
+        };
+
         // Screen-space map decorations — upright icon stamps
         // (castle/balloon) and the marching-ants guide path — projected
         // onto whichever map surface is active and appended to the UI
@@ -5881,6 +6000,14 @@ impl Renderer {
                     pass.set_bind_group(0, &self.bar_bind_group, &[]);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..6, 0..bar_count);
+                }
+                // VR controller pointer beam, drawn over the world but
+                // behind the UI panel so the cursor remains the tip.
+                if let (1.., Some(buf)) = (pointer_count, &self.pointer_buf) {
+                    pass.set_pipeline(&self.pointer_pipeline);
+                    pass.set_bind_group(0, &self.fire_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..6, 0..pointer_count);
                 }
             };
             if self.map_view {

@@ -17,16 +17,15 @@ mod config;
 mod entities;
 mod frontend;
 mod frontend_mc1;
-mod pregamemenu;
 mod menu;
 mod minimenu;
 mod movie;
+mod pregamemenu;
 mod replay;
 mod saves;
 mod settings;
 mod ui;
 mod worldmap;
-
 
 #[cfg(target_os = "android")]
 mod wgpu_share;
@@ -56,17 +55,17 @@ use crate::xr_init::XrContext;
 #[cfg(target_os = "android")]
 use crate::xr_input::InputActions;
 #[cfg(target_os = "android")]
+use jni_min_helper::PermissionRequest;
+#[cfg(target_os = "android")]
+use log::{Level, log};
+#[cfg(target_os = "android")]
 use mgc_render::{EyeView, StereoView};
 #[cfg(target_os = "android")]
 use openxr as xr;
 #[cfg(target_os = "android")]
 use winit::platform::android::ActiveEventLoopExtAndroid;
 #[cfg(target_os = "android")]
-use winit::platform::android::activity::{AndroidApp, PollEvent, MainEvent};
-#[cfg(target_os = "android")]
-use log::{Level, log};
-#[cfg(target_os = "android")]
-use jni_min_helper::{PermissionRequest};
+use winit::platform::android::activity::{AndroidApp, MainEvent, PollEvent};
 
 #[cfg(target_os = "android")]
 const IS_ANDROID: bool = true;
@@ -81,7 +80,6 @@ macro_rules! println {
         log!(target: "AppEvents", Level::Info, $($arg)*)
     }
 }
-
 
 const FOV_Y: f32 = 60.0_f32.to_radians();
 const MOUSE_SENSITIVITY: f32 = 0.0022;
@@ -362,7 +360,9 @@ impl CampaignRun {
                     );
                     // With VR, we need to auto-start a new game when we finish...
                     if IS_ANDROID {
-                        if id == CampaignId::Mc1Hw && s.level >= 25 || id == CampaignId::Mc1 && s.level >= 50 {
+                        if id == CampaignId::Mc1Hw && s.level >= 25
+                            || id == CampaignId::Mc1 && s.level >= 50
+                        {
                             s = saves::Mc1Save {
                                 name: "Zanzamar".into(),
                                 ..Default::default()
@@ -3982,20 +3982,20 @@ impl App {
                     }
                 } else {
                     // MC2
-                     if self.screen == Screen::Menu {
-                         let size = self.view_size();
-                         let cursor = self.cursor;
-                         let _request = self.mainmenu.as_mut().and_then(|m| m.click(size, cursor));
-                     } else if self.screen == Screen::Map {
-                         let size = self.view_size();
-                         let cursor = self.cursor;
-                         if let (Some(wm), Some(save)) = (
-                             &mut self.worldmap,
-                             self.campaign.as_ref().and_then(|c| c.save.mc2()),
-                         ) {
-                             wm.click(save, size, cursor);
-                         }
-                     }
+                    if self.screen == Screen::Menu {
+                        let size = self.view_size();
+                        let cursor = self.cursor;
+                        let _request = self.mainmenu.as_mut().and_then(|m| m.click(size, cursor));
+                    } else if self.screen == Screen::Map {
+                        let size = self.view_size();
+                        let cursor = self.cursor;
+                        if let (Some(wm), Some(save)) = (
+                            &mut self.worldmap,
+                            self.campaign.as_ref().and_then(|c| c.save.mc2()),
+                        ) {
+                            wm.click(save, size, cursor);
+                        }
+                    }
                 }
             }
 
@@ -5139,7 +5139,6 @@ impl App {
     /// atlas, and act on a Start/Quit.
     fn pregame_menu_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
         if self.pre_game_menu.is_none() {
-
             let enhanced = if IS_ANDROID { true } else { false };
             match pregamemenu::PreGameMenu::new(enhanced) {
                 Ok(m) => {
@@ -5244,9 +5243,11 @@ impl App {
         if is_mc2 {
             a.set_mc2_danger_ramp();
         }
-        let dir = get_baked_directory()
-            .join("assets")
-            .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+        let dir = get_baked_directory().join("assets").join(if is_mc2 {
+            "mc2-audio"
+        } else {
+            "mc1-audio"
+        });
         if dir.is_dir() {
             if let Err(e) = a.load_bundle(&dir, 0) {
                 eprintln!("note: audio bundle: {e}");
@@ -7192,10 +7193,9 @@ impl App {
         let image_index = swapchain.acquire_image()? as usize;
         swapchain.wait_image(xr::Duration::INFINITE)?;
         let (left, right) = &self.eye_views[image_index];
-        self.renderer
-            .as_mut()
-            .expect("exist")
-            .render_stereo(&stereo, left, right);
+        let renderer = self.renderer.as_mut().expect("exist");
+        renderer.set_pointer_beam(self.pointer_beam);
+        renderer.render_stereo(&stereo, left, right);
         swapchain.release_image()?;
 
         let rect = xr::Rect2Di {
@@ -10614,11 +10614,7 @@ pub fn game_main(event_loop: Option<EventLoop<()>>) -> std::process::ExitCode {
         }
     }
 
-    let pregame_slot = if let Some(s) = args.slot {
-        s
-    } else {
-        0
-    };
+    let pregame_slot = if let Some(s) = args.slot { s } else { 0 };
 
     // In-app replay (docs/RECORDING.md "Consumers"): the take's
     // header picks the level; the session boots single-level with the
@@ -11014,7 +11010,6 @@ mod ring_tests {
     }
 }
 
-
 #[cfg(target_os = "android")]
 fn check_permissions_active(perms: &[&str; 2]) -> bool {
     let res1 = PermissionRequest::has_permission(perms[0]);
@@ -11041,12 +11036,11 @@ fn android_permission_check(app: &AndroidApp) -> bool {
 
     log::info!("!!! mgcarpet VR: Asking permissions...");
 
-
     let mut request = PermissionRequest::request(
         "Magic Carpet VR needs storage access to read the game data and write saves.",
-        perms
-        ,
-    ).unwrap();
+        perms,
+    )
+    .unwrap();
 
     log::info!("!!! Sent permission request, waiting for user response...");
 
@@ -11081,10 +11075,8 @@ fn android_permission_check(app: &AndroidApp) -> bool {
             }
             return false;
         }
-    };
-
+    }
 }
-
 
 #[allow(clippy::field_reassign_with_default)]
 #[cfg(target_os = "android")]
@@ -11123,4 +11115,3 @@ fn android_main(app: AndroidApp) {
 
     log::info!("mgcarpet VR: exiting");
 }
-
