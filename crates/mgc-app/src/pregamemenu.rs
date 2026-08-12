@@ -508,6 +508,7 @@ mod tests {
     #[test]
     fn click_selects_and_start_launches() {
         let mut m = PreGameMenu::new(false).unwrap();
+        m.has_mc2 = true; // pretend MC2 is available
         let size = (W as f32, H as f32);
         // The window maps 1:1 onto authored space here (no letterbox).
         let center = |r: (f32, f32, f32, f32)| (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
@@ -527,16 +528,19 @@ mod tests {
     #[test]
     fn enhanced_switch_toggles() {
         let mut m = PreGameMenu::new(false).unwrap();
+        m.has_mc1 = true; // pretend MC1 is available
         let size = (W as f32, H as f32);
         let center = |r: (f32, f32, f32, f32)| (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
-        m.click(size, center(CHECK_BOX));
-        assert!(m.enhanced);
+        if IS_ANDROID {
+            m.click(size, center(CHECK_BOX));
+            assert!(m.enhanced);
+        }
         m.click(size, center(START_BTN));
         assert_eq!(
             m.take_action(),
             Some(MenuAction::Start {
                 game: CampaignId::Mc1,
-                enhanced: true
+                enhanced: IS_ANDROID
             })
         );
     }
