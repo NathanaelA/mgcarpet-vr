@@ -4791,7 +4791,7 @@ impl App {
             }
 
             if input.fire_right || input.fire_left {
-                if in_pregame_screen {
+                if in_pregame_screen && input.fire_right {
                     if let Some(m) = &mut self.pre_game_menu {
                         m.click(screen_size, self.cursor);
                     }
@@ -4801,70 +4801,64 @@ impl App {
                         m.skip();
                         return FlightInput::default();
                     }
-                } else if !is_mc2 {
-                    if self.paused && input.fire_right {
-                        // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
-                        // If the mini-menu is open, it handles and return true
-                        if !self.mini_click(event_loop) {
-                            // If the mini-menu did not handle the click, we check if the options menu is open and handle it.
-                            if self.menu.is_some() {
-                                // The options menu owns the pointer while open.
-                                let size = self.view_size();
-                                if let Some(assets) = ui_assets!(self) {
-                                    let st = self.menu.as_ref().unwrap();
-                                    match menu::hit_test(
+                } else if self.paused && input.fire_right {
+                    // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
+                    // If the mini-menu is open, it handles and return true
+                    if self.menu.is_none() && self.mini_click(event_loop) {
+                        return FlightInput::default();
+                    } else if self.menu.is_some() {
+                        // The options menu owns the pointer while open.
+                        let size = self.view_size();
+                        if let Some(assets) = ui_assets!(self) {
+                            let st = self.menu.as_ref().unwrap();
+                            match menu::hit_test(
+                                assets,
+                                &self.specs,
+                                st,
+                                size.0,
+                                size.1,
+                                self.cursor,
+                            ) {
+                                menu::Hit::Tab(t) => {
+                                    self.menu.as_mut().unwrap().set_tab(t);
+                                }
+                                menu::Hit::ScrollTo(row) => {
+                                    self.menu.as_mut().unwrap().scroll_to(row);
+                                }
+                                menu::Hit::Widget(i) => {
+                                    let changed = menu::pointer_apply(
                                         assets,
+                                        &mut self.cfg,
                                         &self.specs,
-                                        st,
+                                        self.menu.as_mut().unwrap(),
                                         size.0,
                                         size.1,
                                         self.cursor,
-                                    ) {
-                                        menu::Hit::Tab(t) => {
-                                            self.menu.as_mut().unwrap().set_tab(t);
-                                        }
-                                        menu::Hit::ScrollTo(row) => {
-                                            self.menu.as_mut().unwrap().scroll_to(row);
-                                        }
-                                        menu::Hit::Widget(i) => {
-                                            let changed = menu::pointer_apply(
-                                                assets,
-                                                &mut self.cfg,
-                                                &self.specs,
-                                                self.menu.as_mut().unwrap(),
-                                                size.0,
-                                                size.1,
-                                                self.cursor,
-                                                i,
-                                                true,
-                                            );
-                                            let path = self.specs[i].cfg_path;
-                                            if changed {
-                                                self.apply_option(path);
-                                            }
-                                            // Click widgets persist
-                                            // immediately; sliders persist
-                                            // on release (not per motion
-                                            // event).
-                                            if changed && self.menu.as_ref().unwrap().drag.is_none() {
-                                                self.persist_option(&self.specs[i]);
-                                            }
-                                        }
-                                        menu::Hit::None => {}
+                                        i,
+                                        true,
+                                    );
+                                    let path = self.specs[i].cfg_path;
+                                    if changed {
+                                        self.apply_option(path);
+                                    }
+                                    // Click widgets persist
+                                    // immediately; sliders persist
+                                    // on release (not per motion
+                                    // event).
+                                    if changed && self.menu.as_ref().unwrap().drag.is_none() {
+                                        self.persist_option(&self.specs[i]);
                                     }
                                 }
-                            } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
-                                self.persist_option(&self.specs[i]);
+                                menu::Hit::None => {}
                             }
                         }
-                        return FlightInput::default();
-                    } else if self.screen == Screen::Movie {
-                        // Either fire button skips the movie.
-                        if let Some(m) = &mut self.movie {
-                            m.skip();
-                            return FlightInput::default();
-                        }
-                    } else if in_bookview {
+                    } else if let Some(i) = self.menu.as_mut().unwrap().drag.take() {
+                        self.persist_option(&self.specs[i]);
+                    }
+                    return FlightInput::default();
+                } else if !is_mc2 {
+                    // MC1 && MC1HW
+                    if in_bookview {
                         // Each controller can select its spell.
                         let owned = self
                             .session
@@ -4918,8 +4912,6 @@ impl App {
                              wm.click(save, size, cursor);
                          }
                      }
-
-
                 }
             }
 
@@ -4929,7 +4921,6 @@ impl App {
                 return FlightInput::default();
             }
         }
-
 
         if input.extra_data & 0x02 != 0 {
             // Pause / Unpause
@@ -4958,7 +4949,7 @@ impl App {
             }
         }
 
-        // We don't return anything whenwe are paused
+        // We don't return anything when we are paused
         if self.paused {
             return FlightInput::default();
         }
@@ -6207,6 +6198,141 @@ impl App {
             // the SPTRS bank — not baked; the OS pointer stands in).
             self.set_grab(false);
         }
+    }
+
+    /// One pre-game selection-menu frame: compose the CPU screen
+    /// (option art + Enhanced switch + Start), upload it as the UI
+    /// atlas, and act on a Start/Quit.
+    fn pregame_menu_frame(&mut self, dt: f32, event_loop: &ActiveEventLoop) {
+        if self.pre_game_menu.is_none() {
+
+            let enhanced = if IS_ANDROID { true } else { false };
+            match pregamemenu::PreGameMenu::new(enhanced) {
+                Ok(m) => {
+                    self.pre_game_menu = Some(m);
+                    // Windowed: the OS pointer clicks the menu;
+                    // fullscreen draws the software arrow via
+                    // `append_software_cursor`.
+                    self.set_grab(false);
+                }
+                Err(e) => {
+                    // The compiled-in art failed to decode (should not
+                    // happen): fall back to a Magic Carpet campaign so
+                    // the game is still reachable.
+                    eprintln!("note: main menu unavailable: {e} — starting Magic Carpet");
+                    self.start_from_main_menu(campaign::CampaignId::Mc1, enhanced, event_loop);
+                    return;
+                }
+            }
+        }
+        let size = self.view_size();
+        let cursor = self.cursor;
+        let action = {
+            let Some(menu) = &mut self.pre_game_menu else {
+                return;
+            };
+            menu.tick(dt);
+            let (rgba, quads) = menu.frame(size, cursor);
+            let action = menu.take_action();
+            let mut q = vec![ui::solid([0.0, 0.0, size.0, size.1], [0.0, 0.0, 0.0, 1.0])];
+            q.extend(quads);
+            self.append_software_cursor(&mut q);
+            if let Some(r) = &mut self.renderer {
+                // The composed screen IS the atlas — re-uploaded per
+                // frame (hover/selection live in the pixels).
+                r.load_ui_atlas(pregamemenu::W as u32, pregamemenu::H as u32, &rgba);
+                self.ui_atlas = UiAtlas::PreGameMenu;
+                r.set_ui_quads(q);
+            }
+            action
+        };
+        if let Some(a) = action {
+            match a {
+                pregamemenu::MenuAction::Start { game, enhanced } => {
+                    self.start_from_main_menu(game, enhanced, event_loop);
+                }
+                pregamemenu::MenuAction::Quit => event_loop.exit(),
+            }
+        }
+    }
+
+    /// Launch the game chosen on the pre-game menu: apply the vr Enhanced
+    /// (re)load that game's audio, and hand off to the campaign boot
+    /// (its intro chain + retail frontend) exactly as `--campaign`
+    /// would have.
+    fn start_from_main_menu(
+        &mut self,
+        game: campaign::CampaignId,
+        enhanced: bool,
+        event_loop: &ActiveEventLoop,
+    ) {
+        self.cfg.gameplay.enhancement.vr_enhancement = enhanced;
+        #[cfg(target_os = "android")]
+        if enhanced {
+            self.cfg.render.preference.fog_distance = 40;
+            self.cfg.sim.parameters.awake_range = Option::from(50);
+        } else {
+            // We reset this to actual defaults.
+            self.cfg.render.preference.fog_distance = 20;
+            self.cfg.sim.parameters.awake_range = Option::from(24);
+        }
+
+        match CampaignRun::start(game, Option::from(self.cfg.gameplay.enhancement.pregame_slot), false) {
+            Ok(run) => self.campaign = Some(run),
+            Err(e) => {
+                eprintln!("error: cannot start {} campaign: {e}", game.tag());
+                event_loop.exit();
+                return;
+            }
+        }
+        // The audio bundle is per-game; the boot loaded MC1's, so swap
+        // to the chosen game's before its frontend needs it.
+        let is_mc2 = game == campaign::CampaignId::Mc2;
+        self.reload_game_audio(is_mc2);
+        // Done with the selection menu; hand the app to the campaign
+        // boot: the intro chain plays, then the retail frontend.
+        self.pre_game_menu = None;
+        self.boot_intro = true;
+        self.screen = Screen::Menu;
+        self.ui_atlas = UiAtlas::None;
+    }
+
+    /// (Re)open the audio device and load a game's bundle — the
+    /// per-game load `App::new` runs at boot, replayed when the
+    /// pre-game menu picks a different game.
+    fn reload_game_audio(&mut self, is_mc2: bool) {
+        if !(self.cfg.audio.sound || self.cfg.audio.music) {
+            self.audio = None;
+            return;
+        }
+        let mut a = mgc_audio::Audio::open();
+        a.set_prefer_gm(self.cfg.audio.arrangement.prefer_gm());
+        if is_mc2 {
+            a.set_mc2_danger_ramp();
+        }
+        let dir = get_baked_directory()
+            .join("assets")
+            .join(if is_mc2 { "mc2-audio" } else { "mc1-audio" });
+        if dir.is_dir() {
+            if let Err(e) = a.load_bundle(&dir, 0) {
+                eprintln!("note: audio bundle: {e}");
+            }
+        } else {
+            eprintln!("note: no audio bundle baked — sound effects disabled (rebake)");
+        }
+        a.set_volumes(
+            if self.cfg.audio.sound {
+                self.cfg.audio.sfx_volume
+            } else {
+                0.0
+            },
+            if self.cfg.audio.music {
+                self.cfg.audio.music_volume
+            } else {
+                0.0
+            },
+        );
+        self.audio = Some(a);
     }
 
     /// One frontend frame (`screen != Level`): the P options menu
@@ -10518,30 +10644,18 @@ struct Args {
 
 #[cfg(target_os = "android")]
 fn parse_args() -> Result<Args, String> {
-    // TODO: Configure this via a menu option...
     let mut args = parse_base_args()?;
-//    args.campaign = Some(campaign::CampaignId::Mc1);
-//    args.show_pregame_menu = false;
-    // args.fog_distance = Option::from(80);
-    // args.awake_range = Option::from(80);
     args.sky = Option::from(false); // At this point, the sky is not supported on Android.
+    args.reflections = Option::from(false); // This costs a lot of CPU, worth defaulting off
     args.crosshair = Option::from(false);
-    args.fps = Option::from(true);
     args.vsync = Option::from(false);
     args.slot = Option::from(1);
     args.pool_slots = Option::from(5000);
-    args.health_bars = Option::from(true);
     args.thrust = Some(config::ThrustModel::Enhanced);
+    args.config = Option::from(PathBuf::from("/storage/emulated/0/mgcarpet/mgcarpet.json"));
     if !args.level.starts_with("/") {
         args.level = PathBuf::from("/storage/emulated/0/mgcarpet/").join(args.level);
     }
-
-    // Testing
-    // args.dev_spells = Option::from(false);
-    // args.expose_jar_spells = Option::from(true);
-    // args.plausible_spellbook = Option::from(true);
-
-
     Ok(args)
 }
 
