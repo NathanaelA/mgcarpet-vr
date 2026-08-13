@@ -85,6 +85,8 @@ pub struct InputActions {
     last_left_trigger: bool,
     consume_triggers: bool,
     pointer: PointerState,
+  //  instance: xr::Instance,
+  //  event_storage: xr::EventDataBuffer,
 }
 
 impl InputActions {
@@ -213,6 +215,8 @@ impl InputActions {
             last_btn_b_time: 0,
             consume_triggers: false,
             pointer: PointerState::default(),
+    //        instance: instance.clone(),
+    //        event_storage: xr::EventDataBuffer::new(),
         })
     }
 
@@ -256,6 +260,25 @@ impl InputActions {
         enhanced: bool,
     ) -> FlightInput {
         let _ = session.sync_actions(&[(&self.action_set).into()]);
+        /*
+        let xrevent = self.instance.poll_event(&mut self.event_storage).unwrap();
+        if (xrevent.is_some()) {
+            let event = xrevent.unwrap();
+            match event {
+                xr::Event::SessionStateChanged(e) => {
+                    if e.state() == xr::SessionState::STOPPING {
+                        log::info!("MGC_APP Session) stopping");
+                    } else if e.state() == xr::SessionState::EXITING {
+                        log::info!("MGC_APP Session) exiting");
+                    } else {
+                        log::info!("MGC_APP Session) state changed: {:?}", e.state());
+                    }
+                }
+
+                _ => { }
+            }
+        } */
+
 
         // Controller pointer: when the cursor is free (grabbed == false)
         // raycast the right-hand aim pose against a virtual UI panel placed
