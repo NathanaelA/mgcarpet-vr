@@ -938,6 +938,7 @@ impl WorldMap {
     }
 
     /// A save-label edit field is accepting keystrokes.
+    #[allow(dead_code)]
     pub fn dialog_editing(&self) -> bool {
         self.dialog.as_ref().is_some_and(|d| d.edit.is_some())
     }
@@ -945,6 +946,7 @@ impl WorldMap {
     /// Open a parchment dialog. `slots` = (label, occupied) per save
     /// slot, scanned by the app (retail probes SAVE%d.GAM on entry,
     /// "Empty" for the rest).
+    #[allow(dead_code)]
     pub fn open_dialog(&mut self, kind: DialogKind, slots: Vec<(String, bool)>) {
         // Retail str_26 anchors: Save (29,60) h 200, Load (510,60)
         // h 200, New Game confirm (37,348) h 60.
@@ -973,6 +975,7 @@ impl WorldMap {
     /// sample (the scroll widget's scancode-1 arm, MI:5660-63 + the
     /// sample at :5686-87); otherwise back to the menu (retail
     /// NewGameDraw returns 2, MI:3430-31).
+    #[allow(dead_code)]
     pub fn escape(&mut self) {
         if self.dialog.take().is_some() {
             self.sounds.push(SND_CLICK);
@@ -983,12 +986,14 @@ impl WorldMap {
 
     /// An open parchment dialog (deciding whether Enter belongs to
     /// it).
+    #[allow(dead_code)]
     pub fn dialog_open(&self) -> bool {
         self.dialog.is_some()
     }
 
     /// A keystroke for the save-label editor (retail sub_7F6A0:
     /// space/0-9/letters, max 15).
+    #[allow(dead_code)]
     pub fn dialog_char(&mut self, c: char) {
         if let Some(d) = &mut self.dialog
             && let Some(edit) = &mut d.edit
@@ -999,6 +1004,7 @@ impl WorldMap {
         }
     }
 
+    #[allow(dead_code)]
     pub fn dialog_backspace(&mut self) {
         if let Some(d) = &mut self.dialog
             && let Some(edit) = &mut d.edit
@@ -1011,6 +1017,7 @@ impl WorldMap {
     /// into the slot row (the actual save happens on OK — retail
     /// law); otherwise Enter is the OK button (the scroll widget's
     /// scancode-28 arm, MI:5656-58).
+    #[allow(dead_code)]
     pub fn dialog_enter(&mut self) {
         let Some(d) = &mut self.dialog else { return };
         if let Some(edit) = d.edit.take() {

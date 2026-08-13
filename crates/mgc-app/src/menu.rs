@@ -227,6 +227,7 @@ fn row_live(spec: &Spec) -> bool {
 
 /// Scroll the active tab by a (possibly fractional) number of rows —
 /// the mouse-wheel path. Clamped against the tab's real overflow.
+#[allow(dead_code)]
 pub fn scroll_by(assets: &UiAssets, specs: &[Spec], st: &mut MenuState, w: f32, h: f32, rows: f32) {
     let l = layout(assets, specs, st, w, h);
     st.scroll_acc += rows;

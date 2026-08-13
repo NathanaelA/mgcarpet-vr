@@ -35,10 +35,14 @@ mod xr_init;
 #[cfg(target_os = "android")]
 mod xr_input;
 
+#[cfg(target_os = "android")]
+use mgc_render::{NATIVE_H,NATIVE_W};
+
+
 use mgc_formats::bundle::Bundle;
 use mgc_formats::{Game, LevelPackage, mgcl};
-use mgc_render::{Billboard, CameraView, LevelView, NATIVE_H, NATIVE_W, Renderer};
-use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT, ThrustModel};
+use mgc_render::{Billboard, CameraView, LevelView, Renderer};
+use mgc_sim::{FlightInput, Flyer, Simulation, TICK_DT};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
@@ -406,7 +410,7 @@ impl CampaignRun {
                 })
             }
             CampaignId::Mc2 => {
-                let mut save = if let Some(bytes) = record {
+                let save = if let Some(bytes) = record {
                     let s = saves::Mc2Save::decode(&bytes)
                         .map_err(|e| format!("mc2 slot {}: {e}", slot_no))?;
                     println!(
@@ -3792,24 +3796,74 @@ impl App {
         self.renderer.as_ref().is_some_and(|r| r.map_view())
     }
 
+
+    #[cfg(target_os = "android")]
+    fn close_spell_pane(&mut self, hand: u8, slot: usize) -> FlightInput {
+        let spell = self.pane.as_ref().map(|p| p.order[slot]).unwrap_or(0);
+        let level = self
+            .selector_hover
+            .level
+            .unwrap_or(self.spell_levels[spell as usize]);
+        self.pane_commit(slot, hand, level);
+        self.selector_drag = None;
+
+        self.ctrl_held = false;
+        self.selector_hover = ui::SelectorHover::default();
+        if (!self.book_open() || !self.selector.map_book) && self.ctrl_grab_restore
+        {
+            self.set_grab(true);
+        }
+
+        // Return the equip for the hand that was selected
+        if self.is_mc2() {
+            return FlightInput {
+                mc2_select: self.pending_mc2_select.take(),
+                ..FlightInput::default()
+            }
+        } else {
+            return FlightInput {
+                equip_left: if hand == 0 {
+                    self
+                        .pending_equip
+                        .0
+                        .take()
+                        .map(mgc_sim::mc1::spells::SpellId)
+                } else {
+                    None
+                },
+                equip_right: if hand == 1 {
+                    self
+                        .pending_equip
+                        .1
+                        .take()
+                        .map(mgc_sim::mc1::spells::SpellId)
+                } else {
+                    None
+                },
+                ..FlightInput::default()
+            }
+        }
+    }
+
     #[cfg(target_os = "android")]
     // On XR the input is polled from the XR session, not the keyboard/mouse.
     // All input from the XR controllers is handled here
     fn tick_input(&mut self, event_loop: &ActiveEventLoop) -> FlightInput {
         let is_mc2 = self.is_mc2();
-        let mut grabbed = self.grabbed;
+        let grabbed = self.grabbed;
         let mut owned = [false; 26];
         let mut bindable = [false; 26];
+        let mut levels = [0; 26];
 
         if grabbed {
-            (owned, bindable) = if let Some(w) = sess!(self).sim.world.as_mut() {
+            (owned, bindable, levels) = if let Some(w) = sess!(self).sim.world.as_mut() {
                 if is_mc2 {
                     let castable = w.mc2_book_view().castable;
                     let mut cast = [false; 26];
                     for i in 0..26 {
                         cast[i] = castable[i][0];
                     }
-                    (w.mc2_book_view().owned, cast)
+                    (w.mc2_book_view().owned, cast, w.mc2_book_view().levels)
                 } else {
                     let mut owned = [false; 26];
                     let mut bindable = [false; 26];
@@ -3819,10 +3873,10 @@ impl App {
                         owned[i] = mc1_owned[i];
                         bindable[i] = mc1_bindable[i];
                     }
-                    (owned, bindable)
+                    (owned, bindable, levels)
                 }
             } else {
-                ([false; 26], [false; 26])
+                ([false; 26], [false; 26], [0; 26])
             };
         }
 
@@ -3839,7 +3893,7 @@ impl App {
         let mut in_panel = false;
         // Since our state is handled a bit differently than the original system as we still need inputs
         // We set a flag if we are in a panel in the game screen
-        if in_bookview || self.paused || in_pregame_screen {
+        if in_bookview || self.paused || in_pregame_screen || self.ctrl_held {
             // grabbed = true;
             in_panel = true;
         }
@@ -3861,6 +3915,7 @@ impl App {
             screen_size,
             owned,
             bindable,
+            levels,
             is_mc2,
             grabbed,
             in_panel,
@@ -3885,6 +3940,45 @@ impl App {
                         m.skip();
                         return FlightInput::default();
                     }
+                } else if self.ctrl_held {
+                    // The CTRL selector pane (over flight OR the map
+                    // screen): press anchors the level flyout for the
+                    // clicked hand, release commits level + binding
+                    // (remc2 PI:806-929); SHIFT+click edits the
+                    // CYCLE RING (cmd 0x26 — toggle/move, no equip
+                    // side-effect, PI:856-878). Fire never leaks
+                    // through the pane.
+                    let hand = if input.fire_left { 0 } else { 1 };
+                    if let Some(slot) = self.selector_hover.slot {
+                        let spell = self.pane.as_ref().map(|p| p.order[slot]);
+                        let mc2 = self.is_mc2();
+                        let owned = (self.cfg.gameplay.cheat.dev_spells && mc2)
+                            || spell
+                            .map(|c| {
+                                let world = self
+                                    .session
+                                    .as_deref()
+                                    .and_then(|s| s.sim.world.as_ref());
+                                world.is_some_and(|w| {
+                                    if mc2 {
+                                        w.mc2_book_view().owned[c as usize]
+                                    } else {
+                                        w.loadout().owned[c as usize]
+                                    }
+                                })
+                            })
+                            .unwrap_or(false);
+                        if owned {
+                            if is_mc2 {
+                                self.selector_drag = Some((slot, hand));
+                            } else {
+                                return self.close_spell_pane(hand, slot);
+                            }
+                        }
+                    } else if let Some((slot, h)) = self.selector_drag {
+                        return self.close_spell_pane(hand, slot);
+                    }
+                    // return FlightInput::default();
                 } else if self.paused && input.fire_right {
                     // The pointer is on the right-hand controller, so we only allow the right click to trigger pause menu items.
                     // If the mini-menu is open, it handles and return true
@@ -4031,6 +4125,33 @@ impl App {
                     self.set_grab(true);
                 }
             }
+        } else if input.extra_data & 0x04 != 0 && !self.paused {
+            // MC2 Ctrl Pane
+            if !self.ctrl_held {
+                self.ctrl_held = true;
+                self.ctrl_grab_restore = self.grabbed;
+                if self
+                    .session
+                    .as_deref()
+                    .is_some_and(|s| s.level.ui.is_some())
+                {
+                    self.set_grab(false);
+                    self.fire_held = false;
+                    self.fire_right_held = false;
+                }
+            } else if self.ctrl_held {
+                self.ctrl_held = false;
+                self.selector_drag = None;
+                self.selector_hover = ui::SelectorHover::default();
+                // Re-grab unless the BOOK map holds the cursor
+                // (the bookless map keeps controls live, so
+                // releasing CTRL over it returns to mouse-look).
+                if (!self.book_open() || !self.selector.map_book) && self.ctrl_grab_restore
+                {
+                    self.set_grab(true);
+                }
+            }
+            return FlightInput::default();
         }
 
         // We don't return anything when we are paused
@@ -8051,6 +8172,13 @@ impl ApplicationHandler for App {
                         // (no mini-menu behind it): Esc closes it and
                         // unpauses, as before.
                         self.toggle_menu();
+                    } else if self.pre_game_menu.is_some() {
+                        // Pre-game menu: Esc = cancel, back to the
+                        if let Some(m) = &mut self.pre_game_menu {
+                            m.escape();
+                        } else {
+                            event_loop.exit();
+                        }
                     } else if self.screen == Screen::Menu {
                         // Main menu: close the modal, else the exit
                         // confirm (retail Esc = the Exit button).
@@ -8918,7 +9046,8 @@ fn parse_args() -> Result<Args, String> {
     let mut args = parse_base_args()?;
     args.sky = Option::from(false); // At this point, the sky is not supported on Android.
     args.reflections = Option::from(false); // This costs a lot of CPU, worth defaulting off
-    args.fps = Option::from(true);
+    args.spell_selector = Option::from(config::SpellSelector::Mc1Mc2);
+    // args.fps = Option::from(true);
     args.crosshair = Option::from(false);
     args.vsync = Option::from(false);
     args.slot = Option::from(1);
