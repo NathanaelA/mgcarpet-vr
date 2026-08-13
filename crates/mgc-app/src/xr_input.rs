@@ -80,6 +80,7 @@ pub struct InputActions {
     last_btn_y_click: bool,
     last_btn_b_time: i64,
     last_btn_b_click: bool,
+    last_btn_a_click: bool,
     last_right_trigger: bool,
     last_left_trigger: bool,
     consume_triggers: bool,
@@ -208,6 +209,7 @@ impl InputActions {
             last_btn_x_click: false,
             last_btn_y_click: false,
             last_btn_b_click: false,
+            last_btn_a_click: false,
             last_btn_b_time: 0,
             consume_triggers: false,
             pointer: PointerState::default(),
@@ -247,6 +249,7 @@ impl InputActions {
         screen_size: (f32, f32),
         owned: [bool; 26],
         bindable: [bool; 26],
+        levels: [u8; 26],
         is_mc2: bool,
         grabbed: bool,
         consume_click: bool,
@@ -354,13 +357,17 @@ impl InputActions {
 
         let mut extra_data = 0;
 
-        if pressed(&self.menu_click) && !self.last_menu {
+        if pressed(&self.btn_y) && !self.last_btn_y_click {
             // Spell/Book
             extra_data |= 1;
         }
-        if pressed(&self.btn_y) && !self.last_btn_y_click {
+        if pressed(&self.menu_click) && !self.last_menu {
             // Pause Button
             extra_data |= 2;
+        }
+        if pressed(&self.btn_x) && !self.last_btn_x_click {
+            // Spell Bar
+            extra_data |= 4;
         }
 
         // Pitch Delta would normally be on right.y; but pitch is VERY annoying in vr; so we are fixing it based on moving forward backwards.
@@ -380,13 +387,13 @@ impl InputActions {
             if !self.last_squeeze_left && value(&self.squeeze_left) > 0.5 {
                 self.left_spell = next_spell(self.left_spell);
                 if self.left_spell < 128 {
-                    mc2_select = Some((self.left_spell, 0, 0));
+                    mc2_select = Some((self.left_spell, levels[self.left_spell as usize], 0));
                 }
             };
             if !self.last_squeeze_right && value(&self.squeeze_right) > 0.5 {
                 self.right_spell = next_spell(self.right_spell);
                 if self.right_spell < 128 {
-                    mc2_select = Some((self.right_spell, 0, 1));
+                    mc2_select = Some((self.right_spell, levels[self.right_spell as usize], 1));
                 }
             };
             if !self.last_thumbstick_right_click && pressed(&self.thumbstick_right_click) {
@@ -395,7 +402,7 @@ impl InputActions {
                 } else {
                     self.right_spell = 1; // possess spell
                 }
-                mc2_select = Some((self.right_spell, 0, 1));
+                mc2_select = Some((self.right_spell, levels[self.right_spell as usize], 1));
             }
             if !self.last_thumbstick_left_click && pressed(&self.thumbstick_left_click) {
                 if self.left_spell == 0 {
@@ -405,7 +412,7 @@ impl InputActions {
                 } else {
                     self.left_spell = 0; // Fireball
                 }
-                mc2_select = Some((self.left_spell, 0, 0));
+                mc2_select = Some((self.left_spell, levels[self.left_spell as usize], 0));
             }
             
         } else {
@@ -479,6 +486,8 @@ impl InputActions {
             }
         }
 
+        let btn_a = pressed(&self.btn_a) && !self.last_btn_a_click;
+
         self.last_left_trigger = value(&self.trigger_left) > 0.5;
         self.last_right_trigger = value(&self.trigger_right) > 0.5;
         self.last_squeeze_right = value(&self.squeeze_right) > 0.5;
@@ -489,6 +498,7 @@ impl InputActions {
         self.last_btn_x_click = pressed(&self.btn_x);
         self.last_btn_y_click = pressed(&self.btn_y);
         self.last_btn_b_click = pressed(&self.btn_b);
+        self.last_btn_a_click = pressed(&self.btn_a);
 
         FlightInput {
             thrust: left.y * if enhanced { 4.0 } else { 2.0 },
@@ -497,7 +507,8 @@ impl InputActions {
             pitch_delta,
             fire_left: trigger_left_value,
             fire_right: trigger_right_value,
-            respawn: pressed(&self.btn_a),
+            respawn: btn_a,
+            // barrel_roll: btn_a, // doesn't seem to work in VR, not sure why...
             demolish,
             equip_left: (equip_left < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_left)),
             equip_right: (equip_right < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_right)),

@@ -132,6 +132,7 @@ impl PreGameMenu {
     }
 
     /// Esc leaves the game (nothing has launched yet).
+    #[allow(dead_code)]
     pub fn escape(&mut self) {
         self.pending = Some(MenuAction::Quit);
     }
