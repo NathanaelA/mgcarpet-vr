@@ -71,7 +71,7 @@ build_targets = ["aarch64-linux-android"]
 apk_name = "mgcarpet-vr"
 java_sources = "android/src/main/java"
 runtime_libs = "android/src/main/jniLibs"
-resources = "android/src/main/res"
+#resources = "android/src/main/res"
 strip = "strip"
 manifest_override = "android/AndroidManifest.xml"
 

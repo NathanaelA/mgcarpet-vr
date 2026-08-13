@@ -1799,6 +1799,7 @@ struct App {
     last_map_tick: Option<u64>,
     /// P-key pause: the sim clock freezes, rendering and UI stay live.
     paused: bool,
+    prior_paused: bool,
     /// The in-game options menu. On the frontend screens P opens this
     /// directly; IN A LEVEL it is a second layer opened from the
     /// mini-menu's Options row. None = closed.
@@ -2126,6 +2127,7 @@ impl App {
             spell_levels: [0; 26],
             last_map_tick: None,
             paused: false,
+            prior_paused: false,
             menu: None,
             mini: None,
             menu_grab_restore: false,
@@ -8897,7 +8899,16 @@ impl ApplicationHandler for App {
                 self.redraw_requested(event_loop, handle_redraw);
             }
             WindowEvent::Focused(focused) => {
-                self.paused = !focused;
+                // IF the user was in the Mini menu which pauses the game
+                // then Hits the meta button, which also pauses
+                // we have to save that value so we can reset it back
+                // otherwise the mini menu gets broken
+                if focused {
+                    self.paused = self.prior_paused;
+                } else {
+                    self.prior_paused = self.paused;
+                    self.paused = true;
+                }
             }
 
             _ => {
