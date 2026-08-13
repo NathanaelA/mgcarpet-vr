@@ -1198,6 +1198,14 @@ const DEFAULT_FOG_TILES: f32 = 20.0;
 /// and the melt never overlap (player-ruled 2026-08-08, round 2).
 /// 0 stays "fog off". config::FOG_STOPS' top stop matches this.
 pub const MAX_FOG_TILES: f32 = 90.0;
+/// Horizontal tiles kept beyond the fog full-occlusion distance so the
+/// fog band still has geometry to fade over; geometry past this is
+/// invisible either to fog or to the unconditional silhouette melt.
+const FOG_CULL_MARGIN_TILES: f32 = 5.0;
+/// End of the unconditional silhouette/extinction melt band in tiles
+/// (must match terrain.wgsl / billboard.wgsl EXT_END).  Used as the
+/// no-fog cull distance so distant tiles are still hidden by the melt.
+const EXT_END_TILES: f32 = 125.0;
 
 /// Shore-field bake geometry — must match terrain.wgsl's SHORE_RES /
 /// SHORE_MAX: texels per tile edge, and the distance saturation.
@@ -1609,6 +1617,17 @@ pub struct Renderer {
     vertex_buf: Option<wgpu::Buffer>,
     index_buf: Option<wgpu::Buffer>,
     index_count: u32,
+    /// Per-frame culled terrain index buffer.  Holds a subset of the full
+    /// terrain mesh: only tiles within fog_distance + margin are included,
+    /// split into per-torus-copy ranges.
+    terrain_cull_buf: Option<wgpu::Buffer>,
+    /// Staging vector reused each frame to build culled terrain indices.
+    terrain_cull_indices: Vec<u32>,
+    /// Number of valid indices in terrain_cull_buf this frame.
+    cull_index_count: u32,
+    /// Per-torus-copy index ranges inside terrain_cull_buf.  Index maps to
+    /// shader instance (dx+1) + (dz+1)*3.
+    cull_offsets: [(u32, u32); 9],
     /// Cell count of the loaded terrain atlas (0 = render flat colors).
     atlas_cells: u32,
     /// The level's water-wave rule, as a shader selector (0/1/2).
@@ -3095,6 +3114,10 @@ impl Renderer {
             vertex_buf: None,
             index_buf: None,
             index_count: 0,
+            terrain_cull_buf: None,
+            terrain_cull_indices: Vec::new(),
+            cull_index_count: 0,
+            cull_offsets: [(0, 0); 9],
             atlas_cells: 0,
             wave_mode: 0,
             anim_turn: 0.0,
@@ -3649,6 +3672,18 @@ impl Renderer {
                 }),
         );
         self.index_count = indices.len() as u32;
+        // Dynamic buffer for per-frame fog-culled terrain indices.  It is
+        // rewritten every frame in render_texture; size is the worst-case
+        // full mesh so we never need to recreate it.
+        self.terrain_cull_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("terrain culled indices"),
+            size: (indices.len() as u64) * 4,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.terrain_cull_indices = Vec::with_capacity(indices.len());
+        self.cull_index_count = 0;
+        self.cull_offsets = [(0, 0); 9];
 
         // A small helper: 2D R8Uint texture from a byte grid.
         let byte_tex = |label: &str, bytes: &[u8], width: u32, height: u32| {
@@ -4955,6 +4990,120 @@ impl Renderer {
         Ok(())
     }
 
+    /// Rebuild the fog-culled terrain index buffer for the current camera.
+    /// Tiles beyond `fog_distance + FOG_CULL_MARGIN_TILES` are omitted, and
+    /// each kept tile is assigned to its nearest torus copy so the shader's
+    /// instance-based wrap offset is still correct.
+    fn rebuild_terrain_cull_indices(&mut self, cam: &CameraView) {
+        if self.index_buf.is_none() || self.index_count == 0 {
+            self.cull_index_count = 0;
+            self.cull_offsets = [(0, 0); 9];
+            self.terrain_cull_indices.clear();
+            return;
+        }
+        let n = MAP_TILES;
+        let cull_dist = if self.fog_distance > 0.0 {
+            self.fog_distance + FOG_CULL_MARGIN_TILES
+        } else {
+            // No fog: keep rendering until the unconditional silhouette
+            // melt fully discards fragments.
+            EXT_END_TILES
+        };
+        let cull_dist2 = cull_dist * cull_dist;
+
+        // dx, dz in {-1, 0, 1}; shader instance index is (dx+1) + (dz+1)*3.
+        const COPIES: [(i32, i32); 9] = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (0, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ];
+        let tiles = n as f32;
+        let verts_per_side = n + 1;
+        let at = |x: usize, z: usize| (z * verts_per_side + x) as u32;
+
+        // First pass: decide which torus copy each visible tile belongs to.
+        let mut tile_copy = vec![0u8; n * n];
+        let mut counts = [0u32; 9];
+        for z in 0..n {
+            for x in 0..n {
+                let cx = x as f32 + 0.5;
+                let cz = z as f32 + 0.5;
+                let mut best = 0usize;
+                let mut best_dist2 = f32::INFINITY;
+                for (i, (dx, dz)) in COPIES.iter().enumerate() {
+                    let ox = cx + (*dx as f32) * tiles;
+                    let oz = cz + (*dz as f32) * tiles;
+                    let dx_ = cam.x - ox;
+                    let dz_ = cam.z - oz;
+                    let d2 = dx_ * dx_ + dz_ * dz_;
+                    if d2 < best_dist2 {
+                        best_dist2 = d2;
+                        best = i;
+                    }
+                }
+                if best_dist2 < cull_dist2 {
+                    tile_copy[z * n + x] = best as u8;
+                    counts[best] += 6;
+                } else {
+                    tile_copy[z * n + x] = 255;
+                }
+            }
+        }
+
+        // Compute contiguous ranges for each copy.
+        let mut total = 0u32;
+        for i in 0..9 {
+            self.cull_offsets[i] = (total, counts[i]);
+            total += counts[i];
+        }
+        self.cull_index_count = total;
+        self.terrain_cull_indices.clear();
+        self.terrain_cull_indices.resize(total as usize, 0);
+
+        // Second pass: emit indices into the staging buffer.
+        let mut heads: [usize; 9] = std::array::from_fn(|i| self.cull_offsets[i].0 as usize);
+        for z in 0..n {
+            for x in 0..n {
+                let copy = tile_copy[z * n + x];
+                if copy == 255 {
+                    continue;
+                }
+                let (a, b, c, d) = (at(x, z), at(x + 1, z), at(x + 1, z + 1), at(x, z + 1));
+                let tri = if (x + z) & 1 == 0 {
+                    [a, c, b, a, d, c]
+                } else {
+                    [a, d, b, b, d, c]
+                };
+                let head = &mut heads[copy as usize];
+                self.terrain_cull_indices[*head..*head + 6].copy_from_slice(&tri);
+                *head += 6;
+            }
+        }
+
+        if self.cull_index_count > 0 {
+            if let Some(buf) = &self.terrain_cull_buf {
+                self.queue
+                    .write_buffer(buf, 0, bytemuck::cast_slice(&self.terrain_cull_indices));
+            } else {
+                // Defensive: if load_level hasn't run yet, allocate on demand.
+                use wgpu::util::DeviceExt;
+                self.terrain_cull_buf = Some(self.device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("terrain culled indices"),
+                        contents: bytemuck::cast_slice(&self.terrain_cull_indices),
+                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ));
+            }
+        }
+    }
+
     /// Render one frame into `surface_view` — any color view of the
     /// surface format and current size. This is the whole frame minus
     /// target acquisition and present, so an embedder can point it at
@@ -5170,6 +5319,9 @@ impl Renderer {
                 bytemuck::bytes_of(&ceiling_globals),
             );
         }
+        // Rebuild the per-frame terrain index list so tiles past the fog
+        // band (plus a small margin) are not rasterized at all.
+        self.rebuild_terrain_cull_indices(cam);
         if mirror_active {
             // The mirror pass globals: atlas.w = 2 flips terrain y in
             // the vertex stage; viewport.z = 0 (a mirror never samples
@@ -5689,8 +5841,18 @@ impl Renderer {
             pass.set_bind_group(0, bg, &[]);
             pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]);
             pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.index_count, 0, 0..9);
+            if let Some(cib) = &self.terrain_cull_buf {
+                pass.set_index_buffer(cib.slice(..), wgpu::IndexFormat::Uint32);
+                for i in 0..9 {
+                    let (start, count) = self.cull_offsets[i];
+                    if count > 0 {
+                        pass.draw_indexed(start..(start + count), 0, i as u32..(i as u32 + 1));
+                    }
+                }
+            } else {
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.index_count, 0, 0..9);
+            }
             // Mirrored sprites (opaque range only — reflected smoke
             // isn't worth a sorted blend pass). NOT retail (GRO reflects
             // terrain only); a monster over water should show in the
@@ -5821,9 +5983,23 @@ impl Renderer {
                         _ => pass.set_bind_group(1, &self.reflection_dummy_bind_group, &[]),
                     }
                     pass.set_vertex_buffer(0, vb.slice(..));
-                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                     // 3x3 wrap copies; the vertex shader offsets by instance.
-                    pass.draw_indexed(0..self.index_count, 0, 0..9);
+                    if let Some(cib) = &self.terrain_cull_buf {
+                        pass.set_index_buffer(cib.slice(..), wgpu::IndexFormat::Uint32);
+                        for i in 0..9 {
+                            let (start, count) = self.cull_offsets[i];
+                            if count > 0 {
+                                pass.draw_indexed(
+                                    start..(start + count),
+                                    0,
+                                    i as u32..(i as u32 + 1),
+                                );
+                            }
+                        }
+                    } else {
+                        pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..self.index_count, 0, 0..9);
+                    }
                     // The MC2 cave ceiling: the same grid again with
                     // the ceiling heightmap + ceiling globals (the
                     // pipeline never culls, so the downward faces
@@ -5831,7 +6007,22 @@ impl Renderer {
                     // like retail's ceiling raster pass).
                     if let Some(cbg) = &self.ceiling_bind_group {
                         pass.set_bind_group(0, cbg, &[]);
-                        pass.draw_indexed(0..self.index_count, 0, 0..9);
+                        if let Some(cib) = &self.terrain_cull_buf {
+                            pass.set_index_buffer(cib.slice(..), wgpu::IndexFormat::Uint32);
+                            for i in 0..9 {
+                                let (start, count) = self.cull_offsets[i];
+                                if count > 0 {
+                                    pass.draw_indexed(
+                                        start..(start + count),
+                                        0,
+                                        i as u32..(i as u32 + 1),
+                                    );
+                                }
+                            }
+                        } else {
+                            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..self.index_count, 0, 0..9);
+                        }
                     }
                 }
                 if let (1.., Some(bg), Some(buf)) = (
