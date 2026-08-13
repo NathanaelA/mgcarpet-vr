@@ -10712,6 +10712,9 @@ impl ApplicationHandler for App {
 
                 self.redraw_requested(event_loop, handle_redraw);
             }
+            WindowEvent::Focused(focused) => {
+                self.paused = !focused;
+            }
 
             _ => {
                 log::info!("!!! mgcarpet VR: window_event: {:?}", event);
