@@ -785,6 +785,7 @@ pub fn registry() -> Vec<Spec> {
                 stops: &crate::config::FOG_STOPS,
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Render,
             group: "render · preference",
@@ -812,6 +813,7 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Render,
             group: "render · preference",
@@ -1597,6 +1599,7 @@ pub fn registry() -> Vec<Spec> {
             },
         },
         // ---- controls · preferences -------------------------------------
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preferences",
@@ -1630,6 +1633,7 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preferences",
@@ -1651,6 +1655,7 @@ pub fn registry() -> Vec<Spec> {
                 step: 0.1,
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preferences",
@@ -1674,6 +1679,7 @@ pub fn registry() -> Vec<Spec> {
                 step: 0.05,
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preferences",
@@ -1696,6 +1702,7 @@ pub fn registry() -> Vec<Spec> {
                 step: 0.05,
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preferences",
@@ -1722,6 +1729,7 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · preferences",
@@ -1783,6 +1791,7 @@ pub fn registry() -> Vec<Spec> {
             },
         },
         // ---- controls · models ------------------------------------------
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · models",
@@ -1819,6 +1828,7 @@ pub fn registry() -> Vec<Spec> {
                 ],
             },
         },
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Controls,
             group: "controls · models",
@@ -2023,6 +2033,7 @@ pub fn registry() -> Vec<Spec> {
             },
         },
         // ---- gameplay · enhancement -------------------------------------
+        #[cfg(not(target_os = "android"))]
         Spec {
             domain: Gameplay,
             group: "gameplay · enhancement",
