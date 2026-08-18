@@ -34,3 +34,4 @@ __pycache__
 
 # Symlinked mgcarpet app for development convenience — never committed
 /mgcarpet
+/mgc-import
