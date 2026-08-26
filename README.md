@@ -255,6 +255,8 @@ git push --force
 git lfs prune
 ```
 
+`ANDROID_NDK_HOME=/home/nathanaela/Android/Sdk/ndk/30.0.14904198     ANDROID_SDK_ROOT=/home/nathanaela/Android/Sdk     make apk && adb install ../../../target/release/apk/mgcarpet-vr.apk `
+
 
 ## License
 

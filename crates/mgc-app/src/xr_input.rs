@@ -535,6 +535,7 @@ impl InputActions {
             demolish,
             equip_left: (equip_left < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_left)),
             equip_right: (equip_right < 128).then(|| mgc_sim::mc1::spells::SpellId(equip_right)),
+            stick_y: if !grabbed { (right.y * 10.0) as i16 } else { 0 },
             mc2_select,
             extra_data,
             ..Default::default()
