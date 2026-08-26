@@ -5019,6 +5019,18 @@ impl App {
                          }
                      }
                 }
+            } else if input.stick_y != 0 {
+                if self.menu.is_some() {
+                    let rows = if input.stick_y > 1 { -1.0 } else if input.stick_y < -1 { 1.0 } else { 0.0 };
+                    let size = self.view_size();
+                    let assets = match &self.session {
+                        Some(sess) => sess.level.ui.as_ref(),
+                        None => self.frontend_ui.as_ref(),
+                    };
+                    if let (Some(st), Some(assets)) = (&mut self.menu, assets) {
+                        menu::scroll_by(assets, &self.specs, st, size.0, size.1, rows);
+                    }
+                }
             }
 
             // If we are in the pregame screen or not  in a panel we want to swallow all input
@@ -6403,7 +6415,7 @@ impl App {
         #[cfg(target_os = "android")]
         if enhanced {
             self.cfg.render.preference.fog_distance = 50;
-            self.cfg.sim.parameters.awake_range = Option::from(55);
+            self.cfg.sim.parameters.awake_range = Option::from(65);
         } else {
             // We reset this to actual defaults.
             self.cfg.render.preference.fog_distance = 20;
@@ -10798,7 +10810,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = parse_base_args()?;
     args.sky = Option::from(false); // At this point, the sky is not supported on Android.
-    args.reflections = Option::from(false); // This costs a lot of CPU, worth defaulting off
+    args.reflections = Option::from(true);
     args.spell_selector = Option::from(config::SpellSelector::Mc1Mc2);
     // args.fps = Option::from(true);
     args.crosshair = Option::from(false);
