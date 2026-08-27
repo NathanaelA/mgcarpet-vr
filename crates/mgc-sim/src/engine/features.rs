@@ -6156,20 +6156,65 @@ impl Gen {
 
     /// sub_360C0 (:42892): if the cell is land and its NW 2x2 quad has
     /// no building/wall texture (types 6..=0x22), replace its height by
-    /// the 3x3 average over similarly-plain cells. Index arithmetic is
-    /// linear u16 (rows wrap into each other) — faithful.
+    /// the 3x3 average over similarly-plain cells.
+    ///
+    /// ⚠⚠⚠ THE QUAD GATE'S INDEX ARITHMETIC IS **SIGNED 32-BIT**, NOT
+    /// u16 (:42912-19): retail computes `(u16)a1 - 257` / `- 256` /
+    /// `- 1` as int and indexes `mapTerrainType` with the RESULT — so
+    /// for a ROW-0 cell (t < 257) the two "row −1" reads land BELOW
+    /// the type plane, in the SOUND-DRIVER globals at CC0DF..CC1DF
+    /// (word_CC070/byte_CC0C2/dword_CC126 & co, the HMI init block).
+    /// Whether a row-0 cell smooths is decided by sound-driver bytes.
+    /// Only the GATE escapes: the 3x3 SUM loop casts per access
+    /// (`(u16)result`, :42928) and wraps into row 255 correctly, and
+    /// the write is in-plane.
+    ///
+    /// [`OOB_TYPE_SHIM`] models those 257 bytes for the retail machine
+    /// the corpus was recorded on. Measured mc1hwl0 t=21282 (castle
+    /// 233's downgrade un-stamp straddles the y wrap): the shim's
+    /// {56, 59, 71} read as building-typed — gate FAILS on cells
+    /// (56,0)/(58,0)/(59,0)/(70,0)/(71,0) of the epilogue while
+    /// (57..69,0) pass, including (66,0) whose port-side NW quad has
+    /// the type-11 keep wall at (65,255) and previously SKIPPED
+    /// (retail smooths it to 157 = the 8-plain-neighbor average).
+    /// With this table the full 441-cell post-collapse height grid
+    /// reproduces retail 441/441; without it, 20 cells drift (the
+    /// t=21282 `(10,0)slot601:z` head and its whole fire-field
+    /// cascade). Offset 71 is the first byte of `dword_CC126` (a
+    /// sound-init parameter, static after boot); 56/59 sit in the
+    /// driver block — stable within a session, so one table serves
+    /// the whole corpus until a take proves otherwise.
+    /// The 257 bytes retail's sub_360C0 quad gate reads BELOW the
+    /// type plane for row-0 cells (addresses CC0DF..CC1DF — sound-
+    /// driver state; see [`Gen::smooth_cell`]). Only the plain/
+    /// building CLASS of a byte matters to the gate, so the three
+    /// observed building-classed offsets carry a representative 22;
+    /// every unobserved byte defaults to 0 (plain). Indexed by
+    /// `signed_index + 257`.
+    const OOB_TYPE_SHIM: [u8; 257] = {
+        let mut s = [0u8; 257];
+        s[56] = 22;
+        s[59] = 22;
+        s[71] = 22;
+        s
+    };
+
     fn smooth_cell(&mut self, t: usize) {
         if self.t.angle[t] & 7 == 0 || self.t.height[t] == 0 {
             return;
         }
         let plain = |ty_val: u8| ty_val <= 5 || ty_val > 0x22;
-        let quad = [
-            (t.wrapping_sub(257)) & 0xFFFF,
-            (t.wrapping_sub(256)) & 0xFFFF,
-            (t.wrapping_sub(1)) & 0xFFFF,
-            t,
-        ];
-        if !quad.iter().all(|&q| plain(self.t.tile_type[q])) {
+        // The gate's four reads, at SIGNED offsets (see above): a
+        // negative index resolves through the below-plane shim.
+        let read = |idx: i64| -> u8 {
+            if idx < 0 {
+                Self::OOB_TYPE_SHIM[(idx + 257) as usize]
+            } else {
+                self.t.tile_type[idx as usize]
+            }
+        };
+        let quad = [t as i64 - 257, t as i64 - 256, t as i64 - 1, t as i64];
+        if !quad.iter().all(|&q| plain(read(q))) {
             return;
         }
         let mut sum = 0u32;
@@ -7827,6 +7872,53 @@ mod tests {
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
         }
+    }
+
+    /// sub_360C0's quad gate indexes the type plane with SIGNED
+    /// 32-bit arithmetic (:42912-19): for a row-0 cell the two
+    /// "row −1" reads land BELOW the plane in the sound-driver
+    /// globals (CC0DF..CC1DF), modeled by [`Gen::OOB_TYPE_SHIM`] —
+    /// so (a) a row-0 cell whose in-map NW quad is all plain still
+    /// SKIPS when its shim byte is building-classed, and (b) a row-0
+    /// cell whose row-255 neighbor holds a wall still SMOOTHS,
+    /// because retail never reads row 255 for the gate. Measured
+    /// mc1hwl0 t=21282 (castle 233's downgrade rect straddles the y
+    /// wrap): the shim reproduced retail's post-collapse heights
+    /// 441/441 where the wrapped gate left 20 cells drifted (the
+    /// `(10,0)slot601:z` head). Reversion-probed: with the wrapped
+    /// quad restored this test fails and the mc1hwl0 horizon drops
+    /// 21483 → 21281.
+    #[test]
+    fn the_row0_smoother_gate_reads_below_the_type_plane() {
+        let mut g = Gen::new(
+            flat_land(100),
+            synthetic_assets(),
+            1,
+            ChassisParams::MC1,
+            crate::verbs::VerbSet::MC1,
+        );
+        // (a) shim byte 56 is building-classed: (56,0) must not
+        // smooth even though every in-map quad cell is plain.
+        g.t.height[tile(56, 1)] = 118;
+        g.smooth_cell(tile(56, 0));
+        assert_eq!(
+            g.t.height[tile(56, 0)],
+            100,
+            "shim byte 56 gates the smooth off"
+        );
+        // (b) a wall at (65,255) sits in the PORT's old NW quad of
+        // (66,0) but retail's gate never reads it — the cell smooths
+        // over the 8 plain neighbors (wall excluded from the SUM
+        // only): (8*100 + 118) / 8 = 102... the wall cell drops from
+        // the sum, n = 8.
+        g.t.tile_type[tile(65, 255)] = 11;
+        g.t.height[tile(66, 1)] = 118;
+        g.smooth_cell(tile(66, 0));
+        assert_eq!(
+            g.t.height[tile(66, 0)],
+            102,
+            "row-0 gate ignores the in-map row-255 wall"
+        );
     }
 
     /// The creature awake gate is a chassis parameter (the

@@ -1142,6 +1142,7 @@ fn run_mc1(
             ));
         }
         if let (Some(img), Some(block)) = (timg.as_mut(), &tick.terrain) {
+            img.dump_delta(block, tick.t);
             img.apply(block)
                 .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
         }
@@ -1908,6 +1909,7 @@ fn run_mc2(
             ));
         }
         if let (Some(img), Some(block)) = (timg.as_mut(), &tick.terrain) {
+            img.dump_delta(block, tick.t);
             img.apply(block)
                 .map_err(|e| format!("t={}: terrain: {e}", tick.t))?;
         }

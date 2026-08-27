@@ -2341,6 +2341,41 @@ impl TerrainImage {
         self.based
     }
 
+    /// `MGC_TERRAIN_DELTA_DUMP=t0:t1` — print a record's delta rows
+    /// (plane, (x,y), old→new) BEFORE they apply: the truth channel's
+    /// own changelog, the only view of WHICH cells retail wrote on a
+    /// tick (a cell trace shows watched values, never the changed
+    /// set). Call right before [`TerrainImage::apply`].
+    pub fn dump_delta(&self, block: &TerrainBlock, t: u64) {
+        let Ok(v) = std::env::var("MGC_TERRAIN_DELTA_DUMP") else {
+            return;
+        };
+        let Some((a, b)) = v.split_once(':') else {
+            return;
+        };
+        let (Ok(t0), Ok(t1)) = (a.parse::<u64>(), b.parse::<u64>()) else {
+            return;
+        };
+        if t < t0 || t > t1 {
+            return;
+        }
+        let Some(delta) = &block.delta else { return };
+        let Ok(rows) = decode_terrain_delta(delta, self.planes.len(), self.decl.cells()) else {
+            return;
+        };
+        for (pi, plane) in rows.iter().enumerate() {
+            for &(cell, val) in plane {
+                eprintln!(
+                    "[tdelta] t={t} plane={} cell=({},{}) {}->{val}",
+                    self.decl.planes[pi],
+                    cell & 0xFF,
+                    cell >> 8,
+                    self.planes[pi][cell as usize],
+                );
+            }
+        }
+    }
+
     /// The running image of a declared plane, by name.
     pub fn plane(&self, name: &str) -> Option<&[u8]> {
         let i = self.decl.planes.iter().position(|p| p == name)?;

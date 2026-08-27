@@ -20736,3 +20736,103 @@ fixture (the session-53 precedent).
   neighborhood.
 - wiz-0 `hits` off-by-one from t=19632 · import-side census
   undercount (52) · mc1l37 2487 · mc2 onramp.
+
+## SESSION 2026-08-27f (55) — mc1hwl0 21281 → 21483 ON THE SMOOTHER'S
+## OUT-OF-ARRAY ROW-0 GATE (the castle-downgrade terrain stamp head)
+
+Head: t=21282 `(10,0)slot601:z` — the castle-233 downgrade's east-rim
+heights. Landed: ONE law. Plain clean 25,964 → **26,054**, horizon
+21281 → **21483** (+202); `--segmented` devs 1195 (was 1198), clean
+48,947; APP clean 21,425 → **23,120** (+1,695, pose first 23132). All
+10 certified takes END (clean=graded, 0 devs), guard rows
+byte-identical (noskip 970, galore 7281/7433, mc1l6 1617, mc2l1/l4 0,
+mc2l24 1, mc2l30 215), 232 fixtures pass, suite 849/0 under
+MGC_REQUIRE_GOLDENS, touched crates fmt-clean.
+
+### THE LAW (sub_360C0 :42892, the 3x3 height smoother)
+
+**THE QUAD GATE'S INDEX ARITHMETIC IS SIGNED 32-BIT, NOT u16**
+(:42912-19): retail computes `(u16)a1 − 257 / − 256 / − 1` as int and
+indexes `mapTerrainType` with the result, so for a ROW-0 cell
+(t < 257) the two "row −1" gate reads land BELOW the type plane — in
+the SOUND-DRIVER globals at CC0DF..CC1DF (word_CC070 / byte_CC0C2 /
+dword_CC126, the HMI init block). Whether a row-0 cell smooths is
+decided by sound-driver bytes, NOT by the wrapped row-255 terrain the
+port consulted. Only the gate escapes: the 3x3 SUM casts per access
+(`(u16)result`, :42928) and wraps correctly; the write is in-plane.
+Port model: `Gen::OOB_TYPE_SHIM`, a 257-byte below-plane table —
+offsets {56, 59, 71} building-classed (71 = the first byte of
+dword_CC126, a static-after-boot sound-init parameter), all else
+plain. With the shim, the FULL 441-cell post-collapse height grid at
+t=21282 reproduces retail **441/441** (verified offline against the
+take's own delta); the wrapped gate left 20 cells adrift: (66,0)
+skipped at 145 where retail smooths it to 157 (the type-11 keep wall
+at (65,255) sits in the port's old quad but retail never reads it),
+(56,0)/(58,0)/(59,0)/(70,0)/(71,0) smoothed where retail's shim bytes
+gate them OFF, everything else ±1/2 smoother-order cascade. The
+graded head was pure derivative: the mass-fire-spread fires standing
+on the rim (slots 601/602/942/989/995) read their z off the drifted
+cells; from t=21293 the level-2 repaint painter drags all rubble to
+its floor goals and the whole neighborhood re-converges — a ~23-tick
+divergence window that cost 200+ boundaries.
+
+Pinned by `features.rs::the_row0_smoother_gate_reads_below_the_type_
+plane` (reversion-probed: with the wrapped quad restored the unit
+FAILS and the horizon drops 21483 → 21281 on the old sig).
+
+### METHOD
+
+- ⭐⭐⭐ **DUMP THE TRUTH CHANNEL'S OWN DELTA BEFORE THEORISING ABOUT A
+  WRITER** — the new `MGC_TERRAIN_DELTA_DUMP=t0:t1` instrument
+  (mgc-formats `TerrainImage::dump_delta`, applied in replay) prints
+  each tick's recorded (plane, cell, old→new) rows: the changed-cell
+  SET killed every "single missing +12 write" theory (the real
+  divergence was 20 cells with BOTH signs) and the per-tick delta
+  cadence proved the truth channel per-tick.
+- ⭐⭐⭐ **SIMULATE THE PASS OFFLINE AND SEARCH VARIANTS**: with
+  post-walk state from the [clp] trace and retail finals from the
+  delta, a 30-line python re-implementation of the epilogue scored
+  every visit-order/quad/buffering variant — all structurally sane
+  variants were WORSE than the port (20 vs 100+ mismatches), which is
+  what said "the algorithm is right, the INPUTS differ" and pointed
+  at the only row where an index goes negative.
+- ⭐⭐ **THE MIXED SMOOTH/SKIP PATTERN WAS THE FINGERPRINT**: retail
+  skipped {56,58,59,70,71} and smoothed {57,60,66,67,69} on one row —
+  no in-map predicate can produce that; 257-byte OOB memory can, and
+  three cells' independent cascade arithmetic ((60,0) 147 = its
+  average over the UNSMOOTHED 145s, (67,0) 148 = its average over the
+  SMOOTHED 157) confirmed it to the unit.
+- ⭐⭐ The pair (verify-deltas --start 21281) proved the whole head
+  IN-TICK from identical imported state before any drift theory could
+  take root — and the `mc1hwl0-terrain-z` capture rule already waives
+  these z rows in PAIR verdicts while the plain horizon still grades
+  them (the two instruments disagree by design; read both).
+- ⭐ RULED OUT along the way, permanently: the un-stamp walk arms are
+  byte-identical AND draw-count-identical (scratch slot-0 rand);
+  build rows 1/2/3 decoded from `baked/.../build.tab.bin` (levels
+  share the 21x21 box: row 2 = the corner towers, row 3 = the
+  demolish rubble with the door ramp); the truth-side post-collapse
+  1/tick decay = the level-2 repaint painter's floor goals (port
+  models it); sub_37150 is extents-only; the respawn's sub_279D0
+  rebuild loop exists (:54992, scratch-slot stamps rows 0..N-1) but
+  the planes matched through 21281 so it was idempotent here.
+
+### THE PSEUDO-STREAM VERDICT (the orient nibbles — session 54's
+### other suspect, now DISPOSED)
+
+The 135 remaining angle diffs at 21282 are ALL orient-only (bits
+4-6). Retail's `pseudoRand_12C1E0` global is stepped by the RENDERER:
+DrawWorld's blur/static path (:38976) steps it ONCE PER VIEWPORT ROW
+on every noise-composited frame, so the stream's phase depends on
+frames drawn and can NEVER be free-run headlessly. The orient nibble
+is write-only cosmetics to the sim (inference reads angle&7; the
+plain-arm write is `(angle&0x87) + 16*(pseudo%7)` — bits 4-6 only,
+no carry), so the lane is visual-only: rostered, not dug. The import
+sentinel `pseudo = 0` (conformance.rs) stays.
+
+### OPEN (next heads)
+
+- **t=21484 `(3,2)slot498:life`** — a castle life lane, fresh family
+  (the first post-fire-field head; plain and segmented agree).
+- noskip-970 `(10,42)` ring · wiz-0 hits off-by-one 19632 ·
+  import-side census undercount (52) · mc1l37 2487 · mc2 onramp.
