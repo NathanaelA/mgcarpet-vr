@@ -4094,10 +4094,12 @@ impl World {
             // 1000 purse on the first live tick (mc1hwl0 t=20762,
             // f140 1000 → 0 under the carried −1000).
             r.grace = 100;
-            r.regen_stall = 0;
+            // `memset(u8_333, 16, 8)` (:55048 / hw:51122): the respawn
+            // SETS the stall block to 16 — the shadow's post-respawn
+            // stall=16 was the respawn's own stamp, not a survival.
+            r.regen_stall = 16;
             r.state = AiState::Fresh;
             r.target = 0;
-            r.burst = 0;
             r.poverty = false;
             // :54868-83 — the respawn clears EXACTLY three flight
             // registers: v_12 (target speed), v_16 (strafe/jink) and
@@ -4108,7 +4110,19 @@ impl World {
             r.knock_mag = 0;
             r.hate = [HATE_NEUTRAL; 8];
             r.war = [false; 8];
-            r.cooldown = [0; SPELL_COUNT];
+            // ⭐ THE BURST AND COOLDOWN REGISTERS SURVIVE THE RESPAWN:
+            // sub_44D30 writes NO +48 burst and exactly ONE cooldown
+            // entry — `var_756 = 4·slot` = cooldown[16] (both
+            // binaries; the array base is +724). The port's blanket
+            // clears let the reborn picker reach spells on a schedule
+            // retail's carried cooldowns refuse, and 500 ticks after
+            // the t=20761 respawn the drift finally forked a commit:
+            // mc1hwl0 t=21275 the port committed Wall of Fire where
+            // retail committed Fireball, so retail's t=21276 fireball
+            // emission (the tick's FIRST allocation) never happened in
+            // the port and every later spawn of the mass fire-spread
+            // tick popped one free-stack slot late (the
+            // missing-(10,0)-at-951 head).
             r.cooldown[16] = 4 * r.slot as u16;
         }
         // Re-seat the +140 mana mirror with the base pool.
@@ -5303,5 +5317,51 @@ mod tests {
             (Gen::CASTLE_CAP[lvl], Gen::CASTLE_CAP[lvl] / 101),
             "the fresh (12,16) wears the standing castle's ladder price"
         );
+    }
+
+    /// The respawn's WIZEXT half (sub_44D30 tail, :55031-48 /
+    /// hw:51110-22): the +48 burst counter and the +724 cooldown
+    /// array SURVIVE the respawn — the function writes exactly ONE
+    /// cooldown entry (`var_756 = 4·slot` = cooldown[16]) and no
+    /// burst — and the stall block is SET to 16 (`memset(u8_333,
+    /// 16, 8)`), not cleared. The port's blanket clears let the
+    /// reborn picker reach spells on a schedule retail's carried
+    /// cooldowns refuse: mc1hwl0 t=21275 (500 ticks after the
+    /// t=20761 respawn) the port committed Wall of Fire where retail
+    /// committed Fireball, so retail's t=21276 fireball emission —
+    /// the tick's FIRST free-stack pop — never happened in the port
+    /// and every spawn of the mass fire-spread tick landed one slot
+    /// late (the missing-(10,0)-at-951 head). Pinned by unit: the
+    /// head is INHERITED (the pair import restores the wizext from
+    /// retail state).
+    #[test]
+    fn the_respawn_keeps_burst_and_cooldowns_and_stamps_the_stall() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        {
+            let r = &mut w.rivals[ri];
+            r.burst = 2;
+            r.cooldown = [0; SPELL_COUNT];
+            r.cooldown[17] = 3;
+            r.cooldown[20] = 5;
+            r.cooldown[16] = 9; // overwritten by the one respawn write
+            r.regen_stall = 0;
+            r.acq = [-1; SPELL_COUNT];
+        }
+        w.rival_respawn(ri, i);
+        let r = &w.rivals[ri];
+        assert_eq!(r.burst, 2, "the +48 burst counter rides through");
+        assert_eq!(
+            (r.cooldown[17], r.cooldown[20]),
+            (3, 5),
+            "carried cooldowns survive — no blanket clear"
+        );
+        assert_eq!(
+            r.cooldown[16],
+            4 * r.slot as u16,
+            "the ONE cooldown write: var_756 = 4*slot"
+        );
+        assert_eq!(r.regen_stall, 16, "the stall block is SET to 16");
     }
 }

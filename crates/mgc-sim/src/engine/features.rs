@@ -5867,6 +5867,15 @@ impl Gen {
                     // Rubble (:30940-93).
                     let hi = b >> 4;
                     let lo = b % 16;
+                    if let Some(tt) = crate::mail_trace() {
+                        eprintln!(
+                            "[clp] t={tt} cell=({x},{y}) b={b:#x} hi={hi} lo={lo} h={} an={:#x} ty={} rand={}",
+                            self.t.height[t],
+                            self.t.angle[t],
+                            self.t.tile_type[t],
+                            self.ent[i].rand
+                        );
+                    }
                     if hi == 0 {
                         // Floors: unprotect, texture kept (:30994-95).
                         self.t.angle[t] &= !0x80;
@@ -5913,7 +5922,16 @@ impl Gen {
         // building-typed quads are self-excluding).
         for gy in 0..h {
             for gx in 0..w {
-                self.smooth_cell(tile(x0.wrapping_add(gx as u8), y0.wrapping_add(gy as u8)));
+                let (sx, sy) = (x0.wrapping_add(gx as u8), y0.wrapping_add(gy as u8));
+                let t = tile(sx, sy);
+                let pre = self.t.height[t];
+                self.smooth_cell(t);
+                if let Some(tt) = crate::mail_trace() {
+                    eprintln!(
+                        "[clp] t={tt} smooth=({sx},{sy}) h {pre}->{} an={:#x} ty={}",
+                        self.t.height[t], self.t.angle[t], self.t.tile_type[t]
+                    );
+                }
             }
         }
         self.ent[i].flags |= 0x400;

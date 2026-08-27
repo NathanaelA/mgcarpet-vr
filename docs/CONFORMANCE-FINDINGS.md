@@ -20624,3 +20624,115 @@ where the port read 0: retail chased, the port wandered on.
   wears the PREVIOUS spawn's x/y — one missing/extra spawn early in
   the spread walk shifts the whole chain.
 - mc1hwl0-noskip t=970 unchanged (the (10,42) upgrade ring spawn).
+
+## SESSION 2026-08-27e (54) — mc1hwl0 21275 → 21281 ON THE RESPAWN'S
+## WIZEXT HALF (the pick-drift head; session 53's OPEN residue was the law)
+
+Head: t=21276 `missing(10,0)slot951x1` — the mass fire-spread tick.
+Landed: ONE three-part law closing session 53's open residue. Plain
+clean 25,846 → **25,964**, horizon 21275 → **21281**; the fix also
+unlocked segment 7 (t=32173..: 3,500 clean boundaries to 35674, a
+stretch the old law never reached). APP clean 21,275 → **21,425**
+(pose first t=21437). All 10 certified takes END (10/10 clean=graded,
+0 devs), guard rows byte-identical (noskip 970, mc2 galore 7281/7433,
+mc1l6 1617), 505 mgc-sim lib tests green.
+
+### THE DIG — the head was five layers deep, and every layer was a lie
+### about the layer below
+
+1. The replay diff read "each spawn wears the PREVIOUS one's x/y from
+   slot 273" — but `rand` stamps are `base + slot` (the ctor seeds
+   from `rand_4 + index` WITHOUT stepping), so rand gives NO event
+   order and the "previous" reading was a slot-order artifact.
+2. The full port-vs-retail position permutation resolved into ONE
+   linear chain = the tick's temporal allocation order: **the
+   free-stack pop order after the tick-top reap** (the reap pushes the
+   night's 0x400 husks ascending — 940, 941, 942, 992 — so pops
+   descend: 992 first, then the stack's carried tail 285, 284, …).
+   Retail's t=21276 pops: fireball→992, rival-fire→942, spreader
+   pair→941/940, impact kit→285/284/283, ring ×51→282…951.
+3. The port ran the IDENTICAL event stream minus its HEAD: its first
+   spawn landed on retail's second slot, every later spawn rode one
+   pop late, and slot 951 (the 51st ring fire's slot) never popped.
+   The missing event was the RIVAL'S FIREBALL EMISSION.
+4. The wizard lanes were graded-clean (charge 55→1, burst 3→4 both
+   sides) because BOTH engines ran a commit that tick — but the raw
+   dump showed port token 28 (12,0) FROZEN at f26=5 (retail 5→4,
+   emitted) and token 167 (12,15) never armed (retail 0→2): **the
+   port's rival committed a different SPELL** — Wall of Fire at
+   21275 and Fireball at 21276, where retail committed Fireball then
+   Lightning. The graded rival lanes (charge/play_index/castle)
+   cannot see WHICH spell committed; cooldown[] and the token +48
+   rows are ungraded in replay projection.
+5. The pick schedule diverged because the t=20761 RESPAWN cleared the
+   pick's inputs — session 53's open residue, now the law:
+
+### THE LAW (sub_44D30's wizext tail, :55031-48 / hw:51110-22,
+### byte-identical in both binaries)
+
+- **The +48 burst counter SURVIVES the respawn** — no write anywhere
+  in the function.
+- **The +724 cooldown array SURVIVES — except exactly ONE entry**:
+  `var_756 = 4·slot` = cooldown[16] (the castle re-attempt seed).
+  The port's blanket `cooldown = [0; _]` let the reborn picker reach
+  spells on a schedule retail's carried cooldowns refuse; the drift
+  stayed invisible for 500 ticks of identical picks, then forked one
+  commit and with it the whole allocation chain of the fire-spread
+  tick.
+- **The stall block is SET to 16, not cleared**: `memset(u8_333, 16,
+  8)` — the shadow's post-respawn `regen_stall=16` reading was the
+  respawn's own stamp, not a survival.
+
+Pinned by `rivals.rs::the_respawn_keeps_burst_and_cooldowns_and_
+stamps_the_stall` (reversion-probed: unit FAILS and the horizon drops
+to exactly 21276 with the three clears restored). INHERITED head —
+the pair import restores the wizext from retail state — so unit, not
+fixture (the session-53 precedent).
+
+### METHOD
+
+- ⭐⭐⭐ **THE FREE-STACK POP ORDER IS THE TICK'S TEMPORAL EVENT ORDER**
+  — when a mass-spawn tick shifts "every spawn by one slot", derive
+  the permutation port(slot)→retail(slot) over ALL born slots and
+  walk its successor chain: it linearizes into the pop sequence, the
+  chain's missing head IS the missing event, and the head names the
+  spawner. Three theories died before this one measurement
+  (spreader-lag, allocation-scan, cell-cursor).
+- ⭐⭐ **`rand` stamps carry NO event order** — NewEvent seeds
+  `rand = rand_4 + slot` without stepping the global; consecutive-
+  looking rand values are slot arithmetic.
+- ⭐⭐ **A COMMIT'S GRADED LANES CANNOT NAME ITS SPELL** — charge and
+  burst move identically for every member of the 0|15 pair (and
+  cooldown[] is ungraded), so a pick-schedule drift is invisible
+  until two different spells' emissions differ observably. The raw
+  `dump-state --port` on the TOKEN rows (f48 frozen vs decremented)
+  is what named it.
+
+### OPEN (next heads)
+
+- **t=21282 `(10,0)slot601:z` — the castle-downgrade terrain stamp.**
+  The rival castle 233 downgrades 3→2 (lethal parked at 21281, second
+  dispatch runs sub_47A70) and the un-stamp + retile + smoother leave
+  the port's planes wrong on the pad ring: east-rim heights +12/+2/+1
+  low ((66,0) 145 vs truth 157) and the corner-ORIENT nibble scattered
+  across ~14 ring cells. DIAGNOSED SO FAR: walker sub_28FE0, downgrade
+  sub_47A70 and smoother sub_360C0 are byte-identical base-vs-HW and
+  faithfully ported (mc1l0-certified); scratch slot-0 rand MATCHES at
+  21281; the pre-collapse planes match. The orient scatter implicates
+  the RETILE's plain-type arm: retail draws orientation from the
+  DEDICATED GLOBAL `pseudoRand_12C1E0` (:41399-402) for inferred types
+  < 8 — the port's `Gen::pseudo` u16 stream (arithmetic equivalent) has
+  DRIFTED from retail's somewhere in 21k ticks of retiles (ungraded
+  lane, observable only through orient nibbles near entities). The
+  east-rim HEIGHT deltas are still unexplained (not the walker's
+  arms, not the smoother rect, not a hidden perimeter pass — the
+  sub_36080 JUMPOUT is a shared epilogue, both binaries). Instrument
+  landed: `[clp]` eprintln trace in `tick_building_collapse`
+  (per-cell walk writes + per-cell smoother pre/post), gated on
+  `MGC_MAIL_TRACE=t0:t1`. The `MGC_CELL_TRACE` pad snapshot lives in
+  the session transcript; cells (62..67, 0..4) at 21281/21282.
+- The pseudo-stream alignment question probably underlies the
+  noskip-970 `(10,42)` castle-paint family too — same terrain-stamp
+  neighborhood.
+- wiz-0 `hits` off-by-one from t=19632 · import-side census
+  undercount (52) · mc1l37 2487 · mc2 onramp.
