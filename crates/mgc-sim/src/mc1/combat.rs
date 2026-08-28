@@ -2315,9 +2315,24 @@ impl Gen {
     }
 
     /// sub_3A040 (:46226): the storm carrier (c9 m12) — sprite 216,
-    /// speed 384, life 2048/384 = 5.
+    /// speed 384, life 2048/384 = 5, **row [1]** (`+156 =
+    /// &unk_98F38[1]` :46246; HW's twin sub_3A3C0 writes the same
+    /// address literally, `&unk_98F58` = base + 32, hw:42366). The
+    /// port handed it row 0 — inert until the homing arm started
+    /// reading `BEHAVIOR[row156]` for its turn caps, and then worth
+    /// exactly the difference between row 0's caps and row 1's 22/22:
+    /// mc1hwl0 t=21997→21998, retail's carrier eases `+30` 1216 →
+    /// 1194 (a 22-capped swing at a `+34` of 1191) where the port
+    /// snapped the whole 25 to 1191 and carried 3 units of position
+    /// with it.
+    ///
+    /// ⭐ ONLY THE FREE RUN CAN SEE A WRONG NATIVE ROW — the importer
+    /// decodes `row156` from the recorded `+156` pointer, so pair
+    /// mode reads retail's row and the tick comes out clean. Same
+    /// blind spot the HW firewall-bolt row fork (m16) was found
+    /// through.
     pub(crate) fn spawn_storm_carrier(&mut self, x: u16, y: u16, z: i16) -> Option<usize> {
-        self.spawn_projectile(12, 12, x, y, z, 384, 5, 0, 216)
+        self.spawn_projectile(12, 12, x, y, z, 384, 5, 1, 216)
     }
 
     /// sub_3A270 (:46330): the Wall of Fire bolt (c9 m16, state 17)

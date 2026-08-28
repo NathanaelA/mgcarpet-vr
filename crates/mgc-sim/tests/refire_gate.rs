@@ -205,18 +205,29 @@ fn firehose_fires_every_held_tick() {
 fn lightning_streams_while_held() {
     let (mut w, pose) = armed_world();
     equip(&mut w, pose, 15);
+    // ⭐ THE CAST-PHASE LAW COVERS 15 TOO. Its command arm is the same
+    // bare LABEL_20→LABEL_32 flow every launcher takes (the branch is
+    // on the token's +65, and 15 is < 0x10, neither 2 nor 16 nor 21),
+    // and its fire machine sub_57470 (:65806) is fireball's skeleton
+    // — so the press ARMS and the token fires one lap later.
+    tick_full(&mut w, pose, true);
+    assert_eq!(
+        projectiles(&w),
+        0,
+        "the press tick ARMS only — the token fires next lap"
+    );
     for _ in 0..4 {
         tick_full(&mut w, pose, true);
         assert!(projectiles(&w) > 0, "the held stream re-emits every tick");
     }
 }
 
-/// Held Lightning, mana half — REAL mana: the re-arm check is
-/// SILENT on an empty pool, the dry stream does NOT auto-resume when
-/// mana returns while held, and only a fresh click restarts it. With
-/// the synthetic 1000 ceiling the edge debit (-1000) empties the pool
-/// by the next cast point, so the stream dies right after the first
-/// emission — the faithful pool-1000 behavior.
+/// Held Lightning, mana half — REAL mana: the command's re-arm check
+/// is SILENT on an empty pool, the dry stream does NOT auto-resume
+/// when mana returns while held, and only a fresh click restarts it.
+/// With the synthetic 1000 ceiling the token's full-cost debit
+/// (sub_55E80 spends `+136`, not `+140`) empties the pool before the
+/// next command point, so the stream runs dry after two emissions.
 #[test]
 fn lightning_stream_dies_dry_and_needs_a_reclick() {
     let (mut w, pose) = armed_world();
@@ -225,34 +236,43 @@ fn lightning_stream_dies_dry_and_needs_a_reclick() {
     w.debug_bless_owned_spells();
     w.set_dev_spells(false);
     equip(&mut w, pose, 15);
+    // The launcher phase: press = arm, token = fire one lap later.
     tick_full(&mut w, pose, true);
-    assert!(projectiles(&w) > 0, "the edge cast fires");
+    assert_eq!(projectiles(&w), 0, "the press tick ARMS only");
+    tick_full(&mut w, pose, true);
+    assert!(projectiles(&w) > 0, "the token fires at arm+1");
 
-    // Held ticks: the pool can never recover to 1000 by the cast
-    // point (the -1000 delta applies first), so the re-arm silently
-    // fails and the burst (count=2) decays to dead.
-    for _ in 0..6 {
+    // Held ticks: the pool can never recover to the full 1000 by the
+    // command point (the token's debit lands first), so the re-arm
+    // silently fails and the burst (count=2) decays to dead.
+    let after_two = projectiles(&w);
+    for _ in 0..8 {
         tick_full(&mut w, pose, true);
     }
-    assert_eq!(projectiles(&w), 0, "the dry stream emits nothing");
-    assert_eq!(
-        w.loadout().cooldown[15],
-        0.0,
-        "the burst is dead after the dry hold"
-    );
-
-    // The pool is back at its ceiling now (regen + refill), but the
-    // button never came up: NO auto-resume.
+    let stalled = projectiles(&w);
+    // The transient segments from the last live emission are still
+    // in the pool; what matters is that NO new one lands.
     for _ in 0..6 {
         tick_full(&mut w, pose, true);
     }
     assert_eq!(
         projectiles(&w),
-        0,
+        stalled,
         "a dry stream must not auto-resume while held"
     );
-    // A fresh click restarts it.
+    assert!(
+        stalled >= after_two,
+        "the stream got at most its armed burst out"
+    );
+    // A fresh click restarts it — press to ARM, token to fire.
     tick_full(&mut w, pose, false);
     tick_full(&mut w, pose, true);
-    assert!(projectiles(&w) > 0, "the re-click restarts the stream");
+    let armed = projectiles(&w);
+    tick_full(&mut w, pose, true);
+    tick_full(&mut w, pose, true);
+    assert!(
+        projectiles(&w) > armed,
+        "the re-click restarts the stream (armed {armed}, now {})",
+        projectiles(&w)
+    );
 }

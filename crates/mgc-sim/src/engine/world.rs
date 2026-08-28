@@ -3268,15 +3268,36 @@ impl World {
         // [`Self::mc1_shield_token_tick`]). The command-site cast
         // debited one lap early: mc1l3 t=4275, the wizext shadow's
         // `wiz 0 mana_delta retail 100 port -2000` row.
+        // ⭐ 15 LIGHTNING BOLT IS ONE OF THEM. Same test as heal and
+        // shield — `sub_46B00_46E40` branches on the token's `+65`,
+        // and 15 is `< 0x10`, neither 2 nor 16 nor 21, so it takes
+        // LABEL_20's bare arm-only flow; its fire machine sub_57470
+        // (:65806, HW's twin at hw:62027) is the launcher skeleton
+        // every sibling uses (`+48 <= 0` bail, gate, `+48 == +50`
+        // spawn, sub_55E80, decrement). Being a `+60 == 0` spell it
+        // re-arms per HELD tick exactly like 23, so it streams from
+        // the input layer, not from a command-site emitter.
+        //
+        // mc1hwl0 t=22111-22113 is the measurement: retail's token
+        // stamps the beam into slot 19 during 22112 (`+26` = the
+        // banked charge 117, `+44` 500, the dest triple) and the beam
+        // — a slot BELOW the carpet — lays its segment chain one lap
+        // later at 22113. The command-site fire ran the whole stream
+        // a tick early AND off the free-stack top (slot 824, above
+        // the carpet), so the port laid its chain the same tick it
+        // cast: 43 phantom `(9,9)` segments at 22111, the take's
+        // first entity-set divergence. Same shape as 23's mc1l4
+        // t=5376 lead, one spell later.
         if matches!(
             id,
-            0 | 1 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 16 | 17 | 18 | 19 | 20 | 22 | 23
+            0 | 1 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 15 | 16 | 17 | 18 | 19 | 20 | 22 | 23
         ) {
-            // 23's held re-issue (the +60==0 input law) is a LEVEL,
-            // not an edge: every held tick re-arms the burst. The
-            // strict lane's dw_0 bits already re-emit per held tick;
-            // the native edge filter must not eat the autofire.
-            if !edge && id != 23 {
+            // The held re-issue (the +60==0 input law) is a LEVEL,
+            // not an edge, for 15 and 23: every held tick re-arms the
+            // burst. The strict lane's dw_0 bits already re-emit per
+            // held tick; the native edge filter must not eat the
+            // autofire.
+            if !edge && !matches!(id, 15 | 23) {
                 return;
             }
             let m = self.player.owned[id] as usize;
@@ -3360,16 +3381,32 @@ impl World {
     /// it at the carpet's walk slot; MC2 keeps the post-walk call.
     fn player_mail_block(&mut self, player: PlayerPose, at_castle: bool) {
         if self.player.state != LifeState::Alive {
-            // Falling/dead: the landing wipe already cleared the
-            // mailbox; discard anything new (the original's dead
-            // wizard never reads it).
+            // ⭐ THE CORPSE'S MAILBOX ACCUMULATES. The dead/falling
+            // carpet dispatches `sub_45FC0_46300` (:55434), NOT the
+            // wizard tick — so this whole block is simply not reached,
+            // and the only memset in the fall handler is the LANDING's
+            // (:55510, inside the `z == ground` branch that also flips
+            // `+70 = 3`, so it runs once). Between the death and the
+            // respawn the box is neither read nor cleared: every area
+            // write lands on a pending source and ACCUMULATES, and the
+            // total is still standing when the respawned wizard's
+            // first at-castle tick forwards it into the castle.
+            //
+            // mc1hwl0 measures the whole arc: the corpse sits at
+            // (12020,58799) from t=21463 taking 1000/tick off the
+            // (10,x) fire field at src 82, the box climbs 1000 →
+            // 10000 by t=21480, and at t=21484 — one tick after the
+            // respawn seats the carpet at the castle — castle slot
+            // 498 takes a single −10,000 packet (act_life 80000 →
+            // 70000) while the box clears and grace steps 100 → 1
+            // (the at-castle `grace = 2` then the memset's `--`).
+            // Wiping per dead tick made that packet vanish.
             if self.g.player_mail[0].1 != 0
                 && let Some(t) = crate::mail_trace()
             {
                 let (amt, src) = self.g.player_mail[0];
-                eprintln!("[mail] t={t} DEAD-DISCARD amt={amt} src={src}");
+                eprintln!("[mail] t={t} DEAD-HOLD amt={amt} src={src}");
             }
-            self.g.player_mail = [(0, 0); 6];
             return;
         }
         // The at-castle redirect (:55353-62): with the own castle
@@ -7965,27 +8002,10 @@ impl World {
         // mana delta keeps regen suppressed for the whole stream — the
         // "activity blocks regen but not re-fire" law.
         //
-        // 15 Lightning held stream: the retail latch re-issues the
-        // cast every held tick (+60==0, :20626-32) but ONLY while the
-        // burst is live (+48 > 0) — a dry stream stays dry until a
-        // fresh click (no auto-resume). The re-issued cast's mana
-        // check is SILENT (:55890 — no buzz, no debit, no reload on
-        // empty); the re-arm itself is free, the stream's cost is the
-        // per-shot debit at cost/count (the firehose idiom), which
-        // also keeps regen suppressed for the stream's duration.
-        if !edge && id == 15 {
-            if !armed {
-                return; // dry stream: re-click to restart
-            }
-            if !self.dev_spells && self.player.mana < def.possess_mana {
-                return; // silent (:55890)
-            }
-            self.mana_debit(def.possess_mana / def.count as u32);
-            self.g.ent[m].f26 = def.count as i16;
-            self.break_cloak(id);
-            self.emit_spell(id, m, p, right, ctx);
-            return;
-        }
+        // (15 Lightning's held stream used to be handled here; it is
+        // a LAUNCHER now — `mc1_cast_command` arms it and sub_57470's
+        // token tick fires it, one lap later, off the token's own
+        // slot.)
         if !edge {
             return;
         }
@@ -8304,23 +8324,48 @@ impl World {
             15 => e.f69 = 23,
             _ => {}
         }
-        // The charge move: earthquake (:65356), meteor (:65414),
-        // volcano (:65472) and CRATER (:65536-37) bank the caster's
-        // meter in the bolt's +26 and zero it; possess zeroes WITHOUT
-        // stamping (:65246 — its forced 200 is set above). mc1l42
-        // t=20150 reads the crater pair straight off: bolt +26 = 16,
-        // and the wizard's own meter back at 1 (zeroed, then the
-        // carpet tick's `if (<200) ++`). ⚠ THE SAME MOVE EXISTS ON
-        // steal mana (:65756), lightning (:65846), undead army
-        // (:65910/:65973) and mana magnet (:66031) — left alone here
-        // for want of a corpus witness in those families.
+        // ⭐ THE CHARGE MOVE IS THE WHOLE EMIT FAMILY'S, NOT FOUR
+        // SPELLS'. Every class-9 manifestation arm in the block banks
+        // the caster's `wizext+326` meter into the bolt's +26 and
+        // ZEROES it — fireball :65072, earthquake :65356, meteor
+        // :65414, volcano :65472, crater :65536, steal mana :65756,
+        // lightning :65846, undead army :65973, storm :66031, mana
+        // magnet :66092, wall of fire :66153, global death :66278 —
+        // and possess zeroes WITHOUT stamping (:65246; its forced 200
+        // is set above). The only arm in the switch that leaves the
+        // meter standing is the DUEL (sub_57040 :65620-710, no +326
+        // reference at all).
+        //
+        // mc1l42 t=20150 reads the crater pair straight off (bolt +26
+        // = 16, the wizard's meter back at 1 — zeroed, then the carpet
+        // tick's `if (<200) ++`), and mc1hwl0 t=22112 is the LIGHTNING
+        // witness the four-spell version was waiting for: retail's
+        // meter drops 117 → 1 on the cast where the port's climbed
+        // straight through it (118, 119, …). The meter is a GRADED
+        // lane (`wizard0.charge`), so every unmodelled arm is a
+        // permanent free-run divergence the moment that spell is used
+        // — 1,151 pairs on this take alone.
         match id {
-            6 | 7 | 8 | 9 => {
+            6 | 7 | 8 | 9 | 13 | 15 | 17 | 19 => {
                 self.g.ent[pr].f26 = self.wiz_charge[0] as i16;
                 self.wiz_charge[0] = 0;
             }
             3 => self.wiz_charge[0] = 0,
             _ => {}
+        }
+        // The lightning arm's dest triple (:65849-51): the CASTER's
+        // raw axis projected 0x4000 along the live aim, exactly like
+        // the storm carrier's — and, like the storm's, no ground read
+        // follows (the earthquake arm's :65362 `sub_11F50` overwrite
+        // is that arm's alone). Nothing in the beam's own resolution
+        // reads it back; it is stamped because the record carries it.
+        if id == 15 {
+            let mut d = (p.x, p.y, p.z);
+            Gen::polar_step(&mut d, p.heading, pitch, 0x4000);
+            let e = &mut self.g.ent[pr];
+            e.dest_x = d.0;
+            e.dest_y = d.1;
+            e.site_z = d.2;
         }
         self.entities_dirty = true;
     }
@@ -9143,6 +9188,21 @@ impl World {
         e.f26 = charge;
         e.f68 = 9;
         e.f69 = 9;
+        // :66025-27 — the same dest triple `cast_firewall` stamps: the
+        // CARPET's raw axis (+72/+76, not the muzzle) projected along
+        // the live aim. Unlike the firewall bolt's the reach does NOT
+        // fork per binary — HW's twin (hw:62259) writes 0x4000 too —
+        // and unlike the firewall bolt's, nothing in the carrier's own
+        // flight reads it back (sub_53DC0 :63628 homes off +146). It
+        // is stamped because retail stamps it: the RECORD is a graded
+        // surface, and a record lane the port leaves at zero is one
+        // more thing a later reader could inherit wrong.
+        let mut d = (p.x, p.y, p.z);
+        Gen::polar_step(&mut d, p.heading, p.pitch, 0x4000);
+        let e = &mut self.g.ent[pr];
+        e.dest_x = d.0;
+        e.dest_y = d.1;
+        e.site_z = d.2;
         self.entities_dirty = true;
     }
 
@@ -9250,6 +9310,13 @@ impl World {
         e.f140 = def.possess_mana as i32;
         e.f68 = 10;
         e.f69 = 55;
+        // The family charge move (:66278-79) — the same bank-and-zero
+        // every other manifestation arm runs; see `cast_projectile`.
+        // The +26 it banks has no reader in the reconstruction, but
+        // the ZERO is what the graded `wizard0.charge` lane measures,
+        // and leaving it out lets the meter run past every cast.
+        e.f26 = self.wiz_charge[0] as i16;
+        self.wiz_charge[0] = 0;
         self.entities_dirty = true;
     }
 
@@ -9488,11 +9555,19 @@ impl World {
                 // drops that to 224 with all eight certified MC1 takes
                 // still bit-exact END.
                 //
-                // ⚠ Spells 5 (Beyond Sight), 12 (Invisible) and 15
-                // (Lightning Bolt) are still absent from this list on
-                // the same "hold/channel set rests inert" reasoning.
-                // They have NO corpus witness yet — do not add them
-                // without one.
+                // ⭐ 15 (LIGHTNING BOLT) NOW HAS ITS WITNESS and has
+                // joined the list: mc1hwl0 t=22112, where retail's
+                // token stamps the beam into slot 19 (`+26` = the
+                // banked charge, `+44` 500, the 0x4000 dest triple)
+                // and the segment chain follows one lap later at
+                // 22113. With the token inert the command site fired
+                // the stream a tick early and off the free-stack top,
+                // laying 43 phantom `(9,9)` segments at 22111.
+                //
+                // ⚠ Spells 5 (Beyond Sight) and 12 (Invisible) are
+                // still absent on the same "hold/channel set rests
+                // inert" reasoning. They have NO corpus witness yet —
+                // do not add them without one.
                 if self.player.owned[spell] == i as u16
                     && matches!(
                         spell,
@@ -9506,6 +9581,7 @@ impl World {
                             | 11
                             | 13
                             | 14
+                            | 15
                             | 16
                             | 17
                             | 18
@@ -9880,9 +9956,11 @@ impl World {
         // the delta AFTER the token slots, so both land the same
         // frame like retail's. The gate failure (:64926-31) buzzes
         // and aborts the burst (+48 = 1, then the decrement).
-        // The traced hold/channel spells {2, 15, 21} and heal keep
-        // their certified command-site fire — their tokens stay
-        // countdown + effects only (token-phase = ledgered lead).
+        // The traced hold/channel spells {2, 21} keep their certified
+        // command-site fire — their tokens stay countdown + effects
+        // only (token-phase = ledgered lead). 15 LEFT that set: its
+        // machine sub_57470 (:65806) is the same launcher skeleton as
+        // fireball's, see `mc1_cast_command`.
         // 23 Repeat Fireballs is a LAUNCHER: its machine sub_58240
         // (:66296) is byte-identical to fireball's sub_56090, and the
         // stream is the held command re-arming +48 every tick (mc1l4
@@ -9891,7 +9969,7 @@ impl World {
         let was_live = self.g.ent[i].f26 > 0;
         let launcher = matches!(
             spell,
-            0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 17 | 18 | 19 | 20 | 22 | 23
+            0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 15 | 17 | 18 | 19 | 20 | 22 | 23
         );
         let mut fired = false;
         let mut gate_failed = false;
@@ -23163,6 +23241,92 @@ mod tests {
         );
     }
 
+    /// The storm carrier's ctor row and dest triple — both lanes
+    /// PAIR-INVISIBLE (the importer decodes `row156` from the
+    /// recorded `+156` pointer and carries `+150/+154` verbatim), so
+    /// only the free run ever saw them. mc1hwl0 t=21997→21998 is the
+    /// witness: with row 0's 56-unit yaw cap the port snapped the
+    /// carrier's whole 25-unit swing onto `+34`, where retail's row 1
+    /// eases 22 (`+30` 1216 → 1194, not 1191).
+    #[test]
+    fn the_storm_carrier_wears_row_1_and_stamps_its_dest_triple() {
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(18));
+        let p = firing_line();
+        w.tick(
+            p,
+            PlayerCommand {
+                fire_left: true,
+                ..Default::default()
+            },
+        );
+        w.tick(p, PlayerCommand::default()); // the token fires at arm+1
+        let carrier = find_slot(&w, 9, 12);
+        let e = &w.g.ent[carrier];
+        // sub_3A040 :46246 / hw:42366 — `&unk_98F38[1]`, i.e. row 1,
+        // whose v_2 = 22 is the homing arm's whole turn authority.
+        assert_eq!(e.row156, 1, "the storm carrier wears behavior row 1");
+        assert_eq!(
+            crate::mc1::behavior::BEHAVIOR[1].v_2,
+            22,
+            "row 1 is the 22-unit yaw cap retail eased at"
+        );
+        // :66025-27 — the carpet's raw axis projected 0x4000 along the
+        // live aim, on BOTH binaries (hw:62259 keeps 0x4000 where the
+        // firewall bolt's twin forks to 10240).
+        let mut d = (p.x, p.y, p.z);
+        Gen::polar_step(&mut d, p.heading, p.pitch, 0x4000);
+        assert_eq!(
+            (e.dest_x, e.dest_y, e.site_z),
+            (d.0, d.1, d.2),
+            "the dest triple projects from the carpet axis at 0x4000"
+        );
+    }
+
+    /// **LIGHTNING IS A LAUNCHER, NOT A COMMAND-SITE SPELL** — the
+    /// command arms `+48` and sub_57470's token tick (:65806) fires
+    /// one walk lap later, banking and ZEROING the caster's `+326`
+    /// charge meter on the way (:65846-48). mc1hwl0 t=22111-22113:
+    /// the port's old command-site fire laid the beam's 43 `(9,9)`
+    /// segments a tick early and off the free-stack top, where retail
+    /// stamps the beam into slot 19 during 22112 and the chain
+    /// follows at 22113. Non-vacuous: dropping 15 from
+    /// `mc1_cast_command`'s launcher set fires it at the press tick
+    /// again. ⚠ `flat_world` is NATIVE play, so this cannot reach the
+    /// STRICT arm's own class-12 allowlist — 15's entry there is
+    /// guarded by the mc1hwl0 horizon alone.
+    #[test]
+    fn lightning_arms_at_the_command_and_its_token_fires_one_lap_later() {
+        use crate::mc1::spells::SpellId;
+        let mut w = flat_world();
+        w.set_dev_spells(true);
+        w.player.left = Some(SpellId(15));
+        let p = firing_line();
+        let fire = PlayerCommand {
+            fire_left: true,
+            ..Default::default()
+        };
+        // A meter deep into its climb, so the zero is unmistakable.
+        w.wiz_charge[0] = 117;
+        w.tick(p, fire);
+        assert_eq!(count(&w, 9, 9), 0, "the press edge only arms the token");
+        assert_eq!(
+            w.wiz_charge[0], 118,
+            "nothing has fired yet: the carpet tick just steps the meter"
+        );
+        w.tick(p, fire);
+        assert!(
+            count(&w, 9, 9) > 0,
+            "the token fires one lap later and lays its segment chain"
+        );
+        assert_eq!(
+            w.wiz_charge[0], 1,
+            "the emit zeroed the meter (:65848), then the carpet tick's ++"
+        );
+    }
+
     #[test]
     fn global_death_fuses_at_the_caster_into_the_flat_plane_field() {
         use crate::mc1::spells::SpellId;
@@ -28478,6 +28642,81 @@ mod tests {
             (100, 44),
             "the redirect forwards the melee alone, no snowball"
         );
+    }
+
+    /// **THE CORPSE'S MAILBOX ACCUMULATES, AND THE RESPAWNED WIZARD'S
+    /// FIRST AT-CASTLE TICK HANDS THE WHOLE BILL TO THE CASTLE.** A
+    /// dead or falling carpet dispatches `sub_45FC0_46300` (:55434),
+    /// not the wizard tick, so the mailbox block above is never
+    /// reached: nothing reads the box and nothing clears it. The only
+    /// memset in the fall handler is the LANDING's (:55510, inside
+    /// the `z == ground` branch that also flips `+70 = 3`, so it runs
+    /// exactly once). Every area write in between lands on a still-
+    /// pending source and ACCUMULATES.
+    ///
+    /// mc1hwl0 measures the arc end to end: the corpse sits at
+    /// (12020,58799) from t=21463 taking 1000/tick off the fire field
+    /// at src 82, the box climbs to 10000 by t=21480, and at t=21484
+    /// — one tick after the respawn seats the carpet at home — castle
+    /// slot 498 takes a single −10,000 packet (80000 → 70000) while
+    /// grace steps 100 → 1. Non-vacuous: restoring the per-dead-tick
+    /// `player_mail = [(0,0); 6]` wipe empties the box and the castle
+    /// takes nothing.
+    #[test]
+    fn a_corpses_mailbox_accumulates_and_the_respawn_hands_it_to_the_castle() {
+        let mut w = flat_world();
+        let home = away();
+        let c = w.g.new_event().expect("castle");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.f26 = 1;
+            e.f59 = 4;
+            e.tick70 = 4;
+            e.x = home.x;
+            e.y = home.y;
+            e.z = home.z;
+            e.f80 = 1664;
+            e.f82 = 1664;
+            e.f78 = 0;
+            e.f84 = 0x4000;
+            e.f136 = 10000;
+        }
+        // Landed and waiting for Space: the fire field keeps writing.
+        w.player.state = LifeState::Dead;
+        for _ in 0..3 {
+            w.g.mail_write(MailTarget::Player, 0, 1000, 82);
+            w.tick(home, PlayerCommand::default());
+        }
+        assert_eq!(
+            w.g.player_mail[0],
+            (3000, 82),
+            "the corpse neither reads nor clears its box"
+        );
+        assert_eq!(
+            w.g.ent[c].mail[0],
+            (0, 0),
+            "and nothing forwards while the wizard is down"
+        );
+        // The respawn seats the carpet on its own castle with a fresh
+        // 100-tick grace; the redirect sits ABOVE the grace memset, so
+        // the castle pays the whole accumulated bill anyway.
+        w.player.state = LifeState::Alive;
+        w.player.grace = 100;
+        w.tick(home, PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[c].mail[0],
+            (3000, 82),
+            "the castle tanks the corpse's whole bill in one packet"
+        );
+        assert_eq!(
+            w.g.player_mail,
+            [(0, 0); 6],
+            "and the at-castle memset clears the box behind it"
+        );
+        assert_eq!(w.player.grace, 1, "at-castle grace = 2, then one decay");
     }
 
     /// **A BALL SOFT-DISABLED EARLIER THE SAME TICK STILL RUNS ITS

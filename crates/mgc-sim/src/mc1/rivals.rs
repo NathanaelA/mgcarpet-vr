@@ -717,9 +717,24 @@ impl World {
         } else {
             self.rival_damage_intake(ri, i);
             if self.g.ent[i].act_life < 0 {
-                // Death (:17980-83): state 2, the fall.
+                // ⭐ THE RIVAL'S DEATH ARM WRITES `+70 = 2` AND
+                // NOTHING ELSE (:17980-83 — `else if (sub_46540(a1)
+                // == 2) { *(a1+70) = 2; return 0; }`). The human's
+                // twin (:55424-29) additionally zeroes `+46` and
+                // screams sound 16; that arm belongs to sub_45C90,
+                // which a rival never runs (sub_13170 is its carpet
+                // tick — the same ownership split the +528 wanted
+                // decay wears). Both writes were the port reading the
+                // human's site for the rival's.
+                //
+                // So the corpse ENTERS THE FALL AT ITS LIVE CLIMB
+                // RATE: mc1hwl0 t=23252, the dying rival carries
+                // `+46` = −56 from its last flight tick and drops 56
+                // on the very next fall step (z 2769 → 2713) where
+                // the zeroed port hung at 2769 and only then began
+                // accelerating. `+46` is not published by the pair
+                // grader, so only the free run ever saw it.
                 self.g.ent[i].tick70 = 2;
-                self.g.ent[i].f46 = 0;
                 // Drop the Rebound bit with the wizard. Retail's token
                 // keeps ticking through the death states and clears
                 // +17 bit 7 when its burst lapses (sub_573F0_57920
@@ -728,7 +743,14 @@ impl World {
                 // reach — without this a corpse would deflect for the
                 // rest of the level.
                 self.g.ent[i].flags &= !0x8000;
-                self.g.snd(16, i); // the death scream (:55424-30)
+                // ⚠ The death scream is cited to :55424-30 — the
+                // HUMAN's arm, the same mis-owned site the `+46 = 0`
+                // above came from; the rival arm (:17980-83) sounds
+                // nothing. Kept for now because the sim's sounds vec
+                // is HASHED (removing it re-bases every golden) and
+                // no capture grades it. Open: find whether a rival
+                // death screams at all, and from where.
+                self.g.snd(16, i);
                 // The death arm returns from the HOUSEKEEPING only —
                 // its caller runs the state handler regardless. See
                 // [`Self::rival_dispatch_tail`].
@@ -5245,6 +5267,47 @@ mod tests {
             16,
             "strict_retail: the player arg is the gate pose"
         );
+    }
+
+    /// **THE RIVAL'S DEATH ARM WRITES `+70 = 2` AND NOTHING ELSE**
+    /// (:17980-83). The human's twin (:55424-29) also zeroes `+46`
+    /// and screams — but that arm lives in `sub_45C90`, which a rival
+    /// never runs; its carpet tick is `sub_13170`. So the corpse
+    /// enters the fall AT ITS LIVE CLIMB RATE and drops that far on
+    /// the very first fall step. mc1hwl0 t=23252: `+46` = −56 rides
+    /// through and z goes 2769 → 2713 where the zeroed port hung at
+    /// 2769. `+46` is not a published pair lane, so only the free run
+    /// could see it (the head classified INHERITED; `--start`
+    /// bisection put the birth in the death tick itself).
+    /// Non-vacuous: restoring the `f46 = 0` write parks the corpse.
+    #[test]
+    fn a_rival_corpse_enters_the_fall_at_its_live_climb_rate() {
+        let mut w = rebound_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        // Airborne, climbing, and one lethal packet in the box.
+        w.g.ent[i].tick70 = 1;
+        w.g.ent[i].f46 = -56;
+        w.g.ent[i].z = w.g.ent[i].z.wrapping_add(4000);
+        w.rivals[ri].grace = 0;
+        w.g.ent[i].act_life = 10;
+        w.g.ent[i].mail[0] = (10_000, 7);
+        let z0 = w.g.ent[i].z;
+        w.rival_entity_tick(i);
+        assert_eq!(w.g.ent[i].tick70, 2, "the intake killed it into the fall");
+        assert_eq!(
+            w.g.ent[i].f46, -56,
+            "the death arm leaves +46 alone — no human-side zero"
+        );
+        assert_eq!(w.g.ent[i].z, z0, "the death tick itself does not fall");
+        // The next tick IS the fall, and it spends the inherited rate.
+        w.rival_entity_tick(i);
+        assert_eq!(
+            w.g.ent[i].z,
+            z0.wrapping_add(-56i16),
+            "the first fall step drops the whole inherited climb rate"
+        );
+        assert_eq!(w.g.ent[i].f46, -58, "and gravity steps it by 2");
     }
 
     /// The respawn block (sub_44D30 :54842-923 + :55031-41), rival

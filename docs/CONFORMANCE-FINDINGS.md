@@ -20836,3 +20836,212 @@ sentinel `pseudo = 0` (conformance.rs) stays.
   (the first post-fire-field head; plain and segmented agree).
 - noskip-970 `(10,42)` ring · wiz-0 hits off-by-one 19632 ·
   import-side census undercount (52) · mc1l37 2487 · mc2 onramp.
+
+## SESSION 2026-08-28 (56) — mc1hwl0 21483 → 24738 ON FIVE LAWS, AND
+## THE SEGMENTED DEVIATION COUNT COLLAPSES 1195 → 9 (ALL LOCAL)
+
+Heads taken, in order: t=21484 `(3,2)slot498:life`, t=21998
+`(9,12)slot995:x,y,heading`, t=22111 `extra(9,9)slot23x43`, t=22112
+`missing(10,0)slot824x1`, t=23253 `(3,1)slot473:z`. Landed: FIVE
+laws. Plain clean 26,054 → **29,309**, horizon 21483 → **24738**
+(+3,255); `--segmented` devs **1195 → 9**, clean 48,947 → **50,133**
+of 50,142 graded, and **both INHERITED heads are gone** — all nine
+survivors are pair-DIRTY fixture candidates. APP `--replay-check`
+clean 23,120 → **24,788** (pose first 23132 → 24800). All 10
+certified takes END in BOTH instruments (`replay --segmented` and the
+app's `--replay-check`, all bit-exact throughout); the seven guard
+rows (noskip 970, mc1l32-quick 9927, mc2l0-galore 7281, mc1l0-galore
+170, mc1l6 1617, mc2l1 0, mc2l4 0) are byte-identical to the
+baseline. Suite **853 / 0** under `MGC_REQUIRE_GOLDENS=1` with ZERO
+golden skips; clippy `--workspace --all-targets` clean. (⚠ `cargo fmt
+--all --check` reports one PRE-EXISTING diff in
+`crates/mgc-app/src/replay.rs:148`, untouched by this session.)
+
+The take's whole pair face moved with it: `verify-deltas` now reads
+**49,773 conforming / 369 with field diffs** (was 48,561 / 1,581) and
+UNEXPLAINED **765 field / 9 missing / 23 extra** rows (was 7,076 /
+7,948 / 1,151).
+
+### LAW 1 — THE CORPSE'S MAILBOX ACCUMULATES (`player_mail_block`)
+
+The dead or falling carpet dispatches `sub_45FC0_46300` (:55434), NOT
+the wizard tick, so the mailbox block (:55344-78) is never reached
+while the player is down: nothing reads the box and nothing clears
+it. The ONLY memset in the fall handler is the LANDING's (:55510),
+inside the `z == ground` branch that also flips `+70 = 3`, so it runs
+exactly once. Between death and respawn every area write lands on a
+still-pending source and ACCUMULATES — and the total is still
+standing when the respawned wizard's first at-castle tick forwards it
+into the castle (:55357-60), ABOVE the grace memset.
+
+mc1hwl0 measures the whole arc with `player_mail_dump_mc1`: the
+corpse sits at (12020,58799) from t=21463 taking 1000/tick at src 82,
+the box climbs 1000 → 10000 by t=21480 (an earlier 14000 was wiped by
+the landing at 21463), and at t=21484 — one tick after the respawn
+seats the carpet at home — castle slot 498 takes a single **−10,000**
+packet (act_life 80000 → 70000) while the box clears and grace steps
+100 → 1 (the at-castle `grace = 2`, then the memset's `--`). The
+port's per-dead-tick wipe made that packet vanish.
+Pinned: `world.rs::a_corpses_mailbox_accumulates_and_the_respawn_
+hands_it_to_the_castle` (reversion-probed).
+
+### LAW 2 — THE STORM CARRIER WEARS BEHAVIOR ROW 1 (+ its dest triple)
+
+`sub_3A040` :46246 writes `+156 = &unk_98F38[1]`; HW's twin
+`sub_3A3C0` writes the same address literally (`&unk_98F58` = base +
+32, hw:42366). The port handed the (9,12) carrier ROW 0 — inert until
+the homing arm began reading `BEHAVIOR[row156]` for its turn caps,
+and then worth exactly the difference between row 0's 56-unit yaw cap
+and row 1's 22: at t=21997→21998 retail eases `+30` 1216 → 1194 at a
+`+34` of 1191 where the port snapped the whole 25.
+
+A FULL SWEEP of the class-9 ctor rows against both binaries found m12
+to be the only wrong one (m0 5, m1 2, m2-m7 1, m8/m9 4, m10-m12 1,
+m13-m15 no write, m16/m17 2 on HW, m18/m19 5).
+
+`cast_storm` also now stamps the dest triple (:66025-27, 0x4000 on
+BOTH binaries — hw:62259 does not fork the way the firewall bolt's
+reach does); the port's free run held (0,0,0) where retail held
+(52254, 62318, −214), and the port now reproduces that triple exactly.
+Pinned: `world.rs::the_storm_carrier_wears_row_1_and_stamps_its_dest_
+triple`.
+
+⭐ **ONLY THE FREE RUN CAN SEE A WRONG NATIVE ROW OR AN UNSTAMPED
+RECORD LANE** — the importer decodes `row156` from the recorded `+156`
+pointer and carries `+150/+154` verbatim, so pair mode reads retail's
+values and the tick comes out clean. Both heads here were INHERITED
+by the classifier for exactly that reason.
+
+### LAW 3 — THE CHARGE MOVE IS THE WHOLE EMIT FAMILY'S
+
+EVERY class-9 manifestation arm banks the caster's `wizext+326` meter
+into the bolt's `+26` and ZEROES it: fireball :65072, earthquake
+:65356, meteor :65414, volcano :65472, crater :65536, steal mana
+:65756, lightning :65846, undead army :65973, storm :66031, mana
+magnet :66092, wall of fire :66153, global death :66278 — and possess
+zeroes WITHOUT stamping (:65246, its forced 200 is written first). The
+ONLY arm in the switch that leaves the meter standing is the DUEL
+(sub_57040 :65620-710, no `+326` reference at all).
+
+The port modelled four of them (6/7/8/9) plus fireball, castle, storm
+and wall of fire, and left steal mana, lightning, undead army, mana
+magnet and global death alone "for want of a corpus witness". That
+justification was the defect: the meter IS a graded lane
+(`wizard0.charge`), so an unmodelled arm is a permanent free-run
+divergence the moment the spell is used — 1,151 pairs on this take.
+mc1hwl0 t=22112 is the lightning witness (retail 117 → 1, the port
+climbing 118, 119, …). Landed for 13/15/17/19 in `cast_projectile`
+and for 22 in `cast_bomb`.
+
+### LAW 4 — LIGHTNING IS A LAUNCHER, NOT A COMMAND-SITE SPELL
+
+`sub_46B00_46E40` branches on the token's `+65`: 15 is `< 0x10`,
+neither 2 nor 16 nor 21, so it takes LABEL_20's bare arm-only flow,
+and its fire machine `sub_57470_579A0` (:65806, HW hw:62027) is the
+launcher skeleton every sibling uses (`+48 <= 0` bail, `sub_55DD0`
+gate, `+48 == +50` spawn, `sub_55E80`, decrement). Being a `+60 == 0`
+spell it re-arms per HELD tick exactly like 23, so the STREAM comes
+from the input layer, not from a command-site emitter.
+
+mc1hwl0 t=22111-22113 is the measurement. Retail stamps the beam into
+slot 19 during 22112 (`+26` = the banked charge 117, `+44` 500,
+`+140` 500, the 0x4000 dest triple) — a slot BELOW the carpet, so the
+beam lays its segment chain one lap later at 22113 (83 allocations: 2
+beams' chains + 2 `(10,23)` endpoint bursts). The port's command-site
+fire ran the stream a tick early AND off the free-stack top (slot
+824, above the carpet), so it laid its chain the same tick it cast:
+43 phantom `(9,9)` segments at 22111, the take's first entity-set
+divergence, and then the fire that should have taken slot 824 landed
+on 19 instead.
+
+15 joins BOTH dispatch lists: `mc1_cast_command`'s launcher set (with
+the `!edge` autofire exemption it shares with 23) and the STRICT
+arm's class-12 allowlist — whose comment explicitly said "5, 12 and
+15 … have NO corpus witness yet — do not add them without one". 15
+now has one; 5 and 12 still do not and stay out.
+Pinned: `world.rs::lightning_arms_at_the_command_and_its_token_fires_
+one_lap_later` (⚠ `flat_world` is NATIVE play, so the unit cannot
+reach the strict arm's allowlist — that entry is guarded by the
+mc1hwl0 horizon alone). `tests/refire_gate.rs`'s two lightning tests
+were rewritten onto the launcher phase (they had encoded the
+command-site fire).
+
+### METHOD
+
+- ⭐⭐⭐ **`explain <t>` PRINTS THE CHARGE AND THE WHOLE REVIVED
+  RECORD** — the entire lightning dig turned on one line of
+  `explain 22112`: `slot 19 (9,0)->(9,9) [REVIVED] … f26 4 -> 117`.
+  The banked charge names the emitter, the slot names the phase.
+- ⭐⭐⭐ **`--start <t>` BISECTION FINDS AN UNGRADED STATE
+  DIFFERENCE**: the free run was clean through 21997 on every graded
+  lane, yet `--start 21994` diverged at 21998 and `--start 21995` did
+  not — which located the birth tick of a lane no boundary compares
+  (`row156`). Pair mode says INHERITED and stops there; the anchor
+  bisection says WHEN.
+- ⭐⭐ **THE FREE-STACK LENGTH IS AN ALLOCATION COUNTER.** `explain`'s
+  `free stack: len X -> Y` and `dump-state --port`'s two-sided stack
+  line read the whole mass-spawn story without naming a single slot:
+  retail 732 → 649 at 22113 (83 allocations) against the port's 734 →
+  690 → 648 at 22111/22112 said "two ticks early, same shape" before
+  any record was opened.
+- ⭐⭐ **AN `eprintln` BEHIND `crate::mail_trace()` IS A FREE
+  INSTRUMENT** — its `t0:t1` gate is already wired to `DEBUG_TICK`,
+  so a temporary probe at a spawner or a token tick costs one rebuild
+  and needs no new env plumbing. Three throwaway probes (`[zig]`,
+  `[cast]`, `[tok15]`) took the lightning head from "43 phantom
+  entities" to "the token never dispatches".
+- ⭐ `player_mail_dump_mc1` (examples/) is the at-castle redirect's
+  ready-made microscope; it printed the corpse-accumulation arc in
+  one run.
+
+### LAW 5 — A RIVAL CORPSE ENTERS THE FALL AT ITS LIVE CLIMB RATE
+
+**The rival's death arm writes `+70 = 2` AND NOTHING ELSE**
+(:17980-83 — `else if (sub_46540_46880(a1) == 2) { *(a1+70) = 2;
+return 0; }`). The human's twin (:55424-29) additionally zeroes `+46`
+and screams sound 16 — but that arm lives in `sub_45C90`, which a
+rival never runs (`sub_13170` is its carpet tick). Both writes were
+the port reading the human's site for the rival's: the same ownership
+split the `+528` wanted decay wears (SESSION 53).
+
+So the corpse carries its LIVE vertical speed into the fall.
+mc1hwl0 t=23252: the dying rival holds `+46` = −56 from its last
+flight tick and drops the whole 56 on the very first fall step (z
+2769 → 2713, `+46` → −58) where the zeroed port hung at 2769 and only
+then began accelerating. `+46` is not a published pair lane, so the
+head classified INHERITED and only `--start` bisection could place
+it — clean from an anchor at 23252, dirty from 23251, i.e. born in
+the death tick itself.
+Pinned: `rivals.rs::a_rival_corpse_enters_the_fall_at_its_live_climb_
+rate` (reversion-probed). Closing it also killed the OTHER inherited
+head at 26045.
+
+⚠ OPEN, same site: the port also sounds 16 on a rival death citing
+:55424-30, the human's arm; the rival arm sounds nothing. Left in
+place because the sim's sounds vec is HASHED (removing it re-bases
+every golden) and no capture grades it. Find whether a rival death
+screams at all, and from where.
+
+### OPEN (next heads — 9 left, ALL LOCAL/pair-dirty ⇒ fixture-able)
+
+`24739` `(10,39)slot298:z` · `26716` · `29614` · `35674` · `36717` ·
+`40825` · `43137` · `44248` · `44382`.
+
+Scouted, 24739: a mass 58-record birth (the mana SPILL's `(10,39)`
+balls + four `(10,54)` magnets + fires, `f144` = 473). NINE balls
+share one z — retail 6184, port 6132 (Δ 52) — and a tenth at 6684 vs
+6672 (Δ 12); x/y match exactly, so it is the z leg of the spawn
+arithmetic alone. Retail's spill (:56196-56240) builds the source
+axis in the `word_AE454_AE444` SCRATCH, spawns at it, projects the
+scratch by `sub_41EC0(yaw, 0, dist)` and copies the scratch back with
+`sub_41C70` (a plain position copy, no ground clamp); the port's
+`features.rs` spill uses `move_relink` on a locally built `pos`.
+Start by identifying which record supplies `cz` on each side.
+
+Also open from this session: the class-9 `m13/m14/m15` ctors write no
+`+156` at all, so retail's row for those is the RECYCLED slot's stale
+one where the port forces 0 — a real divergence class with no witness
+yet. And the dest triple is stamped by nearly every emit arm at
+per-arm reaches (fireball 0x4000, earthquake 4096 + a `sub_11F50`
+ground overwrite of `+154`, meteor 10240, …); only possess, wall of
+fire, storm and lightning are modelled.
