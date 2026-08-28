@@ -1692,9 +1692,13 @@ impl Gen {
 
     /// sub_20710's custom layer over the shared wander (:26033-58):
     /// every v_26+1 ticks (offset from the scan cadence) the nearest
-    /// HOUSE (class-10 m45) within v_28² becomes the chase target —
-    /// pure 2D nearest-in-radius, NO facing cone, NO invisibility
-    /// gate. Wyverns wreck dwellings on sight.
+    /// HOUSE on the +36470 roster ([`Gen::bldg_chain`]) within v_28²
+    /// becomes the chase target — pure 2D nearest-in-radius, NO
+    /// facing cone, NO invisibility gate, and no life or 0x400 test
+    /// either: the walk at :26041-48 carries NOTHING but the distance
+    /// pair, so class/model/liveness come entirely from ROSTER
+    /// MEMBERSHIP. Wyverns wreck dwellings on sight — but only the
+    /// ones that already existed when the tick began.
     fn wyvern_house_hunt(&mut self, i: usize, base: u8) {
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
         let period = row.v_26 + 1;
@@ -1704,11 +1708,9 @@ impl Gen {
         let r2 = (row.v_28 as i32) * (row.v_28 as i32);
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
         let mut best: Option<(usize, i32)> = None;
-        for j in 1..self.ent.len() {
+        for k in 0..self.bldg_chain.visible_len() {
+            let j = self.bldg_chain.list[k] as usize;
             let c = &self.ent[j];
-            if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 || c.act_life < 0 {
-                continue;
-            }
             let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
             if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
@@ -2451,9 +2453,11 @@ impl Gen {
         self.pack_scan(i, base);
     }
 
-    /// Nearest live m45 house on the original's per-tick +36470 list
-    /// (pool order stands in for list order, same approximation as the
-    /// pack scans), scored the way m12 SEEK scores it (:25241-49):
+    /// Nearest m45 house on the original's +36470 list — the TICK-TOP
+    /// roster [`Gen::bldg_chain`], not the live pool, and carrying no
+    /// life or flags test of its own (the walk at :25241 has NO
+    /// per-candidate guard at all) — scored the way m12 SEEK scores
+    /// it (:25241-49):
     /// `sub_42340_42680` (:52721-27), the THREE-axis distance, compared
     /// as a TRUNCATED isqrt under a strict `<` — so equal-rounding
     /// candidates resolve to the earlier entry. The `d != 0` skip is
@@ -2465,11 +2469,9 @@ impl Gen {
     /// [`Gen::militia_idle`].
     fn nearest_building_3d(&self, x: u16, y: u16, z: i16) -> Option<usize> {
         let mut best: Option<(usize, u32)> = None;
-        for j in 1..self.ent.len() {
+        for k in 0..self.bldg_chain.visible_len() {
+            let j = self.bldg_chain.list[k] as usize;
             let c = &self.ent[j];
-            if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 {
-                continue;
-            }
             let dz = c.z.wrapping_sub(z) as i32;
             let sum = Self::dist2_sq(x, y, c.x, c.y).wrapping_add(dz.wrapping_mul(dz));
             let d = Self::isqrt(sum as u32);
@@ -2751,11 +2753,9 @@ impl Gen {
         // nearest is inside it".
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
         let mut best: Option<(usize, u32)> = None;
-        for j in 1..self.ent.len() {
+        for k in 0..self.bldg_chain.visible_len() {
+            let j = self.bldg_chain.list[k] as usize;
             let c = &self.ent[j];
-            if c.class64 != 10 || c.model65 != 45 || c.flags & 0x400 != 0 {
-                continue;
-            }
             let dx = c.x.wrapping_sub(ex) as i16 as i32;
             let dy = c.y.wrapping_sub(ey) as i16 as i32;
             let d2 = (dx * dx) as u32 + (dy * dy) as u32;

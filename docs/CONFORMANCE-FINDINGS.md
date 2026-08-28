@@ -21045,3 +21045,167 @@ yet. And the dest triple is stamped by nearly every emit arm at
 per-arm reaches (fireball 0x4000, earthquake 4096 + a `sub_11F50`
 ground overwrite of `+154`, meteor 10240, …); only possess, wall of
 fire, storm and lightning are modelled.
+
+## SESSION 2026-08-28 (57) — mc1hwl0 24738 → 43136 ON FIVE LAWS; THE
+## SEGMENTED BOARD FALLS 9 → 1, AND THE LAST HEAD IS THE CAPTURE'S
+
+Plain clean 29,309 → **43,078**, horizon 24,738 → **43,136**
+(+18,398). `--segmented` devs **9 → 1**, clean 50,141 of 50,142
+graded. APP `--replay-check` clean 24,788 → **43,078**, same first
+divergence. All 10 certified takes still END in BOTH instruments
+(one segment, devs 0, bit-exact); all 11 guard rows byte-identical
+to their session-56 values. Suite green under `MGC_REQUIRE_GOLDENS=1`
+(0 failures, 2 pre-existing ignores), clippy clean, 236 fixtures pass
+(4 new, each reversion-probed). Baseline data rows regenerated.
+
+### 1. ⭐⭐ THE ROW-0 SMOOTHER SHIM HAS TWO MORE BUILDING BYTES: 63, 65
+
+Session 55 established that `sub_360C0`'s quad gate indexes
+`mapTerrainType` **signed-32** (:42912-19), so a row-0 cell reads two
+bytes BELOW the plane — sound-driver memory at CC117..CC126, modelled
+by `Gen::OOB_TYPE_SHIM`. It fitted `{56, 59, 71}` and warned that a
+later take might extend it. mc1hwl0 t=24739 is that take, and the
+reason it took two sessions is worth keeping:
+
+**A cell only exercises its shim bytes once its FOUR IN-PLANE READS
+PASS.** t=21282's collapse was 16 wide (x 56..71) but its build
+stream SKIPPED (62..65,0), so those cells kept building types
+12/27/27/79, failed the gate on their own type, and never touched
+shim 62..66. "(57..69,0) all pass" was therefore a statement about the
+cells the stream reached, not about the table. t=24739 is castle 233's
+SECOND collapse, an 8x8 footprint (x 60..67) that DOES rubble them and
+retiles them to type 1 — and retail STILL declines to smooth (62,0),
+(64,0), (65,0) while smoothing (61,0) and (66,0). 61 and 66 smoothing
+forces shim 62/66/67 plain, which forces **63 and 65 building**. (64
+stays plain: 65 already explains (64,0)'s skip and nothing observed
+pins it.) No temporal variation is needed — one static table still
+serves both collapses 3,457 ticks apart, which is the first real test
+"static after boot" has had.
+
+The consequence is the head. (64,0) keeps its knock-down 163 instead
+of averaging to 150, so `sub_47130`'s `sub_11F50` under the castle
+reads 5216 not 4800; every spill ball's `+46` is born
+`(1024 − (6176 − ground))/8` = 8 not −44; and after one tick of
+gravity the nine (10,39) balls sit at z 6184 against our 6132. Rows
+253..255 of the same footprint always matched — the smoother walks
+y ascending from 252, so row 0's error only ever propagated
+FORWARD, into rows 1 and 2.
+
+Method note: the port's own `[clp]` trace and
+`MGC_TERRAIN_DELTA_DUMP` are a matched pair — one gives the port's
+per-cell decisions, the other retail's per-tick changelog — and
+diffing them turns "the ground is wrong" into "retail smoothed these
+two cells and not those three" in one pass.
+
+### 2. THE EMIT ARMS WRITE `+30`/`+32` AND NOTHING ELSE
+
+`sub_579D0`'s storm emit (:66036-38, hw:62258-60) stamps the live aim
+pair on the (9,12) carrier and leaves `+34`/`+36` at the NewEvent
+zero; `proj_m12_tick`'s one-shot acquire prologue is what mirrors
+them, one tick later and only on a MISS. The port mirrored at the
+cast, publishing a bearing retail has not written yet — mc1hwl0
+t=26716, slot 182 born with retail `target_yaw` 0 against our 340.
+`cast_bomb`'s (9,18) fuse (:66275-76) is the same arm and was fixed
+with it (no corpus witness in that family yet — a DEBT, not a
+verdict).
+
+### 3. ⭐⭐⭐ THE HOUSE SCANS WALK `+36470`, NOT THE POOL
+
+`sub_20710`'s wyvern house hunt (:26041-48) walks
+`var_u32_36462[2]`, the roster the tick-top sweep builds for
+class-10 model-45 records (:52301-11), and **its loop body is the
+distance pair and nothing else** — no class, no model, no life, no
+0x400. Class and liveness come entirely from MEMBERSHIP, sampled once
+at the tick top. The port ran a live pool scan with two invented
+guards.
+
+mc1hwl0 t=29614 is a village mass-spawn: houses 18..21 AND the wyvern
+at slot 23 are born in the same tick. The ascending walk reaches 23
+with house 18 already in the pool, 2,510,368 units² away — inside the
+row-25 4608² radius — so our scan took it and promoted to CHASE
+(`f146` 18, state 97 → 98). Retail's roster predates all four houses,
+finds nothing, and stays in WANDER. Same tick-top law as `wiz_chain`
+and `ball_chain`; `Gen::bldg_chain` (MC2's `dword_38527`) already had
+the exact membership and the severed-chain `cut`, so MC1 now fills the
+same list. The m12 settler SEEK (:25241) and the m13/m14 feeder
+acquire (:25422/:25598) walk it too and were routed with it.
+
+### 4. ⭐⭐ THE VOLCANO'S RE-ARM IS NOT A TICK OF ITS OWN
+
+`sub_25EC0`'s dormant block (:28749-64) clears `+26` and has **no
+return**: it falls straight into the activation test, whose `|| !+26`
+arm is now TRUE. The tick that wakes a volcano is the tick it erupts.
+Ours returned after the re-arm and paid for the eruption one tick
+later, on a driver LCG that had already moved on — a divergence that
+never heals. mc1hwl0 t=35674, driver slot 754 at f26 2597: retail
+borns the (10,19) plume at 518, the (10,16) lava bomb at 452 and the
+eruption-start (9,0) blast at 364, and advances `+30` by 0x500 (39680
+against our 38400). Ours borned nothing. The counter is likewise ONE
+unconditional `++` at the very bottom (:28831) reached by every path
+but the two deaths — not a per-branch write, and NOT clamped; the old
+`f26 < i16::MAX - 1` guard was invented.
+
+Both ground probes in the function WRITE the sample into `+76` before
+comparing (:28756-58, :28770-76), so a volcano that dies of a
+deformed footprint dies already snapped to the new ground.
+
+### 5. ⭐⭐ THE START'S TWO REGISTER WRITES ARE BLIND — AND THE PLUME
+### REGISTER OUTLIVES ITS PLUME
+
+The eruption start kicks the previous volcano (:28779) and
+reap-flags the previous plume (:28791), and the only gate on either
+is the same `> pool base` pointer test, i.e. **slot != 0**. No class,
+no model, no life. The port's `(10,18)` / `(10,19)` conjuncts were
+invented. And `sub_26140`'s death arm is `sub_41E80_421C0(a1x)` and
+NOTHING else (:28891-92) — it never clears `+38`, so the register
+keeps naming a dead, reaped, re-minted slot until the next eruption
+start overwrites it.
+
+Together they are one law with a 40-tick fuse: mc1hwl0 t=35634 reaps
+plume 404, the pool re-mints 404 as a `(10,0)` fire, and the t=35674
+eruption reap-flags the FIRE (flags 196742 → 197766) where ours left
+it burning. The register is an UNGRADED global, so the pair at 35673
+was CLEAN and the head read as inherited; `--start` bisection dated
+the bad write to 35634 in six runs. It cannot be pinned by a fixture
+— unit test
+`world.rs::a_dead_plume_keeps_the_register_and_the_next_eruption_flags_the_stranger`,
+reversion-probed on both halves.
+
+### THE LAST HEAD IS THE CAPTURE'S: RESPAWN PRESS DATING (t=43137)
+
+The one surviving deviation is the human's respawn. Retail's human
+dies at ~43095, lands (`+70` 3) by 43135; scancode 57 first appears on
+record **43137** and retail respawns at **43138**. Our recovery reads
+the Space lane off the pair's END record, so we respawn at 43137 —
+pose jumps to the castle seat, life refills, 21 class-12
+manifestations re-mint.
+
+**The obvious fix is wrong.** Every other MC1 lane in
+`recover_pair_mc1` reads the START record (`move_byte = pw.move_bits`,
+the fire bits off it, the equip/cheat deltas' BEFORE side), so moving
+Space to the START record looks principled — and it measures WORSE:
+devs 1 → 4 and the horizon collapses to 7628, because mc1hwl0's
+EARLIER respawn has Space first appearing on record 7629 and retail
+respawning at 7629, on the record it appears on. The two sites
+disagree by one tick under either rule. MC1's turn loop is not
+frame-locked, so the per-record key snapshot carries a genuine ±1
+turn of jitter; this is the documented dating caveat cashing out, not
+a port law. Reverted, and recorded here so the next reader does not
+re-derive it.
+
+Also checked and refuted along the way: the state-3 dead-wait handler
+`sub_46480_467C0`'s `+26` countdown is NOT the gate — the human's
+`+26` sits at 1024 through the whole death window and never
+decrements, so retail's respawn comes through the COMMAND path (case
+0xF at :48620 → `sub_44D30_45070`), not the entity dispatch.
+
+### STILL OPEN
+
+`--segmented` names one reset cluster, 43137, tagged LOCAL. The
+`verify-deltas` pair face carries 358 field-diff pairs, of which the
+long-standing ones are the human's `mana`/`mana_max` lanes (353
+pairs; retail's slot-472 `+136`/`+140` climb to 769,606/671,240 over
+the take while ours hold 1000) — unexamined, and not what the replay
+grades. Session 56's two open leads stand: class-9 m13/m14/m15 ctors
+write no `+156`, and the dest triple is stamped by nearly every emit
+arm at per-arm reaches.

@@ -4329,7 +4329,29 @@ impl World {
             // it, so `<= 0x2D` admits model 45 ALONE — and the
             // footprint pass consequently applies no model test of
             // its own.
-            if e.class64 == 10 && e.model65 == 45 && matches!(self.game, GameId::Mc2) {
+            // ⭐ MC1 HAS THE SAME ROSTER AND THE SAME MEMBERSHIP:
+            // `var_u32_36462[2]` (+36470), built by the case-10 arm of
+            // the same sweep (:52301-11) for model 45 ALONE, with no
+            // life and no flags test — so `bldg_chain` serves both
+            // games unchanged. (MC2's `fp_pass` consumer is `mc2`-
+            // gated, so filling the list under MC1 reaches only the
+            // MC1 walkers below.) Its MC1 walkers are the wyvern
+            // house hunt (:26041), the m12 settler SEEK (:25241) and
+            // the m13/m14 feeder acquire (:25422/:25598) — all three
+            // of which the port ran as LIVE POOL scans.
+            //
+            // mc1hwl0 t=29614 is the witness and it is a clean one: a
+            // village mass-spawn borns houses 18..21 AND the wyvern
+            // at slot 23 in one tick. The ascending walk reaches 23
+            // after the houses exist, so the port's pool scan handed
+            // it house 18 (2,510,368 units² inside the row-25 4608²
+            // radius) and promoted it to CHASE; retail's wyvern walks
+            // the roster built at the TICK TOP, which predates all
+            // four houses, finds nothing, and stays in WANDER with
+            // `+146` 0. Same tick-top law as `wiz_chain`/`ball_chain`
+            // — a record that only becomes a house mid-tick is
+            // unreachable for the rest of that tick.
+            if e.class64 == 10 && e.model65 == 45 {
                 bldg_chain.push(s as u16);
             }
             // MC2's TERRAIN-PAINTER roster `dword_38535` — the `v4x`
@@ -9179,10 +9201,18 @@ impl World {
         // carry). Pinning it froze the carrier 2 fast forever.
         e.f126 += p.speed;
         e.id24 = PLAYER_TARGET;
+        // :66036-38 writes the LIVE aim pair `+30`/`+32` and NOTHING
+        // else — the carrier is born with `+34`/`+36` still at the
+        // NewEvent zero. Mirroring them here is the same mistake the
+        // (10,55) drop already unlearned (see `spawn_bomb_fuse`'s
+        // caller and the mc1l0 witness at :20244): the acquire
+        // prologue in `proj_m12_tick` is what mirrors the pair, one
+        // tick later and only on a MISS, so stamping it at the cast
+        // publishes a bearing retail has not written yet. mc1hwl0
+        // t=26716 borns slot 182 with retail `target_yaw` 0 against
+        // our 340. Both binaries agree (:66036-38, hw:62258-60).
         e.f30 = p.heading;
-        e.f34 = p.heading;
         e.f32 = p.pitch;
-        e.f36 = p.pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = per_shot;
         e.f26 = charge;
@@ -9302,10 +9332,12 @@ impl World {
         e.f126 += p.speed;
         e.f128 = e.f126;
         e.id24 = PLAYER_TARGET;
+        // Same aim-pair law as `cast_storm`: :66275-76 writes `+30`
+        // and `+32` only, so the fuse is born with `+34`/`+36` at
+        // zero. No corpus witness in this family yet — the fix rides
+        // the storm's, which the emit arms share verbatim.
         e.f30 = p.heading;
-        e.f34 = p.heading;
         e.f32 = p.pitch;
-        e.f36 = p.pitch;
         e.f44 = def.damage.min(u16::MAX as u32) as u16;
         e.f140 = def.possess_mana as i32;
         e.f68 = 10;
@@ -17370,6 +17402,9 @@ mod tests {
                 .expect("feeder");
         w.g.ent[m].f146 = h as u16;
         w.g.ent[m].f63 = 0;
+        // The acquire walks the TICK-TOP house roster (+36470), not
+        // the pool — a bare `Gen` has to build it like the tick does.
+        w.g.rebuild_bldg_chain();
 
         w.g.feeder_wander(m, 78, false);
 
@@ -17408,6 +17443,7 @@ mod tests {
             w.g.spawn_creature(14, 0x8000, 0x8000, 3200)
                 .expect("migrant");
         w.g.ent[m].f63 = 0;
+        w.g.rebuild_bldg_chain();
 
         w.g.feeder_wander(m, 84, true);
 
@@ -22912,6 +22948,85 @@ mod tests {
             "a refused splash leaves the bomb flying"
         );
         assert_eq!(w.g.ent[b2].f26, 6, "the surviving tick counts too");
+    }
+
+    /// THE PLUME REGISTER OUTLIVES ITS PLUME, AND THE NEXT ERUPTION
+    /// STAMPS WHOEVER INHERITED THE SLOT. `sub_26140`'s death arm is
+    /// `sub_41E80_421C0(a1x)` and nothing else (:28891-92) — it never
+    /// clears `+38` — and the eruption start's reap-flag of the old
+    /// plume (:28791) is gated on `slot != 0` ALONE: no class, no
+    /// model, no life. So a plume that dies, is reaped, and has its
+    /// slot re-minted as something else leaves that stranger to be
+    /// flagged by the next eruption.
+    ///
+    /// It is an UNGRADED global with a 40-tick fuse, which is why
+    /// mc1hwl0 could only reach it by `--start` bisection: the head
+    /// showed at t=35674 as `(10,0)slot404:flags`, the bad write was
+    /// at t=35634, and the pair at 35673 was clean throughout. No
+    /// fixture can pin it; this test is the pin.
+    #[test]
+    fn a_dead_plume_keeps_the_register_and_the_next_eruption_flags_the_stranger() {
+        let mut w = flat_world();
+        let ctx = MobCtx {
+            px: 0,
+            py: 0,
+            pz: 0,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        let (px, py) = (0x8000u16, 0x8000u16);
+        let gz = w.g.ground_z(px, py) as i16;
+        let plume = w.g.spawn_effect(19, px, py, gz).expect("plume");
+        w.g.plume = plume as u16;
+        // Kill it through its own handler's death arm.
+        w.g.ent[plume].act_life = -1;
+        w.g.effect_tick(plume, &ctx);
+        assert!(
+            w.g.ent[plume].flags & 0x400 != 0,
+            "the expired plume reap-flags itself"
+        );
+        assert_eq!(
+            w.g.plume, plume as u16,
+            "…and the register still names it — retail never clears +38"
+        );
+
+        // The slot is recycled as an ordinary (10,0) fire, and a fresh
+        // volcano erupts. The blind write must flag the FIRE.
+        w.g.free_entity(plume);
+        let fire = w.g.new_event().expect("re-mint");
+        assert_eq!(fire, plume, "the free stack hands the slot straight back");
+        w.g.ent[fire].class64 = 10;
+        w.g.ent[fire].model65 = 0;
+        w.g.ent[fire].tick70 = 0;
+        w.g.ent[fire].act_life = 8;
+        w.g.ent[fire].flags &= !0x400;
+
+        let (vx, vy) = (0x8000u16 + 0x2000, 0x8000u16);
+        let vz = w.g.ground_z(vx, vy) as i16;
+        let v = w.g.new_event().expect("volcano slot");
+        {
+            let e = &mut w.g.ent[v];
+            e.class64 = 10;
+            e.model65 = 18;
+            e.tick70 = 18;
+            e.max_life = 10000;
+            e.act_life = 10000;
+            e.f26 = 0; // eruption start, this tick
+        }
+        w.g.link(v, vx, vy, vz);
+        w.g.erupting = 0;
+        w.g.effect_tick(v, &ctx);
+        assert_eq!(w.g.erupting, v as u16, "the start registers the driver");
+        assert!(
+            w.g.ent[fire].flags & 0x400 != 0,
+            "the blind +38 reap-flag landed on the stranger that inherited the slot"
+        );
+        assert_ne!(w.g.plume, fire as u16, "…and the register moved on");
     }
 
     #[test]

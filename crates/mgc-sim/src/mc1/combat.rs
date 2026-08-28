@@ -3687,38 +3687,78 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24)
         };
+        // ⭐⭐ THE RE-ARM IS NOT A TICK OF ITS OWN. Retail's dormant
+        // block (:28749-64) has NO return: it clears `+26` and falls
+        // straight into the activation test below, whose `|| !+26`
+        // arm is now TRUE — so the tick that wakes a volcano is also
+        // the tick that erupts. Ours returned after the re-arm and
+        // paid for the whole eruption one tick later, on a driver LCG
+        // that had already moved on, which is a divergence that never
+        // heals: mc1hwl0 t=35674, driver slot 754 at f26 2597, retail
+        // borns the plume (10,19) at 518, the lava bomb (10,16) at
+        // 452 and the blast (9,0) at 364 while ours borns nothing and
+        // leaves `+30` 0x500 short (38400 vs 39680).
+        //
+        // The counter is likewise ONE unconditional `++` at the very
+        // bottom (:28831), reached by every path but the two deaths —
+        // not a per-branch write, and not clamped. The old
+        // `f26 < i16::MAX - 1` guard was invented; retail lets the
+        // i16 wrap, which is what eventually drags an orphaned
+        // register's volcano (see the missed-1/5-roll quirk above)
+        // back under 128 and starts it lobbing again.
         if c > 2500 {
             let d = self.ent_rand(i);
             if d % 100 == 0 && self.erupting == 0 {
-                if self.ground_z(x, y) as i16 != z {
+                // :28756-58 — the probe WRITES the sample into `+76`
+                // and only then compares, so a volcano that dies here
+                // dies already snapped to the new ground.
+                let g = self.ground_z(x, y) as i16;
+                self.ent[i].z = g;
+                if g != z {
                     self.ent[i].flags |= 0x400;
                     return false;
                 }
                 self.ent[i].f26 = 0;
-            } else if self.ent[i].f26 < i16::MAX - 1 {
-                self.ent[i].f26 = c + 1;
             }
-            return false;
         }
+        // Re-read: the block above may have just re-armed us.
+        let c = self.ent[i].f26;
         let fire = if c != 0 && c < 128 && c & 0xF != 0 {
             self.ent_rand(i) % 5 == 0
         } else {
             c == 0
         };
         if fire {
-            if self.ground_z(x, y) as i16 != z {
+            // :28770-76 — the same write-then-compare probe.
+            let g = self.ground_z(x, y) as i16;
+            self.ent[i].z = g;
+            if g != z {
                 self.ent[i].flags |= 0x400; // deformed under: dead
                 return false;
             }
             if c == 0 {
                 // Register self; kick the previous eruption (:28778-92).
+                //
+                // ⚠ BOTH REGISTER WRITES ARE BLIND. Retail's only
+                // gate on either is `slot != 0` (:28779 and :28791
+                // are the same `> pool base` pointer test) — no
+                // class, no model, no life — and it stamps whatever
+                // record now occupies that slot. The port's
+                // `(10,18)` / `(10,19)` conjuncts were invented, and
+                // the plume one cost mc1hwl0 its t=35674 head: the
+                // previous plume's slot 404 had been reaped and
+                // re-minted as a `(10,0)` FIRE, and retail
+                // reap-flags the fire (flags 196742 → 197766) where
+                // the port left it burning. Same freed-slot
+                // stale-bytes law as the pack-death handoff through
+                // `+52`; the `!= 0` bound is memory safety only.
                 let prev = self.erupting as usize;
-                if prev != 0 && self.ent[prev].class64 == 10 && self.ent[prev].model65 == 18 {
+                if prev != 0 && prev < self.ent.len() {
                     self.ent[prev].f26 = 250;
                 }
                 self.erupting = i as u16;
                 let pl = self.plume as usize;
-                if pl != 0 && self.ent[pl].class64 == 10 && self.ent[pl].model65 == 19 {
+                if pl != 0 && pl < self.ent.len() {
                     self.ent[pl].flags |= 0x400;
                 }
                 let g = self.ground_z(x, y) as i16;
@@ -3774,10 +3814,12 @@ impl Gen {
             if c >= 127 {
                 self.erupting = 0; // the clean death (:28825-29)
                 self.ent[i].flags |= 0x400;
-                return false;
+                // …and STILL falls to the counter below (:28831 sits
+                // outside the fire block): the reap-flagged driver
+                // records `+26` one higher.
             }
         }
-        self.ent[i].f26 = c + 1;
+        self.ent[i].f26 = c.wrapping_add(1);
         false
     }
 
@@ -3977,10 +4019,19 @@ impl Gen {
         let life = self.ent[i].act_life;
         self.ent[i].act_life = life - 1;
         if life < 0 {
+            // ⚠ THE PLUME REGISTER IS NOT CLEARED HERE. Retail's
+            // death arm is `sub_41E80_421C0(a1x)` and nothing else
+            // (:28891-92) — `+38` keeps naming this slot until the
+            // NEXT eruption start overwrites it, straight through the
+            // reap and the slot's re-mint. That is what makes the
+            // start's blind `+38` reap-flag (see `eruption_tick`)
+            // land on a stranger: mc1hwl0 t=35634 reaps plume 404,
+            // the pool re-mints 404 as a `(10,0)` fire, and the
+            // t=35674 eruption flags the FIRE. Ours cleared the
+            // register on death, so the start found 0 and flagged
+            // nothing — an UNGRADED global whose only visible
+            // consequence is 40 ticks downstream.
             self.ent[i].flags |= 0x400;
-            if self.plume == i as u16 {
-                self.plume = 0;
-            }
         } else {
             self.ent[i].f26 = 0;
             let (x, y, z, owner) = {

@@ -1480,6 +1480,22 @@ impl Gen {
         }
     }
 
+    /// The class-10 model-45 arm of the same sweep (:52301-11) — the
+    /// HOUSE roster `var_u32_36462[2]` (MC2's `dword_38527`), for
+    /// tests that drive a bare `Gen`. NO life or flags test: the
+    /// walkers carry none either, so membership is the whole gate.
+    #[cfg(test)]
+    pub(crate) fn rebuild_bldg_chain(&mut self) {
+        self.bldg_chain.list.clear();
+        self.bldg_chain.cut = usize::MAX;
+        for s in 1..self.ent.len() {
+            let e = &self.ent[s];
+            if e.class64 == 10 && e.model65 == 45 {
+                self.bldg_chain.list.push(s as u16);
+            }
+        }
+    }
+
     /// The CLASS-3 arm of the same sweep (:52253-62) — bucket[0], for
     /// tests that drive a bare `Gen`. Membership is sampled ONCE, at
     /// the tick top: `actLife >= 0 && (flags & 0x10) == 0`.
@@ -6170,20 +6186,38 @@ impl Gen {
     /// the write is in-plane.
     ///
     /// [`OOB_TYPE_SHIM`] models those 257 bytes for the retail machine
-    /// the corpus was recorded on. Measured mc1hwl0 t=21282 (castle
-    /// 233's downgrade un-stamp straddles the y wrap): the shim's
-    /// {56, 59, 71} read as building-typed — gate FAILS on cells
-    /// (56,0)/(58,0)/(59,0)/(70,0)/(71,0) of the epilogue while
-    /// (57..69,0) pass, including (66,0) whose port-side NW quad has
-    /// the type-11 keep wall at (65,255) and previously SKIPPED
+    /// the corpus was recorded on. A cell (x, 0) reads shim `x` and
+    /// `x + 1`, so each observed smooth/skip pins a PAIR of bytes —
+    /// but ONLY when the cell's in-plane reads pass first, which is
+    /// why the table fills in one collapse at a time.
+    ///
+    /// Measured mc1hwl0 t=21282 (castle 233's downgrade un-stamp
+    /// straddles the y wrap): the shim's {56, 59, 71} read as
+    /// building-typed — gate FAILS on cells (56,0)/(58,0)/(59,0)/
+    /// (70,0)/(71,0) of the epilogue while (57,0)/(60,0)/(66,0)/
+    /// (67,0)/(69,0) pass, including (66,0) whose port-side NW quad
+    /// has the type-11 keep wall at (65,255) and previously SKIPPED
     /// (retail smooths it to 157 = the 8-plain-neighbor average).
     /// With this table the full 441-cell post-collapse height grid
     /// reproduces retail 441/441; without it, 20 cells drift (the
     /// t=21282 `(10,0)slot601:z` head and its whole fire-field
-    /// cascade). Offset 71 is the first byte of `dword_CC126` (a
-    /// sound-init parameter, static after boot); 56/59 sit in the
-    /// driver block — stable within a session, so one table serves
-    /// the whole corpus until a take proves otherwise.
+    /// cascade).
+    ///
+    /// {63, 65} came from the SECOND collapse, t=24739, where the
+    /// castle is down to an 8x8 footprint (x 60..=67). That run
+    /// rubbles (62..=65,0) — cells the 16-wide t=21282 stream
+    /// SKIPPED, so they still carried building types 12/27/27/79 and
+    /// failed the gate in-plane, leaving their shim bytes untested.
+    /// Retiled to type 1 they reach the OOB reads for the first
+    /// time, and retail still declines to smooth (62,0)/(64,0)/
+    /// (65,0) while smoothing (61,0)/(66,0): shim 62/66/67 plain
+    /// (61 and 66 smooth) forces 63 and 65 building. 64 is left
+    /// plain — 65 already explains (64,0)'s skip, and nothing
+    /// observed pins it. All five live in one 16-byte block
+    /// (CC117..CC126, the last being `dword_CC126`'s low byte); the
+    /// pattern is stable across the 3,457 ticks between the two
+    /// collapses, so "static after boot" survives its first real
+    /// test rather than being assumed.
     /// The 257 bytes retail's sub_360C0 quad gate reads BELOW the
     /// type plane for row-0 cells (addresses CC0DF..CC1DF — sound-
     /// driver state; see [`Gen::smooth_cell`]). Only the plain/
@@ -6195,6 +6229,8 @@ impl Gen {
         let mut s = [0u8; 257];
         s[56] = 22;
         s[59] = 22;
+        s[63] = 22;
+        s[65] = 22;
         s[71] = 22;
         s
     };

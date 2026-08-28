@@ -103,6 +103,30 @@
    "file": "the-invisible-token-runs-its-own-machine-at-its.mgcr",
    "source": "mc1hwl0",
    "note": "THE INVISIBLE TOKEN RUNS ITS OWN MACHINE AT ITS POOL SLOT -- AND A GATE REFUSAL FIZZLES THE BURST INSIDE THE COMMIT TICK: retail's sub_571B0_576E0 (hw :61899, class-12 state 36) is the sub_573F0 skeleton with the owner's +16 0x20 cloak bit (FULL tick: bit on + wizext+331 grace zeroed + 55E80 full-cost debit; broken-bit or 55DD0 refusal: +48 = 1; the shared decrement clears the bit at 0). mc1hwl0 t=20698 pair: rival 473's flee re-decision commits Invisible (cooldown[12] arms, +48 = +50 = 251) and the token's own pass at slot 481 -- above carpet 473, SAME tick -- gate-refuses on the castle-store ladder, so the burst dies 0 -> 251 -> 1 -> 0 intra-tick and slot 481's f26 must read 0 at the boundary (the Wall-of-Fire spike shape). The port's inert rival (12,12) token kept the armed 251 and the refresh mirror cloaked a wizard retail never hid."
+  },
+  {
+   "t": 24738,
+   "file": "the-row-0-quad-gate-s-below-plane-bytes-63-65-th.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE ROW-0 QUAD GATE'S BELOW-PLANE BYTES 63/65 (the second half of the OOB smoother law). sub_360C0's gate indexes mapTerrainType SIGNED-32 (:42912-19), so a cell (x,0) tests shim[x] and shim[x+1] -- sound-driver bytes at CC117..CC126 -- but ONLY once its four IN-PLANE reads pass. t=21282's 16-wide collapse never rubbled (62..65,0): they kept building types 12/27/27/79 and failed in-plane, leaving their shim bytes untested, which is why {56,59,71} alone read as the whole table. mc1hwl0 t=24739 is castle 233's SECOND collapse, an 8x8 footprint (x 60..67) that DOES rubble them and retiles them to type 1 -- and retail still declines to smooth (62,0)/(64,0)/(65,0) while smoothing (61,0)/(66,0), which forces shim 63 and 65 building. The consequence is the head: (64,0) keeps the knock-down 163 instead of averaging to 150, so the ejector's ground read is 5216 not 4800, every spill ball is born with f46 8 not -44, and the nine (10,39) balls land at z 6184 not 6132."
+  },
+  {
+   "t": 26715,
+   "file": "the-emit-arms-write-the-live-aim-pair-30-32-and.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE EMIT ARMS WRITE THE LIVE AIM PAIR +30/+32 AND NOTHING ELSE. sub_579D0's storm emit (:66036-38, hw:62258-60) stamps +30 and +32 off the caster and leaves +34/+36 at the NewEvent zero; the carrier's own first tick is what mirrors them, in proj_m12_tick's one-shot acquire prologue and only on a MISS. Ours mirrored them at the cast, publishing a bearing retail has not written yet: mc1hwl0 t=26716 borns the (9,12) carrier at slot 182 with retail target_yaw 0 against our 340. cast_bomb's (9,18) fuse (:66275-76) is the same arm and was fixed with it."
+  },
+  {
+   "t": 29613,
+   "file": "the-house-scans-walk-36470-not-the-pool-sub-2071.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE HOUSE SCANS WALK +36470, NOT THE POOL. sub_20710's wyvern house hunt (:26041-48) walks var_u32_36462[2] -- the roster the tick-top sweep builds for class-10 model-45 records (:52301-11) -- and its loop body is the distance pair and NOTHING else: no class, no model, no life, no 0x400. Class and liveness come entirely from MEMBERSHIP, which is sampled once, at the top. mc1hwl0 t=29614 is a village mass-spawn: houses 18..21 and the wyvern at slot 23 are all born in the same tick, so the ascending walk reaches 23 with house 18 already in the pool 2,510,368 units^2 away -- inside the row-25 4608^2 radius. Our pool scan took it and promoted to CHASE (f146 18, state 98); retail's roster predates all four houses, finds nothing, and stays in WANDER. The m12 settler SEEK (:25241) and the m13/m14 feeder acquire (:25422/:25598) walk the same list and were routed with it."
+  },
+  {
+   "t": 35673,
+   "file": "the-re-arm-is-not-a-tick-of-its-own-sub-25ec0-s.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE RE-ARM IS NOT A TICK OF ITS OWN. sub_25EC0's dormant block (:28749-64) clears +26 and has NO return, so it falls straight into the activation test whose `|| !+26` arm is now TRUE -- the tick that wakes a volcano is the tick it erupts. Ours returned after the re-arm and paid for the eruption one tick later on a driver LCG that had already moved on. mc1hwl0 t=35674, driver slot 754 at f26 2597: retail borns the (10,19) plume at 518, the (10,16) lava bomb at 452 and the eruption-start (9,0) blast at 364, and advances +30 by 0x500 (39680 vs our 38400). The same pair pins the START's two BLIND register writes (:28779, :28791): the only gate on either is `slot != 0`, so the kick and the plume reap-flag land on whatever record now holds the slot -- here a (10,0) fire that re-minted the dead plume's 404."
   }
  ]
 }
