@@ -962,18 +962,20 @@ impl World {
     /// No wall gate — the water steer is the only obstacle law.
     fn mc2_rival_movement(&mut self, ri: usize, i: usize) {
         let row = &BEHAVIOR[self.g.ent[i].row156 as usize];
-        let (v10, v12, v14) = (row.v_10, row.v_12, row.v_14);
+        let (v12, v14) = (row.v_12, row.v_14);
         let (v2, v4) = (row.v_2, row.v_4);
         let ground = self.g.ground_z(self.g.ent[i].x, self.g.ent[i].y) as i16;
         {
             let e = &mut self.g.ent[i];
-            // sub_580E0 (EF:6454): the three-zone band settle.
-            if e.z > ground.saturating_add(v10) {
+            // sub_580E0 (EF:40372, via sub_146F0 EF:6454): the
+            // TWO-branch altitude servo — the full v_14 step whenever
+            // above the terrain itself, then the ground+v_12 floor
+            // clamp. The a4 slot (v_10) is passed but DEAD in retail,
+            // same as the balloon servo (castle.rs).
+            if e.z > ground {
                 e.z = e.z.saturating_add(v14);
-            } else if e.z > ground.saturating_add(v12) {
-                e.z = e.z.saturating_add((v14 as i32 * 25 / 100) as i16);
             }
-            if e.z < ground.saturating_add(v12) {
+            if e.z <= ground.saturating_add(v12) {
                 e.z = ground.saturating_add(v12);
             }
         }
@@ -2065,11 +2067,18 @@ impl World {
                 }
             }
             // Fly to the scouted site, plant (sub_13100 EF:5620;
-            // approach 2048/4096).
+            // approach 2048/4096). A whiffed cast stops and hovers at
+            // the SITE's stored z + 512 (`axis_0x9A_154x.z`, the
+            // entity's site_z home — retail's scout copies the
+            // scratch slot's whole position, z included).
             Mc2AiState::Build => {
                 let (sx, sy) = self.mc2_rivals[ri].site;
                 if self.mc2_rival_approach(ri, i, sx, sy, 2048, 4096) {
-                    self.mc2_rival_walk_cast(ri, i, 2);
+                    if !self.mc2_rival_walk_cast(ri, i, 2) {
+                        self.mc2_rivals[ri].vdes = 0;
+                        let sz = self.g.ent[i].site_z;
+                        self.mc2_rival_hover(i, sz.saturating_add(512));
+                    }
                     if self.rival_castle(self.mc2_rivals[ri].ent).is_some() {
                         self.mc2_rivals[ri].state = Mc2AiState::Fresh;
                     }
@@ -2494,7 +2503,7 @@ impl World {
     ///
     /// The cone is yaw-vs-setpoint (`sub_582B0(yaw, roll)` — the
     /// state handlers keep f34 on the target): (255-P)/4+20 degrees.
-    fn mc2_rival_cast_ready(&self, ri: usize, s: usize) -> bool {
+    fn mc2_rival_cast_ready(&mut self, ri: usize, s: usize) -> bool {
         let r = &self.mc2_rivals[ri];
         let m = r.book.ent[s] as usize;
         if m == 0 {
@@ -2509,28 +2518,40 @@ impl World {
         } else {
             e.max_life as i64
         };
-        if (r.mana as i64) < cost {
+        // The affordability gate sits BEFORE the dispatch for every
+        // spell but the castle: retail's case-2 kernel runs its
+        // `mana >= manifestation cost` test AFTER the sub_11A10 space
+        // probe (EF:7028-41), so a broke rival still stamps the
+        // castle's quad — the case-2 arm gates itself below.
+        if s != 2 && (r.mana as i64) < cost {
             return false;
         }
         let armed = e.f26 > 0;
         let cooling = r.cooldown[s] != 0;
-        let cone_ok = || {
+        let cone_ok = {
             let cone = ((255 - r.per as u32) / 4 + 20) * 2048 / 360;
             let e = &self.g.ent[r.ent as usize];
             (Gen::angdist(e.f30, e.f34) as u32) < cone
         };
+        let ent = r.ent;
         match s {
-            0 | 7 | 0xD | 0xE | 0x16 => !cooling && cone_ok(),
-            1 | 9 | 0x10 | 0x12 | 0x13 | 0x15 => !armed && !cooling && cone_ok(),
-            2 => match self.rival_castle(r.ent) {
+            0 | 7 | 0xD | 0xE | 0x16 => !cooling && cone_ok,
+            1 | 9 | 0x10 | 0x12 | 0x13 | 0x15 => !armed && !cooling && cone_ok,
+            2 => match self.rival_castle(ent) {
+                // The space probe (sub_11A10 — it QUAD-STAMPS the
+                // castle) runs as soon as the armed/cooling gates
+                // pass, BEFORE the mana/cone gates, and retail has NO
+                // action gate here (EF:7028-41): the probe fires on a
+                // RISING castle too (mc2l4 t=1 castle 304's
+                // yaw-0/fov-256 stamp is exactly this probe).
                 Some(c) => {
                     !armed
                         && !cooling
-                        && cone_ok()
-                        && self.g.ent[c].tick70 == 4
                         && self.g.mc2_castle_space_ok(c)
+                        && self.mc2_rivals[ri].mana as i64 >= cost
+                        && cone_ok
                 }
-                None => !cooling,
+                None => !cooling && self.mc2_rivals[ri].mana as i64 >= cost,
             },
             3 => true,
             4 | 6 | 8 | 0xB => !armed && !cooling,

@@ -21209,3 +21209,144 @@ the take while ours hold 1000) — unexamined, and not what the replay
 grades. Session 56's two open leads stand: class-9 m13/m14/m15 ctors
 write no `+156`, and the dest triple is stamped by nearly every emit
 arm at per-arm reaches.
+
+## SESSION 2026-08-28 (58) — mc1hwl0 IS CERTIFIED: THE CAPTURE'S ±1
+## REPAIRED IN THE TAKE, AND RETAIL'S OWN HASH CHANNEL SIGNS IT
+
+**No port code changed this session.** The one head session 57 left —
+the respawn press dating at t=43137, proven capture-side (the two
+respawn sites disagree by one tick under EITHER dating rule) — is
+closed by a one-record repair of the recording itself:
+
+- `recordings/mc1hwl0-fixed.mgcr` = the original take with scancode
+  57 removed from record 43137's `input.keys_down` and NOTHING else
+  (the hold's remaining records 43138–43141 untouched, every other
+  line byte-identical pass-through). The press EDGE thereby moves to
+  43138, the record retail acted on; the pair recovery
+  (`recover_pair_mc1` reading Space off the END record) now fires the
+  respawn on the pair ending 43138, matching retail, while the
+  earlier respawn (press first on 7629, retail respawn 7629) is
+  untouched.
+- The repair is SELF-VALIDATING: the truth channel (state, obs,
+  terrain, all 50,142 graded records) is the original capture's,
+  byte-identical — so the ~7,000 ticks downstream of the repair must
+  replay bit-exact against retail's own recorded state for the take
+  to END. They do:
+  - `replay --brief`: devs=0, clean 50,142/50,142, horizon=END
+  - `replay --segmented --brief`: devs=0, clean 50,142/50,142,
+    horizon=END (8 segments / 7 gaps = the capture's own recording
+    windows, zero resets in excess)
+  - APP `--replay-check`: 50,142/50,142 clean, bit-exact throughout
+- The original `mc1hwl0.mgcr` stays in `recordings/` as the jitter
+  witness. NO roster entry is written: `verify-deltas` on the
+  original is CLEAN through the whole 43130–43150 window — the
+  dating head was a free-run-only divergence, so the roster (which
+  classifies pair-face rows) has nothing to classify.
+- Board: `mc1hwl0-fixed` joins the certified `--segmented` set;
+  `mc1hwl0` leaves the guard set (the fixed take carries every record
+  but the re-dated press, so it inherits the guard). Suites table
+  updated (`conformance/mc1hwl0.json`, 21 fixtures, sources mc1hwl0 +
+  mc1hwl0-noskip — fixture files are cut and self-contained, none
+  reference the repaired record).
+
+Method note for the next capture ±1: the honest options ARE roster /
+re-record / repair — but a repair is only honest when (a) the edited
+lane is an INPUT lane inside the recorder's documented ±1 dating
+caveat, (b) the truth channel is untouched, and (c) the take then
+runs to END against that untouched channel. Condition (c) is the
+teeth: a wrong re-dating diverges within ticks and cannot survive
+7,000.
+
+### STILL OPEN (carried from 57)
+
+The human's `mana`/`mana_max` pair-face lanes (353 pairs, slot-472
+`+136`/`+140` climbing while ours hold 1000) — pair-face only, not
+replay-graded. Session 56's two leads: class-9 m13/m14/m15 ctors
+write no `+156`; the dest triple is stamped by nearly every emit arm.
+
+### PLAYER RULING (same session): THE JITTER WAS FRAME SKIPPING, AND
+### THE SKIPFUL TAKE RETIRES
+
+The player confirms the ±1 press dating was caused by the capture's
+FRAME SKIPPING — mc1hwl0 was the corpus's one skipful recording. The
+take's purpose was fixture harvest, and with every head driven to END
+it is fully harvested: it RETIRES (files stay on disk until the
+player deletes them; `mc1hwl0-fixed` stays in the certified sweep
+only until its successor certifies). `mc1hwl0-noskip` (already
+recorded, currently horizon 970) becomes the active HW target, and
+the campaign's new endgame is the NO-SKIP CORPUS: every remaining
+take is skip-free, so the board's open horizons — mc1hwl0-noskip,
+mc1l6, mc1l37, mc1l32-quick, the spells-galore takes, mc2l1/l4/l24/
+l30, mc2l6-rival-spells-galore — should be drivable to END without
+capture-side repairs. After that, new recordings are expected to
+replay near out-of-the-box.
+
+### PLAYER RULING, FINAL FORM: BOTH SKIPFUL FILES DELETED, THE NOSKIP
+### TAKE TAKES THE NAME
+
+Executed same session: `mc1hwl0.mgcr` (skipful) and `mc1hwl0-fixed.mgcr`
+deleted; `mc1hwl0-noskip.mgcr` renamed to `mc1hwl0.mgcr` (53,053
+ticks, skip-free, current horizon 970). The certified rows above were
+measured before deletion and are final. `conformance/mc1hwl0.json`
+carries a `_doc` provenance note: fixtures with source `mc1hwl0` were
+cut from the retired skipful take and cannot be re-cut (their files
+remain the assertion); source `mc1hwl0-noskip` fixtures were cut from
+the take that now carries the name. Older ledger/baseline references
+to "mc1hwl0-noskip" mean today's `mc1hwl0.mgcr`.
+
+### SAME SESSION, THE MC2-ONRAMP ROUND: THREE RIVAL-AI LAWS,
+### mc2l1 0 → 21, mc2l4 0 → 1
+
+The "four takes die at t≈1" onramp family is not one law; the first
+three landed (all in the rival wizard's tick):
+
+1. **THE AI CARPET'S ALTITUDE SERVO IS 2-BRANCH — `sub_580E0`'s a4
+   (v_10) IS DEAD** (EF:40372: the decompile's `int /*a4*/`). The
+   law: full `v_14` step whenever `z > getTerrainAlt(pos)` — above
+   the terrain AT ALL — then the `alt + v_12` floor clamp. The port's
+   `mc2_rival_movement` carried an invented three-zone band (full
+   step above ground+v_10, 25% of v_14 between v_12 and v_10) — the
+   same invention the balloon servo shed earlier (castle.rs already
+   documented "MC2 has NO ceiling"; the rival arm never got the
+   memo). mc2l1 t=1: slot 138 descends −4 where the port crawled −1.
+   At the floor the step-then-clamp pair nets ZERO (step down 4,
+   clamp back up) — the servo oscillates invisibly at equilibrium.
+
+2. **THE BUILD ARM'S WHIFFED CAST STOPS AND HOVERS AT THE SITE'S OWN
+   Z + 512** (sub_13100 EF:5620: `speed = 0; z ± v_14 toward
+   axis_0x9A_154x.z + 512`). The site AXIS — x, y AND z — is stamped
+   by the scout copying the SCRATCH SLOT 0's whole position
+   (EF:6089/6095), so the z is whatever the reserved slot held; it
+   imports on the entity (`site_z`, +0x9A triple). The port's Build
+   arm had no whiff branch at all. mc2l4 t=1: rival 298 holds z 1176
+   = the servo's −4 exactly cancelled by the hover's +4 toward
+   2624+512.
+
+3. **THE CASE-2 READY PROBE STAMPS THE CASTLE'S QUAD, AND ITS GATE
+   ORDER IS LOAD-BEARING** (EF:7013-41). `sub_11A10` (the space
+   test) brackets its work with `SetShiftByCastle(row+1)` …
+   `(row)` on EVERY exit (as does the pre-clear sub_11960), and the
+   closing restore writes `yaw = 0`, `fov = 256`, pitch/roll = the
+   row box on the CASTLE — the tick's last writes on those lanes.
+   Retail's kernel reaches it as soon as the armed/cooling gates
+   pass: BEFORE the affordability and cone tests, with NO castle-
+   action gate. The port gated the probe on `tick70 == 4 &&
+   ladder-affordable && cone` — so a broke rival next to its RISING
+   castle never probed, and the castle kept its ctor draw quad
+   (0xE000/0x4000) where retail read 0/256. Port changes:
+   `mc2_castle_box_quad` (the faithful SetShiftByCastle, alongside
+   the deliberately non-writing `mc2_castle_extents`), the
+   pre-clear + space-test brackets, and the cast-ready reorder
+   (ladder cost AFTER the stamp, cone last, action gate dropped —
+   the mc2l0-corpus refutation of `f78 = 0` in extents stands: that
+   was the wrong CALLER, not a wrong law).
+
+Held: mc2l4's t=2 head is the same rival's z one tick later
+(hover/servo interplay past the stamp tick); mc2l24 t=2
+(5,27)heading and mc2l6-rsg t=1 (2,8)z are DIFFERENT families
+(hydra heading / static z), unexamined. ⚠ FIXTURE DEBT: none of the
+three laws carries a cut fixture yet — the mc2l1/mc2l4 horizon rows
+are the only reversion guard. Regression: suite green (22 result
+blocks), all 10 certified takes END (`--segmented`), the MC2 guard
+rows (mc2l0-spells-galore 7281, mc2l24 1, mc2l30 215) byte-identical,
+clippy clean, fmt clean.

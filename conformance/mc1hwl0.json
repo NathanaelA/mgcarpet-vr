@@ -1,4 +1,5 @@
 {
+ "_doc": "PROVENANCE (2026-08-28, SESSION 58): the skipful take mc1hwl0.mgcr and its repaired copy mc1hwl0-fixed.mgcr were CERTIFIED (devs=0, 50,142/50,142, END, both instruments) and then DELETED by player ruling \u2014 the skipful capture existed for fixture harvest and is fully harvested. recordings/mc1hwl0.mgcr is now the former mc1hwl0-noskip take (53,053 ticks, skip-free). Fixtures with source 'mc1hwl0' were cut from the RETIRED skipful take: their ticks do NOT index the current recording and they cannot be re-cut (the files below remain the assertion). Fixtures with source 'mc1hwl0-noskip' were cut from the take that now carries the mc1hwl0 name.",
  "dir": "fixtures/mc1hwl0",
  "pin_pose": "n1",
  "fixtures": [

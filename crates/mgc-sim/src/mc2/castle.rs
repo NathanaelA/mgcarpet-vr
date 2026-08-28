@@ -671,6 +671,26 @@ impl Gen {
         e.f84 = 0x4000;
     }
 
+    /// The FAITHFUL `SetShiftByCastle_49EC0` (EF:32882-95), full
+    /// quad: box halves into `f80`/`f82` plus the helper's own
+    /// `yaw = 0` / `fov = 256` writes. Retail reaches it from the
+    /// pre-clear and the space test, which BRACKET their work with
+    /// (row+1) … (row) — the closing restore is the last write of a
+    /// build-state-0 tick, so a planted/upgrading castle's graded
+    /// `applied_yaw`/`afov` read 0/256 there (mc2l4 t=1 castle 304).
+    /// `mc2_castle_extents_ent` above stays the NON-writing variant
+    /// for the port's own refresh callers (its ⛔ note).
+    fn mc2_castle_box_quad(&mut self, i: usize, row: u8) {
+        let Some(def) = self.assets.build_tab.get(row as usize).copied() else {
+            return;
+        };
+        let e = &mut self.ent[i];
+        e.f80 = (((def.w as u16) << 8).wrapping_add(1280)) >> 1;
+        e.f78 = 0;
+        e.f84 = 256;
+        e.f82 = (((def.h as u16) << 8).wrapping_add(1280)) >> 1;
+    }
+
     /// `sub_11960` (EF:4391) — the pre-clear: kill every EFFECT
     /// entity whose AABB overlaps the NEXT level's footprint
     /// (life = -1). Effects only — objects/terrain untouched. The
@@ -681,7 +701,12 @@ impl Gen {
     /// kind via its own list).
     fn mc2_castle_preclear(&mut self, i: usize) {
         let next = (self.ent[i].f26 + 1).clamp(1, 7) as usize;
+        // sub_11960 brackets with SetShiftByCastle(row+1) … (row):
+        // the temporary next-level box, then the restore whose yaw/fov
+        // writes are the tick's last on those lanes.
+        self.mc2_castle_box_quad(i, next as u8);
         let Some(def) = self.assets.build_tab.get(next).copied() else {
+            self.mc2_castle_box_quad(i, self.ent[i].f26.clamp(0, 7) as u8);
             return;
         };
         let half_w = ((((def.w as u16) << 8).wrapping_add(1280)) >> 1) as i32;
@@ -703,6 +728,7 @@ impl Gen {
                 self.ent[j].f46 = 0; // fontTypeIndex = 0
             }
         }
+        self.mc2_castle_box_quad(i, self.ent[i].f26.clamp(0, 7) as u8);
     }
 
     /// `sub_11A10` (EF:4421) — the space check: (a) any OTHER CASTLE
@@ -714,7 +740,20 @@ impl Gen {
     /// the current and next footprints — a cell with `mapAngle` bit7
     /// (built/blocked), or on caves bit3 (SEALED), fails
     /// (`sub_11C80` EF:4543).
-    pub(crate) fn mc2_castle_space_ok(&self, i: usize) -> bool {
+    /// Every retail exit of `sub_11A10` restores
+    /// `SetShiftByCastle(row)` after the entry's (row+1) box — the
+    /// same bracket as the pre-clear, on every caller (EF:7033/7115
+    /// AI probes + the build machine 61129).
+    pub(crate) fn mc2_castle_space_ok(&mut self, i: usize) -> bool {
+        let cur = self.ent[i].f26.clamp(0, 7) as u8;
+        let next = (self.ent[i].f26 + 1).clamp(1, 7) as u8;
+        self.mc2_castle_box_quad(i, next);
+        let ok = self.mc2_castle_space_scan(i);
+        self.mc2_castle_box_quad(i, cur);
+        ok
+    }
+
+    fn mc2_castle_space_scan(&self, i: usize) -> bool {
         let cur = self.ent[i].f26.clamp(0, 7) as usize;
         let next = (self.ent[i].f26 + 1).clamp(1, 7) as usize;
         let (Some(dc), Some(dn)) = (

@@ -355,7 +355,7 @@ its note claims.
 | `conformance/mc1l5.json` | mc1l5 — hit-arm, `+144` census, soft-kill ×2 | 25 |
 | `conformance/mc1l32.json` | mc1l32 + the retired bee-height cut | 34 |
 | `conformance/mc1l42.json` | mc1l42 — CERTIFIED bit-exact (0..30878) | 17 |
-| `conformance/mc1hwl0.json` | mc1hwl0 — the HW on-ramp | 1 |
+| `conformance/mc1hwl0.json` | mc1hwl0 — skipful take CERTIFIED bit-exact then deleted after harvest (SESSION 58); `mc1hwl0.mgcr` is now the former noskip take, horizon 970 (manifest `_doc` has the provenance) | 21 |
 | `conformance/mc2l0.json` | mc2l0 + mc2l0-spells-galore (two sources; horizon 7291) | 17 |
 | `conformance/mc2l3.json` | mc2l3 — the MC2 certification target (horizon 437) | 25 |
 
