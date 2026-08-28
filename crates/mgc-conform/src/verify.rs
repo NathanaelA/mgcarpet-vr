@@ -224,6 +224,11 @@ fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                     // other state, so the ±1-tick dating caveat costs
                     // nothing on a live wizard.
                     respawn: rec.respawn,
+                    // The Shift+K state witness (`RecoveredPair::
+                    // suicide`) — without it the self-kill pair runs
+                    // a live wizard where retail holds a corpse at −1
+                    // (mc1l0-pd t=2644).
+                    suicide: rec.suicide,
                     // A recorded retail cheat mutates the world, so
                     // the pair it fires on cannot conform without it
                     // (`engine::world::cheats`) — 23 of mc1l0-test's

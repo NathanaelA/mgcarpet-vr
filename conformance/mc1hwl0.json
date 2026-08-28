@@ -34,6 +34,12 @@
    "note": "THE MANA MAGNET STAMPS SOFT-KILLED BALLS TOO \u2014 ITS ONLY PER-NODE TEST IS +65 == 39: sub_29920 (:31252) walks the tick-start ball chain with no class test (membership supplies it) and NO 0x400 test. Retail's reap is the NEXT tick's top-of-frame sweep, so a ball collected earlier in this pass keeps its class, model and link and every magnet below it still overwrites its ch4 pair; the ball's ch4 arm then turns +30 to whichever magnet stamped LAST. mc1hwl0 t=2005: ball 823 is flagged between magnets 260 and 786, so its heading must read 957 (the bearing to magnet 787, the last stamper) and not 1888 (magnet 256, the last one before the flag)."
   },
   {
+   "t": 2230,
+   "file": "the-corpse-hand-aliases-through-the-pool-slot-of.mgcr",
+   "source": "mc1hwl0-permadeath",
+   "note": "THE CORPSE HAND ALIASES THROUGH THE POOL SLOT OF ITS SPELL ID (:55523 model writeback read as a slot): the dead window shows Some(6) at slot 16, not blanket None"
+  },
+  {
    "t": 2350,
    "file": "the-rival-manifestation-mint-is-the-ground-jar-c.mgcr",
    "source": "mc1hwl0",

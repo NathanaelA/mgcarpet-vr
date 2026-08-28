@@ -1840,17 +1840,30 @@ impl World {
         // represent a bound-at-plant level-0 castle (mc1l5 t=14771)
         // nor a fresh unbound flag (mc1l0 t=562) simultaneously.
         let castle_of = |wiz: usize| -> u16 { self.g.castle_reg[wiz & 7] };
-        // A CORPSE SHOWS EMPTY HANDS. The raw +940/+944 registers
-        // survive the death untouched, but the list they index has
-        // been rewritten to MODEL numbers by the landing (:55523), so
-        // retail's own resolution — and the comparator's, which runs
-        // the same `hand_spell` walk — reads None for the whole dead
-        // window. The port carries the resolved spell instead, so the
-        // emptiness has to be projected here; clearing the registers
-        // would lose what the respawn hands straight back (mc1l42
-        // t=17343 vs t=17397, the mirrored pair).
+        // A CORPSE'S HANDS ALIAS THROUGH THE POOL. The raw +940/+944
+        // registers survive the death untouched, but the list they
+        // index has been rewritten to MODEL numbers by the landing
+        // (:55523) — and a class-12 token's model IS its spell id —
+        // so retail's resolution (and the comparator's `hand_spell`,
+        // the same walk) reads the book entry as a POOL SLOT: the
+        // dead-window hand shows pool slot #(spell id in hand) —
+        // class 12 there → Some(its model), anything else → None.
+        // mc1l42's window (spell 3 in hand, slot 3 a class-2 static)
+        // reads None; mc1hwl0-pd's (spell 16, slot 16 a (12,6) token)
+        // reads Some(6) — the old blanket None passed the former by
+        // coincidence. The registers themselves stay untouched:
+        // clearing them would lose what the respawn hands straight
+        // back (mc1l42 t=17343 vs t=17397, the mirrored pair).
         let corpse = self.player.state == LifeState::Dead;
-        let spell_u16 = |s: Option<SpellId>| s.filter(|_| !corpse).map(|s| s.0 as u16);
+        let spell_u16 = |s: Option<SpellId>| -> Option<u16> {
+            let s = s?;
+            if corpse {
+                let e = self.g.ent.get(s.0 as usize)?;
+                (e.class64 == 12).then_some(e.model65 as u16)
+            } else {
+                Some(s.0 as u16)
+            }
+        };
         let wizards: Vec<WizardMc1> = (0..8u16)
             .map(|i| {
                 let localw = i == pin.local;

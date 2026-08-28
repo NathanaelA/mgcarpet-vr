@@ -2007,11 +2007,25 @@ mod tests {
         };
         sim.step(&input);
         {
+            // The key pass is POST-walk (:20488-93): the write tick's
+            // own dispatch ran the full live wizard tick (mc1l0-pd
+            // t=2644 keeps f70 = 0) and only the bare -1 lands.
+            let w = sim.world.as_ref().unwrap();
+            assert_eq!(
+                w.vitals().state,
+                world::LifeState::Alive,
+                "the write tick itself stays action 0"
+            );
+        }
+        sim.step(&FlightInput::default());
+        {
+            // The NEXT tick's regen tail runs the death arm
+            // (:55424-29): flip to the fall despite invincibility.
             let w = sim.world.as_ref().unwrap();
             assert_ne!(
                 w.vitals().state,
                 world::LifeState::Alive,
-                "the suicide tick must leave Alive despite invincibility"
+                "the death arm must flip the tick after the write"
             );
         }
         for _ in 0..200 {

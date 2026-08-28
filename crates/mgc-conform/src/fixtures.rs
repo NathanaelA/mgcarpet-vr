@@ -229,6 +229,12 @@ fn for_each_pair(
                     equip_left: rec.equip_left.map(mgc_sim::mc1::spells::SpellId),
                     equip_right: rec.equip_right.map(mgc_sim::mc1::spells::SpellId),
                     demolish: rec.demolish,
+                    // The SPACE and Shift+K lanes (verify.rs carries
+                    // the same pair): without them the permadeath
+                    // fixtures (castle-less respawn t=1711, suicide
+                    // t=2644) grade a live wizard where retail moved.
+                    respawn: rec.respawn,
+                    suicide: rec.suicide,
                     cheat: rec.cheat,
                     ..pcmd
                 }

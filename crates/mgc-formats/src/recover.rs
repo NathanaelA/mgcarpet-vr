@@ -353,6 +353,17 @@ pub struct RecoveredPair {
     /// left wins, the right is DROPPED (counted by consumers).
     pub rebind_dropped: bool,
     pub respawn: bool,
+    /// MC1 Shift+K, the SELF-KILL (:20488-93): a direct
+    /// `actLife = -1` on the local carpet, bypassing
+    /// MakeControlCommand entirely — no control word, no toast, no
+    /// knock. The witness is therefore the STATE pair itself: the
+    /// human carpet's life crossing `> 0` → exactly −1 with no fresh
+    /// knock impulse. Every projectile kill in the corpus overshoots
+    /// (−65/−160/−215 …) and arms the knock channel, so the exact −1
+    /// is the writer's fingerprint (mc1l0-pd t=2644, mc1hwl0-pd
+    /// t=2658/2782 — 3/3, and the certified sweep is the standing
+    /// no-false-positive probe).
+    pub suicide: bool,
     /// Shift+L, destroy own castle one level. MC1: the move byte IS
     /// the witness (`dw_0 == 48`, retail's own predicate :55760 —
     /// measured 18/18 on mc1l0, zero false positives over 7,098
@@ -442,6 +453,15 @@ pub fn recover_pair_mc1(
         equip_left: equip(pw.hand_left, cw.hand_left),
         equip_right: equip(pw.hand_right, cw.hand_right),
         respawn: respawn_key(input_end),
+        // The Shift+K state witness (field doc): life > 0 → exactly
+        // −1 on the local carpet, knock channel without a fresh
+        // impulse (a decay step is fine; a hit's re-arm is not).
+        suicide: {
+            let s = cw.play_index as usize;
+            matches!((pst.ents.get(s), st.ents.get(s)), (Some(p), Some(c))
+                if p.act_life > 0 && c.act_life == -1)
+                && cw.knock_mag <= pw.knock_mag
+        },
         demolish,
         cheat: cheat_fired_mc1(&pw.notify, &cw.notify),
         ..RecoveredPair::default()

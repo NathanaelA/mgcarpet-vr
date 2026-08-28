@@ -800,6 +800,13 @@ pub struct World {
     placeholders: bool,
     /// Live 1-based THING table; dispositions consume from it.
     table: Vec<Rec>,
+    /// The THING table AS LOADED — the restart lane's restore source.
+    /// Retail's level reload (`sub_408D0` :51596) re-runs LoadLevel,
+    /// re-reading the table from disk and thereby un-consuming every
+    /// one-shot disposition the previous life fired. Static after
+    /// construction; excluded from the state hash and the snapshot
+    /// (both carry the LIVE table).
+    table_load: Vec<Rec>,
     /// Terrain planes changed since last cleared (renderer re-upload).
     pub terrain_dirty: bool,
     /// Live entity set changed since last cleared.
@@ -1869,11 +1876,16 @@ impl World {
         if !matches!(game, GameId::Mc2) {
             g.load_time_pass(&mut table);
         }
+        // Snapshot AFTER the load-time pass: retail's reload re-runs
+        // the whole of LoadLevel, so the restore source is the table
+        // as the load leaves it, not the raw file image.
+        let table_load = table.clone();
         let mut w = World {
             g,
             game,
             placeholders: false,
             table,
+            table_load,
             mc2_stages: Vec::new(),
             mc2_stage_current: 0,
             mc2_stagevars: Vec::new(),
@@ -3144,28 +3156,14 @@ impl World {
                 ((self.player.mana_max / 2000) as i32).max(100)
             };
         }
-        if alive && cmd.suicide {
-            // The SUICIDE key (MC1 Shift+K :20492-93, MC2
-            // PlayerInput.cpp:239-41 — the identical bare write in
-            // both games): `life = -1` on the human wizard, NOTHING
-            // else. No mail, no killer, no knock/flash/hit sound —
-            // and immune to grace, shield and the at-castle redirect,
-            // because retail's write never enters the damage head
-            // (sub_46540). The state flip + death sound reproduce the
-            // wizard tick's own death check (:55424-29 /
-            // EF:60040-44), which the port folds into
-            // apply_player_damage and so must run inline here; the
-            // ordinary chain (fall → scatter → grave → respawn/lost)
-            // follows from Falling, forked per game downstream.
-            self.player.life = -1;
-            self.player.killer = 0;
-            self.player.state = LifeState::Falling;
-            self.player.fall_speed = 0;
-            self.g.snd_player(16);
-        }
-        // A suicided tick processes no further commands — retail's
-        // wizard tick bails at its life check before the cast arms.
-        let alive = alive && !cmd.suicide;
+        // The MC1 SUICIDE key (Shift+K :20488-93) is a bare
+        // `life = -1` from the KEY PASS, which runs AFTER the walk —
+        // the write tick's own dispatch still ran the full live
+        // wizard tick (mc1l0-pd t=2644: f70 holds 0, the carpet
+        // still moves and charges, and the fall only starts at 2645
+        // via the regen tail's death arm). The write therefore lands
+        // post-walk beside the respawn command; nothing in this pass
+        // is suppressed.
         if alive && cmd.demolish {
             // dw_0 == 48 exactly (:55837-39): the BOUND castle to −1
             // (`if (wizext->var_50) pool[var_50].actLife = -1` — the
@@ -3562,6 +3560,21 @@ impl World {
         if self.player.state != LifeState::Alive {
             return;
         }
+        // THE DEATH ARM — retail's regen tail is one `actLife >= 0`
+        // fork and this is its else (:55424-29, EF:60035-41 the same
+        // shape): flip to the fall, zero the climb, scream 16. A
+        // fatal HIT never reaches it (apply_player_damage latched
+        // killer + state mid-mail, same turn); this arm serves the
+        // MAIL-LESS corpse — the previous frame's Shift+K write, or
+        // an imported `f70 = 0 / life < 0` boundary, which must
+        // neither regen (+rate ticked mc1l0-pd's −1 corpse to 4) nor
+        // stay standing.
+        if self.player.life < 0 {
+            self.player.state = LifeState::Falling;
+            self.player.fall_speed = 0;
+            self.g.snd_player(16);
+            return;
+        }
         // Health regen: stalled 16 ticks by every processed hit, then
         // the STORED rate per tick (u16_341) — applied FIRST, then
         // re-selected from the at-castle/dolmen test (:55387-421
@@ -3907,9 +3920,16 @@ impl World {
         // (:55583-89 — the servo writes +32 and the next statement
         // zeroes it); `eff_pitch` is deliberately left stale.
         if d.dead {
-            if let Some((kx, kz)) = self.killer_pos() {
-                let tx = (kx.rem_euclid(256.0) * 256.0) as u16;
-                let ty = (kz.rem_euclid(256.0) * 256.0) as u16;
+            // The gaze target is a RAW pool read (:55580 — `&pool[+38]
+            // + 72` with no null or liveness check), so a killer-less
+            // corpse (f38 = 0, the Shift+K suicide) turns toward
+            // whatever position the reserved slot-0 record happens to
+            // hold: mc1l0-pd t=2647-90 spins −22/tick and settles on
+            // bearing 1446 = slot 0's stale (29952, 26880). No
+            // Some/None fork — that is MC2's arm (EF:60227).
+            {
+                let k = (self.player.killer as usize).min(self.g.ent.len() - 1);
+                let (tx, ty) = (self.g.ent[k].x, self.g.ent[k].y);
                 let target = Gen::angle_between(d.s.x, d.s.y, tx, ty);
                 let mut delta = (target as i32 - d.s.yaw as i32) & 0x7FF;
                 if delta > 1024 {
@@ -5714,6 +5734,18 @@ impl World {
         {
             self.player_respawn();
         }
+        // The MC1 Shift+K write itself (:20488-93) — the key pass is
+        // post-walk like the command processor, so the bare
+        // `life = -1` lands here and the NEXT tick's regen tail runs
+        // the death arm (player_regen_block). MC2's key pass is
+        // pre-walk and keeps its own arm above.
+        if !matches!(self.game, GameId::Mc2)
+            && matches!(self.player.state, LifeState::Alive)
+            && cmd.suicide
+        {
+            self.player.life = -1;
+            self.player.killer = 0;
+        }
         wt_check!("post-walk carpet (native anchor)");
         if any_creature || any_transient {
             // Creatures/projectiles/effects move: poses refresh.
@@ -6587,26 +6619,49 @@ impl World {
         // t=17398: 110-117 against our 136-320).
         let pinned = self.mc1_carpet_slot;
         self.g.mc1_rebuild_free(pinned);
-        let Some(c) = self.player_castle() else {
-            self.player.lost = true;
-            self.pending_restart = true;
-            return;
+        // The seat (:54845-61): the AUTHORED START at ground+256 by
+        // default (`v32x = str_9177[idx]`, then `tempZ._axis_2d.y++`
+        // :54848), overwritten WHOLE by the castle's position when a
+        // castle is bound (`if (wizext->var_50) v32x = pool[var_50]
+        // .pos`) — so the +256 is the castle-less arm's alone.
+        // ⭐ THE CASTLE RESPAWN LANDS AT THE SEAT'S OWN Z, NOT A TILE
+        // ABOVE IT: mc1l42 t=17398 respawns on z = 3776 with the
+        // site's terrain reading exactly 3776 (`MGC_CELL_TRACE`
+        // (123,13) = height 118, 118 * 32 = 3776). The app used to
+        // re-derive `ground + 1.0` here and put the carpet 256 units
+        // high — the take's last pose divergence.
+        let seat = match self.player_castle() {
+            Some(c) => {
+                let e = &self.g.ent[c];
+                (e.x, e.y, e.z)
+            }
+            None => {
+                // Castle-less in single player = PERMADEATH: case 0xF
+                // sets the restart request (`13325 |= 0xC` :48628-31)
+                // and FALLS THROUGH to the same sub_44D30 body — the
+                // respawn runs in full one tick BEFORE the reload
+                // consumes the flags (mc1l0-pd t=1711: pose →
+                // (11904, 19584, 2080) = tile (46,76) at ground+256,
+                // life 10000, mana 1000/1000, hand tokens re-minted;
+                // the reload is t=1712's).
+                self.player.lost = true;
+                self.pending_restart = true;
+                let (sx, sy) = self
+                    .start_markers
+                    .iter()
+                    .flatten()
+                    .next()
+                    .copied()
+                    .unwrap_or((0, 0));
+                let (x, y) = ((sx << 8) | 128, (sy << 8) | 128);
+                (x, y, (self.g.ground_z(x, y) as i16).saturating_add(256))
+            }
         };
-        let e = &self.g.ent[c];
-        // The carpet is MOVED to the castle before anything else
-        // (:54858-61 — `if (wizext->var_50) v32x = pool[var_50].pos`,
-        // then `sub_41C70_41FB0`), and every field the rest of the
-        // routine stamps from the wizard's own axis reads THIS pose.
-        let seat = (e.x, e.y, e.z);
-        // ⭐ THE RESPAWN LANDS AT THE SEAT'S OWN Z, NOT A TILE ABOVE IT.
-        // Retail moves the carpet to the castle's FULL position
-        // (:54858-61), and the `tempZ._axis_2d.y++` at :54848 is not
-        // what the engine lands on: mc1l42 t=17398 respawns on
-        // z = 3776 with the site's terrain reading exactly 3776
-        // (`MGC_CELL_TRACE` (123,13) = height 118, 118 * 32 = 3776).
-        // The app used to re-derive `ground + 1.0` here and put the
-        // carpet 256 units high — the take's last pose divergence.
-        self.pending_respawn = Some((e.x as f32 / 256.0, e.y as f32 / 256.0, e.z as f32 / 256.0));
+        self.pending_respawn = Some((
+            seat.0 as f32 / 256.0,
+            seat.1 as f32 / 256.0,
+            seat.2 as f32 / 256.0,
+        ));
         // Type_160 re-arm (:54866-83) + HP/mana reset (:55019-32).
         // The respawn screen-mode chime (case 0xF runs sub_3DC90(0)
         // :48640 → sound 14).
@@ -7588,6 +7643,9 @@ impl World {
             mc1_cast_pose: _,
             mc1_acq: _,
             table,
+            // Load-static restore source (`reload_thing_table`) — not
+            // live state.
+            table_load: _,
             terrain_dirty: _,
             entities_dirty: _,
             pending_teleport: _,
@@ -10613,6 +10671,20 @@ impl World {
     /// original's lost + level-over flow).
     pub fn take_restart(&mut self) -> bool {
         std::mem::take(&mut self.pending_restart)
+    }
+
+    /// The RELOAD's THING-table restore (`sub_408D0` :51596 →
+    /// LoadLevel): the reload re-reads the level from disk,
+    /// un-consuming every one-shot disposition the previous life
+    /// fired (`fire_disposition` zeroes the fired rows). Called by
+    /// the conform runner at a restart re-anchor — the entity import
+    /// restores the pool but the table is port-side state (mc1hwl0-pd
+    /// t=893: the (5,6) wave re-fires 266 ticks after every reload,
+    /// and with the rows still zeroed from the first life the trigger
+    /// fired into an empty table). The app's restart path rebuilds
+    /// the whole World and never needs this.
+    pub fn reload_thing_table(&mut self) {
+        self.table = self.table_load.clone();
     }
 
     /// Test hook: zero the grace and hand the player a lethal hit
@@ -15217,6 +15289,9 @@ impl World {
             mc2_level_replayed,
             placeholders,
             table,
+            // Load-static restore source (`reload_thing_table`) — not
+            // live state.
+            table_load: _,
             terrain_dirty,
             entities_dirty,
             pending_teleport,

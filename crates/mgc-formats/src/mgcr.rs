@@ -2484,8 +2484,10 @@ pub struct PortInput {
     pub mc2_cmd_speed: Option<i16>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub mc2_park: bool,
-    /// Shift+K. Live-play only (no recovery lane), but a `--record`
-    /// session that omitted it lost the player's own suicide.
+    /// Shift+K. MC1 pairs recover it from the state witness
+    /// ([`crate::recover::RecoveredPair::suicide`] — life > 0 →
+    /// exactly −1, no fresh knock); a `--record` session that omitted
+    /// it lost the player's own suicide.
     #[serde(default, skip_serializing_if = "is_false")]
     pub suicide: bool,
     /// A retail CHEAT sub-code ([`crate::recover::Cheat::code`]), for

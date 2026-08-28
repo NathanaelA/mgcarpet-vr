@@ -576,10 +576,28 @@ does, and the take reads as a sequence of MAXIMAL CONTINUOUS SEGMENTS.
 therefore resets in EXCESS of the gap-forced ones — a take with capture
 gaps structurally cannot certify, and that is a property of the
 RECORDING, not of the port. The summary prints
-`segments / gap-forced / DEVIATION-forced` and collapses the reset
-ticks into runs, because a wrong law usually fails on a RUN of adjacent
-ticks (one carcass, one respawn, one clash): triage the CLUSTER count,
-not the reset count.
+`segments / gap-forced / restart-forced / DEVIATION-forced` and
+collapses the reset ticks into runs, because a wrong law usually fails
+on a RUN of adjacent ticks (one carcass, one respawn, one clash):
+triage the CLUSTER count, not the reset count.
+
+**The RESTART lane (permadeath takes).** When the port's own sim
+signals a level restart (`World::take_restart` — the castle-less
+death), the reload boundary that follows is ungradable by construction:
+retail rebuilds the level from inputs outside the recording (MC1
+re-runs LoadLevel + GenerateFeatures with its own reseed over its own
+heap residue; MC2 re-reads a pre-capture disk checkpoint —
+docs/DEVIATIONS.md, the permadeath entries). The runner re-anchors any
+boundary within a short window behind the signal as a `restart` segment
+(`SegOpen::Restart`): counted beside gap-forced, never a deviation,
+never a fixture candidate, skipped by `--classify`. The brief line
+carries `restarts=N` only when nonzero, so certified baselines stay
+byte-stable. A permadeath take's certification bar is therefore
+`devs=0` with its seams restart-anchored (`mc1l0-permadeath`: 3
+segments, 2 restart-forced, every graded boundary clean). The re-anchor
+also restores the THING table (`World::reload_thing_table`) — the one
+piece of port-side level state retail's reload resets that the entity
+import cannot see.
 
 Every reset tick names itself as a fixture candidate, which is what
 THE REVERSION PROBE (`tools/conform-rig`) was built to do the hard way

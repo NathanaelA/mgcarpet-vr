@@ -609,6 +609,16 @@ enum SegOpen {
     Gap,
     /// A true incremental deviation (`--segmented` only).
     Deviation,
+    /// The PORT signalled a level restart (`World::take_restart` — the
+    /// castle-less PERMADEATH respawn, MC1 case 0xF :48628-31 / MC2
+    /// EF:37671-75). Retail's reload runs machinery whose inputs are
+    /// not in the recording — MC1 re-runs LoadLevel+GenerateFeatures
+    /// with its own reseed over its own heap residue (:51592-609);
+    /// MC2 re-reads a PRE-CAPTURE disk checkpoint (SaveLevel slot 1,
+    /// EF:39894-921) — so the reload boundary is re-anchored like a
+    /// gap: a property of the mechanism, not a port failure, and it
+    /// does not count against certification.
+    Restart,
 }
 
 #[derive(Default)]
@@ -617,6 +627,7 @@ struct RStats {
     gates: BTreeMap<&'static str, u64>,
     stick_unrec: u64,
     respawns: u64,
+    suicides: u64,
     equips: u64,
     rebind_dropped: u64,
     /// Boundaries the RECORDING spent PAUSED — its own category, not a
@@ -724,17 +735,29 @@ impl RStats {
             .filter(|s| s.opened_by == SegOpen::Deviation)
             .map(|s| s.t0)
             .collect();
-        if !devs.is_empty() || self.segs.iter().any(|s| s.opened_by == SegOpen::Gap) {
+        if !devs.is_empty()
+            || self
+                .segs
+                .iter()
+                .any(|s| matches!(s.opened_by, SegOpen::Gap | SegOpen::Restart))
+        {
             let gaps = self
                 .segs
                 .iter()
                 .filter(|s| s.opened_by == SegOpen::Gap)
                 .count();
+            let restarts = self
+                .segs
+                .iter()
+                .filter(|s| s.opened_by == SegOpen::Restart)
+                .count();
             let _ = writeln!(
                 out,
-                "   segments: {} total, {} gap-forced, {} DEVIATION-forced (excess resets: {})",
+                "   segments: {} total, {} gap-forced, {} restart-forced, {} DEVIATION-forced \
+                 (excess resets: {})",
                 self.segs.len(),
                 gaps,
+                restarts,
                 devs.len(),
                 devs.len()
             );
@@ -804,6 +827,7 @@ impl RStats {
                     SegOpen::Seed => "seed",
                     SegOpen::Gap => "gap",
                     SegOpen::Deviation => "reset",
+                    SegOpen::Restart => "restart",
                 },
                 seg.t0,
                 seg.end,
@@ -868,8 +892,9 @@ impl RStats {
         }
         let _ = writeln!(
             out,
-            "   input events: {} respawn(s), {} equip/rebind(s){}",
+            "   input events: {} respawn(s), {} suicide(s), {} equip/rebind(s){}",
             self.respawns,
+            self.suicides,
             self.equips,
             if self.rebind_dropped > 0 {
                 format!(
@@ -944,8 +969,21 @@ impl RStats {
         } else {
             format!(" paused={}", self.paused)
         };
+        // Conditional like `paused` so the certified corpus's baseline
+        // lines are byte-stable: only a take with in-band level
+        // restarts (permadeath) carries the field.
+        let restarts = self
+            .segs
+            .iter()
+            .filter(|s| s.opened_by == SegOpen::Restart)
+            .count();
+        let restarts = if restarts == 0 {
+            String::new()
+        } else {
+            format!(" restarts={restarts}")
+        };
         format!(
-            "BRIEF {take} mode={mode} terrain={terrain} end={end} segments={} gaps={gaps} \
+            "BRIEF {take} mode={mode} terrain={terrain} end={end} segments={} gaps={gaps}{restarts} \
              devs={devs} graded={graded}{paused} clean={clean} horizon={} first={} sig={sig}{tags}\n",
             self.segs.len(),
             first.map_or_else(|| "END".to_string(), |t| t.saturating_sub(1).to_string()),
@@ -1109,7 +1147,13 @@ fn run_mc1(
     // `--segmented`: the boundary grade sets this, and the re-anchor
     // runs after the tick body so the break's own diagnostics (traces,
     // CSV) still see the DIVERGED state that produced them.
-    let mut reset_at: Option<u64> = None;
+    let mut reset_at: Option<(u64, SegOpen)> = None;
+    // The PORT's own restart signal (`take_restart`): the tick the
+    // castle-less respawn fired. Retail's reload lands 1-2 boundaries
+    // later (the reload frame is capture-skipped), so any boundary in
+    // the short window behind the signal is the SEAM — re-anchored as
+    // `SegOpen::Restart`, never graded (see the enum doc).
+    let mut restart_at: Option<u64> = None;
     // ---- `--classify` state (the segmented-residue doctrine run
     // inline): a SCRATCH world for the pair check (never the free-run
     // world — the pair import would wipe the state under
@@ -1236,12 +1280,16 @@ fn run_mc1(
         if rec.respawn {
             stats.respawns += 1;
         }
+        if rec.suicide {
+            stats.suicides += 1;
+        }
         let cmd = PlayerCommand {
             fire_left: rec.fire_left,
             fire_right: rec.fire_right,
             equip_left: rec.equip_left.map(SpellId),
             equip_right: rec.equip_right.map(SpellId),
             respawn: rec.respawn,
+            suicide: rec.suicide,
             demolish: rec.demolish,
             cheat: rec.cheat,
             ..PlayerCommand::default()
@@ -1314,6 +1362,9 @@ fn run_mc1(
                 stats.paused += 1;
             } else {
                 step_mc1(&mut world, ch, inp, cmd);
+            }
+            if world.take_restart() {
+                restart_at = Some(tick.t);
             }
             if let Some(spec) = port_dump
                 && tick.t >= spec.t
@@ -1568,7 +1619,20 @@ fn run_mc1(
             }
             // Grade at the boundary (capture-clean pairs only — a torn
             // snapshot grades nothing, the chain runs on regardless).
-            if capture_clean(&pst, &obs) {
+            if args.segmented && restart_at.is_some_and(|a| tick.t > a && tick.t - a <= 4) {
+                // THE RELOAD BOUNDARY (Seam B): the port signalled the
+                // restart 1-2 boundaries ago and retail has now
+                // rebuilt the level from inputs outside the recording
+                // (its own reseed over its own heap residue; MC2's
+                // pre-capture disk checkpoint) — nothing is gradable.
+                // Re-anchor like a gap, tagged `restart`. Segmented
+                // only: the plain run keeps its "never correct"
+                // purity (a WILD post-horizon run can trip
+                // `take_restart` on state retail never held — the
+                // mc1hwl0 guard row must not re-anchor on it).
+                stats.seg().ungraded += 1;
+                reset_at = Some((tick.t, SegOpen::Restart));
+            } else if capture_clean(&pst, &obs) {
                 let pose = pose_lanes_mc1(&ch.s, &st.ents[slot as usize], cw);
                 pose_window_mc1(tick.t, &ch.s, &st.ents[slot as usize], cw);
                 let pin = PinnedMc1 {
@@ -1617,7 +1681,16 @@ fn run_mc1(
                 // running wild, and every reset tick names itself as a
                 // fixture candidate.
                 if args.segmented && !boundary_clean {
-                    reset_at = Some(tick.t);
+                    // A dirty boundary in the restart window IS the
+                    // seam (MC2's checkpoint restore lands a tick
+                    // BEFORE the witnessed respawn key) — same
+                    // re-anchor, restart-tagged, never a candidate.
+                    let kind = if restart_at.is_some_and(|a| tick.t >= a && tick.t - a <= 4) {
+                        SegOpen::Restart
+                    } else {
+                        SegOpen::Deviation
+                    };
+                    reset_at = Some((tick.t, kind));
                     // `--classify`: run the PAIR at the cluster HEAD
                     // (adjacent resets are one story). Pair DIRTY at
                     // t-1 ⇒ the one-tick law itself is wrong here —
@@ -1625,7 +1698,7 @@ fn run_mc1(
                     // law is right and the break rides earlier state
                     // — INHERITED, a unit test / upstream dig. The
                     // doctrine of [segmented-residue], automated.
-                    if args.classify && last_dev != Some(tick.t - 1) {
+                    if args.classify && kind == SegOpen::Deviation && last_dev != Some(tick.t - 1) {
                         let cw = match classify_world.as_mut() {
                             Some(w) => w,
                             None => {
@@ -1652,6 +1725,7 @@ fn run_mc1(
                             c.equip_right = rec.equip_right.map(SpellId);
                             c.demolish = rec.demolish;
                             c.respawn = rec.respawn;
+                            c.suicide = rec.suicide;
                             c
                         };
                         match exec_pair(
@@ -1679,10 +1753,19 @@ fn run_mc1(
         }
         stats.seg().end = tick.t;
         dump_state(&world, tick.t)?;
-        if let Some(t) = reset_at.take() {
+        if let Some((t, kind)) = reset_at.take() {
+            if kind == SegOpen::Restart {
+                // Retail's reload re-read the level: un-consume the
+                // one-shot dispositions (`World::reload_thing_table`).
+                world.reload_thing_table();
+            }
             let (ch, human_slot, _) = anchor_mc1(&mut world, &pristine, &timg, &st, t)?;
             chain = Some((ch, human_slot));
-            stats.open(t, SegOpen::Deviation);
+            stats.open(t, kind);
+            restart_at = None;
+        }
+        if restart_at.is_some_and(|a| tick.t > a + 4) {
+            restart_at = None;
         }
         // This pair's verify-law command becomes the next pair's
         // predecessor (only the fire bits matter downstream — the
@@ -1886,7 +1969,9 @@ fn run_mc2(
     // (see run_mc1): the re-anchor runs AFTER the tick body so the
     // break's own diagnostics still see the diverged state, and the
     // classify pair runs on a SCRATCH world with terrain@t-1.
-    let mut reset_at: Option<u64> = None;
+    let mut reset_at: Option<(u64, SegOpen)> = None;
+    // The port's restart signal — see the MC1 loop's `restart_at`.
+    let mut restart_at: Option<u64> = None;
     let mut classify_world: Option<World> = None;
     #[allow(clippy::type_complexity)]
     let mut prev_measured: Option<(Vec<u8>, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>)> = None;
@@ -2079,6 +2164,9 @@ fn run_mc2(
             } else {
                 step_mc2(&mut world, ch, inp, cmd);
             }
+            if world.take_restart() {
+                restart_at = Some(tick.t);
+            }
             if let Some(spec) = port_dump
                 && tick.t >= spec.t
             {
@@ -2137,7 +2225,14 @@ fn run_mc2(
                 }
             }
             stats.seg().stepped += 1;
-            if capture_clean_mc2(&pst, &st) {
+            if args.segmented && restart_at.is_some_and(|a| tick.t > a && tick.t - a <= 4) {
+                // The reload boundary — see the MC1 arm (segmented
+                // only, same plain-mode purity rule). MC2's restore
+                // re-reads a PRE-CAPTURE disk checkpoint (SaveLevel
+                // slot 1), so the seam is ungradable by construction.
+                stats.seg().ungraded += 1;
+                reset_at = Some((tick.t, SegOpen::Restart));
+            } else if capture_clean_mc2(&pst, &st) {
                 let pose = pose_lanes_mc2(&ch.s, &st.ents[slot as usize], cp);
                 pose_window_mc2(tick.t, &ch.s, &st.ents[slot as usize], cp);
                 let mut castles = [0i16; 8];
@@ -2182,11 +2277,19 @@ fn run_mc2(
                 }
                 // ---- THE SEGMENTED DOCTRINE (the MC1 arm's twin) ----
                 if args.segmented && !boundary_clean {
-                    reset_at = Some(tick.t);
+                    // A dirty boundary in the restart window IS the
+                    // seam (the checkpoint restore lands a tick
+                    // BEFORE the witnessed respawn key).
+                    let kind = if restart_at.is_some_and(|a| tick.t >= a && tick.t - a <= 4) {
+                        SegOpen::Restart
+                    } else {
+                        SegOpen::Deviation
+                    };
+                    reset_at = Some((tick.t, kind));
                     // `--classify`: the pair at the cluster HEAD.
                     // Pair DIRTY at t-1 ⇒ LOCAL (fixture candidate),
                     // CLEAN ⇒ INHERITED (unit test / upstream dig).
-                    if args.classify && last_dev != Some(tick.t - 1) {
+                    if args.classify && kind == SegOpen::Deviation && last_dev != Some(tick.t - 1) {
                         let cw = match classify_world.as_mut() {
                             Some(w) => w,
                             None => {
@@ -2240,10 +2343,19 @@ fn run_mc2(
         }
         stats.seg().end = tick.t;
         dump_state(&world, tick.t)?;
-        if let Some(t) = reset_at.take() {
+        if let Some((t, kind)) = reset_at.take() {
+            if kind == SegOpen::Restart {
+                // The MC1 arm's twin — MC2's checkpoint restore
+                // re-reads the level image (SLEV), table included.
+                world.reload_thing_table();
+            }
             let (ch, human_slot) = anchor_mc2(&mut world, &pristine, &things, &timg, &st, t)?;
             chain = Some((ch, human_slot));
-            stats.open(t, SegOpen::Deviation);
+            stats.open(t, kind);
+            restart_at = None;
+        }
+        if restart_at.is_some_and(|a| tick.t > a + 4) {
+            restart_at = None;
         }
         st_prev = Some((tick.t, st));
         if let Some(limit) = args.limit {
