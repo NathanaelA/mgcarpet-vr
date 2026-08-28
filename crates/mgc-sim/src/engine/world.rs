@@ -6068,7 +6068,22 @@ impl World {
             // through to the per-model machines.
             MovementVerb::Mc2 => {
                 if !self.mc2_held_tick(i, ctx) {
+                    // The deferred m9 hold arms INSIDE the
+                    // materialize-completion tick, in the entity's own
+                    // dispatch (sub_20370's EF:11992 `sub_122A0` call
+                    // — its only call site): same tick, same dispatch
+                    // ordinal, which is what lands phase3e and the
+                    // stagevar cadence right (mc2l4 t=9: 39 held imps
+                    // flip 72→79 with sv1=1/sv2=3 in ONE tick).
+                    let was_mat = self.g.ent[i].tick70 == 72;
                     self.g.mc2_creature_tick(i, ctx);
+                    if was_mat
+                        && self.g.ent[i].tick70 == 73
+                        && self.g.ent[i].class64 == 5
+                        && self.g.ent[i].model65 == 9
+                    {
+                        self.mc2_stagevar_arm_deferred(i);
+                    }
                 }
             }
         }
@@ -8271,8 +8286,9 @@ impl World {
         };
         let def = &self.spells()[id];
         let e = &mut self.g.ent[pr];
+        // :65060 adds to +126 ONLY — no emit arm writes +128; the
+        // ctor's 384 survives and the flight servo decays the boost.
         e.f126 += p.speed; // inherits carpet speed (:65060)
-        e.f128 = e.f126;
         e.id24 = PLAYER_TARGET;
         // Heading/pitch only (:65070-71 stamps +30/+32; +34/+36 keep
         // the ctor default — the corpus pins target_yaw 0 on fresh
@@ -8982,6 +8998,23 @@ impl World {
                 self.g.ent[ent].f136 = self.rivals[ri].mana_max.min(i32::MAX as u32) as i32;
             }
         }
+        // The MC2 census is the same law (sub_60F00 EF:61976-62052
+        // rebaselines every player's `maxMana_0x8C_140` ON THE
+        // ENTITY, then sub_61000 EF:62060 accumulates there) — the
+        // ceiling the afford gates and the recorder read lives on
+        // the pool record for MC2 rivals too (mc2l4 t=15 slot 292:
+        // 1000 base + 5000 castle = 6000 where the port's entity
+        // held the imported 1000).
+        for ri in 0..self.mc2_rivals.len() {
+            let ent = self.mc2_rivals[ri].ent as usize;
+            if ent != 0
+                && ent < self.g.ent.len()
+                && self.g.ent[ent].class64 == 3
+                && self.g.ent[ent].model65 == 1
+            {
+                self.g.ent[ent].f136 = self.mc2_rivals[ri].mana_max.min(i32::MAX as u32) as i32;
+            }
+        }
     }
 
     /// The owned manifestation's LIVE castle requirement — the
@@ -9399,8 +9432,8 @@ impl World {
         };
         let def = &SPELLS[22];
         let e = &mut self.g.ent[pr];
+        // :66268 adds to +126 ONLY — +128 keeps the ctor base.
         e.f126 += p.speed;
-        e.f128 = e.f126;
         e.id24 = PLAYER_TARGET;
         // Same aim-pair law as `cast_storm`: :66275-76 writes `+30`
         // and `+32` only, so the fuse is born with `+34`/`+36` at
@@ -29871,6 +29904,76 @@ mod tests {
         assert!(
             w.mc2_rival_cast(0, i, 1),
             "after window + cooldown expire the spell re-arms (cast-twice)"
+        );
+    }
+
+    /// The case-2 ready probe QUAD-STAMPS the castle and its gate
+    /// order is load-bearing: sub_11A10's SetShiftByCastle bracket
+    /// (yaw 0 / fov 256 / row box halves) runs as soon as the
+    /// armed/cooling gates pass — BEFORE the mana and cone gates
+    /// (EF:7028-41) — and there is NO action gate, so a BROKE rival
+    /// stamps a RISING castle on every ready poll (mc2l4 t=1 castle
+    /// 304; the pair face can only see this at t=0, which the
+    /// fixture corpus cannot hold — this pin is that fixture).
+    #[test]
+    fn mc2_rival_ready_probe_quad_stamps_a_rising_castle_before_the_mana_gate() {
+        use crate::engine::features::BuildDef;
+        let mut w = mc2_brain_world(&[&[(2, 0)]], &[(2, [100, 1000, 10_000])]);
+        w.g.assets.build_tab = vec![
+            BuildDef {
+                offset: 0,
+                w: 3,
+                h: 3,
+            },
+            BuildDef {
+                offset: 0,
+                w: 3,
+                h: 3,
+            },
+            BuildDef {
+                offset: 0,
+                w: 5,
+                h: 5,
+            },
+        ];
+        let rival_ent = w.mc2_rivals[0].ent;
+        // A RISING castle (tick70 != 4) owned by the rival, quad
+        // lanes scribbled so the stamp is observable.
+        let c = w.g.new_event().expect("castle slot");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = rival_ent;
+            e.act_life = 1000;
+            e.max_life = 1000;
+            e.tick70 = 1; // rising — the invented port gate was tick70 == 4
+            e.f26 = 0;
+            e.f78 = 123;
+            e.f84 = 999;
+            e.f80 = 1;
+            e.f82 = 1;
+        }
+        let gz = w.g.ground_z(100 << 8, 100 << 8) as i16;
+        w.g.link(c, 100 << 8, 100 << 8, gz);
+        w.mc2_rivals[0].mana = 0; // broke: MC2_CASTLE_COST[0] = 1000
+        w.mc2_rivals[0].mana_max = 30000;
+        let i = w.mc2_rivals[0].ent as usize;
+        assert!(
+            !w.mc2_rival_cast(0, i, 2),
+            "the mana gate still refuses the CAST itself"
+        );
+        let e = &w.g.ent[c];
+        assert_eq!(
+            (e.f78, e.f84),
+            (0, 256),
+            "the probe ran anyway: sub_11A10's closing SetShiftByCastle(row) yaw/fov stamp"
+        );
+        let half = ((3u16 << 8) + 1280) >> 1;
+        assert_eq!(
+            (e.f80, e.f82),
+            (half, half),
+            "the bracket's closing stamp restored the CURRENT row's box halves"
         );
     }
 

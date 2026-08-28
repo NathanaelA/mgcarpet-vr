@@ -4293,10 +4293,24 @@ impl Gen {
         self.castle_box_stamp(i, cur);
     }
 
-    /// sub_12D10 (:17643): the upgrade space gate — FAIL when
-    /// another castle overlaps the next level's extents, or any
-    /// tile on the four edges of the new footprint carries the
-    /// protection bit (blocked/steep ground).
+    /// sub_12D10 (:17643, HW :15775 — byte-identical twins): the
+    /// upgrade space gate — FAIL when another castle overlaps the
+    /// next level's extents, or the GROWTH BANDS of the new
+    /// footprint carry the protection bit. NOT a perimeter walk:
+    /// retail reads the OLD half-extents before the level+1 stamp
+    /// (:17666-67), takes the deltas (:17676-77), and when the
+    /// half-height delta is ZERO runs NO terrain test at all. The
+    /// footprint is 2h tiles wide starting at centre−h — the +h
+    /// row/column an inclusive perimeter would test is retail-never
+    /// -touched (mc1hwl0 t=971: the level-2 commit at (232,176) is
+    /// clear everywhere except four protected tiles on row
+    /// cy+hty, exactly the row only the perimeter scan reads).
+    /// Retail's four bands share the MC2 twin's verbatim quirks
+    /// (mc2_castle_space_scan, EF:4464-4535): the side slivers
+    /// iterate only `my` rows at oy+my, and band 4's FIRST row
+    /// starts at centre−mx then resets its x-cursor to ox on later
+    /// rows, duplicating band 3 — corroborated across both
+    /// binaries' decompiles.
     ///
     /// ⭐ Like the pre-clear, BOTH exits restamp the castle's box at
     /// the current level (:17777/:17781) after the entry stamp at
@@ -4307,6 +4321,9 @@ impl Gen {
     /// t=18950 slot 233: 57344/640/640/16384 against the port's
     /// ctor art extents).
     pub(crate) fn castle_upgrade_space_ok(&mut self, i: usize) -> bool {
+        // OLD half-extents in tiles, read BEFORE the stamp (:17666).
+        let iw = (self.ent[i].f80 as i16 >> 8) as u16;
+        let ih = (self.ent[i].f82 as i16 >> 8) as u16;
         let next = (self.ent[i].f26 + 1).clamp(1, 8) as usize;
         self.castle_box_stamp(i, next);
         let half_w = self.ent[i].f80 as i32;
@@ -4329,23 +4346,45 @@ impl Gen {
             }
         }
         if fits {
-            let cx = ((x as u32 + 128) >> 8) as u8;
-            let cy = ((y as u32 + 128) >> 8) as u8;
-            let (htx, hty) = ((half_w >> 8) as i32, (half_h >> 8) as i32);
-            let blocked = |gx: i32, gy: i32| {
-                self.t.angle[tile((cx as i32 + gx) as u8, (cy as i32 + gy) as u8)] & 0x80 != 0
-            };
-            'edges: {
-                for gx in -htx..=htx {
-                    if blocked(gx, -hty) || blocked(gx, hty) {
-                        fits = false;
-                        break 'edges;
+            let (ow, oh) = ((half_w >> 8) as u16, (half_h >> 8) as u16);
+            let ox = (x.wrapping_add(128) >> 8).wrapping_sub(ow) as u8;
+            let oy = (y.wrapping_add(128) >> 8).wrapping_sub(oh) as u8;
+            let (mx, my) = (ow.saturating_sub(iw) as u8, oh.saturating_sub(ih) as u8);
+            let blocked = |gx: u8, gy: u8| self.t.angle[tile(gx, gy)] & 0x80 != 0;
+            'bands: {
+                // Bands 1+2: top rows oy.., bottom rows
+                // oy+2*oh−my.., 2*ow columns from ox (:17679-717).
+                for row in 0..my {
+                    for col in 0..(2 * ow) as u8 {
+                        if blocked(ox.wrapping_add(col), oy.wrapping_add(row))
+                            || blocked(
+                                ox.wrapping_add(col),
+                                oy.wrapping_add((2 * oh) as u8)
+                                    .wrapping_sub(my)
+                                    .wrapping_add(row),
+                            )
+                        {
+                            fits = false;
+                            break 'bands;
+                        }
                     }
                 }
-                for gy in -hty..=hty {
-                    if blocked(-htx, gy) || blocked(htx, gy) {
-                        fits = false;
-                        break 'edges;
+                // Bands 3+4: the side slivers at rows oy+my..,
+                // mx columns (:17719-775) — band 4's first row
+                // starts at centre−mx, later rows reset to ox.
+                for row in 0..my {
+                    for col in 0..mx {
+                        let sx = if row == 0 {
+                            ox.wrapping_add(ow as u8).wrapping_sub(mx)
+                        } else {
+                            ox
+                        };
+                        if blocked(ox.wrapping_add(col), oy.wrapping_add(my).wrapping_add(row))
+                            || blocked(sx.wrapping_add(col), oy.wrapping_add(my).wrapping_add(row))
+                        {
+                            fits = false;
+                            break 'bands;
+                        }
                     }
                 }
             }

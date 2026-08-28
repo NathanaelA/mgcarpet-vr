@@ -583,29 +583,32 @@ impl World {
         self.g.erupting = st.erupting;
         self.g.plume = st.plume;
 
-        // The wizext+84 GUARD REGISTER is not in the recording:
-        // rebuild its LIVE half from the owner-stamped (5,15) roster
-        // (ascending slot order into the low register slots — the
-        // fill order retail's own spawns produce). STALE entries —
-        // the retail-only memory of dead guards that re-arms the +46
-        // cooldown — are unknowable from a snapshot, so a pair whose
-        // tick trips the stale→re-arm law diverges at that one
-        // boundary (mc1l1 t=2571).
+        // The wizext+84 GUARD REGISTER **IS** in the recording (the
+        // closure carries the whole Type_160 slice; `guard_reg`
+        // decodes +84..+152) — import it verbatim like the balloon
+        // register below. A census rebuild could never reproduce a
+        // POINTER register: (a) STALE entries — retail's memory of
+        // dead guards — re-arm the +46 cooldown and block every
+        // empty index behind them (mc1hwl0 t=15515: 7 stale cleared,
+        // f46 0→16, NOTHING spawns, where the rebuilt register's
+        // empty index 6 fired slot 282); (b) ABA duplicates occupy
+        // an index forever (mc1l48 t=5343: slot 206 at index 4 AND
+        // 10); (c) membership is by pointer, so an owner re-stamped
+        // (charmed) guard stays in its original register (mc1l49
+        // t=3779 slot 994). Slot values are pool identity — `tr()`
+        // applies to play_index only, exactly as the balloon
+        // register. This retires the old "stale entries are
+        // unknowable" caveat and mc1l1 t=2571's delayed-first-guard
+        // note (same defect).
         self.g.mc1_guard_reg.0.clear();
-        for slot in 1..n {
-            let e = &self.g.ent[slot];
-            if e.class64 == 5 && e.model65 == 15 && e.tick70 != 95 && e.f144 != 0 {
-                let owner = e.f144;
-                let reg = self
-                    .g
-                    .mc1_guard_reg
-                    .0
-                    .entry(owner)
-                    .or_insert_with(|| vec![0u16; 34]);
-                if let Some(k) = reg.iter().position(|&v| v == 0) {
-                    reg[k] = slot as u16;
-                }
+        for w in &st.wizards {
+            if w.play_index == 0 {
+                continue;
             }
+            self.g
+                .mc1_guard_reg
+                .0
+                .insert(tr(w.play_index), w.guard_reg.to_vec());
         }
 
         // The wizext+52 BALLOON REGISTER, by contrast, IS in the
@@ -809,7 +812,21 @@ impl World {
             // (mc1l3 t=4334-4525: 49 fireball −200 stamps, one per
             // autofire anchor, gone until the shield lapsed at
             // 4275+251).
-            mana_delta: if st.ents.iter().any(|e| {
+            // ⚠ The scan walks the HUMAN'S OWN token register, never
+            // the pool: class-12 f144 is 0 for EVERY wizard's tokens
+            // (shared owner_ptr constant), so a pool-wide `any` took
+            // a RIVAL's mid-burst Rebound for the human's and pinned
+            // the seed to 0 — on 8-wizard mc1l49 the clamp fired on
+            // 7,572 of the first 8,001 ticks (~15k mana rows; retail
+            // sub_55E80's `a2` is the token's OWN caster, :56xxx).
+            // Same owner join as the accel lane below. Vacuous on
+            // every certified take (161,846 ticks, zero firings).
+            mana_delta: if wiz.owned_slots.iter().any(|&s| {
+                let s = s as usize;
+                if s == 0 || s >= st.ents.len() {
+                    return false;
+                }
+                let e = &st.ents[s];
                 e.class64 == 12
                     && e.f144 == 0
                     && e.f48 != 0
@@ -1568,7 +1585,7 @@ impl World {
                 "f2a",
                 if c == 15 {
                     some(e.f30 as i64)
-                } else if c == 10 && matches!(m, 0 | 6 | 11 | 17 | 65 | 66) {
+                } else if c == 10 && matches!(m, 0 | 6 | 9 | 11 | 17 | 65 | 66) {
                     some(e.f140 as i64)
                 } else if ramp2c || piece || (c == 10 && m == 16) {
                     None
@@ -1578,7 +1595,7 @@ impl World {
             ),
             (
                 "f2c",
-                if ramp2c || c == 15 || (c == 10 && matches!(m, 0 | 6 | 16)) {
+                if ramp2c || c == 15 || (c == 10 && matches!(m, 0 | 6 | 9 | 16)) {
                     some(e.f44 as i16 as i64)
                 } else if sphere || castle {
                     // The castle's @0x2C is the GUARD COOLDOWN and it
@@ -2345,6 +2362,24 @@ impl World {
                     slot: r.sv1 as u8,
                     timer: r.sv_timer,
                 });
+            }
+            // A materializing m9's PARKED hold: retail keeps it in
+            // the record's own @0x4A (sub_12100 EF:4716-22 stamps
+            // the SLOT there when a3 = model==9), consumed by the
+            // completion tick's sub_122A0. sv1==0 + action 72 +
+            // @0x4A in 1..=10 is the only state where @0x4A holds a
+            // slot rather than a kind-6 countdown or a watch handle
+            // — without the rebuild the park is destroyed and the
+            // deferred arm can never fire in pair mode (mc2l4 t=9).
+            if r.class3f == 5
+                && r.model40 == 9
+                && slot != human_slot as usize
+                && !ghost(r)
+                && r.sv1 == 0
+                && r.action45 == 72
+                && (1..=10).contains(&r.sv_timer)
+            {
+                self.mc2_sv_deferred.push((slot as u16, r.sv_timer as u8));
             }
         }
 
@@ -3172,7 +3207,13 @@ pub(crate) fn import_ent_mc2(
     let ramp2c = m27 || (r.class3f == 5 && r.model40 == 23) || (r.class3f == 14 && r.model40 == 2);
     let mut e = Ent {
         rand: r.rand as u32,
-        max_life: r.max_life.max(0) as u32,
+        // Bit-preserving: retail's lightning trail stamps a node's
+        // maxLife to -1 (sub_66750 EF:58336-43) and the port's own
+        // (9,9) ctor round-trips it through u32 — the old `.max(0)`
+        // floor turned every imported -1 into 0 (mc2l24: 14,662 of
+        // 15,421 max_life rows were exactly retail -1 / port 0).
+        // MC1's twin import_ent has never clamped.
+        max_life: r.max_life as u32,
         act_life: r.life,
         flags,
         next20: 0,
@@ -3531,7 +3572,13 @@ pub(crate) fn import_ent_mc2(
     // sub_31760) and the z flicker/lift in `word_0x2C_44` (→ f44);
     // the @0x90 mana lane is dead 0 on them (reverse-mapped in
     // `obs_project_mc2`).
-    if r.class3f == 10 && matches!(r.model40, 0 | 6) {
+    // The (10,9) SUMMIT DOME shares the shape (morph.rs module doc:
+    // subSpell @0x2A → f140 = the per-tick area amount EF:23393,
+    // dome height @0x2C → f44 EF:23258 `2r+100`) — the old uniform
+    // fall-through fed f44 the 1200 area amount and the dome pushed
+    // terrain to the 255 saturation cap (mc2l24 t=13 slot 91: the
+    // child born at z=8160 = 255×32 where retail reads 3776).
+    if r.class3f == 10 && matches!(r.model40, 0 | 6 | 9) {
         e.f140 = r.f2a as i32;
         e.f44 = r.f2c as u16;
     }

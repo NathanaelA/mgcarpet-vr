@@ -998,7 +998,9 @@ pub struct RetailEntMc1 {
 
 /// One decoded MC1 wizard record (`TypeStrAE400_13323`, 2049 B) — the
 /// slice of the Type_160 spell/flight column the importer consumes.
-#[derive(Debug, Clone, Copy, Default)]
+// Default is manual only because `[u16; 34]` (guard_reg) is past the
+// std array-Default cap of 32; semantics are the derive's (all zero).
+#[derive(Debug, Clone, Copy)]
 pub struct RetailWizardMc1 {
     /// Exit-status word `var_u16_13325` (+2; bit 2 = won).
     pub status: u16,
@@ -1043,6 +1045,13 @@ pub struct RetailWizardMc1 {
     /// through a double indirection (:56377-80), and the over-quota
     /// cull frees the slots at index >= quota (:56399-411).
     pub balloon_reg: [u16; 3], // +52
+    /// The castle-guard POINTER register (34 × u16 pool slots,
+    /// +84..+152) — the `sub_47400` guard walk reads THIS, not a
+    /// pool census: stale entries (dead guards) re-arm the castle's
+    /// +46 cooldown, duplicates from ABA slot recycling occupy an
+    /// index forever, and membership is by pointer (an owner
+    /// re-stamped guard stays in its original owner's register).
+    pub guard_reg: [u16; 34], // +84
     /// Claimed-house mana tally (u32_308).
     pub banked_houses: i32, // +308
     /// Cast-charge meter (u8_326): +1 per carpet tick to a 200 cap
@@ -1120,6 +1129,56 @@ pub struct RetailWizardMc1 {
     /// memset before the capture window opens, :49044). See
     /// [`crate::recover::Cheat`].
     pub notify: Notify,
+}
+
+impl Default for RetailWizardMc1 {
+    fn default() -> Self {
+        Self {
+            status: 0,
+            play_index: 0,
+            move_bits: 0,
+            roll_delta: 0,
+            pitch_delta: 0,
+            cmd_speed: 0,
+            v14: 0,
+            strafe: 0,
+            knock_mag: 0,
+            knock_dir: 0,
+            eff_pitch: 0,
+            danger: 0,
+            castle: 0,
+            balloon_reg: [0; 3],
+            guard_reg: [0; 34],
+            banked_houses: 0,
+            charge: 0,
+            roll_acc: 0,
+            pitch_acc: 0,
+            grace: 0,
+            regen_stall: 0,
+            life_rate: 0,
+            shots: 0,
+            hits: 0,
+            kills: 0,
+            aggro: 0,
+            tempo: 0,
+            ai_state: 0,
+            burst: 0,
+            poverty: 0,
+            hate: [0; 8],
+            war: [0; 8],
+            learn: [0; 24],
+            cooldown: [0; 24],
+            spell_list: [0; 24],
+            owned_slots: [0; 24],
+            blue: [0; 24],
+            hand_left: 0,
+            hand_right: 0,
+            castle_alert: 0,
+            player_alert: 0,
+            balloon_alert: 0,
+            notify: Notify::default(),
+        }
+    }
 }
 
 /// A wizard/player on-screen message: the text and the countdown that
@@ -1375,6 +1434,7 @@ fn decode_retail_wizard_mc1(d: &[u8], i: u16) -> RetailWizardMc1 {
         danger: i16_(d, t + 46),
         castle: u16_(d, t + 50),
         balloon_reg: [u16_(d, t + 52), u16_(d, t + 54), u16_(d, t + 56)],
+        guard_reg: core::array::from_fn(|k| u16_(d, t + 84 + k * 2)),
         banked_houses: i32_(d, t + 308),
         charge: u8_(d, t + 326),
         roll_acc: u16_(d, t + 327),

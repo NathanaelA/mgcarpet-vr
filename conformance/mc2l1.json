@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc2l1",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 1,
+   "file": "the-mc2-ai-carpet-altitude-servo-is-2-branch-sub.mgcr",
+   "source": "mc2l1",
+   "note": "THE MC2 AI CARPET ALTITUDE SERVO IS 2-BRANCH: sub_580E0 (EF:40372, via sub_146F0 EF:6454) steps the full v_14 whenever the carpet is above the TERRAIN ITSELF, then clamps to ground+v_12 — the a4 slot (v_10) is passed but DEAD in retail, same as the balloon servo. The port's 25% middle band between ground+v_10 and ground+v_12 was invented. mc2l1 t=1: every rival carpet's z rides this servo from the first tick; reverting the law re-dirties all 21 pre-horizon pairs of this take at once (ledger 2026-08-28 session 58)."
+  }
+ ]
+}

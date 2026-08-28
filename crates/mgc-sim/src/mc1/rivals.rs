@@ -3689,14 +3689,24 @@ impl World {
             13 => self.g.spawn_seeker(x, y, z),
             15 => self.g.spawn_zigzag(x, y, z),
             17 => self.g.spawn_spell_lob(11, x, y, z),
-            20 => self.g.spawn_spell_lob(9, x, y, z),
+            // The Wall-of-Fire token machine (sub_57D40 :66110-69) is
+            // ONE function for human and AI — its full tick mints the
+            // (9,16) firewall bolt itself. `spawn_spell_lob(9, ..)` has
+            // no sprite arm and returned None: the rival's Wall of
+            // Fire never produced a projectile (mc1l49 273 + mc1l48 81
+            // missing-(9,16) heads).
+            20 => self.g.spawn_firewall_bolt(x, y, z),
             // Self-buffs/channels have no projectile.
             _ => None,
         };
         let Some(pr) = pr else { return };
         let e = &mut self.g.ent[pr];
+        // Every retail emit arm adds the caster's speed to +126 ONLY
+        // (:65237/:65956/:66143 …) — no emit site in the binary
+        // writes +128, so the ctor's base survives and the flight
+        // servo walks the launch boost back off (mc1l48 t=271 slot
+        // 790: retail f126 462 / f128 384 one tick after birth).
         e.f126 += speed;
-        e.f128 = e.f126;
         e.id24 = owner;
         e.f30 = yaw;
         e.f32 = pitch;
@@ -3735,6 +3745,12 @@ impl World {
                 e.f69 = 25;
             }
             15 => self.g.ent[pr].f69 = 23,
+            // :66129-30 — the token machine's own f68/f69 stamp.
+            20 => {
+                let e = &mut self.g.ent[pr];
+                e.f68 = 10;
+                e.f69 = 53;
+            }
             _ => {}
         }
         // The charge move — the AI's manifestations run the SAME
@@ -3749,6 +3765,12 @@ impl World {
                 self.wiz_charge[ws] = 0;
             }
             3 => self.wiz_charge[ws] = 0,
+            // The firewall token banks the meter too (:66139-40 —
+            // `+26 = u8_326; u8_326 = 0`, same shape as fireball).
+            20 => {
+                self.g.ent[pr].f26 = self.wiz_charge[ws] as i16;
+                self.wiz_charge[ws] = 0;
+            }
             _ => {}
         }
         self.entities_dirty = true;

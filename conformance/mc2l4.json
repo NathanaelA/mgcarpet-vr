@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc2l4",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 1,
+   "file": "the-build-arm-s-whiffed-cast-stops-and-hovers-at.mgcr",
+   "source": "mc2l4",
+   "note": "THE BUILD ARM'S WHIFFED CAST STOPS AND HOVERS AT THE SITE'S STORED Z + 512: retail's scout copies SCRATCH SLOT 0's whole position — z included (EF:6089) — into axis_0x9A_154x, which imports as the entity's site_z; a whiffed castle cast in Mc2AiState::Build zeroes vdes and hovers at site_z+512 (sub_13100 EF:5620), NOT at the live ground. mc2l4 t=1: rival carpet 298's z is that hover; reverting the law dirties pairs 0-4 of this take (ledger 2026-08-28 session 58)."
+  }
+ ]
+}

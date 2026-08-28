@@ -211,7 +211,14 @@ impl World {
         if let Some(b) = self.g.spawn_mana_ball(x, y, z) {
             self.g.ent[b].f140 = CHEAT_SPHERE_MANA;
             self.g.ent[b].f144 = PLAYER_TARGET;
-            self.g.ball_resize(b);
+            // NO re-resize: retail's case-2 body (:48907-13) writes
+            // +140/+144 and stops — the sphere keeps the ctor's
+            // 512-mana box (family 52 size 1, f84 25) for exactly
+            // one tick and self-corrects on its own first dispatch
+            // (:29569). The extra ball_resize inflated the landing
+            // merge box and broke sub_118C0's z test (mc1l0-sg
+            // t=171: retail merges into seeker 646, the port kept
+            // sphere 651 alive).
         }
         // Retail assigns the CEILING word verbatim; the ceiling is
         // recomputed from the claimed set every tick, so the sphere

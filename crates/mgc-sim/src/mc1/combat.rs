@@ -2446,23 +2446,32 @@ impl Gen {
         // ⚠ THE LATCH ITSELF IS SHARED — the `sub_52770` prologue
         // (:62640-60, and see [`Gen::proj_generic_tick`], the other
         // half of the same retail function).
-        if self.ent[i].f146 == 0 && self.ent[i].flags & 2 == 0 {
-            self.ent[i].flags |= 2;
-            // The sub_54520 head clamp (:63945-46) — the banked
-            // charge rides +26 only until the first acquire tick.
-            if self.ent[i].f26 > 16 {
-                self.ent[i].f26 = 16;
+        // The acquire and the tracker are the TWO ARMS OF ONE
+        // IF/ELSE on the PRE-acquire +146 (sub_52770 prologue
+        // :62644-62): the tick that ACQUIRES snaps and stops there —
+        // home() is the ELSE arm only. Running both in the acquire
+        // tick masked the snap's raw pitch through the tracker's
+        // & 0x7FF store (mc1l49 t=983 slot 854: retail keeps the
+        // acquire's raw 2048; home()'s zero-step store wrapped it
+        // to 0). Same shape as `Gen::proj_generic_tick`.
+        if self.ent[i].f146 == 0 {
+            if self.ent[i].flags & 2 == 0 {
+                self.ent[i].flags |= 2;
+                // The sub_54520 head clamp (:63945-46) — the banked
+                // charge rides +26 only until the first acquire tick.
+                if self.ent[i].f26 > 16 {
+                    self.ent[i].f26 = 16;
+                }
+                self.aim_assist_mc1_cone(i, ctx, 0x100, 0x71);
+                if self.ent[i].f146 != 0 {
+                    self.ent[i].f30 = self.ent[i].f34;
+                    self.ent[i].f32 = self.ent[i].f36;
+                } else {
+                    self.ent[i].f34 = self.ent[i].f30;
+                    self.ent[i].f36 = self.ent[i].f32;
+                }
             }
-            self.aim_assist_mc1_cone(i, ctx, 0x100, 0x71);
-            if self.ent[i].f146 != 0 {
-                self.ent[i].f30 = self.ent[i].f34;
-                self.ent[i].f32 = self.ent[i].f36;
-            } else {
-                self.ent[i].f34 = self.ent[i].f30;
-                self.ent[i].f36 = self.ent[i].f32;
-            }
-        }
-        if self.ent[i].f146 != 0 {
+        } else {
             self.home(i, ctx);
         }
         let hit = self.proj_move_and_hit(i, ctx, true, true, DeflectLaw::Generic);

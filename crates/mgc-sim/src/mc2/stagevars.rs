@@ -393,39 +393,12 @@ impl World {
         if self.mc2_stagevars.is_empty() {
             return;
         }
-        // ---- deferred m9 arms (`sub_122A0`): an imp that finished
-        // its materialize (left state 72) picks up its parked hold.
-        // Retail arms inside the completion tick itself (EF:11984-95);
-        // this pre-loop pass arms one boundary later (deliberate: same
-        // observable sequence, and no shipped level authors a held m9).
-        // A deferred imp that died/despawned just drops its entry.
-        if !self.mc2_sv_deferred.is_empty() {
-            let pending: Vec<(u16, u8)> = self
-                .mc2_sv_deferred
-                .iter()
-                .copied()
-                .filter(|&(e, _)| {
-                    let e = e as usize;
-                    e >= self.g.ent.len()
-                        || self.g.ent[e].class64 != 5
-                        || self.g.ent[e].act_life < 0
-                        || self.g.ent[e].flags & 0x400 != 0
-                        || self.g.ent[e].tick70 != 72
-                })
-                .collect();
-            for (e, _) in &pending {
-                let ent = *e as usize;
-                let alive = ent < self.g.ent.len()
-                    && self.g.ent[ent].class64 == 5
-                    && self.g.ent[ent].act_life >= 0
-                    && self.g.ent[ent].flags & 0x400 == 0;
-                if alive {
-                    self.mc2_stagevar_arm_deferred(ent);
-                } else {
-                    self.mc2_sv_deferred.retain(|d| d.0 != *e);
-                }
-            }
-        }
+        // Deferred m9 arms run inside the completion tick, in the
+        // imp's own dispatch (sub_20370 EF:11992 — see
+        // `tick_arm_creature`); a dead/despawned imp's entry is
+        // dropped by the kill lanes' `mc2_stagevar_release`. The old
+        // pre-loop pass here armed one boundary LATE — a falsified
+        // deviation on three graded lanes × 39 entities (mc2l4 t=9).
         // ---- global scan: latch the FIRED bit for the watch kinds ----
         for s in 1..self.mc2_stagevars.len() {
             let v = self.mc2_stagevars[s];

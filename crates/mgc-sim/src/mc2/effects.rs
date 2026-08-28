@@ -270,6 +270,10 @@ impl Gen {
             // the action is what the m57 physics column keys on.
             self.ent[i].model65 = 57;
             self.ent[i].tick70 = 62;
+            // The m57 ctor's own zero (sub_50130 EF:36643), not the
+            // shared (10,39) ctor's 32 (EF:36618) — mc2l30 t=216:
+            // five m57 births at speed 0 where the port kept 32.
+            self.ent[i].f126 = 0;
         }
         self.ent[i].f144 = 0;
         self.ball_resize(i);

@@ -697,11 +697,14 @@ impl World {
         }
         r.state = Mc2AiState::from_retail(ai.state);
         r.target = ai.target;
-        r.target_sig = if ai.target == PLAYER_TARGET {
-            PLAYER_TARGET
-        } else {
-            ai.target_sig
-        };
+        // VERBATIM — retail's `word_0x98_152` is the truth channel
+        // for staleness. The old PLAYER_TARGET branch destroyed the
+        // evidence: a retaliation write (sub_1BD90 EF:9002) moves
+        // the target word ALONE, so a RaidCastle rival whose stored
+        // sig still names the human's CASTLE must FAIL the guard and
+        // go Fresh (retail's LABEL_12), not index the pool with the
+        // sentinel (the mc2l22/mc2l6-rsg segmented-sweep panic).
+        r.target_sig = ai.target_sig;
         r.site = ai.site;
         r.burst = ai.burst;
         r.poverty = ai.poverty != 0;
@@ -788,6 +791,12 @@ impl World {
             } else {
                 ((r.mana_max / 2000) as i32).max(100)
             };
+            // Retail's purse LIVES on the entity (`mana_0x90_144 +=
+            // manaRegen` EF:5424, clamped at EF:5456-59) — the life
+            // half of the same block already writes the record; the
+            // mana half must too (mc2l4 t=16 slot 292: +1000/tick at
+            // the castle, the port's entity frozen at the import).
+            self.g.ent[i].f140 = r.mana.min(i32::MAX as u32) as i32;
         }
         if at_castle || at_shrine {
             self.g.ent[i].flags &= !0x1000;
@@ -999,11 +1008,23 @@ impl World {
             e.f126 += 16 * (vdes - e.f126).signum();
             // Turn toward the setpoint: err / (8 + (255-Reflexes)/16),
             // clamped to the row's [v_4, v_2] caps (EF:6488-6501).
+            // Retail applies sign × cap with NO min(err) and then
+            // SNAPS to the target when the numeric-ordered compare
+            // says the step crossed it (EF:6502-10) — the same
+            // seam-blind clamp the MC1 twin carries (sub_14EB0
+            // :18835-57, mc1/rivals.rs). mc2l1 t=22 slot 138:
+            // retail turns 0 → 1980 in ONE tick (2043 crossed 1980,
+            // snap), where a min(err) step left 2043.
             let err = Gen::angdist(e.f30, e.f34) as i32;
             let div = 8 + ((255 - self.mc2_rivals[ri].refl as i32) / 16);
             let step = (err / div).clamp(v4 as i32, v2 as i32) as i16;
-            let t = Gen::turn_step(e.f30, e.f34, step);
-            e.f30 = (e.f30 as i32 + t as i32) as u16 & 0x7FF;
+            let old = e.f30;
+            let des = e.f34;
+            let new = (old as i32 + (Gen::turn_sign(old, des) * step) as i32) as u16 & 0x7FF;
+            e.f30 = new;
+            if (old < des && new > des) || (old > des && des > new) {
+                e.f30 = des;
+            }
         }
     }
 
@@ -1416,14 +1437,29 @@ impl World {
         if !think {
             return;
         }
-        // 3. Upgrade the castle (sub_13C50 EF:6107).
+        // 3. Upgrade the castle (sub_13C50 EF:6107 → sub_155E0
+        // EF:7106-30). Retail's gate ORDER is load-bearing: the
+        // sub_11A10 space probe — which QUAD-STAMPS the castle
+        // (yaw 0/fov 256, the tick's last write on those lanes) —
+        // runs BEFORE the affordability test (EF:7115 then :7119),
+        // so a broke rival still stamps its castle on every think
+        // tick (mc2l4 t=59/113/315 slot 297/304: retail 0 vs the
+        // port's ctor -8192 whenever afford short-circuited the
+        // probe; t=167/719 agree exactly when afford passes). The
+        // manifestation-exists gate (sub_146C0(a1x,2)) precedes the
+        // probe; the port's f26<7 guard stays but AFTER the stamp
+        // (retail has none — at rung 7 the 300M cost fails afford
+        // anyway, post-stamp). The conjunction's VALUE is unchanged
+        // apart from the known[2] gate; only the stamp side effect
+        // moves.
         if let Some(c) = castle {
             if self.mc2_rivals[ri].cooldown[2] == 0
                 && self.g.ent[c].tick70 == 4
                 && self.g.ent[c].f50 == 0
+                && self.mc2_rivals[ri].book.ent[2] != 0
+                && self.g.mc2_castle_space_ok(c)
                 && self.g.ent[c].f26 < 7
                 && self.mc2_rival_afford_castle(ri)
-                && self.g.mc2_castle_space_ok(c)
             {
                 // Steer target = the own castle (EF:6114-15).
                 self.mc2_set_rival_state(ri, Mc2AiState::Upgrade, c as u16);
@@ -1489,7 +1525,13 @@ impl World {
             return 0;
         }
         if target == PLAYER_TARGET {
-            return PLAYER_TARGET;
+            // The human carpet's RETAIL signature (sub_14C40
+            // EF:6702: id + model + (class << 7); the carpet's
+            // id_0x1A is its own slot, class 3 model 0 — measured
+            // 727 = 343+384 / 808 = 424+384). Self-consistent on a
+            // native world (slot 0 → 384) because the write side
+            // uses this same function.
+            return self.mc2_carpet_slot.wrapping_add(3u16 << 7);
         }
         let e = &self.g.ent[target as usize];
         e.id24
@@ -1502,7 +1544,11 @@ impl World {
             return false;
         }
         if target == PLAYER_TARGET {
-            return self.player.state == LifeState::Alive;
+            // Signature-honouring, like every pool target: an
+            // imported sig that names something else (the human's
+            // CASTLE after a retaliation re-point) must fail here.
+            return self.player.state == LifeState::Alive
+                && self.mc2_target_sig(PLAYER_TARGET) == sig;
         }
         let e = &self.g.ent[target as usize];
         e.flags & 0x400 == 0 && e.act_life >= 0 && self.mc2_target_sig(target) == sig
@@ -2863,11 +2909,18 @@ impl World {
         };
         let owner = self.mc2_rivals[ri].ent;
         let target = self.mc2_rivals[ri].target;
+        // Every retail cast site copies the hand token's mana onto
+        // the spawned projectile (sub_69900 EF:56056 for the basic
+        // possession bolt) — rivals run the SAME machine; the human
+        // arm in mc2_launch already carries this (mc2l4 t=83 slot
+        // 306: retail 33 = the token's purse, not the ctor's 50).
+        let token_mana = self.g.ent[m].f140;
         {
             let e = &mut self.g.ent[p];
             e.id24 = owner;
             e.f68 = impact.0;
             e.f69 = impact.1;
+            e.f140 = token_mana;
             e.f44 = sub.sub_spell.clamp(0, u16::MAX as i32) as u16;
             if charge {
                 e.f71 = sub.life.max(0) as u8;

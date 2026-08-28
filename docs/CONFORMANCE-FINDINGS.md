@@ -21350,3 +21350,200 @@ are the only reversion guard. Regression: suite green (22 result
 blocks), all 10 certified takes END (`--segmented`), the MC2 guard
 rows (mc2l0-spells-galore 7281, mc2l24 1, mc2l30 215) byte-identical,
 clippy clean, fmt clean.
+
+## SESSION 2026-08-28 (60) — THE MAIN CAMPAIGN OPENS: 12-CLUSTER AGENT
+## FAN-OUT, SEVENTEEN LAWS LANDED (+3 FIXTURE DEBTS PAID), SEVEN
+## HORIZONS MOVED
+
+The charter's main loop, round 1. Classify-swept all 14 uncertified
+takes (mc2l22 joined the board: 65,556 ticks, horizon 0,
+missing(10,2)slot654x2), clustered first-divergence families across
+takes, fanned out 12 diagnose-only Opus agents (read-only, fixed
+report shape), verified each report against the decompile in the main
+session and landed SERIALLY with per-law falsifier windows.
+
+FIRST: session 58's fixture debt ×3 PAID — conformance/mc2l1.json
+(servo 2-branch, t=1) + mc2l4.json (build-whiff site-z hover, t=1)
+minted and REGRESSION-proven under the reverted laws;
+the case-2 quad-stamp law unit-pinned instead
+(`mc2_rival_ready_probe_quad_stamps_a_rising_castle_before_the_mana_gate`
+— its only pair exemplar is t=0, which the 3-record fixture format
+cannot hold; the pin FAILS under the pre-law gate order).
+
+LANDED (each verified vs decompile, falsifier-checked):
+1. **MC1 castle upgrade gate scans GROWTH BANDS, not a perimeter**
+   (features.rs castle_upgrade_space_ok; sub_12D10 :17643 / HW :15775
+   byte-identical): old half-extents read BEFORE the level+1 stamp,
+   dty==0 ⇒ NO terrain test, footprint 2h wide from centre−h (the +h
+   row/column is retail-never-touched), bands carry the MC2 twin's
+   verbatim quirks (band-4 first row at centre−mx then reset to ox —
+   corroborated by mc2_castle_space_scan, an independent binary).
+   mc1hwl0 t=971 (the horizon head, the level-2 commit bounced f59=2)
+   and t=1785 both fell. Fixture cut at t=970
+   (the-upgrade-space-gate-scans-growth-bands-not-a).
+2. **MC2 census mirrors the rival ceiling onto the ENTITY**
+   (world.rs recompute_mana: the mc2_rivals write-back loop was
+   MC1-only; sub_60F00 EF:61976-62052 accumulates ON the record).
+   mc2l4 t=15 mana_max 6000 = 1000 base + 5000 castle.
+3. **MC2 rival mana PURSE lives on the entity** (rivals.rs regen
+   block now mirrors r.mana → f140; EF:5424/5456-59 — the life half
+   already wrote the record). mc2l4 t=15/16 mana rows gone.
+   (The rostered `mc2-rival-mana-mirror` decision-owed entry is
+   thereby EXECUTED; the predicted golden movement did NOT occur —
+   the suite is green with no re-pin, so the flag was conservative.)
+4. **import_ent_mc2 max_life is bit-preserving** (conformance.rs:
+   dropped the `.max(0)` clamp; retail's lightning trail stamps −1,
+   sub_66750 EF:58336-43; MC1's twin never clamped). ~95% of
+   mc2l24's 15,421 max_life rows were exactly retail −1 / port 0.
+5. **MC2 rival turn: sign×cap + numeric-ordered overshoot SNAP**
+   (rivals.rs mc2_rival_movement; sub_146F0 EF:6502-10; the MC1 twin
+   carried it since :18835-57). mc2l1 t=21 (0→1980 in ONE tick) and
+   mc2l4 t=11 fell; mc2l1 horizon 21 → 192.
+6. **The m57 random sphere's ctor speed is 0** (effects.rs;
+   sub_50130 EF:36643 vs the shared (10,39) ctor's 32 EF:36618).
+   mc2l30 horizon 215 → 229.
+7. **The (10,9) SUMMIT DOME import re-home** (conformance.rs:
+   f140 ← @0x2A area amount / f44 ← @0x2C dome height, + the f2a/f2c
+   projection arms; morph.rs's own module doc was the contract).
+   The dome had been importing f44=1200 and saturating the heightmap
+   at 255 — the whole port-z=8160 family (mc2l24 ×4,438) + mc2l30
+   t=217.
+8. **The deferred m9 stagevar hold arms INSIDE the completion tick**
+   (world.rs tick_arm_creature seam + stagevars.rs pre-loop pass
+   DELETED + conformance.rs rebuilds the park from the record's own
+   @0x4A; sub_20370 EF:11992 → sub_122A0 EF:4953-58, park at
+   sub_12100 EF:4716-22). mc2l4 t=9's 39×3 graded rows gone.
+   DEVIATIONS.md "deferred m9 arm" entry RETIRED — its "same
+   observable sequence" claim was falsified on graded lanes.
+9. **The rival castle-probe gate ORDER is load-bearing** (rivals.rs
+   selector step 3; sub_155E0 EF:7106-30: manifestation-exists →
+   sub_11A10 probe (the quad STAMP) → afford → cone): the probe now
+   runs before affordability, + the known[2] gate; conjunction value
+   otherwise unchanged. mc2l4 t=59/113/315 applied_yaw 0-vs-−8192
+   family (134 rows) gone.
+10. **rival Wall of Fire EMITS** (mc1/rivals.rs: spell 20 routed
+    through spawn_firewall_bolt — `spawn_spell_lob(9,..)` had no
+    arm and returned None, so the rival's Wall of Fire NEVER
+    produced a projectile; + the token machine's f68/f69 = 10/53
+    stamp and the charge bank, sub_57D40 :66110-69). mc1l49's 273 +
+    mc1l48's 81 missing-(9,16) heads collapse.
+11. **No emit site writes +128** (mc1/rivals.rs rival_emit,
+    world.rs cast_fireball + cast_bomb: the f128=f126 pin deleted;
+    every retail arm :65062..:66329 adds to +126 ONLY, the ctor
+    base survives and the flight servo decays the launch boost).
+    mc1l32-quick horizon 9,927 → 15,187.
+12. **The wizext+84 GUARD REGISTER is decoded and imported VERBATIM**
+    (mgcr.rs RetailWizardMc1.guard_reg [u16;34] @ +84;
+    conformance.rs census rebuild DELETED): a pointer register a
+    census cannot reproduce — stale entries re-arm f46 and block
+    empty indices behind them, ABA duplicates occupy indices
+    forever, membership is by pointer (sub_47400 :56414-55, HW
+    identical). The corpus's biggest single family (~11,500
+    extra-(5,15) rows over 5 takes) collapses; import t=0 registers
+    byte-match the census on all 16 MC1 takes ⇒ certified takes
+    provably unmoved. Retires mc1l1 t=2571's delayed-first-guard
+    caveat.
+13. **RaidCastle/PLAYER_TARGET: the signature lane is the truth
+    channel** (mc2/rivals.rs reanchor imports target_sig VERBATIM;
+    mc2_target_sig(PLAYER_TARGET) = the carpet's retail sig
+    (sub_14C40 EF:6702: slot + (3<<7)); mc2_target_alive honours the
+    sig for the human too): a retaliation write (sub_1BD90 EF:9002)
+    moves the target word ALONE, so a RaidCastle rival whose sig
+    still names the human's CASTLE goes Fresh (retail LABEL_12)
+    instead of indexing ent[0xFFFF] — the segmented-sweep PANIC that
+    blocked mc2l22 + mc2l6-rsg entirely. Both takes now sweep.
+14. **The more-mana cheat sphere keeps the ctor's 512 box for its
+    first tick** (cheats.rs: the extra ball_resize DELETED; retail's
+    case-2 body :48907-13 writes +140/+144 and stops; the inflated
+    box broke sub_118C0's z merge test on landing). mc1l0-sg
+    horizon 170 → 1,078.
+15. **The rival possession bolt inherits the TOKEN's mana**
+    (mc2/rivals.rs mc2_rival_emit stamps f140 from the book
+    manifestation, matching the human path; sub_69900 EF:56056).
+    mc2l4 t=83's mana 33-vs-50 row gone.
+16. **The firewall bolt's acquire and tracker are ONE if/else on the
+    PRE-acquire +146** (mc1/combat.rs proj_firewall_tick; sub_52770
+    prologue :62644-62 — the acquire tick snaps and STOPS; home()
+    is the ELSE arm; running both masked the raw 2048 pitch through
+    the tracker's &0x7FF store). mc1l49 t=983 fell; horizon 982 →
+    1,098.
+
+GATE (one batched pass): suite GREEN (0 failures); ALL 245 fixtures
+pass (13 manifests); ALL TEN certified takes END devs=0
+byte-identical under --segmented (mc1l5/mc1l42 = the band-scan
+exposure, mc2l0/mc2l3 = the quad-order/possession-mana/dome/painter
+exposure — none moved). Horizon deltas this round:
+  mc1hwl0        970 → 10,249    mc1l0-sg       170 → 1,078
+  mc1l32-quick 9,927 → 15,187    mc1l49          79 → 1,098 (982 free)
+  mc2l1           21 → 192       mc2l30         215 → 229
+  mc2l4 pair face: first dirty pair 9 → 83+ (free-run horizon 1
+  stays: the banked ground_z interpolation head)
+  mc2l22 + mc2l6-rsg: segmented sweeps UNBLOCKED (were panics)
+Unmoved as expected (laws banked, diagnosed but not landed):
+mc1l48 50 (accel-token phase), mc2l24 1 (m27 yaw masks + mode-4
+slope gate), mc2l0-sg 7,281 ((5,19) morph-body mint), mc2l6-rsg 0
+(ramp2c (2,8) import families), mc1l6 1,617 (accel), mc1l37 2,486
+(the named trigger-banked dig, untouched by design).
+
+BANKED FOR ROUND 2 (diagnosed, decompile-cited, NOT landed):
+- m27 yaw unmasked at 3 sites + the mode-4 slope-pitch gate
+  (multipart.rs; EF:19878/19956/20089 vs the ONE masking site
+  :20967; sub_102D0 mode 4 EF:3687-3706) — mc2l24's family.
+- The MC1 Accelerate token's speed writes land at the TOKEN's OWN
+  WALK SLOT, same tick (the MC2 column's law, never applied to MC1;
+  :65166-78/:65190-93) — mc1l48/mc1l6/mc1l32-quick pose heads; ⚠
+  INHERITED (pose_lane GATE_ACCEL hides them from pair mode) ⇒ unit
+  pins.
+- The (5,19) morph-body mint's owner/back-link/z/draw stamps
+  (mc2l0-sg t=7282, the take's horizon head).
+- ramp2c import families (2,7)/(2,8)/(5,21)/(5,22) — f44 ← @0x2C
+  (mc2l6-rsg t=1, most of mc2l22 t=1); one family per landing,
+  certified re-verify each.
+- The rival Speed manifestation's (10,2) slipstream puff
+  (GetScroll_69DB0 EF:56251-59; the port's body pass is human-only)
+  — mc2l22 t=1 missing pair.
+- m16 acquire cone: base MC1 likely 0x71 vs HW's widened 0x100
+  (case 0x10 hw:60322 is HW-only; base case-16 is a listing gap) —
+  cone pinned to [16,186) by two witnesses, list shape OPEN.
+- mc2l4 t=2 slot 298 z: ground_z vs getTerrainAlt interpolation
+  (retail 1060, port 1056=33×32 flat-tile read) — pure-function head.
+- The tree-splash strict_retail gate is a STALE workaround (measured:
+  0 of 1,443 trees on water at t=0 across every MC1 take; the
+  premise died with format-2 measured terrain) — ⚠⚠ HIGH blast
+  radius, env-toggle probe + full certified re-sweep before landing.
+- mc2l24 t=44537 (14,3)+(11,12) THING pair re-fire — importer
+  one-shot-consumption gap (same class as the 549-balloon note),
+  needs its own dig; verify_mc2.rs:927-32's re-imprint is
+  load-bearing, do not touch blind.
+- mc2l24 (5,21) flier applied_pitch=128 default family; (5,23)
+  phase-0 hold left early.
+- Instrument: `measured_terrain` is FALSE during retail_import_mc2
+  in the replay driver (restore_planes clears it; install runs
+  after import) — the conformance.rs:2560 `off` gate is inoperative
+  on measured takes; certified takes were certified WITH the
+  reconstructs running. Own head, do not flip blind.
+- mc1l49 t=2788 rand ×9,276: the anti-rebound roll must burn a
+  WATCOM CRT rand stream (EventsFunctions.cpp:413 idiom; remc1
+  :19507 is the listing's only rand()), NOT the wizard record's own
+  LCG (rivals.rs:3317) — phase unrecoverable, graded +4 lane
+  repaired unconditionally.
+- MC1 mana (the 12th agent reported late, three mechanisms):
+  **LANDED same session as law 17** — the mana_delta import clamp's
+  owner join (conformance.rs: the pool-wide class-12 scan walked
+  EVERY wizard's tokens because f144 is 0 on all of them; on
+  8-wizard mc1l49 a rival's mid-burst Rebound pinned the human's
+  seed to 0 on 7,572 of the first 8,001 ticks; now scans
+  wiz.owned_slots only, the accel lane's own join; clamp measured
+  VACUOUS on all 8 certified MC1 takes — 161,846 ticks, zero
+  firings). mc1l49 pair face 217-dirty → 2-dirty in 0..1205.
+  BANKED from the same report: the below-carpet POOL-ORDER arm
+  (replaces the model exclusion list; improves mc1l1/mc1l3 residue
+  156→297 / 431→485 — needs its own pair check); mana as the
+  DAMAGE SINK under Shield/Rebound (life+mana mirrored debits,
+  ⚠ touches certified mc1l3/mc1l42 — reversion-probe the mc1l3
+  shield fixture first; decompile writer NOT yet pinned); the
+  same-frame below-carpet cast debit (12,16 Create-Castle
+  non-suppression carve-out, mc1l48-only, narrow); the castle
+  regen-rate register applied-then-selected pair (mc1l6 t=3908);
+  the (12,16) mound-refresh cadence (mc1l49 slot 26 / mc1l48
+  46/70 — belongs to the castle-economy head).

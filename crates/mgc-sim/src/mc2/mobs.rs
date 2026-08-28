@@ -2444,22 +2444,31 @@ impl Gen {
                 (e.x, e.y, e.f80 as i32, e.f82 as i32)
             };
             let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
-            for w in 1..self.ent.len() {
-                let e = &self.ent[w];
-                if e.class64 != 3 || e.flags & 0x400 != 0 {
-                    continue;
-                }
-                if wd(e.x, bx) < bw + e.f80 as i32 && wd(e.y, by) < bh + e.f82 as i32 {
-                    let (dest, row, own) = (
-                        (e.dest_x, e.dest_y, e.site_z),
-                        e.f26.clamp(0, 7) as u8,
-                        e.id24,
-                    );
-                    if self
-                        .mc2_spawn_wizard_painter(dest, row, own, w as u16)
-                        .is_some()
-                    {
-                        self.ent[w].f46 = 4;
+            // Gated on the same switch as the human arm below: the
+            // import-side pad reconstruct (pads.rs, the only
+            // human:None caller) replays a build retail already
+            // finished — its sub_377A0 pass must not re-mint the
+            // (10,42) painters or re-stamp f46 (mc2l30 t=402: a
+            // phantom painter off the free stack every pair, castle
+            // f2c 0→4; mc2l0-sg t=7283: seven at once).
+            if human.is_some() {
+                for w in 1..self.ent.len() {
+                    let e = &self.ent[w];
+                    if e.class64 != 3 || e.flags & 0x400 != 0 {
+                        continue;
+                    }
+                    if wd(e.x, bx) < bw + e.f80 as i32 && wd(e.y, by) < bh + e.f82 as i32 {
+                        let (dest, row, own) = (
+                            (e.dest_x, e.dest_y, e.site_z),
+                            e.f26.clamp(0, 7) as u8,
+                            e.id24,
+                        );
+                        if self
+                            .mc2_spawn_wizard_painter(dest, row, own, w as u16)
+                            .is_some()
+                        {
+                            self.ent[w].f46 = 4;
+                        }
                     }
                 }
             }

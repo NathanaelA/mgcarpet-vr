@@ -22,6 +22,12 @@
    "note": "THE PROBE MEETS THE HUMAN IN RING ORDER (sub_11980 :16988-17027): the out-of-pool carpet is checked as its CELL comes up, ahead of later cells' pool records - the kraken beam stops on the human, not the rival's chain"
   },
   {
+   "t": 970,
+   "file": "the-upgrade-space-gate-scans-growth-bands-not-a.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE UPGRADE SPACE GATE SCANS GROWTH BANDS, NOT A PERIMETER: sub_12D10 (:17643, HW :15775 - byte-identical twins) reads the OLD half-extents BEFORE the level+1 stamp, takes the growth deltas, and when the half-height delta is zero runs NO terrain test at all; the footprint is 2h tiles from centre-h - the +h row/column an inclusive perimeter tests is retail-never-touched. The four bands carry the MC2 twin's verbatim quirks (side slivers iterate only my rows at oy+my; band 4's first row starts at centre-mx then resets to ox). mc1hwl0 t=971: the human castle's level-2 commit at (232,176) - the 27x27 window is clear except four protected tiles on row cy+hty, exactly the port-only perimeter row, so the port bounced the commit (f59=2) where retail commits: f26 2, f48 4, life 40000, box 3328, manifestation f136 20000/f140 198, and the (10,42) build painter at slot 535 is born. t=1785 is the same law at level 2->3."
+  },
+  {
    "t": 1902,
    "file": "the-target-signature-s-team-word-is-a-pool-slot.mgcr",
    "source": "mc1hwl0",
