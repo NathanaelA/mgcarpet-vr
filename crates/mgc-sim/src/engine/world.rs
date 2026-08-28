@@ -841,6 +841,12 @@ pub struct World {
     /// during a boost only the RESISTING press can arm it (the
     /// boosted target sits outside the ±80 bounds test).
     pub(crate) mc1_v14: bool,
+    /// Tick-top latch: would the human carpet be on the class-3
+    /// roster this tick (`actLife >= 0`, sampled beside `wiz_chain`)?
+    /// Consumed by the trigger volumes' fire probe — see the sweep.
+    /// Transient (re-latched every tick top before any consumer),
+    /// so neither hashed nor snapshotted.
+    pub(crate) human_wiz_top: bool,
     /// THE FALL TRAIL'S SPAWN ALTITUDE — the carpet's POST-MOVE,
     /// PRE-GRAVITY z, published by whichever pass integrated the fall
     /// this tick, or `None` when nothing did (pair mode, where the
@@ -1911,6 +1917,7 @@ impl World {
             pending_speed_zero: false,
             pending_speed_base: None,
             mc1_v14: false,
+            human_wiz_top: true,
             fall_pre_z: None,
             mc1_fall_entry_z: 0,
             player: Player::default(),
@@ -2976,9 +2983,14 @@ impl World {
 
     /// One manifestation's effect state, run from the class-15 walk arm
     /// at the entity's own pool slot — the other half of
-    /// [`World::mc2_player_cast_pass`]. Only the HUMAN's book is
-    /// driven here: rival manifestations are class-15 pool entities too,
-    /// and the port models rival casting on its own lane.
+    /// [`World::mc2_player_cast_pass`]. The HUMAN's book dispatches
+    /// into `mc2_manifestation_tick`; a RIVAL's owned token (the
+    /// same class-15 action-3M dispatch — retail's body is
+    /// caster-generic, GetScroll_69DB0's model-1 arm included)
+    /// dispatches into the rival token body at the token's OWN walk
+    /// slot, which is what gives the f63&3 puff cadence its retail
+    /// phase (the pre-increment read: world's walk bumps f63 AFTER
+    /// the handler, like both engines).
     pub(crate) fn mc2_manifestation_pass(&mut self, i: usize, player: PlayerPose, ctx: &MobCtx) {
         if self.mc2_carpet_slot == 0 || !mc2_manifestation_slot_order() {
             return;
@@ -2990,13 +3002,18 @@ impl World {
         // arc. It also disambiguates the death scatter's boolean 1
         // marker (`mc2_scatter_spells`) from a real slot-1
         // manifestation: the loose jar at slot 1 is in state 3M+1.
-        if spell >= 26
-            || self.mc2_book.ent[spell] as usize != i
-            || self.g.ent[i].tick70 as usize != spell * 3
-        {
+        if spell >= 26 || self.g.ent[i].tick70 as usize != spell * 3 {
             return;
         }
-        self.mc2_manifestation_tick(spell, i, player, ctx);
+        if self.mc2_book.ent[spell] as usize == i {
+            self.mc2_manifestation_tick(spell, i, player, ctx);
+            return;
+        }
+        if let Some(ri) = (0..self.mc2_rivals.len()).find(|&r| {
+            self.mc2_rivals[r].ent != 0 && self.mc2_rivals[r].book.ent[spell] as usize == i
+        }) {
+            self.mc2_rival_manifestation_tick(spell, i, ri);
+        }
     }
 
     /// The castle/dolmen fast-regen probes (:55346-50 + the dolmen
@@ -3146,8 +3163,25 @@ impl World {
         // ceiling — mc1l42 t=17344-17397, `player.mana` 89600 → 56842
         // for the whole 54-tick corpse window.
         let pre_mana = self.player.mana;
+        // Deflection quarters owed by walk slots BELOW the carpet
+        // (:62725 and twins land them raw at the projectile's slot,
+        // i.e. BEFORE this step): ride the delta so this tick's step
+        // applies them — the sum is retail's. On a tick the wizard is
+        // already dead the step never runs, so land them raw like the
+        // fatal mail arm (the corpse holds the shortfall).
+        let deflect = std::mem::take(&mut self.g.player_deflect_debit).0;
+        if deflect != 0 {
+            if self.player.life >= 0 {
+                self.player.mana_delta -= deflect.min(i32::MAX as u32) as i32;
+            } else {
+                self.player.mana = self.player.mana.wrapping_sub(deflect);
+            }
+        }
         if self.player.life >= 0 {
-            let stepped = self.player.mana as i64 + self.player.mana_delta as i64;
+            // Signed read of the purse (:55385-91 `+140` semantics)
+            // — a wrapped shortfall floors at 0 here instead of
+            // clamping to the ceiling.
+            let stepped = self.player.mana as i32 as i64 + self.player.mana_delta as i64;
             self.player.mana = stepped.clamp(0, self.player.mana_max as i64) as u32;
             let (at_castle, at_dolmen) = boost;
             self.player.mana_delta = if at_castle || at_dolmen {
@@ -3286,9 +3320,38 @@ impl World {
         // cast: 43 phantom `(9,9)` segments at 22111, the take's
         // first entity-set divergence. Same shape as 23's mc1l4
         // t=5376 lead, one spell later.
+        // ⭐ 14 REBOUND IS ONE OF THEM TOO — the same +65 test (14 <
+        // 0x10, not 2/16/21 → LABEL_20 arm-only), and its machine
+        // sub_573F0 (:65773) is the bare skeleton (gate, the +17 0x80
+        // bit, the sub_55E80 debit/pin, the shared countdown). The
+        // command-site toggle arm armed NOTHING, so a (re)cast never
+        // reloaded +48 and the token's arm-tick debit never fired:
+        // mc1l32-quick pair mode reads +1000 on the purse at every
+        // re-cast (148 rows, e.g. t=18014: retail reloads the token,
+        // stamps delta 100 → −1000, republishes 0x8000; the port kept
+        // the purse). The bank had attributed those rows to the
+        // deflection quarter — measurement says they are the CAST's.
         if matches!(
             id,
-            0 | 1 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 15 | 16 | 17 | 18 | 19 | 20 | 22 | 23
+            0 | 1
+                | 3
+                | 4
+                | 6
+                | 7
+                | 8
+                | 9
+                | 10
+                | 11
+                | 13
+                | 14
+                | 15
+                | 16
+                | 17
+                | 18
+                | 19
+                | 20
+                | 22
+                | 23
         ) {
             // The held re-issue (the +60==0 input law) is a LEVEL,
             // not an edge, for 15 and 23: every held tick re-arms the
@@ -3867,13 +3930,13 @@ impl World {
         if d.mc2.is_some() {
             return self.step_player_flight_mc2(d);
         }
-        // The speed-token writes land at the TOKEN's walk slot, below
-        // the carpet — re-read them here, the carpet's own dispatch
-        // moment, not the driver's tick-head sample: the burst-end
-        // base restore (:65192-95, target AND actual to +80 max
-        // forward) applies before the command integration, and a
-        // same-tick kill (v_14 → counter = 1 → 0) already dropped the
-        // override.
+        // The speed-token writes land at the TOKEN's walk slot. A
+        // token BELOW the carpet posted its mail (sustain 3×/2× or
+        // the burst-end ±80 restore) before this dispatch — consume
+        // it here, the carpet's own moment, before the command
+        // integration. A token ABOVE the carpet posts after this
+        // step; its mail is taken by the DRIVER after the turn
+        // (replay.rs step_mc1 / the MC2 driver's shape).
         if let Some(base) = self.pending_speed_base.take() {
             d.s.tgt_speed = base;
             d.s.act_speed = base;
@@ -3953,7 +4016,13 @@ impl World {
         // handler never runs, so the mover keeps steering on the live
         // stick while the speed target and strafe freeze.
         d.inp.no_command = d.falling;
-        d.over = self.accel_override();
+        // NO accel override: the SPEED spell writes the carpet's
+        // registers ITSELF at the token's own walk slot (the mail
+        // above / pending_speed_base below) — it is not a thrust
+        // model the mover consults. Mirrors the MC2 mover's law;
+        // the alternate app movers (lib.rs) keep the override, they
+        // never run a manifestation walk.
+        d.over = None;
         // The knock is sampled AT the move (:55204-18 sits inside
         // sub_455D0), not at drive build: the mailbox block just ran
         // in this same dispatch, so a same-tick hit shoves this move.
@@ -4267,6 +4336,19 @@ impl World {
         // walkers carry no life test of their own.
         let mut wiz_chain = std::mem::take(&mut self.g.wiz_chain.list);
         wiz_chain.clear();
+        // The out-of-pool HUMAN's membership in that same roster,
+        // sampled by the same gate at the same moment (the importer
+        // zeroes the human's pool record, so the chain itself can
+        // never carry the carpet). The trigger volumes' FIRE probe
+        // (sub_5A090 :67632-48 / hw:63902-18) walks THIS roster
+        // filtered to model 0 — a dead carpet is not on it, so a
+        // corpse inside an authored volume can never trip it (mc1hwl0
+        // t=23480: the (11,2) ambush ring over the falling corpse —
+        // retail leaves f26=0 and fires nothing; the port's ungated
+        // pose probe armed it and minted six (10,17)s). The REARM
+        // probe (sub_5A120 :63924-38) walks the wizard TABLE with no
+        // liveness gate — the asymmetry is retail's.
+        self.human_wiz_top = self.player.life >= 0;
         // The CLASS-9 roster (`var_u32_36462[3]`, the case-9 arm at
         // :52279): every class-9 record, NO life or flags test. Its
         // measured walker is the rival incoming-projectile defense —
@@ -4437,6 +4519,7 @@ impl World {
             // The mid-walk refresh at the carpet's slot already used
             // this predicate; the tick-head seed now agrees.
             pdead: self.player.life < 0,
+            pdead_top: self.player.life < 0,
             strict: self.strict_retail,
             patches: self.patches,
             mc2_turn: self.mc2_turn,
@@ -4922,6 +5005,17 @@ impl World {
                 }
                 let (at_castle, at_dolmen) = self.regen_boost(&ctx);
                 self.player_mail_block(player, at_castle);
+                // The carpet's LIFE is a mid-walk observable on the
+                // MC1 column too (:21658-61 — the chase reads
+                // `+12 < 0 || +17 & 4` off the pool record LIVE, and
+                // the human's carpet is a pool record there): the
+                // mail drain above is where a fatal hit lands, so
+                // every walker dispatched after this slot must see
+                // the death on its own tick. The MC2 anchors already
+                // republish; these seeded ctx.pdead at the tick head
+                // only (mc1l32-quick t=16618: retail demotes every
+                // chaser chase→wander on the death tick itself).
+                ctx.pdead = self.player.life < 0;
                 if let Some(d) = drive.as_deref_mut() {
                     player = self.step_player_flight(d);
                     self.adopt_walk_pose(player, &mut ctx);
@@ -5195,7 +5289,7 @@ impl World {
                 // ground-vortex eruption controller (shadows MC1's
                 // state 18), 98 = the apocalypse mana rain.
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 18 => {
-                    self.g.mc2_summit18_tick(i, self.strict_retail)
+                    self.g.mc2_summit18_tick(i)
                 }
                 10 if matches!(self.game, GameId::Mc2) && self.g.ent[i].tick70 == 98 => {
                     self.g.mc2_summit91_tick(i)
@@ -5492,18 +5586,42 @@ impl World {
                     // castle-token machine session). The port's bind
                     // stand-in is the FIRST-COMMIT LATCH the case-0
                     // commit already stamps: flags bit 1 (:56057-62).
+                    // ⭐ BOTH ladder writers resolve the token through
+                    // the OWNER, and only a LIVE owner resolves:
+                    // sub_47C60 :56578 / sub_47DD0 :56629 both read
+                    // `pool[castle->id24].+70 <= 1u` before wizext+708
+                    // — a dead owner's token keeps its LAST committed
+                    // price through the whole death window (mc1l48
+                    // t=27414: retail token 146 frozen at CAP[2]
+                    // 20000/198 over a falling corpse where the
+                    // un-gated stamp wrote CAP[1]).
+                    let owner_alive = {
+                        let own = self.g.ent[i].id24;
+                        if own == PLAYER_TARGET {
+                            // The human's +70 <= 1u read, answered
+                            // from the player column (his pool record
+                            // is zeroed under import).
+                            self.player.state == LifeState::Alive
+                        } else {
+                            let own = own as usize;
+                            own != 0 && own < self.g.ent.len() && self.g.ent[own].tick70 <= 1
+                        }
+                    };
                     if self.g.ent[i].f26 > 0
                         && self.g.ent[i].flags & 0x400 == 0
                         && self.g.ent[i].flags & 2 != 0
                     {
-                        let lvl = self.g.ent[i].f26;
-                        let cap = crate::engine::features::Gen::CASTLE_CAP[(lvl as usize).min(7)];
-                        let own = self.g.ent[i].id24;
-                        if let Some(m) = self.castle_owner_token(own) {
-                            self.g.ent[m].f136 = cap;
-                            self.g.ent[m].f140 = cap / 101;
+                        if owner_alive {
+                            let lvl = self.g.ent[i].f26;
+                            let cap =
+                                crate::engine::features::Gen::CASTLE_CAP[(lvl as usize).min(7)];
+                            let own = self.g.ent[i].id24;
+                            if let Some(m) = self.castle_owner_token(own) {
+                                self.g.ent[m].f136 = cap;
+                                self.g.ent[m].f140 = cap / 101;
+                            }
                         }
-                    } else if self.g.ent[i].flags & 0x400 != 0 {
+                    } else if self.g.ent[i].flags & 0x400 != 0 && owner_alive {
                         // The castle died INSIDE this castle_tick.
                         // Retail's teardown runs the ladder stamp
                         // AFTER the level decrement (sub_47A70
@@ -5552,16 +5670,19 @@ impl World {
                 }
                 // Trees burn (states 0/1/2 + the standing fire).
                 // Strict-retail suppresses the water splash-die
-                // (:57703-11, tile_type == 0): the recording has no
-                // terrain channel, and retail's village construction
-                // PAINTS tile types under trees (sub_27D30's
-                // paint pass) — on the replay's pristine planes those
-                // tiles still read water and every imported village
-                // tree drowned in one tick (the (2,0) missing family,
-                // CONFORMANCE-FINDINGS.md). Capture-domain, same
-                // pattern as the class-12 frozen-z law.
+                // (:57703-11, tile_type == 0) ONLY on pristine
+                // planes: format-1 recordings have no terrain
+                // channel, and retail's village construction PAINTS
+                // tile types under trees (sub_27D30's paint pass) —
+                // on pristine planes those tiles still read water
+                // and every imported village tree drowned in one
+                // tick (the (2,0) missing family). A MEASURED
+                // (format-2) channel carries the type plane as
+                // ground truth, so the splash-die is live again
+                // (mc1l0-sg t=1177: two quake-drowned trees splash
+                // (10,5) and free their slots).
                 2 if self.g.ent[i].model65 == 0 => {
-                    let splash = !self.strict_retail;
+                    let splash = !self.strict_retail || self.measured_terrain;
                     self.g.tree_tick(i, splash)
                 }
                 // Standing stone (3) / bad stone (9): the per-tick
@@ -5723,6 +5844,9 @@ impl World {
             }
             let (at_castle, at_dolmen) = self.regen_boost(&ctx);
             self.player_mail_block(player, at_castle);
+            // Mid-walk pdead republish — see the in-walk anchor's
+            // note (:21658-61; the MC1 half of the MC2 anchors' law).
+            ctx.pdead = self.player.life < 0;
             if let Some(d) = drive {
                 player = self.step_player_flight(d);
                 self.adopt_walk_pose(player, &mut ctx);
@@ -5759,6 +5883,18 @@ impl World {
             self.player.killer = 0;
         }
         wt_check!("post-walk carpet (native anchor)");
+        // Deflection quarters owed by walk slots ABOVE the carpet:
+        // retail lands them raw at the projectile's slot, AFTER the
+        // step already ran at the carpet's — so the end-of-tick purse
+        // carries the whole debit with no floor (:62725 and twins;
+        // the afford gate keeps it non-negative). The native column's
+        // pass already drained everything (this is a no-op there).
+        {
+            let leftover = std::mem::take(&mut self.g.player_deflect_debit).0;
+            if leftover != 0 {
+                self.player.mana = self.player.mana.wrapping_sub(leftover);
+            }
+        }
         if any_creature || any_transient {
             // Creatures/projectiles/effects move: poses refresh.
             self.entities_dirty = true;
@@ -6261,6 +6397,11 @@ impl World {
     /// sub_46540 (:55641): apply the pending mailbox channels to the
     /// mortal player.
     fn apply_player_damage(&mut self, player: PlayerPose) {
+        // The MC1 mail debits ride the pending delta (see
+        // [`Self::debit_mana`]) — but a FATAL tick never applies it
+        // (the step is dead-gated), so the fatal arm below must land
+        // them raw. This tracks what the pass owes.
+        let mut mail_debit: u32 = 0;
         // ch4 grip (:55663-81): the wizard duel tether — no rival
         // wizards cast it yet; the intake side effects land (regen
         // stall + danger music), the tether itself is the duel track.
@@ -6280,6 +6421,7 @@ impl World {
             let amt = self.g.player_mail[3].0;
             self.g.player_mail[3].1 = 0; // source only (:55696)
             self.debit_mana(amt);
+            mail_debit = mail_debit.saturating_add(amt);
             self.player.regen_delay = 16;
             self.g.player_danger = 100;
             self.g.player_alert = 4; // +392=4 (:55692)
@@ -6305,6 +6447,7 @@ impl World {
             if self.player.shield {
                 amt /= 4;
                 self.debit_mana(amt);
+                mail_debit = mail_debit.saturating_add(amt);
                 // :55704 writes the QUARTERED value back into +90, so
                 // the shield shrinks the residue too — the next hit
                 // accumulates onto the absorbed amount, not the raw one.
@@ -6383,6 +6526,31 @@ impl World {
                 // the block. The state flip + death sound are the
                 // wizard tick's death check (:55424-29), same turn.
                 self.player.killer = src;
+                // ⭐ THE FATAL TICK LANDS THE MAIL DEBITS RAW AND THE
+                // CORPSE HOLDS THE SHORTFALL: retail's steal (:55691)
+                // and shield quarter (:55703) are plain signed
+                // subtracts on `+140`, and the fatal tick skips the
+                // living regen tail (:55381) — the only floor — so an
+                // over-debit rides the corpse as a wrapped u32 until
+                // the respawn re-mint (:54998). Measured on mc1hwl0
+                // t=23462: purse 0 → −100 (4294967196) held for the
+                // whole 69-tick corpse window. The MC1 arm rides
+                // these debits on the pending delta, which a corpse
+                // never applies — move them to the purse lane here
+                // (undo the deferral, land raw). The REST of the
+                // delta is NOT touched: the corpse holds its last
+                // `+132` and the respawn tick applies it (mc1l32
+                // t=42895: retail respawns to 1000 + the held 182;
+                // hwl0's death-tick 103 → 0 was the shield token's
+                // ordinary mid-burst pin, which still runs at the
+                // token's own slot).
+                if matches!(self.game, GameId::Mc1 | GameId::Mc1Hw) && mail_debit != 0 {
+                    self.player.mana_delta = self
+                        .player
+                        .mana_delta
+                        .saturating_add(mail_debit.min(i32::MAX as u32) as i32);
+                    self.player.mana = self.player.mana.wrapping_sub(mail_debit);
+                }
                 self.player.state = LifeState::Falling;
                 self.player.fall_speed = 0;
                 self.g.snd_player(16);
@@ -6481,6 +6649,10 @@ impl World {
         // this line.
         let pinned = self.mc1_carpet_slot;
         self.g.mc1_rebuild_free(pinned);
+        // The recycle half too (:43836-58, mask 0x20400, descending
+        // push => lowest victim on top) — and the landing leaves it
+        // ARMED like retail (no reset until the next reaper site).
+        self.g.rebuild_recycle(0x20400);
         self.g.player_mail = [(0, 0); 6];
         // Jar scatter (:55519-47): the 24 slots remember the MODELS
         // (re-instantiated on respawn); the manifestation entities
@@ -6646,6 +6818,12 @@ impl World {
         // t=17398: 110-117 against our 136-320).
         let pinned = self.mc1_carpet_slot;
         self.g.mc1_rebuild_free(pinned);
+        // The recycle half (:43836-58): the respawn window may
+        // SACRIFICE 0x20400 victims ascending when the pool is
+        // exhausted (hw:50910; disarmed at the fn tail, hw:51124 —
+        // mc1hwl0 t=25319: the rival twin eats 20 village records
+        // for its re-minted book).
+        self.g.rebuild_recycle(0x20400);
         // The seat (:54845-61): the AUTHORED START at ground+256 by
         // default (`v32x = str_9177[idx]`, then `tempZ._axis_2d.y++`
         // :54848), overwritten WHOLE by the castle's position when a
@@ -6743,8 +6921,11 @@ impl World {
         // 80000/792 under castle 498's level 4).
         if let Some(c) = self.player_castle() {
             let e = &self.g.ent[c];
-            if e.f26 > 0 && e.flags & 2 != 0 {
-                let cap = features::Gen::CASTLE_CAP[(e.f26 as usize).min(7)];
+            // sub_47DD0's switch (:56636-71) includes case 0 → 5000:
+            // a BOUND level-0 castle re-prices the token at CAP[0]
+            // (the old `f26 > 0` conjunct skipped it).
+            if e.flags & 2 != 0 {
+                let cap = features::Gen::CASTLE_CAP[(e.f26.max(0) as usize).min(7)];
                 let own = e.id24;
                 if let Some(m) = self.castle_owner_token(own) {
                     self.g.ent[m].f136 = cap;
@@ -6752,6 +6933,9 @@ impl World {
                 }
             }
         }
+        // hw:51124 — sub_44D30's tail disarms the recycle stack the
+        // entry armed: only the respawn window itself may sacrifice.
+        self.g.mc2_recycle.stack.clear();
     }
 
     /// Drain the death bank into owned manifestations.
@@ -7682,6 +7866,7 @@ impl World {
             // like pending_speed_zero above; both ARE snapshotted.
             pending_speed_base: _,
             mc1_v14: _,
+            human_wiz_top: _,
             fall_pre_z: _,
             mc1_fall_entry_z: _,
             player,
@@ -8209,11 +8394,12 @@ impl World {
                 }
                 self.player.accel = dir;
             }
-            // Toggles (4 Shield :65266, 5 Beyond Sight :65292,
-            // 12 Invisible :65675, 14 Rebound :65774): the flags
-            // derive from the live burst in the manifestation tick.
-            // 5 TODO: map reveal gating is a map-authenticity item
-            // (our map is currently all-seeing).
+            // Toggles (5 Beyond Sight :65292, 12 Invisible :65675):
+            // the flags derive from the live burst in the
+            // manifestation tick. (4 Shield and 14 Rebound route
+            // through the arm-only command list and never reach
+            // here.) 5 TODO: map reveal gating is a map-authenticity
+            // item (our map is currently all-seeing).
             4 | 5 | 12 | 14 => {}
             // Projectile spells.
             3 | 6 | 7 | 8 | 9 | 11 | 13 | 15 | 17 | 19 => self.cast_projectile(id, p, right),
@@ -9839,6 +10025,16 @@ impl World {
             // bit 0 on its next poll (mc1l42 t=17346 onward: retail
             // holds the five scattered jars at flags 4, the port
             // pushed them back to 5 every fourth tick).
+            // ⭐ TWO DIFFERENT REGISTERS, TWO READS. The already-known
+            // stamp reads +676 (:64794) — the DERIVED register, rebuilt
+            // at the carpet's own walk slot (`mc1_owned_rebuild`) — so a
+            // jar polling between a grant's slot and the carpet's slot
+            // still reads "not owned" and declines the flag touch
+            // (mc1hwl0 t=25497: the human picks spell 18 off jar 187,
+            // and jar 204's same-tick poll must hold flags 4; it stamps
+            // at its NEXT poll, t=25501, after the carpet's rebuild).
+            // The GRANT-refusal below is the other read: the live +532
+            // acquisition list (:64818-31).
             let owned_already = self.player.owned[spell] != 0;
             if self.player.state == LifeState::Alive
                 && owned_already
@@ -9900,10 +10096,28 @@ impl World {
             if self.player.state == LifeState::Alive && hit {
                 self.rival_learn_arm(spell);
             }
-            if self.player.state == LifeState::Alive && hit && !owned_already {
+            // The grant-refusal scans the LIVE +532 list for a class-12
+            // record of this model (:64818-31), NOT the derived +676 —
+            // without this, deleting the eager publish below would let a
+            // second same-spell jar in the same sub-carpet window
+            // re-grant and mint a duplicate token.
+            let acq_holds = self.mc1_acq.iter().any(|&e| {
+                e > 0
+                    && self
+                        .g
+                        .ent
+                        .get(e as usize)
+                        .is_some_and(|r| r.class64 == 12 && r.model65 as usize == spell)
+            });
+            if self.player.state == LifeState::Alive && hit && !acq_holds {
                 self.g.ent[i].flags |= 1;
                 self.g.ent[i].tick70 = (spell * 3) as u8;
-                self.player.owned[spell] = i as u16;
+                // ⭐ NO eager `player.owned[spell]` write: the grant
+                // writes +532/+940/+772 and never +676 (:64848-61) —
+                // the owned register catches up at the carpet's
+                // dispatch (`mc1_owned_rebuild`, :55342). Same law the
+                // `all spells` cheat already works around
+                // (cheats.rs `mc1_cheat_all_spells`).
                 self.mc1_acq_push(i as u16);
                 self.player.left = Some(SpellId(spell as u8));
                 // The port's owner tag (see `grant_spell`): without it
@@ -10069,16 +10283,31 @@ impl World {
                     self.mc1_token_gate(16)
                 );
             }
-            if self.g.ent[i].f26 == self.spells()[16].count as i16 {
-                if self.mc1_token_gate(16) {
+            // sub_57610's guard is `+48 > 0` (:65871), NOT `== +50`:
+            // EVERY latched tick re-runs the cast gate sub_55DD0
+            // (:64910-32) and a failure releases the latch (:65920) —
+            // whose hard legs (mana < 0 SIGNED, caster actLife < 0)
+            // fire mid-latch too, so a latched token releases the
+            // tick its caster dies or the purse wraps negative
+            // (mc1l48 t=27414: retail token 146 +48 100→0 over the
+            // falling corpse; the port held 100 — the banked
+            // "f26 0→100 in retail" was our behavior read backwards).
+            // The full-price leg (`mana >= +136`) gates only the
+            // `+48 == +50` fire arm; a mid-latch tick passes on the
+            // hard legs alone.
+            if self.g.ent[i].f26 > 0 {
+                let full = self.g.ent[i].f26 == self.spells()[16].count as i16;
+                let hard_fail = !self.dev_spells
+                    && (self.player.state != LifeState::Alive || (self.player.mana as i32) < 0);
+                if hard_fail || (full && !self.mc1_token_gate(16)) {
+                    self.g.snd_player(29); // the gate's buzz (:64931)
+                    self.g.ent[i].f26 = 0; // :65920 — fail releases
+                } else if full {
                     self.mana_debit(self.spell_cast_cost(16));
                     let p = self.mc1_cast_pose;
                     let right = self.hand_bits & 0x200 != 0;
                     self.emit_spell(16, i, p, right, ctx);
                     self.g.ent[i].f26 = SPELLS[16].count as i16 - 1; // :65885
-                } else {
-                    self.g.snd_player(29); // the token gate's buzz (:64931)
-                    self.g.ent[i].f26 = 0; // :65920 — fail releases
                 }
             }
             return;
@@ -10106,14 +10335,27 @@ impl World {
             spell,
             0 | 3 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 15 | 17 | 18 | 19 | 20 | 22 | 23
         );
+        // 14 REBOUND runs the launcher skeleton WITHOUT an emit
+        // (sub_573F0 :65773 — gate → the owner's +17 0x80 bit +
+        // sub_55E80 → countdown; gate fail = `+48 = 1`): the arm
+        // tick's full-cost debit is real (mc1l32-quick t=18014,
+        // retail delta 100 → −1000 on the re-cast; 148 pair rows
+        // read +1000 on the port purse without it). The machine's
+        // whole output is the bit and the economy.
+        let skeleton = spell == 14;
         let mut fired = false;
         let mut gate_failed = false;
-        if was_live && launcher && self.g.ent[i].f26 == self.spells()[spell].count as i16 {
+        if was_live
+            && (launcher || skeleton)
+            && self.g.ent[i].f26 == self.spells()[spell].count as i16
+        {
             if self.mc1_token_gate(spell) {
                 self.mana_debit(self.spell_cast_cost(spell));
-                let p = self.mc1_cast_pose;
-                let right = self.hand_bits & 0x200 != 0;
-                self.emit_spell(spell, i, p, right, ctx);
+                if launcher {
+                    let p = self.mc1_cast_pose;
+                    let right = self.hand_bits & 0x200 != 0;
+                    self.emit_spell(spell, i, p, right, ctx);
+                }
                 fired = true;
             } else {
                 self.g.snd_player(29); // :64931
@@ -10132,6 +10374,7 @@ impl World {
         // full tick runs nothing but still decrements, :65190).
         let speed_token = matches!(spell, 2 | 21);
         let mut speed_sustained = false;
+        let mut speed_full = false;
         if was_live && speed_token {
             let count = self.spells()[spell].count as i16;
             if self.mc1_v14 {
@@ -10151,6 +10394,7 @@ impl World {
                     }
                     full
                 };
+                speed_full = full;
                 if armed {
                     // :65158 — the arm tick chimes 19 at the OWNER's
                     // pool slot with `a2 = -1`, and case 19 (:64525-47)
@@ -10184,7 +10428,12 @@ impl World {
         // kill or a refused full tick skips sub_55E80 entirely
         // (:65146-50), and on a sustained full tick the debit above
         // already made the delta negative, so the >0 pin no-ops.
-        if was_live && !fired && !gate_failed && (!speed_token || speed_sustained) {
+        // EARTHQUAKE (6) abstains outright: sub_567A0's mid-burst
+        // arm (+48 != +50) decrements and returns BEFORE sub_55E80
+        // (:65336-41) — the only machine of the 24 with the inverted
+        // return, so an active quake never blocks regen (mc1l0-sg
+        // t=1079/1130/1172: retail regens through the burst).
+        if was_live && !fired && !gate_failed && (!speed_token || speed_sustained) && spell != 6 {
             self.suppress_regen();
         }
         let active = self.g.ent[i].f26 > 0;
@@ -10205,6 +10454,22 @@ impl World {
             }
             2 | 21 => {
                 let dir: i8 = if spell == 2 { 1 } else { -1 };
+                // sub_56380 :65167-78 / the twin :66206-10 — the
+                // token slams BOTH speed columns at its OWN walk
+                // slot, 3× base on the full tick, 2× mid-burst.
+                // Below the carpet the mail is consumed by
+                // step_player_flight before the mover; above it, the
+                // driver takes it after the turn (mc1l48 t=51 /
+                // mc1l6 t=1618 / mc1l32-quick t=17696 — the
+                // above-carpet tokens the hard-coded below-carpet
+                // override emulation was blind to). A refused full
+                // tick posts NOTHING (:64926→:64930). 80 is the
+                // human's +128 (out of pool; measured 80 on every
+                // take), the same literal the END restore uses.
+                if speed_sustained {
+                    self.pending_speed_base =
+                        Some(dir as i16 * if speed_full { 3 } else { 2 } * 80);
+                }
                 if !active && self.player.accel == dir {
                     self.player.accel = 0;
                 }
@@ -10249,7 +10514,17 @@ impl World {
             }
             5 => self.player.beyond_sight = active,
             12 => self.player.invisible = active,
-            14 => self.player.rebound = active,
+            14 => {
+                self.player.rebound = active;
+                // Republish the Gen mirror MID-WALK: retail's cast
+                // reloads the token and the token's machine stamps
+                // the owner's +17 0x80 at the TOKEN's slot, so a bolt
+                // walking ABOVE it deflects the same tick (mc1hwl0
+                // t=38740: the re-cast at the carpet, the (9,0) at
+                // 949 already deflected). The tick-head derivation
+                // alone left every same-tick deflect reading stale.
+                self.g.player_rebound = active;
+            }
             // 10 Teleport: the burst END repeats the target-speed
             // zero (:65613-14, `if (!life) Type_160 v_12 = 0` —
             // fired however the burst ended).
@@ -11059,6 +11334,7 @@ impl World {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: self.strict_retail,
             patches: self.patches,
             mc2_turn: self.mc2_turn,
@@ -11280,6 +11556,7 @@ impl World {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: self.strict_retail,
             patches: self.patches,
             mc2_turn: self.mc2_turn,
@@ -13854,7 +14131,13 @@ impl World {
         if self.g.ent[i].f63 & 7 != 0 {
             return false;
         }
-        if self.overlap(i, player) == want {
+        // The fire probe walks the tick-top class-3 roster (:67632-48
+        // — `for i = var_u32_36462[0]`, model 0 only), and a dead
+        // carpet is not on it (:52253-62 gates `actLife >= 0`). Our
+        // out-of-pool human answers from the tick-top latch; with him
+        // off the roster the loop finds nobody, so the probe MISSES
+        // regardless of `want` and takes the z re-stamp path.
+        if self.human_wiz_top && self.overlap(i, player) == want {
             // sub_5A090 (:67642, VERIFIED against CARPET.EXE @0x5A0E9):
             // on the every-8th-tick phase, when a wizard CARPET is in
             // (want=1) / out of (want=0) the volume, the probe plays
@@ -13924,10 +14207,7 @@ impl World {
         // :29186-89 — the first-tick bit-1 latch + positional hum 21,
         // the same shape as the MC2 pad's (mc1l32 t=15113: the fresh
         // vortex's flags read 6, not 4). Expiry carries sound 20
-        // (:29196-97). ⚠ retail's warp scan walks EVERY wizard
-        // (var_u16_10, the carpet ent through wizext+10) — the
-        // rival-warp arm is owed with a corpus that exercises it,
-        // the same register the MC2 pad carries.
+        // (:29196-97).
         if self.g.ent[i].flags & 2 == 0 {
             self.g.ent[i].flags |= 2;
             self.g.snd(21, i);
@@ -13941,6 +14221,25 @@ impl World {
                 return;
             }
         }
+        // The warp scan walks EVERY wizard (:29199-29223,
+        // `var_u16_10`, carpet ent through wizard+10; HW
+        // byte-identical :27714-68): wizard 0 is the human — the
+        // pose-side arm below — then each rival's carpet by its pool
+        // record. Per warp the portal's OWN site_z is re-stamped
+        // (:29212-13) = row156 v_12 + terrainAlt(dest) BEFORE the
+        // verbatim axis copy (sub_41C70 — a plain move, no ground
+        // clamp), and sound 22 fires at the PORTAL's slot (:29214).
+        // The vortex ctor keeps the NewEvent default row 0, whose
+        // v_12 = 0, so a warped carpet emerges exactly on the dest
+        // ground however high it flew in. `sub_44BE0(carpet, 6)`
+        // (:29215) is the LOCAL player's screen flash — presentation,
+        // not modelled. mc1hwl0 t=10250: rival carpet 473 rides the
+        // vortex 51 tiles; the human-only scan left it hovering at
+        // the mouth.
+        let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
+        let stamp_z = crate::mc1::behavior::BEHAVIOR[self.g.ent[i].row156 as usize]
+            .v_12
+            .wrapping_add(self.g.ground_z(dx, dy) as i16);
         if self.overlap(i, player) {
             let e = &self.g.ent[i];
             // The facing cone (:29208-09): sub_42150(wizard, portal)
@@ -13951,16 +14250,33 @@ impl World {
             let bearing = Gen::angle_between(player.x, player.y, e.x, e.y);
             let d = player.heading.wrapping_sub(bearing) & 0x7FF;
             if d.min(2048 - d) < 0xAA {
-                let (dx, dy) = (self.g.ent[i].dest_x, self.g.ent[i].dest_y);
-                // The warp-out z (:29212-13): dest terrain alt + the
-                // vortex's behavior row v_12 — the ctor keeps the
-                // NewEvent default `unk_98F38[0]`, whose v_12 = 0, so
-                // the player emerges exactly on the ground however
-                // high they flew in.
-                let gz = self.g.ground_z(dx, dy) as f32 / 256.0;
-                self.pending_teleport = Some((dx as f32 / 256.0, dy as f32 / 256.0, Some(gz)));
-                // PORTUSE — the same 22 as the teleport spell.
-                self.g.snd_player(22);
+                self.g.ent[i].site_z = stamp_z;
+                self.pending_teleport = Some((
+                    dx as f32 / 256.0,
+                    dy as f32 / 256.0,
+                    Some(stamp_z as f32 / 256.0),
+                ));
+                // PORTUSE — the same 22 as the teleport spell, at
+                // the portal's slot.
+                self.g.snd(22, i);
+            }
+        }
+        for ri in 0..self.rivals.len() {
+            let c = self.rivals[ri].ent as usize;
+            if !self.g.ent_overlap(i, c) {
+                continue;
+            }
+            let bearing = Gen::angle_between(
+                self.g.ent[c].x,
+                self.g.ent[c].y,
+                self.g.ent[i].x,
+                self.g.ent[i].y,
+            );
+            let d = self.g.ent[c].f30.wrapping_sub(bearing) & 0x7FF;
+            if d.min(2048 - d) < 0xAA {
+                self.g.ent[i].site_z = stamp_z;
+                self.g.snd(22, i);
+                self.g.move_relink(c, dx, dy, stamp_z);
             }
         }
         // Follow the ground; the pose consumer must see the drop from
@@ -15343,6 +15659,9 @@ impl World {
             pending_speed_zero,
             pending_speed_base,
             mc1_v14,
+            // Not saved: re-latched at every tick top beside
+            // `wiz_chain` before any consumer runs.
+            human_wiz_top: _,
             // Not saved: a within-tick scratch, re-derived by the next
             // mover pass (a restore never lands mid-dispatch).
             fall_pre_z: _,
@@ -15721,6 +16040,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -15767,6 +16087,60 @@ mod tests {
         }
     }
 
+    /// ⭐ THE CONE SCAN'S ELECTION KEY AND RANGE PRE-GATE ARE UNSIGNED
+    /// (sub_19D70 :21516 `unsigned int v11 = -1`, :21524 `v14 <= v22`
+    /// with `unsigned int v22 = v_28²`): the i16-wrapped dx²+dy² hits
+    /// its only sign-bit value at the EXACT half-map antipode
+    /// (dx = dy = −32768 ⇒ 2·2³⁰ = the u32 0x80000000), which reads as
+    /// the LARGEST key — it fails the range pre-gate and can never win
+    /// the election, so the antipodal body is INVISIBLE to the scan.
+    /// The port's old signed key read the wrap as i32::MIN, saw it
+    /// INSIDE every range, and elected it over the whole map (the
+    /// sub_15260 scout law's Class A twin — mc1l49 t=3298 carries the
+    /// corpus witness for the family's arithmetic).
+    ///
+    /// NON-VACUITY: with the signed key the second assertion returns
+    /// `Some(b)` — the phantom nearest.
+    #[test]
+    fn the_cone_scan_cannot_see_the_exact_antipode() {
+        use crate::mc1::mobs::MobCtx;
+
+        let mut w = flat_world();
+        let s = w.g.spawn_creature(16, 100 << 8, 100 << 8, 100).unwrap(); // wyvern
+        w.g.ent[s].id24 = 0;
+        let (ex, ey) = (w.g.ent[s].x, w.g.ent[s].y);
+        // The human parked far beyond the aggro radius.
+        let far = MobCtx {
+            px: 200 << 8,
+            py: ey,
+            pz: 100,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        // A rival carpet at the scanner's exact antipode, dead in the
+        // facing cone.
+        let b = w.g.spawn_class3(1, ex ^ 0x8000, ey ^ 0x8000, 100).unwrap();
+        let (bx, by) = (w.g.ent[b].x, w.g.ent[b].y);
+        assert_eq!(
+            (bx, by),
+            (ex ^ 0x8000, ey ^ 0x8000),
+            "the spawn moved the body off the antipode — re-park it"
+        );
+        w.g.ent[s].f30 = Gen::angle_between(ex, ey, bx, by);
+        w.g.rebuild_wiz_chain();
+        assert_eq!(
+            w.g.nearest_wizard_target(s, &far, false, false),
+            None,
+            "the antipodal body won the election — the key went signed"
+        );
+    }
+
     /// The m4/m8 wanted scan GATES ITS ELECTION WINNER, not its
     /// candidates (:22613/:23500, hw 21170-72/22057 — `if (v25 &&
     /// *(v25+65) <= 1 && *(*(v25+160)+528))`): the nearest class-3
@@ -15801,6 +16175,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -15865,6 +16240,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -15935,6 +16311,39 @@ mod tests {
         );
     }
 
+    /// ⭐ THE FATAL TICK LANDS THE MAIL DEBITS RAW AND THE CORPSE
+    /// HOLDS THE SHORTFALL: the shield quarter (:55703) and ch3
+    /// steal (:55691) are plain signed subtracts on `+140`, and the
+    /// fatal tick skips the living regen tail (:55381) — the only
+    /// floor — so the purse rides negative (wrapped u32) until the
+    /// respawn re-mint. mc1hwl0 t=23462: purse 0 → 4294967196 held
+    /// 69 ticks. The MC1 arm rides mail debits on the pending delta;
+    /// the fatal arm must move them to the purse WITHOUT touching
+    /// the rest of the delta (mc1l32 t=42895: the corpse's held +132
+    /// of 182 is what the respawn tick applies — zeroing it broke
+    /// the certified take). The corpus pair is too churn-noisy to
+    /// pin (death-tick fire families), so this is the guard.
+    #[test]
+    fn the_fatal_tick_lands_the_mail_debits_raw_and_the_corpse_holds() {
+        let mut w = flat_world();
+        w.player.shield = true;
+        w.player.mana = 0;
+        w.player.life = 40;
+        let delta0 = w.player.mana_delta;
+        w.g.player_mail[0] = (400, 7); // quarter 100: fatal on 40 life
+        w.apply_player_damage(away());
+        assert!(w.player.life < 0, "the quartered hit is fatal");
+        assert_eq!(
+            w.player.mana,
+            0u32.wrapping_sub(100),
+            "the debit lands raw on the purse — no floor on the fatal tick"
+        );
+        assert_eq!(
+            w.player.mana_delta, delta0,
+            "the delta lane hands ONLY the mail debit to the purse; the corpse keeps its last +132"
+        );
+    }
+
     /// The knock arm's ONLY retail gate is `src != 0` (:55711 — a bare
     /// `&pool[src] > pool` pointer compare): a source freed between the
     /// post and the drain still bears the knock off its record's stale
@@ -16000,6 +16409,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -16042,6 +16452,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -16085,6 +16496,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -16167,6 +16579,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -16910,6 +17323,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -16939,6 +17353,191 @@ mod tests {
         assert_eq!(puffs(&w), 1, "lapsed burst spawns nothing");
     }
 
+    /// The speed-token unit-pin harness: an owned Accelerate (or
+    /// Backwards) manifestation on a flat world, driven one
+    /// `manifestation_tick` at a time so each sub_56380/sub_57F00 arm
+    /// (:65131-99 / :66172-229) is observable in isolation.
+    fn speed_token_world(spell: usize) -> (World, usize, MobCtx) {
+        let mut w = flat_world();
+        let m = w.g.spawn_effect(3, 0x8000, 0x8000, 3200).expect("slot");
+        {
+            let e = &mut w.g.ent[m];
+            e.class64 = 12;
+            e.model65 = 2;
+            e.tick70 = MANIFEST_BASE + spell as u8;
+            e.f63 = 1; // off the contrail phase — puffs asserted separately
+        }
+        w.human_pose = (0x8000, 0x8000, 3200);
+        let ctx = MobCtx {
+            px: 0x8000,
+            py: 0x8000,
+            pz: 3200,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        (w, m, ctx)
+    }
+
+    /// sub_56380 :65167-78 — the FULL tick slams BOTH speed columns
+    /// with 3× base (240) as MAIL at the token's own walk slot: a
+    /// token ABOVE the carpet leaves it for the DRIVER to take after
+    /// the turn (`take_speed_base`), which is exactly what this pin
+    /// reads. The full arm also debits the one-shot cost (:64942-52)
+    /// and arms the spell-ACTIVE 0x80 bit (:65154-57).
+    #[test]
+    fn accel_token_full_tick_posts_the_3x_mail_above_the_carpet() {
+        let (mut w, m, ctx) = speed_token_world(2);
+        w.g.ent[m].f26 = SPELLS[2].count as i16;
+        w.player.mana = 5000;
+        w.manifestation_tick(m, 2, &ctx);
+        assert_eq!(
+            w.take_speed_base(),
+            Some(240),
+            "full tick mails 3×80 for the driver"
+        );
+        assert_eq!(w.player.mana_delta, -1000, "the one-shot debit lands");
+        assert_ne!(w.g.ent[m].flags & 0x80, 0, "spell-ACTIVE bit armed");
+        assert_eq!(
+            w.g.ent[m].f26,
+            SPELLS[2].count as i16 - 1,
+            "the shared decrement runs after the arm"
+        );
+    }
+
+    /// Mid-burst the sustain re-admits FREELY (no 55DD0 gate — the
+    /// only live check is on the FULL tick, :65190) and posts 2× base
+    /// (:65167-78's mid arm), pinning regen while it does (sub_55E80's
+    /// else arm).
+    #[test]
+    fn accel_token_mid_burst_posts_2x_with_no_gate() {
+        let (mut w, m, ctx) = speed_token_world(2);
+        w.g.ent[m].f26 = 100;
+        w.player.mana = 0; // a full tick would refuse — mid-burst must not
+        w.player.mana_delta = 50;
+        w.manifestation_tick(m, 2, &ctx);
+        assert_eq!(
+            w.take_speed_base(),
+            Some(160),
+            "mid-burst mails 2×80 despite an empty pool"
+        );
+        assert_eq!(w.player.mana_delta, 0, "mid-burst pins the positive regen");
+        assert_eq!(w.g.ent[m].f26, 99, "countdown continues");
+    }
+
+    /// The below-carpet half of the walk-order law: mail posted by a
+    /// token BELOW the carpet is consumed by `step_player_flight`
+    /// itself — the carpet's own dispatch — so both columns move THIS
+    /// tick and nothing is left for the driver.
+    #[test]
+    fn accel_token_mail_below_the_carpet_lands_the_same_tick() {
+        let (mut w, m, ctx) = speed_token_world(2);
+        w.g.ent[m].f26 = 100;
+        w.manifestation_tick(m, 2, &ctx);
+        let mut st = crate::flight::Mc1State {
+            x: 0x8000,
+            y: 0x8000,
+            z: 3200,
+            act_speed: 80,
+            tgt_speed: 80,
+            ..Default::default()
+        };
+        let mut d = FlightDrive {
+            s: &mut st,
+            inp: crate::flight::Mc1Input::default(),
+            over: None,
+            falling: false,
+            dead: false,
+            mc2: None,
+        };
+        w.step_player_flight(&mut d);
+        assert_eq!(st.tgt_speed, 160, "tgt column slammed at the dispatch");
+        assert_eq!(st.act_speed, 160, "act column slammed at the dispatch");
+        assert_eq!(w.take_speed_base(), None, "nothing left for the driver");
+    }
+
+    /// The v_14 kill (:65146-50): the resisting press moved the flight
+    /// target at the last carpet dispatch, so the token forces ONE
+    /// final decrement and the burst END runs — 0x80 cleared, the
+    /// override dropped, and the ±80 base restore mailed as the
+    /// window's own last act (:65192-96). No sustain, no contrail.
+    #[test]
+    fn accel_token_v14_kill_forces_the_final_decrement_into_the_end_restore() {
+        let (mut w, m, ctx) = speed_token_world(2);
+        w.g.ent[m].f26 = 200;
+        w.g.ent[m].flags |= 0x80;
+        w.g.ent[m].f63 = 0; // on the contrail phase — the kill must not puff
+        w.mc1_v14 = true;
+        w.player.accel = 1;
+        w.player.speed_boost = 3.0;
+        w.manifestation_tick(m, 2, &ctx);
+        assert_eq!(w.g.ent[m].f26, 0, "one forced decrement ends the burst");
+        assert_eq!(w.take_speed_base(), Some(80), "the +80 base restore mailed");
+        assert_eq!(w.g.ent[m].flags & 0x80, 0, "spell-ACTIVE bit cleared");
+        assert_eq!(w.player.accel, 0, "override direction dropped");
+        assert_eq!(w.player.speed_boost, 0.0, "boost cleared");
+        let puffs =
+            w.g.ent
+                .iter()
+                .filter(|e| e.class64 == 10 && e.model65 == 2 && e.flags & 0x400 == 0)
+                .count();
+        assert_eq!(puffs, 0, "a killed tick spawns no contrail");
+    }
+
+    /// A REFUSED full tick (pool below the one-shot cost) runs nothing
+    /// but still decrements (:64926→:64930, :65190): no mail, no
+    /// debit, no regen pin, no 0x80 arm — just the countdown.
+    #[test]
+    fn accel_token_refused_full_tick_runs_nothing_but_still_decrements() {
+        let (mut w, m, ctx) = speed_token_world(2);
+        w.g.ent[m].f26 = SPELLS[2].count as i16;
+        w.g.ent[m].f63 = 0;
+        w.player.mana = 500; // below the 1000 one-shot cost
+        w.player.mana_delta = 50;
+        w.manifestation_tick(m, 2, &ctx);
+        assert_eq!(
+            w.take_speed_base(),
+            None,
+            "a refused full tick posts NOTHING"
+        );
+        assert_eq!(w.player.mana_delta, 50, "no debit, no regen pin");
+        assert_eq!(w.g.ent[m].flags & 0x80, 0, "no spell-ACTIVE arm");
+        assert_eq!(
+            w.g.ent[m].f26,
+            SPELLS[2].count as i16 - 1,
+            "the decrement still runs"
+        );
+    }
+
+    /// sub_57F00, the backwards twin (:66172-229): every arm mirrors
+    /// with the sign — −240 full, −160 mid, and the burst END restores
+    /// −80 (:66224-29), overwriting the same tick's sustain mail
+    /// because the restore is the window's own LAST act.
+    #[test]
+    fn decelerate_token_mirrors_every_arm_with_the_sign() {
+        let (mut w, m, ctx) = speed_token_world(21);
+        w.g.ent[m].f26 = SPELLS[21].count as i16;
+        w.player.mana = 5000;
+        w.manifestation_tick(m, 21, &ctx);
+        assert_eq!(w.take_speed_base(), Some(-240), "full tick: −3×80");
+        w.g.ent[m].f26 = 100;
+        w.manifestation_tick(m, 21, &ctx);
+        assert_eq!(w.take_speed_base(), Some(-160), "mid-burst: −2×80");
+        w.g.ent[m].f26 = 1; // natural expiry tick
+        w.manifestation_tick(m, 21, &ctx);
+        assert_eq!(
+            w.take_speed_base(),
+            Some(-80),
+            "the expiry tick's END restore overwrites its own sustain mail"
+        );
+        assert_eq!(w.g.ent[m].f26, 0, "burst over");
+    }
+
     /// The possess lob's acquisition is ONE-SHOT — the +16&2 latch
     /// (:62952-60): a lob that finds nothing on its first untargeted
     /// tick flies straight forever; a target entering the cone later
@@ -16964,6 +17563,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -17022,6 +17622,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -17078,6 +17679,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -17184,6 +17786,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: true, // keep the human out of the candidate set
+            pdead_top: true,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -17291,6 +17894,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: true,
+            pdead_top: true,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -17368,6 +17972,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: true,
+            pdead_top: true,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -17436,6 +18041,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: true,
+            pdead_top: true,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -18183,14 +18789,17 @@ mod tests {
     #[test]
     fn hidden_worlds_firewall_child_homes_in_the_widened_cone() {
         // The m16 Fire Storm child (state 17) runs the acquire cone
-        // (yaw 0x100, pitch 0x71) in BOTH variants — the old "base
-        // MC1 has no case 16" reading came from remc1's truncated
-        // sub_54520 and was retired by the mc1l5 take (t=23383: the
-        // base bolt's first flight tick carries the head clamp, the
-        // latch, a pick and the heading snap). A creature at yaw
-        // offset 0xA0 (> 0x71, < 0x100), pitch aligned, is picked up
-        // under both game ids.
-        fn acquires(game: GameId) -> bool {
+        // in BOTH variants, but the YAW cone forks: base MC1's jump
+        // table aliases case 16 onto the shared case-0/3/4 arm at
+        // 0x71 (CARPET.EXE 0x544CC[0x10] = 0x54682 — the remc1
+        // listing dropped the alias), HW forks a dedicated 0x100 arm
+        // (HIDDEN.EXE 0x5485C[0x10] = 0x54BB0, remc1hw :60322).
+        // Corpus bracket: mc1l5 t=23382 acquires at dy 44; mc1l49
+        // t=1099/1140 retail-misses at dy 186/125 ⇒ base ∈ [44,124].
+        // A creature at yaw offset 0xA0 (> 0x71, < 0x100), pitch
+        // aligned, is picked up by HW and REFUSED by base MC1; both
+        // acquire inside 0x71.
+        fn acquires_at(game: GameId, off: u16) -> bool {
             let planes = Planes {
                 height: vec![0; 0x10000],
                 tile_type: vec![5; 0x10000],
@@ -18218,9 +18827,9 @@ mod tests {
                 c.z = bz;
             }
             w.g.rebuild_mob_chains();
-            // Aim so the creature sits exactly 0xA0 off the bolt's yaw.
+            // Aim so the creature sits exactly `off` off the bolt's yaw.
             let a = Gen::angle_between(bx, by, cx, cy);
-            w.g.ent[bolt].f30 = (a + 0xA0) & 0x7FF;
+            w.g.ent[bolt].f30 = (a + off) & 0x7FF;
             w.g.ent[bolt].f32 = 0;
             w.g.ent[bolt].f146 = 0;
             let ctx = MobCtx {
@@ -18231,6 +18840,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -18239,13 +18849,18 @@ mod tests {
             w.g.ent[bolt].f146 != 0
         }
         assert!(
-            acquires(GameId::Mc1Hw),
-            "HW firewall child homes (case 0x10, cone 0x100)"
+            acquires_at(GameId::Mc1Hw, 0xA0),
+            "HW firewall child homes at 0xA0 (case 0x10, cone 0x100)"
         );
         assert!(
-            acquires(GameId::Mc1),
-            "base MC1 homes too (mc1l5 t=23383 — the remc1 no-case-16 reading is the listing's gap)"
+            !acquires_at(GameId::Mc1, 0xA0),
+            "base MC1 refuses 0xA0 (case 16 aliases the 0x71 arm — CARPET.EXE 0x544CC[0x10])"
         );
+        assert!(
+            acquires_at(GameId::Mc1, 0x60),
+            "base MC1 homes inside 0x71 (mc1l5 t=23382, dy 44)"
+        );
+        assert!(acquires_at(GameId::Mc1Hw, 0x60), "HW homes inside 0x71 too");
     }
 
     /// ⭐⭐ THE HW WALL OF FIRE FORKS TWICE MORE THAN THE SPRITE, AND
@@ -18307,6 +18922,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -18395,6 +19011,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -18537,6 +19154,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -19159,6 +19777,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -19265,6 +19884,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -22870,6 +23490,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -23095,6 +23716,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -24022,6 +24644,128 @@ mod tests {
         assert_eq!(w.player.mana_max, 1000);
     }
 
+    /// Law A3 (session 66): the respawn tail's ladder call is
+    /// sub_47DD0, whose switch INCLUDES case 0 → 5000 (:56636-71) —
+    /// a BOUND level-0 castle re-prices the owner's Create-Castle
+    /// token at CAP[0]/49 on the respawn tick (the old `f26 > 0`
+    /// conjunct skipped it and the token kept its stale price).
+    #[test]
+    fn player_respawn_reprices_a_bound_level0_castle() {
+        let mut w = flat_world();
+        let c = w.g.new_event().expect("castle");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.f26 = 0; // level 0
+            e.flags |= 2; // BOUND (the first-commit latch)
+            e.x = 80 << 8;
+            e.y = 90 << 8;
+            e.z = 3456;
+        }
+        let m = w.g.new_event().expect("token");
+        {
+            let e = &mut w.g.ent[m];
+            e.class64 = 12;
+            e.model65 = 16;
+            e.f136 = 999; // stale sentinel price
+            e.f140 = 999;
+        }
+        w.player.owned[16] = m as u16;
+        w.player_respawn();
+        assert_eq!(
+            w.g.ent[m].f136,
+            features::Gen::CASTLE_CAP[0],
+            "level-0 bound castle re-prices at CAP[0]"
+        );
+        assert_eq!(w.g.ent[m].f140, features::Gen::CASTLE_CAP[0] / 101, "…/49");
+    }
+
+    /// Law A (session 66): BOTH castle→token ladder writers resolve
+    /// the token through the OWNER and only a LIVE owner resolves
+    /// (sub_47C60 :56578 / sub_47DD0 :56629 — `pool[id24].+70 <= 1u`
+    /// before wizext+708). mc1l48 t=27414: retail's token 146 stays
+    /// frozen at CAP[2] 20000/198 over its falling-corpse owner where
+    /// the un-gated every-tick stamp wrote CAP[1].
+    #[test]
+    fn castle_ladder_stamp_requires_a_live_owner() {
+        let mut w = rival_world(true, 3); // authored level 2
+        let r_ent = w.rivals[0].ent as usize;
+        let c = w.rival_castle(w.rivals[0].ent).expect("castle");
+        let m = w.rivals[0].owned[16] as usize;
+        // Freeze the brain for the whole probe (no upgrades, no AI
+        // respawn countdown) — only the castle entity's own stamp is
+        // under test.
+        w.rivals[0].eliminated = true;
+        w.g.ent[c].flags |= 2; // the first-commit bind latch
+        // The authored castle's FIRST tick runs its own level-up
+        // commit (the ctor +70 note), so read the committed level
+        // rather than assuming the spawn one.
+        w.tick(away(), PlayerCommand::default());
+        let lvl = w.g.ent[c].f26 as usize;
+        assert_eq!(w.g.ent[m].f136, Gen::CASTLE_CAP[lvl], "live owner: stamped");
+        // The owner dies (corpse byte 3).
+        w.g.ent[r_ent].tick70 = 3;
+        w.g.ent[c].f26 = lvl as i16 - 1; // a level change the stamp would publish
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[m].f136,
+            Gen::CASTLE_CAP[lvl],
+            "dead owner: the ladder freezes at the last commit"
+        );
+        w.g.ent[r_ent].tick70 = 1;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.g.ent[m].f136,
+            Gen::CASTLE_CAP[lvl - 1],
+            "live again: the stamp re-prices"
+        );
+    }
+
+    /// Law B (session 66): sub_57610's guard is `+48 > 0` (:65871) —
+    /// EVERY latched tick re-runs the cast gate (:64910-32), whose
+    /// hard legs (caster dead, purse SIGNED-negative) fire mid-latch,
+    /// releasing the latch at :65920. mc1l48 t=27414: retail token
+    /// +48 100→0 over the falling corpse; the port held 100.
+    #[test]
+    fn latched_castle_token_releases_when_its_caster_dies_or_wraps() {
+        let mut w = flat_world();
+        let m = w.g.spawn_effect(3, 0x8000, 0x8000, 3200).expect("slot");
+        {
+            let e = &mut w.g.ent[m];
+            e.class64 = 12;
+            e.model65 = 16;
+            e.tick70 = MANIFEST_BASE + 16;
+            e.f26 = 100; // latched, not full (count 101)
+        }
+        let ctx = MobCtx {
+            px: 0x8000,
+            py: 0x8000,
+            pz: 3200,
+            pyaw: 0,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        w.player.mana = 5000;
+        w.manifestation_tick(m, 16, &ctx);
+        assert_eq!(w.g.ent[m].f26, 100, "mid-latch passes on the hard legs");
+        // The wrapped-negative purse (the corpse's 0 − quarter).
+        w.player.mana = (-100i32) as u32;
+        w.manifestation_tick(m, 16, &ctx);
+        assert_eq!(w.g.ent[m].f26, 0, "signed-negative purse releases");
+        w.g.ent[m].f26 = 100;
+        w.player.mana = 5000;
+        w.player.state = LifeState::Dead;
+        w.manifestation_tick(m, 16, &ctx);
+        assert_eq!(w.g.ent[m].f26, 0, "dead caster releases");
+    }
+
     #[test]
     fn rival_at_war_fires_on_the_player() {
         let mut w = rival_world(false, 0);
@@ -24199,11 +24943,23 @@ mod tests {
         );
 
         // Aim the rival dead at a PLAYER target that is REBOUNDING, so
-        // Lightning is spliced high into the pick order (before Fireball).
+        // Lightning is spliced high into the pick order (before
+        // Fireball). The anti-rebound notice is a LIVE read of the
+        // target's spell-14 TOKEN (+48 > 0, sub_16000 :19449-56) —
+        // arm a token on the human's register, not the 0x8000 mirror.
         w.rivals[0].target = PLAYER_TARGET;
         w.rivals[0].mana = 1000;
         w.rivals[0].mana_max = 1000;
-        w.player.rebound = true;
+        let tok =
+            w.g.spawn_effect(2, 100, 100, 0)
+                .expect("a pool slot for the rebound token");
+        {
+            let e = &mut w.g.ent[tok];
+            e.class64 = 12;
+            e.model65 = 14;
+            e.f26 = 10; // mid-burst: +48 > 0
+        }
+        w.player.owned[14] = tok as u16;
         let (ex, ey) = (w.g.ent[rid as usize].x, w.g.ent[rid as usize].y);
         let (hx, hy) = (ex.wrapping_add(5000), ey);
         w.human_pose = (hx, hy, w.g.ent[rid as usize].z);
@@ -24237,7 +24993,8 @@ mod tests {
         // (c) Without the rebound plan the WAIT branch's cooldown
         // escape advances the ladder to castle-free Fireball — a
         // cooling high-priority spell yields instead of freezing.
-        w.player.rebound = false;
+        // Expire the token: the live +48 read goes cold.
+        w.g.ent[w.player.owned[14] as usize].f26 = 0;
         assert_eq!(
             w.rival_attack_pick(0, true),
             Some(0),
@@ -24652,6 +25409,155 @@ mod tests {
         World::new_for_game(planes, &[], 1, assets(), GameId::Mc2)
     }
 
+    /// The metamorph pose-puppet's parent is the body's OWN caster
+    /// (`sub_1E4D0` EF:10650/10655 reads parentId): a RIVAL's morph
+    /// body follows the RIVAL's carpet, not the human — only a body
+    /// whose id24 is the out-of-pool human reads `ctx` (mc2l22 slot
+    /// 673, owner 557: the rival carpet). Pinned here because every
+    /// mc2l22 pair in the t=1199-1400 morph window carries the
+    /// standing (5,22) family, so the pair lane cannot hold this law
+    /// (the noisy-pair rule). Non-vacuous: the pre-law port read
+    /// `ctx` unconditionally — under it the rival body teleports to
+    /// the human's pose and the first four asserts fail.
+    #[test]
+    fn mc2_rival_morph_body_follows_its_own_caster_not_the_human() {
+        let mut w = mc2_flat_world();
+        let c = w.g.new_event().expect("rival carpet");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 1;
+            e.x = 0x3000;
+            e.y = 0x5000;
+            e.z = 2000;
+            e.f30 = 700;
+        }
+        let ctx = MobCtx {
+            px: 0x8000,
+            py: 0x8000,
+            pz: 3200,
+            pyaw: 123,
+            pmana: 0,
+            pmana_max: 0,
+            pdead: false,
+            pdead_top: false,
+            strict: false,
+            patches: crate::patches::WorldPatches::RETAIL,
+            mc2_turn: 0,
+        };
+        let body = |w: &mut World, id24: u16| {
+            let b = w.g.new_event().expect("morph body");
+            let e = &mut w.g.ent[b];
+            e.class64 = 5;
+            e.model65 = 25; // −512 z offset (EF:10664-74)
+            e.tick70 = 8 * 25 + 7; // the shared class-5 8*M+7 slot
+            e.site_z = 12; // StageVar2 = Metamorph
+            e.id24 = id24;
+            b
+        };
+        // The rival's body: slaved to the rival carpet, ctx ignored.
+        let rb = body(&mut w, c as u16);
+        w.g.mc2_creature_tick(rb, &ctx);
+        assert_eq!(w.g.ent[rb].x, 0x3000, "x = the rival carpet's");
+        assert_eq!(w.g.ent[rb].y, 0x5000, "y = the rival carpet's");
+        assert_eq!(w.g.ent[rb].z, 2000 - 512, "z = carpet z − the m25 offset");
+        assert_eq!(w.g.ent[rb].f30, 700, "facing = the rival carpet's");
+        // The human's body: its carpet is out of pool, so ctx IS the
+        // parent pose.
+        let hb = body(&mut w, PLAYER_TARGET);
+        w.g.mc2_creature_tick(hb, &ctx);
+        assert_eq!(w.g.ent[hb].x, 0x8000, "human body follows ctx");
+        assert_eq!(w.g.ent[hb].z, 3200 - 512, "ctx z − the m25 offset");
+        assert_eq!(w.g.ent[hb].f30, 123, "human body faces ctx yaw");
+    }
+
+    /// `sub_102D0` mode 4 — the m27 SLOPE-PITCH gate: the ground
+    /// mover refuses a candidate whose pitch from the CURRENT
+    /// position exceeds row 97's v_16/v_18 cap (170 ≈ 30°), and it is
+    /// the mover's own gate (`1 || 4 || roughness>=32`,
+    /// EF:19498/20912/20926) — the old mode-1-only probe let the
+    /// hydra crest slopes retail refuses. Witnessless in the corpus
+    /// ((5,27) is per-entity TEAR-excluded on every mc2l24 pair), so
+    /// this pin is the law's only guard. Non-vacuous: with the slope
+    /// arm deleted the steep world returns 2 (moved) — roughness
+    /// stays under its own 32 fence on both ramps.
+    #[test]
+    fn m27_ground_mover_refuses_the_steep_crest_but_climbs_the_gentle_rise() {
+        // A north-rising ramp of `step` height-units per tile,
+        // cresting at tile y=100 (ground_z scales ×32: 10/tile ≈ 51°,
+        // 2/tile ≈ 14°; roughness = 2·step stays < 32 for both).
+        let ramp_world = |step: i32| -> World {
+            let mut height = vec![100u8; 0x10000];
+            for ty in 0..=255usize {
+                let h = if ty >= 100 {
+                    100
+                } else {
+                    (100 + step * (100 - ty as i32)).clamp(0, 255)
+                };
+                for tx in 0..=255usize {
+                    height[(ty << 8) | tx] = h as u8;
+                }
+            }
+            let planes = Planes {
+                height,
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            };
+            World::new_for_game(planes, &[], 1, assets(), GameId::Mc2)
+        };
+        // Facing north (yaw 0), 8 sub-units shy of the tile seam so
+        // the 30-unit step crosses it (the same-tile shortcut would
+        // never consult the gate).
+        let drive = |mut w: World| -> (u8, u16, u16) {
+            let body =
+                w.g.mc2_spawn_m27(0x8000, 100 * 256 + 8, 3200)
+                    .expect("hydra");
+            let code = w.g.m27_move(body, true);
+            (code, w.g.ent[body].x, w.g.ent[body].y)
+        };
+        let (steep, sx, sy) = drive(ramp_world(10));
+        assert_ne!(steep, 2, "the 51° crest must not be climbed");
+        assert_eq!(
+            (sx >> 8, sy >> 8),
+            (0x80, 100),
+            "refused: the body holds its tile"
+        );
+        let (gentle, _gx, gy) = drive(ramp_world(2));
+        assert_eq!(gentle, 2, "the 14° rise is within the 170 cap");
+        assert_eq!(gy >> 8, 99, "moved: the step crossed the seam north");
+    }
+
+    /// The devil's pose selector `sub_26500` (:16970) calls ONLY
+    /// SetEntityIndexAndRot — the applied quad derives from the
+    /// sprite-param row (/2). The one `SetEntityShiftRot(128,128)` in
+    /// the machine is the CTOR's tail (:34371); the port's per-tick
+    /// re-stamp inside `m21_pose` clobbered the sprite-derived
+    /// pitch/roll forever (mc2l24 t=7918: 47 devils applied_pitch 128
+    /// vs retail's row-derived 56) and fed the walker's f80/f82 step
+    /// cap a 128 half-extent. Non-vacuous: re-adding the re-stamp
+    /// makes every post-change assert read 128.
+    #[test]
+    fn mc2_devil_pose_keeps_the_sprite_derived_quad_after_the_ctor_stamp() {
+        let mut w = mc2_flat_world();
+        let i = w.g.mc2_spawn_m21(0x4000, 0x4000, 100).expect("devil");
+        assert_eq!(w.g.ent[i].f80, 128, "ctor tail stamps 128 once");
+        assert_eq!(w.g.ent[i].f82, 128, "ctor tail stamps 128 once");
+        // Drive the jump machine across a sprite change: state 4
+        // seeds the impulse and hands state 5 to the tail's pose
+        // selector (sprite 310 ≠ the ctor's 311), whose
+        // SetEntityIndexAndRot re-derives the quad from the row.
+        w.g.ent[i].f71 = 4;
+        w.g.m21_jump(i);
+        assert_eq!(w.g.ent[i].f71, 5, "impulse seeded, rising");
+        let (s6, r8) = w.g.mc2_params_ext(w.g.ent[i].type86 as usize);
+        assert_ne!(s6 / 2, 128, "the row must discriminate from the stamp");
+        assert_eq!(w.g.ent[i].f80, s6 / 2, "pitch = the sprite row's, not 128");
+        assert_eq!(w.g.ent[i].f82, s6 / 2, "roll = the sprite row's, not 128");
+        assert_eq!(w.g.ent[i].f84, r8 / 2, "fov = the sprite row's");
+    }
+
     /// ⭐⭐ THE RESPAWN SEAT PRECEDES THE AT-CASTLE PROBE, so the
     /// revived carpet gets the CASTLE regen rate on the respawn tick
     /// itself. `sub_5C950` stamps the castle's position onto the
@@ -24954,6 +25860,7 @@ mod tests {
             pmana: 1000,
             pmana_max: 1000,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: w.patches,
             mc2_turn: w.mc2_turn,
@@ -28663,6 +29570,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -28715,6 +29623,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -28852,6 +29761,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29120,6 +30030,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29222,6 +30133,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29278,6 +30190,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29343,6 +30256,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29441,6 +30355,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29487,6 +30402,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29571,6 +30487,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -29686,6 +30603,220 @@ mod tests {
         assert_eq!(
             w.g.ent[m].f26, 0,
             "the homing armed window counts down to 0 (was pinned forever)"
+        );
+    }
+
+    /// `sub_68DE0`'s else arm (EF:56216-19): while any book window
+    /// is live PAST its first tick, a positive regen is pinned to
+    /// 0 — retail HOLDS the purse after a cast's debit until the
+    /// window expires (mc2l1 t=195/238/248/258; the port regenned
+    /// straight back). Those heads are INHERITED (pair-clean), so
+    /// this pin carries the law's assertion.
+    #[test]
+    fn mc2_rival_mid_burst_pins_the_regen_to_zero() {
+        let mut w = one_rival_world(1); // possess
+        let m = w.mc2_rivals[0].book.ent[1] as usize;
+        assert!(m != 0, "the possess manifestation exists");
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        // Drain the purse so regen is visible (afield rate = 100).
+        w.mc2_rivals[0].mana = 100;
+        // Arm a 6-tick window exactly as a landed cast does.
+        w.g.ent[m].f28 = 6;
+        w.g.ent[m].f26 = 6;
+        // The arm tick reads f26 == f28 (NOT mid-burst) and leaves
+        // the delta live, so the purse still steps here and on the
+        // next tick (apply runs before the pin's recompute).
+        w.tick(away(), PlayerCommand::default());
+        w.tick(away(), PlayerCommand::default());
+        let held = w.mc2_rivals[0].mana;
+        assert!(held > 100, "regen ran up to the pin");
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+            assert_eq!(
+                w.mc2_rivals[0].mana, held,
+                "a live window past its first tick pins a positive regen to 0"
+            );
+        }
+        // Window expired (plus one lap for the last pinned delta to
+        // wash out) — regen resumes.
+        for _ in 0..3 {
+            w.tick(away(), PlayerCommand::default());
+        }
+        assert!(
+            w.mc2_rivals[0].mana > held,
+            "regen resumes once the window expires"
+        );
+    }
+
+    /// ⭐ THE METEOR FUSE OVERRIDE IS THE ACTION ROW'S, NOT THE
+    /// IMPACT PAIR'S: `sub_66180` (EF:63372-73 — the ACTION-3
+    /// wrapper, selected by the function-pointer table
+    /// Events.cpp:3281) stamps the impact's maxLife/life with the
+    /// shot's `byte_0x46_70`; the generic impact tail (EF:63306-19)
+    /// has NO override, so a volcano bolt landing the same (10,17)
+    /// keeps the ctor's 10/9. Pair fixtures are BLIND here —
+    /// retail's imported bolt carries byte70 = 10, so both arms
+    /// agree under import (mc2l30 pairs 228+ measured clean under
+    /// both) — the witness is the FREE RUN (mc2l30 t=230 slot 135:
+    /// 1/0 under the folded `.max(1)` override, retail 10/9) and
+    /// this pin.
+    #[test]
+    fn the_meteor_fuse_override_is_the_action_rows_not_the_impacts() {
+        fn lives_after(tick70: u8, f71: u8) -> (u32, i32) {
+            let mut w = mc2_flat_world();
+            let ctx = MobCtx {
+                px: 0,
+                py: 0,
+                pz: 0,
+                pyaw: 0,
+                pmana: 0,
+                pmana_max: 0,
+                pdead: false,
+                pdead_top: false,
+                strict: false,
+                patches: crate::patches::WorldPatches::RETAIL,
+                mc2_turn: 0,
+            };
+            let p =
+                w.g.mc2_spawn_meteor_shot(20000, 20000, 400)
+                    .expect("shot slot");
+            {
+                let e = &mut w.g.ent[p];
+                e.tick70 = tick70;
+                e.f71 = f71;
+                e.f68 = 10;
+                e.f69 = 17;
+            }
+            w.g.mc2_proj_impact(p, 0, &ctx, None);
+            let s = (1..w.g.ent.len())
+                .find(|&j| w.g.ent[j].class64 == 10 && w.g.ent[j].model65 == 17)
+                .expect("the (10,17) impact minted");
+            (w.g.ent[s].max_life, w.g.ent[s].act_life)
+        }
+        assert_eq!(
+            lives_after(17, 0),
+            (10, 10),
+            "a non-action-3 shot (the volcano bolt) takes the generic tail: ctor lives stand"
+        );
+        assert_eq!(
+            lives_after(3, 5),
+            (5, 5),
+            "the action-3 meteor takes sub_66180's fuse override, charge verbatim"
+        );
+    }
+
+    /// ⭐ THE RIVAL CAST'S AIM PITCH IS THE CASTER'S OWN f146
+    /// REGISTER'S (sub_14E10 EF:6810/6860): both aiming families
+    /// stamp `pitch_0x1E = radix_tan(caster, Entities[caster+0x96])`
+    /// onto the CASTER before the fire — NOT a pitch toward the AI
+    /// brain's target pick — and every other case writes NO pitch
+    /// (the fire consumes the standing value). Pair fixtures are
+    /// blind BOTH ways (carpet flight re-derives pitch from imported
+    /// dest state) and the free-run corpus witness is
+    /// upstream-blocked (the port never maintains f146 in a free
+    /// run — the named mc2l1 blocker), so this pin carries the law's
+    /// assertion (mc2l1 t=193: f146 = 141 the mana sphere, not the
+    /// AI target).
+    #[test]
+    fn mc2_rival_cast_pitch_is_the_casters_f146_registers() {
+        // --- The aiming-family stamp (possess = precision family) —
+        let mut w = one_rival_world(1);
+        let i = w.mc2_rivals[0].ent as usize;
+        let (cx, cy, cz) = {
+            let e = &w.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        // The AI brain's pick: dead ahead at the caster's own z
+        // (pitch toward it is level).
+        let brain = w.g.mc2_spawn_fire(cx + 4096, cy, cz).expect("slot");
+        // The caster's f146 register: same bearing, far ABOVE —
+        // radix_tan toward it is distinctly non-level.
+        let reg = w.g.mc2_spawn_fire(cx + 4096, cy, cz + 2000).expect("slot");
+        w.mc2_rivals[0].target = brain as u16;
+        w.g.ent[i].f146 = reg as u16;
+        w.mc2_rivals[0].mana = 10_000;
+        w.mc2_rivals[0].mana_max = 10_000;
+        let want = Gen::angle_between(cx, cy, cx + 4096, cy);
+        {
+            let e = &mut w.g.ent[i];
+            e.f30 = want; // inside the 0xAA burst cone
+            e.f34 = want; // inside the readiness cone
+            e.f32 = 777; // sentinel: the standing pitch
+        }
+        let toward_reg = Gen::mc2_radix_tan((cx, cy, cz), (cx + 4096, cy, cz + 2000));
+        let toward_brain = Gen::mc2_radix_tan((cx, cy, cz), (cx + 4096, cy, cz));
+        assert_ne!(
+            toward_reg, toward_brain,
+            "the two candidate aims must be distinguishable"
+        );
+        assert!(w.mc2_rival_cast(0, i, 1), "the possess cast lands");
+        assert_eq!(
+            w.g.ent[i].f32, toward_reg,
+            "the aiming family stamps the CASTER's pitch from its own f146 register"
+        );
+        // --- The non-aiming case writes NO pitch (SPEED, case _) —
+        let mut w = one_rival_world(3);
+        let i = w.mc2_rivals[0].ent as usize;
+        w.mc2_rivals[0].mana = 10_000;
+        w.mc2_rivals[0].mana_max = 10_000;
+        w.g.ent[i].f32 = 777;
+        assert!(w.mc2_rival_cast(0, i, 3), "the speed cast lands");
+        assert_eq!(
+            w.g.ent[i].f32, 777,
+            "a non-aiming case fires with the STANDING pitch, no write"
+        );
+    }
+
+    /// sub_13100 has NO castle-exists exit and the dispatch's
+    /// selector (sub_12E70) only re-arbitrates on the think cadence:
+    /// a rival whose castle already landed keeps hovering the site in
+    /// state Build until the f63 % (64 - agg/4) tick (mc2l4 t=1..4
+    /// hovers over live castle 304; the state flips only at t=5).
+    /// The head is free-run-only (pair mode re-imports the AI state),
+    /// so this pin carries the law.
+    #[test]
+    fn mc2_rival_build_state_survives_a_live_castle_until_think() {
+        let mut w = one_rival_world(1);
+        let ri = 0;
+        let i = w.mc2_rivals[ri].ent as usize;
+        let (cx, cy, cz) = {
+            let e = &w.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        // A live castle owned by the rival (rival_castle scans
+        // (3,2) id24 == the rival's entity).
+        let c = w.g.mc2_spawn_fire(cx, cy, cz).expect("slot");
+        {
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = w.mc2_rivals[ri].ent;
+            e.max_life = 30000;
+            e.act_life = 30000;
+        }
+        // Mid-Build, arrived at the site, off the think cadence.
+        w.mc2_rivals[ri].state = crate::mc2::rivals::Mc2AiState::Build;
+        w.mc2_rivals[ri].site = (cx, cy);
+        w.g.ent[i].site_z = cz;
+        w.g.ent[i].f63 = 1;
+        let period = w.mc2_rivals[ri].think_period();
+        assert_ne!(1 % period, 0, "tick under test must be think-free");
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(
+            w.mc2_rivals[ri].state,
+            crate::mc2::rivals::Mc2AiState::Build,
+            "a live castle must NOT eject Build before the think tick"
+        );
+        // On the think tick the selector re-arbitrates away (13B00 is
+        // false with the castle alive, the priority walk runs).
+        w.g.ent[i].f63 = 0;
+        w.tick(away(), PlayerCommand::default());
+        assert_ne!(
+            w.mc2_rivals[ri].state,
+            crate::mc2::rivals::Mc2AiState::Build,
+            "the think tick's selector leaves Build once the castle stands"
         );
     }
 
@@ -31267,78 +32398,71 @@ mod tests {
         );
     }
 
-    /// The (10,19) ground-fire-spray column re-snaps its z to
-    /// `ground_z` every tick (native — it tracks the real, runtime-
-    /// raised summit heightfield). Under conformance replay the
-    /// heightfield is the pristine baseline (the recording carries no
-    /// terrain), so the snap drops the column ~624 below retail's
-    /// plateau (mc2l24 (10,19) slot 181: port 2000 vs retail 2624).
-    /// The frozen-z law (same as the summit controller) keeps the
-    /// imported z under strict. Regression guard: reverting the
-    /// `if !ctx.strict` gate makes the strict case snap to ground.
+    /// EF:24141 — the (10,19) column's alive branch ends with an
+    /// UNCONDITIONAL `z = getTerrainAlt`: it rides the dome's own
+    /// terraform every alive tick, strict and native alike (mc2l24
+    /// slot 140: z == height×32 through the raise AND the crater
+    /// cut). The old strict-gated freeze was a stale pristine-plane
+    /// workaround; the format-2 measured channel carries the raised
+    /// summit as ground truth.
     #[test]
-    fn mc2_fire_spray_column_frozen_z_under_strict() {
-        let run = |strict: bool| {
+    fn mc2_fire_spray_column_re_snaps_every_alive_tick() {
+        for strict in [true, false] {
             let mut w = mc2_flat_world();
             let (x, y) = mc2_pos(100, 100);
             let gz = w.g.ground_z(x, y) as i16;
             let c = w.g.mc2_spawn_fire_spray(x, y, gz + 500).expect("column");
             w.strict_retail = strict;
             w.tick(away(), PlayerCommand::default());
-            (w.g.ent[c].z, gz)
-        };
-        let (z_strict, gz) = run(true);
-        assert_eq!(
-            z_strict,
-            gz + 500,
-            "strict: the column keeps its imported (raised-summit) z, no pristine re-snap"
-        );
-        let (z_native, gz) = run(false);
-        assert_eq!(
-            z_native, gz,
-            "native: the column re-snaps to the real ground each tick"
-        );
+            assert_eq!(
+                w.g.ent[c].z, gz,
+                "strict={strict}: the column re-snaps to terrain each tick (EF:24141)"
+            );
+        }
     }
 
+    /// EF:23926-31 — the vortex pulse re-snaps to getTerrainAlt and
+    /// a moved ground DESPAWNS it, strict and native alike (retail's
+    /// own controller dies at mc2l24 t=17 when the dome cuts the
+    /// crater under it). An unmoved vortex erupts normally.
     #[test]
-    fn mc2_summit_vortex_frozen_z_under_strict() {
+    fn mc2_summit_vortex_despawns_on_moved_ground() {
         let live = |w: &World, c: u8, m: u8| {
             w.g.ent
                 .iter()
                 .any(|e| e.class64 == c && e.model65 == m && e.flags & 0x400 == 0)
         };
-        let erupt = |strict: bool| {
+        for strict in [true, false] {
+            // Unmoved: the tick-0 eruption fires and the latch seizes.
             let mut w = mc2_flat_world();
             let (x, y) = mc2_pos(140, 200);
             let gz = w.g.ground_z(x, y) as i16;
             let v = w.g.mc2_spawn_summit18(x, y, gz).expect("vortex");
-            // Retail's plateau z sits far above the pristine floor.
+            w.strict_retail = strict;
+            w.tick(away(), PlayerCommand::default());
+            assert_eq!(
+                w.g.ent[v].flags & 0x400,
+                0,
+                "strict={strict}: an unmoved vortex survives and erupts"
+            );
+            assert!(live(&w, 10, 19), "strict={strict}: the column rose");
+            assert_eq!(w.g.erupting, v as u16, "strict={strict}: the latch seized");
+            // Moved ground: the pulse's z-vs-ground test despawns it.
+            let mut w = mc2_flat_world();
+            let v = w.g.mc2_spawn_summit18(x, y, gz).expect("vortex");
             w.g.ent[v].z = gz + 1000;
             w.strict_retail = strict;
             w.tick(away(), PlayerCommand::default());
-            (w, v)
-        };
-        // Strict: the terrain is frozen, so the phantom move is ignored
-        // — the vortex survives and its tick-0 eruption fires.
-        let (ws, vs) = erupt(true);
-        assert_eq!(
-            ws.g.ent[vs].flags & 0x400,
-            0,
-            "strict: the vortex survives the phantom terrain-move"
-        );
-        assert!(live(&ws, 10, 19), "strict: the fire-spray column rose");
-        assert_eq!(ws.g.erupting, vs as u16, "strict: the vortex latch seized");
-        // Native: a genuine z-vs-ground mismatch still despawns it.
-        let (wn, vn) = erupt(false);
-        assert_ne!(
-            wn.g.ent[vn].flags & 0x400,
-            0,
-            "native: the moved vortex despawns"
-        );
-        assert!(
-            !live(&wn, 10, 19),
-            "native: no column when the ground moved under it"
-        );
+            assert_ne!(
+                w.g.ent[v].flags & 0x400,
+                0,
+                "strict={strict}: the moved vortex despawns (EF:23926-31)"
+            );
+            assert!(
+                !live(&w, 10, 19),
+                "strict={strict}: no column when the ground moved under it"
+            );
+        }
     }
 
     /// The (10,91) apocalypse mana rain (sub_32CF0, mc2::morph):
@@ -31586,6 +32710,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -31665,6 +32790,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -31713,6 +32839,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -31762,6 +32889,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -32657,6 +33785,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -32756,6 +33885,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -33082,6 +34212,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -33179,6 +34310,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -34636,6 +35768,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -34789,6 +35922,7 @@ mod tests {
                 pmana: 0,
                 pmana_max: 0,
                 pdead: false,
+                pdead_top: false,
                 strict: false,
                 patches: crate::patches::WorldPatches::RETAIL,
                 mc2_turn: 0,
@@ -34919,6 +36053,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -35002,6 +36137,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,

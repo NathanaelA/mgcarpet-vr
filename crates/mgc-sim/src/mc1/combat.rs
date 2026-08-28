@@ -792,16 +792,18 @@ impl Gen {
     /// which runs possession's state-1 flight: its ctor writes state
     /// 18 (:46371), past remc1's 14-entry class-9 state table, and
     /// the m1 flight is the behavior-matched stand-in. Inside it the
-    /// m17 bolt diverges from possession twice, both decompile-
-    /// corroborated: NO acquisition (sub_54520 has no model-17 case,
-    /// default return 0 :64185 — it flies straight) and the
-    /// model-39-ONLY contact scan (sub_11C00 :17083, not possession's
+    /// m17 bolt = the m1 homing skeleton in state 18: the HW listing
+    /// carries the case-0x11 acquire arm remc1's dropped
+    /// (hw:60386-405 — walks ONLY the ball chain, no owner
+    /// exclusion, no danger call, cone 0x71/0x71 =
+    /// aim_assist_possess_mc1's magnet arm; corpus witness
+    /// mc1l0-sg t=2723 slot 46, retail +70 = 18). Its contact scan
+    /// is model-39-ONLY (sub_11C00 :17083, not possession's
     /// 39/40/45 sub_11AC0).
     /// Sprites per the class-9 rows in `mc1_entities` — the magnet
     /// bolt shares possession's sprite 209 (both ctors call
     /// sub_36FA0(entity, 209), :45916/:46384: distinct models, one
-    /// look). APPROX(original: each model's own flight state past
-    /// remc1's transcribed table).
+    /// look).
     pub(crate) fn spawn_spell_lob(&mut self, model: u8, x: u16, y: u16, z: i16) -> Option<usize> {
         let sprite = match model {
             1 | 17 => 209,
@@ -812,7 +814,9 @@ impl Gen {
             11 => 281,
             _ => return None,
         };
-        let state = if model == 17 { 1 } else { model };
+        // Retail's magnet bolt flies in state 18 (measured, stable
+        // for its whole life) — native mint and import must agree.
+        let state = if model == 17 { 18 } else { model };
         // The possess lob AND the magnet bolt are the family's short
         // fuses: sub_39A90 (:45908) and sub_3A2F0 (:46375) both
         // compute life 4096/speed = 10 where every sibling
@@ -1837,11 +1841,20 @@ impl Gen {
                 }
                 false
             }
-            // States 6/16/18 stay INERT, not killed: remc1's table
-            // carries row 6 (sub_53060, unported) and the truncated/
-            // relocated listings leave 16/18 unresolved — no corpus
-            // witness either way, so today's no-op stands.
-            6 | 16 | 18 => false,
+            // States 6/16 stay INERT, not killed: remc1's table
+            // carries row 6 (sub_53060, unported) and the truncated
+            // listing leaves 16 unresolved — no corpus witness
+            // either way, so their no-op stands.
+            6 | 16 => false,
+            // State 18 IS the m17 magnet bolt's flight (HW listing
+            // hw:60386-405 carries the case-0x11 arm remc1's dropped;
+            // docs/DEVIATIONS.md names the state-18 flight): the m1
+            // homing skeleton whose acquire walks ONLY the ball
+            // chain, no owner exclusion, no danger call, cone
+            // 0x71/0x71 — aim_assist_possess_mc1's magnet arm.
+            // mc1l0-sg t=2723-2733 slot 46: chase/f26/flags/life all
+            // diverged while this arm sat inert.
+            18 => self.proj_m1_tick(i, ctx),
             // ⭐ THE WALKER SOFT-KILLS A STATE WITH NO TABLE ROW. The
             // main walk direct-indexes `table[class][state]` and
             // requires the row's own state word to match (`data4 ==
@@ -2426,16 +2439,20 @@ impl Gen {
     fn proj_firewall_tick(&mut self, i: usize, ctx: &MobCtx) -> bool {
         let e = &mut self.ent[i];
         e.f126 += (e.f128 - e.f126).clamp(-2, 2);
-        // The m16 child runs the acquire cone in BOTH variants —
-        // HW's case 0x10 (remc1hw :60322: widened yaw cone 0x100,
-        // pitch 0x71) and, the mc1l5 take settled, base MC1 too:
-        // t=23383 slot 227's first flight tick carries the acquire's
-        // whole signature — the sub_54520 head clamp (+26 166 → 16),
-        // the latch (flags 4 → 6), a pick (f146 = 773) and the
-        // heading SNAP onto it (620/31 → 664/21, f34/f36 mirrored).
-        // remc1's sub_54520 shows no case 16 — the same listing whose
-        // truncated class-9 state table hid this handler's +44 copy;
-        // the recording is the oracle. SURVEY-MC1HW §3a note RETIRED.
+        // The m16 child runs the acquire cone in BOTH variants, but
+        // the YAW cone forks: base MC1's jump table (CARPET.EXE
+        // 0x544CC[0x10] = 0x54682, read off the shipped LE binary —
+        // the remc1 listing's switch recovery dropped the alias)
+        // routes case 16 onto the SHARED case-0/3/4 arm at yaw 0x71;
+        // HW forks a dedicated arm (HIDDEN.EXE 0x5485C[0x10] =
+        // 0x54BB0, `mov $0x100,%edi` — remc1hw :60322) that widens
+        // yaw to 0x100. Pitch is 0x71 in both. MC2's independent
+        // decompile carries the same split (EF:54934), and the
+        // corpus brackets it: mc1l5 t=23382's pick at dy 44 (must
+        // acquire) vs mc1l49 t=1099/1140 at dy 186/125 (retail
+        // MISSED both) pin base MC1 inside [44,124] ∋ 0x71. The
+        // list SHAPE is the shared arm's exactly (significant list
+        // + 20 creature buckets under the owner-row v_28 pre-gate).
         //
         // Acquisition is ONE-SHOT, latched on flags bit 2 even on a
         // miss (remc1hw :58731-49): a miss flies straight forever, a
@@ -2462,7 +2479,8 @@ impl Gen {
                 if self.ent[i].f26 > 16 {
                     self.ent[i].f26 = 16;
                 }
-                self.aim_assist_mc1_cone(i, ctx, 0x100, 0x71);
+                let yaw_cone = if self.is_hidden_worlds() { 0x100 } else { 0x71 };
+                self.aim_assist_mc1_cone(i, ctx, yaw_cone, 0x71);
                 if self.ent[i].f146 != 0 {
                     self.ent[i].f30 = self.ent[i].f34;
                     self.ent[i].f32 = self.ent[i].f36;
@@ -3560,25 +3578,57 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.model65)
         };
-        let gz = self.ground_z(x, y) as i16;
         let own = self.ent[i].id24;
         match model {
             // Earthquake (:65314): the authentic (10,15) crevice
             // walker — random start heading off its own LCG, ±45
             // wander, a 10-tick m11 digger per step (the rumble is
-            // the diggers' loop-10).
+            // the diggers' loop-10). The child is a GENERIC-EXPLODE
+            // child like the crater's (:62759-71): laid at the
+            // BOLT's own axis (z included), owner + heading + pitch
+            // + `+44` copied off the bolt, `+146` the unguarded
+            // pointer diff (the miss stamp on a ground death).
+            // mc1l0-sg t=1080/1133: the bare-at-ground mint dropped
+            // every one of those lanes at once.
             2 => {
-                if let Some(w) = self.spawn_creator(15, x, y, gz) {
-                    self.ent[w].id24 = own;
+                let (yaw, pitch, bolt_f44) = {
+                    let e = &self.ent[i];
+                    (e.f30, e.f32, e.f44)
+                };
+                if let Some(w) = self.spawn_creator(15, x, y, z) {
+                    let e = &mut self.ent[w];
+                    e.id24 = own;
+                    e.f30 = yaw;
+                    e.f32 = pitch;
+                    e.f44 = bolt_f44;
+                    e.f146 = match hit {
+                        Some(MailTarget::Pool(j)) => j as u16,
+                        Some(MailTarget::Player) => PLAYER_TARGET,
+                        None => MC1_MISS_STAMP,
+                    };
                 }
             }
             // Volcano (:65432): the growing hill + pit IS the
             // authentic model (trace :65466, effect c10 m9); the
             // finished cone spawns the model-18 eruption driver
-            // ([`Gen::eruption_tick`]).
+            // ([`Gen::eruption_tick`]). Same generic-explode child
+            // stamps as arm 2 (mc1l0-sg t=1176/1483).
             4 => {
-                if let Some(h) = self.spawn_creator(9, x, y, gz) {
-                    self.ent[h].id24 = own;
+                let (yaw, pitch, bolt_f44) = {
+                    let e = &self.ent[i];
+                    (e.f30, e.f32, e.f44)
+                };
+                if let Some(h) = self.spawn_creator(9, x, y, z) {
+                    let e = &mut self.ent[h];
+                    e.id24 = own;
+                    e.f30 = yaw;
+                    e.f32 = pitch;
+                    e.f44 = bolt_f44;
+                    e.f146 = match hit {
+                        Some(MailTarget::Pool(j)) => j as u16,
+                        Some(MailTarget::Player) => PLAYER_TARGET,
+                        None => MC1_MISS_STAMP,
+                    };
                 }
             }
             // Crater (:65491): the expanding bowl (authentic:
@@ -4396,13 +4446,29 @@ impl Gen {
                         // hit below (:62751-55).
                     }
                     MailTarget::Player => {
-                        if gate_ok {
+                        // Afford gate (:62706/:62859, unsigned
+                        // compare): the quarter of the projectile's
+                        // `+140` must fit the DEFLECTOR's purse or
+                        // the deflection refuses. The human's purse
+                        // rides the ctx (tick-head), less whatever
+                        // this tick's earlier deflections already
+                        // owe — retail reads the live `+140` at the
+                        // projectile's walk slot, so a same-tick
+                        // regen step between the reads is a corner
+                        // this proxy can't see.
+                        let quarter = (self.ent[i].f140 / 4).max(0) as u32;
+                        let purse = ctx.pmana.saturating_sub(self.player_deflect_debit.0);
+                        if gate_ok && quarter <= purse {
                             self.snd(28, i); // deflection twang (:62861)
+                            // The deflector PAYS the quarter (:62725
+                            // and twins — the debit lands at the
+                            // PROJECTILE's walk slot): accumulated
+                            // here, drained by the wizard pass / tick
+                            // tail into the human purse.
+                            self.player_deflect_debit.0 += quarter;
                             // The projectile reverses heading and swaps
                             // owner to the player, re-homing on its
-                            // shooter. INTERIM: no mana-economy debit on
-                            // the player pool (the original quarters the
-                            // projectile's +140 against the shield pool).
+                            // shooter.
                             let shooter = self.ent[i].id24;
                             let d = self.ent_rand(i);
                             let e = &mut self.ent[i];
@@ -4422,6 +4488,12 @@ impl Gen {
                                 ctx.py,
                                 ctx.pz.wrapping_add(PLAYER_HH as i16),
                             );
+                            return false;
+                        }
+                        if law == DeflectLaw::Fireball {
+                            // Afford-fail fly-through (:62859's false
+                            // arm), as in the pool arm above: no hit,
+                            // no sound, no debit.
                             return false;
                         }
                         // Generic refusal: the bolt hits the rebounding

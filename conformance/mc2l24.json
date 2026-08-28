@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc2l24",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 1,
+   "file": "m27-stores-its-branch-yaws-unmasked-at-all-three.mgcr",
+   "source": "mc2l24",
+   "note": "M27 STORES ITS BRANCH YAWS UNMASKED AT ALL THREE WRITE SITES: the wander sum (EF:19878), the case-2 pair (EF:19956-57) and the \u00b1204 dodge (EF:20089) all store without &0x7FF \u2014 the yaw lane legitimately carries values above 0x7FF, and the machine's ONE masking site is the body turn (EF:20967). The port masked at all three, so an imported hydra branch heading above 0x7FF snapped back into range (mc2l24 t=2: the (5,27) heading family). Same landing's rider: the ground mover runs sub_102D0's mode-4 SLOPE gate. Ledger SESSION 61 law 5."
+  },
+  {
+   "t": 13,
+   "file": "the-fire-spray-re-snaps-to-terrain-every-alive-t.mgcr",
+   "source": "mc2l24",
+   "note": "THE (10,19) FIRE SPRAY RE-SNAPS TO TERRAIN EVERY ALIVE TICK AND THE (10,18) VORTEX DIES ON MOVED GROUND: EF:24141's alive branch ends with an unconditional z=getTerrainAlt (slot 140: z==height*32 through the whole dome raise AND the crater cut); EF:23926-31's pulse re-snap despawns the vortex when the dome - after it in the walk - moves the ground under it (retail's own controller dies at t=17). The old strict frozen-z gates were stale pristine-plane workarounds; the measured channel carries the raised summit (five sibling newborns at the vent: 4384 both sides at t=14). Rider in the same cut: the (10,19)/(10,18) payload is @0x2A homed f140 (EF:24151) - the uniform f140<-@0x90 imported a column that posts ZERO area mail. Ledger SESSION 65."
+  }
+ ]
+}

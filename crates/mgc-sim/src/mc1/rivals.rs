@@ -683,6 +683,16 @@ impl World {
             *c = c.saturating_sub(1);
         }
         self.rival_hate_decay(ri);
+        // sub_45C10 at :17969 — the owned register is a per-tick
+        // PROJECTION of the acquisition list, rebuilt at the TOP of
+        // the dispatch, BEFORE the learn expiry's mint at :18022: a
+        // spell minted at T reaches owned[] at T+1 (the human's
+        // opposite phase is call order — :55342 — not law). The port
+        // used to hand-maintain owned at the mint. mc1l37's rivals
+        // start castle-less and learn Create Castle mid-take; the
+        // one-tick-early owned[16] moved the whole castle-build
+        // cascade a tick ahead (t=2487 family).
+        self.rival_owned_rebuild(ri);
 
         // At own castle: grace 2 + the mailbox is DISCARDED — the
         // AI's damage does NOT forward into the castle. VERIFIED
@@ -778,7 +788,12 @@ impl World {
         let at_shrine = self.g.ent[i].flags & 0x1000 != 0;
         {
             let r = &mut self.rivals[ri];
-            let stepped = r.mana as i64 + r.mana_delta as i64;
+            // The purse reads SIGNED here (:55385-91 on `+140`): an
+            // intake over-debit this same dispatch left a wrapped
+            // shortfall, and retail's step adds the delta to the
+            // NEGATIVE value then floors at 0 (the quantum is eaten,
+            // not clipped where it landed).
+            let stepped = r.mana as i32 as i64 + r.mana_delta as i64;
             r.mana = stepped.clamp(0, r.mana_max as i64) as u32;
             r.mana_delta = if at_castle || at_shrine {
                 ((r.mana_max / 200) as i32).max(1000)
@@ -908,12 +923,17 @@ impl World {
                 self.set_duel_latch(self.rivals[ri].ent, hold);
             }
         }
-        // ch3 mana steal (:55689-91): the attacker banks it.
+        // ch3 mana steal (:55689-91): the victim's subtract is RAW —
+        // no clamp exists in retail, the only floor is the same-
+        // dispatch regen step below (signed, so an over-steal eats
+        // the tick's quantum) — and the attacker banks the FULL
+        // amount, not the victim's remainder (mc1hwl0 t=23438+ slot
+        // 473: the thief reads 100 off a broke victim where the
+        // clamped take banked 0 ×24).
         let (steal_amt, steal_src) = self.g.ent[i].mail[3];
         if steal_src != 0 {
-            let take = (steal_amt as u32).min(self.rivals[ri].mana);
-            self.rivals[ri].mana -= take;
-            self.credit_wizard_mana(steal_src, take);
+            self.rivals[ri].mana = self.rivals[ri].mana.wrapping_sub(steal_amt);
+            self.credit_wizard_mana(steal_src, steal_amt);
             self.rivals[ri].regen_stall = 16;
             self.g.ent[i].mail[3] = (steal_amt, 0);
         }
@@ -931,8 +951,11 @@ impl World {
         // it, and the bit clears ONE-SHOT.
         if self.g.ent[i].flags & 0x4000 != 0 {
             dmg /= 4;
-            let pay = (dmg.max(0) as u32).min(self.rivals[ri].mana);
-            self.rivals[ri].mana -= pay;
+            // RAW subtract (:55703) — retail has no afford clamp on
+            // the shield quarter; a fatal tick's shortfall rides the
+            // corpse (the death arm returns before the regen step,
+            // the only floor).
+            self.rivals[ri].mana = self.rivals[ri].mana.wrapping_sub(dmg.max(0) as u32);
             self.g.ent[i].flags &= !0x4000;
         }
         self.g.ent[i].act_life -= dmg;
@@ -1211,6 +1234,30 @@ impl World {
         }
     }
 
+    /// `sub_45C10` (:55310-19) run for a RIVAL wizard — the same
+    /// derive-every-tick law as [`World::mc1_owned_rebuild`]: memset
+    /// owned[], then re-register each live acquisition entry under
+    /// the MODEL byte of the pool record it points at. `known` is a
+    /// port-only shadow with no retail twin (retail's "known" IS
+    /// `+676 != 0`), so it advances here too — sticky, like the lane
+    /// it stands in for between the scatter and the respawn regrant.
+    fn rival_owned_rebuild(&mut self, ri: usize) {
+        self.rivals[ri].owned = [0; SPELL_COUNT];
+        for k in 0..SPELL_COUNT {
+            let e = self.rivals[ri].acq[k];
+            if e <= 0 {
+                continue;
+            }
+            if let Some(r) = self.g.ent.get(e as usize) {
+                let m = r.model65 as usize;
+                if m < SPELL_COUNT {
+                    self.rivals[ri].owned[m] = e as u16;
+                    self.rivals[ri].known[m] = true;
+                }
+            }
+        }
+    }
+
     /// Spell learning, the COUNTDOWN half (sub_15EC0 :19381-443): a
     /// live timer decrements 1/tick and the expiry conjures the
     /// rival's own manifestation. Arming lives on the JAR side
@@ -1237,12 +1284,13 @@ impl World {
                 continue;
             }
             if self.rivals[ri].learn[s] == 1 {
-                // Conjure the copy (off_987DE[s] :19415-31).
+                // Conjure the copy (off_987DE[s] :19415-31). The mint
+                // writes the ACQUISITION LIST only — owned[] (and the
+                // port's known shadow) catch up at the next
+                // housekeeping's rebuild (:17969), one tick later.
                 let ent = self.rivals[ri].ent;
                 self.rivals[ri].learn[s] = 0;
-                self.rivals[ri].known[s] = true;
                 if let Some(m) = self.mint_manifestation(s, ent) {
-                    self.rivals[ri].owned[s] = m as u16;
                     self.rivals[ri].acq_push(m as u16);
                 }
             }
@@ -1930,18 +1978,22 @@ impl World {
         // retail's 2D — retail re-stamps the strafe, the port let
         // it decay, and the 4-unit lateral gap is the t=16772
         // x,y head).
-        let mut best: Option<(usize, i32)> = None;
+        // The election is UNGATED and its key UNSIGNED (:19776-89):
+        // the `>= 0x1900000` threshold tests the WINNER only, and the
+        // `-1` seed answers "no candidate" through that same test.
+        let mut best: Option<(usize, u32)> = None;
         for k in 0..self.g.proj_chain.visible_len() {
             let j = self.g.proj_chain.list[k] as usize;
             let e = &self.g.ent[j];
             if e.f146 != me {
                 continue;
             }
-            let d2 = Gen::dist2_sq(px, py, e.x, e.y);
-            if d2 < 5120 * 5120 && best.is_none_or(|(_, bd)| d2 < bd) {
+            let d2 = Gen::dist2_sq(px, py, e.x, e.y) as u32;
+            if best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
             }
         }
+        let best = best.filter(|&(_, d)| d < 0x190_0000);
         if std::env::var_os("MGC_JINK_TRACE").is_some() {
             let cand: Vec<(u16, u16, u16, u16, i16, i32)> = (0..self.g.proj_chain.visible_len())
                 .map(|k| {
@@ -2349,13 +2401,22 @@ impl World {
                     // supercell candidates and plants at (0,0) where
                     // the port's 0x400-skipping pool scan took the
                     // first — Vodor flew off 292° instead of 179°).
+                    // ⭐ The nearest-castle key is UNSIGNED (:18937
+                    // `unsigned int v2 = -1`): sub_42410's i32 sum
+                    // overflows at the exact half-map diagonal
+                    // (dx = dy = ±32768 ⇒ 2·2^30 = i32::MIN), and
+                    // retail reads that wrap as the LARGEST key. A
+                    // signed seed elected the phantom "nearest" and
+                    // green-lit a site retail rejects (mc1l49
+                    // t=3298: cand (49152,16384) vs the far corner
+                    // castle (16384,49152)).
                     let mut near_xy: Option<(u16, u16)> = None;
-                    let mut near_d2 = i32::MAX;
+                    let mut near_d2 = u32::MAX;
                     for c in 0..self.g.wiz_chain.visible_len() {
                         let j = self.g.wiz_chain.list[c] as usize;
                         let e = &self.g.ent[j];
                         if e.model65 == 2 && e.id24 != me {
-                            let d2 = Gen::dist2_sq(tx, ty, e.x, e.y);
+                            let d2 = Gen::dist2_sq(tx, ty, e.x, e.y) as u32;
                             if d2 < near_d2 {
                                 near_d2 = d2;
                                 near_xy = Some((e.x, e.y));
@@ -2457,7 +2518,7 @@ impl World {
             return false;
         }
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
-        let mut best: Option<(u16, i32)> = None;
+        let mut best: Option<(u16, u32)> = None;
         for c in 0..self.g.wiz_chain.visible_len() {
             let j = self.g.wiz_chain.list[c] as usize;
             let e = &self.g.ent[j];
@@ -2469,24 +2530,48 @@ impl World {
             };
             let owner_wealth = self.wizard_wealth(owner);
             let hated = self.hate_over(ri, owner, owner_wealth);
-            // Undefended: the owner is over 7680 away (:18517-22).
+            // Undefended: the owner is over 7680 away (:18517-22)
+            // AND the owner's carpet does NOT box-overlap the castle
+            // (:18518 — the third conjunct, `!sub_11950(ownerCarpet,
+            // castle)` on the pool record AT the castle's id24). The
+            // summed extents of a grown keep reach past the 7680
+            // disc on the diagonal, so a carpet parked over its own
+            // keep's corner still defends it (mc1hwl0 t=15800-18:
+            // 19 pairs where the y-leg of the overlap holds the veto
+            // until retail elects at 15820). The human's carpet is
+            // out-of-pool here — its sub_11950 runs on the live pose
+            // with the sprite-44 halves (World::overlap's box).
+            let parked_on = if e.id24 == PLAYER_TARGET {
+                self.wizard_pos(0).is_some_and(|(wx, wy, wz)| {
+                    use crate::mc1::combat::{PLAYER_HH, PLAYER_HW};
+                    let wd = |p: u16, q: u16| (p.wrapping_sub(q) as i16 as i32).abs();
+                    wd(wx, e.x) < e.f80 as i32 + PLAYER_HW
+                        && wd(wy, e.y) < e.f82 as i32 + PLAYER_HW
+                        && ((e.z as i32 + e.f78 as i16 as i32) - (wz as i32 + PLAYER_HH)).abs()
+                            < e.f84 as i32 + PLAYER_HH
+                })
+            } else {
+                self.g.ent_overlap(e.id24 as usize, j)
+            };
             let undefended = self
                 .wizard_pos(owner)
-                .is_none_or(|(wx, wy, _)| Gen::dist2_sq(e.x, e.y, wx, wy) > 7680 * 7680);
+                .is_none_or(|(wx, wy, _)| Gen::dist2_sq(e.x, e.y, wx, wy) > 7680 * 7680)
+                && !parked_on;
             let poorer = (e.f140.max(0) as u32)
                 .saturating_add(640 * (255 - self.rivals[ri].agg as u32))
                 < my_stored;
             if !(hated && undefended) && !poorer {
                 continue;
             }
-            let d = Gen::dist2_sq(px, py, e.x, e.y);
+            let d = Gen::dist2_sq(px, py, e.x, e.y) as u32;
             if best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((j as u16, d));
             }
         }
-        // The winner alone faces the range gate (:18531-34).
+        // The winner alone faces the range gate (:18531-34) — a SIGNED
+        // recompute (`int >= v4*v4`), so the antipodal wrap passes it.
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32;
-        let best = best.filter(|&(_, d)| d < range.saturating_mul(range));
+        let best = best.filter(|&(_, d)| (d as i32) < range.saturating_mul(range));
         if let Some((t, _)) = best {
             self.set_rival_state(ri, AiState::RaidCastle, t);
             true
@@ -2551,7 +2636,7 @@ impl World {
         // is judged as a pre-pass — retail's chain order puts his
         // carpet below the rivals' in every corpus take.
         let mut war_pick: Option<u16> = None;
-        let mut best: Option<(u16, i32)> = None;
+        let mut best: Option<(u16, u32)> = None;
         let judge = |tgt: u16,
                      x: u16,
                      y: u16,
@@ -2561,7 +2646,7 @@ impl World {
                      unbound_knows16: bool,
                      hate: i64,
                      war: bool,
-                     best: &mut Option<(u16, i32)>|
+                     best: &mut Option<(u16, u32)>|
          -> bool {
             if invisible {
                 return false; // spell-12 targets are skipped (:18558)
@@ -2572,7 +2657,7 @@ impl World {
             let hated = 50_000 - my_agg * (ceiling.max(0) / 10) / 255 <= hate;
             let bully = unbound_knows16 && mana + 32 * (255 - my_agg) < my_mana;
             if hated || bully {
-                let d = Gen::dist2_sq(px, py, x, y);
+                let d = Gen::dist2_sq(px, py, x, y) as u32;
                 if best.is_none_or(|(_, bd)| d < bd) {
                     *best = Some((tgt, d));
                 }
@@ -2639,12 +2724,12 @@ impl World {
             return true;
         }
         // The range gate applies to the ELECTION winner only, strict
-        // (:18585-87: `d² >= (v_28+10)² → return 0`).
+        // and SIGNED (:18585-87: `int d² >= (v_28+10)² → return 0`).
         let Some((t, d)) = best else {
             return false;
         };
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32 + 10;
-        if d >= range.saturating_mul(range) {
+        if (d as i32) >= range.saturating_mul(range) {
             return false;
         }
         self.set_rival_state(ri, AiState::AttackWizard, t);
@@ -2668,7 +2753,7 @@ impl World {
         let me = self.rivals[ri].ent;
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let cargo_gate = 10 * (275 - self.rivals[ri].agg as u32);
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for c in 0..self.g.wiz_chain.visible_len() {
             let j = self.g.wiz_chain.list[c] as usize;
             let e = &self.g.ent[j];
@@ -2689,7 +2774,7 @@ impl World {
             if self.g.ent_overlap(j, home) {
                 continue;
             }
-            let d = Gen::dist2_sq(px, py, self.g.ent[j].x, self.g.ent[j].y);
+            let d = Gen::dist2_sq(px, py, self.g.ent[j].x, self.g.ent[j].y) as u32;
             if best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((j, d));
             }
@@ -2697,6 +2782,7 @@ impl World {
         let Some((t, _)) = best else {
             return false;
         };
+        // The winner's range gate is a SIGNED recompute (:18640-42).
         let range = BEHAVIOR[self.g.ent[i].row156 as usize].v_28 as i32;
         let d = Gen::dist2_sq(px, py, self.g.ent[t].x, self.g.ent[t].y);
         if d >= range.saturating_mul(range) {
@@ -2711,7 +2797,7 @@ impl World {
     fn rival_pick_ball_target(&mut self, ri: usize, i: usize) -> bool {
         let me = self.rivals[ri].ent;
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
-        let mut best: Option<(u16, i32)> = None;
+        let mut best: Option<(u16, u32)> = None;
         // ⭐ THE PICK WALKS THE TICK-TOP BALL CHAIN, NOT THE POOL.
         // `sub_15080` (:18878) seeds from `var_u32_36462[1]` — the
         // ball roster the tick head rebuilt at :52290-97 before any
@@ -2758,7 +2844,7 @@ impl World {
             let owner_is_wiz = tag == PLAYER_TARGET
                 || self.g.ent.get(tag as usize).is_some_and(|o| o.class64 == 3);
             if !owner_is_wiz {
-                let d = Gen::dist2_sq(px, py, bx, by);
+                let d = Gen::dist2_sq(px, py, bx, by) as u32;
                 if best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((j as u16, d));
                 }
@@ -2782,7 +2868,7 @@ impl World {
             if let Some(o) = team
                 && self.hate_over(ri, o, self.wizard_wealth(o))
             {
-                let d = Gen::dist2_sq(rx, ry, bx, by);
+                let d = Gen::dist2_sq(rx, ry, bx, by) as u32;
                 if best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((j as u16, d));
                 }
@@ -2801,17 +2887,23 @@ impl World {
             // what admits a human-claimed ball the human has wandered
             // 5120+ away from (mc1l5 t=253: ball 362 at 5,900 units).
             // Weigh the live human by pose before the chain walk.
-            let mut guard: Option<i32> = self
+            // ⭐ Both sub-elections ride the UNSIGNED key (:18989 /
+            // :19018 `unsigned int v2 = -1`, the sub_15260 law's
+            // sibling call sites); the 5120² unguarded test is the
+            // caller's SIGNED recompute on the WINNER (:18910
+            // `int > 26214400`), so an antipodal sole guard still
+            // reads GUARDED there.
+            let mut guard: Option<u32> = self
                 .wizard_pos(0)
-                .map(|(hx, hy, _)| Gen::dist2_sq(bx, by, hx, hy));
-            let mut castle: Option<(usize, i32)> = None;
+                .map(|(hx, hy, _)| Gen::dist2_sq(bx, by, hx, hy) as u32);
+            let mut castle: Option<(usize, u32)> = None;
             for k in 0..self.g.wiz_chain.visible_len() {
                 let w = self.g.wiz_chain.list[k] as usize;
                 let we = &self.g.ent[w];
                 if we.id24 == bid {
                     continue;
                 }
-                let d = Gen::dist2_sq(bx, by, we.x, we.y);
+                let d = Gen::dist2_sq(bx, by, we.x, we.y) as u32;
                 if we.model65 <= 1 && we.id24 != me && guard.is_none_or(|gd| d < gd) {
                     guard = Some(d);
                 }
@@ -2822,10 +2914,10 @@ impl World {
                     castle = Some((w, d));
                 }
             }
-            let unguarded = guard.is_some_and(|gd| gd > 5120 * 5120);
+            let unguarded = guard.is_some_and(|gd| (gd as i32) > 5120 * 5120);
             let housed = castle.is_some_and(|(cs, _)| self.g.ent_overlap(j, cs));
             if unguarded && !housed {
-                let d = Gen::dist2_sq(px, py, bx, by);
+                let d = Gen::dist2_sq(px, py, bx, by) as u32;
                 if best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((j as u16, d));
                 }
@@ -2864,7 +2956,7 @@ impl World {
             .rival_castle(me)
             .map(|c| (self.g.ent[c].x, self.g.ent[c].y))
             .unwrap_or((self.g.ent[i].x, self.g.ent[i].y));
-        let mut best: Option<(u16, i32)> = None;
+        let mut best: Option<(u16, u32)> = None;
         // Retail's walk (:18669-91) is the class-5 MODEL CHAINS
         // (heads at 36382 + 4·model, bucket-major) — the tick-top
         // membership snapshot, NOT the raw pool: a creature that died
@@ -2878,7 +2970,7 @@ impl World {
                 if e.id24 == me || e.f140 <= 0 {
                     continue;
                 }
-                let d = Gen::dist2_sq(anchor.0, anchor.1, e.x, e.y);
+                let d = Gen::dist2_sq(anchor.0, anchor.1, e.x, e.y) as u32;
                 if best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((j, d));
                 }
@@ -3302,19 +3394,33 @@ impl World {
         // time — and that success path ENDS the walk: 15-when-ready
         // or hold, never falling through to 7/20/0 (:19517-31; the
         // 7/20/0/15 ladder is the roll's ELSE arm).
+        //
+        // The notice is a LIVE read of the TARGET's spell-14 TOKEN
+        // record's +48 (sub_16000 :19449-56 — pool[wizext+676+2*14],
+        // `+48 > 0`), taken at the CASTER's own dispatch — not the
+        // carpet's 0x8000 mirror. Walk order is the law: a token
+        // arming below the reader is seen the same tick (mc1l49
+        // t=3560, token 600 < reader 620), and the owner-slot mirror
+        // refresh misses a token above its owner (t=4003, token 704
+        // > owner 698). The import re-homes class-12 +48 into f26.
+        let token_live =
+            |m: u16| m != 0 && (m as usize) < self.g.ent.len() && self.g.ent[m as usize].f26 > 0;
         let target_rebounds = vs_wizard
             && match self.rivals[ri].target {
-                PLAYER_TARGET => self.player.rebound,
+                PLAYER_TARGET => token_live(self.player.owned[14]),
                 t => self
                     .rivals
                     .iter()
                     .find(|r| r.ent == t)
-                    .is_some_and(|r| r.rebound),
+                    .is_some_and(|r| token_live(r.owned[14])),
             };
         let mut order: Vec<usize> = vec![17, 8];
         let mut lightning_plan = false;
         if target_rebounds {
-            let roll = (self.g.ent_rand(self.rivals[ri].ent as usize) % 255) as u16;
+            // The roll is CRT `rand() % 255` (:19507-08) — the global
+            // Watcom stream, NOT the wizard's own entity LCG. Burning
+            // ent_rand here stole a graded-lane draw (mc1l49 t=2788).
+            let roll = (self.g.watcom_rand() % 255) as u16;
             if roll < self.rivals[ri].acc {
                 lightning_plan = true;
             }
@@ -3904,6 +4010,14 @@ impl World {
         // next (10,40) lands on slot 18 against our 65).
         let pinned = self.mc1_carpet_slot;
         self.g.mc1_rebuild_free(pinned);
+        // :43836-58 — sub_37220 rebuilds BOTH halves: the recycle
+        // stack collects every live record with 0x20400 (descending
+        // push => the LOWEST victim on top), and the landing leaves
+        // it ARMED (no reset until the next reaper site), so an
+        // exhausted pool's next allocation SACRIFICES a hut instead
+        // of failing (mc1hwl0 t=25319: the rival respawn eats 20
+        // village records for its re-minted book).
+        self.g.rebuild_recycle(0x20400);
         // Kill credit (:55488-97): the killer wizard's tally.
         let killer = self.g.ent[i].f38;
         if let Some(k) = self.owner_slot_of_source(killer) {
@@ -4066,7 +4180,15 @@ impl World {
         // the slots the scatter freed.
         let pinned = self.mc1_carpet_slot;
         self.g.mc1_rebuild_free(pinned);
+        // The recycle half too (:43836-58) — the respawn's re-grant
+        // loop allocates 24 times into a possibly-exhausted pool and
+        // retail SACRIFICES 0x20400 victims ascending (hw:50910;
+        // cleared again at the fn tail, hw:51124).
+        self.g.rebuild_recycle(0x20400);
         let Some(c) = self.rival_castle(self.rivals[ri].ent) else {
+            // Even the castle-less early exit disarms like retail's
+            // fn tail (hw:51124 runs on every path).
+            self.g.mc2_recycle.stack.clear();
             return;
         };
         // :54858-61 — the respawn copies the castle's WHOLE position,
@@ -4179,6 +4301,9 @@ impl World {
                 o.hate[slot] = HATE_RESPAWN;
             }
         }
+        // hw:51124 — sub_44D30's tail disarms the recycle stack the
+        // entry armed: only the respawn window itself may sacrifice.
+        self.g.mc2_recycle.stack.clear();
         self.entities_dirty = true;
     }
 }
@@ -4546,6 +4671,30 @@ mod tests {
             "a bolt {high} high stopped arming the dodge — the range \
              gate grew a z leg retail does not have"
         );
+        // (e) ⭐ THE ELECTION KEY IS UNSIGNED AND THE 0x1900000
+        // THRESHOLD TESTS THE WINNER (:19776 `unsigned int v2 = -1`,
+        // :19789 `if (v2 >= 0x1900000) return 0` — the seed itself is
+        // the "no threat" answer). A bolt at the rival's EXACT
+        // half-map antipode wraps to 0x80000000, the LARGEST key: it
+        // is elected only as sole candidate and then FAILS the winner
+        // threshold — no dodge. The old signed per-candidate gate read
+        // i32::MIN < 26.2M and jinked at it.
+        w.rivals[ri].jink = 0;
+        {
+            let (rx, ry) = {
+                let e = &w.g.ent[i];
+                (e.x, e.y)
+            };
+            let e = &mut w.g.ent[threat];
+            e.x = rx ^ 0x8000;
+            e.y = ry ^ 0x8000;
+        }
+        w.g.rebuild_proj_chain();
+        w.rival_defense(ri, i);
+        assert_eq!(
+            w.rivals[ri].jink, 0,
+            "an antipodal bolt armed the dodge — the election key went signed"
+        );
     }
 
     /// The rival Rebound arm, end to end: an incoming fireball inside
@@ -4761,6 +4910,7 @@ mod tests {
             pmana: 0,
             pmana_max: 0,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,
@@ -4952,6 +5102,133 @@ mod tests {
         assert_ne!(claim_at(27), 0, "27 is inside the cone — the claim lands");
     }
 
+    /// ⭐ THE BALL GUARD'S ELECTION KEY IS UNSIGNED (sub_15340 :18989
+    /// `unsigned int v2 = -1`, the landed sub_15260 scout law's
+    /// sibling call site): a foreign carpet at the ball's EXACT
+    /// half-map antipode wraps to 0x80000000 — the LARGEST key — and
+    /// loses the guard election to any real carpet. The old signed
+    /// key elected the phantom as "nearest guard" at i32::MIN, read
+    /// the ball GUARDED, and refused a ball retail takes. The 5120²
+    /// unguarded test is the caller's SIGNED compare on the winner
+    /// (:18910 `int > 26214400`).
+    ///
+    /// NON-VACUITY: the signed key refuses the pick (guard i32::MIN
+    /// fails `> 26.2M`) and the assertion fails.
+    #[test]
+    fn the_ball_guard_election_key_is_unsigned() {
+        let mut w = possess_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let me = w.rivals[ri].ent;
+        assert!(
+            w.wizard_pos(0).is_some(),
+            "test premise: the human is alive (his pose seeds the guard election)"
+        );
+        let (hx, hy) = (w.human_pose.0, w.human_pose.1);
+        // A neutral human-owned ball 20,000 out from the human — far
+        // beyond the 5120 guard disc, so retail reads it UNGUARDED.
+        let b = w.g.new_event().expect("ball slot");
+        {
+            let e = &mut w.g.ent[b];
+            e.class64 = 10;
+            e.model65 = 39;
+            e.tick70 = 41;
+            e.f140 = 512;
+            e.f144 = PLAYER_TARGET; // neutral-owned (no hate latched)
+            e.act_life = 300;
+            e.max_life = 300;
+        }
+        let (bx, by) = (hx.wrapping_add(20_000), hy);
+        let rz = w.g.ent[i].z;
+        w.g.move_relink(b, bx, by, rz);
+        // The phantom guard: a foreign carpet at the ball's exact
+        // antipode, on the tick-top wiz chain.
+        let p =
+            w.g.spawn_fireball(bx ^ 0x8000, by ^ 0x8000, rz)
+                .expect("carpet slot");
+        {
+            let e = &mut w.g.ent[p];
+            e.class64 = 3;
+            e.model65 = 1;
+            e.id24 = me.wrapping_add(9); // foreign, and not the ball's id24
+            e.act_life = 1000;
+            e.flags &= !0x10;
+        }
+        w.g.rebuild_wiz_chain();
+        w.g.rebuild_ball_chain();
+        assert!(
+            w.rival_pick_ball_target(ri, i),
+            "the antipodal phantom guard poisoned the election — the key went signed"
+        );
+        assert_eq!(w.rivals[ri].state, AiState::Possess);
+        assert_eq!(w.rivals[ri].target, b as u16);
+    }
+
+    /// ⭐ THE CASTLE-RAID ELECTION KEY IS UNSIGNED, ITS WINNER GATE
+    /// SIGNED (sub_143A0 :18505 `unsigned int v7 = -1`, :18520
+    /// `v3 < v7`; :18531 `int >= v4*v4` → reject): with a real
+    /// eligible castle beyond raid range and a second one at the
+    /// rival's EXACT antipode, retail elects the REAL one (the
+    /// antipodal key 0x80000000 is the largest) and the winner gate
+    /// refuses the raid. The old signed key elected the antipodal
+    /// phantom at i32::MIN, slid it past the signed winner gate, and
+    /// green-lit a cross-map raid retail never makes.
+    ///
+    /// NON-VACUITY: the signed key returns `true` (state RaidCastle
+    /// at the phantom) and the assertion fails.
+    #[test]
+    fn the_castle_raid_election_key_is_unsigned() {
+        use crate::mc1::behavior::BEHAVIOR;
+
+        let mut w = possess_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let (rx, ry, rz) = {
+            let e = &w.g.ent[i];
+            (e.x, e.y, e.z)
+        };
+        // Both castles human-owned and hated — eligibility rides the
+        // hated && undefended leg. ⚠ Park the human OFF the rival's
+        // axis first: the fresh world spawns them together, which put
+        // the phantom site at the HUMAN's antipode too and the SIGNED
+        // undefended test read it "defended" — masking the election
+        // (this pin probed VACUOUS in that geometry).
+        w.human_pose = (
+            rx.wrapping_add(20_000),
+            ry.wrapping_add(20_000),
+            w.human_pose.2,
+        );
+        w.rivals[ri].hate[0] = 60_000;
+        let fake_castle = |w: &mut World, x: u16, y: u16| {
+            let c = w.g.spawn_fireball(x, y, rz).expect("castle slot");
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = PLAYER_TARGET;
+            e.act_life = 1000;
+            e.flags &= !0x10;
+            c
+        };
+        let v28 = BEHAVIOR[w.g.ent[i].row156 as usize].v_28 as i32;
+        // The real eligible castle: nearest by the true metric, but
+        // 5,000 past the raid range.
+        let c1 = fake_castle(&mut w, rx.wrapping_add((v28 + 5_000) as u16), ry);
+        // The phantom: the rival's exact antipode.
+        fake_castle(&mut w, rx ^ 0x8000, ry ^ 0x8000);
+        let (hx, hy) = (w.human_pose.0, w.human_pose.1);
+        let (c1x, c1y) = (w.g.ent[c1].x, w.g.ent[c1].y);
+        assert!(
+            Gen::dist2_sq(c1x, c1y, hx, hy) as u32 > 7_680 * 7_680,
+            "test premise: the human defends neither site"
+        );
+        w.g.rebuild_wiz_chain();
+        assert!(
+            !w.rival_pick_castle_target(ri, i),
+            "the antipodal phantom won the election and slid past the \
+             signed winner gate — the key went signed"
+        );
+    }
+
     /// A castle-less rival with Create Castle (16) in its book — the
     /// plant/rebuild laws' scaffolding (ledger 2026-08-20b).
     fn castle_world() -> World {
@@ -5056,6 +5333,82 @@ mod tests {
             (w.g.ent[0].x, w.g.ent[0].y),
             (0, 0),
             "the scratch keeps the last probed candidate"
+        );
+    }
+
+    /// ⭐ THE OWNED REGISTER'S PHASE IS THE REBUILD'S (:17969):
+    /// `sub_45C10` projects the acquisition list into `owned[]` at
+    /// the TOP of the rival dispatch, BEFORE the learn expiry's mint
+    /// at :18022 — a spell minted at T reaches `owned[]` at T+1 (the
+    /// human's opposite phase is call order, :55342, not law). The
+    /// heads are INHERITED (mc1l37 t=2487's castle-build cascade) —
+    /// this pin carries the phase.
+    #[test]
+    fn a_learned_spell_reaches_owned_one_tick_late() {
+        let mut w = castle_world();
+        let ri = 0;
+        w.rivals[ri].learn[3] = 1;
+        w.tick(away(), PlayerCommand::default());
+        assert_eq!(w.rivals[ri].learn[3], 0, "the countdown expired");
+        assert_eq!(
+            w.rivals[ri].owned[3], 0,
+            "the mint tick leaves owned[] untouched (its rebuild had already run)"
+        );
+        w.tick(away(), PlayerCommand::default());
+        assert_ne!(
+            w.rivals[ri].owned[3], 0,
+            "the next housekeeping's rebuild registers the token"
+        );
+    }
+
+    /// ⭐ THE NEAREST-CASTLE KEY IS UNSIGNED (:18937 `unsigned int
+    /// v2 = -1`): sub_42410's i32 dx²+dy² wraps to i32::MIN at the
+    /// exact half-map diagonal (dx = dy = ±32768 ⇒ 2·2³⁰), and
+    /// retail reads the wrap as the LARGEST key — a castle on that
+    /// diagonal can never win the election over any real neighbour.
+    /// A signed seed elected the phantom "nearest" (whose Chebyshev
+    /// gap 32768 clears the 12288 veto) and green-lit the first
+    /// candidate retail rejects (mc1l49 t=3298: cand (49152,16384)
+    /// vs the far-corner castle (16384,49152)). The head is
+    /// INHERITED (pair-clean) — this pin carries the law.
+    #[test]
+    fn the_scout_nearest_castle_key_is_unsigned() {
+        let mut w = castle_world();
+        let ri = 0;
+        let i = w.rivals[ri].ent as usize;
+        let me = w.rivals[ri].ent;
+        let z = w.g.ent[i].z;
+        // Home the wizard so the first candidate is (49152, 16384)
+        // (x = 49152 as i16 = −16384 → cell 3; y = 16384 → cell 1).
+        w.g.move_relink(i, 49152, 16384, z);
+        let fake_castle = |w: &mut World, x: u16, y: u16| {
+            let gz = w.g.ground_z(x, y) as i16;
+            let c = w.g.spawn_fireball(x, y, gz).expect("castle slot");
+            let e = &mut w.g.ent[c];
+            e.class64 = 3;
+            e.model65 = 2;
+            e.id24 = me.wrapping_add(9);
+            e.act_life = 1000;
+            e.flags &= !0x10;
+            c
+        };
+        // A foreign castle EXACTLY the half-map diagonal from the
+        // first candidate — its key wraps to 0x80000000 — and the
+        // true neighbour 8000 south, inside the home candidates'
+        // 12288 Chebyshev veto.
+        fake_castle(&mut w, 16384, 49152);
+        fake_castle(&mut w, 49152, 24384);
+        w.g.rebuild_wiz_chain();
+        assert!(w.rival_scout_site(ri, i), "the walk still finds a site");
+        assert_ne!(
+            w.rivals[ri].site,
+            (49152, 16384),
+            "the phantom-nearest election green-lit the corner the true neighbour vetoes"
+        );
+        assert_eq!(
+            w.rivals[ri].site,
+            (0, 16384),
+            "the true neighbour wins the election, vetoes the home cell, and the third candidate lands"
         );
     }
 

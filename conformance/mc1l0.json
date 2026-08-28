@@ -127,6 +127,30 @@
    "file": "a-villager-s-hit-tick-freezes-the-walker-the-m12.mgcr",
    "source": "mc1l0",
    "note": "A VILLAGER'S HIT TICK FREEZES THE WALKER: the m12/13/14 damage prologue puts the movement core and the wander draws in the ELSE of the damage test (m12 :25057-67), so on the tick the damage lands the settler only marks its attacker \u2014 ledger 2026-08-15 (end-to-end, law 5)."
+  },
+  {
+   "t": 1078,
+   "file": "an-active-earthquake-never-blocks-regen-sub-567a.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "AN ACTIVE EARTHQUAKE NEVER BLOCKS REGEN: sub_567A0's mid-burst arm decrements and returns BEFORE sub_55E80 (:65336-41) \u2014 the only machine of the 24 with the inverted return, so the shared launcher suppress-regen pin abstains on spell 6. mc1l0-sg t=1079/1130/1172: retail regens through the burst; the port suppressed. Ledger SESSION 62 law 3."
+  },
+  {
+   "t": 1079,
+   "file": "quake-volcano-payload-children-are-generic-explo.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "QUAKE/VOLCANO PAYLOAD CHILDREN ARE GENERIC-EXPLODE CHILDREN (:62759-71): arms 2/(10,15) and 4/(10,9) spawn at the BOLT's own axis (z included) and stamp owner + heading + pitch + f44 off the bolt and f146 the target (miss => MC1_MISS_STAMP) \u2014 arm 5's shape verbatim. The bare-at-ground mint dropped every one of those lanes at once (mc1l0-sg t=1080/1133 quake, t=1176/1483 volcano). Ledger SESSION 62 law 4."
+  },
+  {
+   "t": 1176,
+   "file": "a-tree-on-a-zeroed-measured-cell-splash-dies.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "A TREE ON A ZEROED MEASURED CELL SPLASH-DIES: retail's tree tail (:57703-11) snaps z to ground, probes the TILE TYPE, and on water (type 0) mints a (10,5) splash at the tree's own axis (child +24 = the tree's) and despawns. The old strict-retail suppression was a PRISTINE-plane workaround (village paint under trees read as water); a format-2 MEASURED channel carries the type plane as ground truth, so the arm is live again. mc1l0-sg t=1177: two quake-drowned trees (238/243, cells (84,57)/(85,57) type->0 at 1176) splash and free their slots - without the law the free-list pops off by two and the (10,11) diggers land in the trees' slots (the old missing(10,11)slot685x2 head). Ledger SESSION 65."
+  },
+  {
+   "t": 2723,
+   "file": "the-m17-magnet-bolt-flies-state-18-the-m1-homing.mgcr",
+   "source": "mc1l0-spells-galore",
+   "note": "THE M17 MAGNET BOLT FLIES STATE 18 = THE M1 HOMING SKELETON: HW's listing carries the case-0x11 acquire arm remc1's dropped (hw:60386-405 - walks ONLY the ball chain, no owner exclusion, no danger call, cone 0x71/0x71). The port had the arm (aim_assist_possess_mc1's magnet leg) but strand-ed every bolt in the 6|16|18 inert dispatch; retail's bolt carries +70=18 for its whole life. mc1l0-sg t=2723-2733 slot 46: chase 991, f26 200->16 entry clamp, flags +2 acquire latch, life countdown, then the (10,12)/(10,54) impacts and the ball's f144 claim at 2734. Ledger SESSION 65."
   }
  ]
 }

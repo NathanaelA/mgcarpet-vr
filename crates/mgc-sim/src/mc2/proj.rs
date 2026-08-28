@@ -470,7 +470,7 @@ impl Gen {
     /// ⚠ This seam folds THREE retail impact workers into one, and
     /// they do NOT agree about the spawned effect's leader — see the
     /// stamp block at the tail.
-    fn mc2_proj_impact(
+    pub(crate) fn mc2_proj_impact(
         &mut self,
         i: usize,
         victim: u16,
@@ -604,15 +604,23 @@ impl Gen {
                 }
                 s
             }
-            // Meteor (spell 9): the action wrapper `sub_66180`
-            // (EF:63372-73) overrides the impact's maxLife with the
-            // tier charge `byte_0x46_70` (life_0x1A = 2/5/10) — the
-            // per-tier fuse (docs/spell-audit/meteor.md).
+            // Meteor (spell 9): the fuse override `v1x->maxLife/life
+            // = byte_0x46_70` lives ONLY in the ACTION-3 wrapper
+            // `sub_66180` (EF:63372-73), selected by the
+            // function-pointer action table (Events.cpp:3281) — it is
+            // the PROJECTILE'S action row's law, not the impact
+            // pair's. Any other shot landing a (10,17) — the volcano
+            // bolt — takes the generic impact tail (EF:63306-19),
+            // which has NO override, so the impact keeps the ctor's
+            // 10/10 (mc2l30 t=230/234: life/max_life retail 9/10
+            // where the folded override minted 1/1 off the volcano
+            // bolt's unset f71 through an invented `.max(1)`).
             (10, 17) => {
-                let charge = self.ent[i].f71;
                 let s = self.mc2_spawn_meteor(x, y, z);
-                if let Some(s) = s {
-                    let ml = (charge as u32).max(1);
+                if self.ent[i].tick70 == 3
+                    && let Some(s) = s
+                {
+                    let ml = self.ent[i].f71 as u32;
                     self.ent[s].max_life = ml;
                     self.ent[s].act_life = ml as i32;
                 }

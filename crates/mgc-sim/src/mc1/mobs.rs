@@ -95,8 +95,15 @@ pub(crate) struct MobCtx {
     /// The human wizard is dead or death-falling (retail's leader
     /// death test `life_0x8 < 0` reads the player entity like any
     /// other; our player lives outside the pool, so followers get
-    /// the state through the ctx).
+    /// the state through the ctx). Republished mid-walk at the
+    /// writer's slot — LIVE-read consumers (:24636, :26152) want
+    /// this one.
     pub(crate) pdead: bool,
+    /// The tick-top pdead, NEVER republished: roster-MEMBERSHIP
+    /// consumers (the genie mana hunt's class-3 chain, :24527 —
+    /// the chain is built at tick top with actLife >= 0, :52254)
+    /// read the value the chain was built with, not the live one.
+    pub(crate) pdead_top: bool,
     /// Conformance replay (`World::strict_retail`): deliberate
     /// gameplay deviations switch off (DEVIATIONS.md law). Carried
     /// here so Gen-side ticks can gate without a Gen field (which
@@ -896,6 +903,17 @@ impl Gen {
     // ---- the six state primitives (:21311-:21871) --------------------------
 
     /// Squared 2D distance in engine units (16-bit wrapping deltas).
+    ///
+    /// ⭐ ELECTION KEYS ARE UNSIGNED. Every retail nearest-X election
+    /// seeds `unsigned int v = -1` and compares this sum UNSIGNED
+    /// (sub_19D70 :21516, sub_143A0 :18505, sub_15340 :18989, …), so
+    /// the one attainable sign-bit value — dx = dy = -32768, the exact
+    /// half-map diagonal, 2·2³⁰ = `i32::MIN` — reads as the LARGEST
+    /// key: it loses every election and fails every `<= v_28²` range
+    /// pre-gate. A signed key elected the phantom "nearest" instead
+    /// (the landed scout law, mc1l49 t=3298). Election sites therefore
+    /// cast this `as u32`; the WINNER's range gate stays per-site
+    /// (signed `int` recomputes at :18531/:18910, unsigned at :19789).
     pub(crate) fn dist2_sq(ax: u16, ay: u16, bx: u16, by: u16) -> i32 {
         let dx = bx.wrapping_sub(ax) as i16 as i32;
         let dy = by.wrapping_sub(ay) as i16 as i32;
@@ -929,16 +947,16 @@ impl Gen {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
         let (ex, ey, yaw, model) = (e.x, e.y, e.f30, e.model65);
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         let cone = row.v_30 as u16;
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for &member in self.mob_chains.visible(model as usize) {
             let j = member as usize;
             let c = &self.ent[j];
             if j == i || c.f52 != 0 {
                 continue;
             }
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 > r2 {
                 continue;
             }
@@ -1022,12 +1040,12 @@ impl Gen {
     ) -> Option<u16> {
         let e = &self.ent[i];
         let row = &BEHAVIOR[e.row156 as usize];
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         let cone = row.v_30 as u16;
         let (ex, ey, ef30, owner) = (e.x, e.y, e.f30, e.id24);
 
         let mut best: Option<u16> = None;
-        let mut best_d2 = i32::MAX;
+        let mut best_d2 = u32::MAX;
 
         // The human wizard (bucket[0]'s out-of-pool member). The
         // rebuild gate applies to him like any other class-3 body:
@@ -1039,7 +1057,7 @@ impl Gen {
         // both the death fall and the dead hold, which is exactly
         // `actLife < 0`).
         if !ctx.pdead && !self.player_invisible && owner != PLAYER_TARGET {
-            let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py);
+            let d2 = Self::dist2_sq(ex, ey, ctx.px, ctx.py) as u32;
             if d2 <= r2 && Self::angdist(ef30, Self::angle_between(ex, ey, ctx.px, ctx.py)) < cone {
                 best = Some(PLAYER_TARGET);
                 best_d2 = d2;
@@ -1074,7 +1092,7 @@ impl Gen {
             if c.flags & 0x20 != 0 || owner == c.id24 {
                 continue;
             }
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 <= r2
                 && d2 < best_d2
                 && Self::angdist(ef30, Self::angle_between(ex, ey, c.x, c.y)) < cone
@@ -1212,15 +1230,15 @@ impl Gen {
             return;
         }
         let (ex, ey) = (e.x, e.y);
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
-        let mut best: Option<(usize, i32)> = None;
+        let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
+        let mut best: Option<(usize, u32)> = None;
         for k in 0..self.ball_chain.visible_len() {
             let j = self.ball_chain.list[k] as usize;
             let c = &self.ent[j];
             if c.model65 != 40 {
                 continue;
             }
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
             }
@@ -1628,7 +1646,11 @@ impl Gen {
         self.creature_move(i);
         let tgt = self.ent[i].f146;
         let (tx, ty, tz, tclass, tdead) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz, 3u8, false)
+            // :26152-53 dereferences pool[+146] whoever it names —
+            // the human's carpet included; the dead test is the same
+            // +12<0 || +17&4 (mc1l49 t=3059: both wyverns exit chase
+            // on the death tick where the port kept firing).
+            (ctx.px, ctx.py, ctx.pz, 3u8, ctx.pdead)
         } else {
             let t = tgt as usize;
             if t == 0 || t >= self.ent.len() || self.ent[t].class64 == 0 {
@@ -1705,13 +1727,13 @@ impl Gen {
         if (self.ent[i].f63 as i16) % period != 0 {
             return;
         }
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for k in 0..self.bldg_chain.visible_len() {
             let j = self.bldg_chain.list[k] as usize;
             let c = &self.ent[j];
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
             }
@@ -1838,15 +1860,15 @@ impl Gen {
             return;
         }
         let row = &BEHAVIOR[self.ent[i].row156 as usize];
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for j in 1..self.ent.len() {
             let c = &self.ent[j];
             if c.class64 != 10 || c.model65 != 39 || c.flags & 0x400 != 0 {
                 continue;
             }
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
             }
@@ -1924,7 +1946,17 @@ impl Gen {
     /// can smell. The out-of-pool human (usually bucket[0]'s lowest
     /// index) is tested first via `ctx`; rivals follow in pool order.
     fn first_wizard_with_mana(&self, i: usize, ctx: &MobCtx) -> Option<u16> {
-        if !self.player_invisible && self.ent[i].id24 != PLAYER_TARGET && ctx.pmana != 0 {
+        // Retail's loop walks the tick-top class-3 chain (:24527),
+        // built with actLife >= 0 (:52254) — MEMBERSHIP is the
+        // liveness filter, and a dead human is off the chain
+        // (mc1hwl0 t=23503/23504: both wandering genies elect the
+        // corpse in the port, retail can't see it). Roster-membership
+        // phase: the tick-top pdead, not the mid-walk republish.
+        if !self.player_invisible
+            && self.ent[i].id24 != PLAYER_TARGET
+            && ctx.pmana != 0
+            && !ctx.pdead_top
+        {
             return Some(PLAYER_TARGET);
         }
         for j in 1..self.ent.len() {
@@ -1973,7 +2005,11 @@ impl Gen {
         // +64` (:24636) and treats a failure as a dead target, not as
         // a reason to leave the handler.
         let (tx, ty, tz, tdead) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz, false)
+            // The human's carpet IS a pool record at :24636 — the
+            // dead test applies to it too (mc1hwl0 t=23461 slot 697:
+            // retail eats a ball + blinks home on the death tick,
+            // mana 10000→10500, f146/f26 → 0).
+            (ctx.px, ctx.py, ctx.pz, ctx.pdead)
         } else {
             let t = tgt as usize;
             if t >= self.ent.len() {
@@ -2094,7 +2130,7 @@ impl Gen {
                 // born mid-tick is invisible (the chain-vs-pool bug in
                 // its fourth costume).
                 let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-                let mut best: Option<(usize, i32)> = None;
+                let mut best: Option<(usize, u32)> = None;
                 let n = self.ball_chain.visible_len();
                 for k in 0..n {
                     let j = self.ball_chain.list[k] as usize;
@@ -2102,7 +2138,7 @@ impl Gen {
                     if c.model65 != 39 {
                         continue;
                     }
-                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+                    let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
                     if best.is_none_or(|(_, bd)| d2 < bd) {
                         best = Some((j, d2));
                     }
@@ -2407,7 +2443,7 @@ impl Gen {
             return;
         }
         let (ex, ey) = (self.ent[i].x, self.ent[i].y);
-        let r2 = r * r;
+        let r2 = (r * r) as u32;
         // ⭐ The burrower rung walks the TICK-TOP m9 roster (:22624-31
         // walks `+36382 + 4*9`, the model-indexed chain the tick-head
         // sweep rebuilt), NOT the live pool: membership was sampled
@@ -2420,11 +2456,11 @@ impl Gen {
         // and ARM in its birth frame — five graded lanes on one slot
         // — where retail's ladder walks the empty tick-top chain and
         // stays idle.
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for k in 0..self.mob_chains.list.get(9).map_or(0, |l| l.len()) {
             let j = self.mob_chains.list[9][k] as usize;
             let c = &self.ent[j];
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 <= r2 && best.is_none_or(|(_, b)| d2 < b) {
                 best = Some((j, d2));
             }
@@ -2870,11 +2906,15 @@ impl Gen {
                 }
                 false
             }
-            // sub_1AB70 (:21976): m5's mana-scaled multishot,
-            // sound 32 (:22975).
+            // sub_1AB70 (:21976): m5's mana-scaled multishot. The
+            // roll bound is 7·mana/maxMana UNCLAMPED, so an
+            // over-filled purse rolls past the last case and the
+            // switch's DEFAULT fires NOTHING (v4 ≥ 7 falls through
+            // and returns 0 — mc1l32-quick t=15188 lands exactly
+            // v4 = 7). Sound 32 is the CALLER's, gated on the
+            // return (:22972-75) — a silent default tick.
             5 => {
                 let mut fired = false;
-                self.snd(32, i);
                 let mana = self.ent[i].f140;
                 let maxmana = self.ent[i].f136.max(1);
                 let v2 = (7 * mana / maxmana).max(0) as u32;
@@ -2897,8 +2937,13 @@ impl Gen {
                         }
                     }
                     1 | 2 => {
-                        for _ in 0..(n - 1).max(0) {
+                        // :22050 — each zigzag binds row 6−i (i runs
+                        // 1..v5, rows 5..2), the same descending
+                        // ladder as case 0's; the spawn default is
+                        // NOT it.
+                        for k in 1..n.max(1) {
                             if let Some(p) = self.spawn_zigzag(x, y, z) {
+                                self.ent[p].row156 = (6 - k).max(0) as u8;
                                 self.arm_projectile(
                                     p, owner, sf66, sf67, tgt, tx, ty, tz, 800, 23, lift,
                                 );
@@ -2906,7 +2951,7 @@ impl Gen {
                             }
                         }
                     }
-                    _ => {
+                    3..=6 => {
                         if let Some(p) = self.spawn_trail_bolt(x, y, z) {
                             self.ent[p].row156 = 3;
                             self.arm_projectile(
@@ -2915,6 +2960,12 @@ impl Gen {
                             fired = true;
                         }
                     }
+                    // v4 ≥ 7: the switch has no arm — nothing fires,
+                    // the rand step still burned.
+                    _ => {}
+                }
+                if fired {
+                    self.snd(32, i);
                 }
                 fired
             }
@@ -3264,7 +3315,7 @@ impl Gen {
             let e = &self.ent[i];
             (e.x, e.y, e.z, e.id24)
         };
-        let r2 = (row.v_28 as i32) * (row.v_28 as i32);
+        let r2 = ((row.v_28 as i32) * (row.v_28 as i32)) as u32;
         // THE VICTIM SCAN WALKS THE TICK-TOP PER-MODEL ROSTER
         // (`+36382 + 4*model`, :23887-98) WITH NO PER-NODE GATES —
         // nearest-within-v_28² is the whole test. The tick-top rebuild
@@ -3277,11 +3328,11 @@ impl Gen {
         // corpse idempotently). The port's pool scan with live
         // life/0x400/state-120 re-tests lost the second mint — the
         // chain-vs-pool bug in its per-node-gate-set costume.
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for &member in self.mob_chains.visible(victim_model as usize) {
             let j = member as usize;
             let c = &self.ent[j];
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if d2 <= r2 && best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
             }
@@ -3403,14 +3454,14 @@ impl Gen {
         // jitter instead.
         let e = &self.ent[i];
         let (ex, ey, ez, id) = (e.x, e.y, e.z, e.id24);
-        let mut best: Option<(usize, i32)> = None;
+        let mut best: Option<(usize, u32)> = None;
         for c in 0..self.wiz_chain.visible_len() {
             let j = self.wiz_chain.list[c] as usize;
             let c = &self.ent[j];
             if c.model65 != 2 || c.id24 == id {
                 continue;
             }
-            let d2 = Self::dist2_sq(ex, ey, c.x, c.y);
+            let d2 = Self::dist2_sq(ex, ey, c.x, c.y) as u32;
             if best.is_none_or(|(_, bd)| d2 < bd) {
                 best = Some((j, d2));
             }
@@ -3727,7 +3778,10 @@ impl Gen {
     fn guard_chase(&mut self, i: usize, base: u8, ctx: &MobCtx) {
         let tgt = self.ent[i].f146;
         let (tx, ty, tz, alive) = if tgt == PLAYER_TARGET {
-            (ctx.px, ctx.py, ctx.pz, true)
+            // Same live-record law as the wyvern/genie chases: the
+            // human's carpet is a pool record to retail's target-loss
+            // test, so a dead human breaks the guard back to WANDER.
+            (ctx.px, ctx.py, ctx.pz, !ctx.pdead)
         } else {
             let t = tgt as usize;
             if t == 0 || t >= self.ent.len() {

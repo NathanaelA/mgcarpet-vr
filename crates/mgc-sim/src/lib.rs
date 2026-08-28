@@ -930,10 +930,12 @@ impl Simulation {
         // flyer derives after.
         let mut walked_prev: Option<flight::Mc1State> = None;
         if faithful_walk && let Some(w) = &mut self.world {
-            // The Accelerate override, kill and burst-end ±80 base
-            // restore all resolve INSIDE the walk (retail's
-            // token-below-carpet order — World::step_player_flight);
-            // this tick-head sample is just the drive's initial value.
+            // The Accelerate kill and the speed writes resolve
+            // INSIDE the walk at the token's own slot (below-carpet
+            // mail via World::step_player_flight, above-carpet mail
+            // taken after the turn below); this tick-head sample is
+            // just the drive's initial value and the faithful MC1
+            // world path forces the override off.
             let over = w.accel_override();
             let prev = self.carpet;
             let mut drive = world::FlightDrive {
@@ -1086,8 +1088,12 @@ impl Simulation {
             // Faithful tier only besides: the enhanced mover's speed
             // state is its float velocity and it takes the boost
             // through `accel_override`/`speed_boost` instead.
-            if walk_mc2
-                && self.thrust_model == ThrustModel::Mc1
+            // MC1 too, not just MC2: on an IMPORTED MC1 world the
+            // carpet has a real pool slot, so an ABOVE-carpet token
+            // posts its mail after the step — the take is a no-op
+            // when step_player_flight already consumed it (native
+            // MC1 dispatches the carpet post-walk: always below).
+            if self.thrust_model == ThrustModel::Mc1
                 && let Some(base) = w.take_speed_base()
             {
                 self.carpet.tgt_speed = base;

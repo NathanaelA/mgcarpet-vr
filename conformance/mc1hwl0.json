@@ -152,6 +152,66 @@
    "file": "the-re-arm-is-not-a-tick-of-its-own-sub-25ec0-s.mgcr",
    "source": "mc1hwl0",
    "note": "THE RE-ARM IS NOT A TICK OF ITS OWN. sub_25EC0's dormant block (:28749-64) clears +26 and has NO return, so it falls straight into the activation test whose `|| !+26` arm is now TRUE -- the tick that wakes a volcano is the tick it erupts. Ours returned after the re-arm and paid for the eruption one tick later on a driver LCG that had already moved on. mc1hwl0 t=35674, driver slot 754 at f26 2597: retail borns the (10,19) plume at 518, the (10,16) lava bomb at 452 and the eruption-start (9,0) blast at 364, and advances +30 by 0x500 (39680 vs our 38400). The same pair pins the START's two BLIND register writes (:28779, :28791): the only gate on either is `slot != 0`, so the kick and the plume reap-flag land on whatever record now holds the slot -- here a (10,0) fire that re-minted the dead plume's 404."
+  },
+  {
+   "t": 10249,
+   "file": "the-portal-vortex-warps-every-wizard-the-warp-sc.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE PORTAL VORTEX WARPS EVERY WIZARD: the warp scan walks the wizard list (sub_26A60 :29199-29223, var_u16_10 \u2014 carpet ent through wizard+10; HW byte-identical :27714-68), human first then each rival's carpet by its pool record, cone on the CARPET's f30; per warp the portal re-stamps its OWN site_z = row156 v_12 + terrainAlt(dest) BEFORE the verbatim sub_41C70 move, and snd 22 fires at the PORTAL's slot. mc1hwl0 t=10250: rival carpet 473 rides the vortex 51 tiles; the human-only scan left it hovering at the mouth. Ledger SESSION 62 law 1."
+  },
+  {
+   "t": 15799,
+   "file": "the-raid-castle-pick-s-undefended-test-has-a-thi.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE RAID CASTLE-PICK'S UNDEFENDED TEST HAS A THIRD CONJUNCT: :18518 \u2014 undefended also requires !sub_11950(ownerCarpet, castle) on the pool record AT the castle's id24 (id24 IS the owner's carpet pool slot); the human's carpet is out-of-pool, its arm runs the sprite-44 box on the live pose. A grown keep's summed extents reach past the 7680 disc, so a carpet parked over its own keep's corner still defends it. mc1hwl0 t=15800-18: 19 pairs where the y-leg of the overlap holds the veto until retail elects at 15820. Ledger SESSION 62 law 2."
+  },
+  {
+   "t": 23462,
+   "file": "a-corpse-imports-and-holds-its-wrapped-negative.mgcr",
+   "source": "mc1hwl0",
+   "note": "A CORPSE IMPORTS AND HOLDS ITS WRAPPED-NEGATIVE PURSE: the import seeded player.mana (and the rival twin) as f140.max(0), eating the corpse's held shortfall at every anchor - retail holds -100 = 4294967196 for the whole 69-tick corpse window (t=23462-23530) until the respawn re-mint (:54998). Both seeds are now BIT-COPIES (conformance.rs). Ledger SESSION 64 Shield/Rebound arm (a), import half."
+  },
+  {
+   "t": 38739,
+   "file": "the-rebound-deflection-quarter-debits-the-deflec.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE REBOUND DEFLECTION QUARTER DEBITS THE DEFLECTOR, AFFORD-GATED, AND THE BIT REPUBLISHES MID-WALK: all four deflect sites (:62725/:62863/:63129/:63734) subtract quarter(projectile +140) from the DEFLECTOR's purse at the PROJECTILE's walk slot, gated quarter <= purse (unsigned) on the payload pair f68/f69 (a (9,0) m16 bolt carries (10,1) and deflects); the port's MailTarget::Player arm had neither gate nor debit ('INTERIM'), and the g.player_rebound mirror was tick-head-stale, so a re-cast's fresh 0x8000 was invisible to same-tick bolts above the token's slot. mc1hwl0 t=38739: the re-cast at carpet 472 republishes, bolt 949 (f140 200) deflects and the human pays the 50 quarter; the port had refused the deflection (plain hit, extra (10,0) impact, +50 purse). The human debit rides Gen.player_deflect_debit (wizard pass pre-step / tick-tail raw, retail's below/above-carpet order). Ledger SESSION 64 Shield/Rebound arm (b)."
+  },
+  {
+   "t": 23438,
+   "file": "the-ch3-thief-banks-the-full-steal-not-the-clamp.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE CH3 THIEF BANKS THE FULL STEAL, NOT THE CLAMPED TAKE: retail's intake (:55689-91) subtracts the full amount raw from the victim (+140, no clamp - the same-dispatch regen step is the only floor, signed so an over-steal eats the quantum) and credits the attacker the FULL amount even off a broke victim. The port clamped both sides (.min(mana) at the two rivals.rs intake sites): mc1hwl0 t=23438+ slot 473, the thief reads 100 where the clamped take banked 0, x24. The rival purse step now reads the purse as signed 32 (:55385-91) so wrapped shortfalls floor at 0. Ledger SESSION 64 Shield/Rebound arm (c)."
+  },
+  {
+   "t": 23461,
+   "file": "a-dead-human-is-a-dead-chase-target-and-off-the.mgcr",
+   "source": "mc1hwl0",
+   "note": "A DEAD HUMAN IS A DEAD CHASE TARGET, AND OFF THE MANA-HUNT CHAIN: the genie chase's target test (:24636, +12>=0 && !(+17&4) && +64) reads the human's carpet like any pool record - the PLAYER_TARGET arm's hardcoded alive was a port invention (t=23461 slot 697: retail eats a ball +500 and blinks home, f146/f26 -> 0). The genie mana hunt (:24527) walks the tick-top class-3 chain built with actLife>=0 (:52254) - MEMBERSHIP is the liveness filter, so the corpse is unelectable (t=23503/23504 slots 696/695: retail chase 0, the port elected the corpse and teleported onto the body). Same law family: wyvern_chase (:26152, mc1l49 t=3059) and the m15 guard's target-loss test. Ledger SESSION 65."
+  },
+  {
+   "t": 23480,
+   "file": "the-trigger-fire-probe-reads-the-tick-top-roster.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE TRIGGER VOLUME'S FIRE PROBE READS THE TICK-TOP CLASS-3 ROSTER, AND A DEAD CARPET IS NOT ON IT: sub_5A090 (hw:63902-18, base :67632-48) walks var_u32_36462[0] filtered to model 0; the roster's case-3 arm (hw:48303-13, base :52253-62) gates actLife >= 0 - so the falling corpse inside (11,2) volume 179's box at t=23480 can trip nothing, the probe MISSES regardless of want and takes the z re-stamp path. The port's ungated pose probe armed f26=10 and minted six (10,17)s, and the fire_disposition's mc2_rebuild_free displaced the death-cascade puffs (999/984/978/963/959 LIFO) to 161/186. The REARM probe (sub_5A120 hw:63924-38) walks the wizard TABLE with no liveness gate - the asymmetry is retail's. Ledger SESSION 66."
+  },
+  {
+   "t": 25314,
+   "file": "the-castle-ejector-is-gated-on-pool-headroom.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE CASTLE EJECTOR IS GATED ON POOL HEADROOM AND A MAGNET DRAWS ONLY IF IT ALLOCATED: sub_47130 (:56194-96, hw:52258-60) gates the ENTIRE ball+magnet body on sub_37710_37AD0() - the free-slot COUNT (top index +40 init -1, hw:40471/40217), so an exhausted pool (the mc1hwl0 eruption drained the stack to 0) skips the ejector WITHOUT A SINGLE DRAW; and the magnet loop (hw:52307-20) allocates the (10,54) AT THE CASTLE first, only a successful alloc stamping the owner + drawing the castle yaw + relinking 25 tiles out. The port's fail-open spawns drew 4 unconditional magnet yaws per even-f63 tick, forking castle 340's LCG phase (t=25315/17/19/21/23 - five LOCAL heads, one law). Also: throw count = min(clamp(spill/1000,1,32), free COUNT) - the old +1 misparsed sub_37710. Ledger SESSION 66."
+  },
+  {
+   "t": 25318,
+   "file": "the-respawn-window-sacrifices-ascending-victims.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE MC1 RESPAWN WINDOW SACRIFICES 0x20400 VICTIMS ASCENDING: sub_37220 (:43836-58) rebuilds BOTH stacks - the recycle half collects every live record with flags & 0x20400, pushed DESCENDING 999->1 so the LOWEST victim tops the stack - and NewEvent's second arm (:43885-908) seizes it bare (unlink, memset, defaults; the tick-top roster caches blanked). The wizard re-init sub_44D30 reaps at entry (hw:50910) and disarms at its tail (hw:51124); the death LANDING (:55487) reaps and leaves the stack ARMED; the disposition fire (sub_37440 :43960) and the ejector's empty-pool retry disarm. Witness: mc1hwl0 t=25319 - rival 473 respawns into a 0-free pool and retail's 24-entry re-grant eats 20 village dwellings at slots 1..15,19..23 (16/17/18 fail the mask), consecutive-rand mint signature; the port's respawn minted nothing and left the rival bookless. Ledger SESSION 66 addendum 2."
+  },
+  {
+   "t": 25496,
+   "file": "the-jar-pickup-writes-the-acq-list-not-the-owned.mgcr",
+   "source": "mc1hwl0",
+   "note": "THE JAR PICKUP WRITES THE ACQUISITION LIST, NOT THE DERIVED OWNED REGISTER: sub_55A40's grant (:64848-61, hw:61070-89) writes +532[v24]/+940/+772 and never +676; +676 is rebuilt wholesale from +532 by sub_45C10 (:55304-19) as the FIRST statement of the wizard's own dispatch (sub_45C90 :55342, hw:51410). The already-known marker reads +676 (:64794) and the grant-refusal reads the live +532 (:64818-31) - two different registers, one variable in the old port. mc1hwl0 t=25497: the human picks spell 18 off jar 187 inside this pair, and the far (12,18) jar 204 - poll tick +63=176, walk slot below carpet 472 - must still read 'not owned' and hold flags 4; it stamps at its NEXT poll, t=25501 (+63=180), after the carpet's rebuild. The port's eager player.owned[spell]=i at the grant stamped it four ticks early. Same law the 'all spells' cheat already works around (cheats.rs mc1_cheat_all_spells). Reversion signature: slot 204 flags retail 4 port 5."
   }
  ]
 }

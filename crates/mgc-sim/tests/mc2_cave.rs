@@ -639,11 +639,21 @@ fn mc2_cave_behaviors_and_goldens() {
     // exactly with all three still in.
     assert_eq!(
         got,
+        // Checkpoint D re-pinned 2026-08-29 (A/B/C hold) for the
+        // RIVAL SPEED-TOKEN dispatch family: the token body now runs
+        // at the token's own walk slot (GetScroll_69DB0's model-1
+        // arm — 240/160 sustain writes, the (10,2) puff on the
+        // token's phase byte), the approach brake (word_0xe_14,
+        // sub_14C90) collapses a live window into the same-tick 1×
+        // restore, and the cast projectile no longer inherits the
+        // AI's f146 target (retail hands the bolt target96 = 0).
+        // A caves world runs rival wizards, so the late checkpoint
+        // reshapes from the first rival SPEED window on.
         vec![
             0xfcd7cfe710ac9782u64,
             0x12d87c9aa580b181,
             0x737a0266e1a078a2,
-            0x06f065fe972116ca,
+            0xc553ff1cead3c046,
         ],
         "cave goldens moved — re-pin ONLY for an intended fidelity change"
     );

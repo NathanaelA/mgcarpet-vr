@@ -1841,8 +1841,13 @@ impl Gen {
                         let d = self.mc2_rand(br); // DRAW #C — wander yaw
                         let fov = BEHAVIOR[103].v_30.max(1) as u32;
                         let w12 = D404C[(self.ent[br].f50 as usize).min(4)][D404C_W12];
+                        // EF:19878 stores the wander sum UNMASKED —
+                        // the yaw lane legitimately carries >0x7FF
+                        // (mc2l24 t=2's (5,27) heading family; the
+                        // one masking site in the machine is the
+                        // body turn, EF:20967).
                         let base = (self.ent[body].f30 as i32 + w12 as i32 - fov as i32) as u16;
-                        self.ent[br].f30 = base.wrapping_add((d % fov) as u16) & 0x7FF;
+                        self.ent[br].f30 = base.wrapping_add((d % fov) as u16);
                     }
                 }
             }
@@ -1917,8 +1922,10 @@ impl Gen {
                             e.f128 = -16;
                             e.f34 = row[D404C_W12] as u16;
                             e.f36 = row[D404C_W14] as u16;
-                            e.f30 = e.f34.wrapping_add(byaw) & 0x7FF;
-                            e.f32 = e.f36.wrapping_add(bpitch) & 0x7FF;
+                            // EF:19956-57: unmasked sums (see the
+                            // wander-yaw note above).
+                            e.f30 = e.f34.wrapping_add(byaw);
+                            e.f32 = e.f36.wrapping_add(bpitch);
                         }
                     }
                     1 => {
@@ -2034,8 +2041,8 @@ impl Gen {
                 if v36 {
                     let v23: i16 = if self.ent[br].f63 & 1 != 0 { -204 } else { 204 };
                     let w12 = D404C[(self.ent[br].f50 as usize).min(4)][D404C_W12];
-                    self.ent[br].f30 =
-                        (self.ent[body].f30 as i32 + w12 as i32 + v23 as i32) as u16 & 0x7FF;
+                    // EF:20089: unmasked (see the wander-yaw note).
+                    self.ent[br].f30 = (self.ent[body].f30 as i32 + w12 as i32 + v23 as i32) as u16;
                 }
                 self.m27_integrate(br);
                 self.m27_swing_branch(body, br);
@@ -2160,6 +2167,23 @@ impl Gen {
         }
     }
 
+    /// `sub_102D0` mode 4 (EF:3687-3706) — the SLOPE-PITCH gate: the
+    /// pitch from the entity's CURRENT position to the candidate,
+    /// capped per direction by the row's `v_16` (one sign) / `v_18`
+    /// (the other). The m27 ground mover is the mode's only caller
+    /// (`1 || 4 || roughness>=32`, EF:19498/20912/20926) — the
+    /// mode-1-only probe let the hydra crest slopes retail refuses.
+    fn m27_slope_blocked(&self, i: usize, cand: (u16, u16, i16)) -> bool {
+        let row = &BEHAVIOR[self.ent[i].row156 as usize];
+        let e = &self.ent[i];
+        let pitch = Self::mc2_radix_tan((e.x, e.y, e.z), cand);
+        match Self::turn_sign(0, pitch) {
+            -1 => Self::angdist(0, pitch) as i32 > row.v_16 as i32,
+            1 => Self::angdist(0, pitch) as i32 > row.v_18 as i32,
+            _ => false,
+        }
+    }
+
     /// The m27 ground mover (`sub_2AF10` EF:20869) — returns
     /// 1 same-tile / 2 moved / 3 turned / 4 fully blocked (which
     /// arms the 0xD8 teleport in place). `commit` = the a2 flag.
@@ -2180,7 +2204,10 @@ impl Gen {
             moved = true;
             turned = true;
             code = 1;
-        } else if self.mc2_path_blocked(body, pred) || self.roughness(pred.0, pred.1) >= 32 {
+        } else if self.mc2_path_blocked(body, pred)
+            || self.m27_slope_blocked(body, pred)
+            || self.roughness(pred.0, pred.1) >= 32
+        {
             if yaw == roll {
                 // Scan ±91-step yaws for a free heading.
                 let mut v7: i32 = 91;
@@ -2191,7 +2218,10 @@ impl Gen {
                     let mut p2 = (x, y, z);
                     Self::polar_step(&mut p2, cand, 0, spd);
                     p2.2 = self.ground_z(p2.0, p2.1) as i16;
-                    if !self.mc2_path_blocked(body, p2) && self.roughness(p2.0, p2.1) < 32 {
+                    if !self.mc2_path_blocked(body, p2)
+                        && !self.m27_slope_blocked(body, p2)
+                        && self.roughness(p2.0, p2.1) < 32
+                    {
                         found = Some(cand);
                         break;
                     }
@@ -2289,6 +2319,7 @@ impl Gen {
                         for _ in 0..128 {
                             pred.2 = self.ground_z(pred.0, pred.1) as i16;
                             if !self.mc2_path_blocked(i, pred)
+                                && !self.m27_slope_blocked(i, pred)
                                 && self.roughness(pred.0, pred.1) < 32
                             {
                                 break;

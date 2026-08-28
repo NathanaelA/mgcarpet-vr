@@ -6,7 +6,19 @@
    "t": 1,
    "file": "the-mc2-ai-carpet-altitude-servo-is-2-branch-sub.mgcr",
    "source": "mc2l1",
-   "note": "THE MC2 AI CARPET ALTITUDE SERVO IS 2-BRANCH: sub_580E0 (EF:40372, via sub_146F0 EF:6454) steps the full v_14 whenever the carpet is above the TERRAIN ITSELF, then clamps to ground+v_12 — the a4 slot (v_10) is passed but DEAD in retail, same as the balloon servo. The port's 25% middle band between ground+v_10 and ground+v_12 was invented. mc2l1 t=1: every rival carpet's z rides this servo from the first tick; reverting the law re-dirties all 21 pre-horizon pairs of this take at once (ledger 2026-08-28 session 58)."
+   "note": "THE MC2 AI CARPET ALTITUDE SERVO IS 2-BRANCH: sub_580E0 (EF:40372, via sub_146F0 EF:6454) steps the full v_14 whenever the carpet is above the TERRAIN ITSELF, then clamps to ground+v_12 \u2014 the a4 slot (v_10) is passed but DEAD in retail, same as the balloon servo. The port's 25% middle band between ground+v_10 and ground+v_12 was invented. mc2l1 t=1: every rival carpet's z rides this servo from the first tick; reverting the law re-dirties all 21 pre-horizon pairs of this take at once (ledger 2026-08-28 session 58)."
+  },
+  {
+   "t": 204,
+   "file": "the-10-76-fire-orb-hub-is-a-word-0x2a-0x2c-tenan.mgcr",
+   "source": "mc2l1",
+   "note": "THE (10,76) FIRE-ORB HUB IS A word-0x2A/0x2C TENANT: damage @0x2A (sub_33C00 EF:24712), ring radius @0x2C (sub_33C70 EF:24741-50) \u2014 the same re-home family as (10,0)/(10,6)/(10,9)/(10,11)/(10,17)/(10,65)/(10,66); model 77 rides along for census honesty. The uniform import homes fed f44 the subSpell and f140 the dead @0x90, so an imported orb breathed z 70->192 and posted ZERO mail (mc2l1 t=204-216 slot 46 z, t=218+ the building's 350/tick life family). Ledger SESSION 62."
+  },
+  {
+   "t": 192,
+   "file": "the-goal-pick-writes-the-target-pair-onto-the-wi.mgcr",
+   "source": "mc2l1",
+   "note": "THE GOAL PICK WRITES THE TARGET PAIR ONTO THE WIZARD ENTITY, AND THE BOLT INHERITS NOTHING: every goal predicate writes word_0x96_150/word_0x98_152 onto the caster entity (EF:6114-15 and siblings) - the port's side-lane target never wrote back, so free-run f146 held 0 and the landed aim-pitch law aimed at the scratch slot (t=193: retail 141). AND no site in the rival cast chain hands the bolt the AI's target (sub_14E10 writes only the caster's pitch): the possession bolt carries target96=0 and flies a straight frozen-pitch ray (slot 151: z exactly -56/tick) - the port's f146 hand-off let the class-9 homing re-aim it (pitch 64 vs 40, z 138 vs 172). Ledger SESSION 65."
   }
  ]
 }

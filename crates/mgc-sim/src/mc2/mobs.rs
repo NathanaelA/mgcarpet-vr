@@ -2777,10 +2777,28 @@ impl Gen {
             25 => 512,
             _ => 0,
         };
-        let z = ctx.pz.saturating_sub(off);
-        self.move_relink(i, ctx.px, ctx.py, z);
-        self.ent[i].f30 = ctx.pyaw;
-        self.ent[i].f34 = ctx.pyaw;
+        // The parent is the body's OWN caster carpet (parentId,
+        // EF:10655) — a RIVAL's morph body follows the rival, not
+        // the human (mc2l22 slot 673, owner 557); only the human's
+        // body reads `ctx` (its carpet is out of pool).
+        let (px, py, pz, pyaw) = if self.ent[i].id24 == PLAYER_TARGET {
+            (ctx.px, ctx.py, ctx.pz, ctx.pyaw)
+        } else {
+            let p = self.ent[i].id24 as usize;
+            if p == 0 || p >= self.ent.len() || self.ent[p].class64 == 0 {
+                return;
+            }
+            let c = &self.ent[p];
+            (c.x, c.y, c.z, c.f30)
+        };
+        // EF:10673-74: the offset z floors at ZERO — a low carpet
+        // pins the body to the deck (mc2l0-sg slot 126: carpet 263,
+        // 263-896 → retail 0 on every tick, 236 of 508 live-morph
+        // ticks in the window sit on the clamp).
+        let z = pz.saturating_sub(off).max(0);
+        self.move_relink(i, px, py, z);
+        self.ent[i].f30 = pyaw;
+        self.ent[i].f34 = pyaw;
         // The creature's cry LOOPS while morphed — the FP effect: no
         // visible sprite from first person, just the monster's scream
         // on a loop (plus the distinct Morph cast sound 60). Play the

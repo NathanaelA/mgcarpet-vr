@@ -148,69 +148,66 @@ impl ReplayFile {
             sim_pool_slots: n("entity_pool_size").map(|v| v as usize),
             sim_awake_range: n("awake_range").map(|v| v as u32),
             mc2_replayed,
-            sim_import_pin: sim
-                .and_then(|s| s.get("import_pin"))
-                .map(|p| ImportPin {
-                    strict_retail: p
-                        .get("strict_retail")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    measured_terrain: p
-                        .get("measured_terrain")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    carpet_slot: p.get("carpet_slot").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
-                    castle_reg: pin_u16s(p, "castle_reg"),
-                    human_pose_prev: {
-                        let a = pin_i64s::<3>(p, "human_pose_prev");
-                        (a[0] as u16, a[1] as u16, a[2] as i16)
-                    },
-                    human_yaw: pin_u64(p, "human_yaw") as u16,
-                    human_yaw_prev: pin_u64(p, "human_yaw_prev") as u16,
-                    hand_bits: pin_u64(p, "mc1_hand_bits") as u32,
-                    mc1_cast_pose: {
-                        let a = pin_i64s::<6>(p, "mc1_cast_pose");
-                        mgc_sim::engine::world::PlayerPose {
-                            x: a[0] as u16,
-                            y: a[1] as u16,
-                            z: a[2] as i16,
-                            heading: a[3] as u16,
-                            pitch: a[4] as u16,
-                            speed: a[5] as i16,
+            sim_import_pin: sim.and_then(|s| s.get("import_pin")).map(|p| ImportPin {
+                strict_retail: p
+                    .get("strict_retail")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                measured_terrain: p
+                    .get("measured_terrain")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                carpet_slot: p.get("carpet_slot").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+                castle_reg: pin_u16s(p, "castle_reg"),
+                human_pose_prev: {
+                    let a = pin_i64s::<3>(p, "human_pose_prev");
+                    (a[0] as u16, a[1] as u16, a[2] as i16)
+                },
+                human_yaw: pin_u64(p, "human_yaw") as u16,
+                human_yaw_prev: pin_u64(p, "human_yaw_prev") as u16,
+                hand_bits: pin_u64(p, "mc1_hand_bits") as u32,
+                mc1_cast_pose: {
+                    let a = pin_i64s::<6>(p, "mc1_cast_pose");
+                    mgc_sim::engine::world::PlayerPose {
+                        x: a[0] as u16,
+                        y: a[1] as u16,
+                        z: a[2] as i16,
+                        heading: a[3] as u16,
+                        pitch: a[4] as u16,
+                        speed: a[5] as i16,
+                    }
+                },
+                // i32 verbatim — the dead-window −1 sentinels are
+                // real state (old u16-era pins re-parse fine: JSON
+                // numbers are typeless and were all non-negative).
+                mc1_acq: pin_i64s::<{ mgc_sim::mc1::spells::SPELL_COUNT }>(p, "mc1_acq")
+                    .map(|v| v as i32),
+                mc2_turn: pin_u64(p, "mc2_turn") as u32,
+                mc2_carpet_stall: pin_bool(p, "mc2_carpet_stall"),
+                mc1_v14: pin_bool(p, "mc1_v14"),
+                accel_veto: {
+                    let a = p.get("accel_veto").and_then(|v| v.as_array());
+                    let at = |i: usize| {
+                        a.and_then(|a| a.get(i))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    };
+                    (at(0), at(1))
+                },
+                pending_teleport: pin_f32s::<3>(p, "pending_teleport")
+                    .map(|a| (a[0], a[1], Some(a[2]))),
+                pending_respawn: pin_f32s::<3>(p, "pending_respawn").map(|a| (a[0], a[1], a[2])),
+                pending_restart: pin_bool(p, "pending_restart"),
+                wiz_charge: {
+                    let mut r = [0u8; 8];
+                    if let Some(a) = p.get("wiz_charge").and_then(|v| v.as_array()) {
+                        for (slot, v) in r.iter_mut().zip(a) {
+                            *slot = v.as_u64().unwrap_or(0) as u8;
                         }
-                    },
-                    // i32 verbatim — the dead-window −1 sentinels are
-                    // real state (old u16-era pins re-parse fine: JSON
-                    // numbers are typeless and were all non-negative).
-                    mc1_acq: pin_i64s::<{ mgc_sim::mc1::spells::SPELL_COUNT }>(p, "mc1_acq")
-                        .map(|v| v as i32),
-                    mc2_turn: pin_u64(p, "mc2_turn") as u32,
-                    mc2_carpet_stall: pin_bool(p, "mc2_carpet_stall"),
-                    mc1_v14: pin_bool(p, "mc1_v14"),
-                    accel_veto: {
-                        let a = p.get("accel_veto").and_then(|v| v.as_array());
-                        let at = |i: usize| {
-                            a.and_then(|a| a.get(i))
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                        };
-                        (at(0), at(1))
-                    },
-                    pending_teleport: pin_f32s::<3>(p, "pending_teleport")
-                        .map(|a| (a[0], a[1], Some(a[2]))),
-                    pending_respawn: pin_f32s::<3>(p, "pending_respawn")
-                        .map(|a| (a[0], a[1], a[2])),
-                    pending_restart: pin_bool(p, "pending_restart"),
-                    wiz_charge: {
-                        let mut r = [0u8; 8];
-                        if let Some(a) = p.get("wiz_charge").and_then(|v| v.as_array()) {
-                            for (slot, v) in r.iter_mut().zip(a) {
-                                *slot = v.as_u64().unwrap_or(0) as u8;
-                            }
-                        }
-                        r
-                    },
-                }),
+                    }
+                    r
+                },
+            }),
             snapshot,
             rec,
         })

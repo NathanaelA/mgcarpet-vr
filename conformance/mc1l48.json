@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc1l48",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 27413,
+   "file": "the-dead-owners-castle-token-freezes-and-releases.mgcr",
+   "source": "mc1l48",
+   "note": "A DEAD OWNER'S CASTLE TOKEN FREEZES ITS LADDER PRICE AND RELEASES ITS LATCH: both castle->token ladder writers gate on the OWNER being alive (sub_47C60 :56578 / sub_47DD0 :56629 - `pool[id24].+70 <= 1u` before wizext+708), so token 146 stays at the last commit's CAP[2] 20000/198 over the falling corpse where the un-gated every-tick stamp wrote CAP[1]; and the latched (12,16) re-runs its cast gate EVERY tick (sub_57610's `+48 > 0` guard :65871, gate sub_55DD0 :64910-32) - the caster's actLife < 0 hard leg fires mid-latch and releases +48 100->0 at :65920. mc1l48 t=27414, one tick, three lanes (f26/f136/f140); the banked 'f26 0->100 in retail' was the port's behavior read backwards. Ledger SESSION 66 law 7."
+  },
+  {
+   "t": 34326,
+   "file": "the-mc1-seizure-blanks-every-tick-top-roster.mgcr",
+   "source": "mc1l48",
+   "note": "THE MC1 SEIZURE BLANKS EVERY TICK-TOP ROSTER (:43885-91, hw:40294-301): before the recycle victim is even unlinked, NewEvent's second arm memsets the 20 per-model heads (str_36382x) and nulls var_u32_36462[1]/[2]/[0]/[3] - every roster consumer dispatched after the seizing slot sees EMPTY lists for the rest of the tick, not just the per-slot severed chain. MC2's arm (NewEvent_4A050 :581-608) has no such blank. Witness: mc1l48 t=34327 - 61 seizures into the wyvern/griffon swarm's full pool; with the blank off the pair reads 19 unexplained rows (creature scans acquired roster members retail could no longer see); with it on, the pair conforms. Rides the recycle-stack import + MC1-free-path laws (the mc1l49 seizure fixture pins those two)."
+  }
+ ]
+}

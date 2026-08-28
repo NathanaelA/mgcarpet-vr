@@ -107,7 +107,10 @@ wanted = {}          # tick -> (fixture, slug)
 taken = {re.sub(r"\.mgcr$", "", os.path.basename(p))
          for p in __import__("glob").glob(f"{out_dir}/*.mgcr")}
 for f in chosen:
-    s = slugify(f)
+    # A declared `file` IS the law's name — honor it. Deriving the
+    # slug from the note here re-cut two fixtures (from the WRONG
+    # take) whose notes had been edited after their files were cut.
+    s = re.sub(r"\.mgcr$", "", f["file"]) if f.get("file") else slugify(f)
     if s in taken:
         print(f"  skip t={f['t']}: law `{s}` is already pinned")
         continue

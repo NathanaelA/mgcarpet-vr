@@ -780,6 +780,16 @@ pub(crate) struct Gen {
     pub(crate) rand: u32,
     /// Terrain-retile LCG (`pseudoRand`), u16 stream.
     pub(crate) pseudo: u16,
+    /// The Watcom CRT `rand()` stream (`_RWD_randnext`, seed 1;
+    /// x·1103515245+12345, returns `(x>>16) & 0x7FFF`). Retail draws
+    /// it at exactly ONE sim site — the rival anti-rebound plan roll
+    /// (`rand() % 255 < acc`, :19507-08). It is a GLOBAL CRT stream
+    /// with no capture channel, so its phase is unrecoverable at
+    /// import — the roll's outcome is best-effort — but drawing it
+    /// here instead of the wizard's own entity LCG keeps the graded
+    /// `rand` lane honest (mc1l49 t=2788: one stolen `ent_rand`
+    /// step shattered every later rand comparison).
+    pub(crate) crt_rand: CrtRand,
     /// Per-model spawn ordinals (`str_AE400+12+model`, Type_AE400_20
     /// str_12): creature spawns record the old value into +63 and
     /// increment; model-7 sprite alternation keys off its parity.
@@ -817,6 +827,13 @@ pub(crate) struct Gen {
     /// from scratch every tick the funnel holds you, and the tick it
     /// stops is the tick you stop turning.
     pub(crate) player_spin: PlayerSpin,
+    /// The mana quarters the human's REBOUND deflections owe this
+    /// tick — see [`DeflectDebit`]. Written by the projectile
+    /// walkers' deflect arms, drained by the MC1 wizard pass
+    /// (pre-step: a debit from a walk slot BELOW the carpet lands on
+    /// this tick's step, retail's order) with the tick tail catching
+    /// the post-carpet slots (retail lands those raw after the step).
+    pub(crate) player_deflect_debit: DeflectDebit,
     /// Pending MC2 debuff-stamp hits on the player — (10,65) slow
     /// web / (10,66) paralyze web (`sub_38E70`/`sub_38F70`
     /// EF:28407/28442) — drained into the flight `Mc2Ext` channels
@@ -1339,6 +1356,25 @@ impl std::hash::Hash for PlayerSpin {
     }
 }
 
+/// See [`Gen::player_deflect_debit`] — the quarters the human's
+/// REBOUND deflections owe this tick (:62725 and twins debit the
+/// deflector's `+140` at the PROJECTILE's walk slot; the human's
+/// purse lives outside the pool, so the walk accumulates here and
+/// the wizard pass / tick tail drain it). Always drained by the
+/// tick boundary, so it hashes transparent-at-pristine like
+/// [`PlayerSpin`] and is deliberately NOT snapshotted.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct DeflectDebit(pub u32);
+
+impl std::hash::Hash for DeflectDebit {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.0 != 0 {
+            state.write_u8(0x5C);
+            state.write_u32(self.0);
+        }
+    }
+}
+
 /// See [`Gen::mc2_night_shade`] — a bool that hashes to NOTHING when
 /// false (hash-transparent).
 #[derive(Default)]
@@ -1531,6 +1567,17 @@ impl Gen {
 /// tag (the original's entity+24). `player` marks requests the
 /// original issued against the player's own entity (full volume,
 /// center pan, and the gate for the player-only ids 4/14/17/29).
+/// See [`Gen::crt_rand`] — the phase is UNRECOVERABLE at import, so
+/// the stream is hash-silent OUTRIGHT (the ⚠⚠ `derive(Hash)` trap on
+/// [`Gen::mc2_mobilize`]: `crt_rand: _` in `snap_write` is only the
+/// SAVE opt-out; a plain field here moved every golden in both games).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CrtRand(pub u32);
+
+impl std::hash::Hash for CrtRand {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct SoundEvent {
     pub id: u8,
@@ -1598,6 +1645,7 @@ impl Gen {
             mc1_balloon_reg: Mc1BalloonReg::default(),
             rand: seed,
             pseudo,
+            crt_rand: CrtRand(1),
             spawn_count: [0; 20],
             player_mail: [(0, 0); 6],
             player_damage: 0,
@@ -1605,6 +1653,7 @@ impl Gen {
             plume: 0,
             player_knock: (0, 0),
             player_spin: PlayerSpin::default(),
+            player_deflect_debit: DeflectDebit::default(),
             mc2_debuffs: Mc2PlayerDebuffs::default(),
             rival_ents: [0; 8],
             castle_reg: CastleReg::default(),
@@ -1744,30 +1793,48 @@ impl Gen {
     /// life 300, flags 8, +126 = 16, +44 = 100, +24 = own slot,
     /// +58 = 0xFA, +66 = +67 = 0xFF, +68 = 10 (:43879), +156 = row 0.
     pub(crate) fn new_event(&mut self) -> Option<usize> {
-        // MC2 pops the free stack FIRST and only then sacrifices a
-        // recycle victim (`NewEvent_4A050`, Events.cpp:561-608 — the
-        // free arm at :563, the victim arm at :581). MC1's
-        // `NewEvent_372C0` has the same two-stack shape (:43900-10),
-        // but its recycle stack is only ever populated inside the
-        // respawn window (`sub_44D30` rebuilds both lists at :54842
-        // and empties the victims again at :55056) — normal play
-        // allocates from `free` alone, as here. The port skips the
-        // respawn-window sacrifice; `World::death_regrant` covers
-        // the consequence (docs/DEVIATIONS.md).
-        let idx = match self.free.pop().or_else(|| self.mc2_recycle_pop()) {
-            Some(i) => i,
-            None => {
-                // Fail-open like the original (alloc returns null, the
-                // spawn silently vanishes — map 032's starved trigger),
-                // but COUNTED: the limit-removing register (ROADMAP
-                // "MULTI-GAME ARCHITECTURE") wants a playtest catalogue
-                // of the levels that hit the pool ceiling before any
-                // bumped-pool option exists.
-                self.exhausted = self.exhausted.saturating_add(1);
-                return None;
-            }
+        // Both games pop the free stack FIRST and only then sacrifice
+        // a recycle victim (MC2 `NewEvent_4A050` Events.cpp:561-608 —
+        // free :563, victim :581; MC1 `NewEvent_372C0` :43867-83 vs
+        // :43885-908). MC1's stack is armed far beyond the respawn
+        // window — the death LANDING's rebuild (:55487) arms it and
+        // never disarms (SESSION 66's sacrifice law + SESSION 67's
+        // recycle-stack import; the old "respawn window only, never
+        // reached" reading is refuted in the ledger).
+        let (idx, seized) = match self.free.pop() {
+            Some(i) => (i, false),
+            None => match self.mc2_recycle_pop() {
+                Some(i) => (i, true),
+                None => {
+                    // Fail-open like the original (alloc returns null, the
+                    // spawn silently vanishes — map 032's starved trigger),
+                    // but COUNTED: the limit-removing register (ROADMAP
+                    // "MULTI-GAME ARCHITECTURE") wants a playtest catalogue
+                    // of the levels that hit the pool ceiling before any
+                    // bumped-pool option exists.
+                    self.exhausted = self.exhausted.saturating_add(1);
+                    return None;
+                }
+            },
         };
         let idx = idx as usize;
+        // ⭐ THE MC1 SEIZURE BLANKS EVERY TICK-TOP ROSTER (:43885-91,
+        // hw:40294-301): before the victim is even unlinked, retail
+        // memsets the 20 per-model heads (`str_36382x`) and nulls
+        // `var_u32_36462[1]/[2]/[0]/[3]` — so every roster consumer
+        // dispatched after the seizing slot sees EMPTY lists for the
+        // rest of the tick, not just a severed chain at the victim.
+        // MC2's arm (`NewEvent_4A050` :581-608) has no such blank —
+        // its per-slot severed-chain cuts below stand alone there.
+        if seized && !matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2) {
+            self.ball_chain.cut = 0;
+            self.wiz_chain.cut = 0;
+            self.proj_chain.cut = 0;
+            self.bldg_chain.cut = 0;
+            for m in 0..self.mob_chains.cut.len() {
+                self.mob_chains.cut[m] = 0;
+            }
+        }
         // THE SEVERED CHAIN: reusing a freed record wipes its list
         // link, so retail walks of the tick-head ball chain stop at
         // this node for the rest of the tick. Measured: mc1l0 pair
@@ -1924,6 +1991,13 @@ impl Gen {
                     self.free_entity(s);
                 }
             }
+        } else {
+            // MC1's disposition-fire rebuild (sub_37440 :43960) runs
+            // the reaper and then DISARMS the recycle top
+            // (`var_u32_4593 = -1`) — a landing-armed sacrifice stack
+            // must not survive a trigger fire. MC2's recycle stack is
+            // live machinery (the imported ranking) and stays.
+            self.mc2_recycle.stack.clear();
         }
         self.free = (1..self.ent.len() as u16)
             .rev()
@@ -1987,6 +2061,14 @@ impl Gen {
                 r
             }
         }
+    }
+
+    /// Watcom CRT `rand()` (`watcomrand`, EventsFunctions.cpp:413):
+    /// the global `_RWD_randnext` stream. See the `crt_rand` field
+    /// doc — one retail sim call site, phase unrecoverable at import.
+    pub(crate) fn watcom_rand(&mut self) -> u32 {
+        self.crt_rand.0 = self.crt_rand.0.wrapping_mul(1103515245).wrapping_add(12345);
+        (self.crt_rand.0 >> 16) & 0x7FFF
     }
 
     /// `sub_41CC0_42000` (:52460) / `sub_57D40` (EF:40306) — UNLINK +
@@ -2074,9 +2156,23 @@ impl Gen {
     /// double allocation of one slot). Retail's removal is a linear
     /// search then a swap-with-top (:5232), which does NOT preserve
     /// the ranking below the hole — mirrored exactly.
+    ///
+    /// ⭐ MC2 ONLY. MC1's `sub_41E90` (:52512-20) touches the recycle
+    /// stack NOT AT ALL — unlink, `class = 0`, push free. Witness:
+    /// every recorded MC1 recycle stack in the corpus is STRICTLY
+    /// DESCENDING (14,178/14,178 armed-tick snapshots across five
+    /// takes) — the descending 999→1 rebuild order (:43843-48), which
+    /// a swap-with-top would scramble — and the seized-slot sequences
+    /// are descending too (mc1l49 t=54744: 21,20,11,9,8,7,6). A stale
+    /// cell whose record has since died stays on the stack; the pop's
+    /// dead-cell skip is the port's stand-in for retail's unwitnessed
+    /// unconditional seizure of it.
     pub(crate) fn free_entity(&mut self, i: usize) {
         self.unlink(i);
-        if self.ent[i].flags & 0x2_0000 != 0 && !self.mc2_recycle.stack.is_empty() {
+        if matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2)
+            && self.ent[i].flags & 0x2_0000 != 0
+            && !self.mc2_recycle.stack.is_empty()
+        {
             if let Some(at) = self.mc2_recycle.stack.iter().position(|&s| s as usize == i) {
                 self.mc2_recycle.stack.swap_remove(at);
             }
@@ -5476,12 +5572,26 @@ impl Gen {
         if spill <= 0 {
             return;
         }
-        // :56194-205 — the throw count is ALSO capped by the pool
-        // headroom (sub_37710_37AD0 = free slots + 1). The empty-pool
-        // arm (:56196, reaper + retry at 8) is approximated by the
-        // fail-open spawns below — the port frees eagerly, so its
-        // stack never carries reapable soft-kills.
-        let count = (spill / 1000).clamp(1, 32).min(self.free.len() as i32 + 1);
+        // :56194-96 (hw:52258-60) — the WHOLE ejector body is gated
+        // on pool headroom: sub_37710_37AD0 returns the free-slot
+        // COUNT (top index +40 init −1, pre-increment push — hw:40471
+        // /40217), so an exhausted pool fails the gate twice (before
+        // and after the reaper; ours frees eagerly, so the reap arm
+        // is vacuous) and the ejector returns WITHOUT A SINGLE DRAW.
+        // mc1hwl0 t=25315-23: the eruption drained the stack to 0 at
+        // castle 340's even-f63 ticks — the port's fail-open spawns
+        // drew 4 magnet yaws/tick retail never drew, forking the
+        // castle's LCG phase (5 LOCAL heads from one law).
+        if self.free.is_empty() {
+            // The gate's retry arm reaps AND disarms the recycle top
+            // (:56196 `var_u32_4593 = -1`) — a landing-armed stack
+            // must not survive past the ejector's empty tick.
+            self.mc2_recycle.stack.clear();
+            return;
+        }
+        // :56198-205 — the throw count is the clamp AND the headroom
+        // COUNT (not count+1 — the old read misparsed sub_37710).
+        let count = (spill / 1000).clamp(1, 32).min(self.free.len() as i32);
         let mut share = spill / count;
         let (cx, cy, cz, own) = {
             let e = &self.ent[i];
@@ -5518,12 +5628,19 @@ impl Gen {
                 break;
             }
         }
+        // hw:52307-20 (:56243-56): each magnet is allocated AT THE
+        // CASTLE first, and only a SUCCESSFUL allocation stamps the
+        // owner, draws the castle's yaw and relinks 25 tiles out — a
+        // failed alloc consumes NO draw (the old draw-then-spawn
+        // order burned the castle's stream on a short pool).
         for _ in 0..4 {
-            let dist = 6400i16;
+            let Some(m) = self.spawn_mana_magnet(cx, cy, cz, own) else {
+                continue;
+            };
             let yaw = (lcg32(&mut self.ent[i].rand) & 0x7FF) as u16;
             let mut pos = (cx, cy, cz);
-            Self::polar_step(&mut pos, yaw, 0, dist);
-            self.spawn_mana_magnet(pos.0, pos.1, pos.2, own);
+            Self::polar_step(&mut pos, yaw, 0, 6400);
+            self.move_relink(m, pos.0, pos.1, pos.2);
         }
     }
 
@@ -5820,16 +5937,30 @@ impl Gen {
             if cap > 5 && self.ent[i].f26 == cap {
                 let d = self.ent_rand(i) % cap as u32;
                 if d > (cap - cap / 16 - 2) as u32 {
-                    self.building_emit(i);
+                    // :30825-27 — the periodic emit fills the scratch
+                    // with the house axis, x += f80.
+                    let (x, y, z) = {
+                        let e = &self.ent[i];
+                        (e.x.wrapping_add(e.f80), e.y, e.z)
+                    };
+                    self.building_emit_at(i, x, y, z);
                 }
             }
         }
     }
 
-    /// sub_28D10 (:30715): one villager emitted at (x+f80, y) —
-    /// LCG%12: 0-1 militia m4, 2-3 migrant m14, 4-8 villager m13,
-    /// 9-11 settler m12 (their natural spawn states 25/85/79/73).
-    fn building_emit(&mut self, i: usize) {
+    /// sub_28D10 (:30715): one villager from the emit mix — LCG%12:
+    /// 0-1 militia m4, 2-3 migrant m14, 4-8 villager m13, 9-11
+    /// settler m12 (their natural spawn states 25/85/79/73).
+    ///
+    /// Retail's sub_28D10 does NOT compute a position: it spawns at
+    /// the shared scratch `word_AE454_AE444`, which each CALLER
+    /// fills (the dropped second argument — the pre-struct
+    /// prototype `sub_28D10(int, int)` survives commented out at
+    /// remc1:539). The periodic emit fills it with the house axis
+    /// +f80 (:30825-27); the collapse evacuation fills it with the
+    /// footprint CELL (:30916-31).
+    fn building_emit_at(&mut self, i: usize, x: u16, y: u16, z: i16) {
         let d = self.ent_rand(i) % 12;
         let model = match d {
             0 | 1 => 4,
@@ -5837,13 +5968,6 @@ impl Gen {
             4..=8 => 13,
             _ => 12,
         };
-        let (x, y, z) = {
-            let e = &self.ent[i];
-            (e.x.wrapping_add(e.f80), e.y, e.z)
-        };
-        // Same axis law as the defender pop-out (:30825-27 copies the
-        // house's position, x += f80): the emit spawns at the HOUSE's
-        // z, and the newborn's own first move settles it.
         self.spawn_creature(model, x, y, z);
     }
 
@@ -5914,7 +6038,11 @@ impl Gen {
                         if occ == 1 {
                             self.spawn_creature(12, wx, wy, ez);
                         } else if occ - 1 >= 4 {
-                            self.building_emit(i);
+                            // :30916-31 — the scratch holds the CELL
+                            // here, not the house axis (mc1l37
+                            // t=2537: seven evacuees at tile corners
+                            // 190..196, not house.x+f80).
+                            self.building_emit_at(i, wx, wy, ez);
                         } else {
                             self.spawn_creature(4, wx, wy, ez);
                         }
@@ -6250,9 +6378,13 @@ impl Gen {
     /// Retiled to type 1 they reach the OOB reads for the first
     /// time, and retail still declines to smooth (62,0)/(64,0)/
     /// (65,0) while smoothing (61,0)/(66,0): shim 62/66/67 plain
-    /// (61 and 66 smooth) forces 63 and 65 building. 64 is left
-    /// plain — 65 already explains (64,0)'s skip, and nothing
-    /// observed pins it. All five live in one 16-byte block
+    /// (61 and 66 smooth) forces 63 building. The 63..65 split was
+    /// re-pinned by mc1hwl0's t=17754 collapse (x 60..67 straddling
+    /// the y seam): (65,0) SMOOTHS there (938/6 = 156 = retail,
+    /// with the downstream (64,1)/(65,1) cascade confirming both
+    /// directions), so 65 is PLAIN and (64,0)'s independent skip
+    /// pins 64 as the building-classed byte instead — the entry the
+    /// earlier fit left unpinned. All five live in one 16-byte block
     /// (CC117..CC126, the last being `dword_CC126`'s low byte); the
     /// pattern is stable across the 3,457 ticks between the two
     /// collapses, so "static after boot" survives its first real
@@ -6269,7 +6401,7 @@ impl Gen {
         s[56] = 22;
         s[59] = 22;
         s[63] = 22;
-        s[65] = 22;
+        s[64] = 22;
         s[71] = 22;
         s
     };
@@ -6709,6 +6841,11 @@ impl Gen {
             free,
             rand,
             pseudo,
+            // Hash-SILENT: the Watcom CRT stream has no capture
+            // channel (phase unrecoverable at import — see the field
+            // doc), so pinning it would re-pin every golden over
+            // state whose phase is arbitrary.
+            crt_rand: _,
             spawn_count,
             player_mail,
             player_damage,
@@ -6717,6 +6854,9 @@ impl Gen {
             player_knock,
             // A per-tick transient the mover drains — see PlayerSpin.
             player_spin: _,
+            // A per-tick transient the wizard pass drains — see
+            // DeflectDebit.
+            player_deflect_debit: _,
             mc2_debuffs,
             rival_ents,
             // Save-silent (see the field doc): consequences ride
@@ -7943,6 +8083,7 @@ mod tests {
             pmana: 1000,
             pmana_max: 1000,
             pdead: false,
+            pdead_top: false,
             strict: false,
             patches: crate::patches::WorldPatches::RETAIL,
             mc2_turn: 0,

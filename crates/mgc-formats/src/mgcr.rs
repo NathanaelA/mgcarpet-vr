@@ -1632,7 +1632,14 @@ pub struct RetailPlayerMc2 {
     /// demolished and pays a cooldown per rung to shed them.
     pub guards: GuardReg,
     pub cmd_speed: i16, // type_str_164 (+998) +12
-    pub strafe: i16,    // +998 +16
+    /// The approach BRAKE word `word_0xe_14` (flight block +14, right
+    /// after `speed_0xc_12`): sub_14C90 clears it first on every
+    /// approach call and sets it on arrive or a refused beyond-boost
+    /// cast — the port's hash-silent `Mc2Rival.v14` (`BrakeWord`).
+    /// Seeded at re-anchor so a replayed rival resumes mid-alternation
+    /// (the every-other-tick SPEED pump) in retail's phase.
+    pub brake: i16,
+    pub strafe: i16, // +998 +16
     // The pose channel's flight lanes (Type_str_164 offsets, all
     // decompile-verified against remc2 global_types.h):
     /// The consumed move/fire byte (`entityIndex_0x0`): stamped from
@@ -1816,6 +1823,27 @@ pub struct RetailMc2 {
     /// `(ptr_a0 − base160)/34 + 59` (retail's own load fixup,
     /// Level.cpp:1255-57).
     pub base160: u32,
+    /// LAW A — the authored THING table `entity_0x30311[1200]`
+    /// (BasicTerrain.h: 20 B rows at 0x30311..0x360D1) IS in every
+    /// capture; the only runtime write is the consumption zero
+    /// (`sub_4A1E0(id, 1)` — one-shot dispositions zero the released
+    /// rows' types). Ten u16 words per row, mapping 1:1 onto the
+    /// port's `Rec`: type, subtype, x, y, DisId, word_10, stageTag,
+    /// par1, par2, par3. The old "not in the closure" doc was FALSE
+    /// (the guard-register lesson verbatim).
+    pub things: Vec<[u16; 10]>,
+    /// The stage BIND table `stages_0x3654C[8]` (`type_str_3654C`,
+    /// LevelStructs.h:146-151, stride 10) as
+    /// `(kind byte0, flags byte1, bound slot)`: `flags & 1` = the
+    /// row's named target is BOUND (`sub_58DA0` EF:40650-90 sets it
+    /// when the THING spawns), `flags & 2` = the external
+    /// force-complete. The union @+6 holds a guest ENTITY POINTER
+    /// for kinds 1/2/3/4 (converted here against the recovered pool
+    /// base) and a raw SLOT dword for kind 6; `None` when unbound or
+    /// unconvertible. Without this the importer left `bound`
+    /// port-carried and every anchored run's type-1/2 rows were
+    /// DEAD.
+    pub stage_binds: [(u8, u8, Option<u16>); 8],
     /// The per-player OBJECTIVE BOARD `struct_0x3659C[8]`
     /// (`type_substr_3659C`, LevelStructs.h:190-196, stride 11):
     /// `[0]` IsLevelEnd_0, `[1]` ObjectiveText_1 (the CURRENT row
@@ -1954,6 +1982,7 @@ fn decode_retail_player_mc2(d: &[u8], i: u16) -> RetailPlayerMc2 {
         balloons: [u16_(d, t + 60), u16_(d, t + 62), u16_(d, t + 64)],
         guards: GuardReg(std::array::from_fn(|k| u16_(d, t + 92 + 2 * k))),
         cmd_speed: i16_(d, t + 12),
+        brake: i16_(d, t + 14),
         strafe: i16_(d, t + 16),
         move_bits: u32_(d, t),
         roll_delta: i16_(d, t + 4),
@@ -2100,6 +2129,39 @@ pub fn decode_retail_mc2(d: &[u8]) -> Result<RetailMc2, String> {
         recycle_stack: mc2_stack(d, 0x11E6, 0x11EA, pool_base),
         level: u16_(d, m2::POOL + m2::ENT_COUNT * m2::ENT_STRIDE + 2),
         base160: u32_(d, 0x36DF6),
+        things: (0..1200)
+            .map(|i| {
+                let b = 0x30311 + i * 20;
+                let mut row = [0u16; 10];
+                for (w, cell) in row.iter_mut().enumerate() {
+                    *cell = u16_(d, b + w * 2);
+                }
+                row
+            })
+            .collect(),
+        stage_binds: {
+            let mut sb = [(0u8, 0u8, None); 8];
+            for (i, row) in sb.iter_mut().enumerate() {
+                let b = 0x3654C + i * 10;
+                let (kind, flags) = (d[b], d[b + 1]);
+                let un = u32_(d, b + 6);
+                let slot = match kind {
+                    // Kinds 1/2/3/4 store the bound ENTITY POINTER
+                    // (sub_58DA0's ptr0x6E8E arms); kind 6 stores
+                    // the slot index directly (`a2x − struct_0x6E8E`).
+                    1..=4 => pool_base.and_then(|base| {
+                        let off = un.wrapping_sub(base);
+                        let s = off / m2::ENT_STRIDE as u32;
+                        (off % m2::ENT_STRIDE as u32 == 0 && s != 0 && s < m2::ENT_COUNT as u32)
+                            .then_some(s as u16)
+                    }),
+                    6 => (un != 0 && un < m2::ENT_COUNT as u32).then_some(un as u16),
+                    _ => None,
+                };
+                *row = (kind, flags, slot);
+            }
+            sb
+        },
         objectives: {
             let mut ob = [[0u8; 11]; 8];
             for (i, row) in ob.iter_mut().enumerate() {
@@ -2689,6 +2751,39 @@ mod tests {
         // (700) to slot 999, i.e. everything +299.
         let legacy: Vec<u16> = stack.iter().map(|s| s + 299).collect();
         assert_ne!(st.free_stack, legacy);
+    }
+
+    /// The stage bind table decodes against the SAME recovered pool
+    /// base: kinds 1..=4 store a guest ENTITY POINTER in the union
+    /// (converted to a slot), kind 6 stores the slot index raw, and
+    /// the flags byte carries retail's own bound (&1) / force (&2)
+    /// bits. Law B1 — without this `Mc2Stage::bound` was
+    /// port-carried and dead on every anchored run.
+    #[test]
+    fn mc2_stage_binds_decode_against_the_pool_base() {
+        const BASE: u32 = 0x0012_0000;
+        let mut d = mc2_snapshot(BASE, &[5, 100, 101, 700], &[700, 101, 100, 5], &[]);
+        // Row 0: kind 1, bound, pointer to slot 42.
+        d[0x3654C] = 1;
+        d[0x3654D] = 1;
+        let p = BASE + 42 * m2::ENT_STRIDE as u32;
+        d[0x3654C + 6..0x3654C + 10].copy_from_slice(&p.to_le_bytes());
+        // Row 1: kind 6, force, slot stored raw.
+        let b1 = 0x3654C + 10;
+        d[b1] = 6;
+        d[b1 + 1] = 2;
+        d[b1 + 6..b1 + 10].copy_from_slice(&77u32.to_le_bytes());
+        // Row 2: kind 1, UNBOUND (flags 0) with a garbage pointer.
+        let b2 = 0x3654C + 20;
+        d[b2] = 1;
+        d[b2 + 6..b2 + 10].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let st = decode_retail_mc2(&d).unwrap();
+        assert_eq!(st.stage_binds[0], (1, 1, Some(42)));
+        assert_eq!(st.stage_binds[1], (6, 2, Some(77)));
+        assert_eq!(
+            st.stage_binds[2].2, None,
+            "a misaligned pointer never mints a slot"
+        );
     }
 
     /// The recycle stack holds LIVE victims, so it can never be

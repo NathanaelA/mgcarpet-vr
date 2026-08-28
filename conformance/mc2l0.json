@@ -163,6 +163,12 @@
    "file": "the-level-end-sequence-is-a-class-3-dispatch-ent.mgcr",
    "source": "mc2l0",
    "note": "THE LEVEL-END SEQUENCE IS A CLASS-3 DISPATCH ENTRY AT THE CARPET'S OWN WALK SLOT, AND IT REPLACES THE ACTION-0 BODY WHOLESALE: sub_5E8C0_endGameSeq sits in the same action table as AddPlayer03_00_5E010 (Events.cpp:2900, 0x23f8c0), reached the moment a touched exit marker flips the carpet's actionIndex to 11/12 - so no sub_5F380, no mailbox, no sub_5D530 (eff_pitch and the published aim pitch stay STALE for the whole sequence) and no mana or life regen. The SEAT is what dates the seizure: mc2l0's exit marker is the (11,12) at slot 5, BELOW the carpet at 152, so retail's walk flips the action before the carpet dispatches and the TRIP TICK ITSELF runs phase 0. mc2l0 t=22595 records action45 0 -> 12, b46 0 -> 1, target96 0 -> 4 with x/y/z, actSpeed AND mana all unmoved; the port's post-walk install let the carpet take one more full action-0 tick - 60 units of travel, an aim_pitch republished off the freshly decayed filter, and the +100 of regen this pair grades (retail 34836, port 34936). The auto-level tail (EF:60577-87) is the one piece of the sequence that writes the wizard's own accumulators, and my_sign32 being -1/0 is load-bearing there: t=22595 takes pitch 105 -> 79 and roll -34 -> -30. This law plus the endseq's z-storage fork and the phase-11 fade exit are what carried mc2l0 to its END."
+  },
+  {
+   "t": 7281,
+   "file": "the-morph-body-spawns-at-the-casters-full-3d-pos.mgcr",
+   "source": "mc2l0-spells-galore",
+   "note": "THE MORPH BODY SPAWNS AT THE CASTER'S FULL 3-D POSITION AND ITS FOLLOW FLOORS AT ZERO: sub_6A030 (EF:56325) mints the sv2=12 pose-puppet at position_0x4C_76 forwarded untouched (no terrain clamp on the path - t=7282 slot 28 born at carpet z 256, not ground 0); the follow (sub_1E4D0 EF:10663-75) is parent z minus the per-model offset (m16 -896, m25 -512) FLOORED AT 0 (236 of 508 live-morph ticks sit on the clamp). The parent is the body's OWN caster carpet (a rival's body follows the rival - mc2l22 slot 673 owner 557); the obs owner lane projects the caster for any sv2=12 body (retail stamps parentId, EF:56328-29). Ledger SESSION 65."
   }
  ]
 }

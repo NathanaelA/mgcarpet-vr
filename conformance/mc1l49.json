@@ -1,0 +1,30 @@
+{
+ "dir": "fixtures/mc1l49",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 2787,
+   "file": "the-rival-anti-rebound-plan-roll-burns-the-watco.mgcr",
+   "source": "mc1l49",
+   "note": "THE RIVAL ANTI-REBOUND PLAN ROLL BURNS THE WATCOM CRT rand() STREAM, NOT THE WIZARD'S ENTITY LCG: :19507-08 `rand() % 255 < acc` \u2014 watcomrand (EventsFunctions.cpp:413) is the global _RWD_randnext stream, x\u00b71103515245+12345, (x>>16)&0x7FFF. Burning ent_rand for the roll stole a graded-lane draw and shattered every later rand comparison on the 8-wizard board (mc1l49 t=2788). Gen::crt_rand is deliberately HASH-SILENT (phase unrecoverable at import). Ledger SESSION 61 law 4."
+  },
+  {
+   "t": 3058,
+   "file": "the-wyvern-chase-drops-a-dead-target-at-tick-top.mgcr",
+   "source": "mc1l49",
+   "note": "THE WYVERN CHASE DROPS A DEAD TARGET (the pdead family): retail's wyvern_chase target check (:26152) reads the victim's life at the chase dispatch, so a wizard dying mid-swarm is dropped as a chase target that tick - the port kept the latched target and t=3059's extra(10,0)x3 was the wyverns still FIRING AT THE CORPSE (the banked 'keeps +146=472' was the port's own behavior read backwards). Ledger SESSION 65 law 5."
+  },
+  {
+   "t": 3559,
+   "file": "the-anti-rebound-notice-is-a-live-token-read.mgcr",
+   "source": "mc1l49",
+   "note": "THE ANTI-REBOUND NOTICE IS A LIVE TOKEN READ AT THE CASTER'S OWN DISPATCH: sub_16000 (:19449-56) reads the TARGET's spell-14 token record's +48 (pool[wizext+676+2*14], `+48 > 0`), not the carpet's 0x8000 mirror. Walk order is the law: a token arming BELOW the reader is seen the same tick (t=3560, token 600 < reader 620); the owner-slot mirror refresh missed a token above its owner (t=4003, token 704 > owner 698). The port's cached rebound bools replaced with ent[owned[14]].f26 > 0. Ledger SESSION 65 law 6."
+  },
+  {
+   "t": 54743,
+   "file": "the-seizure-blanks-every-roster-and-the-stack-im.mgcr",
+   "source": "mc1l49",
+   "note": "THE MC1 SEIZURE FAMILY, POOL-DRY ARM: three laws in one pair. (1) retail_import_mc1 imports the RECYCLE STACK (mgcr +4593/+4597) - the old 'sacrifice set alone, never reached' rationale is refuted: the death LANDING's rebuild (:55487) arms the stack and never disarms it (~3,750 corpus seizures); (2) MC1's free path (sub_41E90 :52512-20) never touches the stack - every recorded stack is strictly descending (14,178/14,178 snapshots), so Gen::free_entity's sub_57F20 swap-remove is MC2-gated; (3) the seizure BLANKS every tick-top roster (:43885-91: str_36382x memset + var_u32_36462[1]/[2]/[0]/[3] nulled) before the victim unlinks - consumers after the seizing slot see EMPTY lists, not a severed chain. Witness: mc1l49 t=54744 - free 7->0, then SEVEN seizures ascending 6,7,8,9,11,20,21; pre-law the pair read 104 unexplained rows (port allocations in the wrong slots: slot 6 model 13-vs-16 etc.), post-law it conforms. The NEXT pair (54744->54745) carries a separate BANKED residual: the respawn re-grant starves its first entry (retail mints (12,0) via seizure at slot 11, the port's one-shot zeroes it) - the DEVIATIONS.md death_regrant 'no corpus witness yet' starving-respawn, now witnessed."
+  }
+ ]
+}

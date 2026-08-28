@@ -528,24 +528,26 @@ impl World {
         // load-rebuild scan (999→1) only when the recorded stack is
         // unusable. The reserved human hole stays OUT either way.
         //
-        // The RECYCLE stack is deliberately NOT chained in. Retail's
-        // `NewEvent_372C0` pops the free stack and only falls through to
-        // the recycle SACRIFICE arm once free is exhausted (:43867-83 vs
-        // :43885-908), and MC1's recycle list is the respawn-window
-        // sacrifice set alone (filled by sub_44D30 :54842, emptied at
-        // :55056) — an arm the port's allocator never reaches with ~925
-        // slots free, and a ruled deviation besides (DEVIATIONS.md
-        // `death_regrant`). Chaining it did two things, both wrong: it
-        // put recycle entries at the TOP of a Vec that `new_event` pops
-        // from the end (inverting retail's priority), and it inflated
-        // the census below so `live.len() == scan_free` could never hold
-        // once a respawn had happened — throwing the whole recorded
-        // order away for the fallback's lowest-free-slot rule. On mc1l2
-        // that misfired from t≈8291 to the end of the take: at t=9089
-        // retail's newborn (10,0) took slot 80 (ahead of its spawner at
-        // 73, so it ticked in its birth frame and its blast landed on
-        // the vulture the same frame), while the port took slot 18 and
-        // the damage never arrived.
+        // The RECYCLE stack is imported SEPARATELY below, never chained
+        // into this Vec. Chaining it was tried once and was wrong twice:
+        // it put recycle entries at the TOP of a Vec that `new_event`
+        // pops from the end (inverting retail's free-first priority,
+        // :43867-83 vs :43885-908), and it inflated the census so
+        // `live.len() == scan_free` could never hold once a respawn had
+        // happened — throwing the whole recorded order away for the
+        // fallback's lowest-free-slot rule (mc1l2 t≈8291→end: at t=9089
+        // retail's newborn (10,0) took slot 80, the port took 18, and
+        // the birth-frame blast never arrived).
+        //
+        // ⚠ The old "MC1's recycle list is the respawn-window sacrifice
+        // set alone — an arm the allocator never reaches" rationale for
+        // skipping the import entirely is REFUTED by the corpus scan:
+        // the death LANDING's rebuild (:55487) arms the stack and never
+        // disarms it (742-5,499 armed snapshots per take), and the
+        // eruption/swarm windows drain free to 0 with the stack armed —
+        // ~3,750 real seizures across mc1hwl0/l48/l49/l37. A pair
+        // anchored inside an armed window MUST hold retail's victim
+        // ranking or every seizure lands in the wrong slot.
         let live: Vec<u16> = st
             .free_stack
             .iter()
@@ -566,6 +568,23 @@ impl World {
                 .collect();
             Some((got, scan_free))
         };
+        // The recycle-victim stack, order preserved, so a 0-free spawn
+        // sacrifices the SAME slot retail's `NewEvent_372C0` second arm
+        // does (:43885-908). Unlike MC2 there is NO liveness filter
+        // here: MC1's free path never removes a dying victim from the
+        // stack (`sub_41E90` :52512-20 — see `Gen::free_entity`), so
+        // retail's own stack legitimately holds stale dead cells; the
+        // pop's dead-cell skip stands in for retail's unwitnessed
+        // unconditional seizure of those. `refill` stays clear — the
+        // recorded stack is retail's snapshot, and running it dry is
+        // retail returning null.
+        self.g.mc2_recycle.refill = false;
+        self.g.mc2_recycle.stack = st
+            .recycle_stack
+            .iter()
+            .copied()
+            .filter(|&s| (s as usize) < pool && s != human_slot && s != 0)
+            .collect();
 
         // Globals in the closure.
         self.g.rand = st.rand;
@@ -684,7 +703,11 @@ impl World {
                 continue;
             }
             let e = &st.ents[w.play_index as usize];
-            r.mana = e.f140.max(0) as u32;
+            // BIT-COPY, not a clamp: a corpse HOLDS a wrapped-negative
+            // purse (+140 raw subtracts, the living regen tail is the
+            // only floor — mc1hwl0 t=23462-23530, −100 held for the
+            // whole window). Clamping at import ate the shortfall.
+            r.mana = e.f140 as u32;
             r.mana_max = e.f136.max(0) as u32;
             // +132 is a SIGNED 32-bit delta (cast debits are negative;
             // castle casts exceed 16 bits) — the old u16 decode turned
@@ -772,7 +795,11 @@ impl World {
             death_owned_blue[s] = wiz.blue[s] != 0;
         }
         self.player = Player {
-            mana: carpet.f140.max(0) as u32,
+            // BIT-COPY, not a clamp (see the rival seed above): the
+            // human corpse holds a wrapped-negative purse too
+            // (mc1hwl0 t=23462: 0 − the shield quarter = 4294967196,
+            // held 69 ticks to the respawn re-mint).
+            mana: carpet.f140 as u32,
             mana_max: carpet.f136.max(0) as u32,
             // The pending regen amount (+132, applied-then-recomputed
             // by the wizard tick :55390/:55415-21 — the port keeps the
@@ -821,40 +848,61 @@ impl World {
             // sub_55E80's `a2` is the token's OWN caster, :56xxx).
             // Same owner join as the accel lane below. Vacuous on
             // every certified take (161,846 ticks, zero firings).
-            mana_delta: if wiz.owned_slots.iter().any(|&s| {
-                let s = s as usize;
-                if s == 0 || s >= st.ents.len() {
-                    return false;
-                }
-                let e = &st.ents[s];
-                e.class64 == 12
-                    && e.f144 == 0
-                    && e.f48 != 0
-                    && e.f48 as i32 != e.f50 as i32
-                    && !(e.f70 % 3 == 0
-                        && matches!(
-                            e.f70 / 3,
-                            0 | 1
-                                | 2
-                                | 3
-                                | 4
-                                | 6
-                                | 7
-                                | 8
-                                | 9
-                                | 10
-                                | 11
-                                | 13
-                                | 16
-                                | 17
-                                | 18
-                                | 19
-                                | 20
-                                | 21
-                                | 22
-                                | 23
-                        ))
-            }) {
+            // Retail only ever zeroes a POSITIVE delta (sub_55E80's
+            // live half, :64956-59: `if (v2 && +132 > 0) +132 = 0`) —
+            // a negative seed (a pending debit) rides through
+            // mid-burst untouched (mc1l48 t=27415-53: 39 firings
+            // with f132 = −50 that the old unconditional zero ate).
+            mana_delta: if carpet.f132 > 0
+                && wiz.owned_slots.iter().any(|&s| {
+                    let s = s as usize;
+                    if s == 0 || s >= st.ents.len() {
+                        return false;
+                    }
+                    let e = &st.ents[s];
+                    // The exempt test keys on the SPELL ID alone (f70/3
+                    // for tokens, phases 0..2 alike): the old
+                    // `f70 % 3 == 0` conjunct carved a live spell's
+                    // token out at phase 0 but NOT at phase 1 — half of
+                    // mc1l48's 204 firings were phase-1 tokens of spells
+                    // the list itself declares live (spell 16 f70=49,
+                    // spell 2 f70=7).
+                    // 14 REBOUND joined the keep-list with the
+                    // command-arm law: its machine debits the full
+                    // cost on the arm tick THROUGH +132 (sub_573F0 →
+                    // sub_55E80), and the boundary after the cast
+                    // already shows the token decremented (mid-burst)
+                    // — clamping the seed ate the −1000 on every
+                    // re-cast (mc1l32-quick t=18014 ff., 148 rows).
+                    e.class64 == 12
+                        && e.f144 == 0
+                        && e.f48 != 0
+                        && e.f48 as i32 != e.f50 as i32
+                        && !(e.f70 < 72
+                            && matches!(
+                                e.f70 / 3,
+                                0 | 1
+                                    | 2
+                                    | 3
+                                    | 4
+                                    | 6
+                                    | 7
+                                    | 8
+                                    | 9
+                                    | 10
+                                    | 11
+                                    | 13
+                                    | 14
+                                    | 16
+                                    | 17
+                                    | 18
+                                    | 19
+                                    | 20
+                                    | 21
+                                    | 22
+                                    | 23
+                            ))
+                }) {
                 0
             } else {
                 // SIGNED 32-bit seed (see the rival arm above): +132
@@ -1444,9 +1492,21 @@ impl World {
         // The class-9 F_MC2PROJ stamp overwrites both bit 3 and bit 29
         // (proj.rs) — those two retail bits are unrecoverable there.
         let proj9 = c == 9 && m != 13;
-        // The `ramp2c` set — the three `word_0x2C_44` tenants whose
-        // f44 holds @0x2C, displacing @0x2A.
-        let ramp2c = m27 || (c == 5 && m == 23) || (c == 14 && m == 2);
+        // The `ramp2c` set — the `word_0x2C_44` tenants whose f44
+        // holds @0x2C, displacing @0x2A. The (2,7)/(2,8) falling
+        // props are tenants too: their f44 is the live gravity
+        // velocity (sub_652C0 EF:62650-60; the port's own ctor and
+        // `mc2_falling_tick` already treat it that way).
+        // The (5,21) DEVIL joined 2026-08-29: @0x2C is its live JUMP
+        // IMPULSE (sub_265A0 EF:17098-151; the port reader is
+        // `Gen::m21_jump`'s f44 integrator). The uniform @0x2A home
+        // seeded every imported devil with the dead 400 (mc2l24
+        // t=7918: 47 devils each +400/tick; mc2l22 t=1: Δ = 485 =
+        // 400 − (−85)).
+        let ramp2c = m27
+            || (c == 5 && matches!(m, 21 | 23))
+            || (c == 14 && m == 2)
+            || (c == 2 && matches!(m, 7 | 8));
         // The doomsday-release life latch: sv2 (relocated to site_z)
         // 16/17 puts the @0x2E latch in f26 even on the @0x10 models.
         let doom_latch = matches!(e.site_z, 16 | 17);
@@ -1585,7 +1645,14 @@ impl World {
                 "f2a",
                 if c == 15 {
                     some(e.f30 as i64)
-                } else if c == 10 && matches!(m, 0 | 6 | 9 | 11 | 17 | 65 | 66) {
+                } else if c == 10 && matches!(m, 0 | 6 | 9 | 11 | 17 | 18 | 19 | 65 | 66 | 76 | 77)
+                {
+                    // 18/19 joined 2026-08-29: the (10,19) column's
+                    // area damage is @0x2A (sub_10C80's subSpell arg,
+                    // EF:24151), homed in f140 like the rest of the
+                    // volcano family — an f44 home read the caster's
+                    // subspell and every IMPORTED column posted zero
+                    // mail (retail's (10,19) @0x90 is 0).
                     some(e.f140 as i64)
                 } else if ramp2c || piece || (c == 10 && m == 16) {
                     None
@@ -1595,7 +1662,7 @@ impl World {
             ),
             (
                 "f2c",
-                if ramp2c || c == 15 || (c == 10 && matches!(m, 0 | 6 | 9 | 16)) {
+                if ramp2c || c == 15 || (c == 10 && matches!(m, 0 | 6 | 9 | 16 | 76 | 77)) {
                     some(e.f44 as i16 as i64)
                 } else if sphere || castle {
                     // The castle's @0x2C is the GUARD COOLDOWN and it
@@ -2328,6 +2395,33 @@ impl World {
                 v.param = u16::from_le_bytes([raw[4], raw[5]]);
             }
         }
+        // LAW A — THE THING TABLE IMPORTS VERBATIM
+        // (`entity_0x30311[1200]`, decoded in mgcr.rs): the whole
+        // authored table rides every capture and its only runtime
+        // write is the consumption zero (`sub_4A1E0(id, 1)`), so the
+        // import carries retail's own consumption state to the pair —
+        // a row retail has spent reads type 0, a row it still holds
+        // re-arms even if an earlier port pair mis-tripped it. The
+        // runner's post-build re-imprint (verify_mc2.rs) still runs
+        // first and is now superseded by this overwrite (kept
+        // load-bearing for the MC1 column, which has no such lane).
+        // MC2's table base is 0, so port index == retail row.
+        for (k, raw) in st.things.iter().enumerate() {
+            if let Some(rec) = self.table.get_mut(k) {
+                *rec = crate::engine::features::Rec {
+                    class: raw[0],
+                    model: raw[1],
+                    x: raw[2],
+                    y: raw[3],
+                    dis_id: raw[4],
+                    swi_sz: raw[5],
+                    swi_id: raw[6],
+                    parent: raw[7],
+                    child: raw[8],
+                    par3: raw[9],
+                };
+            }
+        }
         // THE OBJECTIVE BOARD (`struct_0x3659C[local]`,
         // LevelStructs.h:190-196). Retail's per-row state, the
         // current-row cursor, the m32 one-pass pause and the level-end
@@ -2350,6 +2444,18 @@ impl World {
             self.mc2_objective_pause = board[2] as i16;
             for (k, s) in self.mc2_stages.iter_mut().enumerate().take(8) {
                 s.state = board[3 + k];
+                // Law B1 — the BIND TABLE (`stages_0x3654C[k]`,
+                // decoded in mgcr.rs): `bound` and `force` were
+                // port-carried, so every anchored run's type-1/2
+                // rows were DEAD (the bind seam only fires on a
+                // spawn the anchor already spent). `flags & 1` is
+                // retail's own bound bit; the slot converts from
+                // the row's guest pointer.
+                let (_kind, flags, slot) = st.stage_binds[k];
+                s.force = flags & 2 != 0;
+                if matches!(s.kind, 1 | 2) {
+                    s.bound = if flags & 1 != 0 { slot } else { None };
+                }
             }
         }
         self.mc2_sv_held.clear();
@@ -2460,6 +2566,7 @@ impl World {
                         perception: p.perception.max(0) as u16,
                         reflexes: p.reflexes.max(0) as u16,
                         life_scale: p.life_scale.max(0) as u16,
+                        brake: p.brake,
                     };
                     let book = crate::mc2::cast::Mc2Spellbook {
                         ent: p.spell_ent,
@@ -2760,6 +2867,14 @@ impl World {
                     // all project the same way; everything else 0.
                     let translated = (e.class64 == 15 && e.id24 != slot)
                         || (e.class64 == 10 && e.model65 == 42 && e.id24 != slot)
+                        // The metamorph pose-puppet (sv2 == 12, any
+                        // class-5 model): retail stamps parentId =
+                        // the caster's entity (EF:56328-29) — the
+                        // live-pyramid gate can never admit it since
+                        // its parent is a class-3 carpet (mc2l0-sg
+                        // slot 28 owner 152; mc2l22 slot 673 owner
+                        // 557, a RIVAL carpet).
+                        || (e.class64 == 5 && e.site_z == 12)
                         || (e.class64 == 5
                             && matches!(e.model65, 0 | 19 | 21 | 25)
                             && self
@@ -3204,7 +3319,18 @@ pub(crate) fn import_ent_mc2(
     // grew a TRANSPOSED 2×8 footprint and its GROW arm missed
     // retail's convergence tick (mc2l3 t=15/16/18: slots 195/196/203
     // life retail 3 port 1 — the built-seal transition).
-    let ramp2c = m27 || (r.class3f == 5 && r.model40 == 23) || (r.class3f == 14 && r.model40 == 2);
+    // The (2,7)/(2,8) FALLING PROPS are tenants four and five: f44
+    // is the live gravity velocity (`mc2_falling_tick`, sub_652C0
+    // EF:62650-60 — position takes the old velocity, then −24/tick
+    // clamped ±192). The uniform @0x2A home seeded an imported prop
+    // with @0x2A (100) — an upward kick where retail held a fall
+    // (mc2l6-rsg t=1 slot 135: f2c −192; mc2l22 t=1).
+    // The (5,21) DEVIL is tenant six: @0x2C is the live jump impulse
+    // (`Gen::m21_jump`'s f44 integrator, sub_265A0 EF:17098-151).
+    let ramp2c = m27
+        || (r.class3f == 5 && matches!(r.model40, 21 | 23))
+        || (r.class3f == 14 && r.model40 == 2)
+        || (r.class3f == 2 && matches!(r.model40, 7 | 8));
     let mut e = Ent {
         rand: r.rand as u32,
         // Bit-preserving: retail's lightning trail stamps a node's
@@ -3578,7 +3704,13 @@ pub(crate) fn import_ent_mc2(
     // fall-through fed f44 the 1200 area amount and the dome pushed
     // terrain to the 255 saturation cap (mc2l24 t=13 slot 91: the
     // child born at z=8160 = 255×32 where retail reads 3776).
-    if r.class3f == 10 && matches!(r.model40, 0 | 6 | 9) {
+    // The (10,76) FIRE-ORB HUB (and its 77 sibling, kept for census
+    // honesty) share it whole: damage @0x2A (sub_33C00 EF:24712) and
+    // ring radius @0x2C (sub_33C70 EF:24741-50). The uniform homes
+    // fed f44 the subSpell and f140 the dead @0x90 — an imported orb
+    // breathed 70→192 and posted ZERO mail (mc2l1 t=204-216 slot 46
+    // z; t=218+ the building's 350/tick life family).
+    if r.class3f == 10 && matches!(r.model40, 0 | 6 | 9 | 76 | 77) {
         e.f140 = r.f2a as i32;
         e.f44 = r.f2c as u16;
     }
@@ -3610,6 +3742,19 @@ pub(crate) fn import_ent_mc2(
     // ctors, so f44 keeps the uniform copy.
     if r.class3f == 10 && matches!(r.model40, 17 | 65 | 66) {
         e.f140 = r.f2a as i32;
+    }
+    // The (10,19) FIRE-SPRAY column (and its (10,18) vortex parent,
+    // kept for census honesty) carries its per-tick area amount in
+    // @0x2A too: sub_32F40's alive branch posts
+    // `sub_10C80(a1x, 0, subSpellIndex_0x2A)` (EF:24151) and the
+    // port's spray tick mails out of f140 (tail.rs mints 200). The
+    // uniform f140 ← the DEAD @0x90 imported a column that posts
+    // ZERO area mail on every pair and anchored run; @0x2C is dead
+    // on the family, so f44 takes the uniform copy of it instead of
+    // the payload.
+    if r.class3f == 10 && matches!(r.model40, 18 | 19) {
+        e.f140 = r.f2a as i32;
+        e.f44 = r.f2c as u16;
     }
     // The (10,16) volcano boulder keeps its VERTICAL VELOCITY in
     // `word_0x2C_44` (`sub_32600` EF:23765 reads it as vz, gravity
@@ -4375,6 +4520,33 @@ mod tests {
         assert_eq!(e.site_z, 1760);
     }
 
+    /// The (5,21) DEVIL is a `ramp2c` tenant (2026-08-29): its @0x2C
+    /// is the LIVE jump impulse `Gen::m21_jump` integrates (sub_265A0
+    /// EF:17098-151), while @0x2A holds a dead uniform 400. Importing
+    /// the @0x2A home seeded every devil with +400/tick of bogus
+    /// impulse (mc2l24 t=7918: 47 devils; mc2l22 t=1: Δ = 485 =
+    /// 400 − (−85)). Its f26 rides the `b44` rest-countdown lane, not
+    /// @0x10/@0x2E. Non-vacuous: reverting the ramp2c membership
+    /// makes f44 read 400.
+    #[test]
+    fn mc2_devil_import_takes_the_jump_impulse_from_2c() {
+        let r = RetailEntMc2 {
+            class3f: 5,
+            model40: 21,
+            f2a: 400, // the dead @0x2A home — must NOT reach f44
+            f2c: -85, // @0x2C — the live (falling) jump impulse
+            b44: 12,  // @0x44 rest countdown → f26
+            ..Default::default()
+        };
+        let e = import_ent_mc2(&r, 100, 0, &|v| v);
+        assert_eq!(
+            e.f44,
+            (-85i16) as u16,
+            "devil f44 = the @0x2C jump impulse, not the dead @0x2A"
+        );
+        assert_eq!(e.f26, 12, "devil f26 = the @0x44 rest countdown");
+    }
+
     /// The `owner` obs lane = retail parentId @0x28. The importer must
     /// feed it correctly for the two families that carry a live parent,
     /// and must NOT let the (5,10) pyramid pollute id24 with its
@@ -4681,6 +4853,8 @@ mod tests {
         // NOT among them (retail pushes it at the next frame's top).
         let stack: Vec<u16> = (4..pool as u16).collect();
         let st = RetailMc2 {
+            things: vec![],
+            stage_binds: [(0, 0, None); 8],
             rand: 1,
             vortex: 0,
             fire_col: 0,
@@ -4859,6 +5033,119 @@ mod tests {
         assert_eq!(w.g.ent[3].f146, 2, "the bolt still chases the slot");
     }
 
+    /// The +132 seed clamp, BOTH halves (sub_55E80's live half,
+    /// :64956-59: `if (v2 && +132 > 0) +132 = 0`):
+    ///  • retail only ever zeroes a POSITIVE delta — a negative seed
+    ///    (a pending debit) rides through mid-burst untouched
+    ///    (mc1l48 t=27415-53: 39 firings with f132 = −50 the old
+    ///    unconditional zero ate);
+    ///  • the exempt test keys on the SPELL ID alone (f70/3, phases
+    ///    alike): a phase-1 token of a live spell (16 → f70=49) is
+    ///    still exempt — the old `f70 % 3 == 0` conjunct carved it
+    ///    out at phase 0 but not phase 1 (half of mc1l48's 204
+    ///    firings).
+    /// Non-vacuous: restoring the unconditional zero fails the first
+    /// import; restoring the %3 conjunct fails the third.
+    #[test]
+    fn mc1_import_seed_clamp_spares_negative_deltas_and_keys_on_spell_id() {
+        let import = |f132: i32, f70: u8| {
+            let planes = Planes {
+                height: vec![100; 0x10000],
+                tile_type: vec![5; 0x10000],
+                shading: vec![32; 0x10000],
+                angle: vec![5; 0x10000],
+                ceiling: Vec::new(),
+            };
+            let mut grid = vec![31u8; 1024];
+            for y in 0..32i32 {
+                for x in 0..32i32 {
+                    let (dx, dy) = (x - 15, y - 15);
+                    let r = dx.max(dy).max(-dx + 1).max(-dy + 1) - 1;
+                    grid[(y * 32 + x) as usize] = r.clamp(0, 31) as u8;
+                }
+            }
+            let tab: Vec<u8> = (0..24u32)
+                .flat_map(|_| {
+                    let mut e = 0u32.to_le_bytes().to_vec();
+                    e.extend_from_slice(&[4, 4]);
+                    e
+                })
+                .collect();
+            let mut dat = Vec::new();
+            for _ in 0..4 {
+                dat.push(4u8);
+                dat.extend_from_slice(&[0x10, 0x10, 0x10, 0x10]);
+                dat.push(0);
+            }
+            let fa = crate::engine::features::FeatureAssets::parse(&grid, &tab, &dat).unwrap();
+            let mut w = World::new_for_game(planes, &[], 1, fa, crate::ids::GameId::Mc1);
+            let pool = w.g.ent.len();
+            let mut ents = vec![RetailEntMc1::default(); pool];
+            ents[1] = RetailEntMc1 {
+                class64: 3,
+                model65: 0,
+                model_ptr: 7 * 32,
+                x: 100 << 8,
+                y: 100 << 8,
+                f132,
+                ..Default::default()
+            };
+            // Slot 2: the wizard's own MID-burst token (+48 live and
+            // != +50), owner register f144 = 0 like every token.
+            ents[2] = RetailEntMc1 {
+                class64: 12,
+                model65: 2,
+                f48: 100,
+                f50: 251,
+                f70,
+                f144: 0,
+                model_ptr: 0,
+                ..Default::default()
+            };
+            let stack: Vec<u16> = (3..pool as u16).collect();
+            let st = RetailMc1 {
+                rand: 1,
+                local_player: 0,
+                player_count: 1,
+                spawn_count: [0; 20],
+                wizards: {
+                    let mut ws = vec![RetailWizardMc1::default(); 8];
+                    ws[0] = RetailWizardMc1 {
+                        play_index: 1,
+                        hand_left: 0xFFFF,
+                        hand_right: 0xFFFF,
+                        owned_slots: {
+                            let mut o = [0u16; 24];
+                            o[(f70 / 3) as usize] = 2;
+                            o
+                        },
+                        ..Default::default()
+                    };
+                    ws
+                },
+                ents,
+                free_stack: stack,
+                recycle_stack: Vec::new(),
+                level: 0,
+                erupting: 0,
+                plume: 0,
+            };
+            w.retail_import_mc1(&st).expect("import");
+            w.player.mana_delta
+        };
+        // Spell 5 (f70=15) is NOT on the keep-list: its mid-burst
+        // token clamps a positive seed…
+        assert_eq!(import(100, 15), 0, "positive delta + live token → 0");
+        // …but a NEGATIVE seed rides through the same token.
+        assert_eq!(import(-50, 15), -50, "negative delta is never zeroed");
+        // Spell 16's PHASE-1 token (f70=49) is exempt by spell id.
+        assert_eq!(
+            import(100, 49),
+            100,
+            "exempt spell keeps the seed at phase 1"
+        );
+    }
+
     /// A FULL MC2 pool still spawns: `NewEvent_4A050` (:581) falls
     /// through to the recycle stack and SACRIFICES the top-ranked live
     /// victim — bare seizure, no death. The import must carry the
@@ -4918,6 +5205,8 @@ mod tests {
         // Retail's ranking, bottom-up: 300 pops first, then 500, 700.
         let victims: Vec<u16> = vec![700, 500, 300];
         let st = RetailMc2 {
+            things: vec![],
+            stage_binds: [(0, 0, None); 8],
             rand: 1,
             vortex: 0,
             fire_col: 0,
@@ -5011,6 +5300,8 @@ mod tests {
         };
         ply.spell_ent[tok.model40 as usize] = tok_slot;
         let st = RetailMc2 {
+            things: vec![],
+            stage_binds: [(0, 0, None); 8],
             rand: 0,
             vortex: 0,
             fire_col: 0,

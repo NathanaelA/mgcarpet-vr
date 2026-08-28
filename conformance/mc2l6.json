@@ -1,0 +1,18 @@
+{
+ "dir": "fixtures/mc2l6",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 1,
+   "file": "the-2-7-2-8-falling-prop-s-f44-is-the-live-gravi.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE (2,7)/(2,8) FALLING PROP'S f44 IS THE LIVE GRAVITY VELOCITY: the props are word_0x2C_44 tenants (f44 holds @0x2C, displacing @0x2A) \u2014 sub_652C0 EF:62650-60 steps position by the OLD velocity, then \u221224/tick clamped \u00b1192; the port's ctor and mc2_falling_tick already treat f44 that way. The uniform @0x2A import home seeded an imported prop with 100 \u2014 an upward kick where retail held a terminal fall (mc2l6-rsg t=1 slot 135: f2c \u2212192; mc2l22 t=1 same family). Ledger SESSION 61 law 1."
+  },
+  {
+   "t": 4,
+   "file": "the-rival-speed-token-dispatches-at-its-own-slot.mgcr",
+   "source": "mc2l6-rival-spells-galore",
+   "note": "THE RIVAL SPEED TOKEN DISPATCHES AT ITS OWN WALK SLOT AND THE APPROACH BRAKE COLLAPSES IT: GetScroll_69DB0 is caster-generic (model-1 arm EF:56205-12) - the sustain writes BOTH speed columns sign*minSpeed*(subSpell+first) (240 first tick), the (10,2) slipstream puff fires on the TOKEN's phase byte pre-increment (EF:56246-50) at the caster's settled pose, and the countdown+1x restore are the shared tail (EF:56263-68). The brake word (word_0xe_14, sub_14C90: cleared first, set on arrive AND whenever the beyond-boost cast does not fire - a LIVE window fails readiness into the brake else) collapses the window to 1 (EF:56216-19): t=5->6 retail brakes mid-window and the token restores 80 the same tick where the un-braked port sustained 160. Ledger SESSION 65."
+  }
+ ]
+}

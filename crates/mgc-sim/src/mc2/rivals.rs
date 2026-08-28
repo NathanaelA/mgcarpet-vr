@@ -229,6 +229,18 @@ pub(crate) struct Mc2RivalAi {
     pub perception: u16,
     pub reflexes: u16,
     pub life_scale: u16,
+    /// The players-block brake word `word_0xe_14` (flight +14) —
+    /// seeds the hash-silent [`BrakeWord`] at re-anchor.
+    pub brake: i16,
+}
+
+/// Hash-silent bool (the `CrtRand` pattern — features.rs): carried
+/// in a `derive(Hash)` struct without moving any golden pin.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct BrakeWord(pub bool);
+
+impl std::hash::Hash for BrakeWord {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
 /// One live MC2 rival: the player-extension subset the AI machinery
@@ -295,6 +307,13 @@ pub(crate) struct Mc2Rival {
     avoid_exit: u8,
     /// Desired speed toward which f126 accelerates 16/tick.
     vdes: i16,
+    /// The flight-brake word (`word_0xe_14`): cleared FIRST on every
+    /// approach call (EF:6718), set by the arrive branch (EF:6733-35)
+    /// and by the can't-boost else (EF:6751-52). The SPEED token's
+    /// body reads it to collapse its window (EF:56216-19).
+    /// Hash-silent (the CrtRand pattern): a new lane in a
+    /// derive(Hash) struct would re-pin every golden.
+    v14: BrakeWord,
     /// Spawn/at-castle grace (word_0x159_345): mailbox memset while
     /// > 0 (100 at spawn, pinned 2 at the own castle).
     pub(crate) grace: u16,
@@ -337,6 +356,7 @@ impl Mc2Rival {
             avoid: 0,
             avoid_exit: 0,
             vdes: 0,
+            v14: BrakeWord(false),
             grace: 100,
             eliminated: false,
             shield: false,
@@ -347,7 +367,7 @@ impl Mc2Rival {
 
     /// Decision-cadence period: `64 - Reflexes/4` ticks keyed on the
     /// entity age byte (EF:5460).
-    fn think_period(&self) -> u8 {
+    pub(crate) fn think_period(&self) -> u8 {
         (64 - (self.refl / 4) as i32).max(1) as u8
     }
 }
@@ -721,6 +741,11 @@ impl World {
         r.per = ai.perception;
         r.refl = ai.reflexes;
         r.life_scale = ai.life_scale;
+        // The brake word rides the players block, not the entity — a
+        // re-anchored rival must resume retail's approach/brake
+        // alternation phase or the whole SPEED window shifts a tick
+        // (the mc2l22 every-other-tick pump).
+        r.v14 = BrakeWord(ai.brake != 0);
         // The book: `SpellsEnabled_0x333` is the live manifestation
         // slot, and DEATH rewrites every owned entry to the boolean
         // marker 1 (EF:60147) — imported verbatim, quirk included,
@@ -1297,15 +1322,105 @@ impl World {
         }
     }
 
+    /// A RIVAL's owned class-15 token, dispatched at the TOKEN's own
+    /// pool slot (`mc2_manifestation_pass`) — retail's caster-generic
+    /// body (`GetScroll_69DB0`, model-1 arm EF:56205-12). SPEED (3)
+    /// is the landed arm, the MC2 twin of MC1's
+    /// `rival_speed_token_tick`:
+    /// - brake collapse: `word_0xe_14` set → window = 1 (EF:56216-19);
+    /// - sustain (EF:56239-45): BOTH speed columns =
+    ///   sign · minSpeed · (subSpell + first-tick);
+    /// - the (10,2) slipstream puff every 4th tick on the TOKEN's
+    ///   phase byte, pre-increment (EF:56246-50), at the caster's
+    ///   settled pose, id = the caster, life ×4;
+    /// - sub_68DE0's else arm: mid-burst pins a positive regen to 0
+    ///   (the cast commit already debited);
+    /// - shared countdown + the 1× signed restore at expiry
+    ///   (EF:56263-68), queued-tier drain like the buffs pass.
+    ///
+    /// Other spells keep their carpet-slot machinery in
+    /// [`Self::mc2_rival_buffs`].
+    pub(crate) fn mc2_rival_manifestation_tick(&mut self, spell: usize, m: usize, ri: usize) {
+        if spell != 3 || self.g.ent[m].f26 <= 0 {
+            return;
+        }
+        let i = self.mc2_rivals[ri].ent as usize;
+        if i == 0 || i >= self.g.ent.len() {
+            return;
+        }
+        let sign: i16 = if self.mc2_rivals[ri].vdes < 0 { -1 } else { 1 };
+        let first = self.g.ent[m].f26 as u16 == self.g.ent[m].f28;
+        if self.mc2_rivals[ri].v14.0 {
+            self.g.ent[m].f26 = 1; // the brake collapse (EF:56218)
+        } else {
+            let factor = self.g.ent[m].f30 as i16 + i16::from(first);
+            let v12 = sign * self.g.ent[i].f128 * factor;
+            self.mc2_rivals[ri].vdes = v12;
+            self.g.ent[i].f126 = v12;
+            if self.g.ent[m].f63 & 3 == 0 {
+                let (cx, cy, cz, own_id) = {
+                    let e = &self.g.ent[i];
+                    (e.x, e.y, e.z, e.id24)
+                };
+                if let Some(p) = self.g.mc2_spawn_speed_puff(cx, cy, cz) {
+                    self.g.ent[p].act_life *= 4;
+                    self.g.ent[p].id24 = own_id;
+                }
+            }
+            if !first {
+                let r = &mut self.mc2_rivals[ri];
+                if r.mana_delta > 0 {
+                    r.mana_delta = 0;
+                }
+            }
+        }
+        self.g.ent[m].f26 -= 1;
+        if self.g.ent[m].f26 == 0 {
+            let base = sign * self.g.ent[i].f128;
+            self.mc2_rivals[ri].vdes = base;
+            self.g.ent[i].f126 = base;
+            self.g.ent[m].flags &= !0x80;
+            if self.g.ent[m].f44 != 0 {
+                let queued = (self.g.ent[m].f44 - 1) as u8;
+                self.g.ent[m].f44 = 0;
+                let own = self.mc2_rivals[ri].ent;
+                self.mc2_rival_set_spell(m, queued, own);
+            }
+        }
+    }
+
     fn mc2_rival_buffs(&mut self, ri: usize) {
         let book = self.mc2_rivals[ri].book.ent;
         // Heal fires on the pre-decrement window (including the 1→0
         // tick) — capture before the countdown pass.
         let heal_live = book[5] != 0 && self.g.ent[book[5] as usize].f26 > 0;
         let own = self.mc2_rivals[ri].ent;
+        // The class-15 manifestation body is CASTER-GENERIC in
+        // retail (GetScroll_69DB0 resolves its caster through
+        // parentId and explicitly handles the rival wizard model,
+        // EF:56205-12); the port's body pass is keyed on the HUMAN
+        // book (`mc2_manifestation_pass`). The rival-visible arm
+        // landed here is the MID-BURST REGEN PIN (sub_68DE0's else
+        // arm, EF:56216-19): a live window past its first tick pins
+        // a positive regen to 0 (mc2l1 t=195/238/248/258 — retail
+        // HOLDS after the debit; the port regenned straight back).
+        // SPEED (3) is EXCLUDED here: its whole body — countdown,
+        // speed writes, the f63&3 puff, the brake collapse — runs
+        // at the TOKEN's own walk slot (`mc2_rival_manifestation_tick`,
+        // dispatched from `mc2_manifestation_pass`), which is what
+        // gives the puff cadence its retail pre-increment phase; a
+        // second countdown here would double-decrement (the carpet
+        // slot sits below the token in every take measured).
+        let mut mid_burst = false;
         for (s, m) in book.iter().enumerate() {
+            if s == 3 {
+                continue;
+            }
             let m = *m as usize;
             if m != 0 && self.g.ent[m].f26 > 0 {
+                if self.g.ent[m].f26 as u16 != self.g.ent[m].f28 {
+                    mid_burst = true;
+                }
                 self.g.ent[m].f26 -= 1;
                 if self.g.ent[m].f26 == 0 {
                     // Shield window expiry drops the absorb stages.
@@ -1322,6 +1437,12 @@ impl World {
                         self.mc2_rival_set_spell(m, queued, own);
                     }
                 }
+            }
+        }
+        if mid_burst {
+            let r = &mut self.mc2_rivals[ri];
+            if r.mana_delta > 0 {
+                r.mana_delta = 0;
             }
         }
         let live = |g: &Gen, spell: usize| -> bool {
@@ -1517,6 +1638,22 @@ impl World {
         self.mc2_rivals[ri].state = s;
         self.mc2_rivals[ri].target = target;
         self.mc2_rivals[ri].target_sig = self.mc2_target_sig(target);
+        // EF:6114-15 and every goal-predicate sibling (6140/6174/
+        // 6224/6259/6283/6332/6394, retaliation 9002): the pick
+        // writes the pair onto the WIZARD ENTITY — word_0x96_150 is
+        // where the cast's aim pitch reads the target back
+        // (sub_14E10 EF:6810/6860). The import already reads the
+        // entity (reanchor doc); the sim never wrote it back, so
+        // free-run f146 held 0 and the landed pitch law aimed at
+        // the scratch slot (mc2l1 t=193: retail 141, port 0). The
+        // target is mirrored VERBATIM (it already carries the
+        // PLAYER_TARGET convention the importer produces); the
+        // stale-target drop at state_tick does NOT come through
+        // this funnel — retail never zeroes the word.
+        let e = self.mc2_rivals[ri].ent as usize;
+        if e != 0 && e < self.g.ent.len() {
+            self.g.ent[e].f146 = target;
+        }
     }
 
     /// Target signature `sub_14C40` (EF:6701): id + model + class<<7.
@@ -1626,6 +1763,21 @@ impl World {
                 }
                 if near > 0x3000 {
                     self.mc2_rivals[ri].site = (tx, ty);
+                    // EF:6090 `a1x->axis_0x9A_154x = v1x->position` —
+                    // the pick is copied onto the WIZARD ENTITY, whole
+                    // position: x/y are the corner, z is the SCRATCH
+                    // slot 0's residual z (sub_13B00 writes only the
+                    // scratch's x/y; the copy takes its z as-is). The
+                    // reanchor reads these lanes back (`site: (e.dest_x,
+                    // e.dest_y)`), the whiff-hover reads the entity's
+                    // site_z home, and the obs projects dest_x/dest_y —
+                    // the same write-back asymmetry the f146 target
+                    // mirror closed.
+                    if i != 0 && i < self.g.ent.len() {
+                        self.g.ent[i].dest_x = tx;
+                        self.g.ent[i].dest_y = ty;
+                        self.g.ent[i].site_z = self.g.ent[0].z;
+                    }
                     return true;
                 }
             }
@@ -2118,15 +2270,18 @@ impl World {
             // entity's site_z home — retail's scout copies the
             // scratch slot's whole position, z included).
             Mc2AiState::Build => {
+                // sub_13100 has NO castle-exists exit: a rival whose
+                // castle landed keeps hovering the site until the
+                // selector's think cadence re-arbitrates (sub_12E70's
+                // sub_13B00 goes false, the priority walk runs on the
+                // f63 % (64 - agg/4) tick — mc2l4 t=1..4 hovers over
+                // a live castle, state flips only at t=5).
                 let (sx, sy) = self.mc2_rivals[ri].site;
                 if self.mc2_rival_approach(ri, i, sx, sy, 2048, 4096) {
                     if !self.mc2_rival_walk_cast(ri, i, 2) {
                         self.mc2_rivals[ri].vdes = 0;
                         let sz = self.g.ent[i].site_z;
                         self.mc2_rival_hover(i, sz.saturating_add(512));
-                    }
-                    if self.rival_castle(self.mc2_rivals[ri].ent).is_some() {
-                        self.mc2_rivals[ri].state = Mc2AiState::Fresh;
                     }
                 }
             }
@@ -2400,6 +2555,12 @@ impl World {
     /// Shared travel helper (sub_14C90 EF:6713): inside arriveR ->
     /// stop, done; else min speed, and beyond boostR cast the
     /// speed-up (spell 3 — the MC2 remap).
+    /// sub_14C90 (EF:6713-53). The brake word `v14` is cleared FIRST
+    /// on every call (EF:6718); the arrive branch sets speed 0 +
+    /// brake (EF:6733-35); beyond the boost ring with SPEED owned,
+    /// the cast fires on a free window and the flight target is
+    /// LEFT ALONE (the token writes it at its own slot); otherwise
+    /// speed = minSpeed + brake (EF:6751-52).
     fn mc2_rival_approach(
         &mut self,
         ri: usize,
@@ -2409,22 +2570,27 @@ impl World {
         arrive: i32,
         boost: i32,
     ) -> bool {
+        self.mc2_rivals[ri].v14 = BrakeWord(false);
         let (px, py) = (self.g.ent[i].x, self.g.ent[i].y);
         let d2 = Gen::dist2_sq(px, py, tx, ty);
         self.g.ent[i].f34 = Gen::angle_between(px, py, tx, ty);
         if d2 <= arrive.saturating_mul(arrive) {
             self.mc2_rivals[ri].vdes = 0;
+            self.mc2_rivals[ri].v14 = BrakeWord(true);
             return true;
         }
-        self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
-        if d2 > boost.saturating_mul(boost) {
-            // Speed-up beyond the boost ring, gated on the live
-            // window (sub_156F0 — readiness itself has no cooldown
-            // for 3, so the window is the only re-cast brake).
-            let m3 = self.mc2_rivals[ri].book.ent[3] as usize;
-            if m3 == 0 || self.g.ent[m3].f26 == 0 {
-                self.mc2_rival_cast(ri, i, 3);
-            }
+        let m3 = self.mc2_rivals[ri].book.ent[3] as usize;
+        if d2 > boost.saturating_mul(boost) && m3 != 0 && self.g.ent[m3].f26 == 0 {
+            // Speed-up beyond the boost ring on a FREE window. A
+            // LIVE window fails sub_15170's readiness and falls
+            // into the brake else (mc2l6-rsg t=5→6: retail brakes
+            // mid-window and the token's collapse restores 80 the
+            // same tick; mc2l22's every-other-tick pump is the same
+            // alternation).
+            self.mc2_rival_cast(ri, i, 3);
+        } else {
+            self.mc2_rivals[ri].vdes = self.g.ent[i].f128;
+            self.mc2_rivals[ri].v14 = BrakeWord(true);
         }
         false
     }
@@ -2661,22 +2827,22 @@ impl World {
         if !self.mc2_rival_cast_ready(ri, s) {
             return false;
         }
-        let (tx, ty, tz) = match self.mc2_rivals[ri].target {
+        let (tx, ty) = match self.mc2_rivals[ri].target {
             0 => {
                 let e = &self.g.ent[i];
                 let mut fwd = (e.x, e.y, e.z);
                 Gen::polar_step(&mut fwd, e.f30, 0, 4096);
-                fwd
+                (fwd.0, fwd.1)
             }
-            PLAYER_TARGET => self.human_pose,
+            PLAYER_TARGET => (self.human_pose.0, self.human_pose.1),
             t => {
                 let e = &self.g.ent[t as usize];
-                (e.x, e.y, e.z)
+                (e.x, e.y)
             }
         };
-        let (ex, ey, ez, yaw) = {
+        let (ex, ey, yaw) = {
             let e = &self.g.ent[i];
-            (e.x, e.y, e.z, e.f30)
+            (e.x, e.y, e.f30)
         };
         let want = Gen::angle_between(ex, ey, tx, ty);
         match s {
@@ -2686,6 +2852,11 @@ impl World {
                 if self.mc2_rivals[ri].burst < 0 || Gen::angdist(yaw, want) > 0xAA {
                     return false;
                 }
+                // EF:6810 — the aim pitch is written onto the CASTER,
+                // from the entity's OWN f146 target (see
+                // [`Self::mc2_rival_aim_pitch`]); the write precedes
+                // the fire, so even a whiffed cast leaves the stamp.
+                self.g.ent[i].f32 = self.mc2_rival_aim_pitch(i);
                 self.mc2_rivals[ri].burst += 1;
                 if self.mc2_rivals[ri].burst >= 8 {
                     self.mc2_rivals[ri].burst =
@@ -2693,10 +2864,17 @@ impl World {
                 }
             }
             // Homing-aimed {4,9,0xD,0xE,0x12,0x13,0x15} (EF:6841):
-            // the wider 0xE3 cone.
-            4 | 9 | 0xD | 0xE | 0x12 | 0x13 | 0x15 if Gen::angdist(yaw, want) > 0xE3 => {
-                return false;
+            // the wider 0xE3 cone, the same caster pitch write
+            // (EF:6860).
+            4 | 9 | 0xD | 0xE | 0x12 | 0x13 | 0x15 => {
+                if Gen::angdist(yaw, want) > 0xE3 {
+                    return false;
+                }
+                self.g.ent[i].f32 = self.mc2_rival_aim_pitch(i);
             }
+            // Every other case fires with the caster's standing
+            // pitch — retail writes NO pitch outside the two aiming
+            // families (EF:6870+).
             _ => {}
         }
         // Create Castle routes to the build/upgrade arm (case 2,
@@ -2723,11 +2901,32 @@ impl World {
             // A fresh shield starts ARMED (the byte[2] 0x40 stage).
             self.mc2_rivals[ri].shield_state = 1;
         }
-        // Absolute aim pitch to the target (EF:6803).
-        let dh = Gen::isqrt(Gen::dist2_sq(ex, ey, tx, ty) as u32) as i32;
-        let pitch = Gen::pitch_toward(ez, tz, dh);
+        // The fire reads the caster's STANDING pitch (`sub_5F660`
+        // consumes `pitch_0x1E` — fresh from the stamp above in the
+        // aiming families, untouched otherwise). The old Euclidean
+        // `pitch_toward` at the AI brain's target aimed at the WRONG
+        // entity on the wrong metric (mc2l1 t=193: f146=141, the
+        // mana sphere).
+        let pitch = self.g.ent[i].f32;
         self.mc2_rival_emit(ri, i, s, yaw, pitch);
         true
+    }
+
+    /// EF:6810/6860 — `radix_tan(caster, Entities[caster+0x96])`:
+    /// both aiming families aim at the entity the CASTER's own f146
+    /// walk-slot register holds, NOT the AI brain's target pick
+    /// (mc2l1 t=193: f146 = 141, the mana sphere it was feeding on).
+    /// The read is raw and corpse-tolerant, like the register itself.
+    fn mc2_rival_aim_pitch(&self, i: usize) -> u16 {
+        let e = &self.g.ent[i];
+        let tp = if e.f146 == PLAYER_TARGET {
+            self.human_pose
+        } else {
+            let t = (e.f146 as usize).min(self.g.ent.len() - 1);
+            let te = &self.g.ent[t];
+            (te.x, te.y, te.z)
+        };
+        Gen::mc2_radix_tan((e.x, e.y, e.z), tp)
     }
 
     /// Case 2 — Create Castle (EF:6820): with a castle, the upgrade
@@ -2934,10 +3133,15 @@ impl World {
             // The impact-XP back-ref (the owner-tagged sub_6D8B0
             // mail): f40 carries the spell index.
             e.f40 = s as u16;
-            // Live homing target — the class-9 re-acquire keeps it.
-            if target != 0 {
-                e.f146 = target;
-            }
+            // NO f146 hand-off: no site in retail's rival cast
+            // chain writes word_0x96_150 onto the spawned bolt
+            // (sub_14E10 writes only the caster's pitch; sub_5F660/
+            // sub_5F7B0 touch only the window word and flags) — the
+            // rival possession bolt carries target96 = 0 and flies
+            // a straight frozen-pitch ray (mc2l1 t=193-195 slot
+            // 151: z steps exactly −56/tick). The old stamp let the
+            // class-9 homing tick re-aim it at the AI's pick and
+            // forked the whole trajectory.
         }
         if target == PLAYER_TARGET {
             // Being targeted arms the danger music.
@@ -3281,6 +3485,7 @@ impl Snap for Mc2Rival {
             avoid,
             avoid_exit,
             vdes,
+            v14,
             grace,
             eliminated,
             shield,
@@ -3314,6 +3519,7 @@ impl Snap for Mc2Rival {
         w.put(avoid);
         w.put(avoid_exit);
         w.put(vdes);
+        w.put(&v14.0);
         w.put(grace);
         w.put(eliminated);
         w.put(shield);
@@ -3349,6 +3555,7 @@ impl Snap for Mc2Rival {
             avoid: r.get()?,
             avoid_exit: r.get()?,
             vdes: r.get()?,
+            v14: BrakeWord(r.get()?),
             grace: r.get()?,
             eliminated: r.get()?,
             shield: r.get()?,

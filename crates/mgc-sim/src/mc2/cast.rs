@@ -2156,7 +2156,11 @@ impl World {
 
     fn mc2_cast_metamorph(&mut self, m: usize, sub: Mc2SubSpell, p: PlayerPose) {
         let model = sub.life.max(0) as u8;
-        let z = self.g.ground_z(p.x, p.y) as i16;
+        // sub_6A030 (EF:56325) mints at the caster's FULL 3-D
+        // position — position_0x4C_76 forwarded untouched through
+        // 4A190 to AddEventToMap; NO terrain clamp on the path
+        // (mc2l0-sg t=7282: body born at carpet z 256, not ground 0).
+        let z = p.z;
         let Some(s) = self.g.mc2_spawn_creature_model(model, p.x, p.y, z) else {
             return;
         };

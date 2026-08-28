@@ -89,19 +89,6 @@
    "field": "z"
   },
   {
-   "id": "mc2-summit-fire6-z-capture",
-   "status": "capture",
-   "note": "(10,6) standing fire on the RUNTIME-raised volcano summit (2026-08-03 dig C; ledger l30-terrain question ANSWERED: summit plateau = mc2_dome_tick/sub_31940 EF:23193 direct heightmap writes, runtime-terraform, NOT load-time): standing_fire_tick snaps z = ground_z + f46 and the conformance replay's heightfield is the pristine baseline (retail_import_mc2 never reconstructs terrain), so summit-slope fires read low; compounded by the ruled fire-cascade free-list slot-order desync. Shared MC1/MC2 tick, deliberately NOT strict-gated (banked: frozen-z-under-strict extension needs its own dig + golden re-pin).",
-   "takes": [
-    "mc2l24",
-    "mc2l30"
-   ],
-   "kind": "field",
-   "class": 10,
-   "model": 6,
-   "field": "z"
-  },
-  {
    "id": "mc2l24-boulder-reeruption-z",
    "status": "capture",
    "note": "Re-eruption-window (10,16) boulder z residual after the f44 vz field-home fix (2026-08-03 dig C): eruption-timing + free-list slot-order desync on the fire cascade, ~3 rows per re-eruption window (t=2536..2560 exemplar). NOT law. (10,0)/(10,14) z rows in the same windows are DELIBERATELY unseeded - they ride the open fire-churn story.",
@@ -111,18 +98,6 @@
    "kind": "field",
    "class": 10,
    "model": 16,
-   "field": "z"
-  },
-  {
-   "id": "mc2l24-column-reeruption-z",
-   "status": "capture",
-   "note": "Re-eruption-window (10,19) summit-column z residual after the strict frozen-z gate (2026-08-03 dig C): eruption-timing skew, ~1 row per window. A hit-count jump = frozen-z gate regression signal.",
-   "takes": [
-    "mc2l24"
-   ],
-   "kind": "field",
-   "class": 10,
-   "model": 19,
    "field": "z"
   },
   {
@@ -290,6 +265,19 @@
    ],
    "class": 10,
    "model": 6
+  },
+  {
+   "id": "mc2-summit-fire6-z-capture",
+   "status": "capture",
+   "note": "(10,6) standing fire z, SENTINEL. REFUTED as a law 2026-08-29 (session 67 dig): retail's fire6 z is END-of-tick terrain-consistent (z = f44 + interp(post-write height); 117,830/117,831 samples on mc2l24, 8,861/8,861 on mc2l30, incl. all 1,011 height-moved-under-a-live-fire ticks) and the port computes the same expression at the same walk position (EF:23099-152 sub_31760 vs mc2/effects.rs mc2_fire6_tick) - 655/658 graded exemplars carry NO diff. Every row this rule used to claim was free-slot churn SUBSTITUTION (different entity in the slot; sibling x/y/model rows in the same pair) shadowed from mc2-fire-churn-m6 by first-match order. DEMOTED below the churn rule: its count now reads 0, and any future NONZERO hit is a genuine z-only fire6 divergence - the sharp frozen-z regression sentinel.",
+   "takes": [
+    "mc2l24",
+    "mc2l30"
+   ],
+   "kind": "field",
+   "class": 10,
+   "model": 6,
+   "field": "z"
   },
   {
    "id": "mc2-cast-timing-missing",

@@ -1,0 +1,12 @@
+{
+ "dir": "fixtures/mc1l37",
+ "pin_pose": "n1",
+ "fixtures": [
+  {
+   "t": 2536,
+   "file": "the-building-evacuation-empties-at-the-cell.mgcr",
+   "source": "mc1l37",
+   "note": "BUILDING EVACUATION AT THE CELL: sub_28D10 takes a POSITION ARG the 2019 hand-conversion dropped (the pre-struct prototype survives commented out) - the collapse fills the evac scratch with the building's FOOTPRINT CELL (:30916-31), the periodic emit with house+f80 (:30825-27); the port's building_emit split into building_emit_at. mc1l37 t=2537 was the head: evacuees minted at the entity's pose instead of the cell. Ledger SESSION 65 law 3."
+  }
+ ]
+}

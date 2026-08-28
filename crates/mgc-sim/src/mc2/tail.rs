@@ -1613,27 +1613,16 @@ impl Gen {
                     }
                 }
             }
-            // Frozen z under strict (conformance replay): the
-            // pristine-plane heightfield lacks the runtime-raised
-            // summit, so `ground_z` returns the un-erupted baseline
-            // while retail's `getTerrainAlt` is the raised plateau
-            // (== the imported z for the whole recording). Re-snapping
-            // drops the column ~624 below retail (mc2l24 (10,19) slot
-            // 181: port 2000 vs retail 2624) and pulls its (10,14)
-            // smoke down with it. Same frozen-z law as
-            // `mc2_summit18_tick`; native keeps the exact retail
-            // re-snap to its own (real) heightfield.
-            // Frozen z under strict (conformance replay): the
-            // pristine-plane heightfield lacks the runtime-raised
-            // summit, so `ground_z` returns the un-erupted baseline
-            // while retail's `getTerrainAlt` is the raised plateau
-            // (== the imported z for the whole recording). Re-snapping
-            // drops the column ~624 below retail (mc2l24 (10,19) slot
-            // 181: port 2000 vs retail 2624) and pulls its (10,14)
-            // smoke down with it. Same frozen-z law as
-            // `mc2_summit18_tick`; native keeps the exact retail
-            // re-snap to its own (real) heightfield.
-            if !ctx.strict {
+            // EF:24141 — the alive branch's LAST statement is an
+            // UNCONDITIONAL `z = getTerrainAlt(pos)`: the column
+            // rides the dome's own terraform every alive tick
+            // (mc2l24 slot 140: z == height×32 through the whole
+            // raise AND the crater cut). The old strict-gated freeze
+            // was a stale pristine-plane workaround — the format-2
+            // measured channel carries the raised summit, and five
+            // sibling newborns at the vent pin the port's ground to
+            // retail's exactly (t=14: 4384 on both sides).
+            {
                 let (x, y) = (self.ent[i].x, self.ent[i].y);
                 self.ent[i].z = self.ground_z(x, y) as i16;
             }

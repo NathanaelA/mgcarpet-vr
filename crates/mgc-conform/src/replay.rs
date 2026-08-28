@@ -156,22 +156,27 @@ fn step_mc1(world: &mut World, ch: &mut Chain, inp: Mc1Input, cmd: PlayerCommand
         0.0
     };
     world.thrust_cancel(thrust);
-    // The Accelerate override, kill and burst-end ±80 base restore
-    // all resolve INSIDE the walk now (retail's token-below-carpet
-    // order): the carpet dispatch re-reads the override and consumes
-    // the base-restore mail at its own slot, and the mover's v_14
-    // latch drives the kill one token pass later. The tick-head
-    // sample below is just the drive's initial value.
-    let over = world.accel_override();
+    // The Accelerate token writes the speed columns ITSELF at its
+    // own walk slot (sub_56380 :65167-78) — a BELOW-carpet token's
+    // mail is consumed by step_player_flight before the mover, an
+    // ABOVE-carpet token's lands post-move and the driver takes it
+    // here after the turn, exactly like the MC2 driver below. (The
+    // old "token-below-carpet order" comment was the false premise
+    // that stranded the above-carpet mail a full tick: mc1l48 t=51 /
+    // mc1l6 t=1618 / mc1l32-quick t=17696.)
     let mut drive = FlightDrive {
         s: &mut ch.s,
         inp,
-        over,
+        over: None,
         falling,
         dead,
         mc2: None,
     };
     world.tick_flight(&mut drive, cmd);
+    if let Some(base) = world.take_speed_base() {
+        ch.s.tgt_speed = base;
+        ch.s.act_speed = base;
+    }
     // Respawn (sub_44D30 :54868-83): position at the castle one tile
     // up, then EXACTLY THREE flight registers cleared — `v_12` (target
     // speed), `v_16` (strafe) and the knock triple `v_22/24/26`. The
@@ -542,6 +547,14 @@ fn anchor_mc1(
 
 /// The MC2 twin: same contract, plus the THING table (MC2 ctors read
 /// it) and the carpet's tuning row for the chain seed.
+///
+/// ⚠ The install order is the OPPOSITE of [`anchor_mc1`]'s, and both
+/// are load-bearing: the MC2 importer's terrain-replay reconstruct
+/// pass is gated on `measured_terrain` and DRAWS PSEUDO, so terrain
+/// must install FIRST (the pair path's order, verify_mc2.rs) or every
+/// anchor burns phantom pseudo draws against a gate that was meant to
+/// be closed; MC1's importer reconstructs unconditionally and its
+/// edits must be measured OVER (see anchor_mc1's doc).
 fn anchor_mc2(
     world: &mut World,
     pristine: &mgc_sim::engine::features::Planes,
@@ -551,15 +564,15 @@ fn anchor_mc2(
     t: u64,
 ) -> Result<(Chain, u16), String> {
     world.restore_planes(pristine);
-    world.restore_thing_table(things);
-    let report = world
-        .retail_import_mc2(st)
-        .map_err(|e| format!("t={t}: import: {e}"))?;
     if let Some((h, ty, ceil, an)) = measured_planes(timg) {
         world
             .install_measured_terrain(h, ty, ceil, an)
             .map_err(|e| format!("t={t}: terrain: {e}"))?;
     }
+    world.restore_thing_table(things);
+    let report = world
+        .retail_import_mc2(st)
+        .map_err(|e| format!("t={t}: import: {e}"))?;
     let (fl, fr) = recover::mc1_fire(st.players[st.local_player as usize].move_bits);
     world.set_prev_fire(fl, fr);
     let row = world.mc2_carpet_row();
@@ -982,9 +995,22 @@ impl RStats {
         } else {
             format!(" restarts={restarts}")
         };
+        // A deviation-forced re-anchor on a PRISTINE take restores
+        // un-dug planes (restore_planes), so from the first reset in
+        // excavated territory the sweep degenerates to one reset per
+        // tick — the count measures the capture, not the port
+        // (session 66: mc1l32-terrainless "31,178 segments" was this;
+        // the non-segmented instrument still read 16/15/0). Tag the
+        // line so a baseline diff can never book the artifact as a
+        // regression.
+        let artifact = if terrain == "pristine" && devs > 0 {
+            " ⚠pristine-reset-artifact"
+        } else {
+            ""
+        };
         format!(
             "BRIEF {take} mode={mode} terrain={terrain} end={end} segments={} gaps={gaps}{restarts} \
-             devs={devs} graded={graded}{paused} clean={clean} horizon={} first={} sig={sig}{tags}\n",
+             devs={devs} graded={graded}{paused} clean={clean} horizon={} first={} sig={sig}{tags}{artifact}\n",
             self.segs.len(),
             first.map_or_else(|| "END".to_string(), |t| t.saturating_sub(1).to_string()),
             first.map_or_else(|| "-".to_string(), |t| t.to_string()),

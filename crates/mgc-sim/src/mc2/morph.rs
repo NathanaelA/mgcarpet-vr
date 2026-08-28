@@ -388,26 +388,18 @@ impl Gen {
     /// despawns it; a pulse at `t >= 127` despawns and releases the
     /// latch. Deals NO damage itself — the children carry it.
     ///
-    /// `strict` (conformance replay, `World::strict_retail`) engages the
-    /// FROZEN-Z law: the pristine-plane replay has no cave heightfield,
-    /// so `ground_z` returns the flat baseline, not retail's raised-
-    /// summit `getTerrainAlt`. Comparing the imported (cave) z against
-    /// that baseline reports a phantom terrain-move and disables the
-    /// controller before it can re-erupt — the (10,19) column, the
-    /// (10,16) boulders, and their (10,14) smoke (each a GLOBAL-rng
-    /// draw, `mc2_spawn_smoke_particle_for`) then never spawn, which is
-    /// the mc2l30 rng residual. Retail's summit sits on a stable plateau
-    /// (`getTerrainAlt` == the stored z for the whole recording — slot
-    /// 134 lives t=275..8330+), so under strict the terrain is treated
-    /// as frozen: no re-snap, no ground-move despawn, children born at
-    /// the frozen z (a z-capture mismatch, per docs/CONFORMANCE). Native
-    /// play keeps the exact retail check (the port raises its OWN
-    /// terrain, so z == ground_z on stable ground and a genuine
-    /// re-shape still despawns). The over-eruption the un-latched port
-    /// would otherwise do (every >2500 roll where retail holds
-    /// word_0x31) is fenced by importing the captured latch into
-    /// `erupting` (conformance.rs / mgcr word_0x31).
-    pub(crate) fn mc2_summit18_tick(&mut self, i: usize, strict: bool) {
+    /// The re-snap and the ground-move despawn are UNCONDITIONAL
+    /// (EF:23922-31): retail's own vortex dies the moment the dome —
+    /// after it in the walk — moves the ground under it (mc2l24
+    /// t=17). The old strict-gated FROZEN-Z variant was a
+    /// pristine-plane workaround; the format-2 measured terrain
+    /// channel carries the raised summit as ground truth, so
+    /// conformance replay runs the exact retail check too. The
+    /// over-eruption the un-latched port would otherwise do (every
+    /// roll past 2500 where retail holds word_0x31) stays fenced by
+    /// importing the captured latch into `erupting` (conformance.rs,
+    /// mgcr word_0x31).
+    pub(crate) fn mc2_summit18_tick(&mut self, i: usize) {
         if self.ent[i].f26 > 2500 {
             let r = self.ent_rand(i);
             if r % 0x64 == 0 && self.erupting == 0 {
@@ -415,7 +407,7 @@ impl Gen {
                     let e = &self.ent[i];
                     (e.x, e.y, e.z)
                 };
-                if !strict {
+                {
                     let gz = self.ground_z(x, y) as i16;
                     self.ent[i].z = gz;
                     if z != gz {
@@ -433,15 +425,14 @@ impl Gen {
                 let e = &self.ent[i];
                 (e.x, e.y, e.z, e.id24)
             };
-            // Frozen z under strict (see the method doc) — the imported
-            // summit z IS retail's getTerrainAlt on the real plateau.
-            let gz = if strict {
-                z
-            } else {
-                self.ground_z(x, y) as i16
-            };
+            // EF:23926-31 — the pulse re-snaps to getTerrainAlt and
+            // a moved ground DESPAWNS the vortex (retail's own
+            // controller dies at mc2l24 t=17 when the dome, after it
+            // in the walk, cuts the crater under it). Unconditional:
+            // the measured channel carries the raised summit.
+            let gz = self.ground_z(x, y) as i16;
             self.ent[i].z = gz;
-            if !strict && z != gz {
+            if z != gz {
                 self.ent[i].flags |= 0x400;
                 self.erupting = 0;
                 return;
@@ -474,6 +465,11 @@ impl Gen {
                 && let Some(b) = self.mc2_spawn_bolt(x, y, gz)
             {
                 let byaw = yaw & 0x7FF; // HIBYTE(v11) &= 7 (EF:23987)
+                let mut aim = (x, y, gz);
+                Self::polar_step(&mut aim, byaw, 0, 1536);
+                // EF:23990 — the dest triple's z is the TERRAIN at
+                // the aim point, not the launch z.
+                let aim_z = self.ground_z(aim.0, aim.1) as i16;
                 let e = &mut self.ent[b];
                 e.id24 = id;
                 e.f32 = (-386i16) as u16; // steep upward pitch
@@ -483,15 +479,17 @@ impl Gen {
                 e.f30 = byaw;
                 e.f34 = byaw;
                 e.f36 = e.f32;
-                let mut aim = (x, y, gz);
-                Self::polar_step(&mut aim, byaw, 0, 1536);
                 e.dest_x = aim.0;
                 e.dest_y = aim.1;
+                e.site_z = aim_z;
             }
             if t >= 127 {
+                // Retail's `dword_0x10_16++` sits OUTSIDE the pulse
+                // block (EF:23997): this despawn arm FALLS THROUGH to
+                // the counter increment (only the >2500 arm and the
+                // ground-move despawn return before it).
                 self.ent[i].flags |= 0x400;
                 self.erupting = 0;
-                return;
             }
         }
         // Retail's counter is the i32 `dword_0x10_16` and simply keeps

@@ -217,6 +217,24 @@
    "file": "the-touchdown-breaks-settled-minus-step-the-mc1l.mgcr",
    "source": "mc1l32",
    "note": "THE TOUCHDOWN BREAKS SETTLED-MINUS-STEP (the mc1l42 law's pair face): the death-fall trail's (10,1) rides the post-move pre-gravity scratch, reconstructed in a pinned pair as settled z minus the applied +46 - exact while the mover's ride is in the settled pose, broken on the touchdown tick where the floor clamp lands the carpet at 6375 and back-derivation reads 6403 against the true 6391 (= the frozen-stick tick-entry z). The trail child minted 12 high and the whole death-cascade mint chain shifted one draw (slot 51 z, slot 75 rand)."
+  },
+  {
+   "t": 16617,
+   "file": "the-mc1-mid-walk-pdead-republish-the-carpet-s-li.mgcr",
+   "source": "mc1l32-quick",
+   "note": "THE MC1 MID-WALK PDEAD REPUBLISH: the carpet's LIFE is a mid-walk observable on the MC1 column too (:21658-61 \u2014 the chase reads +12 < 0 || +17 & 4 off the pool record LIVE), so both MC1 carpet anchors re-publish ctx.pdead after player_mail_block \u2014 every walker dispatched after the anchor sees the death on its own tick. mc1l32-quick t=16618: retail demotes every chaser chase->wander on the death tick itself. Ledger SESSION 62 law 5."
+  },
+  {
+   "t": 15187,
+   "file": "m5-multishot-s-default-fires-nothing-sub-1ab70-s.mgcr",
+   "source": "mc1l32-quick",
+   "note": "M5 MULTISHOT'S DEFAULT FIRES NOTHING: sub_1AB70's roll bound is 7*mana/maxMana UNCLAMPED (:21976), so an over-filled purse rolls v4 >= 7 past the last case and the switch falls through returning 0 \u2014 a silent tick (sound 32 is the CALLER's, gated on the return :22972-75; each zigzag binds row156 = 6-i :22050). mc1l32-quick t=15188 lands exactly v4 = 7: the port's catch-all default fired a trail bolt. Ledger SESSION 62 law 6."
+  },
+  {
+   "t": 18014,
+   "file": "the-rebound-cast-is-arm-only-and-the-token-debit.mgcr",
+   "source": "mc1l32-quick",
+   "note": "THE REBOUND CAST IS ARM-ONLY AND THE TOKEN DEBITS: sub_46B00's branch on the token's +65 (14 < 0x10, not 2/16/21) takes LABEL_20 - the command reloads +48 and NOTHING ELSE; the machine sub_573F0 (:65773) is the launcher skeleton without an emit (gate -> the +17 0x80 bit + sub_55E80's arm-tick full-cost debit through +132 -> countdown). The port's command-site toggle armed nothing, so a (re)cast never debited: mc1l32-quick t=18014, retail reloads the token and stamps delta 100 -> -1000 (148 pair rows read +1000 on the port purse). RIDER: 14 joined the import's mana_delta keep-list - the post-cast boundary is already mid-burst, and the clamp ate the -1000 seed. The bank had attributed these rows to the deflection quarter; measurement says they are the cast's. Ledger SESSION 64."
   }
  ]
 }

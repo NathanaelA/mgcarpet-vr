@@ -2669,7 +2669,14 @@ impl Gen {
         Some(i)
     }
 
-    /// `sub_26500` (:16970): sprite by jump-cycle state.
+    /// `sub_26500` (:16970): sprite by jump-cycle state. The pose
+    /// selector calls ONLY SetEntityIndexAndRot (which derives the
+    /// whole applied quad from the sprite-param row); the one
+    /// `SetEntityShiftRot(128,128)` in the machine is the CTOR's
+    /// tail (:34371) — a per-tick re-stamp here clobbered the
+    /// sprite-derived pitch/roll forever (mc2l24 t=7918: 47 devils
+    /// applied_pitch 128 vs retail's row-derived 56) and fed the
+    /// walker's f80/f82 step cap a 128 half-extent.
     fn m21_pose(&mut self, i: usize) {
         let sprite = match self.ent[i].f71 {
             0 => 311,
@@ -2683,7 +2690,6 @@ impl Gen {
         };
         if self.ent[i].type86 != sprite {
             self.mc2_set_sprite(i, sprite);
-            self.mc2_shift_rot(i, 128, 128);
         }
     }
 
