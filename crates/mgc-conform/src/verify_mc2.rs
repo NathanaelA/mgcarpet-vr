@@ -378,6 +378,9 @@ pub(crate) fn run(path: &std::path::Path, args: &Args) -> Result<bool, String> {
                                 &st,
                                 human_slot,
                                 pt,
+                                // The full-stop key (BACKSPACE = 14) off
+                                // the END record's raw input channel.
+                                mgc_formats::recover::key_held(tick.input.as_ref(), 14),
                                 csv.as_mut().map(|w| w as &mut dyn std::io::Write),
                             )
                             .map_err(|e| format!("t={pt}: pose csv: {e}"))?;

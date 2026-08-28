@@ -16,6 +16,12 @@
    "note": "THE RIVAL COMMIT STAMPS ITS AIM PITCH ABOVE THE castle bail: retail's sub_155F0 runs cooldown -> +32 -> token +48 with NO castle test in either arm (:19124-27 precision, :19172-76 wide cone) \u2014 the stored-mana unlock ladder is the PROJECTILE's own first tick (sub_55DD0 :65049), 40k lines away. The port collapses that fizzle into an emission-time bail, and the bail sat ABOVE the pitch stamp, so a rival whose castle stores nothing stopped aiming altogether. mc1hwl0-noskip t=359: rival 1 (slot 473, castle 522 with f140=0) commits Lightning and its +32 must read 8, not the imported 7."
   },
   {
+   "t": 450,
+   "file": "the-probe-meets-the-human-in-ring-order-sub-1198.mgcr",
+   "source": "mc1hwl0-permadeath",
+   "note": "THE PROBE MEETS THE HUMAN IN RING ORDER (sub_11980 :16988-17027): the out-of-pool carpet is checked as its CELL comes up, ahead of later cells' pool records - the kraken beam stops on the human, not the rival's chain"
+  },
+  {
    "t": 1902,
    "file": "the-target-signature-s-team-word-is-a-pool-slot.mgcr",
    "source": "mc1hwl0",
@@ -68,6 +74,12 @@
    "file": "the-ring-iterator-burns-its-own-lcg-step-before.mgcr",
    "source": "mc1hwl0",
    "note": "THE RING ITERATOR BURNS ITS OWN LCG STEP BEFORE THE FIRST CELL: hw:29753 steps the cloud's +4 ONCE between sub_11410 and the first sub_114B0, before any cell is read, and only then two per cell. The base-MC1 arm has always carried that pre-draw; the HW twin was missing it, so every HW wall painted its ring off a stream one step behind and every downstream consumer of the cloud's +4 desynced. mc1hwl0 t=2751: cloud 494's first paint \u2014 its own +4 and the x/y of the flames at 354/363/822."
+  },
+  {
+   "t": 2782,
+   "file": "a-chaser-s-lost-test-reads-the-record-s-life-sig.mgcr",
+   "source": "mc1hwl0-permadeath",
+   "note": "A CHASER'S LOST TEST READS THE RECORD'S LIFE SIGN (:21658-61): the tick-head pdead seed follows act_life, so the kraken drops chase on the suicide-write tick and fires no extra beam"
   },
   {
    "t": 5591,

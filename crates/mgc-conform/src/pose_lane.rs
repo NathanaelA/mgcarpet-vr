@@ -304,6 +304,7 @@ impl PoseLane {
         st: &RetailMc2,
         human_slot: u16,
         t: u64,
+        full_stop: bool,
         mut csv: Option<&mut dyn std::io::Write>,
     ) -> std::io::Result<()> {
         self.arm = "mc2 mover";
@@ -359,8 +360,17 @@ impl PoseLane {
             // is gated) — the command handler always runs here.
             no_command: false,
             // The modal park (big map / spell book): command 0 and
-            // the carpet pinned across the pair.
-            mc2_park: p1.cmd_speed == 0 && e1.speed == 0 && e0.x == e1.x && e0.y == e1.y,
+            // the carpet pinned across the pair — plus the FULL-STOP
+            // key (BACKSPACE, PlayerAction 0x27), which bypasses the
+            // position clause (a same-tick knockback moves the parked
+            // carpet: mc2l0-permadeath t=2229, the pose head) — and
+            // the held-speed-key guard the shared recovery carries
+            // (`recover::recover_pair_mc2`'s mb & 3, the mc2l3 t=605
+            // zero-crossing discriminator).
+            mc2_park: p1.cmd_speed == 0
+                && mb & 3 == 0
+                && e1.speed == 0
+                && (full_stop || (e0.x == e1.x && e0.y == e1.y)),
         };
         let mut s = Mc1State {
             x: e0.x,

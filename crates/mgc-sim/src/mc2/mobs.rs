@@ -601,6 +601,23 @@ impl Gen {
     /// (:9643-56): first packmate closer than array.pitch on both
     /// axes steers us away from it.
     pub(crate) fn mc2_avoid_packmate(&mut self, i: usize) {
+        self.mc2_avoid_packmate_at(i, false);
+    }
+
+    /// `cast16` — THE SEPARATION BOX IS SEAM-BLIND IN THE HELD WALK.
+    /// `sub_1DDA0`'s box test (EF:10404-09) sign-casts each u16
+    /// position to int16 BEFORE the plain-int subtraction, so two
+    /// packmates straddling the x/y 0x8000 map-CENTER seam read an
+    /// astronomical difference and never separate: mc2l0-pd t=906,
+    /// villager 66 (x 32745) vs 54 (x 32867, sign-cast NEGATIVE) —
+    /// wrapped |dx| = 122 < apitch 128 but retail keeps the pure
+    /// waypoint aim 507 where the wrapped test wrote the away-bearing
+    /// 1388. The chase/flee (:9644-46) and m15 (:15304-05) walks
+    /// subtract the raw u16s with NO cast (plain — blind only across
+    /// the 0/65535 map EDGE); the port's wrapped difference stands in
+    /// for those until a witness separates plain from wrapped (no
+    /// shipped take carries an edge-straddling pack).
+    pub(crate) fn mc2_avoid_packmate_at(&mut self, i: usize, cast16: bool) {
         let (ex, ey, pitch, model, id) = {
             let e = &self.ent[i];
             (e.x, e.y, e.f80 as i32, e.model65, e.id24)
@@ -636,12 +653,16 @@ impl Gen {
         // servo had something (or nothing) to chase. The divergence
         // report shows what DIFFERS, never what CHANGED.
         let roster: Vec<u16> = self.mob_chains.visible(model as usize).to_vec();
+        let boxed = |a: u16, b: u16| {
+            if cast16 {
+                ((a as i16 as i32) - (b as i16 as i32)).abs()
+            } else {
+                ((a.wrapping_sub(b)) as i16 as i32).abs()
+            }
+        };
         for &s in &roster {
             let c = &self.ent[s as usize];
-            if c.id24 != id
-                && ((ex.wrapping_sub(c.x)) as i16 as i32).abs() < pitch
-                && ((ey.wrapping_sub(c.y)) as i16 as i32).abs() < pitch
-            {
+            if c.id24 != id && boxed(ex, c.x) < pitch && boxed(ey, c.y) < pitch {
                 let away = Self::angle_between(c.x, c.y, ex, ey);
                 self.ent[i].f34 = away;
                 break;

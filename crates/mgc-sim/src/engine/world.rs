@@ -4424,7 +4424,19 @@ impl World {
             pyaw: player.heading,
             pmana: self.player.mana,
             pmana_max: self.player.mana_max,
-            pdead: self.player.state != LifeState::Alive,
+            // ⭐ THE RECORD'S OWN LIFE SIGN, not the state machine.
+            // Every chaser's target-lost test is `+12 < 0 || +17 & 4`
+            // on the victim RECORD (:21658-61 / hw :20215-19), and the
+            // Shift+K write lands post-walk at 2782 while the state
+            // flip is the NEXT tick's regen tail — seeding from
+            // LifeState handed every walker below the carpet a stale
+            // "alive" for exactly the death tick: mc1hwl0-pd t=2783,
+            // the kraken buffeted, spent its spit charge (f71 1→0)
+            // and minted a 10-record beam retail never fired (retail
+            // takes the lost early-return: f26 untouched, state 38→37).
+            // The mid-walk refresh at the carpet's slot already used
+            // this predicate; the tick-head seed now agrees.
+            pdead: self.player.life < 0,
             strict: self.strict_retail,
             patches: self.patches,
             mc2_turn: self.mc2_turn,
@@ -28227,6 +28239,68 @@ mod tests {
             timer(&w),
             Some(b as u16),
             "the dead watch was scrubbed and re-resolved to the next live archer"
+        );
+    }
+
+    /// THE HELD WALK'S SEPARATION BOX IS SEAM-BLIND (`sub_1DDA0`
+    /// EF:10404-09): the box test sign-casts each u16 position to
+    /// int16 BEFORE a plain-int subtraction, so two packmates
+    /// straddling the 0x8000 map-centre seam read an astronomical
+    /// difference and never separate — the villager keeps its pure
+    /// waypoint aim. mc2l0-permadeath t=906: villager 66 (x 32745)
+    /// beside villager 54 (x 32867, sign-cast negative), wrapped
+    /// |dx| = 122 < apitch 128, retail aims 507 at the fly point
+    /// where the wrapped test wrote the away-bearing 1388. The
+    /// same-side control pins the separation still firing.
+    #[test]
+    fn mc2_held_walk_separation_is_blind_across_the_map_centre_seam() {
+        let mut w = mc2_flat_world();
+        let (_, ay) = mc2_pos(212, 212);
+        let mk = |w: &mut World, x: u16| {
+            let s = w.g.mc2_spawn_villager(x, ay, 0).unwrap();
+            let e = &mut w.g.ent[s];
+            e.tick70 = 104 + 7; // held phase (base+7)
+            e.site_z = 1; // stage kind 1 (fly-to)
+            e.f80 = 128; // apitch — the box threshold
+            e.f126 = 0; // parked: the aim math is the whole test
+            e.f63 = 8; // on the 8-tick re-aim cadence, OFF the
+            // 64-tick jitter one (the take's phase 160 shape)
+            e.f34 = 0;
+            e.f58 = 0; // awake NOW (the spawn-grace stagger trap)
+            e.f59 = 0;
+            e.f26 = 0;
+            s
+        };
+        // Kind-1 row 1: fly point at tile (186, 212) — the pd take's
+        // own authored waypoint shape (data bytes 0/2 = tile x/y).
+        w.set_mc2_stagevars(&[(0, 0, 0, 0, 0), (1, 0, 0, 0, 186 | (212 << 16))]);
+        let a = mk(&mut w, 32745); // i16-positive side of the seam
+        let b = mk(&mut w, 32867); // i16-NEGATIVE side, wrapped dx 122
+        for s in [a, b] {
+            w.mc2_sv_held.push(crate::mc2::stagevars::Mc2Held {
+                ent: s as u16,
+                slot: 1,
+                timer: 0,
+            });
+        }
+        let pose = PlayerPose::level(10 << 8, 10 << 8, 4000, 0);
+        w.tick(pose, PlayerCommand::default());
+        let aim = Gen::angle_between(w.g.ent[a].x, w.g.ent[a].y, 186 << 8, 212 << 8);
+        assert_eq!(
+            w.g.ent[a].f34, aim,
+            "straddling packmates must NOT separate — the sign-cast box is blind"
+        );
+        // Control: same-side neighbour inside the box → the away-
+        // bearing overwrites the aim (asserted by shape, not value —
+        // the neighbour's own walk keeps moving it mid-tick, so the
+        // exact bearing is scaffolding-dependent).
+        w.g.ent[b].x = 32700;
+        w.g.ent[a].f63 = 8;
+        w.tick(pose, PlayerCommand::default());
+        let aim2 = Gen::angle_between(w.g.ent[a].x, w.g.ent[a].y, 186 << 8, 212 << 8);
+        assert_ne!(
+            w.g.ent[a].f34, aim2,
+            "a same-side packmate inside the box still separates (the aim must be overwritten)"
         );
     }
 

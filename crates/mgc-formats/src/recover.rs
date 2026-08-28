@@ -279,6 +279,26 @@ pub fn press_pos(input: Option<&serde_json::Value>) -> Option<(i16, i16)> {
     Some((g("x")?, g("y")?))
 }
 
+/// The MC2 park witness — the modal-park state shape OR the FULL-STOP
+/// key (BACKSPACE = scancode 14, PlayerAction 0x27 EF:37954-65, which
+/// zeroes `actSpeed` and the command in one tick). `frozen` is the
+/// carpet-pinned-across-the-pair clause: it discriminates the KEY-LESS
+/// modal park, and the key BYPASSES it because a same-tick knockback
+/// moves the parked carpet (mc2l0-permadeath t=2191/2229). The held
+/// speed key (`mb & 3`) guards both arms against the mc2l3 t=605
+/// zero-crossing false positive. Pair-blind harness machinery — pinned
+/// by unit, not fixture (the fixtures runner pins the pose, which is
+/// the very channel this law moves).
+pub fn mc2_park_witness(
+    cmd_speed: i16,
+    mb: u32,
+    ent_speed: i16,
+    frozen: bool,
+    full_stop: bool,
+) -> bool {
+    cmd_speed == 0 && mb & 3 == 0 && ent_speed == 0 && (full_stop || frozen)
+}
+
 /// DATING THE MC2 RESPAWN PRESS. The key registers carry no press
 /// LATCH (the mouse's disambiguator), and the corpus shows BOTH sides
 /// of retail's poll: SPACE first appears at record 15314 with the
@@ -303,20 +323,31 @@ pub fn press_pos(input: Option<&serde_json::Value>) -> Option<(i16, i16)> {
 #[derive(Default)]
 pub struct Mc2RespawnWitness {
     prev_space: bool,
-    prev_mouse: Option<(i16, i16)>,
+    prev_press: Option<(i16, i16)>,
 }
 
 impl Mc2RespawnWitness {
     /// Fold one record's raw input channel; returns whether the frame
     /// that produced this record ran the respawn command.
+    ///
+    /// The recentre discriminator reads the PRESS-POS snapshot's jump,
+    /// not the cursor's: the 0xF handler slams the cursor to centre,
+    /// but when the cursor already SITS at centre (a respawn pressed
+    /// while parked — mc2l0-permadeath t=1440/2574, `mouse_press_pos`
+    /// jumps to an unmoved 320,200 cursor) the cursor shows no edge
+    /// and the old rule dated the press one frame late. The genuine
+    /// within-frame press (mc2l3 record 20612) snaps BOTH registers
+    /// at once, so the press-jump form covers it too; a false fire on
+    /// an ordinary click+SPACE is inert (the sim's Dead gate filters
+    /// a respawn on a living wizard).
     pub fn observe(&mut self, input: Option<&serde_json::Value>) -> bool {
         let press = press_pos(input);
         let space = respawn_key(input);
         let mouse = mouse_pos(input);
-        let recentred = mouse.is_some() && mouse != self.prev_mouse && mouse == press;
+        let recentred = press.is_some() && press != self.prev_press && mouse == press;
         let fire = space && (self.prev_space || recentred);
         self.prev_space = space;
-        self.prev_mouse = mouse.or(self.prev_mouse);
+        self.prev_press = press.or(self.prev_press);
         fire
     }
 }
@@ -671,11 +702,22 @@ pub fn recover_pair_mc2(
     //
     // A held speed key is the discriminator: the modal screens eat the
     // movement keys, so a real park never carries one.
+    //
+    // THE FULL-STOP KEY (BACKSPACE = scancode 14, PlayerAction 0x27
+    // EF:37954-65) zeroes BOTH `actSpeed_0x82` and `speed_0xc_12` in
+    // one tick — the same effect the modal park models, so it rides
+    // the same flag, read off `keys_down` like SPACE's respawn lane.
+    // The key BYPASSES the position-frozen clause: a knockback
+    // carries the carpet on the very tick of the press
+    // (mc2l0-permadeath t=2191: x/y move 4 units under knock_mag 21;
+    // t=2229 the same under a 26 → 22 decay), so "did not move" was
+    // false exactly when the player braked under fire. The key-less
+    // clause stays for the modal park; the mb & 3 guard covers both
+    // against the mc2l3 t=605 zero-crossing false positive.
     let ci = cp.play_index as usize;
-    let mc2_park = cp.cmd_speed == 0
-        && mb & 3 == 0
-        && matches!((pst.ents.get(ci), st.ents.get(ci)), (Some(p), Some(c))
-            if c.speed == 0 && p.x == c.x && p.y == c.y);
+    let full_stop = key_held(input_end, 14);
+    let mc2_park = matches!((pst.ents.get(ci), st.ents.get(ci)), (Some(p), Some(c))
+        if mc2_park_witness(cp.cmd_speed, mb, c.speed, p.x == c.x && p.y == c.y, full_stop));
     // Pose NOT mover-driven this pair: frozen (a blocked move) or
     // warped further than any mover step could carry it (2048 is the
     // pose channel's own warp gate; the mover's reach is ~450).
@@ -966,6 +1008,31 @@ mod cheat_tests {
             assert_eq!(cheat_fired_mc2(&a, &notify(text, 99)), Some(want), "{text}");
             assert_eq!(Cheat::from_code(want.code()), Some(want), "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod park_tests {
+    use super::mc2_park_witness;
+
+    /// The BACKSPACE full stop (PlayerAction 0x27) vs the modal park
+    /// — measured rows: mc2l0-permadeath t=2191 (park under a
+    /// same-tick knockback: position MOVED, key down) and t=2229
+    /// (same, knock 26 → 22); mc2l3 t=605 (a braking zero-crossing
+    /// with the down key held is NOT a park, key or no key).
+    #[test]
+    fn the_full_stop_key_parks_through_a_same_tick_knockback() {
+        // The knockback carries the carpet: frozen = false. Key down
+        // → parks; key up (the old heuristic) → dropped.
+        assert!(mc2_park_witness(0, 0, 0, false, true), "t=2191");
+        assert!(
+            !mc2_park_witness(0, 0, 0, false, false),
+            "the pre-key heuristic dropped it"
+        );
+        // The key-less modal park still parks on the frozen clause.
+        assert!(mc2_park_witness(0, 0, 0, true, false), "modal park");
+        // The mc2l3 t=605 zero-crossing: held speed key blocks both.
+        assert!(!mc2_park_witness(0, 2, 0, true, true), "t=605");
     }
 }
 

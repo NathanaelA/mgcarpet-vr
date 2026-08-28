@@ -1363,7 +1363,31 @@ impl Gen {
         };
         let r = (self.ent[i].f80 as i32 + 255) >> 8;
         let cells = self.probe_window(wx, wy, r, ctx.strict);
+        // ⚠ THE OUT-OF-POOL HUMAN JOINS NO TILE CHAIN, so he is
+        // checked AS HIS CELL COMES UP in the ring walk, ahead of
+        // whatever the chain there holds (the `mc2_piece_scan`
+        // pattern). Retail's carpet is an ordinary linked record and
+        // the probe returns the FIRST overlapping record in SEARCH.DAT
+        // ring order — a post-loop player arm loses every tiebreak
+        // where a pool victim sits in a LATER cell: mc1hwl0-pd t=451,
+        // the kraken beam's step-4 probe from rounded cell (99,182) —
+        // the human's cell (98,181) is ring-1 index 0, the rival beam
+        // segment 584's cell (99,181) is index 1, and the post-pass
+        // handed the bolt to 584 (chain-snap 118/162/170 off on the
+        // (9,9), chase 583-for-472 on the (10,23)). The two escape
+        // arms below keep their post-pass semantics.
+        let ptile = tile((ctx.px >> 8) as u8, (ctx.py >> 8) as u8);
+        let player_ordered = !no_probe_window_player()
+            && !(!ctx.strict && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2));
         for &t in &cells {
+            if player_ordered
+                && t == ptile
+                && id != PLAYER_TARGET
+                && Self::filter_admits(f66, f67, 3, 0)
+                && self.player_overlap(i, ctx)
+            {
+                return Some(MailTarget::Player);
+            }
             let mut j = self.map_entity[t] as usize;
             while j != 0 {
                 let c = &self.ent[j];
@@ -1436,11 +1460,13 @@ impl Gen {
         // would be gating a window that is not retail's. Under
         // `strict` that square IS the ring, so the cell gate is
         // retail's again and MC2 rejoins the shared arm.
-        let player_in_window = no_probe_window_player()
-            || (!ctx.strict && matches!(self.verbs.movement, crate::verbs::MovementVerb::Mc2))
-            || cells.contains(&tile((ctx.px >> 8) as u8, (ctx.py >> 8) as u8));
-        if id != PLAYER_TARGET
-            && player_in_window
+        // Post-pass ONLY for the ordered-walk escapes: the
+        // `MGC_NO_PROBE_WINDOW_PLAYER` instrument and MC2 NATIVE play
+        // (whose inflated `.max(1)` square + chord march is the
+        // documented compensating pair — the cell-ordered arm above
+        // would order against a window that is not retail's).
+        if !player_ordered
+            && id != PLAYER_TARGET
             && Self::filter_admits(f66, f67, 3, 0)
             && self.player_overlap(i, ctx)
         {

@@ -853,7 +853,10 @@ impl World {
             }
             self.g.ent[i].f34 = aim;
         }
-        self.g.mc2_avoid_packmate(i);
+        // The held walk's box test sign-casts (EF:10404-09) — see
+        // `mc2_avoid_packmate_at`: seam-blind across the 0x8000 map
+        // centre (mc2l0-pd t=906).
+        self.g.mc2_avoid_packmate_at(i, true);
     }
 
     /// The GRAZE leg (`sub_1E1C0` quiet path, EF:10520-45): move
